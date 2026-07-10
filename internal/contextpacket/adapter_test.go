@@ -29,22 +29,20 @@ func (r *capturingRows) ResolveEvidenceScope(_ context.Context, plan contextpack
 	return contractsv1.ResolvedScope{RepoID: "repo-server-derived", RepoSlug: plan.RepoSlug, Branch: plan.Branch, CommitSHA: plan.CommitSHA, Resolution: contractsv1.ScopeExactCommit, FallbackReasons: []string{}}, nil
 }
 
-func (r *capturingRows) EvidenceRows(ctx context.Context, plan contextpacket.ReadPlan) ([]contractsv1.EvidenceRef, []contractsv1.SourceWatermark, []contractsv1.UnavailableSource, error) {
+func (r *capturingRows) EvidenceRows(_ context.Context, plan contextpacket.ReadPlan) ([]contractsv1.EvidenceRef, []contractsv1.SourceWatermark, []contractsv1.UnavailableSource, error) {
 	r.plan = plan
 	return nil, nil, nil, r.err
 }
 
 func TestClickHouseAdapter_scopes_query_to_authenticated_repository(t *testing.T) {
-	// Given
 	rows := &capturingRows{}
 	request := fixtureRequest("req-clickhouse", "main", "abc123")
 	request.Scope.TaskRef, request.Scope.Files, request.Scope.TimeWindowDays = "TASK-9", []string{"internal/x.go"}, 7
-	store := contextpacket.NewClickHouseEvidenceStore(rows)
-
-	// When
-	_, err := store.ContextForTask(context.Background(), fixturePrincipal(), request)
-
-	// Then
+	store, err := contextpacket.NewClickHouseEvidenceStoreWithOptions(rows, contextpacket.EvidenceStoreOptions{Codec: fixtureEvidenceCodec(t)})
+	if err != nil {
+		t.Fatalf("create evidence store: %v", err)
+	}
+	_, err = store.ContextForTask(context.Background(), fixturePrincipal(), request)
 	if err != nil {
 		t.Fatalf("read scoped evidence: %v", err)
 	}
@@ -58,33 +56,23 @@ func TestClickHouseAdapter_scopes_query_to_authenticated_repository(t *testing.T
 }
 
 func TestAssembler_propagates_cancelled_context(t *testing.T) {
-	// Given
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	assembler := fixtureAssembler(t)
-
-	// When
 	_, err := assembler.Assemble(ctx, fixturePrincipal(), fixtureRequest("req-cancelled", "main", ""))
-
-	// Then
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context canceled", err)
 	}
 }
 
 func TestExecuteCatalog_skips_repo_scope_sources_when_branch_is_requested(t *testing.T) {
-	// Given
 	plan, err := contextpacket.BuildReadPlanV1(fixturePrincipal(), fixtureRequest("req-query", "main", "abc123"))
 	if err != nil {
 		t.Fatalf("build plan: %v", err)
 	}
 	plan.RepoID = "repo-server-derived"
 	executor := &capturingExecutor{}
-
-	// When
 	result, err := contextpacket.ExecuteCatalog(context.Background(), executor, plan)
-
-	// Then
 	if err != nil {
 		t.Fatalf("execute catalog: %v", err)
 	}
@@ -97,10 +85,7 @@ func TestExecuteCatalog_skips_repo_scope_sources_when_branch_is_requested(t *tes
 		}
 	}
 	for _, query := range contextpacket.SourceQueryCatalogV1 {
-		if query.Scope != contextpacket.EvidenceScopeRepo {
-			continue
-		}
-		if !containsUnavailable(result.Unavailable, query.ID, "repo_fallback_branch_not_supported") || watermarkStatus(result.Watermarks, query.ID) != "unavailable" {
+		if query.Scope == contextpacket.EvidenceScopeRepo && (!containsUnavailable(result.Unavailable, query.ID, "repo_fallback_branch_not_supported") || watermarkStatus(result.Watermarks, query.ID) != "unavailable") {
 			t.Fatalf("branch scope did not classify %s as unavailable: %#v %#v", query.ID, result.Unavailable, result.Watermarks)
 		}
 	}

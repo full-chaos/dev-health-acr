@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/api"
 	"github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
@@ -60,6 +61,16 @@ func serve(args []string) error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
+	var evidenceCodec *contextpacket.EvidenceIDCodec
+	if cfg.Environment == "production" || cfg.RequireBackingStores {
+		evidenceCodec, err = contextpacket.NewEvidenceIDCodec(contextpacket.EvidenceIDKeyring{
+			ActiveKID: cfg.EvidenceIDActiveKID,
+			Keys:      cfg.EvidenceIDKeys,
+		})
+		if err != nil {
+			return fmt.Errorf("initialize evidence id codec: %w", err)
+		}
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	info := version.Current()
@@ -104,6 +115,12 @@ func serve(args []string) error {
 	}
 	if cfg.RequireBackingStores {
 		checks = append(checks,
+			api.CheckFunc{CheckName: "evidence_id_codec", Fn: func(context.Context) error {
+				if evidenceCodec == nil {
+					return errors.New("evidence id codec is not configured")
+				}
+				return nil
+			}},
 			api.CheckFunc{CheckName: "clickhouse_configuration", Fn: func(context.Context) error {
 				if cfg.ClickHouseDSN == "" {
 					return errors.New("ClickHouse is not configured")
@@ -124,8 +141,9 @@ func serve(args []string) error {
 		ServiceVersion: info.Version,
 		RequestTimeout: cfg.RequestTimeout,
 	}, api.Dependencies{
-		Capabilities:    capabilities,
-		ReadinessChecks: checks,
+		Capabilities:         capabilities,
+		ReadinessChecks:      checks,
+		EvidenceStoreFactory: contextpacket.NewEvidenceStoreFactory(evidenceCodec),
 	}, logger)
 	if err != nil {
 		return fmt.Errorf("initialize application: %w", err)

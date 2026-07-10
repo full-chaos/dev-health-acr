@@ -35,12 +35,35 @@ func TestProductionRequiresBackingStores(t *testing.T) {
 	}
 }
 
-func TestProductionAcceptsConfiguredBackingStores(t *testing.T) {
-	cfg, err := load(mapLookup(map[string]string{
+func TestProductionRequiresEvidenceKeyring(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{
 		"ACR_ENVIRONMENT":    "production",
 		"ACR_CLICKHOUSE_DSN": "clickhouse://redacted",
 		"ACR_POSTGRES_DSN":   "postgres://redacted",
-		"ACR_LOG_LEVEL":      "warn",
+	}))
+	if err == nil {
+		t.Fatal("expected production evidence keyring configuration error")
+	}
+}
+
+func TestProductionCannotDisableKeyringValidationWithBackingStoreOverride(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{
+		"ACR_ENVIRONMENT":            "production",
+		"ACR_REQUIRE_BACKING_STORES": "false",
+	}))
+	if err == nil {
+		t.Fatal("production disabled backing stores without an evidence keyring")
+	}
+}
+
+func TestProductionAcceptsConfiguredBackingStores(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{
+		"ACR_ENVIRONMENT":            "production",
+		"ACR_CLICKHOUSE_DSN":         "clickhouse://redacted",
+		"ACR_POSTGRES_DSN":           "postgres://redacted",
+		"ACR_LOG_LEVEL":              "warn",
+		"ACR_EVIDENCE_ID_ACTIVE_KID": "current",
+		"ACR_EVIDENCE_ID_KEYS":       "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
 	}))
 	if err != nil {
 		t.Fatal(err)

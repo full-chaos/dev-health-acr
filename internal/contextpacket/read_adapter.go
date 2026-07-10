@@ -168,11 +168,11 @@ func (s *EvaluationStore) ResolveEvidence(ctx context.Context, principal storage
 	if err := ctx.Err(); err != nil {
 		return contractsv1.ExpandedEvidence{}, err
 	}
-	if strings.TrimSpace(principal.OrgID) != s.orgID {
+	if strings.TrimSpace(principal.OrgID) != s.orgID || !validOpaqueEvidenceRefID(evidenceRefID) {
 		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
 	}
 	if err := auth.AuthorizeRepository(principal, s.corpus.Scenario.Repository.Slug); err != nil {
-		return contractsv1.ExpandedEvidence{}, fmt.Errorf("authorize evidence repository: %w", err)
+		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
 	}
 	record, ok := s.corpus.Evidence[evidenceRefID]
 	if !ok {
@@ -182,11 +182,7 @@ func (s *EvaluationStore) ResolveEvidence(ctx context.Context, principal storage
 	if err != nil {
 		return contractsv1.ExpandedEvidence{}, err
 	}
-	expanded := contractsv1.ExpandedEvidence{SchemaVersion: contractsv1.ExpandedEvidenceSchema, Evidence: evidence, ResolvedAt: evidence.ObservedAt, Availability: evidence.Availability, Excerpt: record.Summary, Structured: map[string]any{}}
-	if err := validateExpandedEvidence(expanded); err != nil {
-		return contractsv1.ExpandedEvidence{}, err
-	}
-	return expanded, nil
+	return NewEvidenceResolver(EvidenceResolverOptions{}).Expand(ctx, EvidenceExpansionInput{Evidence: evidence, Excerpt: record.Summary})
 }
 
 func (s *EvaluationStore) matchTask(request contractsv1.ContextPacketRequest) (evalfixture.Task, bool) {
