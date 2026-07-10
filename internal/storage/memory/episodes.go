@@ -35,7 +35,7 @@ func NewEpisodeStore() *EpisodeStore {
 }
 
 func (s *EpisodeStore) CreateIdempotent(_ context.Context, principal storage.Principal, create contractsv1.AgentEpisodeCreate, expiresAt *time.Time) (contractsv1.AgentEpisode, bool, error) {
-	if !repositoryAllowed(principal.RepositoryScopes, create.Repository.Slug) {
+	if !episodeRepositoryAllowed(principal.RepositoryScopes, create.Repository.Slug) {
 		return contractsv1.AgentEpisode{}, false, storage.ErrNotFound
 	}
 	s.mu.Lock()
@@ -75,7 +75,7 @@ func (s *EpisodeStore) GetByClientEpisodeID(_ context.Context, principal storage
 		return contractsv1.AgentEpisode{}, storage.ErrNotFound
 	}
 	record := s.byID[id]
-	if record.episode.RedactionState == "purged_tombstone" || episodeExpired(record.episode, time.Now().UTC()) || !repositoryAllowed(principal.RepositoryScopes, record.episode.Repository.Slug) {
+	if record.episode.RedactionState == "purged_tombstone" || episodeExpired(record.episode, time.Now().UTC()) || !episodeRepositoryAllowed(principal.RepositoryScopes, record.episode.Repository.Slug) {
 		return contractsv1.AgentEpisode{}, storage.ErrNotFound
 	}
 	return presentation(record.episode), nil
@@ -85,7 +85,7 @@ func (s *EpisodeStore) Redact(_ context.Context, principal storage.Principal, ep
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, exists := s.byID[episodeID]
-	if !exists || record.orgID != principal.OrgID || record.episode.RedactionState == "purged_tombstone" || episodeExpired(record.episode, time.Now().UTC()) || record.episode.AgentEpisodeCreate.Repository.Slug == "" || !repositoryAllowed(principal.RepositoryScopes, record.episode.Repository.Slug) {
+	if !exists || record.orgID != principal.OrgID || record.episode.RedactionState == "purged_tombstone" || episodeExpired(record.episode, time.Now().UTC()) || record.episode.AgentEpisodeCreate.Repository.Slug == "" || !episodeRepositoryAllowed(principal.RepositoryScopes, record.episode.Repository.Slug) {
 		return contractsv1.AgentEpisode{}, storage.ErrNotFound
 	}
 	if record.episode.RedactionState == "active" {
@@ -122,7 +122,7 @@ func (s *EpisodeStore) purgeExpired(before time.Time, limit int, orgID string, s
 	defer s.mu.Unlock()
 	purged := 0
 	for id, record := range s.byID {
-		if purged == limit || record.episode.RedactionState == "purged_tombstone" || record.orgID != orgID || !repositoryAllowed(scopes, record.episode.Repository.Slug) {
+		if purged == limit || record.episode.RedactionState == "purged_tombstone" || record.orgID != orgID || !episodeRepositoryAllowed(scopes, record.episode.Repository.Slug) {
 			continue
 		}
 		expiresAt := episodeExpiry(record.episode)
@@ -217,7 +217,7 @@ func defaultRetention(class string) time.Duration {
 	}
 }
 
-func repositoryAllowed(scopes []string, slug string) bool {
+func episodeRepositoryAllowed(scopes []string, slug string) bool {
 	for _, scope := range scopes {
 		scope = strings.ToLower(strings.TrimSpace(scope))
 		if scope == "*" || scope == strings.ToLower(slug) || strings.HasSuffix(scope, "/*") && strings.TrimSuffix(scope, "/*") == strings.Split(strings.ToLower(slug), "/")[0] {

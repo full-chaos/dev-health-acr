@@ -23,7 +23,7 @@ func episodeDigest(payload []byte) string {
 }
 
 func authorizedRepositoryStorageID(principal storage.Principal, slug string) (string, error) {
-	if strings.TrimSpace(principal.OrgID) == "" || !repositoryAllowed(principal.RepositoryScopes, slug) {
+	if strings.TrimSpace(principal.OrgID) == "" || !episodeRepositoryAllowed(principal.RepositoryScopes, slug) {
 		return "", storage.ErrNotFound
 	}
 	digest := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(principal.OrgID)) + "\x00" + strings.ToLower(strings.TrimSpace(slug))))
@@ -70,7 +70,7 @@ func redactedCreate(value contractsv1.AgentEpisodeCreate) contractsv1.AgentEpiso
 	return value
 }
 
-func repositoryAllowed(scopes []string, slug string) bool {
+func episodeRepositoryAllowed(scopes []string, slug string) bool {
 	normalized := strings.ToLower(slug)
 	owner, _, _ := strings.Cut(normalized, "/")
 	for _, scope := range scopes {

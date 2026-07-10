@@ -28,7 +28,7 @@ func NewEpisodeStore(db *sql.DB) (*EpisodeStore, error) {
 }
 
 func (s *EpisodeStore) CreateIdempotent(ctx context.Context, principal storage.Principal, create contractsv1.AgentEpisodeCreate, expiresAt *time.Time) (contractsv1.AgentEpisode, bool, error) {
-	if !repositoryAllowed(principal.RepositoryScopes, create.Repository.Slug) {
+	if !episodeRepositoryAllowed(principal.RepositoryScopes, create.Repository.Slug) {
 		return contractsv1.AgentEpisode{}, false, storage.ErrNotFound
 	}
 	repositoryID, err := authorizedRepositoryStorageID(principal, create.Repository.Slug)
@@ -197,7 +197,7 @@ WHERE org_id = $1::uuid AND (idempotency_key = $2 OR client_episode_id = $3)`, p
 	var episodeID, repoSlug, state string
 	var payload []byte
 	var createdAt time.Time
-	if err := rows.Scan(&episodeID, &repoSlug, &payload, &createdAt, &state); err != nil || !repositoryAllowed(principal.RepositoryScopes, repoSlug) || episodePayloadDigest(payload) != expectedDigest || rows.Next() {
+	if err := rows.Scan(&episodeID, &repoSlug, &payload, &createdAt, &state); err != nil || !episodeRepositoryAllowed(principal.RepositoryScopes, repoSlug) || episodePayloadDigest(payload) != expectedDigest || rows.Next() {
 		return contractsv1.AgentEpisode{}, storage.ErrConflict
 	}
 	if state == "purged_tombstone" {
@@ -229,7 +229,7 @@ func scanAuthorizedEpisode(row episodeScanner, principal storage.Principal) (con
 	if err := row.Scan(&episodeID, &repoSlug, &payload, &createdAt, &state); err != nil {
 		return contractsv1.AgentEpisode{}, err
 	}
-	if !repositoryAllowed(principal.RepositoryScopes, repoSlug) {
+	if !episodeRepositoryAllowed(principal.RepositoryScopes, repoSlug) {
 		return contractsv1.AgentEpisode{}, storage.ErrNotFound
 	}
 	return decodeEpisode(episodeID, payload, createdAt, state)
