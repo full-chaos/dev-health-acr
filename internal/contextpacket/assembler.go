@@ -13,13 +13,18 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-const staleAfterSeconds = 86_400
+const (
+	staleAfterSeconds        = 86_400
+	defaultSnapshotRetention = 30 * 24 * time.Hour
+)
 
 var ErrEvidenceScopeMismatch = errors.New("contextpacket: evidence bundle scope does not match resolved scope")
 
 type Options struct {
 	Now                                   func() time.Time
 	ServiceVersion, MinimumSidecarVersion string
+	SnapshotStore                         storage.PacketStore
+	SnapshotRetention                     time.Duration
 }
 type Assembler struct {
 	store   storage.EvidenceStore
@@ -36,6 +41,9 @@ func NewAssembler(store storage.EvidenceStore, options Options) *Assembler {
 	if options.MinimumSidecarVersion == "" {
 		options.MinimumSidecarVersion = "0.1.0"
 	}
+	if options.SnapshotRetention <= 0 {
+		options.SnapshotRetention = defaultSnapshotRetention
+	}
 	return &Assembler{store: store, options: options}
 }
 
@@ -44,7 +52,7 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 		if errors.Is(err, context.Canceled) {
 			return contractsv1.ContextPacket{}, err
 		}
-		return a.degraded(a.basePacket(principal, request), principal, request, err)
+		return a.degraded(ctx, a.basePacket(principal, request), principal, request, err)
 	}
 	if err := request.Validate(); err != nil {
 		return contractsv1.ContextPacket{}, fmt.Errorf("validate context packet request: %w", err)
@@ -59,9 +67,9 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 			return contractsv1.ContextPacket{}, context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return a.degraded(packet, principal, request, context.DeadlineExceeded)
+			return a.degraded(ctx, packet, principal, request, context.DeadlineExceeded)
 		}
-		return a.degraded(packet, principal, request, err)
+		return a.degraded(ctx, packet, principal, request, err)
 	}
 	scope, err = normalizeUnresolvedScope(principal, request, packet.ContextPacketID, scope)
 	if err != nil {
@@ -74,22 +82,22 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 			return contractsv1.ContextPacket{}, context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return a.degraded(packet, principal, request, context.DeadlineExceeded)
+			return a.degraded(ctx, packet, principal, request, context.DeadlineExceeded)
 		}
-		return a.degraded(packet, principal, request, err)
+		return a.degraded(ctx, packet, principal, request, err)
 	}
 	bundle.ResolvedScope, err = normalizeUnresolvedScope(principal, request, packet.ContextPacketID, bundle.ResolvedScope)
 	if err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
 	if !sameScope(scope, bundle.ResolvedScope) {
-		return a.degraded(packet, principal, request, ErrEvidenceScopeMismatch)
+		return a.degraded(ctx, packet, principal, request, ErrEvidenceScopeMismatch)
 	}
 	if bundle.QueryVersion != "" {
 		packet.QueryVersion = bundle.QueryVersion
 	}
 	if err := validateEvidenceBundle(bundle.Evidence); err != nil {
-		return a.degraded(packet, principal, request, err)
+		return a.degraded(ctx, packet, principal, request, err)
 	}
 	visible, hidden := displayableEvidence(bundle.Evidence)
 	bundle.Evidence = visible
@@ -111,7 +119,7 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	if err := validatePacket(packet); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
-	return packet, nil
+	return a.saveSnapshot(ctx, principal, packet)
 }
 
 func (a *Assembler) basePacket(principal storage.Principal, request contractsv1.ContextPacketRequest) contractsv1.ContextPacket {
@@ -122,7 +130,7 @@ func (a *Assembler) basePacket(principal storage.Principal, request contractsv1.
 	return contractsv1.ContextPacket{SchemaVersion: contractsv1.ContextPacketSchema, ContextPacketID: packetID(principal, request), RequestID: request.RequestID, GeneratedAt: now, Goal: request.Goal, Repository: request.Repository, RequestedScope: request.Scope, QueryVersion: QueryVersionV1, RankingVersion: RankingVersionV1, Summary: "Evidence-backed context for the requested goal.", Items: []contractsv1.ContextPacketItem{}, RequiredChecks: []contractsv1.RequiredCheck{}, RecommendedNextSteps: []contractsv1.RecommendedStep{}, Freshness: contractsv1.Freshness{AsOf: now, StaleAfterSeconds: staleAfterSeconds, Watermarks: []contractsv1.SourceWatermark{}}, Coverage: contractsv1.Coverage{SourcesConsidered: []string{}, SourcesAvailable: []string{}, SourcesUnavailable: []contractsv1.UnavailableSource{}, DegradedReasons: []string{}}, Budget: contractsv1.PacketBudget{MaxItems: request.Options.MaxItems, MaxOutputTokens: request.Options.MaxOutputTokens, MaxSerializedBytes: request.Options.MaxSerializedBytes}, Warnings: []string{}, Compatibility: contractsv1.Compatibility{ServiceVersion: a.options.ServiceVersion, MinimumSidecarVersion: a.options.MinimumSidecarVersion, SupportedSchemaVersions: []string{contractsv1.ContextPacketSchema, contractsv1.ContextPacketItemSchema, contractsv1.EvidenceRefSchema}}}
 }
 
-func (a *Assembler) degraded(packet contractsv1.ContextPacket, principal storage.Principal, request contractsv1.ContextPacketRequest, cause error) (contractsv1.ContextPacket, error) {
+func (a *Assembler) degraded(ctx context.Context, packet contractsv1.ContextPacket, principal storage.Principal, request contractsv1.ContextPacketRequest, cause error) (contractsv1.ContextPacket, error) {
 	if packet.ResolvedScope.RepoID == "" {
 		scope, err := unresolvedScope(principal, request, packet.ContextPacketID)
 		if err != nil {
@@ -142,7 +150,24 @@ func (a *Assembler) degraded(packet contractsv1.ContextPacket, principal storage
 	if err := finalizePacket(&packet); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
-	return packet, validatePacket(packet)
+	if err := validatePacket(packet); err != nil {
+		return contractsv1.ContextPacket{}, err
+	}
+	return a.saveSnapshot(ctx, principal, packet)
+}
+
+func (a *Assembler) saveSnapshot(ctx context.Context, principal storage.Principal, packet contractsv1.ContextPacket) (contractsv1.ContextPacket, error) {
+	if a.options.SnapshotStore == nil {
+		return packet, nil
+	}
+	if ctx.Err() != nil {
+		return packet, nil
+	}
+	expiresAt := a.options.Now().UTC().Add(a.options.SnapshotRetention)
+	if err := a.options.SnapshotStore.SaveSnapshot(ctx, principal, packet, expiresAt); err != nil {
+		return contractsv1.ContextPacket{}, fmt.Errorf("save packet snapshot: %w", err)
+	}
+	return packet, nil
 }
 
 func unresolvedScope(principal storage.Principal, request contractsv1.ContextPacketRequest, id string) (contractsv1.ResolvedScope, error) {
