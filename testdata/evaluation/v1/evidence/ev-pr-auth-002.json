@@ -1,0 +1,11 @@
+{
+  "schema_version": "evaluation_evidence.v1",
+  "evidence_id": "ev-pr-auth-002",
+  "system": "github_pr",
+  "entity_type": "pull_request",
+  "entity_id": "pr-1042",
+  "display_label": "PR #1042: Typed session tokens for auth refactor",
+  "safe_uri": "https://example.invalid/pulls/1042",
+  "summary": "Synthetic pull request review discussion flagging that the new typed token struct should reject tokens with a missing expiry field rather than defaulting to a long-lived session.",
+  "observed_at": "2026-01-12T14:30:00Z"
+}

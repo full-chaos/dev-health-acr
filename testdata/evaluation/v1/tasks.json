@@ -1,0 +1,46 @@
+{
+  "schema_version": "evaluation_tasks.v1",
+  "tasks": [
+    {
+      "schema_version": "evaluation_task.v1",
+      "task_id": "task-001-checkout-flake-exact-commit",
+      "goal": "Investigate the flaky checkout integration test on a pinned commit.",
+      "scope": {
+        "branch": "main",
+        "commit_sha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+      },
+      "expected_status": "complete",
+      "expected_evidence_ids": [
+        "ev-ci-checkout-001",
+        "ev-commit-checkout-001"
+      ],
+      "notes": "Exact-commit scope; evidence must resolve without branch or repo fallback."
+    },
+    {
+      "schema_version": "evaluation_task.v1",
+      "task_id": "task-002-auth-refactor-branch",
+      "goal": "Review the recent authentication refactor for regression risk before merge.",
+      "scope": {
+        "branch": "main"
+      },
+      "expected_status": "complete",
+      "expected_evidence_ids": [
+        "ev-commit-auth-002",
+        "ev-pr-auth-002"
+      ],
+      "notes": "Branch-filtered scope with no commit pin; exercises branch-level resolution."
+    },
+    {
+      "schema_version": "evaluation_task.v1",
+      "task_id": "task-003-unindexed-branch-empty",
+      "goal": "Diagnose failing release checks on a branch with no indexed evidence.",
+      "scope": {
+        "branch": "release/1.4-unindexed"
+      },
+      "expected_status": "empty",
+      "expected_evidence_ids": [],
+      "degraded_reason": "no_indexed_evidence_for_branch",
+      "notes": "Controlled degraded/empty case; this branch intentionally has zero fixture evidence."
+    }
+  ]
+}

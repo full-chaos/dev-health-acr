@@ -1,0 +1,11 @@
+{
+  "schema_version": "evaluation_evidence.v1",
+  "evidence_id": "ev-ci-checkout-001",
+  "system": "ci",
+  "entity_type": "check_run",
+  "entity_id": "checkout-e2e-run-4821",
+  "display_label": "checkout-e2e / flaky retry on step 'add-to-cart'",
+  "safe_uri": "https://example.invalid/ci/runs/4821",
+  "summary": "Synthetic CI check run showing an intermittent failure in the checkout end-to-end suite at commit a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2. The 'add-to-cart' step failed twice before succeeding on retry.",
+  "observed_at": "2026-01-14T10:15:00Z"
+}

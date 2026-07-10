@@ -1,0 +1,12 @@
+{
+  "schema_version": "evaluation_scenario.v1",
+  "scenario_id": "widget-service-checkout-flake",
+  "description": "Synthetic, public-safe scenario built around a fictional widget-service repository. It exercises ACR's deterministic context assembly against a fixed, versioned evaluation corpus. No customer, production, or scraped data is present anywhere in this corpus.",
+  "repository": {
+    "slug": "example-org/widget-service",
+    "remote_url": "https://github.com/example-org/widget-service"
+  },
+  "default_branch": "main",
+  "generated_by": "internal/evalfixture (CHAOS-2918)",
+  "clean_room_notice": "All identifiers, commit SHAs, code excerpts, and evidence records in this corpus are synthetic and authored specifically for ACR evaluation. See docs/evaluation-fixture.md for provenance and regeneration instructions."
+}
