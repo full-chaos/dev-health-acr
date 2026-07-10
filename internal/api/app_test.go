@@ -12,8 +12,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
+
+type evidenceRows struct{}
+
+func (evidenceRows) ResolveEvidenceScope(context.Context, contextpacket.ReadPlan) (contractsv1.ResolvedScope, error) {
+	return contractsv1.ResolvedScope{}, nil
+}
+
+func (evidenceRows) EvidenceRows(context.Context, contextpacket.ReadPlan) ([]contractsv1.EvidenceRef, []contractsv1.SourceWatermark, []contractsv1.UnavailableSource, error) {
+	return nil, nil, nil, nil
+}
 
 func testLogger(buffer *bytes.Buffer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(buffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -54,6 +65,19 @@ func TestHealth(t *testing.T) {
 	}
 	if response.Header().Get("X-Request-ID") != "req_generated" {
 		t.Fatalf("missing generated request id: %q", response.Header().Get("X-Request-ID"))
+	}
+}
+
+func TestNewEvidenceStore_uses_injected_factory(t *testing.T) {
+	codec, err := contextpacket.NewEvidenceIDCodec(contextpacket.EvidenceIDKeyring{ActiveKID: "test", Keys: map[string][]byte{"test": []byte("01234567890123456789012345678901")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := testApp(t)
+	app.evidenceStoreFactory = contextpacket.NewEvidenceStoreFactory(codec)
+	store, err := app.NewEvidenceStore(evidenceRows{})
+	if err != nil || store == nil {
+		t.Fatalf("evidence store = %#v, error = %v", store, err)
 	}
 }
 

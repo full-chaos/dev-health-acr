@@ -36,6 +36,15 @@ type CatalogResult struct {
 	Unavailable []contractsv1.UnavailableSource
 }
 
+func catalogSourceQuery(id string) *SourceQuery {
+	for index := range SourceQueryCatalogV1 {
+		if SourceQueryCatalogV1[index].ID == id {
+			return &SourceQueryCatalogV1[index]
+		}
+	}
+	return nil
+}
+
 func ExecuteCatalog(ctx context.Context, executor SourceQueryExecutor, plan ReadPlan) (CatalogResult, error) {
 	if executor == nil {
 		return CatalogResult{}, fmt.Errorf("contextpacket: source query executor is required")

@@ -44,6 +44,8 @@ type Config struct {
 	RequireBackingStores  bool
 	MinimumSidecarVersion string
 	EntitlementKey        string
+	EvidenceIDActiveKID   string
+	EvidenceIDKeys        map[string][]byte
 	MaxItems              int
 	MaxOutputTokens       int
 	MaxSerializedBytes    int
@@ -74,6 +76,10 @@ func load(lookup lookupEnv) (Config, error) {
 		PostgresDSN:           stringValue(lookup, "ACR_POSTGRES_DSN", ""),
 		MinimumSidecarVersion: stringValue(lookup, "ACR_MINIMUM_SIDECAR_VERSION", defaultMinimumSidecar),
 		EntitlementKey:        stringValue(lookup, "ACR_ENTITLEMENT_KEY", defaultEntitlementKey),
+		EvidenceIDActiveKID:   stringValue(lookup, "ACR_EVIDENCE_ID_ACTIVE_KID", ""),
+	}
+	if cfg.EvidenceIDKeys, err = evidenceIDKeysValue(lookup); err != nil {
+		return Config{}, err
 	}
 
 	if cfg.RequestTimeout, err = durationValue(lookup, "ACR_REQUEST_TIMEOUT", defaultRequestTimeout); err != nil {
@@ -155,6 +161,9 @@ func (c Config) Validate() error {
 	if c.RequestsPerMinute < 1 {
 		return errors.New("ACR_REQUESTS_PER_MINUTE must be positive")
 	}
+	if c.Environment == "production" && !hasActiveEvidenceIDKey(c) {
+		return errors.New("ACR_EVIDENCE_ID_ACTIVE_KID and ACR_EVIDENCE_ID_KEYS must configure an active evidence key in production")
+	}
 	if c.RequireBackingStores {
 		if strings.TrimSpace(c.ClickHouseDSN) == "" {
 			return errors.New("ACR_CLICKHOUSE_DSN is required when backing stores are required")
@@ -164,6 +173,10 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func hasActiveEvidenceIDKey(c Config) bool {
+	return validEvidenceKID(c.EvidenceIDActiveKID) && len(c.EvidenceIDKeys[c.EvidenceIDActiveKID]) >= evidenceIDKeyMinimumBytes
 }
 
 // SafeAttributes returns operational configuration without secret-bearing DSNs.
@@ -176,6 +189,8 @@ func (c Config) SafeAttributes() []any {
 		"postgres_configured", c.PostgresDSN != "",
 		"minimum_sidecar_version", c.MinimumSidecarVersion,
 		"entitlement_key", c.EntitlementKey,
+		"evidence_id_active_kid", c.EvidenceIDActiveKID,
+		"evidence_id_key_count", len(c.EvidenceIDKeys),
 	}
 }
 
