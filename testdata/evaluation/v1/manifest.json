@@ -1,0 +1,30 @@
+{
+  "schema_version": "evaluation_manifest.v1",
+  "corpus_version": "2026-07-10.1",
+  "files": [
+    {
+      "path": "scenario.json",
+      "sha256": "41ddf88a1f73ecde8dfe5653fd4381e94ad984fbafe60c5df76077e0274d20b3"
+    },
+    {
+      "path": "tasks.json",
+      "sha256": "76d4384b3b0727da3526680c246cec62d6180009e3532a9d0e57d001d052e406"
+    },
+    {
+      "path": "evidence/ev-ci-checkout-001.json",
+      "sha256": "38a1a118aba7919c8763ad918ef15d2470eaf07be8bca84055421855ee567adc"
+    },
+    {
+      "path": "evidence/ev-commit-checkout-001.json",
+      "sha256": "7ed905c6db62a51e314a18c059c13a716b205e82cd79bfac4419d725b219e462"
+    },
+    {
+      "path": "evidence/ev-commit-auth-002.json",
+      "sha256": "fb63cad7faa5a7a6833963ea3aaded482f95dc5dd8237bef2390ef3b6527c30d"
+    },
+    {
+      "path": "evidence/ev-pr-auth-002.json",
+      "sha256": "3720d56b79fc7e638b3130bb23e6415a9a70e728db6f9a48fc5d806eba584589"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "schema_version": "evaluation_evidence.v1",
+  "evidence_id": "ev-commit-checkout-001",
+  "system": "git",
+  "entity_type": "commit",
+  "entity_id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "display_label": "checkout: add retry-safe wait for cart drawer animation",
+  "safe_uri": "https://example.invalid/commits/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "summary": "Synthetic commit that introduced a fixed-delay wait before asserting the cart drawer is visible, a common source of flaky UI timing in the checkout suite.",
+  "observed_at": "2026-01-13T18:42:00Z"
+}
