@@ -15,7 +15,7 @@ This repository produces two binaries:
 
 ## Status
 
-Contract-first bootstrap. Health, readiness, capabilities, version, and doctor surfaces exist; context/evidence/episode behavior is implemented by the Phase 1 issues.
+Contract-first bootstrap with a production-shaped `acr-api` service shell. Configuration validation, structured request logging, safe health/readiness/capabilities responses, request IDs, and graceful shutdown are implemented; context/evidence/episode behavior remains in the Phase 1 issues.
 
 ## Product boundary
 
@@ -31,16 +31,17 @@ Contract-first bootstrap. Health, readiness, capabilities, version, and doctor s
 ```text
 cmd/acr-api/                  Hosted Go API entrypoint
 cmd/acr-mcp/                  Local STDIO MCP entrypoint
-cmd/contractcheck/            Go-only contract validation and artifact generation
+cmd/contractcheck/            Go-only contract validation and artifact refresh
 internal/contracts/v1/        Canonical Go DTOs and validation
-internal/contractcheck/       JSON Schema profile/OpenAPI/MCP checker
+internal/contractcheck/       Contract profile validator
 contracts/jsonschema/v1/      JSON Schema 2020-12 wire contracts
-contracts/openapi/            Canonical OpenAPI 3.1 JSON + generated deterministic YAML
+contracts/openapi/            Canonical OpenAPI 3.1 JSON + JSON-compatible YAML mirror
 contracts/mcp/                MCP tool contract bundle
 contracts/examples/v1/        Golden request/response fixtures
 docs/adr/                     Architecture decisions
 docs/                         PRD, threat model, versioning, implementation notes
 docs/implementation-backlog.md  Linear issue reinterpretation and critical path
+docs/service-shell.md          `acr-api` configuration and operational behavior
 ```
 
 ## Contract versions
@@ -56,7 +57,7 @@ docs/implementation-backlog.md  Linear issue reinterpretation and critical path
 - `agent_episode.v1`
 - `error.v1`
 
-JSON Schema is the wire-contract source of truth. Go DTOs, OpenAPI, MCP definitions, web types, examples, and compatibility tests must remain aligned. Contract validation is implemented entirely in Go; CI has no Python runtime or `jsonschema` dependency.
+JSON Schema is the wire-contract source of truth. Go DTOs, OpenAPI, MCP definitions, web types, examples, and compatibility tests must remain aligned. Contract checks are Go-only and require no Python runtime.
 
 ## Local verification
 

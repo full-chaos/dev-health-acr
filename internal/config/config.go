@@ -1,0 +1,238 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	defaultListenAddress      = ":8080"
+	defaultEnvironment        = "development"
+	defaultMinimumSidecar     = "0.1.0"
+	defaultEntitlementKey     = "agent_context_runtime"
+	defaultRequestTimeout     = 15 * time.Second
+	defaultReadHeaderTimeout  = 5 * time.Second
+	defaultReadTimeout        = 20 * time.Second
+	defaultWriteTimeout       = 20 * time.Second
+	defaultIdleTimeout        = 60 * time.Second
+	defaultShutdownTimeout    = 10 * time.Second
+	defaultMaxItems           = 30
+	defaultMaxOutputTokens    = 4000
+	defaultMaxSerializedBytes = 262144
+	defaultRequestsPerMinute  = 60
+)
+
+// Config contains only process-level configuration. Credentials and request
+// identity are resolved by dedicated services and must never be stored here.
+type Config struct {
+	Environment           string
+	ListenAddress         string
+	LogLevel              slog.Level
+	RequestTimeout        time.Duration
+	ReadHeaderTimeout     time.Duration
+	ReadTimeout           time.Duration
+	WriteTimeout          time.Duration
+	IdleTimeout           time.Duration
+	ShutdownTimeout       time.Duration
+	ClickHouseDSN         string
+	PostgresDSN           string
+	RequireBackingStores  bool
+	MinimumSidecarVersion string
+	EntitlementKey        string
+	MaxItems              int
+	MaxOutputTokens       int
+	MaxSerializedBytes    int
+	RequestsPerMinute     int
+}
+
+type lookupEnv func(string) (string, bool)
+
+// Load reads configuration from the process environment and validates it.
+func Load() (Config, error) {
+	return load(os.LookupEnv)
+}
+
+func load(lookup lookupEnv) (Config, error) {
+	environment := stringValue(lookup, "ACR_ENVIRONMENT", defaultEnvironment)
+	requireStoresDefault := environment == "staging" || environment == "production"
+
+	logLevel, err := parseLogLevel(stringValue(lookup, "ACR_LOG_LEVEL", "info"))
+	if err != nil {
+		return Config{}, err
+	}
+
+	cfg := Config{
+		Environment:           environment,
+		ListenAddress:         stringValue(lookup, "ACR_ADDR", defaultListenAddress),
+		LogLevel:              logLevel,
+		ClickHouseDSN:         stringValue(lookup, "ACR_CLICKHOUSE_DSN", ""),
+		PostgresDSN:           stringValue(lookup, "ACR_POSTGRES_DSN", ""),
+		MinimumSidecarVersion: stringValue(lookup, "ACR_MINIMUM_SIDECAR_VERSION", defaultMinimumSidecar),
+		EntitlementKey:        stringValue(lookup, "ACR_ENTITLEMENT_KEY", defaultEntitlementKey),
+	}
+
+	if cfg.RequestTimeout, err = durationValue(lookup, "ACR_REQUEST_TIMEOUT", defaultRequestTimeout); err != nil {
+		return Config{}, err
+	}
+	if cfg.ReadHeaderTimeout, err = durationValue(lookup, "ACR_READ_HEADER_TIMEOUT", defaultReadHeaderTimeout); err != nil {
+		return Config{}, err
+	}
+	if cfg.ReadTimeout, err = durationValue(lookup, "ACR_READ_TIMEOUT", defaultReadTimeout); err != nil {
+		return Config{}, err
+	}
+	if cfg.WriteTimeout, err = durationValue(lookup, "ACR_WRITE_TIMEOUT", defaultWriteTimeout); err != nil {
+		return Config{}, err
+	}
+	if cfg.IdleTimeout, err = durationValue(lookup, "ACR_IDLE_TIMEOUT", defaultIdleTimeout); err != nil {
+		return Config{}, err
+	}
+	if cfg.ShutdownTimeout, err = durationValue(lookup, "ACR_SHUTDOWN_TIMEOUT", defaultShutdownTimeout); err != nil {
+		return Config{}, err
+	}
+	if cfg.RequireBackingStores, err = boolValue(lookup, "ACR_REQUIRE_BACKING_STORES", requireStoresDefault); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxItems, err = intValue(lookup, "ACR_MAX_ITEMS", defaultMaxItems); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxOutputTokens, err = intValue(lookup, "ACR_MAX_OUTPUT_TOKENS", defaultMaxOutputTokens); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxSerializedBytes, err = intValue(lookup, "ACR_MAX_SERIALIZED_BYTES", defaultMaxSerializedBytes); err != nil {
+		return Config{}, err
+	}
+	if cfg.RequestsPerMinute, err = intValue(lookup, "ACR_REQUESTS_PER_MINUTE", defaultRequestsPerMinute); err != nil {
+		return Config{}, err
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func (c Config) Validate() error {
+	switch c.Environment {
+	case "development", "test", "staging", "production":
+	default:
+		return fmt.Errorf("ACR_ENVIRONMENT must be development, test, staging, or production")
+	}
+	if strings.TrimSpace(c.ListenAddress) == "" {
+		return errors.New("ACR_ADDR is required")
+	}
+	for name, value := range map[string]time.Duration{
+		"ACR_REQUEST_TIMEOUT":     c.RequestTimeout,
+		"ACR_READ_HEADER_TIMEOUT": c.ReadHeaderTimeout,
+		"ACR_READ_TIMEOUT":        c.ReadTimeout,
+		"ACR_WRITE_TIMEOUT":       c.WriteTimeout,
+		"ACR_IDLE_TIMEOUT":        c.IdleTimeout,
+		"ACR_SHUTDOWN_TIMEOUT":    c.ShutdownTimeout,
+	} {
+		if value <= 0 {
+			return fmt.Errorf("%s must be positive", name)
+		}
+	}
+	if strings.TrimSpace(c.MinimumSidecarVersion) == "" {
+		return errors.New("ACR_MINIMUM_SIDECAR_VERSION is required")
+	}
+	if strings.TrimSpace(c.EntitlementKey) == "" {
+		return errors.New("ACR_ENTITLEMENT_KEY is required")
+	}
+	if c.MaxItems < 1 || c.MaxItems > 50 {
+		return errors.New("ACR_MAX_ITEMS must be between 1 and 50")
+	}
+	if c.MaxOutputTokens < 500 || c.MaxOutputTokens > 16000 {
+		return errors.New("ACR_MAX_OUTPUT_TOKENS must be between 500 and 16000")
+	}
+	if c.MaxSerializedBytes < 8192 || c.MaxSerializedBytes > 1048576 {
+		return errors.New("ACR_MAX_SERIALIZED_BYTES must be between 8192 and 1048576")
+	}
+	if c.RequestsPerMinute < 1 {
+		return errors.New("ACR_REQUESTS_PER_MINUTE must be positive")
+	}
+	if c.RequireBackingStores {
+		if strings.TrimSpace(c.ClickHouseDSN) == "" {
+			return errors.New("ACR_CLICKHOUSE_DSN is required when backing stores are required")
+		}
+		if strings.TrimSpace(c.PostgresDSN) == "" {
+			return errors.New("ACR_POSTGRES_DSN is required when backing stores are required")
+		}
+	}
+	return nil
+}
+
+// SafeAttributes returns operational configuration without secret-bearing DSNs.
+func (c Config) SafeAttributes() []any {
+	return []any{
+		"environment", c.Environment,
+		"listen_address", c.ListenAddress,
+		"backing_stores_required", c.RequireBackingStores,
+		"clickhouse_configured", c.ClickHouseDSN != "",
+		"postgres_configured", c.PostgresDSN != "",
+		"minimum_sidecar_version", c.MinimumSidecarVersion,
+		"entitlement_key", c.EntitlementKey,
+	}
+}
+
+func stringValue(lookup lookupEnv, key, fallback string) string {
+	if value, ok := lookup(key); ok {
+		return strings.TrimSpace(value)
+	}
+	return fallback
+}
+
+func durationValue(lookup lookupEnv, key string, fallback time.Duration) (time.Duration, error) {
+	value, ok := lookup(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func boolValue(lookup lookupEnv, key string, fallback bool) (bool, error) {
+	value, ok := lookup(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func intValue(lookup lookupEnv, key string, fallback int) (int, error) {
+	value, ok := lookup(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func parseLogLevel(value string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("ACR_LOG_LEVEL must be debug, info, warn, or error")
+	}
+}

@@ -2,9 +2,15 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
+
+var (
+	ErrNotFound = errors.New("storage record not found")
+	ErrConflict = errors.New("storage record conflicts with an existing record")
 )
 
 // Principal is derived from validated authentication. Callers must never build
@@ -46,9 +52,26 @@ type EpisodeStore interface {
 	PurgeExpired(ctx context.Context, before time.Time, limit int) (int, error)
 }
 
+// CredentialRecord is the server-side credential representation. TokenHash is
+// never included in public DTOs, logs, audit metadata, or API responses.
+type CredentialRecord struct {
+	Metadata          contractsv1.ClientCredential
+	TokenHash         string
+	CreatedBy         string
+	LastUsedIP        string
+	LastUsedUserAgent string
+}
+
+// CredentialStore owns both data-plane lookup and the narrow administrative
+// lifecycle needed by ACR. Implementations must make Create/Rotate atomic.
 type CredentialStore interface {
+	Create(ctx context.Context, record CredentialRecord) error
+	List(ctx context.Context, orgID string) ([]contractsv1.ClientCredential, error)
+	GetByID(ctx context.Context, orgID, credentialID string) (contractsv1.ClientCredential, error)
 	FindByTokenHash(ctx context.Context, tokenHash string) (contractsv1.ClientCredential, error)
-	TouchLastUsed(ctx context.Context, credentialID, ip string, usedAt time.Time) error
+	Rotate(ctx context.Context, orgID, credentialID string, replacement CredentialRecord, previousValidUntil *time.Time) error
+	Revoke(ctx context.Context, orgID, credentialID string, revokedAt time.Time) (contractsv1.ClientCredential, error)
+	TouchLastUsed(ctx context.Context, credentialID, ip, userAgent string, usedAt time.Time) error
 }
 
 type AuditEvent struct {

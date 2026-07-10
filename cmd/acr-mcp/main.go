@@ -4,6 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
+
+	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 )
 
 var version = "dev"
@@ -24,13 +28,15 @@ type diagnostic struct {
 }
 
 type doctorReport struct {
-	Service       string       `json:"service"`
-	Version       string       `json:"version"`
-	APIURLSet     bool         `json:"api_url_set"`
-	CredentialSet bool         `json:"credential_set"`
-	WriteEnabled  bool         `json:"write_enabled"`
-	Checks        []diagnostic `json:"checks"`
-	Status        string       `json:"status"`
+	Service              string       `json:"service"`
+	Version              string       `json:"version"`
+	APIURLSet            bool         `json:"api_url_set"`
+	CredentialSet        bool         `json:"credential_set"`
+	CredentialSource     string       `json:"credential_source,omitempty"`
+	CredentialShapeValid bool         `json:"credential_shape_valid"`
+	WriteEnabled         bool         `json:"write_enabled"`
+	Checks               []diagnostic `json:"checks"`
+	Status               string       `json:"status"`
 }
 
 func main() {
@@ -63,9 +69,8 @@ func main() {
 }
 
 func runDoctor() doctorReport {
-	apiURLSet := os.Getenv("ACR_API_URL") != ""
-	credentialSet := os.Getenv("ACR_API_TOKEN") != ""
-	writeEnabled := os.Getenv("ACR_ENABLE_WRITEBACK") == "true"
+	apiURLSet := strings.TrimSpace(os.Getenv("ACR_API_URL")) != ""
+	writeEnabled := strings.EqualFold(strings.TrimSpace(os.Getenv("ACR_ENABLE_WRITEBACK")), "true")
 	checks := []diagnostic{
 		{Name: "binary", Status: "ok", Detail: "acr-mcp is executable"},
 		{Name: "transport", Status: "ok", Detail: "STDIO is the SVS MCP transport"},
@@ -75,23 +80,35 @@ func runDoctor() doctorReport {
 	} else {
 		checks = append(checks, diagnostic{Name: "api_url", Status: "warning", Detail: "ACR_API_URL is not configured"})
 	}
-	if credentialSet {
-		checks = append(checks, diagnostic{Name: "credential", Status: "ok", Detail: "ACR_API_TOKEN is configured and redacted"})
+
+	credential, credentialErr := sidecar.LoadCredential()
+	credentialSet := credentialErr == nil
+	credentialShapeValid := credentialSet && auth.IsTokenShapeValid(credential.Token)
+	if !credentialSet {
+		checks = append(checks, diagnostic{Name: "credential", Status: "warning", Detail: "ACR API credential is not configured"})
+	} else if !credentialShapeValid {
+		checks = append(checks, diagnostic{Name: "credential", Status: "error", Detail: "ACR API credential is configured but malformed"})
 	} else {
-		checks = append(checks, diagnostic{Name: "credential", Status: "warning", Detail: "ACR_API_TOKEN is not configured"})
+		checks = append(checks, diagnostic{Name: "credential", Status: "ok", Detail: "ACR API credential is configured and redacted via " + credential.Source})
 	}
+
 	status := "ok"
 	if !apiURLSet || !credentialSet {
 		status = "incomplete_configuration"
 	}
+	if credentialSet && !credentialShapeValid {
+		status = "invalid_configuration"
+	}
 	return doctorReport{
-		Service:       "dev-health-acr-mcp",
-		Version:       version,
-		APIURLSet:     apiURLSet,
-		CredentialSet: credentialSet,
-		WriteEnabled:  writeEnabled,
-		Checks:        checks,
-		Status:        status,
+		Service:              "dev-health-acr-mcp",
+		Version:              version,
+		APIURLSet:            apiURLSet,
+		CredentialSet:        credentialSet,
+		CredentialSource:     credential.Source,
+		CredentialShapeValid: credentialShapeValid,
+		WriteEnabled:         writeEnabled,
+		Checks:               checks,
+		Status:               status,
 	}
 }
 

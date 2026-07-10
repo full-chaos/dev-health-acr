@@ -1,103 +1,149 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"log"
-	"net/http"
+	"log/slog"
 	"os"
-	"time"
+	"os/signal"
+	"syscall"
 
+	"github.com/full-chaos/dev-health-acr/internal/api"
+	"github.com/full-chaos/dev-health-acr/internal/config"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
-var version = "dev"
-
 func main() {
-	listen := flag.String("listen", ":8080", "HTTP listen address")
-	showVersion := flag.Bool("version", false, "print version and exit")
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Println(version)
-		return
-	}
-
-	server := &http.Server{
-		Addr:              *listen,
-		Handler:           newMux(),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
-	log.Printf("acr-api version=%s listening=%s mode=contract-bootstrap", version, *listen)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Println(err)
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func newMux() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ready", "mode": "contract-bootstrap"})
-	})
-	mux.HandleFunc("GET /api/v1/agent-context/capabilities", func(w http.ResponseWriter, _ *http.Request) {
-		// Bootstrap-only shape. Production middleware replaces the false
-		// entitlement/permission values with authenticated organization state.
-		writeJSON(w, http.StatusOK, contractsv1.Capabilities{
-			SchemaVersion:         contractsv1.CapabilitiesSchema,
-			Service:               "dev-health-acr",
-			ServiceVersion:        version,
-			MinimumSidecarVersion: "0.1.0",
-			SupportedSchemaVersions: []string{
-				contractsv1.ContextPacketRequestSchema,
-				contractsv1.ContextPacketSchema,
-				contractsv1.ContextPacketItemSchema,
-				contractsv1.EvidenceRefSchema,
-				contractsv1.ExpandedEvidenceSchema,
-				contractsv1.CapabilitiesSchema,
-				contractsv1.AgentEpisodeCreateSchema,
-				contractsv1.AgentEpisodeSchema,
-				contractsv1.ErrorSchema,
-			},
-			EnabledTools: []string{},
-			Entitlements: contractsv1.CapabilityEntitlements{
-				AgentContextRuntime: false,
-			},
-			Permissions: contractsv1.CapabilityPermissions{},
-			Limits: contractsv1.CapabilityLimits{
-				MaxItems:           30,
-				MaxOutputTokens:    4000,
-				MaxSerializedBytes: 262144,
-				RequestsPerMinute:  60,
-			},
-			GeneratedAt: time.Now().UTC(),
-		})
-	})
-	return requestIDMiddleware(mux)
-}
-
-func requestIDMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestID := r.Header.Get("X-Request-ID")
-		if requestID != "" {
-			w.Header().Set("X-Request-ID", requestID)
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		log.Printf("encode response: %v", err)
+func run(args []string) error {
+	command := "serve"
+	if len(args) > 0 && args[0] != "-version" && args[0] != "--version" {
+		command = args[0]
+		args = args[1:]
 	}
+	if len(args) > 0 && (args[0] == "-version" || args[0] == "--version") {
+		command = "version"
+	}
+
+	switch command {
+	case "version":
+		info := version.Current()
+		fmt.Printf("%s commit=%s built=%s\n", info.Version, info.Commit, info.Date)
+		return nil
+	case "serve":
+		return serve(args)
+	default:
+		return fmt.Errorf("unknown command %q; use serve or version", command)
+	}
+}
+
+func serve(args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("configuration: %w", err)
+	}
+	flags := flag.NewFlagSet("acr-api serve", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	listen := flags.String("listen", cfg.ListenAddress, "HTTP listen address")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	cfg.ListenAddress = *listen
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("configuration: %w", err)
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	info := version.Current()
+	logger.Info("starting acr-api", append([]any{
+		"version", info.Version,
+		"commit", info.Commit,
+		"build_date", info.Date,
+	}, cfg.SafeAttributes()...)...)
+
+	capabilities := api.StaticCapabilitiesProvider{Value: contractsv1.Capabilities{
+		SchemaVersion:         contractsv1.CapabilitiesSchema,
+		Service:               "dev-health-acr",
+		ServiceVersion:        info.Version,
+		MinimumSidecarVersion: cfg.MinimumSidecarVersion,
+		SupportedSchemaVersions: []string{
+			contractsv1.ContextPacketRequestSchema,
+			contractsv1.ContextPacketSchema,
+			contractsv1.ContextPacketItemSchema,
+			contractsv1.EvidenceRefSchema,
+			contractsv1.ExpandedEvidenceSchema,
+			contractsv1.CapabilitiesSchema,
+			contractsv1.AgentEpisodeCreateSchema,
+			contractsv1.AgentEpisodeSchema,
+			contractsv1.ClientCredentialSchema,
+			contractsv1.ErrorSchema,
+		},
+		EnabledTools: []string{},
+		Entitlements: contractsv1.CapabilityEntitlements{
+			AgentContextRuntime: false,
+		},
+		Permissions: contractsv1.CapabilityPermissions{},
+		Limits: contractsv1.CapabilityLimits{
+			MaxItems:           cfg.MaxItems,
+			MaxOutputTokens:    cfg.MaxOutputTokens,
+			MaxSerializedBytes: cfg.MaxSerializedBytes,
+			RequestsPerMinute:  cfg.RequestsPerMinute,
+		},
+	}}
+
+	checks := []api.ReadinessCheck{
+		api.CheckFunc{CheckName: "configuration", Fn: func(context.Context) error { return cfg.Validate() }},
+	}
+	if cfg.RequireBackingStores {
+		checks = append(checks,
+			api.CheckFunc{CheckName: "clickhouse_configuration", Fn: func(context.Context) error {
+				if cfg.ClickHouseDSN == "" {
+					return errors.New("ClickHouse is not configured")
+				}
+				return nil
+			}},
+			api.CheckFunc{CheckName: "postgres_configuration", Fn: func(context.Context) error {
+				if cfg.PostgresDSN == "" {
+					return errors.New("PostgreSQL is not configured")
+				}
+				return nil
+			}},
+		)
+	}
+
+	app, err := api.NewApp(api.AppConfig{
+		ServiceName:    "dev-health-acr",
+		ServiceVersion: info.Version,
+		RequestTimeout: cfg.RequestTimeout,
+	}, api.Dependencies{
+		Capabilities:    capabilities,
+		ReadinessChecks: checks,
+	}, logger)
+	if err != nil {
+		return fmt.Errorf("initialize application: %w", err)
+	}
+
+	server, err := api.NewServer(api.ServerConfig{
+		ListenAddress:     cfg.ListenAddress,
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
+		ShutdownTimeout:   cfg.ShutdownTimeout,
+	}, app.Handler(), logger)
+	if err != nil {
+		return fmt.Errorf("initialize server: %w", err)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return server.Run(ctx)
 }
