@@ -1,67 +1,158 @@
-# SVS threat model, privacy, and retention
+# SVS threat model, privacy, redaction, and retention contract
 
-## Assets
+This document is the implementation contract for ACR security and data handling in SVS. Requirements not marked **current** are owned by the named downstream issue and must be implemented and tested before that issue can close.
 
-- Engineering evidence and repository metadata.
-- Organization and repository authorization boundaries.
-- ACR client credentials.
-- Context packet snapshots.
-- Agent episode summaries and artifact references.
+## Trust boundaries and data flow
 
-## Primary threats and controls
+```text
+Untrusted browser content
+  -> dev-health-web server (sanitizes rendered evidence)
+  -> trusted hosted user assertion/JWT
+  -> acr-api
 
-### Cross-tenant or cross-repository disclosure
+Untrusted agent output and task input
+  -> acr-mcp over local STDIO
+  -> fcacr_ bearer over HTTPS
+  -> acr-api
 
-- Organization and repository scope are derived from authenticated server context.
-- Client-supplied org identifiers are ignored.
-- Evidence IDs are opaque and checked against org/repo scope on every expansion.
-- Database access uses row/org predicates and a read-only ClickHouse principal.
+dev-health-ops entitlement source
+  -> organization-scoped agent_context_runtime decision
+  -> acr-api independently enforces entitlement, permission, org, and repo scope
 
-### Prompt injection through evidence
+acr-api
+  -> read-only, scoped ClickHouse evidence adapters
+  -> ACR-owned Postgres credentials, snapshots, episodes, and audit events
+```
 
-- Evidence text is labeled as untrusted data.
-- The sidecar and API never execute retrieved instructions.
-- The API does not follow arbitrary URLs from source data.
-- The web inspector sanitizes markdown and external links.
+Trust does not transfer across an arrow automatically:
 
-### Credential theft
+- The browser and every retrieved excerpt, issue, PR, review, document, artifact, URL, task goal, and transcript reference are untrusted data.
+- `acr-mcp` does not make evidence trustworthy. It must not execute retrieved instructions and must keep write tools disabled unless the user explicitly enables them.
+- `acr-api` derives organization identity, repositories, permissions, and product entitlement from authenticated server context. Request bodies cannot override them.
+- A trusted web assertion and an ACR client credential are distinct authentication paths. A Dev Health license artifact is never an ACR bearer credential.
+- Every opaque packet, evidence, and episode lookup rechecks organization and repository authorization. A denied explicit repository selector may return `repo_forbidden`; a foreign, deleted, or unknown opaque object must use the same generic not-found response so existence is not disclosed.
+- ClickHouse is read-only evidence. ACR Postgres owns operational state. Neither path uses External Push.
 
-- ACR credentials are never command-line flags or query parameters.
-- Environment variables are supported as a fallback; OS keychain/config integrations are preferred.
-- Diagnostics redact secrets and bearer headers.
-- Server stores only secure credential hashes.
+## Data classes
 
-### Excessive data collection
+| Class | Meaning | Examples |
+| --- | --- | --- |
+| Secret | Credential material that must never be returned or logged | plaintext `fcacr_` token; bearer header |
+| Confidential | Customer/repository content or linkable operational detail | goals, excerpts, summaries, paths, repository/commit scope, payload JSON |
+| Internal | Identifiers, policy, lifecycle, and audit metadata | org/repo IDs, versions, status, timestamps, actor/resource IDs |
 
-- Raw transcripts are not accepted in SVS.
-- Transcript mode defaults to `none`.
-- Optional references are opaque and never dereferenced by ACR.
-- Evidence excerpts are capped at 1,000 characters and should be omitted unless necessary.
+Plaintext credentials and raw transcript content are not persistence classes because ACR must not persist them.
 
-### Duplicate or replayed writes
+## Persisted fields and retention
 
-- Episode writes require `Idempotency-Key` and `client_episode_id`.
-- Repeated identical writes return the existing episode.
-- Conflicting reuse returns `409`.
+The column lists below are exhaustive for `migrations/postgres/0001_acr_core.sql`. JSON payloads are classified again by logical content because a single JSONB column contains fields with different sensitivity.
 
-### Resource exhaustion
+### `acr.client_credentials`
 
-- Request goals, file lists, packet item counts, excerpts, and token budgets are bounded by schema.
-- Per-org and per-credential rate limits apply.
-- Query timeouts return partial/degraded packets where safe.
+| Fields | Class | Retention requirement |
+| --- | --- | --- |
+| `credential_id`, `org_id`, `name`, `token_prefix`, `repository_scopes`, `scopes`, `created_by`, `created_at`, `expires_at`, `revoked_at`, `last_used_at` | Internal | Current migration has no purge timestamp or deletion job. Rows remain after expiry/revocation until an authorized credential-deletion policy is implemented and disclosed; revocation only makes a row unusable. |
+| `token_hash` | Secret | Same row lifetime; never logged or returned. Plaintext is never persisted. |
+| `last_used_ip`, `last_used_user_agent` | Confidential | Same row lifetime, with access restricted to authorized operational use. |
 
-## Default retention
+### `acr.context_packet_snapshots`
 
-- Context packet snapshots: 30 days.
-- Agent episode metadata: 90 days.
-- Raw transcripts: never stored in SVS.
-- Retention is configurable only within licensed policy bounds.
-- Administrative purge and redaction produce an audit tombstone rather than silently mutating history.
+| Fields | Class | Retention requirement |
+| --- | --- | --- |
+| `context_packet_id`, `org_id`, `repo_id`, `request_id`, `schema_version`, `query_version`, `ranking_version`, `scope_resolution`, `status`, `generated_at`, `expires_at`, `created_at` | Internal | `expires_at` is mandatory. The migration records 30 days as the default; CHAOS-2917 must set and enforce expiry and purge. |
+| `repo_slug`, `payload` | Confidential | Same snapshot expiry. Payload redaction/purge cannot silently recompute a packet. |
 
-## Audit events
+Snapshot `payload` logical fields are Confidential when they contain the goal, task reference, repository/branch/commit/files, item titles/summaries, evidence excerpts or references, next steps, and required checks. Schema/query/ranking versions, coverage, freshness, and unavailable-source status are Internal unless combined with confidential source identifiers.
 
-- Credential created, rotated, revoked, and used.
-- Context packet requested and denied.
-- Evidence expanded and denied.
-- Episode created, deduplicated, redacted, and purged.
-- Entitlement denial and rate-limit denial.
+### `acr.agent_episodes`
+
+| Fields | Class | Retention requirement |
+| --- | --- | --- |
+| `episode_id`, `org_id`, `repo_id`, `context_packet_id`, `client_episode_id`, `idempotency_key`, `schema_version`, `outcome`, `retention_class`, `redaction_state`, `started_at`, `ended_at`, `created_at`, `expires_at`, `redacted_at` | Internal | Driven by the validated retention class below. |
+| `repo_slug`, `payload` | Confidential | Same retention class. Raw transcripts remain prohibited. |
+
+Episode `payload` logical fields classify goal, task reference, repository/branch/commit, agent/model identity, summary, files touched, artifact URIs, tests, opaque transcript reference, and redacted transcript summary as Confidential. Client/version values and outcome are Internal when stored separately from customer content.
+
+Retention classes are contract values, not suggestions:
+
+- `default_90d`: T6 sets `expires_at` to 90 days from creation.
+- `short_30d`: T6 sets `expires_at` to 30 days from creation.
+- `legal_hold`: T6 leaves expiry unset and requires an authorized administrative release process.
+- `no_persist`: T6 stores no episode content. To preserve identical-retry and conflicting-key behavior, it may retain an internal idempotency tombstone/digest under the existing unique keys, with `redaction_state=purged_tombstone` and no readable episode payload. Public reads use generic not-found. If the existing table cannot represent that tombstone without retaining prohibited content, T6 must make the full contract/migration update before shipping rather than weakening idempotency.
+
+### `acr.audit_events`
+
+| Fields | Class | Retention requirement |
+| --- | --- | --- |
+| `audit_event_id`, `org_id`, `repo_id`, `actor_type`, `actor_id`, `action`, `resource_type`, `resource_id`, `status`, `request_id`, `created_at` | Internal | Existing Dev Health compliance policy; this repository does not define a duration or expiry column. Deployment documentation must disclose the effective policy. |
+| `metadata` | Confidential | Same audit policy. Metadata must be allowlisted and must exclude credentials, bearer headers, raw transcripts, and raw evidence bodies. |
+
+## Redaction and purge semantics
+
+CHAOS-2904 and CHAOS-2917 implement these rules without changing v1 wire semantics silently:
+
+1. `active` records are readable only after independent org/repo authorization.
+2. Episode redaction changes `redaction_state` to `redacted`, records `redacted_at`, and writes an audit event whose allowlisted metadata carries the administrative reason. A readable redacted projection preserves required IDs, repository/scope, client, timestamps, outcome, and retention metadata; replaces `goal` and `summary` with a fixed redacted marker; clears optional task reference and artifact arrays; and sets transcript mode to `none`. The projection must validate as `agent_episode.v1`.
+3. Expiry purge retains only the database columns required for org/repo scoping, uniqueness/idempotency, lifecycle state, and audit correlation; sets `redaction_state=purged_tombstone`; and replaces episode content with a non-readable tombstone representation. Code must branch on `redaction_state` before decoding payload. Public reads return generic not-found. If the NOT-NULL payload column or service return type cannot support this safely, T6 must update the migration and every contract-first artifact before shipping.
+4. Packet expiry deletes the snapshot row and writes an audit event; the current packet table has no tombstone state and its payload is NOT NULL. Retrieval never regenerates a packet in place of an expired snapshot.
+5. A redaction/purge operation is org-scoped, auditable, idempotent, and cannot erase the audit event that records it.
+6. If implementation cannot satisfy these rules with existing required response fields, the owning issue must perform the full contract-first update before shipping; it must not return an invalid partial object.
+
+## Residency disclosure
+
+- The repository fixes storage roles, not geographic regions: ClickHouse holds read-only engineering evidence and ACR Postgres holds operational state.
+- The actual region, subprocessors, backups, replicas, and cross-region transfer behavior are deployment facts. Production deployment documentation must disclose them before customer use; this document does not invent a region.
+- `acr-mcp` reads a credential from `ACR_API_TOKEN` or from the caller-selected `ACR_API_TOKEN_FILE`. It checks restrictive file permissions on non-Windows systems. It does not create or manage a home-directory credential file.
+- The sidecar must not persist packets, episode payloads, or raw transcripts locally.
+
+## Evidence content, markup, and URIs
+
+- URI fields may contain absolute server-generated HTTPS/provider references allowed by the v1 schemas. They are references only.
+- ACR never dereferences or fetches an evidence URI discovered in source content. Evidence expansion resolves opaque IDs through typed, authorized server-side adapters.
+- CHAOS-2906 allowlists provider URI generation and bounds excerpts/structured fields. It strips hidden provider fields and never exposes credentials or transcript bodies.
+- `dev-health-web` sanitizes untrusted Markdown/HTML and external links before rendering. No source text becomes executable HTML, JavaScript, shell, prompt, or tool instruction.
+- Public demos and fixtures require explicit synthetic/public-safe review. CHAOS-2918 owns the fixed corpus and hash manifest.
+
+## Limits: current contract versus downstream enforcement
+
+**Current contract/config validation**:
+
+- request ID: 8-256 characters; goal: 1-4,000; repository slug: at most 512;
+- branch: at most 512; task reference: at most 1,024; files: at most 200 entries, each 1-2,048; time window: 1-365 days;
+- packet options: 1-50 items, 500-16,000 estimated tokens, 8,192-1,048,576 serialized bytes;
+- service request/read/write/idle/shutdown timeouts must be positive; configured requests per minute must be positive;
+- episode IDs: at most 256, goal: at most 4,000, summary: at most 8,000, files touched: at most 500, artifact URIs: at most 100, tests: at most 200; string item bounds come from `agent_episode_create.v1.schema.json`;
+- transcript mode is limited to `none`, `opaque_ref`, or `redacted_summary`; there is no raw transcript mode.
+
+Validation is not proof of runtime enforcement. The following are required downstream:
+
+- CHAOS-2905 enforces actual item/token/serialized-byte truncation and labeled empty/partial/degraded results.
+- `expanded_evidence.v1` currently caps an excerpt at 1,000 characters. CHAOS-2906 must enforce that wire limit and add bounded structured-output tests.
+- CHAOS-2907 enforces HTTP body limits, cancellation, timeouts, authorization, and safe error mapping.
+- CHAOS-2927 enforces separate authentication/context/evidence/snapshot/episode limits, per-org concurrency, and safe retry hints. A positive configured RPM value alone is not enforcement.
+- CHAOS-2904 enforces `no_persist`, retention expiry, artifact/summary limits, and rejects transcript representations outside the contract.
+
+## Negative-test ownership matrix
+
+| Control | Status and evidence | Owner before close |
+| --- | --- | --- |
+| Reject Dev Health license/malformed token as ACR bearer | Current: `internal/auth/token_test.go` | CHAOS-2924 (Done) |
+| Explicit repository-scope denial and independent permission denial | Current: `internal/auth/middleware_test.go`; external response is forbidden | CHAOS-2924 (Done) |
+| Unknown/revoked/expired credential reason does not leak | Current: `internal/auth/middleware_test.go` | CHAOS-2924 (Done) |
+| Foreign/unknown opaque evidence ID is non-enumerating generic not-found | Future integration test in evidence resolver/API packages | CHAOS-2906 + CHAOS-2907 |
+| Packet request schema bounds and unknown fields | Current golden/schema profile; add boundary cases in `internal/contracts/v1/contracts_test.go` | CHAOS-2905 + CHAOS-2907 |
+| Deterministic truncation, timeout, empty/partial/degraded behavior | Future assembler tests using `internal/evalfixture` | CHAOS-2905 |
+| Prompt-injection text remains data and cannot alter rules/tools | Future assembler/resolver golden negative cases | CHAOS-2905 + CHAOS-2906 |
+| Malicious Markdown/HTML/URL is sanitized and never fetched | Future resolver tests plus web rendering tests | CHAOS-2906 + CHAOS-2910/CHAOS-2911 |
+| Evidence excerpt/structured-output and safe-URI bounds | Future resolver boundary/allowlist tests | CHAOS-2906 |
+| Cross-org snapshot round trip and stable replay after source change | Future memory/Postgres store tests | CHAOS-2917 |
+| Episode retention class, `no_persist`, duplicate conflict, cross-org access | Future memory/Postgres service tests | CHAOS-2904 |
+| Redaction/purge leaves an auditable tombstone and hides public payload | Future store/service tests with audit assertion | CHAOS-2904 + CHAOS-2925 |
+| Bearer, token hash, raw evidence, and transcript never enter logs/traces | Future log-sink/telemetry capture tests | CHAOS-2927 |
+| Per-org concurrency, endpoint quotas, retry hints, oversized HTTP body | Future limiter/API tests | CHAOS-2927 + CHAOS-2907 |
+| Write tool is disabled by default and requires local enablement plus server scope | Future API/MCP tests | CHAOS-2909 |
+| Synthetic/public-safe fixture provenance and hashes | Current after PR #2: `internal/evalfixture/verify_test.go` validates `testdata/evaluation/v1` | CHAOS-2918 (Done) |
+
+## Release gate for dependent issues
+
+CHAOS-2904, CHAOS-2906, CHAOS-2907, CHAOS-2917, CHAOS-2927, and CHAOS-2909 may close only when their rows above have executable tests. Passing `make verify` before those implementations exist proves contract consistency, not that future security controls are already enforced.
