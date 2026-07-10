@@ -5,7 +5,7 @@
 CREATE SCHEMA IF NOT EXISTS acr;
 
 CREATE TABLE IF NOT EXISTS acr.client_credentials (
-    credential_id UUID PRIMARY KEY,
+    credential_id TEXT PRIMARY KEY,
     org_id UUID NOT NULL,
     name TEXT NOT NULL,
     token_prefix TEXT NOT NULL,
@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS acr.client_credentials (
     revoked_at TIMESTAMPTZ,
     last_used_at TIMESTAMPTZ,
     last_used_ip INET,
+    last_used_user_agent TEXT,
     CHECK (token_prefix LIKE 'fcacr\_%'),
     CHECK (jsonb_typeof(repository_scopes) = 'array'),
     CHECK (jsonb_typeof(scopes) = 'array')
