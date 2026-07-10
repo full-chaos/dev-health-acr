@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +22,7 @@ type PacketStore struct {
 }
 
 var repositoryPartPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`)
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 func NewPacketStore(db *sql.DB, now func() time.Time) (*PacketStore, error) {
 	if db == nil {
@@ -49,7 +52,7 @@ INSERT INTO acr.context_packet_snapshots (
     generated_at, expires_at, created_at
 ) VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
 ON CONFLICT (context_packet_id) DO NOTHING`,
-		packet.ContextPacketID, principal.OrgID, packet.Repository.RepoID, packet.Repository.Slug, packet.RequestID, packet.SchemaVersion,
+		packet.ContextPacketID, principal.OrgID, postgresRepoID(packet.Repository.RepoID), packet.Repository.Slug, packet.RequestID, packet.SchemaVersion,
 		packet.QueryVersion, packet.RankingVersion, packet.ResolvedScope.Resolution, packet.Status, string(payload), packet.GeneratedAt, expiresAt.UTC(), s.now().UTC(),
 	)
 	if err != nil {
@@ -74,6 +77,18 @@ ON CONFLICT (context_packet_id) DO NOTHING`,
 		return storage.ErrConflict
 	}
 	return nil
+}
+
+func postgresRepoID(value string) string {
+	if uuidPattern.MatchString(value) {
+		return strings.ToLower(value)
+	}
+	sum := sha256.Sum256([]byte(value))
+	raw := sum[:16]
+	raw[6] = (raw[6] & 0x0f) | 0x50
+	raw[8] = (raw[8] & 0x3f) | 0x80
+	encoded := hex.EncodeToString(raw)
+	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32]
 }
 
 func (s *PacketStore) GetSnapshot(ctx context.Context, principal storage.Principal, contextPacketID string) (contractsv1.ContextPacket, error) {

@@ -16,6 +16,7 @@ import (
 const (
 	staleAfterSeconds        = 86_400
 	defaultSnapshotRetention = 30 * 24 * time.Hour
+	snapshotSaveTimeout      = time.Second
 )
 
 var ErrEvidenceScopeMismatch = errors.New("contextpacket: evidence bundle scope does not match resolved scope")
@@ -160,8 +161,16 @@ func (a *Assembler) saveSnapshot(ctx context.Context, principal storage.Principa
 	if a.options.SnapshotStore == nil {
 		return packet, nil
 	}
-	if ctx.Err() != nil {
+	if errors.Is(ctx.Err(), context.Canceled) {
 		return packet, nil
+	}
+	if packet.Status == contractsv1.PacketDegraded {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			ctx = context.Background()
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, snapshotSaveTimeout)
+		defer cancel()
 	}
 	expiresAt := a.options.Now().UTC().Add(a.options.SnapshotRetention)
 	if err := a.options.SnapshotStore.SaveSnapshot(ctx, principal, packet, expiresAt); err != nil {

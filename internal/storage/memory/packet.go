@@ -165,7 +165,10 @@ func expiredSnapshotIDs(values map[string]packetSnapshot, before time.Time, limi
 			ids = append(ids, id)
 		}
 	}
-	sort.Strings(ids)
+	sort.Slice(ids, func(i, j int) bool {
+		left, right := values[ids[i]].expiresAt, values[ids[j]].expiresAt
+		return left.Before(right) || left.Equal(right) && ids[i] < ids[j]
+	})
 	if len(ids) > limit {
 		return ids[:limit]
 	}

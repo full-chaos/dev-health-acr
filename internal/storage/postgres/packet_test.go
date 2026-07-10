@@ -2,15 +2,9 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
-	"database/sql/driver"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,6 +44,17 @@ func TestPacketStorePostgres_roundTripScopesAndExpiry(t *testing.T) {
 	if _, err := store.GetSnapshot(context.Background(), storage.Principal{OrgID: "00000000-0000-0000-0000-000000000002", RepositoryScopes: []string{"*"}}, got.ContextPacketID); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("foreign organization lookup error = %v, want not found", err)
 	}
+	if _, err := store.GetSnapshot(context.Background(), storage.Principal{OrgID: owner.OrgID, RepositoryScopes: []string{"example-org/other-service"}}, got.ContextPacketID); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("same-organization foreign repository lookup error = %v, want not found", err)
+	}
+	if err := store.SaveSnapshot(context.Background(), owner, got, now.Add(30*24*time.Hour)); err != nil {
+		t.Fatalf("identical snapshot retry: %v", err)
+	}
+	conflicting := got
+	conflicting.Summary = "a conflicting retry"
+	if err := store.SaveSnapshot(context.Background(), owner, conflicting, now.Add(30*24*time.Hour)); !errors.Is(err, storage.ErrConflict) {
+		t.Fatalf("conflicting snapshot retry error = %v, want conflict", err)
+	}
 	if err := store.SaveSnapshot(context.Background(), storage.Principal{OrgID: "00000000-0000-0000-0000-000000000002", RepositoryScopes: []string{"*"}}, got, now.Add(30*24*time.Hour)); !errors.Is(err, storage.ErrConflict) {
 		t.Fatalf("cross-organization save error = %v, want conflict", err)
 	}
@@ -73,9 +78,58 @@ func TestPacketStorePostgres_roundTripScopesAndExpiry(t *testing.T) {
 	state.mu.Unlock()
 }
 
+func TestPacketStorePostgres_rejectsMalformedAndConstraintViolatingSnapshots(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	db, state := openPacketDB(t)
+	store, err := NewPacketStore(db, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := storage.Principal{OrgID: "00000000-0000-0000-0000-000000000001", RepositoryScopes: []string{"example-org/widget-service"}}
+
+	malformed := postgresPacket(now, "pkt-postgres-malformed")
+	malformed.Status = "not-a-packet-status"
+	if err := store.SaveSnapshot(context.Background(), principal, malformed, now.Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "invalid packet snapshot") {
+		t.Fatalf("malformed snapshot error = %v, want validation rejection", err)
+	}
+	state.mu.Lock()
+	if state.insertAttempts != 0 {
+		state.mu.Unlock()
+		t.Fatalf("malformed snapshot reached database %d times", state.insertAttempts)
+	}
+	state.mu.Unlock()
+
+	invalidOrg := principal
+	invalidOrg.OrgID = "not-a-uuid"
+	if err := store.SaveSnapshot(context.Background(), invalidOrg, postgresPacket(now, "pkt-postgres-invalid-org"), now.Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "invalid input syntax for type uuid") {
+		t.Fatalf("invalid org UUID error = %v, want PostgreSQL UUID cast rejection", err)
+	}
+
+	state.mu.Lock()
+	state.insertError = errors.New("new row for relation \"context_packet_snapshots\" violates check constraint \"context_packet_snapshots_status_check\"")
+	state.mu.Unlock()
+	if err := store.SaveSnapshot(context.Background(), principal, postgresPacket(now, "pkt-postgres-constraint"), now.Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "violates check constraint") {
+		t.Fatalf("database constraint error = %v, want propagated constraint rejection", err)
+	}
+}
+
 func TestPacketStore_canonicalJSONTreatsKeyOrderAsIdempotent(t *testing.T) {
 	if !sameJSON([]byte(`{"a":1,"b":2}`), []byte(`{"b":2,"a":1}`)) {
 		t.Fatal("equivalent JSON key orders did not compare equal")
+	}
+}
+
+func TestPostgresRepoID_handlesUnresolvedScopeIdentity(t *testing.T) {
+	first := postgresRepoID("unresolved:pkt-example")
+	if len(first) != 36 || first != postgresRepoID("unresolved:pkt-example") || first == postgresRepoID("repo-other") {
+		t.Fatalf("unsafe repository storage id: %q", first)
+	}
+}
+
+func TestPostgresRepoID_preservesCanonicalUUID(t *testing.T) {
+	const repoID = "00000000-0000-0000-0000-000000000101"
+	if got := postgresRepoID(repoID); got != repoID {
+		t.Fatalf("resolved repository id = %q, want %q", got, repoID)
 	}
 }
 
@@ -90,145 +144,4 @@ func postgresPacket(now time.Time, id string) contractsv1.ContextPacket {
 		Budget:   contractsv1.PacketBudget{MaxItems: 1, MaxOutputTokens: 500, MaxSerializedBytes: 8192}, Warnings: []string{},
 		Compatibility: contractsv1.Compatibility{ServiceVersion: "test", MinimumSidecarVersion: "0.1.0", SupportedSchemaVersions: []string{contractsv1.ContextPacketSchema}},
 	}
-}
-
-var (
-	packetDriverOnce sync.Once
-	packetDriverID   atomic.Uint64
-	packetStates     sync.Map
-)
-
-func openPacketDB(t *testing.T) (*sql.DB, *packetState) {
-	t.Helper()
-	packetDriverOnce.Do(func() { sql.Register("acr_packet_test", packetDriver{}) })
-	name := fmt.Sprintf("packet-%d", packetDriverID.Add(1))
-	state := &packetState{rows: map[string]packetRow{}}
-	packetStates.Store(name, state)
-	db, err := sql.Open("acr_packet_test", name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { packetStates.Delete(name); _ = db.Close() })
-	return db, state
-}
-
-type packetDriver struct{}
-
-func (packetDriver) Open(name string) (driver.Conn, error) {
-	value, ok := packetStates.Load(name)
-	if !ok {
-		return nil, errors.New("missing packet state")
-	}
-	return packetConn{state: value.(*packetState)}, nil
-}
-
-type packetState struct {
-	mu     sync.Mutex
-	rows   map[string]packetRow
-	audits []packetAudit
-}
-
-type packetRow struct {
-	orgID, repoID, slug string
-	payload             []byte
-	expiresAt           time.Time
-}
-
-type packetAudit struct {
-	packetID string
-	metadata string
-}
-
-type packetConn struct{ state *packetState }
-
-func (packetConn) Prepare(string) (driver.Stmt, error) { return nil, errors.New("prepare unsupported") }
-func (packetConn) Close() error                        { return nil }
-func (packetConn) Begin() (driver.Tx, error)           { return packetTx{}, nil }
-
-type packetTx struct{}
-
-func (packetTx) Commit() error   { return nil }
-func (packetTx) Rollback() error { return nil }
-
-func (c packetConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	c.state.mu.Lock()
-	defer c.state.mu.Unlock()
-	if strings.Contains(query, "acr.audit_events") {
-		c.state.audits = append(c.state.audits, packetAudit{packetID: args[3].Value.(string), metadata: args[4].Value.(string)})
-		return driver.RowsAffected(1), nil
-	}
-	if strings.Contains(query, "INSERT INTO") {
-		id := args[0].Value.(string)
-		if _, exists := c.state.rows[id]; exists {
-			return driver.RowsAffected(0), nil
-		}
-		c.state.rows[id] = packetRow{orgID: args[1].Value.(string), repoID: args[2].Value.(string), slug: args[3].Value.(string), payload: []byte(args[10].Value.(string)), expiresAt: args[12].Value.(time.Time)}
-		return driver.RowsAffected(1), nil
-	}
-	if strings.Contains(query, "DELETE FROM") {
-		before := args[0].Value.(time.Time)
-		limit := int(args[1].Value.(int64))
-		removed := 0
-		for id, row := range c.state.rows {
-			if removed < limit && !row.expiresAt.After(before) {
-				delete(c.state.rows, id)
-				removed++
-			}
-		}
-		return driver.RowsAffected(removed), nil
-	}
-	return nil, errors.New("unexpected execute")
-}
-
-func (c packetConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	c.state.mu.Lock()
-	defer c.state.mu.Unlock()
-	if strings.Contains(query, "DELETE FROM") {
-		before := args[0].Value.(time.Time)
-		limit := int(args[1].Value.(int64))
-		values := make([][]driver.Value, 0, limit)
-		for id, row := range c.state.rows {
-			if len(values) < limit && !row.expiresAt.After(before) {
-				delete(c.state.rows, id)
-				values = append(values, []driver.Value{id, row.orgID, row.repoID, row.expiresAt})
-			}
-		}
-		return &packetRows{values: values}, nil
-	}
-	row, ok := c.state.rows[args[0].Value.(string)]
-	if !ok || row.orgID != args[1].Value.(string) {
-		return &packetRows{}, nil
-	}
-	if len(args) == 2 {
-		return &packetRows{values: [][]driver.Value{{row.payload}}}, nil
-	}
-	if !row.expiresAt.After(args[2].Value.(time.Time)) {
-		return &packetRows{}, nil
-	}
-	return &packetRows{values: [][]driver.Value{{row.payload, row.slug}}}, nil
-}
-
-type packetRows struct {
-	values [][]driver.Value
-	index  int
-}
-
-func (r *packetRows) Columns() []string {
-	if len(r.values) == 0 {
-		return []string{"payload", "repo_slug"}
-	}
-	columns := make([]string, len(r.values[0]))
-	for index := range columns {
-		columns[index] = fmt.Sprintf("column_%d", index)
-	}
-	return columns
-}
-func (r *packetRows) Close() error { return nil }
-func (r *packetRows) Next(dest []driver.Value) error {
-	if r.index >= len(r.values) {
-		return io.EOF
-	}
-	copy(dest, r.values[r.index])
-	r.index++
-	return nil
 }
