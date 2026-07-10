@@ -1,35 +1,36 @@
 package main
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"bytes"
+	"io"
+	"os"
+	"strings"
 	"testing"
-
-	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-func TestHealth(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	response := httptest.NewRecorder()
-	newMux().ServeHTTP(response, req)
-	if response.Code != http.StatusOK {
-		t.Fatalf("unexpected status: %d", response.Code)
+func TestUnknownCommand(t *testing.T) {
+	err := run([]string{"unknown"})
+	if err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestCapabilitiesShape(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
-	response := httptest.NewRecorder()
-	newMux().ServeHTTP(response, req)
-	if response.Code != http.StatusOK {
-		t.Fatalf("unexpected status: %d", response.Code)
-	}
-	var capabilities contractsv1.Capabilities
-	if err := json.Unmarshal(response.Body.Bytes(), &capabilities); err != nil {
+func TestVersionCommand(t *testing.T) {
+	original := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if capabilities.SchemaVersion != contractsv1.CapabilitiesSchema {
-		t.Fatalf("unexpected schema: %s", capabilities.SchemaVersion)
+	os.Stdout = writer
+	t.Cleanup(func() { os.Stdout = original })
+	if err := run([]string{"version"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	var output bytes.Buffer
+	_, _ = io.Copy(&output, reader)
+	_ = reader.Close()
+	if strings.TrimSpace(output.String()) == "" {
+		t.Fatal("version output was empty")
 	}
 }
