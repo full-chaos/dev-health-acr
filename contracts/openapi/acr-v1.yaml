@@ -1,0 +1,250 @@
+# Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
+# canonical-content-sha256: dd135047a2aeaec15cfe57a7b5abeda1aa0a2ec49bf53cecfa500d3d8d69ecfd
+openapi: "3.1.0"
+info:
+  description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
+  title: "Dev Health Agent Context Runtime API"
+  version: "0.1.0"
+servers:
+  -
+    url: "https://acr.fullchaos.dev"
+security:
+  -
+    bearerAuth: []
+paths:
+  "/api/v1/agent-context/capabilities":
+    get:
+      operationId: "getCapabilities"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/capabilities.v1.schema.json"
+          description: "Service, schema, entitlement, tool, and limit handshake"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "426":
+          "$ref": "#/components/responses/Error"
+      x-required-scope: "context:read"
+  "/api/v1/agent-context/context-packets":
+    post:
+      operationId: "createContextPacket"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "../jsonschema/v1/context_packet_request.v1.schema.json"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/context_packet.v1.schema.json"
+          description: "Generated context packet; status may be complete, partial, degraded, or empty"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "413":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      x-required-entitlement: "agent_context_runtime"
+      x-required-scope: "context:read"
+  "/api/v1/agent-context/context-packets/{context_packet_id}":
+    get:
+      operationId: "getContextPacket"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+        -
+          in: "path"
+          name: "context_packet_id"
+          required: true
+          schema:
+            maxLength: 256
+            minLength: 8
+            type: "string"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/context_packet.v1.schema.json"
+          description: "Persisted immutable packet snapshot"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+      x-required-entitlement: "agent_context_runtime"
+      x-required-scope: "context:read"
+  "/api/v1/agent-context/episodes":
+    post:
+      operationId: "createEpisode"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+        -
+          in: "header"
+          name: "Idempotency-Key"
+          required: true
+          schema:
+            maxLength: 256
+            minLength: 8
+            type: "string"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "../jsonschema/v1/agent_episode_create.v1.schema.json"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/agent_episode.v1.schema.json"
+          description: "Existing episode returned for an identical idempotent retry"
+        "201":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/agent_episode.v1.schema.json"
+          description: "Episode created"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "413":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+      x-required-entitlement: "agent_context_runtime"
+      x-required-scope: "episode:write"
+  "/api/v1/agent-context/evidence/{evidence_ref_id}":
+    get:
+      operationId: "getEvidence"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+        -
+          in: "path"
+          name: "evidence_ref_id"
+          required: true
+          schema:
+            maxLength: 256
+            minLength: 8
+            type: "string"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/expanded_evidence.v1.schema.json"
+          description: "Expanded evidence after independent organization and repository authorization"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "410":
+          "$ref": "#/components/responses/Error"
+      x-required-entitlement: "agent_context_runtime"
+      x-required-scope: "evidence:read"
+  "/healthz":
+    get:
+      operationId: "getHealth"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties: false
+                properties:
+                  status:
+                    const: "ok"
+                    type: "string"
+                required:
+                  - "status"
+                type: "object"
+          description: "Liveness status"
+      security: []
+  "/readyz":
+    get:
+      operationId: "getReadiness"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties: false
+                properties:
+                  status:
+                    const: "ready"
+                    type: "string"
+                required:
+                  - "status"
+                type: "object"
+          description: "Service dependencies are ready"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security: []
+components:
+  parameters:
+    ClientVersion:
+      in: "header"
+      name: "X-ACR-Client-Version"
+      required: false
+      schema:
+        maxLength: 200
+        type: "string"
+    RequestID:
+      in: "header"
+      name: "X-Request-ID"
+      required: false
+      schema:
+        maxLength: 256
+        type: "string"
+  responses:
+    Error:
+      content:
+        application/json:
+          schema:
+            "$ref": "../jsonschema/v1/error.v1.schema.json"
+      description: "Structured safe error"
+  securitySchemes:
+    bearerAuth:
+      bearerFormat: "fcacr_ client credential or trusted Dev Health web JWT"
+      scheme: "bearer"
+      type: "http"

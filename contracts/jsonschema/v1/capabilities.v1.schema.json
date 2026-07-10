@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ACR Capabilities v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "service",
+    "service_version",
+    "minimum_sidecar_version",
+    "supported_schema_versions",
+    "enabled_tools",
+    "entitlements",
+    "permissions",
+    "limits",
+    "generated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "capabilities.v1"
+    },
+    "service": {
+      "const": "dev-health-acr"
+    },
+    "service_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "minimum_sidecar_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "supported_schema_versions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "enabled_tools": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "context_for_task",
+          "source_evidence",
+          "record_episode"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "entitlements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent_context_runtime"
+      ],
+      "properties": {
+        "agent_context_runtime": {
+          "type": "boolean"
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_items",
+        "max_output_tokens",
+        "max_serialized_bytes",
+        "requests_per_minute"
+      ],
+      "properties": {
+        "max_items": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_serialized_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "requests_per_minute": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context_read",
+        "evidence_read",
+        "episode_write"
+      ],
+      "properties": {
+        "context_read": {
+          "type": "boolean"
+        },
+        "evidence_read": {
+          "type": "boolean"
+        },
+        "episode_write": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "$id": "https://contracts.fullchaos.dev/acr/v1/capabilities.v1.schema.json"
+}

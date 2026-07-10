@@ -1,0 +1,37 @@
+{
+  "schema_version": "capabilities.v1",
+  "service": "dev-health-acr",
+  "service_version": "0.1.0",
+  "minimum_sidecar_version": "0.1.0",
+  "supported_schema_versions": [
+    "context_packet_request.v1",
+    "context_packet.v1",
+    "context_packet_item.v1",
+    "evidence_ref.v1",
+    "expanded_evidence.v1",
+    "capabilities.v1",
+    "agent_episode_create.v1",
+    "agent_episode.v1",
+    "acr_client_credential.v1",
+    "error.v1"
+  ],
+  "enabled_tools": [
+    "context_for_task",
+    "source_evidence"
+  ],
+  "entitlements": {
+    "agent_context_runtime": true
+  },
+  "limits": {
+    "max_items": 30,
+    "max_output_tokens": 4000,
+    "max_serialized_bytes": 262144,
+    "requests_per_minute": 60
+  },
+  "generated_at": "2026-07-10T14:00:00Z",
+  "permissions": {
+    "context_read": true,
+    "evidence_read": true,
+    "episode_write": false
+  }
+}

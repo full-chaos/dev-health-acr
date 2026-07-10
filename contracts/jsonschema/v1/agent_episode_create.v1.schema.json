@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ACR Agent Episode Create v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "client_episode_id",
+    "idempotency_key",
+    "context_packet_id",
+    "goal",
+    "repository",
+    "scope",
+    "client",
+    "started_at",
+    "ended_at",
+    "outcome",
+    "summary",
+    "artifacts",
+    "transcript",
+    "retention_class"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "agent_episode_create.v1"
+    },
+    "client_episode_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256
+    },
+    "context_packet_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256
+    },
+    "goal": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "task_ref": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slug"
+      ],
+      "properties": {
+        "slug": {
+          "type": "string",
+          "pattern": "^[^/\\s]+/[^/\\s]+$",
+          "maxLength": 512
+        },
+        "repo_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "remote_url": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 2048
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "commit_sha": {
+          "type": "string",
+          "maxLength": 64
+        }
+      }
+    },
+    "client": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "sidecar_version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "sidecar_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "agent_name": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "model": {
+          "type": "string",
+          "maxLength": 500
+        }
+      }
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ended_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "outcome": {
+      "enum": [
+        "succeeded",
+        "failed",
+        "abandoned",
+        "superseded",
+        "unknown"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8000
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "files_touched",
+        "artifact_uris",
+        "tests_run"
+      ],
+      "properties": {
+        "files_touched": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        },
+        "artifact_uris": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048
+          }
+        },
+        "tests_run": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        }
+      }
+    },
+    "transcript": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "none",
+            "opaque_ref",
+            "redacted_summary"
+          ]
+        },
+        "opaque_ref": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "redacted_summary": {
+          "type": "string",
+          "maxLength": 4000
+        }
+      }
+    },
+    "retention_class": {
+      "enum": [
+        "default_90d",
+        "short_30d",
+        "legal_hold",
+        "no_persist"
+      ]
+    }
+  },
+  "$id": "https://contracts.fullchaos.dev/acr/v1/agent_episode_create.v1.schema.json"
+}

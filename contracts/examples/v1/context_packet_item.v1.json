@@ -1,0 +1,35 @@
+{
+  "schema_version": "context_packet_item.v1",
+  "packet_item_id": "item_01J0ACR001",
+  "category": "pressure",
+  "claim_kind": "observed",
+  "title": "Credential scope must be repository constrained",
+  "summary": "The requested task changes ACR client credential authorization and must preserve repository-level scope checks.",
+  "why_included": "The task references the credential lifecycle and repository authorization contract.",
+  "rule_id": "auth.repo_scope.required.v1",
+  "confidence": 0.98,
+  "severity": "high",
+  "rank": 1,
+  "validity_scope": {
+    "branch": "main",
+    "commit_sha": "22e472d",
+    "valid_from": "2026-07-10T14:00:00Z"
+  },
+  "flags": {
+    "stale": false,
+    "uncertain": false,
+    "conflicting": false,
+    "untrusted_content": false
+  },
+  "related_entities": [
+    {
+      "type": "linear_issue",
+      "id": "CHAOS-2924",
+      "label": "Implement scoped client credentials and repository authorization",
+      "url": "https://linear.app/fullchaos/issue/CHAOS-2924"
+    }
+  ],
+  "evidence_ref_ids": [
+    "ev_01J0ACR001"
+  ]
+}

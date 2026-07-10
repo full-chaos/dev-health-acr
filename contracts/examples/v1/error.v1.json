@@ -1,0 +1,11 @@
+{
+  "schema_version": "error.v1",
+  "request_id": "req_01J0ACR001",
+  "error": {
+    "code": "repo_forbidden",
+    "message": "Repository access is not available for this credential.",
+    "http_status": 403,
+    "retryable": false,
+    "details": {}
+  }
+}

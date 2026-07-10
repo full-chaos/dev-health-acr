@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ACR Evidence Reference v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_ref_id",
+    "source",
+    "provenance",
+    "confidence",
+    "citation",
+    "observed_at",
+    "availability"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "evidence_ref.v1"
+    },
+    "evidence_ref_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "system",
+        "entity_type",
+        "entity_id",
+        "display_label"
+      ],
+      "properties": {
+        "system": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "entity_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "entity_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "display_label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "safe_uri": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 2048
+        }
+      }
+    },
+    "provenance": {
+      "enum": [
+        "native",
+        "explicit_text",
+        "heuristic",
+        "derived"
+      ]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "citation": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "event_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_version": {
+      "type": "string",
+      "maxLength": 512
+    },
+    "snapshot_hash": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "content_digest": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "availability": {
+      "enum": [
+        "available",
+        "stale",
+        "redacted",
+        "deleted",
+        "unauthorized"
+      ]
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "$id": "https://contracts.fullchaos.dev/acr/v1/evidence_ref.v1.schema.json"
+}

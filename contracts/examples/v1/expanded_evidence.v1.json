@@ -1,0 +1,33 @@
+{
+  "schema_version": "expanded_evidence.v1",
+  "evidence": {
+    "schema_version": "evidence_ref.v1",
+    "evidence_ref_id": "ev_01J0ACR001",
+    "source": {
+      "system": "linear",
+      "entity_type": "issue",
+      "entity_id": "CHAOS-2924",
+      "display_label": "ACR Security: Implement scoped client credentials and repository authorization",
+      "safe_uri": "https://linear.app/fullchaos/issue/CHAOS-2924"
+    },
+    "provenance": "native",
+    "confidence": 1.0,
+    "citation": "CHAOS-2924 requires organization- and repository-scoped ACR credentials.",
+    "observed_at": "2026-07-10T14:00:00Z",
+    "event_at": "2026-07-10T13:53:27Z",
+    "source_version": "linear:CHAOS-2924@2026-07-10T13:53:27Z",
+    "snapshot_hash": "sha256:0123456789abcdef",
+    "content_digest": "sha256:abcdef0123456789",
+    "availability": "available",
+    "metadata": {
+      "repo_scope_required": true
+    }
+  },
+  "resolved_at": "2026-07-10T14:00:00Z",
+  "availability": "available",
+  "excerpt": "Implement ACR client credentials and authorization in Go with organization and repository scope.",
+  "structured_fields": {
+    "issue_id": "CHAOS-2924",
+    "status": "Backlog"
+  }
+}
