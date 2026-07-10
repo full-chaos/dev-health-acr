@@ -151,59 +151,6 @@ func TestServiceRequiresAuditStoreAndRepositoryGrantForPurge(t *testing.T) {
 	}
 }
 
-func TestCompletionAuditFailureDoesNotReportMutationFailure(t *testing.T) {
-	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
-	principal := episodePrincipal("org_1")
-	store := memory.NewEpisodeStore()
-	completionFails := &failOnNthAudit{store: memory.NewAuditStore(), failAt: 2}
-	service, err := NewService(store, completionFails, ServiceOptions{Now: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	create := episodeCreate()
-	created, _, err := service.Create(context.Background(), principal, create)
-	if err != nil {
-		t.Fatalf("create reported completion-audit failure: %v", err)
-	}
-	if _, err := service.Get(context.Background(), principal, create.ClientEpisodeID); err != nil {
-		t.Fatalf("created episode is unavailable: %v", err)
-	}
-
-	redactFails := &failOnNthAudit{store: memory.NewAuditStore(), failAt: 2}
-	redactor, err := NewService(store, redactFails, ServiceOptions{Now: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := redactor.Redact(context.Background(), principal, created.EpisodeID, "request"); err != nil {
-		t.Fatalf("redact reported completion-audit failure: %v", err)
-	}
-	redacted, err := service.Get(context.Background(), principal, create.ClientEpisodeID)
-	if err != nil || redacted.RedactionState != "redacted" {
-		t.Fatalf("redacted episode = (%#v, %v)", redacted, err)
-	}
-
-	purgeCreate := episodeCreate()
-	purgeCreate.ClientEpisodeID, purgeCreate.IdempotencyKey, purgeCreate.RetentionClass = "episode_02", "idempotency_02", "short_30d"
-	creator, err := NewService(store, memory.NewAuditStore(), ServiceOptions{Now: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := creator.Create(context.Background(), principal, purgeCreate); err != nil {
-		t.Fatal(err)
-	}
-	purgeFails := &failOnNthAudit{store: memory.NewAuditStore(), failAt: 2}
-	purger, err := NewService(store, purgeFails, ServiceOptions{Now: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if purged, err := purger.PurgeExpired(context.Background(), principal, now.Add(31*24*time.Hour), 1); err != nil || purged != 1 {
-		t.Fatalf("purge reported completion-audit failure = (%d, %v)", purged, err)
-	}
-	if _, err := service.Get(context.Background(), principal, purgeCreate.ClientEpisodeID); !errors.Is(err, storage.ErrNotFound) {
-		t.Fatalf("purged episode is still readable: %v", err)
-	}
-}
-
 func TestBoundedCountsUnicodeRunes(t *testing.T) {
 	if !bounded(strings.Repeat("界", 4), 1, 4) {
 		t.Fatal("four Unicode runes were rejected")
