@@ -11,9 +11,12 @@ import (
 	"syscall"
 
 	"github.com/full-chaos/dev-health-acr/internal/api"
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/limits"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
@@ -73,6 +76,15 @@ func serve(args []string) error {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	limitManager, err := limits.NewManager(cfg.LimitOptions())
+	if err != nil {
+		return fmt.Errorf("initialize request controls: %w", err)
+	}
+	authAttempts := auth.NewBoundedMemoryLimiter(auth.MemoryLimiterOptions{
+		Window: cfg.RequestControls.Auth.Window, AttemptLimit: cfg.RequestControls.Auth.Requests,
+		FailureLimit: cfg.RequestControls.AuthFailures, MaxTrackedKeys: cfg.RequestControls.AuthTrackedKeys,
+	})
+	telemetry := observability.NewHooks(observability.NewSlogSink(logger), nil)
 	info := version.Current()
 	logger.Info("starting acr-api", append([]any{
 		"version", info.Version,
@@ -106,7 +118,7 @@ func serve(args []string) error {
 			MaxItems:           cfg.MaxItems,
 			MaxOutputTokens:    cfg.MaxOutputTokens,
 			MaxSerializedBytes: cfg.MaxSerializedBytes,
-			RequestsPerMinute:  cfg.RequestsPerMinute,
+			RequestsPerMinute:  cfg.ContextRequestsPerMinute(),
 		},
 	}}
 
@@ -143,7 +155,10 @@ func serve(args []string) error {
 	}, api.Dependencies{
 		Capabilities:         capabilities,
 		ReadinessChecks:      checks,
-		EvidenceStoreFactory: contextpacket.NewEvidenceStoreFactory(evidenceCodec),
+		Limits:               limitManager,
+		AuthAttempts:         authAttempts,
+		Observability:        &telemetry,
+		EvidenceStoreFactory: contextpacket.NewObservedEvidenceStoreFactory(evidenceCodec, observability.NewEvidenceExpansionObserver(telemetry), observability.NewAssemblyObserver(telemetry)),
 	}, logger)
 	if err != nil {
 		return fmt.Errorf("initialize application: %w", err)

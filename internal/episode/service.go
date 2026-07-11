@@ -15,13 +15,19 @@ import (
 var ErrEntitlementRequired = errors.New("agent context runtime entitlement is required")
 
 type ServiceOptions struct {
-	Now func() time.Time
+	Now              func() time.Time
+	TerminalObserver TerminalObserver
+	StoreObserver    StoreObserver
+	StoreBackend     StoreBackend
 }
 
 type Service struct {
-	store storage.EpisodeStore
-	audit storage.AuditStore
-	now   func() time.Time
+	store         storage.EpisodeStore
+	audit         storage.AuditStore
+	now           func() time.Time
+	observer      TerminalObserver
+	storeObserver StoreObserver
+	storeBackend  StoreBackend
 }
 
 type scopedEpisodePurger interface {
@@ -38,10 +44,17 @@ func NewService(store storage.EpisodeStore, audit storage.AuditStore, options Se
 	if options.Now == nil {
 		options.Now = time.Now
 	}
-	return &Service{store: store, audit: audit, now: options.Now}, nil
+	return &Service{
+		store: store, audit: audit, now: options.Now, observer: options.TerminalObserver,
+		storeObserver: options.StoreObserver, storeBackend: options.StoreBackend,
+	}, nil
 }
 
 func (s *Service) Create(ctx context.Context, principal storage.Principal, create contractsv1.AgentEpisodeCreate) (contractsv1.AgentEpisode, bool, error) {
+	started := s.now()
+	observation := TerminalObservation{Outcome: TerminalOutcomeFailure, AuditDelivery: AuditDeliverySkipped}
+	defer func() { observation.Duration = max(s.now().Sub(started), 0); s.observeTerminal(ctx, observation) }()
+
 	if err := authorizeWrite(principal); err != nil {
 		return contractsv1.AgentEpisode{}, false, err
 	}
@@ -53,10 +66,14 @@ func (s *Service) Create(ctx context.Context, principal storage.Principal, creat
 	}
 	metadata := map[string]any{"outcome": create.Outcome, "retention_class": create.RetentionClass, "packet_linked": create.ContextPacketID != ""}
 	if err := s.recordAudit(ctx, principal, "agent_episode_create_requested", create.ClientEpisodeID, metadata); err != nil {
+		observation.AuditDelivery = AuditDeliveryFailed
 		return contractsv1.AgentEpisode{}, false, fmt.Errorf("audit episode creation request: %w", err)
 	}
+	observation.AuditDelivery = AuditDeliveryDelivered
 	expiresAt := expiryFor(create.RetentionClass, s.now().UTC())
+	storeStarted := s.now()
 	stored, duplicate, err := s.store.CreateIdempotent(ctx, principal, create, expiresAt)
+	s.observeStoreCall(ctx, storeStarted, err)
 	if err != nil {
 		return contractsv1.AgentEpisode{}, false, fmt.Errorf("persist episode: %w", err)
 	}
@@ -64,15 +81,21 @@ func (s *Service) Create(ctx context.Context, principal storage.Principal, creat
 		action := "agent_episode_tombstoned"
 		if duplicate {
 			action = "agent_episode_tombstone_replayed"
+			observation.Outcome = TerminalOutcomeDuplicate
+		} else {
+			observation.Outcome = TerminalOutcomeSuccess
 		}
-		s.recordCompletion(ctx, principal, action, create.ClientEpisodeID, metadata)
+		observation.AuditDelivery = s.recordCompletion(ctx, principal, action, create.ClientEpisodeID, metadata)
 		return contractsv1.AgentEpisode{}, duplicate, storage.ErrNotFound
 	}
 	action := "agent_episode_created"
 	if duplicate {
 		action = "agent_episode_replayed"
+		observation.Outcome = TerminalOutcomeDuplicate
+	} else {
+		observation.Outcome = TerminalOutcomeSuccess
 	}
-	s.recordCompletion(ctx, principal, action, stored.EpisodeID, metadata)
+	observation.AuditDelivery = s.recordCompletion(ctx, principal, action, stored.EpisodeID, metadata)
 	return stored, duplicate, nil
 }
 
@@ -80,7 +103,9 @@ func (s *Service) Get(ctx context.Context, principal storage.Principal, clientEp
 	if principal.OrgID == "" || clientEpisodeID == "" {
 		return contractsv1.AgentEpisode{}, storage.ErrNotFound
 	}
+	storeStarted := s.now()
 	episode, err := s.store.GetByClientEpisodeID(ctx, principal, clientEpisodeID)
+	s.observeStoreCall(ctx, storeStarted, err)
 	if err != nil {
 		return contractsv1.AgentEpisode{}, fmt.Errorf("get episode: %w", err)
 	}
@@ -88,6 +113,10 @@ func (s *Service) Get(ctx context.Context, principal storage.Principal, clientEp
 }
 
 func (s *Service) Redact(ctx context.Context, principal storage.Principal, episodeID, reason string) (contractsv1.AgentEpisode, error) {
+	started := s.now()
+	observation := TerminalObservation{Outcome: TerminalOutcomeFailure, AuditDelivery: AuditDeliverySkipped}
+	defer func() { observation.Duration = max(s.now().Sub(started), 0); s.observeTerminal(ctx, observation) }()
+
 	if err := authorizeWrite(principal); err != nil {
 		return contractsv1.AgentEpisode{}, err
 	}
@@ -95,13 +124,18 @@ func (s *Service) Redact(ctx context.Context, principal storage.Principal, episo
 		return contractsv1.AgentEpisode{}, storage.ErrNotFound
 	}
 	if err := s.recordAudit(ctx, principal, "agent_episode_redact_requested", episodeID, nil); err != nil {
+		observation.AuditDelivery = AuditDeliveryFailed
 		return contractsv1.AgentEpisode{}, fmt.Errorf("audit episode redaction request: %w", err)
 	}
+	observation.AuditDelivery = AuditDeliveryDelivered
+	storeStarted := s.now()
 	episode, err := s.store.Redact(ctx, principal, episodeID, reason)
+	s.observeStoreCall(ctx, storeStarted, err)
 	if err != nil {
 		return contractsv1.AgentEpisode{}, fmt.Errorf("redact episode: %w", err)
 	}
-	s.recordCompletion(ctx, principal, "agent_episode_redacted", episodeID, map[string]any{"reason": reason})
+	observation.Outcome = TerminalOutcomeRedacted
+	observation.AuditDelivery = s.recordCompletion(ctx, principal, "agent_episode_redacted", episodeID, map[string]any{"reason": reason})
 	return episode, nil
 }
 
@@ -116,7 +150,9 @@ func (s *Service) PurgeExpired(ctx context.Context, principal storage.Principal,
 	if err := s.recordAudit(ctx, principal, "agent_episode_purge_requested", "retention", nil); err != nil {
 		return 0, fmt.Errorf("audit episode purge request: %w", err)
 	}
+	storeStarted := s.now()
 	purged, err := purger.PurgeExpiredForPrincipal(ctx, principal, before, limit)
+	s.observeStoreCall(ctx, storeStarted, err)
 	if err != nil {
 		return 0, fmt.Errorf("purge expired episodes: %w", err)
 	}
@@ -133,8 +169,11 @@ func (s *Service) recordAudit(ctx context.Context, principal storage.Principal, 
 	})
 }
 
-func (s *Service) recordCompletion(ctx context.Context, principal storage.Principal, action, resourceID string, metadata map[string]any) {
-	_ = s.recordAudit(ctx, principal, action, resourceID, metadata)
+func (s *Service) recordCompletion(ctx context.Context, principal storage.Principal, action, resourceID string, metadata map[string]any) AuditDelivery {
+	if err := s.recordAudit(ctx, principal, action, resourceID, metadata); err != nil {
+		return AuditDeliveryFailed
+	}
+	return AuditDeliveryDelivered
 }
 
 func authorizeWrite(principal storage.Principal) error {

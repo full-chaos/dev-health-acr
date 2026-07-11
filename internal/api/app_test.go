@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -17,6 +18,8 @@ import (
 )
 
 type evidenceRows struct{}
+
+const testRequestID = "req_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 func (evidenceRows) ResolveEvidenceScope(context.Context, contextpacket.ReadPlan) (contractsv1.ResolvedScope, error) {
 	return contractsv1.ResolvedScope{}, nil
@@ -49,7 +52,7 @@ func testApp(t *testing.T, checks ...ReadinessCheck) *App {
 		},
 		ReadinessChecks: checks,
 		Now:             func() time.Time { return fixedNow },
-		RequestID:       func() string { return "req_generated" },
+		RequestID:       func() string { return testRequestID },
 	}, testLogger(&bytes.Buffer{}))
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +66,7 @@ func TestHealth(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", response.Code)
 	}
-	if response.Header().Get("X-Request-ID") != "req_generated" {
+	if response.Header().Get("X-Request-ID") != testRequestID {
 		t.Fatalf("missing generated request id: %q", response.Header().Get("X-Request-ID"))
 	}
 }
@@ -83,11 +86,47 @@ func TestNewEvidenceStore_uses_injected_factory(t *testing.T) {
 
 func TestRequestIDIsPropagated(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	request.Header.Set("X-Request-ID", "req_0123456789abcdef0123456789abcdef")
+	response := httptest.NewRecorder()
+	testApp(t).Handler().ServeHTTP(response, request)
+	if got := response.Header().Get("X-Request-ID"); got != "req_0123456789abcdef0123456789abcdef" {
+		t.Fatalf("unexpected request ID: %q", got)
+	}
+}
+
+func TestRequestIDInvalidCallerValueIsReplaced(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	request.Header.Set("X-Request-ID", "caller-request")
 	response := httptest.NewRecorder()
 	testApp(t).Handler().ServeHTTP(response, request)
-	if got := response.Header().Get("X-Request-ID"); got != "caller-request" {
-		t.Fatalf("unexpected request ID: %q", got)
+	if got := response.Header().Get("X-Request-ID"); !strings.HasPrefix(got, "req_") || len(got) != 36 {
+		t.Fatalf("replacement request ID is not canonical: %q", got)
+	}
+}
+
+func TestRequestIDInvalidGeneratedValueIsReplaced(t *testing.T) {
+	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
+		Capabilities: StaticCapabilitiesProvider{Value: contractsv1.Capabilities{SchemaVersion: contractsv1.CapabilitiesSchema}},
+		RequestID:    func() string { return "invalid-generated-id" },
+	}, testLogger(&bytes.Buffer{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	requestID := response.Header().Get("X-Request-ID")
+	if !strings.HasPrefix(requestID, "req_") || len(requestID) != 36 {
+		t.Fatalf("generated request ID is not canonical: %q", requestID)
+	}
+}
+
+func TestRequestIDEntropyFailureStillProducesCanonicalID(t *testing.T) {
+	requestID := newRequestIDFrom(strings.NewReader(""), time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC), 1)
+	if !strings.HasPrefix(requestID, "req_") || len(requestID) != 36 {
+		t.Fatalf("request ID = %q", requestID)
+	}
+	if _, err := hex.DecodeString(strings.TrimPrefix(requestID, "req_")); err != nil || strings.ToLower(requestID) != requestID {
+		t.Fatalf("request ID is not lowercase canonical hex: %q, %v", requestID, err)
 	}
 }
 
@@ -131,7 +170,7 @@ func TestCapabilitiesFailureUsesContractError(t *testing.T) {
 	provider := failingCapabilitiesProvider{}
 	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
 		Capabilities: provider,
-		RequestID:    func() string { return "req_failure" },
+		RequestID:    func() string { return testRequestID },
 	}, testLogger(&bytes.Buffer{}))
 	if err != nil {
 		t.Fatal(err)
@@ -145,8 +184,34 @@ func TestCapabilitiesFailureUsesContractError(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if envelope.RequestID != "req_failure" || envelope.Error.Code != "upstream_unavailable" {
+	if envelope.RequestID != testRequestID || envelope.Error.Code != "upstream_unavailable" {
 		t.Fatalf("unexpected envelope: %#v", envelope)
+	}
+}
+
+func TestLogsDoNotContainRawFailureDetailsOrPaths(t *testing.T) {
+	// Given
+	secret := "fcacr_sensitive_bearer_and_dsn"
+	buffer := &bytes.Buffer{}
+	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
+		Capabilities: secretCapabilitiesProvider{err: errors.New(secret)},
+		ReadinessChecks: []ReadinessCheck{CheckFunc{CheckName: "dependency", Fn: func(context.Context) error {
+			return errors.New(secret)
+		}}},
+		RequestID: func() string { return testRequestID },
+	}, testLogger(buffer))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	app.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	app.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil))
+	app.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/"+secret, nil))
+
+	// Then
+	if strings.Contains(buffer.String(), secret) {
+		t.Fatalf("log leaked raw request or failure data: %s", buffer.String())
 	}
 }
 
@@ -156,14 +221,20 @@ func (failingCapabilitiesProvider) Capabilities(context.Context, *http.Request) 
 	return contractsv1.Capabilities{}, errors.New("unavailable")
 }
 
+type secretCapabilitiesProvider struct{ err error }
+
+func (p secretCapabilitiesProvider) Capabilities(context.Context, *http.Request) (contractsv1.Capabilities, error) {
+	return contractsv1.Capabilities{}, p.err
+}
+
 func TestRequestIDIsAvailableToDownstreamMiddleware(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	response := httptest.NewRecorder()
 	testApp(t).Handler().ServeHTTP(response, request)
-	if request.Header.Get("X-Request-ID") != "req_generated" {
+	if request.Header.Get("X-Request-ID") != testRequestID {
 		t.Fatalf("downstream request header did not receive request ID: %q", request.Header.Get("X-Request-ID"))
 	}
-	if response.Header().Get("X-Request-ID") != "req_generated" {
+	if response.Header().Get("X-Request-ID") != testRequestID {
 		t.Fatalf("response header did not receive request ID: %q", response.Header().Get("X-Request-ID"))
 	}
 }

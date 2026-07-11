@@ -24,6 +24,7 @@ type EvidenceExpansionInput struct {
 type EvidenceExpansionObservation struct {
 	System       string
 	Availability contractsv1.EvidenceAvailability
+	Outcome      OperationOutcome
 	Duration     time.Duration
 }
 
@@ -50,7 +51,19 @@ func NewEvidenceResolver(options EvidenceResolverOptions) *EvidenceResolver {
 	return &EvidenceResolver{now: options.Now, observer: options.Observer}
 }
 
-func (r *EvidenceResolver) Expand(ctx context.Context, input EvidenceExpansionInput) (contractsv1.ExpandedEvidence, error) {
+func (r *EvidenceResolver) Expand(ctx context.Context, input EvidenceExpansionInput) (expanded contractsv1.ExpandedEvidence, resultErr error) {
+	started := r.now().UTC()
+	denied := false
+	defer func() {
+		outcome := operationOutcome(resultErr)
+		if denied {
+			outcome = OperationDenied
+		}
+		r.observe(ctx, EvidenceExpansionObservation{
+			System: input.Evidence.Source.System, Availability: input.Evidence.Availability,
+			Outcome: outcome, Duration: max(r.now().UTC().Sub(started), 0),
+		})
+	}()
 	if err := ctx.Err(); err != nil {
 		return contractsv1.ExpandedEvidence{}, err
 	}
@@ -58,6 +71,7 @@ func (r *EvidenceResolver) Expand(ctx context.Context, input EvidenceExpansionIn
 		return contractsv1.ExpandedEvidence{}, fmt.Errorf("validate evidence expansion input: %w", err)
 	}
 	if input.Evidence.Availability == contractsv1.EvidenceUnauthorized {
+		denied = true
 		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
 	}
 	adapter, ok := evidenceAdapterFor(input.Evidence)
@@ -70,7 +84,7 @@ func (r *EvidenceResolver) Expand(ctx context.Context, input EvidenceExpansionIn
 	evidence.Source.DisplayLabel = cleanEvidenceText(evidence.Source.DisplayLabel, 1_000)
 	evidence.Citation = cleanEvidenceText(evidence.Citation, 2_000)
 
-	expanded := contractsv1.ExpandedEvidence{
+	expanded = contractsv1.ExpandedEvidence{
 		SchemaVersion: contractsv1.ExpandedEvidenceSchema,
 		Evidence:      evidence,
 		ResolvedAt:    resolvedAt,
@@ -87,13 +101,6 @@ func (r *EvidenceResolver) Expand(ctx context.Context, input EvidenceExpansionIn
 	if err := validateExpandedEvidence(expanded); err != nil {
 		return contractsv1.ExpandedEvidence{}, fmt.Errorf("validate evidence expansion output: %w", err)
 	}
-	duration := r.now().UTC().Sub(resolvedAt)
-	duration = max(duration, 0)
-	r.observe(ctx, EvidenceExpansionObservation{
-		System:       evidence.Source.System,
-		Availability: evidence.Availability,
-		Duration:     duration,
-	})
 	return expanded, nil
 }
 

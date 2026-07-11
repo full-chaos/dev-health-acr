@@ -31,10 +31,15 @@ type CatalogClickHouseRows struct {
 	resolver *ClickHouseScopeResolver
 	executor SourceQueryExecutor
 	client   ClickHouseQueryClient
+	observer AssemblyObserver
 }
 
 func NewCatalogClickHouseRows(client ClickHouseQueryClient) *CatalogClickHouseRows {
-	return &CatalogClickHouseRows{resolver: NewClickHouseScopeResolver(client), executor: NewClickHouseSourceExecutor(client), client: client}
+	return NewObservedCatalogClickHouseRows(client, nil)
+}
+
+func NewObservedCatalogClickHouseRows(client ClickHouseQueryClient, observer AssemblyObserver) *CatalogClickHouseRows {
+	return &CatalogClickHouseRows{resolver: NewObservedClickHouseScopeResolver(client, observer), executor: NewClickHouseSourceExecutor(client), client: client, observer: observer}
 }
 
 func (r *CatalogClickHouseRows) ResolveEvidenceScope(ctx context.Context, plan ReadPlan) (contractsv1.ResolvedScope, error) {
@@ -42,14 +47,20 @@ func (r *CatalogClickHouseRows) ResolveEvidenceScope(ctx context.Context, plan R
 }
 
 func (r *CatalogClickHouseRows) EvidenceRows(ctx context.Context, plan ReadPlan) ([]contractsv1.EvidenceRef, []contractsv1.SourceWatermark, []contractsv1.UnavailableSource, error) {
-	result, err := ExecuteCatalog(ctx, r.executor, plan)
+	result, err := ExecuteCatalogObserved(ctx, r.executor, plan, r.observer)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	return result.Evidence, result.Watermarks, result.Unavailable, nil
 }
 
-func (r *CatalogClickHouseRows) AuthorizedRepositories(ctx context.Context, orgID string, scopes []string) ([]contractsv1.ResolvedScope, error) {
+func (r *CatalogClickHouseRows) AuthorizedRepositories(ctx context.Context, orgID string, scopes []string) (_ []contractsv1.ResolvedScope, err error) {
+	var observer AssemblyObserver
+	if r != nil {
+		observer = r.observer
+	}
+	completeObservation := beginStoreQueryObservation(ctx, observer, StoreOperationEvidence)
+	defer func() { completeObservation(err) }()
 	if r == nil || r.client == nil {
 		return nil, storage.ErrNotFound
 	}
@@ -75,7 +86,13 @@ func (r *CatalogClickHouseRows) AuthorizedRepositories(ctx context.Context, orgI
 	return result, nil
 }
 
-func (r *CatalogClickHouseRows) ResolveEvidenceReference(ctx context.Context, orgID string, scope contractsv1.ResolvedScope, queryID string) ([]EvidenceReference, error) {
+func (r *CatalogClickHouseRows) ResolveEvidenceReference(ctx context.Context, orgID string, scope contractsv1.ResolvedScope, queryID string) (_ []EvidenceReference, err error) {
+	var observer AssemblyObserver
+	if r != nil {
+		observer = r.observer
+	}
+	completeObservation := beginStoreQueryObservation(ctx, observer, StoreOperationEvidence)
+	defer func() { completeObservation(err) }()
 	query := catalogSourceQuery(queryID)
 	if r == nil || r.client == nil || query == nil {
 		return nil, storage.ErrNotFound

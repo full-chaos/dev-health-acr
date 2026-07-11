@@ -110,16 +110,41 @@ func TestEvidenceResolver_observes_only_safe_latency_metadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
-	if observer.observation.System != "ci" || observer.observation.Availability != contractsv1.EvidenceAvailable || observer.observation.Duration != 0 {
+	if observer.count != 1 || observer.observation.System != "ci" || observer.observation.Availability != contractsv1.EvidenceAvailable || observer.observation.Outcome != contextpacket.OperationSuccess || observer.observation.Duration != 0 {
 		t.Fatalf("unsafe or unexpected observation: %#v", observer.observation)
+	}
+}
+
+func TestEvidenceResolver_observes_terminal_failure_and_denial(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       contextpacket.EvidenceExpansionInput
+		wantOutcome contextpacket.OperationOutcome
+	}{
+		{name: "invalid source", input: contextpacket.EvidenceExpansionInput{Evidence: resolverEvidence("unknown", "unsupported", contractsv1.EvidenceAvailable)}, wantOutcome: contextpacket.OperationFailure},
+		{name: "unauthorized", input: contextpacket.EvidenceExpansionInput{Evidence: resolverEvidence("ci", "check_run", contractsv1.EvidenceUnauthorized)}, wantOutcome: contextpacket.OperationDenied},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			observer := &evidenceObserver{}
+			resolver := contextpacket.NewEvidenceResolver(contextpacket.EvidenceResolverOptions{Observer: observer})
+
+			_, _ = resolver.Expand(context.Background(), test.input)
+
+			if observer.count != 1 || observer.observation.Outcome != test.wantOutcome {
+				t.Fatalf("observation = %#v count=%d", observer.observation, observer.count)
+			}
+		})
 	}
 }
 
 type evidenceObserver struct {
 	observation contextpacket.EvidenceExpansionObservation
+	count       int
 }
 
 func (o *evidenceObserver) ObserveEvidenceExpansion(_ context.Context, observation contextpacket.EvidenceExpansionObservation) {
+	o.count++
 	o.observation = observation
 }
 

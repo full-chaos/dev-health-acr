@@ -26,6 +26,9 @@ type Options struct {
 	ServiceVersion, MinimumSidecarVersion string
 	SnapshotStore                         storage.PacketStore
 	SnapshotRetention                     time.Duration
+	Observer                              AssemblyObserver
+	StoreBackend                          StoreBackend
+	Tracer                                AssemblyTraceBoundary
 }
 type Assembler struct {
 	store   storage.EvidenceStore
@@ -48,7 +51,11 @@ func NewAssembler(store storage.EvidenceStore, options Options) *Assembler {
 	return &Assembler{store: store, options: options}
 }
 
-func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, request contractsv1.ContextPacketRequest) (contractsv1.ContextPacket, error) {
+func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, request contractsv1.ContextPacketRequest) (packet contractsv1.ContextPacket, resultErr error) {
+	started := a.options.Now()
+	ctx, completeTrace := a.startTrace(ctx, TraceObservation{Stage: TraceStageRequest})
+	defer func() { completeTrace(operationOutcome(resultErr)) }()
+	defer func() { a.observePacket(ctx, request, packet, resultErr, a.options.Now().Sub(started)) }()
 	if err := ctx.Err(); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return contractsv1.ContextPacket{}, err
@@ -61,8 +68,8 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	if a.store == nil {
 		return contractsv1.ContextPacket{}, errors.New("contextpacket: evidence store is required")
 	}
-	packet := a.basePacket(principal, request)
-	scope, err := a.store.ResolveScope(ctx, principal, request)
+	packet = a.basePacket(principal, request)
+	scope, err := a.resolveScope(ctx, principal, request)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 			return contractsv1.ContextPacket{}, context.Canceled
@@ -77,7 +84,7 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 		return contractsv1.ContextPacket{}, err
 	}
 	packet.ResolvedScope, packet.Repository.RepoID = scope, scope.RepoID
-	bundle, err := a.store.ContextForTask(ctx, principal, request)
+	bundle, err := a.contextForTask(ctx, principal, request)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 			return contractsv1.ContextPacket{}, context.Canceled
@@ -104,8 +111,12 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	bundle.Evidence = visible
 	bundle.Unavailable = append(bundle.Unavailable, hidden...)
 	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), warnings(bundle)
+	rankingStarted := a.options.Now()
+	rankingContext, completeRankingTrace := a.startTrace(ctx, TraceObservation{Stage: TraceStageRanking})
 	ranked, quotaTruncated := rankEvidence(bundle.Evidence, scope, request.Goal, request.Options.IncludeLowConfidence, request.Options.RequestedCategories, request.Options.MaxItems)
 	items := requestedCategories(ranked, request.Options.RequestedCategories)
+	completeRankingTrace(OperationSuccess)
+	a.observeRanking(rankingContext, packet.QueryVersion, packet.RankingVersion, a.options.Now().Sub(rankingStarted))
 	packet.Budget.Truncated = quotaTruncated
 	if err := applyBudget(&packet, items); err != nil {
 		return contractsv1.ContextPacket{}, err

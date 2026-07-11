@@ -18,9 +18,10 @@ func TestCatalogRows_maps_scanned_rows_and_discloses_missing_sources(t *testing.
 	}
 	plan.RepoID = "00000000-0000-0000-0000-000000000001"
 	client := &rowClient{fail: map[string]error{"pull_requests.v1": errors.New("unknown table")}}
+	observer := &catalogObserver{}
 
 	// When
-	result, err := contextpacket.ExecuteCatalog(context.Background(), contextpacket.NewClickHouseSourceExecutor(client), plan)
+	result, err := contextpacket.ExecuteCatalogObserved(context.Background(), contextpacket.NewClickHouseSourceExecutor(client), plan, observer)
 
 	// Then
 	if err != nil {
@@ -41,9 +42,78 @@ func TestCatalogRows_maps_scanned_rows_and_discloses_missing_sources(t *testing.
 	if watermarkStatus(result.Watermarks, "ai_workflow_runs.v1") != "unavailable" {
 		t.Fatalf("missing source watermark: %#v", result.Watermarks)
 	}
+	if len(observer.store) == 0 {
+		t.Fatal("source queries emitted no observations")
+	}
+	failures := 0
+	for _, observation := range observer.store {
+		if observation.Backend != contextpacket.StoreBackendClickHouse {
+			t.Fatalf("backend = %q", observation.Backend)
+		}
+		if observation.Outcome == contextpacket.OperationFailure {
+			failures++
+		}
+	}
+	if failures != 1 {
+		t.Fatalf("failure observations = %d", failures)
+	}
 }
 
+func TestObservedCatalogRowsReportsEveryDirectQueryTimeout(t *testing.T) {
+	plan, err := contextpacket.BuildReadPlanV1(fixturePrincipal(), fixtureRequest("observed-direct-queries", "main", "commit-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &catalogObserver{}
+	rows := contextpacket.NewObservedCatalogClickHouseRows(timeoutQueryClient{}, observer)
+
+	_, _ = rows.ResolveEvidenceScope(context.Background(), plan)
+	_, _ = rows.AuthorizedRepositories(context.Background(), plan.OrgID, []string{plan.RepoSlug})
+	_, _ = rows.ResolveEvidenceReference(context.Background(), plan.OrgID, contractsv1.ResolvedScope{RepoID: "repo_1", RepoSlug: plan.RepoSlug}, contextpacket.SourceQueryCatalogV1[0].ID)
+
+	if len(observer.store) != 3 {
+		t.Fatalf("observations = %#v", observer.store)
+	}
+	for _, observation := range observer.store {
+		if observation.Backend != contextpacket.StoreBackendClickHouse || observation.Outcome != contextpacket.OperationTimeout {
+			t.Fatalf("observation = %#v", observation)
+		}
+	}
+}
+
+func TestObservedEvidenceStoreFactoryInjectsScopeQueryObserver(t *testing.T) {
+	observer := &catalogObserver{}
+	rows := contextpacket.NewCatalogClickHouseRows(timeoutQueryClient{})
+	store, err := contextpacket.NewObservedEvidenceStoreFactory(fixtureEvidenceCodec(t), nil, observer)(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _ = store.ResolveScope(context.Background(), fixturePrincipal(), fixtureRequest("factory-scope-observation", "main", "commit-1"))
+
+	if len(observer.store) != 1 || observer.store[0].Operation != contextpacket.StoreOperationScope || observer.store[0].Outcome != contextpacket.OperationTimeout {
+		t.Fatalf("observations = %#v", observer.store)
+	}
+}
+
+type catalogObserver struct {
+	store []contextpacket.StoreQueryObservation
+}
+
+func (o *catalogObserver) ObserveStoreQuery(_ context.Context, observation contextpacket.StoreQueryObservation) {
+	o.store = append(o.store, observation)
+}
+
+func (*catalogObserver) ObserveRanking(context.Context, contextpacket.RankingObservation) {}
+func (*catalogObserver) ObservePacket(context.Context, contextpacket.PacketObservation)   {}
+
 type rowClient struct{ fail map[string]error }
+
+type timeoutQueryClient struct{}
+
+func (timeoutQueryClient) Query(context.Context, string, []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	return nil, context.DeadlineExceeded
+}
 
 func (c *rowClient) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	for _, query := range contextpacket.SourceQueryCatalogV1 {
