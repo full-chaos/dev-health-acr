@@ -9,13 +9,26 @@ import (
 
 const RepositoryScopeQueryV1 = `SELECT toString(id), repo, ifNull(ref, '') FROM repos FINAL WHERE org_id = {org_id:String} AND repo = {repo_slug:String} LIMIT 2`
 
-type ClickHouseScopeResolver struct{ client ClickHouseQueryClient }
+type ClickHouseScopeResolver struct {
+	client   ClickHouseQueryClient
+	observer AssemblyObserver
+}
 
 func NewClickHouseScopeResolver(client ClickHouseQueryClient) *ClickHouseScopeResolver {
-	return &ClickHouseScopeResolver{client: client}
+	return NewObservedClickHouseScopeResolver(client, nil)
+}
+
+func NewObservedClickHouseScopeResolver(client ClickHouseQueryClient, observer AssemblyObserver) *ClickHouseScopeResolver {
+	return &ClickHouseScopeResolver{client: client, observer: observer}
 }
 
 func (r *ClickHouseScopeResolver) ResolveEvidenceScope(ctx context.Context, plan ReadPlan) (_ contractsv1.ResolvedScope, err error) {
+	var observer AssemblyObserver
+	if r != nil {
+		observer = r.observer
+	}
+	completeObservation := beginStoreQueryObservation(ctx, observer, StoreOperationScope)
+	defer func() { completeObservation(err) }()
 	if r == nil || r.client == nil {
 		return contractsv1.ResolvedScope{}, fmt.Errorf("contextpacket: clickhouse query client is required")
 	}

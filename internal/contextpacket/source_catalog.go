@@ -46,6 +46,10 @@ func catalogSourceQuery(id string) *SourceQuery {
 }
 
 func ExecuteCatalog(ctx context.Context, executor SourceQueryExecutor, plan ReadPlan) (CatalogResult, error) {
+	return ExecuteCatalogObserved(ctx, executor, plan, nil)
+}
+
+func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, plan ReadPlan, observer AssemblyObserver) (CatalogResult, error) {
 	if executor == nil {
 		return CatalogResult{}, fmt.Errorf("contextpacket: source query executor is required")
 	}
@@ -62,7 +66,14 @@ func ExecuteCatalog(ctx context.Context, executor SourceQueryExecutor, plan Read
 			result.Unavailable = append(result.Unavailable, contractsv1.UnavailableSource{Source: query.ID, Reason: "commit_scope_not_requested"})
 			continue
 		}
+		started := time.Now()
 		rows, err := executor.QueryEvidence(ctx, query, plan.Bindings())
+		if observer != nil {
+			observer.ObserveStoreQuery(ctx, StoreQueryObservation{
+				Operation: StoreOperationEvidence, Backend: StoreBackendClickHouse,
+				Outcome: operationOutcome(err), Duration: time.Since(started),
+			})
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return CatalogResult{}, ctx.Err()

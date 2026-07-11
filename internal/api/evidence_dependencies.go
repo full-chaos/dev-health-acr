@@ -3,10 +3,15 @@ package api
 import (
 	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/limits"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 type AppConfig struct {
@@ -20,6 +25,9 @@ type Dependencies struct {
 	ReadinessChecks      []ReadinessCheck
 	Now                  func() time.Time
 	RequestID            func() string
+	Observability        *observability.Hooks
+	Limits               *limits.Manager
+	AuthAttempts         auth.AttemptLimiter
 	EvidenceStoreFactory contextpacket.EvidenceStoreFactory
 }
 
@@ -30,6 +38,9 @@ type App struct {
 	now                  func() time.Time
 	requestID            func() string
 	logger               *slog.Logger
+	observability        observability.Hooks
+	limits               *limits.Manager
+	authAttempts         auth.AttemptLimiter
 	evidenceStoreFactory contextpacket.EvidenceStoreFactory
 }
 
@@ -55,6 +66,13 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 	if deps.RequestID == nil {
 		deps.RequestID = newRequestID
 	}
+	if deps.Observability == nil {
+		hooks := observability.NewHooks(nil, nil)
+		deps.Observability = &hooks
+	}
+	if deps.AuthAttempts == nil {
+		deps.AuthAttempts = auth.NoopLimiter{}
+	}
 	for _, check := range deps.ReadinessChecks {
 		if check == nil || strings.TrimSpace(check.Name()) == "" {
 			return nil, errors.New("readiness checks require a name")
@@ -67,8 +85,23 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		now:                  deps.Now,
 		requestID:            deps.RequestID,
 		logger:               logger,
+		observability:        *deps.Observability,
+		limits:               deps.Limits,
+		authAttempts:         deps.AuthAttempts,
 		evidenceStoreFactory: deps.EvidenceStoreFactory,
 	}, nil
+}
+
+func (a *App) ProtectedHandler(class limits.RequestClass, next http.Handler) http.Handler {
+	return LimitMiddleware(a.limits, class, next)
+}
+
+func (a *App) AuthenticatedHandler(credentials storage.CredentialStore, audit storage.AuditStore, class limits.RequestClass, next http.Handler) (http.Handler, error) {
+	authenticator, err := auth.NewAuthenticator(credentials, audit, auth.AuthenticatorOptions{Now: a.now, Limiter: a.authAttempts, Logger: a.logger})
+	if err != nil {
+		return nil, err
+	}
+	return authenticator.Middleware(a.ProtectedHandler(class, next)), nil
 }
 
 func (a *App) NewEvidenceStore(rows contextpacket.ClickHouseRows) (*contextpacket.ClickHouseEvidenceStore, error) {

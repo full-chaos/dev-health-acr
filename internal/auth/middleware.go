@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,7 +52,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		now := a.now().UTC()
 		ip := clientIP(r)
 		if !a.limiter.AllowAttempt(ip, now) || a.limiter.FailureBlocked(ip, now) {
-			a.writeError(w, r, http.StatusTooManyRequests, "rate_limited", "Too many authentication attempts", true, nil)
+			a.writeRateLimitError(w, r, a.limiter.RetryAfter(ip, now))
 			return
 		}
 		raw := extractBearer(r)
@@ -67,7 +68,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 				a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 				return
 			}
-			a.logger.ErrorContext(r.Context(), "credential lookup failed", "request_id", requestID(r), "error", err)
+			a.logger.ErrorContext(r.Context(), "credential lookup failed", "request_id", requestID(r), "failure_class", "credential_store")
 			a.writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Credential service is temporarily unavailable", true, nil)
 			return
 		}
@@ -89,7 +90,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		}
 		usageCtx := context.WithoutCancel(r.Context())
 		if err := a.store.TouchLastUsed(usageCtx, credential.CredentialID, ip, r.UserAgent(), now); err != nil {
-			a.logger.WarnContext(r.Context(), "credential last-used update failed", "credential_id", credential.CredentialID, "error", err)
+			a.logger.WarnContext(r.Context(), "credential last-used update failed", "failure_class", "credential_usage_store")
 		}
 		a.recordAudit(usageCtx, storage.AuditEvent{
 			OrgID: credential.OrgID, ActorType: "credential", ActorID: credential.CredentialID,
@@ -99,6 +100,16 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), principalKey{}, principal)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func (a *Authenticator) writeRateLimitError(w http.ResponseWriter, r *http.Request, retryAfter time.Duration) {
+	var details map[string]any
+	if retryAfter > 0 {
+		seconds := max(1, int((retryAfter+time.Second-1)/time.Second))
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		details = map[string]any{"retry_after_seconds": seconds}
+	}
+	a.writeError(w, r, http.StatusTooManyRequests, "rate_limited", "Too many authentication attempts", true, details)
 }
 
 func (a *Authenticator) RequireScope(required string, next http.Handler) http.Handler {
@@ -170,11 +181,14 @@ func (a *Authenticator) recordAudit(ctx context.Context, event storage.AuditEven
 		return
 	}
 	if err := a.audit.Record(ctx, event); err != nil {
-		a.logger.WarnContext(ctx, "audit event persistence failed", "action", event.Action, "resource_id", event.ResourceID, "error", err)
+		a.logger.WarnContext(ctx, "audit event persistence failed", "failure_class", "audit_store")
 	}
 }
 
 func (a *Authenticator) writeError(w http.ResponseWriter, r *http.Request, status int, code, message string, retryable bool, details map[string]any) {
+	if marker, ok := w.(interface{ SetDenialCode(string) }); ok {
+		marker.SetDenialCode(code)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(contractsv1.ErrorEnvelope{

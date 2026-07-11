@@ -50,6 +50,7 @@ type Config struct {
 	MaxOutputTokens       int
 	MaxSerializedBytes    int
 	RequestsPerMinute     int
+	RequestControls       RequestControlsConfig
 }
 
 type lookupEnv func(string) (string, bool)
@@ -115,6 +116,9 @@ func load(lookup lookupEnv) (Config, error) {
 	if cfg.RequestsPerMinute, err = intValue(lookup, "ACR_REQUESTS_PER_MINUTE", defaultRequestsPerMinute); err != nil {
 		return Config{}, err
 	}
+	if cfg.RequestControls, err = requestControlsValue(lookup, cfg.RequestsPerMinute); err != nil {
+		return Config{}, err
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -160,6 +164,9 @@ func (c Config) Validate() error {
 	}
 	if c.RequestsPerMinute < 1 {
 		return errors.New("ACR_REQUESTS_PER_MINUTE must be positive")
+	}
+	if err := c.RequestControls.validate(); err != nil {
+		return err
 	}
 	if c.Environment == "production" && !hasActiveEvidenceIDKey(c) {
 		return errors.New("ACR_EVIDENCE_ID_ACTIVE_KID and ACR_EVIDENCE_ID_KEYS must configure an active evidence key in production")

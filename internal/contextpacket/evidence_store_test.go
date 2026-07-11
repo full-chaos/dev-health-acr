@@ -155,6 +155,37 @@ func TestEvidenceStoreFactory_injects_codec_into_clickhouse_store(t *testing.T) 
 	}
 }
 
+func TestObservedEvidenceStoreFactoryInjectsExpansionObserver(t *testing.T) {
+	evidence := testEvidence("acr:v1:ci:opaque-reference", "ci", time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	evidence.Source.EntityType, evidence.SourceVersion = "ci_pipeline_run", "ci_pipeline_runs.v1"
+	codec := fixtureEvidenceCodec(t)
+	observer := &expansionObserver{}
+	store, err := contextpacket.NewObservedEvidenceStoreFactory(codec, observer, nil)(&referenceRows{record: contextpacket.EvidenceReference{RepoSlug: "example-org/widget-service", Evidence: evidence}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = store.ResolveEvidence(context.Background(), fixturePrincipal(), handle)
+
+	if err != nil || observer.count != 1 || observer.observation.Outcome != contextpacket.OperationSuccess {
+		t.Fatalf("resolve error=%v observation=%#v count=%d", err, observer.observation, observer.count)
+	}
+}
+
+type expansionObserver struct {
+	observation contextpacket.EvidenceExpansionObservation
+	count       int
+}
+
+func (o *expansionObserver) ObserveEvidenceExpansion(_ context.Context, observation contextpacket.EvidenceExpansionObservation) {
+	o.observation = observation
+	o.count++
+}
+
 func fixtureEvidenceCodec(t *testing.T) *contextpacket.EvidenceIDCodec {
 	t.Helper()
 	codec, err := contextpacket.NewEvidenceIDCodec(contextpacket.EvidenceIDKeyring{ActiveKID: "test", Keys: map[string][]byte{"test": []byte("01234567890123456789012345678901")}})

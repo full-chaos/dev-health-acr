@@ -69,18 +69,23 @@ func BuildReadPlanV1(principal storage.Principal, request contractsv1.ContextPac
 // EvaluationStore is a read-only EvidenceStore backed only by the fixed corpus.
 // It is suitable for deterministic assembler tests and never reaches a network.
 type EvaluationStore struct {
-	corpus evalfixture.Corpus
-	orgID  string
+	corpus   evalfixture.Corpus
+	orgID    string
+	resolver *EvidenceResolver
 }
 
 func NewEvaluationStore(corpus evalfixture.Corpus, orgID string) (*EvaluationStore, error) {
+	return NewObservedEvaluationStore(corpus, orgID, nil)
+}
+
+func NewObservedEvaluationStore(corpus evalfixture.Corpus, orgID string, observer EvidenceExpansionObserver) (*EvaluationStore, error) {
 	if strings.TrimSpace(orgID) == "" {
 		return nil, ErrPrincipalOrganization
 	}
 	if strings.TrimSpace(corpus.Scenario.Repository.Slug) == "" {
 		return nil, errors.New("contextpacket: evaluation corpus repository is required")
 	}
-	return &EvaluationStore{corpus: corpus, orgID: orgID}, nil
+	return &EvaluationStore{corpus: corpus, orgID: orgID, resolver: NewEvidenceResolver(EvidenceResolverOptions{Observer: observer})}, nil
 }
 
 func (s *EvaluationStore) ResolveScope(ctx context.Context, principal storage.Principal, request contractsv1.ContextPacketRequest) (contractsv1.ResolvedScope, error) {
@@ -182,7 +187,7 @@ func (s *EvaluationStore) ResolveEvidence(ctx context.Context, principal storage
 	if err != nil {
 		return contractsv1.ExpandedEvidence{}, err
 	}
-	return NewEvidenceResolver(EvidenceResolverOptions{}).Expand(ctx, EvidenceExpansionInput{Evidence: evidence, Excerpt: record.Summary})
+	return s.resolver.Expand(ctx, EvidenceExpansionInput{Evidence: evidence, Excerpt: record.Summary})
 }
 
 func (s *EvaluationStore) matchTask(request contractsv1.ContextPacketRequest) (evalfixture.Task, bool) {

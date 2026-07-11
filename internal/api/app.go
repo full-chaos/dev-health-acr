@@ -3,16 +3,17 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
-	"runtime/debug"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 )
 
 type contextKey string
@@ -56,18 +57,20 @@ func (p StaticCapabilitiesProvider) Capabilities(_ context.Context, _ *http.Requ
 	return value, nil
 }
 
+func (a *App) InstrumentedHandler(next http.Handler) http.Handler {
+	handler := a.recoveryMiddleware(next)
+	handler = a.timeoutMiddleware(handler)
+	handler = a.accessLogMiddleware(handler)
+	handler = a.requestIDMiddleware(handler)
+	return handler
+}
+
 func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.handleHealth)
 	mux.HandleFunc("GET /readyz", a.handleReady)
 	mux.HandleFunc("GET /api/v1/agent-context/capabilities", a.handleCapabilities)
-
-	var handler http.Handler = mux
-	handler = a.accessLogMiddleware(handler)
-	handler = a.timeoutMiddleware(handler)
-	handler = a.recoveryMiddleware(handler)
-	handler = a.requestIDMiddleware(handler)
-	return handler
+	return a.InstrumentedHandler(mux)
 }
 
 type healthResponse struct {
@@ -112,8 +115,7 @@ func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusServiceUnavailable
 			a.logger.WarnContext(r.Context(), "readiness check failed",
 				"request_id", RequestID(r.Context()),
-				"check", check.Name(),
-				"error", err,
+				"failure_class", "readiness_check",
 			)
 		}
 		response.Checks = append(response.Checks, readinessCheckResponse{Name: check.Name(), Status: checkStatus})
@@ -126,7 +128,7 @@ func (a *App) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.logger.ErrorContext(r.Context(), "capabilities resolution failed",
 			"request_id", RequestID(r.Context()),
-			"error", err,
+			"failure_class", "capabilities_provider",
 		)
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Capabilities are temporarily unavailable", true, nil)
 		return
@@ -140,9 +142,14 @@ func (a *App) requestIDMiddleware(next http.Handler) http.Handler {
 		if requestID == "" || len(requestID) > 128 {
 			requestID = a.requestID()
 		}
+		telemetryContext := observability.WithRequestID(r.Context(), requestID)
+		if _, ok := observability.RequestIDFromContext(telemetryContext); !ok {
+			requestID = newRequestID()
+			telemetryContext = observability.WithRequestID(r.Context(), requestID)
+		}
 		w.Header().Set("X-Request-ID", requestID)
 		r.Header.Set("X-Request-ID", requestID)
-		ctx := context.WithValue(r.Context(), requestIDContextKey, requestID)
+		ctx := context.WithValue(telemetryContext, requestIDContextKey, requestID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -161,8 +168,7 @@ func (a *App) recoveryMiddleware(next http.Handler) http.Handler {
 			if recovered := recover(); recovered != nil {
 				a.logger.ErrorContext(r.Context(), "request panic recovered",
 					"request_id", RequestID(r.Context()),
-					"panic", fmt.Sprint(recovered),
-					"stack", string(debug.Stack()),
+					"status", http.StatusInternalServerError,
 				)
 				writeError(w, r, http.StatusInternalServerError, "internal_error", "Internal server error", false, nil)
 			}
@@ -178,12 +184,12 @@ func (a *App) accessLogMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(wrapped, r)
 		a.logger.InfoContext(r.Context(), "request completed",
 			"request_id", RequestID(r.Context()),
-			"method", r.Method,
-			"path", r.URL.Path,
+			"operation", requestOperation(r),
 			"status", wrapped.status,
 			"bytes", wrapped.bytes,
 			"duration_ms", a.now().Sub(started).Milliseconds(),
 		)
+		a.observability.ObserveRequest(r.Context(), requestObservation(requestOperation(r), wrapped.status, denialForError(wrapped.denialCode), a.now().Sub(started)))
 	})
 }
 
@@ -195,46 +201,14 @@ func RequestID(ctx context.Context) string {
 var fallbackRequestIDCounter atomic.Uint64
 
 func newRequestID() string {
+	return newRequestIDFrom(rand.Reader, time.Now(), fallbackRequestIDCounter.Add(1))
+}
+
+func newRequestIDFrom(reader io.Reader, now time.Time, sequence uint64) string {
 	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err == nil {
+	if _, err := io.ReadFull(reader, raw[:]); err == nil {
 		return "req_" + hex.EncodeToString(raw[:])
 	}
-	return fmt.Sprintf("req_fallback_%d_%d", time.Now().UnixNano(), fallbackRequestIDCounter.Add(1))
-}
-
-type statusWriter struct {
-	http.ResponseWriter
-	status int
-	bytes  int
-}
-
-func (w *statusWriter) WriteHeader(status int) {
-	w.status = status
-	w.ResponseWriter.WriteHeader(status)
-}
-
-func (w *statusWriter) Write(p []byte) (int, error) {
-	n, err := w.ResponseWriter.Write(p)
-	w.bytes += n
-	return n, err
-}
-
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
-}
-
-func writeError(w http.ResponseWriter, r *http.Request, status int, code, message string, retryable bool, details map[string]any) {
-	writeJSON(w, status, contractsv1.ErrorEnvelope{
-		SchemaVersion: contractsv1.ErrorSchema,
-		RequestID:     RequestID(r.Context()),
-		Error: contractsv1.ErrorDetail{
-			Code:       code,
-			Message:    message,
-			HTTPStatus: status,
-			Retryable:  retryable,
-			Details:    details,
-		},
-	})
+	fallback := sha256.Sum256(fmt.Appendf(nil, "%d:%d", now.UnixNano(), sequence))
+	return "req_" + hex.EncodeToString(fallback[:16])
 }
