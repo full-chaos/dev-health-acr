@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/observability"
@@ -40,7 +41,12 @@ func requestOperation(request *http.Request) observability.Operation {
 		return observability.OperationReadiness
 	case "/api/v1/agent-context/capabilities":
 		return observability.OperationCapabilities
+	case "/api/v1/agent-context/context-packets":
+		return observability.OperationContext
 	default:
+		if strings.HasPrefix(request.URL.Path, "/api/v1/agent-context/evidence/") {
+			return observability.OperationEvidence
+		}
 		return observability.OperationUnknown
 	}
 }
