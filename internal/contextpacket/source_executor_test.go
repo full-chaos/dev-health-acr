@@ -3,6 +3,7 @@ package contextpacket_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +97,33 @@ func TestObservedEvidenceStoreFactoryInjectsScopeQueryObserver(t *testing.T) {
 	}
 }
 
+func TestClickHouseSourceExecutor_bounds_source_rows_before_ranking(t *testing.T) {
+	// Given
+	rows := make([][]any, 101)
+	for index := range rows {
+		rows[index] = []any{"acr:v1:test:1", "dev_health", "test", "1", "test", "", "native", 0.9, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	}
+	client := &boundedRowClient{rows: &rowScanner{rows: rows}}
+	executor := contextpacket.NewClickHouseSourceExecutor(client)
+
+	// When
+	evidence, err := executor.QueryEvidence(context.Background(), contextpacket.SourceQueryCatalogV1[0], nil)
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evidence) != 100 || client.rows.row != 100 {
+		t.Fatalf("evidence=%d scanned=%d, want 100", len(evidence), client.rows.row)
+	}
+	if !strings.Contains(client.statement, "ORDER BY observed_at DESC, evidence_ref_id ASC LIMIT {source_row_limit:UInt32}") {
+		t.Fatalf("query is not deterministically bounded: %s", client.statement)
+	}
+	if len(client.bindings) != 1 || client.bindings[0].Name != "source_row_limit" || client.bindings[0].Value != uint32(100) {
+		t.Fatalf("row limit binding = %#v", client.bindings)
+	}
+}
+
 type catalogObserver struct {
 	store []contextpacket.StoreQueryObservation
 }
@@ -111,13 +139,25 @@ type rowClient struct{ fail map[string]error }
 
 type timeoutQueryClient struct{}
 
+type boundedRowClient struct {
+	statement string
+	bindings  []contextpacket.ClickHouseBinding
+	rows      *rowScanner
+}
+
+func (c *boundedRowClient) Query(_ context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	c.statement = statement
+	c.bindings = bindings
+	return c.rows, nil
+}
+
 func (timeoutQueryClient) Query(context.Context, string, []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	return nil, context.DeadlineExceeded
 }
 
 func (c *rowClient) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	for _, query := range contextpacket.SourceQueryCatalogV1 {
-		if query.Statement == statement {
+		if strings.Contains(statement, query.Statement) {
 			if err := c.fail[query.ID]; err != nil {
 				return nil, err
 			}
