@@ -15,9 +15,14 @@ import (
 )
 
 type AppConfig struct {
-	ServiceName    string
-	ServiceVersion string
-	RequestTimeout time.Duration
+	ServiceName              string
+	ServiceVersion           string
+	RequestTimeout           time.Duration
+	MaxRequestBodyBytes      int64
+	MaxEvidenceResponseBytes int64
+	MaxItems                 int
+	MaxOutputTokens          int
+	MaxSerializedBytes       int
 }
 
 type Dependencies struct {
@@ -29,6 +34,8 @@ type Dependencies struct {
 	Limits               *limits.Manager
 	AuthAttempts         auth.AttemptLimiter
 	EvidenceStoreFactory contextpacket.EvidenceStoreFactory
+	Runtime              *RuntimeDependencies
+	ClientIP             auth.ClientIPResolver
 }
 
 type App struct {
@@ -42,6 +49,9 @@ type App struct {
 	limits               *limits.Manager
 	authAttempts         auth.AttemptLimiter
 	evidenceStoreFactory contextpacket.EvidenceStoreFactory
+	runtime              *RuntimeDependencies
+	authenticator        *auth.Authenticator
+	clientIP             auth.ClientIPResolver
 }
 
 func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error) {
@@ -53,6 +63,24 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 	}
 	if cfg.RequestTimeout <= 0 {
 		return nil, errors.New("request timeout must be positive")
+	}
+	if cfg.MaxRequestBodyBytes == 0 {
+		cfg.MaxRequestBodyBytes = 1 << 20
+	}
+	if cfg.MaxEvidenceResponseBytes == 0 {
+		cfg.MaxEvidenceResponseBytes = 1 << 20
+	}
+	if cfg.MaxItems == 0 {
+		cfg.MaxItems = 50
+	}
+	if cfg.MaxOutputTokens == 0 {
+		cfg.MaxOutputTokens = 16_000
+	}
+	if cfg.MaxSerializedBytes == 0 {
+		cfg.MaxSerializedBytes = 1 << 20
+	}
+	if cfg.MaxRequestBodyBytes < 1 || cfg.MaxEvidenceResponseBytes < 1 || cfg.MaxItems < 1 || cfg.MaxItems > 50 || cfg.MaxOutputTokens < 500 || cfg.MaxOutputTokens > 16_000 || cfg.MaxSerializedBytes < 8_192 || cfg.MaxSerializedBytes > 1<<20 {
+		return nil, errors.New("hosted read limits are invalid")
 	}
 	if deps.Capabilities == nil {
 		return nil, errors.New("capabilities provider is required")
@@ -73,6 +101,21 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 	if deps.AuthAttempts == nil {
 		deps.AuthAttempts = auth.NoopLimiter{}
 	}
+	var authenticator *auth.Authenticator
+	if deps.Runtime != nil {
+		if err := deps.Runtime.validate(); err != nil {
+			return nil, err
+		}
+		if deps.Limits == nil {
+			return nil, errors.New("hosted read runtime requires request controls")
+		}
+		var err error
+		authenticator, err = auth.NewAuthenticator(deps.Runtime.Credentials, deps.Runtime.Audit, auth.AuthenticatorOptions{Now: deps.Now, Limiter: deps.AuthAttempts, Logger: logger, ClientIP: deps.ClientIP})
+		if err != nil {
+			return nil, err
+		}
+		deps.ReadinessChecks = append(deps.ReadinessChecks, deps.Runtime.ReadinessChecks...)
+	}
 	for _, check := range deps.ReadinessChecks {
 		if check == nil || strings.TrimSpace(check.Name()) == "" {
 			return nil, errors.New("readiness checks require a name")
@@ -89,6 +132,9 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		limits:               deps.Limits,
 		authAttempts:         deps.AuthAttempts,
 		evidenceStoreFactory: deps.EvidenceStoreFactory,
+		runtime:              deps.Runtime,
+		authenticator:        authenticator,
+		clientIP:             deps.ClientIP,
 	}, nil
 }
 
@@ -97,7 +143,7 @@ func (a *App) ProtectedHandler(class limits.RequestClass, next http.Handler) htt
 }
 
 func (a *App) AuthenticatedHandler(credentials storage.CredentialStore, audit storage.AuditStore, class limits.RequestClass, next http.Handler) (http.Handler, error) {
-	authenticator, err := auth.NewAuthenticator(credentials, audit, auth.AuthenticatorOptions{Now: a.now, Limiter: a.authAttempts, Logger: a.logger})
+	authenticator, err := auth.NewAuthenticator(credentials, audit, auth.AuthenticatorOptions{Now: a.now, Limiter: a.authAttempts, Logger: a.logger, ClientIP: a.clientIP})
 	if err != nil {
 		return nil, err
 	}

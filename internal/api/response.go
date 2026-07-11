@@ -30,6 +30,8 @@ func (w *statusWriter) SetDenialCode(code string) { w.denialCode = code }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }
@@ -61,7 +63,7 @@ func denialForError(code string) observability.DenialClass {
 		return observability.DenialPermissionScope
 	case "repo_forbidden":
 		return observability.DenialRepositoryScope
-	case "entitlement_required":
+	case "feature_not_enabled":
 		return observability.DenialLicense
 	case "rate_limited":
 		return observability.DenialRateLimit

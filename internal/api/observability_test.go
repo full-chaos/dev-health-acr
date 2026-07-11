@@ -21,14 +21,9 @@ func TestAppCorrelatesRequestObservationWithCallerRequestID(t *testing.T) {
 	// Given
 	sink := &snapshotSink{}
 	hooks := observability.NewHooks(sink, nil)
-	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
-		Capabilities:  StaticCapabilitiesProvider{Value: contractsv1.Capabilities{SchemaVersion: contractsv1.CapabilitiesSchema}},
-		Observability: &hooks,
-	}, testLogger(&bytes.Buffer{}))
-	if err != nil {
-		t.Fatal(err)
-	}
+	app, token := newHostedTestApp(t, nil, &hooks, []string{auth.ScopeContextRead}, nil, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
 	requestID := "req_0123456789abcdef0123456789abcdef"
 	request.Header.Set("X-Request-ID", requestID)
 
@@ -52,15 +47,11 @@ func TestAppObservesRecoveredPanic(t *testing.T) {
 	hooks := observability.NewHooks(sink, nil)
 	buffer := &bytes.Buffer{}
 	secret := "evidence-and-transcript-sentinel"
-	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
-		Capabilities:  panicCapabilitiesProvider{value: secret},
-		Observability: &hooks,
-	}, testLogger(buffer))
-	if err != nil {
-		t.Fatal(err)
-	}
+	app, token := newHostedTestApp(t, panicCapabilitiesProvider{value: secret}, &hooks, []string{auth.ScopeContextRead}, nil, nil)
+	app.logger = testLogger(buffer)
 	requestID := "req_0123456789abcdef0123456789abcdef"
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("X-Request-ID", requestID)
 
 	// When
