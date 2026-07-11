@@ -15,7 +15,7 @@ This repository produces two binaries:
 
 ## Status
 
-The contract-first Go service includes scoped credentials, deterministic context assembly, authorized evidence expansion, request controls, and the hosted read-route boundary. Production database and entitlement adapters are supplied as one fail-closed runtime bundle; packet replay and episode HTTP writeback remain separate work.
+Contract-first bootstrap with a production-shaped `acr-api` service shell. Configuration validation, structured request logging, safe health/readiness/capabilities responses, request IDs, and graceful shutdown are implemented; context/evidence/episode behavior remains in the Phase 1 issues.
 
 ## Product boundary
 
@@ -75,10 +75,8 @@ Run the contract-bootstrap API:
 ACR_ADDR=:8080 go run ./cmd/acr-api serve
 curl http://127.0.0.1:8080/healthz
 curl http://127.0.0.1:8080/readyz
+curl http://127.0.0.1:8080/api/v1/agent-context/capabilities
 ```
-
-The stock development binary reports not-ready and serves safe `503` read-route
-stubs until a hosting build supplies the complete runtime adapter bundle.
 
 Inspect sidecar metadata and local diagnostics:
 

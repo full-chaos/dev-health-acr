@@ -12,9 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
-	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 )
 
@@ -71,9 +69,7 @@ func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.handleHealth)
 	mux.HandleFunc("GET /readyz", a.handleReady)
-	mux.Handle("GET /api/v1/agent-context/capabilities", a.protectedRuntimeHandler(limits.RequestClassAuth, auth.ScopeContextRead, false, http.HandlerFunc(a.handleCapabilities)))
-	mux.Handle("POST /api/v1/agent-context/context-packets", a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, false, http.HandlerFunc(a.handleContextPacket)))
-	mux.Handle("GET /api/v1/agent-context/evidence/{evidence_ref_id}", a.protectedRuntimeHandler(limits.RequestClassEvidence, auth.ScopeEvidenceRead, true, http.HandlerFunc(a.handleEvidence)))
+	mux.HandleFunc("GET /api/v1/agent-context/capabilities", a.handleCapabilities)
 	return a.InstrumentedHandler(mux)
 }
 
@@ -125,6 +121,19 @@ func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
 		response.Checks = append(response.Checks, readinessCheckResponse{Name: check.Name(), Status: checkStatus})
 	}
 	writeJSON(w, status, response)
+}
+
+func (a *App) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	capabilities, err := a.capabilities.Capabilities(r.Context(), r)
+	if err != nil {
+		a.logger.ErrorContext(r.Context(), "capabilities resolution failed",
+			"request_id", RequestID(r.Context()),
+			"failure_class", "capabilities_provider",
+		)
+		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Capabilities are temporarily unavailable", true, nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, capabilities)
 }
 
 func (a *App) requestIDMiddleware(next http.Handler) http.Handler {

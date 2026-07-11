@@ -51,7 +51,6 @@ type Config struct {
 	MaxSerializedBytes    int
 	RequestsPerMinute     int
 	RequestControls       RequestControlsConfig
-	TrustedProxyCIDRs     []string
 }
 
 type lookupEnv func(string) (string, bool)
@@ -79,7 +78,6 @@ func load(lookup lookupEnv) (Config, error) {
 		MinimumSidecarVersion: stringValue(lookup, "ACR_MINIMUM_SIDECAR_VERSION", defaultMinimumSidecar),
 		EntitlementKey:        stringValue(lookup, "ACR_ENTITLEMENT_KEY", defaultEntitlementKey),
 		EvidenceIDActiveKID:   stringValue(lookup, "ACR_EVIDENCE_ID_ACTIVE_KID", ""),
-		TrustedProxyCIDRs:     stringListValue(lookup, "ACR_TRUSTED_PROXY_CIDRS"),
 	}
 	if cfg.EvidenceIDKeys, err = evidenceIDKeysValue(lookup); err != nil {
 		return Config{}, err
@@ -170,9 +168,6 @@ func (c Config) Validate() error {
 	if err := c.RequestControls.validate(); err != nil {
 		return err
 	}
-	if err := validateTrustedProxyCIDRs(c.TrustedProxyCIDRs); err != nil {
-		return err
-	}
 	if c.Environment == "production" && !hasActiveEvidenceIDKey(c) {
 		return errors.New("ACR_EVIDENCE_ID_ACTIVE_KID and ACR_EVIDENCE_ID_KEYS must configure an active evidence key in production")
 	}
@@ -203,7 +198,6 @@ func (c Config) SafeAttributes() []any {
 		"entitlement_key", c.EntitlementKey,
 		"evidence_id_active_kid", c.EvidenceIDActiveKID,
 		"evidence_id_key_count", len(c.EvidenceIDKeys),
-		"trusted_proxy_count", len(c.TrustedProxyCIDRs),
 	}
 }
 

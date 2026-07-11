@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/api"
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
@@ -63,12 +64,15 @@ func serve(args []string) error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
-	clientIP, err := auth.NewTrustedProxyClientIPResolver(cfg.TrustedProxyCIDRs)
-	if err != nil {
-		return fmt.Errorf("configuration: %w", err)
-	}
-	if cfg.RequireBackingStores {
-		return errors.New("hosted read runtime adapters are not configured in this build")
+	var evidenceCodec *contextpacket.EvidenceIDCodec
+	if cfg.Environment == "production" || cfg.RequireBackingStores {
+		evidenceCodec, err = contextpacket.NewEvidenceIDCodec(contextpacket.EvidenceIDKeyring{
+			ActiveKID: cfg.EvidenceIDActiveKID,
+			Keys:      cfg.EvidenceIDKeys,
+		})
+		if err != nil {
+			return fmt.Errorf("initialize evidence id codec: %w", err)
+		}
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
@@ -120,17 +124,41 @@ func serve(args []string) error {
 
 	checks := []api.ReadinessCheck{
 		api.CheckFunc{CheckName: "configuration", Fn: func(context.Context) error { return cfg.Validate() }},
-		api.CheckFunc{CheckName: "runtime_dependencies", Fn: func(context.Context) error { return errors.New("hosted read runtime is not configured") }},
+	}
+	if cfg.RequireBackingStores {
+		checks = append(checks,
+			api.CheckFunc{CheckName: "evidence_id_codec", Fn: func(context.Context) error {
+				if evidenceCodec == nil {
+					return errors.New("evidence id codec is not configured")
+				}
+				return nil
+			}},
+			api.CheckFunc{CheckName: "clickhouse_configuration", Fn: func(context.Context) error {
+				if cfg.ClickHouseDSN == "" {
+					return errors.New("ClickHouse is not configured")
+				}
+				return nil
+			}},
+			api.CheckFunc{CheckName: "postgres_configuration", Fn: func(context.Context) error {
+				if cfg.PostgresDSN == "" {
+					return errors.New("PostgreSQL is not configured")
+				}
+				return nil
+			}},
+		)
 	}
 
 	app, err := api.NewApp(api.AppConfig{
-		ServiceName:         "dev-health-acr",
-		ServiceVersion:      info.Version,
-		RequestTimeout:      cfg.RequestTimeout,
-		MaxRequestBodyBytes: int64(cfg.MaxSerializedBytes), MaxEvidenceResponseBytes: int64(cfg.MaxSerializedBytes),
-		MaxItems: cfg.MaxItems, MaxOutputTokens: cfg.MaxOutputTokens, MaxSerializedBytes: cfg.MaxSerializedBytes,
+		ServiceName:    "dev-health-acr",
+		ServiceVersion: info.Version,
+		RequestTimeout: cfg.RequestTimeout,
 	}, api.Dependencies{
-		Capabilities: capabilities, ReadinessChecks: checks, Limits: limitManager, AuthAttempts: authAttempts, Observability: &telemetry, ClientIP: clientIP,
+		Capabilities:         capabilities,
+		ReadinessChecks:      checks,
+		Limits:               limitManager,
+		AuthAttempts:         authAttempts,
+		Observability:        &telemetry,
+		EvidenceStoreFactory: contextpacket.NewObservedEvidenceStoreFactory(evidenceCodec, observability.NewEvidenceExpansionObserver(telemetry), observability.NewAssemblyObserver(telemetry)),
 	}, logger)
 	if err != nil {
 		return fmt.Errorf("initialize application: %w", err)

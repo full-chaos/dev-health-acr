@@ -23,8 +23,6 @@ type ClickHouseQueryClient interface {
 
 type ClickHouseSourceExecutor struct{ client ClickHouseQueryClient }
 
-const sourceEvidenceRowLimit = 100
-
 func NewClickHouseSourceExecutor(client ClickHouseQueryClient) *ClickHouseSourceExecutor {
 	return &ClickHouseSourceExecutor{client: client}
 }
@@ -33,11 +31,7 @@ func (e *ClickHouseSourceExecutor) QueryEvidence(ctx context.Context, query Sour
 	if e == nil || e.client == nil {
 		return nil, fmt.Errorf("contextpacket: clickhouse query client is required")
 	}
-	statement := "SELECT * FROM (" + query.Statement + ") ORDER BY observed_at DESC, evidence_ref_id ASC LIMIT {source_row_limit:UInt32}"
-	queryBindings := make([]ClickHouseBinding, len(bindings), len(bindings)+1)
-	copy(queryBindings, bindings)
-	queryBindings = append(queryBindings, ClickHouseBinding{Name: "source_row_limit", Value: uint32(sourceEvidenceRowLimit)})
-	rows, err := e.client.Query(ctx, statement, queryBindings)
+	rows, err := e.client.Query(ctx, query.Statement, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("query source %s: %w", query.ID, err)
 	}
@@ -47,7 +41,7 @@ func (e *ClickHouseSourceExecutor) QueryEvidence(ctx context.Context, query Sour
 		}
 	}()
 	evidence := []contractsv1.EvidenceRef{}
-	for len(evidence) < sourceEvidenceRowLimit && rows.Next() {
+	for rows.Next() {
 		ref, scanErr := scanEvidenceRow(rows)
 		if scanErr != nil {
 			return nil, fmt.Errorf("scan source %s: %w", query.ID, scanErr)

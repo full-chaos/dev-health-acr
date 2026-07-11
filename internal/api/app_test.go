@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -153,11 +152,8 @@ func TestReadinessFailureIsSafe(t *testing.T) {
 }
 
 func TestCapabilitiesShape(t *testing.T) {
-	app, token := newHostedTestApp(t, nil, nil, []string{auth.ScopeContextRead}, nil, nil)
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
-	request.Header.Set("Authorization", "Bearer "+token)
 	response := httptest.NewRecorder()
-	app.Handler().ServeHTTP(response, request)
+	testApp(t).Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", response.Code)
 	}
@@ -172,12 +168,15 @@ func TestCapabilitiesShape(t *testing.T) {
 
 func TestCapabilitiesFailureUsesContractError(t *testing.T) {
 	provider := failingCapabilitiesProvider{}
-	app, token := newHostedTestApp(t, provider, nil, []string{auth.ScopeContextRead}, nil, nil)
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("X-Request-ID", testRequestID)
+	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
+		Capabilities: provider,
+		RequestID:    func() string { return testRequestID },
+	}, testLogger(&bytes.Buffer{}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	response := httptest.NewRecorder()
-	app.Handler().ServeHTTP(response, request)
+	app.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil))
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("unexpected status: %d", response.Code)
 	}
@@ -194,15 +193,20 @@ func TestLogsDoNotContainRawFailureDetailsOrPaths(t *testing.T) {
 	// Given
 	secret := "fcacr_sensitive_bearer_and_dsn"
 	buffer := &bytes.Buffer{}
-	app, token := newHostedTestApp(t, secretCapabilitiesProvider{err: errors.New(secret)}, nil, []string{auth.ScopeContextRead}, nil, nil)
-	app.logger = testLogger(buffer)
-	app.readinessChecks = []ReadinessCheck{CheckFunc{CheckName: "dependency", Fn: func(context.Context) error { return errors.New(secret) }}}
+	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
+		Capabilities: secretCapabilitiesProvider{err: errors.New(secret)},
+		ReadinessChecks: []ReadinessCheck{CheckFunc{CheckName: "dependency", Fn: func(context.Context) error {
+			return errors.New(secret)
+		}}},
+		RequestID: func() string { return testRequestID },
+	}, testLogger(buffer))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// When
 	app.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/readyz", nil))
-	capabilitiesRequest := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
-	capabilitiesRequest.Header.Set("Authorization", "Bearer "+token)
-	app.Handler().ServeHTTP(httptest.NewRecorder(), capabilitiesRequest)
+	app.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil))
 	app.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/"+secret, nil))
 
 	// Then

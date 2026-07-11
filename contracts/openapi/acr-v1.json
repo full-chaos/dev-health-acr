@@ -26,7 +26,17 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HealthResponse"
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "ok"
+                    }
+                  }
                 }
               }
             }
@@ -44,20 +54,23 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ReadinessResponse"
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "ready"
+                    }
+                  }
                 }
               }
             }
           },
           "503": {
-            "description": "One or more service dependencies are not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReadinessResponse"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error"
           }
         }
       }
@@ -91,16 +104,7 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
-          "429": {
-            "$ref": "#/components/responses/Error"
-          },
           "426": {
-            "$ref": "#/components/responses/Error"
-          },
-          "500": {
-            "$ref": "#/components/responses/Error"
-          },
-          "503": {
             "$ref": "#/components/responses/Error"
           }
         }
@@ -155,13 +159,7 @@
           "429": {
             "$ref": "#/components/responses/Error"
           },
-          "500": {
-            "$ref": "#/components/responses/Error"
-          },
           "503": {
-            "$ref": "#/components/responses/Error"
-          },
-          "504": {
             "$ref": "#/components/responses/Error"
           }
         }
@@ -256,19 +254,7 @@
           "404": {
             "$ref": "#/components/responses/Error"
           },
-          "413": {
-            "$ref": "#/components/responses/Error"
-          },
-          "429": {
-            "$ref": "#/components/responses/Error"
-          },
-          "500": {
-            "$ref": "#/components/responses/Error"
-          },
-          "503": {
-            "$ref": "#/components/responses/Error"
-          },
-          "504": {
+          "410": {
             "$ref": "#/components/responses/Error"
           }
         }
@@ -351,82 +337,11 @@
     }
   },
   "components": {
-    "schemas": {
-      "HealthResponse": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "status",
-          "service",
-          "version"
-        ],
-        "properties": {
-          "status": {
-            "type": "string",
-            "const": "ok"
-          },
-          "service": {
-            "type": "string"
-          },
-          "version": {
-            "type": "string"
-          }
-        }
-      },
-      "ReadinessResponse": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "status",
-          "service",
-          "version",
-          "checks"
-        ],
-        "properties": {
-          "status": {
-            "type": "string",
-            "enum": [
-              "ready",
-              "not_ready"
-            ]
-          },
-          "service": {
-            "type": "string"
-          },
-          "version": {
-            "type": "string"
-          },
-          "checks": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "name",
-                "status"
-              ],
-              "properties": {
-                "name": {
-                  "type": "string"
-                },
-                "status": {
-                  "type": "string",
-                  "enum": [
-                    "ready",
-                    "not_ready"
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "securitySchemes": {
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "bearerFormat": "fcacr_ client credential"
+        "bearerFormat": "fcacr_ client credential or trusted Dev Health web JWT"
       }
     },
     "parameters": {

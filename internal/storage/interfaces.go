@@ -36,10 +36,6 @@ type EvidenceBundle struct {
 type EvidenceStore interface {
 	ResolveScope(ctx context.Context, principal Principal, request contractsv1.ContextPacketRequest) (contractsv1.ResolvedScope, error)
 	ContextForTask(ctx context.Context, principal Principal, request contractsv1.ContextPacketRequest) (EvidenceBundle, error)
-	// ResolveEvidence owns independent organization and repository authorization
-	// because the opaque public handle intentionally exposes no repository slug.
-	// Unknown, malformed, foreign, deleted, and unauthorized handles must all
-	// return ErrNotFound.
 	ResolveEvidence(ctx context.Context, principal Principal, evidenceRefID string) (contractsv1.ExpandedEvidence, error)
 }
 

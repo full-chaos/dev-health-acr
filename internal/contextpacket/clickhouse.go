@@ -2,8 +2,11 @@ package contextpacket
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -207,4 +210,55 @@ func unavailableCatalog(reason string) []contractsv1.UnavailableSource {
 		values = append(values, contractsv1.UnavailableSource{Source: query.ID, Reason: reason})
 	}
 	return values
+}
+func (s *ClickHouseEvidenceStore) ResolveEvidence(ctx context.Context, principal storage.Principal, evidenceRefID string) (contractsv1.ExpandedEvidence, error) {
+	if err := ctx.Err(); err != nil {
+		return contractsv1.ExpandedEvidence{}, err
+	}
+	if s.rows == nil || s.codec == nil || strings.TrimSpace(principal.OrgID) == "" || !validOpaqueEvidenceRefID(evidenceRefID) {
+		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
+	}
+	rows, ok := s.rows.(EvidenceReferenceRows)
+	if !ok {
+		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
+	}
+	handle, err := s.codec.Parse(evidenceRefID)
+	if err != nil {
+		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
+	}
+	candidates, err := rows.AuthorizedRepositories(ctx, principal.OrgID, principal.RepositoryScopes)
+	if err != nil {
+		if ctx.Err() != nil {
+			return contractsv1.ExpandedEvidence{}, ctx.Err()
+		}
+		if !errors.Is(err, storage.ErrNotFound) {
+			return contractsv1.ExpandedEvidence{}, fmt.Errorf("resolve authorized evidence repositories: %w", err)
+		}
+		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
+	}
+	if len(candidates) == 0 || len(candidates) > maxEvidenceCandidateRepos {
+		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
+	}
+	var matched EvidenceReference
+	matches := 0
+	for _, scope := range candidates {
+		if auth.AuthorizeRepository(principal, scope.RepoSlug) != nil {
+			continue
+		}
+		references, lookupErr := rows.ResolveEvidenceReference(ctx, principal.OrgID, scope, handle.QueryID)
+		if lookupErr != nil && !errors.Is(lookupErr, storage.ErrNotFound) {
+			return contractsv1.ExpandedEvidence{}, fmt.Errorf("resolve evidence reference: %w", lookupErr)
+		}
+		for _, reference := range references {
+			if lookupErr == nil && reference.RepoSlug == scope.RepoSlug && reference.Evidence.SourceVersion == handle.QueryID && s.codec.Matches(handle, principal.OrgID, scope.RepoID, reference.Evidence.EvidenceRefID) {
+				matches++
+				matched = reference
+			}
+		}
+	}
+	if matches != 1 {
+		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
+	}
+	matched.Evidence.EvidenceRefID = evidenceRefID
+	return s.resolver.Expand(ctx, EvidenceExpansionInput{Evidence: matched.Evidence, Excerpt: matched.Excerpt})
 }

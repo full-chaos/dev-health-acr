@@ -1,6 +1,6 @@
 # `acr-api` service shell
 
-The Phase 1 service shell exposes health plus a fail-closed hosted read boundary.
+The Phase 1 service shell is intentionally production-shaped before context retrieval is enabled.
 
 ## Commands
 
@@ -33,11 +33,8 @@ The default listen address is `:8080`. Override it through `ACR_ADDR` or the `se
 | `ACR_REQUIRE_BACKING_STORES` | environment dependent | Defaults true in staging/production |
 | `ACR_CLICKHOUSE_DSN` | empty | Read-only Dev Health evidence store configuration |
 | `ACR_POSTGRES_DSN` | empty | ACR operational store configuration |
-| `ACR_TRUSTED_PROXY_CIDRS` | empty | Comma-separated proxy networks allowed to supply `X-Forwarded-For` |
 
-DSN values are never emitted by `SafeAttributes` or startup logs. DSN presence
-alone is not readiness: staging/production startup fails until the hosting build
-links concrete credential, audit, entitlement, and evidence adapters.
+Staging and production require both backing-store DSNs unless `ACR_REQUIRE_BACKING_STORES` is explicitly overridden for a controlled bootstrap. DSN values are never emitted by `SafeAttributes` or startup logs.
 
 ## Existing routes
 
@@ -45,28 +42,20 @@ links concrete credential, audit, entitlement, and evidence adapters.
 GET /healthz
 GET /readyz
 GET /api/v1/agent-context/capabilities
-POST /api/v1/agent-context/context-packets
-GET /api/v1/agent-context/evidence/{evidence_ref_id}
 ```
 
-`/healthz` proves that the process is alive. `/readyz` runs named dependency
-checks and exposes only safe ready/not-ready states; detailed failures are
-structured-log events. All three read routes require an `fcacr_` credential and
-return a retryable `503` when the hosted runtime bundle is unavailable.
+`/healthz` proves that the process is alive. `/readyz` runs named dependency checks and exposes only safe ready/not-ready states; detailed failures are structured-log events. The capabilities route is currently supplied by a static provider and is designed to be replaced by authenticated organization entitlement and permission resolution.
 
 ## Request behavior
 
 * A valid caller-provided `X-Request-ID` is propagated.
 * Missing or overlong request IDs are replaced with a generated opaque value.
-* Structured access logs contain operation, status, response bytes, duration, and request ID only.
+* Structured access logs contain method, path, status, response bytes, duration, and request ID only.
 * Authorization headers, API credentials, DSNs, and request bodies are not logged.
 * Handler panics are recovered and returned as the versioned `error.v1` envelope.
-* Capability, entitlement, and evidence dependency failures return safe versioned errors.
+* Capability-provider failures return a safe, retryable `upstream_unavailable` error.
 * SIGINT and SIGTERM trigger graceful HTTP shutdown within `ACR_SHUTDOWN_TIMEOUT`.
 
 ## Dependency seams
 
-`internal/api` defines readiness, capabilities, and the all-or-nothing
-`RuntimeDependencies` boundary. `internal/storage` owns evidence, packet,
-episode, credential, and audit stores. The API package does not choose database
-drivers. See `docs/read-api.md` for production composition and authorization.
+`internal/api` defines readiness and capabilities interfaces. `internal/storage` owns the evidence, packet, episode, credential, and audit-store boundaries. Production database checks and entitlement resolution are installed by the corresponding Phase 1 issues rather than being hard-wired into the process entrypoint.
