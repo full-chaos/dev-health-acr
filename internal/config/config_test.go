@@ -2,6 +2,7 @@ package config
 
 import (
 	"log/slog"
+	"strings"
 	"testing"
 )
 
@@ -85,5 +86,26 @@ func TestSafeAttributesDoNotContainDSNs(t *testing.T) {
 		if text, ok := value.(string); ok && (text == cfg.ClickHouseDSN || text == cfg.PostgresDSN) {
 			t.Fatal("safe attributes leaked a DSN")
 		}
+	}
+}
+
+func TestTrustedProxyCIDRsAreParsedWithoutLoggingValues(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{"ACR_TRUSTED_PROXY_CIDRS": "10.0.0.0/8, 192.0.2.0/24"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 2 {
+		t.Fatalf("trusted proxies = %#v", cfg.TrustedProxyCIDRs)
+	}
+	for _, attribute := range cfg.SafeAttributes() {
+		if text, ok := attribute.(string); ok && strings.Contains(text, "10.0.0.0") {
+			t.Fatal("safe attributes leaked trusted network details")
+		}
+	}
+}
+
+func TestTrustedProxyCIDRsRejectInvalidNetwork(t *testing.T) {
+	if _, err := load(mapLookup(map[string]string{"ACR_TRUSTED_PROXY_CIDRS": "not-a-cidr"})); err == nil {
+		t.Fatal("invalid trusted proxy network accepted")
 	}
 }

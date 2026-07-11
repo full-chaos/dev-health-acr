@@ -9,7 +9,10 @@ import (
 	"strings"
 )
 
-const maxEvidenceCandidateRepos = 64
+const (
+	maxEvidenceCandidateRepos   = 64
+	evidenceRepositoryTagLength = 16
+)
 
 var ErrInvalidEvidenceID = errors.New("contextpacket: invalid evidence id")
 
@@ -21,9 +24,10 @@ type EvidenceIDKeyring struct {
 type EvidenceIDCodec struct{ keyring EvidenceIDKeyring }
 
 type EvidenceHandle struct {
-	KID     string
-	QueryID string
-	MAC     []byte
+	KID           string
+	QueryID       string
+	RepositoryTag []byte
+	MAC           []byte
 }
 
 func NewEvidenceIDCodec(keyring EvidenceIDKeyring) (*EvidenceIDCodec, error) {
@@ -46,7 +50,9 @@ func (c *EvidenceIDCodec) Encode(orgID, repoID, queryID, locator string) (string
 	if !ok || len(key) < 32 || orgID == "" || repoID == "" || locator == "" {
 		return "", ErrInvalidEvidenceID
 	}
-	return "ev1_" + c.keyring.ActiveKID + "_" + code + "_" + base64.RawURLEncoding.EncodeToString(evidenceMAC(key, orgID, repoID, queryID, locator)), nil
+	repositoryTag := evidenceMAC(key, "repository", orgID, repoID)[:evidenceRepositoryTagLength]
+	payload := base64.RawURLEncoding.EncodeToString(repositoryTag) + "." + base64.RawURLEncoding.EncodeToString(evidenceMAC(key, orgID, repoID, queryID, locator))
+	return "ev1_" + c.keyring.ActiveKID + "_" + code + "_" + payload, nil
 }
 
 func (c *EvidenceIDCodec) Parse(handle string) (EvidenceHandle, error) {
@@ -55,16 +61,27 @@ func (c *EvidenceIDCodec) Parse(handle string) (EvidenceHandle, error) {
 		return EvidenceHandle{}, ErrInvalidEvidenceID
 	}
 	queryID, ok := evidenceQueryID(parts[2])
-	mac, err := base64.RawURLEncoding.DecodeString(parts[3])
-	if !ok || err != nil || len(c.keyring.Keys[parts[1]]) < 32 || len(mac) != sha256.Size {
+	tagText, macText, found := strings.Cut(parts[3], ".")
+	repositoryTag, tagErr := base64.RawURLEncoding.DecodeString(tagText)
+	mac, macErr := base64.RawURLEncoding.DecodeString(macText)
+	if !ok || !found || strings.Contains(macText, ".") || tagErr != nil || macErr != nil || len(c.keyring.Keys[parts[1]]) < 32 || len(repositoryTag) != evidenceRepositoryTagLength || len(mac) != sha256.Size {
 		return EvidenceHandle{}, ErrInvalidEvidenceID
 	}
-	return EvidenceHandle{KID: parts[1], QueryID: queryID, MAC: mac}, nil
+	return EvidenceHandle{KID: parts[1], QueryID: queryID, RepositoryTag: repositoryTag, MAC: mac}, nil
 }
 
 func (c *EvidenceIDCodec) Matches(handle EvidenceHandle, orgID, repoID, locator string) bool {
 	key := c.keyring.Keys[handle.KID]
-	return len(key) >= 32 && hmac.Equal(handle.MAC, evidenceMAC(key, orgID, repoID, handle.QueryID, locator))
+	return len(key) >= 32 && c.RoutesTo(handle, orgID, repoID) && hmac.Equal(handle.MAC, evidenceMAC(key, orgID, repoID, handle.QueryID, locator))
+}
+
+func (c *EvidenceIDCodec) RoutesTo(handle EvidenceHandle, orgID, repoID string) bool {
+	key := c.keyring.Keys[handle.KID]
+	if len(key) < 32 || len(handle.RepositoryTag) != evidenceRepositoryTagLength {
+		return false
+	}
+	expected := evidenceMAC(key, "repository", orgID, repoID)[:evidenceRepositoryTagLength]
+	return hmac.Equal(handle.RepositoryTag, expected)
 }
 
 func evidenceMAC(key []byte, values ...string) []byte {

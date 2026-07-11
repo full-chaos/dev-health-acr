@@ -2,6 +2,7 @@ package contextpacket_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,9 +15,10 @@ import (
 )
 
 type referenceRows struct {
-	orgID      string
-	record     contextpacket.EvidenceReference
-	candidates []contractsv1.ResolvedScope
+	orgID          string
+	record         contextpacket.EvidenceReference
+	candidates     []contractsv1.ResolvedScope
+	referenceCalls int
 }
 
 type bundleRows struct{ evidence []contractsv1.EvidenceRef }
@@ -42,6 +44,7 @@ func (r *referenceRows) AuthorizedRepositories(_ context.Context, orgID string, 
 
 func (r *referenceRows) ResolveEvidenceReference(_ context.Context, orgID string, _ contractsv1.ResolvedScope, _ string) ([]contextpacket.EvidenceReference, error) {
 	r.orgID = orgID
+	r.referenceCalls++
 	return []contextpacket.EvidenceReference{r.record}, nil
 }
 
@@ -126,12 +129,48 @@ func TestClickHouseEvidenceStore_accepts_exactly_64_candidates(t *testing.T) {
 	for index := 1; index < len(candidates); index++ {
 		candidates[index] = contractsv1.ResolvedScope{RepoID: fmt.Sprintf("repo-%d", index), RepoSlug: "example-org/widget-service"}
 	}
-	store, err := contextpacket.NewClickHouseEvidenceStoreWithOptions(&referenceRows{record: contextpacket.EvidenceReference{RepoSlug: "example-org/widget-service", Evidence: evidence}, candidates: candidates}, contextpacket.EvidenceStoreOptions{Codec: codec})
+	rows := &referenceRows{record: contextpacket.EvidenceReference{RepoSlug: "example-org/widget-service", Evidence: evidence}, candidates: candidates}
+	store, err := contextpacket.NewClickHouseEvidenceStoreWithOptions(rows, contextpacket.EvidenceStoreOptions{Codec: codec})
 	if err != nil {
 		t.Fatalf("create evidence store: %v", err)
 	}
 	if _, err := store.ResolveEvidence(context.Background(), storage.Principal{OrgID: "org-fixture", RepositoryScopes: []string{"*"}}, handle); err != nil {
 		t.Fatalf("resolve 64 candidates: %v", err)
+	}
+	if rows.referenceCalls != 1 {
+		t.Fatalf("evidence reference queries = %d, want 1", rows.referenceCalls)
+	}
+}
+
+func TestClickHouseEvidenceStoreRejectsUnroutableHandleWithoutReferenceQueries(t *testing.T) {
+	evidence := testEvidence("acr:v1:ci:opaque-reference", "ci", time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+	evidence.Source.EntityType, evidence.SourceVersion = "ci_pipeline_run", "ci_pipeline_runs.v1"
+	codec := fixtureEvidenceCodec(t)
+	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(handle, "_")
+	tagText, macText, found := strings.Cut(parts[3], ".")
+	if !found {
+		t.Fatal("evidence handle payload separator missing")
+	}
+	tag, err := base64.RawURLEncoding.DecodeString(tagText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag[0] ^= 0xff
+	parts[3] = base64.RawURLEncoding.EncodeToString(tag) + "." + macText
+	rows := &referenceRows{record: contextpacket.EvidenceReference{RepoSlug: "example-org/widget-service", Evidence: evidence}, candidates: []contractsv1.ResolvedScope{{RepoID: "repo-server-derived", RepoSlug: "example-org/widget-service"}}}
+	store, err := contextpacket.NewClickHouseEvidenceStoreWithOptions(rows, contextpacket.EvidenceStoreOptions{Codec: codec})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = store.ResolveEvidence(context.Background(), fixturePrincipal(), strings.Join(parts, "_"))
+
+	if !errors.Is(err, storage.ErrNotFound) || rows.referenceCalls != 0 {
+		t.Fatalf("error = %v, evidence reference queries = %d", err, rows.referenceCalls)
 	}
 }
 

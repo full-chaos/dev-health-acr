@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: dd135047a2aeaec15cfe57a7b5abeda1aa0a2ec49bf53cecfa500d3d8d69ecfd
+# canonical-content-sha256: a593516f67cc2b0b2e9eb663b1892c97855066547b0ae8fdaa61bec6b8e1890b
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -33,6 +33,12 @@ paths:
           "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
       x-required-scope: "context:read"
   "/api/v1/agent-context/context-packets":
     post:
@@ -65,7 +71,11 @@ paths:
           "$ref": "#/components/responses/Error"
         "429":
           "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
         "503":
+          "$ref": "#/components/responses/Error"
+        "504":
           "$ref": "#/components/responses/Error"
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
@@ -178,7 +188,15 @@ paths:
           "$ref": "#/components/responses/Error"
         "404":
           "$ref": "#/components/responses/Error"
-        "410":
+        "413":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+        "504":
           "$ref": "#/components/responses/Error"
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "evidence:read"
@@ -190,14 +208,7 @@ paths:
           content:
             application/json:
               schema:
-                additionalProperties: false
-                properties:
-                  status:
-                    const: "ok"
-                    type: "string"
-                required:
-                  - "status"
-                type: "object"
+                "$ref": "#/components/schemas/HealthResponse"
           description: "Liveness status"
       security: []
   "/readyz":
@@ -208,17 +219,14 @@ paths:
           content:
             application/json:
               schema:
-                additionalProperties: false
-                properties:
-                  status:
-                    const: "ready"
-                    type: "string"
-                required:
-                  - "status"
-                type: "object"
+                "$ref": "#/components/schemas/ReadinessResponse"
           description: "Service dependencies are ready"
         "503":
-          "$ref": "#/components/responses/Error"
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/ReadinessResponse"
+          description: "One or more service dependencies are not ready"
       security: []
 components:
   parameters:
@@ -243,8 +251,58 @@ components:
           schema:
             "$ref": "../jsonschema/v1/error.v1.schema.json"
       description: "Structured safe error"
+  schemas:
+    HealthResponse:
+      additionalProperties: false
+      properties:
+        service:
+          type: "string"
+        status:
+          const: "ok"
+          type: "string"
+        version:
+          type: "string"
+      required:
+        - "status"
+        - "service"
+        - "version"
+      type: "object"
+    ReadinessResponse:
+      additionalProperties: false
+      properties:
+        checks:
+          items:
+            additionalProperties: false
+            properties:
+              name:
+                type: "string"
+              status:
+                enum:
+                  - "ready"
+                  - "not_ready"
+                type: "string"
+            required:
+              - "name"
+              - "status"
+            type: "object"
+          type: "array"
+        service:
+          type: "string"
+        status:
+          enum:
+            - "ready"
+            - "not_ready"
+          type: "string"
+        version:
+          type: "string"
+      required:
+        - "status"
+        - "service"
+        - "version"
+        - "checks"
+      type: "object"
   securitySchemes:
     bearerAuth:
-      bearerFormat: "fcacr_ client credential or trusted Dev Health web JWT"
+      bearerFormat: "fcacr_ client credential"
       scheme: "bearer"
       type: "http"
