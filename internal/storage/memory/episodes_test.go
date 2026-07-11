@@ -14,7 +14,7 @@ func TestEpisodeStoreScopesDuplicatesRedactsAndPurges(t *testing.T) {
 	store := NewEpisodeStore()
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
 	create := testEpisodeCreate()
-	expiresAt := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	expiresAt := time.Now().Add(time.Hour)
 	created, duplicate, err := store.CreateIdempotent(context.Background(), principal, create, &expiresAt)
 	if err != nil || duplicate || created.RedactionState != "active" {
 		t.Fatalf("create = (%#v, %t, %v)", created, duplicate, err)
@@ -81,7 +81,7 @@ func TestEpisodeStoreNoPersistRetainsOnlyIdempotencyTombstone(t *testing.T) {
 
 func TestEpisodeStorePurgeRequiresRepositoryScope(t *testing.T) {
 	store := NewEpisodeStore()
-	expiresAt := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	expiresAt := time.Now().Add(time.Hour)
 	owner := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
 	other := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/other"}}
 	first := testEpisodeCreate()
@@ -104,7 +104,7 @@ func TestEpisodeStorePurgeRequiresRepositoryScope(t *testing.T) {
 
 func TestEpisodeStoreScopedPurgeRejectsEmptyRepositoryScope(t *testing.T) {
 	store := NewEpisodeStore()
-	expiresAt := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	expiresAt := time.Now().Add(time.Hour)
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
 	create := testEpisodeCreate()
 	if _, _, err := store.CreateIdempotent(context.Background(), principal, create, &expiresAt); err != nil {
@@ -120,7 +120,7 @@ func TestEpisodeStoreScopedPurgeRejectsEmptyRepositoryScope(t *testing.T) {
 
 func TestEpisodeStoreScopedPurgeRejectsEmptyOrganization(t *testing.T) {
 	store := NewEpisodeStore()
-	expiresAt := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	expiresAt := time.Now().Add(time.Hour)
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
 	create := testEpisodeCreate()
 	if _, _, err := store.CreateIdempotent(context.Background(), principal, create, &expiresAt); err != nil {
@@ -155,7 +155,7 @@ func TestEpisodeStoreRawPurgeMethodsFailClosed(t *testing.T) {
 	store := NewEpisodeStore()
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
 	create := testEpisodeCreate()
-	expiresAt := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	expiresAt := time.Now().Add(time.Hour)
 	if _, _, err := store.CreateIdempotent(context.Background(), principal, create, &expiresAt); err != nil {
 		t.Fatal(err)
 	}
