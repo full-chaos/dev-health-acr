@@ -1,6 +1,8 @@
 package contextpacket_test
 
 import (
+	"bytes"
+	"encoding/base64"
 	"errors"
 	"testing"
 
@@ -13,7 +15,7 @@ func TestEvidenceIDCodec_rejects_cross_org_and_tampered_handles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode handle: %v", err)
 	}
-	if handle != "ev1_test_ci_uNn3lA7Lt_S8afasklI6D9DZhgi0PbjtD9quqnKVt_E" {
+	if handle != "ev1_test_ci_-lkdE7eXOZBS2C-1mJBXmA.uNn3lA7Lt_S8afasklI6D9DZhgi0PbjtD9quqnKVt_E" {
 		t.Fatalf("deterministic handle = %q", handle)
 	}
 	parsed, parseErr := codec.Parse(handle)
@@ -94,5 +96,18 @@ func TestEvidenceIDCodec_rejects_delimiter_invalid_kids(t *testing.T) {
 		if !errors.Is(err, contextpacket.ErrInvalidEvidenceID) {
 			t.Fatalf("KID %q error = %v", kid, err)
 		}
+	}
+}
+
+func TestEvidenceIDCodecParsesBase64URLUnderscoresInRoutingTag(t *testing.T) {
+	codec := fixtureEvidenceCodec(t)
+	tag := bytes.Repeat([]byte{0xff}, 16)
+	mac := bytes.Repeat([]byte{0x00}, 32)
+	handle := "ev1_test_ci_" + base64.RawURLEncoding.EncodeToString(tag) + "." + base64.RawURLEncoding.EncodeToString(mac)
+
+	parsed, err := codec.Parse(handle)
+
+	if err != nil || !bytes.Equal(parsed.RepositoryTag, tag) {
+		t.Fatalf("parsed = %#v, error = %v", parsed, err)
 	}
 }
