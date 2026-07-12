@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"time"
 )
 
 // KeyringLookup resolves a credential from an OS-native secret store. It
@@ -59,6 +60,24 @@ const maxKeyringOutputBytes = 4096 // 4 KiB
 // hostile binary cannot force unbounded memory growth there either.
 const maxKeyringStderrBytes = 4096 // 4 KiB
 
+// keyringCancelWaitDelay bounds how long runKeyringCommand's ctx-driven
+// cancellation waits for killKeyringProcessGroup (see
+// credential_keyring_procgroup_unix.go) to actually free the stdout pipe
+// before falling back to os/exec's own built-in "close the I/O pipes to
+// unblock a stuck reader" behavior (see exec.Cmd.WaitDelay's doc comment
+// and https://go.dev/issue/23019). Killing the process group this
+// command is placed in is expected to do this itself, almost
+// immediately, by terminating every process in that group -- including a
+// descendant a backend forked rather than exec-replaced into -- that
+// could otherwise keep the pipe's write end open past the ctx deadline.
+// This WaitDelay exists only as a backstop for a backend that has
+// escaped its process group entirely (for example by calling setsid()):
+// in that case the escaped process is orphaned to run out its own
+// lifetime, out of this package's reach, but this function's own read at
+// least still returns promptly instead of hanging until that escaped
+// process happens to exit or close its own descriptors.
+const keyringCancelWaitDelay = 1 * time.Second
+
 // errKeyringOutputTooLarge is returned by runKeyringCommand when the
 // backend's stdout exceeds maxKeyringOutputBytes. It carries no captured
 // output, so no partial secret can ever reach an error message or log
@@ -83,8 +102,10 @@ var errKeyringOutputTooLarge = errors.New("keyring lookup output exceeded the ma
 // keyring lookup's own timeout (credential.go's keyringLookupTimeout,
 // applied to ctx by the caller) already bounds wall-clock time
 // independently. Whenever the read comes back oversized (or otherwise
-// fails), the process is killed immediately rather than left to run out
-// the timeout, since output past the ceiling means the backend is
+// fails), the whole process group the child runs in (see
+// configureKeyringProcessGroup, credential_keyring_procgroup_unix.go) is
+// killed immediately rather than left to run out the timeout, since
+// output past the ceiling means the backend is
 // misbehaving, not merely slow. stderr is captured into a boundedBuffer
 // for the same reason stdout is bounded: unbounded stderr buffering would
 // reopen the same memory-exhaustion class this function exists to close.
@@ -110,6 +131,9 @@ func runKeyringCommand(ctx context.Context, name string, args ...string) (string
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Env = credentialSafeEnviron()
 	cmd.Stdin = nil
+	configureKeyringProcessGroup(cmd)
+	cmd.Cancel = func() error { return killKeyringProcessGroup(cmd) }
+	cmd.WaitDelay = keyringCancelWaitDelay
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -125,16 +149,17 @@ func runKeyringCommand(ctx context.Context, name string, args ...string) (string
 	output, readErr := io.ReadAll(io.LimitReader(stdout, maxKeyringOutputBytes+1))
 	oversize := int64(len(output)) > maxKeyringOutputBytes
 	if readErr != nil || oversize {
-		// Kill immediately rather than waiting out the lookup timeout: a
-		// backend producing pathological output is misbehaving, not
-		// merely slow, and there is no reason to let it keep running.
-		// Killing first is also what makes the subsequent Wait safe to
-		// call even though stdout was abandoned before EOF: Wait's own
-		// documentation warns that calling it before all reads from a
-		// StdoutPipe complete can deadlock a still-writing child against
-		// a full pipe buffer, and SIGKILL (which cannot be blocked or
-		// caught) unconditionally unblocks any such pending write.
-		_ = cmd.Process.Kill()
+		// Kill the whole process group immediately rather than waiting out
+		// the lookup timeout: a backend producing pathological output is
+		// misbehaving, not merely slow, and there is no reason to let it, or
+		// any descendant it forked, keep running. Killing first is also what
+		// makes the subsequent Wait safe to call even though stdout was
+		// abandoned before EOF: Wait's own documentation warns that calling
+		// it before all reads from a StdoutPipe complete can deadlock a
+		// still-writing child against a full pipe buffer, and SIGKILL (which
+		// cannot be blocked or caught) unconditionally unblocks any such
+		// pending write.
+		_ = killKeyringProcessGroup(cmd)
 		_ = cmd.Wait()
 		if oversize {
 			return "", false, errKeyringOutputTooLarge

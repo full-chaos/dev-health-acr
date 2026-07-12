@@ -2,11 +2,14 @@ package sidecar
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -103,22 +106,57 @@ func TestClientRefusesToFollowRedirects(t *testing.T) {
 	}
 }
 
+// isExpectedEarlyCloseError reports whether err is the benign, expected
+// result of the deliberately oversized response in
+// TestClientResponseTooLargeIsRejected: readLimited (api_client_transport.go)
+// makes the client stop reading, and close the connection, as soon as it
+// has seen more bytes than MaxResponseBytes -- deliberately before the
+// handler below finishes flushing the rest of the oversized fixture. That
+// races the handler's write against the client's close; on typical fast
+// loopback the write usually wins, but there is no guarantee, and on a
+// busier or slower loopback (as CI runners regularly are) the write can
+// lose, surfacing here as a broken pipe or connection reset. That is the
+// scenario under test behaving exactly as designed -- the client's own
+// rejection decision (checked below) never depends on this write
+// completing -- so it must not fail the test. Any other write error is
+// still unexpected and must fail the test.
+func isExpectedEarlyCloseError(err error) bool {
+	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, net.ErrClosed)
+}
+
 func TestClientResponseTooLargeIsRejected(t *testing.T) {
+	unexpectedWriteErr := make(chan error, 1)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fixture := validCapabilitiesFixture()
 		fixture.Service = strings.Repeat("x", int(minResponseBytes)*2)
-		writeJSONFixture(t, w, http.StatusOK, fixture)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(fixture); err != nil && !isExpectedEarlyCloseError(err) {
+			select {
+			case unexpectedWriteErr <- err:
+			default:
+			}
+		}
 	}))
-	defer server.Close()
 	cfg := newFixtureConfig(t, server)
 	cfg.MaxResponseBytes = minResponseBytes
 	client, err := NewClient(cfg, fixedCredentialSource(testBearerCanary))
 	if err != nil {
+		server.Close()
 		t.Fatal(err)
 	}
 	_, err = client.Capabilities(context.Background())
+	// Server.Close blocks until the handler goroutine above has finished
+	// (or failed) its write of the deliberately oversized fixture, so
+	// unexpectedWriteErr is safe to drain immediately after.
+	server.Close()
 	if !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("expected ErrResponseTooLarge, got %v", err)
+	}
+	select {
+	case werr := <-unexpectedWriteErr:
+		t.Fatalf("server failed to write the oversized fixture for an unexpected reason: %v", werr)
+	default:
 	}
 }
 

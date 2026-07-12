@@ -26,6 +26,22 @@ func requireSh(t *testing.T) {
 	}
 }
 
+// requireProcessGroupKill skips t on platforms where
+// killKeyringProcessGroup cannot actually reach a backend's forked
+// descendant: production only wires up real process-group support for
+// darwin and linux (credential_keyring_procgroup_unix.go); every other
+// platform falls back to killing cmd.Process alone
+// (credential_keyring_procgroup_other.go), which never reaches a
+// descendant a backend backgrounds after forking rather than
+// exec-replacing itself.
+func requireProcessGroupKill(t *testing.T) {
+	t.Helper()
+	requireSh(t)
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("killKeyringProcessGroup only terminates a descendant's process group on darwin/linux; see credential_keyring_procgroup_other.go")
+	}
+}
+
 // TestRunKeyringCommandCanaryOutputRoundTrips proves the replacement
 // StdoutPipe/io.LimitReader read still returns a normal, small,
 // legitimate lookup result unchanged -- the baseline every other test in
@@ -183,13 +199,25 @@ func TestRunKeyringCommandDoesNotLeakOutputInOversizeError(t *testing.T) {
 // ctx deadline (credential.go's keyringLookupTimeout in production) still
 // bounds wall-clock time for a backend that produces little or no output
 // and simply hangs, independent of the byte-size ceiling this file adds.
+//
+// The script backgrounds its sleep with `&` and then blocks in the `wait`
+// builtin rather than running `sleep 30` as sh's own last command: POSIX
+// shells are free to exec-replace themselves into a lone last command
+// (as macOS's /bin/sh does), which would leave only a single process for
+// this test to kill and could hide a regression in how runKeyringCommand
+// terminates a backend. Backgrounding forces every POSIX shell (macOS's
+// /bin/sh included) to fork a genuine, separate descendant that inherits
+// the stdout pipe -- the same shape a real dash `/bin/sh -c` invocation
+// takes on Linux -- so this test exercises process-group termination
+// (credential_keyring_procgroup_unix.go), not just single-process kill,
+// on every platform it runs on.
 func TestRunKeyringCommandRespectsContextTimeout(t *testing.T) {
 	requireSh(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
 	start := time.Now()
-	_, ok, err := runKeyringCommand(ctx, "sh", "-c", "sleep 30")
+	_, ok, err := runKeyringCommand(ctx, "sh", "-c", "sleep 30 & wait")
 	elapsed := time.Since(start)
 
 	if elapsed > 2*time.Second {
@@ -204,6 +232,104 @@ func TestRunKeyringCommandRespectsContextTimeout(t *testing.T) {
 	// here is that it returned promptly, not which of the two
 	// unavailable-reporting shapes it took.
 	_ = err
+}
+
+// waitForMarker polls for path to exist, failing the test if it does not
+// appear within timeout. Used to synchronize deterministically on a
+// shell-side readiness signal instead of guessing a fixed sleep long
+// enough for a backgrounded descendant to have started.
+func waitForMarker(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for marker %s to appear", timeout, path)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestRunKeyringCommandKillsDescendantThatOutlivesTheImmediateChild proves
+// runKeyringCommand's ctx-driven kill (see
+// credential_keyring_procgroup_unix.go) actually terminates a descendant
+// process the immediate child forked, rather than merely unblocking this
+// function's own read while leaving that descendant to keep running as an
+// orphan: TestRunKeyringCommandRespectsContextTimeout above proves prompt
+// return, but prompt return alone would also happen if only stdout's pipe
+// were force-closed (os/exec's own WaitDelay behavior) while the
+// descendant survived untouched -- exactly the "no zombie process"
+// requirement this test exists to close. This guarantee only holds on
+// platforms where killKeyringProcessGroup reaches the whole process
+// group; see requireProcessGroupKill.
+//
+// readyMarker and finishedMarker are passed as positional shell
+// arguments ($1, $2) rather than interpolated into the script text, so a
+// TMPDIR containing spaces (or any other shell metacharacter) cannot
+// corrupt the command the backgrounded descendant runs.
+//
+// The script touches readyMarker immediately after forking the
+// descendant, before blocking in `wait`, so this test can wait for that
+// marker to deterministically confirm the descendant has actually
+// started -- and is holding the inherited stdout pipe -- before
+// cancelling ctx, rather than guessing a fixed delay is long enough for
+// that fork to have already happened. The descendant then sleeps far
+// longer than the cancellation this test triggers and touches
+// finishedMarker only if left to run to completion; finishedMarker's
+// continued absence well past that sleep duration is direct evidence the
+// descendant was itself killed, not merely orphaned.
+func TestRunKeyringCommandKillsDescendantThatOutlivesTheImmediateChild(t *testing.T) {
+	requireProcessGroupKill(t)
+	dir := t.TempDir()
+	readyMarker := dir + "/descendant-ready"
+	finishedMarker := dir + "/descendant-finished"
+	const descendantSleep = 2 * time.Second
+	script := fmt.Sprintf(`(touch "$1"; sleep %d; touch "$2") & wait`, int(descendantSleep.Seconds()))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	type lookupResult struct {
+		output string
+		ok     bool
+		err    error
+	}
+	done := make(chan lookupResult, 1)
+	go func() {
+		output, ok, err := runKeyringCommand(ctx, "sh", "-c", script, "sh", readyMarker, finishedMarker)
+		done <- lookupResult{output, ok, err}
+	}()
+
+	// Block until the descendant itself (not just the immediate `sh -c`
+	// child) has actually started, so cancelling ctx below is guaranteed
+	// to race a live descendant rather than possibly firing before the
+	// fork even happened.
+	waitForMarker(t, readyMarker, 5*time.Second)
+
+	start := time.Now()
+	cancel()
+	var result lookupResult
+	select {
+	case result = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runKeyringCommand did not return after ctx cancellation")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("runKeyringCommand took %s to return after cancellation; expected a prompt kill", elapsed)
+	}
+	if result.ok {
+		t.Fatal("a context-timed-out lookup was reported as available")
+	}
+
+	// Give a surviving descendant ample time past its own sleep to finish
+	// and touch finishedMarker before asserting on finishedMarker's
+	// absence.
+	time.Sleep(descendantSleep + 500*time.Millisecond)
+	if _, statErr := os.Stat(finishedMarker); statErr == nil {
+		t.Fatal("descendant process outlived runKeyringCommand's context cancellation instead of being killed")
+	}
 }
 
 // TestRunKeyringCommandStderrDoesNotBlockCompletion proves a backend that
