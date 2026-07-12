@@ -93,19 +93,13 @@ func serve(args []string) error {
 		Service:               "dev-health-acr",
 		ServiceVersion:        info.Version,
 		MinimumSidecarVersion: cfg.MinimumSidecarVersion,
-		SupportedSchemaVersions: []string{
-			contractsv1.ContextPacketRequestSchema,
-			contractsv1.ContextPacketSchema,
-			contractsv1.ContextPacketItemSchema,
-			contractsv1.EvidenceRefSchema,
-			contractsv1.ExpandedEvidenceSchema,
-			contractsv1.CapabilitiesSchema,
-			contractsv1.AgentEpisodeCreateSchema,
-			contractsv1.AgentEpisodeSchema,
-			contractsv1.ClientCredentialSchema,
-			contractsv1.ErrorSchema,
-		},
-		EnabledTools: []string{},
+		// SupportedSchemaVersions advertises the platform's single canonical
+		// schema-version list (internal/contracts/v1.AllSchemaVersions) rather
+		// than a hand-typed subset: a hand-typed list previously omitted every
+		// MCP-only schema version, so the real hosted API could never satisfy
+		// the acr-mcp sidecar's startup compatibility check.
+		SupportedSchemaVersions: contractsv1.AllSchemaVersions,
+		EnabledTools:            []string{},
 		Entitlements: contractsv1.CapabilityEntitlements{
 			AgentContextRuntime: false,
 		},
