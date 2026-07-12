@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ACR MCP context_for_task Request v1",
+  "description": "Ergonomic goal-only-by-default input for the context_for_task MCP tool. Only goal is required; repository, scope, and budget are optional overrides. There is no caller-supplied schema_version wire field: tool identity is established by the MCP call itself, not a wire field, matching the source_evidence request contract. scope.as_of pins retrieval to a point in time; scope.include_changed_files is a tri-state opt-in (omitted: sidecar default; true: include bounded git-changed files when scope.files is not explicitly set; false: never auto-include them) that lets a caller distinguish 'not specified' from an explicit choice. The sidecar maps omitted fields to fixed safe defaults before calling the hosted HTTP contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "goal"
+  ],
+  "properties": {
+    "goal": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slug"
+      ],
+      "properties": {
+        "slug": {
+          "type": "string",
+          "pattern": "^[^/\\s]+/[^/\\s]+$",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "commit_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,64}$"
+        },
+        "task_ref": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "files": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "uniqueItems": true
+        },
+        "as_of": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "time_window_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365
+        },
+        "include_changed_files": {
+          "type": "boolean"
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_items": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 500,
+          "maximum": 16000
+        },
+        "max_serialized_bytes": {
+          "type": "integer",
+          "minimum": 8192,
+          "maximum": 1048576
+        }
+      }
+    }
+  },
+  "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_context_for_task_request.v1.schema.json"
+}

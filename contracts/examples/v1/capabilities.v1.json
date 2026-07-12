@@ -13,7 +13,11 @@
     "agent_episode_create.v1",
     "agent_episode.v1",
     "acr_client_credential.v1",
-    "error.v1"
+    "error.v1",
+    "mcp_context_for_task_request.v1",
+    "mcp_context_for_task_response.v1",
+    "mcp_source_evidence_request.v1",
+    "mcp_source_evidence_response.v1"
   ],
   "enabled_tools": [
     "context_for_task",

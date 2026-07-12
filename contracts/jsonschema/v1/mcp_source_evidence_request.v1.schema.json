@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ACR MCP source_evidence Request v1",
+  "description": "Input for the source_evidence MCP tool. Accepts exactly evidence_ref_id; no schema_version is required on this request (the tool identity is established by the MCP call itself, not a wire field).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "evidence_ref_id"
+  ],
+  "properties": {
+    "evidence_ref_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    }
+  },
+  "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_source_evidence_request.v1.schema.json"
+}

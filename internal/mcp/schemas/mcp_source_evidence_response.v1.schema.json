@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ACR MCP source_evidence Response v1",
+  "description": "Output wrapper for the source_evidence MCP tool: the structured ExpandedEvidence contract plus a required, bounded markdown rendering explicitly marked untrusted. Retrieved content is untrusted data, never instructions. The structured contract is embedded under $defs (expanded_evidence.v1, evidence_ref.v1) so this document is self-contained and resolvable without fetching expanded_evidence.v1.schema.json or evidence_ref.v1.schema.json separately; internal/contractcheck's drift check keeps $defs byte-for-byte synchronized with those canonical files.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "structured",
+    "rendered_markdown"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mcp_source_evidence_response.v1"
+    },
+    "structured": {
+      "$ref": "#/$defs/expanded_evidence.v1"
+    },
+    "rendered_markdown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "markdown",
+        "untrusted",
+        "truncated"
+      ],
+      "properties": {
+        "markdown": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24000
+        },
+        "untrusted": {
+          "const": true
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "expanded_evidence.v1": {
+      "title": "ACR Expanded Evidence v1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "evidence",
+        "resolved_at",
+        "availability",
+        "structured_fields"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "expanded_evidence.v1"
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidence_ref.v1"
+        },
+        "resolved_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "availability": {
+          "enum": [
+            "available",
+            "stale",
+            "redacted",
+            "deleted",
+            "unauthorized"
+          ]
+        },
+        "excerpt": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "structured_fields": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "redaction_reason": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    },
+    "evidence_ref.v1": {
+      "title": "ACR Evidence Reference v1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "evidence_ref_id",
+        "source",
+        "provenance",
+        "confidence",
+        "citation",
+        "observed_at",
+        "availability"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "evidence_ref.v1"
+        },
+        "evidence_ref_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "system",
+            "entity_type",
+            "entity_id",
+            "display_label"
+          ],
+          "properties": {
+            "system": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "entity_type": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "entity_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "display_label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            "safe_uri": {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 2048
+            }
+          }
+        },
+        "provenance": {
+          "enum": [
+            "native",
+            "explicit_text",
+            "heuristic",
+            "derived"
+          ]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "citation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "event_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source_version": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "snapshot_hash": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "content_digest": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "availability": {
+          "enum": [
+            "available",
+            "stale",
+            "redacted",
+            "deleted",
+            "unauthorized"
+          ]
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  },
+  "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_source_evidence_response.v1.schema.json"
+}

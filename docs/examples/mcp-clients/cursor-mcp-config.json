@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "acr": {
+      "type": "stdio",
+      "command": "/path/to/acr-mcp",
+      "args": ["serve"],
+      "env": {
+        "ACR_API_URL": "https://api.dev-health.example.com",
+        "ACR_API_TOKEN_FILE": "${env:HOME}/.acr/token",
+        "ACR_API_TIMEOUT": "30s"
+      }
+    }
+  }
+}

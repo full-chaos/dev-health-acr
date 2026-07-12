@@ -1,0 +1,15 @@
+# Example ACR MCP server entry for Codex CLI.
+# Codex uses TOML, not JSON: place this table in ~/.codex/config.toml (user
+# scope) or .codex/config.toml (project scope, requires trusting the
+# project on first use). See codex.md in this directory for full setup
+# steps and CLI-based alternatives (`codex mcp add`).
+
+[mcp_servers.acr]
+command = "/path/to/acr-mcp"
+args = ["serve"]
+enabled = true
+
+[mcp_servers.acr.env]
+ACR_API_URL = "https://api.dev-health.example.com"
+ACR_API_TOKEN_FILE = "/home/you/.acr/token"
+ACR_API_TIMEOUT = "30s"
