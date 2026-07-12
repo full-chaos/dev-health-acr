@@ -53,6 +53,30 @@ test -z "$(grep 'release delete-asset\|release edit' "$tmp/revoke-view-fail.log"
 
 if PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/publish.log" MOCK_ROOT="$root" "$root/scripts/release/publish-private-release.sh" not-a-tag 1; then exit 1; fi
 test -z "$(grep -E 'run download|release create' "$tmp/publish.log" || true)"
+
+tag_remote="$tmp/tag-remote.git"
+tag_source="$tmp/tag-source"
+tag_name="v1.2.3-dev.1"
+git init --bare "$tag_remote" >/dev/null
+git init "$tag_source" >/dev/null
+git -C "$tag_source" config user.name release-test
+git -C "$tag_source" config user.email release-test@example.invalid
+git -C "$tag_source" commit --allow-empty -m fixture >/dev/null
+git -C "$tag_source" tag -a "$tag_name" -m fixture
+git -C "$tag_source" remote add origin "$tag_remote"
+git -C "$tag_source" push origin HEAD:main "refs/tags/$tag_name" >/dev/null
+tag_object="$(git -C "$tag_source" rev-parse "refs/tags/$tag_name")"
+tag_commit="$(git -C "$tag_source" rev-parse "$tag_name^{}")"
+single_refs="$(git ls-remote "$tag_remote" "refs/tags/$tag_name")"
+single_commit="$(printf '%s\n' "$single_refs" | awk -v ref="refs/tags/$tag_name^{}" '$2 == ref { print $1 }')"
+test -z "$single_commit"
+tag_refs="$(git ls-remote "$tag_remote" "refs/tags/$tag_name" "refs/tags/$tag_name^{}")"
+remote_object="$(printf '%s\n' "$tag_refs" | awk -v ref="refs/tags/$tag_name" '$2 == ref { print $1 }')"
+remote_commit="$(printf '%s\n' "$tag_refs" | awk -v ref="refs/tags/$tag_name^{}" '$2 == ref { print $1 }')"
+test "$remote_object" = "$tag_object"
+test "$remote_commit" = "$tag_commit"
+grep -F "ls-remote origin \"refs/tags/\$tag\" \"refs/tags/\$tag^{}\"" "$root/scripts/release/publish-private-release.sh" >/dev/null
+
 if grep -E 'gh release upload.*cosign\.pub' "$root/scripts/release/publish-private-release.sh"; then exit 1; fi
 grep -E 'awk -v name=.*[$]2 == name' "$root/docs/release-policy.md" >/dev/null
 if grep -E 'grep -F.*archive.*SHA256SUMS' "$root/docs/release-policy.md"; then exit 1; fi

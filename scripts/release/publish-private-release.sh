@@ -70,7 +70,7 @@ refetch() {
   test "$(git -C "$tmp/repo" cat-file -t "refs/tags/$tag")" = tag
   test "$(git -C "$tmp/repo" rev-parse "refs/tags/$tag")" = "$tag_object"
   test "$(git -C "$tmp/repo" rev-parse "$tag^{}")" = "$commit"
-  remote_refs="$(git -C "$tmp/repo" ls-remote origin "refs/tags/$tag")"
+  remote_refs="$(git -C "$tmp/repo" ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}")"
   remote_tag="$(printf '%s\n' "$remote_refs" | awk -v ref="refs/tags/$tag" '$2 == ref { print $1 }')"
   remote_commit="$(printf '%s\n' "$remote_refs" | awk -v ref="refs/tags/$tag^{}" '$2 == ref { print $1 }')"
   test "$remote_tag" = "$tag_object"
