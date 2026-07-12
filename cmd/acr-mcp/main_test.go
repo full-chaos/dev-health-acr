@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
 func validDoctorToken(fill byte) string {
@@ -28,6 +30,29 @@ func TestDoctorReportsCredentialPresenceWithoutValue(t *testing.T) {
 		if strings.Contains(check.Detail, token) {
 			t.Fatal("doctor leaked the credential")
 		}
+	}
+}
+
+func TestMetadataAndDoctorUseInjectedBuildIdentity(t *testing.T) {
+	// Given
+	originalVersion, originalCommit, originalDate := version.Version, version.Commit, version.Date
+	version.Version = "1.2.3-rc.1+build.7"
+	version.Commit = "0123456789abcdef0123456789abcdef01234567"
+	version.Date = "2026-07-12T15:04:05Z"
+	t.Cleanup(func() { version.Version, version.Commit, version.Date = originalVersion, originalCommit, originalDate })
+	t.Setenv("ACR_API_URL", "https://acr.example.test")
+	t.Setenv("ACR_API_TOKEN", validDoctorToken(18))
+
+	// When
+	metadata := currentMetadata()
+	doctor := runDoctor()
+
+	// Then
+	if metadata.Version != version.Version || metadata.Commit != version.Commit || metadata.BuildDate != version.Date {
+		t.Fatalf("metadata identity = %#v", metadata)
+	}
+	if doctor.Version != version.Version || doctor.Commit != version.Commit || doctor.BuildDate != version.Date {
+		t.Fatalf("doctor identity = %#v", doctor)
 	}
 }
 

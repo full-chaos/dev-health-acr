@@ -1,4 +1,7 @@
-.PHONY: fmt fmt-check test vet contract-write contract-test build verify
+.PHONY: fmt fmt-check test vet contract-write contract-test build verify release-local release-verify
+
+RELEASE_OUTPUT ?= .tmp/release
+RELEASE_VERSION ?=
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './vendor/*')
@@ -25,3 +28,10 @@ build:
 	go build -o .tmp/contractcheck ./cmd/contractcheck
 
 verify: fmt-check vet test contract-test build
+
+release-local:
+	@test -n "$(RELEASE_VERSION)" || (echo "RELEASE_VERSION must be a canonical version such as 1.2.3"; exit 1)
+	go run ./cmd/releasebuild build --root . --out "$(RELEASE_OUTPUT)" --version "$(RELEASE_VERSION)" --commit "$$(git rev-parse HEAD)" --date "$$(TZ=UTC0 git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)"
+
+release-verify:
+	go run ./cmd/releasebuild verify --dir "$(RELEASE_OUTPUT)"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
 const agentContextRuntimeEntitlement = "agent_context_runtime"
@@ -66,9 +68,37 @@ func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, e
 	if entitlement {
 		handler = a.requireEntitlement(agentContextRuntimeEntitlement, handler)
 	}
+	handler = a.requireClientVersion(handler)
 	handler = LimitMiddleware(a.limits, class, handler)
 	handler = a.authenticator.RequireScope(scope, handler)
 	return a.authenticator.Middleware(handler)
+}
+
+func (a *App) requireClientVersion(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerRequest := r.Clone(r.Context())
+		providerRequest.Header = r.Header.Clone()
+		providerRequest.Header.Del("Authorization")
+		providerRequest.Body = nil
+		capabilities, err := a.capabilities.Capabilities(r.Context(), providerRequest)
+		if err != nil {
+			a.logger.ErrorContext(r.Context(), "capabilities resolution failed", "request_id", RequestID(r.Context()), "failure_class", "capabilities_provider")
+			writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Capabilities are temporarily unavailable", true, nil)
+			return
+		}
+		clientVersion := strings.TrimSpace(r.Header.Get("X-ACR-Client-Version"))
+		if clientVersion == "" || !clientVersionCompatible(clientVersion, capabilities.MinimumSidecarVersion) || revokedClientVersion(clientVersion, a.config.RevokedClientVersions) {
+			writeError(w, r, http.StatusUpgradeRequired, "version_mismatch", "ACR client version is not supported", false, map[string]any{"minimum_client_version": capabilities.MinimumSidecarVersion})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func revokedClientVersion(clientVersion string, revokedVersions []string) bool {
+	return slices.ContainsFunc(revokedVersions, func(revoked string) bool {
+		return version.Exact(clientVersion, revoked)
+	})
 }
 
 func (a *App) requireEntitlement(entitlement string, next http.Handler) http.Handler {

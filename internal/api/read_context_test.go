@@ -167,6 +167,7 @@ func TestContextPacketRouteRejectsUnsafeRequests(t *testing.T) {
 			}
 			if test.withToken {
 				request.Header.Set("Authorization", "Bearer "+token)
+				request.Header.Set("X-ACR-Client-Version", "1.0.0")
 			} else {
 				request.Header.Del("Authorization")
 			}
@@ -201,6 +202,7 @@ func contextPacketRequest(t *testing.T, _ *App, token string, value contractsv1.
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/agent-context/context-packets", bytes.NewReader(body))
 	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
 	request.Header.Set("Content-Type", "application/json")
 	return request
 }

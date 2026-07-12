@@ -149,6 +149,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "426": {
+            "$ref": "#/components/responses/Error"
+          },
           "413": {
             "$ref": "#/components/responses/Error"
           },
@@ -207,6 +210,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "426": {
+            "$ref": "#/components/responses/Error"
+          },
           "404": {
             "$ref": "#/components/responses/Error"
           }
@@ -254,6 +260,9 @@
             "$ref": "#/components/responses/Error"
           },
           "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "426": {
             "$ref": "#/components/responses/Error"
           },
           "413": {
@@ -341,6 +350,9 @@
             "$ref": "#/components/responses/Error"
           },
           "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "426": {
             "$ref": "#/components/responses/Error"
           },
           "409": {
@@ -449,6 +461,7 @@
         "name": "X-Request-ID",
         "in": "header",
         "required": false,
+        "description": "Optional correlation ID for request tracing and audit. The service generates and returns a request ID when absent or invalid. It does not authenticate or authorize the caller.",
         "schema": {
           "type": "string",
           "maxLength": 256
@@ -457,7 +470,8 @@
       "ClientVersion": {
         "name": "X-ACR-Client-Version",
         "in": "header",
-        "required": false,
+        "required": true,
+        "description": "Required SemVer compatibility signal for protected routes. It is advisory only and does not authenticate or authorize the caller; unsupported versions return 426 version_mismatch.",
         "schema": {
           "type": "string",
           "maxLength": 200

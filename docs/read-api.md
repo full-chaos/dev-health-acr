@@ -6,10 +6,10 @@ The release-critical hosted read boundary exposes:
 GET  /api/v1/agent-context/capabilities
 POST /api/v1/agent-context/context-packets
 GET  /api/v1/agent-context/evidence/{evidence_ref_id}
+POST /api/v1/agent-context/episodes
 ```
 
-Packet replay and episode writeback are separate work and are not registered by
-the service router in this phase.
+Packet replay remains separate work.
 
 ## Runtime composition
 
@@ -49,10 +49,14 @@ deleted, and unauthorized references all return the same `404 not_found`.
 Their keyed repository-routing tag prevents an invalid handle from fanning out
 reference scans across every authorized repository without disclosing a repo ID.
 
-Capabilities permits a missing `X-ACR-Client-Version` for discovery. A supplied
-malformed or older semantic version returns `426 version_mismatch`. Context and
-evidence compatibility remains represented by the request schema and packet
-compatibility fields.
+Every protected agent-context route requires `X-ACR-Client-Version`. It is a
+SemVer compatibility signal, not an identity or authorization credential:
+authorization derives only from the authenticated `fcacr_` credential, its
+scopes, repository allowance, and organization entitlement. Missing,
+malformed, older, or explicitly revoked versions return `426 version_mismatch`
+with the canonical `minimum_client_version` detail. Security incidents revoke
+credentials; `ACR_REVOKED_CLIENT_VERSIONS` is an exact-version denylist for
+known incompatible client releases, not a security principal mechanism.
 
 ## Error and observability policy
 

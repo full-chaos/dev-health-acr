@@ -91,6 +91,7 @@ func TestHostedReadRoutesUsePostgresAndClickHouseAdapters(t *testing.T) {
 	referenceID := packet.Items[0].EvidenceRefIDs[0]
 	evidenceRequest := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/evidence/"+referenceID, nil)
 	evidenceRequest.Header.Set("Authorization", "Bearer "+issued.Token)
+	evidenceRequest.Header.Set("X-ACR-Client-Version", "1.0.0")
 	evidenceResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(evidenceResponse, evidenceRequest)
 	if evidenceResponse.Code != http.StatusOK {

@@ -46,6 +46,14 @@ func TestClassifyCredentialMissingIsAuth(t *testing.T) {
 	}
 }
 
+func TestClassifyVersionMismatchIncludesMinimumClientVersion(t *testing.T) {
+	apiErr := &sidecar.APIError{Code: "version_mismatch", MinimumClientVersion: "1.2.3"}
+	ce := classify(errors.Join(sidecar.ErrVersionMismatch, apiErr))
+	if ce.category != "version" || !strings.Contains(ce.message, "1.2.3") {
+		t.Fatalf("classified version error = %#v", ce)
+	}
+}
+
 // TestClassifyMapsHostedAPIErrorCodesToDistinctCategories drives classify()
 // through a real hosted API call against an httptest fixture for every wire
 // error code this client recognizes, proving CHAOS-2908's required distinct

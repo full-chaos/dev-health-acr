@@ -1,0 +1,166 @@
+---
+# yamllint disable rule:line-length
+name: Release
+
+"on":
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    if: github.ref_type == 'tag' && github.repository == 'full-chaos/dev-health-acr'
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      commit: ${{ steps.release.outputs.commit }}
+      date: ${{ steps.release.outputs.date }}
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - id: release
+        env:
+          ACR_RELEASE_OPERATORS: ${{ vars.ACR_RELEASE_OPERATORS }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(dev|beta)\.(1|[1-9][0-9]*))?$ ]]
+          test -n "$ACR_RELEASE_OPERATORS"
+          [[ ",$ACR_RELEASE_OPERATORS," == *",$GITHUB_ACTOR,"* ]]
+          fingerprint="9DCD0E7D385C8247E2F5E7FC2C43EBC02D8C8781"
+          GNUPGHOME="$(mktemp -d)"
+          export GNUPGHOME
+          chmod 700 "$GNUPGHOME"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          gpg --batch --import signing/release-tag-signing-key.asc
+          test "$(gpg --batch --with-colons --fingerprint "$fingerprint" | awk -F: '$1 == "fpr" { print $10; exit }')" = "$fingerprint"
+          git verify-tag --raw "$tag" 2>&1 | grep -F "[GNUPG:] VALIDSIG $fingerprint "
+          commit="$(git rev-list -n 1 "$tag")"
+          git show-ref --verify --quiet refs/remotes/origin/main
+          git merge-base --is-ancestor "$commit" refs/remotes/origin/main
+          {
+            printf 'tag=%s\n' "$tag"
+            printf 'version=%s\n' "${tag#v}"
+            printf 'commit=%s\n' "$commit"
+            printf 'date=%s\n' "$(date -u -d "$(git show -s --format=%cI "$commit")" +'%Y-%m-%dT%H:%M:%SZ')"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with: {go-version: "1.26.3", check-latest: false, cache: false}
+      - name: Verify source and dependencies
+        run: |
+          set -euo pipefail
+          verify_module_cache="$(mktemp -d)"
+          verify_build_cache="$(mktemp -d)"
+          export GOMODCACHE="$verify_module_cache/mod" GOCACHE="$verify_build_cache/build"
+          go mod download
+          make verify
+          go mod verify
+          go install golang.org/x/vuln/cmd/govulncheck@v1.5.0
+          govulncheck ./...
+      - name: Build deterministic matrix and final checksum manifest
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          DATE: ${{ needs.preflight.outputs.date }}
+        run: |
+          set -euo pipefail
+          first_cache="$(mktemp -d)"
+          second_cache="$(mktemp -d)"
+          GOMODCACHE="$first_cache/mod" GOCACHE="$first_cache/build" go mod download
+          GOMODCACHE="$first_cache/mod" GOCACHE="$first_cache/build" go run ./cmd/releasebuild build -version "$VERSION" -commit "$COMMIT" -date "$DATE" -out /tmp/first
+          go run ./cmd/releasebuild verify -dir /tmp/first
+          GOMODCACHE="$second_cache/mod" GOCACHE="$second_cache/build" go mod download
+          GOMODCACHE="$second_cache/mod" GOCACHE="$second_cache/build" go run ./cmd/releasebuild build -version "$VERSION" -commit "$COMMIT" -date "$DATE" -out /tmp/second
+          go run ./cmd/releasebuild verify -dir /tmp/second
+          diff -qr --no-dereference /tmp/first /tmp/second
+          mkdir release; cp /tmp/first/* release/
+          for archive in release/*.tar.gz release/*.zip; do
+            go run github.com/anchore/syft/cmd/syft@v1.46.0 "$archive" -o "spdx-json=${archive}.spdx.json"
+          done
+          (
+            cd release
+            find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.spdx.json' -o -name release-manifest.json \) -printf '%f\n' | LC_ALL=C sort | while IFS= read -r file; do sha256sum "$file"; done
+          ) > release/SHA256SUMS
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with: {name: release, path: release/, if-no-files-found: error, retention-days: 7}
+
+  smoke-linux:
+    needs: [preflight, build]
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/download-artifact v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with: {name: release, path: release}
+      - name: Verify and smoke Linux assets
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          DATE: ${{ needs.preflight.outputs.date }}
+        run: |
+          set -euo pipefail
+          cd release; sha256sum --check SHA256SUMS; mkdir smoke
+          tar -xzf "acr-api_${VERSION}_linux_amd64.tar.gz" -C smoke; tar -xzf "acr-mcp_${VERSION}_linux_amd64.tar.gz" -C smoke
+          expected="$VERSION commit=$COMMIT built=$DATE"
+          test "$(smoke/acr-api version)" = "$expected"; test "$(smoke/acr-mcp version)" = "$expected"
+          smoke/acr-mcp doctor | jq -e '.status == "incomplete_configuration" and .credential_set == false and .api_url_set == false'
+
+  smoke-macos:
+    needs: [preflight, build]
+    runs-on: macos-15
+    steps:
+      # actions/download-artifact v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with: {name: release, path: release}
+      - name: Verify and smoke macOS assets
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          DATE: ${{ needs.preflight.outputs.date }}
+        run: |
+          set -euo pipefail
+          cd release; shasum -a 256 --check SHA256SUMS; mkdir smoke
+          tar -xzf "acr-api_${VERSION}_darwin_arm64.tar.gz" -C smoke; tar -xzf "acr-mcp_${VERSION}_darwin_arm64.tar.gz" -C smoke
+          expected="$VERSION commit=$COMMIT built=$DATE"
+          test "$(smoke/acr-api version)" = "$expected"; test "$(smoke/acr-mcp version)" = "$expected"
+          smoke/acr-mcp doctor | jq -e '.status == "incomplete_configuration" and .credential_set == false and .api_url_set == false'
+
+  smoke-windows:
+    needs: [preflight, build]
+    runs-on: windows-2025
+    steps:
+      # actions/download-artifact v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with: {name: release, path: release}
+      - name: Verify and smoke Windows assets
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          DATE: ${{ needs.preflight.outputs.date }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($asset in @("acr-api_$env:VERSION`_windows_amd64.zip", "acr-mcp_$env:VERSION`_windows_amd64.zip")) { $line = Get-Content release/SHA256SUMS | Where-Object { $_.EndsWith("  $asset") }; if ((Get-FileHash "release/$asset" -Algorithm SHA256).Hash.ToLower() -ne $line.Split(' ')[0]) { throw "checksum mismatch: $asset" } }
+          Expand-Archive "release/acr-api_$env:VERSION`_windows_amd64.zip" smoke-api; Expand-Archive "release/acr-mcp_$env:VERSION`_windows_amd64.zip" smoke-mcp
+          $expected = "$env:VERSION commit=$env:COMMIT built=$env:DATE"
+          if ((& ./smoke-api/acr-api.exe version) -ne $expected -or (& ./smoke-mcp/acr-mcp.exe version) -ne $expected) { throw 'version mismatch' }
+          $doctor = & ./smoke-mcp/acr-mcp.exe doctor | ConvertFrom-Json
+          if ($doctor.status -ne 'incomplete_configuration' -or $doctor.credential_set -or $doctor.api_url_set) { throw 'doctor mismatch' }

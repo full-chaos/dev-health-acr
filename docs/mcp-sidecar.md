@@ -48,13 +48,13 @@ Path to an additional PEM-encoded CA bundle file, layered on top of the system t
 Boolean (`true`/`false`). Opts into plain HTTP instead of HTTPS, and only when `ACR_API_URL` resolves to a loopback host (`127.0.0.1`, `::1`, or `localhost`). Default: `false`. For local fixture/test drivers only; never set this against a non-loopback host.
 
 **ACR_SIDECAR_CLIENT_NAME**, **ACR_SIDECAR_CLIENT_VERSION**, **ACR_SIDECAR_VERSION**
-Identify this sidecar instance to the hosted API (client info payload, `X-ACR-Client-Version` header). Defaults: `dev-health-acr-mcp`, `dev`, `dev`. In a release binary built with `-ldflags` version injection (see [CHAOS-2926](https://linear.app/fullchaos/issue/CHAOS-2926)), `serve`/`doctor --live` resolve an unset or default (`dev`) value for either variable to the binary's own compiled-in version before the hosted API client is constructed, so a default installation authenticates as its real release version rather than the literal `dev` sentinel (which a real hosted API rejects). Set either variable explicitly only to override that resolved value, for example for canary/rollback testing.
+Identify this sidecar instance to the hosted API (client info payload, `X-ACR-Client-Version` header). Defaults: `dev-health-acr-mcp`, `dev`, `dev`. In a release binary built with `-ldflags` version injection (see [CHAOS-2926](https://linear.app/fullchaos/issue/CHAOS-2926)), `serve` and plain `doctor` use the compiled release identity before constructing the hosted API client, so environment values cannot spoof a released binary. An unreleased local fixture may set an explicit valid SemVer value for compatibility testing; a literal `dev` sentinel is rejected by a real hosted API.
 
 **ACR_LOG_LEVEL**
 `acr-mcp serve`'s structured diagnostic verbosity, written to stderr as JSON. One of `debug`, `info`, `warn`/`warning`, or `error` (case-insensitive). Default: `info`. An unrecognized value is rejected at startup (fails closed, same as every other sidecar-config invariant) rather than silently falling back to the default. This level only controls how much non-secret operational detail (startup version/service identity/enabled-tools/entitlement summary) is emitted; it never gates redaction -- credentials and response bodies are never logged regardless of level.
 
 **ACR_ENABLE_WRITEBACK**
-Boolean (`true`/`false`). When `true`, enables the `record_episode` tool if all four gates pass: (1) this flag is `true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Default: `false`. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; doctor --live diagnoses the hosted gates.
+Boolean (`true`/`false`). When `true`, enables the `record_episode` tool if all four gates pass: (1) this flag is `true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Default: `false`. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; plain doctor (or `doctor --live`) diagnoses the hosted gates.
 
 ## Credential Management
 
@@ -120,28 +120,45 @@ A valid token is the literal prefix `fcacr_` followed by the unpadded, URL-safe 
 
 ```bash
 acr-mcp version
+# dev commit=unknown built=unknown
 ```
 
-Prints the sidecar version string.
+Prints the full build identity as a single line: `<version> commit=<commit> built=<build_date>`. For an unreleased local build this is exactly `dev commit=unknown built=unknown`; a release binary prints its injected SemVer, full commit SHA, and RFC3339 build date. `--version` and `-version` are compatible aliases with identical output. `metadata` and `doctor` expose the same identity as separate `version`, `commit`, and `build_date` JSON fields.
 
 ### Doctor
 
 ```bash
 acr-mcp doctor
+acr-mcp doctor --offline
+acr-mcp doctor --live
 ```
 
-Runs a diagnostic check and outputs JSON:
+Runs static configuration checks and outputs JSON. When `ACR_API_URL` and the
+credential are both valid, plain `acr-mcp doctor` then performs the same
+bounded hosted capabilities handshake used by `serve` and includes the live
+entitlement, scope, and enabled-tool result. `--live` is a compatible explicit
+alias for that default behavior. `--offline` is the explicit network-free mode:
+it reports only static checks even when the local configuration is valid.
+The JSON output always includes the build identity fields `version`, `commit`,
+and `build_date`.
+
+When static configuration is incomplete or invalid, plain `doctor` returns the
+static report without a network call. This makes local configuration diagnosis
+safe before an API endpoint or credential is usable.
 
 ```json
 {
   "service": "dev-health-acr-mcp",
   "version": "dev",
+  "commit": "unknown",
+  "build_date": "unknown",
   "api_url_set": true,
   "api_url_valid": true,
   "credential_set": true,
   "credential_source": "environment",
   "credential_shape_valid": true,
   "write_enabled": false,
+  "transcript_capture_enabled": false,
   "log_level": "INFO",
   "checks": [
     {
@@ -173,15 +190,27 @@ Status values:
 - `ok`: All checks passed. The sidecar is ready to serve.
 - `incomplete_configuration`: ACR_API_URL or credential is missing.
 - `invalid_configuration`: ACR_API_URL is set but fails validation (wrong scheme, embedded userinfo, a path/query/fragment, or another sidecar-config invariant), and/or the credential is set but malformed.
-- `live_check_unreachable`: only ever set by `doctor --live` (see below); the static checks above all passed, but the live hosted API handshake failed (network, auth, entitlement, or version incompatibility).
+- `live_check_unreachable`: static checks passed and the hosted API handshake
+  attempted by plain `doctor` or `doctor --live` failed before a valid
+  capabilities response was available (for example, network, TLS, or auth).
+- `live_check_incompatible`: the hosted API was reached and returned valid
+  capabilities, but their version, schemas, enabled tools, entitlement, or
+  credential scopes are incompatible with this sidecar. The `live_check`
+  fields retain the actual hosted capability values and a safe detail.
 
-#### Live capability check (`doctor --live`)
+#### Live capability check (plain `doctor` or `doctor --live`)
 
 ```bash
 acr-mcp doctor --live
 ```
 
-Runs every check `acr-mcp doctor` runs, then -- only when the local configuration is already valid (`api_url_valid` and `credential_shape_valid` both true) -- attempts a real, bounded hosted API capabilities handshake (the same `NewBootstrap` path `serve` uses) and adds a `live_check` object reporting the *actual* entitlement, scope, and enabled-tool availability the hosted API returned for the configured credential, not just static local configuration:
+Plain `acr-mcp doctor` runs every static check and -- only when the local
+configuration is already valid (`api_url_valid` and `credential_shape_valid`
+are both true) -- attempts a real, bounded hosted API capabilities handshake
+(the same `NewBootstrap` path `serve` uses). `doctor --live` is a compatible
+explicit alias. Both add a `live_check` object reporting the *actual*
+entitlement, scope, and enabled-tool availability the hosted API returned for
+the configured credential, not just static local configuration:
 
 ```json
 "live_check": {
@@ -193,7 +222,28 @@ Runs every check `acr-mcp doctor` runs, then -- only when the local configuratio
 }
 ```
 
-If the local configuration is not yet valid, or the hosted handshake fails (network, auth, entitlement, or version incompatibility), `live_check.reachable` is `false` and `live_check.detail` carries a sanitized, secret-free description (never a bearer token, response body, or filesystem path) -- the exact same error text `serve` would report on a startup failure. Plain `acr-mcp doctor` (no `--live`) never touches the network; `--live` is strictly opt-in.
+If the local configuration is not yet valid, plain `doctor` returns its static
+report without `live_check` and never touches the network. If a handshake is
+attempted and fails (network, auth, entitlement, or version incompatibility),
+`live_check.reachable` is `false` and `live_check.detail` carries a sanitized,
+secret-free description (never a bearer token, response body, or filesystem
+path) -- the exact same error text `serve` would report on a startup failure.
+
+#### Diagnostics bundles
+
+```bash
+acr-mcp diagnostics --output acr-mcp-diagnostics.tar
+acr-mcp diagnostics --output acr-mcp-diagnostics.tar --live
+acr-mcp doctor --bundle acr-mcp-diagnostics.tar
+acr-mcp doctor --bundle acr-mcp-diagnostics.tar --live
+```
+
+Diagnostics bundles are static and network-free by default, even though plain
+`doctor` performs a live check when local configuration is valid. Pass that
+command's own `--live` flag to include the sanitized hosted capabilities
+result. `doctor --bundle <path>` is an alias for `diagnostics --output <path>`.
+Bundles require an explicit output path and never include bearer credentials,
+raw hosted response bodies, configured URLs, or filesystem paths.
 
 ### Metadata
 
@@ -207,6 +257,8 @@ Outputs the static, network-free default tool surface:
 {
   "service": "dev-health-acr-mcp",
   "version": "dev",
+  "commit": "unknown",
+  "build_date": "unknown",
   "transport": "stdio",
   "enabled_tools": ["context_for_task", "source_evidence"],
   "disabled_tools": ["record_episode"],
@@ -214,7 +266,7 @@ Outputs the static, network-free default tool surface:
 }
 ```
 
-`status` is a descriptor of the static, network-free default tool surface: `read-only` means the two enabled tools never write. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; `record_episode` may be enabled at runtime if all four gates pass (see [record_episode](#record_episode) below); doctor --live diagnoses the hosted gates.
+`status` is a descriptor of the static, network-free default tool surface: `read-only` means the two enabled tools never write. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; `record_episode` may be enabled at runtime if all four gates pass (see [record_episode](#record_episode) below); plain doctor (or `doctor --live`) diagnoses the hosted gates.
 
 ## Tools
 
@@ -234,7 +286,7 @@ Retrieves evidence metadata and references. Evidence URLs are returned as refere
 
 ### record_episode
 
-Defined in the MCP tool contract (`contracts/mcp/tools.v1.json`) as `disabled_by_default` and non-read-only. Enabled at runtime only when all four gates pass: (1) `ACR_ENABLE_WRITEBACK=true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; doctor --live diagnoses the hosted gates.
+Defined in the MCP tool contract (`contracts/mcp/tools.v1.json`) as `disabled_by_default` and non-read-only. Enabled at runtime only when all four gates pass: (1) `ACR_ENABLE_WRITEBACK=true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; plain doctor (or `doctor --live`) diagnoses the hosted gates.
 
 ## Security
 
@@ -255,7 +307,7 @@ Evidence URLs are references only. The sidecar does not fetch them. If you need 
 
 ### Write Operations
 
-`record_episode` is enabled at runtime only when all four gates pass: (1) `ACR_ENABLE_WRITEBACK=true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; doctor --live diagnoses the hosted gates.
+`record_episode` is enabled at runtime only when all four gates pass: (1) `ACR_ENABLE_WRITEBACK=true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; plain doctor (or `doctor --live`) diagnoses the hosted gates.
 
 ## Troubleshooting
 
@@ -333,7 +385,7 @@ The sidecar does not require a specific working directory. It reads configuratio
 
 ## Write Tool Availability
 
-`record_episode` is enabled at runtime only when all four gates pass: (1) `ACR_ENABLE_WRITEBACK=true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; doctor --live diagnoses the hosted gates.
+`record_episode` is enabled at runtime only when all four gates pass: (1) `ACR_ENABLE_WRITEBACK=true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; plain doctor (or `doctor --live`) diagnoses the hosted gates.
 
 ## Next Steps
 

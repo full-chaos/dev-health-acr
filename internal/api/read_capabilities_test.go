@@ -16,6 +16,7 @@ func TestCapabilitiesRouteUsesServerDerivedAccess(t *testing.T) {
 	app, token := newHostedTestApp(t, nil, nil, []string{auth.ScopeContextRead, auth.ScopeEvidenceRead}, nil, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
 	response := httptest.NewRecorder()
 
 	app.Handler().ServeHTTP(response, request)
@@ -43,7 +44,9 @@ func TestCapabilitiesRouteEnforcesAuthScopeAndVersion(t *testing.T) {
 	}{
 		{name: "missing token", scopes: []string{auth.ScopeContextRead}, wantStatus: http.StatusUnauthorized, wantCode: "invalid_token"},
 		{name: "missing context scope", scopes: []string{auth.ScopeEvidenceRead}, withToken: true, wantStatus: http.StatusForbidden, wantCode: "insufficient_scope"},
+		{name: "missing client version", scopes: []string{auth.ScopeContextRead}, withToken: true, wantStatus: http.StatusUpgradeRequired, wantCode: "version_mismatch"},
 		{name: "old client", scopes: []string{auth.ScopeContextRead}, withToken: true, version: "0.0.9", wantStatus: http.StatusUpgradeRequired, wantCode: "version_mismatch"},
+		{name: "development client", scopes: []string{auth.ScopeContextRead}, withToken: true, version: "dev", wantStatus: http.StatusUpgradeRequired, wantCode: "version_mismatch"},
 		{name: "malformed client", scopes: []string{auth.ScopeContextRead}, withToken: true, version: "latest", wantStatus: http.StatusUpgradeRequired, wantCode: "version_mismatch"},
 	}
 	for _, test := range tests {
@@ -66,6 +69,7 @@ func TestCapabilitiesRouteReportsAbsentEntitlementWithoutGating(t *testing.T) {
 	app, token := newHostedTestApp(t, nil, nil, []string{auth.ScopeContextRead}, provider, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
 	response := httptest.NewRecorder()
 
 	app.Handler().ServeHTTP(response, request)
@@ -80,6 +84,22 @@ func TestCapabilitiesRouteReportsAbsentEntitlementWithoutGating(t *testing.T) {
 	if capabilities.Entitlements.AgentContextRuntime || len(capabilities.EnabledTools) != 0 {
 		t.Fatalf("capabilities = %#v", capabilities)
 	}
+}
+
+func TestCapabilitiesRouteRejectsExactRevokedClientVersion(t *testing.T) {
+	// Given
+	app, token := newHostedTestApp(t, nil, nil, []string{auth.ScopeContextRead}, nil, nil)
+	app.config.RevokedClientVersions = []string{"1.2.3+build.7"}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.2.3+build.7")
+
+	// When
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, request)
+
+	// Then
+	assertErrorResponse(t, response, http.StatusUpgradeRequired, "version_mismatch")
 }
 
 func TestHostedReadRoutesFailClosedWithoutRuntime(t *testing.T) {

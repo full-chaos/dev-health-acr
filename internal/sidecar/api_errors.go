@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
 // Sentinel errors for every hosted ACR API error code (see
@@ -104,12 +105,13 @@ const maxSanitizedMessageLength = 500
 // carries the Authorization header, the bearer token, or a raw upstream
 // response body.
 type APIError struct {
-	Code       string
-	Message    string
-	HTTPStatus int
-	Retryable  bool
-	RetryAfter time.Duration
-	RequestID  string
+	Code                 string
+	Message              string
+	HTTPStatus           int
+	Retryable            bool
+	RetryAfter           time.Duration
+	RequestID            string
+	MinimumClientVersion string
 
 	sentinel error
 }
@@ -161,12 +163,23 @@ func newAPIError(status int, detail contractsv1.ErrorDetail, requestID, retryAft
 		RequestID:  sanitizeMessage(requestID),
 		sentinel:   sentinel,
 	}
+	if detail.Code == "version_mismatch" {
+		apiErr.MinimumClientVersion = minimumClientVersion(detail.Details)
+	}
 	if seconds, ok := parseRetryAfterSeconds(retryAfterHeader); ok {
 		apiErr.RetryAfter = time.Duration(seconds) * time.Second
 	} else if seconds, ok := retryAfterFromDetails(detail.Details); ok {
 		apiErr.RetryAfter = time.Duration(seconds) * time.Second
 	}
 	return apiErr
+}
+
+func minimumClientVersion(details map[string]any) string {
+	raw, ok := details["minimum_client_version"].(string)
+	if !ok || !version.IsCanonical(raw) {
+		return ""
+	}
+	return raw
 }
 
 // newTransportError builds a sanitized APIError for responses that could

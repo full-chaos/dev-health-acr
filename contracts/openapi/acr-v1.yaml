@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 07e8245456fddd96b6625d7cc78e1172804f69e9b64137b36eba8ffee9c0a6d5
+# canonical-content-sha256: 230dd65eefbd2e4fe50b7657b42f818f17fb6c82d4e73b52896dbfae454dcf6b
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -69,6 +69,8 @@ paths:
           "$ref": "#/components/responses/Error"
         "413":
           "$ref": "#/components/responses/Error"
+        "426":
+          "$ref": "#/components/responses/Error"
         "429":
           "$ref": "#/components/responses/Error"
         "500":
@@ -107,6 +109,8 @@ paths:
         "403":
           "$ref": "#/components/responses/Error"
         "404":
+          "$ref": "#/components/responses/Error"
+        "426":
           "$ref": "#/components/responses/Error"
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
@@ -159,6 +163,8 @@ paths:
           "$ref": "#/components/responses/Error"
         "413":
           "$ref": "#/components/responses/Error"
+        "426":
+          "$ref": "#/components/responses/Error"
         "429":
           "$ref": "#/components/responses/Error"
         "500":
@@ -199,6 +205,8 @@ paths:
         "404":
           "$ref": "#/components/responses/Error"
         "413":
+          "$ref": "#/components/responses/Error"
+        "426":
           "$ref": "#/components/responses/Error"
         "429":
           "$ref": "#/components/responses/Error"
@@ -241,13 +249,15 @@ paths:
 components:
   parameters:
     ClientVersion:
+      description: "Required SemVer compatibility signal for protected routes. It is advisory only and does not authenticate or authorize the caller; unsupported versions return 426 version_mismatch."
       in: "header"
       name: "X-ACR-Client-Version"
-      required: false
+      required: true
       schema:
         maxLength: 200
         type: "string"
     RequestID:
+      description: "Optional correlation ID for request tracing and audit. The service generates and returns a request ID when absent or invalid. It does not authenticate or authorize the caller."
       in: "header"
       name: "X-Request-ID"
       required: false
