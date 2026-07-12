@@ -1,0 +1,22 @@
+{
+  "goal": "Add repository-scoped ACR credentials",
+  "repository": {
+    "slug": "full-chaos/dev-health-acr"
+  },
+  "scope": {
+    "branch": "main",
+    "commit_sha": "22e472d",
+    "task_ref": "CHAOS-2924",
+    "files": [
+      "internal/auth/token.go"
+    ],
+    "as_of": "2026-07-01T12:00:00Z",
+    "time_window_days": 90,
+    "include_changed_files": true
+  },
+  "budget": {
+    "max_items": 30,
+    "max_output_tokens": 4000,
+    "max_serialized_bytes": 262144
+  }
+}

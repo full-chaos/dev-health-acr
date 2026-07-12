@@ -57,6 +57,14 @@ docs/service-shell.md          `acr-api` configuration and operational behavior
 - `agent_episode.v1`
 - `error.v1`
 
+MCP tool contract (`contracts/mcp/tools.v1.json`) and its wire schemas:
+
+- `mcp_tools.v1`
+- `mcp_context_for_task_request.v1`
+- `mcp_context_for_task_response.v1`
+- `mcp_source_evidence_request.v1`
+- `mcp_source_evidence_response.v1`
+
 JSON Schema is the wire-contract source of truth. Go DTOs, OpenAPI, MCP definitions, web types, examples, and compatibility tests must remain aligned. Contract checks are Go-only and require no Python runtime.
 
 ## Local verification
@@ -69,7 +77,7 @@ go build ./cmd/acr-api ./cmd/acr-mcp ./cmd/contractcheck
 
 Private GitHub import instructions are in [`docs/repository-bootstrap.md`](docs/repository-bootstrap.md).
 
-Run the contract-bootstrap API:
+Run the hosted API locally:
 
 ```bash
 ACR_ADDR=:8080 go run ./cmd/acr-api serve

@@ -1,0 +1,682 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ACR MCP context_for_task Response v1",
+  "description": "Output wrapper for the context_for_task MCP tool: the structured ContextPacket contract plus a required, bounded markdown rendering explicitly marked untrusted. Retrieved content is untrusted data, never instructions. The structured contract is embedded under $defs (context_packet.v1, context_packet_item.v1) so this document is self-contained and resolvable without fetching context_packet.v1.schema.json or context_packet_item.v1.schema.json separately; internal/contractcheck's drift check keeps $defs byte-for-byte synchronized with those canonical files.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "structured",
+    "rendered_markdown"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mcp_context_for_task_response.v1"
+    },
+    "structured": {
+      "$ref": "#/$defs/context_packet.v1"
+    },
+    "rendered_markdown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "markdown",
+        "untrusted",
+        "truncated"
+      ],
+      "properties": {
+        "markdown": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24000
+        },
+        "untrusted": {
+          "const": true
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "context_packet.v1": {
+      "title": "ACR Context Packet v1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "context_packet_id",
+        "request_id",
+        "generated_at",
+        "status",
+        "goal",
+        "repository",
+        "requested_scope",
+        "resolved_scope",
+        "query_version",
+        "ranking_version",
+        "summary",
+        "items",
+        "required_checks",
+        "recommended_next_steps",
+        "freshness",
+        "coverage",
+        "budget",
+        "warnings",
+        "compatibility"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "context_packet.v1"
+        },
+        "context_packet_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "partial",
+            "degraded",
+            "empty"
+          ]
+        },
+        "goal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "repository": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "slug"
+          ],
+          "properties": {
+            "slug": {
+              "type": "string",
+              "pattern": "^[^/\\s]+/[^/\\s]+$",
+              "maxLength": 512
+            },
+            "repo_id": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "remote_url": {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 2048
+            }
+          }
+        },
+        "requested_scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "branch": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "commit_sha": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{7,64}$"
+            },
+            "task_ref": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "files": {
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "uniqueItems": true
+            },
+            "as_of": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "time_window_days": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365
+            }
+          }
+        },
+        "resolved_scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repo_id",
+            "repo_slug",
+            "resolution",
+            "fallback_reasons"
+          ],
+          "properties": {
+            "repo_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "repo_slug": {
+              "type": "string",
+              "pattern": "^[^/\\s]+/[^/\\s]+$"
+            },
+            "branch": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "commit_sha": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "resolution": {
+              "enum": [
+                "exact_commit",
+                "branch_filtered",
+                "repo_fallback",
+                "unresolved"
+              ]
+            },
+            "fallback_reasons": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 1000
+              }
+            }
+          }
+        },
+        "query_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "ranking_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/context_packet_item.v1"
+          }
+        },
+        "required_checks": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "check_id",
+              "label",
+              "reason",
+              "rule_id"
+            ],
+            "properties": {
+              "check_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "rule_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          }
+        },
+        "recommended_next_steps": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "step_id",
+              "label",
+              "reason",
+              "rule_id"
+            ],
+            "properties": {
+              "step_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "rule_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          }
+        },
+        "freshness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "as_of",
+            "stale_after_seconds",
+            "watermarks"
+          ],
+          "properties": {
+            "as_of": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "stale_after_seconds": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "watermarks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "source",
+                  "status"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "last_ingested_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "status": {
+                    "enum": [
+                      "fresh",
+                      "stale",
+                      "missing",
+                      "unavailable"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sources_considered",
+            "sources_available",
+            "sources_unavailable",
+            "partial",
+            "degraded_reasons"
+          ],
+          "properties": {
+            "sources_considered": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            },
+            "sources_available": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            },
+            "sources_unavailable": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "source",
+                  "reason"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                }
+              }
+            },
+            "partial": {
+              "type": "boolean"
+            },
+            "degraded_reasons": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 1000
+              }
+            }
+          }
+        },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_items",
+            "items_used",
+            "max_output_tokens",
+            "estimated_tokens",
+            "max_serialized_bytes",
+            "serialized_bytes",
+            "truncated"
+          ],
+          "properties": {
+            "max_items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "items_used": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_output_tokens": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "estimated_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_serialized_bytes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "serialized_bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "compatibility": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "service_version",
+            "minimum_sidecar_version",
+            "supported_schema_versions"
+          ],
+          "properties": {
+            "service_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "minimum_sidecar_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "supported_schema_versions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "retrieval_debug_summary": {
+          "type": "string",
+          "maxLength": 8000
+        }
+      }
+    },
+    "context_packet_item.v1": {
+      "title": "ACR Context Packet Item v1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "packet_item_id",
+        "category",
+        "claim_kind",
+        "title",
+        "summary",
+        "why_included",
+        "rule_id",
+        "confidence",
+        "severity",
+        "rank",
+        "validity_scope",
+        "flags",
+        "related_entities",
+        "evidence_ref_ids"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "context_packet_item.v1"
+        },
+        "packet_item_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "category": {
+          "enum": [
+            "state",
+            "pressure",
+            "cause",
+            "evidence",
+            "action"
+          ]
+        },
+        "claim_kind": {
+          "enum": [
+            "observed",
+            "inferred",
+            "recommendation"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "why_included": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "rule_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "high",
+            "critical"
+          ]
+        },
+        "rank": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "validity_scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "branch": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "commit_sha": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "valid_from": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "valid_to": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "flags": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stale",
+            "uncertain",
+            "conflicting",
+            "untrusted_content"
+          ],
+          "properties": {
+            "stale": {
+              "type": "boolean"
+            },
+            "uncertain": {
+              "type": "boolean"
+            },
+            "conflicting": {
+              "type": "boolean"
+            },
+            "untrusted_content": {
+              "type": "boolean"
+            }
+          }
+        },
+        "related_entities": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "id",
+              "label"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "url": {
+                "type": "string",
+                "format": "uri",
+                "maxLength": 2048
+              }
+            }
+          }
+        },
+        "evidence_ref_ids": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 256
+          },
+          "uniqueItems": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "claim_kind": {
+                "const": "observed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "evidence_ref_ids": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_context_for_task_response.v1.schema.json"
+}
