@@ -83,6 +83,7 @@ func classify(err error) *classifiedError {
 // as the classifiedError message verbatim.
 func classifyAPIError(err error, apiErr *sidecar.APIError) *classifiedError {
 	category := "unavailable"
+	message := apiErr.Error()
 	switch {
 	case errors.Is(err, sidecar.ErrInvalidToken):
 		category = "auth"
@@ -92,6 +93,9 @@ func classifyAPIError(err error, apiErr *sidecar.APIError) *classifiedError {
 		category = "entitlement"
 	case errors.Is(err, sidecar.ErrVersionMismatch):
 		category = "version"
+		if apiErr.MinimumClientVersion != "" {
+			message = "the installed ACR client is unsupported; update acr-mcp to version " + apiErr.MinimumClientVersion + " or later"
+		}
 	case errors.Is(err, sidecar.ErrRateLimited):
 		category = "rate_limit"
 	case errors.Is(err, sidecar.ErrNotFound):
@@ -103,7 +107,7 @@ func classifyAPIError(err error, apiErr *sidecar.APIError) *classifiedError {
 		errors.Is(err, sidecar.ErrMalformedResponse):
 		category = "unavailable"
 	}
-	return &classifiedError{category: category, message: apiErr.Error()}
+	return &classifiedError{category: category, message: message}
 }
 
 // classifyLocalSidecarSentinel maps a sidecar sentinel that can reach this

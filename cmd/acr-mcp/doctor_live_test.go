@@ -17,8 +17,9 @@ import (
 
 // TestDoctorLiveSkipsNetworkWhenLocalConfigInvalid: Given no ACR_API_URL
 // configured, When runDoctorLive runs, Then it reports an unreachable live
-// check with a fixed, network-free detail -- the default `acr-mcp doctor`
-// network-free invariant is unaffected by the opt-in --live mode.
+// check with a fixed, network-free detail -- neither plain `acr-mcp doctor`
+// (live is its default mode) nor the explicit `--live` alias ever touches
+// the network while static local configuration remains invalid.
 func TestDoctorLiveSkipsNetworkWhenLocalConfigInvalid(t *testing.T) {
 	t.Setenv("ACR_API_URL", "")
 	t.Setenv("ACR_API_TOKEN", "")
@@ -42,7 +43,7 @@ func TestDoctorLiveReportsRealEntitlementScopeToolAvailability(t *testing.T) {
 			"schema_version": "capabilities.v1",
 			"service": "dev-health-acr",
 			"service_version": "dev",
-			"minimum_sidecar_version": "dev",
+			"minimum_sidecar_version": "1.0.0",
 			"supported_schema_versions": ` + schemaVersionsJSON() + `,
 			"enabled_tools": ["context_for_task", "source_evidence"],
 			"entitlements": {"agent_context_runtime": true},
@@ -62,6 +63,7 @@ func TestDoctorLiveReportsRealEntitlementScopeToolAvailability(t *testing.T) {
 	t.Setenv(sidecar.APIURLEnvironment, server.URL)
 	t.Setenv(sidecar.CACertPathEnvironment, caPath)
 	t.Setenv("ACR_API_TOKEN", validDoctorToken(42))
+	t.Setenv(sidecar.SidecarVersionEnvironment, "1.0.0")
 
 	report := runDoctorLive()
 

@@ -109,3 +109,27 @@ func TestTrustedProxyCIDRsRejectInvalidNetwork(t *testing.T) {
 		t.Fatal("invalid trusted proxy network accepted")
 	}
 }
+
+func TestRevokedClientVersionsRequireCanonicalSemVer(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "canonical versions", value: "1.2.3,2.0.0-rc.1+build.7", want: true},
+		{name: "leading v", value: "v1.2.3"},
+		{name: "development sentinel", value: "dev"},
+		{name: "malformed", value: "latest"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// When
+			_, err := load(mapLookup(map[string]string{"ACR_REVOKED_CLIENT_VERSIONS": test.value}))
+
+			// Then
+			if got := err == nil; got != test.want {
+				t.Fatalf("load() success = %t, want %t (err=%v)", got, test.want, err)
+			}
+		})
+	}
+}

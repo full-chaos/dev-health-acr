@@ -22,6 +22,13 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 			OperationID string                     `json:"operationId"`
 			Responses   map[string]json.RawMessage `json:"responses"`
 		} `json:"paths"`
+		Components struct {
+			Parameters map[string]struct {
+				Name        string `json:"name"`
+				Required    bool   `json:"required"`
+				Description string `json:"description"`
+			} `json:"parameters"`
+		} `json:"components"`
 	}
 	if err := json.Unmarshal(encoded, &document); err != nil {
 		t.Fatal(err)
@@ -31,9 +38,9 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 		statuses                []string
 	}{
 		{path: "/api/v1/agent-context/capabilities", method: "get", operation: "getCapabilities", statuses: []string{"200", "401", "403", "426", "429", "500", "503"}},
-		{path: "/api/v1/agent-context/context-packets", method: "post", operation: "createContextPacket", statuses: []string{"200", "400", "401", "403", "413", "429", "500", "503", "504"}},
-		{path: "/api/v1/agent-context/evidence/{evidence_ref_id}", method: "get", operation: "getEvidence", statuses: []string{"200", "401", "403", "404", "413", "429", "500", "503", "504"}},
-		{path: "/api/v1/agent-context/episodes", method: "post", operation: "createEpisode", statuses: []string{"200", "201", "204", "400", "401", "403", "404", "409", "413", "429", "500", "503", "504"}},
+		{path: "/api/v1/agent-context/context-packets", method: "post", operation: "createContextPacket", statuses: []string{"200", "400", "401", "403", "413", "426", "429", "500", "503", "504"}},
+		{path: "/api/v1/agent-context/evidence/{evidence_ref_id}", method: "get", operation: "getEvidence", statuses: []string{"200", "401", "403", "404", "413", "426", "429", "500", "503", "504"}},
+		{path: "/api/v1/agent-context/episodes", method: "post", operation: "createEpisode", statuses: []string{"200", "201", "204", "400", "401", "403", "404", "409", "413", "426", "429", "500", "503", "504"}},
 	}
 	for _, test := range tests {
 		operation, ok := document.Paths[test.path][test.method]
@@ -45,5 +52,18 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 				t.Fatalf("%s %s is missing response %s", test.method, test.path, status)
 			}
 		}
+	}
+	assertOpenAPIParameter(t, document.Components.Parameters["RequestID"], "X-Request-ID", false, "Optional correlation ID for request tracing and audit. The service generates and returns a request ID when absent or invalid. It does not authenticate or authorize the caller.")
+	assertOpenAPIParameter(t, document.Components.Parameters["ClientVersion"], "X-ACR-Client-Version", true, "Required SemVer compatibility signal for protected routes. It is advisory only and does not authenticate or authorize the caller; unsupported versions return 426 version_mismatch.")
+}
+
+func assertOpenAPIParameter(t *testing.T, parameter struct {
+	Name        string `json:"name"`
+	Required    bool   `json:"required"`
+	Description string `json:"description"`
+}, name string, required bool, description string) {
+	t.Helper()
+	if parameter.Name != name || parameter.Required != required || parameter.Description != description {
+		t.Fatalf("OpenAPI parameter = %#v", parameter)
 	}
 }

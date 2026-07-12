@@ -156,6 +156,7 @@ func TestCapabilitiesShape(t *testing.T) {
 	app, token := newHostedTestApp(t, nil, nil, []string{auth.ScopeContextRead}, nil, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
 	response := httptest.NewRecorder()
 	app.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {

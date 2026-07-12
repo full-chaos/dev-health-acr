@@ -29,6 +29,7 @@ func TestEvidenceRouteExpandsPacketReference(t *testing.T) {
 	referenceID := packet.Items[0].EvidenceRefIDs[0]
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/evidence/"+referenceID, nil)
 	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
 	response := httptest.NewRecorder()
 
 	app.Handler().ServeHTTP(response, request)
@@ -50,6 +51,7 @@ func TestEvidenceRouteReturnsGenericNotFound(t *testing.T) {
 	for _, referenceID := range []string{"malformed", "ev1_unknown-opaque-reference"} {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/evidence/"+referenceID, nil)
 		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("X-ACR-Client-Version", "1.0.0")
 		response := httptest.NewRecorder()
 		app.Handler().ServeHTTP(response, request)
 		assertErrorResponse(t, response, http.StatusNotFound, "not_found")
@@ -98,6 +100,7 @@ func TestEvidenceRouteMapsSecurityAndDependencyFailures(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/evidence/opaque-reference", nil)
 			if test.withToken {
 				request.Header.Set("Authorization", "Bearer "+token)
+				request.Header.Set("X-ACR-Client-Version", "1.0.0")
 			}
 			response := httptest.NewRecorder()
 			app.Handler().ServeHTTP(response, request)

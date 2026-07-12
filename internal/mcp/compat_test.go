@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
 func validCapabilities() contractsv1.Capabilities {
@@ -99,12 +100,10 @@ func TestCheckCompatibilityRejectsOlderSidecar(t *testing.T) {
 	assertCompatCategory(t, err, "version")
 }
 
-func TestCheckCompatibilityAllowsUnparseableDevVersions(t *testing.T) {
+func TestCheckCompatibilityRejectsDevelopmentVersion(t *testing.T) {
 	caps := validCapabilities()
 	caps.MinimumSidecarVersion = "dev"
-	if err := checkCompatibility(caps, "dev", false); err != nil {
-		t.Fatalf("expected dev/dev version comparison to be permissive, got: %v", err)
-	}
+	assertCompatCategory(t, checkCompatibility(caps, "dev", false), "version")
 }
 
 func TestCheckCompatibilityRejectsMissingSchemaVersion(t *testing.T) {
@@ -146,40 +145,13 @@ func assertCompatCategory(t *testing.T, err error, wantCategory string) {
 	}
 }
 
-func TestVersionAtLeast(t *testing.T) {
-	cases := []struct {
-		have, want string
-		wantOK     bool
-	}{
-		{"1.2.0", "1.0.0", true},
-		{"1.0.0", "1.2.0", false},
-		{"1.2.0", "1.2.0", true},
-		{"2.0.0", "1.9.9", true},
-		{"v1.2.0", "v1.1.0", true},
-		{"dev", "1.0.0", true},
-		{"1.0.0", "dev", true},
-		// A malformed (non-"dev", non-dotted-numeric) minimum from the hosted
-		// side must fail closed, not silently pass every real release build.
-		{"1.2.0", "not-a-version", false},
-		{"1.2.0", "1.2.x", false},
-		{"1.2.0", "", false},
-		// A malformed, non-"dev" have (should not occur from a real compiled
-		// binary, but defensively must not pass by default either).
-		{"garbage", "1.0.0", false},
-	}
-	for _, tc := range cases {
-		if got := versionAtLeast(tc.have, tc.want); got != tc.wantOK {
-			t.Errorf("versionAtLeast(%q, %q) = %v, want %v", tc.have, tc.want, got, tc.wantOK)
-		}
-	}
-}
-
 // TestEffectiveSidecarVersionPrefersExplicitConfigOverride locks the
 // operator-override path: when ACR_SIDECAR_VERSION is explicitly set to a
 // real value, it wins over the binary's own compiled-in version
 // regardless of what that binary version is.
 func TestEffectiveSidecarVersionPrefersExplicitConfigOverride(t *testing.T) {
-	if got := effectiveSidecarVersion("2.0.0", "1.5.0"); got != "2.0.0" {
+	identity := version.Info{Version: "dev", Commit: "unknown", Date: "unknown"}
+	if got := effectiveSidecarVersion("2.0.0", identity); got != "2.0.0" {
 		t.Fatalf("expected explicit config override to win, got: %q", got)
 	}
 }
@@ -191,8 +163,9 @@ func TestEffectiveSidecarVersionPrefersExplicitConfigOverride(t *testing.T) {
 // because they forgot the env var -- a real release binary's own
 // compiled-in version is used instead, so a stale installed binary still
 // fails a real minimum-version gate with no configuration required.
-func TestEffectiveSidecarVersionFallsBackToBinaryVersionWhenConfigIsDevDefault(t *testing.T) {
-	if got := effectiveSidecarVersion("dev", "1.5.0"); got != "1.5.0" {
+func TestEffectiveSidecarVersionKeepsReleaseIdentityAuthoritative(t *testing.T) {
+	identity := version.Info{Version: "1.5.0", Commit: "0123456789abcdef0123456789abcdef01234567", Date: "2026-07-12T15:04:05Z"}
+	if got := effectiveSidecarVersion("2.0.0", identity); got != "1.5.0" {
 		t.Fatalf("expected fallback to the real binary version, got: %q", got)
 	}
 }
@@ -201,11 +174,12 @@ func TestEffectiveSidecarVersionFallsBackToBinaryVersionWhenConfigIsDevDefault(t
 // unreleased development builds (both sides "dev") remain permissive,
 // exactly as versionAtLeast's own non-numeric handling already documents.
 func TestEffectiveSidecarVersionStaysDevWhenBothAreDev(t *testing.T) {
-	if got := effectiveSidecarVersion("dev", "dev"); got != "dev" {
+	identity := version.Info{Version: "dev", Commit: "unknown", Date: "unknown"}
+	if got := effectiveSidecarVersion("dev", identity); got != "dev" {
 		t.Fatalf("expected dev/dev to stay dev, got: %q", got)
 	}
-	if got := effectiveSidecarVersion("", ""); got != "" {
-		t.Fatalf("expected empty/empty to stay empty, got: %q", got)
+	if got := effectiveSidecarVersion("latest", identity); got != "dev" {
+		t.Fatalf("expected malformed fixture override to stay dev, got: %q", got)
 	}
 }
 

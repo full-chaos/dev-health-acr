@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin" "$tmp/setup/signing"
+
+cat > "$tmp/bin/cosign" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_LOG"
+if [[ "$1" == version ]]; then printf '%s\n' "$MOCK_COSIGN_VERSION"; exit 0; fi
+exit 1
+EOF
+cat > "$tmp/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_LOG"
+case "$1 $2" in
+  'api user') printf 'chrisgeo\n' ;;
+  'variable get') printf 'chrisgeo\n' ;;
+  'repo view') printf 'full-chaos/dev-health-acr\n' ;;
+  'release view') if [[ "${MOCK_RELEASE_VIEW_FAIL:-}" == true ]]; then exit 1; fi; printf 'first-asset\nsecond-asset\n' ;;
+esac
+EOF
+cat > "$tmp/bin/git" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1 $2 $3" == 'rev-parse --show-toplevel' ]]; then printf '%s\n' "$MOCK_ROOT"; fi
+EOF
+chmod 755 "$tmp/bin"/*
+
+touch "$tmp/setup/signing/cosign.pub"
+if (cd "$tmp/setup" && PATH="$tmp/bin:$PATH" HOME="$tmp/home" COSIGN_PASSWORD=test MOCK_LOG="$tmp/setup.log" "$root/scripts/release/setup-cosign-key.sh"); then exit 1; fi
+test ! -e "$tmp/setup.log"
+
+mkdir -p "$tmp/version"
+if (cd "$tmp/version" && PATH="$tmp/bin:$PATH" HOME="$tmp/home" COSIGN_PASSWORD=test MOCK_LOG="$tmp/version.log" MOCK_COSIGN_VERSION='GitVersion:    v3.1.1' "$root/scripts/release/setup-cosign-key.sh"); then exit 1; fi
+test ! -e "$tmp/home/.config/acr/release/cosign.key"
+grep -Fx 'version' "$tmp/version.log" >/dev/null
+
+mkdir -p "$tmp/wrong-version"
+if (cd "$tmp/wrong-version" && PATH="$tmp/bin:$PATH" HOME="$tmp/wrong-home" COSIGN_PASSWORD=test MOCK_LOG="$tmp/wrong.log" MOCK_COSIGN_VERSION='GitVersion:    v3.1.0' "$root/scripts/release/setup-cosign-key.sh"); then exit 1; fi
+test ! -e "$tmp/wrong-home/.config/acr/release/cosign.key"
+test "$(wc -l < "$tmp/wrong.log")" -eq 1
+
+if printf 'wrong\n' | PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/revoke.log" "$root/scripts/release/revoke-private-release.sh" v1.2.3 reason; then exit 1; fi
+test -z "$(grep 'release ' "$tmp/revoke.log" || true)"
+printf 'REVOKE v1.2.3\n' | PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/revoke-ok.log" "$root/scripts/release/revoke-private-release.sh" v1.2.3 INCIDENT-1
+grep -Fx 'release delete-asset v1.2.3 first-asset --repo full-chaos/dev-health-acr --yes' "$tmp/revoke-ok.log" >/dev/null
+grep -Fx 'release delete-asset v1.2.3 second-asset --repo full-chaos/dev-health-acr --yes' "$tmp/revoke-ok.log" >/dev/null
+test "$(grep -n 'release edit' "$tmp/revoke-ok.log" | cut -d: -f1)" -gt "$(grep -n 'second-asset' "$tmp/revoke-ok.log" | cut -d: -f1)"
+if printf 'REVOKE v1.2.3\n' | PATH="$tmp/bin:$PATH" MOCK_RELEASE_VIEW_FAIL=true MOCK_LOG="$tmp/revoke-view-fail.log" "$root/scripts/release/revoke-private-release.sh" v1.2.3 INCIDENT-2; then exit 1; fi
+test -z "$(grep 'release delete-asset\|release edit' "$tmp/revoke-view-fail.log" || true)"
+
+if PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/publish.log" MOCK_ROOT="$root" "$root/scripts/release/publish-private-release.sh" not-a-tag 1; then exit 1; fi
+test -z "$(grep -E 'run download|release create' "$tmp/publish.log" || true)"
+if grep -E 'gh release upload.*cosign\.pub' "$root/scripts/release/publish-private-release.sh"; then exit 1; fi
+grep -E 'awk -v name=.*[$]2 == name' "$root/docs/release-policy.md" >/dev/null
+if grep -E 'grep -F.*archive.*SHA256SUMS' "$root/docs/release-policy.md"; then exit 1; fi
+grep -F 'set -euo pipefail' "$root/docs/release-policy.md" >/dev/null
+grep -F "\$ErrorActionPreference = 'Stop'" "$root/docs/release-policy.md" >/dev/null
+if grep -E 'gh release upload.*\.\/\*' "$root/scripts/release/publish-private-release.sh"; then exit 1; fi
+grep -F 'assets=(SHA256SUMS SHA256SUMS.sig)' "$root/scripts/release/publish-private-release.sh" >/dev/null
+grep -F 'gh release delete-asset' "$root/scripts/release/revoke-private-release.sh" >/dev/null
+if grep -F 'remote get-url origin' "$root/scripts/release/publish-private-release.sh"; then exit 1; fi
+grep -E 'gh repo clone.*--no-checkout' "$root/scripts/release/publish-private-release.sh" >/dev/null

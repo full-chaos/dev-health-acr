@@ -31,6 +31,7 @@ func TestHostedReadRuntimeRemainsAvailableWithoutEpisodeCreator(t *testing.T) {
 	}
 	capabilitiesRequest := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
 	capabilitiesRequest.Header.Set("Authorization", "Bearer "+token)
+	capabilitiesRequest.Header.Set("X-ACR-Client-Version", "1.0.0")
 	capabilities := httptest.NewRecorder()
 	app.Handler().ServeHTTP(capabilities, capabilitiesRequest)
 	if capabilities.Code != http.StatusOK || strings.Contains(capabilities.Body.String(), "record_episode") {
@@ -128,6 +129,7 @@ func TestCreateEpisodeRejectsInvalidIdempotencyAndBodies(t *testing.T) {
 			app, token := hostedEpisodeTestApp(t, &fakeEpisodeCreator{episode: storedEpisode()}, []string{auth.ScopeEpisodeWrite}, nil)
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/agent-context/episodes", strings.NewReader(test.body))
 			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("X-ACR-Client-Version", "1.0.0")
 			request.Header.Set("Content-Type", "application/json")
 			if test.header != "" {
 				request.Header.Set("Idempotency-Key", test.header)
@@ -169,6 +171,7 @@ func authenticatedEpisodeRequest(t *testing.T, token string, create contractsv1.
 	t.Helper()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/agent-context/episodes", strings.NewReader(episodeJSON(t, create)))
 	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", idempotencyKey)
 	return request

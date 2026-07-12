@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
 func TestUnknownCommand(t *testing.T) {
@@ -16,6 +18,11 @@ func TestUnknownCommand(t *testing.T) {
 }
 
 func TestVersionCommand(t *testing.T) {
+	originalVersion, originalCommit, originalDate := version.Version, version.Commit, version.Date
+	version.Version = "1.2.3-rc.1+build.7"
+	version.Commit = "0123456789abcdef0123456789abcdef01234567"
+	version.Date = "2026-07-12T15:04:05Z"
+	t.Cleanup(func() { version.Version, version.Commit, version.Date = originalVersion, originalCommit, originalDate })
 	original := os.Stdout
 	reader, writer, err := os.Pipe()
 	if err != nil {
@@ -30,8 +37,8 @@ func TestVersionCommand(t *testing.T) {
 	var output bytes.Buffer
 	_, _ = io.Copy(&output, reader)
 	_ = reader.Close()
-	if strings.TrimSpace(output.String()) == "" {
-		t.Fatal("version output was empty")
+	if got, want := strings.TrimSpace(output.String()), "1.2.3-rc.1+build.7 commit=0123456789abcdef0123456789abcdef01234567 built=2026-07-12T15:04:05Z"; got != want {
+		t.Fatalf("version output = %q, want %q", got, want)
 	}
 }
 

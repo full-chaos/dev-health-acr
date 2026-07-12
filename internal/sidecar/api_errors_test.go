@@ -37,6 +37,26 @@ func TestNewAPIErrorMapsUnknownCodeToUnknownSentinel(t *testing.T) {
 	}
 }
 
+func TestNewAPIErrorExtractsCanonicalMinimumClientVersion(t *testing.T) {
+	// Given
+	detail := contractsv1.ErrorDetail{Code: "version_mismatch", Details: map[string]any{"minimum_client_version": "1.2.3-rc.1+build.7"}}
+
+	// When
+	apiErr := newAPIError(426, detail, "req_1", "")
+
+	// Then
+	if apiErr.MinimumClientVersion != "1.2.3-rc.1+build.7" {
+		t.Fatalf("MinimumClientVersion = %q", apiErr.MinimumClientVersion)
+	}
+}
+
+func TestNewAPIErrorRejectsMalformedMinimumClientVersion(t *testing.T) {
+	apiErr := newAPIError(426, contractsv1.ErrorDetail{Code: "version_mismatch", Details: map[string]any{"minimum_client_version": "latest"}}, "req_1", "")
+	if apiErr.MinimumClientVersion != "" {
+		t.Fatalf("MinimumClientVersion = %q", apiErr.MinimumClientVersion)
+	}
+}
+
 // TestNewAPIErrorUsesFixedSafeMessagePerCode proves apiErr.Message is
 // always the codeSafeMessages entry for the code, completely independent
 // of whatever detail.Message the (simulated) hosted response carried.

@@ -24,6 +24,7 @@ func TestAppCorrelatesRequestObservationWithCallerRequestID(t *testing.T) {
 	app, token := newHostedTestApp(t, nil, &hooks, []string{auth.ScopeContextRead}, nil, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
 	requestID := "req_0123456789abcdef0123456789abcdef"
 	request.Header.Set("X-Request-ID", requestID)
 
@@ -52,6 +53,7 @@ func TestAppObservesRecoveredPanic(t *testing.T) {
 	requestID := "req_0123456789abcdef0123456789abcdef"
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
 	request.Header.Set("X-Request-ID", requestID)
 
 	// When

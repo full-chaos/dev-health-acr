@@ -1,6 +1,7 @@
+---
 name: ci
 
-on:
+"on":
   pull_request:
   push:
     branches: [main]
@@ -15,6 +16,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23.x'
+          go-version: '1.26.3'
           cache: true
+      - name: Check release setup script modes
+        run: |
+          test -x scripts/release/setup-cosign-key.sh
+          test -x scripts/release/export-tag-signing-key.sh
+          test -x scripts/release/publish-private-release.sh
+          test -x scripts/release/revoke-private-release.sh
+          test -x scripts/release/test_release_scripts.sh
+      - name: Check release scripts
+        run: |
+          shellcheck scripts/release/*.sh
+          scripts/release/test_release_scripts.sh
       - run: make verify

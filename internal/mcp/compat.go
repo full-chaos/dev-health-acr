@@ -3,10 +3,9 @@ package mcp
 import (
 	"fmt"
 	"slices"
-	"strconv"
-	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
 // ourSchemaVersions are required for every sidecar, including the default
@@ -40,30 +39,8 @@ var writebackSchemaVersions = []string{
 	contractsv1.AgentEpisodeSchema,
 }
 
-// devVersionSentinel mirrors internal/sidecar's own unexported
-// defaultSidecarVersion: both this package's compiled-in binary version
-// (cmd/acr-mcp's "dev" default, overridden via -ldflags at release build
-// time) and sidecar.Config.SidecarVersion (ACR_SIDECAR_VERSION, same
-// default) use this exact literal for "no real version configured".
-const devVersionSentinel = "dev"
-
-// effectiveSidecarVersion picks the sidecar version identity
-// checkCompatibility enforces against the hosted API's minimum_sidecar_
-// version. An explicit, non-default ACR_SIDECAR_VERSION always wins (an
-// operator override for canary/rollback testing). Otherwise, a real
-// release binary's own compiled-in version is authoritative: this is the
-// fail-closed fix over trusting cfgVersion alone, since cfgVersion
-// silently defaults to "dev" -- which versionAtLeast always treats as
-// compatible -- whenever an operator simply forgets to set the env var,
-// even on a genuine stale release binary that should fail the check.
-func effectiveSidecarVersion(cfgVersion, binaryVersion string) string {
-	if cfgVersion != devVersionSentinel && cfgVersion != "" {
-		return cfgVersion
-	}
-	if binaryVersion != devVersionSentinel && binaryVersion != "" {
-		return binaryVersion
-	}
-	return cfgVersion
+func effectiveSidecarVersion(cfgVersion string, identity version.Info) string {
+	return version.EffectiveVersion(identity, cfgVersion)
 }
 
 // checkCompatibility enforces that the hosted API's capability descriptor
@@ -77,7 +54,7 @@ func checkCompatibility(caps contractsv1.Capabilities, sidecarVersion string, wr
 	if caps.Service != wantService {
 		return &compatError{category: "version", detail: "hosted API service identity does not match this sidecar"}
 	}
-	if !versionAtLeast(sidecarVersion, caps.MinimumSidecarVersion) {
+	if !version.AtLeast(sidecarVersion, caps.MinimumSidecarVersion) {
 		return &compatError{category: "version", detail: "sidecar version is older than the hosted API's minimum supported version"}
 	}
 	for _, want := range ourSchemaVersions {
@@ -119,59 +96,4 @@ type compatError struct {
 
 func (e *compatError) Error() string {
 	return fmt.Sprintf("acr-mcp: %s incompatibility: %s", e.category, e.detail)
-}
-
-// versionAtLeast reports whether have >= want using dotted numeric
-// component comparison (e.g. "1.4.2" >= "1.3.0"). The literal
-// devVersionSentinel ("dev") on either side is a deliberate exemption --
-// preserved exactly as before -- so a local, unreleased development build
-// (have == "dev") is never blocked by this comparison, and a hosted API
-// running in local/fixture dev mode (want == "dev") never blocks a real
-// sidecar either. Any other unparseable value, on either side, fails
-// closed (returns false) rather than being treated as automatically
-// satisfied: a corrupted or unexpected minimum_sidecar_version from the
-// hosted side (garbage that is not the "dev" sentinel) must not silently
-// let every real release sidecar through, and a real release build's own
-// compiled-in version is always a dotted numeric string, so a non-"dev",
-// unparseable have here indicates a genuine configuration defect that
-// should also fail closed rather than pass by default.
-func versionAtLeast(have, want string) bool {
-	if have == devVersionSentinel || want == devVersionSentinel {
-		return true
-	}
-	haveParts, ok1 := parseDottedVersion(have)
-	wantParts, ok2 := parseDottedVersion(want)
-	if !ok1 || !ok2 {
-		return false
-	}
-	for i := 0; i < len(haveParts) || i < len(wantParts); i++ {
-		var h, w int
-		if i < len(haveParts) {
-			h = haveParts[i]
-		}
-		if i < len(wantParts) {
-			w = wantParts[i]
-		}
-		if h != w {
-			return h > w
-		}
-	}
-	return true
-}
-
-func parseDottedVersion(v string) ([]int, bool) {
-	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
-	if v == "" {
-		return nil, false
-	}
-	fields := strings.Split(v, ".")
-	parts := make([]int, 0, len(fields))
-	for _, f := range fields {
-		n, err := strconv.Atoi(f)
-		if err != nil {
-			return nil, false
-		}
-		parts = append(parts, n)
-	}
-	return parts, len(parts) > 0
 }

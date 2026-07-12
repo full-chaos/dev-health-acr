@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 )
@@ -26,10 +25,6 @@ func (a *App) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	entitled, err := a.runtime.Entitlements.HasEntitlement(r.Context(), principal.OrgID, agentContextRuntimeEntitlement)
 	if err != nil {
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Entitlement service is temporarily unavailable", true, nil)
-		return
-	}
-	if version := strings.TrimSpace(r.Header.Get("X-ACR-Client-Version")); version != "" && !clientVersionCompatible(version, capabilities.MinimumSidecarVersion) {
-		writeError(w, r, http.StatusUpgradeRequired, "version_mismatch", "ACR client version is not supported", false, map[string]any{"minimum_client_version": capabilities.MinimumSidecarVersion})
 		return
 	}
 	capabilities.Entitlements.AgentContextRuntime = entitled

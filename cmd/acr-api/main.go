@@ -123,6 +123,7 @@ func serve(args []string) error {
 		RequestTimeout:      cfg.RequestTimeout,
 		MaxRequestBodyBytes: int64(cfg.MaxSerializedBytes), MaxEvidenceResponseBytes: int64(cfg.MaxSerializedBytes),
 		MaxItems: cfg.MaxItems, MaxOutputTokens: cfg.MaxOutputTokens, MaxSerializedBytes: cfg.MaxSerializedBytes,
+		RevokedClientVersions: cfg.RevokedClientVersions,
 	}, api.Dependencies{
 		Capabilities: capabilities, ReadinessChecks: checks, Limits: limitManager, AuthAttempts: authAttempts, Observability: &telemetry, ClientIP: clientIP,
 	}, logger)

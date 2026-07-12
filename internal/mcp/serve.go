@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+
+	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
 // Serve bootstraps the sidecar (config, credential, hosted client,
@@ -23,7 +25,11 @@ import (
 // while any other bootstrap or SDK/transport failure is still reported and
 // returned as before.
 func Serve(ctx context.Context, diagnostics io.Writer, serverVersion string) error {
-	boot, err := NewBootstrap(ctx, serverVersion)
+	return ServeWithIdentity(ctx, diagnostics, legacyIdentity(serverVersion))
+}
+
+func ServeWithIdentity(ctx context.Context, diagnostics io.Writer, identity version.Info) error {
+	boot, err := NewBootstrapWithIdentity(ctx, identity)
 	if err != nil {
 		if causedByCallerCancellation(ctx, err) {
 			return nil
@@ -33,7 +39,9 @@ func Serve(ctx context.Context, diagnostics io.Writer, serverVersion string) err
 	}
 	logger := newDiagnosticsLogger(diagnostics, boot.Config.LogLevel)
 	logger.InfoContext(ctx, "acr-mcp starting",
-		"version", serverVersion,
+		"version", identity.Version,
+		"commit", identity.Commit,
+		"build_date", identity.Date,
 		"service", boot.Capabilities.Service,
 		"enabled_tools", boot.Capabilities.EnabledTools,
 		"agent_context_runtime", boot.Capabilities.Entitlements.AgentContextRuntime,
@@ -43,7 +51,7 @@ func Serve(ctx context.Context, diagnostics io.Writer, serverVersion string) err
 		"writeback_enabled", boot.Config.EnableWriteback,
 		"record_episode_active", recordEpisodeEnabled(boot),
 	)
-	server := NewServer(boot, serverVersion)
+	server := NewServer(boot, identity.Version)
 	if err := Run(ctx, server); err != nil {
 		if causedByCallerCancellation(ctx, err) {
 			return nil

@@ -23,6 +23,7 @@ type AppConfig struct {
 	MaxItems                 int
 	MaxOutputTokens          int
 	MaxSerializedBytes       int
+	RevokedClientVersions    []string
 }
 
 type Dependencies struct {

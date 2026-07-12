@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
 const (
@@ -43,6 +44,7 @@ type Config struct {
 	PostgresDSN           string
 	RequireBackingStores  bool
 	MinimumSidecarVersion string
+	RevokedClientVersions []string
 	EntitlementKey        string
 	EvidenceIDActiveKID   string
 	EvidenceIDKeys        map[string][]byte
@@ -77,6 +79,7 @@ func load(lookup lookupEnv) (Config, error) {
 		ClickHouseDSN:         stringValue(lookup, "ACR_CLICKHOUSE_DSN", ""),
 		PostgresDSN:           stringValue(lookup, "ACR_POSTGRES_DSN", ""),
 		MinimumSidecarVersion: stringValue(lookup, "ACR_MINIMUM_SIDECAR_VERSION", defaultMinimumSidecar),
+		RevokedClientVersions: stringListValue(lookup, "ACR_REVOKED_CLIENT_VERSIONS"),
 		EntitlementKey:        stringValue(lookup, "ACR_ENTITLEMENT_KEY", defaultEntitlementKey),
 		EvidenceIDActiveKID:   stringValue(lookup, "ACR_EVIDENCE_ID_ACTIVE_KID", ""),
 		TrustedProxyCIDRs:     stringListValue(lookup, "ACR_TRUSTED_PROXY_CIDRS"),
@@ -152,6 +155,14 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.MinimumSidecarVersion) == "" {
 		return errors.New("ACR_MINIMUM_SIDECAR_VERSION is required")
 	}
+	if !version.IsCanonical(c.MinimumSidecarVersion) {
+		return errors.New("ACR_MINIMUM_SIDECAR_VERSION must be canonical SemVer")
+	}
+	for _, revoked := range c.RevokedClientVersions {
+		if !version.IsCanonical(revoked) {
+			return errors.New("ACR_REVOKED_CLIENT_VERSIONS must contain canonical SemVer versions")
+		}
+	}
 	if strings.TrimSpace(c.EntitlementKey) == "" {
 		return errors.New("ACR_ENTITLEMENT_KEY is required")
 	}
@@ -204,63 +215,5 @@ func (c Config) SafeAttributes() []any {
 		"evidence_id_active_kid", c.EvidenceIDActiveKID,
 		"evidence_id_key_count", len(c.EvidenceIDKeys),
 		"trusted_proxy_count", len(c.TrustedProxyCIDRs),
-	}
-}
-
-func stringValue(lookup lookupEnv, key, fallback string) string {
-	if value, ok := lookup(key); ok {
-		return strings.TrimSpace(value)
-	}
-	return fallback
-}
-
-func durationValue(lookup lookupEnv, key string, fallback time.Duration) (time.Duration, error) {
-	value, ok := lookup(key)
-	if !ok || strings.TrimSpace(value) == "" {
-		return fallback, nil
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", key, err)
-	}
-	return parsed, nil
-}
-
-func boolValue(lookup lookupEnv, key string, fallback bool) (bool, error) {
-	value, ok := lookup(key)
-	if !ok || strings.TrimSpace(value) == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return false, fmt.Errorf("%s: %w", key, err)
-	}
-	return parsed, nil
-}
-
-func intValue(lookup lookupEnv, key string, fallback int) (int, error) {
-	value, ok := lookup(key)
-	if !ok || strings.TrimSpace(value) == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", key, err)
-	}
-	return parsed, nil
-}
-
-func parseLogLevel(value string) (slog.Level, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "debug":
-		return slog.LevelDebug, nil
-	case "info":
-		return slog.LevelInfo, nil
-	case "warn", "warning":
-		return slog.LevelWarn, nil
-	case "error":
-		return slog.LevelError, nil
-	default:
-		return 0, fmt.Errorf("ACR_LOG_LEVEL must be debug, info, warn, or error")
 	}
 }

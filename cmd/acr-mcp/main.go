@@ -14,13 +14,14 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	acrmcp "github.com/full-chaos/dev-health-acr/internal/mcp"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
+	"github.com/full-chaos/dev-health-acr/internal/version"
 )
-
-var version = "dev"
 
 type metadata struct {
 	Service       string   `json:"service"`
 	Version       string   `json:"version"`
+	Commit        string   `json:"commit"`
+	BuildDate     string   `json:"build_date"`
 	Transport     string   `json:"transport"`
 	EnabledTools  []string `json:"enabled_tools"`
 	DisabledTools []string `json:"disabled_tools"`
@@ -36,6 +37,8 @@ type diagnostic struct {
 type doctorReport struct {
 	Service                  string           `json:"service"`
 	Version                  string           `json:"version"`
+	Commit                   string           `json:"commit"`
+	BuildDate                string           `json:"build_date"`
 	APIURLSet                bool             `json:"api_url_set"`
 	APIURLValid              bool             `json:"api_url_valid"`
 	CredentialSet            bool             `json:"credential_set"`
@@ -49,12 +52,13 @@ type doctorReport struct {
 	LiveCheck                *doctorLiveCheck `json:"live_check,omitempty"`
 }
 
-// doctorLiveCheck is populated only by `acr-mcp doctor --live`, never by
-// the default `acr-mcp doctor`: it reports the actual, live entitlement,
-// scope, and enabled-tool availability a real hosted capabilities
-// handshake returned for the currently configured credential, rather than
-// only the static local configuration runDoctor already reports without
-// touching the network.
+// doctorLiveCheck is populated by plain `acr-mcp doctor` (live is its
+// default mode) and by the explicit `acr-mcp doctor --live` alias --
+// never by `acr-mcp doctor --offline`. It reports the actual, live
+// entitlement, scope, and enabled-tool availability a real hosted
+// capabilities handshake returned for the currently configured
+// credential, rather than only the static local configuration runDoctor
+// already reports without touching the network.
 type doctorLiveCheck struct {
 	Reachable                bool     `json:"reachable"`
 	Detail                   string   `json:"detail,omitempty"`
@@ -68,38 +72,25 @@ type doctorLiveCheck struct {
 }
 
 func main() {
-	command := "metadata"
-	if len(os.Args) > 1 {
-		command = os.Args[1]
-	}
+	os.Exit(runCLI(os.Args[1:]))
+}
 
-	switch command {
-	case "version", "--version", "-version":
-		fmt.Println(version)
-	case "doctor":
-		if len(os.Args) > 2 && os.Args[2] == "--live" {
-			printJSON(runDoctorLive())
-		} else {
-			printJSON(runDoctor())
-		}
-	case "metadata":
-		printJSON(metadata{
-			Service:       "dev-health-acr-mcp",
-			Version:       version,
-			Transport:     "stdio",
-			EnabledTools:  []string{"context_for_task", "source_evidence"},
-			DisabledTools: []string{"record_episode"},
-			Status:        "read-only",
-		})
-	case "serve":
-		os.Exit(runServe())
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q; use version, doctor, metadata, or serve\n", command)
-		os.Exit(2)
+func currentMetadata() metadata {
+	info := version.Current()
+	return metadata{
+		Service:       "dev-health-acr-mcp",
+		Version:       info.Version,
+		Commit:        info.Commit,
+		BuildDate:     info.Date,
+		Transport:     "stdio",
+		EnabledTools:  []string{"context_for_task", "source_evidence"},
+		DisabledTools: []string{"record_episode"},
+		Status:        "read-only",
 	}
 }
 
 func runDoctor() doctorReport {
+	info := version.Current()
 	apiURLSet := strings.TrimSpace(os.Getenv(sidecar.APIURLEnvironment)) != ""
 	checks := []diagnostic{
 		{Name: "binary", Status: "ok", Detail: "acr-mcp is executable"},
@@ -168,7 +159,9 @@ func runDoctor() doctorReport {
 	}
 	report := doctorReport{
 		Service:              "dev-health-acr-mcp",
-		Version:              version,
+		Version:              info.Version,
+		Commit:               info.Commit,
+		BuildDate:            info.Date,
 		APIURLSet:            apiURLSet,
 		APIURLValid:          apiURLValid,
 		CredentialSet:        credentialSet,
@@ -202,8 +195,13 @@ func runDoctorLive() doctorReport {
 		report.LiveCheck = &doctorLiveCheck{Reachable: false, Detail: "local configuration is not valid; live check skipped"}
 		return report
 	}
-	boot, err := acrmcp.NewBootstrap(context.Background(), version)
+	probe, err := acrmcp.ProbeCapabilities(context.Background(), version.Current())
 	if err != nil {
+		if minimum, ok := acrmcp.VersionMismatchMinimum(err); ok {
+			report.LiveCheck = &doctorLiveCheck{Reachable: true, Detail: "the installed ACR client is unsupported; update acr-mcp to version " + minimum + " or later"}
+			report.Status = "live_check_incompatible"
+			return report
+		}
 		// A bootstrap failure here covers both a real network/TLS/connection
 		// problem reaching the hosted API and a hosted-side rejection
 		// (incompatibility, credential, entitlement): every case means the
@@ -218,22 +216,19 @@ func runDoctorLive() doctorReport {
 	}
 	report.LiveCheck = &doctorLiveCheck{
 		Reachable:                true,
-		AgentContextRuntime:      boot.Capabilities.Entitlements.AgentContextRuntime,
-		ContextReadScope:         boot.Capabilities.Permissions.ContextRead,
-		EvidenceReadScope:        boot.Capabilities.Permissions.EvidenceRead,
-		EpisodeWriteScope:        boot.Capabilities.Permissions.EpisodeWrite,
-		RecordEpisodeActive:      recordEpisodeActive(boot),
-		TranscriptCaptureEnabled: boot.Config.EnableTranscriptCapture,
-		EnabledTools:             boot.Capabilities.EnabledTools,
+		AgentContextRuntime:      probe.Capabilities.Entitlements.AgentContextRuntime,
+		ContextReadScope:         probe.Capabilities.Permissions.ContextRead,
+		EvidenceReadScope:        probe.Capabilities.Permissions.EvidenceRead,
+		EpisodeWriteScope:        probe.Capabilities.Permissions.EpisodeWrite,
+		RecordEpisodeActive:      probe.Config.EnableWriteback && probe.Capabilities.Entitlements.AgentContextRuntime && probe.Capabilities.Permissions.EpisodeWrite && slices.Contains(probe.Capabilities.EnabledTools, "record_episode"),
+		TranscriptCaptureEnabled: probe.Config.EnableTranscriptCapture,
+		EnabledTools:             probe.Capabilities.EnabledTools,
+	}
+	if err := probe.CheckCompatibility(); err != nil {
+		report.Status = "live_check_incompatible"
+		report.LiveCheck.Detail = err.Error()
 	}
 	return report
-}
-
-func recordEpisodeActive(boot *acrmcp.Bootstrap) bool {
-	if !boot.Config.EnableWriteback || !boot.Capabilities.Entitlements.AgentContextRuntime || !boot.Capabilities.Permissions.EpisodeWrite {
-		return false
-	}
-	return slices.Contains(boot.Capabilities.EnabledTools, "record_episode")
 }
 
 func printJSON(value any) {
@@ -251,7 +246,7 @@ func printJSON(value any) {
 func runServe() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := acrmcp.Serve(ctx, os.Stderr, version); err != nil {
+	if err := acrmcp.ServeWithIdentity(ctx, os.Stderr, version.Current()); err != nil {
 		return 1
 	}
 	return 0
