@@ -1,6 +1,8 @@
 package mcpclientfixtures
 
 import (
+	"archive/zip"
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -50,14 +52,46 @@ func TestInstallSidecarWindowsSnippetHasFailClosedErrorHandling(t *testing.T) {
 	}
 }
 
+// buildTestZipArchive creates a real, valid ZIP archive in memory using
+// the standard library's archive/zip -- not a placeholder byte string --
+// containing one file with known content, so a real, unmocked
+// Expand-Archive invoked by the adversarial test below can genuinely
+// extract it rather than fail on malformed archive bytes. A prior
+// version of this test used a plain "real archive bytes" string as the
+// archive payload; that happened to make the fail-closed ("cosign
+// fails") case pass, since Expand-Archive is never reached, but it made
+// the positive-control ("cosign succeeds") case falsely rely on
+// Expand-Archive itself throwing on the malformed input for markerless
+// reasoning to still hold -- which only surfaced as a failure once this
+// test actually ran against a real pwsh in CI (Ubuntu), not on a
+// developer machine without pwsh where the whole test is skipped.
+func buildTestZipArchive(t *testing.T, name, content string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
 // TestInstallSidecarWindowsSnippetAdversarial executes the real,
 // unmodified InstallSidecarWindowsSnippet PowerShell block (only the
 // <version>/<os>/<arch> and <trusted-ref> placeholders substituted) under
 // a real pwsh, with fake git/cosign.exe stand-ins on PATH, proving the
 // same fail-closed contract the POSIX adversarial test proves: a failing
 // cosign.exe verification must never let Expand-Archive run, and a
-// succeeding one must still extract normally. It is skipped -- not
-// weakened -- when pwsh is unavailable; see
+// succeeding one must still extract normally -- verified both by an
+// injected marker immediately before the real Expand-Archive call and,
+// more directly, by the real archived file actually landing in workDir.
+// It is skipped -- not weakened -- when pwsh is unavailable; see
 // TestInstallSidecarWindowsSnippetHasFailClosedErrorHandling above for
 // the structural lock that always runs.
 func TestInstallSidecarWindowsSnippetAdversarial(t *testing.T) {
@@ -66,9 +100,12 @@ func TestInstallSidecarWindowsSnippetAdversarial(t *testing.T) {
 	}
 
 	const archive = "acr-mcp_1.2.3_windows_amd64.zip"
+	const extractedFileName = "acr-mcp-adversarial-marker.txt"
+	const extractedFileContent = "this file must be extracted only after cosign.exe verification succeeds"
 	script := findFencedBlockContaining(t, []byte(InstallSidecarWindowsSnippet), "powershell", "cosign.exe verify-blob")
 	script = strings.ReplaceAll(script, "acr-mcp_<version>_windows_amd64.zip", archive)
 	script = strings.ReplaceAll(script, "<trusted-ref>", "test-ref")
+	archiveContent := buildTestZipArchive(t, extractedFileName, extractedFileContent)
 
 	fakeBin := t.TempDir()
 	writeFakeExecutable(t, fakeBin, "git", "exit 0")
@@ -80,17 +117,17 @@ func TestInstallSidecarWindowsSnippetAdversarial(t *testing.T) {
 		if err := os.Mkdir(filepath.Join(workDir, "signing"), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		archiveContent := []byte("real archive bytes")
 		writeTestFile(t, workDir, archive, archiveContent)
 		writeTestFile(t, workDir, "SHA256SUMS", []byte(sha256Hex(archiveContent)+"  "+archive+"\n"))
 
 		_ = os.Remove(marker)
 		writeFakeExecutable(t, fakeBin, "cosign.exe", fmt.Sprintf("exit %d", cosignExitCode))
-		// A real Expand-Archive would fail on this fake, non-zip archive
-		// content anyway; what this test verifies is whether it is ever
-		// *invoked*, so unpack the marker file's presence from cosign's
-		// own failure by dropping the marker BEFORE running the script and
-		// checking it independently of Expand-Archive's own success.
+		// The marker is written immediately before the real Expand-Archive
+		// call so its presence proves invocation independently of whether
+		// extraction itself later succeeds; archiveContent above is now a
+		// real ZIP, so a successful invocation also genuinely extracts
+		// extractedFileName, which is asserted below as the stronger,
+		// non-marker proof of success.
 		scriptPath := filepath.Join(workDir, "install.ps1")
 		instrumented := strings.Replace(script, "Expand-Archive -Path $archive -DestinationPath .",
 			"Set-Content -Path '"+marker+"' -Value 'invoked'\nExpand-Archive -Path $archive -DestinationPath . -Force", 1)
@@ -105,12 +142,21 @@ func TestInstallSidecarWindowsSnippetAdversarial(t *testing.T) {
 
 		_, markerErr := os.Stat(marker)
 		markerExists := markerErr == nil
+		extractedPath := filepath.Join(workDir, extractedFileName)
+		extractedContent, extractedErr := os.ReadFile(extractedPath)
+		extractedExists := extractedErr == nil
 		if wantSuccess {
 			if err != nil {
 				t.Fatalf("expected success when cosign.exe succeeds, got error: %v\noutput:\n%s", err, out)
 			}
 			if !markerExists {
 				t.Fatalf("expected Expand-Archive to be invoked when cosign.exe succeeds, but it was not:\n%s", out)
+			}
+			if !extractedExists {
+				t.Fatalf("expected %s to be extracted from the real ZIP archive when cosign.exe succeeds, but it was not:\n%s", extractedFileName, out)
+			}
+			if string(extractedContent) != extractedFileContent {
+				t.Fatalf("expected extracted %s to contain %q, got %q", extractedFileName, extractedFileContent, string(extractedContent))
 			}
 			return
 		}
@@ -119,6 +165,9 @@ func TestInstallSidecarWindowsSnippetAdversarial(t *testing.T) {
 		}
 		if markerExists {
 			t.Fatalf("expected Expand-Archive to never be invoked when cosign.exe fails, but it was:\n%s", out)
+		}
+		if extractedExists {
+			t.Fatalf("expected %s to never be extracted when cosign.exe fails, but it was found in workDir", extractedFileName)
 		}
 	}
 
