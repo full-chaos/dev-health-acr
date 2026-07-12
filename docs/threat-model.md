@@ -102,7 +102,7 @@ CHAOS-2904 and CHAOS-2917 implement these rules without changing v1 wire semanti
 
 - The repository fixes storage roles, not geographic regions: ClickHouse holds read-only engineering evidence and ACR Postgres holds operational state.
 - The actual region, subprocessors, backups, replicas, and cross-region transfer behavior are deployment facts. Production deployment documentation must disclose them before customer use; this document does not invent a region.
-- `acr-mcp` reads a credential from `ACR_API_TOKEN` or from the caller-selected `ACR_API_TOKEN_FILE`. It checks restrictive file permissions on non-Windows systems. It does not create or manage a home-directory credential file.
+- `acr-mcp` reads a credential from `ACR_API_TOKEN` (works on every supported platform) or from the caller-selected `ACR_API_TOKEN_FILE`. Token-file (and CA-bundle) loading is supported only on macOS and Linux, where it checks restrictive file permissions; on every other platform, including Windows, it fails closed and refuses to load the file at all. It does not create or manage a home-directory credential file.
 - The sidecar must not persist packets, episode payloads, or raw transcripts locally.
 
 ## Evidence content, markup, and URIs
