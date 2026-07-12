@@ -87,11 +87,12 @@ func TestEpisodeStoreObserverEmitsActualStoreDimensions(t *testing.T) {
 }
 
 func TestEpisodeTerminalObserverInstrumentsRealService(t *testing.T) {
-	sink := NewMemorySink(2)
+	sink := NewMemorySink(3)
 	hooks := NewHooks(sink, nil)
 	service, err := episode.NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), episode.ServiceOptions{
 		Now:              func() time.Time { return time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC) },
 		TerminalObserver: NewEpisodeTerminalObserver(hooks), StoreObserver: NewEpisodeStoreObserver(hooks), StoreBackend: episode.StoreBackendMemory,
+		PacketStore: observationPacketStore{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +112,21 @@ func TestEpisodeTerminalObserverInstrumentsRealService(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshots := sink.Snapshots()
-	if len(snapshots) != 2 || snapshots[0].StoreBackend != StoreBackendMemory || snapshots[0].StoreQueryClass != StoreQueryEpisode || snapshots[1].EpisodeOutcome != EpisodeOutcomeSuccess {
+	if len(snapshots) != 3 || snapshots[0].StoreBackend != StoreBackendMemory || snapshots[0].StoreQueryClass != StoreQueryEpisode || snapshots[1].StoreQueryClass != StoreQueryEpisode || snapshots[2].EpisodeOutcome != EpisodeOutcomeSuccess {
 		t.Fatalf("snapshots = %#v", snapshots)
 	}
+}
+
+type observationPacketStore struct{}
+
+func (observationPacketStore) SaveSnapshot(context.Context, storage.Principal, contractsv1.ContextPacket, time.Time) error {
+	return nil
+}
+
+func (observationPacketStore) GetSnapshot(context.Context, storage.Principal, string) (contractsv1.ContextPacket, error) {
+	return contractsv1.ContextPacket{Repository: contractsv1.RepositoryRef{Slug: "owner/repo"}}, nil
+}
+
+func (observationPacketStore) PurgeExpired(context.Context, time.Time, int) (int, error) {
+	return 0, nil
 }

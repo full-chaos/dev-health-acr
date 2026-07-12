@@ -29,12 +29,17 @@ type ContextPacketAssembler interface {
 	Assemble(context.Context, storage.Principal, contractsv1.ContextPacketRequest) (contractsv1.ContextPacket, error)
 }
 
+type EpisodeCreator interface {
+	Create(context.Context, storage.Principal, contractsv1.AgentEpisodeCreate) (contractsv1.AgentEpisode, bool, error)
+}
+
 type RuntimeDependencies struct {
 	Credentials     storage.CredentialStore
 	Audit           storage.AuditStore
 	Entitlements    EntitlementProvider
 	Assembler       ContextPacketAssembler
 	Evidence        storage.EvidenceStore
+	Episodes        EpisodeCreator
 	ReadinessChecks []ReadinessCheck
 }
 

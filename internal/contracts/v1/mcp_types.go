@@ -13,6 +13,8 @@ const (
 	MCPContextForTaskResponseSchema = "mcp_context_for_task_response.v1"
 	MCPSourceEvidenceRequestSchema  = "mcp_source_evidence_request.v1"
 	MCPSourceEvidenceResponseSchema = "mcp_source_evidence_response.v1"
+	MCPRecordEpisodeRequestSchema   = "mcp_record_episode_request.v1"
+	MCPRecordEpisodeResponseSchema  = "mcp_record_episode_response.v1"
 )
 
 // MCPContextForTaskRequest is the input contract for the context_for_task
@@ -98,4 +100,41 @@ type MCPSourceEvidenceResponse struct {
 	SchemaVersion    string              `json:"schema_version"`
 	Structured       ExpandedEvidence    `json:"structured"`
 	RenderedMarkdown MCPRenderedMarkdown `json:"rendered_markdown"`
+}
+
+// MCPRecordEpisodeRequest is the writeback-specific MCP input. It deliberately
+// omits schema_version and sidecar client identity: the sidecar owns both so an
+// MCP caller cannot spoof the client that made the hosted write.
+type MCPRecordEpisodeRequest struct {
+	ClientEpisodeID string            `json:"client_episode_id"`
+	IdempotencyKey  string            `json:"idempotency_key"`
+	ContextPacketID string            `json:"context_packet_id"`
+	Goal            string            `json:"goal"`
+	TaskRef         string            `json:"task_ref,omitempty"`
+	Repository      *MCPRepositoryRef `json:"repository"`
+	Scope           *EpisodeScope     `json:"scope"`
+	AgentName       string            `json:"agent_name,omitempty"`
+	Model           string            `json:"model,omitempty"`
+	StartedAt       time.Time         `json:"started_at"`
+	EndedAt         time.Time         `json:"ended_at"`
+	Outcome         string            `json:"outcome"`
+	Summary         string            `json:"summary"`
+	Artifacts       EpisodeArtifacts  `json:"artifacts"`
+	Transcript      TranscriptRef     `json:"transcript"`
+	RetentionClass  string            `json:"retention_class"`
+}
+
+// MCPRecordEpisodeResponse exposes only a safe write receipt. In particular,
+// it never echoes submitted summary, artifact, or transcript data.
+type MCPRecordEpisodeResponse struct {
+	SchemaVersion         string       `json:"schema_version"`
+	Status                string       `json:"status"`
+	ClientEpisodeID       string       `json:"client_episode_id"`
+	IdempotencyKey        string       `json:"idempotency_key"`
+	EpisodeID             string       `json:"episode_id,omitempty"`
+	CreatedAt             *time.Time   `json:"created_at,omitempty"`
+	RedactionState        string       `json:"redaction_state,omitempty"`
+	Duplicate             *bool        `json:"duplicate,omitempty"`
+	Scope                 EpisodeScope `json:"scope"`
+	TranscriptDisposition string       `json:"transcript_disposition"`
 }

@@ -126,3 +126,45 @@ func TestMCPSourceEvidenceRequestRejectsUnknownField(t *testing.T) {
 		t.Fatal("expected unknown top-level field to be rejected")
 	}
 }
+
+func TestMCPRecordEpisodeRequestFixture(t *testing.T) {
+	// Given
+	request := loadFixture[MCPRecordEpisodeRequest](t, "mcp_record_episode_request.v1.json")
+
+	// When
+	err := request.Validate()
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSchemaParity(t, "mcp_record_episode_request.v1.schema.json", request)
+}
+
+func TestMCPManifestRecordEpisodeRejectsSidecarIdentityFields(t *testing.T) {
+	// Given
+	schemaName := mcpToolInputSchemaName(t, "record_episode")
+	payload := []byte(`{"client_episode_id":"client_ep_01J0ACR001","idempotency_key":"idem_01J0ACR001","context_packet_id":"pkt_01J0ACR001","goal":"g","repository":{"slug":"acme/widgets"},"scope":{},"client":{"name":"spoofed"},"started_at":"2026-07-10T14:01:00Z","ended_at":"2026-07-10T14:10:00Z","outcome":"succeeded","summary":"s","artifacts":{"files_touched":[],"artifact_uris":[],"tests_run":[]},"transcript":{"mode":"none"},"retention_class":"no_persist"}`)
+
+	// When
+	err := contractcheck.ValidateSerialized("", schemaName, payload)
+
+	// Then
+	if err == nil {
+		t.Fatal("expected record_episode input to reject a caller-supplied sidecar client identity")
+	}
+}
+
+func TestMCPRecordEpisodeResponseFixture(t *testing.T) {
+	// Given
+	response := loadFixture[MCPRecordEpisodeResponse](t, "mcp_record_episode_response.v1.json")
+
+	// When
+	err := response.Validate()
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSchemaParity(t, "mcp_record_episode_response.v1.schema.json", response)
+}

@@ -14,7 +14,7 @@ func TestPurgeReportsAuditFailure(t *testing.T) {
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	store := memory.NewEpisodeStore()
 	principal := episodePrincipal("org_1")
-	creator, err := NewService(store, memory.NewAuditStore(), ServiceOptions{Now: func() time.Time { return now }})
+	creator, err := NewService(store, memory.NewAuditStore(), withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func TestPurgeReportsAuditFailure(t *testing.T) {
 	if _, _, err := creator.Create(context.Background(), principal, create); err != nil {
 		t.Fatal(err)
 	}
-	purger, err := NewService(store, failingAuditStore{}, ServiceOptions{Now: func() time.Time { return now }})
+	purger, err := NewService(store, failingAuditStore{}, withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestCreateAndRedactPreflightAuditFailuresLeaveEpisodeUnchanged(t *testing.T
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	principal := episodePrincipal("org_1")
 	store := memory.NewEpisodeStore()
-	failing, err := NewService(store, failingAuditStore{}, ServiceOptions{Now: func() time.Time { return now }})
+	failing, err := NewService(store, failingAuditStore{}, withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestCreateAndRedactPreflightAuditFailuresLeaveEpisodeUnchanged(t *testing.T
 	if _, err := store.GetByClientEpisodeID(context.Background(), principal, create.ClientEpisodeID); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("audit-preflight create persisted episode: %v", err)
 	}
-	creator, err := NewService(store, memory.NewAuditStore(), ServiceOptions{Now: func() time.Time { return now }})
+	creator, err := NewService(store, memory.NewAuditStore(), withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,17 +69,17 @@ func TestCreateAndRedactPreflightAuditFailuresLeaveEpisodeUnchanged(t *testing.T
 
 func TestNoPersistAttemptsAreAudited(t *testing.T) {
 	audit := memory.NewAuditStore()
-	service, err := NewService(memory.NewEpisodeStore(), audit, ServiceOptions{})
+	service, err := NewService(memory.NewEpisodeStore(), audit, withPacketStore(ServiceOptions{}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	create := episodeCreate()
 	create.RetentionClass = "no_persist"
 	principal := episodePrincipal("org_1")
-	if _, duplicate, err := service.Create(context.Background(), principal, create); !errors.Is(err, storage.ErrNotFound) || duplicate {
+	if _, duplicate, err := service.Create(context.Background(), principal, create); !errors.Is(err, ErrNoPersistAccepted) || duplicate {
 		t.Fatalf("no-persist create = (%t, %v)", duplicate, err)
 	}
-	if _, duplicate, err := service.Create(context.Background(), principal, create); !errors.Is(err, storage.ErrNotFound) || !duplicate {
+	if _, duplicate, err := service.Create(context.Background(), principal, create); !errors.Is(err, ErrNoPersistAccepted) || !duplicate {
 		t.Fatalf("no-persist replay = (%t, %v)", duplicate, err)
 	}
 	if !sameActions(audit.Events(), "agent_episode_create_requested", "agent_episode_tombstoned", "agent_episode_create_requested", "agent_episode_tombstone_replayed") {
@@ -91,7 +91,7 @@ func TestCompletionAuditFailureDoesNotReportMutationFailure(t *testing.T) {
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	principal := episodePrincipal("org_1")
 	store := memory.NewEpisodeStore()
-	service, err := NewService(store, &failOnNthAudit{store: memory.NewAuditStore(), failAt: 2}, ServiceOptions{Now: func() time.Time { return now }})
+	service, err := NewService(store, &failOnNthAudit{store: memory.NewAuditStore(), failAt: 2}, withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestCompletionAuditFailureDoesNotReportMutationFailure(t *testing.T) {
 		t.Fatalf("created episode is unavailable: %v", err)
 	}
 
-	redactor, err := NewService(store, &failOnNthAudit{store: memory.NewAuditStore(), failAt: 2}, ServiceOptions{Now: func() time.Time { return now }})
+	redactor, err := NewService(store, &failOnNthAudit{store: memory.NewAuditStore(), failAt: 2}, withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,14 +118,14 @@ func TestCompletionAuditFailureDoesNotReportMutationFailure(t *testing.T) {
 
 	purgeCreate := episodeCreate()
 	purgeCreate.ClientEpisodeID, purgeCreate.IdempotencyKey, purgeCreate.RetentionClass = "episode_02", "idempotency_02", "short_30d"
-	creator, err := NewService(store, memory.NewAuditStore(), ServiceOptions{Now: func() time.Time { return now }})
+	creator, err := NewService(store, memory.NewAuditStore(), withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := creator.Create(context.Background(), principal, purgeCreate); err != nil {
 		t.Fatal(err)
 	}
-	purger, err := NewService(store, &failOnNthAudit{store: memory.NewAuditStore(), failAt: 2}, ServiceOptions{Now: func() time.Time { return now }})
+	purger, err := NewService(store, &failOnNthAudit{store: memory.NewAuditStore(), failAt: 2}, withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
 		t.Fatal(err)
 	}

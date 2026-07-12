@@ -3,10 +3,25 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func TestServerInstructionsDescribeWritebackWhenActive(t *testing.T) {
+	// Given
+	fx := newFixtureServer(t)
+	boot := newWritebackFixtureBootstrap(t, fx)
+
+	// When
+	instructions := serverInstructions(boot)
+
+	// Then
+	if strings.Contains(instructions, "Read-only") || !strings.Contains(instructions, "append-only") {
+		t.Fatalf("unexpected active writeback instructions: %q", instructions)
+	}
+}
 
 // connectedClient starts NewServer(boot, "test-version") over an in-memory
 // transport and returns a connected *mcpsdk.ClientSession exercising the
@@ -150,10 +165,7 @@ func TestServerCallToolSuccessForBothTools(t *testing.T) {
 	}
 }
 
-// TestServerRejectsRecordEpisodeAsUnknownTool proves record_episode is
-// unreachable: since NewServer never registers it, calling it produces a
-// protocol-level "tool not found" error, not a CallToolResult.
-func TestServerRejectsRecordEpisodeAsUnknownTool(t *testing.T) {
+func TestServerRejectsRecordEpisodeAsUnknownToolByDefault(t *testing.T) {
 	fx := newFixtureServer(t)
 	boot := newFixtureBootstrap(t, fx)
 	client, closeFn := connectedClient(t, boot)

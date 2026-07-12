@@ -43,6 +43,9 @@ func (a *App) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	if entitled && capabilities.Permissions.EvidenceRead {
 		capabilities.EnabledTools = append(capabilities.EnabledTools, "source_evidence")
 	}
+	if entitled && capabilities.Permissions.EpisodeWrite && a.runtime.Episodes != nil {
+		capabilities.EnabledTools = append(capabilities.EnabledTools, "record_episode")
+	}
 	encoded, err := encodeBounded(capabilities, a.config.MaxEvidenceResponseBytes)
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "Capabilities response exceeded service limits", false, nil)

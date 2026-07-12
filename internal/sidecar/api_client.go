@@ -17,6 +17,7 @@ import (
 const (
 	capabilitiesPath   = "/api/v1/agent-context/capabilities"
 	contextPacketsPath = "/api/v1/agent-context/context-packets"
+	episodesPath       = "/api/v1/agent-context/episodes"
 	evidencePathPrefix = "/api/v1/agent-context/evidence/"
 )
 

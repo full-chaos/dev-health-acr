@@ -74,6 +74,7 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("GET /api/v1/agent-context/capabilities", a.protectedRuntimeHandler(limits.RequestClassAuth, auth.ScopeContextRead, false, http.HandlerFunc(a.handleCapabilities)))
 	mux.Handle("POST /api/v1/agent-context/context-packets", a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, false, http.HandlerFunc(a.handleContextPacket)))
 	mux.Handle("GET /api/v1/agent-context/evidence/{evidence_ref_id}", a.protectedRuntimeHandler(limits.RequestClassEvidence, auth.ScopeEvidenceRead, true, http.HandlerFunc(a.handleEvidence)))
+	mux.Handle("POST /api/v1/agent-context/episodes", a.protectedRuntimeHandler(limits.RequestClassEpisode, auth.ScopeEpisodeWrite, true, http.HandlerFunc(a.handleEpisode)))
 	return a.InstrumentedHandler(mux)
 }
 

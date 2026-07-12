@@ -1,6 +1,9 @@
 package sidecar
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // lookupFromMap adapts a plain map to the lookupEnv seam loadConfig uses in
 // place of os.LookupEnv, so tests can exercise loadConfig deterministically
@@ -43,6 +46,118 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.AllowInsecureLoopback {
 		t.Fatal("insecure loopback must default to false")
+	}
+	if cfg.EnableWriteback {
+		t.Fatal("writeback must default to false")
+	}
+	if cfg.EnableTranscriptCapture {
+		t.Fatal("transcript capture must default to false")
+	}
+}
+
+func TestLoadConfigParsesTranscriptCaptureEnablement(t *testing.T) {
+	// Given
+	lookup := lookupFromMap(map[string]string{
+		APIURLEnvironment:                  "https://acr.example.com",
+		EnableTranscriptCaptureEnvironment: "true",
+	})
+
+	// When
+	cfg, err := loadConfig(lookup)
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.EnableTranscriptCapture {
+		t.Fatal("transcript capture was not enabled")
+	}
+}
+
+func TestLoadConfigRejectsMalformedTranscriptCaptureEnablementWithoutEchoingValue(t *testing.T) {
+	// Given
+	const canary = "invalid-transcript-capture-canary"
+	lookup := lookupFromMap(map[string]string{
+		APIURLEnvironment:                  "https://acr.example.com",
+		EnableTranscriptCaptureEnvironment: canary,
+	})
+
+	// When
+	_, err := loadConfig(lookup)
+
+	// Then
+	if err == nil {
+		t.Fatal("malformed transcript capture value was accepted")
+	}
+	if strings.Contains(DescribeConfigError(err), canary) {
+		t.Fatal("malformed transcript capture value leaked")
+	}
+}
+
+func TestLoadConfigParsesWritebackEnablement(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{name: "true", raw: "true", want: true},
+		{name: "false", raw: "false", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given
+			lookup := lookupFromMap(map[string]string{
+				APIURLEnvironment:          "https://acr.example.com",
+				EnableWritebackEnvironment: tc.raw,
+			})
+
+			// When
+			cfg, err := loadConfig(lookup)
+
+			// Then
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.EnableWriteback != tc.want {
+				t.Fatalf("EnableWriteback=%t, want %t", cfg.EnableWriteback, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadConfigRejectsMalformedWritebackEnablementWithoutEchoingValue(t *testing.T) {
+	// Given
+	const canary = "not-a-boolean-secret-canary"
+	lookup := lookupFromMap(map[string]string{
+		APIURLEnvironment:          "https://acr.example.com",
+		EnableWritebackEnvironment: canary,
+	})
+
+	// When
+	_, err := loadConfig(lookup)
+
+	// Then
+	if err == nil {
+		t.Fatal("malformed writeback value was accepted")
+	}
+	if strings.Contains(DescribeConfigError(err), canary) {
+		t.Fatal("malformed writeback value leaked")
+	}
+}
+
+func TestLoadConfigRejectsWhitespacePaddedWritebackEnablement(t *testing.T) {
+	// Given
+	lookup := lookupFromMap(map[string]string{
+		APIURLEnvironment:          "https://acr.example.com",
+		EnableWritebackEnvironment: " true ",
+	})
+
+	// When
+	_, err := loadConfig(lookup)
+
+	// Then
+	if err == nil {
+		t.Fatal("whitespace-padded writeback value was accepted")
 	}
 }
 

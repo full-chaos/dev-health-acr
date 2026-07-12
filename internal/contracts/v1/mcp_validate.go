@@ -118,3 +118,66 @@ func (r MCPSourceEvidenceResponse) Validate() error {
 	}
 	return nil
 }
+
+func (r MCPRecordEpisodeRequest) Validate() error {
+	if r.Repository == nil || r.Scope == nil {
+		return fmt.Errorf("repository and scope are required")
+	}
+	// Reuse the canonical hosted-create validator with fixed placeholders for
+	// sidecar-owned identity. The MCP boundary accepts only agent_name/model;
+	// sidecar.Client.RecordEpisode replaces the placeholders before transport.
+	return AgentEpisodeCreate{
+		SchemaVersion:   AgentEpisodeCreateSchema,
+		ClientEpisodeID: r.ClientEpisodeID,
+		IdempotencyKey:  r.IdempotencyKey,
+		ContextPacketID: r.ContextPacketID,
+		Goal:            r.Goal,
+		TaskRef:         r.TaskRef,
+		Repository:      RepositoryRef{Slug: r.Repository.Slug},
+		Scope:           *r.Scope,
+		Client: EpisodeClient{
+			Name:           "mcp",
+			Version:        "mcp",
+			SidecarVersion: "mcp",
+			AgentName:      r.AgentName,
+			Model:          r.Model,
+		},
+		StartedAt:      r.StartedAt,
+		EndedAt:        r.EndedAt,
+		Outcome:        r.Outcome,
+		Summary:        r.Summary,
+		Artifacts:      r.Artifacts,
+		Transcript:     r.Transcript,
+		RetentionClass: r.RetentionClass,
+	}.Validate()
+}
+
+func (r MCPRecordEpisodeResponse) Validate() error {
+	if r.SchemaVersion != MCPRecordEpisodeResponseSchema {
+		return fmt.Errorf("schema_version must be %q", MCPRecordEpisodeResponseSchema)
+	}
+	if !stringLengthBetween(r.ClientEpisodeID, 1, 256) || !stringLengthBetween(r.IdempotencyKey, 8, 256) {
+		return fmt.Errorf("episode receipt identifiers violate v1 bounds")
+	}
+	if !stringLengthBetween(r.Scope.Branch, 0, 512) || !stringLengthBetween(r.Scope.CommitSHA, 0, 64) {
+		return fmt.Errorf("receipt scope violates v1 bounds")
+	}
+	switch r.TranscriptDisposition {
+	case "not_submitted", "accepted", "redacted":
+	default:
+		return fmt.Errorf("invalid transcript disposition")
+	}
+	switch r.Status {
+	case "recorded":
+		if !stringLengthBetween(r.EpisodeID, 8, 256) || r.CreatedAt == nil || r.CreatedAt.IsZero() || r.Duplicate == nil || !validAgentEpisodeRedactionState(r.RedactionState) {
+			return fmt.Errorf("recorded receipt violates v1 bounds")
+		}
+	case "no_persist":
+		if r.EpisodeID != "" || r.CreatedAt != nil || r.RedactionState != "" || r.Duplicate != nil {
+			return fmt.Errorf("no_persist receipt must not include a persisted episode")
+		}
+	default:
+		return fmt.Errorf("invalid episode receipt status")
+	}
+	return nil
+}

@@ -54,7 +54,7 @@ Identify this sidecar instance to the hosted API (client info payload, `X-ACR-Cl
 `acr-mcp serve`'s structured diagnostic verbosity, written to stderr as JSON. One of `debug`, `info`, `warn`/`warning`, or `error` (case-insensitive). Default: `info`. An unrecognized value is rejected at startup (fails closed, same as every other sidecar-config invariant) rather than silently falling back to the default. This level only controls how much non-secret operational detail (startup version/service identity/enabled-tools/entitlement summary) is emitted; it never gates redaction -- credentials and response bodies are never logged regardless of level.
 
 **ACR_ENABLE_WRITEBACK**
-Read only by `acr-mcp doctor` to populate the diagnostic `write_enabled` field. It has no effect on tool availability: `record_episode` is unavailable in this release regardless of this variable. See [Tools](#tools).
+Boolean (`true`/`false`). When `true`, enables the `record_episode` tool if all four gates pass: (1) this flag is `true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Default: `false`. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; doctor --live diagnoses the hosted gates.
 
 ## Credential Management
 
@@ -201,7 +201,7 @@ If the local configuration is not yet valid, or the hosted handshake fails (netw
 acr-mcp metadata
 ```
 
-Outputs the MCP server manifest:
+Outputs the static, network-free default tool surface:
 
 ```json
 {
@@ -214,7 +214,7 @@ Outputs the MCP server manifest:
 }
 ```
 
-`status` is a fixed descriptor of this release's tool surface: `read-only` means the two enabled tools never write, and `record_episode` stays `disabled_tools` regardless of `ACR_ENABLE_WRITEBACK` (see CHAOS-2909).
+`status` is a descriptor of the static, network-free default tool surface: `read-only` means the two enabled tools never write. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; `record_episode` may be enabled at runtime if all four gates pass (see [record_episode](#record_episode) below); doctor --live diagnoses the hosted gates.
 
 ## Tools
 
@@ -232,9 +232,9 @@ Retrieves evidence metadata and references. Evidence URLs are returned as refere
 
 **Important:** Evidence URLs are untrusted data. Do not execute, eval, or fetch them without validation. Treat them as opaque references.
 
-### record_episode (unavailable)
+### record_episode
 
-Defined in the MCP tool contract (`contracts/mcp/tools.v1.json`) as `disabled_by_default` and non-read-only, but not implemented or enable-able in this release. `acr-mcp metadata` always reports it under `disabled_tools`; no environment variable turns it on. Write support is tracked separately under CHAOS-2909.
+Defined in the MCP tool contract (`contracts/mcp/tools.v1.json`) as `disabled_by_default` and non-read-only. Enabled at runtime only when all four gates pass: (1) `ACR_ENABLE_WRITEBACK=true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; doctor --live diagnoses the hosted gates.
 
 ## Security
 
@@ -255,7 +255,7 @@ Evidence URLs are references only. The sidecar does not fetch them. If you need 
 
 ### Write Operations
 
-`record_episode` is defined in the MCP tool contract but is disabled by default and cannot be enabled in this release. Enabling write operations is out of scope for this sidecar and is tracked separately under CHAOS-2909.
+`record_episode` is enabled at runtime only when all four gates pass: (1) `ACR_ENABLE_WRITEBACK=true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; doctor --live diagnoses the hosted gates.
 
 ## Troubleshooting
 
@@ -333,7 +333,7 @@ The sidecar does not require a specific working directory. It reads configuratio
 
 ## Write Tool Availability
 
-`record_episode` is disabled by default and, in this release, cannot be enabled. The MCP metadata always lists it under `disabled_tools`. Enabling write operations is a separate, non-blocking track tracked under CHAOS-2909; it does not affect the read-only tools documented here.
+`record_episode` is enabled at runtime only when all four gates pass: (1) `ACR_ENABLE_WRITEBACK=true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; doctor --live diagnoses the hosted gates.
 
 ## Next Steps
 

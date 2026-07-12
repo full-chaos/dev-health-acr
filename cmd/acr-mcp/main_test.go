@@ -129,6 +129,36 @@ func TestDoctorReportsValidAPIURLAsOk(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsWritebackOnlyForStrictTrueConfig(t *testing.T) {
+	// Given
+	t.Setenv("ACR_API_URL", "https://acr.example.test")
+	t.Setenv("ACR_API_TOKEN", validDoctorToken(16))
+	t.Setenv("ACR_ENABLE_WRITEBACK", "true")
+
+	// When
+	report := runDoctor()
+
+	// Then
+	if !report.WriteEnabled {
+		t.Fatalf("expected strict writeback opt-in to be reported: %#v", report)
+	}
+}
+
+func TestDoctorReportsTranscriptCaptureOnlyForStrictTrueConfig(t *testing.T) {
+	// Given
+	t.Setenv("ACR_API_URL", "https://acr.example.test")
+	t.Setenv("ACR_API_TOKEN", validDoctorToken(17))
+	t.Setenv("ACR_ENABLE_TRANSCRIPT_CAPTURE", "true")
+
+	// When
+	report := runDoctor()
+
+	// Then
+	if !report.TranscriptCaptureEnabled {
+		t.Fatalf("expected strict transcript-capture opt-in to be reported: %#v", report)
+	}
+}
+
 // TestDoctorRejectsMalformedUserinfoWithoutLeakingSecret is a canary for
 // the leak this doctor surface used to be exposed to: url.Parse's own
 // error text embeds the full raw input verbatim, so a malformed userinfo

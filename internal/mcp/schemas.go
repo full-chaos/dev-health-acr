@@ -1,6 +1,4 @@
-// Package mcp implements the CHAOS-2908 local STDIO MCP sidecar: exactly
-// two read-only tools (context_for_task, source_evidence) backed by the
-// hosted ACR read API. record_episode is never registered here.
+// Package mcp implements the local STDIO MCP sidecar.
 package mcp
 
 import (
@@ -26,6 +24,8 @@ const (
 	contextForTaskResponseSchemaFile = "schemas/mcp_context_for_task_response.v1.schema.json"
 	sourceEvidenceRequestSchemaFile  = "schemas/mcp_source_evidence_request.v1.schema.json"
 	sourceEvidenceResponseSchemaFile = "schemas/mcp_source_evidence_response.v1.schema.json"
+	recordEpisodeRequestSchemaFile   = "schemas/mcp_record_episode_request.v1.schema.json"
+	recordEpisodeResponseSchemaFile  = "schemas/mcp_record_episode_response.v1.schema.json"
 	toolManifestFile                 = "schemas/tools.v1.json"
 )
 

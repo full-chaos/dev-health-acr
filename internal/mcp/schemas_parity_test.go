@@ -49,6 +49,8 @@ func TestEmbeddedSchemasMatchCanonicalSource(t *testing.T) {
 		{contextForTaskResponseSchemaFile, "contracts/jsonschema/v1/mcp_context_for_task_response.v1.schema.json"},
 		{sourceEvidenceRequestSchemaFile, "contracts/jsonschema/v1/mcp_source_evidence_request.v1.schema.json"},
 		{sourceEvidenceResponseSchemaFile, "contracts/jsonschema/v1/mcp_source_evidence_response.v1.schema.json"},
+		{recordEpisodeRequestSchemaFile, "contracts/jsonschema/v1/mcp_record_episode_request.v1.schema.json"},
+		{recordEpisodeResponseSchemaFile, "contracts/jsonschema/v1/mcp_record_episode_response.v1.schema.json"},
 	}
 
 	for _, tc := range cases {
@@ -70,9 +72,7 @@ func TestEmbeddedSchemasMatchCanonicalSource(t *testing.T) {
 
 // TestManifestEntryMatchesRegisteredTools pins that the embedded manifest
 // still describes exactly context_for_task and source_evidence as
-// read-only, plus record_episode as a disabled-by-default write tool that
-// this package never registers (see server.go's toolContextForTask /
-// toolSourceEvidence constants and NewServer).
+// read-only, plus record_episode as a disabled-by-default write tool.
 func TestManifestEntryMatchesRegisteredTools(t *testing.T) {
 	for _, name := range []string{toolContextForTask, toolSourceEvidence} {
 		entry := manifestEntry(name)

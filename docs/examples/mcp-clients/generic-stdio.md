@@ -55,7 +55,7 @@ Your MCP client should:
    - (Optional) `ACR_API_TIMEOUT`: Request timeout as a Go duration string (e.g. `20s`). Default: `20s`.
    - (Optional) `ACR_API_PROXY_URL`: HTTP proxy URL.
    - (Optional) `ACR_API_CA_BUNDLE`: Path to a PEM-encoded CA bundle file.
-   - (Optional) `ACR_ENABLE_WRITEBACK`: Read only for `acr-mcp doctor` diagnostics; it does not enable `record_episode`, which is unavailable in this release (tracked under CHAOS-2909).
+   - (Optional) `ACR_ENABLE_WRITEBACK`: Boolean (`true`/`false`). When `true`, enables the `record_episode` tool if all four gates pass: (1) this flag is `true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Default: `false`. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; doctor --live diagnoses the hosted gates.
 3. Connect to the subprocess via STDIN/STDOUT.
 4. Send MCP requests as JSON-RPC 2.0 messages.
 5. Parse MCP responses from STDOUT.

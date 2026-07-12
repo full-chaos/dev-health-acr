@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: a593516f67cc2b0b2e9eb663b1892c97855066547b0ae8fdaa61bec6b8e1890b
+# canonical-content-sha256: 07e8245456fddd96b6625d7cc78e1172804f69e9b64137b36eba8ffee9c0a6d5
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -145,17 +145,27 @@ paths:
               schema:
                 "$ref": "../jsonschema/v1/agent_episode.v1.schema.json"
           description: "Episode created"
+        "204":
+          description: "Episode accepted with no retained representation"
         "400":
           "$ref": "#/components/responses/Error"
         "401":
           "$ref": "#/components/responses/Error"
         "403":
           "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
         "409":
           "$ref": "#/components/responses/Error"
         "413":
           "$ref": "#/components/responses/Error"
         "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+        "504":
           "$ref": "#/components/responses/Error"
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "episode:write"

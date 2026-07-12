@@ -29,12 +29,20 @@ import (
 // transport-boundary failures, or a plain wrapped error for local request
 // construction/credential problems.
 func (c *Client) call(ctx context.Context, method, subPath string, requestBody []byte, decodeInto any) error {
+	_, err := c.callWithHeaders(ctx, method, subPath, requestBody, decodeInto, nil)
+	return err
+}
+
+// callWithHeaders extends call for fixed endpoint methods that require
+// endpoint-specific request headers or need to distinguish successful status
+// codes. Security-sensitive headers remain owned by this transport.
+func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, requestBody []byte, decodeInto any, headers http.Header) (int, error) {
 	if int64(len(requestBody)) > c.cfg.MaxRequestBodyBytes {
-		return fmt.Errorf("%w: %d bytes exceeds the configured limit of %d", ErrRequestTooLarge, len(requestBody), c.cfg.MaxRequestBodyBytes)
+		return 0, fmt.Errorf("%w: %d bytes exceeds the configured limit of %d", ErrRequestTooLarge, len(requestBody), c.cfg.MaxRequestBodyBytes)
 	}
 	credential, err := c.credential()
 	if err != nil {
-		return fmt.Errorf("load ACR credential: %w", err)
+		return 0, fmt.Errorf("load ACR credential: %w", err)
 	}
 	// Last-mile guard: no matter which CredentialSource produced this
 	// value (LoadCredential's own precedence chain, or a caller-supplied
@@ -43,11 +51,11 @@ func (c *Client) call(ctx context.Context, method, subPath string, requestBody [
 	// key or any other non-ACR credential from ever reaching the wire,
 	// independent of how it was loaded.
 	if !auth.IsTokenShapeValid(credential.Token) {
-		return ErrCredentialShapeInvalid
+		return 0, ErrCredentialShapeInvalid
 	}
 	requestURL, err := c.buildURL(subPath)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
@@ -59,7 +67,12 @@ func (c *Client) call(ctx context.Context, method, subPath string, requestBody [
 	}
 	req, err := http.NewRequestWithContext(callCtx, method, requestURL.String(), bodyReader)
 	if err != nil {
-		return fmt.Errorf("build hosted API request: %w", err)
+		return 0, fmt.Errorf("build hosted API request: %w", err)
+	}
+	for name, values := range headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
 	}
 	req.Header.Set("Authorization", "Bearer "+credential.Token)
 	req.Header.Set("Accept", "application/json")
@@ -83,9 +96,9 @@ func (c *Client) call(ctx context.Context, method, subPath string, requestBody [
 		// the raw net/http error, whose text can contain the configured
 		// host, a resolved IP, or proxy details.
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("hosted API request failed: %w", err)
+			return 0, fmt.Errorf("hosted API request failed: %w", err)
 		}
-		return newTransportUnavailableError()
+		return 0, newTransportUnavailableError()
 	}
 	defer resp.Body.Close()
 
@@ -93,7 +106,7 @@ func (c *Client) call(ctx context.Context, method, subPath string, requestBody [
 
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return &APIError{
+		return resp.StatusCode, &APIError{
 			HTTPStatus: resp.StatusCode,
 			Message:    "hosted API returned an unexpected redirect, which the client does not follow",
 			RequestID:  sanitizeMessage(requestID),
@@ -113,12 +126,12 @@ func (c *Client) call(ctx context.Context, method, subPath string, requestBody [
 		// raw net/http error, whose text can contain partial response body
 		// bytes.
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("read hosted API response: %w", err)
+			return resp.StatusCode, fmt.Errorf("read hosted API response: %w", err)
 		}
-		return newTransportUnavailableError()
+		return resp.StatusCode, newTransportUnavailableError()
 	}
 	if truncated {
-		return &APIError{
+		return resp.StatusCode, &APIError{
 			HTTPStatus: resp.StatusCode,
 			Message:    "hosted API response exceeded the configured size limit",
 			RequestID:  sanitizeMessage(requestID),
@@ -127,13 +140,19 @@ func (c *Client) call(ctx context.Context, method, subPath string, requestBody [
 	}
 
 	if resp.StatusCode/100 != 2 {
-		return decodeAPIError(resp.StatusCode, requestID, resp.Header.Get("Retry-After"), data)
+		return resp.StatusCode, decodeAPIError(resp.StatusCode, requestID, resp.Header.Get("Retry-After"), data)
+	}
+	if resp.StatusCode == http.StatusNoContent {
+		if len(data) != 0 {
+			return resp.StatusCode, fmt.Errorf("%w: no-content response included a body", ErrInvalidResponse)
+		}
+		return resp.StatusCode, nil
 	}
 	if decodeInto == nil {
-		return nil
+		return resp.StatusCode, nil
 	}
 	if err := decodeExact(data, decodeInto); err != nil {
-		return fmt.Errorf("decode hosted API response: %w", err)
+		return resp.StatusCode, fmt.Errorf("decode hosted API response: %w", err)
 	}
 	// decodeExact alone cannot require any particular field to be present:
 	// it only rejects unknown fields and trailing content, and once a
@@ -142,9 +161,9 @@ func (c *Client) call(ctx context.Context, method, subPath string, requestBody [
 	// zero value. requiredFieldsPresent (api_client_presence.go) closes
 	// that gap before this typed contract is ever returned to a caller.
 	if err := requiredFieldsPresent(data, decodeInto); err != nil {
-		return fmt.Errorf("%w: %s", ErrInvalidResponse, err)
+		return resp.StatusCode, fmt.Errorf("%w: %s", ErrInvalidResponse, err)
 	}
-	return nil
+	return resp.StatusCode, nil
 }
 
 // buildURL joins a fixed sub-path (a literal, or a fixed prefix plus one

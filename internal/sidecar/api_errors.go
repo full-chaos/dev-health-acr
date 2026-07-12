@@ -31,10 +31,12 @@ var (
 	ErrInvalidRequest      = errors.New("acr: request was rejected as invalid")
 	ErrUnknownAPIError     = errors.New("acr: hosted API reported an unrecognized error code")
 
-	ErrUnexpectedRedirect = errors.New("acr: hosted API attempted a redirect, which the client does not follow")
-	ErrResponseTooLarge   = errors.New("acr: hosted API response exceeded the configured size limit")
-	ErrRequestTooLarge    = errors.New("acr: outgoing request body exceeded the configured size limit")
-	ErrMalformedResponse  = errors.New("acr: hosted API response could not be parsed")
+	ErrUnexpectedRedirect        = errors.New("acr: hosted API attempted a redirect, which the client does not follow")
+	ErrResponseTooLarge          = errors.New("acr: hosted API response exceeded the configured size limit")
+	ErrRequestTooLarge           = errors.New("acr: outgoing request body exceeded the configured size limit")
+	ErrMalformedResponse         = errors.New("acr: hosted API response could not be parsed")
+	ErrWritebackDisabled         = errors.New("acr: sidecar writeback is disabled")
+	ErrTranscriptCaptureDisabled = errors.New("acr: sidecar transcript capture is disabled")
 	// ErrTransportUnavailable is the sentinel for a client-side network or
 	// TLS failure that occurred before any HTTP response was received (DNS
 	// failure, TLS handshake failure, connection refused/reset, and so

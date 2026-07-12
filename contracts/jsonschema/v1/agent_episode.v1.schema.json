@@ -227,6 +227,9 @@
         "redacted",
         "purged_tombstone"
       ]
+    },
+    "duplicate": {
+      "type": "boolean"
     }
   },
   "$id": "https://contracts.fullchaos.dev/acr/v1/agent_episode.v1.schema.json"

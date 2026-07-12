@@ -39,6 +39,8 @@ func TestAllSchemaVersionsIncludesEveryDeclaredSchemaConstant(t *testing.T) {
 		MCPContextForTaskResponseSchema,
 		MCPSourceEvidenceRequestSchema,
 		MCPSourceEvidenceResponseSchema,
+		MCPRecordEpisodeRequestSchema,
+		MCPRecordEpisodeResponseSchema,
 	}
 	present := make(map[string]bool, len(AllSchemaVersions))
 	for _, version := range AllSchemaVersions {

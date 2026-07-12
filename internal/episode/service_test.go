@@ -16,9 +16,9 @@ import (
 func TestCreateIsScopedIdempotentAndAudited(t *testing.T) {
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
-	service, err := NewService(memory.NewEpisodeStore(), audit, ServiceOptions{
+	service, err := NewService(memory.NewEpisodeStore(), audit, withPacketStore(ServiceOptions{
 		Now: func() time.Time { return now },
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,8 +39,36 @@ func TestCreateIsScopedIdempotentAndAudited(t *testing.T) {
 	}
 }
 
+func TestCreatePreservesDuplicateAndConflictIdempotencyBehavior(t *testing.T) {
+	// Given
+	service, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), withPacketStore(ServiceOptions{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := episodePrincipal("org_1")
+	create := episodeCreate()
+
+	// When
+	created, duplicate, err := service.Create(context.Background(), principal, create)
+	if err != nil || duplicate {
+		t.Fatalf("create = (%#v, %t, %v)", created, duplicate, err)
+	}
+	retried, duplicate, err := service.Create(context.Background(), principal, create)
+	if err != nil || !duplicate || retried.EpisodeID != created.EpisodeID {
+		t.Fatalf("retry = (%#v, %t, %v)", retried, duplicate, err)
+	}
+	conflicting := create
+	conflicting.Summary = "different bounded summary"
+	_, _, err = service.Create(context.Background(), principal, conflicting)
+
+	// Then
+	if !errors.Is(err, storage.ErrConflict) {
+		t.Fatalf("conflicting retry error = %v, want conflict", err)
+	}
+}
+
 func TestCreateRejectsTranscriptContentAndKeepsNoPersistUnreadable(t *testing.T) {
-	service, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), ServiceOptions{})
+	service, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), withPacketStore(ServiceOptions{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,10 +80,10 @@ func TestCreateRejectsTranscriptContentAndKeepsNoPersistUnreadable(t *testing.T)
 	}
 	noPersist := episodeCreate()
 	noPersist.RetentionClass = "no_persist"
-	if _, duplicate, err := service.Create(context.Background(), principal, noPersist); !errors.Is(err, storage.ErrNotFound) || duplicate {
+	if _, duplicate, err := service.Create(context.Background(), principal, noPersist); !errors.Is(err, ErrNoPersistAccepted) || duplicate {
 		t.Fatalf("no_persist create = (%t, %v)", duplicate, err)
 	}
-	if _, duplicate, err := service.Create(context.Background(), principal, noPersist); !errors.Is(err, storage.ErrNotFound) || !duplicate {
+	if _, duplicate, err := service.Create(context.Background(), principal, noPersist); !errors.Is(err, ErrNoPersistAccepted) || !duplicate {
 		t.Fatalf("no_persist retry = (%t, %v)", duplicate, err)
 	}
 }
@@ -63,7 +91,7 @@ func TestCreateRejectsTranscriptContentAndKeepsNoPersistUnreadable(t *testing.T)
 func TestRedactUsesScopedTombstoneAndSafeAuditMetadata(t *testing.T) {
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
-	service, err := NewService(memory.NewEpisodeStore(), audit, ServiceOptions{Now: func() time.Time { return now }})
+	service, err := NewService(memory.NewEpisodeStore(), audit, withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +116,7 @@ func TestRedactUsesScopedTombstoneAndSafeAuditMetadata(t *testing.T) {
 func TestPurgeExpiredIsScopedAndAudited(t *testing.T) {
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
-	service, err := NewService(memory.NewEpisodeStore(), audit, ServiceOptions{Now: func() time.Time { return now }})
+	service, err := NewService(memory.NewEpisodeStore(), audit, withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +137,7 @@ func TestPurgeExpiredIsScopedAndAudited(t *testing.T) {
 }
 
 func TestCreateRequiresWriteScopeAndEntitlement(t *testing.T) {
-	service, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), ServiceOptions{})
+	service, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), withPacketStore(ServiceOptions{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,13 +154,13 @@ func TestCreateRequiresWriteScopeAndEntitlement(t *testing.T) {
 }
 
 func TestServiceRequiresAuditStoreAndRepositoryGrantForPurge(t *testing.T) {
-	if _, err := NewService(memory.NewEpisodeStore(), nil, ServiceOptions{}); err == nil {
+	if _, err := NewService(memory.NewEpisodeStore(), nil, withPacketStore(ServiceOptions{})); err == nil {
 		t.Fatal("service accepted a nil audit store")
 	}
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	store := memory.NewEpisodeStore()
 	principal := episodePrincipal("org_1")
-	service, err := NewService(store, memory.NewAuditStore(), ServiceOptions{Now: func() time.Time { return now }})
+	service, err := NewService(store, memory.NewAuditStore(), withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,4 +237,23 @@ func episodeCreate() contractsv1.AgentEpisodeCreate {
 		Outcome: "succeeded", Summary: "Completed persistence", Artifacts: contractsv1.EpisodeArtifacts{FilesTouched: []string{}, ArtifactURIs: []string{}, TestsRun: []string{}},
 		Transcript: contractsv1.TranscriptRef{Mode: "none"}, RetentionClass: "default_90d",
 	}
+}
+
+type matchingPacketStore struct{}
+
+func (matchingPacketStore) SaveSnapshot(context.Context, storage.Principal, contractsv1.ContextPacket, time.Time) error {
+	return nil
+}
+
+func (matchingPacketStore) GetSnapshot(context.Context, storage.Principal, string) (contractsv1.ContextPacket, error) {
+	return contractsv1.ContextPacket{Repository: contractsv1.RepositoryRef{Slug: "owner/repo"}}, nil
+}
+
+func (matchingPacketStore) PurgeExpired(context.Context, time.Time, int) (int, error) {
+	return 0, nil
+}
+
+func withPacketStore(options ServiceOptions) ServiceOptions {
+	options.PacketStore = matchingPacketStore{}
+	return options
 }

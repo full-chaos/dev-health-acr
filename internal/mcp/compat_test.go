@@ -20,29 +20,89 @@ func validCapabilities() contractsv1.Capabilities {
 }
 
 func TestCheckCompatibilitySucceeds(t *testing.T) {
-	if err := checkCompatibility(validCapabilities(), "1.2.0"); err != nil {
+	if err := checkCompatibility(validCapabilities(), "1.2.0", false); err != nil {
 		t.Fatalf("expected compatible capabilities to pass, got: %v", err)
+	}
+}
+
+func TestCheckCompatibilityAllowsPreWritebackHostWhenLocalWritebackDisabled(t *testing.T) {
+	// Given
+	caps := validCapabilities()
+
+	// When
+	err := checkCompatibility(caps, "1.2.0", false)
+
+	// Then
+	if err != nil {
+		t.Fatalf("expected read-only compatibility with a pre-writeback host, got: %v", err)
+	}
+}
+
+func TestCheckCompatibilityRequiresWritebackSchemasToolAndScopeWhenEnabled(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*contractsv1.Capabilities)
+	}{
+		{"schemas", func(caps *contractsv1.Capabilities) { caps.SupportedSchemaVersions = ourSchemaVersions }},
+		{"tool", func(caps *contractsv1.Capabilities) {
+			caps.EnabledTools = []string{toolContextForTask, toolSourceEvidence}
+		}},
+		{"scope", func(caps *contractsv1.Capabilities) { caps.Permissions.EpisodeWrite = false }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			caps := validCapabilities()
+			caps.SupportedSchemaVersions = append(caps.SupportedSchemaVersions, writebackSchemaVersions...)
+			caps.EnabledTools = append(caps.EnabledTools, toolRecordEpisode)
+			caps.Permissions.EpisodeWrite = true
+			test.mutate(&caps)
+
+			// When
+			err := checkCompatibility(caps, "1.2.0", true)
+
+			// Then
+			if err == nil {
+				t.Fatal("expected writeback compatibility to fail closed")
+			}
+		})
+	}
+}
+
+func TestCheckCompatibilitySucceedsWhenWritebackRequirementsArePresent(t *testing.T) {
+	// Given
+	caps := validCapabilities()
+	caps.SupportedSchemaVersions = append(caps.SupportedSchemaVersions, writebackSchemaVersions...)
+	caps.EnabledTools = append(caps.EnabledTools, toolRecordEpisode)
+	caps.Permissions.EpisodeWrite = true
+
+	// When
+	err := checkCompatibility(caps, "1.2.0", true)
+
+	// Then
+	if err != nil {
+		t.Fatalf("expected writeback-compatible capabilities to pass, got: %v", err)
 	}
 }
 
 func TestCheckCompatibilityRejectsWrongService(t *testing.T) {
 	caps := validCapabilities()
 	caps.Service = "some-other-service"
-	err := checkCompatibility(caps, "1.2.0")
+	err := checkCompatibility(caps, "1.2.0", false)
 	assertCompatCategory(t, err, "version")
 }
 
 func TestCheckCompatibilityRejectsOlderSidecar(t *testing.T) {
 	caps := validCapabilities()
 	caps.MinimumSidecarVersion = "9.0.0"
-	err := checkCompatibility(caps, "1.2.0")
+	err := checkCompatibility(caps, "1.2.0", false)
 	assertCompatCategory(t, err, "version")
 }
 
 func TestCheckCompatibilityAllowsUnparseableDevVersions(t *testing.T) {
 	caps := validCapabilities()
 	caps.MinimumSidecarVersion = "dev"
-	if err := checkCompatibility(caps, "dev"); err != nil {
+	if err := checkCompatibility(caps, "dev", false); err != nil {
 		t.Fatalf("expected dev/dev version comparison to be permissive, got: %v", err)
 	}
 }
@@ -50,28 +110,28 @@ func TestCheckCompatibilityAllowsUnparseableDevVersions(t *testing.T) {
 func TestCheckCompatibilityRejectsMissingSchemaVersion(t *testing.T) {
 	caps := validCapabilities()
 	caps.SupportedSchemaVersions = []string{contractsv1.MCPContextForTaskRequestSchema}
-	err := checkCompatibility(caps, "1.2.0")
+	err := checkCompatibility(caps, "1.2.0", false)
 	assertCompatCategory(t, err, "version")
 }
 
 func TestCheckCompatibilityRejectsMissingTool(t *testing.T) {
 	caps := validCapabilities()
 	caps.EnabledTools = []string{toolContextForTask}
-	err := checkCompatibility(caps, "1.2.0")
+	err := checkCompatibility(caps, "1.2.0", false)
 	assertCompatCategory(t, err, "entitlement")
 }
 
 func TestCheckCompatibilityRejectsMissingEntitlement(t *testing.T) {
 	caps := validCapabilities()
 	caps.Entitlements.AgentContextRuntime = false
-	err := checkCompatibility(caps, "1.2.0")
+	err := checkCompatibility(caps, "1.2.0", false)
 	assertCompatCategory(t, err, "entitlement")
 }
 
 func TestCheckCompatibilityRejectsMissingScope(t *testing.T) {
 	caps := validCapabilities()
 	caps.Permissions.EvidenceRead = false
-	err := checkCompatibility(caps, "1.2.0")
+	err := checkCompatibility(caps, "1.2.0", false)
 	assertCompatCategory(t, err, "entitlement")
 }
 
@@ -156,7 +216,7 @@ func TestEffectiveSidecarVersionStaysDevWhenBothAreDev(t *testing.T) {
 func TestCheckCompatibilityRejectsMalformedMinimumSidecarVersion(t *testing.T) {
 	caps := validCapabilities()
 	caps.MinimumSidecarVersion = "not-a-real-version"
-	err := checkCompatibility(caps, "1.2.0")
+	err := checkCompatibility(caps, "1.2.0", false)
 	assertCompatCategory(t, err, "version")
 }
 
@@ -177,6 +237,11 @@ func TestOurSchemaVersionsAreSubsetOfCanonicalSchemaVersions(t *testing.T) {
 	for _, want := range ourSchemaVersions {
 		if !canonical[want] {
 			t.Fatalf("ourSchemaVersions requires %q, which is absent from contractsv1.AllSchemaVersions", want)
+		}
+	}
+	for _, want := range writebackSchemaVersions {
+		if !canonical[want] {
+			t.Fatalf("writebackSchemaVersions requires %q, which is absent from contractsv1.AllSchemaVersions", want)
 		}
 	}
 }

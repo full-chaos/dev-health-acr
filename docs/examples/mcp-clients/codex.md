@@ -75,7 +75,7 @@ The sidecar reads these from the `[mcp_servers.acr.env]` table:
 - `ACR_API_TIMEOUT` (optional): Request timeout as a Go duration string (e.g. `20s`). Default: `20s`.
 - `ACR_API_PROXY_URL` (optional): HTTP proxy URL.
 - `ACR_API_CA_BUNDLE` (optional): Path to a PEM-encoded CA bundle file.
-- `ACR_ENABLE_WRITEBACK` (optional): Read only for `acr-mcp doctor` diagnostics; it does not enable `record_episode`, which is unavailable in this release (tracked under CHAOS-2909).
+- `ACR_ENABLE_WRITEBACK` (optional): Boolean (`true`/`false`). When `true`, enables the `record_episode` tool if all four gates pass: (1) this flag is `true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Default: `false`. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; doctor --live diagnoses the hosted gates.
 
 Codex also supports top-level fields on `[mcp_servers.acr]` itself (outside the `env` table), notably `enabled` (default `true`), `startup_timeout_sec`, and `cwd`; these are Codex-level knobs, not variables the sidecar reads.
 

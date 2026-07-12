@@ -25,34 +25,68 @@ type EpisodeStore struct {
 }
 
 type episodeRecord struct {
-	episode contractsv1.AgentEpisode
-	digest  [sha256.Size]byte
-	orgID   string
+	episode  contractsv1.AgentEpisode
+	digest   [sha256.Size]byte
+	orgID    string
+	repoSlug string
+	clientID string
 }
 
 func NewEpisodeStore() *EpisodeStore {
 	return &EpisodeStore{byID: map[string]episodeRecord{}, byClient: map[string]string{}, byKey: map[string]string{}}
 }
 
-func (s *EpisodeStore) CreateIdempotent(_ context.Context, principal storage.Principal, create contractsv1.AgentEpisodeCreate, expiresAt *time.Time) (contractsv1.AgentEpisode, bool, error) {
+func (s *EpisodeStore) PreflightIdempotency(ctx context.Context, principal storage.Principal, create contractsv1.AgentEpisodeCreate) (storage.EpisodePreflight, error) {
+	if err := ctx.Err(); err != nil {
+		return storage.EpisodePreflightMiss, err
+	}
+	if !episodeRepositoryAllowed(principal.RepositoryScopes, create.Repository.Slug) {
+		return storage.EpisodePreflightMiss, storage.ErrNotFound
+	}
+	digest, err := episodeDigest(create)
+	if err != nil {
+		return storage.EpisodePreflightMiss, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	clientKey, idempotencyKey := episodeKeys(principal.OrgID, create)
+	if id, exists := s.byKey[idempotencyKey]; exists {
+		return preflightRecord(s.byID[id], digest, create.Repository.Slug), nil
+	}
+	if id, exists := s.byClient[clientKey]; exists {
+		return preflightRecord(s.byID[id], digest, create.Repository.Slug), nil
+	}
+	return storage.EpisodePreflightMiss, nil
+}
+
+func (s *EpisodeStore) CreateIdempotent(ctx context.Context, principal storage.Principal, create contractsv1.AgentEpisodeCreate, expiresAt *time.Time) (contractsv1.AgentEpisode, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return contractsv1.AgentEpisode{}, false, err
+	}
 	if !episodeRepositoryAllowed(principal.RepositoryScopes, create.Repository.Slug) {
 		return contractsv1.AgentEpisode{}, false, storage.ErrNotFound
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return contractsv1.AgentEpisode{}, false, err
+	}
 	digest, err := episodeDigest(create)
 	if err != nil {
 		return contractsv1.AgentEpisode{}, false, err
 	}
 	clientKey, idempotencyKey := episodeKeys(principal.OrgID, create)
 	if id, exists := s.byKey[idempotencyKey]; exists {
-		return s.duplicate(id, digest)
+		return s.duplicate(id, digest, create.Repository.Slug)
 	}
 	if id, exists := s.byClient[clientKey]; exists {
-		return s.duplicate(id, digest)
+		return s.duplicate(id, digest, create.Repository.Slug)
 	}
 	id, err := newEpisodeID()
 	if err != nil {
+		return contractsv1.AgentEpisode{}, false, err
+	}
+	if err := ctx.Err(); err != nil {
 		return contractsv1.AgentEpisode{}, false, err
 	}
 	stored := contractsv1.AgentEpisode{AgentEpisodeCreate: cloneEpisodeCreate(create), EpisodeID: id, CreatedAt: time.Now().UTC(), RedactionState: "active"}
@@ -62,23 +96,9 @@ func (s *EpisodeStore) CreateIdempotent(_ context.Context, principal storage.Pri
 	if create.RetentionClass == "no_persist" {
 		stored = contractsv1.AgentEpisode{EpisodeID: id, RedactionState: "purged_tombstone"}
 	}
-	s.byID[id] = episodeRecord{episode: stored, digest: digest, orgID: principal.OrgID}
+	s.byID[id] = episodeRecord{episode: stored, digest: digest, orgID: principal.OrgID, repoSlug: create.Repository.Slug, clientID: create.ClientEpisodeID}
 	s.byClient[clientKey], s.byKey[idempotencyKey] = id, id
 	return presentation(stored), false, nil
-}
-
-func (s *EpisodeStore) GetByClientEpisodeID(_ context.Context, principal storage.Principal, clientEpisodeID string) (contractsv1.AgentEpisode, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	id, exists := s.byClient[scopedKey(principal.OrgID, clientEpisodeID)]
-	if !exists {
-		return contractsv1.AgentEpisode{}, storage.ErrNotFound
-	}
-	record := s.byID[id]
-	if record.episode.RedactionState == "purged_tombstone" || episodeExpired(record.episode, time.Now().UTC()) || !episodeRepositoryAllowed(principal.RepositoryScopes, record.episode.Repository.Slug) {
-		return contractsv1.AgentEpisode{}, storage.ErrNotFound
-	}
-	return presentation(record.episode), nil
 }
 
 func (s *EpisodeStore) Redact(_ context.Context, principal storage.Principal, episodeID, _ string) (contractsv1.AgentEpisode, error) {
@@ -136,17 +156,31 @@ func (s *EpisodeStore) purgeExpired(before time.Time, limit int, orgID string, s
 	return purged, nil
 }
 
-func (s *EpisodeStore) duplicate(id string, digest [sha256.Size]byte) (contractsv1.AgentEpisode, bool, error) {
+func (s *EpisodeStore) duplicate(id string, digest [sha256.Size]byte, repository string) (contractsv1.AgentEpisode, bool, error) {
 	record := s.byID[id]
-	if record.digest != digest {
+	if record.digest != digest || !sameEpisodeRepository(record.repoSlug, repository) {
 		return contractsv1.AgentEpisode{}, false, storage.ErrConflict
 	}
 	return presentation(record.episode), true, nil
 }
 
-func episodeKeys(orgID string, create contractsv1.AgentEpisodeCreate) (string, string) {
-	return scopedKey(orgID, create.ClientEpisodeID), scopedKey(orgID, create.IdempotencyKey)
+func preflightRecord(record episodeRecord, digest [sha256.Size]byte, repository string) storage.EpisodePreflight {
+	if record.digest == digest && sameEpisodeRepository(record.repoSlug, repository) {
+		return storage.EpisodePreflightIdentical
+	}
+	return storage.EpisodePreflightConflict
 }
+
+func sameEpisodeRepository(left, right string) bool {
+	return strings.EqualFold(strings.TrimSpace(left), strings.TrimSpace(right))
+}
+
+func episodeKeys(orgID string, create contractsv1.AgentEpisodeCreate) (string, string) {
+	repository := normalizeRepository(create.Repository.Slug)
+	return scopedKey(orgID, repository+"\x00"+create.ClientEpisodeID), scopedKey(orgID, repository+"\x00"+create.IdempotencyKey)
+}
+
+func normalizeRepository(slug string) string { return strings.ToLower(strings.TrimSpace(slug)) }
 
 func scopedKey(orgID, value string) string { return orgID + "\x00" + value }
 
@@ -176,9 +210,9 @@ func presentation(value contractsv1.AgentEpisode) contractsv1.AgentEpisode {
 }
 
 func cloneEpisodeCreate(value contractsv1.AgentEpisodeCreate) contractsv1.AgentEpisodeCreate {
-	value.Artifacts.FilesTouched = append([]string(nil), value.Artifacts.FilesTouched...)
-	value.Artifacts.ArtifactURIs = append([]string(nil), value.Artifacts.ArtifactURIs...)
-	value.Artifacts.TestsRun = append([]string(nil), value.Artifacts.TestsRun...)
+	value.Artifacts.FilesTouched = append([]string{}, value.Artifacts.FilesTouched...)
+	value.Artifacts.ArtifactURIs = append([]string{}, value.Artifacts.ArtifactURIs...)
+	value.Artifacts.TestsRun = append([]string{}, value.Artifacts.TestsRun...)
 	return value
 }
 

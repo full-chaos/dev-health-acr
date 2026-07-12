@@ -83,7 +83,7 @@ The sidecar reads these environment variables:
 - `ACR_API_PROXY_URL` (optional): HTTP proxy URL.
 - `ACR_API_CA_BUNDLE` (optional): Path to a PEM-encoded CA bundle file.
 - `ACR_API_MAX_RESPONSE_BYTES` / `ACR_API_MAX_REQUEST_BODY_BYTES` (optional): Response/request body size caps in bytes. Defaults: `1048576` / `262144`.
-- `ACR_ENABLE_WRITEBACK` (optional): Read only for `acr-mcp doctor` diagnostics; it does not enable `record_episode`, which is unavailable in this release (tracked under CHAOS-2909).
+- `ACR_ENABLE_WRITEBACK` (optional): Boolean (`true`/`false`). When `true`, enables the `record_episode` tool if all four gates pass: (1) this flag is `true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Default: `false`. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; doctor --live diagnoses the hosted gates.
 
 ## Security Notes
 

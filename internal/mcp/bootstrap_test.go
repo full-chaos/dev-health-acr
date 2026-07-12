@@ -39,6 +39,35 @@ func TestNewBootstrapSucceedsWithCompatibleFixture(t *testing.T) {
 	}
 }
 
+func TestNewBootstrapAllowsPreWritebackHostByDefault(t *testing.T) {
+	// Given
+	fx := newFixtureServer(t)
+	setFixtureEnv(t, fx, fixtureToken(18))
+
+	// When
+	_, err := NewBootstrap(context.Background(), "dev")
+
+	// Then
+	if err != nil {
+		t.Fatalf("expected default read-only bootstrap to accept a pre-writeback host, got: %v", err)
+	}
+}
+
+func TestNewBootstrapFailsClosedForWritebackAgainstPreWritebackHost(t *testing.T) {
+	// Given
+	fx := newFixtureServer(t)
+	setFixtureEnv(t, fx, fixtureToken(19))
+	t.Setenv(sidecar.EnableWritebackEnvironment, "true")
+
+	// When
+	_, err := NewBootstrap(context.Background(), "dev")
+
+	// Then
+	if err == nil || !strings.Contains(err.Error(), "writeback") {
+		t.Fatalf("expected writeback compatibility failure, got: %v", err)
+	}
+}
+
 func TestNewBootstrapFailsClearlyOnMissingCredential(t *testing.T) {
 	fx := newFixtureServer(t)
 	setFixtureEnv(t, fx, "")

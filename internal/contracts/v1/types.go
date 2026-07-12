@@ -350,6 +350,7 @@ type AgentEpisode struct {
 	EpisodeID      string    `json:"episode_id"`
 	CreatedAt      time.Time `json:"created_at"`
 	RedactionState string    `json:"redaction_state"`
+	Duplicate      bool      `json:"duplicate,omitempty"`
 }
 
 type ClientCredential struct {

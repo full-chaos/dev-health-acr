@@ -58,7 +58,7 @@ func NewBootstrap(ctx context.Context, serverVersion string) (*Bootstrap, error)
 		return nil, classify(err)
 	}
 
-	if err := checkCompatibility(caps, cfg.SidecarVersion); err != nil {
+	if err := checkCompatibility(caps, cfg.SidecarVersion, cfg.EnableWriteback); err != nil {
 		return nil, err
 	}
 

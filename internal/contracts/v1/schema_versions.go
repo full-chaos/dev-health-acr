@@ -4,7 +4,7 @@ package v1
 // schema_version literal this platform issues or accepts, spanning both
 // the HTTP contract (ContextPacket*, EvidenceRef, ExpandedEvidence,
 // Capabilities, AgentEpisode*, ClientCredential, Error) and the MCP-facing
-// contracts (MCPContextForTask*, MCPSourceEvidence*).
+// contracts (MCPContextForTask*, MCPSourceEvidence*, MCPRecordEpisode*).
 //
 // The hosted API's capabilities handshake (cmd/acr-api) advertises exactly
 // this list via Capabilities.SupportedSchemaVersions, and internal/mcp's
@@ -33,4 +33,6 @@ var AllSchemaVersions = []string{
 	MCPContextForTaskResponseSchema,
 	MCPSourceEvidenceRequestSchema,
 	MCPSourceEvidenceResponseSchema,
+	MCPRecordEpisodeRequestSchema,
+	MCPRecordEpisodeResponseSchema,
 }

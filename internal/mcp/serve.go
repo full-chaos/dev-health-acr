@@ -39,6 +39,9 @@ func Serve(ctx context.Context, diagnostics io.Writer, serverVersion string) err
 		"agent_context_runtime", boot.Capabilities.Entitlements.AgentContextRuntime,
 		"context_read_scope", boot.Capabilities.Permissions.ContextRead,
 		"evidence_read_scope", boot.Capabilities.Permissions.EvidenceRead,
+		"episode_write_scope", boot.Capabilities.Permissions.EpisodeWrite,
+		"writeback_enabled", boot.Config.EnableWriteback,
+		"record_episode_active", recordEpisodeEnabled(boot),
 	)
 	server := NewServer(boot, serverVersion)
 	if err := Run(ctx, server); err != nil {

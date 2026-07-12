@@ -50,11 +50,22 @@ type PacketStore interface {
 }
 
 type EpisodeStore interface {
+	PreflightIdempotency(ctx context.Context, principal Principal, episode contractsv1.AgentEpisodeCreate) (EpisodePreflight, error)
 	CreateIdempotent(ctx context.Context, principal Principal, episode contractsv1.AgentEpisodeCreate, expiresAt *time.Time) (contractsv1.AgentEpisode, bool, error)
 	GetByClientEpisodeID(ctx context.Context, principal Principal, clientEpisodeID string) (contractsv1.AgentEpisode, error)
 	Redact(ctx context.Context, principal Principal, episodeID, reason string) (contractsv1.AgentEpisode, error)
 	PurgeExpired(ctx context.Context, before time.Time, limit int) (int, error)
 }
+
+// EpisodePreflight is the opaque idempotency state used before creating an
+// episode. It deliberately carries no episode or tombstone data.
+type EpisodePreflight uint8
+
+const (
+	EpisodePreflightMiss EpisodePreflight = iota
+	EpisodePreflightIdentical
+	EpisodePreflightConflict
+)
 
 // CredentialRecord is the server-side credential representation. TokenHash is
 // never included in public DTOs, logs, audit metadata, or API responses.

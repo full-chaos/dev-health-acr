@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -33,18 +34,19 @@ type diagnostic struct {
 }
 
 type doctorReport struct {
-	Service              string           `json:"service"`
-	Version              string           `json:"version"`
-	APIURLSet            bool             `json:"api_url_set"`
-	APIURLValid          bool             `json:"api_url_valid"`
-	CredentialSet        bool             `json:"credential_set"`
-	CredentialSource     string           `json:"credential_source,omitempty"`
-	CredentialShapeValid bool             `json:"credential_shape_valid"`
-	WriteEnabled         bool             `json:"write_enabled"`
-	LogLevel             string           `json:"log_level,omitempty"`
-	Checks               []diagnostic     `json:"checks"`
-	Status               string           `json:"status"`
-	LiveCheck            *doctorLiveCheck `json:"live_check,omitempty"`
+	Service                  string           `json:"service"`
+	Version                  string           `json:"version"`
+	APIURLSet                bool             `json:"api_url_set"`
+	APIURLValid              bool             `json:"api_url_valid"`
+	CredentialSet            bool             `json:"credential_set"`
+	CredentialSource         string           `json:"credential_source,omitempty"`
+	CredentialShapeValid     bool             `json:"credential_shape_valid"`
+	WriteEnabled             bool             `json:"write_enabled"`
+	TranscriptCaptureEnabled bool             `json:"transcript_capture_enabled"`
+	LogLevel                 string           `json:"log_level,omitempty"`
+	Checks                   []diagnostic     `json:"checks"`
+	Status                   string           `json:"status"`
+	LiveCheck                *doctorLiveCheck `json:"live_check,omitempty"`
 }
 
 // doctorLiveCheck is populated only by `acr-mcp doctor --live`, never by
@@ -54,12 +56,15 @@ type doctorReport struct {
 // only the static local configuration runDoctor already reports without
 // touching the network.
 type doctorLiveCheck struct {
-	Reachable           bool     `json:"reachable"`
-	Detail              string   `json:"detail,omitempty"`
-	AgentContextRuntime bool     `json:"agent_context_runtime"`
-	ContextReadScope    bool     `json:"context_read_scope"`
-	EvidenceReadScope   bool     `json:"evidence_read_scope"`
-	EnabledTools        []string `json:"enabled_tools,omitempty"`
+	Reachable                bool     `json:"reachable"`
+	Detail                   string   `json:"detail,omitempty"`
+	AgentContextRuntime      bool     `json:"agent_context_runtime"`
+	ContextReadScope         bool     `json:"context_read_scope"`
+	EvidenceReadScope        bool     `json:"evidence_read_scope"`
+	EpisodeWriteScope        bool     `json:"episode_write_scope"`
+	RecordEpisodeActive      bool     `json:"record_episode_active"`
+	TranscriptCaptureEnabled bool     `json:"transcript_capture_enabled"`
+	EnabledTools             []string `json:"enabled_tools,omitempty"`
 }
 
 func main() {
@@ -96,7 +101,6 @@ func main() {
 
 func runDoctor() doctorReport {
 	apiURLSet := strings.TrimSpace(os.Getenv(sidecar.APIURLEnvironment)) != ""
-	writeEnabled := strings.EqualFold(strings.TrimSpace(os.Getenv("ACR_ENABLE_WRITEBACK")), "true")
 	checks := []diagnostic{
 		{Name: "binary", Status: "ok", Detail: "acr-mcp is executable"},
 		{Name: "transport", Status: "ok", Detail: "STDIO is the SVS MCP transport"},
@@ -170,12 +174,13 @@ func runDoctor() doctorReport {
 		CredentialSet:        credentialSet,
 		CredentialSource:     credential.Source,
 		CredentialShapeValid: credentialShapeValid,
-		WriteEnabled:         writeEnabled,
 		Checks:               checks,
 		Status:               status,
 	}
 	if configErr == nil {
 		report.LogLevel = cfg.LogLevel.String()
+		report.WriteEnabled = cfg.EnableWriteback
+		report.TranscriptCaptureEnabled = cfg.EnableTranscriptCapture
 	}
 	return report
 }
@@ -212,13 +217,23 @@ func runDoctorLive() doctorReport {
 		return report
 	}
 	report.LiveCheck = &doctorLiveCheck{
-		Reachable:           true,
-		AgentContextRuntime: boot.Capabilities.Entitlements.AgentContextRuntime,
-		ContextReadScope:    boot.Capabilities.Permissions.ContextRead,
-		EvidenceReadScope:   boot.Capabilities.Permissions.EvidenceRead,
-		EnabledTools:        boot.Capabilities.EnabledTools,
+		Reachable:                true,
+		AgentContextRuntime:      boot.Capabilities.Entitlements.AgentContextRuntime,
+		ContextReadScope:         boot.Capabilities.Permissions.ContextRead,
+		EvidenceReadScope:        boot.Capabilities.Permissions.EvidenceRead,
+		EpisodeWriteScope:        boot.Capabilities.Permissions.EpisodeWrite,
+		RecordEpisodeActive:      recordEpisodeActive(boot),
+		TranscriptCaptureEnabled: boot.Config.EnableTranscriptCapture,
+		EnabledTools:             boot.Capabilities.EnabledTools,
 	}
 	return report
+}
+
+func recordEpisodeActive(boot *acrmcp.Bootstrap) bool {
+	if !boot.Config.EnableWriteback || !boot.Capabilities.Entitlements.AgentContextRuntime || !boot.Capabilities.Permissions.EpisodeWrite {
+		return false
+	}
+	return slices.Contains(boot.Capabilities.EnabledTools, "record_episode")
 }
 
 func printJSON(value any) {

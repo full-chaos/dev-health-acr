@@ -43,6 +43,8 @@ func requestOperation(request *http.Request) observability.Operation {
 		return observability.OperationCapabilities
 	case "/api/v1/agent-context/context-packets":
 		return observability.OperationContext
+	case "/api/v1/agent-context/episodes":
+		return observability.OperationEpisode
 	default:
 		if strings.HasPrefix(request.URL.Path, "/api/v1/agent-context/evidence/") {
 			return observability.OperationEvidence

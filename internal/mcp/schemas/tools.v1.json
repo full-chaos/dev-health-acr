@@ -20,8 +20,8 @@
       "description": "Record append-only agent-run evidence. Disabled by default and never promotes durable facts.",
       "read_only": false,
       "disabled_by_default": true,
-      "input_schema_ref": "../jsonschema/v1/agent_episode_create.v1.schema.json",
-      "output_schema_ref": "../jsonschema/v1/agent_episode.v1.schema.json"
+      "input_schema_ref": "../jsonschema/v1/mcp_record_episode_request.v1.schema.json",
+      "output_schema_ref": "../jsonschema/v1/mcp_record_episode_response.v1.schema.json"
     }
   ]
 }

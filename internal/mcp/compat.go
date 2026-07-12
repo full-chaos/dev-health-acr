@@ -9,8 +9,8 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// ourSchemaVersions lists every MCP-facing schema this sidecar speaks.
-// checkCompatibility requires the hosted API to support all of them.
+// ourSchemaVersions are required for every sidecar, including the default
+// read-only mode.
 var ourSchemaVersions = []string{
 	contractsv1.MCPContextForTaskRequestSchema,
 	contractsv1.MCPContextForTaskResponseSchema,
@@ -31,6 +31,13 @@ var ourSchemaVersions = []string{
 	contractsv1.ContextPacketItemSchema,
 	contractsv1.EvidenceRefSchema,
 	contractsv1.ExpandedEvidenceSchema,
+}
+
+var writebackSchemaVersions = []string{
+	contractsv1.MCPRecordEpisodeRequestSchema,
+	contractsv1.MCPRecordEpisodeResponseSchema,
+	contractsv1.AgentEpisodeCreateSchema,
+	contractsv1.AgentEpisodeSchema,
 }
 
 // devVersionSentinel mirrors internal/sidecar's own unexported
@@ -63,8 +70,9 @@ func effectiveSidecarVersion(cfgVersion, binaryVersion string) string {
 // is compatible with this sidecar before any tool call is accepted:
 // service identity, minimum sidecar version, required schema versions,
 // both read tools enabled, and both read entitlement/permission bits set.
+// Writeback requirements are enforced only when local writeback is enabled.
 // Every returned error is a *compatError with a fixed, safe message.
-func checkCompatibility(caps contractsv1.Capabilities, sidecarVersion string) error {
+func checkCompatibility(caps contractsv1.Capabilities, sidecarVersion string, writebackEnabled bool) error {
 	const wantService = "dev-health-acr"
 	if caps.Service != wantService {
 		return &compatError{category: "version", detail: "hosted API service identity does not match this sidecar"}
@@ -77,6 +85,13 @@ func checkCompatibility(caps contractsv1.Capabilities, sidecarVersion string) er
 			return &compatError{category: "version", detail: "hosted API does not support a schema version this sidecar requires"}
 		}
 	}
+	if writebackEnabled {
+		for _, want := range writebackSchemaVersions {
+			if !slices.Contains(caps.SupportedSchemaVersions, want) {
+				return &compatError{category: "version", detail: "hosted API does not support a writeback schema version this sidecar requires"}
+			}
+		}
+	}
 	for _, want := range []string{toolContextForTask, toolSourceEvidence} {
 		if !slices.Contains(caps.EnabledTools, want) {
 			return &compatError{category: "entitlement", detail: "hosted API has not enabled a tool this sidecar exposes"}
@@ -87,6 +102,9 @@ func checkCompatibility(caps contractsv1.Capabilities, sidecarVersion string) er
 	}
 	if !caps.Permissions.ContextRead || !caps.Permissions.EvidenceRead {
 		return &compatError{category: "entitlement", detail: "credential is missing context:read or evidence:read scope"}
+	}
+	if writebackEnabled && (!slices.Contains(caps.EnabledTools, toolRecordEpisode) || !caps.Permissions.EpisodeWrite) {
+		return &compatError{category: "entitlement", detail: "credential is missing episode:write scope or hosted record_episode availability"}
 	}
 	return nil
 }

@@ -177,6 +177,95 @@ func TestEpisodeStoreCreateRequiresRepositoryScope(t *testing.T) {
 	}
 }
 
+func TestEpisodeStoreCreateIdempotentRejectsCanceledContextBeforeMutation(t *testing.T) {
+	// Given
+	store := NewEpisodeStore()
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// When
+	_, _, err := store.CreateIdempotent(ctx, principal, testEpisodeCreate(), nil)
+
+	// Then
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled create error = %v", err)
+	}
+	if _, getErr := store.GetByClientEpisodeID(context.Background(), principal, "episode_01"); !errors.Is(getErr, storage.ErrNotFound) {
+		t.Fatalf("canceled create persisted episode: %v", getErr)
+	}
+}
+
+func TestEpisodeStoreIdempotencyIsScopedToRepository(t *testing.T) {
+	// Given
+	store := NewEpisodeStore()
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo", "owner/other"}}
+	create := testEpisodeCreate()
+	if _, _, err := store.CreateIdempotent(context.Background(), principal, create, nil); err != nil {
+		t.Fatal(err)
+	}
+	other := create
+	other.Repository.Slug = "owner/other"
+
+	// When
+	preflight, preflightErr := store.PreflightIdempotency(context.Background(), principal, other)
+	created, duplicate, createErr := store.CreateIdempotent(context.Background(), principal, other, nil)
+
+	// Then
+	if preflightErr != nil || preflight != storage.EpisodePreflightMiss || createErr != nil || duplicate || created.EpisodeID == "" {
+		t.Fatalf("cross-repository isolation = (%v, %v, %#v, %t, %v)", preflight, preflightErr, created, duplicate, createErr)
+	}
+}
+
+func TestEpisodeStorePreflightClassifiesMissIdenticalAndConflictWithoutTombstoneData(t *testing.T) {
+	// Given
+	store := NewEpisodeStore()
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
+	create := testEpisodeCreate()
+	if result, err := store.PreflightIdempotency(context.Background(), principal, create); err != nil || result != storage.EpisodePreflightMiss {
+		t.Fatalf("miss preflight = (%v, %v)", result, err)
+	}
+	noPersist := create
+	noPersist.RetentionClass = "no_persist"
+	if _, _, err := store.CreateIdempotent(context.Background(), principal, noPersist, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	identical, identicalErr := store.PreflightIdempotency(context.Background(), principal, noPersist)
+	conflicting := noPersist
+	conflicting.Summary = "different bounded summary"
+	conflict, conflictErr := store.PreflightIdempotency(context.Background(), principal, conflicting)
+
+	// Then
+	if identicalErr != nil || identical != storage.EpisodePreflightIdentical {
+		t.Fatalf("identical preflight = (%v, %v)", identical, identicalErr)
+	}
+	if conflictErr != nil || conflict != storage.EpisodePreflightConflict {
+		t.Fatalf("conflict preflight = (%v, %v)", conflict, conflictErr)
+	}
+}
+
+func TestEpisodeStoreAllowsSameKeysInSiblingRepositories(t *testing.T) {
+	store := NewEpisodeStore()
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo_a", "owner/repo_b"}}
+
+	// Create in repo_a
+	create_a := testEpisodeCreate()
+	create_a.Repository.Slug = "owner/repo_a"
+	if _, _, err := store.CreateIdempotent(context.Background(), principal, create_a, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// When: create in repo_b with the same client and idempotency keys.
+	create_b := create_a
+	create_b.Repository.Slug = "owner/repo_b"
+	created, duplicate, err := store.CreateIdempotent(context.Background(), principal, create_b, nil)
+	if err != nil || duplicate || created.EpisodeID == "" {
+		t.Fatalf("sibling repository create = (%#v, %t, %v)", created, duplicate, err)
+	}
+}
+
 func testEpisodeCreate() contractsv1.AgentEpisodeCreate {
 	return contractsv1.AgentEpisodeCreate{
 		SchemaVersion: contractsv1.AgentEpisodeCreateSchema, ClientEpisodeID: "episode_01", IdempotencyKey: "idempotency_01", ContextPacketID: "packet_01",

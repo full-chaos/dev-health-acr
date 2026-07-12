@@ -75,8 +75,8 @@ CREATE TABLE IF NOT EXISTS acr.agent_episodes (
     CHECK (retention_class IN ('default_90d', 'short_30d', 'legal_hold', 'no_persist')),
     CHECK (redaction_state IN ('active', 'redacted', 'purged_tombstone')),
     CHECK (ended_at >= started_at),
-    UNIQUE (org_id, idempotency_key),
-    UNIQUE (org_id, client_episode_id)
+    UNIQUE (org_id, repo_id, idempotency_key),
+    UNIQUE (org_id, repo_id, client_episode_id)
 );
 
 CREATE INDEX IF NOT EXISTS ix_acr_agent_episodes_org_repo_created

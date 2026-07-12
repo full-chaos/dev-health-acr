@@ -94,11 +94,21 @@ func validCapabilitiesFixture() contractsv1.Capabilities {
 		ServiceVersion:          "1.2.3",
 		MinimumSidecarVersion:   "0.1.0",
 		SupportedSchemaVersions: ourSchemaVersions,
-		EnabledTools:            []string{toolContextForTask, toolSourceEvidence, "record_episode"},
+		EnabledTools:            []string{toolContextForTask, toolSourceEvidence},
 		Entitlements:            contractsv1.CapabilityEntitlements{AgentContextRuntime: true},
 		Permissions:             contractsv1.CapabilityPermissions{ContextRead: true, EvidenceRead: true},
 		Limits:                  contractsv1.CapabilityLimits{MaxItems: 30, MaxOutputTokens: 4000, MaxSerializedBytes: 262144, RequestsPerMinute: 60},
 		GeneratedAt:             time.Now().UTC(),
+	}
+}
+
+func validAgentEpisodeFixture(create contractsv1.AgentEpisodeCreate, duplicate bool) contractsv1.AgentEpisode {
+	return contractsv1.AgentEpisode{
+		AgentEpisodeCreate: create,
+		EpisodeID:          "episode_01J0ACR001",
+		CreatedAt:          time.Now().UTC(),
+		RedactionState:     "active",
+		Duplicate:          duplicate,
 	}
 }
 
@@ -163,6 +173,7 @@ type fixtureServer struct {
 	CapabilitiesHandler  http.HandlerFunc
 	ContextPacketHandler http.HandlerFunc
 	EvidenceHandler      http.HandlerFunc
+	EpisodeHandler       http.HandlerFunc
 }
 
 func newFixtureServer(t *testing.T) *fixtureServer {
@@ -180,6 +191,15 @@ func newFixtureServer(t *testing.T) *fixtureServer {
 		id := r.URL.Path[len("/api/v1/agent-context/evidence/"):]
 		writeJSONFixture(t, w, http.StatusOK, validExpandedEvidenceFixture(id))
 	}
+	fx.EpisodeHandler = func(w http.ResponseWriter, r *http.Request) {
+		var received contractsv1.AgentEpisodeCreate
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		recorded := validAgentEpisodeFixture(received, false)
+		recorded.SchemaVersion = contractsv1.AgentEpisodeSchema
+		writeJSONFixture(t, w, http.StatusCreated, recorded)
+	}
 	fx.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/v1/agent-context/capabilities":
@@ -188,6 +208,8 @@ func newFixtureServer(t *testing.T) *fixtureServer {
 			fx.ContextPacketHandler(w, r)
 		case len(r.URL.Path) > len("/api/v1/agent-context/evidence/") && r.URL.Path[:len("/api/v1/agent-context/evidence/")] == "/api/v1/agent-context/evidence/":
 			fx.EvidenceHandler(w, r)
+		case r.URL.Path == "/api/v1/agent-context/episodes":
+			fx.EpisodeHandler(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -208,4 +230,20 @@ func newFixtureBootstrap(t *testing.T, fx *fixtureServer) *Bootstrap {
 		t.Fatal(err)
 	}
 	return &Bootstrap{Config: cfg, Client: client, Capabilities: validCapabilitiesFixture()}
+}
+
+func newWritebackFixtureBootstrap(t *testing.T, fx *fixtureServer) *Bootstrap {
+	t.Helper()
+	cfg := fixtureConfig(t, fx.Server)
+	cfg.EnableWriteback = true
+	cfg.EnableTranscriptCapture = true
+	client, err := sidecar.NewClient(cfg, fixedCredentialSource(fixtureToken(0xAB)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps := validCapabilitiesFixture()
+	caps.Permissions.EpisodeWrite = true
+	caps.SupportedSchemaVersions = append(caps.SupportedSchemaVersions, writebackSchemaVersions...)
+	caps.EnabledTools = append(caps.EnabledTools, toolRecordEpisode)
+	return &Bootstrap{Config: cfg, Client: client, Capabilities: caps}
 }

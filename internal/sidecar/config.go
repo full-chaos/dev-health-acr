@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -16,17 +14,19 @@ import (
 // Environment variables read by LoadConfig. All are optional except
 // APIURLEnvironment.
 const (
-	APIURLEnvironment                = "ACR_API_URL"
-	TimeoutEnvironment               = "ACR_API_TIMEOUT"
-	MaxResponseBytesEnvironment      = "ACR_API_MAX_RESPONSE_BYTES"
-	MaxRequestBodyBytesEnvironment   = "ACR_API_MAX_REQUEST_BODY_BYTES"
-	ProxyURLEnvironment              = "ACR_API_PROXY_URL"
-	CACertPathEnvironment            = "ACR_API_CA_BUNDLE"
-	AllowInsecureLoopbackEnvironment = "ACR_API_ALLOW_INSECURE_LOOPBACK"
-	ClientNameEnvironment            = "ACR_SIDECAR_CLIENT_NAME"
-	ClientVersionEnvironment         = "ACR_SIDECAR_CLIENT_VERSION"
-	SidecarVersionEnvironment        = "ACR_SIDECAR_VERSION"
-	LogLevelEnvironment              = "ACR_LOG_LEVEL"
+	APIURLEnvironment                  = "ACR_API_URL"
+	TimeoutEnvironment                 = "ACR_API_TIMEOUT"
+	MaxResponseBytesEnvironment        = "ACR_API_MAX_RESPONSE_BYTES"
+	MaxRequestBodyBytesEnvironment     = "ACR_API_MAX_REQUEST_BODY_BYTES"
+	ProxyURLEnvironment                = "ACR_API_PROXY_URL"
+	CACertPathEnvironment              = "ACR_API_CA_BUNDLE"
+	AllowInsecureLoopbackEnvironment   = "ACR_API_ALLOW_INSECURE_LOOPBACK"
+	EnableWritebackEnvironment         = "ACR_ENABLE_WRITEBACK"
+	EnableTranscriptCaptureEnvironment = "ACR_ENABLE_TRANSCRIPT_CAPTURE"
+	ClientNameEnvironment              = "ACR_SIDECAR_CLIENT_NAME"
+	ClientVersionEnvironment           = "ACR_SIDECAR_CLIENT_VERSION"
+	SidecarVersionEnvironment          = "ACR_SIDECAR_VERSION"
+	LogLevelEnvironment                = "ACR_LOG_LEVEL"
 )
 
 const (
@@ -113,8 +113,12 @@ type Config struct {
 	// client will read before treating the response as too large.
 	MaxResponseBytes int64
 	// MaxRequestBodyBytes bounds the serialized size of outgoing request
-	// bodies (currently only the context-packet request).
+	// bodies sent to the hosted API.
 	MaxRequestBodyBytes int64
+	// EnableWriteback permits write-capable sidecar operations. It defaults to
+	// false and is only enabled by the exact environment value "true".
+	EnableWriteback         bool
+	EnableTranscriptCapture bool
 	// ProxyURL, when set, is used for all hosted API requests instead of
 	// the standard HTTP_PROXY/HTTPS_PROXY/NO_PROXY environment resolution.
 	ProxyURL *url.URL
@@ -187,6 +191,12 @@ func loadConfig(lookup lookupEnv) (Config, error) {
 	if cfg.AllowInsecureLoopback, err = boolOrDefault(lookup, AllowInsecureLoopbackEnvironment, false); err != nil {
 		return Config{}, err
 	}
+	if cfg.EnableWriteback, err = strictBoolOrDefault(lookup, EnableWritebackEnvironment, false); err != nil {
+		return Config{}, err
+	}
+	if cfg.EnableTranscriptCapture, err = strictBoolOrDefault(lookup, EnableTranscriptCaptureEnvironment, false); err != nil {
+		return Config{}, err
+	}
 	if raw := strings.TrimSpace(firstOrEmpty(lookup, ProxyURLEnvironment)); raw != "" {
 		proxyURL, err := url.Parse(raw)
 		if err != nil || proxyURL.Host == "" {
@@ -257,105 +267,4 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
-}
-
-// validateOriginOnly restricts the configured base URL to scheme+host: no
-// userinfo, path, query, or fragment. Fixed endpoint sub-paths are always
-// appended by the API client (see Client.buildURL); allowing a caller-set
-// path/query/fragment/userinfo here would make those fixed paths, and the
-// no-credentials-in-the-URL invariant, no longer guaranteed.
-func validateOriginOnly(base *url.URL) error {
-	if base.User != nil {
-		return &ConfigError{Field: APIURLEnvironment, Detail: "must not contain userinfo (no embedded credentials)"}
-	}
-	if base.Path != "" && base.Path != "/" {
-		return &ConfigError{Field: APIURLEnvironment, Detail: "must not contain a path; it must be scheme and host only"}
-	}
-	if base.RawQuery != "" || base.ForceQuery {
-		// ForceQuery is url.URL's own signal for a bare trailing "?" with
-		// no query text (e.g. "https://example.com?"): RawQuery is empty in
-		// that case, so RawQuery alone would let a query-string delimiter
-		// through the origin-only invariant this function exists to
-		// enforce.
-		return &ConfigError{Field: APIURLEnvironment, Detail: "must not contain a query string"}
-	}
-	if base.Fragment != "" {
-		return &ConfigError{Field: APIURLEnvironment, Detail: "must not contain a fragment"}
-	}
-	return nil
-}
-
-// validateScheme enforces HTTPS except for the explicit loopback fixture
-// pairing: plain HTTP is only ever accepted when the caller both opted in
-// via AllowInsecureLoopback and the host resolves to a loopback address or
-// name. This prevents the fixture flag from silently downgrading
-// production traffic if it is ever set for the wrong host.
-func validateScheme(base *url.URL, allowInsecureLoopback bool) error {
-	switch base.Scheme {
-	case "https":
-		return nil
-	case "http":
-		if allowInsecureLoopback && isLoopbackHost(base.Hostname()) {
-			return nil
-		}
-		return &ConfigError{Field: APIURLEnvironment, Detail: "must use https (plain http is only allowed for an explicit loopback fixture)"}
-	default:
-		return &ConfigError{Field: APIURLEnvironment, Detail: "scheme is not supported (must be https, or http for an explicit loopback fixture)"}
-	}
-}
-
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
-func firstOrEmpty(lookup lookupEnv, key string) string {
-	value, _ := lookup(key)
-	return value
-}
-
-func stringOrDefault(lookup lookupEnv, key, fallback string) string {
-	if value, ok := lookup(key); ok && strings.TrimSpace(value) != "" {
-		return strings.TrimSpace(value)
-	}
-	return fallback
-}
-
-func durationOrDefault(lookup lookupEnv, key string, fallback time.Duration) (time.Duration, error) {
-	value, ok := lookup(key)
-	if !ok || strings.TrimSpace(value) == "" {
-		return fallback, nil
-	}
-	parsed, err := time.ParseDuration(strings.TrimSpace(value))
-	if err != nil {
-		return 0, &ConfigError{Field: key, Detail: "must be a valid Go duration (e.g. \"30s\", \"2m\")"}
-	}
-	return parsed, nil
-}
-
-func int64OrDefault(lookup lookupEnv, key string, fallback int64) (int64, error) {
-	value, ok := lookup(key)
-	if !ok || strings.TrimSpace(value) == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-	if err != nil {
-		return 0, &ConfigError{Field: key, Detail: "must be a valid integer"}
-	}
-	return parsed, nil
-}
-
-func boolOrDefault(lookup lookupEnv, key string, fallback bool) (bool, error) {
-	value, ok := lookup(key)
-	if !ok || strings.TrimSpace(value) == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
-	if err != nil {
-		return false, &ConfigError{Field: key, Detail: "must be \"true\" or \"false\""}
-	}
-	return parsed, nil
 }

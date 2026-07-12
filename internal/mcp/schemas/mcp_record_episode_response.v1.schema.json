@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_record_episode_response.v1.schema.json",
+  "title": "ACR MCP record_episode Response v1",
+  "description": "Safe write receipt. Submitted summary, artifacts, and transcript data are never echoed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "client_episode_id", "idempotency_key", "scope", "transcript_disposition"],
+  "properties": {
+    "schema_version": {"const": "mcp_record_episode_response.v1"},
+    "status": {"enum": ["recorded", "no_persist"]},
+    "client_episode_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "idempotency_key": {"type": "string", "minLength": 8, "maxLength": 256},
+    "episode_id": {"type": "string", "minLength": 8, "maxLength": 256},
+    "created_at": {"type": "string", "format": "date-time"},
+    "redaction_state": {"enum": ["active", "redacted", "purged_tombstone"]},
+    "duplicate": {"type": "boolean"},
+    "scope": {"type": "object", "additionalProperties": false, "properties": {"branch": {"type": "string", "maxLength": 512}, "commit_sha": {"type": "string", "maxLength": 64}}},
+    "transcript_disposition": {"enum": ["not_submitted", "accepted", "redacted"]}
+  },
+  "allOf": [
+    {"if": {"properties": {"status": {"const": "recorded"}}}, "then": {"required": ["episode_id", "created_at", "redaction_state", "duplicate"]}},
+    {"if": {"properties": {"status": {"const": "no_persist"}}}, "then": {"not": {"anyOf": [{"required": ["episode_id"]}, {"required": ["created_at"]}, {"required": ["redaction_state"]}, {"required": ["duplicate"]}]}}}
+  ]
+}

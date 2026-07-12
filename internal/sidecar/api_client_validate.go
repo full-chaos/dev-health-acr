@@ -54,3 +54,10 @@ func validateExpandedEvidence(e contractsv1.ExpandedEvidence) error {
 	}
 	return nil
 }
+
+func validateAgentEpisode(episode contractsv1.AgentEpisode) error {
+	if err := episode.Validate(); err != nil {
+		return fmt.Errorf("%w: agent episode: %w", ErrInvalidResponse, err)
+	}
+	return nil
+}

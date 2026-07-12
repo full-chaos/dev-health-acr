@@ -71,6 +71,9 @@ func TestDoctorLiveReportsRealEntitlementScopeToolAvailability(t *testing.T) {
 	if !report.LiveCheck.AgentContextRuntime || !report.LiveCheck.ContextReadScope || !report.LiveCheck.EvidenceReadScope {
 		t.Fatalf("expected live entitlement/scope availability to be true, got: %#v", report.LiveCheck)
 	}
+	if report.LiveCheck.EpisodeWriteScope || report.LiveCheck.RecordEpisodeActive {
+		t.Fatalf("expected writeback to remain inactive without episode:write and local opt-in, got: %#v", report.LiveCheck)
+	}
 	if len(report.LiveCheck.EnabledTools) != 2 {
 		t.Fatalf("expected 2 live enabled tools, got: %#v", report.LiveCheck.EnabledTools)
 	}

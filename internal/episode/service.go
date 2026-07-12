@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
@@ -12,13 +13,19 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-var ErrEntitlementRequired = errors.New("agent context runtime entitlement is required")
+const auditTimeout = 100 * time.Millisecond
+
+var (
+	ErrEntitlementRequired = errors.New("agent context runtime entitlement is required")
+	ErrNoPersistAccepted   = errors.New("episode tombstone accepted")
+)
 
 type ServiceOptions struct {
 	Now              func() time.Time
 	TerminalObserver TerminalObserver
 	StoreObserver    StoreObserver
 	StoreBackend     StoreBackend
+	PacketStore      storage.PacketStore
 }
 
 type Service struct {
@@ -28,6 +35,7 @@ type Service struct {
 	observer      TerminalObserver
 	storeObserver StoreObserver
 	storeBackend  StoreBackend
+	packetStore   storage.PacketStore
 }
 
 type scopedEpisodePurger interface {
@@ -41,12 +49,15 @@ func NewService(store storage.EpisodeStore, audit storage.AuditStore, options Se
 	if audit == nil {
 		return nil, errors.New("episode audit store is required")
 	}
+	if options.PacketStore == nil {
+		return nil, errors.New("episode packet store is required")
+	}
 	if options.Now == nil {
 		options.Now = time.Now
 	}
 	return &Service{
 		store: store, audit: audit, now: options.Now, observer: options.TerminalObserver,
-		storeObserver: options.StoreObserver, storeBackend: options.StoreBackend,
+		storeObserver: options.StoreObserver, storeBackend: options.StoreBackend, packetStore: options.PacketStore,
 	}, nil
 }
 
@@ -64,6 +75,17 @@ func (s *Service) Create(ctx context.Context, principal storage.Principal, creat
 	if err := auth.AuthorizeRepository(principal, create.Repository.Slug); err != nil {
 		return contractsv1.AgentEpisode{}, false, err
 	}
+	storeStarted := s.now()
+	preflight, err := s.store.PreflightIdempotency(ctx, principal, create)
+	s.observeStoreCall(ctx, storeStarted, err)
+	if err != nil {
+		return contractsv1.AgentEpisode{}, false, fmt.Errorf("preflight episode idempotency: %w", err)
+	}
+	if preflight == storage.EpisodePreflightMiss {
+		if err := s.verifyPacketLink(ctx, principal, create); err != nil {
+			return contractsv1.AgentEpisode{}, false, err
+		}
+	}
 	metadata := map[string]any{"outcome": create.Outcome, "retention_class": create.RetentionClass, "packet_linked": create.ContextPacketID != ""}
 	if err := s.recordAudit(ctx, principal, "agent_episode_create_requested", create.ClientEpisodeID, metadata); err != nil {
 		observation.AuditDelivery = AuditDeliveryFailed
@@ -71,7 +93,7 @@ func (s *Service) Create(ctx context.Context, principal storage.Principal, creat
 	}
 	observation.AuditDelivery = AuditDeliveryDelivered
 	expiresAt := expiryFor(create.RetentionClass, s.now().UTC())
-	storeStarted := s.now()
+	storeStarted = s.now()
 	stored, duplicate, err := s.store.CreateIdempotent(ctx, principal, create, expiresAt)
 	s.observeStoreCall(ctx, storeStarted, err)
 	if err != nil {
@@ -86,7 +108,7 @@ func (s *Service) Create(ctx context.Context, principal storage.Principal, creat
 			observation.Outcome = TerminalOutcomeSuccess
 		}
 		observation.AuditDelivery = s.recordCompletion(ctx, principal, action, create.ClientEpisodeID, metadata)
-		return contractsv1.AgentEpisode{}, duplicate, storage.ErrNotFound
+		return contractsv1.AgentEpisode{}, duplicate, ErrNoPersistAccepted
 	}
 	action := "agent_episode_created"
 	if duplicate {
@@ -97,6 +119,27 @@ func (s *Service) Create(ctx context.Context, principal storage.Principal, creat
 	}
 	observation.AuditDelivery = s.recordCompletion(ctx, principal, action, stored.EpisodeID, metadata)
 	return stored, duplicate, nil
+}
+
+func (s *Service) verifyPacketLink(ctx context.Context, principal storage.Principal, create contractsv1.AgentEpisodeCreate) error {
+	if create.ContextPacketID == "" {
+		return nil
+	}
+	packet, err := s.packetStore.GetSnapshot(ctx, principal, create.ContextPacketID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return storage.ErrNotFound
+		}
+		return fmt.Errorf("get context packet snapshot: %w", err)
+	}
+	if normalizeRepository(create.Repository.Slug) != normalizeRepository(packet.Repository.Slug) {
+		return storage.ErrNotFound
+	}
+	return nil
+}
+
+func normalizeRepository(slug string) string {
+	return strings.ToLower(strings.TrimSpace(slug))
 }
 
 func (s *Service) Get(ctx context.Context, principal storage.Principal, clientEpisodeID string) (contractsv1.AgentEpisode, error) {
@@ -163,7 +206,9 @@ func (s *Service) PurgeExpired(ctx context.Context, principal storage.Principal,
 }
 
 func (s *Service) recordAudit(ctx context.Context, principal storage.Principal, action, resourceID string, metadata map[string]any) error {
-	return s.audit.Record(context.WithoutCancel(ctx), storage.AuditEvent{
+	auditContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditTimeout)
+	defer cancel()
+	return s.audit.Record(auditContext, storage.AuditEvent{
 		OrgID: principal.OrgID, ActorType: "acr_credential", ActorID: principal.CredentialID, Action: action,
 		ResourceType: "agent_episode", ResourceID: resourceID, Status: "success", Metadata: metadata, CreatedAt: s.now().UTC(),
 	})

@@ -74,7 +74,7 @@ ON CONFLICT DO NOTHING
 	if !errors.Is(err, sql.ErrNoRows) {
 		return contractsv1.AgentEpisode{}, false, fmt.Errorf("insert episode: %w", err)
 	}
-	existing, err := s.existing(ctx, principal, create, digestText)
+	existing, err := s.existing(ctx, principal, repositoryID, create, digestText)
 	if err != nil {
 		return contractsv1.AgentEpisode{}, false, err
 	}
@@ -183,10 +183,10 @@ FROM candidates WHERE episode.episode_id = candidates.episode_id`, before, limit
 	return int(count), nil
 }
 
-func (s *EpisodeStore) existing(ctx context.Context, principal storage.Principal, create contractsv1.AgentEpisodeCreate, expectedDigest string) (contractsv1.AgentEpisode, error) {
+func (s *EpisodeStore) existing(ctx context.Context, principal storage.Principal, repositoryID string, create contractsv1.AgentEpisodeCreate, expectedDigest string) (contractsv1.AgentEpisode, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 SELECT episode_id, repo_slug, payload, created_at, redaction_state FROM acr.agent_episodes
-WHERE org_id = $1::uuid AND (idempotency_key = $2 OR client_episode_id = $3)`, principal.OrgID, create.IdempotencyKey, create.ClientEpisodeID)
+WHERE org_id = $1::uuid AND repo_id = $2::uuid AND (idempotency_key = $3 OR client_episode_id = $4)`, principal.OrgID, repositoryID, create.IdempotencyKey, create.ClientEpisodeID)
 	if err != nil {
 		return contractsv1.AgentEpisode{}, fmt.Errorf("load conflicting episode: %w", err)
 	}
@@ -197,7 +197,7 @@ WHERE org_id = $1::uuid AND (idempotency_key = $2 OR client_episode_id = $3)`, p
 	var episodeID, repoSlug, state string
 	var payload []byte
 	var createdAt time.Time
-	if err := rows.Scan(&episodeID, &repoSlug, &payload, &createdAt, &state); err != nil || !episodeRepositoryAllowed(principal.RepositoryScopes, repoSlug) || episodePayloadDigest(payload) != expectedDigest || rows.Next() {
+	if err := rows.Scan(&episodeID, &repoSlug, &payload, &createdAt, &state); err != nil || !sameEpisodeRepository(repoSlug, create.Repository.Slug) || episodePayloadDigest(payload) != expectedDigest || rows.Next() {
 		return contractsv1.AgentEpisode{}, storage.ErrConflict
 	}
 	if state == "purged_tombstone" {
