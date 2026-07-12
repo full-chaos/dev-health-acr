@@ -63,3 +63,47 @@ grep -F 'assets=(SHA256SUMS SHA256SUMS.sig)' "$root/scripts/release/publish-priv
 grep -F 'gh release delete-asset' "$root/scripts/release/revoke-private-release.sh" >/dev/null
 if grep -F 'remote get-url origin' "$root/scripts/release/publish-private-release.sh"; then exit 1; fi
 grep -E 'gh repo clone.*--no-checkout' "$root/scripts/release/publish-private-release.sh" >/dev/null
+
+workflow_go_version() {
+  local line value
+  local -a versions=()
+
+  test -r "$1" || return 1
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[[:space:]]*go-version:[[:space:]]*(.+)[[:space:]]*$ ]]; then
+      value="${BASH_REMATCH[1]}"
+      value="${value#"${value%%[![:space:]]*}"}"
+      value="${value%"${value##*[![:space:]]}"}"
+      case "$value" in
+        \"*\") value="${value#\"}"; value="${value%\"}" ;;
+        \'*\') value="${value#\'}"; value="${value%\'}" ;;
+      esac
+      [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+      versions+=("$value")
+    elif [[ "$line" =~ ^[[:space:]]*go-version: ]]; then
+      return 1
+    fi
+  done < "$1"
+
+  test "${#versions[@]}" -eq 1 || return 1
+  printf '%s\n' "${versions[0]}"
+}
+
+assert_go_version_pins() {
+  local ci_go_version release_go_version
+
+  ci_go_version="$(workflow_go_version "$1")" || return 1
+  release_go_version="$(workflow_go_version "$2")" || return 1
+  test "$ci_go_version" = 1.26.5 || return 1
+  test "$release_go_version" = 1.26.5 || return 1
+  test "$ci_go_version" = "$release_go_version"
+}
+
+ci_workflow="$root/.github/workflows/ci.yml"
+release_workflow="$root/.github/workflows/release.yml"
+assert_go_version_pins "$ci_workflow" "$release_workflow"
+
+grep -v '^[[:space:]]*go-version:' "$ci_workflow" > "$tmp/ci-missing-go-version.yml"
+if assert_go_version_pins "$tmp/ci-missing-go-version.yml" "$release_workflow"; then exit 1; fi
+sed 's/^\([[:space:]]*go-version:\).*/\1 "1.26.4"/' "$ci_workflow" > "$tmp/ci-mismatched-go-version.yml"
+if assert_go_version_pins "$tmp/ci-mismatched-go-version.yml" "$release_workflow"; then exit 1; fi
