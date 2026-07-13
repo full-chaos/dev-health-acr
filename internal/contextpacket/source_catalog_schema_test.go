@@ -12,10 +12,18 @@ import (
 func TestSourceCatalog_joins_repositories_for_raw_evidence_tables(t *testing.T) {
 	for _, id := range []string{"git_commits.v1", "git_commit_files.v1", "pull_requests.v1", "pull_request_reviews.v1", "ci_pipeline_runs.v1", "deployments.v1", "incidents.v1"} {
 		query := catalogQuery(t, id)
-		for _, predicate := range []string{"INNER JOIN repos FINAL AS repo", "repo.org_id = {org_id:String}", "repo.id = {repo_id:UUID}"} {
+		for _, predicate := range []string{"INNER JOIN repos AS repo FINAL", "repo.org_id = {org_id:String}", "repo.id = {repo_id:UUID}"} {
 			if !strings.Contains(query.Statement, predicate) {
 				t.Fatalf("%s missing %q", id, predicate)
 			}
+		}
+	}
+}
+
+func TestSourceCatalog_places_alias_before_FINAL(t *testing.T) {
+	for _, query := range contextpacket.SourceQueryCatalogV1 {
+		if strings.Contains(query.Statement, "FINAL AS") {
+			t.Fatalf("%s uses invalid FINAL alias ordering: %s", query.ID, query.Statement)
 		}
 	}
 }
