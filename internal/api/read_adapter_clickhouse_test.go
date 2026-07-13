@@ -20,7 +20,7 @@ func (c fixtureClickHouseClient) Query(_ context.Context, query string, _ []cont
 		return &fixtureClickHouseRows{values: [][]any{{c.repoID, c.repository, "main"}}}, nil
 	case strings.Contains(query, "arrayExists(scope"):
 		return &fixtureClickHouseRows{values: [][]any{{c.repoID, c.repository}}}, nil
-	case strings.Contains(query, "FROM ci_pipeline_runs FINAL"):
+	case strings.Contains(query, "FROM ci_pipeline_runs AS c FINAL"):
 		return &fixtureClickHouseRows{values: [][]any{fixtureEvidenceRow()}}, nil
 	default:
 		return &fixtureClickHouseRows{}, nil
