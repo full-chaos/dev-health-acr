@@ -31,29 +31,36 @@ const (
 // Config contains only process-level configuration. Credentials and request
 // identity are resolved by dedicated services and must never be stored here.
 type Config struct {
-	Environment           string
-	ListenAddress         string
-	LogLevel              slog.Level
-	RequestTimeout        time.Duration
-	ReadHeaderTimeout     time.Duration
-	ReadTimeout           time.Duration
-	WriteTimeout          time.Duration
-	IdleTimeout           time.Duration
-	ShutdownTimeout       time.Duration
-	ClickHouseDSN         string
-	PostgresDSN           string
-	RequireBackingStores  bool
-	MinimumSidecarVersion string
-	RevokedClientVersions []string
-	EntitlementKey        string
-	EvidenceIDActiveKID   string
-	EvidenceIDKeys        map[string][]byte
-	MaxItems              int
-	MaxOutputTokens       int
-	MaxSerializedBytes    int
-	RequestsPerMinute     int
-	RequestControls       RequestControlsConfig
-	TrustedProxyCIDRs     []string
+	Environment                               string
+	ListenAddress                             string
+	LogLevel                                  slog.Level
+	RequestTimeout                            time.Duration
+	ReadHeaderTimeout                         time.Duration
+	ReadTimeout                               time.Duration
+	WriteTimeout                              time.Duration
+	IdleTimeout                               time.Duration
+	ShutdownTimeout                           time.Duration
+	ClickHouseDSN                             string
+	PostgresDSN                               string
+	RequireBackingStores                      bool
+	MinimumSidecarVersion                     string
+	RevokedClientVersions                     []string
+	EntitlementKey                            string
+	EvidenceIDActiveKID                       string
+	EvidenceIDKeys                            map[string][]byte
+	MaxItems                                  int
+	MaxOutputTokens                           int
+	MaxSerializedBytes                        int
+	RequestsPerMinute                         int
+	RequestControls                           RequestControlsConfig
+	TrustedProxyCIDRs                         []string
+	DevHealthEntitlementURL                   string
+	DevHealthEntitlementTokenFile             string
+	DevHealthEntitlementTimeout               time.Duration
+	DevHealthEntitlementMaxResponseBytes      int64
+	DevHealthEntitlementProxyURL              string
+	DevHealthEntitlementCACertPath            string
+	DevHealthEntitlementAllowInsecureLoopback bool
 }
 
 type lookupEnv func(string) (string, bool)
@@ -73,16 +80,20 @@ func load(lookup lookupEnv) (Config, error) {
 	}
 
 	cfg := Config{
-		Environment:           environment,
-		ListenAddress:         stringValue(lookup, "ACR_ADDR", defaultListenAddress),
-		LogLevel:              logLevel,
-		ClickHouseDSN:         stringValue(lookup, "ACR_CLICKHOUSE_DSN", ""),
-		PostgresDSN:           stringValue(lookup, "ACR_POSTGRES_DSN", ""),
-		MinimumSidecarVersion: stringValue(lookup, "ACR_MINIMUM_SIDECAR_VERSION", defaultMinimumSidecar),
-		RevokedClientVersions: stringListValue(lookup, "ACR_REVOKED_CLIENT_VERSIONS"),
-		EntitlementKey:        stringValue(lookup, "ACR_ENTITLEMENT_KEY", defaultEntitlementKey),
-		EvidenceIDActiveKID:   stringValue(lookup, "ACR_EVIDENCE_ID_ACTIVE_KID", ""),
-		TrustedProxyCIDRs:     stringListValue(lookup, "ACR_TRUSTED_PROXY_CIDRS"),
+		Environment:                    environment,
+		ListenAddress:                  stringValue(lookup, "ACR_ADDR", defaultListenAddress),
+		LogLevel:                       logLevel,
+		ClickHouseDSN:                  stringValue(lookup, "ACR_CLICKHOUSE_DSN", ""),
+		PostgresDSN:                    stringValue(lookup, "ACR_POSTGRES_DSN", ""),
+		MinimumSidecarVersion:          stringValue(lookup, "ACR_MINIMUM_SIDECAR_VERSION", defaultMinimumSidecar),
+		RevokedClientVersions:          stringListValue(lookup, "ACR_REVOKED_CLIENT_VERSIONS"),
+		EntitlementKey:                 stringValue(lookup, "ACR_ENTITLEMENT_KEY", defaultEntitlementKey),
+		EvidenceIDActiveKID:            stringValue(lookup, "ACR_EVIDENCE_ID_ACTIVE_KID", ""),
+		TrustedProxyCIDRs:              stringListValue(lookup, "ACR_TRUSTED_PROXY_CIDRS"),
+		DevHealthEntitlementURL:        stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_URL", ""),
+		DevHealthEntitlementTokenFile:  stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE", ""),
+		DevHealthEntitlementProxyURL:   stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_PROXY_URL", ""),
+		DevHealthEntitlementCACertPath: stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE", ""),
 	}
 	if cfg.EvidenceIDKeys, err = evidenceIDKeysValue(lookup); err != nil {
 		return Config{}, err
@@ -119,6 +130,17 @@ func load(lookup lookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.RequestsPerMinute, err = intValue(lookup, "ACR_REQUESTS_PER_MINUTE", defaultRequestsPerMinute); err != nil {
+		return Config{}, err
+	}
+	if cfg.DevHealthEntitlementTimeout, err = durationValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT", 5*time.Second); err != nil {
+		return Config{}, err
+	}
+	devHealthEntitlementMaxResponseBytes, err := intValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_MAX_RESPONSE_BYTES", 16<<10)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.DevHealthEntitlementMaxResponseBytes = int64(devHealthEntitlementMaxResponseBytes)
+	if cfg.DevHealthEntitlementAllowInsecureLoopback, err = boolValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_ALLOW_INSECURE_LOOPBACK", false); err != nil {
 		return Config{}, err
 	}
 	if cfg.RequestControls, err = requestControlsValue(lookup, cfg.RequestsPerMinute); err != nil {
@@ -195,6 +217,19 @@ func (c Config) Validate() error {
 			return errors.New("ACR_POSTGRES_DSN is required when backing stores are required")
 		}
 	}
+	if c.Environment == "production" {
+		if strings.TrimSpace(c.DevHealthEntitlementURL) == "" {
+			return errors.New("ACR_DEV_HEALTH_ENTITLEMENT_URL is required in production")
+		}
+		if strings.TrimSpace(c.DevHealthEntitlementTokenFile) == "" {
+			return errors.New("ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE is required in production")
+		}
+	}
+	if strings.TrimSpace(c.DevHealthEntitlementURL) != "" {
+		if err := validateDevHealthEntitlementURL(c); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -215,5 +250,7 @@ func (c Config) SafeAttributes() []any {
 		"evidence_id_active_kid", c.EvidenceIDActiveKID,
 		"evidence_id_key_count", len(c.EvidenceIDKeys),
 		"trusted_proxy_count", len(c.TrustedProxyCIDRs),
+		"dev_health_entitlement_configured", c.DevHealthEntitlementURL != "",
+		"dev_health_entitlement_token_file_configured", c.DevHealthEntitlementTokenFile != "",
 	}
 }

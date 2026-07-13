@@ -59,18 +59,72 @@ func TestProductionCannotDisableKeyringValidationWithBackingStoreOverride(t *tes
 
 func TestProductionAcceptsConfiguredBackingStores(t *testing.T) {
 	cfg, err := load(mapLookup(map[string]string{
-		"ACR_ENVIRONMENT":            "production",
-		"ACR_CLICKHOUSE_DSN":         "clickhouse://redacted",
-		"ACR_POSTGRES_DSN":           "postgres://redacted",
-		"ACR_LOG_LEVEL":              "warn",
-		"ACR_EVIDENCE_ID_ACTIVE_KID": "current",
-		"ACR_EVIDENCE_ID_KEYS":       "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
+		"ACR_ENVIRONMENT":                       "production",
+		"ACR_CLICKHOUSE_DSN":                    "clickhouse://redacted",
+		"ACR_POSTGRES_DSN":                      "postgres://redacted",
+		"ACR_LOG_LEVEL":                         "warn",
+		"ACR_EVIDENCE_ID_ACTIVE_KID":            "current",
+		"ACR_EVIDENCE_ID_KEYS":                  "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
+		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "https://ops.example.test",
+		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !cfg.RequireBackingStores || cfg.LogLevel != slog.LevelWarn {
 		t.Fatalf("unexpected config: %#v", cfg)
+	}
+}
+
+func TestProductionRequiresDevHealthEntitlementConfiguration(t *testing.T) {
+	// Given
+	base := map[string]string{
+		"ACR_ENVIRONMENT":            "production",
+		"ACR_REQUIRE_BACKING_STORES": "false",
+		"ACR_EVIDENCE_ID_ACTIVE_KID": "current",
+		"ACR_EVIDENCE_ID_KEYS":       "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
+	}
+
+	for _, test := range []struct {
+		name   string
+		values map[string]string
+		field  string
+	}{
+		{"missing URL", base, "ACR_DEV_HEALTH_ENTITLEMENT_URL"},
+		{"missing token file", map[string]string{
+			"ACR_ENVIRONMENT": "production", "ACR_REQUIRE_BACKING_STORES": "false",
+			"ACR_EVIDENCE_ID_ACTIVE_KID": "current", "ACR_EVIDENCE_ID_KEYS": "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
+			"ACR_DEV_HEALTH_ENTITLEMENT_URL": "https://ops.example.test",
+		}, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// When
+			_, err := load(mapLookup(test.values))
+
+			// Then
+			if err == nil || !strings.Contains(err.Error(), test.field) {
+				t.Fatalf("load() error = %v; want missing %s", err, test.field)
+			}
+		})
+	}
+}
+
+func TestProductionRejectsInsecureDevHealthEntitlementURL(t *testing.T) {
+	// Given
+	values := map[string]string{
+		"ACR_ENVIRONMENT": "production", "ACR_REQUIRE_BACKING_STORES": "false",
+		"ACR_EVIDENCE_ID_ACTIVE_KID": "current", "ACR_EVIDENCE_ID_KEYS": "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
+		"ACR_DEV_HEALTH_ENTITLEMENT_URL":                     "http://127.0.0.1:8080",
+		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE":              "/run/secrets/ops-token",
+		"ACR_DEV_HEALTH_ENTITLEMENT_ALLOW_INSECURE_LOOPBACK": "true",
+	}
+
+	// When
+	_, err := load(mapLookup(values))
+
+	// Then
+	if err == nil || !strings.Contains(err.Error(), "must use HTTPS") {
+		t.Fatalf("load() error = %v; want HTTPS requirement", err)
 	}
 }
 
