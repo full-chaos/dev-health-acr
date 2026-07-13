@@ -26,6 +26,7 @@ build:
 	go build -o .tmp/acr-api ./cmd/acr-api
 	go build -o .tmp/acr-mcp ./cmd/acr-mcp
 	go build -o .tmp/contractcheck ./cmd/contractcheck
+	go build -o .tmp/acr-migrate ./cmd/acr-migrate
 
 verify: fmt-check vet test contract-test build
 
