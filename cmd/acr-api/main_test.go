@@ -48,6 +48,8 @@ func TestServeFailsClosedWithoutHostedRuntimeAdapters(t *testing.T) {
 	t.Setenv("ACR_POSTGRES_DSN", "postgres://configured")
 	t.Setenv("ACR_EVIDENCE_ID_ACTIVE_KID", "current")
 	t.Setenv("ACR_EVIDENCE_ID_KEYS", "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=")
+	t.Setenv("ACR_DEV_HEALTH_ENTITLEMENT_URL", "https://ops.example.test")
+	t.Setenv("ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE", "/run/secrets/ops-token")
 
 	err := serve(nil)
 
