@@ -7,7 +7,7 @@ import (
 	versioninfo "github.com/full-chaos/dev-health-acr/internal/version"
 )
 
-const rootUsageLine = "Usage: acr-mcp [version|doctor|diagnostics|metadata|serve]"
+const rootUsageLine = "Usage: acr-mcp [version|doctor|diagnostics|metadata|workspace|serve]"
 
 func runCLI(args []string) int {
 	if len(args) == 0 {
@@ -35,6 +35,8 @@ func runCLI(args []string) int {
 		return runDoctorCommand(commandArgs)
 	case "diagnostics":
 		return runDiagnosticsCommand(commandArgs)
+	case "workspace":
+		return runWorkspaceCommand(commandArgs)
 	case "metadata":
 		if len(commandArgs) > 0 {
 			return rejectRootArgs()
@@ -47,7 +49,7 @@ func runCLI(args []string) int {
 		}
 		return runServe()
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q; use version, doctor, diagnostics, metadata, or serve\n", command)
+		fmt.Fprintf(os.Stderr, "unknown command %q; use version, doctor, diagnostics, metadata, workspace, or serve\n", command)
 		return 2
 	}
 }

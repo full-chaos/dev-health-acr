@@ -17,6 +17,27 @@ func TestUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestHelpCommand(t *testing.T) {
+	original := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	t.Cleanup(func() { os.Stdout = original })
+
+	if err := run([]string{"--help"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	var output bytes.Buffer
+	_, _ = io.Copy(&output, reader)
+	_ = reader.Close()
+	if got := output.String(); !strings.Contains(got, "Usage: acr-api") {
+		t.Fatalf("help output = %q", got)
+	}
+}
+
 func TestVersionCommand(t *testing.T) {
 	originalVersion, originalCommit, originalDate := version.Version, version.Commit, version.Date
 	version.Version = "1.2.3-rc.1+build.7"

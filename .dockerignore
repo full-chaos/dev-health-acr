@@ -1,0 +1,4 @@
+# Raw repository builds fail closed. scripts/container/build.sh constructs a
+# fresh context containing only reviewed source extensions.
+*
+!Dockerfile
