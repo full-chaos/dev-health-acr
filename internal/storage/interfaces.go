@@ -6,11 +6,24 @@ import (
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage/internal/credentiallifecycle"
 )
 
 var (
-	ErrNotFound = errors.New("storage record not found")
-	ErrConflict = errors.New("storage record conflicts with an existing record")
+	ErrNotFound                   = errors.New("storage record not found")
+	ErrConflict                   = errors.New("storage record conflicts with an existing record")
+	ErrUnavailable                = errors.New("storage operation unavailable")
+	ErrInvalidAuditMetadata       = errors.New("storage audit metadata is invalid")
+	ErrInvalidCredentialLifecycle = credentiallifecycle.ErrInvalidLifecycle
+	ErrInvalidCredentialInput     = credentiallifecycle.ErrInvalidInput
+)
+
+const MaximumCredentialOverlap = credentiallifecycle.MaximumOverlap
+
+const (
+	AuditActionCredentialCreated = "credential_created"
+	AuditActionCredentialRotated = "credential_rotated"
+	AuditActionCredentialRevoked = "credential_revoked"
 )
 
 // Principal is derived from validated authentication. Callers must never build
@@ -73,21 +86,25 @@ type CredentialRecord struct {
 	Metadata          contractsv1.ClientCredential
 	TokenHash         string
 	CreatedBy         string
+	RotatedAt         *time.Time
 	LastUsedIP        string
 	LastUsedUserAgent string
 }
 
-// CredentialStore owns both data-plane lookup and the narrow administrative
-// lifecycle needed by ACR. Implementations must make Create/Rotate atomic.
+// CredentialStore is the read and authentication data plane. It deliberately
+// exposes no credential lifecycle mutation.
 type CredentialStore interface {
-	Create(ctx context.Context, record CredentialRecord) error
 	List(ctx context.Context, orgID string) ([]contractsv1.ClientCredential, error)
 	GetByID(ctx context.Context, orgID, credentialID string) (contractsv1.ClientCredential, error)
 	FindByTokenHash(ctx context.Context, tokenHash string) (contractsv1.ClientCredential, error)
-	Rotate(ctx context.Context, orgID, credentialID string, replacement CredentialRecord, previousValidUntil *time.Time) error
-	Revoke(ctx context.Context, orgID, credentialID string, revokedAt time.Time) (contractsv1.ClientCredential, error)
 	TouchLastUsed(ctx context.Context, credentialID, ip, userAgent string, usedAt time.Time) error
 }
+
+type CredentialLifecycle = credentiallifecycle.Lifecycle
+type CredentialCreateInput = credentiallifecycle.CreateInput
+type CredentialRotationInput = credentiallifecycle.RotationInput
+type CredentialRotationReplacement = credentiallifecycle.RotationReplacement
+type CredentialRevocationInput = credentiallifecycle.RevocationInput
 
 type AuditEvent struct {
 	OrgID        string
@@ -105,4 +122,13 @@ type AuditEvent struct {
 
 type AuditStore interface {
 	Record(ctx context.Context, event AuditEvent) error
+}
+
+func IsCredentialLifecycleAuditAction(action string) bool {
+	switch action {
+	case AuditActionCredentialCreated, AuditActionCredentialRotated, AuditActionCredentialRevoked:
+		return true
+	default:
+		return false
+	}
 }

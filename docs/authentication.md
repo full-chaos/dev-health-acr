@@ -40,7 +40,9 @@ The service rechecks repository authorization on every packet, evidence, snapsho
 
 Credential services support create, list, rotate, and revoke operations. Rotation defaults to immediate cutover and may request a bounded overlap of no more than 15 minutes. Expired or revoked credentials return the generic `invalid_token` contract response so callers cannot enumerate credential state.
 
-Successful use updates last-used metadata outside downstream business transactions. Known-credential denials and successful use emit audit events. Unknown tokens cannot be tied to an organization and are recorded in structured security logs instead of the organization audit table.
+Authorization is evaluated when middleware looks up the credential. A request authenticated before a revocation transaction commits may finish with its established principal; revocation does not cancel in-flight handlers. Every credential lookup that starts after the commit rejects the revoked token. This is the standard request-boundary model rather than continuous authorization during handler execution.
+
+Successful use updates last-used metadata outside downstream business transactions and emits an audit event. Rejected token lookups cannot safely disclose or attribute credential state, so they are recorded in structured security logs instead of the organization audit table.
 
 ## Sidecar loading
 

@@ -10,27 +10,48 @@ import (
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/internal/credentiallifecycle"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // CredentialStore persists ACR credential metadata in PostgreSQL. The caller
 // owns database construction and driver selection; this package never parses
 // or logs DSNs.
-type CredentialStore struct {
-	DB *sql.DB
+type credentialStore struct {
+	DB    *sql.DB
+	audit *AuditStore
+	now   func() time.Time
 }
 
-func NewCredentialStore(db *sql.DB) (*CredentialStore, error) {
+func NewCredentialStore(db *sql.DB, audit *AuditStore) (*storage.CredentialLifecycle, error) {
+	_, lifecycle, err := newCredentialStore(db, audit, time.Now)
+	return lifecycle, err
+}
+
+func newCredentialStore(db *sql.DB, audit *AuditStore, now func() time.Time) (*credentialStore, *storage.CredentialLifecycle, error) {
 	if db == nil {
-		return nil, errors.New("PostgreSQL database is required")
+		return nil, nil, storage.ErrInvalidCredentialLifecycle
 	}
-	return &CredentialStore{DB: db}, nil
+	if audit == nil || audit.DB != db || audit.GenerateID == nil || now == nil {
+		return nil, nil, storage.ErrInvalidCredentialLifecycle
+	}
+	store := &credentialStore{DB: db, audit: audit, now: now}
+	if err := audit.bindLifecycle(store); err != nil {
+		return nil, nil, err
+	}
+	lifecycle, err := credentiallifecycle.New(credentiallifecycle.Backend{
+		Store: store, Create: store.createCredential, Rotate: store.rotateCredential, Revoke: store.revokeCredential,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return store, lifecycle, nil
 }
 
-func (s *CredentialStore) Create(ctx context.Context, record storage.CredentialRecord) error {
-	return insertCredential(ctx, s.DB, record)
-}
-
-func (s *CredentialStore) List(ctx context.Context, orgID string) ([]contractsv1.ClientCredential, error) {
+func (s *credentialStore) List(ctx context.Context, orgID string) ([]contractsv1.ClientCredential, error) {
+	if err := s.ready(ctx); err != nil {
+		return nil, err
+	}
 	rows, err := s.DB.QueryContext(ctx, `
 SELECT credential_id, name, token_prefix, org_id, repository_scopes, scopes,
        created_at, expires_at, revoked_at, last_used_at
@@ -38,24 +59,27 @@ FROM acr.client_credentials
 WHERE org_id = $1
 ORDER BY created_at, credential_id`, orgID)
 	if err != nil {
-		return nil, fmt.Errorf("list credentials: %w", err)
+		return nil, fmt.Errorf("list credentials: %w", sanitizeDatabaseError(err))
 	}
 	defer rows.Close()
 	result := make([]contractsv1.ClientCredential, 0)
 	for rows.Next() {
 		credential, err := scanCredential(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan credential: %w", err)
+			return nil, fmt.Errorf("scan credential: %w", sanitizeDatabaseError(err))
 		}
 		result = append(result, credential)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate credentials: %w", err)
+		return nil, fmt.Errorf("iterate credentials: %w", sanitizeDatabaseError(err))
 	}
 	return result, nil
 }
 
-func (s *CredentialStore) GetByID(ctx context.Context, orgID, credentialID string) (contractsv1.ClientCredential, error) {
+func (s *credentialStore) GetByID(ctx context.Context, orgID, credentialID string) (contractsv1.ClientCredential, error) {
+	if err := s.ready(ctx); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
 	row := s.DB.QueryRowContext(ctx, `
 SELECT credential_id, name, token_prefix, org_id, repository_scopes, scopes,
        created_at, expires_at, revoked_at, last_used_at
@@ -65,75 +89,25 @@ WHERE org_id = $1 AND credential_id = $2`, orgID, credentialID)
 	return credential, mapNotFound("get credential", err)
 }
 
-func (s *CredentialStore) FindByTokenHash(ctx context.Context, tokenHash string) (contractsv1.ClientCredential, error) {
+func (s *credentialStore) FindByTokenHash(ctx context.Context, tokenHash string) (contractsv1.ClientCredential, error) {
+	if err := s.ready(ctx); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
 	row := s.DB.QueryRowContext(ctx, `
 SELECT credential_id, name, token_prefix, org_id, repository_scopes, scopes,
        created_at, expires_at, revoked_at, last_used_at
 FROM acr.client_credentials
-WHERE token_hash = $1`, tokenHash)
+WHERE token_hash = $1
+  AND revoked_at IS NULL
+  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)`, tokenHash)
 	credential, err := scanCredential(row)
 	return credential, mapNotFound("find credential", err)
 }
 
-func (s *CredentialStore) Rotate(ctx context.Context, orgID, credentialID string, replacement storage.CredentialRecord, previousValidUntil *time.Time) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin credential rotation: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var result sql.Result
-	if previousValidUntil == nil || !previousValidUntil.After(replacement.Metadata.CreatedAt) {
-		result, err = tx.ExecContext(ctx, `
-UPDATE acr.client_credentials
-SET revoked_at = CASE
-        WHEN revoked_at IS NULL OR revoked_at > $3 THEN $3
-        ELSE revoked_at
-    END
-WHERE org_id = $1 AND credential_id = $2`, orgID, credentialID, replacement.Metadata.CreatedAt)
-	} else {
-		result, err = tx.ExecContext(ctx, `
-UPDATE acr.client_credentials
-SET expires_at = CASE
-        WHEN expires_at IS NULL OR expires_at > $3 THEN $3
-        ELSE expires_at
-    END
-WHERE org_id = $1 AND credential_id = $2`, orgID, credentialID, *previousValidUntil)
-	}
-	if err != nil {
-		return fmt.Errorf("update previous credential: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("credential rotation rows affected: %w", err)
-	}
-	if rows != 1 {
-		return storage.ErrNotFound
-	}
-	if err := insertCredential(ctx, tx, replacement); err != nil {
+func (s *credentialStore) TouchLastUsed(ctx context.Context, credentialID, ip, userAgent string, usedAt time.Time) error {
+	if err := s.ready(ctx); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit credential rotation: %w", err)
-	}
-	return nil
-}
-
-func (s *CredentialStore) Revoke(ctx context.Context, orgID, credentialID string, revokedAt time.Time) (contractsv1.ClientCredential, error) {
-	row := s.DB.QueryRowContext(ctx, `
-UPDATE acr.client_credentials
-SET revoked_at = CASE
-        WHEN revoked_at IS NULL OR revoked_at > $3 THEN $3
-        ELSE revoked_at
-    END
-WHERE org_id = $1 AND credential_id = $2
-RETURNING credential_id, name, token_prefix, org_id, repository_scopes, scopes,
-          created_at, expires_at, revoked_at, last_used_at`, orgID, credentialID, revokedAt)
-	credential, err := scanCredential(row)
-	return credential, mapNotFound("revoke credential", err)
-}
-
-func (s *CredentialStore) TouchLastUsed(ctx context.Context, credentialID, ip, userAgent string, usedAt time.Time) error {
 	result, err := s.DB.ExecContext(ctx, `
 UPDATE acr.client_credentials
 SET last_used_at = CASE
@@ -150,16 +124,23 @@ SET last_used_at = CASE
     END
 WHERE credential_id = $1`, credentialID, usedAt, ip, userAgent)
 	if err != nil {
-		return fmt.Errorf("touch credential last used: %w", err)
+		return fmt.Errorf("touch credential last used: %w", sanitizeDatabaseError(err))
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("credential last-used rows affected: %w", err)
+		return fmt.Errorf("credential last-used rows affected: %w", sanitizeDatabaseError(err))
 	}
 	if rows != 1 {
 		return storage.ErrNotFound
 	}
 	return nil
+}
+
+func (s *credentialStore) ready(ctx context.Context) error {
+	if s == nil || s.DB == nil || s.audit == nil || s.now == nil || ctx == nil {
+		return storage.ErrInvalidCredentialLifecycle
+	}
+	return ctx.Err()
 }
 
 type execer interface {
@@ -197,7 +178,7 @@ INSERT INTO acr.client_credentials (
 		record.LastUsedUserAgent,
 	)
 	if err != nil {
-		return fmt.Errorf("insert credential: %w", err)
+		return fmt.Errorf("insert credential: %w", sanitizeDatabaseError(err))
 	}
 	return nil
 }
@@ -239,7 +220,24 @@ func mapNotFound(operation string, err error) error {
 		return storage.ErrNotFound
 	}
 	if err != nil {
-		return fmt.Errorf("%s: %w", operation, err)
+		return fmt.Errorf("%s: %w", operation, sanitizeDatabaseError(err))
 	}
 	return nil
+}
+
+func sanitizeDatabaseError(err error) error {
+	if err == nil || errors.Is(err, sql.ErrNoRows) || errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrUnavailable) {
+		return err
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return storage.ErrConflict
+	}
+	return storage.ErrUnavailable
 }

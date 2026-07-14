@@ -112,7 +112,12 @@ func (s *PacketStore) PurgeExpired(ctx context.Context, before time.Time, limit 
 	}
 	audit.mu.Lock()
 	for _, event := range events {
-		event.Metadata = cloneMetadata(event.Metadata)
+		metadata, err := cloneMetadata(event.Metadata)
+		if err != nil {
+			audit.mu.Unlock()
+			return 0, err
+		}
+		event.Metadata = metadata
 		audit.events = append(audit.events, event)
 	}
 	audit.mu.Unlock()

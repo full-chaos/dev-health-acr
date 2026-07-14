@@ -22,8 +22,8 @@ import (
 
 func TestSeededProtectedFlowCorrelatesRealPacketPipeline(t *testing.T) {
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
-	credentials := memory.NewCredentialStore()
 	audit := memory.NewAuditStore()
+	credentials := newMemoryCredentialLifecycle(t, audit, now)
 	repository := "example-org/widget-service"
 	token := issueScopedCredential(t, credentials, audit, now, []string{auth.ScopeContextRead}, []string{repository})
 	manager, err := limits.NewManager(limits.Options{Now: func() time.Time { return now }, Policies: limits.PolicySet{Context: limits.ContextPolicy{

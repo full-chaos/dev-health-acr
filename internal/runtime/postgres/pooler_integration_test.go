@@ -58,6 +58,7 @@ func newPgBouncerDSNs(t *testing.T, ctx context.Context, mode string) (string, s
 		tcpostgres.WithDatabase("acr"),
 		tcpostgres.WithUsername("acr"),
 		tcpostgres.WithPassword("acr"),
+		tcpostgres.BasicWaitStrategies(),
 		network.WithNetwork([]string{"postgres"}, dockerNetwork),
 	)
 	require.NoError(t, err)

@@ -2,48 +2,74 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/internal/credentiallifecycle"
 )
 
-// CredentialStore is an in-memory implementation for tests, local demos, and
-// interface development. It intentionally models the same atomic lifecycle
-// semantics expected from the PostgreSQL adapter.
-type CredentialStore struct {
+type credentialStore struct {
 	mu     sync.RWMutex
+	audit  *AuditStore
 	byID   map[string]storage.CredentialRecord
 	byHash map[string]string
+	now    func() time.Time
 }
 
-func NewCredentialStore() *CredentialStore {
-	return &CredentialStore{
-		byID:   make(map[string]storage.CredentialRecord),
-		byHash: make(map[string]string),
-	}
+type CredentialStoreOptions struct {
+	Audit *AuditStore
+	Now   func() time.Time
 }
 
-func (s *CredentialStore) Create(_ context.Context, record storage.CredentialRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.byID[record.Metadata.CredentialID]; exists {
-		return storage.ErrConflict
+func NewCredentialStore(audits ...*AuditStore) (*storage.CredentialLifecycle, error) {
+	if len(audits) > 1 {
+		return nil, fmt.Errorf("%w: at most one audit store", storage.ErrInvalidCredentialLifecycle)
 	}
-	if _, exists := s.byHash[record.TokenHash]; exists {
-		return storage.ErrConflict
+	audit := NewAuditStore()
+	if len(audits) == 1 {
+		audit = audits[0]
 	}
-	record = cloneRecord(record)
-	s.byID[record.Metadata.CredentialID] = record
-	s.byHash[record.TokenHash] = record.Metadata.CredentialID
-	return nil
+	_, lifecycle, err := newCredentialStore(audit, time.Now)
+	return lifecycle, err
 }
 
-func (s *CredentialStore) List(_ context.Context, orgID string) ([]contractsv1.ClientCredential, error) {
+func NewCredentialStoreWithOptions(options CredentialStoreOptions) (*storage.CredentialLifecycle, error) {
+	_, lifecycle, err := newCredentialStore(options.Audit, options.Now)
+	return lifecycle, err
+}
+
+func newCredentialStore(audit *AuditStore, now func() time.Time) (*credentialStore, *storage.CredentialLifecycle, error) {
+	if audit == nil || now == nil {
+		return nil, nil, storage.ErrInvalidCredentialLifecycle
+	}
+	store := &credentialStore{
+		audit: audit, byID: make(map[string]storage.CredentialRecord), byHash: make(map[string]string), now: now,
+	}
+	if err := audit.bindLifecycle(store); err != nil {
+		return nil, nil, err
+	}
+	lifecycle, err := credentiallifecycle.New(credentiallifecycle.Backend{
+		Store: store, Create: store.createCredential, Rotate: store.rotateCredential, Revoke: store.revokeCredential,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return store, lifecycle, nil
+}
+
+func (s *credentialStore) List(ctx context.Context, orgID string) ([]contractsv1.ClientCredential, error) {
+	if err := s.ready(ctx); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	values := make([]contractsv1.ClientCredential, 0)
 	for _, record := range s.byID {
 		if record.Metadata.OrgID == orgID {
@@ -56,9 +82,15 @@ func (s *CredentialStore) List(_ context.Context, orgID string) ([]contractsv1.C
 	return values, nil
 }
 
-func (s *CredentialStore) GetByID(_ context.Context, orgID, credentialID string) (contractsv1.ClientCredential, error) {
+func (s *credentialStore) GetByID(ctx context.Context, orgID, credentialID string) (contractsv1.ClientCredential, error) {
+	if err := s.ready(ctx); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
 	record, ok := s.byID[credentialID]
 	if !ok || record.Metadata.OrgID != orgID {
 		return contractsv1.ClientCredential{}, storage.ErrNotFound
@@ -66,65 +98,36 @@ func (s *CredentialStore) GetByID(_ context.Context, orgID, credentialID string)
 	return cloneCredential(record.Metadata), nil
 }
 
-func (s *CredentialStore) FindByTokenHash(_ context.Context, tokenHash string) (contractsv1.ClientCredential, error) {
+func (s *credentialStore) FindByTokenHash(ctx context.Context, tokenHash string) (contractsv1.ClientCredential, error) {
+	if err := s.ready(ctx); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
 	credentialID, ok := s.byHash[tokenHash]
 	if !ok {
 		return contractsv1.ClientCredential{}, storage.ErrNotFound
 	}
 	record, ok := s.byID[credentialID]
-	if !ok {
+	now := s.now().UTC()
+	if !ok || record.Metadata.RevokedAt != nil || record.Metadata.ExpiresAt != nil && !record.Metadata.ExpiresAt.After(now) {
 		return contractsv1.ClientCredential{}, storage.ErrNotFound
 	}
 	return cloneCredential(record.Metadata), nil
 }
 
-func (s *CredentialStore) Rotate(_ context.Context, orgID, credentialID string, replacement storage.CredentialRecord, previousValidUntil *time.Time) error {
+func (s *credentialStore) TouchLastUsed(ctx context.Context, credentialID, ip, userAgent string, usedAt time.Time) error {
+	if err := s.ready(ctx); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	old, ok := s.byID[credentialID]
-	if !ok || old.Metadata.OrgID != orgID {
-		return storage.ErrNotFound
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	if _, exists := s.byID[replacement.Metadata.CredentialID]; exists {
-		return storage.ErrConflict
-	}
-	if _, exists := s.byHash[replacement.TokenHash]; exists {
-		return storage.ErrConflict
-	}
-
-	cutover := replacement.Metadata.CreatedAt
-	if previousValidUntil == nil || !previousValidUntil.After(cutover) {
-		old.Metadata.RevokedAt = ptrTime(cutover)
-	} else if old.Metadata.ExpiresAt == nil || previousValidUntil.Before(*old.Metadata.ExpiresAt) {
-		old.Metadata.ExpiresAt = ptrTime(*previousValidUntil)
-	}
-	s.byID[credentialID] = cloneRecord(old)
-
-	replacement = cloneRecord(replacement)
-	s.byID[replacement.Metadata.CredentialID] = replacement
-	s.byHash[replacement.TokenHash] = replacement.Metadata.CredentialID
-	return nil
-}
-
-func (s *CredentialStore) Revoke(_ context.Context, orgID, credentialID string, revokedAt time.Time) (contractsv1.ClientCredential, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	record, ok := s.byID[credentialID]
-	if !ok || record.Metadata.OrgID != orgID {
-		return contractsv1.ClientCredential{}, storage.ErrNotFound
-	}
-	if record.Metadata.RevokedAt == nil || revokedAt.Before(*record.Metadata.RevokedAt) {
-		record.Metadata.RevokedAt = ptrTime(revokedAt)
-	}
-	s.byID[credentialID] = cloneRecord(record)
-	return cloneCredential(record.Metadata), nil
-}
-
-func (s *CredentialStore) TouchLastUsed(_ context.Context, credentialID, ip, userAgent string, usedAt time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	record, ok := s.byID[credentialID]
 	if !ok {
 		return storage.ErrNotFound
@@ -138,38 +141,9 @@ func (s *CredentialStore) TouchLastUsed(_ context.Context, credentialID, ip, use
 	return nil
 }
 
-// RecordForTest returns the private record for same-package and integration
-// tests. Production code must only consume the CredentialStore interface.
-func (s *CredentialStore) RecordForTest(credentialID string) (storage.CredentialRecord, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	record, ok := s.byID[credentialID]
-	return cloneRecord(record), ok
-}
-
-func cloneRecord(record storage.CredentialRecord) storage.CredentialRecord {
-	record.Metadata = cloneCredential(record.Metadata)
-	return record
-}
-
-func cloneCredential(value contractsv1.ClientCredential) contractsv1.ClientCredential {
-	value.RepositoryScopes = append([]string(nil), value.RepositoryScopes...)
-	value.Scopes = append([]string(nil), value.Scopes...)
-	value.ExpiresAt = cloneTime(value.ExpiresAt)
-	value.RevokedAt = cloneTime(value.RevokedAt)
-	value.LastUsedAt = cloneTime(value.LastUsedAt)
-	return value
-}
-
-func cloneTime(value *time.Time) *time.Time {
-	if value == nil {
-		return nil
+func (s *credentialStore) ready(ctx context.Context) error {
+	if s == nil || s.audit == nil || s.byID == nil || s.byHash == nil || s.now == nil || ctx == nil {
+		return storage.ErrInvalidCredentialLifecycle
 	}
-	copy := *value
-	return &copy
-}
-
-func ptrTime(value time.Time) *time.Time {
-	copy := value
-	return &copy
+	return ctx.Err()
 }

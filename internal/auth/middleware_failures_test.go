@@ -18,7 +18,7 @@ import (
 
 func TestAuthenticatorReturnsRetryableErrorForCredentialStoreFailure(t *testing.T) {
 	now := time.Date(2026, 7, 10, 15, 0, 0, 0, time.UTC)
-	store := &failingCredentialStore{CredentialStore: memory.NewCredentialStore(), err: errors.New("database unavailable")}
+	store := &failingCredentialStore{CredentialStore: newMemoryCredentialStore(t), err: errors.New("database unavailable")}
 	authenticator := newTestAuthenticator(t, store, memory.NewAuditStore(), now, NoopLimiter{})
 	handler := authenticator.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("failed credential lookup reached handler")
@@ -43,7 +43,7 @@ func TestAuthenticatorReturnsRetryableErrorForCredentialStoreFailure(t *testing.
 
 func TestAuthenticatorDoesNotLogCredentialStoreFailureDetails(t *testing.T) {
 	secret := "postgres://operator:credential-secret@example"
-	store := &failingCredentialStore{CredentialStore: memory.NewCredentialStore(), err: errors.New(secret)}
+	store := &failingCredentialStore{CredentialStore: newMemoryCredentialStore(t), err: errors.New(secret)}
 	buffer := &bytes.Buffer{}
 	authenticator, err := NewAuthenticator(store, memory.NewAuditStore(), AuthenticatorOptions{
 		Now: func() time.Time { return time.Date(2026, 7, 10, 15, 0, 0, 0, time.UTC) }, Limiter: NoopLimiter{}, Logger: slog.New(slog.NewJSONHandler(buffer, nil)),
@@ -67,7 +67,7 @@ func TestAuthenticatorDoesNotLogCredentialStoreFailureDetails(t *testing.T) {
 
 func TestAuthenticatorTreatsExactExpiryAsExpired(t *testing.T) {
 	now := time.Date(2026, 7, 10, 15, 0, 0, 0, time.UTC)
-	credentialStore := memory.NewCredentialStore()
+	credentialStore := newMemoryCredentialStoreAt(t, now.Add(-time.Hour), memory.NewAuditStore())
 	auditStore := memory.NewAuditStore()
 	issued := issueForMiddleware(t, credentialStore, auditStore, now.Add(-time.Hour), []string{ScopeContextRead}, []string{"owner/repo"}, &now)
 	authenticator := newTestAuthenticator(t, credentialStore, auditStore, now, NoopLimiter{})
@@ -81,7 +81,7 @@ func TestAuthenticatorTreatsExactExpiryAsExpired(t *testing.T) {
 
 func TestAuthenticatorRateLimitsBeforeCredentialLookup(t *testing.T) {
 	now := time.Date(2026, 7, 10, 15, 0, 0, 0, time.UTC)
-	store := &countingCredentialStore{CredentialStore: memory.NewCredentialStore()}
+	store := &countingCredentialStore{CredentialStore: newMemoryCredentialStore(t)}
 	authenticator := newTestAuthenticator(t, store, memory.NewAuditStore(), now, NewMemoryLimiter(time.Minute, 1, 5))
 	handler := authenticator.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	request := func() *http.Request {
