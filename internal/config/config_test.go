@@ -36,11 +36,18 @@ func TestProductionRequiresBackingStores(t *testing.T) {
 	}
 }
 
+func TestLoad_rejectsNonCanonicalEntitlementKey(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{"ACR_ENTITLEMENT_KEY": "different_policy"}))
+	if err == nil || !strings.Contains(err.Error(), "agent_context_runtime") {
+		t.Fatalf("load() error = %v, want canonical entitlement rejection", err)
+	}
+}
+
 func TestProductionRequiresEvidenceKeyring(t *testing.T) {
 	_, err := load(mapLookup(map[string]string{
 		"ACR_ENVIRONMENT":    "production",
 		"ACR_CLICKHOUSE_DSN": "clickhouse://redacted",
-		"ACR_POSTGRES_DSN":   "postgres://redacted",
+		"ACR_POSTGRES_DSN":   "postgres://redacted?sslmode=verify-full",
 	}))
 	if err == nil {
 		t.Fatal("expected production evidence keyring configuration error")
@@ -61,12 +68,13 @@ func TestProductionAcceptsConfiguredBackingStores(t *testing.T) {
 	cfg, err := load(mapLookup(map[string]string{
 		"ACR_ENVIRONMENT":                       "production",
 		"ACR_CLICKHOUSE_DSN":                    "clickhouse://redacted",
-		"ACR_POSTGRES_DSN":                      "postgres://redacted",
+		"ACR_POSTGRES_DSN":                      "postgres://redacted?sslmode=verify-full",
 		"ACR_LOG_LEVEL":                         "warn",
 		"ACR_EVIDENCE_ID_ACTIVE_KID":            "current",
 		"ACR_EVIDENCE_ID_KEYS":                  "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
 		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "https://ops.example.test",
 		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
+		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +89,8 @@ func TestProductionRequiresDevHealthEntitlementConfiguration(t *testing.T) {
 	base := map[string]string{
 		"ACR_ENVIRONMENT":            "production",
 		"ACR_REQUIRE_BACKING_STORES": "false",
+		"ACR_CLICKHOUSE_DSN":         "clickhouse://redacted",
+		"ACR_POSTGRES_DSN":           "postgres://redacted?sslmode=verify-full",
 		"ACR_EVIDENCE_ID_ACTIVE_KID": "current",
 		"ACR_EVIDENCE_ID_KEYS":       "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
 	}
@@ -93,6 +103,7 @@ func TestProductionRequiresDevHealthEntitlementConfiguration(t *testing.T) {
 		{"missing URL", base, "ACR_DEV_HEALTH_ENTITLEMENT_URL"},
 		{"missing token file", map[string]string{
 			"ACR_ENVIRONMENT": "production", "ACR_REQUIRE_BACKING_STORES": "false",
+			"ACR_CLICKHOUSE_DSN": "clickhouse://redacted", "ACR_POSTGRES_DSN": "postgres://redacted?sslmode=verify-full",
 			"ACR_EVIDENCE_ID_ACTIVE_KID": "current", "ACR_EVIDENCE_ID_KEYS": "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
 			"ACR_DEV_HEALTH_ENTITLEMENT_URL": "https://ops.example.test",
 		}, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE"},
@@ -113,10 +124,12 @@ func TestProductionRejectsInsecureDevHealthEntitlementURL(t *testing.T) {
 	// Given
 	values := map[string]string{
 		"ACR_ENVIRONMENT": "production", "ACR_REQUIRE_BACKING_STORES": "false",
+		"ACR_CLICKHOUSE_DSN": "clickhouse://redacted", "ACR_POSTGRES_DSN": "postgres://redacted?sslmode=verify-full",
 		"ACR_EVIDENCE_ID_ACTIVE_KID": "current", "ACR_EVIDENCE_ID_KEYS": "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
 		"ACR_DEV_HEALTH_ENTITLEMENT_URL":                     "http://127.0.0.1:8080",
 		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE":              "/run/secrets/ops-token",
 		"ACR_DEV_HEALTH_ENTITLEMENT_ALLOW_INSECURE_LOOPBACK": "true",
+		"ACR_POSTGRES_CONNECTION_KIND":                       "direct",
 	}
 
 	// When

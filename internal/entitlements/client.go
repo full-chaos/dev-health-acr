@@ -109,6 +109,14 @@ func (c *Client) Check(ctx context.Context) error {
 	return nil
 }
 
+// Close releases idle transport connections held by the client. It is safe to
+// call more than once and never fails: the entitlement client owns no other
+// closable resource.
+func (c *Client) Close() error {
+	c.http.CloseIdleConnections()
+	return nil
+}
+
 func (c *Client) fetch(ctx context.Context, orgID string) (bool, error) {
 	requestContext, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()

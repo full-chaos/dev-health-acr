@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -46,15 +47,34 @@ type RuntimeDependencies struct {
 }
 
 func (r *RuntimeDependencies) validate() error {
-	if r == nil || r.Credentials == nil || r.Audit == nil || r.Entitlements == nil || r.Assembler == nil || r.Evidence == nil {
+	if r == nil || storage.IsNil(r.Credentials) || storage.IsNil(r.Audit) || storage.IsNil(r.Entitlements) || storage.IsNil(r.Assembler) || storage.IsNil(r.Evidence) {
 		return errors.New("hosted read runtime dependencies must be configured together")
 	}
-	if len(r.ReadinessChecks) < 3 {
-		return errors.New("hosted read runtime requires credential, entitlement, and evidence readiness checks")
+	if r.Episodes != nil && storage.IsNil(r.Episodes) {
+		return errors.New("hosted episode runtime must not be typed nil")
 	}
+	if len(r.ReadinessChecks) < 3 {
+		return errors.New("hosted read runtime requires postgres, clickhouse, and entitlement readiness checks")
+	}
+	required := map[string]bool{"postgres": false, "clickhouse": false, "entitlement": false}
 	for _, check := range r.ReadinessChecks {
-		if check == nil || strings.TrimSpace(check.Name()) == "" {
+		if storage.IsNil(check) {
+			return errors.New("hosted read runtime readiness checks must not be nil")
+		}
+		name := strings.TrimSpace(check.Name())
+		if name == "" {
 			return errors.New("hosted read runtime readiness checks require a name")
+		}
+		if seen, ok := required[name]; ok {
+			if seen {
+				return errors.New("hosted read runtime readiness checks must not repeat postgres, clickhouse, or entitlement")
+			}
+			required[name] = true
+		}
+	}
+	for _, name := range []string{"postgres", "clickhouse", "entitlement"} {
+		if !required[name] {
+			return fmt.Errorf("hosted read runtime requires a %s readiness check", name)
 		}
 	}
 	return nil

@@ -41,8 +41,19 @@ type Config struct {
 	IdleTimeout                               time.Duration
 	ShutdownTimeout                           time.Duration
 	ClickHouseDSN                             string
+	ClickHouseCACertPath                      string
 	PostgresDSN                               string
+	PostgresPoolerAdminDSN                    string
+	PostgresConnectionKind                    string
+	PostgresMaxOpenConns                      int
+	PostgresMaxIdleConns                      int
+	PostgresMaxIdleConnsConfigured            bool
+	PostgresConnMaxLifetime                   time.Duration
+	PostgresConnMaxIdleTime                   time.Duration
+	PostgresPingTimeout                       time.Duration
+	AllowInsecurePostgres                     bool
 	RequireBackingStores                      bool
+	EnableEpisodeWriteback                    bool
 	MinimumSidecarVersion                     string
 	RevokedClientVersions                     []string
 	EntitlementKey                            string
@@ -83,8 +94,6 @@ func load(lookup lookupEnv) (Config, error) {
 		Environment:                    environment,
 		ListenAddress:                  stringValue(lookup, "ACR_ADDR", defaultListenAddress),
 		LogLevel:                       logLevel,
-		ClickHouseDSN:                  stringValue(lookup, "ACR_CLICKHOUSE_DSN", ""),
-		PostgresDSN:                    stringValue(lookup, "ACR_POSTGRES_DSN", ""),
 		MinimumSidecarVersion:          stringValue(lookup, "ACR_MINIMUM_SIDECAR_VERSION", defaultMinimumSidecar),
 		RevokedClientVersions:          stringListValue(lookup, "ACR_REVOKED_CLIENT_VERSIONS"),
 		EntitlementKey:                 stringValue(lookup, "ACR_ENTITLEMENT_KEY", defaultEntitlementKey),
@@ -94,6 +103,9 @@ func load(lookup lookupEnv) (Config, error) {
 		DevHealthEntitlementTokenFile:  stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE", ""),
 		DevHealthEntitlementProxyURL:   stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_PROXY_URL", ""),
 		DevHealthEntitlementCACertPath: stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE", ""),
+	}
+	if err := loadHostedRuntimeValues(lookup, &cfg, requireStoresDefault); err != nil {
+		return Config{}, err
 	}
 	if cfg.EvidenceIDKeys, err = evidenceIDKeysValue(lookup); err != nil {
 		return Config{}, err
@@ -115,9 +127,6 @@ func load(lookup lookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.ShutdownTimeout, err = durationValue(lookup, "ACR_SHUTDOWN_TIMEOUT", defaultShutdownTimeout); err != nil {
-		return Config{}, err
-	}
-	if cfg.RequireBackingStores, err = boolValue(lookup, "ACR_REQUIRE_BACKING_STORES", requireStoresDefault); err != nil {
 		return Config{}, err
 	}
 	if cfg.MaxItems, err = intValue(lookup, "ACR_MAX_ITEMS", defaultMaxItems); err != nil {
@@ -185,8 +194,8 @@ func (c Config) Validate() error {
 			return errors.New("ACR_REVOKED_CLIENT_VERSIONS must contain canonical SemVer versions")
 		}
 	}
-	if strings.TrimSpace(c.EntitlementKey) == "" {
-		return errors.New("ACR_ENTITLEMENT_KEY is required")
+	if c.EntitlementKey != defaultEntitlementKey {
+		return errors.New("ACR_ENTITLEMENT_KEY must be agent_context_runtime")
 	}
 	if c.MaxItems < 1 || c.MaxItems > 50 {
 		return errors.New("ACR_MAX_ITEMS must be between 1 and 50")
@@ -206,23 +215,12 @@ func (c Config) Validate() error {
 	if err := validateTrustedProxyCIDRs(c.TrustedProxyCIDRs); err != nil {
 		return err
 	}
-	if c.Environment == "production" && !hasActiveEvidenceIDKey(c) {
-		return errors.New("ACR_EVIDENCE_ID_ACTIVE_KID and ACR_EVIDENCE_ID_KEYS must configure an active evidence key in production")
+	if c.AllowInsecurePostgres && c.Environment != "test" {
+		return errors.New("ACR_ALLOW_INSECURE_POSTGRES is restricted to the test environment")
 	}
 	if c.RequireBackingStores {
-		if strings.TrimSpace(c.ClickHouseDSN) == "" {
-			return errors.New("ACR_CLICKHOUSE_DSN is required when backing stores are required")
-		}
-		if strings.TrimSpace(c.PostgresDSN) == "" {
-			return errors.New("ACR_POSTGRES_DSN is required when backing stores are required")
-		}
-	}
-	if c.Environment == "production" {
-		if strings.TrimSpace(c.DevHealthEntitlementURL) == "" {
-			return errors.New("ACR_DEV_HEALTH_ENTITLEMENT_URL is required in production")
-		}
-		if strings.TrimSpace(c.DevHealthEntitlementTokenFile) == "" {
-			return errors.New("ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE is required in production")
+		if err := validateHostedRuntime(c); err != nil {
+			return err
 		}
 	}
 	if strings.TrimSpace(c.DevHealthEntitlementURL) != "" {
@@ -231,26 +229,4 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
-}
-
-func hasActiveEvidenceIDKey(c Config) bool {
-	return validEvidenceKID(c.EvidenceIDActiveKID) && len(c.EvidenceIDKeys[c.EvidenceIDActiveKID]) >= evidenceIDKeyMinimumBytes
-}
-
-// SafeAttributes returns operational configuration without secret-bearing DSNs.
-func (c Config) SafeAttributes() []any {
-	return []any{
-		"environment", c.Environment,
-		"listen_address", c.ListenAddress,
-		"backing_stores_required", c.RequireBackingStores,
-		"clickhouse_configured", c.ClickHouseDSN != "",
-		"postgres_configured", c.PostgresDSN != "",
-		"minimum_sidecar_version", c.MinimumSidecarVersion,
-		"entitlement_key", c.EntitlementKey,
-		"evidence_id_active_kid", c.EvidenceIDActiveKID,
-		"evidence_id_key_count", len(c.EvidenceIDKeys),
-		"trusted_proxy_count", len(c.TrustedProxyCIDRs),
-		"dev_health_entitlement_configured", c.DevHealthEntitlementURL != "",
-		"dev_health_entitlement_token_file_configured", c.DevHealthEntitlementTokenFile != "",
-	}
 }

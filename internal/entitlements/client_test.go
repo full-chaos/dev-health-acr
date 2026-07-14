@@ -44,6 +44,24 @@ func TestClientHasEntitlement_returns_false_when_contract_flag_false(t *testing.
 	}
 }
 
+func TestClientClose_releasesIdleConnectionsAndIsIdempotent(t *testing.T) {
+	// Given
+	server := newTLSServer(t, http.StatusOK, `{"schema_version":"acr_entitlement.v1","org_id":"org-1","agent_context_runtime":true}`)
+	client := newClient(t, server, entitlements.Config{})
+	if _, err := client.HasEntitlement(context.Background(), "org-1", "agent_context_runtime"); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	firstErr := client.Close()
+	secondErr := client.Close()
+
+	// Then
+	if firstErr != nil || secondErr != nil {
+		t.Fatalf("Close() = (%v, %v), want (nil, nil)", firstErr, secondErr)
+	}
+}
+
 func TestClientCheck_accepts_only_authenticated_service_health_contract(t *testing.T) {
 	// Given
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

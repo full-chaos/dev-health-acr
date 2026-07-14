@@ -67,9 +67,9 @@ func TestHostedReadRoutesUsePostgresAndClickHouseAdapters(t *testing.T) {
 		Runtime: &RuntimeDependencies{
 			Credentials: credentials, Audit: audit, Entitlements: entitlements, Assembler: assembler, Evidence: evidence,
 			ReadinessChecks: []ReadinessCheck{
-				CheckFunc{CheckName: "credential_store", Fn: database.PingContext},
-				CheckFunc{CheckName: "entitlement_provider"},
-				CheckFunc{CheckName: "evidence_store", Fn: fixtureClickHouseReadiness(clickHouse)},
+				CheckFunc{CheckName: "postgres", Fn: database.PingContext},
+				CheckFunc{CheckName: "clickhouse", Fn: fixtureClickHouseReadiness(clickHouse)},
+				CheckFunc{CheckName: "entitlement"},
 			},
 		},
 	}, testLogger(&bytes.Buffer{}))

@@ -233,7 +233,7 @@ func runCredentialCLIProcess(t *testing.T, environment []string, arguments ...st
 	t.Helper()
 	command := exec.Command(os.Args[0], "-test.run=^TestCredentialCLIProcess$", "--")
 	command.Args = append(command.Args, arguments...)
-	command.Env = append(os.Environ(), credentialProcessEnvironment+"=1")
+	command.Env = append(os.Environ(), credentialProcessEnvironment+"=1", "ACR_ENVIRONMENT=test", "ACR_ALLOW_INSECURE_POSTGRES=true")
 	command.Env = append(command.Env, environment...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -261,7 +261,7 @@ func newCredentialTestDatabase(t *testing.T, ctx context.Context) string {
 	t.Cleanup(func() { require.NoError(t, container.Terminate(ctx)) })
 	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
-	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn})
+	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn, AllowInsecure: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	applyCredentialMigrations(t, ctx, db)

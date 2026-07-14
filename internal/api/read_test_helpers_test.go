@@ -51,9 +51,7 @@ func newHostedTestApp(t *testing.T, provider CapabilitiesProvider, hooks *observ
 		Capabilities: provider, Observability: hooks, Limits: manager, Now: func() time.Time { return now },
 		Runtime: &RuntimeDependencies{
 			Credentials: credentials, Audit: audit, Entitlements: entitlements, Assembler: assembler, Evidence: store,
-			ReadinessChecks: []ReadinessCheck{
-				CheckFunc{CheckName: "credential_store"}, CheckFunc{CheckName: "entitlement_provider"}, CheckFunc{CheckName: "evidence_store"},
-			},
+			ReadinessChecks: exactRuntimeChecks(),
 		},
 	}, testLogger(&bytes.Buffer{}))
 	if err != nil {

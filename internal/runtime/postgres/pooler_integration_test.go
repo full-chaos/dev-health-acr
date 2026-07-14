@@ -25,7 +25,7 @@ func TestOpen_rejectsActualPgBouncerTransactionAndStatementModes(t *testing.T) {
 			require.NotContains(t, migrationDSN, "pool_mode")
 
 			// When
-			_, err := Open(ctx, Config{DSN: migrationDSN, PoolerAdminDSN: adminDSN, PingTimeout: 30 * time.Second})
+			_, err := Open(ctx, Config{DSN: migrationDSN, PoolerAdminDSN: adminDSN, PingTimeout: 30 * time.Second, AllowInsecure: true})
 
 			// Then
 			require.ErrorIs(t, err, ErrTransactionPooler)
@@ -40,7 +40,7 @@ func TestOpen_acceptsActualPgBouncerSessionMode(t *testing.T) {
 	migrationDSN, adminDSN := newPgBouncerDSNs(t, ctx, "session")
 
 	// When
-	db, err := Open(ctx, Config{DSN: migrationDSN, PoolerAdminDSN: adminDSN, PingTimeout: 30 * time.Second})
+	db, err := Open(ctx, Config{DSN: migrationDSN, PoolerAdminDSN: adminDSN, PingTimeout: 30 * time.Second, AllowInsecure: true})
 
 	// Then
 	require.NoError(t, err)
@@ -48,7 +48,60 @@ func TestOpen_acceptsActualPgBouncerSessionMode(t *testing.T) {
 	require.NoError(t, db.PingContext(ctx))
 }
 
+func TestOpen_rejectsActualPgBouncerDatabasePoolModeOverride(t *testing.T) {
+	// Given
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	migrationDSN, adminDSN := newPgBouncerDSNsWithModes(t, ctx, pgBouncerModes{global: "session", database: "transaction"})
+
+	// When
+	_, err := Open(ctx, Config{DSN: migrationDSN, PoolerAdminDSN: adminDSN, PingTimeout: 30 * time.Second, AllowInsecure: true})
+
+	// Then
+	require.ErrorIs(t, err, ErrTransactionPooler)
+}
+
+func TestOpen_resolvesActualPgBouncerForcedUserPoolMode(t *testing.T) {
+	for _, test := range []struct {
+		mode    string
+		wantErr error
+	}{
+		{mode: "session"},
+		{mode: "transaction", wantErr: ErrTransactionPooler},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			// Given
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			modes := pgBouncerModes{global: "session", database: test.mode, forcedUser: true, clientUser: "client"}
+			migrationDSN, adminDSN := newPgBouncerDSNsWithModes(t, ctx, modes)
+
+			// When
+			database, err := Open(ctx, Config{DSN: migrationDSN, PoolerAdminDSN: adminDSN, PingTimeout: 30 * time.Second, AllowInsecure: true})
+
+			// Then
+			if test.wantErr != nil {
+				require.ErrorIs(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.NoError(t, database.Close())
+		})
+	}
+}
+
+type pgBouncerModes struct {
+	global     string
+	database   string
+	forcedUser bool
+	clientUser string
+}
+
 func newPgBouncerDSNs(t *testing.T, ctx context.Context, mode string) (string, string) {
+	return newPgBouncerDSNsWithModes(t, ctx, pgBouncerModes{global: mode})
+}
+
+func newPgBouncerDSNsWithModes(t *testing.T, ctx context.Context, modes pgBouncerModes) (string, string) {
 	t.Helper()
 	dockerNetwork, err := network.New(ctx)
 	require.NoError(t, err)
@@ -64,7 +117,7 @@ func newPgBouncerDSNs(t *testing.T, ctx context.Context, mode string) (string, s
 	require.NoError(t, err)
 	t.Cleanup(func() { terminateTestContainer(t, postgres) })
 
-	configPath, userListPath := writePgBouncerConfig(t, mode)
+	configPath, userListPath := writePgBouncerConfig(t, modes)
 	pooler, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        "edoburu/pgbouncer:latest",
@@ -94,16 +147,32 @@ func newPgBouncerDSNs(t *testing.T, ctx context.Context, mode string) (string, s
 	require.NoError(t, err)
 	port, err := pooler.MappedPort(ctx, "5432/tcp")
 	require.NoError(t, err)
-	base := fmt.Sprintf("postgres://acr:acr@%s:%s", host, port.Port())
-	migrationDSN, adminDSN := base+"/acr?sslmode=disable", base+"/pgbouncer?sslmode=disable"
+	clientUser := modes.clientUser
+	clientPassword := "acr"
+	if clientUser == "" {
+		clientUser = "acr"
+	}
+	if clientUser == "client" {
+		clientPassword = "client"
+	}
+	targetBase := fmt.Sprintf("postgres://%s:%s@%s:%s", clientUser, clientPassword, host, port.Port())
+	adminBase := fmt.Sprintf("postgres://acr:acr@%s:%s", host, port.Port())
+	migrationDSN, adminDSN := targetBase+"/acr?sslmode=disable", adminBase+"/pgbouncer?sslmode=disable"
 	return migrationDSN, adminDSN
 }
 
-func writePgBouncerConfig(t *testing.T, mode string) (string, string) {
+func writePgBouncerConfig(t *testing.T, modes pgBouncerModes) (string, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "pgbouncer.ini")
+	databaseOptions := ""
+	if modes.database != "" {
+		databaseOptions = " pool_mode=" + modes.database
+	}
+	if modes.forcedUser {
+		databaseOptions += " user=acr password=acr"
+	}
 	contents := fmt.Sprintf(`[databases]
-acr = host=postgres port=5432 dbname=acr
+acr = host=postgres port=5432 dbname=acr%s
 
 [pgbouncer]
 listen_addr = 0.0.0.0
@@ -112,10 +181,10 @@ auth_type = plain
 auth_file = /etc/pgbouncer/userlist.txt
 admin_users = acr
 pool_mode = %s
-`, mode)
+`, databaseOptions, modes.global)
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
 	userListPath := filepath.Join(filepath.Dir(path), "userlist.txt")
-	require.NoError(t, os.WriteFile(userListPath, []byte("\"acr\" \"acr\"\n"), 0o644))
+	require.NoError(t, os.WriteFile(userListPath, []byte("\"acr\" \"acr\"\n\"client\" \"client\"\n"), 0o644))
 	return path, userListPath
 }
 

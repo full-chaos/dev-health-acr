@@ -274,7 +274,7 @@ func newCredentialStoreDatabase(t *testing.T, ctx context.Context) *sql.DB {
 	t.Cleanup(func() { require.NoError(t, container.Terminate(ctx)) })
 	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
-	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn})
+	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn, AllowInsecure: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	runner, err := migrations.Embedded()

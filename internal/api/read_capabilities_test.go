@@ -130,7 +130,7 @@ func TestRuntimeReadinessChecksAreRequiredAndExecuted(t *testing.T) {
 	if ready.Code != http.StatusOK || len(app.readinessChecks) != 3 {
 		t.Fatalf("ready status = %d checks=%d", ready.Code, len(app.readinessChecks))
 	}
-	app.readinessChecks[1] = CheckFunc{CheckName: "entitlement_provider", Fn: func(context.Context) error { return errors.New("unavailable") }}
+	app.readinessChecks[1] = CheckFunc{CheckName: "entitlement", Fn: func(context.Context) error { return errors.New("unavailable") }}
 	notReady := httptest.NewRecorder()
 	app.Handler().ServeHTTP(notReady, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if notReady.Code != http.StatusServiceUnavailable {
