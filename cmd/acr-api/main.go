@@ -43,8 +43,10 @@ func run(args []string) error {
 		return nil
 	case "serve":
 		return serve(args)
+	case "credentials":
+		return runCredentialCLI(context.Background(), args, os.LookupEnv, os.Stdout, os.Stderr)
 	default:
-		return fmt.Errorf("unknown command %q; use serve or version", command)
+		return fmt.Errorf("unknown command %q; use serve, version, or credentials", command)
 	}
 }
 

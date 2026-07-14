@@ -19,7 +19,7 @@ import (
 
 func TestAuthenticatorAllowsAuthorizedReadAndTracksUsage(t *testing.T) {
 	now := time.Date(2026, 7, 10, 15, 0, 0, 0, time.UTC)
-	credentialStore := memory.NewCredentialStore()
+	credentialStore := newMemoryCredentialStore(t)
 	auditStore := memory.NewAuditStore()
 	issued := issueForMiddleware(t, credentialStore, auditStore, now, []string{ScopeContextRead, ScopeEvidenceRead}, []string{"full-chaos/dev-health-acr"}, nil)
 	authenticator := newTestAuthenticator(t, credentialStore, auditStore, now, NewMemoryLimiter(time.Minute, 10, 5))
@@ -45,21 +45,33 @@ func TestAuthenticatorAllowsAuthorizedReadAndTracksUsage(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("unexpected status: %d body=%s", response.Code, response.Body.String())
 	}
-	record, ok := credentialStore.RecordForTest(issued.Credential.CredentialID)
-	if !ok || record.Metadata.LastUsedAt == nil || !record.Metadata.LastUsedAt.Equal(now) || record.LastUsedIP != "192.0.2.10" {
-		t.Fatalf("last-used metadata not updated: %#v", record)
-	}
-	if record.LastUsedUserAgent != "acr-mcp/test" {
-		t.Fatalf("user agent not recorded: %q", record.LastUsedUserAgent)
+	stored, err := credentialStore.GetByID(context.Background(), issued.Credential.OrgID, issued.Credential.CredentialID)
+	if err != nil || stored.LastUsedAt == nil || !stored.LastUsedAt.Equal(now) {
+		t.Fatalf("last-used metadata not updated: %#v %v", stored, err)
 	}
 	if !hasAuditAction(auditStore.Events(), "credential_used") {
 		t.Fatal("successful use was not audited")
 	}
 }
 
+func TestNewAuthenticator_rejectsTypedNilStores(t *testing.T) {
+	// Given
+	var credentialStore *storage.CredentialLifecycle
+	var auditStore *memory.AuditStore
+
+	// When
+	withCredential, credentialErr := NewAuthenticator(credentialStore, nil, AuthenticatorOptions{})
+	withAudit, auditErr := NewAuthenticator(newMemoryCredentialStore(t), auditStore, AuthenticatorOptions{})
+
+	// Then
+	if withCredential != nil || credentialErr == nil || withAudit != nil || auditErr == nil {
+		t.Fatalf("NewAuthenticator() typed-nil results = (%v, %v), (%v, %v); want errors", withCredential, credentialErr, withAudit, auditErr)
+	}
+}
+
 func TestAuthenticatorDeniesIndependentScopeAndRepository(t *testing.T) {
 	now := time.Date(2026, 7, 10, 15, 0, 0, 0, time.UTC)
-	credentialStore := memory.NewCredentialStore()
+	credentialStore := newMemoryCredentialStore(t)
 	auditStore := memory.NewAuditStore()
 	issued := issueForMiddleware(t, credentialStore, auditStore, now, []string{ScopeEpisodeWrite}, []string{"owner/allowed"}, nil)
 	authenticator := newTestAuthenticator(t, credentialStore, auditStore, now, NoopLimiter{})
@@ -107,7 +119,7 @@ func TestAuthenticatorRejectsUnknownRevokedAndExpiredTokensWithoutLeakingReason(
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			credentialStore := memory.NewCredentialStore()
+			credentialStore := newMemoryCredentialStoreAt(t, now.Add(-time.Hour), memory.NewAuditStore())
 			auditStore := memory.NewAuditStore()
 			var expires *time.Time
 			if test.configure != nil {
@@ -115,7 +127,7 @@ func TestAuthenticatorRejectsUnknownRevokedAndExpiredTokensWithoutLeakingReason(
 			}
 			issued := issueForMiddleware(t, credentialStore, auditStore, now.Add(-time.Hour), []string{ScopeContextRead}, []string{"owner/repo"}, expires)
 			if test.revoke {
-				if _, err := credentialStore.Revoke(context.Background(), "org_1", issued.Credential.CredentialID, now.Add(-time.Minute)); err != nil {
+				if _, err := credentialStore.RevokeCredential(context.Background(), storage.CredentialRevocationInput{OrgID: "org_1", CredentialID: issued.Credential.CredentialID, ActorID: "admin"}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -141,14 +153,14 @@ func TestAuthenticatorRejectsUnknownRevokedAndExpiredTokensWithoutLeakingReason(
 	}
 }
 
-func issueForMiddleware(t *testing.T, store storage.CredentialStore, audit storage.AuditStore, now time.Time, scopes, repositories []string, expires *time.Time) IssuedCredential {
+func issueForMiddleware(t *testing.T, store *storage.CredentialLifecycle, _ storage.AuditStore, now time.Time, scopes, repositories []string, expires *time.Time) IssuedCredential {
 	t.Helper()
-	service, err := NewService(store, audit, ServiceOptions{Now: func() time.Time { return now }})
+	service, err := NewService(store, ServiceOptions{Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	issued, err := service.Create(context.Background(), CreateCredentialRequest{
-		OrgID: "org_1", Name: "test", RepositoryScopes: repositories, Scopes: scopes, ExpiresAt: expires,
+		OrgID: "org_1", Name: "test", RepositoryScopes: repositories, Scopes: scopes, CreatedBy: "test_actor", ExpiresAt: expires,
 	})
 	if err != nil {
 		t.Fatal(err)

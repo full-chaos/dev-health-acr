@@ -22,22 +22,22 @@ func TestHostedReadRoutesUsePostgresAndClickHouseAdapters(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	credentials, err := postgresstore.NewCredentialStore(database)
-	if err != nil {
-		t.Fatal(err)
-	}
 	audit, err := postgresstore.NewAuditStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
+	credentials, err := postgresstore.NewCredentialStore(database, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
-	credentialService, err := auth.NewService(credentials, audit, auth.ServiceOptions{Now: func() time.Time { return now }})
+	credentialService, err := auth.NewService(credentials, auth.ServiceOptions{Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	issued, err := credentialService.Create(context.Background(), auth.CreateCredentialRequest{
 		OrgID: "11111111-1111-4111-8111-111111111111", Name: "adapter fixture",
-		RepositoryScopes: []string{hostedTestRepository}, Scopes: []string{auth.ScopeContextRead, auth.ScopeEvidenceRead},
+		RepositoryScopes: []string{hostedTestRepository}, Scopes: []string{auth.ScopeContextRead, auth.ScopeEvidenceRead}, CreatedBy: "test_actor",
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -62,8 +63,8 @@ func normalizeCreateRequest(request CreateCredentialRequest) (CreateCredentialRe
 	request.OrgID = strings.TrimSpace(request.OrgID)
 	request.Name = strings.TrimSpace(request.Name)
 	request.CreatedBy = strings.TrimSpace(request.CreatedBy)
-	if request.OrgID == "" || request.Name == "" {
-		return request, fmt.Errorf("%w: org_id and name are required", ErrInvalidCredential)
+	if request.OrgID == "" || request.Name == "" || request.CreatedBy == "" {
+		return request, fmt.Errorf("%w: org_id, name, and actor are required", ErrInvalidCredential)
 	}
 	if len(request.Name) > 200 {
 		return request, fmt.Errorf("%w: name exceeds 200 characters", ErrInvalidCredential)
@@ -78,6 +79,11 @@ func normalizeCreateRequest(request CreateCredentialRequest) (CreateCredentialRe
 		return request, err
 	}
 	return request, nil
+}
+
+func ValidateCreateCredentialRequest(request CreateCredentialRequest) error {
+	_, err := normalizeCreateRequest(request)
+	return err
 }
 
 func normalizeScopes(scopes []string) ([]string, error) {
@@ -104,10 +110,5 @@ func normalizeScopes(scopes []string) ([]string, error) {
 }
 
 func HasScope(scopes []string, required string) bool {
-	for _, scope := range scopes {
-		if scope == required {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(scopes, required)
 }

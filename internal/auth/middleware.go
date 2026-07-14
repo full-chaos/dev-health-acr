@@ -35,8 +35,11 @@ type Authenticator struct {
 }
 
 func NewAuthenticator(store storage.CredentialStore, audit storage.AuditStore, options AuthenticatorOptions) (*Authenticator, error) {
-	if store == nil {
+	if storage.IsNil(store) {
 		return nil, errors.New("credential store is required")
+	}
+	if storage.IsNil(audit) && audit != nil {
+		return nil, errors.New("audit store must not be typed nil")
 	}
 	if options.Now == nil {
 		options.Now = time.Now
@@ -81,7 +84,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			a.writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Credential service is temporarily unavailable", true, nil)
 			return
 		}
-		if credential.RevokedAt != nil && !credential.RevokedAt.After(now) {
+		if credential.RevokedAt != nil {
 			a.recordKnownFailure(r, credential, "revoked", now)
 			a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 			return

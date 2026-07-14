@@ -13,14 +13,15 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
 )
 
 func TestLimitMiddlewareReturnsCorrelatedRateLimitDenial(t *testing.T) {
 	// Given
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
-	credentials := memory.NewCredentialStore()
 	audit := memory.NewAuditStore()
+	credentials := newMemoryCredentialLifecycle(t, audit, now)
 	issued := issueCredential(t, credentials, audit, now)
 	authenticator, err := auth.NewAuthenticator(credentials, audit, auth.AuthenticatorOptions{
 		Now:     func() time.Time { return now },
@@ -113,8 +114,8 @@ func TestAppProtectedHandlerUsesInjectedLimitManager(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials := memory.NewCredentialStore()
 	audit := memory.NewAuditStore()
+	credentials := newMemoryCredentialLifecycle(t, audit, now)
 	token := issueCredential(t, credentials, audit, now)
 	authenticator, err := auth.NewAuthenticator(credentials, audit, auth.AuthenticatorOptions{Now: func() time.Time { return now }, Limiter: auth.NoopLimiter{}, Logger: testLogger(&bytes.Buffer{})})
 	if err != nil {
@@ -164,8 +165,8 @@ func TestAppProtectedHandlerUsesInjectedLimitManager(t *testing.T) {
 
 func TestAppAuthenticatedHandlerUsesInjectedAttemptLimiter(t *testing.T) {
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
-	credentials := memory.NewCredentialStore()
 	audit := memory.NewAuditStore()
+	credentials := newMemoryCredentialLifecycle(t, audit, now)
 	token := issueCredential(t, credentials, audit, now)
 	manager, err := limits.NewManager(limits.Options{Policies: limits.PolicySet{Evidence: limits.EvidencePolicy{Window: time.Minute, PerOrgLimit: 10}}})
 	if err != nil {
@@ -203,14 +204,14 @@ func TestAppAuthenticatedHandlerUsesInjectedAttemptLimiter(t *testing.T) {
 	}
 }
 
-func issueCredential(t *testing.T, credentials *memory.CredentialStore, audit *memory.AuditStore, now time.Time) string {
+func issueCredential(t *testing.T, credentials *storage.CredentialLifecycle, _ *memory.AuditStore, now time.Time) string {
 	t.Helper()
-	service, err := auth.NewService(credentials, audit, auth.ServiceOptions{Now: func() time.Time { return now }})
+	service, err := auth.NewService(credentials, auth.ServiceOptions{Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	issued, err := service.Create(context.Background(), auth.CreateCredentialRequest{
-		OrgID: "org_1", Name: "limit middleware", RepositoryScopes: []string{"owner/repository"}, Scopes: []string{auth.ScopeContextRead},
+		OrgID: "org_1", Name: "limit middleware", RepositoryScopes: []string{"owner/repository"}, Scopes: []string{auth.ScopeContextRead}, CreatedBy: "test_actor",
 	})
 	if err != nil {
 		t.Fatal(err)

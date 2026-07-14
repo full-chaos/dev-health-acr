@@ -19,8 +19,8 @@ const hostedTestRepository = "example-org/widget-service"
 func newHostedTestApp(t *testing.T, provider CapabilitiesProvider, hooks *observability.Hooks, scopes []string, entitlements EntitlementProvider, store storage.EvidenceStore) (*App, string) {
 	t.Helper()
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
-	credentials := memory.NewCredentialStore()
 	audit := memory.NewAuditStore()
+	credentials := newMemoryCredentialLifecycle(t, audit, now)
 	token := issueScopedCredential(t, credentials, audit, now, scopes, []string{hostedTestRepository})
 	if hooks == nil {
 		value := observability.NewHooks(nil, nil)
@@ -60,6 +60,15 @@ func newHostedTestApp(t *testing.T, provider CapabilitiesProvider, hooks *observ
 		t.Fatal(err)
 	}
 	return app, token
+}
+
+func newMemoryCredentialLifecycle(t *testing.T, audit *memory.AuditStore, now time.Time) *storage.CredentialLifecycle {
+	t.Helper()
+	store, err := memory.NewCredentialStoreWithOptions(memory.CredentialStoreOptions{Audit: audit, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
 }
 
 func hostedCapabilities() contractsv1.Capabilities {

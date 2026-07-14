@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -15,6 +16,21 @@ import (
 type AuditStore struct {
 	DB         *sql.DB
 	GenerateID func() (string, error)
+	mu         sync.Mutex
+	lifecycle  *credentialStore
+}
+
+func (s *AuditStore) bindLifecycle(store *credentialStore) error {
+	if s == nil || store == nil {
+		return errors.New("credential and audit stores are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lifecycle != nil {
+		return storage.ErrConflict
+	}
+	s.lifecycle = store
+	return nil
 }
 
 func NewAuditStore(db *sql.DB) (*AuditStore, error) {
@@ -25,6 +41,22 @@ func NewAuditStore(db *sql.DB) (*AuditStore, error) {
 }
 
 func (s *AuditStore) Record(ctx context.Context, event storage.AuditEvent) error {
+	if s == nil || s.DB == nil || s.GenerateID == nil || storage.IsNil(ctx) {
+		return storage.ErrInvalidCredentialLifecycle
+	}
+	if storage.IsCredentialLifecycleAuditAction(event.Action) {
+		return storage.ErrInvalidCredentialInput
+	}
+	return s.record(ctx, s.DB, event)
+}
+
+func (s *AuditStore) record(ctx context.Context, executor execer, event storage.AuditEvent) error {
+	if s == nil || s.GenerateID == nil || storage.IsNil(executor) || ctx == nil {
+		return storage.ErrInvalidCredentialLifecycle
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	id, err := s.GenerateID()
 	if err != nil {
 		return fmt.Errorf("generate audit id: %w", err)
@@ -33,7 +65,7 @@ func (s *AuditStore) Record(ctx context.Context, event storage.AuditEvent) error
 	if err != nil {
 		return fmt.Errorf("encode audit metadata: %w", err)
 	}
-	_, err = s.DB.ExecContext(ctx, `
+	_, err = executor.ExecContext(ctx, `
 INSERT INTO acr.audit_events (
     audit_event_id, org_id, repo_id, actor_type, actor_id, action,
     resource_type, resource_id, status, request_id, metadata, created_at
@@ -42,7 +74,7 @@ INSERT INTO acr.audit_events (
 		event.ResourceType, event.ResourceID, event.Status, event.RequestID, string(metadata), event.CreatedAt,
 	)
 	if err != nil {
-		return fmt.Errorf("insert audit event: %w", err)
+		return fmt.Errorf("insert audit event: %w", sanitizeDatabaseError(err))
 	}
 	return nil
 }

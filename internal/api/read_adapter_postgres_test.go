@@ -29,6 +29,8 @@ type fixturePostgresDriver struct{}
 
 type fixturePostgresConn struct{ state *fixturePostgresState }
 
+type fixturePostgresTx struct{}
+
 type fixturePostgresRows struct {
 	row  []driver.Value
 	done bool
@@ -58,8 +60,11 @@ func (c *fixturePostgresConn) Prepare(string) (driver.Stmt, error) {
 func (c *fixturePostgresConn) Close() error { return nil }
 
 func (c *fixturePostgresConn) Begin() (driver.Tx, error) {
-	return nil, errors.New("fixture PostgreSQL transactions are unsupported")
+	return fixturePostgresTx{}, nil
 }
+
+func (fixturePostgresTx) Commit() error   { return nil }
+func (fixturePostgresTx) Rollback() error { return nil }
 
 func (c *fixturePostgresConn) Ping(context.Context) error { return nil }
 
