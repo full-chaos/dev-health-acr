@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test hosted-integration vet contract-write contract-test build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan
+.PHONY: fmt fmt-check test hosted-integration vet contract-write contract-test build verify release-local release-verify
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -32,24 +32,6 @@ build:
 	go build -o .tmp/acr-migrate ./cmd/acr-migrate
 
 verify: fmt-check vet test contract-test build
-
-container-contract:
-	bash scripts/container/test-contract.sh
-
-container-pins:
-	bash scripts/container/verify-pins.sh
-
-container-test: container-contract
-	bash scripts/container/smoke.sh
-
-container-reproducible:
-	bash scripts/container/reproducible.sh
-
-container-oci:
-	bash scripts/container/oci.sh
-
-container-scan:
-	bash scripts/container/scan.sh
 
 release-local:
 	@test -n "$(RELEASE_VERSION)" || (echo "RELEASE_VERSION must be a canonical version such as 1.2.3"; exit 1)
