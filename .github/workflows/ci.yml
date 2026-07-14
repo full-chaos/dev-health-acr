@@ -13,11 +13,14 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.26.5'
-          cache: true
+          cache: false
       - name: Check release setup script modes
         run: |
           test -x scripts/release/setup-cosign-key.sh
@@ -34,3 +37,61 @@ jobs:
         run: make hosted-integration
       - name: Check known Go vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
+
+  containers:
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # docker/setup-qemu-action v3.6.0
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
+        with:
+          # yamllint disable rule:line-length
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          # yamllint enable rule:line-length
+          cache-image: false
+      - name: Install checksum-verified Docker Buildx
+        env:
+          BUILDX_VERSION: v0.35.0
+          BUILDX_SHA256: >-
+            d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda
+          BUILDX_URL: >-
+            https://github.com/docker/buildx/releases/download/v0.35.0/buildx-v0.35.0.linux-amd64
+        run: |
+          mkdir -p "$RUNNER_TEMP/buildx" "$HOME/.docker/cli-plugins"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "$BUILDX_URL" \
+            --output "$RUNNER_TEMP/buildx/docker-buildx"
+          printf '%s  %s\n' \
+            "$BUILDX_SHA256" "$RUNNER_TEMP/buildx/docker-buildx" \
+            | sha256sum --check -
+          install -m 0755 \
+            "$RUNNER_TEMP/buildx/docker-buildx" \
+            "$HOME/.docker/cli-plugins/docker-buildx"
+          docker buildx version | grep -F "$BUILDX_VERSION"
+      # docker/setup-buildx-action v3.11.1
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435  # yamllint disable-line rule:line-length
+        with:
+          # yamllint disable rule:line-length
+          driver-opts: image=moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1
+          # yamllint enable rule:line-length
+          cache-binary: false
+      - name: Verify mutable tags still resolve to reviewed digests
+        run: make container-pins
+      - name: Validate container contract and native runtime smoke tests
+        run: make container-test
+      - name: Rebuild the clean commit reproducibly
+        run: make container-reproducible
+      - name: Build and validate multi-architecture OCI archives
+        run: make container-oci
+      - name: Scan immutable amd64 and arm64 OCI images and generate SPDX SBOMs
+        run: make container-scan
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: container-reports
+          path: .tmp/container-reports/
+          if-no-files-found: warn
+          retention-days: 7

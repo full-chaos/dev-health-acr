@@ -15,6 +15,14 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
+const rootUsage = `Usage: acr-api [serve|version|credentials]
+
+Commands:
+  serve        run the ACR HTTP API
+  version      print build identity
+  credentials  administer ACR client credentials
+`
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -23,6 +31,10 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+		_, err := fmt.Print(rootUsage)
+		return err
+	}
 	command := "serve"
 	if len(args) > 0 && args[0] != "-version" && args[0] != "--version" {
 		command = args[0]
