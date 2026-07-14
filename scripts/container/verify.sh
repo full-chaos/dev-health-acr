@@ -168,7 +168,10 @@ postgres_container="$(docker run -d \
 track_container "$postgres_container"
 postgres_ready=0
 for _ in {1..60}; do
-  if docker exec "$postgres_container" pg_isready --quiet --username acr --dbname acr; then
+  if docker run --rm --network "$migration_network" "${readonly_probe_flags[@]}" \
+    "$postgres_image" pg_isready --quiet \
+    --host postgres --port 5432 \
+    --username acr --dbname acr --timeout=1; then
     postgres_ready=1
     break
   fi

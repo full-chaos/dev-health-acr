@@ -115,6 +115,27 @@ grep -q 'assert_no_package_manager' "${repo_root}/scripts/container/verify.sh"
 test "$(grep -c 'assert_no_shell .* MCP' "${repo_root}/scripts/container/verify.sh")" -eq 1
 grep -q 'migration-first' "${repo_root}/scripts/container/verify.sh"
 grep -q 'migration-second' "${repo_root}/scripts/container/verify.sh"
+verify_script="${repo_root}/scripts/container/verify.sh"
+if grep -q 'docker exec .*pg_isready' "$verify_script"; then
+  printf 'PostgreSQL readiness must not use the container-local socket\n' >&2
+  exit 1
+fi
+grep -qF "docker run --rm --network \"\$migration_network\" \"\${readonly_probe_flags[@]}\"" "$verify_script" || {
+  printf 'PostgreSQL readiness must use a hardened peer on the migration network\n' >&2
+  exit 1
+}
+grep -qF "\"\$postgres_image\" pg_isready --quiet" "$verify_script" || {
+  printf 'PostgreSQL readiness must use the pinned PostgreSQL client\n' >&2
+  exit 1
+}
+grep -qF -- '--host postgres --port 5432' "$verify_script" || {
+  printf 'PostgreSQL readiness must probe the migration DSN host and port\n' >&2
+  exit 1
+}
+grep -qF -- '--timeout=1' "$verify_script" || {
+  printf 'PostgreSQL readiness attempts must have a bounded client timeout\n' >&2
+  exit 1
+}
 
 # 8. Local artifact builds must refuse a dirty product worktree by
 # default and only label metadata as dirty under an explicit,
