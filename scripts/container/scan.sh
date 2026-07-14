@@ -16,10 +16,15 @@ max_db_age_hours="${TRIVY_DB_MAX_AGE_HOURS:-168}"
 require() { command -v "$1" >/dev/null || { printf '%s is required\n' "$1" >&2; exit 1; }; }
 require date
 require docker
+require id
 require jq
 require tar
 [[ "$max_db_age_hours" =~ ^[1-9][0-9]*$ ]] || { printf 'TRIVY_DB_MAX_AGE_HOURS must be a positive integer\n' >&2; exit 2; }
 [[ "$lock_timeout" =~ ^[1-9][0-9]*$ ]] || { printf 'CONTAINER_PUBLISH_LOCK_TIMEOUT must be a positive integer\n' >&2; exit 2; }
+scanner_uid="$(id -u)"
+scanner_gid="$(id -g)"
+[[ "$scanner_uid" =~ ^[1-9][0-9]*$ ]] || { printf 'container scanning requires a non-root invoking user\n' >&2; exit 2; }
+[[ "$scanner_gid" =~ ^[0-9]+$ ]] || { printf 'container scanning requires a numeric invoking group\n' >&2; exit 2; }
 
 mkdir -p "$tmp_root"
 work_root="$(mktemp -d "${tmp_root}/container-scan.work.XXXXXX")"
@@ -68,10 +73,13 @@ jq -e --arg layer "$trivy_db_layer" '.layers | any(.digest == $layer)' <<<"$db_m
 }
 
 docker run --rm --pull=never \
+  --user "${scanner_uid}:${scanner_gid}" \
+  --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777 \
   --cap-drop ALL --security-opt no-new-privileges \
-  -v "${trivy_cache}:/root/.cache/trivy" \
+  -e HOME=/tmp \
+  -v "${trivy_cache}:/tmp/trivy-cache" \
   "$trivy_image" image \
-  --cache-dir /root/.cache/trivy \
+  --cache-dir /tmp/trivy-cache \
   --db-repository "$trivy_db" \
   --download-db-only \
   --no-progress
@@ -97,12 +105,15 @@ printf '%s\n%s\n' "$trivy_db" "$trivy_db_layer" >"${report_root}/trivy-db-snapsh
 failures=0
 for name in acr-api-amd64 acr-api-arm64 acr-mcp-amd64 acr-mcp-arm64; do
   if ! docker run --rm --pull=never --network none \
+    --user "${scanner_uid}:${scanner_gid}" \
+    --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777 \
     --cap-drop ALL --security-opt no-new-privileges \
+    -e HOME=/tmp \
     -v "${scan_root}:/scan:ro" \
     -v "${report_root}:/reports" \
-    -v "${trivy_cache}:/root/.cache/trivy" \
+    -v "${trivy_cache}:/tmp/trivy-cache" \
     "$trivy_image" image \
-    --cache-dir /root/.cache/trivy \
+    --cache-dir /tmp/trivy-cache \
     --skip-db-update \
     --skip-version-check \
     --input "/scan/${name}" \
@@ -114,8 +125,10 @@ for name in acr-api-amd64 acr-api-arm64 acr-mcp-amd64 acr-mcp-arm64; do
   fi
 
   if ! docker run --rm --pull=never --network none \
+    --user "${scanner_uid}:${scanner_gid}" \
+    --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777 \
     --cap-drop ALL --security-opt no-new-privileges \
-    -e SYFT_CHECK_FOR_APP_UPDATE=false \
+    -e HOME=/tmp -e SYFT_CHECK_FOR_APP_UPDATE=false \
     -v "${scan_root}:/scan:ro" \
     -v "${report_root}:/reports" \
     "$syft_image" "oci-dir:/scan/${name}" \

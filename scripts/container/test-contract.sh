@@ -220,6 +220,31 @@ grep -q 'TRIVY_DB_MAX_AGE_HOURS' "${repo_root}/scripts/container/scan.sh"
 test "$(grep -c -- '--skip-db-update' "${repo_root}/scripts/container/scan.sh")" -eq 1
 grep -q 'anchore/syft:v1.46.0@sha256:' "${repo_root}/scripts/container/scan.sh"
 grep -q 'container-scan.work.XXXXXX' "${repo_root}/scripts/container/scan.sh"
+scan_script="${repo_root}/scripts/container/scan.sh"
+grep -qF "scanner_uid=\"\$(id -u)\"" "$scan_script" || {
+  printf 'container scanners must derive the invoking host UID\n' >&2
+  exit 1
+}
+grep -qF "scanner_gid=\"\$(id -g)\"" "$scan_script" || {
+  printf 'container scanners must derive the invoking host GID\n' >&2
+  exit 1
+}
+test "$(grep -cF -- "--user \"\${scanner_uid}:\${scanner_gid}\"" "$scan_script")" -eq 3 || {
+  printf 'DB download, Trivy scans, and Syft SBOMs must run as the invoking non-root user\n' >&2
+  exit 1
+}
+test "$(grep -c -- '--read-only' "$scan_script")" -eq 3 || {
+  printf 'every scanner container must use a read-only root filesystem\n' >&2
+  exit 1
+}
+test "$(grep -cF -- '--tmpfs /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777' "$scan_script")" -eq 3 || {
+  printf 'every scanner container must provide bounded non-root scratch space\n' >&2
+  exit 1
+}
+if grep -q '/root/.cache/trivy' "$scan_script"; then
+  printf 'Trivy cache must not depend on root-home traversal or ownership\n' >&2
+  exit 1
+fi
 if grep -q "rm -rf \"\$scan_root\" \"\$report_root\" \"\$trivy_cache\"" "${repo_root}/scripts/container/scan.sh"; then
   printf 'container scan must not delete shared work roots before generating reports\n' >&2
   exit 1
