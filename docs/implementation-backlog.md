@@ -2,6 +2,23 @@
 
 This document translates the pre-v2.1 Linear backlog into the decided private Go service boundary.
 
+## Superseded deployment plan status
+
+`.omo/plans/acr-developer-deployment.md` is superseded for remaining work by
+`.omo/plans/acr-project-completion.md`, but its already-completed evidence
+remains valid and is tracked here rather than re-executed.
+
+- **Todo 8** (reproducible `acr-api`/`acr-mcp` container images, CHAOS-2943) is
+  **complete**: merged at `11c44ef812f9f9ae71a044d64f00ebae1ea1602f`
+  (`feat(containers): add hardened reproducible images (CHAOS-2943)`). See
+  [`container-images.md`](container-images.md) and
+  `.omo/evidence/task-8-acr-developer-deployment.txt`. No target publishes or
+  pushes an image to any registry.
+- **Todo 9** (root local Compose integration with isolated ACR persistence and
+  migrations) is **pending**. It is not yet implemented or tested here; the
+  equivalent work continues under `.omo/plans/acr-project-completion.md` Todo 7
+  and must not be documented as working, merged, or verified until that todo's
+  Compose acceptance evidence exists.
 ## Phase 1 foundation
 
 | Linear issue | Repository | Decided implementation |
