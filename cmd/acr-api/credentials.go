@@ -19,6 +19,9 @@ const (
 	postgresDSNEnvironment            = "ACR_POSTGRES_DSN"
 	postgresDSNFileEnvironment        = "ACR_POSTGRES_DSN_FILE"
 	postgresPoolerAdminDSNEnvironment = "ACR_POSTGRES_POOLER_ADMIN_DSN"
+	postgresEnvironment               = "ACR_ENVIRONMENT"
+	postgresInsecureEnvironment       = "ACR_ALLOW_INSECURE_POSTGRES"
+	postgresConnectionKindEnvironment = "ACR_POSTGRES_CONNECTION_KIND"
 	maximumCredentialLifetime         = 365 * 24 * time.Hour
 	maximumCredentialOverlap          = 15 * time.Minute
 )
@@ -55,7 +58,16 @@ func runCredentialCLI(ctx context.Context, arguments []string, lookup lookupEnv,
 		return err
 	}
 	poolerAdminDSN, _ := lookup(postgresPoolerAdminDSNEnvironment)
-	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn, PoolerAdminDSN: poolerAdminDSN})
+	environment, _ := lookup(postgresEnvironment)
+	insecureRaw, _ := lookup(postgresInsecureEnvironment)
+	allowInsecure, err := runtimepostgres.InsecureTestTransportOverride(strings.TrimSpace(environment), strings.TrimSpace(insecureRaw))
+	if err != nil {
+		return err
+	}
+	if err := validateDeclaredConnectionKind(lookup, poolerAdminDSN); err != nil {
+		return err
+	}
+	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn, PoolerAdminDSN: poolerAdminDSN, AllowInsecure: allowInsecure})
 	if err != nil {
 		return fmt.Errorf("open PostgreSQL for credential command: %w", err)
 	}
@@ -156,6 +168,23 @@ func credentialDSN(lookup lookupEnv) (string, error) {
 		return "", fmt.Errorf("%s or %s is required", postgresDSNEnvironment, postgresDSNFileEnvironment)
 	}
 	return strings.TrimSpace(dsn), nil
+}
+
+// validateDeclaredConnectionKind rejects a declared ACR_POSTGRES_CONNECTION_KIND
+// that contradicts the presence of a PgBouncer administration DSN, applying
+// the same rule the hosted server enforces. The declaration is optional for
+// this administrative CLI; when absent, the PgBouncer administration DSN
+// alone continues to control the session-mode probe.
+func validateDeclaredConnectionKind(lookup lookupEnv, poolerAdminDSN string) error {
+	raw, declared := lookup(postgresConnectionKindEnvironment)
+	if !declared || strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	kind, err := runtimepostgres.ParseConnectionKind(raw)
+	if err != nil {
+		return err
+	}
+	return runtimepostgres.ValidateConnectionKind(kind, poolerAdminDSN)
 }
 
 func requireCredentialCreateArguments(arguments credentialCommandArguments) error {

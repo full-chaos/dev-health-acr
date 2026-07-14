@@ -42,19 +42,23 @@ func TestVersionCommand(t *testing.T) {
 	}
 }
 
-func TestServeFailsClosedWithoutHostedRuntimeAdapters(t *testing.T) {
+func TestServeFailsClosedWhenPostgresIsUnavailable(t *testing.T) {
 	t.Setenv("ACR_ENVIRONMENT", "production")
 	t.Setenv("ACR_CLICKHOUSE_DSN", "clickhouse://configured")
-	t.Setenv("ACR_POSTGRES_DSN", "postgres://configured")
+	t.Setenv("ACR_POSTGRES_DSN", "postgres://configured?sslmode=verify-full")
 	t.Setenv("ACR_EVIDENCE_ID_ACTIVE_KID", "current")
 	t.Setenv("ACR_EVIDENCE_ID_KEYS", "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=")
 	t.Setenv("ACR_DEV_HEALTH_ENTITLEMENT_URL", "https://ops.example.test")
 	t.Setenv("ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE", "/run/secrets/ops-token")
+	t.Setenv("ACR_POSTGRES_CONNECTION_KIND", "direct")
 
 	err := serve(nil)
 
-	if err == nil || !strings.Contains(err.Error(), "runtime adapters") {
+	if err == nil || !strings.Contains(err.Error(), "initialize PostgreSQL runtime") {
 		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(err.Error(), "postgres://configured") {
+		t.Fatalf("error leaked PostgreSQL DSN: %v", err)
 	}
 }
 

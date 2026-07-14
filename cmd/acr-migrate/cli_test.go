@@ -15,7 +15,7 @@ func TestRun_usesMigrationDSNOnlyFromEnvironment(t *testing.T) {
 	ctx := context.Background()
 	dsn := newTestPostgresDSN(t, ctx)
 	var stdout bytes.Buffer
-	lookup := environment(map[string]string{migrationDSNEnvironment: dsn})
+	lookup := testMigrationEnvironment(dsn)
 
 	// When
 	err := run(ctx, []string{"up"}, lookup, &stdout)
@@ -29,7 +29,7 @@ func TestRun_reportsStatusFromEnvironmentConfiguredDSN(t *testing.T) {
 	// Given
 	ctx := context.Background()
 	dsn := newTestPostgresDSN(t, ctx)
-	lookup := environment(map[string]string{migrationDSNEnvironment: dsn})
+	lookup := testMigrationEnvironment(dsn)
 	require.NoError(t, run(ctx, []string{"up"}, lookup, &bytes.Buffer{}))
 	var stdout bytes.Buffer
 
@@ -46,7 +46,7 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 	// Given
 	ctx := context.Background()
 	dsn := newTestPostgresDSN(t, ctx)
-	lookup := environment(map[string]string{migrationDSNEnvironment: dsn})
+	lookup := testMigrationEnvironment(dsn)
 	var first, second bytes.Buffer
 
 	// When
@@ -64,7 +64,7 @@ func TestRun_reportsExplicitEmptyStatus_whenDatabaseIsFresh(t *testing.T) {
 	// Given
 	ctx := context.Background()
 	dsn := newTestPostgresDSN(t, ctx)
-	lookup := environment(map[string]string{migrationDSNEnvironment: dsn})
+	lookup := testMigrationEnvironment(dsn)
 	var stdout bytes.Buffer
 
 	// When
@@ -101,11 +101,59 @@ func TestRun_requiresMigrationDSNEnvironment(t *testing.T) {
 	require.Contains(t, err.Error(), migrationDSNEnvironment)
 }
 
+func TestRun_rejectsInsecureMigrationDSNOutsideTestEnvironment(t *testing.T) {
+	// Given
+	lookup := environment(map[string]string{migrationDSNEnvironment: "postgres://user:sentinel-secret@db.example/acr?sslmode=disable"})
+
+	// When
+	err := run(context.Background(), []string{"status"}, lookup, &bytes.Buffer{})
+
+	// Then
+	require.ErrorContains(t, err, "verified TLS")
+	require.NotContains(t, err.Error(), "sentinel-secret")
+}
+
+func TestRun_rejectsDeclaredConnectionKindContradictions(t *testing.T) {
+	tests := []struct {
+		name   string
+		values map[string]string
+	}{
+		{name: "direct with pooler admin DSN", values: map[string]string{
+			migrationDSNEnvironment:            "postgres://localhost/acr?sslmode=verify-full",
+			poolerAdminDSNEnvironment:          "postgres://pooler-admin",
+			migrationConnectionKindEnvironment: "direct",
+		}},
+		{name: "pgbouncer without pooler admin DSN", values: map[string]string{
+			migrationDSNEnvironment:            "postgres://localhost/acr?sslmode=verify-full",
+			migrationConnectionKindEnvironment: "pgbouncer",
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			lookup := environment(test.values)
+
+			// When
+			err := run(context.Background(), []string{"status"}, lookup, &bytes.Buffer{})
+
+			// Then
+			require.ErrorContains(t, err, "ACR_POSTGRES_CONNECTION_KIND")
+		})
+	}
+}
+
 func environment(values map[string]string) lookupEnv {
 	return func(name string) (string, bool) {
 		value, ok := values[name]
 		return value, ok
 	}
+}
+
+func testMigrationEnvironment(dsn string) lookupEnv {
+	return environment(map[string]string{
+		migrationDSNEnvironment: dsn,
+		migrationEnvironment:    "test", migrationInsecureEnvironment: "true",
+	})
 }
 
 func newTestPostgresDSN(t *testing.T, ctx context.Context) string {

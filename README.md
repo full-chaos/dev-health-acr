@@ -15,7 +15,7 @@ This repository produces two binaries:
 
 ## Status
 
-The contract-first Go service includes scoped credentials, deterministic context assembly, authorized evidence expansion, request controls, and the hosted read-route boundary. Production database and entitlement adapters are supplied as one fail-closed runtime bundle; packet replay and episode HTTP writeback remain separate work.
+The contract-first Go service includes scoped credentials, deterministic context assembly, authorized evidence expansion, request controls, and the hosted read-route boundary. The stock API composes production database and entitlement adapters as one fail-closed runtime bundle. Episode HTTP writeback remains disabled unless explicitly enabled.
 
 ## Product boundary
 
@@ -72,6 +72,7 @@ JSON Schema is the wire-contract source of truth. Go DTOs, OpenAPI, MCP definiti
 ```bash
 make contract-test
 make verify
+make hosted-integration
 go build ./cmd/acr-api ./cmd/acr-mcp ./cmd/contractcheck
 ```
 
@@ -105,7 +106,6 @@ GET  /healthz
 GET  /readyz
 GET  /api/v1/agent-context/capabilities
 POST /api/v1/agent-context/context-packets
-GET  /api/v1/agent-context/context-packets/{context_packet_id}
 GET  /api/v1/agent-context/evidence/{evidence_ref_id}
 POST /api/v1/agent-context/episodes
 ```

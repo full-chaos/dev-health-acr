@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test vet contract-write contract-test build verify release-local release-verify
+.PHONY: fmt fmt-check test hosted-integration vet contract-write contract-test build verify release-local release-verify
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -12,6 +12,9 @@ fmt-check:
 
 test:
 	go test ./...
+
+hosted-integration:
+	ACR_HOSTED_INTEGRATION=1 go test ./cmd/acr-api -run '^TestHostedRuntime_real_binary_serves_and_fails_readiness_safely$$' -count=1 -v
 
 vet:
 	go vet ./...

@@ -14,6 +14,9 @@ import (
 
 const migrationDSNEnvironment = "ACR_POSTGRES_MIGRATION_DSN"
 const poolerAdminDSNEnvironment = "ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN"
+const migrationEnvironment = "ACR_ENVIRONMENT"
+const migrationInsecureEnvironment = "ACR_ALLOW_INSECURE_POSTGRES"
+const migrationConnectionKindEnvironment = "ACR_POSTGRES_CONNECTION_KIND"
 
 type lookupEnv func(string) (string, bool)
 
@@ -33,7 +36,16 @@ func run(ctx context.Context, args []string, lookup lookupEnv, output io.Writer)
 		return fmt.Errorf("%s is required", migrationDSNEnvironment)
 	}
 	poolerAdminDSN, _ := lookup(poolerAdminDSNEnvironment)
-	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn, PoolerAdminDSN: poolerAdminDSN})
+	environment, _ := lookup(migrationEnvironment)
+	insecureRaw, _ := lookup(migrationInsecureEnvironment)
+	allowInsecure, err := runtimepostgres.InsecureTestTransportOverride(strings.TrimSpace(environment), strings.TrimSpace(insecureRaw))
+	if err != nil {
+		return err
+	}
+	if err := validateDeclaredMigrationConnectionKind(lookup, poolerAdminDSN); err != nil {
+		return err
+	}
+	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn, PoolerAdminDSN: poolerAdminDSN, AllowInsecure: allowInsecure})
 	if err != nil {
 		return fmt.Errorf("open PostgreSQL: %w", err)
 	}
@@ -72,4 +84,22 @@ func run(ctx context.Context, args []string, lookup lookupEnv, output io.Writer)
 	default:
 		return errors.New("invalid arguments")
 	}
+}
+
+// validateDeclaredMigrationConnectionKind rejects a declared
+// ACR_POSTGRES_CONNECTION_KIND that contradicts the presence of a PgBouncer
+// administration DSN, applying the same rule the hosted server enforces. The
+// declaration is optional for this administrative CLI; when absent, the
+// PgBouncer administration DSN alone continues to control the session-mode
+// probe.
+func validateDeclaredMigrationConnectionKind(lookup lookupEnv, poolerAdminDSN string) error {
+	raw, declared := lookup(migrationConnectionKindEnvironment)
+	if !declared || strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	kind, err := runtimepostgres.ParseConnectionKind(raw)
+	if err != nil {
+		return err
+	}
+	return runtimepostgres.ValidateConnectionKind(kind, poolerAdminDSN)
 }

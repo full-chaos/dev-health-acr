@@ -25,8 +25,10 @@ var ErrTransactionPooler = errors.New("PostgreSQL transaction pooler is not supp
 type Config struct {
 	DSN             string
 	PoolerAdminDSN  string
+	AllowInsecure   bool
 	MaxOpenConns    int
 	MaxIdleConns    int
+	MaxIdleConnsSet bool
 	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
 	PingTimeout     time.Duration
@@ -40,11 +42,6 @@ func Open(ctx context.Context, config Config) (*sql.DB, error) {
 	if err != nil {
 		return nil, errors.New("invalid PostgreSQL configuration")
 	}
-	if config.PoolerAdminDSN != "" {
-		if err := verifyPoolerMode(ctx, config.PoolerAdminDSN, config.PingTimeout); err != nil {
-			return nil, err
-		}
-	}
 	db := stdlib.OpenDB(*parsed)
 	db.SetMaxOpenConns(config.MaxOpenConns)
 	db.SetMaxIdleConns(config.MaxIdleConns)
@@ -56,6 +53,13 @@ func Open(ctx context.Context, config Config) (*sql.DB, error) {
 		db.Close()
 		return nil, errors.New("PostgreSQL is unavailable")
 	}
+	if config.PoolerAdminDSN != "" {
+		probe := poolerProbe{adminDSN: config.PoolerAdminDSN, database: parsed.Database, user: parsed.User, timeout: config.PingTimeout}
+		if err := verifyPoolerMode(ctx, probe); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
 	return db, nil
 }
 
@@ -66,16 +70,22 @@ func (c *Config) validate() error {
 	if _, err := pgx.ParseConfig(c.DSN); err != nil {
 		return errors.New("invalid PostgreSQL configuration")
 	}
+	if err := ValidateDSNTransport(c.DSN, c.AllowInsecure); err != nil {
+		return err
+	}
 	if c.PoolerAdminDSN != "" {
 		if _, err := pgx.ParseConfig(c.PoolerAdminDSN); err != nil {
 			return errors.New("invalid PgBouncer administration configuration")
+		}
+		if err := ValidateDSNTransport(c.PoolerAdminDSN, c.AllowInsecure); err != nil {
+			return errors.New("PgBouncer administration DSN must use verified TLS")
 		}
 	}
 	if c.MaxOpenConns == 0 {
 		c.MaxOpenConns = defaultMaxOpenConns
 	}
-	if c.MaxIdleConns == 0 {
-		c.MaxIdleConns = defaultMaxIdleConns
+	if c.MaxIdleConns == 0 && !c.MaxIdleConnsSet {
+		c.MaxIdleConns = min(defaultMaxIdleConns, c.MaxOpenConns)
 	}
 	if c.MaxOpenConns < 1 || c.MaxIdleConns < 0 || c.MaxIdleConns > c.MaxOpenConns {
 		return fmt.Errorf("invalid PostgreSQL pool bounds")
@@ -95,45 +105,119 @@ func (c *Config) validate() error {
 	return nil
 }
 
-func verifyPoolerMode(ctx context.Context, dsn string, timeout time.Duration) error {
-	config, err := pgx.ParseConfig(dsn)
+type poolerProbe struct {
+	adminDSN string
+	database string
+	user     string
+	timeout  time.Duration
+}
+
+type poolUserProbe struct {
+	database string
+	user     string
+}
+
+func verifyPoolerMode(ctx context.Context, probe poolerProbe) error {
+	config, err := pgx.ParseConfig(probe.adminDSN)
 	if err != nil {
 		return errors.New("invalid PgBouncer administration configuration")
 	}
 	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
-	probeContext, cancel := context.WithTimeout(ctx, timeout)
+	probeContext, cancel := context.WithTimeout(ctx, probe.timeout)
 	defer cancel()
 	connection, err := pgx.ConnectConfig(probeContext, config)
 	if err != nil {
 		return errors.New("PgBouncer pool mode connection could not be verified")
 	}
 	defer connection.Close(probeContext)
-	rows, err := connection.Query(probeContext, "SHOW CONFIG")
+	effectiveUser, err := effectivePoolUser(probeContext, connection, poolUserProbe{database: probe.database, user: probe.user})
+	if err != nil {
+		return err
+	}
+	rows, err := connection.Query(probeContext, "SHOW POOLS")
 	if err != nil {
 		return errors.New("PgBouncer pool mode query could not be verified")
 	}
 	defer rows.Close()
+	positions := map[string]int{}
+	for index, field := range rows.FieldDescriptions() {
+		positions[string(field.Name)] = index
+	}
+	databaseIndex, hasDatabase := positions["database"]
+	userIndex, hasUser := positions["user"]
+	modeIndex, hasMode := positions["pool_mode"]
+	if !hasDatabase || !hasUser || !hasMode {
+		return errors.New("PgBouncer effective pool mode could not be verified")
+	}
+	matches := 0
+	mode := ""
 	for rows.Next() {
 		values, err := rows.Values()
-		if err != nil || len(values) < 2 {
+		if err != nil || len(values) <= max(databaseIndex, userIndex, modeIndex) {
 			return errors.New("PgBouncer pool mode response body could not be verified")
 		}
-		key := fmt.Sprint(values[0])
-		value := fmt.Sprint(values[1])
-		if key != "pool_mode" {
+		if poolerValue(values[databaseIndex]) != probe.database || poolerValue(values[userIndex]) != effectiveUser {
 			continue
 		}
-		switch strings.ToLower(strings.TrimSpace(value)) {
-		case "session":
-			return nil
-		case "transaction", "statement":
-			return ErrTransactionPooler
-		default:
-			return errors.New("PgBouncer pool mode is unsupported")
-		}
+		matches++
+		mode = strings.ToLower(strings.TrimSpace(fmt.Sprint(values[modeIndex])))
 	}
 	if err := rows.Err(); err != nil {
 		return errors.New("PgBouncer pool mode response completion could not be verified")
 	}
-	return errors.New("PgBouncer pool mode could not be verified")
+	if matches != 1 {
+		return errors.New("PgBouncer effective pool mode could not be verified")
+	}
+	switch mode {
+	case "session":
+		return nil
+	case "transaction", "statement":
+		return ErrTransactionPooler
+	default:
+		return errors.New("PgBouncer pool mode is unsupported")
+	}
+}
+
+func effectivePoolUser(ctx context.Context, connection *pgx.Conn, probe poolUserProbe) (string, error) {
+	rows, err := connection.Query(ctx, "SHOW DATABASES")
+	if err != nil {
+		return "", errors.New("PgBouncer database configuration could not be verified")
+	}
+	defer rows.Close()
+	positions := map[string]int{}
+	for index, field := range rows.FieldDescriptions() {
+		positions[string(field.Name)] = index
+	}
+	nameIndex, hasName := positions["name"]
+	forceUserIndex, hasForceUser := positions["force_user"]
+	if !hasName || !hasForceUser {
+		return "", errors.New("PgBouncer database configuration could not be verified")
+	}
+	matches := 0
+	forcedUser := ""
+	for rows.Next() {
+		values, err := rows.Values()
+		if err != nil || len(values) <= max(nameIndex, forceUserIndex) {
+			return "", errors.New("PgBouncer database configuration could not be verified")
+		}
+		if poolerValue(values[nameIndex]) != probe.database {
+			continue
+		}
+		matches++
+		forcedUser = poolerValue(values[forceUserIndex])
+	}
+	if rows.Err() != nil || matches != 1 {
+		return "", errors.New("PgBouncer database configuration could not be verified")
+	}
+	if forcedUser != "" {
+		return forcedUser, nil
+	}
+	return probe.user, nil
+}
+
+func poolerValue(value any) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
