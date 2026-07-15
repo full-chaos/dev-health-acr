@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: acr-config
+  labels:
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/part-of: dev-health-acr
+data:
+  ACR_ENVIRONMENT: development
+  ACR_ADDR: :8080
+  ACR_LOG_LEVEL: info
+  ACR_REQUEST_TIMEOUT: 15s
+  ACR_READ_HEADER_TIMEOUT: 5s
+  ACR_READ_TIMEOUT: 20s
+  ACR_WRITE_TIMEOUT: 20s
+  ACR_IDLE_TIMEOUT: 60s
+  ACR_SHUTDOWN_TIMEOUT: 10s
+  ACR_REQUIRE_BACKING_STORES: "true"
+  ACR_POSTGRES_CONNECTION_KIND: direct
+  ACR_MAX_ITEMS: "30"
+  ACR_MAX_OUTPUT_TOKENS: "4000"
+  ACR_MAX_SERIALIZED_BYTES: "262144"
+  ACR_REQUESTS_PER_MINUTE: "60"
+  ACR_ENABLE_EPISODE_WRITEBACK: "false"
+  ACR_DEV_HEALTH_ENTITLEMENT_URL: https://ops.dev-health.internal
+  ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT: 5s
+  ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /var/run/acr/entitlement/token
