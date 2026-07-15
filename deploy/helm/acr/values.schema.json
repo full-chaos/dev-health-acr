@@ -84,7 +84,10 @@
           "properties": {
             "existingSecret": { "type": "string" },
             "postgresDsnKey": { "type": "string" },
-            "clickhouseDsnKey": { "type": "string" }
+            "clickhouseDsnKey": { "type": "string" },
+            "evidenceIdActiveKidKey": { "type": "string" },
+            "evidenceIdKeysKey": { "type": "string" },
+            "poolerAdminDsnKey": { "type": "string" }
           }
         },
         "migration": {
@@ -105,11 +108,43 @@
             "existingSecret": { "type": "string" },
             "key": { "type": "string" }
           }
-        }
+        },
+        "rotationRevision": { "type": ["string", "integer"] }
       }
     },
-    "deployment": { "type": "object" },
-    "migration": { "type": "object" },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicaCount": { "type": "integer", "minimum": 1 },
+        "revisionHistoryLimit": { "type": "integer", "minimum": 0 },
+        "strategy": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["RollingUpdate", "Recreate"] },
+            "rollingUpdate": { "type": "object" }
+          }
+        },
+        "podAnnotations": { "type": "object" },
+        "podLabels": { "type": "object" },
+        "resources": { "type": "object" },
+        "nodeSelector": { "type": "object" },
+        "tolerations": { "type": "array" },
+        "topologySpreadConstraints": { "type": "array" },
+        "affinity": { "type": "object" },
+        "extraContainers": { "type": "array" }
+      }
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backoffLimit": { "type": "integer", "minimum": 0 },
+        "activeDeadlineSeconds": { "type": "integer", "minimum": 1 },
+        "resources": { "type": "object" },
+        "podAnnotations": { "type": "object" }
+      }
+    },
     "service": {
       "type": "object",
       "properties": {
@@ -138,7 +173,32 @@
         "maxReplicas": { "type": "integer", "minimum": 1 }
       }
     },
-    "podDisruptionBudget": { "type": "object" },
-    "networkPolicy": { "type": "object" }
+    "podDisruptionBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": { "type": ["integer", "string", "null"] },
+        "maxUnavailable": { "type": ["integer", "string", "null"] }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ingressNamespaceSelectors": { "type": "array" },
+        "egress": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "dns": { "type": "boolean" },
+            "postgresPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "clickhousePort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "entitlementPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        }
+      }
+    }
   }
 }

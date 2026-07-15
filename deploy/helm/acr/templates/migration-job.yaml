@@ -4,7 +4,9 @@ schema-owner migration DSN (never the runtime DSN) and completes before the
 Deployment rolls out. Credential and no-MCP guards run here first.
 */ -}}
 {{- include "acr.validateCredentials" . -}}
+{{- include "acr.validateConnectionKind" . -}}
 {{- include "acr.validateNoMcp" . -}}
+{{- include "acr.validateEntitlementOrigin" . -}}
 {{- $image := include "acr.image" . -}}
 apiVersion: batch/v1
 kind: Job
@@ -25,13 +27,14 @@ spec:
       labels:
         {{- include "acr.migrationSelectorLabels" . | nindent 8 }}
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/config: {{ include (print $.Template.BasePath "/migration-prereqs.yaml") . | sha256sum }}
+        checksum/credentials: {{ include "acr.credentialsChecksumInput" . | sha256sum }}
         {{- with .Values.migration.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
       restartPolicy: Never
-      serviceAccountName: {{ include "acr.serviceAccountName" . }}
+      serviceAccountName: {{ include "acr.fullname" . }}-migrate
       automountServiceAccountToken: false
       {{- include "acr.imagePullSecrets" . | nindent 6 }}
       securityContext:
@@ -44,7 +47,8 @@ spec:
           securityContext:
             {{- include "acr.containerSecurityContext" . | nindent 12 }}
           envFrom:
-            {{- include "acr.configEnvFrom" . | nindent 12 }}
+            - configMapRef:
+                name: {{ include "acr.fullname" . }}-migrate-config
           env:
             - name: ACR_POSTGRES_MIGRATION_DSN
               valueFrom:

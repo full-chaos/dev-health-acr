@@ -134,19 +134,70 @@ enforces that the migration DSN is not the runtime DSN reference.
 {{- end -}}
 
 {{/*
-No-MCP guard. Rejects any additional container that would run acr-mcp, keeping
-the MCP sidecar host-local only.
+No additional-workload guard. deployment.extraContainers is unsupported: any
+additional container would bypass the pod-security and no-MCP guarantees, so a
+non-empty value fails closed. A value that names acr-mcp is called out
+specifically. The Deployment never renders extraContainers regardless.
 */}}
 {{- define "acr.validateNoMcp" -}}
-{{- range $i, $ctr := (.Values.deployment.extraContainers | default list) -}}
-{{- $name := $ctr.name | default "" -}}
-{{- $img := $ctr.image | default "" -}}
-{{- $cmd := join " " ($ctr.command | default list) -}}
-{{- $args := join " " ($ctr.args | default list) -}}
-{{- if or (regexMatch "acr-mcp" $name) (regexMatch "acr-mcp" $img) (regexMatch "acr-mcp" $cmd) (regexMatch "acr-mcp" $args) -}}
+{{- $extra := .Values.deployment.extraContainers | default list -}}
+{{- range $i, $ctr := $extra -}}
+{{- $blob := printf "%s %s %s %s" ($ctr.name | default "") ($ctr.image | default "") (join " " ($ctr.command | default list)) (join " " ($ctr.args | default list)) -}}
+{{- if regexMatch "acr-mcp" $blob -}}
 {{- fail (printf "injected-mcp: deployment.extraContainers[%d] would run acr-mcp; the MCP sidecar is host-local and must never be deployed as a workload" $i) -}}
 {{- end -}}
 {{- end -}}
+{{- if $extra -}}
+{{- fail "injected-mcp: deployment.extraContainers is not permitted; additional workload containers would bypass the restricted pod-security and no-MCP guarantees" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Connection-kind guard. When postgresConnectionKind is pgbouncer, both the
+runtime and migration pooler admin DSN keys are required so transaction-pool
+validation is wired; when direct, they must be absent.
+*/}}
+{{- define "acr.validateConnectionKind" -}}
+{{- $kind := .Values.config.postgresConnectionKind | default "direct" -}}
+{{- $runtimePooler := .Values.credentials.runtime.poolerAdminDsnKey | default "" -}}
+{{- $migrationPooler := .Values.credentials.migration.poolerAdminDsnKey | default "" -}}
+{{- if eq $kind "pgbouncer" -}}
+{{- if not $runtimePooler -}}
+{{- fail "pgbouncer-admin-dsn: config.postgresConnectionKind is pgbouncer but credentials.runtime.poolerAdminDsnKey is empty; a PgBouncer admin DSN reference is required" -}}
+{{- end -}}
+{{- if not $migrationPooler -}}
+{{- fail "pgbouncer-admin-dsn: config.postgresConnectionKind is pgbouncer but credentials.migration.poolerAdminDsnKey is empty; a PgBouncer admin DSN reference is required" -}}
+{{- end -}}
+{{- else if ne $kind "direct" -}}
+{{- fail (printf "invalid-connection-kind: config.postgresConnectionKind %q must be direct or pgbouncer" $kind) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Entitlement-origin guard. The runtime requires an origin (scheme://host[:port])
+with no path; reject a URL that carries a path.
+*/}}
+{{- define "acr.validateEntitlementOrigin" -}}
+{{- $url := .Values.config.entitlement.url | default "" -}}
+{{- if $url -}}
+{{- if not (regexMatch "^https?://[^/]+/?$" $url) -}}
+{{- fail (printf "entitlement-origin: config.entitlement.url %q must be an origin (scheme and host only, no path); the runtime rejects a path component" $url) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Credentials checksum input. Rolls pods when a referenced Secret changes name or
+when the operator bumps credentials.rotationRevision after rotating Secret
+content (which Helm cannot observe directly).
+*/}}
+{{- define "acr.credentialsChecksumInput" -}}
+{{- $c := .Values.credentials -}}
+runtime={{ $c.runtime.existingSecret | default "" }}:{{ $c.runtime.postgresDsnKey | default "" }}:{{ $c.runtime.clickhouseDsnKey | default "" }}:{{ $c.runtime.poolerAdminDsnKey | default "" }}:{{ $c.runtime.evidenceIdActiveKidKey | default "" }}:{{ $c.runtime.evidenceIdKeysKey | default "" }}
+migration={{ $c.migration.existingSecret | default "" }}:{{ $c.migration.postgresDsnKey | default "" }}:{{ $c.migration.poolerAdminDsnKey | default "" }}
+entitlement={{ $c.entitlementToken.existingSecret | default "" }}:{{ $c.entitlementToken.key | default "" }}
+pullSecrets={{ range .Values.imagePullSecrets }}{{ .name | default "" }},{{ end }}
+rotationRevision={{ $c.rotationRevision | default "" }}
 {{- end -}}
 
 {{/*

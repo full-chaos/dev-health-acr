@@ -140,6 +140,18 @@ case "$scenario" in
     negative injected-mcp "injected-mcp" \
       --set-json 'deployment.extraContainers=[{"name":"mcp","image":"registry.internal/dev-health-acr/acr-mcp@sha256:1111111111111111111111111111111111111111111111111111111111111111","command":["/usr/local/bin/acr-mcp","serve"]}]'
     exit 0 ;;
+  entitlement-path)
+    negative entitlement-path "entitlement-origin" \
+      --set-string "config.entitlement.url=https://ops.dev-health.internal/api/internal/entitlements"
+    exit 0 ;;
+  pgbouncer-missing-pooler)
+    negative pgbouncer-missing-pooler "pgbouncer-admin-dsn" \
+      --set-string "config.postgresConnectionKind=pgbouncer"
+    exit 0 ;;
+  extra-container)
+    negative extra-container "injected-mcp" \
+      --set-json 'deployment.extraContainers=[{"name":"sidecar","image":"registry.internal/dev-health-acr/helper@sha256:2222222222222222222222222222222222222222222222222222222222222222"}]'
+    exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;
 esac
@@ -248,5 +260,74 @@ if grep -q 'kind: HTTPRoute' "$rendered"; then
 else
   printf '  note HTTPRoute disabled in these values (gateway.enabled=false)\n'
 fi
+
+# Gate 11: migration hook prerequisites exist before the Job (fresh install).
+python3 - "$rendered" <<'PY' || exit 1
+import sys
+docs = open(sys.argv[1]).read().split('\n---\n')
+def weight(d):
+    for line in d.splitlines():
+        if 'helm.sh/hook-weight' in line:
+            return int(line.split(':')[-1].strip().strip('"'))
+    return None
+sa=cm=np=job=None
+for d in docs:
+    is_migrate = 'component: migration' in d
+    pre = ('pre-install' in d) and ('pre-upgrade' in d)
+    if not (is_migrate and pre):
+        continue
+    if '\nkind: ServiceAccount' in ('\n'+d): sa=weight(d)
+    elif '\nkind: ConfigMap' in ('\n'+d): cm=weight(d)
+    elif '\nkind: NetworkPolicy' in ('\n'+d): np=weight(d)
+    elif '\nkind: Job' in ('\n'+d): job=weight(d)
+miss=[n for n,v in (('ServiceAccount',sa),('ConfigMap',cm),('NetworkPolicy',np),('Job',job)) if v is None]
+if miss:
+    print('  FAIL migration-prereqs: missing migration hook resource(s): '+','.join(miss), file=sys.stderr); sys.exit(1)
+if not (sa < job and cm < job and np < job):
+    print(f'  FAIL migration-prereqs: prereq weights (sa={sa},cm={cm},np={np}) must be more negative than Job ({job})', file=sys.stderr); sys.exit(1)
+print('  ok   migration-prereqs: migration SA/ConfigMap/NetworkPolicy are pre-install,pre-upgrade hooks ordered before the Job')
+PY
+
+# Gate 12: evidence-ID signing keys sourced from an existing Secret.
+for key in 'ACR_EVIDENCE_ID_ACTIVE_KID' 'ACR_EVIDENCE_ID_KEYS'; do
+  grep -q "$key" "$rendered" || fail_gate "evidence-keys: $key not wired into the Deployment"
+done
+grep -q 'ACR_EVIDENCE_ID_KEYS' "$rendered" && grep -A3 'ACR_EVIDENCE_ID_KEYS' "$rendered" | grep -q 'secretKeyRef:' || fail_gate "evidence-keys: ACR_EVIDENCE_ID_KEYS must come from a secretKeyRef"
+pass "evidence-keys: ACR_EVIDENCE_ID_ACTIVE_KID + ACR_EVIDENCE_ID_KEYS sourced from existing Secret"
+
+# Gate 13: entitlement URL is an origin (no path).
+ent_url="$(grep 'ACR_DEV_HEALTH_ENTITLEMENT_URL' "$rendered" | head -1 | grep -oE 'https?://[^"]+')"
+if [[ -n "$ent_url" ]]; then
+  grep -Eq '^https?://[^/]+/?$' <<<"$ent_url" || fail_gate "entitlement-origin: rendered URL '$ent_url' has a path; runtime requires an origin"
+  pass "entitlement-origin: rendered entitlement URL is an origin ($ent_url)"
+else
+  printf '  note entitlement URL empty in these values\n'
+fi
+
+# Gate 14: Secret rotation rolls pods (checksum/credentials present and reactive).
+cc=$(grep -c 'checksum/credentials' "$rendered")
+[[ "$cc" -ge 2 ]] || fail_gate "secret-rotation: checksum/credentials must annotate both Deployment and migration Job (found $cc)"
+sum_a=$(render | grep -m1 'checksum/credentials' | awk '{print $2}')
+sum_b=$(render --set-string credentials.rotationRevision=rotated-2 | grep -m1 'checksum/credentials' | awk '{print $2}')
+[[ -n "$sum_a" && "$sum_a" != "$sum_b" ]] || fail_gate "secret-rotation: bumping credentials.rotationRevision must change checksum/credentials (a=$sum_a b=$sum_b)"
+pass "secret-rotation: checksum/credentials present on both workloads and changes with rotationRevision"
+
+# Gate 15: migration workload is covered by a NetworkPolicy.
+python3 - "$rendered" <<'PY' || exit 1
+import sys
+docs = open(sys.argv[1]).read().split('\n---\n')
+ok = any((('\nkind: NetworkPolicy' in ('\n'+d)) and ('component: migration' in d)) for d in docs)
+if not ok:
+    print('  FAIL migration-netpol: no NetworkPolicy selects the migration component', file=sys.stderr); sys.exit(1)
+print('  ok   migration-netpol: a NetworkPolicy applies to the migration workload')
+PY
+
+# Gate 16: PgBouncer mode fully wires both pooler admin DSNs.
+pgb=$(render --set-string config.postgresConnectionKind=pgbouncer \
+  --set-string credentials.runtime.poolerAdminDsnKey=ACR_POSTGRES_POOLER_ADMIN_DSN \
+  --set-string credentials.migration.poolerAdminDsnKey=ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN 2>&1)
+grep -q 'ACR_POSTGRES_POOLER_ADMIN_DSN' <<<"$pgb" || fail_gate "pgbouncer: runtime ACR_POSTGRES_POOLER_ADMIN_DSN not wired in pgbouncer mode"
+grep -q 'ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN' <<<"$pgb" || fail_gate "pgbouncer: migration ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN not wired in pgbouncer mode"
+pass "pgbouncer: connection kind pgbouncer wires runtime + migration pooler admin DSNs"
 
 printf 'RESULT: happy path passed all gates\n'

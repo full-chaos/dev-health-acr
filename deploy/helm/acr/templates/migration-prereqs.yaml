@@ -1,0 +1,81 @@
+{{- /*
+Migration hook prerequisites.
+
+The migration Job runs as a pre-install/pre-upgrade hook and therefore executes
+BEFORE the release's regular ServiceAccount, ConfigMap, and NetworkPolicy are
+created. To make a fresh install work without weakening ordering, the migration
+Job gets its own dedicated ServiceAccount, ConfigMap, and NetworkPolicy that are
+themselves pre-install/pre-upgrade hooks with a more-negative weight (-10) than
+the Job (-5), so they exist first. They are cleaned up after the hook succeeds.
+*/ -}}
+{{- include "acr.validateCredentials" . -}}
+{{- include "acr.validateConnectionKind" . -}}
+{{- include "acr.validateNoMcp" . -}}
+{{- include "acr.validateEntitlementOrigin" . -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "acr.fullname" . }}-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.migrationLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "acr.fullname" . }}-migrate-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.migrationLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+data:
+  ACR_ENVIRONMENT: {{ .Values.config.environment | quote }}
+  ACR_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  ACR_POSTGRES_CONNECTION_KIND: {{ .Values.config.postgresConnectionKind | quote }}
+  {{- if eq .Values.config.environment "test" }}
+  ACR_ALLOW_INSECURE_POSTGRES: "true"
+  {{- end }}
+---
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "acr.fullname" . }}-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.migrationLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "acr.migrationSelectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  # The migration Job accepts no ingress.
+  ingress: []
+  egress:
+    {{- if .Values.networkPolicy.egress.dns }}
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.postgresPort }}
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.postgresPort }}
+    {{- end }}
+{{- end }}

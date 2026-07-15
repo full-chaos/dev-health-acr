@@ -74,6 +74,13 @@ credentials:
     existingSecret: ""
     postgresDsnKey: ACR_POSTGRES_DSN
     clickhouseDsnKey: ACR_CLICKHOUSE_DSN
+    # Evidence-ID signing keyring (required by the hosted runtime). Both are
+    # sourced from the existing runtime Secret; key material is never templated.
+    evidenceIdActiveKidKey: ACR_EVIDENCE_ID_ACTIVE_KID
+    evidenceIdKeysKey: ACR_EVIDENCE_ID_KEYS
+    # PgBouncer admin DSN key; required when config.postgresConnectionKind is
+    # pgbouncer, otherwise leave empty.
+    poolerAdminDsnKey: ""
   # Migration (schema-owner) Postgres DSN consumed only by the acr-migrate Job.
   # MUST reference a different Secret or key than the runtime DSN.
   migration:
@@ -85,6 +92,10 @@ credentials:
   entitlementToken:
     existingSecret: ""
     key: token
+  # Bump this opaque revision whenever a referenced Secret's CONTENT is rotated
+  # (name unchanged). Helm cannot observe external Secret content, so changing
+  # this value forces the API and migration pods to roll onto the new material.
+  rotationRevision: ""
 
 deployment:
   replicaCount: 2
@@ -116,7 +127,9 @@ deployment:
       whenUnsatisfiable: ScheduleAnyway
       labelSelectorFromRelease: true
   affinity: {}
-  # Any additional sidecar containers. Guarded: none may run acr-mcp.
+  # UNSUPPORTED escape hatch. Additional workload containers would bypass the
+  # restricted pod-security and no-MCP guarantees, so any non-empty value fails
+  # closed and this list is never rendered. Keep empty.
   extraContainers: []
 
 migration:

@@ -22,7 +22,8 @@ config:
   requireBackingStores: false
   postgresConnectionKind: direct
   entitlement:
-    url: https://ops.dev-health.internal/api/internal/entitlements
+    # Origin only (scheme://host[:port]); the runtime rejects a path component.
+    url: https://ops.dev-health.internal
     timeout: "5s"
 
 credentials:
