@@ -1,0 +1,58 @@
+{{- /*
+Default-deny NetworkPolicy with explicit ingress to the API port and explicit
+egress to DNS and the external Postgres/ClickHouse/entitlement dependency ports.
+Endpoints are resolved from the referenced Secrets at runtime; this policy only
+opens the required ports.
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "acr.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "acr.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        {{- if .Values.networkPolicy.ingressNamespaceSelectors }}
+        {{- range .Values.networkPolicy.ingressNamespaceSelectors }}
+        - namespaceSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- else }}
+        - podSelector: {}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    {{- if .Values.networkPolicy.egress.dns }}
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.postgresPort }}
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.postgresPort }}
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.clickhousePort }}
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.clickhousePort }}
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.entitlementPort }}
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.entitlementPort }}
+    {{- end }}
+{{- end }}

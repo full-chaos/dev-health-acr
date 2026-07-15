@@ -1,0 +1,36 @@
+{{- /* Non-secret process configuration. Credentials never appear here. */ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "acr.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.labels" . | nindent 4 }}
+data:
+  ACR_ENVIRONMENT: {{ .Values.config.environment | quote }}
+  ACR_ADDR: {{ .Values.config.addr | quote }}
+  ACR_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  ACR_REQUEST_TIMEOUT: {{ .Values.config.requestTimeout | quote }}
+  ACR_READ_HEADER_TIMEOUT: {{ .Values.config.readHeaderTimeout | quote }}
+  ACR_READ_TIMEOUT: {{ .Values.config.readTimeout | quote }}
+  ACR_WRITE_TIMEOUT: {{ .Values.config.writeTimeout | quote }}
+  ACR_IDLE_TIMEOUT: {{ .Values.config.idleTimeout | quote }}
+  ACR_SHUTDOWN_TIMEOUT: {{ .Values.config.shutdownTimeout | quote }}
+  ACR_REQUIRE_BACKING_STORES: {{ .Values.config.requireBackingStores | quote }}
+  ACR_POSTGRES_CONNECTION_KIND: {{ .Values.config.postgresConnectionKind | quote }}
+  ACR_MAX_ITEMS: {{ .Values.config.maxItems | quote }}
+  ACR_MAX_OUTPUT_TOKENS: {{ .Values.config.maxOutputTokens | quote }}
+  ACR_MAX_SERIALIZED_BYTES: {{ .Values.config.maxSerializedBytes | quote }}
+  ACR_REQUESTS_PER_MINUTE: {{ .Values.config.requestsPerMinute | quote }}
+  ACR_ENABLE_EPISODE_WRITEBACK: {{ .Values.config.enableEpisodeWriteback | quote }}
+  {{- with .Values.config.entitlement }}
+  ACR_DEV_HEALTH_ENTITLEMENT_URL: {{ .url | quote }}
+  ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT: {{ .timeout | quote }}
+  ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: {{ printf "%s/%s" (.tokenMountPath | trimSuffix "/") .tokenFileName | quote }}
+  {{- end }}
+  {{- if .Values.config.clickhouseCaBundle.existingSecret }}
+  ACR_CLICKHOUSE_CA_BUNDLE: {{ printf "/var/run/acr/clickhouse-ca/%s" .Values.config.clickhouseCaBundle.key | quote }}
+  {{- end }}
+  {{- if .Values.config.entitlementCaBundle.existingSecret }}
+  ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE: {{ printf "/var/run/acr/entitlement-ca/%s" .Values.config.entitlementCaBundle.key | quote }}
+  {{- end }}

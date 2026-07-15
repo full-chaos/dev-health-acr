@@ -1,0 +1,45 @@
+{{- /*
+Optional Gateway API HTTPRoute targeting a caller-supplied, pre-existing
+Gateway. This chart never installs a Gateway controller or a Gateway object;
+parentRefs must be provided by the operator.
+*/ -}}
+{{- if .Values.gateway.enabled }}
+{{- if not .Values.gateway.httpRoute.parentRefs }}
+{{- fail "gateway.enabled is true but gateway.httpRoute.parentRefs is empty; a caller-supplied Gateway reference is required and this chart never provisions a Gateway" -}}
+{{- end }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "acr.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.labels" . | nindent 4 }}
+  {{- with .Values.gateway.httpRoute.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    {{- range .Values.gateway.httpRoute.parentRefs }}
+    - name: {{ .name | quote }}
+      {{- if .namespace }}
+      namespace: {{ .namespace | quote }}
+      {{- end }}
+      {{- if .sectionName }}
+      sectionName: {{ .sectionName | quote }}
+      {{- end }}
+      {{- if .port }}
+      port: {{ .port }}
+      {{- end }}
+    {{- end }}
+  {{- with .Values.gateway.httpRoute.hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - matches:
+        {{- toYaml .Values.gateway.httpRoute.matches | nindent 8 }}
+      backendRefs:
+        - name: {{ include "acr.fullname" . }}
+          port: {{ .Values.service.port }}
+{{- end }}

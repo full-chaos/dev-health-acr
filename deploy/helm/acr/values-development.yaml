@@ -1,0 +1,66 @@
+# Development values for the private ACR Helm chart.
+#
+# These values exercise the full happy-path render used by
+# scripts/deploy/test-helm.sh. The image reference is intentionally left empty
+# here and supplied by the harness via --image "$TEST_IMAGE_DIGEST" so the chart
+# is always pinned to an immutable digest.
+
+image:
+  reference: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: acr-registry-pull
+
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+
+config:
+  environment: development
+  logLevel: debug
+  requireBackingStores: false
+  postgresConnectionKind: direct
+  entitlement:
+    url: https://ops.dev-health.internal/api/internal/entitlements
+    timeout: "5s"
+
+credentials:
+  runtime:
+    existingSecret: acr-runtime-credentials
+    postgresDsnKey: ACR_POSTGRES_DSN
+    clickhouseDsnKey: ACR_CLICKHOUSE_DSN
+  migration:
+    existingSecret: acr-migration-credentials
+    postgresDsnKey: ACR_POSTGRES_MIGRATION_DSN
+  entitlementToken:
+    existingSecret: acr-entitlement-token
+    key: token
+
+deployment:
+  replicaCount: 2
+
+gateway:
+  enabled: true
+  httpRoute:
+    parentRefs:
+      - name: acr-gateway
+        namespace: gateway-system
+        sectionName: https
+    hostnames:
+      - acr.dev-health.internal
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  ingressNamespaceSelectors:
+    - matchLabels:
+        kubernetes.io/metadata.name: gateway-system
