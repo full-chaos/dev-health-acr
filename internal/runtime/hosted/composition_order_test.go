@@ -48,6 +48,9 @@ func TestOpen_constructs_checks_then_closes_in_reverse_order(t *testing.T) {
 	if runtime.Dependencies.Runtime.Episodes == nil {
 		t.Fatal("episode service is nil when explicitly enabled")
 	}
+	if runtime.Dependencies.UsageTelemetry == nil || runtime.usageTelemetry != runtime.Dependencies.UsageTelemetry {
+		t.Fatalf("usage telemetry = runtime(%p) dependency(%p), want one lifecycle-owned instance", runtime.usageTelemetry, runtime.Dependencies.UsageTelemetry)
+	}
 }
 
 func TestRuntime_Close_isIdempotentAndDoesNotRepeatCloseCalls(t *testing.T) {

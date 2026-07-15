@@ -116,6 +116,34 @@ receives a retryable `503` while writeback is disabled; enabling
 * Capability, entitlement, and evidence dependency failures return safe versioned errors.
 * SIGINT and SIGTERM trigger graceful HTTP shutdown within `ACR_SHUTDOWN_TIMEOUT`.
 
+### Credential usage telemetry
+
+Successful credential and trusted-web reads enqueue best-effort usage telemetry
+without waiting for a `last_used_at` or audit-store write. The lifecycle-owned
+single worker has a bounded 256-record queue (hard maximum 4096) and coalesces
+records by actor and usage action. A credential batch writes only the newest
+`last_used_at`, preserving the storage adapter's monotonic update rule, and
+records the number of successful uses in one audit event.
+
+Queue saturation drops the newest successful-use record and emits the
+low-cardinality `credential usage telemetry dropped` warning with
+`reason=queue_full`; `UsageTelemetryStats` exposes queue capacity, enqueued,
+coalesced, dropped, delivery-failure, delivered, and shutdown-drop counters for
+metrics export. A database outage affects only those counters and safe warnings,
+never the authenticated response. A nil telemetry close result means only that
+the worker is quiesced; it does not claim durable delivery. Queue saturation,
+process crash, forced termination, or an unjoined shutdown timeout can lose
+successful-use telemetry. An unjoined worker keeps PostgreSQL open and returns
+an error so process termination reclaims the process instead of permitting a
+post-close store call. During a joined shutdown the worker completes before the
+PostgreSQL pool closes.
+
+Known authorization denials make exactly one synchronous, detached,
+deadline-bounded audit delivery attempt. An unavailable audit store emits the
+safe `credential denial audit delivery failed` warning but cannot permit access,
+change the denial response, retry the delivery, or claim that the denial audit
+persisted.
+
 ## Dependency seams
 
 `internal/api` defines readiness, capabilities, and the all-or-nothing

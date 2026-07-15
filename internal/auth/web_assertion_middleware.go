@@ -31,16 +31,19 @@ func (a *Authenticator) authenticateWebAssertion(w http.ResponseWriter, r *http.
 		a.writeRateLimitError(w, r, a.limiter.RetryAfter(subjectKey, now))
 		return
 	}
-	usageCtx, cancelUsage := a.detachedContext(r.Context())
-	defer cancelUsage()
-	a.recordAudit(usageCtx, auditEvent(principal, "web_assertion_used", "web_assertion", principal.Subject, "success", requestID(r), nil, now))
 	ctx := context.WithValue(r.Context(), principalKey{}, principal)
-	next.ServeHTTP(w, r.WithContext(ctx))
+	response := &responseStatusWriter{ResponseWriter: w}
+	next.ServeHTTP(response, r.WithContext(ctx))
+	if response.successful() {
+		a.usageTelemetry.Enqueue(UsageRecord{
+			OrgID: principal.OrgID, ActorType: string(principal.AuthenticationMethod), ActorID: principal.Subject,
+			Action: "web_assertion_used", ResourceType: "web_assertion", ResourceID: principal.Subject,
+			RequestID: requestID(r), UsedAt: now,
+		})
+	}
 }
 
 func (a *Authenticator) recordWebAssertionReplay(r *http.Request, principal storage.Principal, now time.Time) {
 	a.limiter.RecordFailure(a.clientIP(r), now)
-	auditCtx, cancelAudit := a.detachedContext(r.Context())
-	defer cancelAudit()
-	a.recordAudit(auditCtx, auditEvent(principal, "web_assertion_replay", "web_assertion", "replayed", "denied", requestID(r), nil, now))
+	a.recordDenialAudit(r, auditEvent(principal, "web_assertion_replay", "web_assertion", "replayed", "denied", requestID(r), nil, now))
 }

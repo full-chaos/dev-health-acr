@@ -37,19 +37,24 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize PostgreSQL runtime: %w", err)
 	}
-	runtime := &Runtime{closers: []func() error{postgres.close}}
+	runtime := &Runtime{postgresClose: postgres.close}
+	usageTelemetry, err := auth.NewUsageTelemetry(postgres.credentials, postgres.audit, auth.UsageTelemetryOptions{Logger: request.options.Logger})
+	if err != nil {
+		return nil, closeAfterError(runtime, fmt.Errorf("initialize credential usage telemetry: %w", err))
+	}
+	runtime.usageTelemetry = usageTelemetry
 	clickhouse, err := request.factories.openClickHouse(ctx, clickHouseOpenRequest{
 		config: request.config, assemblyObserver: assemblyObserver, expansionObserver: expansionObserver,
 	})
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize ClickHouse runtime: %w", err))
 	}
-	runtime.closers = []func() error{clickhouse.close, postgres.close}
+	runtime.closers = []func() error{clickhouse.close}
 	entitlement, err := request.factories.newEntitlement(request.config)
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize entitlement runtime: %w", err))
 	}
-	runtime.closers = []func() error{entitlement.Close, clickhouse.close, postgres.close}
+	runtime.closers = []func() error{entitlement.Close, clickhouse.close}
 
 	var episodeCreator api.EpisodeCreator
 	if request.config.EnableEpisodeWriteback {
@@ -96,7 +101,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	})
 	runtime.Dependencies = api.Dependencies{
 		Capabilities: capabilities, Now: request.options.Now, Observability: &hooks, Limits: manager, AuthAttempts: authAttempts,
-		EvidenceStoreFactory: clickhouse.factory, ClientIP: clientIP,
+		EvidenceStoreFactory: clickhouse.factory, ClientIP: clientIP, UsageTelemetry: usageTelemetry,
 		Runtime: &api.RuntimeDependencies{
 			Credentials: postgres.credentials, Audit: postgres.audit, Entitlements: entitlement, Assembler: assembler,
 			Evidence: clickhouse.evidence, Episodes: episodeCreator, ReadinessChecks: checks,

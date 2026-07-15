@@ -49,11 +49,17 @@ func prepareServer(ctx context.Context, request serverBuildRequest) (serverRunne
 	if err != nil {
 		return nil, nil, closeBuildFailure(closeRuntime, fmt.Errorf("initialize application: %w", err))
 	}
+	closeApplication := func() error {
+		if closeRuntime == nil {
+			return app.Close()
+		}
+		return errors.Join(app.Close(), closeRuntime())
+	}
 	server, err := request.newServer(serverConfig(request.config), app.Handler(), request.logger)
 	if err != nil {
-		return nil, nil, closeBuildFailure(closeRuntime, fmt.Errorf("initialize server: %w", err))
+		return nil, nil, closeBuildFailure(closeApplication, fmt.Errorf("initialize server: %w", err))
 	}
-	return server, closeRuntime, nil
+	return server, closeApplication, nil
 }
 
 func webAssertionVerifier(cfg config.Config) (*auth.WebAssertionVerifier, error) {
