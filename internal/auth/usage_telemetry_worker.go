@@ -75,7 +75,6 @@ func (u *UsageTelemetry) flush(ctx context.Context, pending map[string]usageBatc
 	for key, batch := range pending {
 		if err := ctx.Err(); err != nil {
 			if final {
-				u.metrics.shutdownDropped.Add(batch.count)
 				for _, remaining := range pending {
 					u.metrics.shutdownDropped.Add(remaining.count)
 				}

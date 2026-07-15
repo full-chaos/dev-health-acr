@@ -321,3 +321,29 @@ func TestUsageTelemetry_close_reports_timeout_only_until_uncooperative_worker_jo
 		t.Fatalf("Close() after join = %v, want terminal result", third)
 	}
 }
+
+func TestUsageTelemetry_expired_final_drain_counts_each_unattempted_batch_once(t *testing.T) {
+	// Given
+	store := &usageStore{}
+	audit := &usageAuditStore{}
+	telemetry, err := NewUsageTelemetry(store, audit, UsageTelemetryOptions{QueueCapacity: 2, FlushInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = telemetry.Close() })
+	usedAt := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	pending := map[string]usageBatch{
+		"first":  {record: UsageRecord{OrgID: "org-1", CredentialID: "credential-1", UsedAt: usedAt}, count: 1},
+		"second": {record: UsageRecord{OrgID: "org-1", CredentialID: "credential-2", UsedAt: usedAt}, count: 1},
+	}
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	// When
+	err = telemetry.flush(expired, pending, true)
+
+	// Then
+	if !errors.Is(err, context.DeadlineExceeded) || telemetry.Stats().ShutdownDropped != 2 || len(store.Touches()) != 0 || len(audit.Events()) != 0 {
+		t.Fatalf("final drain error=%v stats=%#v touches=%d audits=%d, want two drops and no ambiguous delivery attempt", err, telemetry.Stats(), len(store.Touches()), len(audit.Events()))
+	}
+}
