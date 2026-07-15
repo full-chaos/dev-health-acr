@@ -1,0 +1,11 @@
+# Base SHA-256: 2dd6d3a8ad9a39173c04eb312e1c8795e573371a7547d0d60ba009d505672992
+# Apply from /Users/chris/projects/full-chaos/dev-health after placing this repository at ./acr.
+--- compose.yml
++++ compose.yml
+@@ -11,4 +11,7 @@
+ #   - (license-svc removed — billing is now handled by ops)
+ 
++include:
++  - path: ./acr/deploy/compose/acr.compose.yml
++
+ services:

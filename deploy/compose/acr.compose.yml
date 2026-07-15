@@ -1,0 +1,82 @@
+services:
+  acr-db-init:
+    image: postgres:18-alpine
+    restart: "no"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      ACR_DB_NAME: ${ACR_DB_NAME:-acr}
+      ACR_RUNTIME_DB_USER: ${ACR_RUNTIME_DB_USER:?ACR_RUNTIME_DB_USER is required}
+      ACR_RUNTIME_DB_PASSWORD: ${ACR_RUNTIME_DB_PASSWORD:?ACR_RUNTIME_DB_PASSWORD is required}
+      ACR_MIGRATION_DB_USER: ${ACR_MIGRATION_DB_USER:?ACR_MIGRATION_DB_USER is required}
+      ACR_MIGRATION_DB_PASSWORD: ${ACR_MIGRATION_DB_PASSWORD:?ACR_MIGRATION_DB_PASSWORD is required}
+    volumes:
+      - ./deploy/compose/acr-db-init.sh:/usr/local/bin/acr-db-init:ro
+    command: ["/usr/local/bin/acr-db-init"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [dev-health]
+  acr-migrate:
+    image: ${ACR_IMAGE:?ACR_IMAGE must be an immutable image digest}
+    restart: "no"
+    entrypoint: ["/usr/local/bin/acr-secret-entrypoint"]
+    command: ["/usr/local/bin/acr-migrate", "up"]
+    environment:
+      ACR_ENVIRONMENT: development
+      ACR_POSTGRES_CONNECTION_KIND: direct
+      ACR_POSTGRES_MIGRATION_DSN_FILE: /run/secrets/acr_migration_dsn
+    secrets: [acr_migration_dsn]
+    volumes:
+      - ./deploy/compose/acr-secret-entrypoint.sh:/usr/local/bin/acr-secret-entrypoint:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+      acr-db-init: { condition: service_completed_successfully }
+    networks: [dev-health]
+  acr-api:
+    image: ${ACR_IMAGE:?ACR_IMAGE must be an immutable image digest}
+    entrypoint: ["/usr/local/bin/acr-secret-entrypoint"]
+    command: ["/usr/local/bin/acr-api", "serve"]
+    environment:
+      ACR_ADDR: :8080
+      ACR_ENVIRONMENT: development
+      ACR_POSTGRES_CONNECTION_KIND: direct
+      ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
+      ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
+      ACR_CLICKHOUSE_CA_BUNDLE: /run/secrets/acr_ca
+      ACR_DEV_HEALTH_ENTITLEMENT_URL: https://api:8000
+      ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /run/secrets/acr_ops_token
+      ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE: /run/secrets/acr_ca
+      ACR_EVIDENCE_ID_ACTIVE_KID_FILE: /run/secrets/acr_evidence_active_kid
+      ACR_EVIDENCE_ID_KEYS_FILE: /run/secrets/acr_evidence_keys
+    secrets: [acr_runtime_dsn, acr_clickhouse_dsn, acr_ops_token, acr_ca, acr_evidence_active_kid, acr_evidence_keys]
+    volumes:
+      - ./deploy/compose/acr-secret-entrypoint.sh:/usr/local/bin/acr-secret-entrypoint:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+      api: { condition: service_healthy }
+      acr-migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/readyz"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      traefik.enable: "true"
+      traefik.scope: dev-health
+      traefik.http.routers.acr.rule: Host(`acr.localhost`)
+      traefik.http.routers.acr.entrypoints: web
+      traefik.http.services.acr.loadbalancer.server.port: "8080"
+    networks: [dev-health]
+secrets:
+  acr_runtime_dsn: { file: "${ACR_RUNTIME_DSN_FILE:?ACR_RUNTIME_DSN_FILE is required}" }
+  acr_migration_dsn: { file: "${ACR_MIGRATION_DSN_FILE:?ACR_MIGRATION_DSN_FILE is required}" }
+  acr_clickhouse_dsn: { file: "${ACR_CLICKHOUSE_DSN_FILE:?ACR_CLICKHOUSE_DSN_FILE is required}" }
+  acr_ops_token: { file: "${ACR_OPS_TOKEN_FILE:?ACR_OPS_TOKEN_FILE is required}" }
+  acr_ca: { file: "${ACR_CA_FILE:?ACR_CA_FILE is required}" }
+  acr_evidence_active_kid: { file: "${ACR_EVIDENCE_ACTIVE_KID_FILE:?ACR_EVIDENCE_ACTIVE_KID_FILE is required}" }
+  acr_evidence_keys: { file: "${ACR_EVIDENCE_KEYS_FILE:?ACR_EVIDENCE_KEYS_FILE is required}" }
