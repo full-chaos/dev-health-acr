@@ -130,11 +130,13 @@ low-cardinality `credential usage telemetry dropped` warning with
 `reason=queue_full`; `UsageTelemetryStats` exposes queue capacity, enqueued,
 coalesced, dropped, delivery-failure, delivered, and shutdown-drop counters for
 metrics export. A database outage affects only those counters and safe warnings,
-never the authenticated response. Process crash or forced termination before the
-bounded shutdown flush can lose queued successful-use telemetry; this is an
-intentional best-effort trade-off and is never represented as durable audit
-persistence. During normal shutdown the worker flushes before the PostgreSQL
-pool closes.
+never the authenticated response. A nil telemetry close result means only that
+the worker is quiesced; it does not claim durable delivery. Queue saturation,
+process crash, forced termination, or an unjoined shutdown timeout can lose
+successful-use telemetry. An unjoined worker keeps PostgreSQL open and returns
+an error so process termination reclaims the process instead of permitting a
+post-close store call. During a joined shutdown the worker completes before the
+PostgreSQL pool closes.
 
 Known authorization denials make exactly one synchronous, detached,
 deadline-bounded audit delivery attempt. An unavailable audit store emits the

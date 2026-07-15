@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/api"
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
@@ -21,26 +22,51 @@ type Options struct {
 }
 
 type Runtime struct {
-	Dependencies api.Dependencies
-	closeOnce    sync.Once
-	closeErr     error
-	closers      []func() error
+	Dependencies      api.Dependencies
+	closeMu           sync.Mutex
+	closeErr          error
+	closers           []func() error
+	usageTelemetry    *auth.UsageTelemetry
+	postgresClose     func() error
+	independentClosed bool
+	postgresClosed    bool
 }
 
 func (r *Runtime) Close() error {
 	if r == nil {
 		return nil
 	}
-	r.closeOnce.Do(func() {
-		var errs []error
-		for _, closeResource := range r.closers {
-			if closeResource != nil {
-				errs = append(errs, closeResource())
-			}
+	r.closeMu.Lock()
+	defer r.closeMu.Unlock()
+	if r.postgresClosed {
+		return r.closeErr
+	}
+	if r.usageTelemetry != nil {
+		if err := r.usageTelemetry.Close(); errors.Is(err, auth.ErrUsageTelemetryShutdownTimeout) {
+			r.closeErr = errors.Join(r.closeErr, r.closeIndependentLocked())
+			return errors.Join(r.closeErr, err)
 		}
-		r.closeErr = errors.Join(errs...)
-	})
+	}
+	r.closeErr = errors.Join(r.closeErr, r.closeIndependentLocked())
+	if r.postgresClose != nil {
+		r.closeErr = errors.Join(r.closeErr, r.postgresClose())
+	}
+	r.postgresClosed = true
 	return r.closeErr
+}
+
+func (r *Runtime) closeIndependentLocked() error {
+	if r.independentClosed {
+		return nil
+	}
+	r.independentClosed = true
+	var errs []error
+	for _, closeResource := range r.closers {
+		if closeResource != nil {
+			errs = append(errs, closeResource())
+		}
+	}
+	return errors.Join(errs...)
 }
 
 type postgresComponents struct {

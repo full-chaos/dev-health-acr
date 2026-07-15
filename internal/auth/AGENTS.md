@@ -24,7 +24,7 @@ Owns ACR token lifecycle, repository-scope normalization, authentication middlew
 - Authentication failures for missing, malformed, unknown, revoked, and expired credentials share a safe external response.
 - Store only token hashes. Return plaintext only at creation/rotation and never place it in logs or audit metadata.
 - Scope denial and repository denial remain separate authorization decisions and audit actions.
-- Successful-read usage telemetry is lifecycle-owned, bounded, coalesced, and asynchronous; queue saturation and crash-before-flush loss are observable best-effort outcomes. Known authorization denials make one synchronous detached bounded audit attempt and remain denied if it fails. Credential lifecycle audit in `service.go` stays atomic with its mutation.
+- Successful-read usage telemetry is lifecycle-owned, bounded, coalesced, and asynchronous; queue saturation, crash, forced termination, and an unjoined shutdown timeout can lose best-effort records. A nil close result proves only worker quiescence, not durable persistence. Known authorization denials make one synchronous detached bounded audit attempt and remain denied if it fails. Credential lifecycle audit in `service.go` stays atomic with its mutation.
 
 ## TESTING
 

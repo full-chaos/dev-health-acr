@@ -21,26 +21,25 @@ type flushRequest struct {
 func (u *UsageTelemetry) run() {
 	ticker := time.NewTicker(u.flushInterval)
 	defer ticker.Stop()
-	defer close(u.done)
 	pending := make(map[string]usageBatch, u.queueCapacity)
 	for {
 		select {
 		case record := <-u.queue:
 			u.collect(pending, record)
 			if len(pending) == u.queueCapacity {
-				u.flush(context.Background(), pending)
+				_ = u.flush(u.workerContext, pending, false)
 			}
 		case request := <-u.flushRequests:
 			u.drain(pending)
-			request.done <- u.flush(request.context, pending)
+			request.done <- u.flush(request.context, pending, false)
 		case <-ticker.C:
-			u.flush(context.Background(), pending)
+			_ = u.flush(u.workerContext, pending, false)
 		case <-u.stop:
 			u.drain(pending)
-			shutdownContext, cancel := context.WithTimeout(context.Background(), u.shutdownTimeout)
-			err := u.flush(shutdownContext, pending)
+			shutdownContext, cancel := context.WithDeadline(context.Background(), u.shutdownDeadline())
+			_ = u.flush(shutdownContext, pending, true)
 			cancel()
-			u.closeResult <- err
+			u.finish(nil)
 			return
 		}
 	}
@@ -72,17 +71,19 @@ func (u *UsageTelemetry) collect(pending map[string]usageBatch, record UsageReco
 	u.metrics.coalesced.Add(1)
 }
 
-func (u *UsageTelemetry) flush(ctx context.Context, pending map[string]usageBatch) error {
+func (u *UsageTelemetry) flush(ctx context.Context, pending map[string]usageBatch, final bool) error {
 	for key, batch := range pending {
-		delete(pending, key)
 		if err := ctx.Err(); err != nil {
-			u.metrics.shutdownDropped.Add(batch.count)
-			for _, remaining := range pending {
-				u.metrics.shutdownDropped.Add(remaining.count)
+			if final {
+				u.metrics.shutdownDropped.Add(batch.count)
+				for _, remaining := range pending {
+					u.metrics.shutdownDropped.Add(remaining.count)
+				}
+				clear(pending)
 			}
-			clear(pending)
 			return err
 		}
+		delete(pending, key)
 		u.deliver(ctx, batch)
 	}
 	return nil

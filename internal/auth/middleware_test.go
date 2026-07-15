@@ -74,6 +74,31 @@ func TestNewAuthenticator_rejectsTypedNilStores(t *testing.T) {
 	}
 }
 
+func TestNewAuthenticator_borrows_injected_telemetry_and_owns_only_fallback(t *testing.T) {
+	// Given
+	store := newMemoryCredentialStore(t)
+	audit := memory.NewAuditStore()
+	borrowed, err := NewUsageTelemetry(store, audit, UsageTelemetryOptions{FlushInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = borrowed.Close() })
+
+	// When
+	withBorrowed, borrowedErr := NewAuthenticator(store, audit, AuthenticatorOptions{UsageTelemetry: borrowed})
+	withFallback, fallbackErr := NewAuthenticator(store, audit, AuthenticatorOptions{})
+	t.Cleanup(func() {
+		if withFallback != nil {
+			_ = withFallback.Close()
+		}
+	})
+
+	// Then
+	if borrowedErr != nil || fallbackErr != nil || withBorrowed.UsageTelemetry() != borrowed || withBorrowed.ownsTelemetry || !withFallback.ownsTelemetry || withFallback.UsageTelemetry() == borrowed {
+		t.Fatalf("telemetry ownership = borrowed(%p,%t) fallback(%p,%t), want borrowed dependency and distinct owned fallback", withBorrowed.UsageTelemetry(), withBorrowed.ownsTelemetry, withFallback.UsageTelemetry(), withFallback.ownsTelemetry)
+	}
+}
+
 func TestAuthenticatorDeniesIndependentScopeAndRepository(t *testing.T) {
 	now := time.Date(2026, 7, 10, 15, 0, 0, 0, time.UTC)
 	credentialStore := newMemoryCredentialStore(t)

@@ -215,6 +215,10 @@ func TestUsageTelemetry_shutdown_flushes_pending_work(t *testing.T) {
 	if len(store.Touches()) != 1 || len(audit.Events()) != 1 {
 		t.Fatalf("shutdown must flush queued usage, touches=%d audits=%d", len(store.Touches()), len(audit.Events()))
 	}
+	telemetry.Enqueue(UsageRecord{OrgID: "org-1", CredentialID: "credential-2", UsedAt: time.Date(2026, 7, 15, 12, 1, 0, 0, time.UTC)})
+	if len(store.Touches()) != 1 || telemetry.Stats().Dropped != 1 {
+		t.Fatalf("enqueue after worker completion touched=%d stats=%#v, want no store call and one drop", len(store.Touches()), telemetry.Stats())
+	}
 }
 
 func TestUsageTelemetry_close_returns_when_a_store_ignores_its_deadline(t *testing.T) {
@@ -244,5 +248,76 @@ func TestUsageTelemetry_close_returns_when_a_store_ignores_its_deadline(t *testi
 	case <-telemetry.done:
 	case <-time.After(time.Second):
 		t.Fatal("telemetry worker did not exit after the blocked store released")
+	}
+}
+
+func TestUsageTelemetry_close_cancels_active_capacity_flush_and_joins_worker(t *testing.T) {
+	// Given
+	store := &blockingUsageStore{started: make(chan struct{}), release: make(chan struct{})}
+	telemetry, err := NewUsageTelemetry(store, &usageAuditStore{}, UsageTelemetryOptions{
+		QueueCapacity: 1, FlushInterval: time.Hour, ShutdownTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetry.Enqueue(UsageRecord{OrgID: "org-1", CredentialID: "credential-1", UsedAt: time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)})
+	select {
+	case <-store.started:
+	case <-time.After(time.Second):
+		t.Fatal("capacity flush did not begin")
+	}
+
+	// When
+	err = telemetry.Close()
+
+	// Then
+	if err != nil {
+		t.Fatalf("Close() = %v, want joined cancellation", err)
+	}
+	select {
+	case <-telemetry.done:
+	default:
+		t.Fatal("Close() returned before the worker joined")
+	}
+}
+
+func TestUsageTelemetry_close_reports_timeout_only_until_uncooperative_worker_joins(t *testing.T) {
+	// Given
+	store := &uncooperativeUsageStore{started: make(chan struct{}), release: make(chan struct{})}
+	telemetry, err := NewUsageTelemetry(store, &usageAuditStore{}, UsageTelemetryOptions{
+		QueueCapacity: 1, FlushInterval: time.Hour, ShutdownTimeout: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetry.Enqueue(UsageRecord{OrgID: "org-1", CredentialID: "credential-1", UsedAt: time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)})
+	select {
+	case <-store.started:
+	case <-time.After(time.Second):
+		t.Fatal("usage delivery did not begin")
+	}
+
+	// When
+	first := telemetry.Close()
+	select {
+	case <-telemetry.done:
+		t.Fatal("uncooperative worker joined before release")
+	default:
+	}
+	second := telemetry.Close()
+	close(store.release)
+	select {
+	case <-telemetry.done:
+	case <-time.After(time.Second):
+		t.Fatal("telemetry worker did not exit after the blocked store released")
+	}
+	third := telemetry.Close()
+
+	// Then
+	if !errors.Is(first, ErrUsageTelemetryShutdownTimeout) || !errors.Is(second, ErrUsageTelemetryShutdownTimeout) {
+		t.Fatalf("Close() before join = (%v, %v), want shutdown timeout", first, second)
+	}
+	if third != nil {
+		t.Fatalf("Close() after join = %v, want terminal result", third)
 	}
 }

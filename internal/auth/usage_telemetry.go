@@ -86,17 +86,18 @@ type UsageTelemetry struct {
 	flushRequests   chan flushRequest
 	stop            chan struct{}
 	done            chan struct{}
-	closeResult     chan error
+	workerContext   context.Context
+	cancelWorker    context.CancelFunc
 	queueCapacity   int
 	flushInterval   time.Duration
 	deliveryTimeout time.Duration
 	shutdownTimeout time.Duration
 	logger          *slog.Logger
 	metrics         usageMetrics
-	enqueueMu       sync.RWMutex
-	closed          bool
-	closeOnce       sync.Once
-	closeErr        error
+	lifecycleMu     sync.RWMutex
+	state           usageTelemetryState
+	shutdownBy      time.Time
+	terminalErr     error
 }
 
 func NewUsageTelemetry(store storage.CredentialStore, audit storage.AuditStore, options UsageTelemetryOptions) (*UsageTelemetry, error) {
@@ -124,10 +125,11 @@ func NewUsageTelemetry(store storage.CredentialStore, audit storage.AuditStore, 
 	if options.Logger == nil {
 		options.Logger = slog.Default()
 	}
+	workerContext, cancelWorker := context.WithCancel(context.Background())
 	telemetry := &UsageTelemetry{
 		store: store, audit: audit,
 		queue: make(chan UsageRecord, options.QueueCapacity), flushRequests: make(chan flushRequest, 1),
-		stop: make(chan struct{}), done: make(chan struct{}), closeResult: make(chan error, 1),
+		stop: make(chan struct{}), done: make(chan struct{}), workerContext: workerContext, cancelWorker: cancelWorker,
 		queueCapacity: options.QueueCapacity, flushInterval: options.FlushInterval,
 		deliveryTimeout: options.DeliveryTimeout, shutdownTimeout: options.ShutdownTimeout, logger: options.Logger,
 	}
@@ -141,9 +143,9 @@ func (u *UsageTelemetry) Enqueue(record UsageRecord) {
 	if u == nil || record.OrgID == "" || usageActorID(record) == "" || record.UsedAt.IsZero() {
 		return
 	}
-	u.enqueueMu.RLock()
-	defer u.enqueueMu.RUnlock()
-	if u.closed {
+	u.lifecycleMu.RLock()
+	defer u.lifecycleMu.RUnlock()
+	if u.state != usageTelemetryOpen {
 		u.metrics.dropped.Add(1)
 		return
 	}
@@ -165,10 +167,18 @@ func (u *UsageTelemetry) Flush(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	u.lifecycleMu.RLock()
+	open := u.state == usageTelemetryOpen
+	u.lifecycleMu.RUnlock()
+	if !open {
+		return ErrUsageTelemetryClosed
+	}
 	done := make(chan error, 1)
 	request := flushRequest{context: ctx, done: done}
 	select {
 	case <-u.done:
+		return ErrUsageTelemetryClosed
+	case <-u.stop:
 		return ErrUsageTelemetryClosed
 	case <-ctx.Done():
 		return ctx.Err()
@@ -182,29 +192,6 @@ func (u *UsageTelemetry) Flush(ctx context.Context) error {
 	case <-u.done:
 		return ErrUsageTelemetryClosed
 	}
-}
-
-// Close blocks only for the bounded shutdown flush. Records not delivered
-// before that deadline are counted as shutdown drops. A process crash before
-// Close is intentionally allowed to lose queued successful-use telemetry.
-func (u *UsageTelemetry) Close() error {
-	if u == nil {
-		return nil
-	}
-	u.closeOnce.Do(func() {
-		u.enqueueMu.Lock()
-		u.closed = true
-		close(u.stop)
-		u.enqueueMu.Unlock()
-		timer := time.NewTimer(u.shutdownTimeout)
-		defer timer.Stop()
-		select {
-		case u.closeErr = <-u.closeResult:
-		case <-timer.C:
-			u.closeErr = ErrUsageTelemetryShutdownTimeout
-		}
-	})
-	return u.closeErr
 }
 
 func (u *UsageTelemetry) Stats() UsageTelemetryStats {
