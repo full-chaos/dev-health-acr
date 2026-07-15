@@ -1,0 +1,17 @@
+Todo 7 Compose contract evidence
+
+Root Compose baseline SHA-256: 2dd6d3a8ad9a39173c04eb312e1c8795e573371a7547d0d60ba009d505672992
+Root Compose patched SHA-256: 3c8f7f0f63ac64374e74e35cddd7493b558f962b0503122acf36641277b41005
+Portable patch SHA-256: 9ce50f65df3d8ed5bca58077823961a83361cce617ed6a25c3c758ea1912c043
+
+Passed:
+- docker compose config over the operator root plus ACR overlay with isolated project values.
+- scripts/deploy/local-pki.sh generated a local CA and ACR certificate.
+- scripts/deploy/test-compose.sh happy contract scenario.
+
+Expected failures (exit 1):
+- missing-ops-token
+- invalid-ca
+- clickhouse-read-denied
+
+Repository verification: make verify passed.
