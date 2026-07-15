@@ -1,0 +1,26 @@
+apiVersion: v2
+name: acr
+description: >-
+  Private Dev Health Agent Context Runtime (ACR) hosted API. Packages only the
+  ACR `acr-api` workload and its pre-install/pre-upgrade migration Job. External
+  Postgres, ClickHouse, and Dev Health Ops entitlement endpoints are consumed as
+  pre-existing dependencies; credentials are referenced from existing Secrets
+  only. No MCP workload is ever deployed.
+type: application
+# Chart version tracks the packaging revision; appVersion tracks the immutable
+# application image, which is always supplied as a digest reference at deploy
+# time (see values.image.reference).
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.29.0-0"
+home: https://github.com/full-chaos/dev-health-acr
+sources:
+  - https://github.com/full-chaos/dev-health-acr
+keywords:
+  - agent-context-runtime
+  - dev-health
+  - private
+annotations:
+  # This chart must never be vendored into dev-health-ops (see ADR-0004).
+  dev-health.io/ownership: dev-health-acr
+  dev-health.io/no-mcp-workload: "true"

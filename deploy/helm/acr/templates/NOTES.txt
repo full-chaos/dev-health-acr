@@ -1,0 +1,26 @@
+Private ACR ({{ include "acr.fullname" . }}) has been rendered.
+
+Image (immutable):
+  {{ include "acr.image" . }}
+
+Boundary reminders (ADR-0004):
+  - This chart packages only acr-api and its pre-install/pre-upgrade migration
+    Job. No MCP workload is deployed; acr-mcp remains host-local.
+  - Postgres, ClickHouse, and the Dev Health Ops entitlement service are
+    external, pre-existing dependencies. This chart provisions none of them.
+  - All credentials are referenced from existing Secrets:
+      runtime:      {{ .Values.credentials.runtime.existingSecret }}
+      migration:    {{ .Values.credentials.migration.existingSecret }}
+      entitlement:  {{ .Values.credentials.entitlementToken.existingSecret }}
+    Ensure these Secrets exist in namespace {{ .Release.Namespace }} before the
+    migration hook runs (live existence is verified at deploy time, Todo 19).
+
+{{- if .Values.gateway.enabled }}
+
+North-south routing is served through the caller-supplied Gateway referenced by
+the rendered HTTPRoute. This chart never installs a Gateway controller.
+{{- else }}
+
+Gateway API HTTPRoute is disabled. The Service {{ include "acr.fullname" . }}
+exposes the API on port {{ .Values.service.port }} inside the cluster.
+{{- end }}

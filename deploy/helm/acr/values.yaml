@@ -1,0 +1,194 @@
+# Default values for the private ACR Helm chart.
+#
+# Security contract (enforced by templates/_helpers.tpl and values.schema.json):
+#   - image.reference MUST be an immutable @sha256 digest reference.
+#   - Every credential is a reference to a pre-existing Secret; this chart never
+#     creates a Secret or embeds a credential literal.
+#   - The migration DSN reference MUST differ from the runtime DSN reference.
+#   - No container may run acr-mcp; the MCP sidecar is host-local only.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Immutable application image. Supplied at deploy time as a fully qualified
+# digest reference, e.g. registry.internal/dev-health-acr/acr-api@sha256:<64 hex>.
+# A bare/mutable tag (for example :latest) is rejected before rendering.
+image:
+  reference: ""
+  pullPolicy: IfNotPresent
+
+# References to pre-existing image pull Secrets. Each entry is {name: <secret>}.
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automountServiceAccountToken: false
+
+# Non-secret process configuration rendered into a ConfigMap and consumed by
+# both the acr-api Deployment and the acr-migrate Job.
+config:
+  environment: production
+  logLevel: info
+  # Listen address is fixed to :8080 in the ConfigMap (matches containerPort);
+  # it is intentionally NOT an operator knob and is rejected under config.
+  # (no addr key here)
+  requestTimeout: "15s"
+  readHeaderTimeout: "5s"
+  readTimeout: "20s"
+  writeTimeout: "20s"
+  idleTimeout: "60s"
+  shutdownTimeout: "10s"
+  requireBackingStores: true
+  # direct or pgbouncer; must not contradict a PgBouncer admin DSN.
+  postgresConnectionKind: direct
+  maxItems: 30
+  maxOutputTokens: 4000
+  maxSerializedBytes: 262144
+  requestsPerMinute: 60
+  enableEpisodeWriteback: false
+  # External Dev Health Ops entitlement endpoint (HTTPS required outside
+  # loopback). The service is consumed, never deployed, by this chart.
+  entitlement:
+    url: ""
+    timeout: "5s"
+    # Mount path for the entitlement bearer token file sourced from an existing
+    # Secret (see credentials.entitlementToken).
+    tokenMountPath: /var/run/acr/entitlement
+    tokenFileName: token
+  # Optional PEM CA bundles mounted from existing Secrets (references only).
+  clickhouseCaBundle:
+    existingSecret: ""
+    key: ca.pem
+  entitlementCaBundle:
+    existingSecret: ""
+    key: ca.pem
+
+# Existing-Secret-only credential contract. Each existingSecret is the NAME of a
+# Secret that already exists in the release namespace. This chart validates the
+# reference syntax offline; live object existence is verified at deploy time
+# (Todo 19), not here.
+credentials:
+  # Runtime (least-privilege) ACR operational Postgres DSN and read-only
+  # ClickHouse evidence DSN consumed by acr-api.
+  runtime:
+    existingSecret: ""
+    postgresDsnKey: ACR_POSTGRES_DSN
+    clickhouseDsnKey: ACR_CLICKHOUSE_DSN
+    # Evidence-ID signing keyring (required by the hosted runtime). Both are
+    # sourced from the existing runtime Secret; key material is never templated.
+    evidenceIdActiveKidKey: ACR_EVIDENCE_ID_ACTIVE_KID
+    evidenceIdKeysKey: ACR_EVIDENCE_ID_KEYS
+    # PgBouncer admin DSN key; required when config.postgresConnectionKind is
+    # pgbouncer, otherwise leave empty.
+    poolerAdminDsnKey: ""
+  # Migration (schema-owner) Postgres DSN consumed only by the acr-migrate Job.
+  # MUST reference a different Secret or key than the runtime DSN.
+  migration:
+    existingSecret: ""
+    postgresDsnKey: ACR_POSTGRES_MIGRATION_DSN
+    # Optional PgBouncer admin DSN key for transaction-pool validation.
+    poolerAdminDsnKey: ""
+  # Bearer token used to authenticate to the Dev Health Ops entitlement service.
+  entitlementToken:
+    existingSecret: ""
+    key: token
+  # Bump this opaque revision whenever a referenced Secret's CONTENT is rotated
+  # (name unchanged). Helm cannot observe external Secret content, so changing
+  # this value forces the API and migration pods to roll onto the new material.
+  rotationRevision: ""
+
+deployment:
+  replicaCount: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  podAnnotations: {}
+  podLabels: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  nodeSelector: {}
+  tolerations: []
+  # Spread replicas across zones and nodes by default.
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelectorFromRelease: true
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelectorFromRelease: true
+  affinity: {}
+  # UNSUPPORTED escape hatch. Additional workload containers would bypass the
+  # restricted pod-security and no-MCP guarantees, so any non-empty value fails
+  # closed and this list is never rendered. Keep empty.
+  extraContainers: []
+
+migration:
+  # Bounded retries for the pre-install/pre-upgrade migration hook.
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  podAnnotations: {}
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+# Optional Gateway API HTTPRoute targeting a caller-supplied, pre-existing
+# Gateway. This chart never installs a Gateway controller or a Gateway object.
+gateway:
+  enabled: false
+  httpRoute:
+    annotations: {}
+    # Caller-supplied Gateway references. Each: {name, namespace?, sectionName?}.
+    parentRefs: []
+    hostnames: []
+    matches:
+      - path:
+          type: PathPrefix
+          value: /api/v1/agent-context
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+  maxUnavailable: null
+
+# Default-deny NetworkPolicy with explicit egress to external dependencies.
+networkPolicy:
+  enabled: true
+  # Ingress to the API port is allowed from these namespace selectors (for
+  # example the Gateway namespace). Empty means same-namespace only.
+  ingressNamespaceSelectors: []
+  egress:
+    # Allow DNS resolution.
+    dns: true
+    # External dependency egress ports (references only; endpoints resolved via
+    # the DSNs in the referenced Secrets).
+    postgresPort: 5432
+    clickhousePort: 8443
+    entitlementPort: 443

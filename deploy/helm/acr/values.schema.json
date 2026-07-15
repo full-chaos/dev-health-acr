@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Private ACR Helm chart values",
+  "description": "Structural contract for the private Dev Health ACR chart. Semantic rules (immutable-digest image, existing-Secret-only credentials, distinct runtime/migration DSN, no-MCP workload) are enforced fail-closed by templates/_helpers.tpl so that violations render a named error.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["image", "config", "credentials"],
+  "properties": {
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference"],
+      "properties": {
+        "reference": {
+          "type": "string",
+          "description": "Immutable image reference; must be pinned to an @sha256 digest (validated at render time)."
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": { "name": { "type": "string" } }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": { "type": "object" },
+        "automountServiceAccountToken": { "type": "boolean" }
+      }
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["environment"],
+      "properties": {
+        "environment": {
+          "type": "string",
+          "enum": ["development", "test", "staging", "production"]
+        },
+        "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
+        "requestTimeout": { "type": "string" },
+        "readHeaderTimeout": { "type": "string" },
+        "readTimeout": { "type": "string" },
+        "writeTimeout": { "type": "string" },
+        "idleTimeout": { "type": "string" },
+        "shutdownTimeout": { "type": "string" },
+        "requireBackingStores": { "type": "boolean" },
+        "postgresConnectionKind": { "type": "string", "enum": ["direct", "pgbouncer"] },
+        "maxItems": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "maxOutputTokens": { "type": "integer", "minimum": 500, "maximum": 16000 },
+        "maxSerializedBytes": { "type": "integer", "minimum": 8192, "maximum": 1048576 },
+        "requestsPerMinute": { "type": "integer", "minimum": 1 },
+        "enableEpisodeWriteback": { "type": "boolean" },
+        "entitlement": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "url": { "type": "string" },
+            "timeout": { "type": "string" },
+            "tokenMountPath": { "type": "string" },
+            "tokenFileName": { "type": "string" }
+          }
+        },
+        "clickhouseCaBundle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "key": { "type": "string" }
+          }
+        },
+        "entitlementCaBundle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "key": { "type": "string" }
+          }
+        }
+      }
+    },
+    "credentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime", "migration", "entitlementToken"],
+      "properties": {
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["existingSecret"],
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "postgresDsnKey": { "type": "string" },
+            "clickhouseDsnKey": { "type": "string" },
+            "evidenceIdActiveKidKey": { "type": "string" },
+            "evidenceIdKeysKey": { "type": "string" },
+            "poolerAdminDsnKey": { "type": "string" }
+          }
+        },
+        "migration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["existingSecret"],
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "postgresDsnKey": { "type": "string" },
+            "poolerAdminDsnKey": { "type": "string" }
+          }
+        },
+        "entitlementToken": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["existingSecret"],
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "key": { "type": "string" }
+          }
+        },
+        "rotationRevision": { "type": ["string", "integer"] }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicaCount": { "type": "integer", "minimum": 1 },
+        "revisionHistoryLimit": { "type": "integer", "minimum": 0 },
+        "strategy": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["RollingUpdate", "Recreate"] },
+            "rollingUpdate": { "type": "object" }
+          }
+        },
+        "podAnnotations": { "type": "object" },
+        "podLabels": { "type": "object" },
+        "resources": { "type": "object" },
+        "nodeSelector": { "type": "object" },
+        "tolerations": { "type": "array" },
+        "topologySpreadConstraints": { "type": "array" },
+        "affinity": { "type": "object" },
+        "extraContainers": { "type": "array" }
+      }
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backoffLimit": { "type": "integer", "minimum": 0 },
+        "activeDeadlineSeconds": { "type": "integer", "minimum": 1 },
+        "resources": { "type": "object" },
+        "podAnnotations": { "type": "object" }
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "gateway": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "httpRoute": {
+          "type": "object",
+          "properties": {
+            "parentRefs": { "type": "array" },
+            "hostnames": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "autoscaling": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minReplicas": { "type": "integer", "minimum": 1 },
+        "maxReplicas": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": { "type": ["integer", "string", "null"] },
+        "maxUnavailable": { "type": ["integer", "string", "null"] }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ingressNamespaceSelectors": { "type": "array" },
+        "egress": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "dns": { "type": "boolean" },
+            "postgresPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "clickhousePort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "entitlementPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        }
+      }
+    }
+  }
+}
