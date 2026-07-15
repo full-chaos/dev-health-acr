@@ -67,6 +67,16 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.config.postgresCaBundle.existingSecret }}
+            - name: postgres-ca
+              mountPath: /var/run/acr/postgres-ca
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if .Values.config.postgresCaBundle.existingSecret }}
+        - name: postgres-ca
+          secret:
+            secretName: {{ .Values.config.postgresCaBundle.existingSecret | quote }}
+        {{- end }}

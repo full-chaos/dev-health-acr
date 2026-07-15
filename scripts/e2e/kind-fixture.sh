@@ -867,8 +867,11 @@ data:
     <clickhouse>
       <profiles>
         <readonly_profile>
-          <readonly>1</readonly>
+          <readonly>2</readonly>
         </readonly_profile>
+        <bootstrap_profile>
+          <readonly>0</readonly>
+        </bootstrap_profile>
       </profiles>
       <users>
         <default>
@@ -877,7 +880,24 @@ data:
           <networks><ip>::/0</ip></networks>
           <quota>default</quota>
         </default>
+        <bootstrap>
+          <password></password>
+          <profile>bootstrap_profile</profile>
+          <access_management>1</access_management>
+          <networks><ip>127.0.0.1</ip><ip>::1</ip></networks>
+          <quota>default</quota>
+        </bootstrap>
       </users>
+    </clickhouse>
+  tls.xml: |
+    <clickhouse>
+      <tcp_port_secure>9440</tcp_port_secure>
+      <openSSL>
+        <server>
+          <certificateFile>/tls/tls.crt</certificateFile>
+          <privateKeyFile>/tls/tls.key</privateKeyFile>
+        </server>
+      </openSSL>
     </clickhouse>
 ---
 apiVersion: apps/v1
@@ -896,15 +916,23 @@ spec:
       containers:
         - name: clickhouse
           image: ${ACR_E2E_IMG_CLICKHOUSE}
-          ports: [{ containerPort: 8123 }, { containerPort: 9000 }]
+          ports: [{ containerPort: 8123 }, { containerPort: 9440 }]
           volumeMounts:
             - { name: readonly, mountPath: /etc/clickhouse-server/users.d/readonly.xml, subPath: readonly.xml }
+            - { name: tls-config, mountPath: /etc/clickhouse-server/config.d/tls.xml, subPath: tls.xml }
+            - { name: tls, mountPath: /tls, readOnly: true }
+          lifecycle:
+            postStart:
+              exec:
+                command: ["sh","-ec","for attempt in \$(seq 1 30); do clickhouse-client --user bootstrap --query \"CREATE TABLE IF NOT EXISTS repos (id UUID, repo String, ref Nullable(String), org_id String) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo, id)\" && clickhouse-client --user bootstrap --query \"CREATE USER IF NOT EXISTS readonly IDENTIFIED WITH no_password\" && clickhouse-client --user bootstrap --query \"GRANT SELECT ON default.repos TO readonly\" && clickhouse-client --user bootstrap --query \"INSERT INTO repos SELECT toUUID('00000000-0000-0000-0000-000000000019'), 'acr/readiness-probe', NULL, 'acr-readiness-probe' WHERE NOT EXISTS (SELECT 1 FROM repos WHERE id = toUUID('00000000-0000-0000-0000-000000000019'))\" && exit 0; sleep 1; done; exit 1"]
           readinessProbe:
             httpGet: { path: /ping, port: 8123 }
             initialDelaySeconds: 5
             periodSeconds: 5
       volumes:
         - { name: readonly, configMap: { name: clickhouse-readonly } }
+        - { name: tls-config, configMap: { name: clickhouse-readonly } }
+        - { name: tls, secret: { secretName: tls-clickhouse } }
 ---
 apiVersion: v1
 kind: Service
@@ -914,7 +942,7 @@ metadata:
   labels: { app: clickhouse }
 spec:
   selector: { app: clickhouse }
-  ports: [{ name: http, port: 8123, targetPort: 8123 }, { name: native, port: 9000, targetPort: 9000 }]
+  ports: [{ name: http, port: 8123, targetPort: 8123 }, { name: native-tls, port: 9440, targetPort: 9440 }]
 EOF
 }
 
@@ -932,11 +960,14 @@ data:
       listen 8443 ssl;
       ssl_certificate     /tls/tls.crt;
       ssl_certificate_key /tls/tls.key;
-      location = /entitlement {
+      location = /api/v1/internal/acr/health {
         default_type application/json;
-        return 200 '{"entitlement":"agent_context_runtime","status":"active","fixture":"acr-e2e"}';
+        return 200 '{"schema_version":"acr_service_health.v1","service":"dev-health-ops","status":"ok"}';
       }
-      location = /healthz { return 200 'ok'; }
+      location ~ ^/api/v1/internal/acr/entitlements/([A-Za-z0-9._-]+)$ {
+        default_type application/json;
+        return 200 '{"schema_version":"acr_entitlement.v1","org_id":"$1","agent_context_runtime":true}';
+      }
     }
 ---
 apiVersion: apps/v1
@@ -1022,7 +1053,7 @@ spec:
   hostnames: ["acr.local"]
   rules:
     - matches:
-        - path: { type: PathPrefix, value: /entitlement }
+        - path: { type: PathPrefix, value: /api/v1/internal/acr }
       backendRefs:
         - name: ops-entitlement
           port: 8443
@@ -1074,6 +1105,7 @@ spec:
   ingress:
     - from:
         - podSelector: { matchLabels: { acr-e2e/access: allowed } }
+        - namespaceSelector: { matchLabels: { acr-e2e.fullchaos.dev/consumer-fixture-id: ${FIXTURE_ID} } }
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ${NS_GW} } }
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: envoy-gateway-system } }
 EOF
@@ -1113,6 +1145,7 @@ ACR_E2E_POSTGRES_PORT="5432"
 ACR_E2E_POSTGRES_DB="acr"
 ACR_E2E_CLICKHOUSE_HOST="clickhouse.${NS_DEPS}.svc.cluster.local"
 ACR_E2E_CLICKHOUSE_HTTP_PORT="8123"
+ACR_E2E_CLICKHOUSE_NATIVE_PORT="9440"
 ACR_E2E_OPS_ENTITLEMENT_HOST="ops-entitlement.${NS_DEPS}.svc.cluster.local"
 ACR_E2E_OPS_ENTITLEMENT_PORT="8443"
 ACR_E2E_CA_CERT="${cdir}/ca.crt"
@@ -1214,6 +1247,7 @@ cmd_verify() {
 
   # 7. TLS chains: every leaf verifies against the fixture CA.
   verify_tls_chain "${name}" postgres 5432 postgres
+  verify_tls_chain "${name}" clickhouse 9440
   verify_tls_chain "${name}" ops-entitlement 8443
 
   # 8. Read-only ClickHouse: SELECT ok, INSERT denied.
@@ -1428,13 +1462,14 @@ gateway_entitlement_response() {
   local ca="$1" lport="$2"
   curl --noproxy '*' --max-time 5 --silent --show-error --cacert "${ca}" \
     --resolve "acr.local:${lport}:127.0.0.1" -w '\n__HTTP_%{http_code}__' \
-    "https://acr.local:${lport}/entitlement" 2>&1 || true
+    "https://acr.local:${lport}/api/v1/internal/acr/health" 2>&1 || true
 }
 
 entitlement_response_active() {
   local body="$1"
-  grep -Fq '"entitlement":"agent_context_runtime"' <<<"${body}" \
-    && grep -Fq '"status":"active"' <<<"${body}" \
+  grep -Fq '"schema_version":"acr_service_health.v1"' <<<"${body}" \
+    && grep -Fq '"service":"dev-health-ops"' <<<"${body}" \
+    && grep -Fq '"status":"ok"' <<<"${body}" \
     && grep -Fq '__HTTP_200__' <<<"${body}"
 }
 
@@ -1455,11 +1490,17 @@ verify_tls_chain() {
 }
 
 verify_clickhouse_readonly() {
-  local name="$1" lport sel body code; local ctx="kind-${name}"
+  local name="$1" lport sel catalog body code; local ctx="kind-${name}"
   pf_start "${ctx}" "${NS_DEPS}" clickhouse 8123; lport="${PF_LPORT}"
-  sel="$(curl -s "http://127.0.0.1:${lport}/?query=SELECT%201" 2>/dev/null || true)"
+  sel="$(curl -s "http://127.0.0.1:${lport}/?user=readonly&query=SELECT%201" 2>/dev/null || true)"
   if [[ "${sel//[$'\r\n ']/}" == "1" ]]; then ok "ClickHouse SELECT works"; else fail "ClickHouse SELECT failed (got: ${sel})"; VERIFY_FAILURES=$((VERIFY_FAILURES+1)); fi
-  body="$(curl -s -w '\n__HTTP_%{http_code}__' "http://127.0.0.1:${lport}/?query=CREATE%20TABLE%20t_${RANDOM}(a%20Int8)%20ENGINE=Memory" 2>&1 || true)"
+  catalog="$(curl -s --get "http://127.0.0.1:${lport}/" --data-urlencode 'user=readonly' --data-urlencode "query=SELECT toString(id), repo, ifNull(ref, '') FROM repos FINAL WHERE org_id = 'acr-readiness-probe' AND repo = 'acr/readiness-probe' LIMIT 1" 2>/dev/null || true)"
+  if [[ "${catalog//[$'\r\n\t ']/}" == "00000000-0000-0000-0000-000000000019acr/readiness-probe" ]]; then
+    ok "ClickHouse readonly runtime catalog probe row is available"
+  else
+    fail "ClickHouse readonly runtime catalog probe row is unavailable (got: ${catalog})"; VERIFY_FAILURES=$((VERIFY_FAILURES+1))
+  fi
+  body="$(curl -s -w '\n__HTTP_%{http_code}__' "http://127.0.0.1:${lport}/?user=readonly&query=CREATE%20TABLE%20t_${RANDOM}(a%20Int8)%20ENGINE=Memory" 2>&1 || true)"
   pf_stop
   code="$(sed -n 's/.*__HTTP_\([0-9]*\)__.*/\1/p' <<<"${body}")"
   if [[ "${code}" != "200" ]] && grep -qiE "readonly|read.only|Cannot execute|ACCESS_DENIED" <<<"${body}"; then

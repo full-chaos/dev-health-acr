@@ -254,11 +254,23 @@ if grep -qiE '^\s*stringData:\s*$' "$rendered"; then
 fi
 pass "secret-ref: credentials and imagePullSecrets are existing-Secret references only"
 
-# Gate 8: pod-security (restricted) posture.
+# Gate 8: the projected Secret filename, rather than its source key, is copied by the init container.
+distinct_token_render="$workdir/distinct-token.yaml"
+render \
+  --set-string 'credentials.entitlementToken.key=source-token' \
+  --set-string 'config.entitlement.tokenFileName=runtime-token' \
+  >"$distinct_token_render"
+grep -qF 'cp /source/runtime-token /destination/runtime-token' "$distinct_token_render" \
+  || fail_gate "entitlement-token: init container must copy the projected token filename"
+pass "entitlement-token: init container copies the projected Secret filename"
+
+# Gate 9: pod-security (restricted) posture.
 for token in 'runAsNonRoot: true' 'readOnlyRootFilesystem: true' 'allowPrivilegeEscalation: false' 'type: RuntimeDefault'; do
   grep -qF "$token" "$rendered" || fail_gate "pod-security: expected '$token' not found"
 done
-grep -q 'drop:' "$rendered" && grep -q '\- ALL' "$rendered" || fail_gate "pod-security: capabilities are not dropped (drop: [ALL])"
+if ! { grep -q 'drop:' "$rendered" && grep -q '\- ALL' "$rendered"; }; then
+  fail_gate "pod-security: capabilities are not dropped (drop: [ALL])"
+fi
 pass "pod-security: restricted context (nonroot, RO rootfs, no-privesc, drop ALL, seccomp)"
 
 # Gate 9: migration ordering via pre-install/pre-upgrade hook.
@@ -324,7 +336,9 @@ PY
 for key in 'ACR_EVIDENCE_ID_ACTIVE_KID' 'ACR_EVIDENCE_ID_KEYS'; do
   grep -q "$key" "$rendered" || fail_gate "evidence-keys: $key not wired into the Deployment"
 done
-grep -q 'ACR_EVIDENCE_ID_KEYS' "$rendered" && grep -A3 'ACR_EVIDENCE_ID_KEYS' "$rendered" | grep -q 'secretKeyRef:' || fail_gate "evidence-keys: ACR_EVIDENCE_ID_KEYS must come from a secretKeyRef"
+if ! { grep -q 'ACR_EVIDENCE_ID_KEYS' "$rendered" && grep -A3 'ACR_EVIDENCE_ID_KEYS' "$rendered" | grep -q 'secretKeyRef:'; }; then
+  fail_gate "evidence-keys: ACR_EVIDENCE_ID_KEYS must come from a secretKeyRef"
+fi
 pass "evidence-keys: ACR_EVIDENCE_ID_ACTIVE_KID + ACR_EVIDENCE_ID_KEYS sourced from existing Secret"
 
 # Gate 13: entitlement URL is an origin (no path).
@@ -361,5 +375,10 @@ pgb=$(render --set-string config.postgresConnectionKind=pgbouncer \
 grep -q 'ACR_POSTGRES_POOLER_ADMIN_DSN' <<<"$pgb" || fail_gate "pgbouncer: runtime ACR_POSTGRES_POOLER_ADMIN_DSN not wired in pgbouncer mode"
 grep -q 'ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN' <<<"$pgb" || fail_gate "pgbouncer: migration ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN not wired in pgbouncer mode"
 pass "pgbouncer: connection kind pgbouncer wires runtime + migration pooler admin DSNs"
+
+pg_ca_mounts=$(grep -c '/var/run/acr/postgres-ca' "$rendered")
+[[ "$pg_ca_mounts" -ge 2 ]] || fail_gate "postgres-tls: Deployment and migration Job must mount the PostgreSQL CA bundle (found $pg_ca_mounts)"
+grep -Eq 'secretName: "?acr-postgres-ca"?' "$rendered" || fail_gate "postgres-tls: existing PostgreSQL CA Secret reference missing"
+pass "postgres-tls: Deployment and migration Job mount the existing CA bundle for verified DSNs"
 
 printf 'RESULT: happy path passed all gates\n'

@@ -7,6 +7,7 @@ least-privilege runtime credentials and never runs acr-mcp.
 {{- include "acr.validateNoMcp" . -}}
 {{- include "acr.validateEntitlementOrigin" . -}}
 {{- $image := include "acr.image" . -}}
+{{- $tokenCopyImage := include "acr.tokenCopyImage" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -47,6 +48,61 @@ spec:
       {{- include "acr.imagePullSecrets" . | nindent 6 }}
       securityContext:
         {{- include "acr.podSecurityContext" . | nindent 8 }}
+      initContainers:
+        - name: entitlement-token-permissions
+          image: {{ $tokenCopyImage | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -ec
+            - {{ printf "cp /source/%s /destination/%s && chmod 0600 /destination/%s && chown 65532:65532 /destination/%s" .Values.config.entitlement.tokenFileName .Values.config.entitlement.tokenFileName .Values.config.entitlement.tokenFileName .Values.config.entitlement.tokenFileName | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: false
+            runAsUser: 0
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - CHOWN
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: entitlement-token-source
+              mountPath: /source
+              readOnly: true
+            - name: entitlement-token
+              mountPath: /destination
+      {{- if .Values.config.entitlementCaBundle.existingSecret }}
+        - name: entitlement-ca-permissions
+          image: {{ $tokenCopyImage | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -ec
+            - {{ printf "cp /source/%s /destination/%s && chmod 0600 /destination/%s && chown 65532:65532 /destination/%s" .Values.config.entitlementCaBundle.key .Values.config.entitlementCaBundle.key .Values.config.entitlementCaBundle.key .Values.config.entitlementCaBundle.key | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: false
+            runAsUser: 0
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - CHOWN
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: entitlement-ca-source
+              mountPath: /source
+              readOnly: true
+            - name: entitlement-ca
+              mountPath: /destination
+      {{- end }}
       {{- with .Values.deployment.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -146,6 +202,11 @@ spec:
             - name: entitlement-token
               mountPath: {{ .Values.config.entitlement.tokenMountPath | quote }}
               readOnly: true
+            {{- if .Values.config.postgresCaBundle.existingSecret }}
+            - name: postgres-ca
+              mountPath: /var/run/acr/postgres-ca
+              readOnly: true
+            {{- end }}
             {{- if .Values.config.clickhouseCaBundle.existingSecret }}
             - name: clickhouse-ca
               mountPath: /var/run/acr/clickhouse-ca
@@ -161,11 +222,18 @@ spec:
         - name: tmp
           emptyDir: {}
         - name: entitlement-token
+          emptyDir: {}
+        - name: entitlement-token-source
           secret:
             secretName: {{ .Values.credentials.entitlementToken.existingSecret | quote }}
             items:
               - key: {{ .Values.credentials.entitlementToken.key | default "token" | quote }}
                 path: {{ .Values.config.entitlement.tokenFileName | quote }}
+        {{- if .Values.config.postgresCaBundle.existingSecret }}
+        - name: postgres-ca
+          secret:
+            secretName: {{ .Values.config.postgresCaBundle.existingSecret | quote }}
+        {{- end }}
         {{- if .Values.config.clickhouseCaBundle.existingSecret }}
         - name: clickhouse-ca
           secret:
@@ -173,6 +241,8 @@ spec:
         {{- end }}
         {{- if .Values.config.entitlementCaBundle.existingSecret }}
         - name: entitlement-ca
+          emptyDir: {}
+        - name: entitlement-ca-source
           secret:
             secretName: {{ .Values.config.entitlementCaBundle.existingSecret | quote }}
         {{- end }}

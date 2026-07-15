@@ -25,6 +25,12 @@ config:
     # Origin only (scheme://host[:port]); the runtime rejects a path component.
     url: https://ops.dev-health.internal
     timeout: "5s"
+  postgresCaBundle:
+    existingSecret: acr-postgres-ca
+    key: ca.crt
+  entitlementCaBundle:
+    existingSecret: acr-entitlement-ca
+    key: ca.crt
 
 credentials:
   runtime:
