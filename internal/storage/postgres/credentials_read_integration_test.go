@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -16,9 +17,10 @@ func TestCredentialStore_ListAndGetByIDRoundTripJSONScopes(t *testing.T) {
 	db := newCredentialStoreDatabase(t, ctx)
 	audit, err := NewAuditStore(db)
 	require.NoError(t, err)
-	store, err := NewCredentialStore(db, audit)
+	createdAt := time.Date(2026, time.January, 2, 3, 4, 5, 123456789, time.UTC)
+	store, lifecycle, err := newCredentialStore(db, audit, func() time.Time { return createdAt })
 	require.NoError(t, err)
-	service, err := auth.NewService(store, auth.ServiceOptions{})
+	service, err := auth.NewService(lifecycle, auth.ServiceOptions{})
 	require.NoError(t, err)
 	request := credentialCreateRequest("round-trip")
 	request.RepositoryScopes = []string{"acme/catalog", "acme/widgets"}
@@ -71,7 +73,7 @@ func requireCredentialRoundTrip(t *testing.T, want, actual contractsv1.ClientCre
 	require.Equal(t, want.OrgID, actual.OrgID)
 	require.Equal(t, want.RepositoryScopes, actual.RepositoryScopes)
 	require.Equal(t, want.Scopes, actual.Scopes)
-	require.True(t, want.CreatedAt.Equal(actual.CreatedAt))
+	require.True(t, want.CreatedAt.Truncate(time.Microsecond).Equal(actual.CreatedAt))
 	require.Equal(t, want.ExpiresAt, actual.ExpiresAt)
 	require.Equal(t, want.RevokedAt, actual.RevokedAt)
 	require.Equal(t, want.LastUsedAt, actual.LastUsedAt)
