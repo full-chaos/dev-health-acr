@@ -96,7 +96,7 @@ func (s *Service) Rotate(ctx context.Context, request RotateCredentialRequest) (
 		return IssuedCredential{}, fmt.Errorf("load credential for rotation: %w", err)
 	}
 	now := s.now().UTC()
-	if current.RevokedAt != nil || (current.ExpiresAt != nil && !current.ExpiresAt.After(now)) {
+	if current.RevokedAt != nil {
 		return IssuedCredential{}, fmt.Errorf("%w: source credential is no longer active", ErrInvalidCredential)
 	}
 	create := CreateCredentialRequest{
