@@ -61,6 +61,13 @@ validate_name() {
 state_dir() { echo "${STATE_ROOT}/$1"; }
 kube() { kubectl --context "kind-$1" "${@:2}"; }
 
+# Per-fixture Docker object names, deterministically derived from the validated
+# cluster name so every fixture owns a uniquely named network + registry and
+# nothing collides with the host-global default "kind" network.
+net_name()  { echo "$1-net"; }
+reg_name()  { echo "$1-registry"; }
+node_name() { echo "$1-control-plane"; }
+
 # ---------------------------------------------------------------------------
 # Vendored-manifest integrity gate. Recomputed on every create AND verify so a
 # tampered byte in vendor/ fails closed.
@@ -93,9 +100,18 @@ cmd_create() {
   command -v kubectl >/dev/null 2>&1 || die "kubectl not installed"
   command -v openssl >/dev/null 2>&1 || die "openssl not installed"
 
-  # Unique-resource guard: refuse to reuse an existing cluster name.
+  # Unique-resource guard: refuse to reuse an existing cluster, network, OR
+  # registry name (fail closed) so two fixtures can never share isolation state.
+  local net reg
+  net="$(net_name "${name}")"; reg="$(reg_name "${name}")"
   if kind get clusters 2>/dev/null | grep -qx "${name}"; then
     die "cluster already exists: ${name} (reused name refused)"
+  fi
+  if docker network inspect "${net}" >/dev/null 2>&1; then
+    die "docker network already exists: ${net} (reused name refused)"
+  fi
+  if docker inspect "${reg}" >/dev/null 2>&1; then
+    die "registry container already exists: ${reg} (reused name refused)"
   fi
 
   verify_vendor_checksums || die "vendored manifest integrity gate failed"
@@ -105,6 +121,7 @@ cmd_create() {
 
   gen_certs "${name}" "${sd}"
   preload_images
+  provision_registry_network "${name}"
   create_cluster "${name}" "${sd}"
   install_calico "${name}"
   install_gateway_api "${name}"
@@ -164,10 +181,25 @@ preload_images() {
     "${ACR_E2E_IMG_CALICO_CNI}" "${ACR_E2E_IMG_CALICO_NODE}" "${ACR_E2E_IMG_CALICO_KUBE_CONTROLLERS}" \
     "${ACR_E2E_IMG_ENVOY_GATEWAY}" "${ACR_E2E_IMG_ENVOY_RATELIMIT}" "${ACR_E2E_IMG_ENVOY_PROXY}" \
     "${ACR_E2E_IMG_POSTGRES}" "${ACR_E2E_IMG_CLICKHOUSE}" "${ACR_E2E_IMG_OPS_ENTITLEMENT}" \
-    "${ACR_E2E_IMG_PROBE}"; do
+    "${ACR_E2E_IMG_PROBE}" "${ACR_E2E_IMG_REGISTRY}"; do
     docker pull -q "${img}" >/dev/null || die "failed to pull ${img}"
   done
   ok "pulled all pinned images"
+}
+
+# Provision this fixture's uniquely named Docker network and local OCI registry
+# BEFORE the cluster, so the Kind node can be attached to that same network and
+# reach the registry by name. Nothing is host-published; isolation is by network.
+provision_registry_network() {
+  local name="$1" net reg
+  net="$(net_name "${name}")"; reg="$(reg_name "${name}")"
+  log "provisioning fixture network ${net} and registry ${reg}"
+  docker network create "${net}" >/dev/null || die "failed to create network ${net}"
+  # Registry attached ONLY to this fixture's network; no -p host publish.
+  docker run -d --restart=no --name "${reg}" --network "${net}" \
+    -e REGISTRY_HTTP_ADDR=0.0.0.0:5000 "${ACR_E2E_IMG_REGISTRY}" >/dev/null \
+    || die "failed to start registry ${reg}"
+  ok "network ${net} + registry ${reg} provisioned"
 }
 
 create_cluster() {
@@ -183,11 +215,18 @@ networking:
 nodes:
   - role: control-plane
     image: ${ACR_E2E_NODE_IMAGE}
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."${name}-registry:5000"]
+      endpoint = ["http://${name}-registry:5000"]
 EOF
-  log "creating kind cluster ${name} (default CNI disabled)"
+  log "creating kind cluster ${name} on network $(net_name "${name}") (default CNI disabled)"
   # Do NOT --wait for node Ready here: the default CNI is disabled, so the node
   # stays NotReady until Calico is applied below. Readiness is enforced then.
-  kind create cluster --name "${name}" --config "${sd}/kind-config.yaml"
+  # KIND_EXPERIMENTAL_DOCKER_NETWORK binds the node to this fixture's own network
+  # (not the host-global default "kind" bridge), giving isolated ownership.
+  KIND_EXPERIMENTAL_DOCKER_NETWORK="$(net_name "${name}")" \
+    kind create cluster --name "${name}" --config "${sd}/kind-config.yaml"
   # Load every pinned image into the node so pods never reach a registry.
   local img
   for img in \
@@ -629,6 +668,9 @@ ACR_E2E_OPS_ENTITLEMENT_HOST="ops-entitlement.${NS_DEPS}.svc.cluster.local"
 ACR_E2E_OPS_ENTITLEMENT_PORT="8443"
 ACR_E2E_CA_CERT="${cdir}/ca.crt"
 ACR_E2E_IMAGE_PULL_SECRET="acr-e2e-regcred"
+ACR_E2E_DOCKER_NETWORK="$(net_name "${name}")"
+ACR_E2E_REGISTRY_NAME="$(reg_name "${name}")"
+ACR_E2E_REGISTRY_ENDPOINT="$(reg_name "${name}"):5000"
 EOF
   # A deterministic values snippet the Helm/Kustomize tests can merge.
   cat >"${sd}/acr-values.yaml" <<EOF
@@ -645,6 +687,10 @@ externalDependencies:
   postgresHost: postgres.${NS_DEPS}.svc.cluster.local
   clickhouseHost: clickhouse.${NS_DEPS}.svc.cluster.local
   opsEntitlementHost: ops-entitlement.${NS_DEPS}.svc.cluster.local
+fixtureRegistry:
+  network: $(net_name "${name}")
+  name: $(reg_name "${name}")
+  endpoint: $(reg_name "${name}"):5000
 EOF
   ok "exported deterministic values/secrets/gateway references"
 }
@@ -720,6 +766,9 @@ cmd_verify() {
   # 11. Unique resources: docker objects carry the fixture name.
   check "kind node container name scoped to fixture" \
     bash -c "docker ps --format '{{.Names}}' | grep -qx ${name}-control-plane"
+
+  # 12. Per-fixture registry/network isolation ownership (real Docker state).
+  verify_isolation "${name}"
 
   if [[ "${VERIFY_FAILURES}" -eq 0 ]]; then
     ok "verify passed for ${name}"
@@ -841,18 +890,51 @@ verify_network_policy() {
   fi
 }
 
+# Prove this fixture owns a uniquely named Docker network + registry, that its
+# node and registry share ONLY that network (never the host-global "kind"
+# bridge), and that the registry actually serves on the fixture network.
+verify_isolation() {
+  local name="$1" net reg node out
+  net="$(net_name "${name}")"; reg="$(reg_name "${name}")"; node="$(node_name "${name}")"
+  check "fixture network ${net} exists" docker network inspect "${net}"
+  check "fixture registry ${reg} running" \
+    bash -c "[[ \"\$(docker inspect -f '{{.State.Running}}' ${reg} 2>/dev/null)\" == true ]]"
+  check "registry ${reg} attached to ${net}" \
+    bash -c "docker network inspect ${net} -f '{{range .Containers}}{{.Name}} {{end}}' | tr ' ' '\n' | grep -qx ${reg}"
+  check "node ${node} attached to ${net}" \
+    bash -c "docker network inspect ${net} -f '{{range .Containers}}{{.Name}} {{end}}' | tr ' ' '\n' | grep -qx ${node}"
+  # Node must NOT be on the host-global default "kind" network.
+  check "node ${node} not on host-global 'kind' network" \
+    bash -c "! docker network inspect kind -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null | tr ' ' '\n' | grep -qx ${node}"
+  # Registry actually serves the v2 API on the fixture network.
+  out="$(docker run --rm --network "${net}" "${ACR_E2E_IMG_PROBE}" wget -qO- "http://${reg}:5000/v2/" 2>/dev/null || true)"
+  if [[ "${out}" == "{}" ]]; then ok "registry ${reg} serves /v2/ on ${net}"; else fail "registry ${reg} not serving on ${net}"; VERIFY_FAILURES=$((VERIFY_FAILURES+1)); fi
+}
+
 # ===========================================================================
 # DESTROY
 # ===========================================================================
 cmd_destroy() {
   local name="$1"
   validate_name "${name}"
+  local net reg
+  net="$(net_name "${name}")"; reg="$(reg_name "${name}")"
+  # Delete the cluster first so its node detaches from the fixture network.
   if kind get clusters 2>/dev/null | grep -qx "${name}"; then
     log "deleting kind cluster ${name}"
     kind delete cluster --name "${name}" >/dev/null 2>&1 || true
     ok "cluster ${name} deleted"
   else
     log "no kind cluster named ${name}; nothing to delete"
+  fi
+  # Remove ONLY this fixture's registry container and network.
+  if docker inspect "${reg}" >/dev/null 2>&1; then
+    docker rm -f "${reg}" >/dev/null 2>&1 || true
+    ok "registry ${reg} removed"
+  fi
+  if docker network inspect "${net}" >/dev/null 2>&1; then
+    docker network rm "${net}" >/dev/null 2>&1 || true
+    ok "network ${net} removed"
   fi
   rm -rf "$(state_dir "${name}")"
   ok "fixture state for ${name} removed"
