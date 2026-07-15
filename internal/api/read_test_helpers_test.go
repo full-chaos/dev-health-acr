@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
@@ -17,6 +18,10 @@ import (
 const hostedTestRepository = "example-org/widget-service"
 
 func newHostedTestApp(t *testing.T, provider CapabilitiesProvider, hooks *observability.Hooks, scopes []string, entitlements EntitlementProvider, store storage.EvidenceStore) (*App, string) {
+	return newHostedTestAppWithWebAssertions(t, provider, hooks, scopes, entitlements, store, nil)
+}
+
+func newHostedTestAppWithWebAssertions(t *testing.T, provider CapabilitiesProvider, hooks *observability.Hooks, scopes []string, entitlements EntitlementProvider, store storage.EvidenceStore, webAssertions *auth.WebAssertionVerifier) (*App, string) {
 	t.Helper()
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
@@ -48,7 +53,7 @@ func newHostedTestApp(t *testing.T, provider CapabilitiesProvider, hooks *observ
 		Observer: observability.NewAssemblyObserver(*hooks), StoreBackend: contextpacket.StoreBackendMemory,
 	})
 	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
-		Capabilities: provider, Observability: hooks, Limits: manager, Now: func() time.Time { return now },
+		Capabilities: provider, Observability: hooks, Limits: manager, Now: func() time.Time { return now }, WebAssertions: webAssertions,
 		Runtime: &RuntimeDependencies{
 			Credentials: credentials, Audit: audit, Entitlements: entitlements, Assembler: assembler, Evidence: store,
 			ReadinessChecks: exactRuntimeChecks(),

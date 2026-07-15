@@ -1,0 +1,37 @@
+{
+  "contract": "acr-v1",
+  "manual_http": {
+    "driver": "scripts/e2e/web-assertion.sh",
+    "scenarios": [
+      "happy",
+      "wrong-issuer",
+      "wrong-audience",
+      "wrong-alg",
+      "wrong-kid",
+      "expired",
+      "future",
+      "overlong",
+      "method",
+      "path",
+      "body",
+      "removed-key",
+      "foreign-scope",
+      "write-route",
+      "token-confusion"
+    ],
+    "status": "passed"
+  },
+  "security": {
+    "diff_check": "passed",
+    "secret_scan": "passed"
+  },
+  "task": 14,
+  "verification": [
+    "make contract-write",
+    "make contract-test",
+    "go test -race ./internal/auth ./internal/api ./cmd/acr-api -run 'Test.*WebAssertion' -count=1",
+    "make hosted-integration",
+    "make verify",
+    "go test -race -shuffle=on -count=1 ./..."
+  ]
+}

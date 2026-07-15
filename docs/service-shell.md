@@ -51,6 +51,9 @@ The default listen address is `:8080`. Override it through `ACR_ADDR` or the `se
 | `ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE` | empty | Optional PEM CA bundle for entitlement service TLS verification |
 | `ACR_DEV_HEALTH_ENTITLEMENT_ALLOW_INSECURE_LOOPBACK` | `false` | Allows plaintext HTTP only when the entitlement origin is loopback (local development) |
 | `ACR_TRUSTED_PROXY_CIDRS` | empty | Comma-separated proxy networks allowed to supply `X-Forwarded-For` |
+| `ACR_WEB_ASSERTION_ISSUER` | empty | Fixed trusted-web assertion issuer; must be set with audience and JWKS file |
+| `ACR_WEB_ASSERTION_AUDIENCE` | empty | Fixed trusted-web assertion audience; must be set with issuer and JWKS file |
+| `ACR_WEB_ASSERTION_JWKS_FILE` | empty | Local public Ed25519 JWKS file; enables trusted-web read assertions |
 
 DSN values are never emitted by `SafeAttributes` or startup logs. DSN presence
 alone is not readiness: staging/production startup composes the complete hosted
@@ -85,6 +88,16 @@ structured-log events. The hosted read routes require an authenticated `fcacr_`
 credential, the `agent_context_runtime` entitlement, and their applicable
 read scope before they can return a retryable `503` for an unavailable hosted
 runtime bundle.
+
+When the three `ACR_WEB_ASSERTION_*` values are configured, read routes also
+accept a compact `X-ACR-Web-Assertion` JWT. The assertion uses an `EdDSA`
+signature from the local JWKS and binds its configured issuer/audience, `sub`,
+server-derived `org_id`, explicit repository slugs, read permissions, short
+timestamps, `jti`, method, path, and body digest. The process never logs the
+assertion or its body. JWKS key removal takes effect on the next assertion
+because the file is re-read for verification. Web assertions cannot authorize
+credentials, administration, or episode writes. Duplicate `jti` attempts are
+audited and rate-limited; they are not represented as impossible.
 
 `POST /api/v1/agent-context/episodes` is protected by authentication, the
 `agent_context_runtime` entitlement, and an `episode:write` scope authorized

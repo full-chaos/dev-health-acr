@@ -72,6 +72,9 @@ type Config struct {
 	DevHealthEntitlementProxyURL              string
 	DevHealthEntitlementCACertPath            string
 	DevHealthEntitlementAllowInsecureLoopback bool
+	WebAssertionIssuer                        string
+	WebAssertionAudience                      string
+	WebAssertionJWKSFile                      string
 }
 
 type lookupEnv func(string) (string, bool)
@@ -103,6 +106,9 @@ func load(lookup lookupEnv) (Config, error) {
 		DevHealthEntitlementTokenFile:  stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE", ""),
 		DevHealthEntitlementProxyURL:   stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_PROXY_URL", ""),
 		DevHealthEntitlementCACertPath: stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE", ""),
+		WebAssertionIssuer:             stringValue(lookup, "ACR_WEB_ASSERTION_ISSUER", ""),
+		WebAssertionAudience:           stringValue(lookup, "ACR_WEB_ASSERTION_AUDIENCE", ""),
+		WebAssertionJWKSFile:           stringValue(lookup, "ACR_WEB_ASSERTION_JWKS_FILE", ""),
 	}
 	if err := loadHostedRuntimeValues(lookup, &cfg, requireStoresDefault); err != nil {
 		return Config{}, err
@@ -227,6 +233,9 @@ func (c Config) Validate() error {
 		if err := validateDevHealthEntitlementURL(c); err != nil {
 			return err
 		}
+	}
+	if err := validateWebAssertionConfig(c); err != nil {
+		return err
 	}
 	return nil
 }

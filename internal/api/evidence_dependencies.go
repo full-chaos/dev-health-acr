@@ -37,6 +37,7 @@ type Dependencies struct {
 	EvidenceStoreFactory contextpacket.EvidenceStoreFactory
 	Runtime              *RuntimeDependencies
 	ClientIP             auth.ClientIPResolver
+	WebAssertions        *auth.WebAssertionVerifier
 }
 
 type App struct {
@@ -111,7 +112,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 			return nil, errors.New("hosted read runtime requires request controls")
 		}
 		var err error
-		authenticator, err = auth.NewAuthenticator(deps.Runtime.Credentials, deps.Runtime.Audit, auth.AuthenticatorOptions{Now: deps.Now, Limiter: deps.AuthAttempts, Logger: logger, ClientIP: deps.ClientIP})
+		authenticator, err = auth.NewAuthenticator(deps.Runtime.Credentials, deps.Runtime.Audit, auth.AuthenticatorOptions{Now: deps.Now, Limiter: deps.AuthAttempts, Logger: logger, ClientIP: deps.ClientIP, WebAssertions: deps.WebAssertions})
 		if err != nil {
 			return nil, err
 		}

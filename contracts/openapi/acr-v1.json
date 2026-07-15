@@ -66,6 +66,14 @@
       "get": {
         "operationId": "getCapabilities",
         "x-required-scope": "context:read",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "webAssertionAuth": []
+          }
+        ],
         "parameters": [
           {
             "$ref": "#/components/parameters/RequestID"
@@ -111,6 +119,14 @@
         "operationId": "createContextPacket",
         "x-required-scope": "context:read",
         "x-required-entitlement": "agent_context_runtime",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "webAssertionAuth": []
+          }
+        ],
         "parameters": [
           {
             "$ref": "#/components/parameters/RequestID"
@@ -175,6 +191,14 @@
         "operationId": "getContextPacket",
         "x-required-scope": "context:read",
         "x-required-entitlement": "agent_context_runtime",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "webAssertionAuth": []
+          }
+        ],
         "parameters": [
           {
             "$ref": "#/components/parameters/RequestID"
@@ -224,6 +248,14 @@
         "operationId": "getEvidence",
         "x-required-scope": "evidence:read",
         "x-required-entitlement": "agent_context_runtime",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "webAssertionAuth": []
+          }
+        ],
         "parameters": [
           {
             "$ref": "#/components/parameters/RequestID"
@@ -288,6 +320,11 @@
         "operationId": "createEpisode",
         "x-required-scope": "episode:write",
         "x-required-entitlement": "agent_context_runtime",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "$ref": "#/components/parameters/RequestID"
@@ -454,6 +491,12 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "fcacr_ client credential"
+      },
+      "webAssertionAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-ACR-Web-Assertion",
+        "description": "Ed25519 request-bound compact JWT assertion for read-only server-to-server web requests. Assertions require the configured issuer, audience, local JWKS key ID, exact method/path/body hash, explicit repository scopes, and a maximum 30-second lifetime."
       }
     },
     "parameters": {

@@ -200,3 +200,36 @@ func TestRevokedClientVersionsRequireCanonicalSemVer(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_webAssertionsRequireCompleteConfiguration(t *testing.T) {
+	// Given
+	values := map[string]string{"ACR_WEB_ASSERTION_ISSUER": "https://web.example.test"}
+
+	// When
+	_, err := load(mapLookup(values))
+
+	// Then
+	if err == nil || !strings.Contains(err.Error(), "ACR_WEB_ASSERTION_AUDIENCE") {
+		t.Fatalf("load() error = %v, want missing assertion audience", err)
+	}
+}
+
+func TestLoad_webAssertionsRetainFixedIssuerAudienceAndJWKSPath(t *testing.T) {
+	// Given
+	values := map[string]string{
+		"ACR_WEB_ASSERTION_ISSUER":    "https://web.example.test",
+		"ACR_WEB_ASSERTION_AUDIENCE":  "acr-api",
+		"ACR_WEB_ASSERTION_JWKS_FILE": "/run/secrets/acr-web-assertions.jwks.json",
+	}
+
+	// When
+	cfg, err := load(mapLookup(values))
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WebAssertionIssuer != values["ACR_WEB_ASSERTION_ISSUER"] || cfg.WebAssertionAudience != values["ACR_WEB_ASSERTION_AUDIENCE"] || cfg.WebAssertionJWKSFile != values["ACR_WEB_ASSERTION_JWKS_FILE"] {
+		t.Fatalf("web assertion config = %#v", cfg)
+	}
+}
