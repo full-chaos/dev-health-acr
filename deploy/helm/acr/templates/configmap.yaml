@@ -8,7 +8,9 @@ metadata:
     {{- include "acr.labels" . | nindent 4 }}
 data:
   ACR_ENVIRONMENT: {{ .Values.config.environment | quote }}
-  ACR_ADDR: {{ .Values.config.addr | quote }}
+  # Fixed to the container/probe port; not operator-tunable so the listen
+  # address can never diverge from containerPort 8080.
+  ACR_ADDR: ":8080"
   ACR_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
   ACR_REQUEST_TIMEOUT: {{ .Values.config.requestTimeout | quote }}
   ACR_READ_HEADER_TIMEOUT: {{ .Values.config.readHeaderTimeout | quote }}

@@ -155,7 +155,10 @@ specifically. The Deployment never renders extraContainers regardless.
 {{/*
 Connection-kind guard. When postgresConnectionKind is pgbouncer, both the
 runtime and migration pooler admin DSN keys are required so transaction-pool
-validation is wired; when direct, they must be absent.
+validation is wired. When direct, both MUST be absent: acr-migrate and the
+hosted runtime reject an admin DSN in direct mode
+(runtime/postgres.ValidateConnectionKind), so a configured pooler key is a
+runtime-equivalence violation and fails closed here.
 */}}
 {{- define "acr.validateConnectionKind" -}}
 {{- $kind := .Values.config.postgresConnectionKind | default "direct" -}}
@@ -168,20 +171,28 @@ validation is wired; when direct, they must be absent.
 {{- if not $migrationPooler -}}
 {{- fail "pgbouncer-admin-dsn: config.postgresConnectionKind is pgbouncer but credentials.migration.poolerAdminDsnKey is empty; a PgBouncer admin DSN reference is required" -}}
 {{- end -}}
-{{- else if ne $kind "direct" -}}
+{{- else if eq $kind "direct" -}}
+{{- if $runtimePooler -}}
+{{- fail (printf "direct-mode-pooler: config.postgresConnectionKind is direct but credentials.runtime.poolerAdminDsnKey (%s) is set; acr-api rejects a PgBouncer admin DSN in direct mode" $runtimePooler) -}}
+{{- end -}}
+{{- if $migrationPooler -}}
+{{- fail (printf "direct-mode-pooler: config.postgresConnectionKind is direct but credentials.migration.poolerAdminDsnKey (%s) is set; acr-migrate rejects a PgBouncer admin DSN in direct mode" $migrationPooler) -}}
+{{- end -}}
+{{- else -}}
 {{- fail (printf "invalid-connection-kind: config.postgresConnectionKind %q must be direct or pgbouncer" $kind) -}}
 {{- end -}}
 {{- end -}}
 
 {{/*
-Entitlement-origin guard. The runtime requires an origin (scheme://host[:port])
-with no path; reject a URL that carries a path.
+Entitlement-origin guard. The runtime requires an HTTPS origin only: scheme
+must be https, and the URL must carry no userinfo, path, query, or fragment
+(scheme://host[:port] only). This mirrors the sidecar's origin contract.
 */}}
 {{- define "acr.validateEntitlementOrigin" -}}
 {{- $url := .Values.config.entitlement.url | default "" -}}
 {{- if $url -}}
-{{- if not (regexMatch "^https?://[^/]+/?$" $url) -}}
-{{- fail (printf "entitlement-origin: config.entitlement.url %q must be an origin (scheme and host only, no path); the runtime rejects a path component" $url) -}}
+{{- if not (regexMatch "^https://[^/@?#]+$" $url) -}}
+{{- fail (printf "entitlement-origin: config.entitlement.url %q must be an HTTPS origin only (https scheme, host[:port], no userinfo, path, query, or fragment)" $url) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

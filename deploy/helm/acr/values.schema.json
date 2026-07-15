@@ -3,7 +3,7 @@
   "title": "Private ACR Helm chart values",
   "description": "Structural contract for the private Dev Health ACR chart. Semantic rules (immutable-digest image, existing-Secret-only credentials, distinct runtime/migration DSN, no-MCP workload) are enforced fail-closed by templates/_helpers.tpl so that violations render a named error.",
   "type": "object",
-  "additionalProperties": true,
+  "additionalProperties": false,
   "required": ["image", "config", "credentials"],
   "properties": {
     "nameOverride": { "type": "string" },
@@ -44,7 +44,7 @@
     },
     "config": {
       "type": "object",
-      "additionalProperties": true,
+      "additionalProperties": false,
       "required": ["environment"],
       "properties": {
         "environment": {
@@ -52,7 +52,12 @@
           "enum": ["development", "test", "staging", "production"]
         },
         "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
-        "addr": { "type": "string" },
+        "requestTimeout": { "type": "string" },
+        "readHeaderTimeout": { "type": "string" },
+        "readTimeout": { "type": "string" },
+        "writeTimeout": { "type": "string" },
+        "idleTimeout": { "type": "string" },
+        "shutdownTimeout": { "type": "string" },
         "requireBackingStores": { "type": "boolean" },
         "postgresConnectionKind": { "type": "string", "enum": ["direct", "pgbouncer"] },
         "maxItems": { "type": "integer", "minimum": 1, "maximum": 50 },
@@ -68,6 +73,22 @@
             "timeout": { "type": "string" },
             "tokenMountPath": { "type": "string" },
             "tokenFileName": { "type": "string" }
+          }
+        },
+        "clickhouseCaBundle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "key": { "type": "string" }
+          }
+        },
+        "entitlementCaBundle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "key": { "type": "string" }
           }
         }
       }

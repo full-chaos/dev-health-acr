@@ -31,7 +31,9 @@ serviceAccount:
 config:
   environment: production
   logLevel: info
-  addr: ":8080"
+  # Listen address is fixed to :8080 in the ConfigMap (matches containerPort);
+  # it is intentionally NOT an operator knob and is rejected under config.
+  # (no addr key here)
   requestTimeout: "15s"
   readHeaderTimeout: "5s"
   readTimeout: "20s"

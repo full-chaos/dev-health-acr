@@ -152,6 +152,38 @@ case "$scenario" in
     negative extra-container "injected-mcp" \
       --set-json 'deployment.extraContainers=[{"name":"sidecar","image":"registry.internal/dev-health-acr/helper@sha256:2222222222222222222222222222222222222222222222222222222222222222"}]'
     exit 0 ;;
+  direct-with-pooler)
+    negative direct-with-pooler "direct-mode-pooler" \
+      --set-string "credentials.runtime.poolerAdminDsnKey=ACR_POSTGRES_POOLER_ADMIN_DSN"
+    exit 0 ;;
+  http-url)
+    negative http-url "entitlement-origin" \
+      --set-string "config.entitlement.url=http://ops.dev-health.internal"
+    exit 0 ;;
+  userinfo-url)
+    negative userinfo-url "entitlement-origin" \
+      --set-string "config.entitlement.url=https://user@ops.dev-health.internal"
+    exit 0 ;;
+  query-url)
+    negative query-url "entitlement-origin" \
+      --set-string "config.entitlement.url=https://ops.dev-health.internal?x=1"
+    exit 0 ;;
+  fragment-url)
+    negative fragment-url "entitlement-origin" \
+      --set-string "config.entitlement.url=https://ops.dev-health.internal#f"
+    exit 0 ;;
+  unknown-root-key)
+    negative unknown-root-key "bogusRootKey" \
+      --set-string "bogusRootKey=x"
+    exit 0 ;;
+  unknown-config-key)
+    negative unknown-config-key "bogusKey" \
+      --set-string "config.bogusKey=x"
+    exit 0 ;;
+  alternate-port)
+    negative alternate-port "addr" \
+      --set-string "config.addr=:9090"
+    exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;
 esac
