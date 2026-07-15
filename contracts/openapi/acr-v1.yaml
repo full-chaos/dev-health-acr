@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 230dd65eefbd2e4fe50b7657b42f818f17fb6c82d4e73b52896dbfae454dcf6b
+# canonical-content-sha256: 2650839a984e5be015208ea29a237be88933d7f4d9d696960f92f2baadb14a93
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -39,6 +39,11 @@ paths:
           "$ref": "#/components/responses/Error"
         "503":
           "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+        -
+          webAssertionAuth: []
       x-required-scope: "context:read"
   "/api/v1/agent-context/context-packets":
     post:
@@ -79,6 +84,11 @@ paths:
           "$ref": "#/components/responses/Error"
         "504":
           "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+        -
+          webAssertionAuth: []
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
   "/api/v1/agent-context/context-packets/{context_packet_id}":
@@ -112,6 +122,11 @@ paths:
           "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+        -
+          webAssertionAuth: []
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
   "/api/v1/agent-context/episodes":
@@ -173,6 +188,9 @@ paths:
           "$ref": "#/components/responses/Error"
         "504":
           "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "episode:write"
   "/api/v1/agent-context/evidence/{evidence_ref_id}":
@@ -216,6 +234,11 @@ paths:
           "$ref": "#/components/responses/Error"
         "504":
           "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+        -
+          webAssertionAuth: []
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "evidence:read"
   "/healthz":
@@ -326,3 +349,8 @@ components:
       bearerFormat: "fcacr_ client credential"
       scheme: "bearer"
       type: "http"
+    webAssertionAuth:
+      description: "Ed25519 request-bound compact JWT assertion for read-only server-to-server web requests. Assertions require the configured issuer, audience, local JWKS key ID, exact method/path/body hash, explicit repository scopes, and a maximum 30-second lifetime."
+      in: "header"
+      name: "X-ACR-Web-Assertion"
+      type: "apiKey"

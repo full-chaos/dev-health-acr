@@ -22,6 +22,7 @@ type AuthenticatorOptions struct {
 	Logger          *slog.Logger
 	DetachedTimeout time.Duration
 	ClientIP        ClientIPResolver
+	WebAssertions   *WebAssertionVerifier
 }
 
 type Authenticator struct {
@@ -32,6 +33,7 @@ type Authenticator struct {
 	logger          *slog.Logger
 	detachedTimeout time.Duration
 	clientIP        ClientIPResolver
+	webAssertions   *WebAssertionVerifier
 }
 
 func NewAuthenticator(store storage.CredentialStore, audit storage.AuditStore, options AuthenticatorOptions) (*Authenticator, error) {
@@ -56,15 +58,23 @@ func NewAuthenticator(store storage.CredentialStore, audit storage.AuditStore, o
 	if options.ClientIP == nil {
 		options.ClientIP = RemoteAddressClientIP
 	}
-	return &Authenticator{store: store, audit: audit, now: options.Now, limiter: options.Limiter, logger: options.Logger, detachedTimeout: options.DetachedTimeout, clientIP: options.ClientIP}, nil
+	return &Authenticator{store: store, audit: audit, now: options.Now, limiter: options.Limiter, logger: options.Logger, detachedTimeout: options.DetachedTimeout, clientIP: options.ClientIP, webAssertions: options.WebAssertions}, nil
 }
 
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
+	return a.MiddlewareFor(false, next)
+}
+
+func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		now := a.now().UTC()
 		ip := a.clientIP(r)
 		if !a.limiter.AllowAttempt(ip, now) || a.limiter.FailureBlocked(ip, now) {
 			a.writeRateLimitError(w, r, a.limiter.RetryAfter(ip, now))
+			return
+		}
+		if len(r.Header.Values(WebAssertionHeader)) > 0 {
+			a.authenticateWebAssertion(w, r, ip, now, allowWebAssertions, next)
 			return
 		}
 		raw := extractBearer(r)
@@ -96,6 +106,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		}
 
 		principal := storage.Principal{
+			AuthenticationMethod: storage.AuthenticationMethodCredential, Subject: credential.CredentialID,
 			OrgID: credential.OrgID, CredentialID: credential.CredentialID,
 			RepositoryScopes: append([]string(nil), credential.RepositoryScopes...),
 			Permissions:      append([]string(nil), credential.Scopes...),
@@ -135,11 +146,7 @@ func (a *Authenticator) RequireScope(required string, next http.Handler) http.Ha
 		if !HasScope(principal.Permissions, required) {
 			auditCtx, cancelAudit := a.detachedContext(r.Context())
 			defer cancelAudit()
-			a.recordAudit(auditCtx, storage.AuditEvent{
-				OrgID: principal.OrgID, ActorType: "credential", ActorID: principal.CredentialID,
-				Action: "scope_denied", ResourceType: "acr_scope", ResourceID: required,
-				Status: "denied", RequestID: requestID(r), Metadata: map[string]any{"required_scope": required}, CreatedAt: a.now().UTC(),
-			})
+			a.recordAudit(auditCtx, auditEvent(principal, "scope_denied", "acr_scope", required, "denied", requestID(r), map[string]any{"required_scope": required}, a.now().UTC()))
 			a.writeError(w, r, http.StatusForbidden, "insufficient_scope", "Credential is missing the required scope", false, map[string]any{"required_scope": required})
 			return
 		}
@@ -161,11 +168,7 @@ func (a *Authenticator) RequireRepository(resolve func(*http.Request) string, ne
 		if err := AuthorizeRepository(principal, repository); err != nil {
 			auditCtx, cancelAudit := a.detachedContext(r.Context())
 			defer cancelAudit()
-			a.recordAudit(auditCtx, storage.AuditEvent{
-				OrgID: principal.OrgID, ActorType: "credential", ActorID: principal.CredentialID,
-				Action: "repository_denied", ResourceType: "repository", ResourceID: repository,
-				Status: "denied", RequestID: requestID(r), Metadata: map[string]any{"repository": repository}, CreatedAt: a.now().UTC(),
-			})
+			a.recordAudit(auditCtx, auditEvent(principal, "repository_denied", "repository", repository, "denied", requestID(r), map[string]any{"repository": repository}, a.now().UTC()))
 			a.writeError(w, r, http.StatusForbidden, "repo_forbidden", "Credential is not authorized for this repository", false, nil)
 			return
 		}
@@ -197,6 +200,15 @@ func (a *Authenticator) recordKnownFailure(r *http.Request, credential contracts
 
 func (a *Authenticator) detachedContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), a.detachedTimeout)
+}
+
+func auditEvent(principal storage.Principal, action, resourceType, resourceID, status, requestID string, metadata map[string]any, createdAt time.Time) storage.AuditEvent {
+	actorType, actorID := principal.AuditActor()
+	return storage.AuditEvent{
+		OrgID: principal.OrgID, ActorType: actorType, ActorID: actorID,
+		Action: action, ResourceType: resourceType, ResourceID: resourceID,
+		Status: status, RequestID: requestID, Metadata: metadata, CreatedAt: createdAt,
+	}
 }
 
 func (a *Authenticator) recordAudit(ctx context.Context, event storage.AuditEvent) {

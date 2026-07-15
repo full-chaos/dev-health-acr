@@ -40,6 +40,11 @@ func prepareServer(ctx context.Context, request serverBuildRequest) (serverRunne
 	if err != nil {
 		return nil, nil, err
 	}
+	webAssertions, err := webAssertionVerifier(request.config)
+	if err != nil {
+		return nil, nil, closeBuildFailure(closeRuntime, fmt.Errorf("initialize web assertions: %w", err))
+	}
+	dependencies.WebAssertions = webAssertions
 	app, err := api.NewApp(appConfig(request.config, request.serviceVersion), dependencies, request.logger)
 	if err != nil {
 		return nil, nil, closeBuildFailure(closeRuntime, fmt.Errorf("initialize application: %w", err))
@@ -49,6 +54,16 @@ func prepareServer(ctx context.Context, request serverBuildRequest) (serverRunne
 		return nil, nil, closeBuildFailure(closeRuntime, fmt.Errorf("initialize server: %w", err))
 	}
 	return server, closeRuntime, nil
+}
+
+func webAssertionVerifier(cfg config.Config) (*auth.WebAssertionVerifier, error) {
+	if cfg.WebAssertionJWKSFile == "" {
+		return nil, nil
+	}
+	return auth.NewWebAssertionVerifier(auth.WebAssertionOptions{
+		Issuer: cfg.WebAssertionIssuer, Audience: cfg.WebAssertionAudience, JWKSPath: cfg.WebAssertionJWKSFile,
+		MaxBodyBytes: int64(cfg.MaxSerializedBytes),
+	})
 }
 
 func applicationDependencies(ctx context.Context, request serverBuildRequest) (api.Dependencies, func() error, error) {

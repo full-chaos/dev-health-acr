@@ -80,7 +80,7 @@ func (r *RuntimeDependencies) validate() error {
 	return nil
 }
 
-func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement bool, next http.Handler) http.Handler {
+func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement, allowWebAssertions bool, next http.Handler) http.Handler {
 	if a.runtime == nil || a.authenticator == nil {
 		return http.HandlerFunc(a.handleRuntimeUnavailable)
 	}
@@ -91,7 +91,7 @@ func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, e
 	handler = a.requireClientVersion(handler)
 	handler = LimitMiddleware(a.limits, class, handler)
 	handler = a.authenticator.RequireScope(scope, handler)
-	return a.authenticator.Middleware(handler)
+	return a.authenticator.MiddlewareFor(allowWebAssertions, handler)
 }
 
 func (a *App) requireClientVersion(next http.Handler) http.Handler {
@@ -152,8 +152,9 @@ func (a *App) recordReadAudit(ctx context.Context, principal storage.Principal, 
 	}
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()
+	actorType, actorID := principal.AuditActor()
 	if err := a.runtime.Audit.Record(auditCtx, storage.AuditEvent{
-		OrgID: principal.OrgID, ActorType: "credential", ActorID: principal.CredentialID,
+		OrgID: principal.OrgID, ActorType: actorType, ActorID: actorID,
 		Action: action, ResourceType: resourceType, ResourceID: resourceID, Status: status,
 		RequestID: RequestID(ctx), Metadata: metadata, CreatedAt: a.now().UTC(),
 	}); err != nil {

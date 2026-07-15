@@ -25,7 +25,7 @@ func LimitMiddleware(manager *limits.Manager, class limits.RequestClass, next ht
 		}
 		claim, decision, err := manager.Claim(r.Context(), limits.Subject{
 			OrgID:        principal.OrgID,
-			CredentialID: principal.CredentialID,
+			CredentialID: principal.Subject,
 		}, class)
 		if err != nil {
 			writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Request controls are temporarily unavailable", true, nil)

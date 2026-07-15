@@ -29,11 +29,31 @@ const (
 // Principal is derived from validated authentication. Callers must never build
 // it from organization identifiers supplied in request bodies.
 type Principal struct {
-	OrgID               string
-	CredentialID        string
-	RepositoryScopes    []string
-	Permissions         []string
-	ProductEntitlements []string
+	AuthenticationMethod AuthenticationMethod
+	Subject              string
+	OrgID                string
+	CredentialID         string
+	RepositoryScopes     []string
+	Permissions          []string
+	ProductEntitlements  []string
+}
+
+// AuthenticationMethod identifies the validated authentication boundary that
+// derived a Principal. It is never supplied by a request payload.
+type AuthenticationMethod string
+
+const (
+	AuthenticationMethodCredential   AuthenticationMethod = "credential"
+	AuthenticationMethodWebAssertion AuthenticationMethod = "web_assertion"
+)
+
+// AuditActor returns the identity safe to use for audit and rate correlation.
+// Web assertions deliberately leave CredentialID empty.
+func (p Principal) AuditActor() (string, string) {
+	if p.AuthenticationMethod == AuthenticationMethodWebAssertion {
+		return string(AuthenticationMethodWebAssertion), p.Subject
+	}
+	return string(AuthenticationMethodCredential), p.Subject
 }
 
 type EvidenceBundle struct {
