@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: acr-migrate
+  labels:
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/component: migration
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: acr
+      app.kubernetes.io/component: migration
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: 5432

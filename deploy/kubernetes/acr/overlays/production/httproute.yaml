@@ -1,0 +1,22 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: acr-api
+  labels:
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/component: api
+spec:
+  parentRefs:
+    - name: production-internal
+      namespace: gateway-system
+      sectionName: https
+  hostnames:
+    - acr.production.internal
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: acr-api
+          port: 8080

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: acr-config
+data:
+  ACR_ENVIRONMENT: production
+  ACR_LOG_LEVEL: warn

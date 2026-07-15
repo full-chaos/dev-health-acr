@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: acr-development
+resources:
+  - ../../base
+  - httproute.yaml
+images:
+  - name: acr-api
+    newName: registry.internal/dev-health/acr-api
+    digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+patches:
+  - path: scaling.yaml

@@ -1,0 +1,80 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: acr-migrate
+  labels:
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/component: migration
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: acr
+        app.kubernetes.io/component: migration
+      annotations:
+        acr.fullchaos.dev/credentials-revision: required
+    spec:
+      restartPolicy: Never
+      serviceAccountName: acr-migrate
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: acr-registry-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: acr-migrate
+          image: acr-api
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/acr-migrate", "up"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: ACR_ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: acr-config
+                  key: ACR_ENVIRONMENT
+            - name: ACR_LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: acr-config
+                  key: ACR_LOG_LEVEL
+            - name: ACR_POSTGRES_CONNECTION_KIND
+              valueFrom:
+                configMapKeyRef:
+                  name: acr-config
+                  key: ACR_POSTGRES_CONNECTION_KIND
+            - name: ACR_POSTGRES_MIGRATION_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: acr-migration-credentials
+                  key: ACR_POSTGRES_MIGRATION_DSN
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
