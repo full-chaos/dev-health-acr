@@ -22,6 +22,11 @@ run_dir=""
 fixture_id=""
 owned_namespace=0
 cleanup_started=0
+port_forward_pids=()
+queued_evidence_result=""
+queued_evidence_detail=""
+imported_image_refs=()
+remote_archives=()
 
 log() { printf '[kind-helm] %s\n' "$*" >&2; }
 fail() { printf '[kind-helm] FAIL: %s\n' "$*" >&2; }
@@ -64,7 +69,7 @@ validate_identifier() {
 
 kube() { kubectl --context "kind-${cluster}" "$@"; }
 
-record_evidence() {
+write_evidence() {
   local result="$1" detail="$2"
   mkdir -p "$(dirname "${EVIDENCE_FILE}")"
   umask 077
@@ -79,6 +84,33 @@ record_evidence() {
     printf 'recorded_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf '%s\n' '---'
   } >>"${EVIDENCE_FILE}"
+}
+
+queue_evidence() {
+  queued_evidence_result="$1"
+  queued_evidence_detail="$2"
+}
+
+stop_port_forwards() {
+  local pid
+  for pid in "${port_forward_pids[@]}"; do
+    kill "${pid}" 2>/dev/null || true
+    wait "${pid}" 2>/dev/null || true
+  done
+  port_forward_pids=()
+}
+
+cleanup_kind_images() {
+  local node ref archive status=0
+  [[ -n "${cluster}" ]] || return 0
+  node="${cluster}-control-plane"
+  for archive in "${remote_archives[@]}"; do
+    docker exec "${node}" rm -f "${archive}" >/dev/null 2>&1 || status=1
+  done
+  for ref in "${imported_image_refs[@]}"; do
+    docker exec "${node}" ctr -n k8s.io images rm "${ref}" >/dev/null 2>&1 || status=1
+  done
+  return "${status}"
 }
 
 cleanup_namespace() {
@@ -108,8 +140,17 @@ cleanup_namespace() {
 on_exit() {
   local original_status="$1" cleanup_status=0
   trap - EXIT
+  stop_port_forwards
   if ! cleanup_namespace; then cleanup_status=1; fi
+  if ! cleanup_kind_images; then cleanup_status=1; fi
   rm -rf "${run_dir:-}"
+  if [[ -n "${queued_evidence_result}" ]]; then
+    if [[ "${cleanup_status}" -ne 0 ]]; then
+      queued_evidence_result="failed"
+      queued_evidence_detail="${queued_evidence_detail}; owned namespace cleanup failed"
+    fi
+    write_evidence "${queued_evidence_result}" "${queued_evidence_detail}"
+  fi
   if [[ "${original_status}" -ne 0 ]]; then return "${original_status}"; fi
   return "${cleanup_status}"
 }
@@ -125,19 +166,57 @@ static_check() {
       failures=$((failures + 1))
     fi
   }
+  function_block() {
+    local function_name="$1"
+    awk -v name="${function_name}" '
+      $0 == (name "() {") { inside = 1 }
+      inside { print }
+      inside && $0 == "}" { exit }
+    ' "${BASH_SOURCE[0]}"
+  }
+  assert_helm_context() {
+    local function_name block literal_dollar='$' context_token
+    context_token="--kube-context \"kind-${literal_dollar}{cluster}\""
+    for function_name in run_helm run_helm_failure assert_migration_completed; do
+      block="$(function_block "${function_name}")"
+      if ! grep -Fq -- "${context_token}" <<<"${block}"; then
+        fail "static: ${function_name} must pin Helm to kind-${cluster}"
+        failures=$((failures + 1))
+      fi
+    done
+  }
+  assert_missing_image_pull_secret_boundary() {
+    local block token literal_dollar='$' deploy_token job_token
+    deploy_token="${literal_dollar}{deploy}"
+    job_token="${literal_dollar}{job}"
+    block="$(function_block assert_missing_image_pull_secret)"
+    for token in "job=\"${deploy_token}-migrate\"" "get \"job/${job_token}\"" "FailedToRetrieveImagePullSecret" "unexpectedly created the API Deployment"; do
+      if ! grep -Fq -- "${token}" <<<"${block}"; then
+        fail "static: missing imagePullSecret must assert the migration-hook retrieval boundary"
+        failures=$((failures + 1))
+        return
+      fi
+    done
+  }
   check_static 'ctr -n k8s.io images import --base-name.*--digests' 'imports a local OCI archive into Kind under its exact digest' "${BASH_SOURCE[0]}"
   check_static 'imagePullSecrets' 'asserts existing imagePullSecret use' "${BASH_SOURCE[0]}"
   check_static 'schema_migrations' 'records migration state without a schema rollback claim' "${BASH_SOURCE[0]}"
   check_static 'acr-mcp' 'checks namespace inventory has no MCP workload' "${BASH_SOURCE[0]}"
   check_static 'cleanup_namespace' 'cleanup is owned-namespace-only and retried' "${BASH_SOURCE[0]}"
+  check_static 'run_helm_failure' 'failure scenarios retain failed workloads for boundary assertions before namespace cleanup' "${BASH_SOURCE[0]}"
+  check_static 'stop_port_forwards' 'port-forwards are tracked and stopped during cleanup' "${BASH_SOURCE[0]}"
+  check_static 'queue_evidence' 'live evidence is queued until cleanup completes' "${BASH_SOURCE[0]}"
+  check_static 'cleanup_kind_images' 'only run-owned imported Kind image references and remote archives are removed' "${BASH_SOURCE[0]}"
+  assert_helm_context
+  assert_missing_image_pull_secret_boundary
   check_static 'postgresCaBundle' 'chart mounts the PostgreSQL CA referenced by verified DSNs' "${CHART}/templates/deployment.yaml"
   check_static 'tcp_port_secure' 'fixture exposes TLS ClickHouse native transport' "${FIXTURE_SCRIPT}"
   check_static 'acr-e2e\.fullchaos\.dev/fixture-id' 'fixture permits only explicitly labelled consumer namespaces' "${FIXTURE_SCRIPT}"
   if [[ "${failures}" -ne 0 ]]; then
-    record_evidence failed "static checks failed (${failures})"
+    write_evidence failed "static checks failed (${failures})"
     return 1
   fi
-  record_evidence passed 'static chart/fixture lifecycle guards present'
+  write_evidence passed 'static chart/fixture lifecycle guards present'
 }
 
 require_tools() {
@@ -190,12 +269,14 @@ prepare_run() {
   [[ "${#namespace}" -le 63 && "${#release}" -le 53 ]] || die "generated namespace or release name is too long"
   run_dir="$(mktemp -d "${STATE_ROOT}/kind-helm.${run_id}.XXXXXX")"
   trap 'on_exit "$?"' EXIT
+  trap 'exit 130' INT TERM
   kube get namespace "${namespace}" >/dev/null 2>&1 && die "refusing reused namespace: ${namespace}"
   kube create namespace "${namespace}" >/dev/null
   kube label namespace "${namespace}" \
     "acr-e2e.fullchaos.dev/run-id=${run_id}" \
     "acr-e2e.fullchaos.dev/consumer-fixture-id=${fixture_id}" --overwrite >/dev/null
   owned_namespace=1
+  queue_evidence failed 'scenario ended before recording a successful result'
 }
 
 image_digest_from_oci() {
@@ -222,10 +303,12 @@ build_local_image() {
   node="${cluster}-control-plane"
   remote_archive="/var/lib/acr-e2e/$(basename "${archive}")"
   docker exec "${node}" mkdir -p /var/lib/acr-e2e
+  remote_archives+=("${remote_archive}")
   docker cp "${archive}" "${node}:/var/lib/acr-e2e/"
   docker exec "${node}" ctr -n k8s.io images import --base-name "${repo}" --digests "${remote_archive}" >/dev/null
   docker exec "${node}" ctr -n k8s.io images tag "${tag}" "${repo}@${digest}" >/dev/null
   docker exec "${node}" rm -f "${remote_archive}" >/dev/null
+  imported_image_refs+=("${tag}" "${repo}@${digest}")
   docker exec "${node}" ctr -n k8s.io images list -q >"${run_dir}/kind-images-${version}.txt"
   grep -Fxq "${repo}@${digest}" "${run_dir}/kind-images-${version}.txt" || die "Kind node did not retain the exact local OCI image digest"
   printf '%s@%s\n' "${repo}" "${digest}"
@@ -255,7 +338,7 @@ create_fixture_references() {
 }
 
 write_values() {
-  local image="$1" entitlement_url="$2" target="${run_dir}/values.yaml"
+  local image="$1" entitlement_url="$2" gateway_name="${3:-${ACR_E2E_GATEWAY_NAME}}" gateway_namespace="${4:-${ACR_E2E_GATEWAY_NAMESPACE}}" target="${run_dir}/values.yaml"
   cat >"${target}" <<EOF
 image:
   reference: ${image}
@@ -302,8 +385,8 @@ gateway:
   enabled: true
   httpRoute:
     parentRefs:
-      - name: ${ACR_E2E_GATEWAY_NAME}
-        namespace: ${ACR_E2E_GATEWAY_NAMESPACE}
+      - name: ${gateway_name}
+        namespace: ${gateway_namespace}
         sectionName: https
     hostnames:
       - ${ACR_E2E_GATEWAY_HOSTNAME}
@@ -327,8 +410,14 @@ EOF
 
 run_helm() {
   local values="$1"; shift
-  helm upgrade --install "${release}" "${CHART}" --namespace "${namespace}" \
-    --values "${values}" --wait --wait-for-jobs --timeout 240s "$@"
+  helm upgrade --install "${release}" "${CHART}" --kube-context "kind-${cluster}" --namespace "${namespace}" \
+    --values "${values}" --wait --wait-for-jobs --atomic --cleanup-on-fail --timeout 240s "$@"
+}
+
+run_helm_failure() {
+  local values="$1"; shift
+  helm upgrade --install "${release}" "${CHART}" --kube-context "kind-${cluster}" --namespace "${namespace}" \
+    --values "${values}" --wait --wait-for-jobs --timeout 90s "$@"
 }
 
 deployment_name() { printf '%s\n' "${release}"; }
@@ -348,7 +437,7 @@ assert_migration_completed() {
   local count hooks
   count="$(migration_count)"
   [[ "${count}" =~ ^[1-9][0-9]*$ ]] || { fail "migration history was not created"; return 1; }
-  hooks="$(helm get hooks "${release}" --namespace "${namespace}")"
+  hooks="$(helm --kube-context "kind-${cluster}" get hooks "${release}" --namespace "${namespace}")"
   grep -q 'pre-install,pre-upgrade' <<<"${hooks}" || { fail "Helm did not record migration hook ordering"; return 1; }
   log "migration hook completed before ready Deployment (schema versions=${count})"
 }
@@ -365,19 +454,19 @@ assert_service_and_route() {
   local_port=$((20000 + RANDOM % 20000))
   kubectl --context "kind-${cluster}" -n envoy-gateway-system port-forward "service/${gateway_service}" "${local_port}:443" >/dev/null 2>&1 &
   local port_forward_pid=$!
+  port_forward_pids+=("${port_forward_pid}")
   local ready=0 attempts=0
   while [[ "${attempts}" -lt 40 ]]; do
     if (exec 3<>"/dev/tcp/127.0.0.1/${local_port}") 2>/dev/null; then ready=1; break; fi
     sleep 0.25
     attempts=$((attempts + 1))
   done
-  if [[ "${ready}" -ne 1 ]]; then kill "${port_forward_pid}" 2>/dev/null || true; wait "${port_forward_pid}" 2>/dev/null || true; fail "gateway port-forward did not become ready"; return 1; fi
+  if [[ "${ready}" -ne 1 ]]; then stop_port_forwards; fail "gateway port-forward did not become ready"; return 1; fi
   ca="${ACR_E2E_CA_CERT}"
   response="$(curl --noproxy '*' --silent --show-error --max-time 10 --cacert "${ca}" \
     --resolve "${ACR_E2E_GATEWAY_HOSTNAME}:${local_port}:127.0.0.1" \
     -o /dev/null -w '%{http_code}' "https://${ACR_E2E_GATEWAY_HOSTNAME}:${local_port}/api/v1/agent-context/capabilities" 2>&1 || true)"
-  kill "${port_forward_pid}" 2>/dev/null || true
-  wait "${port_forward_pid}" 2>/dev/null || true
+  stop_port_forwards
   [[ "${response}" == "401" || "${response}" == "403" ]] || { fail "Gateway route did not reach ACR's protected API (HTTP ${response})"; return 1; }
   log "Service and Programmed Gateway/HTTPRoute reached protected API over fixture TLS"
 }
@@ -432,16 +521,54 @@ upgrade_for_checksum_rollouts() {
 
 assert_no_deployment_ready() {
   local deploy; deploy="$(deployment_name)"
+  ! kube -n "${namespace}" wait --for=condition=Available "deployment/${deploy}" --timeout=5s >/dev/null 2>&1 || {
+    fail "expected failure left an Available API Deployment"; return 1;
+  }
+}
+
+assert_failed_migration_hook() {
+  local job pod exit_code
+  job="$(deployment_name)-migrate"
+  kube -n "${namespace}" wait --for=condition=failed "job/${job}" --timeout=90s >/dev/null || {
+    fail "migration failure did not leave a failed hook Job"; return 1;
+  }
+  pod="$(kube -n "${namespace}" get pods -l "job-name=${job}" -o jsonpath='{.items[0].metadata.name}')"
+  [[ -n "${pod}" ]] || { fail "failed migration hook has no Pod"; return 1; }
+  exit_code="$(kube -n "${namespace}" get "pod/${pod}" -o jsonpath='{.status.containerStatuses[?(@.name=="acr-migrate")].state.terminated.exitCode}')"
+  [[ "${exit_code}" =~ ^[1-9][0-9]*$ ]] || { fail "failed migration hook did not terminate acr-migrate nonzero"; return 1; }
+  assert_no_deployment_ready
+}
+
+assert_missing_runtime_secret() {
+  local deploy reason events
+  deploy="$(deployment_name)"
+  kube -n "${namespace}" get "deployment/${deploy}" >/dev/null || { fail "missing runtime Secret did not create the API Deployment"; return 1; }
+  assert_no_deployment_ready
+  reason="$(kube -n "${namespace}" get pods -o jsonpath='{range .items[*].status.containerStatuses[*]}{.state.waiting.reason}{"\n"}{end}' 2>/dev/null || true)"
+  events="$(kube -n "${namespace}" get events --sort-by=.metadata.creationTimestamp 2>/dev/null || true)"
+  grep -qiE 'CreateContainerConfigError|secret.*not found|not found' <<<"${reason}${events}" || {
+    fail "missing runtime Secret did not produce a missing-Secret workload boundary"; return 1;
+  }
+}
+
+assert_missing_image_pull_secret() {
+  local deploy job events
+  deploy="$(deployment_name)"
+  job="${deploy}-migrate"
+  kube -n "${namespace}" get "job/${job}" >/dev/null || { fail "missing imagePullSecret did not create the migration hook Job"; return 1; }
   if kube -n "${namespace}" get "deployment/${deploy}" >/dev/null 2>&1; then
-    ! kube -n "${namespace}" wait --for=condition=Available "deployment/${deploy}" --timeout=5s >/dev/null 2>&1 || {
-      fail "expected failure left an Available API Deployment"; return 1;
-    }
+    fail "missing imagePullSecret unexpectedly created the API Deployment after migration hook failure"
+    return 1
   fi
+  events="$(kube -n "${namespace}" get events --sort-by=.metadata.creationTimestamp 2>/dev/null || true)"
+  grep -qiE 'FailedToRetrieveImagePullSecret|image pull secret' <<<"${events}" || {
+    fail "missing imagePullSecret did not reach Kubernetes image-pull-secret retrieval"; return 1;
+  }
 }
 
 diagnose_workload_failure() {
   local pod diagnostics
-  diagnostics="${EVIDENCE_FILE%.txt}-diagnostics.txt"
+  diagnostics="${EVIDENCE_FILE%.txt}-${run_id}-diagnostics.txt"
   mkdir -p "$(dirname "${diagnostics}")"
   umask 077
   {
@@ -496,7 +623,7 @@ run_lifecycle() {
   [[ "${schema_before}" == "${schema_after}" ]] || { fail "application rollback changed migration history; schema downgrade is prohibited"; return 1; }
   printf 'PREVIOUS_IMAGE_DIGEST=%s\n' "${previous}"
   printf 'CURRENT_IMAGE_DIGEST=%s\n' "${current}"
-  record_evidence passed "lifecycle exact_previous=${previous} exact_current=${current} schema_versions=${schema_after} no_schema_downgrade=true"
+  queue_evidence passed "lifecycle exact_previous=${previous} exact_current=${current} schema_versions=${schema_after} no_schema_downgrade=true"
 }
 
 run_bad_migration() {
@@ -507,12 +634,13 @@ run_bad_migration() {
   kube -n "${namespace}" create secret generic acr-migration \
     --from-literal=ACR_POSTGRES_MIGRATION_DSN='postgres://postgres:acr-e2e-pass@postgres.invalid/acr?sslmode=disable' >/dev/null
   values="$(write_values "${current}" "${entitlement}")"
-  if run_helm "${values}" --set migration.backoffLimit=0 --set migration.activeDeadlineSeconds=60 >/dev/null 2>&1; then
+  if run_helm_failure "${values}" --set migration.backoffLimit=0 --set migration.activeDeadlineSeconds=60 >/dev/null 2>&1; then
     fail "bad migration unexpectedly installed"
     return 1
   fi
-  assert_no_deployment_ready
-  record_evidence expected-failure 'bad migration hook prevented ready deployment'
+  diagnose_workload_failure
+  assert_failed_migration_hook
+  queue_evidence expected-failure 'bad migration hook failed nonzero and left no Available API Deployment'
   return 1
 }
 
@@ -522,12 +650,13 @@ run_missing_secret() {
   current="$(build_local_image missing-secret)"
   kube -n "${namespace}" delete secret acr-runtime >/dev/null
   values="$(write_values "${current}" "${entitlement}")"
-  if run_helm "${values}" --timeout 45s >/dev/null 2>&1; then
+  if run_helm_failure "${values}" --timeout 45s >/dev/null 2>&1; then
     fail "missing runtime Secret unexpectedly installed"
     return 1
   fi
-  assert_no_deployment_ready
-  record_evidence expected-failure 'missing existing runtime Secret prevented ready deployment'
+  diagnose_workload_failure
+  assert_missing_runtime_secret
+  queue_evidence expected-failure 'missing runtime Secret created an unready Deployment with a missing-Secret boundary'
   return 1
 }
 
@@ -541,16 +670,43 @@ run_missing_image_pull_secret() {
     fail "missing imagePullSecret fault was not injected"
     return 1
   fi
-  helm template "${release}" "${CHART}" --namespace "${namespace}" --values "${values}" >/dev/null
-  record_evidence expected-failure 'live imagePullSecret preflight denied absent existing Secret before workload creation'
+  if run_helm_failure "${values}" --set-string image.pullPolicy=Always --timeout 45s >/dev/null 2>&1; then
+    fail "missing imagePullSecret unexpectedly installed"
+    return 1
+  fi
+  diagnose_workload_failure
+  assert_missing_image_pull_secret
+  queue_evidence expected-failure 'missing imagePullSecret reached Kubernetes retrieval at the migration hook and prevented API Deployment creation'
   return 1
 }
 
 run_unprogrammed_gateway() {
-  local status
-  status="$(kube -n "${ACR_E2E_GATEWAY_NAMESPACE}" get gateway missing-acr-gateway -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || true)"
-  [[ "${status}" != "True" ]] || { fail "unprogrammed gateway fault was not injected"; return 1; }
-  record_evidence expected-failure 'caller-supplied unprogrammed Gateway preflight denied workload creation'
+  local entitlement current values gateway_name="unprogrammed-${run_id}" accepted programmed attempt
+  entitlement="$(create_fixture_references)"
+  current="$(build_local_image unprogrammed-gateway)"
+  kube -n "${namespace}" apply -f - >/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ${gateway_name}
+spec:
+  gatewayClassName: acr-e2e-unprogrammed
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+EOF
+  values="$(write_values "${current}" "${entitlement}" "${gateway_name}" "${namespace}")"
+  run_helm "${values}" >/dev/null || { fail "unprogrammed Gateway prevented Helm installation before route status could be checked"; return 1; }
+  for attempt in $(seq 1 20); do
+    programmed="$(kube -n "${namespace}" get "gateway/${gateway_name}" -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}')"
+    accepted="$(kube -n "${namespace}" get "httproute/$(deployment_name)" -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}')"
+    [[ "${programmed}" != "True" && "${accepted}" != "True" ]] && break
+    sleep 1
+  done
+  [[ "${programmed}" != "True" ]] || { fail "unprogrammed Gateway unexpectedly became Programmed"; return 1; }
+  [[ "${accepted}" != "True" ]] || { fail "unprogrammed Gateway unexpectedly accepted the HTTPRoute"; return 1; }
+  queue_evidence expected-failure 'Gateway Programmed and HTTPRoute Accepted remained non-True, preserving the unready routing boundary'
   return 1
 }
 
@@ -559,18 +715,21 @@ run_denied_egress() {
   entitlement="$(create_fixture_references)"
   current="$(build_local_image denied-egress)"
   values="$(write_values "${current}" "${entitlement}")"
-  if run_helm "${values}" --set networkPolicy.egress.postgresPort=1 --set migration.backoffLimit=0 --set migration.activeDeadlineSeconds=60 >/dev/null 2>&1; then
+  if run_helm_failure "${values}" --set networkPolicy.egress.postgresPort=1 --set migration.backoffLimit=0 --set migration.activeDeadlineSeconds=60 >/dev/null 2>&1; then
     fail "denied egress unexpectedly installed"
     return 1
   fi
-  assert_no_deployment_ready
-  record_evidence expected-failure 'migration egress denial prevented ready deployment with default-deny retained'
+  diagnose_workload_failure
+  assert_failed_migration_hook
+  queue_evidence expected-failure 'migration egress denial failed nonzero with default-deny retained and no Available API Deployment'
   return 1
 }
 
 run_app_rollback() {
   local current entitlement values schema_before schema_after configured
   [[ "${previous_image}" =~ ^[^[:space:]]+@sha256:[a-f0-9]{64}$ ]] || die "app-rollback requires --previous-image <immutable @sha256 reference>"
+  docker exec "${cluster}-control-plane" ctr -n k8s.io images list -q | grep -Fxq "${previous_image}" \
+    || die "app-rollback previous image is not loaded in the Todo 18 Kind node: ${previous_image}"
   entitlement="$(create_fixture_references)"
   current="$(build_local_image rollback-current)"
   values="$(write_values "${current}" "${entitlement}")"
@@ -580,13 +739,16 @@ run_app_rollback() {
   fi
   wait_api_ready
   schema_before="$(migration_count)"
-  run_helm "${values}" --set-string "image.reference=${previous_image}" >/dev/null
+  if ! run_helm "${values}" --set-string "image.reference=${previous_image}" >/dev/null; then
+    diagnose_workload_failure
+    return 1
+  fi
   wait_api_ready
   schema_after="$(migration_count)"
   configured="$(kube -n "${namespace}" get "deployment/$(deployment_name)" -o jsonpath='{.spec.template.spec.containers[?(@.name=="acr-api")].image}')"
   [[ "${configured}" == "${previous_image}" ]] || { fail "rollback did not restore explicit previous application digest"; return 1; }
   [[ "${schema_before}" == "${schema_after}" ]] || { fail "rollback changed schema history; no schema downgrade is permitted"; return 1; }
-  record_evidence passed "application rollback restored=${previous_image} schema_versions=${schema_after} no_schema_downgrade=true"
+  queue_evidence passed "application rollback restored=${previous_image} schema_versions=${schema_after} no_schema_downgrade=true"
 }
 
 if [[ "${scenario}" == "static" ]]; then

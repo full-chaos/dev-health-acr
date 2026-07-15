@@ -55,18 +55,17 @@ spec:
           command:
             - sh
             - -ec
-            - {{ printf "cp /source/%s /destination/%s && chmod 0600 /destination/%s && chown 65532:65532 /destination/%s" .Values.config.entitlement.tokenFileName .Values.config.entitlement.tokenFileName .Values.config.entitlement.tokenFileName .Values.config.entitlement.tokenFileName | quote }}
+            - {{ printf "cp /source/%s /destination/%s && chmod 0600 /destination/%s" .Values.config.entitlement.tokenFileName .Values.config.entitlement.tokenFileName .Values.config.entitlement.tokenFileName | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             privileged: false
             readOnlyRootFilesystem: true
-            runAsNonRoot: false
-            runAsUser: 0
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
             capabilities:
               drop:
                 - ALL
-              add:
-                - CHOWN
             seccompProfile:
               type: RuntimeDefault
           volumeMounts:
@@ -82,18 +81,17 @@ spec:
           command:
             - sh
             - -ec
-            - {{ printf "cp /source/%s /destination/%s && chmod 0600 /destination/%s && chown 65532:65532 /destination/%s" .Values.config.entitlementCaBundle.key .Values.config.entitlementCaBundle.key .Values.config.entitlementCaBundle.key .Values.config.entitlementCaBundle.key | quote }}
+            - {{ printf "cp /source/%s /destination/%s && chmod 0600 /destination/%s" .Values.config.entitlementCaBundle.key .Values.config.entitlementCaBundle.key .Values.config.entitlementCaBundle.key | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             privileged: false
             readOnlyRootFilesystem: true
-            runAsNonRoot: false
-            runAsUser: 0
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
             capabilities:
               drop:
                 - ALL
-              add:
-                - CHOWN
             seccompProfile:
               type: RuntimeDefault
           volumeMounts:

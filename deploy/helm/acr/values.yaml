@@ -184,7 +184,9 @@ podDisruptionBudget:
   minAvailable: 1
   maxUnavailable: null
 
-# Default-deny NetworkPolicy with explicit egress to external dependencies.
+# Default-deny NetworkPolicy with explicit egress to external dependencies. It
+# constrains TCP ports; Kubernetes NetworkPolicy cannot inspect TLS or resolve
+# the secret-supplied dependency hostnames into destination peers.
 networkPolicy:
   enabled: true
   # Ingress to the API port is allowed from these namespace selectors (for
@@ -193,8 +195,8 @@ networkPolicy:
   egress:
     # Allow DNS resolution.
     dns: true
-    # External dependency egress ports (references only; endpoints resolved via
-    # the DSNs in the referenced Secrets).
+    # TLS-native dependency ports. These must match the secure DSNs and
+    # entitlement origin in the referenced Secrets/configuration.
     postgresPort: 5432
-    clickhousePort: 8443
+    clickhousePort: 9440
     entitlementPort: 443

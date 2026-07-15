@@ -11,9 +11,9 @@
 #     --image "$TEST_IMAGE_DIGEST"
 #
 # Negative scenarios (each must fail closed pre-apply, exit 1, naming the
-# violation):
+# violation): use any scenario listed by --help.
 #   bash scripts/deploy/test-helm.sh --values <v> --image <img> \
-#     --scenario mutable-image|invalid-secret-ref|invalid-image-pull-secret-ref|shared-runtime-migration-dsn|injected-mcp
+#     --scenario <name>
 #
 # Exit codes:
 #   0  requested scenario passed (happy rendered + all gates; or negative failed as required)
@@ -36,7 +36,10 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
   --chart     Chart directory (default: deploy/helm/acr).
   --scenario  happy (default) or one of the negative scenarios:
               mutable-image, invalid-secret-ref, invalid-image-pull-secret-ref,
-              shared-runtime-migration-dsn, injected-mcp.
+              shared-runtime-migration-dsn, injected-mcp, entitlement-path,
+              pgbouncer-missing-pooler, extra-container, direct-with-pooler,
+              http-url, userinfo-url, query-url, fragment-url, unknown-root-key,
+              unknown-config-key, alternate-port.
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -83,6 +86,15 @@ trap 'rm -rf "$workdir"' EXIT
 
 pass() { printf '  ok   %s\n' "$1"; }
 fail_gate() { printf '  FAIL %s\n' "$1" >&2; exit 1; }
+
+container_block() {
+  local name="$1"
+  awk -v name="$name" '
+    $0 == "        - name: " name { inside = 1 }
+    inside && $0 ~ /^        - name: / && $0 != "        - name: " name { exit }
+    inside { print }
+  ' "$rendered"
+}
 
 render() {
   # Render with the base happy inputs plus any scenario overrides ($@).
@@ -220,7 +232,7 @@ rendered="$workdir/rendered.yaml"
 if [[ -n "$KUBECONFORM" ]]; then
   "$KUBECONFORM" -strict -ignore-missing-schemas -summary "$rendered" >"$workdir/kubeconform.txt" 2>&1 \
     || { cat "$workdir/kubeconform.txt" >&2; fail_gate "kubeconform: schema validation failed"; }
-  pass "kubeconform: schema validation passed ($("$KUBECONFORM" -version 2>/dev/null | head -1))"
+  pass "kubeconform: schema validation passed ($("$KUBECONFORM" -v 2>/dev/null | head -1))"
 else
   printf '  SKIP kubeconform not installed (install github.com/yannh/kubeconform to enable this gate)\n' >&2
 fi
@@ -264,14 +276,51 @@ grep -qF 'cp /source/runtime-token /destination/runtime-token' "$distinct_token_
   || fail_gate "entitlement-token: init container must copy the projected token filename"
 pass "entitlement-token: init container copies the projected Secret filename"
 
-# Gate 9: pod-security (restricted) posture.
-for token in 'runAsNonRoot: true' 'readOnlyRootFilesystem: true' 'allowPrivilegeEscalation: false' 'type: RuntimeDefault'; do
-  grep -qF "$token" "$rendered" || fail_gate "pod-security: expected '$token' not found"
+assert_restricted_container() {
+  local name="$1" block
+  block="$(container_block "$name")"
+  [[ -n "$block" ]] || fail_gate "restricted-container: $name is missing"
+  for token in 'runAsNonRoot: true' 'runAsUser: 65532' 'readOnlyRootFilesystem: true' 'allowPrivilegeEscalation: false' 'privileged: false' 'type: RuntimeDefault'; do
+    grep -qF "$token" <<<"$block" || fail_gate "restricted-container: $name must render '$token'"
+  done
+  if ! grep -qF 'drop:' <<<"$block" || ! grep -qF -- '- ALL' <<<"$block"; then
+    fail_gate "restricted-container: $name must drop all capabilities"
+  fi
+  if grep -qE 'runAsUser: 0|runAsNonRoot: false|CHOWN' <<<"$block"; then
+    fail_gate "restricted-container: $name must not request root or CHOWN"
+  fi
+}
+
+for init_name in entitlement-token-permissions entitlement-ca-permissions; do
+  init_block="$(container_block "$init_name")"
+  if [[ "$init_name" == 'entitlement-token-permissions' || -n "$init_block" ]]; then
+    assert_restricted_container "$init_name"
+  fi
 done
-if ! { grep -q 'drop:' "$rendered" && grep -q '\- ALL' "$rendered"; }; then
-  fail_gate "pod-security: capabilities are not dropped (drop: [ALL])"
-fi
-pass "pod-security: restricted context (nonroot, RO rootfs, no-privesc, drop ALL, seccomp)"
+assert_restricted_container acr-api
+assert_restricted_container acr-migrate
+pass "pod-security: every rendered API, migration, and present init container is Restricted-compatible"
+
+# Gate 9: exact native-TLS dependency ports and Gateway-only API ingress.
+python3 - "$rendered" <<'PY' || exit 1
+import sys
+docs = open(sys.argv[1]).read().split('\n---\n')
+policies = [d for d in docs if '\nkind: NetworkPolicy' in ('\n'+d)]
+api = next((d for d in policies if 'component: api' in d), '')
+migrate = next((d for d in policies if 'component: migration' in d), '')
+def fail(msg):
+    print('  FAIL network-policy: '+msg, file=sys.stderr); sys.exit(1)
+if not api or not migrate: fail('API and migration NetworkPolicies must both render')
+for port in ('port: 5432', 'port: 9440', 'port: 443'):
+    if port not in api: fail('API egress is missing TLS-native '+port)
+if 'port: 8443' in api or 'port: 8123' in api: fail('API egress contains a legacy plaintext/non-default ClickHouse port')
+if 'protocol: TCP' not in api: fail('API egress must explicitly use TCP')
+if 'port: 8080' not in api or 'namespaceSelector:' not in api: fail('API ingress must be constrained to the configured Gateway namespace selector')
+if 'port: 5432' not in migrate or 'protocol: TCP' not in migrate: fail('migration policy must allow TCP PostgreSQL only')
+for port in ('port: 9440', 'port: 443', 'port: 8080'):
+    if port in migrate: fail('migration policy must not allow non-PostgreSQL dependency '+port)
+print('  ok   network-policy: API permits TCP TLS-native Postgres/ClickHouse/Ops ports and Gateway ingress; migration permits only DNS + TCP Postgres')
+PY
 
 # Gate 9: migration ordering via pre-install/pre-upgrade hook.
 python3 - "$rendered" <<'PY' || exit 1
