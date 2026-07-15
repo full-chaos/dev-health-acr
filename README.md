@@ -76,6 +76,24 @@ make hosted-integration
 go build ./cmd/acr-api ./cmd/acr-mcp ./cmd/contractcheck
 ```
 
+## Container images
+
+Reproducible, hardened container images for `acr-api` (plus the separate
+`acr-migrate` command) and `acr-mcp` are documented in
+[`docs/container-images.md`](docs/container-images.md): pinned build inputs,
+non-root numeric UID/GID `65532:65532`, read-only root filesystem, the
+deny-all build-context wrapper, and SBOM/scan gates. No target below pushes
+or publishes an image; every archive and report stays local under `.tmp/`.
+
+```bash
+make container-contract
+make container-pins
+make container-test
+make container-oci
+make container-scan
+make container-reproducible
+```
+
 Private GitHub import instructions are in [`docs/repository-bootstrap.md`](docs/repository-bootstrap.md).
 
 Run the hosted API locally:
