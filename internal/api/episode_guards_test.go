@@ -88,12 +88,23 @@ func TestCreateEpisodeRecordsUsageAuditAndOperation(t *testing.T) {
 	app.observability = hooks
 	audit := &episodeAuditStore{}
 	app.runtime.Audit = audit
+	telemetry, err := auth.NewUsageTelemetry(app.runtime.Credentials, audit, auth.UsageTelemetryOptions{QueueCapacity: 1, FlushInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.usageTelemetry = telemetry
+	t.Cleanup(func() { _ = telemetry.Close() })
 	request := authenticatedEpisodeRequest(t, token, episodeCreate(), "idempotency_01")
 	request.Header.Set("X-Request-ID", "req_0123456789abcdef0123456789abcdef")
 
 	// When
 	response := httptest.NewRecorder()
 	app.Handler().ServeHTTP(response, request)
+	flushContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := telemetry.Flush(flushContext); err != nil {
+		t.Fatal(err)
+	}
 
 	// Then
 	if response.Code != http.StatusCreated || response.Header().Get("X-Request-ID") != request.Header.Get("X-Request-ID") || !audit.recorded {

@@ -45,6 +45,11 @@ func TestAuthenticatorAllowsAuthorizedReadAndTracksUsage(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("unexpected status: %d body=%s", response.Code, response.Body.String())
 	}
+	flushContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := authenticator.usageTelemetry.Flush(flushContext); err != nil {
+		t.Fatal(err)
+	}
 	stored, err := credentialStore.GetByID(context.Background(), issued.Credential.OrgID, issued.Credential.CredentialID)
 	if err != nil || stored.LastUsedAt == nil || !stored.LastUsedAt.Equal(now) {
 		t.Fatalf("last-used metadata not updated: %#v %v", stored, err)
@@ -175,6 +180,7 @@ func newTestAuthenticator(t *testing.T, store storage.CredentialStore, audit sto
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = authenticator.Close() })
 	return authenticator
 }
 

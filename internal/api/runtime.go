@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -150,14 +151,33 @@ func (a *App) recordReadAudit(ctx context.Context, principal storage.Principal, 
 	if a.runtime == nil || a.runtime.Audit == nil || strings.TrimSpace(principal.OrgID) == "" {
 		return
 	}
+	actorType, actorID := principal.AuditActor()
+	if status == "success" && a.usageTelemetry != nil {
+		a.usageTelemetry.Enqueue(auth.UsageRecord{
+			OrgID: principal.OrgID, ActorType: actorType, ActorID: actorID, Action: action,
+			ResourceType: resourceType, ResourceID: resourceID, RequestID: RequestID(ctx), Metadata: cloneAuditMetadata(metadata), UsedAt: a.now().UTC(),
+		})
+		return
+	}
+	if status != "denied" {
+		return
+	}
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()
-	actorType, actorID := principal.AuditActor()
 	if err := a.runtime.Audit.Record(auditCtx, storage.AuditEvent{
 		OrgID: principal.OrgID, ActorType: actorType, ActorID: actorID,
-		Action: action, ResourceType: resourceType, ResourceID: resourceID, Status: status,
+		Action: action, ResourceType: resourceType, ResourceID: resourceID, Status: "denied",
 		RequestID: RequestID(ctx), Metadata: metadata, CreatedAt: a.now().UTC(),
 	}); err != nil {
-		a.logger.WarnContext(ctx, "read audit persistence failed", "failure_class", "audit_store")
+		a.logger.WarnContext(ctx, "credential denial audit delivery failed", "failure_class", "denial_audit_delivery")
 	}
+}
+
+func cloneAuditMetadata(metadata map[string]any) map[string]any {
+	if metadata == nil {
+		return nil
+	}
+	copy := make(map[string]any, len(metadata))
+	maps.Copy(copy, metadata)
+	return copy
 }
