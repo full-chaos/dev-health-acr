@@ -28,6 +28,7 @@ grep -Fq 'clickhouse-client --user default --password ch' "$script"
 grep -Fq 'CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"' "$script"
 grep -Fq 'CLICKHOUSE_USER=default CLICKHOUSE_PASSWORD=ch' "$script"
 grep -Fq 'redact_log()' "$script"
+if grep -Fq 'acr-secret-entrypoint' "$root/deploy/compose/acr.compose.yml"; then exit 1; fi
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

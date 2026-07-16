@@ -22,22 +22,18 @@ services:
   acr-migrate:
     image: ${ACR_IMAGE:?ACR_IMAGE must be an immutable image digest}
     restart: "no"
-    entrypoint: ["/usr/local/bin/acr-secret-entrypoint"]
     command: ["/usr/local/bin/acr-migrate", "up"]
     environment:
       ACR_ENVIRONMENT: development
       ACR_POSTGRES_CONNECTION_KIND: direct
       ACR_POSTGRES_MIGRATION_DSN_FILE: /run/secrets/acr_migration_dsn
     secrets: [acr_migration_dsn]
-    volumes:
-      - ./deploy/compose/acr-secret-entrypoint.sh:/usr/local/bin/acr-secret-entrypoint:ro
     depends_on:
       postgres: { condition: service_healthy }
       acr-db-init: { condition: service_completed_successfully }
     networks: [dev-health]
   acr-api:
     image: ${ACR_IMAGE:?ACR_IMAGE must be an immutable image digest}
-    entrypoint: ["/usr/local/bin/acr-secret-entrypoint"]
     command: ["/usr/local/bin/acr-api", "serve"]
     environment:
       ACR_ADDR: :8080
@@ -52,8 +48,6 @@ services:
       ACR_EVIDENCE_ID_ACTIVE_KID_FILE: /run/secrets/acr_evidence_active_kid
       ACR_EVIDENCE_ID_KEYS_FILE: /run/secrets/acr_evidence_keys
     secrets: [acr_runtime_dsn, acr_clickhouse_dsn, acr_ops_token, acr_ca, acr_evidence_active_kid, acr_evidence_keys]
-    volumes:
-      - ./deploy/compose/acr-secret-entrypoint.sh:/usr/local/bin/acr-secret-entrypoint:ro
     depends_on:
       postgres: { condition: service_healthy }
       clickhouse: { condition: service_healthy }

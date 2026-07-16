@@ -50,7 +50,7 @@ cleanup() {
   [[ -n "$STATE" && -d "$STATE" ]] || exit "$status"
   note "cleanup receipt before: $(owned_receipt)"
   if [[ "$status" -ne 0 ]]; then
-    compose logs --no-color acr-pki-init migrate 2>&1 | redact_log || true
+    compose logs --no-color acr-pki-init migrate acr-migrate 2>&1 | redact_log || true
   fi
   if ! compose down --volumes --remove-orphans >/dev/null 2>&1; then
     note 'cleanup failed; refusing to claim an isolated teardown'
