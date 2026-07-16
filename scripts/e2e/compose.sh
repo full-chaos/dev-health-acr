@@ -374,7 +374,7 @@ elif [[ "$SCENARIO" == existing-volume ]]; then
   compose down --remove-orphans >/dev/null
   compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-ops-tls acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
   wait_https_ready
-  run_mcp "$(<"$STATE/secrets/acr-token")"
+  run_mcp "$(<"$STATE/secrets/acr-rotated-token")"
   SAFE_BOUNDARY='existing project-scoped volumes survived a complete application restart'
 else
   run_failure
