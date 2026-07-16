@@ -48,9 +48,13 @@ owned_receipt() {
 cleanup() {
   local status=$?
   [[ -n "$STATE" && -d "$STATE" ]] || exit "$status"
+  if [[ ! -f "$STATE/override.yml" ]]; then
+    rm -rf "$STATE"
+    exit "$status"
+  fi
   note "cleanup receipt before: $(owned_receipt)"
   if [[ "$status" -ne 0 ]]; then
-    compose logs --no-color acr-pki-init migrate acr-migrate 2>&1 | redact_log || true
+    compose logs --no-color acr-pki-init migrate acr-migrate acr-api 2>&1 | redact_log || true
   fi
   if ! compose down --volumes --remove-orphans >/dev/null 2>&1; then
     note 'cleanup failed; refusing to claim an isolated teardown'
@@ -146,19 +150,24 @@ services:
   acr-api:
     image: "${IMAGE}"
     ports: []
+    healthcheck: { test: ["NONE"] }
     environment:
       ACR_ENVIRONMENT: development
+      ACR_POSTGRES_DSN: "$(<"$STATE/secrets/runtime-dsn")"
+      ACR_CLICKHOUSE_DSN: "$(<"$STATE/secrets/clickhouse-dsn")"
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
       ACR_CLICKHOUSE_CA_BUNDLE: /run/secrets/acr_ca
       ACR_DEV_HEALTH_ENTITLEMENT_URL: https://acr-ops-tls:8443
       ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE: /run/secrets/acr_ca
-  acr-migrate: { image: "${IMAGE}" }
+  acr-migrate:
+    image: "${IMAGE}"
+    environment: { ACR_POSTGRES_MIGRATION_DSN: "$(<"$STATE/secrets/migration-dsn")" }
   acr-tls-proxy:
     image: nginx:1.27-alpine
     ports: ["127.0.0.1:${PORT}:8443"]
     volumes: ["${STATE}/pki:/run/pki:ro", "${STATE}/nginx-api.conf:/etc/nginx/nginx.conf:ro"]
-    depends_on: { acr-api: { condition: service_healthy } }
+    depends_on: { acr-api: { condition: service_started } }
     networks: [dev-health]
   acr-ops-tls:
     image: nginx:1.27-alpine
@@ -247,7 +256,7 @@ run_failure() {
     clickhouse-read-denied)
       start_happy; expect_failure compose exec -T clickhouse clickhouse-client --user acr_reader --password "$(<"$STATE/secrets/clickhouse-password")" --query "INSERT INTO acr_${PROJECT//-/}_e2e.system_metrics VALUES ()"; SAFE_BOUNDARY='read-only ClickHouse user rejected a write' ;;
     migration-failure)
-      bootstrap_ops; expect_failure compose run --rm --no-deps -e ACR_POSTGRES_MIGRATION_DSN_FILE=/missing acr-migrate; SAFE_BOUNDARY='migration stopped before connecting with an unreadable DSN secret' ;;
+      bootstrap_ops; expect_failure compose run --rm --no-deps -e ACR_POSTGRES_MIGRATION_DSN= acr-migrate; SAFE_BOUNDARY='migration stopped before connecting without a migration DSN' ;;
   esac
   note "expected failure verified: ${SAFE_BOUNDARY}"
   return 1

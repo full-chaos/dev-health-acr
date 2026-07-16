@@ -28,7 +28,7 @@ services:
       ACR_ENVIRONMENT: development
       ACR_POSTGRES_CONNECTION_KIND: direct
       ACR_POSTGRES_MIGRATION_DSN_FILE: /run/secrets/acr_migration_dsn
-    secrets: [acr_migration_dsn]
+    secrets: [acr_migration_dsn, acr_ca]
     depends_on:
       postgres: { condition: service_healthy }
       acr-db-init: { condition: service_completed_successfully }

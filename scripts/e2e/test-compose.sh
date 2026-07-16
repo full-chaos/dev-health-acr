@@ -28,8 +28,16 @@ grep -Fq 'clickhouse-client --user default --password ch' "$script"
 grep -Fq 'CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"' "$script"
 grep -Fq 'CLICKHOUSE_USER=default CLICKHOUSE_PASSWORD=ch' "$script"
 grep -Fq 'redact_log()' "$script"
+grep -Fq 'acr-migrate acr-api' "$script"
+grep -Fq 'ACR_POSTGRES_MIGRATION_DSN:' "$script"
+grep -Fq 'ACR_POSTGRES_MIGRATION_DSN=' "$script"
+grep -Fq 'healthcheck: { test: ["NONE"] }' "$script"
+grep -Fq 'acr-api: { condition: service_started }' "$script"
+expected_cleanup_guard=$(printf '%s' '[[ ! -f "$STATE/override.yml" ]]')
+grep -Fq "$expected_cleanup_guard" "$script"
 if grep -Fq 'acr-secret-entrypoint' "$root/deploy/compose/acr.compose.yml"; then exit 1; fi
 grep -Fq 'entrypoint: ["/usr/local/bin/acr-migrate"]' "$root/deploy/compose/acr.compose.yml"
+grep -Fq 'secrets: [acr_migration_dsn, acr_ca]' "$root/deploy/compose/acr.compose.yml"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
