@@ -40,8 +40,11 @@ Scenarios:
   lifecycle, bad-migration, missing-secret, missing-image-pull-secret,
   unprogrammed-gateway, denied-egress, app-rollback, static
 
-The app-rollback scenario requires --previous-image to be a local immutable
-digest already loaded into the fixture Kind node (lifecycle prints one).
+The app-rollback scenario requires an explicitly preloaded --previous-image
+immutable digest. Rollback changes only the application image; migration
+history must stay unchanged and is reported as such (it never claims a schema
+rollback). The comparison does not establish compatibility across source
+revisions unless the caller supplies an image built from that prior revision.
 EOF
 }
 
@@ -92,12 +95,15 @@ queue_evidence() {
 }
 
 stop_port_forwards() {
-  local pid
+  local pid status=0
   for pid in "${port_forward_pids[@]}"; do
-    kill "${pid}" 2>/dev/null || true
-    wait "${pid}" 2>/dev/null || true
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill "${pid}" 2>/dev/null || status=1
+      wait "${pid}" 2>/dev/null || status=1
+    fi
   done
   port_forward_pids=()
+  return "${status}"
 }
 
 cleanup_kind_images() {
@@ -140,19 +146,24 @@ cleanup_namespace() {
 on_exit() {
   local original_status="$1" cleanup_status=0
   trap - EXIT
-  stop_port_forwards
+  if ! stop_port_forwards; then cleanup_status=1; fi
   if ! cleanup_namespace; then cleanup_status=1; fi
   if ! cleanup_kind_images; then cleanup_status=1; fi
-  rm -rf "${run_dir:-}"
+  if [[ -n "${run_dir:-}" ]] && ! rm -rf "${run_dir}"; then cleanup_status=1; fi
   if [[ -n "${queued_evidence_result}" ]]; then
     if [[ "${cleanup_status}" -ne 0 ]]; then
       queued_evidence_result="failed"
-      queued_evidence_detail="${queued_evidence_detail}; owned namespace cleanup failed"
+      queued_evidence_detail="${queued_evidence_detail}; owned resource cleanup failed"
     fi
     write_evidence "${queued_evidence_result}" "${queued_evidence_detail}"
   fi
   if [[ "${original_status}" -ne 0 ]]; then return "${original_status}"; fi
   return "${cleanup_status}"
+}
+
+queue_expected_failure() {
+  local boundary="$1" detail="$2"
+  queue_evidence expected-failure "expected_failure_proven=true boundary=${boundary}; ${detail}"
 }
 
 static_check() {
@@ -186,10 +197,9 @@ static_check() {
     done
   }
   assert_missing_image_pull_secret_boundary() {
-    local block token literal_dollar='$' deploy_token
-    deploy_token="${literal_dollar}{deploy}"
+    local block token literal_dollar='$'
     block="$(function_block assert_missing_image_pull_secret)"
-    for token in "get \"deployment/${deploy_token}\"" "wait_api_ready" "FailedToRetrieveImagePullSecret"; do
+    for token in "get \"job/${literal_dollar}{job}\"" "assert_no_deployment_ready" "FailedToRetrieveImagePullSecret"; do
       if ! grep -Fq -- "${token}" <<<"${block}"; then
         fail "static: missing imagePullSecret must assert a Kubernetes retrieval warning on a ready local image"
         failures=$((failures + 1))
@@ -200,7 +210,7 @@ static_check() {
   assert_unprogrammed_gateway_boundary() {
     local block token
     block="$(function_block run_unprogrammed_gateway)"
-    for token in 'get gatewayclass acr-e2e-unprogrammed --ignore-not-found -o name' 'protocol: HTTP' '"http"' 'seq 1 20' 'unexpectedly became Programmed' 'unexpectedly accepted the HTTPRoute'; do
+    for token in "gatewayClassName: \${ACR_E2E_GATEWAY_CLASS}" 'certificateRefs:' 'observedGeneration' 'protocol: HTTPS' '"https"' 'seq 1 20' 'unprogrammed Gateway did not report Programmed=False'; do
       if ! grep -Fq -- "${token}" <<<"${block}"; then
         fail "static: unprogrammed Gateway must prove a valid absent class and a full non-True observation window"
         failures=$((failures + 1))
@@ -221,6 +231,8 @@ static_check() {
   check_static 'stop_port_forwards' 'port-forwards are tracked and stopped during cleanup' "${BASH_SOURCE[0]}"
   check_static 'queue_evidence' 'live evidence is queued until cleanup completes' "${BASH_SOURCE[0]}"
   check_static 'cleanup_kind_images' 'only run-owned imported Kind image references and remote archives are removed' "${BASH_SOURCE[0]}"
+  check_static 'pod-security\.kubernetes\.io/enforce=restricted' 'creates a Restricted Pod Security Admission test namespace' "${BASH_SOURCE[0]}"
+  check_static 'cannot inspect TLS or restrict a' 'documents the port-only NetworkPolicy TLS-destination limitation' "${CHART}/templates/networkpolicy.yaml"
   assert_helm_context
   assert_missing_image_pull_secret_boundary
   assert_unprogrammed_gateway_boundary
@@ -289,9 +301,36 @@ prepare_run() {
   kube create namespace "${namespace}" >/dev/null
   kube label namespace "${namespace}" \
     "acr-e2e.fullchaos.dev/run-id=${run_id}" \
-    "acr-e2e.fullchaos.dev/consumer-fixture-id=${fixture_id}" --overwrite >/dev/null
+    "acr-e2e.fullchaos.dev/consumer-fixture-id=${fixture_id}" \
+    "pod-security.kubernetes.io/enforce=restricted" \
+    "pod-security.kubernetes.io/audit=restricted" \
+    "pod-security.kubernetes.io/warn=restricted" --overwrite >/dev/null
   owned_namespace=1
+  assert_restricted_psa_enforced
   queue_evidence failed 'scenario ended before recording a successful result'
+}
+
+assert_restricted_psa_enforced() {
+  local output
+  output="$(kube -n "${namespace}" apply -f - 2>&1 <<'EOF' || true
+apiVersion: v1
+kind: Pod
+metadata:
+  name: restricted-psa-rejection
+spec:
+  restartPolicy: Never
+  containers:
+    - name: rejected
+      image: busybox
+      command: ["true"]
+      securityContext:
+        runAsUser: 0
+EOF
+)"
+  grep -qi 'violates PodSecurity.*restricted' <<<"${output}" || {
+    fail "Restricted Pod Security Admission did not reject a root Pod"; return 1;
+  }
+  log "Restricted Pod Security Admission enforcement is active in the owned namespace"
 }
 
 image_digest_from_oci() {
@@ -348,8 +387,25 @@ create_fixture_references() {
     --from-literal=ACR_POSTGRES_MIGRATION_DSN="${migration_dsn}" >/dev/null
   kube -n "${namespace}" create secret generic acr-entitlement-token --from-literal=token=acr-e2e-token >/dev/null
   kube -n "${namespace}" create secret docker-registry "${ACR_E2E_IMAGE_PULL_SECRET}" \
-    --docker-server=fixture.invalid --docker-username=fixture --docker-password=fixture >/dev/null
+    --docker-server="${ACR_E2E_REGISTRY_ENDPOINT}" --docker-username=fixture --docker-password=fixture >/dev/null
   printf '%s\n' "${entitlement_url}"
+}
+
+validate_immutable_image_ref() {
+  [[ "$1" =~ ^[^[:space:]]+@sha256:[a-f0-9]{64}$ ]] || die "image must be an immutable @sha256 reference"
+}
+
+publish_image_to_fixture_registry() {
+  local source="$1" digest repository target node
+  validate_immutable_image_ref "${source}"
+  digest="${source##*@}"
+  repository="${source%%@*}"
+  target="${ACR_E2E_REGISTRY_ENDPOINT}/${repository##*/}@${digest}"
+  node="${cluster}-control-plane"
+  docker exec "${node}" ctr -n k8s.io images tag "${source}" "${target}" >/dev/null
+  docker exec "${node}" ctr -n k8s.io images push --plain-http --user fixture:fixture "${target}" >/dev/null
+  docker exec "${node}" ctr -n k8s.io images rm "${target}" >/dev/null
+  printf '%s\n' "${target}"
 }
 
 write_values() {
@@ -448,6 +504,11 @@ migration_count() {
     psql -U postgres -d acr -Atqc 'SELECT count(*) FROM acr.schema_migrations' 2>/dev/null
 }
 
+migration_history_fingerprint() {
+  kube -n "${ACR_E2E_DEPS_NAMESPACE}" exec deployment/postgres -- \
+    psql -U postgres -d acr -Atqc "SELECT md5(string_agg(version::text || ':' || name || ':' || coalesce(checksum, ''), ',' ORDER BY version)) FROM acr.schema_migrations" 2>/dev/null
+}
+
 assert_migration_completed() {
   local count hooks
   count="$(migration_count)"
@@ -498,23 +559,74 @@ assert_image_and_inventory() {
   log "exact application digest, existing imagePullSecret, and zero MCP inventory confirmed"
 }
 
+network_policy_probe() {
+  local name="$1" command="$2" expected_exit="$3" component="${4:-api}" phase="" exit_code="" reason="" attempt image
+  name="network-probe-${name}-${RANDOM}"
+  image="${ACR_E2E_IMG_PROBE:-docker.io/library/busybox@sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028}"
+  validate_immutable_image_ref "${image}"
+  kube -n "${namespace}" apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${name}
+  labels:
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: ${release}
+    app.kubernetes.io/component: ${component}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: ${image}
+      command: ["sh", "-ec"]
+      args:
+        - >-
+          ${command}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+EOF
+  for attempt in $(seq 1 30); do
+    phase="$(kube -n "${namespace}" get "pod/${name}" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+    [[ "${phase}" == "Succeeded" || "${phase}" == "Failed" ]] && break
+    sleep 1
+  done
+  exit_code="$(kube -n "${namespace}" get "pod/${name}" -o jsonpath='{.status.containerStatuses[0].state.terminated.exitCode}' 2>/dev/null || true)"
+  reason="$(kube -n "${namespace}" get "pod/${name}" -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}' 2>/dev/null || true)"
+  kube -n "${namespace}" delete "pod/${name}" --wait=true >/dev/null
+  if [[ "${expected_exit}" == "0" ]]; then
+    [[ "${reason}" == "Completed" && "${exit_code}" == "0" ]]
+  else
+    [[ "${reason}" == "Error" && "${exit_code}" == "${expected_exit}" ]]
+  fi
+}
+
 assert_network_policy() {
-  local deploy labels allowed denied
+  local deploy denied
   deploy="$(deployment_name)"
-  labels="app.kubernetes.io/name=acr,app.kubernetes.io/instance=${release},app.kubernetes.io/component=api"
-  allowed="$(kube -n "${namespace}" run "egress-allow-${RANDOM}" --rm -i --restart=Never --labels="${labels}" \
-    --image="${ACR_E2E_IMG_PROBE:-docker.io/library/busybox@sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028}" --quiet --command -- \
-    sh -c "nc -z -w 5 postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local 5432" 2>&1 || true)"
-  [[ -z "${allowed}" ]] || { fail "NetworkPolicy blocked required PostgreSQL egress: ${allowed}"; return 1; }
-  if kube -n "${namespace}" run "egress-deny-${RANDOM}" --rm -i --restart=Never --labels="${labels}" \
-    --image="${ACR_E2E_IMG_PROBE:-docker.io/library/busybox@sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028}" --quiet --command -- \
-    sh -c "nc -z -w 5 clickhouse.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local 8123" >/dev/null 2>&1; then
-    fail "NetworkPolicy allowed forbidden ClickHouse plaintext egress"
+  if ! network_policy_probe allow "nc -z -w 5 postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local 5432" 0; then
+    fail "NetworkPolicy blocked required PostgreSQL egress under Restricted Pod Security Admission"
+    return 1
+  fi
+  if ! network_policy_probe deny "nc -z -w 5 clickhouse.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local 8123" 1; then
+    fail "NetworkPolicy did not prove a completed forbidden ClickHouse plaintext connection failure"
     return 1
   fi
   denied="$(kube -n "${namespace}" get networkpolicy "${deploy}" -o jsonpath='{.spec.policyTypes[*]}')"
   [[ "${denied}" == *Egress* ]] || { fail "NetworkPolicy lacks default-deny egress"; return 1; }
-  log "NetworkPolicy allows only required TLS dependency egress and denies plaintext ClickHouse"
+  log "NetworkPolicy allows required TLS-native ports and denies plaintext ClickHouse; Kubernetes policy is port-only and cannot verify a TLS destination hostname"
 }
 
 upgrade_for_checksum_rollouts() {
@@ -567,14 +679,76 @@ assert_missing_runtime_secret() {
 }
 
 assert_missing_image_pull_secret() {
-  local deploy events
+  local deploy job events secret_name
   deploy="$(deployment_name)"
-  kube -n "${namespace}" get "deployment/${deploy}" >/dev/null || { fail "missing imagePullSecret did not create the API Deployment"; return 1; }
-  wait_api_ready
+  job="${deploy}-migrate"
+  secret_name="${ACR_E2E_IMAGE_PULL_SECRET}"
+  kube -n "${namespace}" get "job/${job}" >/dev/null || { fail "missing imagePullSecret did not create the migration hook Job"; return 1; }
+  assert_no_deployment_ready
   events="$(kube -n "${namespace}" get events --sort-by=.metadata.creationTimestamp 2>/dev/null || true)"
-  grep -qiE 'FailedToRetrieveImagePullSecret|image pull secret' <<<"${events}" || {
-    fail "missing imagePullSecret did not reach Kubernetes image-pull-secret retrieval"; return 1;
+  if ! grep -Fqi 'FailedToRetrieveImagePullSecret' <<<"${events}" || ! grep -Fqi -- "${secret_name}" <<<"${events}"; then
+    fail "missing imagePullSecret did not produce a FailedToRetrieveImagePullSecret event for ${secret_name}"; return 1;
+  fi
+}
+
+assert_denied_migration_egress() {
+  local deploy job pod policy policy_json pod_labels migration_dsn
+  deploy="$(deployment_name)"
+  job="${deploy}-migrate"
+  pod="$(kube -n "${namespace}" get pods -l "job-name=${job}" -o jsonpath='{.items[0].metadata.name}')"
+  [[ -n "${pod}" ]] || { fail "denied egress has no migration hook Pod"; return 1; }
+  policy="${deploy}-deny-postgres"
+  policy_json="$(kube -n "${namespace}" get "networkpolicy/${policy}" -o json)" || {
+    fail "denied egress has no migration NetworkPolicy"; return 1;
   }
+  pod_labels="$(kube -n "${namespace}" get "pod/${pod}" -o json | jq -c '.metadata.labels')"
+  jq -e --argjson labels "${pod_labels}" '
+    .spec.podSelector.matchLabels | to_entries |
+    all(. as $entry | $labels[$entry.key] == $entry.value)
+  ' <<<"${policy_json}" >/dev/null || {
+    fail "denied egress NetworkPolicy does not select the failed migration Pod"; return 1;
+  }
+  jq -e '
+    ([.spec.policyTypes[]?] | index("Egress")) and
+    ([.spec.egress[]?.ports[]? | select(.protocol == "TCP") | .port] | index(1) != null and index(5432) == null) and
+    ([.spec.egress[]? | select((.ports // []) | any(.protocol == "TCP" and .port == 5432))] | length == 0)
+  ' <<<"${policy_json}" >/dev/null || {
+    fail "denied egress NetworkPolicy did not retain default deny while excluding PostgreSQL port 5432"; return 1;
+  }
+  migration_dsn="$(kube -n "${namespace}" get secret acr-migration -o jsonpath='{.data.ACR_POSTGRES_MIGRATION_DSN}' | base64 -d)"
+  [[ "${migration_dsn}" == "postgres://postgres:acr-e2e-pass@postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt" ]] || {
+    fail "denied egress changed the verified migration DSN instead of isolating the NetworkPolicy"; return 1;
+  }
+  if ! network_policy_probe migration-deny "nc -z -w 5 postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local 5432" 1 migration; then
+    fail "selected denied-egress policy did not block an equivalent PostgreSQL connection"; return 1
+  fi
+  log "migration failure is causally supported by a selected default-deny NetworkPolicy: an equivalent PostgreSQL connection failed while the verified DSN remained unchanged"
+}
+
+inject_denied_migration_policy() {
+  local deploy
+  deploy="$(deployment_name)"
+  kube -n "${namespace}" apply -f - >/dev/null <<EOF
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ${deploy}-deny-postgres
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: acr
+      app.kubernetes.io/instance: ${release}
+      app.kubernetes.io/component: migration
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+        - protocol: TCP
+          port: 1
+EOF
 }
 
 diagnose_workload_failure() {
@@ -606,7 +780,7 @@ diagnose_workload_failure() {
 }
 
 run_lifecycle() {
-  local previous current entitlement values schema_before schema_after configured
+  local previous current entitlement values history_before history_after configured
   entitlement="$(create_fixture_references)"
   previous="$(build_local_image v1)"
   current="$(build_local_image v2)"
@@ -625,16 +799,16 @@ run_lifecycle() {
   wait_api_ready
   configured="$(kube -n "${namespace}" get "deployment/$(deployment_name)" -o jsonpath='{.spec.template.spec.containers[?(@.name=="acr-api")].image}')"
   [[ "${configured}" == "${current}" ]] || { fail "immutable image upgrade did not reach requested digest"; return 1; }
-  schema_before="$(migration_count)"
+  history_before="$(migration_history_fingerprint)"
   run_helm "${values}" --set-string "image.reference=${previous}" >/dev/null
   wait_api_ready
-  schema_after="$(migration_count)"
+  history_after="$(migration_history_fingerprint)"
   configured="$(kube -n "${namespace}" get "deployment/$(deployment_name)" -o jsonpath='{.spec.template.spec.containers[?(@.name=="acr-api")].image}')"
   [[ "${configured}" == "${previous}" ]] || { fail "explicit application rollback did not restore previous digest"; return 1; }
-  [[ "${schema_before}" == "${schema_after}" ]] || { fail "application rollback changed migration history; schema downgrade is prohibited"; return 1; }
+  [[ -n "${history_before}" && "${history_before}" == "${history_after}" ]] || { fail "application rollback changed migration history; schema downgrade is prohibited"; return 1; }
   printf 'PREVIOUS_IMAGE_DIGEST=%s\n' "${previous}"
   printf 'CURRENT_IMAGE_DIGEST=%s\n' "${current}"
-  queue_evidence passed "lifecycle exact_previous=${previous} exact_current=${current} schema_versions=${schema_after} no_schema_downgrade=true"
+  queue_evidence passed "lifecycle exact_previous=${previous} exact_current=${current} migration_history_fingerprint_before=${history_before} migration_history_fingerprint_after=${history_after} migration_history_unchanged=true rollback_scope=application-only"
 }
 
 run_bad_migration() {
@@ -651,8 +825,9 @@ run_bad_migration() {
   fi
   diagnose_workload_failure
   assert_failed_migration_hook
-  queue_evidence expected-failure 'bad migration hook failed nonzero and left no Available API Deployment'
-  return 1
+  queue_expected_failure bad-migration 'bad migration hook failed nonzero and left no Available API Deployment'
+  log 'expected failure proven: bad migration hook failed before application readiness'
+  return 0
 }
 
 run_missing_secret() {
@@ -667,33 +842,33 @@ run_missing_secret() {
   fi
   diagnose_workload_failure
   assert_missing_runtime_secret
-  queue_evidence expected-failure 'missing runtime Secret created an unready Deployment with a missing-Secret boundary'
-  return 1
+  queue_expected_failure missing-runtime-secret 'missing runtime Secret created an unready Deployment with a missing-Secret boundary'
+  log 'expected failure proven: missing runtime Secret left the application unready'
+  return 0
 }
 
 run_missing_image_pull_secret() {
-  local entitlement current values
+  local entitlement current registry_image values
   entitlement="$(create_fixture_references)"
   current="$(build_local_image missing-image-pull-secret)"
+  registry_image="$(publish_image_to_fixture_registry "${current}")"
   kube -n "${namespace}" delete secret "${ACR_E2E_IMAGE_PULL_SECRET}" >/dev/null
   values="$(write_values "${current}" "${entitlement}")"
   if kube -n "${namespace}" get secret "${ACR_E2E_IMAGE_PULL_SECRET}" >/dev/null 2>&1; then
     fail "missing imagePullSecret fault was not injected"
     return 1
   fi
-  if ! run_helm "${values}" >/dev/null; then
+  if run_helm_failure "${values}" --set-string "image.reference=${registry_image}" --set-string image.pullPolicy=Always >/dev/null 2>&1; then
     diagnose_workload_failure
-    fail "missing imagePullSecret prevented a locally available immutable image from starting"
+    fail "missing imagePullSecret unexpectedly installed after a forced pull from the fixture registry"
     return 1
   fi
   assert_missing_image_pull_secret
-  queue_evidence expected-warning 'missing imagePullSecret emitted a Kubernetes retrieval warning while the local immutable image remained ready'
+  queue_expected_failure missing-image-pull-secret "forced fixture-registry pull emitted a Kubernetes credential retrieval failure for ${ACR_E2E_IMAGE_PULL_SECRET}; no locally cached registry reference was used"
 }
 
 run_unprogrammed_gateway() {
-  local entitlement current values gateway_name="unprogrammed-${run_id}" gateway_class accepted programmed attempt
-  gateway_class="$(kube get gatewayclass acr-e2e-unprogrammed --ignore-not-found -o name)" || { fail "unable to determine whether the unprogrammed GatewayClass is absent"; return 1; }
-  [[ -z "${gateway_class}" ]] || { fail "unprogrammed GatewayClass unexpectedly exists"; return 1; }
+  local entitlement current values gateway_name="unprogrammed-${run_id}" programmed observed_generation generation attempt
   entitlement="$(create_fixture_references)"
   current="$(build_local_image unprogrammed-gateway)"
   kube -n "${namespace}" apply -f - >/dev/null <<EOF
@@ -702,23 +877,30 @@ kind: Gateway
 metadata:
   name: ${gateway_name}
 spec:
-  gatewayClassName: acr-e2e-unprogrammed
+  gatewayClassName: ${ACR_E2E_GATEWAY_CLASS}
   listeners:
-    - name: http
-      protocol: HTTP
-      port: 80
+    - name: https
+      protocol: HTTPS
+      port: 8443
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: missing-gateway-certificate
 EOF
-  values="$(write_values "${current}" "${entitlement}" "${gateway_name}" "${namespace}" "http")"
+  values="$(write_values "${current}" "${entitlement}" "${gateway_name}" "${namespace}" "https")"
   run_helm "${values}" >/dev/null || { fail "unprogrammed Gateway prevented Helm installation before route status could be checked"; return 1; }
+  generation="$(kube -n "${namespace}" get "gateway/${gateway_name}" -o jsonpath='{.metadata.generation}')"
   for attempt in $(seq 1 20); do
     programmed="$(kube -n "${namespace}" get "gateway/${gateway_name}" -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}')"
-    accepted="$(kube -n "${namespace}" get "httproute/$(deployment_name)" -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}')"
-    [[ "${programmed}" != "True" ]] || { fail "unprogrammed Gateway unexpectedly became Programmed"; return 1; }
-    [[ "${accepted}" != "True" ]] || { fail "unprogrammed Gateway unexpectedly accepted the HTTPRoute"; return 1; }
+    observed_generation="$(kube -n "${namespace}" get "gateway/${gateway_name}" -o jsonpath='{.status.conditions[?(@.type=="Programmed")].observedGeneration}')"
+    [[ "${programmed}" == "False" ]] || { fail "unprogrammed Gateway did not report Programmed=False"; return 1; }
+    [[ "${observed_generation}" == "${generation}" ]] || { fail "unprogrammed Gateway was never reconciled to its current generation"; return 1; }
     sleep 1
   done
-  queue_evidence expected-failure 'absent GatewayClass kept Gateway Programmed and HTTPRoute Accepted non-True throughout the full observation window'
-  return 1
+  queue_expected_failure unprogrammed-gateway 'reconciled Gateway generation stayed Programmed=False because its certificate reference is absent throughout the full observation window'
+  log 'expected failure proven: reconciled Gateway remained unprogrammed because its certificate reference is absent'
+  return 0
 }
 
 run_denied_egress() {
@@ -726,19 +908,23 @@ run_denied_egress() {
   entitlement="$(create_fixture_references)"
   current="$(build_local_image denied-egress)"
   values="$(write_values "${current}" "${entitlement}")"
+  inject_denied_migration_policy
   if run_helm_failure "${values}" --set networkPolicy.egress.postgresPort=1 --set migration.backoffLimit=0 --set migration.activeDeadlineSeconds=60 >/dev/null 2>&1; then
     fail "denied egress unexpectedly installed"
     return 1
   fi
   diagnose_workload_failure
   assert_failed_migration_hook
-  queue_evidence expected-failure 'migration egress denial failed nonzero with default-deny retained and no Available API Deployment'
-  return 1
+  assert_denied_migration_egress
+  queue_expected_failure denied-migration-egress 'migration egress denial failed nonzero because its selected default-deny NetworkPolicy excludes verified PostgreSQL port 5432; an equivalent selected probe also failed; no Available API Deployment'
+  log 'expected failure proven: migration egress is denied by its NetworkPolicy, not a changed DSN'
+  return 0
 }
 
 run_app_rollback() {
-  local current entitlement values schema_before schema_after configured
-  [[ "${previous_image}" =~ ^[^[:space:]]+@sha256:[a-f0-9]{64}$ ]] || die "app-rollback requires --previous-image <immutable @sha256 reference>"
+  local current entitlement values history_before history_after configured
+  [[ -n "${previous_image}" ]] || die "app-rollback requires an explicitly loaded --previous-image immutable digest"
+  validate_immutable_image_ref "${previous_image}"
   docker exec "${cluster}-control-plane" ctr -n k8s.io images list -q | grep -Fxq "${previous_image}" \
     || die "app-rollback previous image is not loaded in the Todo 18 Kind node: ${previous_image}"
   entitlement="$(create_fixture_references)"
@@ -749,17 +935,17 @@ run_app_rollback() {
     return 1
   fi
   wait_api_ready
-  schema_before="$(migration_count)"
+  history_before="$(migration_history_fingerprint)"
   if ! run_helm "${values}" --set-string "image.reference=${previous_image}" >/dev/null; then
     diagnose_workload_failure
     return 1
   fi
   wait_api_ready
-  schema_after="$(migration_count)"
+  history_after="$(migration_history_fingerprint)"
   configured="$(kube -n "${namespace}" get "deployment/$(deployment_name)" -o jsonpath='{.spec.template.spec.containers[?(@.name=="acr-api")].image}')"
   [[ "${configured}" == "${previous_image}" ]] || { fail "rollback did not restore explicit previous application digest"; return 1; }
-  [[ "${schema_before}" == "${schema_after}" ]] || { fail "rollback changed schema history; no schema downgrade is permitted"; return 1; }
-  queue_evidence passed "application rollback restored=${previous_image} schema_versions=${schema_after} no_schema_downgrade=true"
+  [[ -n "${history_before}" && "${history_before}" == "${history_after}" ]] || { fail "rollback changed migration history; no schema downgrade is permitted"; return 1; }
+  queue_evidence passed "application rollback restored=${previous_image} migration_history_fingerprint_before=${history_before} migration_history_fingerprint_after=${history_after} migration_history_unchanged=true rollback_scope=application-only same_source_scope=not_established"
 }
 
 if [[ "${scenario}" == "static" ]]; then

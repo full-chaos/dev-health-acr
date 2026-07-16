@@ -491,6 +491,7 @@ cmd_create() {
   command -v kind >/dev/null 2>&1 || die "kind not installed"
   command -v kubectl >/dev/null 2>&1 || die "kubectl not installed"
   command -v openssl >/dev/null 2>&1 || die "openssl not installed"
+  command -v htpasswd >/dev/null 2>&1 || die "htpasswd not installed"
   require_kind_version
 
   # Unique-resource guard: refuse to reuse an existing cluster, network, OR
@@ -603,15 +604,22 @@ preload_images() {
 # BEFORE the cluster, so the Kind node can be attached to that same network and
 # reach the registry by name. Nothing is host-published; isolation is by network.
 provision_registry_network() {
-  local name="$1" net reg
+  local name="$1" net reg auth_dir
   net="$(net_name "${name}")"; reg="$(reg_name "${name}")"
   log "provisioning fixture network ${net} and registry ${reg}"
   FIXTURE_NETWORK_ID="$(docker network create --label "${FIXTURE_LABEL_KEY}=${FIXTURE_ID}" "${net}")" || die "failed to create network ${net}"
   [[ "${FIXTURE_NETWORK_ID}" =~ ^[a-f0-9]{64}$ ]] || die "failed to record network ownership identity"
   write_fixture_identity "${name}"
-  # Registry attached ONLY to this fixture's network; no -p host publish.
+  auth_dir="$(state_dir "${name}")/registry-auth"
+  install -d -m 700 "${auth_dir}" || die "failed to create fixture registry auth directory"
+  umask 077
+  htpasswd -Bbn fixture fixture >"${auth_dir}/htpasswd" || die "failed to create fixture registry credentials"
+  # Registry attached ONLY to this fixture's network; no -p host publish. It
+  # requires the fixture pull secret so imagePullSecret tests exercise auth.
   FIXTURE_REGISTRY_ID="$(docker run -d --restart=no --name "${reg}" --network "${net}" --label "${FIXTURE_LABEL_KEY}=${FIXTURE_ID}" \
-    -e REGISTRY_HTTP_ADDR=0.0.0.0:5000 "${ACR_E2E_IMG_REGISTRY}")" \
+    -e REGISTRY_HTTP_ADDR=0.0.0.0:5000 -e REGISTRY_AUTH=htpasswd \
+    -e REGISTRY_AUTH_HTPASSWD_REALM=fixture -e REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd \
+    -v "${auth_dir}:/auth:ro" "${ACR_E2E_IMG_REGISTRY}")" \
     || die "failed to start registry ${reg}"
   [[ "${FIXTURE_REGISTRY_ID}" =~ ^[a-f0-9]{64}$ ]] || die "failed to record registry ownership identity"
   write_fixture_identity "${name}"
@@ -1553,7 +1561,7 @@ verify_isolation() {
   check "node ${node} not on host-global 'kind' network" \
     bash -c "! docker network inspect kind -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null | tr ' ' '\n' | grep -qx ${node}"
   # Registry actually serves the v2 API on the fixture network.
-  out="$(docker run --rm --network "${net}" "${ACR_E2E_IMG_PROBE}" wget -qO- "http://${reg}:5000/v2/" 2>/dev/null || true)"
+  out="$(docker run --rm --network "${net}" "${ACR_E2E_IMG_PROBE}" wget -qO- --header='Authorization: Basic Zml4dHVyZTpmaXh0dXJl' "http://${reg}:5000/v2/" 2>/dev/null || true)"
   if [[ "${out}" == "{}" ]]; then ok "registry ${reg} serves /v2/ on ${net}"; else fail "registry ${reg} not serving on ${net}"; VERIFY_FAILURES=$((VERIFY_FAILURES+1)); fi
 }
 
