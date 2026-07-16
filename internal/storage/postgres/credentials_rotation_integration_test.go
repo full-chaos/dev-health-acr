@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 	"time"
@@ -106,6 +107,13 @@ func TestCredentialStoreRotateCredentialRejectsRevokedSourceWithoutSideEffects(t
 	revokedSource, err := lifecycle.GetByID(ctx, credentialTestOrgID, source.CredentialID)
 	require.NoError(t, err)
 	require.NotNil(t, revokedSource.RevokedAt)
+	var revokedAtBefore time.Time
+	var rotatedAtBefore sql.NullTime
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT revoked_at, rotated_at
+		FROM acr.client_credentials
+		WHERE credential_id = $1`, source.CredentialID).Scan(&revokedAtBefore, &rotatedAtBefore))
+	require.False(t, rotatedAtBefore.Valid)
 
 	// When
 	replacement, err := lifecycle.RotateCredential(ctx, storage.CredentialRotationInput{
@@ -123,6 +131,14 @@ func TestCredentialStoreRotateCredentialRejectsRevokedSourceWithoutSideEffects(t
 	storedSource, err := lifecycle.GetByID(ctx, credentialTestOrgID, source.CredentialID)
 	require.NoError(t, err)
 	require.Equal(t, revokedSource, storedSource)
+	var revokedAtAfter time.Time
+	var rotatedAtAfter sql.NullTime
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT revoked_at, rotated_at
+		FROM acr.client_credentials
+		WHERE credential_id = $1`, source.CredentialID).Scan(&revokedAtAfter, &rotatedAtAfter))
+	require.True(t, revokedAtAfter.Equal(revokedAtBefore))
+	require.False(t, rotatedAtAfter.Valid)
 	_, err = lifecycle.GetByID(ctx, credentialTestOrgID, "cred_replacement")
 	require.ErrorIs(t, err, storage.ErrNotFound)
 	assertCredentialAndAuditCounts(t, ctx, db, 1, 2)
