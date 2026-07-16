@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,6 +83,52 @@ func TestCredentialStoreRotateRejectsRevokedCrossOrgAndUnknownSourcesWithoutSide
 			require.Zero(t, successfulRotations)
 		})
 	}
+}
+
+func TestCredentialStoreRotateCredentialRejectsRevokedSourceWithoutSideEffects(t *testing.T) {
+	// Given
+	ctx := context.Background()
+	db := newCredentialStoreDatabase(t, ctx)
+	audit, err := NewAuditStore(db)
+	require.NoError(t, err)
+	lifecycle, err := NewCredentialStore(db, audit)
+	require.NoError(t, err)
+	source, err := lifecycle.CreateCredential(ctx, storage.CredentialCreateInput{
+		CredentialID: "cred_source", OrgID: credentialTestOrgID, Name: "source", TokenPrefix: "fcacr_source",
+		TokenHash: strings.Repeat("a", 64), RepositoryScopes: []string{"acme/widgets"},
+		Scopes: []string{auth.ScopeContextRead}, ActorID: credentialTestActorID,
+	})
+	require.NoError(t, err)
+	_, err = lifecycle.RevokeCredential(ctx, storage.CredentialRevocationInput{
+		OrgID: credentialTestOrgID, CredentialID: source.CredentialID, ActorID: credentialTestActorID,
+	})
+	require.NoError(t, err)
+	revokedSource, err := lifecycle.GetByID(ctx, credentialTestOrgID, source.CredentialID)
+	require.NoError(t, err)
+	require.NotNil(t, revokedSource.RevokedAt)
+
+	// When
+	replacement, err := lifecycle.RotateCredential(ctx, storage.CredentialRotationInput{
+		OrgID: credentialTestOrgID, SourceCredentialID: source.CredentialID, ActorID: credentialTestActorID,
+		Replacement: storage.CredentialRotationReplacement{
+			CredentialID: "cred_replacement", Name: "replacement", TokenPrefix: "fcacr_replacement",
+			TokenHash: strings.Repeat("b", 64), RepositoryScopes: []string{"acme/widgets"},
+			Scopes: []string{auth.ScopeContextRead}, Immediate: true,
+		},
+	})
+
+	// Then
+	require.ErrorIs(t, err, storage.ErrNotFound)
+	require.Empty(t, replacement.CredentialID)
+	storedSource, err := lifecycle.GetByID(ctx, credentialTestOrgID, source.CredentialID)
+	require.NoError(t, err)
+	require.Equal(t, revokedSource, storedSource)
+	_, err = lifecycle.GetByID(ctx, credentialTestOrgID, "cred_replacement")
+	require.ErrorIs(t, err, storage.ErrNotFound)
+	assertCredentialAndAuditCounts(t, ctx, db, 1, 2)
+	var successfulRotations int
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM acr.audit_events WHERE org_id = $1 AND action = 'credential_rotated'", credentialTestOrgID).Scan(&successfulRotations))
+	require.Zero(t, successfulRotations)
 }
 
 func TestCredentialStoreRotateAllowsExpiredUnrevokedSourceWithBoundedOverlap(t *testing.T) {
