@@ -167,7 +167,9 @@ assert_safe_render() {
   grep -q '^  acr-api:' "$STATE/rendered.yml" || die 'ACR API missing from rendered stack'
   ! grep -q 'acr-mcp:' "$STATE/rendered.yml" || die 'MCP must remain host-local'
   ! grep -Eq 'name:[[:space:]]*(postgres_data|clickhouse_data|valkey_data)$' "$STATE/rendered.yml" || die 'refusing shared default volume name'
-  grep -q "127.0.0.1:${PORT}:8443" "$STATE/rendered.yml" || die 'direct localhost TLS endpoint missing'
+  if ! grep -q 'host_ip: 127.0.0.1' "$STATE/rendered.yml" || ! grep -q 'target: 8443' "$STATE/rendered.yml" || ! grep -q "published: \"${PORT}\"" "$STATE/rendered.yml"; then
+    die 'direct localhost TLS endpoint missing'
+  fi
 }
 
 wait_https() { curl --fail --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' "https://localhost:${PORT}$1" >/dev/null; }

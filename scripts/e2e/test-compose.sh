@@ -17,6 +17,7 @@ grep -Fq 'MCP must remain host-local' "$script"
 grep -Fq 'zero owned containers, volumes, and networks' "$script"
 grep -Fq 'POSTGRES_USER=devhealth' "$script"
 grep -Fq "ACR_IMAGE=\"\$IMAGE\"" "$script"
+grep -Fq 'host_ip: 127.0.0.1' "$script"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
