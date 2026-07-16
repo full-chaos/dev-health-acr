@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+HARNESS="${ROOT}/scripts/e2e/kind-kustomize.sh"
+LIBRARY="${ROOT}/scripts/e2e/kind-kustomize-lib.sh"
+FIXTURE="${ROOT}/scripts/e2e/kind-fixture.sh"
+APPLY="${ROOT}/deploy/kubernetes/acr/scripts/apply.sh"
+DEPLOYMENT="${ROOT}/deploy/kubernetes/acr/base/deployment.yaml"
+MIGRATION="${ROOT}/deploy/kubernetes/acr/base/migration-job.yaml"
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+require_output() {
+  local output="$1" expected="$2"
+  grep -Fqx -- "$expected" <<<"${output}" || fail "missing self-test result: ${expected}"
+}
+
+test_self_test_requires_a_fixture_and_runs_scenarios() {
+  local output status scenario
+  set +e
+  output="$(bash "${HARNESS}" --self-test 2>&1)"
+  status=$?
+  set -e
+
+  [[ ${status} -ne 0 ]] || fail 'self-test accepted no fixture cluster'
+  grep -Fq -- '--cluster is required' <<<"${output}" || fail 'self-test did not require a fixture cluster'
+  grep -Fq 'run_behavioral_scenario' "${HARNESS}" || fail 'self-test does not execute child scenarios'
+  for scenario in lifecycle stale-migration-status denied-egress mutable-production-image app-rollback; do
+    grep -Fq "${scenario}" "${HARNESS}" || fail "self-test does not cover ${scenario}"
+  done
+}
+
+test_hardening_seams_are_present() {
+  local expected_delete
+  expected_delete='kubectl --namespace "$'
+  expected_delete+='namespace" delete job/acr-migrate --ignore-not-found --wait=false'
+  grep -Fq 'commit_sha=' "${FIXTURE}" || fail 'verification evidence does not record the exact commit SHA'
+  grep -Fq "$expected_delete" "${APPLY}" || fail 'migration replacement delete is unbounded'
+  if ! grep -Fq 'emptyDir:' "${DEPLOYMENT}" || ! grep -Fq 'medium: Memory' "${DEPLOYMENT}"; then fail 'deployment copied secret storage is not memory-backed'; fi
+  if ! grep -Fq 'emptyDir:' "${MIGRATION}" || ! grep -Fq 'medium: Memory' "${MIGRATION}"; then fail 'migration writable storage is not memory-backed'; fi
+  grep -Fq 'rotation_content' "${LIBRARY}" || fail 'secret rotation does not change fixture credential bytes'
+  grep -Fq 'e2e_set_ops_entitlement_token' "${HARNESS}" || fail 'secret rotation does not rotate the accepted Ops token'
+  grep -Fq 'e2e_application_readiness' "${HARNESS}" || fail 'secret rotation does not prove application-boundary token use'
+  grep -Fq 'if (\$http_authorization != "Bearer ${token}")' "${LIBRARY}" || fail 'rotated Ops fixture emits an invalid authorization predicate'
+  grep -Fq 'replacement_uid' "${HARNESS}" || fail 'stale migration scenario does not prove replacement UID freshness'
+  grep -Fq 'old_complete' "${HARNESS}" || fail 'stale migration scenario does not observe stale completion'
+  if ! grep -Fq 'NetworkPolicy' "${HARNESS}" || ! grep -Fq 'transport' "${HARNESS}"; then fail 'denied egress scenario does not prove transport causality'; fi
+}
+
+test_verification_evidence_requires_clean_git_provenance() {
+  local token
+  for token in verify_clean_git_provenance working_tree_clean=true index_clean=true head_tree_sha index_tree_sha; do
+    grep -Fq "${token}" "${FIXTURE}" || fail "verification evidence omits clean Git provenance: ${token}"
+  done
+}
+
+test_verification_provenance_rejects_dirty_worktree() {
+  local state_root fake_bin output status
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/git" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" diff --quiet -- "*) exit 1 ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/git"
+  set +e
+  output="$(PATH="${fake_bin}:${PATH}" ACR_E2E_LIB_ONLY=1 bash -c 'source "$1"; verify_clean_git_provenance' -- "${FIXTURE}" 2>&1)"
+  status=$?
+  set -e
+  rm -rf "${state_root}"
+
+  [[ ${status} -ne 0 ]] || fail 'dirty working tree attribution unexpectedly succeeded'
+  grep -Fq 'verification refuses dirty working tree attribution' <<<"${output}" || fail 'dirty working tree attribution did not fail closed'
+}
+
+test_verification_provenance_rejects_dirty_index() {
+  local state_root fake_bin output status
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/git" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" diff --cached --quiet -- "*) exit 1 ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/git"
+  set +e
+  output="$(PATH="${fake_bin}:${PATH}" ACR_E2E_LIB_ONLY=1 bash -c 'source "$1"; verify_clean_git_provenance' -- "${FIXTURE}" 2>&1)"
+  status=$?
+  set -e
+  rm -rf "${state_root}"
+
+  [[ ${status} -ne 0 ]] || fail 'dirty index attribution unexpectedly succeeded'
+  grep -Fq 'verification refuses dirty index attribution' <<<"${output}" || fail 'dirty index attribution did not fail closed'
+}
+
+test_preexisting_namespace_is_not_deleted() {
+  local state_root fake_bin log output status
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  log="${state_root}/kubectl.log"
+  mkdir -p "${state_root}/fixture" "${fake_bin}"
+  : >"${state_root}/fixture/ca.crt"
+  cat >"${state_root}/fixture/exports.env" <<EOF
+ACR_KIND_CONTEXT="fake-context"
+ACR_E2E_DEPS_NAMESPACE="acr-deps"
+ACR_E2E_GATEWAY_NAMESPACE="gateway-system"
+ACR_E2E_GATEWAY_NAME="gateway"
+ACR_E2E_GATEWAY_HOSTNAME="acr.example.test"
+ACR_E2E_POSTGRES_HOST="postgres.example.test"
+ACR_E2E_CLICKHOUSE_HOST="clickhouse.example.test"
+ACR_E2E_OPS_ENTITLEMENT_HOST="ops.example.test"
+ACR_E2E_CA_CERT="${state_root}/fixture/ca.crt"
+ACR_E2E_REGISTRY_ENDPOINT="registry.example.test"
+EOF
+  cat >"${fake_bin}/kubectl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${KUBECTL_LOG}"
+case " $* " in
+  *" get namespace acr-deps "*) exit 0 ;;
+  *" create namespace "*) exit 1 ;;
+  *" delete namespace "*) exit 0 ;;
+  *" wait --for=delete namespace/"*) exit 0 ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/kubectl"
+
+  set +e
+  output="$(PATH="${fake_bin}:${PATH}" KUBECTL_LOG="${log}" ACR_E2E_STATE_ROOT="${state_root}" bash "${HARNESS}" --cluster fixture --namespace acr-kustomize-owned-test 2>&1)"
+  status=$?
+  set -e
+
+  [[ ${status} -ne 0 ]] || fail 'pre-existing namespace unexpectedly succeeded'
+  grep -Fq 'namespace already exists' <<<"${output}" || fail 'pre-existing namespace failure was not reported'
+  if grep -Fq 'delete namespace acr-kustomize-owned-test' "${log}"; then
+    rm -rf "${state_root}"
+    fail 'pre-existing namespace was deleted by cleanup'
+  fi
+  rm -rf "${state_root}"
+}
+
+test_mutable_image_is_rejected_before_cluster_access() {
+  local output status
+  set +e
+  output="$(bash "${HARNESS}" --cluster missing-fixture --scenario mutable-production-image --image registry.invalid/acr-api:latest 2>&1)"
+  status=$?
+  set -e
+
+  [[ ${status} -ne 0 ]] || fail 'mutable production image unexpectedly succeeded'
+  grep -Fq 'mutable-production-image' <<<"${output}" || fail 'mutable production image rejection was not named'
+  if grep -Fq 'cluster not found' <<<"${output}"; then
+    fail 'mutable production image checked cluster before rejecting image'
+  fi
+}
+
+test_self_test_requires_a_fixture_and_runs_scenarios
+test_mutable_image_is_rejected_before_cluster_access
+test_hardening_seams_are_present
+test_verification_evidence_requires_clean_git_provenance
+test_verification_provenance_rejects_dirty_worktree
+test_verification_provenance_rejects_dirty_index
+test_preexisting_namespace_is_not_deleted
+printf 'RESULT: Kind Kustomize harness contract tests passed\n'

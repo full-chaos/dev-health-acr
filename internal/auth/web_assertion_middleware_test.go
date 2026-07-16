@@ -2,6 +2,7 @@ package auth
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"net/http"
@@ -31,6 +32,7 @@ func TestAuthenticator_webAssertionReadOnlyScopeAndRepositoryAuthorization(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = authenticator.Close() })
 	read := authenticator.MiddlewareFor(true, authenticator.RequireScope(ScopeContextRead,
 		authenticator.RequireRepository(func(*http.Request) string { return "example-org/widget-service" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			principal, ok := PrincipalFromContext(r.Context())
@@ -50,6 +52,11 @@ func TestAuthenticator_webAssertionReadOnlyScopeAndRepositoryAuthorization(t *te
 	// Then
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("read status = %d body=%s", response.Code, response.Body.String())
+	}
+	flushContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := authenticator.usageTelemetry.Flush(flushContext); err != nil {
+		t.Fatal(err)
 	}
 	if !hasAuditAction(audit.Events(), "web_assertion_used") {
 		t.Fatalf("web assertion use was not audited: %#v", audit.Events())
@@ -71,6 +78,7 @@ func TestAuthenticator_webAssertionsCannotAuthenticateWriteRoutes(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = authenticator.Close() })
 	body := []byte(`{}`)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/agent-context/episodes", bytes.NewReader(body))
 	claims := webAssertionClaims(now, request, body)

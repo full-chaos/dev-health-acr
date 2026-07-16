@@ -60,16 +60,16 @@ config:
     # Secret (see credentials.entitlementToken).
     tokenMountPath: /var/run/acr/entitlement
     tokenFileName: token
+  # Optional PEM CA bundles mounted from existing Secrets (references only).
   postgresCaBundle:
     existingSecret: ""
-    key: ca.pem
-  # Optional PEM CA bundles mounted from existing Secrets (references only).
+    key: ca.crt
   clickhouseCaBundle:
     existingSecret: ""
-    key: ca.pem
+    key: ca.crt
   entitlementCaBundle:
     existingSecret: ""
-    key: ca.pem
+    key: ca.crt
 
 # Existing-Secret-only credential contract. Each existingSecret is the NAME of a
 # Secret that already exists in the release namespace. This chart validates the

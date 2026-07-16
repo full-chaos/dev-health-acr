@@ -925,14 +925,14 @@ diagnose_workload_failure() {
     [[ -n "${pod}" ]] || continue
     {
       printf '\ninit_container=%s\n' "${pod}"
-      kube -n "${namespace}" logs "${pod}" -c entitlement-token-permissions || true
+      kube -n "${namespace}" logs "${pod}" -c prepare-entitlement-token || true
       printf '\napi_container=%s\n' "${pod}"
       kube -n "${namespace}" get "pod/${pod}" -o jsonpath='{.status.containerStatuses[?(@.name=="acr-api")].state.terminated} {.status.containerStatuses[?(@.name=="acr-api")].lastState.terminated}{"\n"}' || true
       kube -n "${namespace}" logs "${pod}" -c acr-api || true
       kube -n "${namespace}" logs "${pod}" -c acr-api --previous || true
     } >>"${diagnostics}"
     kube -n "${namespace}" logs "${pod}" --all-containers=true >&2 || true
-    kube -n "${namespace}" logs "${pod}" -c entitlement-token-permissions >&2 || true
+    kube -n "${namespace}" logs "${pod}" -c prepare-entitlement-token >&2 || true
   done < <(kube -n "${namespace}" get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
 }
 

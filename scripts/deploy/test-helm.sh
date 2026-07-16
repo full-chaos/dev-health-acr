@@ -430,4 +430,24 @@ pg_ca_mounts=$(grep -c '/var/run/acr/postgres-ca' "$rendered")
 grep -Eq 'secretName: "?acr-postgres-ca"?' "$rendered" || fail_gate "postgres-tls: existing PostgreSQL CA Secret reference missing"
 pass "postgres-tls: Deployment and migration Job mount the existing CA bundle for verified DSNs"
 
+custom_projection="$(render \
+  --set-string credentials.entitlementToken.key=entitlement.custom \
+  --set-string config.entitlement.tokenFileName=token.custom \
+  --set-string config.postgresCaBundle.existingSecret=acr-postgres-ca \
+  --set-string config.postgresCaBundle.key=postgres.custom \
+  --set-string config.clickhouseCaBundle.existingSecret=acr-clickhouse-ca \
+  --set-string config.clickhouseCaBundle.key=clickhouse.custom \
+  --set-string config.entitlementCaBundle.existingSecret=acr-entitlement-ca \
+  --set-string config.entitlementCaBundle.key=entitlement-ca.custom)"
+grep -Fq 'key: "entitlement.custom"' <<<"$custom_projection" || fail_gate "secret-projection: custom entitlement Secret key is not rendered"
+grep -Fq 'path: "token.custom"' <<<"$custom_projection" || fail_gate "secret-projection: entitlement token is not projected to tokenFileName"
+grep -Fq 'cp /source/token.custom /target/token.custom' <<<"$custom_projection" || fail_gate "secret-projection: init container does not consume the projected entitlement token filename"
+for key in postgres.custom clickhouse.custom entitlement-ca.custom; do
+  grep -Fq "key: \"$key\"" <<<"$custom_projection" || fail_gate "secret-projection: custom CA Secret key $key is not rendered"
+done
+for path in '/var/run/acr/postgres-ca/ca.crt' '/var/run/acr/clickhouse-ca/ca.crt' '/var/run/acr/entitlement-ca/ca.crt'; do
+  grep -Fq "$path" <<<"$custom_projection" || fail_gate "secret-projection: runtime does not consume canonical CA projection $path"
+done
+pass "secret-projection: custom Secret keys map to canonical projected filenames"
+
 printf 'RESULT: happy path passed all gates\n'

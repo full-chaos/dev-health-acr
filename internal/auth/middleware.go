@@ -23,6 +23,7 @@ type AuthenticatorOptions struct {
 	DetachedTimeout time.Duration
 	ClientIP        ClientIPResolver
 	WebAssertions   *WebAssertionVerifier
+	UsageTelemetry  *UsageTelemetry
 }
 
 type Authenticator struct {
@@ -34,6 +35,8 @@ type Authenticator struct {
 	detachedTimeout time.Duration
 	clientIP        ClientIPResolver
 	webAssertions   *WebAssertionVerifier
+	usageTelemetry  *UsageTelemetry
+	ownsTelemetry   bool
 }
 
 func NewAuthenticator(store storage.CredentialStore, audit storage.AuditStore, options AuthenticatorOptions) (*Authenticator, error) {
@@ -58,7 +61,21 @@ func NewAuthenticator(store storage.CredentialStore, audit storage.AuditStore, o
 	if options.ClientIP == nil {
 		options.ClientIP = RemoteAddressClientIP
 	}
-	return &Authenticator{store: store, audit: audit, now: options.Now, limiter: options.Limiter, logger: options.Logger, detachedTimeout: options.DetachedTimeout, clientIP: options.ClientIP, webAssertions: options.WebAssertions}, nil
+	telemetry := options.UsageTelemetry
+	ownsTelemetry := false
+	if telemetry == nil {
+		var err error
+		telemetry, err = NewUsageTelemetry(store, audit, UsageTelemetryOptions{Logger: options.Logger})
+		if err != nil {
+			return nil, err
+		}
+		ownsTelemetry = true
+	}
+	return &Authenticator{
+		store: store, audit: audit, now: options.Now, limiter: options.Limiter, logger: options.Logger,
+		detachedTimeout: options.DetachedTimeout, clientIP: options.ClientIP, webAssertions: options.WebAssertions,
+		usageTelemetry: telemetry, ownsTelemetry: ownsTelemetry,
+	}, nil
 }
 
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
@@ -111,18 +128,15 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 			RepositoryScopes: append([]string(nil), credential.RepositoryScopes...),
 			Permissions:      append([]string(nil), credential.Scopes...),
 		}
-		usageCtx, cancelUsage := a.detachedContext(r.Context())
-		defer cancelUsage()
-		if err := a.store.TouchLastUsed(usageCtx, credential.CredentialID, ip, r.UserAgent(), now); err != nil {
-			a.logger.WarnContext(r.Context(), "credential last-used update failed", "failure_class", "credential_usage_store")
-		}
-		a.recordAudit(usageCtx, storage.AuditEvent{
-			OrgID: credential.OrgID, ActorType: "credential", ActorID: credential.CredentialID,
-			Action: "credential_used", ResourceType: "acr_credential", ResourceID: credential.CredentialID,
-			Status: "success", RequestID: requestID(r), CreatedAt: now,
-		})
 		ctx := context.WithValue(r.Context(), principalKey{}, principal)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		response := &responseStatusWriter{ResponseWriter: w}
+		next.ServeHTTP(response, r.WithContext(ctx))
+		if response.successful() {
+			a.usageTelemetry.Enqueue(UsageRecord{
+				OrgID: credential.OrgID, CredentialID: credential.CredentialID, ClientIP: ip,
+				UserAgent: r.UserAgent(), RequestID: requestID(r), UsedAt: now,
+			})
+		}
 	})
 }
 
@@ -144,9 +158,7 @@ func (a *Authenticator) RequireScope(required string, next http.Handler) http.Ha
 			return
 		}
 		if !HasScope(principal.Permissions, required) {
-			auditCtx, cancelAudit := a.detachedContext(r.Context())
-			defer cancelAudit()
-			a.recordAudit(auditCtx, auditEvent(principal, "scope_denied", "acr_scope", required, "denied", requestID(r), map[string]any{"required_scope": required}, a.now().UTC()))
+			a.recordDenialAudit(r, auditEvent(principal, "scope_denied", "acr_scope", required, "denied", requestID(r), map[string]any{"required_scope": required}, a.now().UTC()))
 			a.writeError(w, r, http.StatusForbidden, "insufficient_scope", "Credential is missing the required scope", false, map[string]any{"required_scope": required})
 			return
 		}
@@ -166,9 +178,7 @@ func (a *Authenticator) RequireRepository(resolve func(*http.Request) string, ne
 			repository = resolve(r)
 		}
 		if err := AuthorizeRepository(principal, repository); err != nil {
-			auditCtx, cancelAudit := a.detachedContext(r.Context())
-			defer cancelAudit()
-			a.recordAudit(auditCtx, auditEvent(principal, "repository_denied", "repository", repository, "denied", requestID(r), map[string]any{"repository": repository}, a.now().UTC()))
+			a.recordDenialAudit(r, auditEvent(principal, "repository_denied", "repository", repository, "denied", requestID(r), map[string]any{"repository": repository}, a.now().UTC()))
 			a.writeError(w, r, http.StatusForbidden, "repo_forbidden", "Credential is not authorized for this repository", false, nil)
 			return
 		}
@@ -189,9 +199,7 @@ func (a *Authenticator) recordUnknownFailure(r *http.Request, ip, reason string,
 func (a *Authenticator) recordKnownFailure(r *http.Request, credential contractsv1.ClientCredential, reason string, now time.Time) {
 	ip := a.clientIP(r)
 	a.limiter.RecordFailure(ip, now)
-	auditCtx, cancelAudit := a.detachedContext(r.Context())
-	defer cancelAudit()
-	a.recordAudit(auditCtx, storage.AuditEvent{
+	a.recordDenialAudit(r, storage.AuditEvent{
 		OrgID: credential.OrgID, ActorType: "credential", ActorID: credential.CredentialID,
 		Action: "credential_auth_denied", ResourceType: "acr_credential", ResourceID: credential.CredentialID,
 		Status: "denied", RequestID: requestID(r), Metadata: map[string]any{"reason": reason}, CreatedAt: now,
@@ -211,12 +219,14 @@ func auditEvent(principal storage.Principal, action, resourceType, resourceID, s
 	}
 }
 
-func (a *Authenticator) recordAudit(ctx context.Context, event storage.AuditEvent) {
+func (a *Authenticator) recordDenialAudit(r *http.Request, event storage.AuditEvent) {
 	if a.audit == nil {
 		return
 	}
-	if err := a.audit.Record(ctx, event); err != nil {
-		a.logger.WarnContext(ctx, "audit event persistence failed", "failure_class", "audit_store")
+	auditContext, cancel := a.detachedContext(r.Context())
+	defer cancel()
+	if err := a.audit.Record(auditContext, event); err != nil {
+		a.logger.WarnContext(r.Context(), "credential denial audit delivery failed", "failure_class", "denial_audit_delivery")
 	}
 }
 

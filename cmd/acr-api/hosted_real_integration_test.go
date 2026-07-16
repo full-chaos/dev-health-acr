@@ -24,6 +24,7 @@ func TestHostedRuntime_real_binary_serves_and_fails_readiness_safely(t *testing.
 	binary := buildACRAPIBinary(t)
 	assertMissingRuntimeConfigDoesNotListen(t, ctx, binary)
 	clickhouse := newClickHouseFixture(t, ctx)
+	assertNativeClickHouseFixtureIntegration(t, ctx, clickhouse)
 	entitlement := newEntitlementFixture(t)
 	unmigratedPostgres := newUnmigratedPostgresFixture(t, ctx)
 	failedAddress := reserveAddress(t)
@@ -53,6 +54,22 @@ func TestHostedRuntime_real_binary_serves_and_fails_readiness_safely(t *testing.
 	// Then
 	if ready.Status != "ready" || ready.checkStatus("postgres") != "ready" || ready.checkStatus("clickhouse") != "ready" || ready.checkStatus("entitlement") != "ready" {
 		t.Fatalf("initial readiness = %#v", ready)
+	}
+	entitlement.RotateToken(t)
+	ready = apiClient.readiness(t)
+	if ready.checkStatus("entitlement") != "not_ready" {
+		t.Fatalf("readiness with rejected pre-rotation application token = %#v", ready)
+	}
+	if err := process.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if output := process.Output(); strings.Contains(output, entitlement.token) {
+		t.Fatal("acr-api output leaked a rotated entitlement token")
+	}
+	process = startAPIProcess(t, ctx, apiProcessRequest{binary: binary, environment: environment})
+	ready = apiClient.readiness(t)
+	if ready.Status != "ready" || ready.checkStatus("entitlement") != "ready" {
+		t.Fatalf("readiness with rotated application token = %#v", ready)
 	}
 	if !capabilities.Entitlements.AgentContextRuntime || !capabilities.Permissions.ContextRead || !capabilities.Permissions.EvidenceRead {
 		t.Fatalf("capabilities = %#v", capabilities)
@@ -110,6 +127,25 @@ func TestHostedRuntime_real_binary_serves_and_fails_readiness_safely(t *testing.
 	}
 	if err := process.Stop(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertNativeClickHouseFixtureIntegration(t *testing.T, ctx context.Context, fixture *clickHouseFixture) {
+	t.Helper()
+	command := exec.CommandContext(ctx, "go", "test", "../../internal/runtime/clickhouse", "-run", "^TestIntegrationClient_native_readonly_fixture_is_not_skipped$", "-count=1", "-v")
+	command.Env = mergedEnvironment(map[string]string{
+		"ACR_CLICKHOUSE_INTEGRATION_DSN":             fixture.dsn,
+		"ACR_CLICKHOUSE_INTEGRATION_CA_FILE":         fixture.caPath,
+		"ACR_CLICKHOUSE_INTEGRATION_ISOLATED":        "1",
+		"ACR_CLICKHOUSE_INTEGRATION_REQUIRED":        "1",
+		"ACR_CLICKHOUSE_INTEGRATION_TLS_SERVER_NAME": "localhost",
+	})
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mandatory native ClickHouse fixture integration failed: %v", err)
+	}
+	if strings.Contains(string(output), "--- SKIP:") {
+		t.Fatal("mandatory native ClickHouse fixture integration was skipped")
 	}
 }
 

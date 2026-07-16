@@ -45,6 +45,11 @@ func TestAuthenticatorAllowsAuthorizedReadAndTracksUsage(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("unexpected status: %d body=%s", response.Code, response.Body.String())
 	}
+	flushContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := authenticator.usageTelemetry.Flush(flushContext); err != nil {
+		t.Fatal(err)
+	}
 	stored, err := credentialStore.GetByID(context.Background(), issued.Credential.OrgID, issued.Credential.CredentialID)
 	if err != nil || stored.LastUsedAt == nil || !stored.LastUsedAt.Equal(now) {
 		t.Fatalf("last-used metadata not updated: %#v %v", stored, err)
@@ -66,6 +71,31 @@ func TestNewAuthenticator_rejectsTypedNilStores(t *testing.T) {
 	// Then
 	if withCredential != nil || credentialErr == nil || withAudit != nil || auditErr == nil {
 		t.Fatalf("NewAuthenticator() typed-nil results = (%v, %v), (%v, %v); want errors", withCredential, credentialErr, withAudit, auditErr)
+	}
+}
+
+func TestNewAuthenticator_borrows_injected_telemetry_and_owns_only_fallback(t *testing.T) {
+	// Given
+	store := newMemoryCredentialStore(t)
+	audit := memory.NewAuditStore()
+	borrowed, err := NewUsageTelemetry(store, audit, UsageTelemetryOptions{FlushInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = borrowed.Close() })
+
+	// When
+	withBorrowed, borrowedErr := NewAuthenticator(store, audit, AuthenticatorOptions{UsageTelemetry: borrowed})
+	withFallback, fallbackErr := NewAuthenticator(store, audit, AuthenticatorOptions{})
+	t.Cleanup(func() {
+		if withFallback != nil {
+			_ = withFallback.Close()
+		}
+	})
+
+	// Then
+	if borrowedErr != nil || fallbackErr != nil || withBorrowed.UsageTelemetry() != borrowed || withBorrowed.ownsTelemetry || !withFallback.ownsTelemetry || withFallback.UsageTelemetry() == borrowed {
+		t.Fatalf("telemetry ownership = borrowed(%p,%t) fallback(%p,%t), want borrowed dependency and distinct owned fallback", withBorrowed.UsageTelemetry(), withBorrowed.ownsTelemetry, withFallback.UsageTelemetry(), withFallback.ownsTelemetry)
 	}
 }
 
@@ -175,6 +205,7 @@ func newTestAuthenticator(t *testing.T, store storage.CredentialStore, audit sto
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = authenticator.Close() })
 	return authenticator
 }
 

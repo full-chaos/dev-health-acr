@@ -38,6 +38,7 @@ type Dependencies struct {
 	Runtime              *RuntimeDependencies
 	ClientIP             auth.ClientIPResolver
 	WebAssertions        *auth.WebAssertionVerifier
+	UsageTelemetry       *auth.UsageTelemetry
 }
 
 type App struct {
@@ -54,6 +55,8 @@ type App struct {
 	runtime              *RuntimeDependencies
 	authenticator        *auth.Authenticator
 	clientIP             auth.ClientIPResolver
+	usageTelemetry       *auth.UsageTelemetry
+	closers              appClosers
 }
 
 func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error) {
@@ -112,9 +115,12 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 			return nil, errors.New("hosted read runtime requires request controls")
 		}
 		var err error
-		authenticator, err = auth.NewAuthenticator(deps.Runtime.Credentials, deps.Runtime.Audit, auth.AuthenticatorOptions{Now: deps.Now, Limiter: deps.AuthAttempts, Logger: logger, ClientIP: deps.ClientIP, WebAssertions: deps.WebAssertions})
+		authenticator, err = auth.NewAuthenticator(deps.Runtime.Credentials, deps.Runtime.Audit, auth.AuthenticatorOptions{Now: deps.Now, Limiter: deps.AuthAttempts, Logger: logger, ClientIP: deps.ClientIP, WebAssertions: deps.WebAssertions, UsageTelemetry: deps.UsageTelemetry})
 		if err != nil {
 			return nil, err
+		}
+		if deps.UsageTelemetry == nil {
+			deps.UsageTelemetry = authenticator.UsageTelemetry()
 		}
 		deps.ReadinessChecks = append(deps.ReadinessChecks, deps.Runtime.ReadinessChecks...)
 	}
@@ -123,7 +129,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 			return nil, errors.New("readiness checks require a name")
 		}
 	}
-	return &App{
+	app := &App{
 		config:               cfg,
 		capabilities:         deps.Capabilities,
 		readinessChecks:      append([]ReadinessCheck(nil), deps.ReadinessChecks...),
@@ -137,7 +143,10 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		runtime:              deps.Runtime,
 		authenticator:        authenticator,
 		clientIP:             deps.ClientIP,
-	}, nil
+		usageTelemetry:       deps.UsageTelemetry,
+	}
+	app.trackAuthenticator(authenticator)
+	return app, nil
 }
 
 func (a *App) ProtectedHandler(class limits.RequestClass, next http.Handler) http.Handler {
@@ -145,10 +154,11 @@ func (a *App) ProtectedHandler(class limits.RequestClass, next http.Handler) htt
 }
 
 func (a *App) AuthenticatedHandler(credentials storage.CredentialStore, audit storage.AuditStore, class limits.RequestClass, next http.Handler) (http.Handler, error) {
-	authenticator, err := auth.NewAuthenticator(credentials, audit, auth.AuthenticatorOptions{Now: a.now, Limiter: a.authAttempts, Logger: a.logger, ClientIP: a.clientIP})
+	authenticator, err := auth.NewAuthenticator(credentials, audit, auth.AuthenticatorOptions{Now: a.now, Limiter: a.authAttempts, Logger: a.logger, ClientIP: a.clientIP, UsageTelemetry: a.usageTelemetry})
 	if err != nil {
 		return nil, err
 	}
+	a.trackAuthenticator(authenticator)
 	return authenticator.Middleware(a.ProtectedHandler(class, next)), nil
 }
 

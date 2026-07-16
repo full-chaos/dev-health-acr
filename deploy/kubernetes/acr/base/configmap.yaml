@@ -25,3 +25,5 @@ data:
   ACR_DEV_HEALTH_ENTITLEMENT_URL: https://ops.dev-health.internal
   ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT: 5s
   ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /var/run/acr/entitlement/token
+  ACR_CLICKHOUSE_CA_BUNDLE: /var/run/acr/clickhouse-ca/ca.crt
+  ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE: /var/run/acr/entitlement-ca/ca.crt
