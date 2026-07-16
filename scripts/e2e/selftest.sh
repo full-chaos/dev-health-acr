@@ -345,6 +345,7 @@ assert_static_hardening() {
   assert_helm_script_contains 'establish_source_guard' 'every live Helm scenario requires a source quiescence guard'
   assert_helm_script_contains 'sleep 60' 'source guard establishes sixty seconds of source quiescence'
   assert_helm_script_contains 'capture_clean_git_provenance' 'source guard captures exact clean Git provenance'
+  assert_helm_script_contains 'from-literal=token=acr-e2e-ops-token-initial' 'fixture entitlement token matches the controlled Ops responder'
   assert_helm_script_contains 'commit_sha=' 'scenario evidence records its exact commit SHA'
   assert_helm_script_contains 'working_tree_clean=' 'scenario evidence records clean-tree provenance'
   assert_helm_script_contains 'assert_source_guard' 'local image builds recheck the source hash guard'

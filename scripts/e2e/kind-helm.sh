@@ -530,7 +530,7 @@ create_fixture_references() {
     --from-literal=ACR_EVIDENCE_ID_KEYS='current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=' >/dev/null
   kube -n "${namespace}" create secret generic acr-migration \
     --from-literal=ACR_POSTGRES_MIGRATION_DSN="${migration_dsn}" >/dev/null
-  kube -n "${namespace}" create secret generic acr-entitlement-token --from-literal=token=acr-e2e-token >/dev/null
+  kube -n "${namespace}" create secret generic acr-entitlement-token --from-literal=token=acr-e2e-ops-token-initial >/dev/null
   kube -n "${namespace}" create secret docker-registry "${ACR_E2E_IMAGE_PULL_SECRET}" \
     --docker-server="${ACR_E2E_REGISTRY_ENDPOINT}" --docker-username=fixture --docker-password=fixture >/dev/null
   printf '%s\n' "${entitlement_url}"
