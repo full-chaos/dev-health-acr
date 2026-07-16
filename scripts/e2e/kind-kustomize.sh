@@ -134,10 +134,12 @@ EOF
     grep -Fq -- "$token" "${KUSTOMIZE_E2E_WORK}/rendered.yaml" || e2e_die "parity: Kustomize omitted ${token}"
     grep -Fq -- "$token" "$helm_render" || e2e_die "parity: Helm omitted ${token}"
   done
-  for token in '/var/run/acr/postgres-ca' '/var/run/acr/clickhouse-ca' '/var/run/acr/entitlement-ca' 'key: ca.crt' 'path: ca.crt' 'medium: Memory'; do
+  for token in '/var/run/acr/postgres-ca' '/var/run/acr/clickhouse-ca' '/var/run/acr/entitlement-ca' 'path: ca.crt' 'medium: Memory'; do
     grep -Fq -- "$token" "${KUSTOMIZE_E2E_WORK}/rendered.yaml" || e2e_die "parity: Kustomize omitted ${token}"
     grep -Fq -- "$token" "$helm_render" || e2e_die "parity: Helm omitted ${token}"
   done
+  grep -Eq 'key: "?ca\.crt"?' "${KUSTOMIZE_E2E_WORK}/rendered.yaml" || e2e_die 'parity: Kustomize omitted normalized CA key'
+  grep -Eq 'key: "?ca\.crt"?' "$helm_render" || e2e_die 'parity: Helm omitted normalized CA key'
   grep -qF 'runAsNonRoot: true' "${KUSTOMIZE_E2E_WORK}/rendered.yaml" || e2e_die 'parity: Kustomize lacks restricted security'
   grep -qF 'runAsNonRoot: true' "$helm_render" || e2e_die 'parity: Helm lacks restricted security'
   if grep -qi 'acr-mcp' "${KUSTOMIZE_E2E_WORK}/rendered.yaml"; then e2e_die 'parity: Kustomize rendered MCP'; fi
