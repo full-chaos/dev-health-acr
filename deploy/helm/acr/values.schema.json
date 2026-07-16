@@ -98,14 +98,6 @@
             "key": { "type": "string" }
           }
         },
-        "postgresCaBundle": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "existingSecret": { "type": "string" },
-            "key": { "type": "string" }
-          }
-        },
         "entitlementCaBundle": {
           "type": "object",
           "additionalProperties": false,

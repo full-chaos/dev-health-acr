@@ -1250,7 +1250,7 @@ verify_clean_git_provenance() {
   [[ -z "${status}" ]] || die "verification refuses untracked working tree attribution"
 
   VERIFY_COMMIT_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
-  VERIFY_HEAD_TREE_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD^{tree})"
+  VERIFY_HEAD_TREE_SHA="$(git -C "${REPO_ROOT}" rev-parse "HEAD^{tree}")"
   VERIFY_INDEX_TREE_SHA="$(git -C "${REPO_ROOT}" write-tree)"
   [[ "${VERIFY_COMMIT_SHA}" =~ ^[a-f0-9]{40}$ && "${VERIFY_HEAD_TREE_SHA}" =~ ^[a-f0-9]{40}$ && "${VERIFY_INDEX_TREE_SHA}" == "${VERIFY_HEAD_TREE_SHA}" ]] || die "verification cannot establish exact clean Git provenance"
   VERIFY_GIT_PROVENANCE_CAPTURED_AT_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -1682,7 +1682,9 @@ validate_verification_evidence() {
   index_clean="$(awk -F= '$1 == "index_clean" { print $2 }' "${evidence}")"
   captured="$(awk -F= '$1 == "git_provenance_captured_at_utc" { print $2 }' "${evidence}")"
   [[ "${commit}" == "${VERIFY_COMMIT_SHA}" && "${head_tree}" == "${VERIFY_HEAD_TREE_SHA}" && "${index_tree}" == "${VERIFY_INDEX_TREE_SHA}" && "${tree_clean}" == true && "${index_clean}" == true && "${captured}" == "${VERIFY_GIT_PROVENANCE_CAPTURED_AT_UTC}" ]] || die "verification evidence does not match captured clean Git provenance"
-  git -C "${REPO_ROOT}" diff --quiet -- && git -C "${REPO_ROOT}" diff --cached --quiet -- || die "verification attribution became dirty"
+  if ! git -C "${REPO_ROOT}" diff --quiet -- || ! git -C "${REPO_ROOT}" diff --cached --quiet --; then
+    die "verification attribution became dirty"
+  fi
   if [[ ! "${started}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || ! "${verified}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || ! "${written}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || "${started}" > "${verified}" || "${verified}" > "${written}" ]]; then
     die "verification evidence timestamps are invalid or out of order"
   fi

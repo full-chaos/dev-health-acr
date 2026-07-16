@@ -210,7 +210,7 @@ spec:
             secretName: {{ .Values.config.postgresCaBundle.existingSecret | quote }}
             items:
               - key: {{ .Values.config.postgresCaBundle.key | quote }}
-              path: ca.crt
+                path: ca.crt
         {{- end }}
         {{- if .Values.config.clickhouseCaBundle.existingSecret }}
         - name: clickhouse-ca
@@ -218,5 +218,5 @@ spec:
             secretName: {{ .Values.config.clickhouseCaBundle.existingSecret | quote }}
             items:
               - key: {{ .Values.config.clickhouseCaBundle.key | quote }}
-              path: ca.crt
+                path: ca.crt
         {{- end }}

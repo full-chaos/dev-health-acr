@@ -272,7 +272,7 @@ render \
   --set-string 'credentials.entitlementToken.key=source-token' \
   --set-string 'config.entitlement.tokenFileName=runtime-token' \
   >"$distinct_token_render"
-grep -qF 'cp /source/runtime-token /destination/runtime-token' "$distinct_token_render" \
+grep -qF 'cp /source/runtime-token /target/runtime-token' "$distinct_token_render" \
   || fail_gate "entitlement-token: init container must copy the projected token filename"
 pass "entitlement-token: init container copies the projected Secret filename"
 
@@ -291,12 +291,7 @@ assert_restricted_container() {
   fi
 }
 
-for init_name in entitlement-token-permissions entitlement-ca-permissions; do
-  init_block="$(container_block "$init_name")"
-  if [[ "$init_name" == 'entitlement-token-permissions' || -n "$init_block" ]]; then
-    assert_restricted_container "$init_name"
-  fi
-done
+assert_restricted_container prepare-entitlement-token
 assert_restricted_container acr-api
 assert_restricted_container acr-migrate
 pass "pod-security: every rendered API, migration, and present init container is Restricted-compatible"

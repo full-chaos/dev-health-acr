@@ -267,11 +267,11 @@ EOF
 }
 
 e2e_application_readiness() {
-  local port pid body ready=0 attempt
+  local port pid body ready=0
   port=$(( (RANDOM % 20000) + 20000 ))
   kubectl --context "$KUSTOMIZE_E2E_CONTEXT" --namespace "$KUSTOMIZE_E2E_NAMESPACE" port-forward deployment/acr-api "${port}:8080" >/dev/null 2>&1 &
   pid=$!
-  for attempt in $(seq 1 40); do
+  for _ in $(seq 1 40); do
     if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then ready=1; break; fi
     sleep 0.25
   done
