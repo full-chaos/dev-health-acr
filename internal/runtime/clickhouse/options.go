@@ -21,6 +21,7 @@ func applyOptions(configured *clickhousedriver.Options, options Options) {
 		configured.Compression = &clickhousedriver.Compression{Method: clickhousedriver.CompressionZSTD}
 	}
 	configured.Settings = cloneSettings(configured.Settings)
+	configured.Settings["readonly"] = 1
 	configured.Settings["max_execution_time"] = maxExecutionTime(options)
 	configured.Settings["max_result_rows"] = defaultPositiveUint(options.MaxResultRows, 1_000)
 	configured.Settings["max_bytes_to_read"] = defaultPositiveUint64(options.MaxBytesToRead, 16<<20)

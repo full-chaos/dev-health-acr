@@ -55,7 +55,8 @@ prepare_namespace() {
 
 cleanup_namespace() {
   [[ -n "$KUSTOMIZE_E2E_CONTEXT" && -n "$KUSTOMIZE_E2E_NAMESPACE" ]] || return 0
-  kubectl --context "$KUSTOMIZE_E2E_CONTEXT" delete namespace "$KUSTOMIZE_E2E_NAMESPACE" --wait=true --timeout=120s >/dev/null 2>&1 || true
+  kubectl --context "$KUSTOMIZE_E2E_CONTEXT" delete namespace "$KUSTOMIZE_E2E_NAMESPACE" --ignore-not-found --wait=false >/dev/null
+  kubectl --context "$KUSTOMIZE_E2E_CONTEXT" wait --for=delete "namespace/${KUSTOMIZE_E2E_NAMESPACE}" --timeout=120s >/dev/null
 }
 
 prepare_work() {
@@ -101,8 +102,13 @@ config:
     url: https://${KUSTOMIZE_E2E_OPS_HOST}:8443
   clickhouseCaBundle:
     existingSecret: acr-clickhouse-ca
+    key: ca.crt
+  postgresCaBundle:
+    existingSecret: acr-postgres-ca
+    key: ca.crt
   entitlementCaBundle:
     existingSecret: acr-entitlement-ca
+    key: ca.crt
 credentials:
   runtime:
     existingSecret: acr-runtime-credentials
@@ -124,7 +130,11 @@ networkPolicy:
         kubernetes.io/metadata.name: envoy-gateway-system
 EOF
   helm template acr "${KUSTOMIZE_E2E_ROOT}/deploy/helm/acr" --namespace "$KUSTOMIZE_E2E_NAMESPACE" -f "$helm_values" --set-string "image.reference=${KUSTOMIZE_E2E_IMAGE}" >"$helm_render"
-  for token in "$KUSTOMIZE_E2E_IMAGE" acr-e2e-regcred acr-runtime-credentials acr-migration-credentials acr-entitlement-token acr-clickhouse-ca acr-entitlement-ca acr-api acr-migrate 'port: 5432' 'port: 8443' "$KUSTOMIZE_E2E_GATEWAY_NAME" "$KUSTOMIZE_E2E_GATEWAY_NAMESPACE" "$KUSTOMIZE_E2E_GATEWAY_HOSTNAME"; do
+  for token in "$KUSTOMIZE_E2E_IMAGE" acr-e2e-regcred acr-runtime-credentials acr-migration-credentials acr-entitlement-token acr-postgres-ca acr-clickhouse-ca acr-entitlement-ca acr-api acr-migrate 'port: 5432' 'port: 8443' "$KUSTOMIZE_E2E_GATEWAY_NAME" "$KUSTOMIZE_E2E_GATEWAY_NAMESPACE" "$KUSTOMIZE_E2E_GATEWAY_HOSTNAME"; do
+    grep -Fq -- "$token" "${KUSTOMIZE_E2E_WORK}/rendered.yaml" || e2e_die "parity: Kustomize omitted ${token}"
+    grep -Fq -- "$token" "$helm_render" || e2e_die "parity: Helm omitted ${token}"
+  done
+  for token in '/var/run/acr/postgres-ca' '/var/run/acr/clickhouse-ca' '/var/run/acr/entitlement-ca' 'key: ca.crt' 'path: ca.crt' 'medium: Memory'; do
     grep -Fq -- "$token" "${KUSTOMIZE_E2E_WORK}/rendered.yaml" || e2e_die "parity: Kustomize omitted ${token}"
     grep -Fq -- "$token" "$helm_render" || e2e_die "parity: Helm omitted ${token}"
   done
@@ -152,15 +162,22 @@ verify_no_mcp() {
 }
 
 rotate_secret() {
-  local before revision after
+  local before before_pod before_secret rotation_content revision after after_pod rotated_secret
+  before_pod="$(e2e_kube get pod -l app.kubernetes.io/name=acr,app.kubernetes.io/component=api -o jsonpath='{.items[0].metadata.uid}')"
+  before_secret="$(e2e_kube get secret/acr-entitlement-token -o jsonpath='{.data.token}')"
   before="$(e2e_kube get deployment/acr-api -o jsonpath='{.spec.template.metadata.annotations.acr\.fullchaos\.dev/credentials-revision}')"
-  revision="rotation-$(openssl rand -hex 16)"
-  e2e_create_secrets
+  rotation_content="rotation-$(openssl rand -hex 16)"
+  e2e_create_secrets "$rotation_content"
+  revision="$(e2e_kube get secret/acr-entitlement-token -o jsonpath='{.data.token}' | e2e_sha256)"
   e2e_render "$KUSTOMIZE_E2E_IMAGE" "$revision" false
   e2e_apply_kinds Deployment
   e2e_kube rollout status deployment/acr-api --timeout=180s >/dev/null
   after="$(e2e_kube get deployment/acr-api -o jsonpath='{.spec.template.metadata.annotations.acr\.fullchaos\.dev/credentials-revision}')"
-  [[ "$before" != "$after" && "$after" == "$revision" ]] || e2e_die 'secret rotation did not restart the application template'
+  after_pod="$(e2e_kube get pod -l app.kubernetes.io/name=acr,app.kubernetes.io/component=api -o jsonpath='{.items[0].metadata.uid}')"
+  rotated_secret="$(e2e_kube get secret/acr-entitlement-token -o jsonpath='{.data.token}')"
+  [[ "$before" != "$after" && "$after" == "$revision" ]] || e2e_die 'secret rotation did not change consumed pod-template configuration'
+  [[ "$before_secret" != "$rotated_secret" ]] || e2e_die 'secret rotation did not change credential bytes'
+  [[ "$before_pod" != "$after_pod" ]] || e2e_die 'secret rotation did not replace the consuming application pod'
 }
 
 run_lifecycle() {
@@ -179,24 +196,39 @@ run_lifecycle() {
 }
 
 run_stale_migration() {
-  local old_uid
-  KUSTOMIZE_E2E_IMAGE="$(require_image current "$image")"
-  e2e_kube create job acr-migrate --image="${KUSTOMIZE_E2E_IMAGE}" -- /usr/local/bin/acr-migrate up >/dev/null
-  old_uid="$(e2e_kube get job/acr-migrate -o jsonpath='{.metadata.uid}')"
-  [[ -n "$old_uid" ]] || e2e_die 'stale-migration-status: failed to create stale Job'
-  e2e_kube annotate job/acr-migrate acr.fullchaos.dev/stale=true >/dev/null
-  e2e_die 'stale-migration-status: refusing a pre-existing Job before rollout'
-}
-
-run_denied_egress() {
+  local old_complete old_uid replacement_uid
   KUSTOMIZE_E2E_IMAGE="$(require_image current "$image")"
   e2e_prepare_runtime_role
   e2e_create_secrets
+  e2e_render "$KUSTOMIZE_E2E_IMAGE" initial false
+  e2e_apply_migration old_uid
+  old_complete="$(e2e_kube get job/acr-migrate -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}')"
+  [[ "$old_complete" == True ]] || e2e_die 'stale-migration-status: stale Job did not record completion'
+  if e2e_kube get deployment/acr-api >/dev/null 2>&1; then e2e_die 'stale-migration-status: stale completion gated deployment'; fi
+  e2e_apply_migration replacement_uid
+  [[ -n "$old_uid" && -n "$replacement_uid" && "$old_uid" != "$replacement_uid" ]] || e2e_die 'stale-migration-status: replacement Job UID was not fresh'
+  e2e_rollout_api
+  e2e_log 'stale migration completion was rejected; replacement Job UID is fresh'
+}
+
+run_denied_egress() {
+  local egress
+  KUSTOMIZE_E2E_IMAGE="$(require_image current "$image")"
+  e2e_prepare_runtime_role
+  e2e_create_secrets
+  e2e_render "$KUSTOMIZE_E2E_IMAGE" baseline false
+  e2e_apply_migration
+  e2e_kube delete job/acr-migrate --wait=false >/dev/null
+  e2e_kube wait --for=delete job/acr-migrate --timeout=90s >/dev/null
   e2e_render "$KUSTOMIZE_E2E_IMAGE" denied true
   e2e_apply_kinds 'ConfigMap ServiceAccount Service HorizontalPodAutoscaler PodDisruptionBudget NetworkPolicy HTTPRoute Job'
   if e2e_kube wait --for=condition=failed job/acr-migrate --timeout=90s >/dev/null; then
     if e2e_kube get deployment/acr-api >/dev/null 2>&1; then e2e_die 'denied-egress: deployment was applied after migration failure'; fi
-    e2e_die 'denied-egress: migration network policy prevented rollout'
+    egress="$(e2e_kube get networkpolicy/acr-migrate -o jsonpath='{.spec.egress}')"
+    [[ "$egress" == '[]' ]] || e2e_die 'denied-egress: migration NetworkPolicy did not deny egress'
+    e2e_kube logs job/acr-migrate --all-containers=true 2>&1 | grep -Eqi 'dial|connect|timeout|network|postgres' || e2e_die 'denied-egress: failure was not a PostgreSQL transport failure'
+    e2e_log 'denied egress causally produced a PostgreSQL transport failure after baseline migration success'
+    return
   fi
   e2e_die 'denied-egress: migration did not fail within the bounded wait'
 }
@@ -225,10 +257,10 @@ self_test() {
   e2e_is_digest 'registry.invalid/acr@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' || e2e_die 'self-test parity digest'
   if e2e_is_digest 'registry.invalid/acr:latest'; then e2e_die 'self-test mutable image'; fi
   printf '%s\n' 'ok: parity compares critical Helm and Kustomize fields'
-  printf '%s\n' 'ok: stale migration status is rejected by current Job UID'
-  printf '%s\n' 'ok: denied migration egress blocks rollout'
+  printf '%s\n' 'ok: stale migration status is rejected after replacement UID freshness'
+  printf '%s\n' 'ok: denied migration egress is causally proven by the NetworkPolicy'
   printf '%s\n' 'ok: mutable production image is rejected before cluster access'
-  printf '%s\n' 'ok: secret rotation changes the pod-template checksum'
+  printf '%s\n' 'ok: secret rotation changes bytes, content checksum, and consuming pod'
   printf '%s\n' 'ok: application rollback renders only the previous immutable Deployment image'
 }
 
@@ -246,9 +278,10 @@ main() {
   [[ -n "$cluster" ]] || e2e_die '--cluster is required'
   e2e_load_fixture "$cluster"
   set_namespace
+  local status=0 cleanup_status=0 work_status=0
+  trap 'status=$?; set +e; cleanup_namespace; cleanup_status=$?; cleanup_work; work_status=$?; if [[ $status -ne 0 ]]; then exit "$status"; fi; if [[ $cleanup_status -ne 0 ]]; then exit "$cleanup_status"; fi; exit "$work_status"' EXIT
   prepare_work
   prepare_namespace
-  trap 'cleanup_namespace; cleanup_work' EXIT
   case "$scenario" in
     lifecycle) run_lifecycle ;;
     stale-migration-status) run_stale_migration ;;

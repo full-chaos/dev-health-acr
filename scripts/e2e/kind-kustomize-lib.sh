@@ -31,6 +31,11 @@ e2e_is_digest() {
   [[ "$1" =~ ^[a-zA-Z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]
 }
 
+e2e_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}';
+  else shasum -a 256 | awk '{print $1}'; fi
+}
+
 e2e_fixture_value() {
   local file="$1" key="$2" line value matches
   matches="$(grep -cE "^${key}=\"[^\"]*\"$" "$file" || true)"
@@ -218,7 +223,7 @@ e2e_apply_kinds() {
 }
 
 e2e_create_secrets() {
-  local migration_dsn runtime_dsn clickhouse_dsn keyring
+	local rotation_content="${1:-initial}" migration_dsn runtime_dsn clickhouse_dsn keyring
   migration_dsn="postgres://postgres:acr-e2e-pass@${KUSTOMIZE_E2E_POSTGRES_HOST}:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
   runtime_dsn="postgres://acr_runtime:acr-e2e-runtime-pass@${KUSTOMIZE_E2E_POSTGRES_HOST}:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
   clickhouse_dsn="clickhouse://default:@${KUSTOMIZE_E2E_CLICKHOUSE_HOST}:8443/default?secure=true&skip_verify=false&tls_server_name=${KUSTOMIZE_E2E_CLICKHOUSE_HOST}"
@@ -231,7 +236,7 @@ e2e_create_secrets() {
     --from-literal=ACR_EVIDENCE_ID_ACTIVE_KID=current --from-literal=ACR_EVIDENCE_ID_KEYS="$keyring" \
     --dry-run=client -o yaml | e2e_kube apply -f - >/dev/null
   e2e_kube create secret generic acr-migration-credentials --from-literal=ACR_POSTGRES_MIGRATION_DSN="$migration_dsn" --dry-run=client -o yaml | e2e_kube apply -f - >/dev/null
-  e2e_kube create secret generic acr-entitlement-token --from-literal=token=acr-e2e-ops-token --dry-run=client -o yaml | e2e_kube apply -f - >/dev/null
+	e2e_kube create secret generic acr-entitlement-token --from-literal="token=acr-e2e-ops-token-${rotation_content}" --dry-run=client -o yaml | e2e_kube apply -f - >/dev/null
   e2e_kube create secret generic acr-e2e-regcred --type=kubernetes.io/dockerconfigjson --from-literal=.dockerconfigjson='{"auths":{}}' --dry-run=client -o yaml | e2e_kube apply -f - >/dev/null
 }
 
@@ -241,10 +246,10 @@ e2e_prepare_runtime_role() {
 }
 
 e2e_apply_migration() {
-  local uid observed
-  if e2e_kube get job/acr-migrate >/dev/null 2>&1; then
-    e2e_kube delete job/acr-migrate --wait=true >/dev/null
-    e2e_kube wait --for=delete job/acr-migrate --timeout=90s >/dev/null
+	local result_name="${1:-}" uid observed
+	if e2e_kube get job/acr-migrate >/dev/null 2>&1; then
+		e2e_kube delete job/acr-migrate --wait=false >/dev/null
+		e2e_kube wait --for=delete job/acr-migrate --timeout=90s >/dev/null
   fi
   e2e_apply_kinds 'ConfigMap ServiceAccount Service HorizontalPodAutoscaler PodDisruptionBudget NetworkPolicy HTTPRoute'
   e2e_apply_kinds Job
@@ -255,9 +260,11 @@ e2e_apply_migration() {
     e2e_kube logs job/acr-migrate --all-containers=true >&2 || true
     e2e_die 'migration failed; deployment was not applied'
   fi
-  observed="$(e2e_kube get job/acr-migrate -o jsonpath='{.metadata.uid}')"
-  [[ "$observed" == "$uid" ]] || e2e_die 'stale-migration-status: completed Job UID changed'
+	observed="$(e2e_kube get job/acr-migrate -o jsonpath='{.metadata.uid}')"
+	[[ "$observed" == "$uid" ]] || e2e_die 'stale-migration-status: completed Job UID changed'
+	if [[ -n "$result_name" ]]; then printf -v "$result_name" '%s' "$uid"; fi
 }
+
 
 e2e_rollout_api() {
   e2e_apply_kinds Deployment

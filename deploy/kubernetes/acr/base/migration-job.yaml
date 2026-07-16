@@ -80,7 +80,11 @@ spec:
               readOnly: true
       volumes:
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            medium: Memory
         - name: postgres-ca
           secret:
             secretName: acr-postgres-ca
+            items:
+              - key: ca.crt
+                path: ca.crt

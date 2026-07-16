@@ -44,6 +44,18 @@ require_kind() {
   require_line "^kind: ${kind}$" "policy-parity: missing ${kind}"
 }
 
+require_resource_literal() {
+  local kind="$1" name="$2" literal="$3" gate="$4"
+  awk -v kind="$kind" -v name="$name" -v literal="$literal" '
+    function check() {
+      if (index(document, "kind: " kind "\n") > 0 && index(document, "  name: " name "\n") > 0 && index(document, literal) > 0) found = 1
+    }
+    /^---[[:space:]]*$/ { check(); document=""; next }
+    { document = document $0 "\n" }
+    END { check(); exit(found ? 0 : 1) }
+  ' "$work/rendered.yaml" || fail_gate "$gate"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --overlay|--image|--scenario)
@@ -120,6 +132,21 @@ done
 require_literal 'drop:' 'pod-security: missing capability drop'
 require_literal '- ALL' 'pod-security: capabilities are not dropped'
 pass "pod-security: restricted workloads and PostgreSQL-only migration egress"
+
+for target in 'Deployment acr-api' 'Job acr-migrate'; do
+  read -r kind name <<<"$target"
+  require_resource_literal "$kind" "$name" 'runAsNonRoot: true' "pod-security: ${kind}/${name} lacks restricted pod security"
+  require_resource_literal "$kind" "$name" 'medium: Memory' "pod-security: ${kind}/${name} lacks memory-backed writable storage"
+done
+for path in '/var/run/acr/postgres-ca' '/var/run/acr/clickhouse-ca' '/var/run/acr/entitlement-ca'; do
+  require_resource_literal Deployment acr-api "$path" "ca-parity: API lacks ${path} mount"
+done
+require_resource_literal Job acr-migrate '/var/run/acr/postgres-ca' 'ca-parity: migration lacks PostgreSQL CA mount'
+for token in 'key: ca.crt' 'path: ca.crt'; do
+  require_resource_literal Deployment acr-api "$token" "ca-parity: API lacks normalized ${token}"
+  require_resource_literal Job acr-migrate "$token" "ca-parity: migration lacks normalized ${token}"
+done
+pass "ca-parity: normalized CA keys, paths, and required mounts are rendered"
 
 if [[ "$overlay" == staging || "$overlay" == production ]]; then
   require_literal "ACR_ENVIRONMENT: $overlay" "overlay: wrong environment value"

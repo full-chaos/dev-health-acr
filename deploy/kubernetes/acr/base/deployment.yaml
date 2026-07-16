@@ -167,7 +167,8 @@ spec:
         - name: tmp
           emptyDir: {}
         - name: entitlement-token
-          emptyDir: {}
+          emptyDir:
+            medium: Memory
         - name: entitlement-token-source
           secret:
             secretName: acr-entitlement-token
@@ -177,11 +178,21 @@ spec:
         - name: postgres-ca
           secret:
             secretName: acr-postgres-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
         - name: clickhouse-ca
           secret:
             secretName: acr-clickhouse-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
         - name: entitlement-ca
-          emptyDir: {}
+          emptyDir:
+            medium: Memory
         - name: entitlement-ca-source
           secret:
             secretName: acr-entitlement-ca
+            items:
+              - key: ca.crt
+                path: ca.crt

@@ -75,6 +75,25 @@ spec:
           {{- end }}
         {{- end }}
       {{- end }}
+      initContainers:
+        - name: prepare-entitlement-token
+          image: docker.io/library/busybox@sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028
+          command: ["sh", "-c", 'umask 077 && cp /source/{{ .Values.credentials.entitlementToken.key | default "token" }} /target/{{ .Values.config.entitlement.tokenFileName }} && if [ -f /source-ca/ca.crt ]; then cp /source-ca/ca.crt /target-ca/ca.crt; fi']
+          securityContext:
+            {{- include "acr.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: entitlement-token-source
+              mountPath: /source
+              readOnly: true
+            - name: entitlement-token
+              mountPath: /target
+            {{- if .Values.config.entitlementCaBundle.existingSecret }}
+            - name: entitlement-ca-source
+              mountPath: /source-ca
+              readOnly: true
+            {{- end }}
+            - name: entitlement-ca
+              mountPath: /target-ca
       containers:
         - name: acr-api
           image: {{ $image | quote }}
@@ -146,6 +165,11 @@ spec:
             - name: entitlement-token
               mountPath: {{ .Values.config.entitlement.tokenMountPath | quote }}
               readOnly: true
+            {{- if .Values.config.postgresCaBundle.existingSecret }}
+            - name: postgres-ca
+              mountPath: /var/run/acr/postgres-ca
+              readOnly: true
+            {{- end }}
             {{- if .Values.config.clickhouseCaBundle.existingSecret }}
             - name: clickhouse-ca
               mountPath: /var/run/acr/clickhouse-ca
@@ -161,18 +185,38 @@ spec:
         - name: tmp
           emptyDir: {}
         - name: entitlement-token
+          emptyDir:
+            medium: Memory
+        - name: entitlement-token-source
           secret:
             secretName: {{ .Values.credentials.entitlementToken.existingSecret | quote }}
             items:
               - key: {{ .Values.credentials.entitlementToken.key | default "token" | quote }}
                 path: {{ .Values.config.entitlement.tokenFileName | quote }}
+        - name: entitlement-ca
+          emptyDir:
+            medium: Memory
+        {{- if .Values.config.entitlementCaBundle.existingSecret }}
+        - name: entitlement-ca-source
+          secret:
+            secretName: {{ .Values.config.entitlementCaBundle.existingSecret | quote }}
+            items:
+              - key: {{ .Values.config.entitlementCaBundle.key | quote }}
+                path: ca.crt
+        {{- end }}
+        {{- if .Values.config.postgresCaBundle.existingSecret }}
+        - name: postgres-ca
+          secret:
+            secretName: {{ .Values.config.postgresCaBundle.existingSecret | quote }}
+            items:
+              - key: {{ .Values.config.postgresCaBundle.key | quote }}
+                path: ca.crt
+        {{- end }}
         {{- if .Values.config.clickhouseCaBundle.existingSecret }}
         - name: clickhouse-ca
           secret:
             secretName: {{ .Values.config.clickhouseCaBundle.existingSecret | quote }}
-        {{- end }}
-        {{- if .Values.config.entitlementCaBundle.existingSecret }}
-        - name: entitlement-ca
-          secret:
-            secretName: {{ .Values.config.entitlementCaBundle.existingSecret | quote }}
+            items:
+              - key: {{ .Values.config.clickhouseCaBundle.key | quote }}
+                path: ca.crt
         {{- end }}

@@ -60,7 +60,7 @@ func assertIntegrationServerRejectsMutation(t *testing.T, options Options) {
 	if err != nil {
 		t.Fatalf("parse direct ClickHouse DSN: %v", err)
 	}
-	configured.TLS = mergeTLS(options.TLS, configured.TLS)
+	applyOptions(configured, options)
 	connection, err := clickhousedriver.Open(configured)
 	if err != nil {
 		t.Fatalf("open direct ClickHouse connection: %v", err)
@@ -68,6 +68,21 @@ func assertIntegrationServerRejectsMutation(t *testing.T, options Options) {
 	t.Cleanup(func() { _ = connection.Close() })
 
 	// When
+	rows, err := connection.Query(context.Background(), "SELECT getSetting('readonly')")
+	if err != nil {
+		t.Fatalf("read enforced readonly setting: %v", err)
+	}
+	t.Cleanup(func() { _ = rows.Close() })
+	if !rows.Next() {
+		t.Fatalf("enforced readonly setting returned no rows: %v", rows.Err())
+	}
+	var readonly uint64
+	if err := rows.Scan(&readonly); err != nil {
+		t.Fatalf("scan enforced readonly setting: %v", err)
+	}
+	if readonly != 1 {
+		t.Fatalf("getSetting('readonly') = %d, want 1", readonly)
+	}
 	err = connection.Exec(context.Background(), "INSERT INTO ci_pipeline_runs (org_id) VALUES ('forbidden')")
 
 	// Then

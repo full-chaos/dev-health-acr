@@ -1289,6 +1289,7 @@ cmd_verify() {
 
   if [[ "${VERIFY_FAILURES}" -eq 0 ]]; then
     write_verification_evidence "${name}" "${sd}"
+    validate_verification_evidence "${sd}/verification-evidence.env"
     ok "verify passed for ${name}"
     trap - EXIT
     release_fixture_lock
@@ -1503,7 +1504,7 @@ verify_clickhouse_readonly() {
   pf_start "${ctx}" "${NS_DEPS}" clickhouse 8123; lport="${PF_LPORT}"
   sel="$(curl -s "http://127.0.0.1:${lport}/?query=SELECT%201" 2>/dev/null || true)"
   if [[ "${sel//[$'\r\n ']/}" == "1" ]]; then ok "ClickHouse SELECT works"; else fail "ClickHouse SELECT failed (got: ${sel})"; VERIFY_FAILURES=$((VERIFY_FAILURES+1)); fi
-  body="$(curl -s -w '\n__HTTP_%{http_code}__' "http://127.0.0.1:${lport}/?query=CREATE%20TABLE%20t_${RANDOM}(a%20Int8)%20ENGINE=Memory" 2>&1 || true)"
+  body="$(curl --request POST -s -w '\n__HTTP_%{http_code}__' --data-binary "CREATE TABLE t_${RANDOM}(a Int8) ENGINE=Memory" "http://127.0.0.1:${lport}/" 2>&1 || true)"
   pf_stop
   code="$(sed -n 's/.*__HTTP_\([0-9]*\)__.*/\1/p' <<<"${body}")"
   if [[ "${code}" != "200" ]] && grep -qiE "readonly|read.only|Cannot execute|ACCESS_DENIED" <<<"${body}"; then
@@ -1575,20 +1576,32 @@ verify_host_container_image() {
 }
 
 write_verification_evidence() {
-  local name="$1" sd="$2" i
+  local name="$1" sd="$2" i evidence
+  evidence="${sd}/verification-evidence.env"
   cat >"${sd}/verification-evidence.env" <<EOF
 fixture_name=${name}
 fixture_id=${FIXTURE_ID}
 kind_version=${ACR_E2E_KIND_VERSION}
 node_image=${ACR_E2E_NODE_IMAGE}
 north_south_https_entitlement=observed
+commit_sha=$(git -C "${REPO_ROOT}" rev-parse HEAD)
+verification_started_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 verified_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
   for ((i = 0; i < ${#RUNTIME_IMAGE_IDS[@]}; i += 1)); do
     printf 'runtime_image_ref_%d=%s\n' "$((i + 1))" "${RUNTIME_IMAGE_REFS[$i]}" >>"${sd}/verification-evidence.env"
     printf 'runtime_image_id_%d=%s\n' "$((i + 1))" "${RUNTIME_IMAGE_IDS[$i]}" >>"${sd}/verification-evidence.env"
   done
+  printf 'evidence_written_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"${evidence}"
+  printf 'evidence_payload_sha256=%s\n' "$(sha256_of "${evidence}")" >>"${evidence}"
   ok "wrote observed verification evidence"
+}
+
+validate_verification_evidence() {
+  local evidence="$1" expected actual
+  expected="$(awk -F= '$1 == "evidence_payload_sha256" { print $2 }' "${evidence}")"
+  actual="$(awk -F= '$1 != "evidence_payload_sha256" { print }' "${evidence}" | sha256_of /dev/stdin)"
+  [[ "${expected}" =~ ^[a-f0-9]{64}$ && "${actual}" == "${expected}" ]] || die "verification evidence integrity check failed"
 }
 
 # ===========================================================================

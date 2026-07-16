@@ -27,6 +27,23 @@ func TestNewClickHouseQueryClientWithOptions_requires_verified_TLS(t *testing.T)
 	}
 }
 
+func TestNewClickHouseQueryClientWithOptions_rejects_client_readonly_setting(t *testing.T) {
+	for _, readonly := range []string{"0", "1", "2"} {
+		t.Run("readonly="+readonly, func(t *testing.T) {
+			// Given
+			dsn := "clickhouse://readonly@example.invalid:9440/default?secure=true&skip_verify=false&readonly=" + readonly
+
+			// When
+			_, err := NewClickHouseQueryClientWithOptions(Options{DSN: dsn, TLS: &tls.Config{MinVersion: tls.VersionTLS12}})
+
+			// Then
+			if !errors.Is(err, ErrInvalidConfiguration) {
+				t.Fatalf("NewClickHouseQueryClientWithOptions() error = %v, want ErrInvalidConfiguration", err)
+			}
+		})
+	}
+}
+
 func TestApplyOptions_applies_default_execution_limits(t *testing.T) {
 	// Given
 	configured := &clickhousedriver.Options{}
@@ -35,8 +52,8 @@ func TestApplyOptions_applies_default_execution_limits(t *testing.T) {
 	applyOptions(configured, Options{})
 
 	// Then
-	if _, exists := configured.Settings["readonly"]; exists || configured.Settings["max_execution_time"] != uint(10) || configured.Settings["max_result_rows"] != uint(1_000) || configured.Settings["max_bytes_to_read"] != uint64(16<<20) {
-		t.Fatalf("query settings = %#v, want bounded limits without an overridden read-only policy", configured.Settings)
+	if configured.Settings["readonly"] != 1 || configured.Settings["max_execution_time"] != uint(10) || configured.Settings["max_result_rows"] != uint(1_000) || configured.Settings["max_bytes_to_read"] != uint64(16<<20) {
+		t.Fatalf("query settings = %#v, want bounded limits and read-only policy", configured.Settings)
 	}
 }
 
@@ -46,7 +63,6 @@ func TestApplyOptions_preserves_DSN_settings_and_TLS_server_name(t *testing.T) {
 	runtimeRoots := x509.NewCertPool()
 	callerSettings := clickhousedriver.Settings{
 		"custom_setting":     "preserve",
-		"readonly":           0,
 		"max_execution_time": uint(999),
 	}
 	configured := &clickhousedriver.Options{
@@ -69,10 +85,10 @@ func TestApplyOptions_preserves_DSN_settings_and_TLS_server_name(t *testing.T) {
 	if configured.DialTimeout != 3*time.Second || configured.ReadTimeout != 4*time.Second || configured.MaxOpenConns != 5 || configured.MaxIdleConns != 2 || configured.ConnMaxLifetime != 6*time.Minute {
 		t.Fatalf("DSN connection settings were overwritten: %#v", configured)
 	}
-	if configured.Settings["custom_setting"] != "preserve" || configured.Settings["readonly"] != 0 || configured.Settings["max_execution_time"] != uint(10) {
+	if configured.Settings["custom_setting"] != "preserve" || configured.Settings["readonly"] != 1 || configured.Settings["max_execution_time"] != uint(10) {
 		t.Fatalf("settings = %#v, want preserved caller settings plus bounded query limits", configured.Settings)
 	}
-	if callerSettings["readonly"] != 0 || callerSettings["max_execution_time"] != uint(999) {
+	if _, exists := callerSettings["readonly"]; exists || callerSettings["max_execution_time"] != uint(999) {
 		t.Fatalf("caller settings were mutated: %#v", callerSettings)
 	}
 }
