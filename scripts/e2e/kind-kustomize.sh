@@ -166,8 +166,8 @@ verify_no_mcp() {
 }
 
 rotate_secret() {
-	local before before_pod before_secret rotation_content revision after after_pod rotated_secret rejected ready
-  before_pod="$(e2e_kube get pod -l app.kubernetes.io/name=acr,app.kubernetes.io/component=api -o jsonpath='{.items[0].metadata.uid}')"
+	local before before_pods before_secret rotation_content revision after after_pods rotated_secret rejected ready
+	before_pods="$(e2e_kube get pod -l app.kubernetes.io/name=acr,app.kubernetes.io/component=api -o jsonpath='{range .items[*]}{.metadata.uid}{"\n"}{end}' | LC_ALL=C sort)"
   before_secret="$(e2e_kube get secret/acr-entitlement-token -o jsonpath='{.data.token}')"
   before="$(e2e_kube get deployment/acr-api -o jsonpath='{.spec.template.metadata.annotations.acr\.fullchaos\.dev/credentials-revision}')"
 	rotation_content="rotation-$(openssl rand -hex 16)"
@@ -180,12 +180,12 @@ rotate_secret() {
   e2e_apply_kinds Deployment
   e2e_kube rollout status deployment/acr-api --timeout=180s >/dev/null
   after="$(e2e_kube get deployment/acr-api -o jsonpath='{.spec.template.metadata.annotations.acr\.fullchaos\.dev/credentials-revision}')"
-  after_pod="$(e2e_kube get pod -l app.kubernetes.io/name=acr,app.kubernetes.io/component=api -o jsonpath='{.items[0].metadata.uid}')"
+	after_pods="$(e2e_kube get pod -l app.kubernetes.io/name=acr,app.kubernetes.io/component=api -o jsonpath='{range .items[*]}{.metadata.uid}{"\n"}{end}' | LC_ALL=C sort)"
 	rotated_secret="$(e2e_kube get secret/acr-entitlement-token -o jsonpath='{.data.token}')"
 	ready="$(e2e_application_readiness)"
   [[ "$before" != "$after" && "$after" == "$revision" ]] || e2e_die 'secret rotation did not change consumed pod-template configuration'
   [[ "$before_secret" != "$rotated_secret" ]] || e2e_die 'secret rotation did not change credential bytes'
-	[[ "$before_pod" != "$after_pod" ]] || e2e_die 'secret rotation did not replace the consuming application pod'
+	[[ "$before_pods" != "$after_pods" ]] || e2e_die 'secret rotation did not replace the consuming application pods'
 	grep -Fq '"status":"ready"' <<<"${ready}" || e2e_die 'secret rotation did not make the rotated application token succeed at the application boundary'
 }
 
