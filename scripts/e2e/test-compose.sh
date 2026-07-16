@@ -15,7 +15,8 @@ grep -Fq 'skip_verify=false' "$script"
 grep -Fq 'curl --fail --silent --show-error --cacert' "$script"
 grep -Fq 'MCP must remain host-local' "$script"
 grep -Fq 'zero owned containers, volumes, and networks' "$script"
-grep -Fq 'export POSTGRES_USER=devhealth' "$script"
+grep -Fq 'POSTGRES_USER=devhealth' "$script"
+grep -Fq "ACR_IMAGE=\"\$IMAGE\"" "$script"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
