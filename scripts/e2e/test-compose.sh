@@ -33,6 +33,7 @@ grep -Fq 'ACR_POSTGRES_MIGRATION_DSN:' "$script"
 grep -Fq 'ACR_POSTGRES_MIGRATION_DSN=' "$script"
 grep -Fq 'ACR_REQUIRE_BACKING_STORES: "true"' "$script"
 grep -Fq 'ACR_EVIDENCE_ID_ACTIVE_KID:' "$script"
+grep -Fq 'random_base64()' "$script"
 grep -Fq 'healthcheck: { test: ["NONE"] }' "$script"
 grep -Fq 'acr-api: { condition: service_started }' "$script"
 expected_cleanup_guard=$(printf '%s' '[[ ! -f "$STATE/override.yml" ]]')

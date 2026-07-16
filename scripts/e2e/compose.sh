@@ -73,6 +73,7 @@ cleanup() {
 trap cleanup EXIT
 
 random_secret() { openssl rand -base64 36 | tr -d '\n' | tr '/+' '_-' | cut -c1-32; }
+random_base64() { openssl rand -base64 32 | tr -d '\n'; }
 write_secret() { (umask 077; printf '%s' "$2" > "$1"); }
 free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'; }
 
@@ -91,7 +92,7 @@ prepare_state() {
   write_secret "$STATE/secrets/migration-password" "$(random_secret)"
   write_secret "$STATE/secrets/clickhouse-password" "$(random_secret)"
   write_secret "$STATE/secrets/evidence-kid" 'acr-e2e-kid'
-  write_secret "$STATE/secrets/evidence-keys" "{\"acr-e2e-kid\":\"$(random_secret)\"}"
+  write_secret "$STATE/secrets/evidence-keys" "acr-e2e-kid=$(random_base64)"
   : > "$STATE/secrets/ops-token"; chmod 600 "$STATE/secrets/ops-token"
   cat > "$STATE/clickhouse/tls.xml" <<EOF
 <clickhouse><tcp_port_secure>9440</tcp_port_secure><openSSL><server><certificateFile>/run/acr-tls/acr.crt</certificateFile><privateKeyFile>/run/acr-tls/acr.key</privateKeyFile><caConfig>/run/acr-tls/ca.crt</caConfig><verificationMode>none</verificationMode></server></openSSL></clickhouse>
