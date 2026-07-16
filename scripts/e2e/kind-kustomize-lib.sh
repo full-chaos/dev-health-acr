@@ -248,15 +248,15 @@ server {
   ssl_certificate /tls/tls.crt;
   ssl_certificate_key /tls/tls.key;
   location = /entitlement {
-    if (\$http_authorization != \"Bearer ${token}\") { return 401; }
+    if (\$http_authorization != "Bearer ${token}") { return 401; }
     default_type application/json;
-    return 200 '{\"entitlement\":\"agent_context_runtime\",\"status\":\"active\",\"fixture\":\"acr-e2e\"}';
+    return 200 '{"entitlement":"agent_context_runtime","status":"active","fixture":"acr-e2e"}';
   }
   location = /healthz { return 200 'ok'; }
   location = /api/v1/internal/acr/health {
-    if (\$http_authorization != \"Bearer ${token}\") { return 401; }
+    if (\$http_authorization != "Bearer ${token}") { return 401; }
     default_type application/json;
-    return 200 '{\"schema_version\":\"acr_service_health.v1\",\"service\":\"dev-health-ops\",\"status\":\"ok\"}';
+    return 200 '{"schema_version":"acr_service_health.v1","service":"dev-health-ops","status":"ok"}';
   }
 }
 EOF

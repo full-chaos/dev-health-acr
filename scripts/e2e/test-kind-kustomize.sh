@@ -45,6 +45,7 @@ test_hardening_seams_are_present() {
   grep -Fq 'rotation_content' "${LIBRARY}" || fail 'secret rotation does not change fixture credential bytes'
   grep -Fq 'e2e_set_ops_entitlement_token' "${HARNESS}" || fail 'secret rotation does not rotate the accepted Ops token'
   grep -Fq 'e2e_application_readiness' "${HARNESS}" || fail 'secret rotation does not prove application-boundary token use'
+  grep -Fq 'if (\$http_authorization != "Bearer ${token}")' "${LIBRARY}" || fail 'rotated Ops fixture emits an invalid authorization predicate'
   grep -Fq 'replacement_uid' "${HARNESS}" || fail 'stale migration scenario does not prove replacement UID freshness'
   grep -Fq 'old_complete' "${HARNESS}" || fail 'stale migration scenario does not observe stale completion'
   if ! grep -Fq 'NetworkPolicy' "${HARNESS}" || ! grep -Fq 'transport' "${HARNESS}"; then fail 'denied egress scenario does not prove transport causality'; fi
