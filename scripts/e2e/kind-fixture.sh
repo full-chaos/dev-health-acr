@@ -893,6 +893,12 @@ data:
           <networks><ip>::/0</ip></networks>
           <quota>default</quota>
         </default>
+        <readonly>
+          <password></password>
+          <profile>readonly_profile</profile>
+          <networks><ip>::/0</ip></networks>
+          <quota>default</quota>
+        </readonly>
         <fixture_admin>
           <password></password>
           <profile>default</profile>
