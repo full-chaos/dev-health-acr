@@ -24,6 +24,7 @@ grep -Fq 'command: ["cp /input/acr.crt' "$script"
 grep -Fq 'chown -R 70:70 /tls' "$script"
 grep -Fq 'Ops organization provisioning failed' "$script"
 if grep -Fq -- '--owner-email' "$script"; then exit 1; fi
+grep -Fq 'clickhouse-client --user default' "$script"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
