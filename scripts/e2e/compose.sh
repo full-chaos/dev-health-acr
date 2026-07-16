@@ -69,7 +69,8 @@ write_secret() { (umask 077; printf '%s' "$2" > "$1"); }
 free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'; }
 
 prepare_state() {
-  STATE="$(mktemp -d "${TMPDIR:-/tmp}/acr-compose-${PROJECT}.XXXXXX")"
+  mkdir -p "$REPO_ROOT/.tmp/e2e"
+  STATE="$(mktemp -d "$REPO_ROOT/.tmp/e2e/compose-${PROJECT}.XXXXXX")"
   mkdir -p "$STATE/stage" "$STATE/pki" "$STATE/secrets" "$STATE/clickhouse"
   cp "$COMPOSE_FILE" "$STATE/stage/compose.yml"
   ln -s "$(cd "$(dirname "$COMPOSE_FILE")" && pwd)/ops" "$STATE/stage/ops"
