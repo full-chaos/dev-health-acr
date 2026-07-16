@@ -28,7 +28,10 @@ render_manifest "$overlay" "$image" all \
   | select_kinds "ConfigMap ServiceAccount Service HorizontalPodAutoscaler PodDisruptionBudget NetworkPolicy HTTPRoute" \
   | kubectl --namespace "$namespace" apply --server-side --field-manager=acr-kustomize -f -
 
-kubectl --namespace "$namespace" delete job/acr-migrate --ignore-not-found
+kubectl --namespace "$namespace" delete job/acr-migrate --ignore-not-found --wait=false
+if kubectl --namespace "$namespace" get job/acr-migrate >/dev/null 2>&1; then
+  kubectl --namespace "$namespace" wait --for=delete job/acr-migrate --timeout="$timeout"
+fi
 render_manifest "$overlay" "$image" all \
   | select_kinds "Job" \
   | kubectl --namespace "$namespace" apply --server-side --field-manager=acr-kustomize -f -

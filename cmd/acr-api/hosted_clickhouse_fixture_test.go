@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"net"
 	"net/url"
 	"os"
@@ -150,6 +151,7 @@ func newClickHouseFixture(t *testing.T, ctx context.Context) *clickHouseFixture 
 		}
 	})
 	assertClickHouseScopeQuery(t, ctx, clickHouseScopeRequest{dsn: dsn, roots: roots})
+	assertClickHouseServerRejectsMutation(t, ctx, clickHouseScopeRequest{dsn: dsn, roots: roots})
 	return fixture
 }
 
@@ -189,6 +191,36 @@ func assertClickHouseScopeQuery(t *testing.T, ctx context.Context, request click
 	}
 }
 
+func assertClickHouseServerRejectsMutation(t *testing.T, ctx context.Context, request clickHouseScopeRequest) {
+	t.Helper()
+	options, err := clickhousedriver.ParseDSN(request.dsn)
+	if err != nil {
+		t.Fatalf("parse readonly ClickHouse DSN: %v", err)
+	}
+	options.TLS = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: request.roots, ServerName: "localhost"}
+	connection, err := clickhousedriver.Open(options)
+	if err != nil {
+		t.Fatalf("open readonly ClickHouse connection: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := connection.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	var readonly uint8
+	if err := connection.QueryRow(ctx, "SELECT getSetting('readonly')").Scan(&readonly); err != nil {
+		t.Fatalf("read configured ClickHouse readonly setting: %v", err)
+	}
+	if readonly != 2 {
+		t.Fatalf("getSetting('readonly') = %d, want server profile 2", readonly)
+	}
+	err = connection.Exec(ctx, "INSERT INTO ci_pipeline_runs (run_id, repo_id, branch, status, started_at, finished_at) VALUES ('forbidden', '00000000-0000-0000-0000-000000000001', 'main', 'failure', now64(3), now64(3))")
+	var exception *clickhousedriver.Exception
+	if err == nil || !errors.As(err, &exception) || exception.Code != 164 {
+		t.Fatalf("readonly ClickHouse mutation error = %v, want ClickHouse READONLY code 164", err)
+	}
+}
+
 func seedClickHouse(t *testing.T, ctx context.Context, request clickHouseSeedRequest) {
 	t.Helper()
 	statements := []string{
@@ -210,6 +242,12 @@ func seedClickHouse(t *testing.T, ctx context.Context, request clickHouseSeedReq
 		t.Fatal(err)
 	}
 	if err := request.connection.Exec(ctx, `GRANT SELECT ON default.* TO acr_readonly`); err != nil {
+		t.Fatal(err)
+	}
+	if err := request.connection.Exec(ctx, `GRANT INSERT ON default.ci_pipeline_runs TO acr_readonly`); err != nil {
+		t.Fatal(err)
+	}
+	if err := request.connection.Exec(ctx, `CREATE SETTINGS PROFILE acr_fixture_readonly SETTINGS readonly = 2 TO acr_readonly`); err != nil {
 		t.Fatal(err)
 	}
 }

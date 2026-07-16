@@ -30,9 +30,12 @@ data:
   ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT: {{ .timeout | quote }}
   ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: {{ printf "%s/%s" (.tokenMountPath | trimSuffix "/") .tokenFileName | quote }}
   {{- end }}
+  {{- if .Values.config.postgresCaBundle.existingSecret }}
+  ACR_POSTGRES_CA_BUNDLE: "/var/run/acr/postgres-ca/ca.crt"
+  {{- end }}
   {{- if .Values.config.clickhouseCaBundle.existingSecret }}
-  ACR_CLICKHOUSE_CA_BUNDLE: {{ printf "/var/run/acr/clickhouse-ca/%s" .Values.config.clickhouseCaBundle.key | quote }}
+  ACR_CLICKHOUSE_CA_BUNDLE: "/var/run/acr/clickhouse-ca/ca.crt"
   {{- end }}
   {{- if .Values.config.entitlementCaBundle.existingSecret }}
-  ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE: {{ printf "/var/run/acr/entitlement-ca/%s" .Values.config.entitlementCaBundle.key | quote }}
+  ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE: "/var/run/acr/entitlement-ca/ca.crt"
   {{- end }}

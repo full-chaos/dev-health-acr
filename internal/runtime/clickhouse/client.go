@@ -60,6 +60,9 @@ func NewClickHouseQueryClientWithOptions(options Options) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse ClickHouse connection: %w", ErrInvalidConfiguration)
 	}
+	if _, configuredByDSN := configured.Settings["readonly"]; configuredByDSN {
+		return nil, fmt.Errorf("validate ClickHouse settings: %w", ErrInvalidConfiguration)
+	}
 	applyOptions(configured, options)
 	if configured.TLS == nil || configured.TLS.InsecureSkipVerify {
 		return nil, fmt.Errorf("validate ClickHouse TLS: %w", ErrInvalidConfiguration)

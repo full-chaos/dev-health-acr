@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,9 +18,15 @@ func integrationClient(t *testing.T) (*Client, Options) {
 	t.Helper()
 	dsn := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_DSN")
 	if dsn == "" {
+		if os.Getenv("ACR_CLICKHOUSE_INTEGRATION_REQUIRED") == "1" {
+			t.Fatal("ACR_CLICKHOUSE_INTEGRATION_DSN is required when native ClickHouse integration is mandatory")
+		}
 		t.Skip("ACR_CLICKHOUSE_INTEGRATION_DSN is required for the real ClickHouse integration test")
 	}
 	if os.Getenv("ACR_CLICKHOUSE_INTEGRATION_ISOLATED") != "1" {
+		if os.Getenv("ACR_CLICKHOUSE_INTEGRATION_REQUIRED") == "1" {
+			t.Fatal("ACR_CLICKHOUSE_INTEGRATION_ISOLATED=1 is required when native ClickHouse integration is mandatory")
+		}
 		t.Skip("ACR_CLICKHOUSE_INTEGRATION_ISOLATED=1 is required before the integration test can target seeded data")
 	}
 	options := Options{DSN: dsn, TLS: integrationTLSConfig(t), QueryTimeout: 10 * time.Second}
@@ -49,7 +56,7 @@ func integrationTLSConfig(t *testing.T) *tls.Config {
 	if !pool.AppendCertsFromPEM(certificate) {
 		t.Fatal("parse ClickHouse CA file")
 	}
-	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
+	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: os.Getenv("ACR_CLICKHOUSE_INTEGRATION_TLS_SERVER_NAME")}
 }
 
 func assertIntegrationServerRejectsMutation(t *testing.T, options Options) {
@@ -60,7 +67,7 @@ func assertIntegrationServerRejectsMutation(t *testing.T, options Options) {
 	if err != nil {
 		t.Fatalf("parse direct ClickHouse DSN: %v", err)
 	}
-	configured.TLS = mergeTLS(options.TLS, configured.TLS)
+	applyOptions(configured, options)
 	connection, err := clickhousedriver.Open(configured)
 	if err != nil {
 		t.Fatalf("open direct ClickHouse connection: %v", err)
@@ -68,7 +75,22 @@ func assertIntegrationServerRejectsMutation(t *testing.T, options Options) {
 	t.Cleanup(func() { _ = connection.Close() })
 
 	// When
-	err = connection.Exec(context.Background(), "INSERT INTO ci_pipeline_runs (org_id) VALUES ('forbidden')")
+	rows, err := connection.Query(context.Background(), "SELECT getSetting('readonly')")
+	if err != nil {
+		t.Fatalf("read enforced readonly setting: %v", err)
+	}
+	t.Cleanup(func() { _ = rows.Close() })
+	if !rows.Next() {
+		t.Fatalf("enforced readonly setting returned no rows: %v", rows.Err())
+	}
+	var readonly uint8
+	if err := rows.Scan(&readonly); err != nil {
+		t.Fatalf("scan enforced readonly setting: %v", err)
+	}
+	if readonly != 2 {
+		t.Fatalf("getSetting('readonly') = %d, want server profile 2", readonly)
+	}
+	err = connection.Exec(context.Background(), "INSERT INTO ci_pipeline_runs (run_id, repo_id, branch, status, started_at, finished_at) VALUES ('forbidden', '00000000-0000-0000-0000-000000000001', 'main', 'failure', now64(3), now64(3))")
 
 	// Then
 	if err == nil {
@@ -77,7 +99,7 @@ func assertIntegrationServerRejectsMutation(t *testing.T, options Options) {
 	if errors.Is(err, context.Canceled) {
 		t.Fatalf("server mutation error was cancellation: %v", err)
 	}
-	if fmt.Sprint(err) == "" {
-		t.Fatal("server mutation returned an empty error")
+	if !strings.Contains(strings.ToLower(fmt.Sprint(err)), "readonly") {
+		t.Fatalf("server mutation error = %v, want readonly-specific denial", err)
 	}
 }

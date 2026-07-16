@@ -85,6 +85,10 @@ FIXTURE_LOCK_DIR=""
 CREATE_IN_MEMORY_OWNERSHIP=0
 VERIFY_BACKEND_TLS_RESTORE_NAME=""
 VERIFY_BACKEND_TLS_RESTORE_HOST=""
+VERIFY_COMMIT_SHA=""
+VERIFY_HEAD_TREE_SHA=""
+VERIFY_INDEX_TREE_SHA=""
+VERIFY_GIT_PROVENANCE_CAPTURED_AT_UTC=""
 
 identity_path() { echo "$(state_dir "$1")/${IDENTITY_FILE}"; }
 lock_path() { echo "${STATE_ROOT}/.$1.fixture-lock"; }
@@ -783,6 +787,7 @@ deploy_dependencies() {
 
   kube "${name}" -n "${NS_DEPS}" rollout status deploy/postgres --timeout=180s
   kube "${name}" -n "${NS_DEPS}" rollout status deploy/clickhouse --timeout=180s
+  bootstrap_clickhouse_catalog "${name}"
   kube "${name}" -n "${NS_DEPS}" rollout status deploy/ops-entitlement --timeout=120s
   ok "external dependencies healthy"
 }
@@ -867,7 +872,7 @@ data:
     <clickhouse>
       <profiles>
         <readonly_profile>
-          <readonly>1</readonly>
+          <readonly>2</readonly>
         </readonly_profile>
       </profiles>
       <users>
@@ -877,7 +882,32 @@ data:
           <networks><ip>::/0</ip></networks>
           <quota>default</quota>
         </default>
+        <fixture_admin>
+          <password></password>
+          <profile>default</profile>
+          <networks><ip>127.0.0.1</ip><ip>::1</ip></networks>
+          <quota>default</quota>
+        </fixture_admin>
       </users>
+    </clickhouse>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-tls
+  namespace: ${NS_DEPS}
+data:
+  tls.xml: |
+    <clickhouse>
+      <tcp_port_secure>9440</tcp_port_secure>
+      <openSSL>
+        <server>
+          <certificateFile>/tls/tls.crt</certificateFile>
+          <privateKeyFile>/tls/tls.key</privateKeyFile>
+          <caConfig>/tls/ca.crt</caConfig>
+          <verificationMode>none</verificationMode>
+        </server>
+      </openSSL>
     </clickhouse>
 ---
 apiVersion: apps/v1
@@ -896,15 +926,19 @@ spec:
       containers:
         - name: clickhouse
           image: ${ACR_E2E_IMG_CLICKHOUSE}
-          ports: [{ containerPort: 8123 }, { containerPort: 9000 }]
+          ports: [{ containerPort: 8123 }, { containerPort: 9000 }, { containerPort: 9440 }]
           volumeMounts:
             - { name: readonly, mountPath: /etc/clickhouse-server/users.d/readonly.xml, subPath: readonly.xml }
+            - { name: tls-config, mountPath: /etc/clickhouse-server/config.d/tls.xml, subPath: tls.xml }
+            - { name: tls, mountPath: /tls, readOnly: true }
           readinessProbe:
             httpGet: { path: /ping, port: 8123 }
             initialDelaySeconds: 5
             periodSeconds: 5
       volumes:
         - { name: readonly, configMap: { name: clickhouse-readonly } }
+        - { name: tls-config, configMap: { name: clickhouse-tls } }
+        - { name: tls, secret: { secretName: tls-clickhouse } }
 ---
 apiVersion: v1
 kind: Service
@@ -914,12 +948,19 @@ metadata:
   labels: { app: clickhouse }
 spec:
   selector: { app: clickhouse }
-  ports: [{ name: http, port: 8123, targetPort: 8123 }, { name: native, port: 9000, targetPort: 9000 }]
+  ports: [{ name: http, port: 8123, targetPort: 8123 }, { name: native, port: 9000, targetPort: 9000 }, { name: secure-native, port: 8443, targetPort: 9440 }]
 EOF
 }
 
-deploy_ops_entitlement() {
+bootstrap_clickhouse_catalog() {
   local name="$1"
+  kube "${name}" -n "${NS_DEPS}" exec deploy/clickhouse -- \
+    clickhouse-client --host 127.0.0.1 --user fixture_admin --query \
+    'CREATE TABLE IF NOT EXISTS repos (id UUID, org_id String, repo String, ref Nullable(String)) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo)'
+}
+
+deploy_ops_entitlement() {
+  local name="$1" token="acr-e2e-ops-token-initial"
   cat <<EOF | kube "${name}" apply -f - >/dev/null
 apiVersion: v1
 kind: ConfigMap
@@ -933,10 +974,16 @@ data:
       ssl_certificate     /tls/tls.crt;
       ssl_certificate_key /tls/tls.key;
       location = /entitlement {
+        if (\$http_authorization != "Bearer ${token}") { return 401; }
         default_type application/json;
         return 200 '{"entitlement":"agent_context_runtime","status":"active","fixture":"acr-e2e"}';
       }
       location = /healthz { return 200 'ok'; }
+      location = /api/v1/internal/acr/health {
+        if (\$http_authorization != "Bearer ${token}") { return 401; }
+        default_type application/json;
+        return 200 '{"schema_version":"acr_service_health.v1","service":"dev-health-ops","status":"ok"}';
+      }
     }
 ---
 apiVersion: apps/v1
@@ -1074,6 +1121,8 @@ spec:
   ingress:
     - from:
         - podSelector: { matchLabels: { acr-e2e/access: allowed } }
+        - namespaceSelector: { matchLabels: { acr-e2e/access: allowed } }
+          podSelector: { matchLabels: { acr-e2e/access: allowed } }
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ${NS_GW} } }
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: envoy-gateway-system } }
 EOF
@@ -1159,8 +1208,26 @@ check_neg() { # check_neg "<description>" <command...>  (must FAIL)
   if "$@" >/dev/null 2>&1; then fail "${desc}"; VERIFY_FAILURES=$((VERIFY_FAILURES+1)); else ok "${desc}"; fi
 }
 
+verify_clean_git_provenance() {
+  local status
+  if ! git -C "${REPO_ROOT}" diff --quiet --; then
+    die "verification refuses dirty working tree attribution"
+  fi
+  if ! git -C "${REPO_ROOT}" diff --cached --quiet --; then
+    die "verification refuses dirty index attribution"
+  fi
+  status="$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=all)"
+  [[ -z "${status}" ]] || die "verification refuses untracked working tree attribution"
+
+  VERIFY_COMMIT_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+  VERIFY_HEAD_TREE_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD^{tree})"
+  VERIFY_INDEX_TREE_SHA="$(git -C "${REPO_ROOT}" write-tree)"
+  [[ "${VERIFY_COMMIT_SHA}" =~ ^[a-f0-9]{40}$ && "${VERIFY_HEAD_TREE_SHA}" =~ ^[a-f0-9]{40}$ && "${VERIFY_INDEX_TREE_SHA}" == "${VERIFY_HEAD_TREE_SHA}" ]] || die "verification cannot establish exact clean Git provenance"
+  VERIFY_GIT_PROVENANCE_CAPTURED_AT_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+
 cmd_verify() {
-  local name="$1"
+  local name="$1" verification_started_at_utc
   validate_name "${name}"
   acquire_fixture_lock "${name}"
   trap 'release_lock_on_exit "$?"' EXIT
@@ -1170,6 +1237,8 @@ cmd_verify() {
   VERIFY_FAILURES=0
   RUNTIME_IMAGE_REFS=()
   RUNTIME_IMAGE_IDS=()
+  verification_started_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  verify_clean_git_provenance
 
   check "exact Kind version ${ACR_E2E_KIND_VERSION}" kind_version_matches
   verify_fixture_ownership "${name}" || die "fixture ownership verification failed for ${name}"
@@ -1214,6 +1283,7 @@ cmd_verify() {
 
   # 7. TLS chains: every leaf verifies against the fixture CA.
   verify_tls_chain "${name}" postgres 5432 postgres
+  verify_tls_chain "${name}" clickhouse 8443
   verify_tls_chain "${name}" ops-entitlement 8443
 
   # 8. Read-only ClickHouse: SELECT ok, INSERT denied.
@@ -1244,7 +1314,8 @@ cmd_verify() {
   verify_isolation "${name}"
 
   if [[ "${VERIFY_FAILURES}" -eq 0 ]]; then
-    write_verification_evidence "${name}" "${sd}"
+    write_verification_evidence "${name}" "${sd}" "${verification_started_at_utc}"
+    validate_verification_evidence "${sd}/verification-evidence.env"
     ok "verify passed for ${name}"
     trap - EXIT
     release_fixture_lock
@@ -1427,6 +1498,7 @@ restore_backend_tls_policy() {
 gateway_entitlement_response() {
   local ca="$1" lport="$2"
   curl --noproxy '*' --max-time 5 --silent --show-error --cacert "${ca}" \
+    -H 'Authorization: Bearer acr-e2e-ops-token-initial' \
     --resolve "acr.local:${lport}:127.0.0.1" -w '\n__HTTP_%{http_code}__' \
     "https://acr.local:${lport}/entitlement" 2>&1 || true
 }
@@ -1445,7 +1517,7 @@ verify_tls_chain() {
   [[ -n "${starttls}" ]] && st_opt="-starttls ${starttls}"
   pf_start "${ctx}" "${NS_DEPS}" "${svc}" "${port}"; lport="${PF_LPORT}"
   # shellcheck disable=SC2086  # st_opt must word-split into openssl flags
-  out="$(openssl s_client ${st_opt} -connect "127.0.0.1:${lport}" -CAfile "${ca}" -servername "${svc}" </dev/null 2>&1 || true)"
+  out="$(openssl s_client -no_ign_eof ${st_opt} -connect "127.0.0.1:${lport}" -CAfile "${ca}" -servername "${svc}" </dev/null 2>&1 || true)"
   pf_stop
   if grep -q "Verify return code: 0 (ok)" <<<"${out}"; then
     ok "${svc} TLS leaf chains to fixture CA"
@@ -1459,7 +1531,7 @@ verify_clickhouse_readonly() {
   pf_start "${ctx}" "${NS_DEPS}" clickhouse 8123; lport="${PF_LPORT}"
   sel="$(curl -s "http://127.0.0.1:${lport}/?query=SELECT%201" 2>/dev/null || true)"
   if [[ "${sel//[$'\r\n ']/}" == "1" ]]; then ok "ClickHouse SELECT works"; else fail "ClickHouse SELECT failed (got: ${sel})"; VERIFY_FAILURES=$((VERIFY_FAILURES+1)); fi
-  body="$(curl -s -w '\n__HTTP_%{http_code}__' "http://127.0.0.1:${lport}/?query=CREATE%20TABLE%20t_${RANDOM}(a%20Int8)%20ENGINE=Memory" 2>&1 || true)"
+  body="$(curl --request POST -s -w '\n__HTTP_%{http_code}__' --data-binary "CREATE TABLE t_${RANDOM}(a Int8) ENGINE=Memory" "http://127.0.0.1:${lport}/" 2>&1 || true)"
   pf_stop
   code="$(sed -n 's/.*__HTTP_\([0-9]*\)__.*/\1/p' <<<"${body}")"
   if [[ "${code}" != "200" ]] && grep -qiE "readonly|read.only|Cannot execute|ACCESS_DENIED" <<<"${body}"; then
@@ -1531,20 +1603,52 @@ verify_host_container_image() {
 }
 
 write_verification_evidence() {
-  local name="$1" sd="$2" i
+  local name="$1" sd="$2" verification_started_at_utc="$3" i evidence verified_at_utc
+  evidence="${sd}/verification-evidence.env"
+  verified_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   cat >"${sd}/verification-evidence.env" <<EOF
 fixture_name=${name}
 fixture_id=${FIXTURE_ID}
 kind_version=${ACR_E2E_KIND_VERSION}
 node_image=${ACR_E2E_NODE_IMAGE}
 north_south_https_entitlement=observed
-verified_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+commit_sha=${VERIFY_COMMIT_SHA}
+head_tree_sha=${VERIFY_HEAD_TREE_SHA}
+index_tree_sha=${VERIFY_INDEX_TREE_SHA}
+working_tree_clean=true
+index_clean=true
+git_provenance_captured_at_utc=${VERIFY_GIT_PROVENANCE_CAPTURED_AT_UTC}
+verification_started_at_utc=${verification_started_at_utc}
+verified_at_utc=${verified_at_utc}
 EOF
   for ((i = 0; i < ${#RUNTIME_IMAGE_IDS[@]}; i += 1)); do
     printf 'runtime_image_ref_%d=%s\n' "$((i + 1))" "${RUNTIME_IMAGE_REFS[$i]}" >>"${sd}/verification-evidence.env"
     printf 'runtime_image_id_%d=%s\n' "$((i + 1))" "${RUNTIME_IMAGE_IDS[$i]}" >>"${sd}/verification-evidence.env"
   done
+  printf 'evidence_written_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"${evidence}"
+  printf 'evidence_payload_sha256=%s\n' "$(sha256_of "${evidence}")" >>"${evidence}"
   ok "wrote observed verification evidence"
+}
+
+validate_verification_evidence() {
+  local evidence="$1" expected actual started verified written commit head_tree index_tree tree_clean index_clean captured
+  expected="$(awk -F= '$1 == "evidence_payload_sha256" { print $2 }' "${evidence}")"
+  actual="$(awk -F= '$1 != "evidence_payload_sha256" { print }' "${evidence}" | sha256_of /dev/stdin)"
+  [[ "${expected}" =~ ^[a-f0-9]{64}$ && "${actual}" == "${expected}" ]] || die "verification evidence integrity check failed"
+  started="$(awk -F= '$1 == "verification_started_at_utc" { print $2 }' "${evidence}")"
+  verified="$(awk -F= '$1 == "verified_at_utc" { print $2 }' "${evidence}")"
+  written="$(awk -F= '$1 == "evidence_written_at_utc" { print $2 }' "${evidence}")"
+  commit="$(awk -F= '$1 == "commit_sha" { print $2 }' "${evidence}")"
+  head_tree="$(awk -F= '$1 == "head_tree_sha" { print $2 }' "${evidence}")"
+  index_tree="$(awk -F= '$1 == "index_tree_sha" { print $2 }' "${evidence}")"
+  tree_clean="$(awk -F= '$1 == "working_tree_clean" { print $2 }' "${evidence}")"
+  index_clean="$(awk -F= '$1 == "index_clean" { print $2 }' "${evidence}")"
+  captured="$(awk -F= '$1 == "git_provenance_captured_at_utc" { print $2 }' "${evidence}")"
+  [[ "${commit}" == "${VERIFY_COMMIT_SHA}" && "${head_tree}" == "${VERIFY_HEAD_TREE_SHA}" && "${index_tree}" == "${VERIFY_INDEX_TREE_SHA}" && "${tree_clean}" == true && "${index_clean}" == true && "${captured}" == "${VERIFY_GIT_PROVENANCE_CAPTURED_AT_UTC}" ]] || die "verification evidence does not match captured clean Git provenance"
+  git -C "${REPO_ROOT}" diff --quiet -- && git -C "${REPO_ROOT}" diff --cached --quiet -- || die "verification attribution became dirty"
+  if [[ ! "${started}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || ! "${verified}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || ! "${written}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || "${started}" > "${verified}" || "${verified}" > "${written}" ]]; then
+    die "verification evidence timestamps are invalid or out of order"
+  fi
 }
 
 # ===========================================================================

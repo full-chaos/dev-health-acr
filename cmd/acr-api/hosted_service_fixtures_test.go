@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -154,14 +156,48 @@ type entitlementFixture struct {
 	caPath    string
 	token     string
 	tokenPath string
+	tokenMu   sync.RWMutex
 	stopOnce  sync.Once
+}
+
+func TestEntitlementFixture_rotates_accepted_token_bytes(t *testing.T) {
+	// Given
+	fixture := newEntitlementFixture(t)
+	oldToken := fixture.token
+
+	// When
+	newToken := fixture.RotateToken(t)
+
+	// Then
+	if entitlementFixtureStatus(t, fixture, oldToken) != http.StatusUnauthorized {
+		t.Fatal("old entitlement token remained accepted after rotation")
+	}
+	if entitlementFixtureStatus(t, fixture, newToken) != http.StatusOK {
+		t.Fatal("rotated entitlement token was not accepted")
+	}
+}
+
+func entitlementFixtureStatus(t *testing.T, fixture *entitlementFixture, token string) int {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodGet, fixture.baseURL+"/api/v1/internal/acr/health", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	response, err := fixture.server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	return response.StatusCode
 }
 
 func newEntitlementFixture(t *testing.T) *entitlementFixture {
 	t.Helper()
 	token := randomFixtureSecret(t)
+	fixture := &entitlementFixture{token: token, tokenPath: writeRestrictedFixture(t, "entitlement-token", []byte(token))}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		if request.Header.Get("Authorization") != "Bearer "+token {
+		if !fixture.acceptsAuthorization(request.Header.Get("Authorization")) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -180,13 +216,47 @@ func newEntitlementFixture(t *testing.T) *entitlementFixture {
 		}
 	}))
 	certificate := server.Certificate()
-	caPath := writeRestrictedFixture(t, "entitlement-ca.pem", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw}))
-	fixture := &entitlementFixture{
-		server: server, baseURL: server.URL, caPath: caPath, token: token,
-		tokenPath: writeRestrictedFixture(t, "entitlement-token", []byte(token)),
-	}
+	fixture.server = server
+	fixture.baseURL = server.URL
+	fixture.caPath = writeRestrictedFixture(t, "entitlement-ca.pem", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw}))
 	t.Cleanup(fixture.Stop)
 	return fixture
+}
+
+func (f *entitlementFixture) acceptsAuthorization(value string) bool {
+	f.tokenMu.RLock()
+	defer f.tokenMu.RUnlock()
+	return value == "Bearer "+f.token
+}
+
+func (f *entitlementFixture) RotateToken(t *testing.T) string {
+	t.Helper()
+	rotated := randomFixtureSecret(t)
+	directory := filepath.Dir(f.tokenPath)
+	temporary, err := os.CreateTemp(directory, ".entitlement-token-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		t.Fatal(err)
+	}
+	if _, err := temporary.WriteString(rotated); err != nil {
+		temporary.Close()
+		t.Fatal(err)
+	}
+	if err := temporary.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.tokenMu.Lock()
+	defer f.tokenMu.Unlock()
+	if err := os.Rename(temporaryPath, f.tokenPath); err != nil {
+		t.Fatal(err)
+	}
+	f.token = rotated
+	return rotated
 }
 
 func (f *entitlementFixture) Stop() {
