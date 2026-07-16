@@ -21,6 +21,7 @@ grep -Fq 'host_ip: 127.0.0.1' "$script"
 grep -Fq "REDIS_PORT=\"\$redis_port\"" "$script"
 grep -Fq "REPO_ROOT/.tmp/e2e/compose-\${PROJECT}" "$script"
 grep -Fq 'command: ["cp /input/acr.crt' "$script"
+grep -Fq 'chown -R 70:70 /tls' "$script"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

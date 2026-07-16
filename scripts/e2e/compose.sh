@@ -140,7 +140,7 @@ services:
     image: postgres:18-alpine
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
-    command: ["cp /input/acr.crt /input/acr.key /input/ca.crt /tls/; chown -R 999:999 /tls; chmod 600 /tls/acr.key"]
+    command: ["cp /input/acr.crt /input/acr.key /input/ca.crt /tls/; chown -R 70:70 /tls; chmod 600 /tls/acr.key"]
     volumes: ["${STATE}/pki:/input:ro", "acr_e2e_tls:/tls"]
   acr-api:
     image: "${IMAGE}"
