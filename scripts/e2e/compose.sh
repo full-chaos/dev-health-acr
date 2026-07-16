@@ -165,6 +165,13 @@ services:
       ACR_CLICKHOUSE_CA_BUNDLE: /run/secrets/acr_ca
       ACR_DEV_HEALTH_ENTITLEMENT_URL: https://acr-ops-tls:8443
       ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE: /run/secrets/acr_ca
+  acr-credentials:
+    image: "${IMAGE}"
+    environment:
+      ACR_ENVIRONMENT: development
+      ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
+    secrets: [acr_runtime_dsn, acr_ca]
+    networks: [dev-health]
   acr-migrate:
     image: "${IMAGE}"
     environment: { ACR_POSTGRES_MIGRATION_DSN: "$(<"$STATE/secrets/migration-dsn")" }
@@ -224,6 +231,7 @@ bootstrap_ops() {
   db="acr_${PROJECT//-/}_e2e"
   compose exec -T api dev-hops migrate clickhouse >/dev/null
   compose exec -T clickhouse clickhouse-client --user default --password ch --query "CREATE DATABASE IF NOT EXISTS ${db}" >/dev/null
+  compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:8123/${db} dev-hops migrate clickhouse" >/dev/null
   compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:8123/${db} dev-hops fixtures generate --sink \"\$CLICKHOUSE_URI\" --db-type clickhouse --repo-name acme/live-e2e --provider synthetic --days 14 --commits-per-day 6 --pr-count 24 --seed 20260219 --with-metrics --with-work-graph" >/dev/null
   compose exec -T clickhouse clickhouse-client --user default --password ch --multiquery <<EOF >/dev/null
 CREATE USER IF NOT EXISTS acr_reader IDENTIFIED BY '$(<"$STATE/secrets/clickhouse-password")';
@@ -234,7 +242,7 @@ EOF
 
 create_acr_credential() {
   local token
-  token="$(compose run --rm --no-deps acr-api credentials create --org-id "$(<"$STATE/org-id")" --repository-scope acme/live-e2e --scope context:read,evidence:read --name compose-e2e --actor compose-e2e)"
+  token="$(compose run --rm --no-deps acr-credentials credentials create --org-id "$(<"$STATE/org-id")" --repository-scope acme/live-e2e --scope context:read,evidence:read --name compose-e2e --actor compose-e2e)"
   [[ "$token" == fcacr_* ]] || die 'ACR credential provisioning returned an invalid token shape'
   write_secret "$STATE/secrets/acr-token" "$token"
 }
@@ -251,7 +259,7 @@ record_acl_probe() {
 run_mcp() {
   local token="$1" evidence_id output
   ACR_API_URL="https://localhost:${PORT}" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$STATE/pki/ca.crt" ACR_SIDECAR_VERSION=1.0.0 ACR_SIDECAR_CLIENT_VERSION=1.0.0 "$STATE/acr-mcp" doctor --live > "$STATE/doctor.json"
-  grep -q '"status": "ok"' "$STATE/doctor.json" || die 'host MCP doctor did not report healthy TLS capability'
+  grep -q '"status":"ok"' "$STATE/doctor.json" || die 'host MCP doctor did not report healthy TLS capability'
   output="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"compose-e2e","version":"1.0.0"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"context_for_task","arguments":{"goal":"inspect live evidence","repository":{"slug":"acme/live-e2e"},"scope":{"branch":"main"}}}}' | ACR_API_URL="https://localhost:${PORT}" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$STATE/pki/ca.crt" ACR_SIDECAR_VERSION=1.0.0 ACR_SIDECAR_CLIENT_VERSION=1.0.0 "$STATE/acr-mcp" serve)"
   evidence_id="$(printf '%s\n' "$output" | sed -nE 's/.*"evidence_ref_id":"([^"]+)".*/\1/p' | head -1)"
   [[ -n "$evidence_id" ]] || die 'context_for_task returned no evidence reference'
@@ -279,7 +287,7 @@ run_failure() {
     invalid-ca)
       start_happy; printf 'not a certificate\n' > "$STATE/pki/invalid-ca.crt"; expect_failure curl --fail --silent --cacert "$STATE/pki/invalid-ca.crt" --noproxy '*' "https://localhost:${PORT}/readyz"; SAFE_BOUNDARY='TLS verification failed; no insecure curl option was used' ;;
     revoked-acr-token)
-      start_happy; compose run --rm --no-deps acr-api credentials revoke --org-id "$(<"$STATE/org-id")" --credential-id "$(compose run --rm --no-deps acr-api credentials list --org-id "$(<"$STATE/org-id")" --json | sed -nE 's/.*"credential_id":"([^"]+)".*/\1/p' | head -1)" --actor compose-e2e >/dev/null; expect_failure curl --fail --silent --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "Authorization: Bearer $(<"$STATE/secrets/acr-token")" "https://localhost:${PORT}/api/v1/agent-context/capabilities"; SAFE_BOUNDARY='revoked ACR credential was denied before protected reads' ;;
+      start_happy; compose run --rm --no-deps acr-credentials credentials revoke --org-id "$(<"$STATE/org-id")" --credential-id "$(compose run --rm --no-deps acr-credentials credentials list --org-id "$(<"$STATE/org-id")" --json | sed -nE 's/.*"credential_id":"([^"]+)".*/\1/p' | head -1)" --actor compose-e2e >/dev/null; expect_failure curl --fail --silent --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "Authorization: Bearer $(<"$STATE/secrets/acr-token")" "https://localhost:${PORT}/api/v1/agent-context/capabilities"; SAFE_BOUNDARY='revoked ACR credential was denied before protected reads' ;;
     clickhouse-read-denied)
       start_happy; expect_failure compose exec -T clickhouse clickhouse-client --user acr_reader --password "$(<"$STATE/secrets/clickhouse-password")" --query "INSERT INTO acr_${PROJECT//-/}_e2e.system_metrics VALUES ()"; SAFE_BOUNDARY='read-only ClickHouse user rejected a write' ;;
     migration-failure)
