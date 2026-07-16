@@ -40,6 +40,7 @@ grep -Fq 'HTTPS readiness timed out' "$script"
 grep -Fq 'acr_e2e_postgres_tls' "$script"
 grep -Fq 'acr_e2e_clickhouse_tls' "$script"
 grep -Fq 'chown -R 101:101 /clickhouse-tls' "$script"
+grep -Fq 'clickhouse-client --secure --accept-invalid-certificate' "$script"
 grep -Fq 'healthcheck: { test: ["NONE"] }' "$script"
 grep -Fq 'acr-api: { condition: service_started }' "$script"
 state_variable=STATE

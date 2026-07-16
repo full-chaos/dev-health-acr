@@ -139,6 +139,7 @@ services:
     ports: []
     environment: { CLICKHOUSE_USER: default, CLICKHOUSE_PASSWORD: ch, CLICKHOUSE_DB: default, CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1" }
     volumes: ["clickhouse_data:/var/lib/clickhouse", "acr_e2e_clickhouse_tls:/run/acr-tls:ro", "${STATE}/clickhouse/tls.xml:/etc/clickhouse-server/config.d/acr-e2e-tls.xml:ro"]
+    healthcheck: { test: ["CMD-SHELL", "clickhouse-client --secure --accept-invalid-certificate --host localhost --port 9440 --user default --password ch --query 'SELECT 1'"], interval: 5s, timeout: 5s, retries: 12, start_period: 10s }
     depends_on: { acr-pki-init: { condition: service_completed_successfully } }
   valkey: { ports: [] }
   traefik: { ports: [] }
