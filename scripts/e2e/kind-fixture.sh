@@ -1498,6 +1498,7 @@ restore_backend_tls_policy() {
 gateway_entitlement_response() {
   local ca="$1" lport="$2"
   curl --noproxy '*' --max-time 5 --silent --show-error --cacert "${ca}" \
+    -H 'Authorization: Bearer acr-e2e-ops-token-initial' \
     --resolve "acr.local:${lport}:127.0.0.1" -w '\n__HTTP_%{http_code}__' \
     "https://acr.local:${lport}/entitlement" 2>&1 || true
 }
