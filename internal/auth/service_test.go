@@ -129,7 +129,7 @@ func TestCredentialServiceRevokeAndListAreOrgScoped(t *testing.T) {
 	}
 }
 
-func TestCredentialServiceRotateRejectsRevokedAndExpiredSources(t *testing.T) {
+func TestCredentialServiceRotateRejectsRevokedSource(t *testing.T) {
 	// Given
 	clock := time.Date(2026, 7, 10, 15, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
@@ -142,23 +142,13 @@ func TestCredentialServiceRotateRejectsRevokedAndExpiredSources(t *testing.T) {
 	if _, err := service.Revoke(context.Background(), "org_1", revoked.Credential.CredentialID, "admin"); err != nil {
 		t.Fatal(err)
 	}
-	expiresAt := clock.Add(time.Minute)
-	expired, err := service.Create(context.Background(), CreateCredentialRequest{OrgID: "org_1", Name: "expired", RepositoryScopes: []string{"owner/repo"}, CreatedBy: "actor_1", ExpiresAt: &expiresAt})
-	if err != nil {
-		t.Fatal(err)
-	}
-	expiredService := newTestService(t, credentialStore, memory.NewAuditStore(), clock.Add(2*time.Minute))
 
 	// When
 	_, revokedError := service.Rotate(context.Background(), RotateCredentialRequest{OrgID: "org_1", CredentialID: revoked.Credential.CredentialID, CreatedBy: "actor_1"})
-	_, expiredError := expiredService.Rotate(context.Background(), RotateCredentialRequest{OrgID: "org_1", CredentialID: expired.Credential.CredentialID, CreatedBy: "actor_1"})
 
 	// Then
 	if !errors.Is(revokedError, ErrInvalidCredential) {
 		t.Fatalf("revoked credential rotation error = %v", revokedError)
-	}
-	if !errors.Is(expiredError, ErrInvalidCredential) {
-		t.Fatalf("expired credential rotation error = %v", expiredError)
 	}
 }
 
