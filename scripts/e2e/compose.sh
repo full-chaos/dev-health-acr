@@ -16,6 +16,7 @@ SAFE_BOUNDARY=""
 usage() { printf 'usage: %s --compose <root-compose.yml> --overlay <acr.compose.yml> --project <acr-e2e-name> [--scenario happy|existing-volume|missing-ops-token|invalid-ca|revoked-acr-token|clickhouse-read-denied|migration-failure]\n' "$0" >&2; }
 die() { printf '[compose-e2e] FAIL: %s\n' "$*" >&2; exit 1; }
 note() { printf '[compose-e2e] %s\n' "$*" >&2; }
+redact_log() { sed -E -e 's/(fcacr|svc_acr)_[[:alnum:]_-]+/REDACTED/g' -e 's#(postgresql?|clickhouse)://[^[:space:]]+#REDACTED_DSN#g'; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,7 +50,7 @@ cleanup() {
   [[ -n "$STATE" && -d "$STATE" ]] || exit "$status"
   note "cleanup receipt before: $(owned_receipt)"
   if [[ "$status" -ne 0 ]]; then
-    compose logs --no-color acr-pki-init 2>&1 || true
+    compose logs --no-color acr-pki-init migrate 2>&1 | redact_log || true
   fi
   if ! compose down --volumes --remove-orphans >/dev/null 2>&1; then
     note 'cleanup failed; refusing to claim an isolated teardown'
@@ -167,7 +168,7 @@ services:
 volumes:
   acr_e2e_tls: {}
 EOF
-  export ACR_IMAGE="$IMAGE" POSTGRES_USER=devhealth POSTGRES_PASSWORD="$pg" POSTGRES_PORT="$postgres_port" CLICKHOUSE_HTTP_PORT="$clickhouse_http_port" CLICKHOUSE_NATIVE_PORT="$clickhouse_native_port" REDIS_PORT="$redis_port" ACR_DB_NAME="$db" ACR_RUNTIME_DB_USER=acr_runtime ACR_RUNTIME_DB_PASSWORD="$runtime" ACR_MIGRATION_DB_USER=acr_migration ACR_MIGRATION_DB_PASSWORD="$migration" ACR_RUNTIME_DSN_FILE="$STATE/secrets/runtime-dsn" ACR_MIGRATION_DSN_FILE="$STATE/secrets/migration-dsn" ACR_CLICKHOUSE_DSN_FILE="$STATE/secrets/clickhouse-dsn" ACR_OPS_TOKEN_FILE="$STATE/secrets/ops-token" ACR_CA_FILE="$STATE/pki/ca.crt" ACR_EVIDENCE_ACTIVE_KID_FILE="$STATE/secrets/evidence-kid" ACR_EVIDENCE_KEYS_FILE="$STATE/secrets/evidence-keys"
+  export ACR_IMAGE="$IMAGE" POSTGRES_USER=devhealth POSTGRES_PASSWORD="$pg" POSTGRES_PORT="$postgres_port" CLICKHOUSE_USER=default CLICKHOUSE_PASSWORD=ch CLICKHOUSE_HTTP_PORT="$clickhouse_http_port" CLICKHOUSE_NATIVE_PORT="$clickhouse_native_port" REDIS_PORT="$redis_port" ACR_DB_NAME="$db" ACR_RUNTIME_DB_USER=acr_runtime ACR_RUNTIME_DB_PASSWORD="$runtime" ACR_MIGRATION_DB_USER=acr_migration ACR_MIGRATION_DB_PASSWORD="$migration" ACR_RUNTIME_DSN_FILE="$STATE/secrets/runtime-dsn" ACR_MIGRATION_DSN_FILE="$STATE/secrets/migration-dsn" ACR_CLICKHOUSE_DSN_FILE="$STATE/secrets/clickhouse-dsn" ACR_OPS_TOKEN_FILE="$STATE/secrets/ops-token" ACR_CA_FILE="$STATE/pki/ca.crt" ACR_EVIDENCE_ACTIVE_KID_FILE="$STATE/secrets/evidence-kid" ACR_EVIDENCE_KEYS_FILE="$STATE/secrets/evidence-keys"
 }
 
 assert_safe_render() {
