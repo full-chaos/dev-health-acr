@@ -91,7 +91,7 @@ prepare_state() {
   write_secret "$STATE/secrets/migration-password" "$(random_secret)"
   write_secret "$STATE/secrets/clickhouse-password" "$(random_secret)"
   write_secret "$STATE/secrets/evidence-kid" 'acr-e2e-kid'
-  write_secret "$STATE/secrets/evidence-keys" '{}'
+  write_secret "$STATE/secrets/evidence-keys" "{\"acr-e2e-kid\":\"$(random_secret)\"}"
   : > "$STATE/secrets/ops-token"; chmod 600 "$STATE/secrets/ops-token"
   cat > "$STATE/clickhouse/tls.xml" <<EOF
 <clickhouse><tcp_port_secure>9440</tcp_port_secure><openSSL><server><certificateFile>/run/acr-tls/acr.crt</certificateFile><privateKeyFile>/run/acr-tls/acr.key</privateKeyFile><caConfig>/run/acr-tls/ca.crt</caConfig><verificationMode>none</verificationMode></server></openSSL></clickhouse>
@@ -153,8 +153,11 @@ services:
     healthcheck: { test: ["NONE"] }
     environment:
       ACR_ENVIRONMENT: development
+      ACR_REQUIRE_BACKING_STORES: "true"
       ACR_POSTGRES_DSN: "$(<"$STATE/secrets/runtime-dsn")"
       ACR_CLICKHOUSE_DSN: "$(<"$STATE/secrets/clickhouse-dsn")"
+      ACR_EVIDENCE_ID_ACTIVE_KID: "$(<"$STATE/secrets/evidence-kid")"
+      ACR_EVIDENCE_ID_KEYS: '$(<"$STATE/secrets/evidence-keys")'
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
       ACR_CLICKHOUSE_CA_BUNDLE: /run/secrets/acr_ca
