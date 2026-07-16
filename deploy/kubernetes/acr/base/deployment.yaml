@@ -51,6 +51,31 @@ spec:
             matchLabels:
               app.kubernetes.io/name: acr
               app.kubernetes.io/component: api
+      initContainers:
+        - name: prepare-entitlement-token
+          image: docker.io/library/busybox@sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028
+          command: ["sh", "-c", "umask 077 && cp /source/token /target/token && cp /source-ca/ca.crt /target-ca/ca.crt"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: entitlement-token-source
+              mountPath: /source
+              readOnly: true
+            - name: entitlement-token
+              mountPath: /target
+            - name: entitlement-ca-source
+              mountPath: /source-ca
+              readOnly: true
+            - name: entitlement-ca
+              mountPath: /target-ca
       containers:
         - name: acr-api
           image: acr-api
@@ -129,12 +154,34 @@ spec:
             - name: entitlement-token
               mountPath: /var/run/acr/entitlement
               readOnly: true
+            - name: postgres-ca
+              mountPath: /var/run/acr/postgres-ca
+              readOnly: true
+            - name: clickhouse-ca
+              mountPath: /var/run/acr/clickhouse-ca
+              readOnly: true
+            - name: entitlement-ca
+              mountPath: /var/run/acr/entitlement-ca
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir: {}
         - name: entitlement-token
+          emptyDir: {}
+        - name: entitlement-token-source
           secret:
             secretName: acr-entitlement-token
             items:
               - key: token
                 path: token
+        - name: postgres-ca
+          secret:
+            secretName: acr-postgres-ca
+        - name: clickhouse-ca
+          secret:
+            secretName: acr-clickhouse-ca
+        - name: entitlement-ca
+          emptyDir: {}
+        - name: entitlement-ca-source
+          secret:
+            secretName: acr-entitlement-ca

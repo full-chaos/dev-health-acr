@@ -35,8 +35,8 @@ func TestApplyOptions_applies_default_execution_limits(t *testing.T) {
 	applyOptions(configured, Options{})
 
 	// Then
-	if configured.Settings["readonly"] != 1 || configured.Settings["max_execution_time"] != uint(10) || configured.Settings["max_result_rows"] != uint(1_000) || configured.Settings["max_bytes_to_read"] != uint64(16<<20) {
-		t.Fatalf("query settings = %#v, want read-only execution limits", configured.Settings)
+	if _, exists := configured.Settings["readonly"]; exists || configured.Settings["max_execution_time"] != uint(10) || configured.Settings["max_result_rows"] != uint(1_000) || configured.Settings["max_bytes_to_read"] != uint64(16<<20) {
+		t.Fatalf("query settings = %#v, want bounded limits without an overridden read-only policy", configured.Settings)
 	}
 }
 
@@ -69,8 +69,8 @@ func TestApplyOptions_preserves_DSN_settings_and_TLS_server_name(t *testing.T) {
 	if configured.DialTimeout != 3*time.Second || configured.ReadTimeout != 4*time.Second || configured.MaxOpenConns != 5 || configured.MaxIdleConns != 2 || configured.ConnMaxLifetime != 6*time.Minute {
 		t.Fatalf("DSN connection settings were overwritten: %#v", configured)
 	}
-	if configured.Settings["custom_setting"] != "preserve" || configured.Settings["readonly"] != 1 || configured.Settings["max_execution_time"] != uint(10) {
-		t.Fatalf("settings = %#v, want preserved caller settings plus enforced query limits", configured.Settings)
+	if configured.Settings["custom_setting"] != "preserve" || configured.Settings["readonly"] != 0 || configured.Settings["max_execution_time"] != uint(10) {
+		t.Fatalf("settings = %#v, want preserved caller settings plus bounded query limits", configured.Settings)
 	}
 	if callerSettings["readonly"] != 0 || callerSettings["max_execution_time"] != uint(999) {
 		t.Fatalf("caller settings were mutated: %#v", callerSettings)

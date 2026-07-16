@@ -783,6 +783,7 @@ deploy_dependencies() {
 
   kube "${name}" -n "${NS_DEPS}" rollout status deploy/postgres --timeout=180s
   kube "${name}" -n "${NS_DEPS}" rollout status deploy/clickhouse --timeout=180s
+  bootstrap_clickhouse_catalog "${name}"
   kube "${name}" -n "${NS_DEPS}" rollout status deploy/ops-entitlement --timeout=120s
   ok "external dependencies healthy"
 }
@@ -867,7 +868,7 @@ data:
     <clickhouse>
       <profiles>
         <readonly_profile>
-          <readonly>1</readonly>
+          <readonly>2</readonly>
         </readonly_profile>
       </profiles>
       <users>
@@ -877,7 +878,32 @@ data:
           <networks><ip>::/0</ip></networks>
           <quota>default</quota>
         </default>
+        <fixture_admin>
+          <password></password>
+          <profile>default</profile>
+          <networks><ip>127.0.0.1</ip><ip>::1</ip></networks>
+          <quota>default</quota>
+        </fixture_admin>
       </users>
+    </clickhouse>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-tls
+  namespace: ${NS_DEPS}
+data:
+  tls.xml: |
+    <clickhouse>
+      <tcp_port_secure>9440</tcp_port_secure>
+      <openSSL>
+        <server>
+          <certificateFile>/tls/tls.crt</certificateFile>
+          <privateKeyFile>/tls/tls.key</privateKeyFile>
+          <caConfig>/tls/ca.crt</caConfig>
+          <verificationMode>none</verificationMode>
+        </server>
+      </openSSL>
     </clickhouse>
 ---
 apiVersion: apps/v1
@@ -896,15 +922,19 @@ spec:
       containers:
         - name: clickhouse
           image: ${ACR_E2E_IMG_CLICKHOUSE}
-          ports: [{ containerPort: 8123 }, { containerPort: 9000 }]
+          ports: [{ containerPort: 8123 }, { containerPort: 9000 }, { containerPort: 9440 }]
           volumeMounts:
             - { name: readonly, mountPath: /etc/clickhouse-server/users.d/readonly.xml, subPath: readonly.xml }
+            - { name: tls-config, mountPath: /etc/clickhouse-server/config.d/tls.xml, subPath: tls.xml }
+            - { name: tls, mountPath: /tls, readOnly: true }
           readinessProbe:
             httpGet: { path: /ping, port: 8123 }
             initialDelaySeconds: 5
             periodSeconds: 5
       volumes:
         - { name: readonly, configMap: { name: clickhouse-readonly } }
+        - { name: tls-config, configMap: { name: clickhouse-tls } }
+        - { name: tls, secret: { secretName: tls-clickhouse } }
 ---
 apiVersion: v1
 kind: Service
@@ -914,8 +944,15 @@ metadata:
   labels: { app: clickhouse }
 spec:
   selector: { app: clickhouse }
-  ports: [{ name: http, port: 8123, targetPort: 8123 }, { name: native, port: 9000, targetPort: 9000 }]
+  ports: [{ name: http, port: 8123, targetPort: 8123 }, { name: native, port: 9000, targetPort: 9000 }, { name: secure-native, port: 8443, targetPort: 9440 }]
 EOF
+}
+
+bootstrap_clickhouse_catalog() {
+  local name="$1"
+  kube "${name}" -n "${NS_DEPS}" exec deploy/clickhouse -- \
+    clickhouse-client --host 127.0.0.1 --user fixture_admin --query \
+    'CREATE TABLE IF NOT EXISTS repos (id UUID, org_id String, repo String, ref Nullable(String)) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo)'
 }
 
 deploy_ops_entitlement() {
@@ -937,6 +974,10 @@ data:
         return 200 '{"entitlement":"agent_context_runtime","status":"active","fixture":"acr-e2e"}';
       }
       location = /healthz { return 200 'ok'; }
+      location = /api/v1/internal/acr/health {
+        default_type application/json;
+        return 200 '{"schema_version":"acr_service_health.v1","service":"dev-health-ops","status":"ok"}';
+      }
     }
 ---
 apiVersion: apps/v1
@@ -1074,6 +1115,8 @@ spec:
   ingress:
     - from:
         - podSelector: { matchLabels: { acr-e2e/access: allowed } }
+        - namespaceSelector: { matchLabels: { acr-e2e/access: allowed } }
+          podSelector: { matchLabels: { acr-e2e/access: allowed } }
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ${NS_GW} } }
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: envoy-gateway-system } }
 EOF
@@ -1214,6 +1257,7 @@ cmd_verify() {
 
   # 7. TLS chains: every leaf verifies against the fixture CA.
   verify_tls_chain "${name}" postgres 5432 postgres
+  verify_tls_chain "${name}" clickhouse 8443
   verify_tls_chain "${name}" ops-entitlement 8443
 
   # 8. Read-only ClickHouse: SELECT ok, INSERT denied.
@@ -1445,7 +1489,7 @@ verify_tls_chain() {
   [[ -n "${starttls}" ]] && st_opt="-starttls ${starttls}"
   pf_start "${ctx}" "${NS_DEPS}" "${svc}" "${port}"; lport="${PF_LPORT}"
   # shellcheck disable=SC2086  # st_opt must word-split into openssl flags
-  out="$(openssl s_client ${st_opt} -connect "127.0.0.1:${lport}" -CAfile "${ca}" -servername "${svc}" </dev/null 2>&1 || true)"
+  out="$(openssl s_client -no_ign_eof ${st_opt} -connect "127.0.0.1:${lport}" -CAfile "${ca}" -servername "${svc}" </dev/null 2>&1 || true)"
   pf_stop
   if grep -q "Verify return code: 0 (ok)" <<<"${out}"; then
     ok "${svc} TLS leaf chains to fixture CA"
