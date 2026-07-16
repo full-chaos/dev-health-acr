@@ -216,7 +216,7 @@ wait_https_ready() {
 }
 
 bootstrap_ops() {
-  local output org_id token db
+  local output org_id token db scoped_repo_count
   compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-ops-tls >/dev/null
   if ! output="$(compose exec -T api dev-hops admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community)"; then
     printf '%s\n' "$output" >&2
@@ -233,6 +233,12 @@ bootstrap_ops() {
   compose exec -T clickhouse clickhouse-client --user default --password ch --query "CREATE DATABASE IF NOT EXISTS ${db}" >/dev/null
   compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:8123/${db} dev-hops migrate clickhouse" >/dev/null
   compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:8123/${db} dev-hops fixtures generate --sink \"\$CLICKHOUSE_URI\" --db-type clickhouse --repo-name acme/live-e2e --provider synthetic --days 14 --commits-per-day 6 --pr-count 24 --seed 20260219 --with-metrics --with-work-graph" >/dev/null
+  compose exec -T clickhouse clickhouse-client --user default --password ch --query "INSERT INTO ${db}.repos (id, repo, ref, created_at, settings, tags, last_synced, org_id, provider) SELECT generateUUIDv4(), 'acme/live-e2e', 'main', now64(3), NULL, NULL, now64(3), '${org_id}', 'synthetic'" >/dev/null
+  scoped_repo_count="$(compose exec -T clickhouse clickhouse-client --user default --password ch --query "SELECT count() FROM ${db}.repos FINAL WHERE org_id = '${org_id}' AND repo = 'acme/live-e2e'")"
+  if [[ "$scoped_repo_count" != "1" ]]; then
+    note "project-scoped repository evidence count=${scoped_repo_count}"
+    die 'project-scoped repository evidence provisioning failed'
+  fi
   compose exec -T clickhouse clickhouse-client --user default --password ch --multiquery <<EOF >/dev/null
 CREATE USER IF NOT EXISTS acr_reader IDENTIFIED BY '$(<"$STATE/secrets/clickhouse-password")';
 GRANT SELECT ON ${db}.* TO acr_reader;
@@ -241,8 +247,12 @@ EOF
 }
 
 create_acr_credential() {
-  local token
-  token="$(compose run --rm --no-deps acr-credentials credentials create --org-id "$(<"$STATE/org-id")" --repository-scope acme/live-e2e --scope context:read,evidence:read --name compose-e2e --actor compose-e2e)"
+  local token credential_stderr
+  credential_stderr="$STATE/acr-credentials.stderr"
+  if ! token="$(compose run --rm --no-deps acr-credentials credentials create --org-id "$(<"$STATE/org-id")" --repository-scope acme/live-e2e --scope context:read,evidence:read --name compose-e2e --actor compose-e2e 2>"$credential_stderr")"; then
+    redact_log < "$credential_stderr" >&2 || true
+    die 'ACR credential provisioning failed'
+  fi
   [[ "$token" == fcacr_* ]] || die 'ACR credential provisioning returned an invalid token shape'
   write_secret "$STATE/secrets/acr-token" "$token"
 }
@@ -256,15 +266,45 @@ record_acl_probe() {
   note "ACL_PROBE runtime=${runtime} owners_and_defaults=${owner_defaults}"
 }
 
+mcp_shutdown() {
+  local pid="$1" input_fd="$2" output_fd="$3"
+  exec {input_fd}>&- || true
+  exec {output_fd}<&- || true
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -INT "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+}
+
 run_mcp() {
-  local token="$1" evidence_id output
+  local token="$1" evidence_id initialize_response context_response evidence_response mcp_pid mcp_input mcp_output
   ACR_API_URL="https://localhost:${PORT}" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$STATE/pki/ca.crt" ACR_SIDECAR_VERSION=1.0.0 ACR_SIDECAR_CLIENT_VERSION=1.0.0 "$STATE/acr-mcp" doctor --live > "$STATE/doctor.json"
   grep -q '"status":"ok"' "$STATE/doctor.json" || die 'host MCP doctor did not report healthy TLS capability'
-  output="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"compose-e2e","version":"1.0.0"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"context_for_task","arguments":{"goal":"inspect live evidence","repository":{"slug":"acme/live-e2e"},"scope":{"branch":"main"}}}}' | ACR_API_URL="https://localhost:${PORT}" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$STATE/pki/ca.crt" ACR_SIDECAR_VERSION=1.0.0 ACR_SIDECAR_CLIENT_VERSION=1.0.0 "$STATE/acr-mcp" serve)"
-  evidence_id="$(printf '%s\n' "$output" | sed -nE 's/.*"evidence_ref_id":"([^"]+)".*/\1/p' | head -1)"
-  [[ -n "$evidence_id" ]] || die 'context_for_task returned no evidence reference'
-  printf '%s\n' "$output" | grep -q 'context_packet' || die 'context_for_task did not return a packet'
-  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"compose-e2e","version":"1.0.0"}}}' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"source_evidence\",\"arguments\":{\"evidence_ref_id\":\"${evidence_id}\"}}}" | ACR_API_URL="https://localhost:${PORT}" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$STATE/pki/ca.crt" ACR_SIDECAR_VERSION=1.0.0 ACR_SIDECAR_CLIENT_VERSION=1.0.0 "$STATE/acr-mcp" serve | grep -q 'expanded_evidence' || die 'source_evidence did not return evidence'
+  coproc ACR_MCP { ACR_API_URL="https://localhost:${PORT}" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$STATE/pki/ca.crt" ACR_SIDECAR_VERSION=1.0.0 ACR_SIDECAR_CLIENT_VERSION=1.0.0 "$STATE/acr-mcp" serve; }
+  mcp_pid="$ACR_MCP_PID"
+  mcp_input="${ACR_MCP[1]}"
+  mcp_output="${ACR_MCP[0]}"
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"compose-e2e","version":"1.0.0"}}}' >&"$mcp_input"
+  if ! IFS= read -r -t 30 initialize_response <&"$mcp_output" || ! printf '%s\n' "$initialize_response" | jq -e '(.result.protocolVersion | type) == "string"' >/dev/null; then
+    mcp_shutdown "$mcp_pid" "$mcp_input" "$mcp_output"
+    die 'MCP initialize did not return a negotiated protocol version'
+  fi
+  printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"context_for_task","arguments":{"goal":"inspect live evidence","repository":{"slug":"acme/live-e2e"},"scope":{"branch":"main"}}}}' >&"$mcp_input"
+  if ! IFS= read -r -t 30 context_response <&"$mcp_output" || ! printf '%s\n' "$context_response" | jq -e '(.result.isError // false) == false and .result.structuredContent.schema_version == "mcp_context_for_task_response.v1"' >/dev/null; then
+    mcp_shutdown "$mcp_pid" "$mcp_input" "$mcp_output"
+    die 'context_for_task did not return a valid MCP response'
+  fi
+  evidence_id="$(printf '%s\n' "$context_response" | jq -r '[.result.structuredContent | .. | objects | .evidence_ref_ids? | arrays | .[] | select(type == "string")][0] // empty')"
+  if [[ -z "$evidence_id" ]]; then
+    mcp_shutdown "$mcp_pid" "$mcp_input" "$mcp_output"
+    die 'context_for_task returned no evidence reference'
+  fi
+  printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"source_evidence\",\"arguments\":{\"evidence_ref_id\":\"${evidence_id}\"}}}" >&"$mcp_input"
+  if ! IFS= read -r -t 30 evidence_response <&"$mcp_output" || ! printf '%s\n' "$evidence_response" | jq -e '(.result.isError // false) == false and .result.structuredContent.schema_version == "mcp_source_evidence_response.v1"' >/dev/null; then
+    mcp_shutdown "$mcp_pid" "$mcp_input" "$mcp_output"
+    die 'source_evidence did not return a valid MCP response'
+  fi
+  mcp_shutdown "$mcp_pid" "$mcp_input" "$mcp_output"
 }
 
 start_happy() {
