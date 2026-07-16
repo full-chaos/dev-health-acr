@@ -166,6 +166,7 @@ assert_kind_images_absent() {
   for ref in "$@"; do
     grep -Fxq "${ref}" <<<"${existing}" && die "refusing to reuse a pre-existing Kind image reference: ${ref}"
   done
+  return 0
 }
 
 cleanup_namespace() {
