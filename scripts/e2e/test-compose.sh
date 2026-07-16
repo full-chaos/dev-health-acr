@@ -25,6 +25,7 @@ grep -Fq 'command: ["cp /input/acr.crt' "$script"
 grep -Fq 'chown -R 70:70 /postgres-tls' "$script"
 grep -Fq 'Ops organization provisioning failed' "$script"
 grep -Fq 'expect_failure compose up -d --no-deps acr-api' "$script"
+grep -F -A 5 'expect_failure() {' "$script" | grep -Fq 'return 0'
 if grep -Fq -- '--owner-email' "$script"; then exit 1; fi
 grep -Fq 'clickhouse-client --user default --password ch' "$script"
 db_variable=db

@@ -343,7 +343,12 @@ start_happy() {
   SAFE_BOUNDARY='verified TLS readiness, host-local MCP, non-empty packet and evidence, immediate credential rotation revoked the prior token'
 }
 
-expect_failure() { "$@" >/dev/null 2>&1 && die "expected failure: $*"; }
+expect_failure() {
+  if "$@" >/dev/null 2>&1; then
+    die "expected failure: $*"
+  fi
+  return 0
+}
 
 run_failure() {
   case "$SCENARIO" in
