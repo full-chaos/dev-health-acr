@@ -186,17 +186,31 @@ static_check() {
     done
   }
   assert_missing_image_pull_secret_boundary() {
-    local block token literal_dollar='$' deploy_token job_token
+    local block token literal_dollar='$' deploy_token
     deploy_token="${literal_dollar}{deploy}"
-    job_token="${literal_dollar}{job}"
     block="$(function_block assert_missing_image_pull_secret)"
-    for token in "job=\"${deploy_token}-migrate\"" "get \"job/${job_token}\"" "FailedToRetrieveImagePullSecret" "unexpectedly created the API Deployment"; do
+    for token in "get \"deployment/${deploy_token}\"" "wait_api_ready" "FailedToRetrieveImagePullSecret"; do
       if ! grep -Fq -- "${token}" <<<"${block}"; then
-        fail "static: missing imagePullSecret must assert the migration-hook retrieval boundary"
+        fail "static: missing imagePullSecret must assert a Kubernetes retrieval warning on a ready local image"
         failures=$((failures + 1))
         return
       fi
     done
+  }
+  assert_unprogrammed_gateway_boundary() {
+    local block token
+    block="$(function_block run_unprogrammed_gateway)"
+    for token in 'get gatewayclass acr-e2e-unprogrammed' 'seq 1 20' 'unexpectedly became Programmed' 'unexpectedly accepted the HTTPRoute'; do
+      if ! grep -Fq -- "${token}" <<<"${block}"; then
+        fail "static: unprogrammed Gateway must prove an absent class and a full non-True observation window"
+        failures=$((failures + 1))
+        return
+      fi
+    done
+    if grep -Fq '&& break' <<<"${block}"; then
+      fail "static: unprogrammed Gateway must not accept an initial empty status"
+      failures=$((failures + 1))
+    fi
   }
   check_static 'ctr -n k8s.io images import --base-name.*--digests' 'imports a local OCI archive into Kind under its exact digest' "${BASH_SOURCE[0]}"
   check_static 'imagePullSecrets' 'asserts existing imagePullSecret use' "${BASH_SOURCE[0]}"
@@ -209,6 +223,7 @@ static_check() {
   check_static 'cleanup_kind_images' 'only run-owned imported Kind image references and remote archives are removed' "${BASH_SOURCE[0]}"
   assert_helm_context
   assert_missing_image_pull_secret_boundary
+  assert_unprogrammed_gateway_boundary
   check_static 'postgresCaBundle' 'chart mounts the PostgreSQL CA referenced by verified DSNs' "${CHART}/templates/deployment.yaml"
   check_static 'tcp_port_secure' 'fixture exposes TLS ClickHouse native transport' "${FIXTURE_SCRIPT}"
   check_static 'acr-e2e\.fullchaos\.dev/fixture-id' 'fixture permits only explicitly labelled consumer namespaces' "${FIXTURE_SCRIPT}"
@@ -552,14 +567,10 @@ assert_missing_runtime_secret() {
 }
 
 assert_missing_image_pull_secret() {
-  local deploy job events
+  local deploy events
   deploy="$(deployment_name)"
-  job="${deploy}-migrate"
-  kube -n "${namespace}" get "job/${job}" >/dev/null || { fail "missing imagePullSecret did not create the migration hook Job"; return 1; }
-  if kube -n "${namespace}" get "deployment/${deploy}" >/dev/null 2>&1; then
-    fail "missing imagePullSecret unexpectedly created the API Deployment after migration hook failure"
-    return 1
-  fi
+  kube -n "${namespace}" get "deployment/${deploy}" >/dev/null || { fail "missing imagePullSecret did not create the API Deployment"; return 1; }
+  wait_api_ready
   events="$(kube -n "${namespace}" get events --sort-by=.metadata.creationTimestamp 2>/dev/null || true)"
   grep -qiE 'FailedToRetrieveImagePullSecret|image pull secret' <<<"${events}" || {
     fail "missing imagePullSecret did not reach Kubernetes image-pull-secret retrieval"; return 1;
@@ -670,18 +681,18 @@ run_missing_image_pull_secret() {
     fail "missing imagePullSecret fault was not injected"
     return 1
   fi
-  if run_helm_failure "${values}" --set-string image.pullPolicy=Always --timeout 45s >/dev/null 2>&1; then
-    fail "missing imagePullSecret unexpectedly installed"
+  if ! run_helm "${values}" >/dev/null; then
+    diagnose_workload_failure
+    fail "missing imagePullSecret prevented a locally available immutable image from starting"
     return 1
   fi
-  diagnose_workload_failure
   assert_missing_image_pull_secret
-  queue_evidence expected-failure 'missing imagePullSecret reached Kubernetes retrieval at the migration hook and prevented API Deployment creation'
-  return 1
+  queue_evidence expected-warning 'missing imagePullSecret emitted a Kubernetes retrieval warning while the local immutable image remained ready'
 }
 
 run_unprogrammed_gateway() {
   local entitlement current values gateway_name="unprogrammed-${run_id}" accepted programmed attempt
+  ! kube get gatewayclass acr-e2e-unprogrammed >/dev/null 2>&1 || { fail "unprogrammed GatewayClass unexpectedly exists"; return 1; }
   entitlement="$(create_fixture_references)"
   current="$(build_local_image unprogrammed-gateway)"
   kube -n "${namespace}" apply -f - >/dev/null <<EOF
@@ -701,12 +712,11 @@ EOF
   for attempt in $(seq 1 20); do
     programmed="$(kube -n "${namespace}" get "gateway/${gateway_name}" -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}')"
     accepted="$(kube -n "${namespace}" get "httproute/$(deployment_name)" -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}')"
-    [[ "${programmed}" != "True" && "${accepted}" != "True" ]] && break
+    [[ "${programmed}" != "True" ]] || { fail "unprogrammed Gateway unexpectedly became Programmed"; return 1; }
+    [[ "${accepted}" != "True" ]] || { fail "unprogrammed Gateway unexpectedly accepted the HTTPRoute"; return 1; }
     sleep 1
   done
-  [[ "${programmed}" != "True" ]] || { fail "unprogrammed Gateway unexpectedly became Programmed"; return 1; }
-  [[ "${accepted}" != "True" ]] || { fail "unprogrammed Gateway unexpectedly accepted the HTTPRoute"; return 1; }
-  queue_evidence expected-failure 'Gateway Programmed and HTTPRoute Accepted remained non-True, preserving the unready routing boundary'
+  queue_evidence expected-failure 'absent GatewayClass kept Gateway Programmed and HTTPRoute Accepted non-True throughout the full observation window'
   return 1
 }
 
