@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,7 +84,7 @@ func assertIntegrationServerRejectsMutation(t *testing.T, options Options) {
 	if readonly != 2 {
 		t.Fatalf("getSetting('readonly') = %d, want server profile 2", readonly)
 	}
-	err = connection.Exec(context.Background(), "INSERT INTO ci_pipeline_runs (org_id) VALUES ('forbidden')")
+	err = connection.Exec(context.Background(), "INSERT INTO ci_pipeline_runs (run_id, repo_id, branch, status, started_at, finished_at) VALUES ('forbidden', '00000000-0000-0000-0000-000000000001', 'main', 'failure', now64(3), now64(3))")
 
 	// Then
 	if err == nil {
@@ -92,7 +93,7 @@ func assertIntegrationServerRejectsMutation(t *testing.T, options Options) {
 	if errors.Is(err, context.Canceled) {
 		t.Fatalf("server mutation error was cancellation: %v", err)
 	}
-	if fmt.Sprint(err) == "" {
-		t.Fatal("server mutation returned an empty error")
+	if !strings.Contains(strings.ToLower(fmt.Sprint(err)), "readonly") {
+		t.Fatalf("server mutation error = %v, want readonly-specific denial", err)
 	}
 }

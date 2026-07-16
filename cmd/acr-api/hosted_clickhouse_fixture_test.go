@@ -150,6 +150,7 @@ func newClickHouseFixture(t *testing.T, ctx context.Context) *clickHouseFixture 
 		}
 	})
 	assertClickHouseScopeQuery(t, ctx, clickHouseScopeRequest{dsn: dsn, roots: roots})
+	assertClickHouseServerRejectsMutation(t, ctx, clickHouseScopeRequest{dsn: dsn, roots: roots})
 	return fixture
 }
 
@@ -186,6 +187,28 @@ func assertClickHouseScopeQuery(t *testing.T, ctx context.Context, request click
 	}
 	if repositoryID == "" || repository != hostedIntegrationRepository || branch != "main" {
 		t.Fatalf("runtime scope row = %q %q %q", repositoryID, repository, branch)
+	}
+}
+
+func assertClickHouseServerRejectsMutation(t *testing.T, ctx context.Context, request clickHouseScopeRequest) {
+	t.Helper()
+	options, err := clickhousedriver.ParseDSN(request.dsn)
+	if err != nil {
+		t.Fatalf("parse readonly ClickHouse DSN: %v", err)
+	}
+	options.TLS = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: request.roots, ServerName: "localhost"}
+	connection, err := clickhousedriver.Open(options)
+	if err != nil {
+		t.Fatalf("open readonly ClickHouse connection: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := connection.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	err = connection.Exec(ctx, "INSERT INTO ci_pipeline_runs (run_id, repo_id, branch, status, started_at, finished_at) VALUES ('forbidden', '00000000-0000-0000-0000-000000000001', 'main', 'failure', now64(3), now64(3))")
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "readonly") {
+		t.Fatalf("readonly ClickHouse mutation error = %v, want readonly-specific denial", err)
 	}
 }
 
