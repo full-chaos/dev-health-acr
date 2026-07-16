@@ -198,7 +198,7 @@ bootstrap_ops() {
   db="acr_${PROJECT//-/}_e2e"
   compose exec -T api dev-hops migrate clickhouse >/dev/null
   compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://ch:ch@clickhouse:8123/${db} dev-hops fixtures generate --sink \"\$CLICKHOUSE_URI\" --db-type clickhouse --repo-name acme/live-e2e --provider synthetic --days 14 --commits-per-day 6 --pr-count 24 --seed 20260219 --with-metrics --with-work-graph" >/dev/null
-  compose exec -T clickhouse clickhouse-client --user default --multiquery <<EOF >/dev/null
+  compose exec -T clickhouse clickhouse-client --user default --password ch --multiquery <<EOF >/dev/null
 CREATE USER IF NOT EXISTS acr_reader IDENTIFIED BY '$(<"$STATE/secrets/clickhouse-password")';
 GRANT SELECT ON ${db}.* TO acr_reader;
 EOF
