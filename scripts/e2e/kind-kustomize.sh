@@ -227,7 +227,7 @@ run_denied_egress() {
   if e2e_kube wait --for=condition=failed job/acr-migrate --timeout=90s >/dev/null; then
     if e2e_kube get deployment/acr-api >/dev/null 2>&1; then e2e_die 'denied-egress: deployment was applied after migration failure'; fi
     egress="$(e2e_kube get networkpolicy/acr-migrate -o jsonpath='{.spec.egress}')"
-    [[ "$egress" == '[]' ]] || e2e_die 'denied-egress: migration NetworkPolicy did not deny egress'
+    [[ -z "$egress" || "$egress" == '[]' ]] || e2e_die 'denied-egress: migration NetworkPolicy did not deny egress'
     e2e_kube logs job/acr-migrate --all-containers=true 2>&1 | grep -Eqi 'dial|connect|timeout|network|postgres' || e2e_die 'denied-egress: failure was not a PostgreSQL transport failure'
     e2e_log 'denied egress causally produced a PostgreSQL transport failure after baseline migration success'
     return
