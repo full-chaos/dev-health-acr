@@ -200,9 +200,9 @@ static_check() {
   assert_unprogrammed_gateway_boundary() {
     local block token
     block="$(function_block run_unprogrammed_gateway)"
-    for token in 'get gatewayclass acr-e2e-unprogrammed' 'seq 1 20' 'unexpectedly became Programmed' 'unexpectedly accepted the HTTPRoute'; do
+    for token in 'get gatewayclass acr-e2e-unprogrammed --ignore-not-found -o name' 'protocol: HTTP' '"http"' 'seq 1 20' 'unexpectedly became Programmed' 'unexpectedly accepted the HTTPRoute'; do
       if ! grep -Fq -- "${token}" <<<"${block}"; then
-        fail "static: unprogrammed Gateway must prove an absent class and a full non-True observation window"
+        fail "static: unprogrammed Gateway must prove a valid absent class and a full non-True observation window"
         failures=$((failures + 1))
         return
       fi
@@ -353,7 +353,7 @@ create_fixture_references() {
 }
 
 write_values() {
-  local image="$1" entitlement_url="$2" gateway_name="${3:-${ACR_E2E_GATEWAY_NAME}}" gateway_namespace="${4:-${ACR_E2E_GATEWAY_NAMESPACE}}" target="${run_dir}/values.yaml"
+  local image="$1" entitlement_url="$2" gateway_name="${3:-${ACR_E2E_GATEWAY_NAME}}" gateway_namespace="${4:-${ACR_E2E_GATEWAY_NAMESPACE}}" gateway_section_name="${5:-https}" target="${run_dir}/values.yaml"
   cat >"${target}" <<EOF
 image:
   reference: ${image}
@@ -402,7 +402,7 @@ gateway:
     parentRefs:
       - name: ${gateway_name}
         namespace: ${gateway_namespace}
-        sectionName: https
+        sectionName: ${gateway_section_name}
     hostnames:
       - ${ACR_E2E_GATEWAY_HOSTNAME}
 autoscaling:
@@ -691,8 +691,9 @@ run_missing_image_pull_secret() {
 }
 
 run_unprogrammed_gateway() {
-  local entitlement current values gateway_name="unprogrammed-${run_id}" accepted programmed attempt
-  ! kube get gatewayclass acr-e2e-unprogrammed >/dev/null 2>&1 || { fail "unprogrammed GatewayClass unexpectedly exists"; return 1; }
+  local entitlement current values gateway_name="unprogrammed-${run_id}" gateway_class accepted programmed attempt
+  gateway_class="$(kube get gatewayclass acr-e2e-unprogrammed --ignore-not-found -o name)" || { fail "unable to determine whether the unprogrammed GatewayClass is absent"; return 1; }
+  [[ -z "${gateway_class}" ]] || { fail "unprogrammed GatewayClass unexpectedly exists"; return 1; }
   entitlement="$(create_fixture_references)"
   current="$(build_local_image unprogrammed-gateway)"
   kube -n "${namespace}" apply -f - >/dev/null <<EOF
@@ -703,11 +704,11 @@ metadata:
 spec:
   gatewayClassName: acr-e2e-unprogrammed
   listeners:
-    - name: https
-      protocol: HTTPS
-      port: 443
+    - name: http
+      protocol: HTTP
+      port: 80
 EOF
-  values="$(write_values "${current}" "${entitlement}" "${gateway_name}" "${namespace}")"
+  values="$(write_values "${current}" "${entitlement}" "${gateway_name}" "${namespace}" "http")"
   run_helm "${values}" >/dev/null || { fail "unprogrammed Gateway prevented Helm installation before route status could be checked"; return 1; }
   for attempt in $(seq 1 20); do
     programmed="$(kube -n "${namespace}" get "gateway/${gateway_name}" -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}')"
