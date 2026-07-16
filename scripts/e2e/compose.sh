@@ -13,6 +13,8 @@ IMAGE="${ACR_E2E_IMAGE:-}"
 COMPOSE=(docker compose)
 SAFE_BOUNDARY=""
 
+# allow: SIZE_OK — the isolated scenario lifecycle shares one trap-owned state directory.
+
 usage() { printf 'usage: %s --compose <root-compose.yml> --overlay <acr.compose.yml> --project <acr-e2e-name> [--scenario happy|existing-volume|missing-ops-token|invalid-ca|revoked-acr-token|clickhouse-read-denied|migration-failure]\n' "$0" >&2; }
 die() { printf '[compose-e2e] FAIL: %s\n' "$*" >&2; exit 1; }
 note() { printf '[compose-e2e] %s\n' "$*" >&2; }
@@ -257,6 +259,26 @@ create_acr_credential() {
   write_secret "$STATE/secrets/acr-token" "$token"
 }
 
+rotate_acr_credential() {
+  local old_token credential_id token credential_stderr
+  old_token="$(<"$STATE/secrets/acr-token")"
+  credential_id="$(compose run --rm --no-deps acr-credentials credentials list --org-id "$(<"$STATE/org-id")" --json | sed -nE 's/.*"credential_id":"([^"]+)".*/\1/p' | head -1)"
+  [[ -n "$credential_id" ]] || die 'ACR credential rotation did not return a credential ID'
+  credential_stderr="$STATE/acr-credentials-rotate.stderr"
+  if ! token="$(compose run --rm --no-deps acr-credentials credentials rotate --org-id "$(<"$STATE/org-id")" --credential-id "$credential_id" --repository-scope acme/live-e2e --scope context:read,evidence:read --name compose-e2e-rotated --actor compose-e2e --overlap 0s 2>"$credential_stderr")"; then
+    redact_log < "$credential_stderr" >&2 || true
+    die 'ACR credential rotation failed'
+  fi
+  [[ "$token" == fcacr_* ]] || die 'ACR credential rotation returned an invalid token shape'
+  write_secret "$STATE/secrets/acr-rotated-token" "$token"
+  if ! curl --fail --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "Authorization: Bearer ${token}" "https://localhost:${PORT}/api/v1/agent-context/capabilities" >/dev/null; then
+    die 'rotated ACR credential did not authenticate against the direct localhost endpoint'
+  fi
+  if curl --fail --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "Authorization: Bearer ${old_token}" "https://localhost:${PORT}/api/v1/agent-context/capabilities" >/dev/null 2>&1; then
+    die 'previous ACR credential remained valid after immediate rotation'
+  fi
+}
+
 record_acl_probe() {
   local runtime owner_defaults
   runtime="$(compose exec -T -e "PGPASSWORD=${ACR_RUNTIME_DB_PASSWORD}" postgres psql -h postgres -U "$ACR_RUNTIME_DB_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c "SELECT current_user, current_database(), has_schema_privilege(current_user, 'acr', 'USAGE'), has_schema_privilege(current_user, 'acr', 'CREATE'), has_table_privilege(current_user, 'acr.schema_migrations', 'SELECT'), has_table_privilege(current_user, 'acr.client_credentials', 'SELECT'), has_table_privilege(current_user, 'acr.client_credentials', 'INSERT'), has_table_privilege(current_user, 'acr.client_credentials', 'UPDATE'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'SELECT'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'INSERT'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'UPDATE'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'DELETE'), has_table_privilege(current_user, 'acr.audit_events', 'INSERT'), (SELECT count(*) FROM acr.schema_migrations)")"
@@ -315,7 +337,9 @@ start_happy() {
   create_acr_credential
   go build -o "$STATE/acr-mcp" ./cmd/acr-mcp
   run_mcp "$(<"$STATE/secrets/acr-token")"
-  SAFE_BOUNDARY='verified TLS readiness, host-local MCP, non-empty packet and evidence'
+  rotate_acr_credential
+  run_mcp "$(<"$STATE/secrets/acr-rotated-token")"
+  SAFE_BOUNDARY='verified TLS readiness, host-local MCP, non-empty packet and evidence, immediate credential rotation revoked the prior token'
 }
 
 expect_failure() { "$@" >/dev/null 2>&1 && die "expected failure: $*"; }
