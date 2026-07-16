@@ -82,6 +82,8 @@ kube() {
   kubectl --context "kind-${cluster}" --request-timeout=10s "$@"
 }
 
+kube_cleanup() { kubectl --context "kind-${cluster}" --request-timeout=10s "$@"; }
+
 write_evidence() {
   local result="$1" detail="$2"
   mkdir -p "$(dirname "${EVIDENCE_FILE}")"
@@ -163,7 +165,7 @@ cleanup_namespace() {
   cleanup_started=1
 
   local actual attempt
-  actual="$(kube get namespace "${namespace}" -o jsonpath='{.metadata.labels.acr-e2e\.fullchaos\.dev/run-id}' 2>/dev/null || true)"
+  actual="$(kube_cleanup get namespace "${namespace}" -o jsonpath='{.metadata.labels.acr-e2e\.fullchaos\.dev/run-id}' 2>/dev/null || true)"
   if [[ "${actual}" != "${run_id}" && "${namespace_labelled}" -eq 1 ]]; then
     fail "refusing to delete namespace ${namespace}: exact run ownership label is absent"
     return 1
@@ -173,8 +175,8 @@ cleanup_namespace() {
   fi
 
   for attempt in 1 2; do
-    if kube delete namespace "${namespace}" --wait=false >/dev/null && \
-      kube wait --for=delete "namespace/${namespace}" --timeout=180s >/dev/null; then
+    if kube_cleanup delete namespace "${namespace}" --wait=false >/dev/null && \
+      kube_cleanup wait --for=delete "namespace/${namespace}" --timeout=180s >/dev/null; then
       owned_namespace=0
       log "owned namespace ${namespace} deleted (attempt ${attempt})"
       return 0
@@ -446,13 +448,13 @@ build_local_image() {
   digest="$(image_digest_from_oci "${archive}")"
   node="${cluster}-control-plane"
   remote_archive="/var/lib/acr-e2e/$(basename "${archive}")"
+  imported_image_refs+=("${tag}" "${repo}@${digest}")
   docker exec "${node}" mkdir -p /var/lib/acr-e2e
   remote_archives+=("${remote_archive}")
   docker cp "${archive}" "${node}:/var/lib/acr-e2e/"
   docker exec "${node}" ctr -n k8s.io images import --base-name "${repo}" --digests "${remote_archive}" >/dev/null
   docker exec "${node}" ctr -n k8s.io images tag "${tag}" "${repo}@${digest}" >/dev/null
   docker exec "${node}" rm -f "${remote_archive}" >/dev/null
-  imported_image_refs+=("${tag}" "${repo}@${digest}")
   docker exec "${node}" ctr -n k8s.io images list -q >"${run_dir}/kind-images-${version}.txt"
   grep -Fxq "${repo}@${digest}" "${run_dir}/kind-images-${version}.txt" || die "Kind node did not retain the exact local OCI image digest"
   built_image_ref="${repo}@${digest}"

@@ -226,6 +226,7 @@ assert_helm_harness_behaviors() {
         *"delete namespace"*|*"wait --for=delete"*) return 0 ;;
       esac
     }
+    kube_cleanup() { kube "$@"; }
     cleanup_namespace
   ' -- "${HELM_SCRIPT}"; then
     ok 'namespace created before label failure remains cleanup-owned'
