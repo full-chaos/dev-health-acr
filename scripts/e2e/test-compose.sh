@@ -25,6 +25,7 @@ grep -Fq 'chown -R 70:70 /tls' "$script"
 grep -Fq 'Ops organization provisioning failed' "$script"
 if grep -Fq -- '--owner-email' "$script"; then exit 1; fi
 grep -Fq 'clickhouse-client --user default --password ch' "$script"
+grep -Fq 'CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"' "$script"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

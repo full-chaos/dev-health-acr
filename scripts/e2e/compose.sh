@@ -131,7 +131,7 @@ services:
     depends_on: { acr-pki-init: { condition: service_completed_successfully } }
   clickhouse:
     ports: []
-    environment: { CLICKHOUSE_USER: ch, CLICKHOUSE_PASSWORD: ch, CLICKHOUSE_DB: default }
+    environment: { CLICKHOUSE_USER: default, CLICKHOUSE_PASSWORD: ch, CLICKHOUSE_DB: default, CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1" }
     volumes: ["clickhouse_data:/var/lib/clickhouse", "acr_e2e_tls:/run/acr-tls:ro", "${STATE}/clickhouse/tls.xml:/etc/clickhouse-server/config.d/acr-e2e-tls.xml:ro"]
     depends_on: { acr-pki-init: { condition: service_completed_successfully } }
   valkey: { ports: [] }
@@ -197,7 +197,7 @@ bootstrap_ops() {
   write_secret "$STATE/secrets/ops-token" "$token"
   db="acr_${PROJECT//-/}_e2e"
   compose exec -T api dev-hops migrate clickhouse >/dev/null
-  compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://ch:ch@clickhouse:8123/${db} dev-hops fixtures generate --sink \"\$CLICKHOUSE_URI\" --db-type clickhouse --repo-name acme/live-e2e --provider synthetic --days 14 --commits-per-day 6 --pr-count 24 --seed 20260219 --with-metrics --with-work-graph" >/dev/null
+  compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:8123/${db} dev-hops fixtures generate --sink \"\$CLICKHOUSE_URI\" --db-type clickhouse --repo-name acme/live-e2e --provider synthetic --days 14 --commits-per-day 6 --pr-count 24 --seed 20260219 --with-metrics --with-work-graph" >/dev/null
   compose exec -T clickhouse clickhouse-client --user default --password ch --multiquery <<EOF >/dev/null
 CREATE USER IF NOT EXISTS acr_reader IDENTIFIED BY '$(<"$STATE/secrets/clickhouse-password")';
 GRANT SELECT ON ${db}.* TO acr_reader;
