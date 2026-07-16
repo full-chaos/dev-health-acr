@@ -21,12 +21,14 @@ release=""
 run_dir=""
 fixture_id=""
 owned_namespace=0
+namespace_labelled=0
 cleanup_started=0
 port_forward_pids=()
 queued_evidence_result=""
 queued_evidence_detail=""
 imported_image_refs=()
 remote_archives=()
+source_hash=""
 
 log() { printf '[kind-helm] %s\n' "$*" >&2; }
 fail() { printf '[kind-helm] FAIL: %s\n' "$*" >&2; }
@@ -95,26 +97,54 @@ queue_evidence() {
 }
 
 stop_port_forwards() {
-  local pid status=0
+  local pid status=0 wait_status was_running
   for pid in "${port_forward_pids[@]}"; do
+    was_running=0
     if kill -0 "${pid}" 2>/dev/null; then
+      was_running=1
       kill "${pid}" 2>/dev/null || status=1
-      wait "${pid}" 2>/dev/null || status=1
+      if ! wait_for_process_exit "${pid}" 10; then
+        kill -KILL "${pid}" 2>/dev/null || status=1
+        wait_for_process_exit "${pid}" 5 || status=1
+      fi
+    fi
+    if wait "${pid}" 2>/dev/null; then
+      :
+    else
+      wait_status=$?
+      if [[ "${was_running}" -ne 1 || ( "${wait_status}" -ne 143 && "${wait_status}" -ne 137 ) ]]; then
+        status=1
+      fi
     fi
   done
   port_forward_pids=()
   return "${status}"
 }
 
+wait_for_process_exit() {
+  local pid="$1" seconds="$2" attempt
+  for ((attempt = 0; attempt < seconds * 4; attempt++)); do
+    kill -0 "${pid}" 2>/dev/null || return 0
+    sleep 0.25
+  done
+  return 1
+}
+
 cleanup_kind_images() {
-  local node ref archive status=0
+  local node ref archive refs status=0
   [[ -n "${cluster}" ]] || return 0
   node="${cluster}-control-plane"
   for archive in "${remote_archives[@]}"; do
     docker exec "${node}" rm -f "${archive}" >/dev/null 2>&1 || status=1
   done
   for ref in "${imported_image_refs[@]}"; do
-    docker exec "${node}" ctr -n k8s.io images rm "${ref}" >/dev/null 2>&1 || status=1
+    refs="$(docker exec "${node}" ctr -n k8s.io images list -q)" || {
+      status=1
+      continue
+    }
+    if grep -Fxq "${ref}" <<<"${refs}"; then
+      docker exec "${node}" ctr -n k8s.io images rm "${ref}" >/dev/null 2>&1 || status=1
+    fi
   done
   return "${status}"
 }
@@ -126,9 +156,12 @@ cleanup_namespace() {
 
   local actual attempt
   actual="$(kube get namespace "${namespace}" -o jsonpath='{.metadata.labels.acr-e2e\.fullchaos\.dev/run-id}' 2>/dev/null || true)"
-  if [[ "${actual}" != "${run_id}" ]]; then
+  if [[ "${actual}" != "${run_id}" && "${namespace_labelled}" -eq 1 ]]; then
     fail "refusing to delete namespace ${namespace}: exact run ownership label is absent"
     return 1
+  fi
+  if [[ "${actual}" != "${run_id}" ]]; then
+    log "deleting namespace created before its ownership label was recorded"
   fi
 
   for attempt in 1 2; do
@@ -157,8 +190,8 @@ on_exit() {
     fi
     write_evidence "${queued_evidence_result}" "${queued_evidence_detail}"
   fi
-  if [[ "${original_status}" -ne 0 ]]; then return "${original_status}"; fi
-  return "${cleanup_status}"
+  if [[ "${original_status}" -ne 0 ]]; then exit "${original_status}"; fi
+  exit "${cleanup_status}"
 }
 
 queue_expected_failure() {
@@ -199,7 +232,7 @@ static_check() {
   assert_missing_image_pull_secret_boundary() {
     local block token literal_dollar='$'
     block="$(function_block assert_missing_image_pull_secret)"
-    for token in "get \"job/${literal_dollar}{job}\"" "assert_no_deployment_ready" "FailedToRetrieveImagePullSecret"; do
+    for token in "get \"job/${literal_dollar}{job}\"" "assert_no_deployment_ready" "FailedToRetrieveImagePullSecret" "involvedObject.name=${literal_dollar}{pod}" "assert_anonymous_registry_pull_denied"; do
       if ! grep -Fq -- "${token}" <<<"${block}"; then
         fail "static: missing imagePullSecret must assert a Kubernetes retrieval warning on a ready local image"
         failures=$((failures + 1))
@@ -209,16 +242,24 @@ static_check() {
   }
   assert_unprogrammed_gateway_boundary() {
     local block token
-    block="$(function_block run_unprogrammed_gateway)"
-    for token in "gatewayClassName: \${ACR_E2E_GATEWAY_CLASS}" 'certificateRefs:' 'observedGeneration' 'protocol: HTTPS' '"https"' 'seq 1 20' 'unprogrammed Gateway did not report Programmed=False'; do
+    block="$(function_block wait_gateway_programmed_false)"
+    for token in 'observedGeneration' 'seq 1 60' 'unprogrammed Gateway did not reconcile Programmed=False'; do
       if ! grep -Fq -- "${token}" <<<"${block}"; then
-        fail "static: unprogrammed Gateway must prove a valid absent class and a full non-True observation window"
+        fail "static: unprogrammed Gateway must wait for a reconciled Programmed=False condition"
         failures=$((failures + 1))
         return
       fi
     done
-    if grep -Fq '&& break' <<<"${block}"; then
-      fail "static: unprogrammed Gateway must not accept an initial empty status"
+    block="$(function_block run_unprogrammed_gateway)"
+    for token in "gatewayClassName: \${ACR_E2E_GATEWAY_CLASS}" 'certificateRefs:' 'protocol: HTTPS' '"https"' 'wait_gateway_programmed_false'; do
+      if ! grep -Fq -- "${token}" <<<"${block}"; then
+        fail "static: unprogrammed Gateway must deploy a valid absent class before polling"
+        failures=$((failures + 1))
+        return
+      fi
+    done
+    if grep -Fq 'observedGeneration' <<<"${block}"; then
+      fail "static: unprogrammed Gateway reconciliation must not require an immediate condition"
       failures=$((failures + 1))
     fi
   }
@@ -248,9 +289,42 @@ static_check() {
 
 require_tools() {
   local tool
-  for tool in docker helm jq kind kubectl tar; do
+  for tool in docker helm jq kind kubectl tar shasum; do
     command -v "${tool}" >/dev/null 2>&1 || die "${tool} is required"
   done
+}
+
+source_tree_hash() {
+  (
+    cd "${REPO_ROOT}"
+    {
+      printf '%s\0' Dockerfile go.mod go.sum
+      find cmd -type f -name '*.go' -print0
+      find internal -type f \( -name '*.go' -o -name '*.json' \) -print0
+      find migrations -type f \( -name '*.go' -o -name '*.sql' \) -print0
+    } | LC_ALL=C sort -z | while IFS= read -r -d '' path; do
+      [[ -f "${path}" && ! -L "${path}" ]] || exit 1
+      digest="$(shasum -a 256 -- "${path}")" || exit 1
+      printf '%s\0%s\0' "${path}" "${digest%% *}"
+    done | shasum -a 256 | awk '{print $1}'
+  )
+}
+
+establish_source_guard() {
+  local baseline rechecked
+  baseline="$(source_tree_hash)" || die "could not hash tracked source before the live scenario"
+  sleep 60
+  rechecked="$(source_tree_hash)" || die "source tree changed during the 60-second quiescence window"
+  [[ "${rechecked}" == "${baseline}" ]] || die "source tree hash changed during the 60-second quiescence window"
+  source_hash="${baseline}"
+  log "source quiescence established (sha256=${source_hash})"
+}
+
+assert_source_guard() {
+  local current
+  [[ -n "${source_hash}" ]] || die "source guard was not established"
+  current="$(source_tree_hash)" || die "source tree changed after source guard establishment"
+  [[ "${current}" == "${source_hash}" ]] || die "source tree hash changed after source guard establishment"
 }
 
 load_fixture_exports() {
@@ -288,6 +362,7 @@ prepare_run() {
   validate_identifier "${cluster}"
   validate_identifier "${run_id}"
   require_tools
+  establish_source_guard
   kind get clusters | grep -Fxq "${cluster}" || die "Kind cluster not found: ${cluster}"
   load_fixture_exports
   assert_fixture_ready
@@ -299,13 +374,14 @@ prepare_run() {
   trap 'exit 130' INT TERM
   kube get namespace "${namespace}" >/dev/null 2>&1 && die "refusing reused namespace: ${namespace}"
   kube create namespace "${namespace}" >/dev/null
+  owned_namespace=1
   kube label namespace "${namespace}" \
     "acr-e2e.fullchaos.dev/run-id=${run_id}" \
     "acr-e2e.fullchaos.dev/consumer-fixture-id=${fixture_id}" \
     "pod-security.kubernetes.io/enforce=restricted" \
     "pod-security.kubernetes.io/audit=restricted" \
     "pod-security.kubernetes.io/warn=restricted" --overwrite >/dev/null
-  owned_namespace=1
+  namespace_labelled=1
   assert_restricted_psa_enforced
   queue_evidence failed 'scenario ended before recording a successful result'
 }
@@ -345,6 +421,7 @@ build_local_image() {
   archive="${run_dir}/acr-api-${version}.oci.tar"
   repo="acr-e2e.local/acr-api-${run_id}"
   tag="${repo}:${version}"
+  assert_source_guard
   CONTAINER_ALLOW_DIRTY=1 \
     CONTAINER_OUTPUT=oci \
     CONTAINER_OCI_OUTPUT="${archive}" \
@@ -353,6 +430,7 @@ build_local_image() {
     CONTAINER_VERSION="kind-${version}" \
     CONTAINER_BUILD_CACHE_ID="kind-helm-${run_id}-${version}" \
     "${REPO_ROOT}/scripts/container/build.sh" acr-api >/dev/null
+  assert_source_guard
   digest="$(image_digest_from_oci "${archive}")"
   node="${cluster}-control-plane"
   remote_archive="/var/lib/acr-e2e/$(basename "${archive}")"
@@ -395,6 +473,27 @@ validate_immutable_image_ref() {
   [[ "$1" =~ ^[^[:space:]]+@sha256:[a-f0-9]{64}$ ]] || die "image must be an immutable @sha256 reference"
 }
 
+run_with_timeout() {
+  local seconds="$1" pid attempt wait_status
+  shift
+  "$@" &
+  pid=$!
+  for ((attempt = 0; attempt < seconds; attempt++)); do
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      if wait "${pid}"; then
+        return 0
+      else
+        wait_status=$?
+        return "${wait_status}"
+      fi
+    fi
+    sleep 1
+  done
+  kill "${pid}" 2>/dev/null || true
+  wait "${pid}" 2>/dev/null || true
+  return 124
+}
+
 publish_image_to_fixture_registry() {
   local source="$1" digest repository target node
   validate_immutable_image_ref "${source}"
@@ -402,8 +501,12 @@ publish_image_to_fixture_registry() {
   repository="${source%%@*}"
   target="${ACR_E2E_REGISTRY_ENDPOINT}/${repository##*/}@${digest}"
   node="${cluster}-control-plane"
+  imported_image_refs+=("${target}")
   docker exec "${node}" ctr -n k8s.io images tag "${source}" "${target}" >/dev/null
-  docker exec "${node}" ctr -n k8s.io images push --plain-http --user fixture:fixture "${target}" >/dev/null
+  if ! run_with_timeout 120 docker exec "${node}" ctr -n k8s.io images push --plain-http --user fixture:fixture "${target}" >/dev/null; then
+    fail "timed out or failed while pushing ${target} to the fixture registry"
+    return 1
+  fi
   docker exec "${node}" ctr -n k8s.io images rm "${target}" >/dev/null
   printf '%s\n' "${target}"
 }
@@ -537,12 +640,16 @@ assert_service_and_route() {
     sleep 0.25
     attempts=$((attempts + 1))
   done
-  if [[ "${ready}" -ne 1 ]]; then stop_port_forwards; fail "gateway port-forward did not become ready"; return 1; fi
+  if [[ "${ready}" -ne 1 ]]; then
+    stop_port_forwards || fail "gateway port-forward cleanup failed after readiness timeout"
+    fail "gateway port-forward did not become ready"
+    return 1
+  fi
   ca="${ACR_E2E_CA_CERT}"
   response="$(curl --noproxy '*' --silent --show-error --max-time 10 --cacert "${ca}" \
     --resolve "${ACR_E2E_GATEWAY_HOSTNAME}:${local_port}:127.0.0.1" \
     -o /dev/null -w '%{http_code}' "https://${ACR_E2E_GATEWAY_HOSTNAME}:${local_port}/api/v1/agent-context/capabilities" 2>&1 || true)"
-  stop_port_forwards
+  stop_port_forwards || { fail "gateway port-forward cleanup failed"; return 1; }
   [[ "${response}" == "401" || "${response}" == "403" ]] || { fail "Gateway route did not reach ACR's protected API (HTTP ${response})"; return 1; }
   log "Service and Programmed Gateway/HTTPRoute reached protected API over fixture TLS"
 }
@@ -679,16 +786,32 @@ assert_missing_runtime_secret() {
 }
 
 assert_missing_image_pull_secret() {
-  local deploy job events secret_name
+  local deploy job pod events secret_name waiting_reason image
   deploy="$(deployment_name)"
   job="${deploy}-migrate"
   secret_name="${ACR_E2E_IMAGE_PULL_SECRET}"
   kube -n "${namespace}" get "job/${job}" >/dev/null || { fail "missing imagePullSecret did not create the migration hook Job"; return 1; }
   assert_no_deployment_ready
-  events="$(kube -n "${namespace}" get events --sort-by=.metadata.creationTimestamp 2>/dev/null || true)"
+  pod="$(kube -n "${namespace}" get pods -l "job-name=${job}" -o jsonpath='{.items[0].metadata.name}')"
+  [[ -n "${pod}" ]] || { fail "missing imagePullSecret migration Job has no Pod"; return 1; }
+  image="$(kube -n "${namespace}" get "pod/${pod}" -o jsonpath='{.spec.containers[?(@.name=="acr-migrate")].image}')"
+  [[ "${image}" == "${ACR_E2E_REGISTRY_ENDPOINT}/"* ]] || { fail "migration Pod does not use the authenticated fixture registry"; return 1; }
+  waiting_reason="$(kube -n "${namespace}" get "pod/${pod}" -o jsonpath='{.status.containerStatuses[?(@.name=="acr-migrate")].state.waiting.reason}' 2>/dev/null || true)"
+  events="$(kube -n "${namespace}" get events --field-selector "involvedObject.kind=Pod,involvedObject.name=${pod}" --sort-by=.metadata.creationTimestamp 2>/dev/null || true)"
   if ! grep -Fqi 'FailedToRetrieveImagePullSecret' <<<"${events}" || ! grep -Fqi -- "${secret_name}" <<<"${events}"; then
     fail "missing imagePullSecret did not produce a FailedToRetrieveImagePullSecret event for ${secret_name}"; return 1;
   fi
+  grep -Eq 'CreateContainerConfigError|ImagePullBackOff|ErrImagePull|FailedToRetrieveImagePullSecret' <<<"${waiting_reason}${events}" || {
+    fail "migration Pod did not record a pull-secret boundary for acr-migrate"; return 1;
+  }
+  assert_anonymous_registry_pull_denied "${image}"
+}
+
+assert_anonymous_registry_pull_denied() {
+  local image="$1" node status
+  node="${cluster}-control-plane"
+  status="$(docker exec "${node}" curl --noproxy '*' --silent --show-error --output /dev/null --write-out '%{http_code}' "http://${image%%/*}/v2/" 2>/dev/null || true)"
+  [[ "${status}" == "401" ]] || { fail "fixture registry did not reject anonymous pull access for migration image"; return 1; }
 }
 
 assert_denied_migration_egress() {
@@ -867,8 +990,23 @@ run_missing_image_pull_secret() {
   queue_expected_failure missing-image-pull-secret "forced fixture-registry pull emitted a Kubernetes credential retrieval failure for ${ACR_E2E_IMAGE_PULL_SECRET}; no locally cached registry reference was used"
 }
 
+wait_gateway_programmed_false() {
+  local gateway_name="$1" programmed observed_generation generation attempt
+  for attempt in $(seq 1 60); do
+    generation="$(kube -n "${namespace}" get "gateway/${gateway_name}" -o jsonpath='{.metadata.generation}')"
+    programmed="$(kube -n "${namespace}" get "gateway/${gateway_name}" -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}')"
+    observed_generation="$(kube -n "${namespace}" get "gateway/${gateway_name}" -o jsonpath='{.status.conditions[?(@.type=="Programmed")].observedGeneration}')"
+    if [[ -n "${generation}" && "${programmed}" == "False" && "${observed_generation}" == "${generation}" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  fail "unprogrammed Gateway did not reconcile Programmed=False to its current generation"
+  return 1
+}
+
 run_unprogrammed_gateway() {
-  local entitlement current values gateway_name="unprogrammed-${run_id}" programmed observed_generation generation attempt
+  local entitlement current values gateway_name="unprogrammed-${run_id}"
   entitlement="$(create_fixture_references)"
   current="$(build_local_image unprogrammed-gateway)"
   kube -n "${namespace}" apply -f - >/dev/null <<EOF
@@ -890,15 +1028,8 @@ spec:
 EOF
   values="$(write_values "${current}" "${entitlement}" "${gateway_name}" "${namespace}" "https")"
   run_helm "${values}" >/dev/null || { fail "unprogrammed Gateway prevented Helm installation before route status could be checked"; return 1; }
-  generation="$(kube -n "${namespace}" get "gateway/${gateway_name}" -o jsonpath='{.metadata.generation}')"
-  for attempt in $(seq 1 20); do
-    programmed="$(kube -n "${namespace}" get "gateway/${gateway_name}" -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}')"
-    observed_generation="$(kube -n "${namespace}" get "gateway/${gateway_name}" -o jsonpath='{.status.conditions[?(@.type=="Programmed")].observedGeneration}')"
-    [[ "${programmed}" == "False" ]] || { fail "unprogrammed Gateway did not report Programmed=False"; return 1; }
-    [[ "${observed_generation}" == "${generation}" ]] || { fail "unprogrammed Gateway was never reconciled to its current generation"; return 1; }
-    sleep 1
-  done
-  queue_expected_failure unprogrammed-gateway 'reconciled Gateway generation stayed Programmed=False because its certificate reference is absent throughout the full observation window'
+  wait_gateway_programmed_false "${gateway_name}"
+  queue_expected_failure unprogrammed-gateway 'Gateway reconciled Programmed=False because its certificate reference is absent'
   log 'expected failure proven: reconciled Gateway remained unprogrammed because its certificate reference is absent'
   return 0
 }
@@ -948,18 +1079,20 @@ run_app_rollback() {
   queue_evidence passed "application rollback restored=${previous_image} migration_history_fingerprint_before=${history_before} migration_history_fingerprint_after=${history_after} migration_history_unchanged=true rollback_scope=application-only same_source_scope=not_established"
 }
 
-if [[ "${scenario}" == "static" ]]; then
-  static_check
-  exit $?
-fi
+if [[ "${ACR_E2E_LIB_ONLY:-0}" != 1 ]]; then
+  if [[ "${scenario}" == "static" ]]; then
+    static_check
+    exit $?
+  fi
 
-prepare_run
-case "${scenario}" in
-  lifecycle) run_lifecycle ;;
-  bad-migration) run_bad_migration ;;
-  missing-secret) run_missing_secret ;;
-  missing-image-pull-secret) run_missing_image_pull_secret ;;
-  unprogrammed-gateway) run_unprogrammed_gateway ;;
-  denied-egress) run_denied_egress ;;
-  app-rollback) run_app_rollback ;;
-esac
+  prepare_run
+  case "${scenario}" in
+    lifecycle) run_lifecycle ;;
+    bad-migration) run_bad_migration ;;
+    missing-secret) run_missing_secret ;;
+    missing-image-pull-secret) run_missing_image_pull_secret ;;
+    unprogrammed-gateway) run_unprogrammed_gateway ;;
+    denied-egress) run_denied_egress ;;
+    app-rollback) run_app_rollback ;;
+  esac
+fi

@@ -26,6 +26,7 @@ source "${SCRIPT_DIR}/pins.env"
 
 PROBE_IMG="${ACR_E2E_IMG_PROBE:-docker.io/library/busybox@sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028}"
 FIXTURE_SCRIPT="${SCRIPT_DIR}/kind-fixture.sh"
+HELM_SCRIPT="${SCRIPT_DIR}/kind-helm.sh"
 STATE_ROOT="${ACR_E2E_STATE_ROOT:-${REPO_ROOT}/.tmp/e2e}"
 FIXTURE_LABEL_KEY="acr-e2e.fullchaos.dev/fixture-id"
 
@@ -61,6 +62,16 @@ assert_fixture_script_lacks() {
   if grep -Eq -- "${expression}" "${FIXTURE_SCRIPT}"; then bad "${description}"; else ok "${description}"; fi
 }
 
+assert_helm_script_contains() {
+  local expression="$1" description="$2"
+  if grep -Eq -- "${expression}" "${HELM_SCRIPT}"; then ok "${description}"; else bad "${description}"; fi
+}
+
+assert_helm_script_lacks() {
+  local expression="$1" description="$2"
+  if grep -Eq -- "${expression}" "${HELM_SCRIPT}"; then bad "${description}"; else ok "${description}"; fi
+}
+
 assert_rendering_with_bash() {
   local shell="$1" rendered
   # shellcheck disable=SC2016
@@ -80,6 +91,137 @@ assert_rendering_with_bash() {
     ok "${shell} renders digest-only Calico image references"
   else
     bad "${shell} cannot render digest-only Calico image references: ${rendered}"
+  fi
+}
+
+assert_helm_harness_behaviors() {
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    stop_port_forwards() { return 1; }
+    cleanup_namespace() { return 0; }
+    cleanup_kind_images() { return 0; }
+    queued_evidence_result=""
+    run_dir=""
+    on_exit 0
+  ' -- "${HELM_SCRIPT}"; then
+    bad 'cleanup failure must turn an otherwise successful exit into failure'
+  else
+    ok 'cleanup failure turns an otherwise successful exit into failure'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    port_forward_pids=(42)
+    kill() { return 0; }
+    wait_for_process_exit() { return 0; }
+    wait() { return 143; }
+    stop_port_forwards
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'expected port-forward signal exit is accepted during bounded cleanup'
+  else
+    bad 'expected port-forward signal exit is accepted during bounded cleanup'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    cluster=test
+    imported_image_refs=(owned-ref)
+    docker() { return 1; }
+    if cleanup_kind_images; then exit 1; fi
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'Kind image inspection failures fail cleanup closed'
+  else
+    bad 'Kind image inspection failures fail cleanup closed'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    owned_namespace=1
+    namespace_labelled=0
+    cleanup_started=0
+    namespace=test
+    run_id=run
+    kube() {
+      case "$*" in
+        *"get namespace"*) printf "" ;;
+        *"delete namespace"*|*"wait --for=delete"*) return 0 ;;
+      esac
+    }
+    cleanup_namespace
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'namespace created before label failure remains cleanup-owned'
+  else
+    bad 'namespace created before label failure remains cleanup-owned'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    source_tree_hash() { printf fixed; }
+    sleep() { [[ "$1" == 60 ]]; }
+    establish_source_guard
+    [[ "${source_hash}" == fixed ]]
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'source guard requires a sixty-second quiescence window before a scenario'
+  else
+    bad 'source guard requires a sixty-second quiescence window before a scenario'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    root="$(mktemp -d)"
+    trap "rm -rf \"${root}\"" EXIT
+    mkdir -p "${root}/cmd" "${root}/internal" "${root}/migrations"
+    printf x >"${root}/Dockerfile"
+    printf x >"${root}/go.mod"
+    printf x >"${root}/go.sum"
+    REPO_ROOT="${root}"
+    before="$(source_tree_hash)"
+    printf x >"${root}/cmd/untracked.go"
+    after="$(source_tree_hash)"
+    [[ "${before}" != "${after}" ]]
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'source guard fingerprints untracked container build inputs'
+  else
+    bad 'source guard fingerprints untracked container build inputs'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    if run_with_timeout 0 sh -c "exit 0"; then exit 1; else [[ "$?" == 124 ]]; fi
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'registry timeout wrapper returns a bounded timeout failure'
+  else
+    bad 'registry timeout wrapper returns a bounded timeout failure'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    namespace=test
+    poll_file="$(mktemp)"
+    trap "rm -f \"${poll_file}\"" EXIT
+    printf 0 >"${poll_file}"
+    kube() {
+      case "$*" in
+        *observedGeneration*) if [[ "$(cat "${poll_file}")" -gt 1 ]]; then printf 3; fi ;;
+        *metadata.generation*) printf 3 ;;
+        *Programmed*status*) poll=$(( $(cat "${poll_file}") + 1 )); printf %s "${poll}" >"${poll_file}"; if [[ "${poll}" -gt 1 ]]; then printf False; fi ;;
+      esac
+      return 0
+    }
+    sleep() { :; }
+    wait_gateway_programmed_false gateway
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'Gateway False assertion waits for a reconciled condition'
+  else
+    bad 'Gateway False assertion waits for a reconciled condition'
   fi
 }
 
@@ -115,6 +257,18 @@ assert_static_hardening() {
   assert_fixture_script_lacks 'kind delete cluster --name .*[|][|] true' 'cluster deletion failures are not suppressed'
   assert_fixture_script_lacks 'docker rm -f .*[|][|] true' 'registry deletion failures are not suppressed'
   assert_fixture_script_lacks 'docker network rm .*[|][|] true' 'network deletion failures are not suppressed'
+  assert_helm_script_contains 'establish_source_guard' 'every live Helm scenario requires a source quiescence guard'
+  assert_helm_script_contains 'sleep 60' 'source guard establishes sixty seconds of source quiescence'
+  assert_helm_script_contains 'assert_source_guard' 'local image builds recheck the source hash guard'
+  assert_helm_script_contains 'exit "\$\{cleanup_status\}"' 'EXIT cleanup failures change a successful lifecycle exit status'
+  assert_helm_script_contains 'run_with_timeout' 'registry pushes are bounded and fail closed'
+  assert_helm_script_contains 'wait_gateway_programmed_false' 'Gateway False assertions wait for reconciliation'
+  assert_helm_script_contains 'involvedObject.name=\$\{pod\}' 'image-pull evidence is scoped to the migration Pod'
+  assert_helm_script_contains 'assert_anonymous_registry_pull_denied' 'missing pull-secret scenario proves anonymous registry denial'
+  assert_helm_script_contains 'imported_image_refs\+=\("\$\{target\}"\)' 'registry target is tracked before the push can fail'
+  assert_helm_script_contains 'namespace_labelled' 'namespace cleanup handles label failure after namespace creation'
+  assert_helm_script_lacks '^[[:space:]]*docker exec "\$\{node\}" ctr -n k8s.io images push' 'registry pushes cannot run without a bounded wrapper'
+  assert_helm_harness_behaviors
 }
 
 assert_single() {
@@ -160,7 +314,7 @@ assert_single() {
 
   # 6. Registry actually serves the v2 API on the fixture network (real reach).
   local out
-  out="$(docker run --rm --network "$net" "$PROBE_IMG" wget -qO- "http://${reg}:5000/v2/" 2>/dev/null || true)"
+  out="$(docker run --rm --network "$net" "$PROBE_IMG" wget -qO- --header='Authorization: Basic Zml4dHVyZTpmaXh0dXJl' "http://${reg}:5000/v2/" 2>/dev/null || true)"
   if [[ "$out" == "{}" ]]; then ok "registry ${reg} serves /v2/ on ${net}"; else bad "registry ${reg} not reachable/serving on ${net} (got: '${out}')"; fi
 }
 
@@ -181,7 +335,7 @@ assert_pair_isolation() {
 
   # B's registry must NOT be resolvable/reachable from A's network (isolation).
   local xout
-  xout="$(docker run --rm --network "$aNet" "$PROBE_IMG" wget -T 4 -qO- "http://${bReg}:5000/v2/" 2>/dev/null || true)"
+  xout="$(docker run --rm --network "$aNet" "$PROBE_IMG" wget -T 4 -qO- --header='Authorization: Basic Zml4dHVyZTpmaXh0dXJl' "http://${bReg}:5000/v2/" 2>/dev/null || true)"
   if [[ -z "$xout" ]]; then ok "${bReg} unreachable from ${aNet} (isolated)"; else bad "${bReg} reachable from ${aNet} (isolation breach)"; fi
 }
 
