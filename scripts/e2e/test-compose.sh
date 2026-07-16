@@ -22,7 +22,7 @@ grep -Fq 'host_ip: 127.0.0.1' "$script"
 grep -Fq "REDIS_PORT=\"\$redis_port\"" "$script"
 grep -Fq "REPO_ROOT/.tmp/e2e/compose-\${PROJECT}" "$script"
 grep -Fq 'command: ["cp /input/acr.crt' "$script"
-grep -Fq 'chown -R 70:70 /tls' "$script"
+grep -Fq 'chown -R 70:70 /postgres-tls' "$script"
 grep -Fq 'Ops organization provisioning failed' "$script"
 if grep -Fq -- '--owner-email' "$script"; then exit 1; fi
 grep -Fq 'clickhouse-client --user default --password ch' "$script"
@@ -36,9 +36,13 @@ grep -Fq 'ACR_REQUIRE_BACKING_STORES: "true"' "$script"
 grep -Fq 'ACR_EVIDENCE_ID_ACTIVE_KID:' "$script"
 grep -Fq 'random_base64()' "$script"
 grep -Fq 'record_acl_probe()' "$script"
+grep -Fq 'acr_e2e_postgres_tls' "$script"
+grep -Fq 'acr_e2e_clickhouse_tls' "$script"
+grep -Fq 'chown -R 101:101 /clickhouse-tls' "$script"
 grep -Fq 'healthcheck: { test: ["NONE"] }' "$script"
 grep -Fq 'acr-api: { condition: service_started }' "$script"
-expected_cleanup_guard=$(printf '%s' '[[ ! -f "$STATE/override.yml" ]]')
+state_variable=STATE
+expected_cleanup_guard="[[ ! -f \"\$${state_variable}/override.yml\" ]]"
 grep -Fq "$expected_cleanup_guard" "$script"
 if grep -Fq 'acr-secret-entrypoint' "$root/deploy/compose/acr.compose.yml"; then exit 1; fi
 grep -Fq 'entrypoint: ["/usr/local/bin/acr-migrate"]' "$root/deploy/compose/acr.compose.yml"

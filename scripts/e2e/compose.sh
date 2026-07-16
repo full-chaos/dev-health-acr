@@ -133,12 +133,12 @@ services:
     ports: []
     environment: { POSTGRES_USER: devhealth, POSTGRES_PASSWORD: "${pg}", POSTGRES_DB: devhealth }
     command: ["postgres", "-c", "ssl=on", "-c", "ssl_cert_file=/run/acr-tls/acr.crt", "-c", "ssl_key_file=/run/acr-tls/acr.key", "-c", "ssl_ca_file=/run/acr-tls/ca.crt"]
-    volumes: ["postgres_data:/var/lib/postgresql/data", "${STATE}/stage/ops/docker/init-extra-dbs.sh:/docker-entrypoint-initdb.d/init-extra-dbs.sh:ro", "acr_e2e_tls:/run/acr-tls:ro"]
+    volumes: ["postgres_data:/var/lib/postgresql/data", "${STATE}/stage/ops/docker/init-extra-dbs.sh:/docker-entrypoint-initdb.d/init-extra-dbs.sh:ro", "acr_e2e_postgres_tls:/run/acr-tls:ro"]
     depends_on: { acr-pki-init: { condition: service_completed_successfully } }
   clickhouse:
     ports: []
     environment: { CLICKHOUSE_USER: default, CLICKHOUSE_PASSWORD: ch, CLICKHOUSE_DB: default, CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1" }
-    volumes: ["clickhouse_data:/var/lib/clickhouse", "acr_e2e_tls:/run/acr-tls:ro", "${STATE}/clickhouse/tls.xml:/etc/clickhouse-server/config.d/acr-e2e-tls.xml:ro"]
+    volumes: ["clickhouse_data:/var/lib/clickhouse", "acr_e2e_clickhouse_tls:/run/acr-tls:ro", "${STATE}/clickhouse/tls.xml:/etc/clickhouse-server/config.d/acr-e2e-tls.xml:ro"]
     depends_on: { acr-pki-init: { condition: service_completed_successfully } }
   valkey: { ports: [] }
   traefik: { ports: [] }
@@ -146,8 +146,8 @@ services:
     image: postgres:18-alpine
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
-    command: ["cp /input/acr.crt /input/acr.key /input/ca.crt /tls/; chown -R 70:70 /tls; chmod 600 /tls/acr.key"]
-    volumes: ["${STATE}/pki:/input:ro", "acr_e2e_tls:/tls"]
+    command: ["cp /input/acr.crt /input/acr.key /input/ca.crt /postgres-tls/; chown -R 70:70 /postgres-tls; chmod 600 /postgres-tls/acr.key; cp /input/acr.crt /input/acr.key /input/ca.crt /clickhouse-tls/; chown -R 101:101 /clickhouse-tls; chmod 600 /clickhouse-tls/acr.key"]
+    volumes: ["${STATE}/pki:/input:ro", "acr_e2e_postgres_tls:/postgres-tls", "acr_e2e_clickhouse_tls:/clickhouse-tls"]
   acr-api:
     image: "${IMAGE}"
     ports: []
@@ -179,7 +179,8 @@ services:
     depends_on: { api: { condition: service_healthy } }
     networks: [dev-health]
 volumes:
-  acr_e2e_tls: {}
+  acr_e2e_postgres_tls: {}
+  acr_e2e_clickhouse_tls: {}
 EOF
   export ACR_IMAGE="$IMAGE" POSTGRES_USER=devhealth POSTGRES_PASSWORD="$pg" POSTGRES_PORT="$postgres_port" CLICKHOUSE_USER=default CLICKHOUSE_PASSWORD=ch CLICKHOUSE_HTTP_PORT="$clickhouse_http_port" CLICKHOUSE_NATIVE_PORT="$clickhouse_native_port" REDIS_PORT="$redis_port" ACR_DB_NAME="$db" ACR_RUNTIME_DB_USER=acr_runtime ACR_RUNTIME_DB_PASSWORD="$runtime" ACR_MIGRATION_DB_USER=acr_migration ACR_MIGRATION_DB_PASSWORD="$migration" ACR_RUNTIME_DSN_FILE="$STATE/secrets/runtime-dsn" ACR_MIGRATION_DSN_FILE="$STATE/secrets/migration-dsn" ACR_CLICKHOUSE_DSN_FILE="$STATE/secrets/clickhouse-dsn" ACR_OPS_TOKEN_FILE="$STATE/secrets/ops-token" ACR_CA_FILE="$STATE/pki/ca.crt" ACR_EVIDENCE_ACTIVE_KID_FILE="$STATE/secrets/evidence-kid" ACR_EVIDENCE_KEYS_FILE="$STATE/secrets/evidence-keys"
 }
