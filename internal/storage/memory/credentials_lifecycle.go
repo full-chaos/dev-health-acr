@@ -54,7 +54,7 @@ func (s *credentialStore) rotateCredential(ctx context.Context, input storage.Cr
 	if old.RotatedAt != nil {
 		return contractsv1.ClientCredential{}, storage.ErrConflict
 	}
-	if old.Metadata.RevokedAt != nil || old.Metadata.ExpiresAt != nil && !old.Metadata.ExpiresAt.After(now) {
+	if old.Metadata.RevokedAt != nil {
 		return contractsv1.ClientCredential{}, storage.ErrNotFound
 	}
 	replacementInput := input.Replacement
