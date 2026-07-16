@@ -226,6 +226,15 @@ create_acr_credential() {
   write_secret "$STATE/secrets/acr-token" "$token"
 }
 
+record_acl_probe() {
+  local runtime owner_defaults
+  runtime="$(compose exec -T -e "PGPASSWORD=${ACR_RUNTIME_DB_PASSWORD}" postgres psql -h postgres -U "$ACR_RUNTIME_DB_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c "SELECT current_user, current_database(), has_schema_privilege(current_user, 'acr', 'USAGE'), has_schema_privilege(current_user, 'acr', 'CREATE'), has_table_privilege(current_user, 'acr.schema_migrations', 'SELECT'), has_table_privilege(current_user, 'acr.client_credentials', 'SELECT'), has_table_privilege(current_user, 'acr.client_credentials', 'INSERT'), has_table_privilege(current_user, 'acr.client_credentials', 'UPDATE'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'SELECT'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'INSERT'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'UPDATE'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'DELETE'), has_table_privilege(current_user, 'acr.audit_events', 'INSERT'), (SELECT count(*) FROM acr.schema_migrations)")"
+  owner_defaults="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c "SELECT (SELECT bool_and(pg_get_userbyid(relowner) = 'acr_migration') FROM pg_class WHERE relnamespace = 'acr'::regnamespace AND relkind = 'r'), EXISTS (SELECT 1 FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace CROSS JOIN LATERAL aclexplode(d.defaclacl) acl JOIN pg_roles grantee ON grantee.oid = acl.grantee WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = 'acr_migration') AND n.nspname = 'acr' AND grantee.rolname = 'acr_runtime' AND acl.privilege_type = 'SELECT')")"
+  [[ "$runtime" =~ ^acr_runtime\|acr_.*\|t\|f\|t\|t\|t\|t\|t\|t\|t\|t\|t\|[0-9]+$ ]] || die 'runtime ACL probe did not satisfy the required contract'
+  [[ "$owner_defaults" == 't|t' ]] || die 'migration ownership/default ACL probe did not satisfy the required contract'
+  note "ACL_PROBE runtime=${runtime} owners_and_defaults=${owner_defaults}"
+}
+
 run_mcp() {
   local token="$1" evidence_id output
   ACR_API_URL="https://localhost:${PORT}" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$STATE/pki/ca.crt" ACR_SIDECAR_VERSION=1.0.0 ACR_SIDECAR_CLIENT_VERSION=1.0.0 "$STATE/acr-mcp" doctor --live > "$STATE/doctor.json"
@@ -241,6 +250,7 @@ start_happy() {
   bootstrap_ops
   compose up -d acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
   until wait_https /readyz; do sleep 2; done
+  record_acl_probe
   create_acr_credential
   go build -o "$STATE/acr-mcp" ./cmd/acr-mcp
   run_mcp "$(<"$STATE/secrets/acr-token")"

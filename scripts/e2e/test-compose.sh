@@ -6,6 +6,7 @@ script="$root/scripts/e2e/compose.sh"
 pki="$root/scripts/deploy/local-pki.sh"
 
 bash -n "$script" "$pki"
+bash -n "$root/scripts/e2e/test-acr-db-init.sh"
 for scenario in happy existing-volume missing-ops-token invalid-ca revoked-acr-token clickhouse-read-denied migration-failure; do
   grep -Fq "$scenario" "$script"
 done
@@ -34,6 +35,7 @@ grep -Fq 'ACR_POSTGRES_MIGRATION_DSN=' "$script"
 grep -Fq 'ACR_REQUIRE_BACKING_STORES: "true"' "$script"
 grep -Fq 'ACR_EVIDENCE_ID_ACTIVE_KID:' "$script"
 grep -Fq 'random_base64()' "$script"
+grep -Fq 'record_acl_probe()' "$script"
 grep -Fq 'healthcheck: { test: ["NONE"] }' "$script"
 grep -Fq 'acr-api: { condition: service_started }' "$script"
 expected_cleanup_guard=$(printf '%s' '[[ ! -f "$STATE/override.yml" ]]')
@@ -41,6 +43,9 @@ grep -Fq "$expected_cleanup_guard" "$script"
 if grep -Fq 'acr-secret-entrypoint' "$root/deploy/compose/acr.compose.yml"; then exit 1; fi
 grep -Fq 'entrypoint: ["/usr/local/bin/acr-migrate"]' "$root/deploy/compose/acr.compose.yml"
 grep -Fq 'secrets: [acr_migration_dsn, acr_ca]' "$root/deploy/compose/acr.compose.yml"
+grep -Fq 'acr-db-acl:' "$root/deploy/compose/acr.compose.yml"
+grep -Fq '["/usr/local/bin/acr-db-init", "runtime-acl"]' "$root/deploy/compose/acr.compose.yml"
+grep -Fq 'acr-db-acl: { condition: service_completed_successfully }' "$root/deploy/compose/acr.compose.yml"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
