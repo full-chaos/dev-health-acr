@@ -23,7 +23,15 @@ case "$ACR_ENABLE_EPISODE_WRITEBACK" in
 esac
 
 export PGPASSWORD="$POSTGRES_PASSWORD"
-until pg_isready -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d postgres >/dev/null 2>&1; do sleep 1; done
+attempts=0
+until pg_isready -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d postgres >/dev/null 2>&1; do
+  attempts=$((attempts + 1))
+  if [ "$attempts" -ge 60 ]; then
+    printf 'PostgreSQL readiness timed out\n' >&2
+    exit 1
+  fi
+  sleep 1
+done
 
 psql -v ON_ERROR_STOP=1 -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d postgres \
   -v acr_db_name="$ACR_DB_NAME" \

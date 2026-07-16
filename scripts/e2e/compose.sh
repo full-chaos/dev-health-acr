@@ -196,6 +196,16 @@ assert_safe_render() {
 }
 
 wait_https() { curl --fail --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' "https://localhost:${PORT}$1" >/dev/null; }
+wait_https_ready() {
+  local attempts=0
+  until wait_https /readyz; do
+    attempts=$((attempts + 1))
+    if [[ "$attempts" -ge 90 ]]; then
+      die 'HTTPS readiness timed out'
+    fi
+    sleep 2
+  done
+}
 
 bootstrap_ops() {
   local output org_id token db
@@ -250,7 +260,7 @@ run_mcp() {
 start_happy() {
   bootstrap_ops
   compose up -d acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
-  until wait_https /readyz; do sleep 2; done
+  wait_https_ready
   record_acl_probe
   create_acr_credential
   go build -o "$STATE/acr-mcp" ./cmd/acr-mcp
@@ -288,7 +298,7 @@ elif [[ "$SCENARIO" == existing-volume ]]; then
   start_happy
   compose down --remove-orphans >/dev/null
   compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-ops-tls acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
-  until wait_https /readyz; do sleep 2; done
+  wait_https_ready
   run_mcp "$(<"$STATE/secrets/acr-token")"
   SAFE_BOUNDARY='existing project-scoped volumes survived a complete application restart'
 else

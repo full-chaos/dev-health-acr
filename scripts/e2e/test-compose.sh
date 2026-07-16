@@ -36,6 +36,7 @@ grep -Fq 'ACR_REQUIRE_BACKING_STORES: "true"' "$script"
 grep -Fq 'ACR_EVIDENCE_ID_ACTIVE_KID:' "$script"
 grep -Fq 'random_base64()' "$script"
 grep -Fq 'record_acl_probe()' "$script"
+grep -Fq 'HTTPS readiness timed out' "$script"
 grep -Fq 'acr_e2e_postgres_tls' "$script"
 grep -Fq 'acr_e2e_clickhouse_tls' "$script"
 grep -Fq 'chown -R 101:101 /clickhouse-tls' "$script"
@@ -50,6 +51,7 @@ grep -Fq 'secrets: [acr_migration_dsn, acr_ca]' "$root/deploy/compose/acr.compos
 grep -Fq 'acr-db-acl:' "$root/deploy/compose/acr.compose.yml"
 grep -Fq '["/usr/local/bin/acr-db-init", "runtime-acl"]' "$root/deploy/compose/acr.compose.yml"
 grep -Fq 'acr-db-acl: { condition: service_completed_successfully }' "$root/deploy/compose/acr.compose.yml"
+grep -Fq 'PostgreSQL readiness timed out' "$root/deploy/compose/acr-db-init.sh"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
