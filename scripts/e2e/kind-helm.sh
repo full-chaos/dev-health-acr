@@ -159,6 +159,15 @@ cleanup_kind_images() {
   return "${status}"
 }
 
+assert_kind_images_absent() {
+  local node="$1" ref existing
+  shift
+  existing="$(docker exec "${node}" ctr -n k8s.io images list -q)" || die "could not inspect Kind image ownership before import"
+  for ref in "$@"; do
+    grep -Fxq "${ref}" <<<"${existing}" && die "refusing to reuse a pre-existing Kind image reference: ${ref}"
+  done
+}
+
 cleanup_namespace() {
   [[ "${owned_namespace}" -eq 1 ]] || return 0
   [[ "${cleanup_started}" -eq 0 ]] || return 0
@@ -448,6 +457,7 @@ build_local_image() {
   digest="$(image_digest_from_oci "${archive}")"
   node="${cluster}-control-plane"
   remote_archive="/var/lib/acr-e2e/$(basename "${archive}")"
+  assert_kind_images_absent "${node}" "${tag}" "${repo}@${digest}"
   imported_image_refs+=("${tag}" "${repo}@${digest}")
   docker exec "${node}" mkdir -p /var/lib/acr-e2e
   remote_archives+=("${remote_archive}")

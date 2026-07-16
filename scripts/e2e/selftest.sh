@@ -349,6 +349,7 @@ assert_static_hardening() {
   assert_helm_script_contains 'involvedObject.name=\$\{pod\}' 'image-pull evidence is scoped to the migration Pod'
   assert_helm_script_contains 'assert_anonymous_registry_pull_denied' 'missing pull-secret scenario proves anonymous registry denial'
   assert_helm_script_contains 'imported_image_refs\+=\("\$\{target\}"\)' 'registry target is tracked before the push can fail'
+  assert_helm_script_contains 'assert_kind_images_absent' 'Kind image imports reject pre-existing references before tracking cleanup ownership'
   assert_helm_script_contains 'namespace_labelled' 'namespace cleanup handles label failure after namespace creation'
   assert_helm_script_lacks '^[[:space:]]*docker exec "\$\{node\}" ctr -n k8s.io images push' 'registry pushes cannot run without a bounded wrapper'
   assert_helm_harness_behaviors
