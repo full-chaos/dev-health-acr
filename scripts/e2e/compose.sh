@@ -48,6 +48,9 @@ cleanup() {
   local status=$?
   [[ -n "$STATE" && -d "$STATE" ]] || exit "$status"
   note "cleanup receipt before: $(owned_receipt)"
+  if [[ "$status" -ne 0 ]]; then
+    compose logs --no-color acr-pki-init 2>&1 || true
+  fi
   if ! compose down --volumes --remove-orphans >/dev/null 2>&1; then
     note 'cleanup failed; refusing to claim an isolated teardown'
     status=1
@@ -137,7 +140,7 @@ services:
     image: postgres:18-alpine
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
-    command: "cp /input/acr.crt /input/acr.key /input/ca.crt /tls/; chown -R 999:999 /tls; chmod 600 /tls/acr.key"
+    command: ["cp /input/acr.crt /input/acr.key /input/ca.crt /tls/; chown -R 999:999 /tls; chmod 600 /tls/acr.key"]
     volumes: ["${STATE}/pki:/input:ro", "acr_e2e_tls:/tls"]
   acr-api:
     image: "${IMAGE}"
