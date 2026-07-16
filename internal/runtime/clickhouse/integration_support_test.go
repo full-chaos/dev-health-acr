@@ -80,8 +80,8 @@ func assertIntegrationServerRejectsMutation(t *testing.T, options Options) {
 	if err := rows.Scan(&readonly); err != nil {
 		t.Fatalf("scan enforced readonly setting: %v", err)
 	}
-	if readonly != 1 {
-		t.Fatalf("getSetting('readonly') = %d, want 1", readonly)
+	if readonly != 2 {
+		t.Fatalf("getSetting('readonly') = %d, want server profile 2", readonly)
 	}
 	err = connection.Exec(context.Background(), "INSERT INTO ci_pipeline_runs (org_id) VALUES ('forbidden')")
 
