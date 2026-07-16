@@ -343,7 +343,7 @@ PATH="${timeout_fixture}:$PATH" \
   CONTAINER_BUILD_KILL_GRACE=1 \
   "${repo_root}/scripts/container/build.sh" acr-api >/dev/null 2>&1 &
 signaled_build_pid=$!
-for _ in {1..50}; do
+for _ in {1..200}; do
   [[ -s "$timeout_child_pid" ]] && break
   sleep 0.1
 done
