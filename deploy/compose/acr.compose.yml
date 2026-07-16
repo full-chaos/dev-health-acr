@@ -22,7 +22,8 @@ services:
   acr-migrate:
     image: ${ACR_IMAGE:?ACR_IMAGE must be an immutable image digest}
     restart: "no"
-    command: ["/usr/local/bin/acr-migrate", "up"]
+    entrypoint: ["/usr/local/bin/acr-migrate"]
+    command: ["up"]
     environment:
       ACR_ENVIRONMENT: development
       ACR_POSTGRES_CONNECTION_KIND: direct
@@ -34,7 +35,7 @@ services:
     networks: [dev-health]
   acr-api:
     image: ${ACR_IMAGE:?ACR_IMAGE must be an immutable image digest}
-    command: ["/usr/local/bin/acr-api", "serve"]
+    command: ["serve"]
     environment:
       ACR_ADDR: :8080
       ACR_ENVIRONMENT: development
