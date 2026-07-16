@@ -22,6 +22,8 @@ grep -Fq "REDIS_PORT=\"\$redis_port\"" "$script"
 grep -Fq "REPO_ROOT/.tmp/e2e/compose-\${PROJECT}" "$script"
 grep -Fq 'command: ["cp /input/acr.crt' "$script"
 grep -Fq 'chown -R 70:70 /tls' "$script"
+grep -Fq 'Ops organization provisioning failed' "$script"
+if grep -Fq -- '--owner-email' "$script"; then exit 1; fi
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

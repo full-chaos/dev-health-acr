@@ -185,7 +185,10 @@ wait_https() { curl --fail --silent --show-error --cacert "$STATE/pki/ca.crt" --
 bootstrap_ops() {
   local output org_id token db
   compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-ops-tls >/dev/null
-  output="$(compose exec -T api dev-hops admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community --owner-email 'owner@example.test' 2>/dev/null)"
+  if ! output="$(compose exec -T api dev-hops admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community)"; then
+    printf '%s\n' "$output" >&2
+    die 'Ops organization provisioning failed'
+  fi
   org_id="$(printf '%s\n' "$output" | sed -nE 's/.*id:[[:space:]]*([0-9a-fA-F-]{36}).*/\1/p')"
   [[ "$org_id" =~ ^[0-9a-fA-F-]{36}$ ]] || die 'Ops org provisioning did not return an ID'
   compose exec -T api dev-hops admin bundles assign-org --org-id "$org_id" --feature-key agent_context_runtime --reason 'isolated compose E2E' --expires-days 1 >/dev/null
