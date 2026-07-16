@@ -12,6 +12,7 @@ PORT=""
 IMAGE="${ACR_E2E_IMAGE:-}"
 COMPOSE=(docker compose)
 SAFE_BOUNDARY=""
+ACR_CLIENT_VERSION_HEADER="X-ACR-Client-Version: 1.0.0"
 
 # allow: SIZE_OK — the isolated scenario lifecycle shares one trap-owned state directory.
 
@@ -271,10 +272,10 @@ rotate_acr_credential() {
   fi
   [[ "$token" == fcacr_* ]] || die 'ACR credential rotation returned an invalid token shape'
   write_secret "$STATE/secrets/acr-rotated-token" "$token"
-  if ! curl --fail --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "Authorization: Bearer ${token}" "https://localhost:${PORT}/api/v1/agent-context/capabilities" >/dev/null; then
+  if ! curl --fail --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer ${token}" "https://localhost:${PORT}/api/v1/agent-context/capabilities" >/dev/null; then
     die 'rotated ACR credential did not authenticate against the direct localhost endpoint'
   fi
-  if curl --fail --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "Authorization: Bearer ${old_token}" "https://localhost:${PORT}/api/v1/agent-context/capabilities" >/dev/null 2>&1; then
+  if curl --fail --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer ${old_token}" "https://localhost:${PORT}/api/v1/agent-context/capabilities" >/dev/null 2>&1; then
     die 'previous ACR credential remained valid after immediate rotation'
   fi
 }
@@ -351,7 +352,7 @@ run_failure() {
     invalid-ca)
       start_happy; printf 'not a certificate\n' > "$STATE/pki/invalid-ca.crt"; expect_failure curl --fail --silent --cacert "$STATE/pki/invalid-ca.crt" --noproxy '*' "https://localhost:${PORT}/readyz"; SAFE_BOUNDARY='TLS verification failed; no insecure curl option was used' ;;
     revoked-acr-token)
-      start_happy; compose run --rm --no-deps acr-credentials credentials revoke --org-id "$(<"$STATE/org-id")" --credential-id "$(compose run --rm --no-deps acr-credentials credentials list --org-id "$(<"$STATE/org-id")" --json | sed -nE 's/.*"credential_id":"([^"]+)".*/\1/p' | head -1)" --actor compose-e2e >/dev/null; expect_failure curl --fail --silent --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "Authorization: Bearer $(<"$STATE/secrets/acr-token")" "https://localhost:${PORT}/api/v1/agent-context/capabilities"; SAFE_BOUNDARY='revoked ACR credential was denied before protected reads' ;;
+      start_happy; compose run --rm --no-deps acr-credentials credentials revoke --org-id "$(<"$STATE/org-id")" --credential-id "$(compose run --rm --no-deps acr-credentials credentials list --org-id "$(<"$STATE/org-id")" --json | sed -nE 's/.*"credential_id":"([^"]+)".*/\1/p' | head -1)" --actor compose-e2e >/dev/null; expect_failure curl --fail --silent --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer $(<"$STATE/secrets/acr-token")" "https://localhost:${PORT}/api/v1/agent-context/capabilities"; SAFE_BOUNDARY='revoked ACR credential was denied before protected reads' ;;
     clickhouse-read-denied)
       start_happy; expect_failure compose exec -T clickhouse clickhouse-client --user acr_reader --password "$(<"$STATE/secrets/clickhouse-password")" --query "INSERT INTO acr_${PROJECT//-/}_e2e.system_metrics VALUES ()"; SAFE_BOUNDARY='read-only ClickHouse user rejected a write' ;;
     migration-failure)
