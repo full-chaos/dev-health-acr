@@ -237,6 +237,7 @@ assert_helm_harness_behaviors() {
   # shellcheck disable=SC2016
   if "${BASH}" -c '
     ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    capture_clean_git_provenance() { :; }
     source_tree_hash() { printf fixed; }
     sleep() { [[ "$1" == 60 ]]; }
     establish_source_guard
@@ -343,6 +344,9 @@ assert_static_hardening() {
   assert_fixture_script_lacks 'docker network rm .*[|][|] true' 'network deletion failures are not suppressed'
   assert_helm_script_contains 'establish_source_guard' 'every live Helm scenario requires a source quiescence guard'
   assert_helm_script_contains 'sleep 60' 'source guard establishes sixty seconds of source quiescence'
+  assert_helm_script_contains 'capture_clean_git_provenance' 'source guard captures exact clean Git provenance'
+  assert_helm_script_contains 'commit_sha=' 'scenario evidence records its exact commit SHA'
+  assert_helm_script_contains 'working_tree_clean=' 'scenario evidence records clean-tree provenance'
   assert_helm_script_contains 'assert_source_guard' 'local image builds recheck the source hash guard'
   assert_helm_script_contains 'scripts/e2e/kind-helm.sh' 'source guard covers the executed Helm harness'
   assert_helm_script_contains 'scripts/container' 'source guard covers untracked container build helpers'

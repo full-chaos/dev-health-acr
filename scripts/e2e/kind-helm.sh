@@ -29,6 +29,10 @@ queued_evidence_detail=""
 imported_image_refs=()
 remote_archives=()
 source_hash=""
+git_commit_sha=""
+git_head_tree_sha=""
+git_index_tree_sha=""
+git_provenance_captured_at_utc=""
 built_image_ref=""
 published_image_ref=""
 TIMEOUT_TERM_GRACE_SECONDS="${ACR_E2E_TIMEOUT_TERM_GRACE_SECONDS:-5}"
@@ -86,6 +90,10 @@ kube_cleanup() { kubectl --context "kind-${cluster}" --request-timeout=10s "$@";
 
 write_evidence() {
   local result="$1" detail="$2"
+  if [[ -n "${source_hash}" ]]; then
+    assert_source_guard
+    assert_clean_git_provenance
+  fi
   mkdir -p "$(dirname "${EVIDENCE_FILE}")"
   umask 077
   {
@@ -95,6 +103,13 @@ write_evidence() {
     printf 'namespace=%s\n' "${namespace:-none}"
     printf 'release=%s\n' "${release:-none}"
     printf 'fixture_id=%s\n' "${fixture_id:-none}"
+    printf 'commit_sha=%s\n' "${git_commit_sha:-none}"
+    printf 'head_tree_sha=%s\n' "${git_head_tree_sha:-none}"
+    printf 'index_tree_sha=%s\n' "${git_index_tree_sha:-none}"
+    printf 'working_tree_clean=%s\n' "$( [[ -n "${source_hash}" ]] && printf true || printf false )"
+    printf 'index_clean=%s\n' "$( [[ -n "${source_hash}" ]] && printf true || printf false )"
+    printf 'git_provenance_captured_at_utc=%s\n' "${git_provenance_captured_at_utc:-none}"
+    printf 'source_hash=%s\n' "${source_hash:-none}"
     printf 'detail=%s\n' "${detail}"
     printf 'recorded_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf '%s\n' '---'
@@ -334,8 +349,34 @@ source_tree_hash() {
   )
 }
 
+capture_clean_git_provenance() {
+  local status
+  git -C "${REPO_ROOT}" diff --quiet -- || die "live scenario refuses dirty working tree attribution"
+  git -C "${REPO_ROOT}" diff --cached --quiet -- || die "live scenario refuses dirty index attribution"
+  status="$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=all)"
+  [[ -z "${status}" ]] || die "live scenario refuses untracked working tree attribution"
+  git_commit_sha="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+  git_head_tree_sha="$(git -C "${REPO_ROOT}" rev-parse "HEAD^{tree}")"
+  git_index_tree_sha="$(git -C "${REPO_ROOT}" write-tree)"
+  [[ "${git_commit_sha}" =~ ^[a-f0-9]{40}$ && "${git_head_tree_sha}" =~ ^[a-f0-9]{40}$ && "${git_index_tree_sha}" == "${git_head_tree_sha}" ]] || die "live scenario cannot establish exact clean Git provenance"
+  git_provenance_captured_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+
+assert_clean_git_provenance() {
+  local status current_commit current_head_tree current_index_tree
+  current_commit="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+  current_head_tree="$(git -C "${REPO_ROOT}" rev-parse "HEAD^{tree}")"
+  current_index_tree="$(git -C "${REPO_ROOT}" write-tree)"
+  [[ "${current_commit}" == "${git_commit_sha}" && "${current_head_tree}" == "${git_head_tree_sha}" && "${current_index_tree}" == "${git_index_tree_sha}" ]] || die "live scenario Git provenance changed after source guard establishment"
+  git -C "${REPO_ROOT}" diff --quiet -- || die "live scenario working tree became dirty"
+  git -C "${REPO_ROOT}" diff --cached --quiet -- || die "live scenario index became dirty"
+  status="$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=all)"
+  [[ -z "${status}" ]] || die "live scenario acquired untracked source attribution"
+}
+
 establish_source_guard() {
   local baseline rechecked
+  capture_clean_git_provenance
   baseline="$(source_tree_hash)" || die "could not hash tracked source before the live scenario"
   sleep 60
   rechecked="$(source_tree_hash)" || die "source tree changed during the 60-second quiescence window"
