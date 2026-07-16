@@ -85,6 +85,10 @@ FIXTURE_LOCK_DIR=""
 CREATE_IN_MEMORY_OWNERSHIP=0
 VERIFY_BACKEND_TLS_RESTORE_NAME=""
 VERIFY_BACKEND_TLS_RESTORE_HOST=""
+VERIFY_COMMIT_SHA=""
+VERIFY_HEAD_TREE_SHA=""
+VERIFY_INDEX_TREE_SHA=""
+VERIFY_GIT_PROVENANCE_CAPTURED_AT_UTC=""
 
 identity_path() { echo "$(state_dir "$1")/${IDENTITY_FILE}"; }
 lock_path() { echo "${STATE_ROOT}/.$1.fixture-lock"; }
@@ -956,7 +960,7 @@ bootstrap_clickhouse_catalog() {
 }
 
 deploy_ops_entitlement() {
-  local name="$1"
+  local name="$1" token="acr-e2e-ops-token-initial"
   cat <<EOF | kube "${name}" apply -f - >/dev/null
 apiVersion: v1
 kind: ConfigMap
@@ -970,11 +974,13 @@ data:
       ssl_certificate     /tls/tls.crt;
       ssl_certificate_key /tls/tls.key;
       location = /entitlement {
+        if (\$http_authorization != "Bearer ${token}") { return 401; }
         default_type application/json;
         return 200 '{"entitlement":"agent_context_runtime","status":"active","fixture":"acr-e2e"}';
       }
       location = /healthz { return 200 'ok'; }
       location = /api/v1/internal/acr/health {
+        if (\$http_authorization != "Bearer ${token}") { return 401; }
         default_type application/json;
         return 200 '{"schema_version":"acr_service_health.v1","service":"dev-health-ops","status":"ok"}';
       }
@@ -1202,6 +1208,24 @@ check_neg() { # check_neg "<description>" <command...>  (must FAIL)
   if "$@" >/dev/null 2>&1; then fail "${desc}"; VERIFY_FAILURES=$((VERIFY_FAILURES+1)); else ok "${desc}"; fi
 }
 
+verify_clean_git_provenance() {
+  local status
+  if ! git -C "${REPO_ROOT}" diff --quiet --; then
+    die "verification refuses dirty working tree attribution"
+  fi
+  if ! git -C "${REPO_ROOT}" diff --cached --quiet --; then
+    die "verification refuses dirty index attribution"
+  fi
+  status="$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=all)"
+  [[ -z "${status}" ]] || die "verification refuses untracked working tree attribution"
+
+  VERIFY_COMMIT_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+  VERIFY_HEAD_TREE_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD^{tree})"
+  VERIFY_INDEX_TREE_SHA="$(git -C "${REPO_ROOT}" write-tree)"
+  [[ "${VERIFY_COMMIT_SHA}" =~ ^[a-f0-9]{40}$ && "${VERIFY_HEAD_TREE_SHA}" =~ ^[a-f0-9]{40}$ && "${VERIFY_INDEX_TREE_SHA}" == "${VERIFY_HEAD_TREE_SHA}" ]] || die "verification cannot establish exact clean Git provenance"
+  VERIFY_GIT_PROVENANCE_CAPTURED_AT_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+
 cmd_verify() {
   local name="$1" verification_started_at_utc
   validate_name "${name}"
@@ -1214,6 +1238,7 @@ cmd_verify() {
   RUNTIME_IMAGE_REFS=()
   RUNTIME_IMAGE_IDS=()
   verification_started_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  verify_clean_git_provenance
 
   check "exact Kind version ${ACR_E2E_KIND_VERSION}" kind_version_matches
   verify_fixture_ownership "${name}" || die "fixture ownership verification failed for ${name}"
@@ -1586,7 +1611,12 @@ fixture_id=${FIXTURE_ID}
 kind_version=${ACR_E2E_KIND_VERSION}
 node_image=${ACR_E2E_NODE_IMAGE}
 north_south_https_entitlement=observed
-commit_sha=$(git -C "${REPO_ROOT}" rev-parse HEAD)
+commit_sha=${VERIFY_COMMIT_SHA}
+head_tree_sha=${VERIFY_HEAD_TREE_SHA}
+index_tree_sha=${VERIFY_INDEX_TREE_SHA}
+working_tree_clean=true
+index_clean=true
+git_provenance_captured_at_utc=${VERIFY_GIT_PROVENANCE_CAPTURED_AT_UTC}
 verification_started_at_utc=${verification_started_at_utc}
 verified_at_utc=${verified_at_utc}
 EOF
@@ -1600,13 +1630,21 @@ EOF
 }
 
 validate_verification_evidence() {
-  local evidence="$1" expected actual started verified written
+  local evidence="$1" expected actual started verified written commit head_tree index_tree tree_clean index_clean captured
   expected="$(awk -F= '$1 == "evidence_payload_sha256" { print $2 }' "${evidence}")"
   actual="$(awk -F= '$1 != "evidence_payload_sha256" { print }' "${evidence}" | sha256_of /dev/stdin)"
   [[ "${expected}" =~ ^[a-f0-9]{64}$ && "${actual}" == "${expected}" ]] || die "verification evidence integrity check failed"
   started="$(awk -F= '$1 == "verification_started_at_utc" { print $2 }' "${evidence}")"
   verified="$(awk -F= '$1 == "verified_at_utc" { print $2 }' "${evidence}")"
   written="$(awk -F= '$1 == "evidence_written_at_utc" { print $2 }' "${evidence}")"
+  commit="$(awk -F= '$1 == "commit_sha" { print $2 }' "${evidence}")"
+  head_tree="$(awk -F= '$1 == "head_tree_sha" { print $2 }' "${evidence}")"
+  index_tree="$(awk -F= '$1 == "index_tree_sha" { print $2 }' "${evidence}")"
+  tree_clean="$(awk -F= '$1 == "working_tree_clean" { print $2 }' "${evidence}")"
+  index_clean="$(awk -F= '$1 == "index_clean" { print $2 }' "${evidence}")"
+  captured="$(awk -F= '$1 == "git_provenance_captured_at_utc" { print $2 }' "${evidence}")"
+  [[ "${commit}" == "${VERIFY_COMMIT_SHA}" && "${head_tree}" == "${VERIFY_HEAD_TREE_SHA}" && "${index_tree}" == "${VERIFY_INDEX_TREE_SHA}" && "${tree_clean}" == true && "${index_clean}" == true && "${captured}" == "${VERIFY_GIT_PROVENANCE_CAPTURED_AT_UTC}" ]] || die "verification evidence does not match captured clean Git provenance"
+  git -C "${REPO_ROOT}" diff --quiet -- && git -C "${REPO_ROOT}" diff --cached --quiet -- || die "verification attribution became dirty"
   if [[ ! "${started}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || ! "${verified}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || ! "${written}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || "${started}" > "${verified}" || "${verified}" > "${written}" ]]; then
     die "verification evidence timestamps are invalid or out of order"
   fi

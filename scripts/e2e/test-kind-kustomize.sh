@@ -19,16 +19,19 @@ require_output() {
   grep -Fqx -- "$expected" <<<"${output}" || fail "missing self-test result: ${expected}"
 }
 
-test_self_test_covers_required_seams() {
-  local output
-  output="$(bash "${HARNESS}" --self-test)"
+test_self_test_requires_a_fixture_and_runs_scenarios() {
+  local output status scenario
+  set +e
+  output="$(bash "${HARNESS}" --self-test 2>&1)"
+  status=$?
+  set -e
 
-  require_output "${output}" 'ok: parity compares critical Helm and Kustomize fields'
-  require_output "${output}" 'ok: stale migration status is rejected after replacement UID freshness'
-  require_output "${output}" 'ok: denied migration egress is causally proven by the NetworkPolicy'
-  require_output "${output}" 'ok: mutable production image is rejected before cluster access'
-  require_output "${output}" 'ok: secret rotation changes bytes, content checksum, and consuming pod'
-  require_output "${output}" 'ok: application rollback renders only the previous immutable Deployment image'
+  [[ ${status} -ne 0 ]] || fail 'self-test accepted no fixture cluster'
+  grep -Fq -- '--cluster is required' <<<"${output}" || fail 'self-test did not require a fixture cluster'
+  grep -Fq 'run_behavioral_scenario' "${HARNESS}" || fail 'self-test does not execute child scenarios'
+  for scenario in lifecycle stale-migration-status denied-egress mutable-production-image app-rollback; do
+    grep -Fq "${scenario}" "${HARNESS}" || fail "self-test does not cover ${scenario}"
+  done
 }
 
 test_hardening_seams_are_present() {
@@ -40,9 +43,64 @@ test_hardening_seams_are_present() {
   if ! grep -Fq 'emptyDir:' "${DEPLOYMENT}" || ! grep -Fq 'medium: Memory' "${DEPLOYMENT}"; then fail 'deployment copied secret storage is not memory-backed'; fi
   if ! grep -Fq 'emptyDir:' "${MIGRATION}" || ! grep -Fq 'medium: Memory' "${MIGRATION}"; then fail 'migration writable storage is not memory-backed'; fi
   grep -Fq 'rotation_content' "${LIBRARY}" || fail 'secret rotation does not change fixture credential bytes'
+  grep -Fq 'e2e_set_ops_entitlement_token' "${HARNESS}" || fail 'secret rotation does not rotate the accepted Ops token'
+  grep -Fq 'e2e_application_readiness' "${HARNESS}" || fail 'secret rotation does not prove application-boundary token use'
   grep -Fq 'replacement_uid' "${HARNESS}" || fail 'stale migration scenario does not prove replacement UID freshness'
   grep -Fq 'old_complete' "${HARNESS}" || fail 'stale migration scenario does not observe stale completion'
   if ! grep -Fq 'NetworkPolicy' "${HARNESS}" || ! grep -Fq 'transport' "${HARNESS}"; then fail 'denied egress scenario does not prove transport causality'; fi
+}
+
+test_verification_evidence_requires_clean_git_provenance() {
+  local token
+  for token in verify_clean_git_provenance working_tree_clean=true index_clean=true head_tree_sha index_tree_sha; do
+    grep -Fq "${token}" "${FIXTURE}" || fail "verification evidence omits clean Git provenance: ${token}"
+  done
+}
+
+test_verification_provenance_rejects_dirty_worktree() {
+  local state_root fake_bin output status
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/git" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" diff --quiet -- "*) exit 1 ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/git"
+  set +e
+  output="$(PATH="${fake_bin}:${PATH}" ACR_E2E_LIB_ONLY=1 bash -c 'source "$1"; verify_clean_git_provenance' -- "${FIXTURE}" 2>&1)"
+  status=$?
+  set -e
+  rm -rf "${state_root}"
+
+  [[ ${status} -ne 0 ]] || fail 'dirty working tree attribution unexpectedly succeeded'
+  grep -Fq 'verification refuses dirty working tree attribution' <<<"${output}" || fail 'dirty working tree attribution did not fail closed'
+}
+
+test_verification_provenance_rejects_dirty_index() {
+  local state_root fake_bin output status
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/git" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" diff --cached --quiet -- "*) exit 1 ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/git"
+  set +e
+  output="$(PATH="${fake_bin}:${PATH}" ACR_E2E_LIB_ONLY=1 bash -c 'source "$1"; verify_clean_git_provenance' -- "${FIXTURE}" 2>&1)"
+  status=$?
+  set -e
+  rm -rf "${state_root}"
+
+  [[ ${status} -ne 0 ]] || fail 'dirty index attribution unexpectedly succeeded'
+  grep -Fq 'verification refuses dirty index attribution' <<<"${output}" || fail 'dirty index attribution did not fail closed'
 }
 
 test_preexisting_namespace_is_not_deleted() {
@@ -105,8 +163,11 @@ test_mutable_image_is_rejected_before_cluster_access() {
   fi
 }
 
-test_self_test_covers_required_seams
+test_self_test_requires_a_fixture_and_runs_scenarios
 test_mutable_image_is_rejected_before_cluster_access
 test_hardening_seams_are_present
+test_verification_evidence_requires_clean_git_provenance
+test_verification_provenance_rejects_dirty_worktree
+test_verification_provenance_rejects_dirty_index
 test_preexisting_namespace_is_not_deleted
 printf 'RESULT: Kind Kustomize harness contract tests passed\n'

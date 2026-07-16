@@ -240,6 +240,50 @@ e2e_create_secrets() {
   e2e_kube create secret generic acr-e2e-regcred --type=kubernetes.io/dockerconfigjson --from-literal=.dockerconfigjson='{"auths":{}}' --dry-run=client -o yaml | e2e_kube apply -f - >/dev/null
 }
 
+e2e_set_ops_entitlement_token() {
+  local token="$1" config
+  config="$(cat <<EOF
+server {
+  listen 8443 ssl;
+  ssl_certificate /tls/tls.crt;
+  ssl_certificate_key /tls/tls.key;
+  location = /entitlement {
+    if (\$http_authorization != \"Bearer ${token}\") { return 401; }
+    default_type application/json;
+    return 200 '{\"entitlement\":\"agent_context_runtime\",\"status\":\"active\",\"fixture\":\"acr-e2e\"}';
+  }
+  location = /healthz { return 200 'ok'; }
+  location = /api/v1/internal/acr/health {
+    if (\$http_authorization != \"Bearer ${token}\") { return 401; }
+    default_type application/json;
+    return 200 '{\"schema_version\":\"acr_service_health.v1\",\"service\":\"dev-health-ops\",\"status\":\"ok\"}';
+  }
+}
+EOF
+)"
+  kubectl --context "$KUSTOMIZE_E2E_CONTEXT" --namespace "$KUSTOMIZE_E2E_DEPS_NAMESPACE" create configmap ops-entitlement-conf --from-literal=default.conf="$config" --dry-run=client -o yaml | kubectl --context "$KUSTOMIZE_E2E_CONTEXT" apply -f - >/dev/null
+  kubectl --context "$KUSTOMIZE_E2E_CONTEXT" --namespace "$KUSTOMIZE_E2E_DEPS_NAMESPACE" rollout restart deployment/ops-entitlement >/dev/null
+  kubectl --context "$KUSTOMIZE_E2E_CONTEXT" --namespace "$KUSTOMIZE_E2E_DEPS_NAMESPACE" rollout status deployment/ops-entitlement --timeout=120s >/dev/null
+}
+
+e2e_application_readiness() {
+  local pod port pid body ready=0 attempt
+  pod="$(e2e_kube get pod -l app.kubernetes.io/name=acr,app.kubernetes.io/component=api -o jsonpath='{.items[0].metadata.name}')"
+  [[ -n "$pod" ]] || e2e_die 'application readiness probe could not select an API pod'
+  port=$(( (RANDOM % 20000) + 20000 ))
+  kubectl --context "$KUSTOMIZE_E2E_CONTEXT" --namespace "$KUSTOMIZE_E2E_NAMESPACE" port-forward "pod/${pod}" "${port}:8080" >/dev/null 2>&1 &
+  pid=$!
+  for attempt in $(seq 1 40); do
+    if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then ready=1; break; fi
+    sleep 0.25
+  done
+  if [[ "$ready" != 1 ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; e2e_die 'application readiness port-forward did not become ready'; fi
+  body="$(curl --max-time 10 --silent --show-error "http://127.0.0.1:${port}/readyz" 2>&1 || true)"
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  printf '%s' "$body"
+}
+
 e2e_prepare_runtime_role() {
   kubectl --context "$KUSTOMIZE_E2E_CONTEXT" --namespace "$KUSTOMIZE_E2E_DEPS_NAMESPACE" exec deploy/postgres -- \
     psql -v ON_ERROR_STOP=1 -U postgres -d acr -c "DO \$\$ BEGIN CREATE ROLE acr_runtime LOGIN PASSWORD 'acr-e2e-runtime-pass'; EXCEPTION WHEN duplicate_object THEN END \$\$; CREATE SCHEMA IF NOT EXISTS acr; GRANT USAGE ON SCHEMA acr TO acr_runtime; ALTER DEFAULT PRIVILEGES IN SCHEMA acr GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO acr_runtime; ALTER DEFAULT PRIVILEGES IN SCHEMA acr GRANT USAGE, SELECT ON SEQUENCES TO acr_runtime;" >/dev/null

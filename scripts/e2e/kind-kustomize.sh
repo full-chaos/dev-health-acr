@@ -166,22 +166,27 @@ verify_no_mcp() {
 }
 
 rotate_secret() {
-  local before before_pod before_secret rotation_content revision after after_pod rotated_secret
+	local before before_pod before_secret rotation_content revision after after_pod rotated_secret rejected ready
   before_pod="$(e2e_kube get pod -l app.kubernetes.io/name=acr,app.kubernetes.io/component=api -o jsonpath='{.items[0].metadata.uid}')"
   before_secret="$(e2e_kube get secret/acr-entitlement-token -o jsonpath='{.data.token}')"
   before="$(e2e_kube get deployment/acr-api -o jsonpath='{.spec.template.metadata.annotations.acr\.fullchaos\.dev/credentials-revision}')"
-  rotation_content="rotation-$(openssl rand -hex 16)"
-  e2e_create_secrets "$rotation_content"
+	rotation_content="rotation-$(openssl rand -hex 16)"
+	e2e_set_ops_entitlement_token "acr-e2e-ops-token-${rotation_content}"
+	rejected="$(e2e_application_readiness)"
+	grep -Fq '"status":"not_ready"' <<<"${rejected}" || e2e_die 'secret rotation did not make the pre-rotation application token fail at the application boundary'
+	e2e_create_secrets "$rotation_content"
   revision="$(e2e_kube get secret/acr-entitlement-token -o jsonpath='{.data.token}' | e2e_sha256)"
   e2e_render "$KUSTOMIZE_E2E_IMAGE" "$revision" false
   e2e_apply_kinds Deployment
   e2e_kube rollout status deployment/acr-api --timeout=180s >/dev/null
   after="$(e2e_kube get deployment/acr-api -o jsonpath='{.spec.template.metadata.annotations.acr\.fullchaos\.dev/credentials-revision}')"
   after_pod="$(e2e_kube get pod -l app.kubernetes.io/name=acr,app.kubernetes.io/component=api -o jsonpath='{.items[0].metadata.uid}')"
-  rotated_secret="$(e2e_kube get secret/acr-entitlement-token -o jsonpath='{.data.token}')"
+	rotated_secret="$(e2e_kube get secret/acr-entitlement-token -o jsonpath='{.data.token}')"
+	ready="$(e2e_application_readiness)"
   [[ "$before" != "$after" && "$after" == "$revision" ]] || e2e_die 'secret rotation did not change consumed pod-template configuration'
   [[ "$before_secret" != "$rotated_secret" ]] || e2e_die 'secret rotation did not change credential bytes'
-  [[ "$before_pod" != "$after_pod" ]] || e2e_die 'secret rotation did not replace the consuming application pod'
+	[[ "$before_pod" != "$after_pod" ]] || e2e_die 'secret rotation did not replace the consuming application pod'
+	grep -Fq '"status":"ready"' <<<"${ready}" || e2e_die 'secret rotation did not make the rotated application token succeed at the application boundary'
 }
 
 run_lifecycle() {
@@ -257,20 +262,42 @@ run_app_rollback() {
   e2e_log 'application rollback restored only the prior immutable image; schema remains forward-only'
 }
 
+run_behavioral_scenario() {
+  local requested="$1" output status
+  set +e
+  output="$(bash "${SCRIPT_DIR}/kind-kustomize.sh" --cluster "$cluster" --scenario "$requested" 2>&1)"
+  status=$?
+  set -e
+  if [[ "$requested" == mutable-production-image ]]; then
+    [[ ${status} -ne 0 ]] || e2e_die 'self-test mutable-production-image unexpectedly succeeded'
+    grep -Fq 'mutable-production-image: mutable image rejected before cluster access' <<<"${output}" || e2e_die 'self-test mutable-production-image did not prove early rejection'
+    return
+  fi
+  [[ ${status} -eq 0 ]] || e2e_die "self-test ${requested} failed"
+  case "$requested" in
+    lifecycle) grep -Fq 'lifecycle reached ready with explicit migration wait and restricted policy' <<<"${output}" || e2e_die 'self-test lifecycle lacked readiness evidence' ;;
+    stale-migration-status) grep -Fq 'stale migration completion was rejected; replacement Job UID is fresh' <<<"${output}" || e2e_die 'self-test stale migration lacked UID evidence' ;;
+    denied-egress) grep -Fq 'denied egress causally produced a PostgreSQL transport failure after baseline migration success' <<<"${output}" || e2e_die 'self-test denied egress lacked transport evidence' ;;
+    app-rollback) grep -Fq 'application rollback restored only the prior immutable image; schema remains forward-only' <<<"${output}" || e2e_die 'self-test rollback lacked immutable image evidence' ;;
+    *) e2e_die "self-test unknown scenario: ${requested}" ;;
+  esac
+}
+
 self_test() {
-  e2e_is_digest 'registry.invalid/acr@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' || e2e_die 'self-test parity digest'
-  if e2e_is_digest 'registry.invalid/acr:latest'; then e2e_die 'self-test mutable image'; fi
-  printf '%s\n' 'ok: parity compares critical Helm and Kustomize fields'
-  printf '%s\n' 'ok: stale migration status is rejected after replacement UID freshness'
-  printf '%s\n' 'ok: denied migration egress is causally proven by the NetworkPolicy'
-  printf '%s\n' 'ok: mutable production image is rejected before cluster access'
-  printf '%s\n' 'ok: secret rotation changes bytes, content checksum, and consuming pod'
-  printf '%s\n' 'ok: application rollback renders only the previous immutable Deployment image'
+  local requested
+  for requested in lifecycle stale-migration-status denied-egress mutable-production-image app-rollback; do
+    run_behavioral_scenario "$requested"
+  done
 }
 
 main() {
   parse_args "$@"
-  if [[ "$scenario" == self-test ]]; then self_test; return; fi
+	if [[ "$scenario" == self-test ]]; then
+		[[ -n "$cluster" ]] || e2e_die '--cluster is required'
+		e2e_load_fixture "$cluster"
+		self_test
+		return
+	fi
   case "$scenario" in
     lifecycle|stale-migration-status|denied-egress|mutable-production-image|app-rollback) ;;
     *) e2e_die "unknown scenario: ${scenario}" ;;
