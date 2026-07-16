@@ -63,7 +63,7 @@ validate_name() {
 }
 
 state_dir() { echo "${STATE_ROOT}/$1"; }
-kube() { kubectl --context "kind-$1" "${@:2}"; }
+kube() { kubectl --context "kind-$1" --request-timeout=10s "${@:2}"; }
 
 # Per-fixture Docker object names, deterministically derived from the validated
 # cluster name so every fixture owns a uniquely named network + registry and
@@ -1223,7 +1223,7 @@ cmd_verify() {
 
   # 3. Default CNI disabled + Calico running from explicit digest references.
   check "default CNI disabled (no kindnet daemonset)" \
-    bash -c "! kubectl --context kind-${name} -n kube-system get ds kindnet >/dev/null 2>&1"
+    bash -c "! kubectl --context kind-${name} --request-timeout=10s -n kube-system get ds kindnet >/dev/null 2>&1"
   verify_pod_image "${name}" kube-system "k8s-app=calico-node" initContainers upgrade-ipam "${ACR_E2E_IMG_CALICO_CNI}"
   verify_pod_image "${name}" kube-system "k8s-app=calico-node" initContainers install-cni "${ACR_E2E_IMG_CALICO_CNI}"
   verify_pod_image "${name}" kube-system "k8s-app=calico-node" initContainers ebpf-bootstrap "${ACR_E2E_IMG_CALICO_NODE}"
@@ -1234,7 +1234,7 @@ cmd_verify() {
   check "Gateway API CRD gateways established" \
     kube "${name}" get crd gateways.gateway.networking.k8s.io
   check "Gateway API bundle version ${ACR_E2E_GATEWAY_API_VERSION}" \
-    bash -c "kubectl --context kind-${name} get crd gateways.gateway.networking.k8s.io -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}' | grep -qx ${ACR_E2E_GATEWAY_API_VERSION}"
+    bash -c "kubectl --context kind-${name} --request-timeout=10s get crd gateways.gateway.networking.k8s.io -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}' | grep -qx ${ACR_E2E_GATEWAY_API_VERSION}"
 
   # 5. Envoy Gateway control plane + data-plane are digest-configured and running.
   verify_pod_image "${name}" envoy-gateway-system "control-plane=envoy-gateway" containers envoy-gateway "${ACR_E2E_IMG_ENVOY_GATEWAY}"
@@ -1263,15 +1263,15 @@ cmd_verify() {
 
   # 9. Programmed Gateway + resolved backend TLS + real north-south request.
   check "Gateway Programmed=True" \
-    bash -c "kubectl --context kind-${name} -n ${NS_GW} get gateway acr-gateway -o jsonpath='{.status.conditions[?(@.type==\"Programmed\")].status}' | grep -qx True"
+    bash -c "kubectl --context kind-${name} --request-timeout=10s -n ${NS_GW} get gateway acr-gateway -o jsonpath='{.status.conditions[?(@.type==\"Programmed\")].status}' | grep -qx True"
   check "HTTPRoute Accepted=True" \
-    bash -c "kubectl --context kind-${name} -n ${NS_DEPS} get httproute ops-entitlement -o jsonpath='{.status.parents[0].conditions[?(@.type==\"Accepted\")].status}' | grep -qx True"
+    bash -c "kubectl --context kind-${name} --request-timeout=10s -n ${NS_DEPS} get httproute ops-entitlement -o jsonpath='{.status.parents[0].conditions[?(@.type==\"Accepted\")].status}' | grep -qx True"
   check "HTTPRoute ResolvedRefs=True" \
-    bash -c "kubectl --context kind-${name} -n ${NS_DEPS} get httproute ops-entitlement -o jsonpath='{.status.parents[0].conditions[?(@.type==\"ResolvedRefs\")].status}' | grep -qx True"
+    bash -c "kubectl --context kind-${name} --request-timeout=10s -n ${NS_DEPS} get httproute ops-entitlement -o jsonpath='{.status.parents[0].conditions[?(@.type==\"ResolvedRefs\")].status}' | grep -qx True"
   check "BackendTLSPolicy Accepted=True" \
-    bash -c "kubectl --context kind-${name} -n ${NS_DEPS} get backendtlspolicy ops-entitlement -o jsonpath='{.status.ancestors[0].conditions[?(@.type==\"Accepted\")].status}' | grep -qx True"
+    bash -c "kubectl --context kind-${name} --request-timeout=10s -n ${NS_DEPS} get backendtlspolicy ops-entitlement -o jsonpath='{.status.ancestors[0].conditions[?(@.type==\"Accepted\")].status}' | grep -qx True"
   check "BackendTLSPolicy ResolvedRefs=True" \
-    bash -c "kubectl --context kind-${name} -n ${NS_DEPS} get backendtlspolicy ops-entitlement -o jsonpath='{.status.ancestors[0].conditions[?(@.type==\"ResolvedRefs\")].status}' | grep -qx True"
+    bash -c "kubectl --context kind-${name} --request-timeout=10s -n ${NS_DEPS} get backendtlspolicy ops-entitlement -o jsonpath='{.status.ancestors[0].conditions[?(@.type==\"ResolvedRefs\")].status}' | grep -qx True"
   verify_north_south_entitlement "${name}"
 
   # 10. NetworkPolicy enforcement (deny-by-default proven).
@@ -1357,7 +1357,7 @@ pf_start() { # ctx ns target rport -> sets globals PF_PID and PF_LPORT
   # visible to pf_stop; otherwise the backgrounded forward would leak.
   local ctx="$1" ns="$2" tgt="$3" rport="$4" i ready=0
   PF_LPORT=$(( (RANDOM % 20000) + 20000 ))
-  kubectl --context "${ctx}" -n "${ns}" port-forward "svc/${tgt}" "${PF_LPORT}:${rport}" >/dev/null 2>&1 &
+  kubectl --context "${ctx}" --request-timeout=10s -n "${ns}" port-forward "svc/${tgt}" "${PF_LPORT}:${rport}" >/dev/null 2>&1 &
   PF_PID=$!
   for i in $(seq 1 40); do
     # The probe fd is opened in a subshell, so nothing to close in this shell.

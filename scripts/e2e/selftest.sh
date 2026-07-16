@@ -98,6 +98,81 @@ assert_helm_harness_behaviors() {
   # shellcheck disable=SC2016
   if "${BASH}" -c '
     ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    build_local_image() {
+      imported_image_refs+=("image-$1")
+      remote_archives+=("archive-$1")
+      built_image_ref="image-$1"
+    }
+    build_local_image v1
+    build_local_image v2
+    [[ "${built_image_ref}" == image-v2 ]]
+    [[ "${#imported_image_refs[@]}" -eq 2 && "${#remote_archives[@]}" -eq 2 ]]
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'image build tracking remains in the parent shell through lifecycle'
+  else
+    bad 'image build tracking must remain in the parent shell through lifecycle'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    ACR_E2E_IMAGE_PULL_SECRET=secret
+    validate_immutable_image_ref() { :; }
+    publish_image_to_fixture_registry() {
+      imported_image_refs+=(registry-image)
+      published_image_ref=registry-image
+    }
+    publish_image_to_fixture_registry local-image
+    [[ "${published_image_ref}" == registry-image && "${#imported_image_refs[@]}" -eq 1 ]]
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'registry publish tracking remains in the parent shell'
+  else
+    bad 'registry publish tracking must remain in the parent shell'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    TIMEOUT_TERM_GRACE_SECONDS=1
+    signals=()
+    kill() { [[ "$1" == -0 ]] || signals+=("$1"); return 0; }
+    wait_for_process_exit() { return 1; }
+    wait() { return 0; }
+    if run_with_timeout 0 sh -c true; then
+      exit 1
+    else
+      status=$?
+    fi
+    [[ "${status}" == 124 ]]
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'timeout sends TERM then KILL and returns within its grace bound'
+  else
+    bad 'timeout must send TERM then KILL and return within its grace bound'
+  fi
+
+  # shellcheck disable=SC2016
+  local evidence_status
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    write_evidence() { return 1; }
+    queued_evidence_result=passed
+    queued_evidence_detail=detail
+    on_exit 42
+  ' -- "${HELM_SCRIPT}"; then
+    evidence_status=0
+  else
+    evidence_status=$?
+  fi
+  if [[ "${evidence_status}" == 42 ]]; then
+    ok 'failed evidence writing preserves the original scenario status'
+  else
+    bad 'failed evidence writing must preserve the original scenario status'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
     stop_port_forwards() { return 1; }
     cleanup_namespace() { return 0; }
     cleanup_kind_images() { return 0; }
@@ -176,10 +251,14 @@ assert_helm_harness_behaviors() {
     ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
     root="$(mktemp -d)"
     trap "rm -rf \"${root}\"" EXIT
-    mkdir -p "${root}/cmd" "${root}/internal" "${root}/migrations"
+    mkdir -p "${root}/cmd" "${root}/internal" "${root}/migrations" "${root}/deploy/helm" "${root}/scripts/container" "${root}/scripts/e2e"
     printf x >"${root}/Dockerfile"
     printf x >"${root}/go.mod"
     printf x >"${root}/go.sum"
+    printf x >"${root}/.dockerignore"
+    printf x >"${root}/scripts/e2e/kind-helm.sh"
+    printf x >"${root}/scripts/e2e/kind-fixture.sh"
+    printf x >"${root}/scripts/e2e/pins.env"
     REPO_ROOT="${root}"
     before="$(source_tree_hash)"
     printf x >"${root}/cmd/untracked.go"
@@ -260,6 +339,9 @@ assert_static_hardening() {
   assert_helm_script_contains 'establish_source_guard' 'every live Helm scenario requires a source quiescence guard'
   assert_helm_script_contains 'sleep 60' 'source guard establishes sixty seconds of source quiescence'
   assert_helm_script_contains 'assert_source_guard' 'local image builds recheck the source hash guard'
+  assert_helm_script_contains 'scripts/e2e/kind-helm.sh' 'source guard covers the executed Helm harness'
+  assert_helm_script_contains 'scripts/container' 'source guard covers untracked container build helpers'
+  assert_helm_script_contains --request-timeout=10s 'Kubectl reconciliation calls have request deadlines'
   assert_helm_script_contains 'exit "\$\{cleanup_status\}"' 'EXIT cleanup failures change a successful lifecycle exit status'
   assert_helm_script_contains 'run_with_timeout' 'registry pushes are bounded and fail closed'
   assert_helm_script_contains 'wait_gateway_programmed_false' 'Gateway False assertions wait for reconciliation'

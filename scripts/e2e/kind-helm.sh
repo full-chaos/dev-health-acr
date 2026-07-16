@@ -29,6 +29,9 @@ queued_evidence_detail=""
 imported_image_refs=()
 remote_archives=()
 source_hash=""
+built_image_ref=""
+published_image_ref=""
+TIMEOUT_TERM_GRACE_SECONDS="${ACR_E2E_TIMEOUT_TERM_GRACE_SECONDS:-5}"
 
 log() { printf '[kind-helm] %s\n' "$*" >&2; }
 fail() { printf '[kind-helm] FAIL: %s\n' "$*" >&2; }
@@ -72,7 +75,12 @@ validate_identifier() {
   [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,48}$ ]] || die "invalid identifier: $1"
 }
 
-kube() { kubectl --context "kind-${cluster}" "$@"; }
+kube() {
+  if [[ -n "${source_hash}" ]]; then
+    assert_source_guard
+  fi
+  kubectl --context "kind-${cluster}" --request-timeout=10s "$@"
+}
 
 write_evidence() {
   local result="$1" detail="$2"
@@ -188,7 +196,10 @@ on_exit() {
       queued_evidence_result="failed"
       queued_evidence_detail="${queued_evidence_detail}; owned resource cleanup failed"
     fi
-    write_evidence "${queued_evidence_result}" "${queued_evidence_detail}"
+    if ! write_evidence "${queued_evidence_result}" "${queued_evidence_detail}"; then
+      cleanup_status=1
+      fail "could not record scenario evidence"
+    fi
   fi
   if [[ "${original_status}" -ne 0 ]]; then exit "${original_status}"; fi
   exit "${cleanup_status}"
@@ -298,10 +309,11 @@ source_tree_hash() {
   (
     cd "${REPO_ROOT}"
     {
-      printf '%s\0' Dockerfile go.mod go.sum
+      printf '%s\0' Dockerfile .dockerignore go.mod go.sum scripts/e2e/kind-helm.sh scripts/e2e/kind-fixture.sh scripts/e2e/pins.env
       find cmd -type f -name '*.go' -print0
       find internal -type f \( -name '*.go' -o -name '*.json' \) -print0
       find migrations -type f \( -name '*.go' -o -name '*.sql' \) -print0
+      find deploy/helm scripts/container -type f -print0
     } | LC_ALL=C sort -z | while IFS= read -r -d '' path; do
       [[ -f "${path}" && ! -L "${path}" ]] || exit 1
       digest="$(shasum -a 256 -- "${path}")" || exit 1
@@ -443,11 +455,12 @@ build_local_image() {
   imported_image_refs+=("${tag}" "${repo}@${digest}")
   docker exec "${node}" ctr -n k8s.io images list -q >"${run_dir}/kind-images-${version}.txt"
   grep -Fxq "${repo}@${digest}" "${run_dir}/kind-images-${version}.txt" || die "Kind node did not retain the exact local OCI image digest"
-  printf '%s@%s\n' "${repo}" "${digest}"
+  built_image_ref="${repo}@${digest}"
 }
 
 create_fixture_references() {
   local runtime_dsn migration_dsn clickhouse_dsn entitlement_url
+  assert_source_guard
   runtime_dsn="postgres://postgres:acr-e2e-pass@postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
   migration_dsn="${runtime_dsn}"
   clickhouse_dsn="clickhouse://readonly@clickhouse.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:${ACR_E2E_CLICKHOUSE_NATIVE_PORT}/default?secure=true"
@@ -489,7 +502,12 @@ run_with_timeout() {
     fi
     sleep 1
   done
-  kill "${pid}" 2>/dev/null || true
+  kill -TERM "${pid}" 2>/dev/null || true
+  if ! wait_for_process_exit "${pid}" "${TIMEOUT_TERM_GRACE_SECONDS}"; then
+    kill -KILL "${pid}" 2>/dev/null || true
+    wait "${pid}" 2>/dev/null || true
+    return 124
+  fi
   wait "${pid}" 2>/dev/null || true
   return 124
 }
@@ -508,11 +526,12 @@ publish_image_to_fixture_registry() {
     return 1
   fi
   docker exec "${node}" ctr -n k8s.io images rm "${target}" >/dev/null
-  printf '%s\n' "${target}"
+  published_image_ref="${target}"
 }
 
 write_values() {
   local image="$1" entitlement_url="$2" gateway_name="${3:-${ACR_E2E_GATEWAY_NAME}}" gateway_namespace="${4:-${ACR_E2E_GATEWAY_NAMESPACE}}" gateway_section_name="${5:-https}" target="${run_dir}/values.yaml"
+  assert_source_guard
   cat >"${target}" <<EOF
 image:
   reference: ${image}
@@ -584,12 +603,14 @@ EOF
 
 run_helm() {
   local values="$1"; shift
+  assert_source_guard
   helm upgrade --install "${release}" "${CHART}" --kube-context "kind-${cluster}" --namespace "${namespace}" \
     --values "${values}" --wait --wait-for-jobs --atomic --cleanup-on-fail --timeout 240s "$@"
 }
 
 run_helm_failure() {
   local values="$1"; shift
+  assert_source_guard
   helm upgrade --install "${release}" "${CHART}" --kube-context "kind-${cluster}" --namespace "${namespace}" \
     --values "${values}" --wait --wait-for-jobs --timeout 90s "$@"
 }
@@ -631,7 +652,7 @@ assert_service_and_route() {
   gateway_service="$(kube -n envoy-gateway-system get service -l "gateway.envoyproxy.io/owning-gateway-name=${ACR_E2E_GATEWAY_NAME},gateway.envoyproxy.io/owning-gateway-namespace=${ACR_E2E_GATEWAY_NAMESPACE}" -o jsonpath='{.items[0].metadata.name}')"
   [[ -n "${gateway_service}" ]] || { fail "fixture Envoy Gateway Service is unavailable"; return 1; }
   local_port=$((20000 + RANDOM % 20000))
-  kubectl --context "kind-${cluster}" -n envoy-gateway-system port-forward "service/${gateway_service}" "${local_port}:443" >/dev/null 2>&1 &
+  kubectl --context "kind-${cluster}" --request-timeout=10s -n envoy-gateway-system port-forward "service/${gateway_service}" "${local_port}:443" >/dev/null 2>&1 &
   local port_forward_pid=$!
   port_forward_pids+=("${port_forward_pid}")
   local ready=0 attempts=0
@@ -905,8 +926,10 @@ diagnose_workload_failure() {
 run_lifecycle() {
   local previous current entitlement values history_before history_after configured
   entitlement="$(create_fixture_references)"
-  previous="$(build_local_image v1)"
-  current="$(build_local_image v2)"
+  build_local_image v1
+  previous="${built_image_ref}"
+  build_local_image v2
+  current="${built_image_ref}"
   values="$(write_values "${previous}" "${entitlement}")"
   if ! run_helm "${values}" >/dev/null; then
     diagnose_workload_failure
@@ -937,7 +960,8 @@ run_lifecycle() {
 run_bad_migration() {
   local entitlement current values
   entitlement="$(create_fixture_references)"
-  current="$(build_local_image bad-migration)"
+  build_local_image bad-migration
+  current="${built_image_ref}"
   kube -n "${namespace}" delete secret acr-migration >/dev/null
   kube -n "${namespace}" create secret generic acr-migration \
     --from-literal=ACR_POSTGRES_MIGRATION_DSN='postgres://postgres:acr-e2e-pass@postgres.invalid/acr?sslmode=disable' >/dev/null
@@ -956,7 +980,8 @@ run_bad_migration() {
 run_missing_secret() {
   local entitlement current values
   entitlement="$(create_fixture_references)"
-  current="$(build_local_image missing-secret)"
+  build_local_image missing-secret
+  current="${built_image_ref}"
   kube -n "${namespace}" delete secret acr-runtime >/dev/null
   values="$(write_values "${current}" "${entitlement}")"
   if run_helm_failure "${values}" --timeout 45s >/dev/null 2>&1; then
@@ -973,8 +998,10 @@ run_missing_secret() {
 run_missing_image_pull_secret() {
   local entitlement current registry_image values
   entitlement="$(create_fixture_references)"
-  current="$(build_local_image missing-image-pull-secret)"
-  registry_image="$(publish_image_to_fixture_registry "${current}")"
+  build_local_image missing-image-pull-secret
+  current="${built_image_ref}"
+  publish_image_to_fixture_registry "${current}"
+  registry_image="${published_image_ref}"
   kube -n "${namespace}" delete secret "${ACR_E2E_IMAGE_PULL_SECRET}" >/dev/null
   values="$(write_values "${current}" "${entitlement}")"
   if kube -n "${namespace}" get secret "${ACR_E2E_IMAGE_PULL_SECRET}" >/dev/null 2>&1; then
@@ -1008,7 +1035,8 @@ wait_gateway_programmed_false() {
 run_unprogrammed_gateway() {
   local entitlement current values gateway_name="unprogrammed-${run_id}"
   entitlement="$(create_fixture_references)"
-  current="$(build_local_image unprogrammed-gateway)"
+  build_local_image unprogrammed-gateway
+  current="${built_image_ref}"
   kube -n "${namespace}" apply -f - >/dev/null <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -1037,7 +1065,8 @@ EOF
 run_denied_egress() {
   local entitlement current values
   entitlement="$(create_fixture_references)"
-  current="$(build_local_image denied-egress)"
+  build_local_image denied-egress
+  current="${built_image_ref}"
   values="$(write_values "${current}" "${entitlement}")"
   inject_denied_migration_policy
   if run_helm_failure "${values}" --set networkPolicy.egress.postgresPort=1 --set migration.backoffLimit=0 --set migration.activeDeadlineSeconds=60 >/dev/null 2>&1; then
@@ -1059,7 +1088,8 @@ run_app_rollback() {
   docker exec "${cluster}-control-plane" ctr -n k8s.io images list -q | grep -Fxq "${previous_image}" \
     || die "app-rollback previous image is not loaded in the Todo 18 Kind node: ${previous_image}"
   entitlement="$(create_fixture_references)"
-  current="$(build_local_image rollback-current)"
+  build_local_image rollback-current
+  current="${built_image_ref}"
   values="$(write_values "${current}" "${entitlement}")"
   if ! run_helm "${values}" >/dev/null; then
     diagnose_workload_failure
