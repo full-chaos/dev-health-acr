@@ -78,7 +78,7 @@ spec:
       initContainers:
         - name: prepare-entitlement-token
           image: docker.io/library/busybox@sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028
-          command: ["sh", "-c", 'umask 077 && cp /source/{{ .Values.credentials.entitlementToken.key | default "token" }} /target/{{ .Values.config.entitlement.tokenFileName }} && if [ -f /source-ca/ca.crt ]; then cp /source-ca/ca.crt /target-ca/ca.crt; fi']
+          command: ["sh", "-c", 'umask 077 && cp /source/{{ .Values.config.entitlement.tokenFileName }} /target/{{ .Values.config.entitlement.tokenFileName }} && if [ -f /source-ca/ca.crt ]; then cp /source-ca/ca.crt /target-ca/ca.crt; fi']
           securityContext:
             {{- include "acr.containerSecurityContext" . | nindent 12 }}
           volumeMounts:
