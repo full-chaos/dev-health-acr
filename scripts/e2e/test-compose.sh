@@ -26,6 +26,9 @@ grep -Fq 'chown -R 70:70 /postgres-tls' "$script"
 grep -Fq 'Ops organization provisioning failed' "$script"
 if grep -Fq -- '--owner-email' "$script"; then exit 1; fi
 grep -Fq 'clickhouse-client --user default --password ch' "$script"
+db_variable=db
+expected_clickhouse_database="CREATE DATABASE IF NOT EXISTS \${${db_variable}}"
+grep -Fq "$expected_clickhouse_database" "$script"
 grep -Fq 'CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"' "$script"
 grep -Fq 'CLICKHOUSE_USER=default CLICKHOUSE_PASSWORD=ch' "$script"
 grep -Fq 'redact_log()' "$script"
