@@ -45,6 +45,52 @@ test_hardening_seams_are_present() {
   if ! grep -Fq 'NetworkPolicy' "${HARNESS}" || ! grep -Fq 'transport' "${HARNESS}"; then fail 'denied egress scenario does not prove transport causality'; fi
 }
 
+test_preexisting_namespace_is_not_deleted() {
+  local state_root fake_bin log output status
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  log="${state_root}/kubectl.log"
+  mkdir -p "${state_root}/fixture" "${fake_bin}"
+  : >"${state_root}/fixture/ca.crt"
+  cat >"${state_root}/fixture/exports.env" <<EOF
+ACR_KIND_CONTEXT="fake-context"
+ACR_E2E_DEPS_NAMESPACE="acr-deps"
+ACR_E2E_GATEWAY_NAMESPACE="gateway-system"
+ACR_E2E_GATEWAY_NAME="gateway"
+ACR_E2E_GATEWAY_HOSTNAME="acr.example.test"
+ACR_E2E_POSTGRES_HOST="postgres.example.test"
+ACR_E2E_CLICKHOUSE_HOST="clickhouse.example.test"
+ACR_E2E_OPS_ENTITLEMENT_HOST="ops.example.test"
+ACR_E2E_CA_CERT="${state_root}/fixture/ca.crt"
+ACR_E2E_REGISTRY_ENDPOINT="registry.example.test"
+EOF
+  cat >"${fake_bin}/kubectl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${KUBECTL_LOG}"
+case " $* " in
+  *" get namespace acr-deps "*) exit 0 ;;
+  *" create namespace "*) exit 1 ;;
+  *" delete namespace "*) exit 0 ;;
+  *" wait --for=delete namespace/"*) exit 0 ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/kubectl"
+
+  set +e
+  output="$(PATH="${fake_bin}:${PATH}" KUBECTL_LOG="${log}" ACR_E2E_STATE_ROOT="${state_root}" bash "${HARNESS}" --cluster fixture --namespace acr-kustomize-owned-test 2>&1)"
+  status=$?
+  set -e
+
+  [[ ${status} -ne 0 ]] || fail 'pre-existing namespace unexpectedly succeeded'
+  grep -Fq 'namespace already exists' <<<"${output}" || fail 'pre-existing namespace failure was not reported'
+  if grep -Fq 'delete namespace acr-kustomize-owned-test' "${log}"; then
+    rm -rf "${state_root}"
+    fail 'pre-existing namespace was deleted by cleanup'
+  fi
+  rm -rf "${state_root}"
+}
+
 test_mutable_image_is_rejected_before_cluster_access() {
   local output status
   set +e
@@ -62,4 +108,5 @@ test_mutable_image_is_rejected_before_cluster_access() {
 test_self_test_covers_required_seams
 test_mutable_image_is_rejected_before_cluster_access
 test_hardening_seams_are_present
+test_preexisting_namespace_is_not_deleted
 printf 'RESULT: Kind Kustomize harness contract tests passed\n'

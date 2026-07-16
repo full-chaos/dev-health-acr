@@ -1203,7 +1203,7 @@ check_neg() { # check_neg "<description>" <command...>  (must FAIL)
 }
 
 cmd_verify() {
-  local name="$1"
+  local name="$1" verification_started_at_utc
   validate_name "${name}"
   acquire_fixture_lock "${name}"
   trap 'release_lock_on_exit "$?"' EXIT
@@ -1213,6 +1213,7 @@ cmd_verify() {
   VERIFY_FAILURES=0
   RUNTIME_IMAGE_REFS=()
   RUNTIME_IMAGE_IDS=()
+  verification_started_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
   check "exact Kind version ${ACR_E2E_KIND_VERSION}" kind_version_matches
   verify_fixture_ownership "${name}" || die "fixture ownership verification failed for ${name}"
@@ -1288,7 +1289,7 @@ cmd_verify() {
   verify_isolation "${name}"
 
   if [[ "${VERIFY_FAILURES}" -eq 0 ]]; then
-    write_verification_evidence "${name}" "${sd}"
+    write_verification_evidence "${name}" "${sd}" "${verification_started_at_utc}"
     validate_verification_evidence "${sd}/verification-evidence.env"
     ok "verify passed for ${name}"
     trap - EXIT
@@ -1576,8 +1577,9 @@ verify_host_container_image() {
 }
 
 write_verification_evidence() {
-  local name="$1" sd="$2" i evidence
+  local name="$1" sd="$2" verification_started_at_utc="$3" i evidence verified_at_utc
   evidence="${sd}/verification-evidence.env"
+  verified_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   cat >"${sd}/verification-evidence.env" <<EOF
 fixture_name=${name}
 fixture_id=${FIXTURE_ID}
@@ -1585,8 +1587,8 @@ kind_version=${ACR_E2E_KIND_VERSION}
 node_image=${ACR_E2E_NODE_IMAGE}
 north_south_https_entitlement=observed
 commit_sha=$(git -C "${REPO_ROOT}" rev-parse HEAD)
-verification_started_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-verified_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+verification_started_at_utc=${verification_started_at_utc}
+verified_at_utc=${verified_at_utc}
 EOF
   for ((i = 0; i < ${#RUNTIME_IMAGE_IDS[@]}; i += 1)); do
     printf 'runtime_image_ref_%d=%s\n' "$((i + 1))" "${RUNTIME_IMAGE_REFS[$i]}" >>"${sd}/verification-evidence.env"
@@ -1598,10 +1600,16 @@ EOF
 }
 
 validate_verification_evidence() {
-  local evidence="$1" expected actual
+  local evidence="$1" expected actual started verified written
   expected="$(awk -F= '$1 == "evidence_payload_sha256" { print $2 }' "${evidence}")"
   actual="$(awk -F= '$1 != "evidence_payload_sha256" { print }' "${evidence}" | sha256_of /dev/stdin)"
   [[ "${expected}" =~ ^[a-f0-9]{64}$ && "${actual}" == "${expected}" ]] || die "verification evidence integrity check failed"
+  started="$(awk -F= '$1 == "verification_started_at_utc" { print $2 }' "${evidence}")"
+  verified="$(awk -F= '$1 == "verified_at_utc" { print $2 }' "${evidence}")"
+  written="$(awk -F= '$1 == "evidence_written_at_utc" { print $2 }' "${evidence}")"
+  if [[ ! "${started}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || ! "${verified}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || ! "${written}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || "${started}" > "${verified}" || "${verified}" > "${written}" ]]; then
+    die "verification evidence timestamps are invalid or out of order"
+  fi
 }
 
 # ===========================================================================

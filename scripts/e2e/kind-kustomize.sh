@@ -11,6 +11,7 @@ scenario="lifecycle"
 image=""
 previous_image=""
 namespace=""
+namespace_created=false
 
 usage() {
   cat >&2 <<'EOF'
@@ -50,11 +51,12 @@ set_namespace() {
 prepare_namespace() {
   kubectl --context "$KUSTOMIZE_E2E_CONTEXT" create namespace "$KUSTOMIZE_E2E_NAMESPACE" >/dev/null \
     || e2e_die "namespace already exists: ${KUSTOMIZE_E2E_NAMESPACE}"
+  namespace_created=true
   kubectl --context "$KUSTOMIZE_E2E_CONTEXT" label namespace "$KUSTOMIZE_E2E_NAMESPACE" acr-e2e/access=allowed >/dev/null
 }
 
 cleanup_namespace() {
-  [[ -n "$KUSTOMIZE_E2E_CONTEXT" && -n "$KUSTOMIZE_E2E_NAMESPACE" ]] || return 0
+  [[ "$namespace_created" == true && -n "$KUSTOMIZE_E2E_CONTEXT" && -n "$KUSTOMIZE_E2E_NAMESPACE" ]] || return 0
   kubectl --context "$KUSTOMIZE_E2E_CONTEXT" delete namespace "$KUSTOMIZE_E2E_NAMESPACE" --ignore-not-found --wait=false >/dev/null
   kubectl --context "$KUSTOMIZE_E2E_CONTEXT" wait --for=delete "namespace/${KUSTOMIZE_E2E_NAMESPACE}" --timeout=120s >/dev/null
 }
