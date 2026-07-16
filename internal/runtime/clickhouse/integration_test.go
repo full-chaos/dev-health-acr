@@ -48,6 +48,20 @@ func TestIntegrationClient_queries_read_only_ClickHouse(t *testing.T) {
 	assertIntegrationServerRejectsMutation(t, options)
 }
 
+func TestIntegrationClient_native_readonly_fixture_is_not_skipped(t *testing.T) {
+	// Given
+	client, options := integrationClient(t)
+
+	// When
+	err := client.Ping(context.Background())
+
+	// Then
+	if err != nil {
+		t.Fatalf("Ping() error = %v", err)
+	}
+	assertIntegrationServerRejectsMutation(t, options)
+}
+
 func assertIntegrationExecutionLimit(t *testing.T, options Options) {
 	t.Helper()
 

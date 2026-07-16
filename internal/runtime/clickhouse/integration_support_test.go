@@ -18,9 +18,15 @@ func integrationClient(t *testing.T) (*Client, Options) {
 	t.Helper()
 	dsn := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_DSN")
 	if dsn == "" {
+		if os.Getenv("ACR_CLICKHOUSE_INTEGRATION_REQUIRED") == "1" {
+			t.Fatal("ACR_CLICKHOUSE_INTEGRATION_DSN is required when native ClickHouse integration is mandatory")
+		}
 		t.Skip("ACR_CLICKHOUSE_INTEGRATION_DSN is required for the real ClickHouse integration test")
 	}
 	if os.Getenv("ACR_CLICKHOUSE_INTEGRATION_ISOLATED") != "1" {
+		if os.Getenv("ACR_CLICKHOUSE_INTEGRATION_REQUIRED") == "1" {
+			t.Fatal("ACR_CLICKHOUSE_INTEGRATION_ISOLATED=1 is required when native ClickHouse integration is mandatory")
+		}
 		t.Skip("ACR_CLICKHOUSE_INTEGRATION_ISOLATED=1 is required before the integration test can target seeded data")
 	}
 	options := Options{DSN: dsn, TLS: integrationTLSConfig(t), QueryTimeout: 10 * time.Second}
@@ -50,7 +56,7 @@ func integrationTLSConfig(t *testing.T) *tls.Config {
 	if !pool.AppendCertsFromPEM(certificate) {
 		t.Fatal("parse ClickHouse CA file")
 	}
-	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
+	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: os.Getenv("ACR_CLICKHOUSE_INTEGRATION_TLS_SERVER_NAME")}
 }
 
 func assertIntegrationServerRejectsMutation(t *testing.T, options Options) {
@@ -77,7 +83,7 @@ func assertIntegrationServerRejectsMutation(t *testing.T, options Options) {
 	if !rows.Next() {
 		t.Fatalf("enforced readonly setting returned no rows: %v", rows.Err())
 	}
-	var readonly uint64
+	var readonly uint8
 	if err := rows.Scan(&readonly); err != nil {
 		t.Fatalf("scan enforced readonly setting: %v", err)
 	}
