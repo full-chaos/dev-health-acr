@@ -18,6 +18,7 @@ grep -Fq 'zero owned containers, volumes, and networks' "$script"
 grep -Fq 'POSTGRES_USER=devhealth' "$script"
 grep -Fq "ACR_IMAGE=\"\$IMAGE\"" "$script"
 grep -Fq 'host_ip: 127.0.0.1' "$script"
+grep -Fq "REDIS_PORT=\"\$redis_port\"" "$script"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

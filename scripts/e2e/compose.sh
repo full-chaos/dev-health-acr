@@ -107,12 +107,16 @@ ensure_image() {
 }
 
 render_override() {
-  local pg runtime migration ch db
+  local pg runtime migration ch db postgres_port clickhouse_http_port clickhouse_native_port redis_port
   pg="$(<"$STATE/secrets/postgres-password")"; runtime="$(<"$STATE/secrets/runtime-password")"; migration="$(<"$STATE/secrets/migration-password")"; ch="$(<"$STATE/secrets/clickhouse-password")"
   db="acr_${PROJECT//-/}_e2e"
   write_secret "$STATE/secrets/runtime-dsn" "postgres://acr_runtime:${runtime}@postgres:5432/${db}?sslmode=verify-full&sslrootcert=/run/secrets/acr_ca"
   write_secret "$STATE/secrets/migration-dsn" "postgres://acr_migration:${migration}@postgres:5432/${db}?sslmode=verify-full&sslrootcert=/run/secrets/acr_ca"
   write_secret "$STATE/secrets/clickhouse-dsn" "clickhouse://acr_reader:${ch}@clickhouse:9440/${db}?secure=true&skip_verify=false"
+  postgres_port="$(free_port)"
+  clickhouse_http_port="$(free_port)"
+  clickhouse_native_port="$(free_port)"
+  redis_port="$(free_port)"
   cat > "$STATE/override.yml" <<EOF
 services:
   postgres:
@@ -159,7 +163,7 @@ services:
 volumes:
   acr_e2e_tls: {}
 EOF
-  export ACR_IMAGE="$IMAGE" POSTGRES_USER=devhealth POSTGRES_PASSWORD="$pg" ACR_DB_NAME="$db" ACR_RUNTIME_DB_USER=acr_runtime ACR_RUNTIME_DB_PASSWORD="$runtime" ACR_MIGRATION_DB_USER=acr_migration ACR_MIGRATION_DB_PASSWORD="$migration" ACR_RUNTIME_DSN_FILE="$STATE/secrets/runtime-dsn" ACR_MIGRATION_DSN_FILE="$STATE/secrets/migration-dsn" ACR_CLICKHOUSE_DSN_FILE="$STATE/secrets/clickhouse-dsn" ACR_OPS_TOKEN_FILE="$STATE/secrets/ops-token" ACR_CA_FILE="$STATE/pki/ca.crt" ACR_EVIDENCE_ACTIVE_KID_FILE="$STATE/secrets/evidence-kid" ACR_EVIDENCE_KEYS_FILE="$STATE/secrets/evidence-keys"
+  export ACR_IMAGE="$IMAGE" POSTGRES_USER=devhealth POSTGRES_PASSWORD="$pg" POSTGRES_PORT="$postgres_port" CLICKHOUSE_HTTP_PORT="$clickhouse_http_port" CLICKHOUSE_NATIVE_PORT="$clickhouse_native_port" REDIS_PORT="$redis_port" ACR_DB_NAME="$db" ACR_RUNTIME_DB_USER=acr_runtime ACR_RUNTIME_DB_PASSWORD="$runtime" ACR_MIGRATION_DB_USER=acr_migration ACR_MIGRATION_DB_PASSWORD="$migration" ACR_RUNTIME_DSN_FILE="$STATE/secrets/runtime-dsn" ACR_MIGRATION_DSN_FILE="$STATE/secrets/migration-dsn" ACR_CLICKHOUSE_DSN_FILE="$STATE/secrets/clickhouse-dsn" ACR_OPS_TOKEN_FILE="$STATE/secrets/ops-token" ACR_CA_FILE="$STATE/pki/ca.crt" ACR_EVIDENCE_ACTIVE_KID_FILE="$STATE/secrets/evidence-kid" ACR_EVIDENCE_KEYS_FILE="$STATE/secrets/evidence-keys"
 }
 
 assert_safe_render() {
