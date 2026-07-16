@@ -159,7 +159,7 @@ services:
 volumes:
   acr_e2e_tls: {}
 EOF
-  export POSTGRES_PASSWORD="$pg" ACR_DB_NAME="$db" ACR_RUNTIME_DB_USER=acr_runtime ACR_RUNTIME_DB_PASSWORD="$runtime" ACR_MIGRATION_DB_USER=acr_migration ACR_MIGRATION_DB_PASSWORD="$migration" ACR_RUNTIME_DSN_FILE="$STATE/secrets/runtime-dsn" ACR_MIGRATION_DSN_FILE="$STATE/secrets/migration-dsn" ACR_CLICKHOUSE_DSN_FILE="$STATE/secrets/clickhouse-dsn" ACR_OPS_TOKEN_FILE="$STATE/secrets/ops-token" ACR_CA_FILE="$STATE/pki/ca.crt" ACR_EVIDENCE_ACTIVE_KID_FILE="$STATE/secrets/evidence-kid" ACR_EVIDENCE_KEYS_FILE="$STATE/secrets/evidence-keys"
+  export POSTGRES_USER=devhealth POSTGRES_PASSWORD="$pg" ACR_DB_NAME="$db" ACR_RUNTIME_DB_USER=acr_runtime ACR_RUNTIME_DB_PASSWORD="$runtime" ACR_MIGRATION_DB_USER=acr_migration ACR_MIGRATION_DB_PASSWORD="$migration" ACR_RUNTIME_DSN_FILE="$STATE/secrets/runtime-dsn" ACR_MIGRATION_DSN_FILE="$STATE/secrets/migration-dsn" ACR_CLICKHOUSE_DSN_FILE="$STATE/secrets/clickhouse-dsn" ACR_OPS_TOKEN_FILE="$STATE/secrets/ops-token" ACR_CA_FILE="$STATE/pki/ca.crt" ACR_EVIDENCE_ACTIVE_KID_FILE="$STATE/secrets/evidence-kid" ACR_EVIDENCE_KEYS_FILE="$STATE/secrets/evidence-keys"
 }
 
 assert_safe_render() {
