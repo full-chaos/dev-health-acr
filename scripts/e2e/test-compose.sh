@@ -24,6 +24,7 @@ grep -Fq "REPO_ROOT/.tmp/e2e/compose-\${PROJECT}" "$script"
 grep -Fq 'command: ["cp /input/acr.crt' "$script"
 grep -Fq 'chown -R 70:70 /postgres-tls' "$script"
 grep -Fq 'Ops organization provisioning failed' "$script"
+grep -Fq 'expect_failure compose up -d --no-deps acr-api' "$script"
 if grep -Fq -- '--owner-email' "$script"; then exit 1; fi
 grep -Fq 'clickhouse-client --user default --password ch' "$script"
 db_variable=db

@@ -348,7 +348,7 @@ expect_failure() { "$@" >/dev/null 2>&1 && die "expected failure: $*"; }
 run_failure() {
   case "$SCENARIO" in
     missing-ops-token)
-      rm -f "$STATE/secrets/ops-token"; expect_failure compose config; SAFE_BOUNDARY='ACR services were not started without an Ops token file' ;;
+      rm -f "$STATE/secrets/ops-token"; expect_failure compose up -d --no-deps acr-api; SAFE_BOUNDARY='ACR API did not start without an Ops token file' ;;
     invalid-ca)
       start_happy; printf 'not a certificate\n' > "$STATE/pki/invalid-ca.crt"; expect_failure curl --fail --silent --cacert "$STATE/pki/invalid-ca.crt" --noproxy '*' "https://localhost:${PORT}/readyz"; SAFE_BOUNDARY='TLS verification failed; no insecure curl option was used' ;;
     revoked-acr-token)
