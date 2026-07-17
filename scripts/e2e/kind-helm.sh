@@ -158,21 +158,30 @@ wait_for_process_exit() {
 }
 
 cleanup_kind_images() {
-  local node ref archive refs status=0
+  local node ref archive refs attempt status=0 remaining=0
   [[ -n "${cluster}" ]] || return 0
   node="${cluster}-control-plane"
-  for archive in "${remote_archives[@]}"; do
-    docker exec "${node}" rm -f "${archive}" >/dev/null 2>&1 || status=1
-  done
-  for ref in "${imported_image_refs[@]}"; do
+  for attempt in 1 2 3; do
+    for archive in "${remote_archives[@]}"; do
+      docker exec "${node}" rm -f "${archive}" >/dev/null 2>&1 || [[ "${attempt}" -lt 3 ]] || status=1
+    done
     refs="$(docker exec "${node}" ctr -n k8s.io images list -q)" || {
       status=1
       continue
     }
-    if grep -Fxq "${ref}" <<<"${refs}"; then
-      docker exec "${node}" ctr -n k8s.io images rm "${ref}" >/dev/null 2>&1 || status=1
-    fi
+    while IFS= read -r ref || [[ -n "${ref}" ]]; do
+      is_cleanup_kind_image_ref "${ref}" || continue
+      docker exec "${node}" ctr -n k8s.io images rm "${ref}" >/dev/null 2>&1 || :
+    done <<<"${refs}"
   done
+  refs="$(docker exec "${node}" ctr -n k8s.io images list -q)" || return 1
+  while IFS= read -r ref || [[ -n "${ref}" ]]; do
+    if is_cleanup_kind_image_ref "${ref}"; then
+      fail "Kind image cleanup left owned reference: ${ref}"
+      remaining=1
+    fi
+  done <<<"${refs}"
+  [[ "${remaining}" -eq 0 ]] || return 1
   return "${status}"
 }
 
@@ -194,8 +203,25 @@ record_imported_image_refs() {
   while IFS= read -r ref || [[ -n "${ref}" ]]; do
     [[ "${ref}" == "${repo}:"* || "${ref}" == "${repo}@"* ]] || continue
     grep -Fxq "${ref}" <<<"${kind_image_refs_before}" && continue
-    imported_image_refs+=("${ref}")
+    register_imported_image_ref "${ref}"
   done <<<"${refs}"
+}
+
+register_imported_image_ref() {
+  local ref="$1" recorded
+  for recorded in "${imported_image_refs[@]}"; do
+    [[ "${recorded}" == "${ref}" ]] && return 0
+  done
+  imported_image_refs+=("${ref}")
+}
+
+is_cleanup_kind_image_ref() {
+  local ref="$1" recorded
+  [[ "${ref}" == "acr-e2e.local/acr-api-${run_id}:"* || "${ref}" == "acr-e2e.local/acr-api-${run_id}@"* ]] && return 0
+  for recorded in "${imported_image_refs[@]}"; do
+    [[ "${recorded}" == "${ref}" ]] && return 0
+  done
+  return 1
 }
 
 cleanup_namespace() {
@@ -342,10 +368,17 @@ static_check() {
     done
   }
   assert_kind_image_cleanup_aliases() {
-    local block
+    local block literal_dollar='$'
     block="$(function_block build_local_image)"
-    if ! grep -Fq "record_imported_image_refs \"\${repo}\"" <<<"${block}"; then
-      fail 'static: each OCI import must record every new exact Kind image alias for cleanup'
+    if ! grep -Fq "register_imported_image_ref \"${literal_dollar}{tag}\"" <<<"${block}" || \
+      ! grep -Fq "register_imported_image_ref \"${literal_dollar}{repo}@${literal_dollar}{digest}\"" <<<"${block}" || \
+      ! grep -Fq "if ! docker exec \"${literal_dollar}{node}\" ctr -n k8s.io images import" <<<"${block}" || \
+      ! grep -Fq "if ! docker exec \"${literal_dollar}{node}\" ctr -n k8s.io images tag" <<<"${block}"; then
+      fail 'static: Kind aliases must be registered before each mutable import/tag operation'
+      failures=$((failures + 1))
+    fi
+    if [[ "$(grep -Fc "record_imported_image_refs \"${literal_dollar}{repo}\"" <<<"${block}")" -lt 3 ]]; then
+      fail 'static: each import/tag outcome must reconcile every new exact Kind image alias for cleanup'
       failures=$((failures + 1))
     fi
   }
@@ -551,11 +584,20 @@ build_local_image() {
   node="${cluster}-control-plane"
   remote_archive="/var/lib/acr-e2e/$(basename "${archive}")"
   assert_kind_images_absent "${node}" "${tag}" "${repo}@${digest}"
+  register_imported_image_ref "${tag}"
+  register_imported_image_ref "${repo}@${digest}"
   docker exec "${node}" mkdir -p /var/lib/acr-e2e
   remote_archives+=("${remote_archive}")
   docker cp "${archive}" "${node}:/var/lib/acr-e2e/"
-  docker exec "${node}" ctr -n k8s.io images import --base-name "${repo}" --digests "${remote_archive}" >/dev/null
-  docker exec "${node}" ctr -n k8s.io images tag "${tag}" "${repo}@${digest}" >/dev/null
+  if ! docker exec "${node}" ctr -n k8s.io images import --base-name "${repo}" --digests "${remote_archive}" >/dev/null; then
+    record_imported_image_refs "${repo}" || :
+    die "could not import local OCI image into Kind"
+  fi
+  record_imported_image_refs "${repo}" || die "could not reconcile imported Kind image aliases"
+  if ! docker exec "${node}" ctr -n k8s.io images tag "${tag}" "${repo}@${digest}" >/dev/null; then
+    record_imported_image_refs "${repo}" || :
+    die "could not tag imported Kind image"
+  fi
   record_imported_image_refs "${repo}" || die "could not record imported Kind image references"
   docker exec "${node}" rm -f "${remote_archive}" >/dev/null
   docker exec "${node}" ctr -n k8s.io images list -q >"${run_dir}/kind-images-${version}.txt"
