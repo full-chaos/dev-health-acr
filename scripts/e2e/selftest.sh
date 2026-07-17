@@ -438,6 +438,32 @@ assert_helm_harness_behaviors() {
   if "${BASH}" -c '
     ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
     namespace=test
+    release=acr-runtime
+    ACR_E2E_DEPS_NAMESPACE=deps
+    create_fixture_references() { printf https://ops-entitlement.deps.svc.cluster.local:8443; }
+    build_local_image() { :; }
+    write_values() { :; }
+    inject_denied_migration_policy() { :; }
+    run_helm_failure() { return 1; }
+    diagnose_workload_failure() { :; }
+    assert_failed_migration_hook() {
+      [[ "${expected_migration_failure_marker}" == "PostgreSQL is unavailable" ]]
+      [[ "${expected_migration_failure_dsn}" == "postgres://postgres:acr-e2e-pass@postgres.deps.svc.cluster.local:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt" ]]
+    }
+    assert_denied_migration_egress() { :; }
+    queue_expected_failure() { :; }
+    log() { :; }
+    run_denied_egress
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'denied-egress initializes its causal marker before the migration failure assertion'
+  else
+    bad 'denied-egress must not exit on an unbound migration failure marker'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    namespace=test
     poll_file="$(mktemp)"
     trap "rm -f \"${poll_file}\"" EXIT
     printf 0 >"${poll_file}"
@@ -459,6 +485,7 @@ assert_helm_harness_behaviors() {
 }
 
 assert_static_hardening() {
+  local literal_dollar='$'
   assert_fixture_script_contains 'require_kind_version' 'Kind version gate is implemented'
   assert_fixture_script_contains 'kind version -q' 'Kind version gate queries exact version'
   assert_fixture_script_contains 'render_pinned_manifest' 'vendored manifests are rewritten before apply'
@@ -512,6 +539,9 @@ assert_static_hardening() {
   assert_helm_script_contains 'secret_name="acr-runtime"' 'missing runtime Secret assertion requires the exact Secret name'
   assert_helm_script_contains 'waiting_reason.*CreateContainerConfigError' 'missing runtime Secret assertion requires the exact waiting reason'
   assert_helm_script_contains 'expected_migration_failure_dsn' 'bad migration assertion selects the exact verified-TLS fixture configuration'
+  assert_helm_script_contains "entitlement_url=\"https://\\${literal_dollar}\{ACR_E2E_OPS_ENTITLEMENT_HOST\}:\\${literal_dollar}\{ACR_E2E_OPS_ENTITLEMENT_PORT\}\"" 'Helm fixture derives entitlement URL host and port from fixture exports'
+  assert_helm_script_contains "entitlementPort: \\${literal_dollar}\{ACR_E2E_OPS_ENTITLEMENT_PORT\}" 'Helm fixture allows the exported entitlement TLS port'
+  assert_helm_script_contains "expected_migration_failure_dsn=\"postgres://postgres:acr-e2e-pass@postgres\.\\${literal_dollar}\{ACR_E2E_DEPS_NAMESPACE\}\.svc\.cluster\.local:5432/acr\\?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca\.crt\"" 'denied-egress initializes the exact verified migration DSN before assertion'
   assert_helm_script_contains 'PostgreSQL is unavailable' 'bad migration assertion classifies the redacted unavailable boundary'
   assert_helm_script_contains 'migration hook exposed injected connection details' 'bad migration assertion rejects leaked connection details'
   assert_helm_script_contains 'acr-migrate.*up' 'bad migration assertion proves the intended migration hook command'

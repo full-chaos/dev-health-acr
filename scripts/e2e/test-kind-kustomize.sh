@@ -53,16 +53,16 @@ test_hardening_seams_are_present() {
 }
 
 test_parity_keeps_dependency_port_meanings_separate() {
-  local parity_tokens api_policy
+  local parity_tokens api_policy literal_dollar='$'
   parity_tokens="$(grep 'for token in .*acr-migrate' "${HARNESS}")"
   api_policy="${ROOT}/deploy/kubernetes/acr/base/networkpolicy-api.yaml"
   [[ "${parity_tokens}" != *"port:"* ]] || fail 'port parity is coupled to untyped shared tokens'
   grep -Fq "verify_semantic_port_parity 'ClickHouse native TLS' 9440 acr-api" "${HARNESS}" || fail 'parity does not require ClickHouse native TLS port 9440 from the API policy'
-  grep -Fq "verify_semantic_port_parity 'entitlement HTTPS' 443 acr-api" "${HARNESS}" || fail 'parity does not require entitlement HTTPS port 443 from the API policy'
+  grep -Fq "verify_semantic_port_parity 'entitlement HTTPS' \"\${KUSTOMIZE_E2E_OPS_PORT}\" acr-api" "${HARNESS}" || fail 'parity does not derive entitlement HTTPS port from the fixture export'
   grep -Fq 'network_policy_tcp_ports' "${HARNESS}" || fail 'parity does not scope dependency ports to NetworkPolicy documents'
-  if grep -Fq 'port: 8443' "${api_policy}" || grep -Fq "verify_semantic_port_parity 'entitlement HTTPS' 8443" "${HARNESS}"; then
-    fail 'parity couples entitlement HTTPS to the fixture backend port'
-  fi
+  grep -Fq "KUSTOMIZE_E2E_OPS_PORT=\"${literal_dollar}(e2e_fixture_value \"${literal_dollar}file\" ACR_E2E_OPS_ENTITLEMENT_PORT)\"" "${LIBRARY}" || fail 'Kustomize does not load the entitlement port from the fixture export'
+  grep -Fq "https://${literal_dollar}{KUSTOMIZE_E2E_OPS_HOST}:${literal_dollar}{KUSTOMIZE_E2E_OPS_PORT}" "${LIBRARY}" || fail 'Kustomize entitlement URL does not use its semantic fixture port'
+  grep -Fq 'port: 8443' "${api_policy}" || fail 'API policy does not allow the fixture entitlement HTTPS port'
 }
 
 test_verification_evidence_requires_clean_git_provenance() {
@@ -135,6 +135,7 @@ ACR_E2E_POSTGRES_HOST="postgres.example.test"
 ACR_E2E_CLICKHOUSE_HOST="clickhouse.example.test"
 ACR_E2E_CLICKHOUSE_NATIVE_PORT="9440"
 ACR_E2E_OPS_ENTITLEMENT_HOST="ops.example.test"
+ACR_E2E_OPS_ENTITLEMENT_PORT="8443"
 ACR_E2E_CA_CERT="${state_root}/fixture/ca.crt"
 ACR_E2E_REGISTRY_ENDPOINT="registry.example.test"
 EOF
@@ -182,6 +183,7 @@ ACR_E2E_POSTGRES_HOST="postgres.example.test"
 ACR_E2E_CLICKHOUSE_HOST="clickhouse.example.test"
 ACR_E2E_CLICKHOUSE_NATIVE_PORT="9440"
 ACR_E2E_OPS_ENTITLEMENT_HOST="ops.example.test"
+ACR_E2E_OPS_ENTITLEMENT_PORT="8443"
 ACR_E2E_CA_CERT="${state_root}/fixture/ca.crt"
 ACR_E2E_REGISTRY_ENDPOINT="registry.example.test"
 EOF

@@ -102,7 +102,7 @@ imagePullSecrets:
 config:
   environment: development
   entitlement:
-    url: https://${KUSTOMIZE_E2E_OPS_HOST}:8443
+    url: https://${KUSTOMIZE_E2E_OPS_HOST}:${KUSTOMIZE_E2E_OPS_PORT}
   clickhouseCaBundle:
     existingSecret: acr-clickhouse-ca
     key: ca.crt
@@ -140,7 +140,7 @@ EOF
   done
   verify_semantic_port_parity 'PostgreSQL' 5432 acr-api "${KUSTOMIZE_E2E_WORK}/rendered.yaml" acr "$helm_network_policy"
   verify_semantic_port_parity 'ClickHouse native TLS' 9440 acr-api "${KUSTOMIZE_E2E_WORK}/rendered.yaml" acr "$helm_network_policy"
-  verify_semantic_port_parity 'entitlement HTTPS' 443 acr-api "${KUSTOMIZE_E2E_WORK}/rendered.yaml" acr "$helm_network_policy"
+  verify_semantic_port_parity 'entitlement HTTPS' "${KUSTOMIZE_E2E_OPS_PORT}" acr-api "${KUSTOMIZE_E2E_WORK}/rendered.yaml" acr "$helm_network_policy"
   for token in '/var/run/acr/postgres-ca' '/var/run/acr/clickhouse-ca' '/var/run/acr/entitlement-ca' 'path: ca.crt' 'medium: Memory'; do
     grep -Fq -- "$token" "${KUSTOMIZE_E2E_WORK}/rendered.yaml" || e2e_die "parity: Kustomize omitted ${token}"
     grep -Fq -- "$token" "$helm_render" || e2e_die "parity: Helm omitted ${token}"
@@ -160,9 +160,6 @@ verify_semantic_port_parity() {
   helm_ports="$(network_policy_tcp_ports "${helm_render}" "${helm_name}")"
   grep -Fqx -- "${port}" <<<"${kustomize_ports}" || e2e_die "parity: Kustomize ${kustomize_name} NetworkPolicy omitted ${semantic_key} port ${port}"
   grep -Fqx -- "${port}" <<<"${helm_ports}" || e2e_die "parity: Helm ${helm_name} NetworkPolicy omitted ${semantic_key} port ${port}"
-  if grep -Fqx -- 8443 <<<"${kustomize_ports}" || grep -Fqx -- 8443 <<<"${helm_ports}"; then
-    e2e_die "parity: API NetworkPolicies must not treat fixture backend port 8443 as entitlement HTTPS"
-  fi
 }
 
 network_policy_tcp_ports() {
@@ -171,13 +168,17 @@ network_policy_tcp_ports() {
 }
 
 verify_network_and_gateway() {
-  local gateway_status route_status
+  local gateway_status route_status route_section api_policy_ports
   e2e_kube get networkpolicy/acr-api networkpolicy/acr-migrate >/dev/null
   gateway_status="$(kubectl --context "$KUSTOMIZE_E2E_CONTEXT" --namespace "$KUSTOMIZE_E2E_GATEWAY_NAMESPACE" get gateway "$KUSTOMIZE_E2E_GATEWAY_NAME" -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}')"
   route_status="$(e2e_kube get httproute/acr-api -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}')"
+  route_section="$(e2e_kube get httproute/acr-api -o jsonpath='{.spec.parentRefs[0].sectionName}')"
   [[ "$gateway_status" == True && "$route_status" == True ]] || e2e_die 'gateway/TLS route is not programmed and accepted'
-  grep -qF 'port: 5432' "${KUSTOMIZE_E2E_WORK}/rendered.yaml" || e2e_die 'network policy lacks migration egress'
-  grep -qF 'port: 8443' "${KUSTOMIZE_E2E_WORK}/rendered.yaml" || e2e_die 'network policy lacks TLS dependency egress'
+  [[ "$route_section" == https ]] || e2e_die 'gateway route does not target the external HTTPS listener'
+  api_policy_ports="$(network_policy_tcp_ports "${KUSTOMIZE_E2E_WORK}/rendered.yaml" acr-api)"
+  grep -Fqx -- 5432 <<<"${api_policy_ports}" || e2e_die 'API NetworkPolicy lacks PostgreSQL egress'
+  grep -Fqx -- "${KUSTOMIZE_E2E_CLICKHOUSE_NATIVE_PORT}" <<<"${api_policy_ports}" || e2e_die 'API NetworkPolicy lacks ClickHouse native TLS egress'
+  grep -Fqx -- "${KUSTOMIZE_E2E_OPS_PORT}" <<<"${api_policy_ports}" || e2e_die 'API NetworkPolicy lacks entitlement HTTPS egress'
 }
 
 verify_no_mcp() {

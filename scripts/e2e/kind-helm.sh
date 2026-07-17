@@ -302,6 +302,32 @@ static_check() {
       failures=$((failures + 1))
     fi
   }
+  assert_fixture_entitlement_port_contract() {
+    local fixture_block values_block literal_dollar='$'
+    fixture_block="$(function_block create_fixture_references)"
+    values_block="$(function_block write_values)"
+    grep -Fq -- "entitlement_url=\"https://${literal_dollar}{ACR_E2E_OPS_ENTITLEMENT_HOST}:${literal_dollar}{ACR_E2E_OPS_ENTITLEMENT_PORT}\"" <<<"${fixture_block}" || {
+      fail 'static: entitlement URL must use the fixture host and port exports'
+      failures=$((failures + 1))
+    }
+    grep -Fq -- "entitlementPort: ${literal_dollar}{ACR_E2E_OPS_ENTITLEMENT_PORT}" <<<"${values_block}" || {
+      fail 'static: API NetworkPolicy must allow the fixture entitlement port'
+      failures=$((failures + 1))
+    }
+  }
+  assert_denied_egress_failure_marker() {
+    local block dsn marker literal_dollar='$'
+    block="$(function_block run_denied_egress)"
+    dsn="expected_migration_failure_dsn=\"postgres://postgres:acr-e2e-pass@postgres.${literal_dollar}{ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt\""
+    marker='expected_migration_failure_marker="PostgreSQL is unavailable"'
+    for token in "${dsn}" "${marker}" assert_failed_migration_hook; do
+      grep -Fq -- "${token}" <<<"${block}" || {
+        fail 'static: denied-egress must initialize its exact causal failure marker before asserting the failed migration hook'
+        failures=$((failures + 1))
+        return
+      }
+    done
+  }
   check_static 'ctr -n k8s.io images import --base-name.*--digests' 'imports a local OCI archive into Kind under its exact digest' "${BASH_SOURCE[0]}"
   check_static 'imagePullSecrets' 'asserts existing imagePullSecret use' "${BASH_SOURCE[0]}"
   check_static 'schema_migrations' 'records migration state without a schema rollback claim' "${BASH_SOURCE[0]}"
@@ -316,6 +342,8 @@ static_check() {
   assert_helm_context
   assert_missing_image_pull_secret_boundary
   assert_unprogrammed_gateway_boundary
+  assert_fixture_entitlement_port_contract
+  assert_denied_egress_failure_marker
   check_static 'postgresCaBundle' 'chart mounts the PostgreSQL CA referenced by verified DSNs' "${CHART}/templates/deployment.yaml"
   check_static 'tcp_port_secure' 'fixture exposes TLS ClickHouse native transport' "${FIXTURE_SCRIPT}"
   check_static 'acr-e2e\.fullchaos\.dev/fixture-id' 'fixture permits only explicitly labelled consumer namespaces' "${FIXTURE_SCRIPT}"
@@ -519,7 +547,7 @@ create_fixture_references() {
   runtime_dsn="postgres://postgres:acr-e2e-pass@postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
   migration_dsn="${runtime_dsn}"
   clickhouse_dsn="clickhouse://readonly@clickhouse.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:${ACR_E2E_CLICKHOUSE_NATIVE_PORT}/default?secure=true"
-  entitlement_url="https://ops-entitlement.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:8443"
+  entitlement_url="https://${ACR_E2E_OPS_ENTITLEMENT_HOST}:${ACR_E2E_OPS_ENTITLEMENT_PORT}"
 
   kube -n "${namespace}" create secret generic acr-postgres-ca --from-file=ca.crt="${ACR_E2E_CA_CERT}" >/dev/null
   kube -n "${namespace}" create secret generic acr-clickhouse-ca --from-file=ca.crt="${ACR_E2E_CA_CERT}" >/dev/null
@@ -651,7 +679,7 @@ networkPolicy:
     dns: true
     postgresPort: 5432
     clickhousePort: ${ACR_E2E_CLICKHOUSE_NATIVE_PORT}
-    entitlementPort: 443
+    entitlementPort: ${ACR_E2E_OPS_ENTITLEMENT_PORT}
 EOF
   printf '%s\n' "${target}"
 }
@@ -1137,6 +1165,8 @@ EOF
 
 run_denied_egress() {
   local entitlement current values
+  expected_migration_failure_marker="PostgreSQL is unavailable"
+  expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
   entitlement="$(create_fixture_references)"
   build_local_image denied-egress
   current="${built_image_ref}"

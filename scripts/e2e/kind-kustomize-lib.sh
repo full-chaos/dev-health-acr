@@ -17,6 +17,7 @@ KUSTOMIZE_E2E_POSTGRES_HOST=""
 KUSTOMIZE_E2E_CLICKHOUSE_HOST=""
 KUSTOMIZE_E2E_CLICKHOUSE_NATIVE_PORT=""
 KUSTOMIZE_E2E_OPS_HOST=""
+KUSTOMIZE_E2E_OPS_PORT=""
 KUSTOMIZE_E2E_REGISTRY=""
 
 e2e_die() {
@@ -62,6 +63,7 @@ e2e_load_fixture() {
   KUSTOMIZE_E2E_CLICKHOUSE_HOST="$(e2e_fixture_value "$file" ACR_E2E_CLICKHOUSE_HOST)"
   KUSTOMIZE_E2E_CLICKHOUSE_NATIVE_PORT="$(e2e_fixture_value "$file" ACR_E2E_CLICKHOUSE_NATIVE_PORT)"
   KUSTOMIZE_E2E_OPS_HOST="$(e2e_fixture_value "$file" ACR_E2E_OPS_ENTITLEMENT_HOST)"
+  KUSTOMIZE_E2E_OPS_PORT="$(e2e_fixture_value "$file" ACR_E2E_OPS_ENTITLEMENT_PORT)"
   KUSTOMIZE_E2E_CA="$(e2e_fixture_value "$file" ACR_E2E_CA_CERT)"
   KUSTOMIZE_E2E_REGISTRY="$(e2e_fixture_value "$file" ACR_E2E_REGISTRY_ENDPOINT)"
   [[ -f "$KUSTOMIZE_E2E_CA" ]] || e2e_die "fixture CA is unavailable"
@@ -151,7 +153,7 @@ patches:
     patch: |-
       - op: replace
         path: /data/ACR_DEV_HEALTH_ENTITLEMENT_URL
-        value: https://${KUSTOMIZE_E2E_OPS_HOST}:8443
+        value: https://${KUSTOMIZE_E2E_OPS_HOST}:${KUSTOMIZE_E2E_OPS_PORT}
   - target:
       group: networking.k8s.io
       version: v1
