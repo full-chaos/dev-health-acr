@@ -27,6 +27,7 @@ port_forward_pids=()
 queued_evidence_result=""
 queued_evidence_detail=""
 imported_image_refs=()
+kind_image_refs_before=""
 remote_archives=()
 source_hash=""
 git_commit_sha=""
@@ -179,10 +180,22 @@ assert_kind_images_absent() {
   local node="$1" ref existing
   shift
   existing="$(docker exec "${node}" ctr -n k8s.io images list -q)" || die "could not inspect Kind image ownership before import"
+  kind_image_refs_before="${existing}"
   for ref in "$@"; do
     grep -Fxq "${ref}" <<<"${existing}" && die "refusing to reuse a pre-existing Kind image reference: ${ref}"
   done
   return 0
+}
+
+record_imported_image_refs() {
+  local repo="$1" node ref refs
+  node="${cluster}-control-plane"
+  refs="$(docker exec "${node}" ctr -n k8s.io images list -q)" || return 1
+  while IFS= read -r ref || [[ -n "${ref}" ]]; do
+    [[ "${ref}" == "${repo}:"* || "${ref}" == "${repo}@"* ]] || continue
+    grep -Fxq "${ref}" <<<"${kind_image_refs_before}" && continue
+    imported_image_refs+=("${ref}")
+  done <<<"${refs}"
 }
 
 cleanup_namespace() {
@@ -328,6 +341,14 @@ static_check() {
       }
     done
   }
+  assert_kind_image_cleanup_aliases() {
+    local block
+    block="$(function_block build_local_image)"
+    if ! grep -Fq "record_imported_image_refs \"\${repo}\"" <<<"${block}"; then
+      fail 'static: each OCI import must record every new exact Kind image alias for cleanup'
+      failures=$((failures + 1))
+    fi
+  }
   check_static 'ctr -n k8s.io images import --base-name.*--digests' 'imports a local OCI archive into Kind under its exact digest' "${BASH_SOURCE[0]}"
   check_static 'imagePullSecrets' 'asserts existing imagePullSecret use' "${BASH_SOURCE[0]}"
   check_static 'schema_migrations' 'records migration state without a schema rollback claim' "${BASH_SOURCE[0]}"
@@ -344,6 +365,7 @@ static_check() {
   assert_unprogrammed_gateway_boundary
   assert_fixture_entitlement_port_contract
   assert_denied_egress_failure_marker
+  assert_kind_image_cleanup_aliases
   check_static 'postgresCaBundle' 'chart mounts the PostgreSQL CA referenced by verified DSNs' "${CHART}/templates/deployment.yaml"
   check_static 'tcp_port_secure' 'fixture exposes TLS ClickHouse native transport' "${FIXTURE_SCRIPT}"
   check_static 'acr-e2e\.fullchaos\.dev/fixture-id' 'fixture permits only explicitly labelled consumer namespaces' "${FIXTURE_SCRIPT}"
@@ -529,12 +551,12 @@ build_local_image() {
   node="${cluster}-control-plane"
   remote_archive="/var/lib/acr-e2e/$(basename "${archive}")"
   assert_kind_images_absent "${node}" "${tag}" "${repo}@${digest}"
-  imported_image_refs+=("${tag}" "${repo}@${digest}")
   docker exec "${node}" mkdir -p /var/lib/acr-e2e
   remote_archives+=("${remote_archive}")
   docker cp "${archive}" "${node}:/var/lib/acr-e2e/"
   docker exec "${node}" ctr -n k8s.io images import --base-name "${repo}" --digests "${remote_archive}" >/dev/null
   docker exec "${node}" ctr -n k8s.io images tag "${tag}" "${repo}@${digest}" >/dev/null
+  record_imported_image_refs "${repo}" || die "could not record imported Kind image references"
   docker exec "${node}" rm -f "${remote_archive}" >/dev/null
   docker exec "${node}" ctr -n k8s.io images list -q >"${run_dir}/kind-images-${version}.txt"
   grep -Fxq "${repo}@${digest}" "${run_dir}/kind-images-${version}.txt" || die "Kind node did not retain the exact local OCI image digest"
