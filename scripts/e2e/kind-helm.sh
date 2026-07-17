@@ -35,6 +35,7 @@ git_index_tree_sha=""
 git_provenance_captured_at_utc=""
 built_image_ref=""
 published_image_ref=""
+expected_migration_failure_marker=""
 TIMEOUT_TERM_GRACE_SECONDS="${ACR_E2E_TIMEOUT_TERM_GRACE_SECONDS:-5}"
 
 log() { printf '[kind-helm] %s\n' "$*" >&2; }
@@ -836,27 +837,40 @@ assert_no_deployment_ready() {
 }
 
 assert_failed_migration_hook() {
-  local job pod exit_code
+  local job pod exit_code hook migration_dsn command failure_output
   job="$(deployment_name)-migrate"
   kube -n "${namespace}" wait --for=condition=failed "job/${job}" --timeout=90s >/dev/null || {
     fail "migration failure did not leave a failed hook Job"; return 1;
   }
+  hook="$(kube -n "${namespace}" get "job/${job}" -o jsonpath='{.metadata.annotations.helm\.sh/hook}')"
+  [[ "${hook}" == "pre-install,pre-upgrade" ]] || { fail "failed Job is not the Helm migration hook"; return 1; }
   pod="$(kube -n "${namespace}" get pods -l "job-name=${job}" -o jsonpath='{.items[0].metadata.name}')"
   [[ -n "${pod}" ]] || { fail "failed migration hook has no Pod"; return 1; }
+  command="$(kube -n "${namespace}" get "pod/${pod}" -o jsonpath='{.spec.containers[?(@.name=="acr-migrate")].command[*]} {.spec.containers[?(@.name=="acr-migrate")].args[*]}')"
+  [[ "${command}" == *'/usr/local/bin/acr-migrate up'* ]] || { fail "failed hook Pod does not execute acr-migrate up"; return 1; }
+  migration_dsn="$(kube -n "${namespace}" get secret acr-migration -o jsonpath='{.data.ACR_POSTGRES_MIGRATION_DSN}' | base64 -d)"
+  [[ "${migration_dsn}" == *"${expected_migration_failure_marker}"* ]] || { fail "migration Secret does not contain the injected failure target"; return 1; }
   exit_code="$(kube -n "${namespace}" get "pod/${pod}" -o jsonpath='{.status.containerStatuses[?(@.name=="acr-migrate")].state.terminated.exitCode}')"
   [[ "${exit_code}" =~ ^[1-9][0-9]*$ ]] || { fail "failed migration hook did not terminate acr-migrate nonzero"; return 1; }
+  failure_output="$(kube -n "${namespace}" logs "${pod}" -c acr-migrate --tail=50 2>&1 || true)"
+  grep -Fq -- "${expected_migration_failure_marker}" <<<"${failure_output}" || { fail "migration hook did not report the injected fixture failure"; return 1; }
+  grep -Eqi 'lookup|no such host|dial tcp|connect' <<<"${failure_output}" || { fail "migration hook failure was not a classified connection failure"; return 1; }
   assert_no_deployment_ready
 }
 
 assert_missing_runtime_secret() {
-  local deploy reason events
+  local deploy pod waiting_reason events secret_name
   deploy="$(deployment_name)"
+  secret_name="acr-runtime"
   kube -n "${namespace}" get "deployment/${deploy}" >/dev/null || { fail "missing runtime Secret did not create the API Deployment"; return 1; }
   assert_no_deployment_ready
-  reason="$(kube -n "${namespace}" get pods -o jsonpath='{range .items[*].status.containerStatuses[*]}{.state.waiting.reason}{"\n"}{end}' 2>/dev/null || true)"
-  events="$(kube -n "${namespace}" get events --sort-by=.metadata.creationTimestamp 2>/dev/null || true)"
-  grep -qiE 'CreateContainerConfigError|secret.*not found|not found' <<<"${reason}${events}" || {
-    fail "missing runtime Secret did not produce a missing-Secret workload boundary"; return 1;
+  pod="$(kube -n "${namespace}" get pods -l "app.kubernetes.io/name=acr,app.kubernetes.io/instance=${release},app.kubernetes.io/component=api" -o jsonpath='{.items[0].metadata.name}')"
+  [[ -n "${pod}" ]] || { fail "missing runtime Secret has no API Pod"; return 1; }
+  waiting_reason="$(kube -n "${namespace}" get "pod/${pod}" -o jsonpath='{.status.containerStatuses[?(@.name=="acr-api")].state.waiting.reason}' 2>/dev/null || true)"
+  [[ "${waiting_reason}" == "CreateContainerConfigError" ]] || { fail "API Pod did not report CreateContainerConfigError for missing runtime Secret"; return 1; }
+  events="$(kube -n "${namespace}" get events --field-selector "involvedObject.kind=Pod,involvedObject.name=${pod}" --sort-by=.metadata.creationTimestamp 2>/dev/null || true)"
+  grep -Fqi "secret \"${secret_name}\" not found" <<<"${events}" || {
+    fail "API Pod did not report missing Secret ${secret_name}"; return 1;
   }
 }
 
@@ -1016,6 +1030,7 @@ run_bad_migration() {
   entitlement="$(create_fixture_references)"
   build_local_image bad-migration
   current="${built_image_ref}"
+  expected_migration_failure_marker="postgres.invalid"
   kube -n "${namespace}" delete secret acr-migration >/dev/null
   kube -n "${namespace}" create secret generic acr-migration \
     --from-literal=ACR_POSTGRES_MIGRATION_DSN='postgres://postgres:acr-e2e-pass@postgres.invalid/acr?sslmode=disable' >/dev/null
@@ -1026,7 +1041,7 @@ run_bad_migration() {
   fi
   diagnose_workload_failure
   assert_failed_migration_hook
-  queue_expected_failure bad-migration 'bad migration hook failed nonzero and left no Available API Deployment'
+  queue_expected_failure bad-migration 'injected postgres.invalid migration hook failed nonzero before API readiness'
   log 'expected failure proven: bad migration hook failed before application readiness'
   return 0
 }

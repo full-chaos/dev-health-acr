@@ -39,7 +39,7 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               shared-runtime-migration-dsn, injected-mcp, entitlement-path,
               pgbouncer-missing-pooler, extra-container, direct-with-pooler,
               http-url, userinfo-url, query-url, fragment-url, unknown-root-key,
-              unknown-config-key, alternate-port.
+              unknown-config-key, alternate-port, mutable-token-copy-image.
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -196,6 +196,10 @@ case "$scenario" in
     negative alternate-port "addr" \
       --set-string "config.addr=:9090"
     exit 0 ;;
+  mutable-token-copy-image)
+    negative mutable-token-copy-image "mutable-image: security.tokenCopyImage" \
+      --set-string "security.tokenCopyImage=registry.internal/dev-health-acr/token-copy:latest"
+    exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;
 esac
@@ -275,6 +279,13 @@ render \
 grep -qF 'cp /source/runtime-token /target/runtime-token' "$distinct_token_render" \
   || fail_gate "entitlement-token: init container must copy the projected token filename"
 pass "entitlement-token: init container copies the projected Secret filename"
+
+token_copy_image="registry.example/token-copy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+token_copy_render="$(render --set-string "security.tokenCopyImage=${token_copy_image}")"
+token_copy_block="$(awk '/        - name: prepare-entitlement-token/{inside=1} inside{print} inside && /^      containers:/{exit}' <<<"${token_copy_render}")"
+grep -Fq "image: \"${token_copy_image}\"" <<<"${token_copy_block}" \
+  || fail_gate "token-copy-image: prepare-entitlement-token does not use security.tokenCopyImage"
+pass "token-copy-image: prepare-entitlement-token uses the configured immutable image"
 
 assert_restricted_container() {
   local name="$1" block

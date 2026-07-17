@@ -286,6 +286,54 @@ assert_helm_harness_behaviors() {
   if "${BASH}" -c '
     ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
     namespace=test
+    release=acr-runtime
+    kube() {
+      case "$*" in
+        *"get deployment/acr-runtime"*) return 0 ;;
+        *"wait --for=condition=Available deployment/acr-runtime"*) return 1 ;;
+        *"get pods -l"*) printf acr-runtime-api-pod ;;
+        *"get pod/acr-runtime-api-pod"*) printf "" ;;
+        *"get events"*) printf "Warning FailedMount configmap \\"other-config\\" not found" ;;
+      esac
+      return 0
+    }
+    if assert_missing_runtime_secret; then exit 1; fi
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'unrelated not-found events do not satisfy the missing runtime Secret assertion'
+  else
+    bad 'unrelated not-found events must not satisfy the missing runtime Secret assertion'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    namespace=test
+    release=acr-runtime
+    expected_migration_failure_marker=postgres.invalid
+    kube() {
+      case "$*" in
+        *"wait --for=condition=failed job/acr-runtime-migrate"*) return 0 ;;
+        *"get job/acr-runtime-migrate"*) printf pre-install,pre-upgrade ;;
+        *"get pods -l job-name=acr-runtime-migrate"*) printf acr-runtime-migrate-pod ;;
+        *".spec.containers"*) printf "/usr/local/bin/acr-migrate up" ;;
+        *"get secret acr-migration"*) printf postgres.invalid | base64 ;;
+        *".status.containerStatuses"*) printf 1 ;;
+        *"logs acr-runtime-migrate-pod"*) printf "exec: invalid binary" ;;
+        *"wait --for=condition=Available deployment/acr-runtime"*) return 1 ;;
+      esac
+      return 0
+    }
+    if assert_failed_migration_hook; then exit 1; fi
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'unrelated migration binary failures do not satisfy the injected fixture failure assertion'
+  else
+    bad 'unrelated migration binary failures must not satisfy the injected fixture failure assertion'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    namespace=test
     poll_file="$(mktemp)"
     trap "rm -f \"${poll_file}\"" EXIT
     printf 0 >"${poll_file}"
@@ -356,6 +404,11 @@ assert_static_hardening() {
   assert_helm_script_contains 'run_with_timeout' 'registry pushes are bounded and fail closed'
   assert_helm_script_contains 'wait_gateway_programmed_false' 'Gateway False assertions wait for reconciliation'
   assert_helm_script_contains 'involvedObject.name=\$\{pod\}' 'image-pull evidence is scoped to the migration Pod'
+  assert_helm_script_contains 'involvedObject.name=\$\{pod\}' 'missing runtime Secret evidence is scoped to the API Pod'
+  assert_helm_script_contains 'secret_name="acr-runtime"' 'missing runtime Secret assertion requires the exact Secret name'
+  assert_helm_script_contains 'waiting_reason.*CreateContainerConfigError' 'missing runtime Secret assertion requires the exact waiting reason'
+  assert_helm_script_contains 'expected_migration_failure_marker' 'bad migration assertion classifies the injected fixture failure'
+  assert_helm_script_contains 'acr-migrate.*up' 'bad migration assertion proves the intended migration hook command'
   assert_helm_script_contains 'assert_anonymous_registry_pull_denied' 'missing pull-secret scenario proves anonymous registry denial'
   assert_helm_script_contains 'imported_image_refs\+=\("\$\{target\}"\)' 'registry target is tracked before the push can fail'
   assert_helm_script_contains 'assert_kind_images_absent' 'Kind image imports reject pre-existing references before tracking cleanup ownership'

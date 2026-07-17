@@ -120,6 +120,7 @@ ACR_E2E_GATEWAY_NAME="gateway"
 ACR_E2E_GATEWAY_HOSTNAME="acr.example.test"
 ACR_E2E_POSTGRES_HOST="postgres.example.test"
 ACR_E2E_CLICKHOUSE_HOST="clickhouse.example.test"
+ACR_E2E_CLICKHOUSE_NATIVE_PORT="9440"
 ACR_E2E_OPS_ENTITLEMENT_HOST="ops.example.test"
 ACR_E2E_CA_CERT="${state_root}/fixture/ca.crt"
 ACR_E2E_REGISTRY_ENDPOINT="registry.example.test"
@@ -151,6 +152,43 @@ EOF
   rm -rf "${state_root}"
 }
 
+test_clickhouse_dsn_uses_fixture_native_port() {
+  local state_root fake_bin log
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  log="${state_root}/kubectl.log"
+  mkdir -p "${state_root}/fixture" "${fake_bin}"
+  : >"${state_root}/fixture/ca.crt"
+  cat >"${state_root}/fixture/exports.env" <<EOF
+ACR_KIND_CONTEXT="fake-context"
+ACR_E2E_DEPS_NAMESPACE="acr-deps"
+ACR_E2E_GATEWAY_NAMESPACE="gateway-system"
+ACR_E2E_GATEWAY_NAME="gateway"
+ACR_E2E_GATEWAY_HOSTNAME="acr.example.test"
+ACR_E2E_POSTGRES_HOST="postgres.example.test"
+ACR_E2E_CLICKHOUSE_HOST="clickhouse.example.test"
+ACR_E2E_CLICKHOUSE_NATIVE_PORT="9440"
+ACR_E2E_OPS_ENTITLEMENT_HOST="ops.example.test"
+ACR_E2E_CA_CERT="${state_root}/fixture/ca.crt"
+ACR_E2E_REGISTRY_ENDPOINT="registry.example.test"
+EOF
+  cat >"${fake_bin}/kubectl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${KUBECTL_LOG}"
+EOF
+  chmod +x "${fake_bin}/kubectl"
+
+  PATH="${fake_bin}:${PATH}" KUBECTL_LOG="${log}" ACR_E2E_STATE_ROOT="${state_root}" \
+    ACR_E2E_LIB_ONLY=1 bash -c 'source "$1"; KUSTOMIZE_E2E_NAMESPACE=acr-test; e2e_load_fixture fixture; e2e_create_secrets' -- "${LIBRARY}"
+  grep -Fq 'clickhouse://default:@clickhouse.example.test:9440/default?secure=true&skip_verify=false&tls_server_name=clickhouse.example.test' "${log}" \
+    || fail 'ClickHouse DSN does not use the fixture native TLS port'
+  if grep -Fq 'clickhouse.example.test:8443' "${log}"; then
+    rm -rf "${state_root}"
+    fail 'ClickHouse DSN incorrectly uses the Ops entitlement port'
+  fi
+  rm -rf "${state_root}"
+}
+
 test_mutable_image_is_rejected_before_cluster_access() {
   local output status
   set +e
@@ -172,4 +210,5 @@ test_verification_evidence_requires_clean_git_provenance
 test_verification_provenance_rejects_dirty_worktree
 test_verification_provenance_rejects_dirty_index
 test_preexisting_namespace_is_not_deleted
+test_clickhouse_dsn_uses_fixture_native_port
 printf 'RESULT: Kind Kustomize harness contract tests passed\n'

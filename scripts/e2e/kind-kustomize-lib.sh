@@ -15,6 +15,7 @@ KUSTOMIZE_E2E_GATEWAY_NAME=""
 KUSTOMIZE_E2E_GATEWAY_HOSTNAME=""
 KUSTOMIZE_E2E_POSTGRES_HOST=""
 KUSTOMIZE_E2E_CLICKHOUSE_HOST=""
+KUSTOMIZE_E2E_CLICKHOUSE_NATIVE_PORT=""
 KUSTOMIZE_E2E_OPS_HOST=""
 KUSTOMIZE_E2E_REGISTRY=""
 
@@ -59,6 +60,7 @@ e2e_load_fixture() {
   KUSTOMIZE_E2E_GATEWAY_HOSTNAME="$(e2e_fixture_value "$file" ACR_E2E_GATEWAY_HOSTNAME)"
   KUSTOMIZE_E2E_POSTGRES_HOST="$(e2e_fixture_value "$file" ACR_E2E_POSTGRES_HOST)"
   KUSTOMIZE_E2E_CLICKHOUSE_HOST="$(e2e_fixture_value "$file" ACR_E2E_CLICKHOUSE_HOST)"
+  KUSTOMIZE_E2E_CLICKHOUSE_NATIVE_PORT="$(e2e_fixture_value "$file" ACR_E2E_CLICKHOUSE_NATIVE_PORT)"
   KUSTOMIZE_E2E_OPS_HOST="$(e2e_fixture_value "$file" ACR_E2E_OPS_ENTITLEMENT_HOST)"
   KUSTOMIZE_E2E_CA="$(e2e_fixture_value "$file" ACR_E2E_CA_CERT)"
   KUSTOMIZE_E2E_REGISTRY="$(e2e_fixture_value "$file" ACR_E2E_REGISTRY_ENDPOINT)"
@@ -226,7 +228,7 @@ e2e_create_secrets() {
 	local rotation_content="${1:-initial}" migration_dsn runtime_dsn clickhouse_dsn keyring
   migration_dsn="postgres://postgres:acr-e2e-pass@${KUSTOMIZE_E2E_POSTGRES_HOST}:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
   runtime_dsn="postgres://acr_runtime:acr-e2e-runtime-pass@${KUSTOMIZE_E2E_POSTGRES_HOST}:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
-  clickhouse_dsn="clickhouse://default:@${KUSTOMIZE_E2E_CLICKHOUSE_HOST}:8443/default?secure=true&skip_verify=false&tls_server_name=${KUSTOMIZE_E2E_CLICKHOUSE_HOST}"
+  clickhouse_dsn="clickhouse://default:@${KUSTOMIZE_E2E_CLICKHOUSE_HOST}:${KUSTOMIZE_E2E_CLICKHOUSE_NATIVE_PORT}/default?secure=true&skip_verify=false&tls_server_name=${KUSTOMIZE_E2E_CLICKHOUSE_HOST}"
   keyring='current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE='
   for name in acr-postgres-ca acr-clickhouse-ca acr-entitlement-ca; do
     e2e_kube create secret generic "$name" --from-file=ca.crt="$KUSTOMIZE_E2E_CA" --dry-run=client -o yaml | e2e_kube apply -f - >/dev/null
