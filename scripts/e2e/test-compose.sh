@@ -42,7 +42,8 @@ test "$(grep -Fc 'response_body' "$script")" -eq 4
 if grep -Fq "cat \"\$response_body\"" "$script"; then exit 1; fi
 grep -Fq "expect_failure 1 'Code: 164.*readonly'" "$script"
 grep -Fq "expect_failure 1 'apply migration 2'" "$script"
-grep -Fq 'CREATE TABLE acr.agent_episodes (broken_marker TEXT)' "$script"
+grep -Fq 'migrations/postgres/0001_acr_core.sql' "$script"
+grep -Fq 'agent_episodes_org_repo_idempotency_key_key CHECK (false)' "$script"
 grep -Fq 'partial state and API stayed gated' "$script"
 if grep -Fq 'system_metrics' "$script"; then exit 1; fi
 grep -Fq 'select(.revoked_at == null)' "$script"
