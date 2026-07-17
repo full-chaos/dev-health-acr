@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/config"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 )
@@ -152,22 +152,14 @@ func validateCredentialCommand(command string, arguments credentialCommandArgume
 }
 
 func credentialDSN(lookup lookupEnv) (string, error) {
-	dsn, hasDSN := lookup(postgresDSNEnvironment)
-	path, hasPath := lookup(postgresDSNFileEnvironment)
-	if hasDSN && hasPath {
-		return "", errors.New("configure only one PostgreSQL DSN source")
+	dsn, err := config.SecretValue(lookup, postgresDSNEnvironment)
+	if err != nil {
+		return "", err
 	}
-	if hasPath {
-		value, err := os.ReadFile(strings.TrimSpace(path))
-		if err != nil {
-			return "", errors.New("read PostgreSQL DSN file")
-		}
-		dsn = string(value)
-	}
-	if strings.TrimSpace(dsn) == "" {
+	if dsn == "" {
 		return "", fmt.Errorf("%s or %s is required", postgresDSNEnvironment, postgresDSNFileEnvironment)
 	}
-	return strings.TrimSpace(dsn), nil
+	return dsn, nil
 }
 
 // validateDeclaredConnectionKind rejects a declared ACR_POSTGRES_CONNECTION_KIND

@@ -1,17 +1,18 @@
 services:
   acr-db-init:
-    image: postgres:18-alpine
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
     restart: "no"
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/acr_postgres_password
       ACR_DB_NAME: ${ACR_DB_NAME:-acr}
       ACR_RUNTIME_DB_USER: ${ACR_RUNTIME_DB_USER:?ACR_RUNTIME_DB_USER is required}
-      ACR_RUNTIME_DB_PASSWORD: ${ACR_RUNTIME_DB_PASSWORD:?ACR_RUNTIME_DB_PASSWORD is required}
+      ACR_RUNTIME_DB_PASSWORD_FILE: /run/secrets/acr_runtime_db_password
       ACR_MIGRATION_DB_USER: ${ACR_MIGRATION_DB_USER:?ACR_MIGRATION_DB_USER is required}
-      ACR_MIGRATION_DB_PASSWORD: ${ACR_MIGRATION_DB_PASSWORD:?ACR_MIGRATION_DB_PASSWORD is required}
+      ACR_MIGRATION_DB_PASSWORD_FILE: /run/secrets/acr_migration_db_password
+    secrets: [acr_postgres_password, acr_runtime_db_password, acr_migration_db_password]
     volumes:
       - ./deploy/compose/acr-db-init.sh:/usr/local/bin/acr-db-init:ro
     command: ["/usr/local/bin/acr-db-init", "roles"]
@@ -34,19 +35,20 @@ services:
       acr-db-init: { condition: service_completed_successfully }
     networks: [dev-health]
   acr-db-acl:
-    image: postgres:18-alpine
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
     restart: "no"
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/acr_postgres_password
       ACR_DB_NAME: ${ACR_DB_NAME:-acr}
       ACR_RUNTIME_DB_USER: ${ACR_RUNTIME_DB_USER:?ACR_RUNTIME_DB_USER is required}
-      ACR_RUNTIME_DB_PASSWORD: ${ACR_RUNTIME_DB_PASSWORD:?ACR_RUNTIME_DB_PASSWORD is required}
+      ACR_RUNTIME_DB_PASSWORD_FILE: /run/secrets/acr_runtime_db_password
       ACR_MIGRATION_DB_USER: ${ACR_MIGRATION_DB_USER:?ACR_MIGRATION_DB_USER is required}
-      ACR_MIGRATION_DB_PASSWORD: ${ACR_MIGRATION_DB_PASSWORD:?ACR_MIGRATION_DB_PASSWORD is required}
+      ACR_MIGRATION_DB_PASSWORD_FILE: /run/secrets/acr_migration_db_password
       ACR_ENABLE_EPISODE_WRITEBACK: ${ACR_ENABLE_EPISODE_WRITEBACK:-false}
+    secrets: [acr_postgres_password, acr_runtime_db_password, acr_migration_db_password]
     volumes:
       - ./deploy/compose/acr-db-init.sh:/usr/local/bin/acr-db-init:ro
     command: ["/usr/local/bin/acr-db-init", "runtime-acl"]
@@ -90,6 +92,9 @@ services:
       traefik.http.services.acr.loadbalancer.server.port: "8080"
     networks: [dev-health]
 secrets:
+  acr_postgres_password: { file: "${ACR_POSTGRES_ADMIN_PASSWORD_FILE:?ACR_POSTGRES_ADMIN_PASSWORD_FILE is required}" }
+  acr_runtime_db_password: { file: "${ACR_RUNTIME_DB_PASSWORD_FILE:?ACR_RUNTIME_DB_PASSWORD_FILE is required}" }
+  acr_migration_db_password: { file: "${ACR_MIGRATION_DB_PASSWORD_FILE:?ACR_MIGRATION_DB_PASSWORD_FILE is required}" }
   acr_runtime_dsn: { file: "${ACR_RUNTIME_DSN_FILE:?ACR_RUNTIME_DSN_FILE is required}" }
   acr_migration_dsn: { file: "${ACR_MIGRATION_DSN_FILE:?ACR_MIGRATION_DSN_FILE is required}" }
   acr_clickhouse_dsn: { file: "${ACR_CLICKHOUSE_DSN_FILE:?ACR_CLICKHOUSE_DSN_FILE is required}" }

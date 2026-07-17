@@ -13,6 +13,12 @@ IMAGE="${ACR_E2E_IMAGE:-}"
 COMPOSE=(docker compose)
 SAFE_BOUNDARY=""
 ACR_CLIENT_VERSION_HEADER="X-ACR-Client-Version: 1.0.0"
+POSTGRES_IMAGE="postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
+CLICKHOUSE_IMAGE="clickhouse/clickhouse-server:latest@sha256:1d1f6508eba2dccce2cee9913907c5f7766327debc57a6b1991f2c9e3176c163"
+PGBOUNCER_IMAGE="edoburu/pgbouncer:latest@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd"
+VALKEY_IMAGE="valkey/valkey:9-alpine@sha256:c9b77919daeba2c02ad954d0c844cc4e7142069d177b89c5fd771f405daf9e02"
+MAILPIT_IMAGE="axllent/mailpit:latest@sha256:5a49a77c5bdbe7c5474450b4f46348d09949df3695257729c93a30369382d4f6"
+NGINX_IMAGE="nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10"
 
 # allow: SIZE_OK — the isolated scenario lifecycle shares one trap-owned state directory.
 
@@ -48,8 +54,19 @@ owned_receipt() {
   printf 'containers=%s volumes=%s networks=%s' "${containers%,}" "${volumes%,}" "${networks%,}"
 }
 
+assert_project_unused() {
+  local existing
+  existing="$(docker ps -aq --filter "label=com.docker.compose.project=${PROJECT}")$(docker volume ls -q --filter "label=com.docker.compose.project=${PROJECT}")$(docker network ls -q --filter "label=com.docker.compose.project=${PROJECT}")"
+  if [[ -n "$existing" ]]; then
+    die 'refusing pre-existing Compose project resources'
+  fi
+  if docker compose ls --all --format json | jq -e --arg project "$PROJECT" '.[] | select(.Name == $project)' >/dev/null; then
+    die 'refusing pre-existing Compose project name'
+  fi
+}
+
 cleanup() {
-  local status=$?
+  local status=$? health_container service
   [[ -n "$STATE" && -d "$STATE" ]] || exit "$status"
   if [[ ! -f "$STATE/override.yml" ]]; then
     rm -rf "$STATE"
@@ -57,7 +74,13 @@ cleanup() {
   fi
   note "cleanup receipt before: $(owned_receipt)"
   if [[ "$status" -ne 0 ]]; then
-    compose logs --no-color acr-pki-init migrate acr-migrate acr-api 2>&1 | redact_log || true
+    compose logs --no-color acr-pki-init clickhouse migrate acr-migrate acr-api 2>&1 | redact_log || true
+    for service in clickhouse api; do
+      health_container="$(compose ps -q "$service" 2>/dev/null || true)"
+      if [[ -n "$health_container" ]]; then
+        docker inspect --format '{{range .State.Health.Log}}{{.Output}}{{end}}' "$health_container" 2>&1 | redact_log || true
+      fi
+    done
   fi
   if ! compose down --volumes --remove-orphans >/dev/null 2>&1; then
     note 'cleanup failed; refusing to claim an isolated teardown'
@@ -98,7 +121,10 @@ prepare_state() {
   write_secret "$STATE/secrets/evidence-keys" "acr-e2e-kid=$(random_base64)"
   : > "$STATE/secrets/ops-token"; chmod 600 "$STATE/secrets/ops-token"
   cat > "$STATE/clickhouse/tls.xml" <<EOF
-<clickhouse><tcp_port_secure>9440</tcp_port_secure><openSSL><server><certificateFile>/run/acr-tls/acr.crt</certificateFile><privateKeyFile>/run/acr-tls/acr.key</privateKeyFile><caConfig>/run/acr-tls/ca.crt</caConfig><verificationMode>none</verificationMode></server></openSSL></clickhouse>
+<clickhouse><tcp_port_secure>9440</tcp_port_secure><openSSL><server><certificateFile>/run/acr-tls/acr.crt</certificateFile><privateKeyFile>/run/acr-tls/acr.key</privateKeyFile><caConfig>/run/acr-tls/ca.crt</caConfig><verificationMode>relaxed</verificationMode></server></openSSL></clickhouse>
+EOF
+  cat > "$STATE/clickhouse/client-tls.xml" <<EOF
+<clickhouse><openSSL><client><loadDefaultCAFile>false</loadDefaultCAFile><caConfig>/run/acr-tls/ca.crt</caConfig><verificationMode>strict</verificationMode><invalidCertificateHandler><name>RejectCertificateHandler</name></invalidCertificateHandler></client></openSSL></clickhouse>
 EOF
   cat > "$STATE/nginx-api.conf" <<'EOF'
 events {}
@@ -133,21 +159,27 @@ render_override() {
   cat > "$STATE/override.yml" <<EOF
 services:
   postgres:
+    image: "${POSTGRES_IMAGE}"
     ports: []
     environment: { POSTGRES_USER: devhealth, POSTGRES_PASSWORD: "${pg}", POSTGRES_DB: devhealth }
     command: ["postgres", "-c", "ssl=on", "-c", "ssl_cert_file=/run/acr-tls/acr.crt", "-c", "ssl_key_file=/run/acr-tls/acr.key", "-c", "ssl_ca_file=/run/acr-tls/ca.crt"]
     volumes: ["postgres_data:/var/lib/postgresql/data", "${STATE}/stage/ops/docker/init-extra-dbs.sh:/docker-entrypoint-initdb.d/init-extra-dbs.sh:ro", "acr_e2e_postgres_tls:/run/acr-tls:ro"]
     depends_on: { acr-pki-init: { condition: service_completed_successfully } }
   clickhouse:
+    image: "${CLICKHOUSE_IMAGE}"
     ports: []
     environment: { CLICKHOUSE_USER: default, CLICKHOUSE_PASSWORD: ch, CLICKHOUSE_DB: default, CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1" }
-    volumes: ["clickhouse_data:/var/lib/clickhouse", "acr_e2e_clickhouse_tls:/run/acr-tls:ro", "${STATE}/clickhouse/tls.xml:/etc/clickhouse-server/config.d/acr-e2e-tls.xml:ro"]
-    healthcheck: { test: ["CMD-SHELL", "clickhouse-client --secure --accept-invalid-certificate --host localhost --port 9440 --user default --password ch --query 'SELECT 1'"], interval: 5s, timeout: 5s, retries: 12, start_period: 10s }
+    volumes: ["clickhouse_data:/var/lib/clickhouse", "acr_e2e_clickhouse_tls:/run/acr-tls:ro", "${STATE}/clickhouse/tls.xml:/etc/clickhouse-server/config.d/acr-e2e-tls.xml:ro", "${STATE}/clickhouse/client-tls.xml:/etc/clickhouse-client/config.d/acr-e2e-tls.xml:ro"]
+    healthcheck: { test: ["CMD-SHELL", "clickhouse-client --config-file=/etc/clickhouse-client/config.d/acr-e2e-tls.xml --secure --host clickhouse --port 9440 --user default --password ch --query 'SELECT 1'"], interval: 5s, timeout: 5s, retries: 12, start_period: 10s }
     depends_on: { acr-pki-init: { condition: service_completed_successfully } }
-  valkey: { ports: [] }
+  pgbouncer: { image: "${PGBOUNCER_IMAGE}" }
+  valkey: { image: "${VALKEY_IMAGE}", ports: [] }
+  mailpit: { image: "${MAILPIT_IMAGE}" }
+  api:
+    healthcheck: { test: ["CMD", "wget", "--spider", "http://localhost:8000/ready"], interval: 5s, timeout: 5s, retries: 36, start_period: 120s }
   traefik: { ports: [] }
   acr-pki-init:
-    image: postgres:18-alpine
+    image: "${POSTGRES_IMAGE}"
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
     command: ["cp /input/acr.crt /input/acr.key /input/ca.crt /postgres-tls/; chown -R 70:70 /postgres-tls; chmod 600 /postgres-tls/acr.key; cp /input/acr.crt /input/acr.key /input/ca.crt /clickhouse-tls/; chown -R 101:101 /clickhouse-tls; chmod 600 /clickhouse-tls/acr.key"]
@@ -159,10 +191,6 @@ services:
     environment:
       ACR_ENVIRONMENT: development
       ACR_REQUIRE_BACKING_STORES: "true"
-      ACR_POSTGRES_DSN: "$(<"$STATE/secrets/runtime-dsn")"
-      ACR_CLICKHOUSE_DSN: "$(<"$STATE/secrets/clickhouse-dsn")"
-      ACR_EVIDENCE_ID_ACTIVE_KID: "$(<"$STATE/secrets/evidence-kid")"
-      ACR_EVIDENCE_ID_KEYS: '$(<"$STATE/secrets/evidence-keys")'
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
       ACR_CLICKHOUSE_CA_BUNDLE: /run/secrets/acr_ca
@@ -177,15 +205,14 @@ services:
     networks: [dev-health]
   acr-migrate:
     image: "${IMAGE}"
-    environment: { ACR_POSTGRES_MIGRATION_DSN: "$(<"$STATE/secrets/migration-dsn")" }
   acr-tls-proxy:
-    image: nginx:1.27-alpine
+    image: "${NGINX_IMAGE}"
     ports: ["127.0.0.1:${PORT}:8443"]
     volumes: ["${STATE}/pki:/run/pki:ro", "${STATE}/nginx-api.conf:/etc/nginx/nginx.conf:ro"]
     depends_on: { acr-api: { condition: service_started } }
     networks: [dev-health]
   acr-ops-tls:
-    image: nginx:1.27-alpine
+    image: "${NGINX_IMAGE}"
     volumes: ["${STATE}/pki:/run/pki:ro", "${STATE}/nginx-ops.conf:/etc/nginx/nginx.conf:ro"]
     depends_on: { api: { condition: service_healthy } }
     networks: [dev-health]
@@ -193,7 +220,7 @@ volumes:
   acr_e2e_postgres_tls: {}
   acr_e2e_clickhouse_tls: {}
 EOF
-  export ACR_IMAGE="$IMAGE" POSTGRES_USER=devhealth POSTGRES_PASSWORD="$pg" POSTGRES_PORT="$postgres_port" CLICKHOUSE_USER=default CLICKHOUSE_PASSWORD=ch CLICKHOUSE_HTTP_PORT="$clickhouse_http_port" CLICKHOUSE_NATIVE_PORT="$clickhouse_native_port" REDIS_PORT="$redis_port" ACR_DB_NAME="$db" ACR_RUNTIME_DB_USER=acr_runtime ACR_RUNTIME_DB_PASSWORD="$runtime" ACR_MIGRATION_DB_USER=acr_migration ACR_MIGRATION_DB_PASSWORD="$migration" ACR_RUNTIME_DSN_FILE="$STATE/secrets/runtime-dsn" ACR_MIGRATION_DSN_FILE="$STATE/secrets/migration-dsn" ACR_CLICKHOUSE_DSN_FILE="$STATE/secrets/clickhouse-dsn" ACR_OPS_TOKEN_FILE="$STATE/secrets/ops-token" ACR_CA_FILE="$STATE/pki/ca.crt" ACR_EVIDENCE_ACTIVE_KID_FILE="$STATE/secrets/evidence-kid" ACR_EVIDENCE_KEYS_FILE="$STATE/secrets/evidence-keys"
+  export ACR_IMAGE="$IMAGE" POSTGRES_USER=devhealth POSTGRES_PASSWORD="$pg" POSTGRES_PORT="$postgres_port" CLICKHOUSE_USER=default CLICKHOUSE_PASSWORD=ch CLICKHOUSE_HTTP_PORT="$clickhouse_http_port" CLICKHOUSE_NATIVE_PORT="$clickhouse_native_port" REDIS_PORT="$redis_port" ACR_DB_NAME="$db" ACR_RUNTIME_DB_USER=acr_runtime ACR_MIGRATION_DB_USER=acr_migration ACR_POSTGRES_ADMIN_PASSWORD_FILE="$STATE/secrets/postgres-password" ACR_RUNTIME_DB_PASSWORD_FILE="$STATE/secrets/runtime-password" ACR_MIGRATION_DB_PASSWORD_FILE="$STATE/secrets/migration-password" ACR_RUNTIME_DSN_FILE="$STATE/secrets/runtime-dsn" ACR_MIGRATION_DSN_FILE="$STATE/secrets/migration-dsn" ACR_CLICKHOUSE_DSN_FILE="$STATE/secrets/clickhouse-dsn" ACR_OPS_TOKEN_FILE="$STATE/secrets/ops-token" ACR_CA_FILE="$STATE/pki/ca.crt" ACR_EVIDENCE_ACTIVE_KID_FILE="$STATE/secrets/evidence-kid" ACR_EVIDENCE_KEYS_FILE="$STATE/secrets/evidence-keys"
 }
 
 assert_safe_render() {
@@ -244,6 +271,7 @@ bootstrap_ops() {
   fi
   compose exec -T clickhouse clickhouse-client --user default --password ch --multiquery <<EOF >/dev/null
 CREATE USER IF NOT EXISTS acr_reader IDENTIFIED BY '$(<"$STATE/secrets/clickhouse-password")';
+ALTER USER acr_reader SETTINGS readonly = 2;
 GRANT SELECT ON ${db}.* TO acr_reader;
 EOF
   printf '%s' "$org_id" > "$STATE/org-id"
@@ -282,11 +310,16 @@ rotate_acr_credential() {
 
 record_acl_probe() {
   local runtime owner_defaults
-  runtime="$(compose exec -T -e "PGPASSWORD=${ACR_RUNTIME_DB_PASSWORD}" postgres psql -h postgres -U "$ACR_RUNTIME_DB_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c "SELECT current_user, current_database(), has_schema_privilege(current_user, 'acr', 'USAGE'), has_schema_privilege(current_user, 'acr', 'CREATE'), has_table_privilege(current_user, 'acr.schema_migrations', 'SELECT'), has_table_privilege(current_user, 'acr.client_credentials', 'SELECT'), has_table_privilege(current_user, 'acr.client_credentials', 'INSERT'), has_table_privilege(current_user, 'acr.client_credentials', 'UPDATE'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'SELECT'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'INSERT'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'UPDATE'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'DELETE'), has_table_privilege(current_user, 'acr.audit_events', 'INSERT'), (SELECT count(*) FROM acr.schema_migrations)")"
-  owner_defaults="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c "SELECT (SELECT bool_and(pg_get_userbyid(relowner) = 'acr_migration') FROM pg_class WHERE relnamespace = 'acr'::regnamespace AND relkind = 'r'), EXISTS (SELECT 1 FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace CROSS JOIN LATERAL aclexplode(d.defaclacl) acl JOIN pg_roles grantee ON grantee.oid = acl.grantee WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = 'acr_migration') AND n.nspname = 'acr' AND grantee.rolname = 'acr_runtime' AND acl.privilege_type = 'SELECT')")"
+  runtime="$(compose exec -T -e "PGPASSWORD=$(<"$STATE/secrets/runtime-password")" postgres psql -h postgres -U "$ACR_RUNTIME_DB_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c "SELECT current_user, current_database(), has_schema_privilege(current_user, 'acr', 'USAGE'), has_schema_privilege(current_user, 'acr', 'CREATE'), has_table_privilege(current_user, 'acr.schema_migrations', 'SELECT'), has_table_privilege(current_user, 'acr.client_credentials', 'SELECT'), has_table_privilege(current_user, 'acr.client_credentials', 'INSERT'), has_table_privilege(current_user, 'acr.client_credentials', 'UPDATE'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'SELECT'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'INSERT'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'UPDATE'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'DELETE'), has_table_privilege(current_user, 'acr.audit_events', 'INSERT'), (SELECT count(*) FROM acr.schema_migrations)")"
+  owner_defaults="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c "SELECT (SELECT bool_and(pg_get_userbyid(relowner) = 'acr_migration') FROM pg_class WHERE relnamespace = 'acr'::regnamespace AND relkind = 'r'), EXISTS (SELECT 1 FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace CROSS JOIN LATERAL aclexplode(d.defaclacl) acl JOIN pg_roles grantee ON grantee.oid = acl.grantee WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = 'acr_migration') AND n.nspname = 'acr' AND grantee.rolname = 'acr_runtime' AND acl.privilege_type = 'SELECT'), (SELECT pg_get_userbyid(datdba) = 'acr_migration' FROM pg_database WHERE datname = current_database()), (SELECT pg_get_userbyid(nspowner) = 'acr_migration' FROM pg_namespace WHERE nspname = 'acr'), (SELECT NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls AND NOT rolinherit FROM pg_roles WHERE rolname = 'acr_runtime')")"
   [[ "$runtime" =~ ^acr_runtime\|acr_.*\|t\|f\|t\|t\|t\|t\|t\|t\|t\|t\|t\|[0-9]+$ ]] || die 'runtime ACL probe did not satisfy the required contract'
-  [[ "$owner_defaults" == 't|t' ]] || die 'migration ownership/default ACL probe did not satisfy the required contract'
+  [[ "$owner_defaults" == 't|f|t|t|t' ]] || die 'migration ownership/default ACL probe did not satisfy the required contract'
   note "ACL_PROBE runtime=${runtime} owners_and_defaults=${owner_defaults}"
+}
+
+inject_existing_volume_drift() {
+  compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -c "ALTER ROLE ${ACR_RUNTIME_DB_USER} SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS PASSWORD 'stale-runtime-password'; ALTER ROLE ${ACR_MIGRATION_DB_USER} SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS PASSWORD 'stale-migration-password'; ALTER DATABASE ${ACR_DB_NAME} OWNER TO ${POSTGRES_USER};" >/dev/null
+  compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -v ON_ERROR_STOP=1 -c "ALTER SCHEMA acr OWNER TO ${POSTGRES_USER}; ALTER TABLE acr.client_credentials OWNER TO ${POSTGRES_USER}; GRANT ALL ON SCHEMA acr TO ${ACR_RUNTIME_DB_USER}; GRANT ALL ON ALL TABLES IN SCHEMA acr TO ${ACR_RUNTIME_DB_USER};" >/dev/null
 }
 
 mcp_shutdown() {
@@ -344,29 +377,54 @@ start_happy() {
 }
 
 expect_failure() {
-  if "$@" >/dev/null 2>&1; then
-    die "expected failure: $*"
+  local expected_status="$1" expected_pattern="$2" actual_status output redacted
+  shift 2
+  output="$STATE/${SCENARIO}.failure.log"
+  redacted="$STATE/${SCENARIO}.failure.redacted.log"
+  set +e
+  "$@" >"$output" 2>&1
+  actual_status="$?"
+  set -e
+  redact_log < "$output" > "$redacted"
+  if [[ "$actual_status" -ne "$expected_status" ]]; then
+    sed -n '1,40p' "$redacted" >&2
+    die "expected failure status ${expected_status}, got ${actual_status}"
   fi
+  if ! grep -Eq "$expected_pattern" "$redacted"; then
+    sed -n '1,40p' "$redacted" >&2
+    die "expected failure diagnostics did not match safe classification"
+  fi
+  note "expected failure diagnostics: $(sed -n '1,4p' "$redacted")"
   return 0
+}
+
+prepare_acr_database() {
+  compose up -d acr-db-init >/dev/null
+  compose wait acr-db-init >/dev/null || die 'ACR role initialization failed'
+  compose up -d acr-migrate >/dev/null
+  compose wait acr-migrate >/dev/null || die 'ACR migration failed'
+  compose up -d acr-db-acl >/dev/null
+  compose wait acr-db-acl >/dev/null || die 'ACR runtime ACL reconciliation failed'
 }
 
 run_failure() {
   case "$SCENARIO" in
     missing-ops-token)
-      rm -f "$STATE/secrets/ops-token"; expect_failure compose up -d --no-deps acr-api; SAFE_BOUNDARY='ACR API did not start without an Ops token file' ;;
+      bootstrap_ops; prepare_acr_database; : > "$STATE/secrets/ops-token"; expect_failure 1 'Dev Health entitlement token file is invalid' compose run --rm --no-deps acr-api; SAFE_BOUNDARY='ACR API rejected the empty Ops token file with its safe entitlement-token classification' ;;
     invalid-ca)
-      start_happy; printf 'not a certificate\n' > "$STATE/pki/invalid-ca.crt"; expect_failure curl --fail --silent --cacert "$STATE/pki/invalid-ca.crt" --noproxy '*' "https://localhost:${PORT}/readyz"; SAFE_BOUNDARY='TLS verification failed; no insecure curl option was used' ;;
+      start_happy; printf 'not a certificate\n' > "$STATE/pki/invalid-ca.crt"; expect_failure 60 'SSL certificate problem' curl --fail --silent --show-error --cacert "$STATE/pki/invalid-ca.crt" --noproxy '*' "https://localhost:${PORT}/readyz"; SAFE_BOUNDARY='TLS verification failed with curl certificate exit 60; no insecure option was used' ;;
     revoked-acr-token)
-      start_happy; active_credential_id="$(compose run --rm --no-deps acr-credentials credentials list --org-id "$(<"$STATE/org-id")" --json | jq -er '[.[] | select(.revoked_at == null)][0].credential_id')"; compose run --rm --no-deps acr-credentials credentials revoke --org-id "$(<"$STATE/org-id")" --credential-id "$active_credential_id" --actor compose-e2e >/dev/null; expect_failure curl --fail --silent --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer $(<"$STATE/secrets/acr-rotated-token")" "https://localhost:${PORT}/api/v1/agent-context/capabilities"; SAFE_BOUNDARY='revoked active ACR credential was denied before protected reads' ;;
+      start_happy; active_credential_id="$(compose run --rm --no-deps acr-credentials credentials list --org-id "$(<"$STATE/org-id")" --json | jq -er '[.[] | select(.revoked_at == null)][0].credential_id')"; compose run --rm --no-deps acr-credentials credentials revoke --org-id "$(<"$STATE/org-id")" --credential-id "$active_credential_id" --actor compose-e2e >/dev/null; expect_failure 22 'HTTP_STATUS=401' curl --fail --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer $(<"$STATE/secrets/acr-rotated-token")" --output "$STATE/revoked-response.json" --write-out 'HTTP_STATUS=%{http_code}\n' "https://localhost:${PORT}/api/v1/agent-context/capabilities"; jq -e '.code == "unauthorized"' "$STATE/revoked-response.json" >/dev/null || die 'revoked credential did not return the unauthorized error classification'; SAFE_BOUNDARY='revoked active ACR credential returned exact HTTP 401 unauthorized before protected reads' ;;
     clickhouse-read-denied)
-      start_happy; expect_failure compose exec -T clickhouse clickhouse-client --user acr_reader --password "$(<"$STATE/secrets/clickhouse-password")" --query "INSERT INTO acr_${PROJECT//-/}_e2e.system_metrics VALUES ()"; SAFE_BOUNDARY='read-only ClickHouse user rejected a write' ;;
+      start_happy; expect_failure 1 'Code: 164.*readonly' compose exec -T clickhouse clickhouse-client --config-file=/etc/clickhouse-client/config.d/acr-e2e-tls.xml --secure --host clickhouse --port 9440 --user acr_reader --password "$(<"$STATE/secrets/clickhouse-password")" --query "INSERT INTO acr_${PROJECT//-/}_e2e.repos (id, repo, ref, created_at, settings, tags, last_synced, org_id, provider) SELECT generateUUIDv4(), 'acme/write-denied', 'main', now64(3), NULL, NULL, now64(3), toUUID('$(<"$STATE/org-id")'), 'synthetic'"; SAFE_BOUNDARY='read-only ClickHouse user rejected a syntactically valid insert into the existing repos table with exact code 164' ;;
     migration-failure)
-      bootstrap_ops; expect_failure compose run --rm --no-deps -e ACR_POSTGRES_MIGRATION_DSN= acr-migrate; SAFE_BOUNDARY='migration stopped before connecting without a migration DSN' ;;
+      bootstrap_ops; compose up -d acr-db-init >/dev/null; compose wait acr-db-init >/dev/null || die 'ACR role initialization failed'; compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -v ON_ERROR_STOP=1 -c 'CREATE SCHEMA acr AUTHORIZATION acr_migration; CREATE TABLE acr.agent_episodes (broken_marker TEXT);' >/dev/null; expect_failure 1 'apply migration 2' compose run --rm --no-deps acr-migrate; partial_version="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c 'SELECT version FROM acr.schema_migrations ORDER BY version')"; [[ "$partial_version" == '1' ]] || die 'migration failure did not leave the expected partial state'; [[ -z "$(compose ps -q acr-api)" ]] || die 'API started despite failed migration'; SAFE_BOUNDARY='migration 2 failed against deliberate incompatible DDL; migration 1 remains as partial state and API stayed gated' ;;
   esac
   note "expected failure verified: ${SAFE_BOUNDARY}"
   return 1
 }
 
+assert_project_unused
 prepare_state
 ensure_image
 render_override
@@ -376,11 +434,13 @@ if [[ "$SCENARIO" == happy ]]; then
   start_happy
 elif [[ "$SCENARIO" == existing-volume ]]; then
   start_happy
+  inject_existing_volume_drift
   compose down --remove-orphans >/dev/null
   compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-ops-tls acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
   wait_https_ready
+  record_acl_probe
   run_mcp "$(<"$STATE/secrets/acr-rotated-token")"
-  SAFE_BOUNDARY='existing project-scoped volumes survived a complete application restart'
+  SAFE_BOUNDARY='existing project-scoped volumes survived a complete application restart and reconciled role, password, ownership, and ACL drift'
 else
   run_failure
 fi

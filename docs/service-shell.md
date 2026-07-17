@@ -31,10 +31,10 @@ The default listen address is `:8080`. Override it through `ACR_ADDR` or the `se
 | `ACR_MAX_SERIALIZED_BYTES` | `262144` | Serialized packet byte limit |
 | `ACR_REQUESTS_PER_MINUTE` | `60` | Initial advertised request limit |
 | `ACR_REQUIRE_BACKING_STORES` | environment dependent | Defaults true in staging/production |
-| `ACR_CLICKHOUSE_DSN` | empty | Read-only Dev Health evidence store configuration |
+| `ACR_CLICKHOUSE_DSN` / `ACR_CLICKHOUSE_DSN_FILE` | empty | Read-only Dev Health evidence store configuration |
 | `ACR_CLICKHOUSE_CA_BUNDLE` | empty | Optional PEM CA bundle for ClickHouse TLS |
-| `ACR_POSTGRES_DSN` | empty | ACR operational store configuration |
-| `ACR_POSTGRES_POOLER_ADMIN_DSN` | empty | Optional PgBouncer admin connection for transaction-pool validation |
+| `ACR_POSTGRES_DSN` / `ACR_POSTGRES_DSN_FILE` | empty | ACR operational store configuration |
+| `ACR_POSTGRES_POOLER_ADMIN_DSN` / `ACR_POSTGRES_POOLER_ADMIN_DSN_FILE` | empty | Optional PgBouncer admin connection for transaction-pool validation |
 | `ACR_POSTGRES_CONNECTION_KIND` | required for hosted | `direct` or `pgbouncer`; must not contradict `ACR_POSTGRES_POOLER_ADMIN_DSN` presence |
 | `ACR_POSTGRES_MAX_OPEN_CONNS` | `12` | PostgreSQL pool open-connection limit |
 | `ACR_POSTGRES_MAX_IDLE_CONNS` | `min(4, max-open)` | PostgreSQL pool idle-connection limit; explicit `0` disables idle connections |
@@ -43,6 +43,8 @@ The default listen address is `:8080`. Override it through `ACR_ADDR` or the `se
 | `ACR_POSTGRES_PING_TIMEOUT` | `5s` | PostgreSQL startup ping and readiness timeout |
 | `ACR_ALLOW_INSECURE_POSTGRES` | `false` | Test-environment-only override for disposable plaintext PostgreSQL fixtures |
 | `ACR_ENABLE_EPISODE_WRITEBACK` | `false` | Explicitly enables the hosted episode service and route permission |
+| `ACR_EVIDENCE_ID_ACTIVE_KID` / `ACR_EVIDENCE_ID_ACTIVE_KID_FILE` | empty | Active evidence-ID signing key identifier |
+| `ACR_EVIDENCE_ID_KEYS` / `ACR_EVIDENCE_ID_KEYS_FILE` | empty | Comma-separated evidence-ID key material |
 | `ACR_DEV_HEALTH_ENTITLEMENT_URL` | empty | Dev Health entitlement/health service origin (HTTPS required outside loopback) |
 | `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE` | empty | Path to the bearer token file used to authenticate to the entitlement service |
 | `ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT` | `5s` | Per-request timeout for entitlement and health checks |
@@ -62,6 +64,14 @@ ClickHouse catalog probe, and checks the entitlement service before listening.
 Hosted, credential-administration, and migration PostgreSQL/PgBouncer network
 DSNs require certificate-verified TLS; Unix sockets are accepted without TLS.
 The plaintext override is rejected outside `ACR_ENVIRONMENT=test`.
+
+Each listed secret pair accepts exactly one source. A `_FILE` source must name
+a regular, non-symlink file that is not writable by group or others; its
+trimmed contents are bounded to 64 KiB. Invalid paths, permissions, file sizes,
+and conflicting direct/file sources fail configuration without reporting file
+contents or paths. `acr-migrate` accepts the same source pair for
+`ACR_POSTGRES_MIGRATION_DSN`; credential administration accepts it for
+`ACR_POSTGRES_DSN`.
 
 ### Hosted database operations
 

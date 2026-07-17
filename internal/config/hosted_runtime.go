@@ -12,10 +12,16 @@ const defaultHostedPostgresPingTimeout = 5 * time.Second
 
 func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, requiredByEnvironment bool) error {
 	var err error
-	cfg.ClickHouseDSN = stringValue(lookup, "ACR_CLICKHOUSE_DSN", "")
+	if cfg.ClickHouseDSN, err = SecretValue(lookup, "ACR_CLICKHOUSE_DSN"); err != nil {
+		return err
+	}
 	cfg.ClickHouseCACertPath = stringValue(lookup, "ACR_CLICKHOUSE_CA_BUNDLE", "")
-	cfg.PostgresDSN = stringValue(lookup, "ACR_POSTGRES_DSN", "")
-	cfg.PostgresPoolerAdminDSN = stringValue(lookup, "ACR_POSTGRES_POOLER_ADMIN_DSN", "")
+	if cfg.PostgresDSN, err = SecretValue(lookup, "ACR_POSTGRES_DSN"); err != nil {
+		return err
+	}
+	if cfg.PostgresPoolerAdminDSN, err = SecretValue(lookup, "ACR_POSTGRES_POOLER_ADMIN_DSN"); err != nil {
+		return err
+	}
 	cfg.PostgresConnectionKind = stringValue(lookup, "ACR_POSTGRES_CONNECTION_KIND", "")
 	if cfg.PostgresMaxOpenConns, err = intValue(lookup, "ACR_POSTGRES_MAX_OPEN_CONNS", 0); err != nil {
 		return err

@@ -4,13 +4,50 @@ set -eu
 : "${POSTGRES_HOST:=postgres}"
 : "${POSTGRES_PORT:=5432}"
 : "${POSTGRES_USER:?POSTGRES_USER is required}"
-: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
 : "${ACR_DB_NAME:=acr}"
 : "${ACR_RUNTIME_DB_USER:?ACR_RUNTIME_DB_USER is required}"
-: "${ACR_RUNTIME_DB_PASSWORD:?ACR_RUNTIME_DB_PASSWORD is required}"
 : "${ACR_MIGRATION_DB_USER:?ACR_MIGRATION_DB_USER is required}"
-: "${ACR_MIGRATION_DB_PASSWORD:?ACR_MIGRATION_DB_PASSWORD is required}"
 : "${ACR_ENABLE_EPISODE_WRITEBACK:=false}"
+
+secret_value() {
+  name="$1"
+  file_name="${name}_FILE"
+  eval "direct_set=\${${name}+x}"
+  eval "direct_value=\${${name}-}"
+  eval "file_set=\${${file_name}+x}"
+  eval "file_path=\${${file_name}-}"
+  if [ -n "$direct_set" ] && [ -n "$file_set" ]; then
+    printf '%s and %s are mutually exclusive\n' "$name" "$file_name" >&2
+    exit 2
+  fi
+  if [ -n "$file_set" ]; then
+    [ -n "$file_path" ] && [ -f "$file_path" ] && [ ! -L "$file_path" ] || {
+      printf '%s is invalid\n' "$file_name" >&2
+      exit 2
+    }
+    permissions="$(stat -c '%a' "$file_path" 2>/dev/null)" || {
+      printf '%s is unreadable\n' "$file_name" >&2
+      exit 2
+    }
+    group_permissions="${permissions#?}"
+    group_permissions="${group_permissions%?}"
+    other_permissions="${permissions#??}"
+    case "$group_permissions$other_permissions" in
+      *[2367]*) printf '%s has unsafe permissions\n' "$file_name" >&2; exit 2 ;;
+    esac
+    cat "$file_path" || exit 2
+    return
+  fi
+  [ -n "$direct_set" ] && [ -n "$direct_value" ] || {
+    printf '%s or %s is required\n' "$name" "$file_name" >&2
+    exit 2
+  }
+  printf '%s' "$direct_value"
+}
+
+POSTGRES_PASSWORD="$(secret_value POSTGRES_PASSWORD)"
+ACR_RUNTIME_DB_PASSWORD="$(secret_value ACR_RUNTIME_DB_PASSWORD)"
+ACR_MIGRATION_DB_PASSWORD="$(secret_value ACR_MIGRATION_DB_PASSWORD)"
 
 mode="${1:-roles}"
 case "$mode" in
@@ -41,9 +78,15 @@ SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'runtime_user', :'runtime_pas
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'runtime_user') \gexec
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'migration_user', :'migration_password')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'migration_user') \gexec
+SELECT format('ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L', :'runtime_user', :'runtime_password') \gexec
+SELECT format('ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L', :'migration_user', :'migration_password') \gexec
 SELECT format('CREATE DATABASE %I OWNER %I', :'acr_db_name', :'migration_user')
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'acr_db_name') \gexec
+SELECT format('ALTER DATABASE %I OWNER TO %I', :'acr_db_name', :'migration_user') \gexec
+SELECT format('REVOKE ALL PRIVILEGES ON DATABASE %I FROM PUBLIC', :'acr_db_name') \gexec
+SELECT format('REVOKE ALL PRIVILEGES ON DATABASE %I FROM %I', :'acr_db_name', :'runtime_user') \gexec
 SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'acr_db_name', :'runtime_user') \gexec
+SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'acr_db_name', :'migration_user') \gexec
 SQL
 
 if [ "$mode" = runtime-acl ]; then
@@ -52,6 +95,16 @@ if [ "$mode" = runtime-acl ]; then
     -v episode_writeback="$ACR_ENABLE_EPISODE_WRITEBACK" <<'SQL'
 REVOKE USAGE, CREATE ON SCHEMA acr FROM PUBLIC;
 REVOKE USAGE, CREATE ON SCHEMA acr FROM :"runtime_user";
+ALTER SCHEMA acr OWNER TO :"migration_user";
+ALTER TABLE acr.schema_migrations OWNER TO :"migration_user";
+ALTER TABLE acr.client_credentials OWNER TO :"migration_user";
+ALTER TABLE acr.context_packet_snapshots OWNER TO :"migration_user";
+ALTER TABLE acr.audit_events OWNER TO :"migration_user";
+ALTER TABLE acr.agent_episodes OWNER TO :"migration_user";
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA acr FROM PUBLIC;
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA acr FROM PUBLIC;
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA acr FROM :"runtime_user";
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA acr FROM :"runtime_user";
 GRANT USAGE ON SCHEMA acr TO :"runtime_user";
 
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.schema_migrations FROM :"runtime_user";
@@ -72,7 +125,8 @@ GRANT SELECT, INSERT, UPDATE ON TABLE acr.agent_episodes TO :"runtime_user";
 \endif
 
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES FROM PUBLIC;
-ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES FROM :"runtime_user";
-ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"runtime_user";
+ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE ALL ON TABLES FROM :"runtime_user";
+ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE ALL ON SEQUENCES FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE ALL ON SEQUENCES FROM :"runtime_user";
 SQL
 fi

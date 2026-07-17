@@ -16,6 +16,7 @@ grep -Fq 'skip_verify=false' "$script"
 grep -Fq 'curl --fail --silent --show-error --cacert' "$script"
 grep -Fq 'MCP must remain host-local' "$script"
 grep -Fq 'zero owned containers, volumes, and networks' "$script"
+grep -Fq 'refusing pre-existing Compose project resources' "$script"
 grep -Fq 'POSTGRES_USER=devhealth' "$script"
 grep -Fq "ACR_IMAGE=\"\$IMAGE\"" "$script"
 grep -Fq 'host_ip: 127.0.0.1' "$script"
@@ -24,8 +25,15 @@ grep -Fq "REPO_ROOT/.tmp/e2e/compose-\${PROJECT}" "$script"
 grep -Fq 'command: ["cp /input/acr.crt' "$script"
 grep -Fq 'chown -R 70:70 /postgres-tls' "$script"
 grep -Fq 'Ops organization provisioning failed' "$script"
-grep -Fq 'expect_failure compose up -d --no-deps acr-api' "$script"
-grep -F -A 5 'expect_failure() {' "$script" | grep -Fq 'return 0'
+grep -Fq 'actual_status="$?"' "$script"
+grep -Fq 'expected failure diagnostics' "$script"
+grep -Fq "expect_failure 60 'SSL certificate problem'" "$script"
+grep -Fq "expect_failure 22 'HTTP_STATUS=401'" "$script"
+grep -Fq "expect_failure 1 'Code: 164.*readonly'" "$script"
+grep -Fq "expect_failure 1 'apply migration 2'" "$script"
+grep -Fq 'CREATE TABLE acr.agent_episodes (broken_marker TEXT)' "$script"
+grep -Fq 'partial state and API stayed gated' "$script"
+if grep -Fq 'system_metrics' "$script"; then exit 1; fi
 grep -Fq 'select(.revoked_at == null)' "$script"
 grep -F -A 3 'revoked-acr-token)' "$script" | grep -Fq 'acr-rotated-token'
 if grep -Fq -- '--owner-email' "$script"; then exit 1; fi
@@ -39,17 +47,16 @@ grep -Fq "INSERT INTO \${${db_variable}}.repos (id, repo, ref, created_at, setti
 grep -Fq 'project-scoped repository evidence provisioning failed' "$script"
 grep -Fq 'CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"' "$script"
 grep -Fq 'CLICKHOUSE_USER=default CLICKHOUSE_PASSWORD=ch' "$script"
+grep -Fq 'ALTER USER acr_reader SETTINGS readonly = 2;' "$script"
 grep -Fq 'redact_log()' "$script"
 grep -Fq 'acr-migrate acr-api' "$script"
-grep -Fq 'ACR_POSTGRES_MIGRATION_DSN:' "$script"
-grep -Fq 'ACR_POSTGRES_MIGRATION_DSN=' "$script"
+grep -Fq 'ACR_POSTGRES_MIGRATION_DSN_FILE: /run/secrets/acr_migration_dsn' "$root/deploy/compose/acr.compose.yml"
 grep -Fq 'ACR_REQUIRE_BACKING_STORES: "true"' "$script"
-grep -Fq "ACR_POSTGRES_DSN: \"\$(" "$script"
-grep -Fq "ACR_CLICKHOUSE_DSN: \"\$(" "$script"
+if grep -Eq 'ACR_(POSTGRES_DSN|CLICKHOUSE_DSN|EVIDENCE_ID_ACTIVE_KID|EVIDENCE_ID_KEYS):' "$script"; then exit 1; fi
 grep -Fq 'acr-credentials:' "$script"
 grep -Fq 'compose run --rm --no-deps acr-credentials credentials create' "$script"
 if grep -Fq 'compose run --rm --no-deps acr-api credentials' "$script"; then exit 1; fi
-grep -Fq 'ACR_EVIDENCE_ID_ACTIVE_KID:' "$script"
+grep -Fq 'ACR_EVIDENCE_ID_ACTIVE_KID_FILE: /run/secrets/acr_evidence_active_kid' "$root/deploy/compose/acr.compose.yml"
 grep -Fq 'random_base64()' "$script"
 grep -Fq 'record_acl_probe()' "$script"
 grep -Fq 'rotate_acr_credential()' "$script"
@@ -61,6 +68,8 @@ grep -Fq "\"\$ACR_CLIENT_VERSION_HEADER\"" "$script"
 grep -Fq 'rotated ACR credential did not authenticate against the direct localhost endpoint' "$script"
 grep -Fq 'previous ACR credential remained valid after immediate rotation' "$script"
 grep -F -A 3 'compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-ops-tls acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null' "$script" | grep -Fq "run_mcp \"\$(<\"\$STATE/secrets/acr-rotated-token\")\""
+grep -Fq 'inject_existing_volume_drift' "$script"
+grep -Fq 'reconciled role, password, ownership, and ACL drift' "$script"
 grep -Fq "'\"status\":\"ok\"'" "$script"
 grep -Fq '"method":"notifications/initialized","params":{}' "$script"
 grep -Fq 'coproc ACR_MCP' "$script"
@@ -69,7 +78,11 @@ grep -Fq 'HTTPS readiness timed out' "$script"
 grep -Fq 'acr_e2e_postgres_tls' "$script"
 grep -Fq 'acr_e2e_clickhouse_tls' "$script"
 grep -Fq 'chown -R 101:101 /clickhouse-tls' "$script"
-grep -Fq 'clickhouse-client --secure --accept-invalid-certificate' "$script"
+if grep -Fq -- '--accept-invalid-certificate' "$script"; then exit 1; fi
+if grep -Fq -- '--insecure' "$script"; then exit 1; fi
+grep -Fq '<verificationMode>strict</verificationMode>' "$script"
+grep -Fq '<name>RejectCertificateHandler</name>' "$script"
+grep -Fq 'clickhouse-client --config-file=/etc/clickhouse-client/config.d/acr-e2e-tls.xml --secure --host clickhouse --port 9440' "$script"
 grep -Fq 'healthcheck: { test: ["NONE"] }' "$script"
 grep -Fq 'acr-api: { condition: service_started }' "$script"
 state_variable=STATE
@@ -82,9 +95,45 @@ grep -Fq 'acr-db-acl:' "$root/deploy/compose/acr.compose.yml"
 grep -Fq '["/usr/local/bin/acr-db-init", "runtime-acl"]' "$root/deploy/compose/acr.compose.yml"
 grep -Fq 'acr-db-acl: { condition: service_completed_successfully }' "$root/deploy/compose/acr.compose.yml"
 grep -Fq 'PostgreSQL readiness timed out' "$root/deploy/compose/acr-db-init.sh"
+grep -Fq 'POSTGRES_PASSWORD_FILE' "$root/deploy/compose/acr.compose.yml"
+grep -Fq 'ACR_RUNTIME_DB_PASSWORD_FILE' "$root/deploy/compose/acr.compose.yml"
+grep -Fq 'ACR_MIGRATION_DB_PASSWORD_FILE' "$root/deploy/compose/acr.compose.yml"
+grep -Fq 'ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L' "$root/deploy/compose/acr-db-init.sh"
+grep -Fq 'ALTER DATABASE %I OWNER TO %I' "$root/deploy/compose/acr-db-init.sh"
+grep -Fq 'REVOKE ALL ON TABLES FROM :"runtime_user"' "$root/deploy/compose/acr-db-init.sh"
+if grep -Fq 'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"runtime_user"' "$root/deploy/compose/acr-db-init.sh"; then exit 1; fi
+for image in \
+  'postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15' \
+  'clickhouse/clickhouse-server:latest@sha256:1d1f6508eba2dccce2cee9913907c5f7766327debc57a6b1991f2c9e3176c163' \
+  'edoburu/pgbouncer:latest@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd' \
+  'valkey/valkey:9-alpine@sha256:c9b77919daeba2c02ad954d0c844cc4e7142069d177b89c5fd771f405daf9e02' \
+  'axllent/mailpit:latest@sha256:5a49a77c5bdbe7c5474450b4f46348d09949df3695257729c93a30369382d4f6' \
+  'nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10'; do
+  grep -Fq "$image" "$root/deploy/compose/acr.compose.yml" "$script"
+  pin="${image/@sha256:/|sha256:}"
+  grep -Fq "$pin" "$root/scripts/container/verify-pins.sh"
+done
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin"
+cat > "$tmp/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  ps) printf 'preexisting-container\n' ;;
+  volume|network) exit 0 ;;
+  *) printf 'unexpected docker invocation: %s\n' "$*" >&2; exit 99 ;;
+esac
+EOF
+chmod +x "$tmp/bin/docker"
+touch "$tmp/compose.yml" "$tmp/overlay.yml"
+set +e
+PATH="$tmp/bin:$PATH" bash "$script" --compose "$tmp/compose.yml" --overlay "$tmp/overlay.yml" --project acr-e2e-collision --scenario happy >"$tmp/collision.log" 2>&1
+collision_status=$?
+set -e
+test "$collision_status" -eq 1
+grep -Fq 'refusing pre-existing Compose project resources' "$tmp/collision.log"
 "$pki" --out "$tmp" --dns 'localhost,acr-ops-tls,127.0.0.1'
 openssl verify -CAfile "$tmp/ca.crt" "$tmp/acr.crt" >/dev/null
 openssl x509 -in "$tmp/acr.crt" -noout -ext subjectAltName | grep -q 'DNS:acr-ops-tls'
