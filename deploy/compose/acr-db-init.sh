@@ -35,7 +35,28 @@ secret_value() {
     case "$group_permissions$other_permissions" in
       *[2367]*) printf '%s has unsafe permissions\n' "$file_name" >&2; exit 2 ;;
     esac
-    cat "$file_path" || exit 2
+    size="$(wc -c < "$file_path" 2>/dev/null)" || {
+      printf '%s is unreadable\n' "$file_name" >&2
+      exit 2
+    }
+    size="$(printf '%s' "$size" | tr -d '[:space:]')"
+    case "$size" in
+      ''|*[!0-9]*) printf '%s is unreadable\n' "$file_name" >&2; exit 2 ;;
+    esac
+    [ "$size" -le 65536 ] || {
+      printf '%s is too large\n' "$file_name" >&2
+      exit 2
+    }
+    value="$(cat "$file_path" 2>/dev/null)" || {
+      printf '%s is unreadable\n' "$file_name" >&2
+      exit 2
+    }
+    value="$(printf '%s' "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -n "$value" ] || {
+      printf '%s is empty\n' "$file_name" >&2
+      exit 2
+    }
+    printf '%s' "$value"
     return
   fi
   [ -n "$direct_set" ] && [ -n "$direct_value" ] || {

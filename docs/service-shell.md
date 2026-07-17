@@ -73,6 +73,16 @@ contents or paths. `acr-migrate` accepts the same source pair for
 `ACR_POSTGRES_MIGRATION_DSN`; credential administration accepts it for
 `ACR_POSTGRES_DSN`.
 
+### Compose database password files
+
+`deploy/compose/acr.compose.yml` requires these host-side password-file
+variables: `ACR_POSTGRES_ADMIN_PASSWORD_FILE`,
+`ACR_RUNTIME_DB_PASSWORD_FILE`, and `ACR_MIGRATION_DB_PASSWORD_FILE`. Point
+each at an owner-only regular file with mode `0600`; do not use symlinks or
+group-/other-writable files. Compose maps those paths to the corresponding
+container `_FILE` variables, so Compose deployments use the file source.
+Direct and `_FILE` sources are mutually exclusive; there is no fallback precedence.
+
 ### Hosted database operations
 
 Hosted startup requires the embedded migration history to match its required

@@ -27,8 +27,12 @@ grep -Fq 'chown -R 70:70 /postgres-tls' "$script"
 grep -Fq 'Ops organization provisioning failed' "$script"
 grep -Fq 'actual_status="$?"' "$script"
 grep -Fq 'expected failure diagnostics' "$script"
+grep -Fq 'for tool in docker openssl curl git jq' "$script"
 grep -Fq "expect_failure 60 'SSL certificate problem'" "$script"
-grep -Fq "expect_failure 22 'HTTP_STATUS=401'" "$script"
+grep -Fq 'openssl req -x509 -newkey rsa:2048' "$script"
+if grep -Fq 'not a certificate' "$script"; then exit 1; fi
+grep -Fq "expect_typed_http_error 401 unauthorized" "$script"
+grep -Fq "jq -e --arg code \"\$expected_code\" 'type == \"object\" and .code == \$code'" "$script"
 grep -Fq "expect_failure 1 'Code: 164.*readonly'" "$script"
 grep -Fq "expect_failure 1 'apply migration 2'" "$script"
 grep -Fq 'CREATE TABLE acr.agent_episodes (broken_marker TEXT)' "$script"
@@ -48,6 +52,9 @@ grep -Fq 'project-scoped repository evidence provisioning failed' "$script"
 grep -Fq 'CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"' "$script"
 grep -Fq 'CLICKHOUSE_USER=default CLICKHOUSE_PASSWORD=ch' "$script"
 grep -Fq 'ALTER USER acr_reader SETTINGS readonly = 2;' "$script"
+grep -Fq "CREATE TABLE IF NOT EXISTS \${db}.acr_e2e_readonly_probe" "$script"
+grep -Fq "GRANT INSERT ON \${db}.acr_e2e_readonly_probe TO acr_reader;" "$script"
+grep -Fq "INSERT INTO acr_\${PROJECT//-/}_e2e.acr_e2e_readonly_probe" "$script"
 grep -Fq 'redact_log()' "$script"
 grep -Fq 'acr-migrate acr-api' "$script"
 grep -Fq 'ACR_POSTGRES_MIGRATION_DSN_FILE: /run/secrets/acr_migration_dsn' "$root/deploy/compose/acr.compose.yml"
@@ -98,6 +105,11 @@ grep -Fq 'PostgreSQL readiness timed out' "$root/deploy/compose/acr-db-init.sh"
 grep -Fq 'POSTGRES_PASSWORD_FILE' "$root/deploy/compose/acr.compose.yml"
 grep -Fq 'ACR_RUNTIME_DB_PASSWORD_FILE' "$root/deploy/compose/acr.compose.yml"
 grep -Fq 'ACR_MIGRATION_DB_PASSWORD_FILE' "$root/deploy/compose/acr.compose.yml"
+grep -Fq 'ACR_POSTGRES_ADMIN_PASSWORD_FILE' "$root/docs/service-shell.md"
+grep -Fq 'ACR_RUNTIME_DB_PASSWORD_FILE' "$root/docs/service-shell.md"
+grep -Fq 'ACR_MIGRATION_DB_PASSWORD_FILE' "$root/docs/service-shell.md"
+grep -Fq "mode \`0600\`" "$root/docs/service-shell.md"
+grep -Fq 'mutually exclusive; there is no fallback precedence' "$root/docs/service-shell.md"
 grep -Fq 'ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L' "$root/deploy/compose/acr-db-init.sh"
 grep -Fq 'ALTER DATABASE %I OWNER TO %I' "$root/deploy/compose/acr-db-init.sh"
 grep -Fq 'REVOKE ALL ON TABLES FROM :"runtime_user"' "$root/deploy/compose/acr-db-init.sh"
@@ -109,7 +121,7 @@ for image in \
   'valkey/valkey:9-alpine@sha256:c9b77919daeba2c02ad954d0c844cc4e7142069d177b89c5fd771f405daf9e02' \
   'axllent/mailpit:latest@sha256:5a49a77c5bdbe7c5474450b4f46348d09949df3695257729c93a30369382d4f6' \
   'nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10'; do
-  grep -Fq "$image" "$root/deploy/compose/acr.compose.yml" "$script"
+  grep -Fq "$image" "$root/deploy/compose/acr.compose.yml" "$script" "$root/scripts/e2e/test-acr-db-init.sh"
   pin="${image/@sha256:/|sha256:}"
   grep -Fq "$pin" "$root/scripts/container/verify-pins.sh"
 done
@@ -121,19 +133,39 @@ cat > "$tmp/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 case "$1" in
-  ps) printf 'preexisting-container\n' ;;
-  volume|network) exit 0 ;;
+  ps|volume|network) exit 0 ;;
+  compose)
+    case "${2:-}" in
+      ls) printf '[{"Name":"acr-e2e-collision"}]\n' ;;
+      *) printf 'unexpected docker compose invocation: %s\n' "$*" >&2; exit 99 ;;
+    esac
+    ;;
   *) printf 'unexpected docker invocation: %s\n' "$*" >&2; exit 99 ;;
 esac
 EOF
 chmod +x "$tmp/bin/docker"
 touch "$tmp/compose.yml" "$tmp/overlay.yml"
+mkdir -p "$tmp/no-jq-bin"
+for tool in docker openssl curl git dirname; do
+  ln -s "$(command -v "$tool")" "$tmp/no-jq-bin/$tool"
+done
+set +e
+PATH="$tmp/no-jq-bin" /bin/bash "$script" --compose "$tmp/compose.yml" --overlay "$tmp/overlay.yml" --project acr-e2e-collision --scenario happy >"$tmp/no-jq.log" 2>&1
+missing_jq_status=$?
+set -e
+test "$missing_jq_status" -eq 1
+grep -Fq 'jq is required' "$tmp/no-jq.log"
 set +e
 PATH="$tmp/bin:$PATH" bash "$script" --compose "$tmp/compose.yml" --overlay "$tmp/overlay.yml" --project acr-e2e-collision --scenario happy >"$tmp/collision.log" 2>&1
 collision_status=$?
 set -e
 test "$collision_status" -eq 1
-grep -Fq 'refusing pre-existing Compose project resources' "$tmp/collision.log"
+grep -Fq 'refusing pre-existing Compose project name' "$tmp/collision.log"
+for response in '{"code":"unrelated"}' 'not-json'; do
+  if printf '%s\n' "$response" | jq -e 'type == "object" and .code == "unauthorized"' >/dev/null 2>&1; then
+    exit 1
+  fi
+done
 "$pki" --out "$tmp" --dns 'localhost,acr-ops-tls,127.0.0.1'
 openssl verify -CAfile "$tmp/ca.crt" "$tmp/acr.crt" >/dev/null
 openssl x509 -in "$tmp/acr.crt" -noout -ext subjectAltName | grep -q 'DNS:acr-ops-tls'

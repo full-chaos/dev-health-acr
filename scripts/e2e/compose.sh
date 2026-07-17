@@ -42,7 +42,7 @@ case "$SCENARIO" in happy|existing-volume|missing-ops-token|invalid-ca|revoked-a
 [[ -f "$COMPOSE_FILE" && -f "$OVERLAY_FILE" ]] || { usage; exit 2; }
 [[ "$PROJECT" =~ ^acr-e2e-[a-z0-9][a-z0-9-]{2,40}$ ]] || die 'project must be an isolated acr-e2e-* name'
 [[ "$PROJECT" != dev-health && "$PROJECT" != default ]] || die 'refusing the operator default Compose project'
-for tool in docker openssl curl git; do command -v "$tool" >/dev/null || die "$tool is required"; done
+for tool in docker openssl curl git jq; do command -v "$tool" >/dev/null || die "$tool is required"; done
 
 compose() { "${COMPOSE[@]}" -p "$PROJECT" --project-directory "$STATE/stage" -f "$STATE/stage/compose.yml" -f "$OVERLAY_FILE" -f "$STATE/override.yml" "$@"; }
 
@@ -271,6 +271,8 @@ bootstrap_ops() {
   fi
   compose exec -T clickhouse clickhouse-client --user default --password ch --multiquery <<EOF >/dev/null
 CREATE USER IF NOT EXISTS acr_reader IDENTIFIED BY '$(<"$STATE/secrets/clickhouse-password")';
+CREATE TABLE IF NOT EXISTS ${db}.acr_e2e_readonly_probe (probe_id UUID) ENGINE = Memory;
+GRANT INSERT ON ${db}.acr_e2e_readonly_probe TO acr_reader;
 ALTER USER acr_reader SETTINGS readonly = 2;
 GRANT SELECT ON ${db}.* TO acr_reader;
 EOF
@@ -398,6 +400,25 @@ expect_failure() {
   return 0
 }
 
+expect_typed_http_error() {
+  local expected_http_status="$1" expected_code="$2" actual_status http_status response_body
+  shift 2
+  response_body="$STATE/${SCENARIO}.response.json"
+  set +e
+  http_status="$("$@" --output "$response_body" --write-out '%{http_code}')"
+  actual_status="$?"
+  set -e
+  if [[ "$actual_status" -ne 0 ]]; then
+    die "expected an HTTP response, curl exited ${actual_status}"
+  fi
+  if [[ "$http_status" != "$expected_http_status" ]]; then
+    die "expected HTTP status ${expected_http_status}, got ${http_status}"
+  fi
+  if ! jq -e --arg code "$expected_code" 'type == "object" and .code == $code' "$response_body" >/dev/null; then
+    die "expected HTTP ${expected_http_status} response with typed ${expected_code} error"
+  fi
+}
+
 prepare_acr_database() {
   compose up -d acr-db-init >/dev/null
   compose wait acr-db-init >/dev/null || die 'ACR role initialization failed'
@@ -412,11 +433,11 @@ run_failure() {
     missing-ops-token)
       bootstrap_ops; prepare_acr_database; : > "$STATE/secrets/ops-token"; expect_failure 1 'Dev Health entitlement token file is invalid' compose run --rm --no-deps acr-api; SAFE_BOUNDARY='ACR API rejected the empty Ops token file with its safe entitlement-token classification' ;;
     invalid-ca)
-      start_happy; printf 'not a certificate\n' > "$STATE/pki/invalid-ca.crt"; expect_failure 60 'SSL certificate problem' curl --fail --silent --show-error --cacert "$STATE/pki/invalid-ca.crt" --noproxy '*' "https://localhost:${PORT}/readyz"; SAFE_BOUNDARY='TLS verification failed with curl certificate exit 60; no insecure option was used' ;;
+      start_happy; openssl req -x509 -newkey rsa:2048 -nodes -keyout "$STATE/pki/invalid-ca.key" -out "$STATE/pki/invalid-ca.crt" -subj '/CN=acr-e2e-untrusted-ca' -days 1 >/dev/null 2>&1; expect_failure 60 'SSL certificate problem' curl --fail --silent --show-error --cacert "$STATE/pki/invalid-ca.crt" --noproxy '*' "https://localhost:${PORT}/readyz"; SAFE_BOUNDARY='TLS verification rejected the valid unrelated CA with curl certificate exit 60; no insecure option was used' ;;
     revoked-acr-token)
-      start_happy; active_credential_id="$(compose run --rm --no-deps acr-credentials credentials list --org-id "$(<"$STATE/org-id")" --json | jq -er '[.[] | select(.revoked_at == null)][0].credential_id')"; compose run --rm --no-deps acr-credentials credentials revoke --org-id "$(<"$STATE/org-id")" --credential-id "$active_credential_id" --actor compose-e2e >/dev/null; expect_failure 22 'HTTP_STATUS=401' curl --fail --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer $(<"$STATE/secrets/acr-rotated-token")" --output "$STATE/revoked-response.json" --write-out 'HTTP_STATUS=%{http_code}\n' "https://localhost:${PORT}/api/v1/agent-context/capabilities"; jq -e '.code == "unauthorized"' "$STATE/revoked-response.json" >/dev/null || die 'revoked credential did not return the unauthorized error classification'; SAFE_BOUNDARY='revoked active ACR credential returned exact HTTP 401 unauthorized before protected reads' ;;
+      start_happy; active_credential_id="$(compose run --rm --no-deps acr-credentials credentials list --org-id "$(<"$STATE/org-id")" --json | jq -er '[.[] | select(.revoked_at == null)][0].credential_id')"; compose run --rm --no-deps acr-credentials credentials revoke --org-id "$(<"$STATE/org-id")" --credential-id "$active_credential_id" --actor compose-e2e >/dev/null; expect_typed_http_error 401 unauthorized curl --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer $(<"$STATE/secrets/acr-rotated-token")" "https://localhost:${PORT}/api/v1/agent-context/capabilities"; SAFE_BOUNDARY='revoked active ACR credential returned exact HTTP 401 typed unauthorized error before protected reads' ;;
     clickhouse-read-denied)
-      start_happy; expect_failure 1 'Code: 164.*readonly' compose exec -T clickhouse clickhouse-client --config-file=/etc/clickhouse-client/config.d/acr-e2e-tls.xml --secure --host clickhouse --port 9440 --user acr_reader --password "$(<"$STATE/secrets/clickhouse-password")" --query "INSERT INTO acr_${PROJECT//-/}_e2e.repos (id, repo, ref, created_at, settings, tags, last_synced, org_id, provider) SELECT generateUUIDv4(), 'acme/write-denied', 'main', now64(3), NULL, NULL, now64(3), toUUID('$(<"$STATE/org-id")'), 'synthetic'"; SAFE_BOUNDARY='read-only ClickHouse user rejected a syntactically valid insert into the existing repos table with exact code 164' ;;
+      start_happy; expect_failure 1 'Code: 164.*readonly' compose exec -T clickhouse clickhouse-client --config-file=/etc/clickhouse-client/config.d/acr-e2e-tls.xml --secure --host clickhouse --port 9440 --user acr_reader --password "$(<"$STATE/secrets/clickhouse-password")" --query "INSERT INTO acr_${PROJECT//-/}_e2e.acr_e2e_readonly_probe (probe_id) VALUES (generateUUIDv4())"; SAFE_BOUNDARY='read-only ClickHouse user rejected an E2E-only granted insert with exact code 164 before it could mutate evidence' ;;
     migration-failure)
       bootstrap_ops; compose up -d acr-db-init >/dev/null; compose wait acr-db-init >/dev/null || die 'ACR role initialization failed'; compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -v ON_ERROR_STOP=1 -c 'CREATE SCHEMA acr AUTHORIZATION acr_migration; CREATE TABLE acr.agent_episodes (broken_marker TEXT);' >/dev/null; expect_failure 1 'apply migration 2' compose run --rm --no-deps acr-migrate; partial_version="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c 'SELECT version FROM acr.schema_migrations ORDER BY version')"; [[ "$partial_version" == '1' ]] || die 'migration failure did not leave the expected partial state'; [[ -z "$(compose ps -q acr-api)" ]] || die 'API started despite failed migration'; SAFE_BOUNDARY='migration 2 failed against deliberate incompatible DDL; migration 1 remains as partial state and API stayed gated' ;;
   esac
