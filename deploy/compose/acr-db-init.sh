@@ -110,6 +110,20 @@ SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'acr_db_name', :'runtime_us
 SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'acr_db_name', :'migration_user') \gexec
 SQL
 
+psql -v ON_ERROR_STOP=1 -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$ACR_DB_NAME" \
+  -v migration_user="$ACR_MIGRATION_DB_USER" <<'SQL'
+SELECT format('ALTER SCHEMA acr OWNER TO %I', :'migration_user')
+WHERE EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'acr') \gexec
+SELECT format('ALTER TABLE acr.%I OWNER TO %I', c.relname, :'migration_user')
+FROM pg_class AS c
+JOIN pg_namespace AS n ON n.oid = c.relnamespace
+WHERE n.nspname = 'acr' AND c.relkind IN ('r', 'p') \gexec
+SELECT format('ALTER SEQUENCE acr.%I OWNER TO %I', c.relname, :'migration_user')
+FROM pg_class AS c
+JOIN pg_namespace AS n ON n.oid = c.relnamespace
+WHERE n.nspname = 'acr' AND c.relkind = 'S' \gexec
+SQL
+
 if [ "$mode" = runtime-acl ]; then
   psql -v ON_ERROR_STOP=1 -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$ACR_DB_NAME" \
     -v runtime_user="$ACR_RUNTIME_DB_USER" -v migration_user="$ACR_MIGRATION_DB_USER" \
