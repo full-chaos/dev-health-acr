@@ -546,7 +546,7 @@ assert_static_hardening() {
   assert_helm_script_contains 'migration hook exposed injected connection details' 'bad migration assertion rejects leaked connection details'
   assert_helm_script_contains 'acr-migrate.*up' 'bad migration assertion proves the intended migration hook command'
   assert_helm_script_contains 'assert_anonymous_registry_pull_denied' 'missing pull-secret scenario proves anonymous registry denial'
-  assert_helm_script_contains 'register_imported_image_ref "\$\{target\}"' 'registry target is tracked after its baseline ownership check and before the push can fail'
+  assert_helm_script_contains 'prepare_registry_image_aliases' 'registry target aliases are derived during preflight before cleanup is armed'
   assert_helm_script_contains 'assert_kind_images_absent' 'Kind image imports reject pre-existing references before tracking cleanup ownership'
   assert_helm_script_contains 'namespace_labelled' 'namespace cleanup handles label failure after namespace creation'
   assert_helm_script_lacks '^[[:space:]]*docker exec "\$\{node\}" ctr -n k8s.io images push' 'registry pushes cannot run without a bounded wrapper'

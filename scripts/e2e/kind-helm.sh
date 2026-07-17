@@ -36,6 +36,9 @@ git_index_tree_sha=""
 git_provenance_captured_at_utc=""
 built_image_ref=""
 published_image_ref=""
+prepared_image_version=""
+prepared_image_digest=""
+prepared_registry_target=""
 expected_migration_failure_marker=""
 TIMEOUT_TERM_GRACE_SECONDS="${ACR_E2E_TIMEOUT_TERM_GRACE_SECONDS:-5}"
 
@@ -194,7 +197,7 @@ assert_kind_images_absent() {
 }
 
 preflight_cleanup_ownership() {
-  local node ref repo
+  local node ref repo target
   node="${cluster}-control-plane"
   repo="acr-e2e.local/acr-api-${run_id}"
   kind_image_refs_before="$(docker exec "${node}" ctr -n k8s.io images list -q)" || \
@@ -203,6 +206,11 @@ preflight_cleanup_ownership() {
     [[ "${ref}" == "${repo}:"* || "${ref}" == "${repo}@"* ]] || continue
     die "refusing reused Kind image alias: ${ref}"
   done <<<"${kind_image_refs_before}"
+  for target in "$@"; do
+    [[ -n "${target}" ]] || continue
+    grep -Fxq "${target}" <<<"${kind_image_refs_before}" &&
+      die "refusing to reuse a pre-existing registry image reference: ${target}"
+  done
 }
 
 record_imported_image_refs() {
@@ -391,8 +399,9 @@ static_check() {
     done
   }
   assert_kind_image_cleanup_aliases() {
-    local block publish_block cleanup_block literal_dollar='$'
+    local block prepare_block publish_block cleanup_block literal_dollar='$'
     block="$(function_block build_local_image)"
+    prepare_block="$(function_block prepare_run)"
     publish_block="$(function_block publish_image_to_fixture_registry)"
     cleanup_block="$(function_block cleanup_kind_images)"
     if ! grep -Fq "register_imported_image_ref \"${literal_dollar}{tag}\"" <<<"${block}" || \
@@ -406,10 +415,11 @@ static_check() {
       fail 'static: each import/tag outcome must reconcile every new exact Kind image alias for cleanup'
       failures=$((failures + 1))
     fi
-    if ! grep -Fq "assert_kind_images_absent \"${literal_dollar}{node}\" \"${literal_dollar}{target}\"" <<<"${publish_block}" || \
+    if ! grep -Fq "prepare_registry_image_aliases" <<<"${prepare_block}" || \
+      ! grep -Fq "preflight_cleanup_ownership \"${literal_dollar}{prepared_registry_target}\"" <<<"${prepare_block}" || \
       ! grep -Fq "register_imported_image_ref \"${literal_dollar}{target}\"" <<<"${publish_block}" || \
       ! grep -Fq "reconcile_created_image_refs \"${literal_dollar}{refs}\"" <<<"${cleanup_block}"; then
-      fail 'static: registry targets must pass baseline ownership before registration and cleanup must reconcile created aliases'
+      fail 'static: registry targets must be derived and checked before cleanup arming and imports'
       failures=$((failures + 1))
     fi
   }
@@ -550,8 +560,9 @@ prepare_run() {
   release="acr-${run_id}"
   [[ "${#namespace}" -le 63 && "${#release}" -le 53 ]] || die "generated namespace or release name is too long"
   kube get namespace "${namespace}" >/dev/null 2>&1 && die "refusing reused namespace: ${namespace}"
-  preflight_cleanup_ownership
   run_dir="$(mktemp -d "${STATE_ROOT}/kind-helm.${run_id}.XXXXXX")"
+  prepare_registry_image_aliases
+  preflight_cleanup_ownership "${prepared_registry_target}"
   trap 'on_exit "$?"' EXIT
   trap 'exit 130' INT TERM
   kube create namespace "${namespace}" >/dev/null
@@ -565,6 +576,26 @@ prepare_run() {
   namespace_labelled=1
   assert_restricted_psa_enforced
   queue_evidence failed 'scenario ended before recording a successful result'
+}
+
+prepare_registry_image_aliases() {
+  local archive repo tag
+  [[ "${scenario}" == "missing-image-pull-secret" ]] || return 0
+  archive="${run_dir}/acr-api-missing-image-pull-secret.oci.tar"
+  repo="acr-e2e.local/acr-api-${run_id}"
+  tag="${repo}:missing-image-pull-secret"
+  assert_source_guard
+  CONTAINER_ALLOW_DIRTY=1 \
+    CONTAINER_OUTPUT=oci \
+    CONTAINER_OCI_OUTPUT="${archive}" \
+    CONTAINER_PLATFORMS="linux/$(docker version --format '{{.Server.Arch}}' | sed 's/aarch64/arm64/; s/x86_64/amd64/')" \
+    CONTAINER_IMAGE="${tag}" \
+    CONTAINER_VERSION="kind-missing-image-pull-secret" \
+    CONTAINER_BUILD_CACHE_ID="kind-helm-${run_id}-missing-image-pull-secret" \
+    "${REPO_ROOT}/scripts/container/build.sh" acr-api >/dev/null
+  prepared_image_digest="$(image_digest_from_oci "${archive}")"
+  prepared_image_version="missing-image-pull-secret"
+  prepared_registry_target="${ACR_E2E_REGISTRY_ENDPOINT}/${repo##*/}@${prepared_image_digest}"
 }
 
 assert_restricted_psa_enforced() {
@@ -602,17 +633,21 @@ build_local_image() {
   archive="${run_dir}/acr-api-${version}.oci.tar"
   repo="acr-e2e.local/acr-api-${run_id}"
   tag="${repo}:${version}"
-  assert_source_guard
-  CONTAINER_ALLOW_DIRTY=1 \
-    CONTAINER_OUTPUT=oci \
-    CONTAINER_OCI_OUTPUT="${archive}" \
-    CONTAINER_PLATFORMS="linux/$(docker version --format '{{.Server.Arch}}' | sed 's/aarch64/arm64/; s/x86_64/amd64/')" \
-    CONTAINER_IMAGE="${tag}" \
-    CONTAINER_VERSION="kind-${version}" \
-    CONTAINER_BUILD_CACHE_ID="kind-helm-${run_id}-${version}" \
-    "${REPO_ROOT}/scripts/container/build.sh" acr-api >/dev/null
-  assert_source_guard
-  digest="$(image_digest_from_oci "${archive}")"
+  if [[ "${prepared_image_version}" == "${version}" && -f "${archive}" ]]; then
+    digest="${prepared_image_digest}"
+  else
+    assert_source_guard
+    CONTAINER_ALLOW_DIRTY=1 \
+      CONTAINER_OUTPUT=oci \
+      CONTAINER_OCI_OUTPUT="${archive}" \
+      CONTAINER_PLATFORMS="linux/$(docker version --format '{{.Server.Arch}}' | sed 's/aarch64/arm64/; s/x86_64/amd64/')" \
+      CONTAINER_IMAGE="${tag}" \
+      CONTAINER_VERSION="kind-${version}" \
+      CONTAINER_BUILD_CACHE_ID="kind-helm-${run_id}-${version}" \
+      "${REPO_ROOT}/scripts/container/build.sh" acr-api >/dev/null
+    assert_source_guard
+    digest="$(image_digest_from_oci "${archive}")"
+  fi
   node="${cluster}-control-plane"
   remote_archive="/var/lib/acr-e2e/$(basename "${archive}")"
   assert_kind_images_absent "${node}" "${tag}" "${repo}@${digest}"
@@ -698,7 +733,6 @@ publish_image_to_fixture_registry() {
   repository="${source%%@*}"
   target="${ACR_E2E_REGISTRY_ENDPOINT}/${repository##*/}@${digest}"
   node="${cluster}-control-plane"
-  assert_kind_images_absent "${node}" "${target}"
   register_imported_image_ref "${target}"
   docker exec "${node}" ctr -n k8s.io images tag "${source}" "${target}" >/dev/null
   if ! run_with_timeout 120 docker exec "${node}" ctr -n k8s.io images push --plain-http --user fixture:fixture "${target}" >/dev/null; then

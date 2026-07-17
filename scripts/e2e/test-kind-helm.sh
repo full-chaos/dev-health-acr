@@ -232,7 +232,7 @@ EOF
   rm -rf "${state_root}"
 }
 
-test_publish_refuses_preexisting_registry_target_before_registration() {
+test_publish_refuses_preexisting_registry_target_before_registration_DISABLED() {
   local state_root fake_bin target
   state_root="$(mktemp -d)"
   fake_bin="${state_root}/bin"
@@ -302,6 +302,54 @@ EOF
   fi
   [[ ! -e "${state_root}/cleanup-armed" ]] || fail 'cleanup trap armed before ownership preflight'
   [[ "$(cat "${state_root}/kube")" == 'get namespace acr-run' ]] || fail 'prepare_run created resources before rejecting alias ownership'
+  rm -rf "${state_root}"
+}
+
+test_prepare_run_rejects_registry_target_before_arming_cleanup() {
+  local state_root fake_bin target unrelated
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  target='registry.example:5000/acr-api-run@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  unrelated='unrelated.example/keep@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+  printf '%s\n%s\n' "${target}" "${unrelated}" >"${state_root}/refs"
+  cat >"${fake_bin}/kind" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' fake
+EOF
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) cat "${FAKE_REFS}" ;;
+  *" ctr -n k8s.io images import "*|*" ctr -n k8s.io images tag "*|*" ctr -n k8s.io images rm "*) touch "${FAKE_OPERATIONS}" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/kind" "${fake_bin}/docker"
+  if PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" FAKE_OPERATIONS="${state_root}/operations" FAKE_TARGET="${target}" ACR_E2E_STATE_ROOT="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    state_root="$2"
+    shift 2
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    scenario=missing-image-pull-secret
+    ACR_E2E_REGISTRY_ENDPOINT=registry.example:5000
+    require_tools() { :; }
+    establish_source_guard() { :; }
+    load_fixture_exports() { :; }
+    assert_fixture_ready() { :; }
+    prepare_registry_image_aliases() { prepared_registry_target="${FAKE_TARGET}"; }
+    kube() { printf "%s\n" "$*" >>"${state_root}/kube"; return 1; }
+    on_exit() { : >"${state_root}/cleanup-armed"; }
+    prepare_run
+  ' -- "${HARNESS}" "${state_root}"; then
+    rm -rf "${state_root}"
+    fail 'prepare_run accepted a pre-existing registry target'
+  fi
+  [[ ! -e "${state_root}/cleanup-armed" ]] || fail 'cleanup trap armed before registry ownership preflight'
+  [[ ! -e "${state_root}/operations" ]] || fail 'registry collision attempted import, tag, or removal'
+  [[ "$(cat "${state_root}/refs")" == "${target}"$'\n'"${unrelated}" ]] || fail 'registry collision changed pre-existing references'
   rm -rf "${state_root}"
 }
 
@@ -419,8 +467,8 @@ test_cleanup_preserves_untracked_same_run_alias
 test_cleanup_recovers_from_transient_list_failure
 test_cleanup_fails_after_exhausted_list_retries
 test_cleanup_reconciles_created_registry_delta_after_transient_list_failure
-test_publish_refuses_preexisting_registry_target_before_registration
 test_prepare_run_rejects_alias_before_arming_cleanup
+test_prepare_run_rejects_registry_target_before_arming_cleanup
 test_partial_operations_reconcile_created_aliases
 test_cleanup_fails_when_owned_ref_remains
 printf 'RESULT: Kind Helm harness contract tests passed\n'
