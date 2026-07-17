@@ -93,8 +93,9 @@ require_image() {
 }
 
 verify_static_parity() {
-  local helm_values="${KUSTOMIZE_E2E_WORK}/helm-values.yaml" helm_render token
+  local helm_values="${KUSTOMIZE_E2E_WORK}/helm-values.yaml" helm_render helm_network_policy token
   helm_render="${KUSTOMIZE_E2E_WORK}/helm.yaml"
+  helm_network_policy="${KUSTOMIZE_E2E_WORK}/helm-networkpolicy.yaml"
   cat >"$helm_values" <<EOF
 imagePullSecrets:
   - name: acr-e2e-regcred
@@ -132,10 +133,14 @@ networkPolicy:
         kubernetes.io/metadata.name: envoy-gateway-system
 EOF
   helm template acr "${KUSTOMIZE_E2E_ROOT}/deploy/helm/acr" --namespace "$KUSTOMIZE_E2E_NAMESPACE" -f "$helm_values" --set-string "image.reference=${KUSTOMIZE_E2E_IMAGE}" >"$helm_render"
-  for token in "$KUSTOMIZE_E2E_IMAGE" acr-e2e-regcred acr-runtime-credentials acr-migration-credentials acr-entitlement-token acr-postgres-ca acr-clickhouse-ca acr-entitlement-ca acr-api acr-migrate 'port: 5432' 'port: 8443' "$KUSTOMIZE_E2E_GATEWAY_NAME" "$KUSTOMIZE_E2E_GATEWAY_NAMESPACE" "$KUSTOMIZE_E2E_GATEWAY_HOSTNAME"; do
+  helm template acr "${KUSTOMIZE_E2E_ROOT}/deploy/helm/acr" --namespace "$KUSTOMIZE_E2E_NAMESPACE" -f "$helm_values" --set-string "image.reference=${KUSTOMIZE_E2E_IMAGE}" --show-only templates/networkpolicy.yaml >"$helm_network_policy"
+  for token in "$KUSTOMIZE_E2E_IMAGE" acr-e2e-regcred acr-runtime-credentials acr-migration-credentials acr-entitlement-token acr-postgres-ca acr-clickhouse-ca acr-entitlement-ca acr-api acr-migrate "$KUSTOMIZE_E2E_GATEWAY_NAME" "$KUSTOMIZE_E2E_GATEWAY_NAMESPACE" "$KUSTOMIZE_E2E_GATEWAY_HOSTNAME"; do
     grep -Fq -- "$token" "${KUSTOMIZE_E2E_WORK}/rendered.yaml" || e2e_die "parity: Kustomize omitted ${token}"
     grep -Fq -- "$token" "$helm_render" || e2e_die "parity: Helm omitted ${token}"
   done
+  verify_semantic_port_parity 'PostgreSQL' 5432 acr-api "${KUSTOMIZE_E2E_WORK}/rendered.yaml" acr "$helm_network_policy"
+  verify_semantic_port_parity 'ClickHouse native TLS' 9440 acr-api "${KUSTOMIZE_E2E_WORK}/rendered.yaml" acr "$helm_network_policy"
+  verify_semantic_port_parity 'entitlement HTTPS' 443 acr-api "${KUSTOMIZE_E2E_WORK}/rendered.yaml" acr "$helm_network_policy"
   for token in '/var/run/acr/postgres-ca' '/var/run/acr/clickhouse-ca' '/var/run/acr/entitlement-ca' 'path: ca.crt' 'medium: Memory'; do
     grep -Fq -- "$token" "${KUSTOMIZE_E2E_WORK}/rendered.yaml" || e2e_die "parity: Kustomize omitted ${token}"
     grep -Fq -- "$token" "$helm_render" || e2e_die "parity: Helm omitted ${token}"
@@ -147,6 +152,22 @@ EOF
   if grep -qi 'acr-mcp' "${KUSTOMIZE_E2E_WORK}/rendered.yaml"; then e2e_die 'parity: Kustomize rendered MCP'; fi
   if grep -qi 'acr-mcp' "$helm_render"; then e2e_die 'parity: Helm rendered MCP'; fi
   e2e_log 'parity compares critical Helm and Kustomize fields'
+}
+
+verify_semantic_port_parity() {
+  local semantic_key="$1" port="$2" kustomize_name="$3" kustomize_render="$4" helm_name="$5" helm_render="$6" kustomize_ports helm_ports
+  kustomize_ports="$(network_policy_tcp_ports "${kustomize_render}" "${kustomize_name}")"
+  helm_ports="$(network_policy_tcp_ports "${helm_render}" "${helm_name}")"
+  grep -Fqx -- "${port}" <<<"${kustomize_ports}" || e2e_die "parity: Kustomize ${kustomize_name} NetworkPolicy omitted ${semantic_key} port ${port}"
+  grep -Fqx -- "${port}" <<<"${helm_ports}" || e2e_die "parity: Helm ${helm_name} NetworkPolicy omitted ${semantic_key} port ${port}"
+  if grep -Fqx -- 8443 <<<"${kustomize_ports}" || grep -Fqx -- 8443 <<<"${helm_ports}"; then
+    e2e_die "parity: API NetworkPolicies must not treat fixture backend port 8443 as entitlement HTTPS"
+  fi
+}
+
+network_policy_tcp_ports() {
+  local manifest="$1" policy_name="$2"
+  yq -r "select(.kind == \"NetworkPolicy\" and .metadata.name == \"${policy_name}\") | .spec.egress[]?.ports[]? | select(.protocol == \"TCP\") | .port" "${manifest}"
 }
 
 verify_network_and_gateway() {

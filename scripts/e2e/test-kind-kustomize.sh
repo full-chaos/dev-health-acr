@@ -52,6 +52,19 @@ test_hardening_seams_are_present() {
   if ! grep -Fq 'NetworkPolicy' "${HARNESS}" || ! grep -Fq 'transport' "${HARNESS}"; then fail 'denied egress scenario does not prove transport causality'; fi
 }
 
+test_parity_keeps_dependency_port_meanings_separate() {
+  local parity_tokens api_policy
+  parity_tokens="$(grep 'for token in .*acr-migrate' "${HARNESS}")"
+  api_policy="${ROOT}/deploy/kubernetes/acr/base/networkpolicy-api.yaml"
+  [[ "${parity_tokens}" != *"port:"* ]] || fail 'port parity is coupled to untyped shared tokens'
+  grep -Fq "verify_semantic_port_parity 'ClickHouse native TLS' 9440 acr-api" "${HARNESS}" || fail 'parity does not require ClickHouse native TLS port 9440 from the API policy'
+  grep -Fq "verify_semantic_port_parity 'entitlement HTTPS' 443 acr-api" "${HARNESS}" || fail 'parity does not require entitlement HTTPS port 443 from the API policy'
+  grep -Fq 'network_policy_tcp_ports' "${HARNESS}" || fail 'parity does not scope dependency ports to NetworkPolicy documents'
+  if grep -Fq 'port: 8443' "${api_policy}" || grep -Fq "verify_semantic_port_parity 'entitlement HTTPS' 8443" "${HARNESS}"; then
+    fail 'parity couples entitlement HTTPS to the fixture backend port'
+  fi
+}
+
 test_verification_evidence_requires_clean_git_provenance() {
   local token
   for token in verify_clean_git_provenance working_tree_clean=true index_clean=true head_tree_sha index_tree_sha; do
@@ -206,6 +219,7 @@ test_mutable_image_is_rejected_before_cluster_access() {
 test_self_test_requires_a_fixture_and_runs_scenarios
 test_mutable_image_is_rejected_before_cluster_access
 test_hardening_seams_are_present
+test_parity_keeps_dependency_port_meanings_separate
 test_verification_evidence_requires_clean_git_provenance
 test_verification_provenance_rejects_dirty_worktree
 test_verification_provenance_rejects_dirty_index

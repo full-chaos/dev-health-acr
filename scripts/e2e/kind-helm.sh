@@ -651,7 +651,7 @@ networkPolicy:
     dns: true
     postgresPort: 5432
     clickhousePort: ${ACR_E2E_CLICKHOUSE_NATIVE_PORT}
-    entitlementPort: 8443
+    entitlementPort: 443
 EOF
   printf '%s\n' "${target}"
 }
@@ -849,12 +849,15 @@ assert_failed_migration_hook() {
   command="$(kube -n "${namespace}" get "pod/${pod}" -o jsonpath='{.spec.containers[?(@.name=="acr-migrate")].command[*]} {.spec.containers[?(@.name=="acr-migrate")].args[*]}')"
   [[ "${command}" == *'/usr/local/bin/acr-migrate up'* ]] || { fail "failed hook Pod does not execute acr-migrate up"; return 1; }
   migration_dsn="$(kube -n "${namespace}" get secret acr-migration -o jsonpath='{.data.ACR_POSTGRES_MIGRATION_DSN}' | base64 -d)"
-  [[ "${migration_dsn}" == *"${expected_migration_failure_marker}"* ]] || { fail "migration Secret does not contain the injected failure target"; return 1; }
+  [[ "${migration_dsn}" == "${expected_migration_failure_dsn}" ]] || { fail "migration Secret does not contain the exact injected failure configuration"; return 1; }
   exit_code="$(kube -n "${namespace}" get "pod/${pod}" -o jsonpath='{.status.containerStatuses[?(@.name=="acr-migrate")].state.terminated.exitCode}')"
   [[ "${exit_code}" =~ ^[1-9][0-9]*$ ]] || { fail "failed migration hook did not terminate acr-migrate nonzero"; return 1; }
   failure_output="$(kube -n "${namespace}" logs "${pod}" -c acr-migrate --tail=50 2>&1 || true)"
+  if grep -Fq -- "${expected_migration_failure_dsn}" <<<"${failure_output}" || grep -Fq -- 'acr-e2e-pass' <<<"${failure_output}" || grep -Fq -- 'postgres.invalid' <<<"${failure_output}"; then
+    fail "migration hook exposed injected connection details in logs"
+    return 1
+  fi
   grep -Fq -- "${expected_migration_failure_marker}" <<<"${failure_output}" || { fail "migration hook did not report the injected fixture failure"; return 1; }
-  grep -Eqi 'lookup|no such host|dial tcp|connect' <<<"${failure_output}" || { fail "migration hook failure was not a classified connection failure"; return 1; }
   assert_no_deployment_ready
 }
 
@@ -1030,10 +1033,11 @@ run_bad_migration() {
   entitlement="$(create_fixture_references)"
   build_local_image bad-migration
   current="${built_image_ref}"
-  expected_migration_failure_marker="postgres.invalid"
+  expected_migration_failure_marker="PostgreSQL is unavailable"
+  expected_migration_failure_dsn='postgres://postgres:acr-e2e-pass@postgres.invalid:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt'
   kube -n "${namespace}" delete secret acr-migration >/dev/null
   kube -n "${namespace}" create secret generic acr-migration \
-    --from-literal=ACR_POSTGRES_MIGRATION_DSN='postgres://postgres:acr-e2e-pass@postgres.invalid/acr?sslmode=disable' >/dev/null
+    --from-literal="ACR_POSTGRES_MIGRATION_DSN=${expected_migration_failure_dsn}" >/dev/null
   values="$(write_values "${current}" "${entitlement}")"
   if run_helm_failure "${values}" --set migration.backoffLimit=0 --set migration.activeDeadlineSeconds=60 >/dev/null 2>&1; then
     fail "bad migration unexpectedly installed"
@@ -1041,7 +1045,7 @@ run_bad_migration() {
   fi
   diagnose_workload_failure
   assert_failed_migration_hook
-  queue_expected_failure bad-migration 'injected postgres.invalid migration hook failed nonzero before API readiness'
+  queue_expected_failure bad-migration 'injected verified-TLS migration endpoint failed as PostgreSQL unavailable before API readiness'
   log 'expected failure proven: bad migration hook failed before application readiness'
   return 0
 }

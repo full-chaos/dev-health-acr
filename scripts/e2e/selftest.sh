@@ -292,8 +292,8 @@ assert_helm_harness_behaviors() {
         *"get deployment/acr-runtime"*) return 0 ;;
         *"wait --for=condition=Available deployment/acr-runtime"*) return 1 ;;
         *"get pods -l"*) printf acr-runtime-api-pod ;;
-        *"get pod/acr-runtime-api-pod"*) printf "" ;;
-        *"get events"*) printf "Warning FailedMount configmap \\"other-config\\" not found" ;;
+        *"get pod/acr-runtime-api-pod"*"waiting.reason"*) printf CreateContainerConfigError ;;
+        *"get events"*"involvedObject.kind=Pod,involvedObject.name=acr-runtime-api-pod"*) printf "Warning Failed pod/acr-runtime-api-pod CreateContainerConfigError: secret \"other-runtime\" not found" ;;
       esac
       return 0
     }
@@ -309,14 +309,37 @@ assert_helm_harness_behaviors() {
     ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
     namespace=test
     release=acr-runtime
-    expected_migration_failure_marker=postgres.invalid
+    kube() {
+      case "$*" in
+        *"get deployment/acr-runtime"*) return 0 ;;
+        *"wait --for=condition=Available deployment/acr-runtime"*) return 1 ;;
+        *"get pods -l"*) printf acr-runtime-api-pod ;;
+        *"get pod/acr-runtime-api-pod"*"waiting.reason"*) printf CreateContainerConfigError ;;
+        *"get events"*"involvedObject.kind=Pod,involvedObject.name=acr-runtime-api-pod"*) printf "Warning Failed pod/acr-runtime-api-pod CreateContainerConfigError: secret \"acr-runtime\" not found" ;;
+      esac
+      return 0
+    }
+    assert_missing_runtime_secret
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'exact API Pod missing runtime Secret event satisfies the assertion'
+  else
+    bad 'exact API Pod missing runtime Secret event must satisfy the assertion'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    namespace=test
+    release=acr-runtime
+    expected_migration_failure_marker="PostgreSQL is unavailable"
+    expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.invalid:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
     kube() {
       case "$*" in
         *"wait --for=condition=failed job/acr-runtime-migrate"*) return 0 ;;
         *"get job/acr-runtime-migrate"*) printf pre-install,pre-upgrade ;;
         *"get pods -l job-name=acr-runtime-migrate"*) printf acr-runtime-migrate-pod ;;
         *".spec.containers"*) printf "/usr/local/bin/acr-migrate up" ;;
-        *"get secret acr-migration"*) printf postgres.invalid | base64 ;;
+        *"get secret acr-migration"*) printf "%s" "${expected_migration_failure_dsn}" | base64 ;;
         *".status.containerStatuses"*) printf 1 ;;
         *"logs acr-runtime-migrate-pod"*) printf "exec: invalid binary" ;;
         *"wait --for=condition=Available deployment/acr-runtime"*) return 1 ;;
@@ -328,6 +351,87 @@ assert_helm_harness_behaviors() {
     ok 'unrelated migration binary failures do not satisfy the injected fixture failure assertion'
   else
     bad 'unrelated migration binary failures must not satisfy the injected fixture failure assertion'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    namespace=test
+    release=acr-runtime
+    expected_migration_failure_marker="PostgreSQL is unavailable"
+    expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.invalid:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
+    kube() {
+      case "$*" in
+        *"wait --for=condition=failed job/acr-runtime-migrate"*) return 0 ;;
+        *"get job/acr-runtime-migrate"*) printf pre-install,pre-upgrade ;;
+        *"get pods -l job-name=acr-runtime-migrate"*) printf acr-runtime-migrate-pod ;;
+        *".spec.containers"*) printf "/usr/local/bin/acr-migrate up" ;;
+        *"get secret acr-migration"*) printf "%s" "${expected_migration_failure_dsn}" | base64 ;;
+        *".status.containerStatuses"*) printf 1 ;;
+        *"logs acr-runtime-migrate-pod"*) printf "acr-migrate: invalid PostgreSQL configuration" ;;
+        *"wait --for=condition=Available deployment/acr-runtime"*) return 1 ;;
+      esac
+      return 0
+    }
+    if assert_failed_migration_hook; then exit 1; fi
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'redacted migration configuration failures do not satisfy the unavailable boundary assertion'
+  else
+    bad 'redacted migration configuration failures must not satisfy the unavailable boundary assertion'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    namespace=test
+    release=acr-runtime
+    expected_migration_failure_marker="PostgreSQL is unavailable"
+    expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.invalid:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
+    kube() {
+      case "$*" in
+        *"wait --for=condition=failed job/acr-runtime-migrate"*) return 0 ;;
+        *"get job/acr-runtime-migrate"*) printf pre-install,pre-upgrade ;;
+        *"get pods -l job-name=acr-runtime-migrate"*) printf acr-runtime-migrate-pod ;;
+        *".spec.containers"*) printf "/usr/local/bin/acr-migrate up" ;;
+        *"get secret acr-migration"*) printf "%s" "${expected_migration_failure_dsn}" | base64 ;;
+        *".status.containerStatuses"*) printf 1 ;;
+        *"logs acr-runtime-migrate-pod"*) printf "acr-migrate: PostgreSQL is unavailable; dsn=%s" "${expected_migration_failure_dsn}" ;;
+        *"wait --for=condition=Available deployment/acr-runtime"*) return 1 ;;
+      esac
+      return 0
+    }
+    if assert_failed_migration_hook; then exit 1; fi
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'unredacted migration connection details do not satisfy the unavailable boundary assertion'
+  else
+    bad 'unredacted migration connection details must not satisfy the unavailable boundary assertion'
+  fi
+
+  # shellcheck disable=SC2016
+  if "${BASH}" -c '
+    ACR_E2E_LIB_ONLY=1 source "$1" --scenario static
+    namespace=test
+    release=acr-runtime
+    expected_migration_failure_marker="PostgreSQL is unavailable"
+    expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.invalid:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
+    kube() {
+      case "$*" in
+        *"wait --for=condition=failed job/acr-runtime-migrate"*) return 0 ;;
+        *"get job/acr-runtime-migrate"*) printf pre-install,pre-upgrade ;;
+        *"get pods -l job-name=acr-runtime-migrate"*) printf acr-runtime-migrate-pod ;;
+        *".spec.containers"*) printf "/usr/local/bin/acr-migrate up" ;;
+        *"get secret acr-migration"*) printf "%s" "${expected_migration_failure_dsn}" | base64 ;;
+        *".status.containerStatuses"*) printf 1 ;;
+        *"logs acr-runtime-migrate-pod"*) printf "acr-migrate: PostgreSQL is unavailable" ;;
+        *"wait --for=condition=Available deployment/acr-runtime"*) return 1 ;;
+      esac
+      return 0
+    }
+    assert_failed_migration_hook
+  ' -- "${HELM_SCRIPT}"; then
+    ok 'redacted PostgreSQL unavailable boundary proves the injected migration failure'
+  else
+    bad 'redacted PostgreSQL unavailable boundary must prove the injected migration failure'
   fi
 
   # shellcheck disable=SC2016
@@ -407,7 +511,9 @@ assert_static_hardening() {
   assert_helm_script_contains 'involvedObject.name=\$\{pod\}' 'missing runtime Secret evidence is scoped to the API Pod'
   assert_helm_script_contains 'secret_name="acr-runtime"' 'missing runtime Secret assertion requires the exact Secret name'
   assert_helm_script_contains 'waiting_reason.*CreateContainerConfigError' 'missing runtime Secret assertion requires the exact waiting reason'
-  assert_helm_script_contains 'expected_migration_failure_marker' 'bad migration assertion classifies the injected fixture failure'
+  assert_helm_script_contains 'expected_migration_failure_dsn' 'bad migration assertion selects the exact verified-TLS fixture configuration'
+  assert_helm_script_contains 'PostgreSQL is unavailable' 'bad migration assertion classifies the redacted unavailable boundary'
+  assert_helm_script_contains 'migration hook exposed injected connection details' 'bad migration assertion rejects leaked connection details'
   assert_helm_script_contains 'acr-migrate.*up' 'bad migration assertion proves the intended migration hook command'
   assert_helm_script_contains 'assert_anonymous_registry_pull_denied' 'missing pull-secret scenario proves anonymous registry denial'
   assert_helm_script_contains 'imported_image_refs\+=\("\$\{target\}"\)' 'registry target is tracked before the push can fail'
