@@ -353,6 +353,41 @@ EOF
   rm -rf "${state_root}"
 }
 
+test_preflight_allows_absent_registry_target() {
+  local state_root fake_bin target unrelated
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  target='registry.example:5000/acr-api-run@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  unrelated='unrelated.example/keep@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+  printf '%s\n' "${unrelated}" >"${state_root}/refs"
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) cat "${FAKE_REFS}" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/docker"
+  if ! PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    target="$2"
+    shift 2
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    preflight_cleanup_ownership "${target}"
+  ' -- "${HARNESS}" "${target}"; then
+    rm -rf "${state_root}"
+    fail 'preflight rejected an absent registry target'
+  fi
+  [[ "$(cat "${state_root}/refs")" == "${unrelated}" ]] || {
+    rm -rf "${state_root}"
+    fail 'preflight changed an unrelated Kind image reference'
+  }
+  rm -rf "${state_root}"
+}
+
 test_partial_operations_reconcile_created_aliases() {
   local state_root fake_bin fake_root phase
   state_root="$(mktemp -d)"
@@ -469,6 +504,7 @@ test_cleanup_fails_after_exhausted_list_retries
 test_cleanup_reconciles_created_registry_delta_after_transient_list_failure
 test_prepare_run_rejects_alias_before_arming_cleanup
 test_prepare_run_rejects_registry_target_before_arming_cleanup
+test_preflight_allows_absent_registry_target
 test_partial_operations_reconcile_created_aliases
 test_cleanup_fails_when_owned_ref_remains
 printf 'RESULT: Kind Helm harness contract tests passed\n'

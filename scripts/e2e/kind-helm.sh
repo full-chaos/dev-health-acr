@@ -208,8 +208,9 @@ preflight_cleanup_ownership() {
   done <<<"${kind_image_refs_before}"
   for target in "$@"; do
     [[ -n "${target}" ]] || continue
-    grep -Fxq "${target}" <<<"${kind_image_refs_before}" &&
+    if grep -Fxq "${target}" <<<"${kind_image_refs_before}"; then
       die "refusing to reuse a pre-existing registry image reference: ${target}"
+    fi
   done
 }
 
