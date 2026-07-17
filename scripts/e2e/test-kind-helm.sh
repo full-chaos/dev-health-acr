@@ -441,11 +441,14 @@ EOF
 }
 
 test_prepare_run_rejects_docker_list_error_before_arming_cleanup() {
-  local state_root fake_bin
+  local state_root fake_bin target unrelated
   state_root="$(mktemp -d)"
   fake_bin="${state_root}/bin"
   mkdir -p "${fake_bin}"
-  printf '%s\n' 'unrelated.example/keep@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' >"${state_root}/refs"
+  target='registry.example:5000/acr-api-run@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  unrelated='unrelated.example/keep@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+  printf '%s\n%s\n' "${target}" "${unrelated}" >"${state_root}/refs"
+  cp "${state_root}/refs" "${state_root}/refs.baseline"
   cat >"${fake_bin}/kind" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' fake
@@ -454,11 +457,15 @@ EOF
 #!/usr/bin/env bash
 case " $* " in
   *" ctr -n k8s.io images list -q "*) exit 2 ;;
+  *" ctr -n k8s.io images import "*|*" ctr -n k8s.io images tag "*|*" ctr -n k8s.io images rm "*)
+    touch "${FAKE_OPERATIONS}"
+    exit 99
+    ;;
   *) exit 1 ;;
 esac
 EOF
   chmod +x "${fake_bin}/kind" "${fake_bin}/docker"
-  if PATH="${fake_bin}:${PATH}" ACR_E2E_STATE_ROOT="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
+  if PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" FAKE_OPERATIONS="${state_root}/operations" ACR_E2E_STATE_ROOT="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
     harness="$1"
     state_root="$2"
     shift 2
@@ -480,7 +487,7 @@ EOF
   fi
   [[ ! -e "${state_root}/cleanup-armed" ]] || fail 'cleanup trap armed after Docker image-list failure'
   [[ ! -e "${state_root}/operations" ]] || fail 'Docker image-list failure caused an image mutation'
-  [[ "$(cat "${state_root}/refs")" == 'unrelated.example/keep@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' ]] || fail 'Docker image-list failure changed pre-existing references'
+  cmp -s "${state_root}/refs.baseline" "${state_root}/refs" || fail 'Docker image-list failure changed pre-existing references'
   rm -rf "${state_root}"
 }
 
