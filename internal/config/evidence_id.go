@@ -10,12 +10,15 @@ import (
 const evidenceIDKeyMinimumBytes = 32
 
 func evidenceIDKeysValue(lookup lookupEnv) (map[string][]byte, error) {
-	value, ok := lookup("ACR_EVIDENCE_ID_KEYS")
-	if !ok || strings.TrimSpace(value) == "" {
+	value, err := SecretValue(lookup, "ACR_EVIDENCE_ID_KEYS")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(value) == "" {
 		return nil, nil
 	}
 	keys := make(map[string][]byte)
-	for _, pair := range strings.Split(value, ",") {
+	for pair := range strings.SplitSeq(value, ",") {
 		kid, encoded, ok := strings.Cut(strings.TrimSpace(pair), "=")
 		if !ok || !validEvidenceKID(kid) || encoded == "" {
 			return nil, errors.New("ACR_EVIDENCE_ID_KEYS must be comma-separated KID=base64 values")

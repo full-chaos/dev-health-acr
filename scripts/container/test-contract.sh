@@ -116,6 +116,10 @@ test "$(grep -c 'assert_no_shell .* MCP' "${repo_root}/scripts/container/verify.
 grep -q 'migration-first' "${repo_root}/scripts/container/verify.sh"
 grep -q 'migration-second' "${repo_root}/scripts/container/verify.sh"
 verify_script="${repo_root}/scripts/container/verify.sh"
+grep -qF 'ACR_POSTGRES_MIGRATION_DSN or ACR_POSTGRES_MIGRATION_DSN_FILE is required' "$verify_script" || {
+  printf 'Migration verification must accept either the DSN or DSN_FILE credential form\n' >&2
+  exit 1
+}
 if grep -q 'docker exec .*pg_isready' "$verify_script"; then
   printf 'PostgreSQL readiness must not use the container-local socket\n' >&2
   exit 1

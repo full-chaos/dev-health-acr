@@ -51,6 +51,12 @@ GitHub action commit SHA):
 | Scanner DB snapshot | `ghcr.io/aquasecurity/trivy-db@sha256:d1f9baeef9aa5fc4c2c631ee8813033e7ec3442950e2b06d33aa1bc84618bc81` |
 | SBOM generator | `anchore/syft:v1.46.0@sha256:473a60e3a58e29aca3aedb3e99e787bb4ef273917e44d10fcbea4330a07320bb` |
 | Migration smoke database | `postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193` |
+| Compose E2E PostgreSQL helper | `postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15` |
+| Compose E2E ClickHouse helper | `clickhouse/clickhouse-server:latest@sha256:1d1f6508eba2dccce2cee9913907c5f7766327debc57a6b1991f2c9e3176c163` |
+| Compose E2E PgBouncer helper | `edoburu/pgbouncer:latest@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd` |
+| Compose E2E Valkey helper | `valkey/valkey:9-alpine@sha256:c9b77919daeba2c02ad954d0c844cc4e7142069d177b89c5fd771f405daf9e02` |
+| Compose E2E Mailpit helper | `axllent/mailpit:latest@sha256:5a49a77c5bdbe7c5474450b4f46348d09949df3695257729c93a30369382d4f6` |
+| Compose E2E TLS proxy | `nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10` |
 
 CI action refs are commit-SHA pinned: `actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0`,
 `actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16`,

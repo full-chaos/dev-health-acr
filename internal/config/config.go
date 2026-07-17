@@ -92,6 +92,10 @@ func load(lookup lookupEnv) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	evidenceIDActiveKID, err := SecretValue(lookup, "ACR_EVIDENCE_ID_ACTIVE_KID")
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		Environment:                    environment,
@@ -100,7 +104,7 @@ func load(lookup lookupEnv) (Config, error) {
 		MinimumSidecarVersion:          stringValue(lookup, "ACR_MINIMUM_SIDECAR_VERSION", defaultMinimumSidecar),
 		RevokedClientVersions:          stringListValue(lookup, "ACR_REVOKED_CLIENT_VERSIONS"),
 		EntitlementKey:                 stringValue(lookup, "ACR_ENTITLEMENT_KEY", defaultEntitlementKey),
-		EvidenceIDActiveKID:            stringValue(lookup, "ACR_EVIDENCE_ID_ACTIVE_KID", ""),
+		EvidenceIDActiveKID:            evidenceIDActiveKID,
 		TrustedProxyCIDRs:              stringListValue(lookup, "ACR_TRUSTED_PROXY_CIDRS"),
 		DevHealthEntitlementURL:        stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_URL", ""),
 		DevHealthEntitlementTokenFile:  stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE", ""),

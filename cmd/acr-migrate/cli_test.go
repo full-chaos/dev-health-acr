@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -23,6 +25,25 @@ func TestRun_usesMigrationDSNOnlyFromEnvironment(t *testing.T) {
 	// Then
 	require.NoError(t, err)
 	require.Contains(t, stdout.String(), "applied")
+}
+
+func TestRun_usesMigrationDSNFromSecretFile(t *testing.T) {
+	// Given
+	ctx := context.Background()
+	dsn := newTestPostgresDSN(t, ctx)
+	path := filepath.Join(t.TempDir(), "migration-dsn")
+	require.NoError(t, os.WriteFile(path, []byte("  "+dsn+"\n"), 0o600))
+	lookup := environment(map[string]string{
+		migrationDSNEnvironment + "_FILE": path,
+		migrationEnvironment:              "test",
+		migrationInsecureEnvironment:      "true",
+	})
+
+	// When
+	err := run(ctx, []string{"up"}, lookup, &bytes.Buffer{})
+
+	// Then
+	require.NoError(t, err)
 }
 
 func TestRun_reportsStatusFromEnvironmentConfiguredDSN(t *testing.T) {

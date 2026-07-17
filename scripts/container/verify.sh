@@ -152,7 +152,7 @@ if docker run --rm --network none "${readonly_probe_flags[@]}" \
   printf 'acr-migrate accepted a missing migration DSN\n' >&2
   exit 1
 fi
-grep -Fq 'ACR_POSTGRES_MIGRATION_DSN is required' "${tmp_dir}/migration"
+grep -Fq 'ACR_POSTGRES_MIGRATION_DSN or ACR_POSTGRES_MIGRATION_DSN_FILE is required' "${tmp_dir}/migration"
 
 migration_network="acr-container-verify-$$-${RANDOM}"
 docker network create "$migration_network" >/dev/null

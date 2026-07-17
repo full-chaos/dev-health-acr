@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/config"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
 )
@@ -31,11 +32,17 @@ func run(ctx context.Context, args []string, lookup lookupEnv, output io.Writer)
 	if len(args) != 1 || (args[0] != "up" && args[0] != "status") {
 		return errors.New("invalid arguments: use acr-migrate up or acr-migrate status")
 	}
-	dsn, ok := lookup(migrationDSNEnvironment)
-	if !ok || strings.TrimSpace(dsn) == "" {
-		return fmt.Errorf("%s is required", migrationDSNEnvironment)
+	dsn, err := config.SecretValue(lookup, migrationDSNEnvironment)
+	if err != nil {
+		return err
 	}
-	poolerAdminDSN, _ := lookup(poolerAdminDSNEnvironment)
+	if dsn == "" {
+		return fmt.Errorf("%s or %s_FILE is required", migrationDSNEnvironment, migrationDSNEnvironment)
+	}
+	poolerAdminDSN, err := config.SecretValue(lookup, poolerAdminDSNEnvironment)
+	if err != nil {
+		return err
+	}
 	environment, _ := lookup(migrationEnvironment)
 	insecureRaw, _ := lookup(migrationInsecureEnvironment)
 	allowInsecure, err := runtimepostgres.InsecureTestTransportOverride(strings.TrimSpace(environment), strings.TrimSpace(insecureRaw))
