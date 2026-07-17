@@ -165,10 +165,7 @@ cleanup_kind_images() {
     for archive in "${remote_archives[@]}"; do
       docker exec "${node}" rm -f "${archive}" >/dev/null 2>&1 || [[ "${attempt}" -lt 3 ]] || status=1
     done
-    refs="$(docker exec "${node}" ctr -n k8s.io images list -q)" || {
-      status=1
-      continue
-    }
+    refs="$(docker exec "${node}" ctr -n k8s.io images list -q)" || continue
     while IFS= read -r ref || [[ -n "${ref}" ]]; do
       is_cleanup_kind_image_ref "${ref}" || continue
       docker exec "${node}" ctr -n k8s.io images rm "${ref}" >/dev/null 2>&1 || :
@@ -179,6 +176,9 @@ cleanup_kind_images() {
     if is_cleanup_kind_image_ref "${ref}"; then
       fail "Kind image cleanup left owned reference: ${ref}"
       remaining=1
+    elif is_untracked_kind_image_delta "${ref}"; then
+      fail "Kind image cleanup left untracked created reference: ${ref}"
+      remaining=1
     fi
   done <<<"${refs}"
   [[ "${remaining}" -eq 0 ]] || return 1
@@ -186,14 +186,24 @@ cleanup_kind_images() {
 }
 
 assert_kind_images_absent() {
-  local node="$1" ref existing
+  local ref
   shift
-  existing="$(docker exec "${node}" ctr -n k8s.io images list -q)" || die "could not inspect Kind image ownership before import"
-  kind_image_refs_before="${existing}"
   for ref in "$@"; do
-    grep -Fxq "${ref}" <<<"${existing}" && die "refusing to reuse a pre-existing Kind image reference: ${ref}"
+    grep -Fxq "${ref}" <<<"${kind_image_refs_before}" && die "refusing to reuse a pre-existing Kind image reference: ${ref}"
   done
   return 0
+}
+
+preflight_cleanup_ownership() {
+  local node ref repo
+  node="${cluster}-control-plane"
+  repo="acr-e2e.local/acr-api-${run_id}"
+  kind_image_refs_before="$(docker exec "${node}" ctr -n k8s.io images list -q)" || \
+    die "could not inspect Kind image ownership before arming cleanup"
+  while IFS= read -r ref || [[ -n "${ref}" ]]; do
+    [[ "${ref}" == "${repo}:"* || "${ref}" == "${repo}@"* ]] || continue
+    die "refusing reused Kind image alias: ${ref}"
+  done <<<"${kind_image_refs_before}"
 }
 
 record_imported_image_refs() {
@@ -217,11 +227,16 @@ register_imported_image_ref() {
 
 is_cleanup_kind_image_ref() {
   local ref="$1" recorded
-  [[ "${ref}" == "acr-e2e.local/acr-api-${run_id}:"* || "${ref}" == "acr-e2e.local/acr-api-${run_id}@"* ]] && return 0
   for recorded in "${imported_image_refs[@]}"; do
     [[ "${recorded}" == "${ref}" ]] && return 0
   done
   return 1
+}
+
+is_untracked_kind_image_delta() {
+  local ref="$1"
+  [[ "${ref}" == "acr-e2e.local/acr-api-${run_id}:"* || "${ref}" == "acr-e2e.local/acr-api-${run_id}@"* ]] || return 1
+  ! grep -Fxq "${ref}" <<<"${kind_image_refs_before}"
 }
 
 cleanup_namespace() {
@@ -518,10 +533,11 @@ prepare_run() {
   namespace="acr-${run_id}"
   release="acr-${run_id}"
   [[ "${#namespace}" -le 63 && "${#release}" -le 53 ]] || die "generated namespace or release name is too long"
+  kube get namespace "${namespace}" >/dev/null 2>&1 && die "refusing reused namespace: ${namespace}"
+  preflight_cleanup_ownership
   run_dir="$(mktemp -d "${STATE_ROOT}/kind-helm.${run_id}.XXXXXX")"
   trap 'on_exit "$?"' EXIT
   trap 'exit 130' INT TERM
-  kube get namespace "${namespace}" >/dev/null 2>&1 && die "refusing reused namespace: ${namespace}"
   kube create namespace "${namespace}" >/dev/null
   owned_namespace=1
   kube label namespace "${namespace}" \

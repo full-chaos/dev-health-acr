@@ -83,6 +83,178 @@ EOF
   [[ "${output}" == $'attempts=2\nunrelated.example/keep:v1' ]] || fail 'cleanup did not retry tracked removal while preserving unrelated refs'
 }
 
+test_cleanup_preserves_untracked_same_run_alias() {
+  local state_root fake_bin output
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) cat "${FAKE_REFS}" ;;
+  *" ctr -n k8s.io images rm "*)
+    ref="${*: -1}"
+    grep -Fxv "${ref}" "${FAKE_REFS}" >"${FAKE_REFS}.next" || true
+    mv "${FAKE_REFS}.next" "${FAKE_REFS}"
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/docker"
+  printf '%s\n%s\n' \
+    'acr-e2e.local/acr-api-run:v1' \
+    'acr-e2e.local/acr-api-run:preexisting-alias' >"${state_root}/refs"
+  output="$(PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    shift
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    kind_image_refs_before="acr-e2e.local/acr-api-run:preexisting-alias"
+    imported_image_refs=("acr-e2e.local/acr-api-run:v1")
+    cleanup_kind_images
+    cat "${FAKE_REFS}"
+  ' -- "${HARNESS}")"
+  rm -rf "${state_root}"
+  [[ "${output}" == 'acr-e2e.local/acr-api-run:preexisting-alias' ]] || fail 'cleanup removed an untracked same-run alias'
+}
+
+test_cleanup_recovers_from_transient_list_failure() {
+  local state_root fake_bin
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*)
+    count="$(cat "${FAKE_STATE}/list-count" 2>/dev/null || printf 0)"
+    printf '%s\n' "$((count + 1))" >"${FAKE_STATE}/list-count"
+    [[ "${count}" -ge 1 ]] || exit 1
+    cat "${FAKE_REFS}"
+    ;;
+  *" ctr -n k8s.io images rm "*)
+    ref="${*: -1}"
+    grep -Fxv "${ref}" "${FAKE_REFS}" >"${FAKE_REFS}.next" || true
+    mv "${FAKE_REFS}.next" "${FAKE_REFS}"
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/docker"
+  printf '%s\n' 'acr-e2e.local/acr-api-run:v1' >"${state_root}/refs"
+  if ! PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" FAKE_STATE="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    shift
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    imported_image_refs=("acr-e2e.local/acr-api-run:v1")
+    cleanup_kind_images
+  ' -- "${HARNESS}"; then
+    rm -rf "${state_root}"
+    fail 'cleanup did not recover from a transient Kind reference list failure'
+  fi
+  [[ ! -s "${state_root}/refs" ]] || fail 'cleanup left a tracked ref after transient list recovery'
+  rm -rf "${state_root}"
+}
+
+test_cleanup_fails_after_exhausted_list_retries() {
+  local state_root fake_bin
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) exit 1 ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/docker"
+  if PATH="${fake_bin}:${PATH}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    shift
+    source "${harness}"
+    cluster=fake
+    cleanup_kind_images
+  ' -- "${HARNESS}"; then
+    rm -rf "${state_root}"
+    fail 'cleanup succeeded after Kind reference list retries were exhausted'
+  fi
+  rm -rf "${state_root}"
+}
+
+test_cleanup_fails_for_untracked_created_delta() {
+  local state_root fake_bin
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) printf '%s\n' 'acr-e2e.local/acr-api-run:untracked-created-alias' ;;
+  *" ctr -n k8s.io images rm "*) exit 1 ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/docker"
+  if PATH="${fake_bin}:${PATH}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    shift
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    kind_image_refs_before=""
+    imported_image_refs=()
+    cleanup_kind_images
+  ' -- "${HARNESS}"; then
+    rm -rf "${state_root}"
+    fail 'cleanup accepted an untracked post-preflight Kind image alias'
+  fi
+  rm -rf "${state_root}"
+}
+
+test_prepare_run_rejects_alias_before_arming_cleanup() {
+  local state_root fake_bin
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/kind" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' fake
+EOF
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) printf '%s\n' 'acr-e2e.local/acr-api-run:preexisting-alias' ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/kind" "${fake_bin}/docker"
+  if PATH="${fake_bin}:${PATH}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    state_root="$2"
+    shift 2
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    require_tools() { :; }
+    establish_source_guard() { :; }
+    load_fixture_exports() { :; }
+    assert_fixture_ready() { :; }
+    kube() { printf "%s\n" "$*" >>"${state_root}/kube"; return 1; }
+    on_exit() { : >"${state_root}/cleanup-armed"; }
+    prepare_run
+  ' -- "${HARNESS}" "${state_root}"; then
+    rm -rf "${state_root}"
+    fail 'prepare_run accepted a pre-existing same-run Kind alias'
+  fi
+  [[ ! -e "${state_root}/cleanup-armed" ]] || fail 'cleanup trap armed before ownership preflight'
+  [[ "$(cat "${state_root}/kube")" == 'get namespace acr-run' ]] || fail 'prepare_run created resources before rejecting alias ownership'
+  rm -rf "${state_root}"
+}
+
 test_partial_operations_reconcile_created_aliases() {
   local state_root fake_bin fake_root phase
   state_root="$(mktemp -d)"
@@ -185,6 +357,11 @@ EOF
 
 test_import_tracking_records_every_new_alias
 test_cleanup_retries_and_preserves_unrelated_refs
+test_cleanup_preserves_untracked_same_run_alias
+test_cleanup_recovers_from_transient_list_failure
+test_cleanup_fails_after_exhausted_list_retries
+test_cleanup_fails_for_untracked_created_delta
+test_prepare_run_rejects_alias_before_arming_cleanup
 test_partial_operations_reconcile_created_aliases
 test_cleanup_fails_when_owned_ref_remains
 printf 'RESULT: Kind Helm harness contract tests passed\n'
