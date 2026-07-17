@@ -67,9 +67,14 @@ assert_project_unused() {
 
 cleanup() {
   local status=$? health_container service
+  local cleanup_failed=0
+  trap '' INT TERM HUP
   [[ -n "$STATE" && -d "$STATE" ]] || exit "$status"
   if [[ ! -f "$STATE/override.yml" ]]; then
-    rm -rf "$STATE"
+    rm -rf "$STATE" || cleanup_failed=1
+    if [[ "$status" -eq 0 && "$cleanup_failed" -ne 0 ]]; then
+      status=1
+    fi
     exit "$status"
   fi
   note "cleanup receipt before: $(owned_receipt)"
@@ -84,15 +89,18 @@ cleanup() {
   fi
   if ! compose down --volumes --remove-orphans >/dev/null 2>&1; then
     note 'cleanup failed; refusing to claim an isolated teardown'
-    status=1
+    cleanup_failed=1
   fi
   if [[ -n "$(docker ps -aq --filter "label=com.docker.compose.project=${PROJECT}")" || -n "$(docker volume ls -q --filter "label=com.docker.compose.project=${PROJECT}")" || -n "$(docker network ls -q --filter "label=com.docker.compose.project=${PROJECT}")" ]]; then
     note "cleanup residue: $(owned_receipt)"
-    status=1
+    cleanup_failed=1
   else
     note 'cleanup receipt after: zero owned containers, volumes, and networks'
   fi
-  rm -rf "$STATE"
+  rm -rf "$STATE" || cleanup_failed=1
+  if [[ "$status" -eq 0 && "$cleanup_failed" -ne 0 ]]; then
+    status=1
+  fi
   exit "$status"
 }
 
@@ -100,6 +108,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   trap cleanup EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
+  trap 'exit 129' HUP
 fi
 
 random_secret() { openssl rand -base64 36 | tr -d '\n' | tr '/+' '_-' | cut -c1-32; }

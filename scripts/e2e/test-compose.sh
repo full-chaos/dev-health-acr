@@ -17,6 +17,8 @@ grep -Fq 'skip_verify=false' "$script"
 grep -Fq 'curl --fail --silent --show-error --cacert' "$script"
 grep -Fq 'MCP must remain host-local' "$script"
 grep -Fq 'zero owned containers, volumes, and networks' "$script"
+grep -Fq "trap '' INT TERM HUP" "$script"
+grep -Fq "trap 'exit 129' HUP" "$script"
 grep -Fq 'refusing pre-existing Compose project resources' "$script"
 grep -Fq 'POSTGRES_USER=devhealth' "$script"
 grep -Fq "ACR_IMAGE=\"\$IMAGE\"" "$script"
@@ -271,4 +273,66 @@ failure_cleanup_status=$?
 set -e
 test "$failure_cleanup_status" -eq 1
 test ! -e "$failure_state"
+
+signal_bin="$tmp/signal-bin"
+mkdir -p "$signal_bin"
+cat > "$signal_bin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+EOF
+chmod +x "$signal_bin/docker"
+cleanup_runner="$tmp/cleanup-runner.sh"
+cat > "$cleanup_runner" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+set -- --compose "$CASE_STATE/compose.yml" --overlay "$CASE_STATE/overlay.yml" --project acr-e2e-signal --scenario happy
+source "$COMPOSE_LIBRARY"
+STATE="$CASE_STATE"
+PROJECT=acr-e2e-signal
+OVERLAY_FILE="$CASE_STATE/overlay.yml"
+mkdir -p "$STATE/stage" "$STATE/secrets" "$STATE/clickhouse"
+touch "$STATE/override.yml" "$STATE/secrets/password" "$STATE/clickhouse/client.xml"
+compose() {
+  if [[ "${1:-}" == down ]]; then
+    if [[ -n "${CLEANUP_SIGNAL:-}" ]]; then
+      kill "-$CLEANUP_SIGNAL" "$$"
+    fi
+    sleep 0.1
+  fi
+}
+owned_receipt() { printf 'containers= volumes= networks='; }
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+trap cleanup EXIT
+case "$CASE_MODE" in
+  failure) false ;;
+  success) : ;;
+  signal-int) CLEANUP_SIGNAL=INT; kill -INT "$$" ;;
+  signal-term) CLEANUP_SIGNAL=TERM; kill -TERM "$$" ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod +x "$cleanup_runner"
+
+run_cleanup_case() {
+  local mode="$1" expected_status="$2"
+  local case_state="$tmp/case-$mode" status
+  mkdir -p "$case_state"
+  : > "$case_state/compose.yml"
+  : > "$case_state/overlay.yml"
+  set +e
+  CASE_MODE="$mode" CASE_STATE="$case_state" COMPOSE_LIBRARY="$compose_library" \
+    PATH="$signal_bin:$PATH" "$cleanup_runner" >"$case_state/output.log" 2>&1
+  status=$?
+  set -e
+  test "$status" -eq "$expected_status"
+  test ! -e "$case_state"
+}
+
+run_cleanup_case failure 1
+run_cleanup_case success 0
+run_cleanup_case signal-int 130
+run_cleanup_case signal-term 143
 printf 'compose e2e static checks passed\n'
