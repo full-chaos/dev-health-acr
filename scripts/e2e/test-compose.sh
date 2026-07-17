@@ -96,9 +96,11 @@ if grep -Fq -- '--accept-invalid-certificate' "$script"; then exit 1; fi
 if grep -Fq -- '--insecure' "$script"; then exit 1; fi
 grep -Fq '<verificationMode>strict</verificationMode>' "$script"
 grep -Fq '<name>RejectCertificateHandler</name>' "$script"
-grep -Fq 'clickhouse-client --config-file=/etc/clickhouse-client/config.d/acr-e2e-tls.xml --secure --host clickhouse --port 9440' "$script"
-# shellcheck disable=SC2016 # Match the literal source argument.
-grep -Fq -- '--password="$(<"$STATE/secrets/clickhouse-password")"' "$script"
+grep -Fq 'clickhouse-client --config-file=/run/acr-e2e/clickhouse-client-readonly.xml --secure --host clickhouse --port 9440 --user acr_reader' "$script"
+dollar='$'
+password_argument="--password=\"${dollar}(<\"${dollar}STATE/secrets/clickhouse-password\")\""
+if grep -Fq -- "$password_argument" "$script"; then exit 1; fi
+grep -Fq 'write_clickhouse_readonly_client_config()' "$script"
 grep -Fq 'healthcheck: { test: ["NONE"] }' "$script"
 grep -Fq 'acr-api: { condition: service_started }' "$script"
 state_variable=STATE
@@ -193,4 +195,55 @@ fi
 "$pki" --out "$tmp" --dns 'localhost,acr-ops-tls,127.0.0.1'
 openssl verify -CAfile "$tmp/ca.crt" "$tmp/acr.crt" >/dev/null
 openssl x509 -in "$tmp/acr.crt" -noout -ext subjectAltName | grep -q 'DNS:acr-ops-tls'
+
+compose_library="$tmp/compose-library.sh"
+sed '/^assert_project_unused$/,$d' "$script" > "$compose_library"
+set -- --compose "$tmp/compose.yml" --overlay "$tmp/overlay.yml" --project acr-e2e-secret-safe --scenario clickhouse-read-denied
+# shellcheck source=/dev/null
+source "$compose_library"
+trap - EXIT
+STATE="$tmp/state"
+export PROJECT='acr-e2e-secret-safe'
+export OVERLAY_FILE="$tmp/overlay.yml"
+export SCENARIO='clickhouse-read-denied'
+mkdir -p "$STATE/secrets" "$STATE/clickhouse" "$STATE/stage"
+touch "$STATE/override.yml"
+password="$(cat <<'EOF'
+- starts & < > " ' $() ; | `
+EOF
+)"
+write_secret "$STATE/secrets/clickhouse-password" "$password"
+write_clickhouse_readonly_client_config
+config_mode="$(stat -c '%a' "$STATE/clickhouse/client-readonly.xml" 2>/dev/null || stat -f '%Lp' "$STATE/clickhouse/client-readonly.xml")"
+test "$config_mode" = 600
+escaped_password="<password>- starts &amp; &lt; &gt; &quot; &apos; ${dollar}() ; | \`</password>"
+grep -Fq "$escaped_password" "$STATE/clickhouse/client-readonly.xml"
+fake_docker_args="$tmp/fake-docker-args.log"
+cat > "$tmp/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" >> "$FAKE_DOCKER_ARGS"
+if [[ "$*" == *'clickhouse-client'* ]]; then
+  printf '%s\n' "${FAKE_CLICKHOUSE_OUTPUT:-Code: 164. DB::Exception: Cannot execute query in readonly mode}"
+  exit "${FAKE_CLICKHOUSE_EXIT:-164}"
+fi
+EOF
+chmod +x "$tmp/bin/docker"
+PATH="$tmp/bin:$PATH" FAKE_DOCKER_ARGS="$fake_docker_args" FAKE_CLICKHOUSE_EXIT=164 expect_clickhouse_readonly_denial
+grep -Fq -- '--config-file=/run/acr-e2e/clickhouse-client-readonly.xml' "$fake_docker_args"
+if grep -Fq -- "$password" "$fake_docker_args"; then exit 1; fi
+for fake_exit in 1 165; do
+  set +e
+  ( PATH="$tmp/bin:$PATH" FAKE_DOCKER_ARGS="$fake_docker_args" FAKE_CLICKHOUSE_EXIT="$fake_exit" expect_clickhouse_readonly_denial ) >"$tmp/clickhouse-failure.log" 2>&1
+  fake_status=$?
+  set -e
+  test "$fake_status" -eq 1
+done
+set +e
+( PATH="$tmp/bin:$PATH" FAKE_DOCKER_ARGS="$fake_docker_args" FAKE_CLICKHOUSE_EXIT=164 FAKE_CLICKHOUSE_OUTPUT='Code: 164. unrelated failure' expect_clickhouse_readonly_denial ) >"$tmp/clickhouse-failure.log" 2>&1
+fake_status=$?
+set -e
+test "$fake_status" -eq 1
+( PATH="$tmp/bin:$PATH" FAKE_DOCKER_ARGS="$fake_docker_args" cleanup )
+test ! -e "$STATE/clickhouse/client-readonly.xml"
 printf 'compose e2e static checks passed\n'

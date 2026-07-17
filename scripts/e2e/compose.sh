@@ -101,6 +101,16 @@ trap cleanup EXIT
 random_secret() { openssl rand -base64 36 | tr -d '\n' | tr '/+' '_-' | cut -c1-32; }
 random_base64() { openssl rand -base64 32 | tr -d '\n'; }
 write_secret() { (umask 077; printf '%s' "$2" > "$1"); }
+xml_escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g' -e "s/'/\&apos;/g"; }
+write_clickhouse_readonly_client_config() {
+  local password escaped
+  password="$(<"$STATE/secrets/clickhouse-password")"
+  escaped="$(printf '%s' "$password" | xml_escape)"
+  (umask 077; cat > "$STATE/clickhouse/client-readonly.xml" <<EOF
+<clickhouse><password>${escaped}</password><openSSL><client><loadDefaultCAFile>false</loadDefaultCAFile><caConfig>/run/acr-tls/ca.crt</caConfig><verificationMode>strict</verificationMode><invalidCertificateHandler><name>RejectCertificateHandler</name></invalidCertificateHandler></client></openSSL></clickhouse>
+EOF
+)
+}
 free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'; }
 
 prepare_state() {
@@ -126,6 +136,7 @@ EOF
   cat > "$STATE/clickhouse/client-tls.xml" <<EOF
 <clickhouse><openSSL><client><loadDefaultCAFile>false</loadDefaultCAFile><caConfig>/run/acr-tls/ca.crt</caConfig><verificationMode>strict</verificationMode><invalidCertificateHandler><name>RejectCertificateHandler</name></invalidCertificateHandler></client></openSSL></clickhouse>
 EOF
+  write_clickhouse_readonly_client_config
   cat > "$STATE/nginx-api.conf" <<'EOF'
 events {}
 http { server { listen 8443 ssl; ssl_certificate /run/pki/acr.crt; ssl_certificate_key /run/pki/acr.key; location / { proxy_pass http://acr-api:8080; } } }
@@ -169,7 +180,7 @@ services:
     image: "${CLICKHOUSE_IMAGE}"
     ports: []
     environment: { CLICKHOUSE_USER: default, CLICKHOUSE_PASSWORD: ch, CLICKHOUSE_DB: default, CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1" }
-    volumes: ["clickhouse_data:/var/lib/clickhouse", "acr_e2e_clickhouse_tls:/run/acr-tls:ro", "${STATE}/clickhouse/tls.xml:/etc/clickhouse-server/config.d/acr-e2e-tls.xml:ro", "${STATE}/clickhouse/client-tls.xml:/etc/clickhouse-client/config.d/acr-e2e-tls.xml:ro"]
+    volumes: ["clickhouse_data:/var/lib/clickhouse", "acr_e2e_clickhouse_tls:/run/acr-tls:ro", "${STATE}/clickhouse/tls.xml:/etc/clickhouse-server/config.d/acr-e2e-tls.xml:ro", "${STATE}/clickhouse/client-tls.xml:/etc/clickhouse-client/config.d/acr-e2e-tls.xml:ro", "${STATE}/clickhouse/client-readonly.xml:/run/acr-e2e/clickhouse-client-readonly.xml:ro"]
     healthcheck: { test: ["CMD-SHELL", "clickhouse-client --config-file=/etc/clickhouse-client/config.d/acr-e2e-tls.xml --secure --host clickhouse --port 9440 --user default --password ch --query 'SELECT 1'"], interval: 5s, timeout: 5s, retries: 12, start_period: 10s }
     depends_on: { acr-pki-init: { condition: service_completed_successfully } }
   pgbouncer: { image: "${PGBOUNCER_IMAGE}" }
@@ -400,6 +411,10 @@ expect_failure() {
   return 0
 }
 
+expect_clickhouse_readonly_denial() {
+  expect_failure 164 'Code: 164.*readonly' compose exec -T clickhouse clickhouse-client --config-file=/run/acr-e2e/clickhouse-client-readonly.xml --secure --host clickhouse --port 9440 --user acr_reader --query "INSERT INTO acr_${PROJECT//-/}_e2e.acr_e2e_readonly_probe (probe_id) VALUES (generateUUIDv4())"
+}
+
 expect_typed_http_error() {
   local expected_http_status="$1" expected_code="$2" actual_status http_status response_body
   shift 2
@@ -436,7 +451,7 @@ run_failure() {
     revoked-acr-token)
       start_happy; active_credential_id="$(compose run --rm --no-deps acr-credentials credentials list --org-id "$(<"$STATE/org-id")" --json | jq -er '[.[] | select(.revoked_at == null)][0].credential_id')"; compose run --rm --no-deps acr-credentials credentials revoke --org-id "$(<"$STATE/org-id")" --credential-id "$active_credential_id" --actor compose-e2e >/dev/null; expect_typed_http_error 401 invalid_token curl --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer $(<"$STATE/secrets/acr-rotated-token")" "https://localhost:${PORT}/api/v1/agent-context/capabilities"; SAFE_BOUNDARY='revoked active ACR credential returned exact HTTP 401 typed invalid_token error before protected reads' ;;
     clickhouse-read-denied)
-      start_happy; expect_failure 164 'Code: 164.*readonly' compose exec -T clickhouse clickhouse-client --config-file=/etc/clickhouse-client/config.d/acr-e2e-tls.xml --secure --host clickhouse --port 9440 --user acr_reader --password="$(<"$STATE/secrets/clickhouse-password")" --query "INSERT INTO acr_${PROJECT//-/}_e2e.acr_e2e_readonly_probe (probe_id) VALUES (generateUUIDv4())"; SAFE_BOUNDARY='read-only ClickHouse user rejected an E2E-only granted insert with exact code 164 before it could mutate evidence' ;;
+      start_happy; expect_clickhouse_readonly_denial; SAFE_BOUNDARY='read-only ClickHouse user rejected an E2E-only granted insert with exact code 164 before it could mutate evidence' ;;
     migration-failure)
       bootstrap_ops; compose up -d acr-db-init >/dev/null; compose wait acr-db-init >/dev/null || die 'ACR role initialization failed'; migration_one_checksum="$(openssl dgst -sha256 "$REPO_ROOT/migrations/postgres/0001_acr_core.sql")"; migration_one_checksum="${migration_one_checksum##* }"; compose exec -T -e "PGPASSWORD=$(<"$STATE/secrets/migration-password")" postgres psql -h postgres -U "$ACR_MIGRATION_DB_USER" -d "$ACR_DB_NAME" -v ON_ERROR_STOP=1 < "$REPO_ROOT/migrations/postgres/0001_acr_core.sql" >/dev/null; compose exec -T -e "PGPASSWORD=$(<"$STATE/secrets/migration-password")" postgres psql -h postgres -U "$ACR_MIGRATION_DB_USER" -d "$ACR_DB_NAME" -v ON_ERROR_STOP=1 -c "CREATE TABLE acr.schema_migrations (version BIGINT PRIMARY KEY, name TEXT NOT NULL, checksum TEXT, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()); INSERT INTO acr.schema_migrations (version, name, checksum) VALUES (1, '0001_acr_core.sql', '${migration_one_checksum}'); ALTER TABLE acr.agent_episodes ADD CONSTRAINT agent_episodes_org_repo_idempotency_key_key CHECK (false);" >/dev/null; expect_failure 1 'apply migration 2' compose run --rm --no-deps acr-migrate; partial_version="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c 'SELECT version FROM acr.schema_migrations ORDER BY version')"; [[ "$partial_version" == '1' ]] || die 'migration failure did not leave the expected partial state'; [[ -z "$(compose ps -q acr-api)" ]] || die 'API started despite failed migration'; SAFE_BOUNDARY='migration 2 failed against deliberate incompatible DDL; migration 1 remains as partial state and API stayed gated' ;;
   esac
