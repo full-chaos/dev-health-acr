@@ -199,9 +199,16 @@ openssl x509 -in "$tmp/acr.crt" -noout -ext subjectAltName | grep -q 'DNS:acr-op
 compose_library="$tmp/compose-library.sh"
 sed '/^assert_project_unused$/,$d' "$script" > "$compose_library"
 set -- --compose "$tmp/compose.yml" --overlay "$tmp/overlay.yml" --project acr-e2e-secret-safe --scenario clickhouse-read-denied
+test_cleanup() { rm -rf "$tmp"; }
+trap test_cleanup EXIT
 # shellcheck source=/dev/null
 source "$compose_library"
-trap - EXIT
+trap -p EXIT > "$tmp/exit-trap.txt"
+grep -Fq "trap -- 'test_cleanup' EXIT" "$tmp/exit-trap.txt"
+trap -p INT > "$tmp/int-trap.txt"
+test ! -s "$tmp/int-trap.txt"
+trap -p TERM > "$tmp/term-trap.txt"
+test ! -s "$tmp/term-trap.txt"
 STATE="$tmp/state"
 export PROJECT='acr-e2e-secret-safe'
 export OVERLAY_FILE="$tmp/overlay.yml"
@@ -244,6 +251,24 @@ set +e
 fake_status=$?
 set -e
 test "$fake_status" -eq 1
+set +e
 ( PATH="$tmp/bin:$PATH" FAKE_DOCKER_ARGS="$fake_docker_args" cleanup )
+cleanup_status=$?
+set -e
+test "$cleanup_status" -eq 0
 test ! -e "$STATE/clickhouse/client-readonly.xml"
+failure_state="$tmp/failure-state"
+failure_cleanup() {
+  local STATE="$1"
+  mkdir -p "$STATE/secrets" "$STATE/clickhouse"
+  touch "$STATE/override.yml" "$STATE/secrets/password" "$STATE/clickhouse/client.xml"
+  false
+  PATH="$tmp/bin:$PATH" FAKE_DOCKER_ARGS="$fake_docker_args" cleanup
+}
+set +e
+( failure_cleanup "$failure_state" )
+failure_cleanup_status=$?
+set -e
+test "$failure_cleanup_status" -eq 1
+test ! -e "$failure_state"
 printf 'compose e2e static checks passed\n'

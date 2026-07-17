@@ -96,7 +96,11 @@ cleanup() {
   exit "$status"
 }
 
-trap cleanup EXIT
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  trap cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+fi
 
 random_secret() { openssl rand -base64 36 | tr -d '\n' | tr '/+' '_-' | cut -c1-32; }
 random_base64() { openssl rand -base64 32 | tr -d '\n'; }
