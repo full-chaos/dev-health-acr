@@ -166,18 +166,17 @@ cleanup_kind_images() {
       docker exec "${node}" rm -f "${archive}" >/dev/null 2>&1 || [[ "${attempt}" -lt 3 ]] || status=1
     done
     refs="$(docker exec "${node}" ctr -n k8s.io images list -q)" || continue
+    reconcile_created_image_refs "${refs}"
     while IFS= read -r ref || [[ -n "${ref}" ]]; do
       is_cleanup_kind_image_ref "${ref}" || continue
       docker exec "${node}" ctr -n k8s.io images rm "${ref}" >/dev/null 2>&1 || :
     done <<<"${refs}"
   done
   refs="$(docker exec "${node}" ctr -n k8s.io images list -q)" || return 1
+  reconcile_created_image_refs "${refs}"
   while IFS= read -r ref || [[ -n "${ref}" ]]; do
     if is_cleanup_kind_image_ref "${ref}"; then
       fail "Kind image cleanup left owned reference: ${ref}"
-      remaining=1
-    elif is_untracked_kind_image_delta "${ref}"; then
-      fail "Kind image cleanup left untracked created reference: ${ref}"
       remaining=1
     fi
   done <<<"${refs}"
@@ -217,6 +216,15 @@ record_imported_image_refs() {
   done <<<"${refs}"
 }
 
+reconcile_created_image_refs() {
+  local refs="$1" ref
+  while IFS= read -r ref || [[ -n "${ref}" ]]; do
+    is_kind_run_image_ref "${ref}" || continue
+    grep -Fxq "${ref}" <<<"${kind_image_refs_before}" && continue
+    register_imported_image_ref "${ref}"
+  done <<<"${refs}"
+}
+
 register_imported_image_ref() {
   local ref="$1" recorded
   for recorded in "${imported_image_refs[@]}"; do
@@ -233,10 +241,10 @@ is_cleanup_kind_image_ref() {
   return 1
 }
 
-is_untracked_kind_image_delta() {
+is_kind_run_image_ref() {
   local ref="$1"
-  [[ "${ref}" == "acr-e2e.local/acr-api-${run_id}:"* || "${ref}" == "acr-e2e.local/acr-api-${run_id}@"* ]] || return 1
-  ! grep -Fxq "${ref}" <<<"${kind_image_refs_before}"
+  [[ "${ref}" == "acr-e2e.local/acr-api-${run_id}:"* || "${ref}" == "acr-e2e.local/acr-api-${run_id}@"* ||
+    "${ref}" == "${ACR_E2E_REGISTRY_ENDPOINT:-}/acr-api-${run_id}:"* || "${ref}" == "${ACR_E2E_REGISTRY_ENDPOINT:-}/acr-api-${run_id}@"* ]]
 }
 
 cleanup_namespace() {
@@ -383,8 +391,10 @@ static_check() {
     done
   }
   assert_kind_image_cleanup_aliases() {
-    local block literal_dollar='$'
+    local block publish_block cleanup_block literal_dollar='$'
     block="$(function_block build_local_image)"
+    publish_block="$(function_block publish_image_to_fixture_registry)"
+    cleanup_block="$(function_block cleanup_kind_images)"
     if ! grep -Fq "register_imported_image_ref \"${literal_dollar}{tag}\"" <<<"${block}" || \
       ! grep -Fq "register_imported_image_ref \"${literal_dollar}{repo}@${literal_dollar}{digest}\"" <<<"${block}" || \
       ! grep -Fq "if ! docker exec \"${literal_dollar}{node}\" ctr -n k8s.io images import" <<<"${block}" || \
@@ -394,6 +404,12 @@ static_check() {
     fi
     if [[ "$(grep -Fc "record_imported_image_refs \"${literal_dollar}{repo}\"" <<<"${block}")" -lt 3 ]]; then
       fail 'static: each import/tag outcome must reconcile every new exact Kind image alias for cleanup'
+      failures=$((failures + 1))
+    fi
+    if ! grep -Fq "assert_kind_images_absent \"${literal_dollar}{node}\" \"${literal_dollar}{target}\"" <<<"${publish_block}" || \
+      ! grep -Fq "register_imported_image_ref \"${literal_dollar}{target}\"" <<<"${publish_block}" || \
+      ! grep -Fq "reconcile_created_image_refs \"${literal_dollar}{refs}\"" <<<"${cleanup_block}"; then
+      fail 'static: registry targets must pass baseline ownership before registration and cleanup must reconcile created aliases'
       failures=$((failures + 1))
     fi
   }
@@ -682,7 +698,8 @@ publish_image_to_fixture_registry() {
   repository="${source%%@*}"
   target="${ACR_E2E_REGISTRY_ENDPOINT}/${repository##*/}@${digest}"
   node="${cluster}-control-plane"
-  imported_image_refs+=("${target}")
+  assert_kind_images_absent "${node}" "${target}"
+  register_imported_image_ref "${target}"
   docker exec "${node}" ctr -n k8s.io images tag "${source}" "${target}" >/dev/null
   if ! run_with_timeout 120 docker exec "${node}" ctr -n k8s.io images push --plain-http --user fixture:fixture "${target}" >/dev/null; then
     fail "timed out or failed while pushing ${target} to the fixture registry"

@@ -167,12 +167,16 @@ test_cleanup_fails_after_exhausted_list_retries() {
   cat >"${fake_bin}/docker" <<'EOF'
 #!/usr/bin/env bash
 case " $* " in
-  *" ctr -n k8s.io images list -q "*) exit 1 ;;
+  *" ctr -n k8s.io images list -q "*)
+    count="$(cat "${FAKE_STATE}/list-count" 2>/dev/null || printf 0)"
+    printf '%s\n' "$((count + 1))" >"${FAKE_STATE}/list-count"
+    exit 1
+    ;;
   *) exit 1 ;;
 esac
 EOF
   chmod +x "${fake_bin}/docker"
-  if PATH="${fake_bin}:${PATH}" ACR_E2E_LIB_ONLY=1 bash -c '
+  if PATH="${fake_bin}:${PATH}" FAKE_STATE="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
     harness="$1"
     shift
     source "${harness}"
@@ -182,36 +186,82 @@ EOF
     rm -rf "${state_root}"
     fail 'cleanup succeeded after Kind reference list retries were exhausted'
   fi
+  [[ "$(cat "${state_root}/list-count")" == 4 ]] || fail 'cleanup did not use its bounded list retry budget before failing'
   rm -rf "${state_root}"
 }
 
-test_cleanup_fails_for_untracked_created_delta() {
-  local state_root fake_bin
+test_cleanup_reconciles_created_registry_delta_after_transient_list_failure() {
+  local state_root fake_bin output
   state_root="$(mktemp -d)"
   fake_bin="${state_root}/bin"
   mkdir -p "${fake_bin}"
   cat >"${fake_bin}/docker" <<'EOF'
 #!/usr/bin/env bash
 case " $* " in
-  *" ctr -n k8s.io images list -q "*) printf '%s\n' 'acr-e2e.local/acr-api-run:untracked-created-alias' ;;
-  *" ctr -n k8s.io images rm "*) exit 1 ;;
+  *" ctr -n k8s.io images list -q "*)
+    count="$(cat "${FAKE_STATE}/list-count" 2>/dev/null || printf 0)"
+    printf '%s\n' "$((count + 1))" >"${FAKE_STATE}/list-count"
+    [[ "${count}" -ge 1 ]] || exit 1
+    cat "${FAKE_REFS}"
+    ;;
+  *" ctr -n k8s.io images rm "*)
+    ref="${*: -1}"
+    grep -Fxv "${ref}" "${FAKE_REFS}" >"${FAKE_REFS}.next" || true
+    mv "${FAKE_REFS}.next" "${FAKE_REFS}"
+    ;;
   *) exit 1 ;;
 esac
 EOF
   chmod +x "${fake_bin}/docker"
-  if PATH="${fake_bin}:${PATH}" ACR_E2E_LIB_ONLY=1 bash -c '
+  printf '%s\n%s\n' \
+    'registry.example:5000/acr-api-run@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    'registry.example:5000/acr-api-run@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' >"${state_root}/refs"
+  output="$(PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" FAKE_STATE="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
     harness="$1"
     shift
     source "${harness}"
     cluster=fake
     run_id=run
-    kind_image_refs_before=""
+    ACR_E2E_REGISTRY_ENDPOINT=registry.example:5000
+    kind_image_refs_before="registry.example:5000/acr-api-run@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     imported_image_refs=()
     cleanup_kind_images
+    cat "${FAKE_REFS}"
+  ' -- "${HARNESS}")"
+  [[ "${output}" == 'registry.example:5000/acr-api-run@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ]] || fail 'cleanup did not reconcile and remove the post-baseline registry alias'
+  rm -rf "${state_root}"
+}
+
+test_publish_refuses_preexisting_registry_target_before_registration() {
+  local state_root fake_bin target
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  target='registry.example:5000/acr-api-run@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) printf '%s\n' "${FAKE_TARGET}" ;;
+  *" ctr -n k8s.io images tag "*|*" ctr -n k8s.io images push "*|*" ctr -n k8s.io images rm "*) touch "${FAKE_OPERATIONS}" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/docker"
+  if PATH="${fake_bin}:${PATH}" FAKE_TARGET="${target}" FAKE_OPERATIONS="${state_root}/operations" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    shift
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    ACR_E2E_REGISTRY_ENDPOINT=registry.example:5000
+    kind_image_refs_before="${FAKE_TARGET}"
+    register_imported_image_ref() { touch "${FAKE_OPERATIONS}"; }
+    publish_image_to_fixture_registry "acr-e2e.local/acr-api-run@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   ' -- "${HARNESS}"; then
     rm -rf "${state_root}"
-    fail 'cleanup accepted an untracked post-preflight Kind image alias'
+    fail 'publish accepted a pre-existing registry target'
   fi
+  [[ ! -e "${state_root}/operations" ]] || fail 'publish registered or mutated a pre-existing registry target'
   rm -rf "${state_root}"
 }
 
@@ -269,15 +319,23 @@ digest='sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
 refs="${FAKE_REFS}"
 case " $* " in
   *" version --format "*) printf 'amd64\n' ;;
-  *" ctr -n k8s.io images list -q "*) cat "${refs}" ;;
+  *" ctr -n k8s.io images list -q "*)
+    if [[ -e "${FAKE_STATE}/fail-next-list" ]]; then
+      rm -f "${FAKE_STATE}/fail-next-list"
+      exit 1
+    fi
+    cat "${refs}"
+    ;;
   *" ctr -n k8s.io images import "*)
     printf 'import\n' >>"${FAKE_STATE}/operations"
     printf '%s\n%s\n' "acr-e2e.local/acr-api-run@${digest}" "acr-e2e.local/acr-api-run@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" >>"${refs}"
+    [[ "${FAIL_PHASE}" != import ]] || : >"${FAKE_STATE}/fail-next-list"
     [[ "${FAIL_PHASE}" != import ]] || exit 1
     ;;
   *" ctr -n k8s.io images tag "*)
     printf 'tag\n' >>"${FAKE_STATE}/operations"
     printf '%s\n' 'acr-e2e.local/acr-api-run:v1' >>"${refs}"
+    [[ "${FAIL_PHASE}" != tag ]] || : >"${FAKE_STATE}/fail-next-list"
     [[ "${FAIL_PHASE}" != tag ]] || exit 1
     ;;
   *" ctr -n k8s.io images rm "*)
@@ -360,7 +418,8 @@ test_cleanup_retries_and_preserves_unrelated_refs
 test_cleanup_preserves_untracked_same_run_alias
 test_cleanup_recovers_from_transient_list_failure
 test_cleanup_fails_after_exhausted_list_retries
-test_cleanup_fails_for_untracked_created_delta
+test_cleanup_reconciles_created_registry_delta_after_transient_list_failure
+test_publish_refuses_preexisting_registry_target_before_registration
 test_prepare_run_rejects_alias_before_arming_cleanup
 test_partial_operations_reconcile_created_aliases
 test_cleanup_fails_when_owned_ref_remains
