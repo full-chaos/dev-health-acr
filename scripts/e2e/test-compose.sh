@@ -40,7 +40,7 @@ grep -Fq "if [[ \"\$http_status\" != \"\$expected_http_status\" ]]; then" "$scri
 grep -Fq 'validate-error-receipt.sh' "$script"
 test "$(grep -Fc 'response_body' "$script")" -eq 4
 if grep -Fq "cat \"\$response_body\"" "$script"; then exit 1; fi
-grep -Fq "expect_failure 1 'Code: 164.*readonly'" "$script"
+grep -Fq "expect_failure 164 'Code: 164.*readonly'" "$script"
 grep -Fq "expect_failure 1 'apply migration 2'" "$script"
 grep -Fq 'migrations/postgres/0001_acr_core.sql' "$script"
 grep -Fq 'agent_episodes_org_repo_idempotency_key_key CHECK (false)' "$script"
@@ -97,6 +97,8 @@ if grep -Fq -- '--insecure' "$script"; then exit 1; fi
 grep -Fq '<verificationMode>strict</verificationMode>' "$script"
 grep -Fq '<name>RejectCertificateHandler</name>' "$script"
 grep -Fq 'clickhouse-client --config-file=/etc/clickhouse-client/config.d/acr-e2e-tls.xml --secure --host clickhouse --port 9440' "$script"
+# shellcheck disable=SC2016 # Match the literal source argument.
+grep -Fq -- '--password="$(<"$STATE/secrets/clickhouse-password")"' "$script"
 grep -Fq 'healthcheck: { test: ["NONE"] }' "$script"
 grep -Fq 'acr-api: { condition: service_started }' "$script"
 state_variable=STATE
