@@ -402,17 +402,26 @@ EOF
 #!/usr/bin/env bash
 case " $* " in
   *" ctr -n k8s.io images list -q "*) cat "${FAKE_REFS}" ;;
+  *" ctr -n k8s.io images import "*|*" ctr -n k8s.io images tag "*|*" ctr -n k8s.io images rm "*)
+    printf '%s\n' "$*" >>"${FAKE_OPERATIONS}"
+    exit 99
+    ;;
   *) exit 1 ;;
 esac
 EOF
   cat >"${fake_bin}/grep" <<'EOF'
 #!/usr/bin/env bash
 input="$(cat)"
-[[ "${input}" == fake ]] && exit 0
+if [[ "${input}" == fake ]]; then
+  if [[ "${ACR_E2E_TEST_INJECT_IMAGE_MUTATION:-0}" == 1 ]]; then
+    docker exec fake ctr -n k8s.io images import /tmp/injected-mutation
+  fi
+  exit 0
+fi
 exit 2
 EOF
   chmod +x "${fake_bin}/kind" "${fake_bin}/docker" "${fake_bin}/grep"
-  if PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" ACR_E2E_STATE_ROOT="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
+  if PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" FAKE_OPERATIONS="${state_root}/operations" ACR_E2E_STATE_ROOT="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
     harness="$1"
     state_root="$2"
     shift 2
@@ -435,7 +444,7 @@ EOF
     fail 'prepare_run accepted a grep tool failure'
   fi
   [[ ! -e "${state_root}/cleanup-armed" ]] || fail 'cleanup trap armed after grep tool failure'
-  [[ ! -e "${state_root}/operations" ]] || fail 'grep tool failure caused an image mutation'
+  [[ ! -s "${state_root}/operations" ]] || fail 'grep tool failure caused an image mutation'
   [[ "$(cat "${state_root}/refs")" == 'unrelated.example/keep@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' ]] || fail 'grep tool failure changed pre-existing references'
   rm -rf "${state_root}"
 }
