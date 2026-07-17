@@ -31,15 +31,20 @@ grep -Fq 'for tool in docker openssl curl git jq' "$script"
 grep -Fq "expect_failure 60 'SSL certificate problem'" "$script"
 grep -Fq 'openssl req -x509 -newkey rsa:2048' "$script"
 if grep -Fq 'not a certificate' "$script"; then exit 1; fi
-grep -Fq "expect_typed_http_error 401 unauthorized" "$script"
-grep -Fq "jq -e --arg code \"\$expected_code\" 'type == \"object\" and .code == \$code'" "$script"
+revoked_acr_token_case="$(sed -n '/revoked-acr-token)/,/;;/p' "$script")"
+printf '%s\n' "$revoked_acr_token_case" | grep -Fq 'expect_typed_http_error 401 invalid_token'
+printf '%s\n' "$revoked_acr_token_case" | grep -Fq 'acr-rotated-token'
+grep -Fq "http_status=\"\$(\"\$@\" --output \"\$response_body\" --write-out '%{http_code}')\"" "$script"
+grep -Fq "if [[ \"\$http_status\" != \"\$expected_http_status\" ]]; then" "$script"
+grep -Fq "jq -e --arg code \"\$expected_code\" 'type == \"object\" and .code == \$code' \"\$response_body\"" "$script"
+test "$(grep -Fc 'response_body' "$script")" -eq 4
+if grep -Fq "cat \"\$response_body\"" "$script"; then exit 1; fi
 grep -Fq "expect_failure 1 'Code: 164.*readonly'" "$script"
 grep -Fq "expect_failure 1 'apply migration 2'" "$script"
 grep -Fq 'CREATE TABLE acr.agent_episodes (broken_marker TEXT)' "$script"
 grep -Fq 'partial state and API stayed gated' "$script"
 if grep -Fq 'system_metrics' "$script"; then exit 1; fi
 grep -Fq 'select(.revoked_at == null)' "$script"
-grep -F -A 3 'revoked-acr-token)' "$script" | grep -Fq 'acr-rotated-token'
 if grep -Fq -- '--owner-email' "$script"; then exit 1; fi
 grep -Fq 'clickhouse-client --user default --password ch' "$script"
 db_variable=db
@@ -162,7 +167,7 @@ set -e
 test "$collision_status" -eq 1
 grep -Fq 'refusing pre-existing Compose project name' "$tmp/collision.log"
 for response in '{"code":"unrelated"}' 'not-json'; do
-  if printf '%s\n' "$response" | jq -e 'type == "object" and .code == "unauthorized"' >/dev/null 2>&1; then
+  if printf '%s\n' "$response" | jq -e 'type == "object" and .code == "invalid_token"' >/dev/null 2>&1; then
     exit 1
   fi
 done
