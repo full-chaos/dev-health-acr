@@ -1,0 +1,624 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+HARNESS="${ROOT}/scripts/e2e/kind-helm.sh"
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+test_import_tracking_records_every_new_alias() {
+  local state_root fake_bin output expected
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*)
+    printf '%s\n' \
+      'acr-e2e.local/acr-api-test:v1' \
+      'acr-e2e.local/acr-api-test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+      'acr-e2e.local/acr-api-test@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/docker"
+  output="$(PATH="${fake_bin}:${PATH}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    shift
+    source "${harness}"
+    cluster=fake
+    kind_image_refs_before=""
+    imported_image_refs=()
+    record_imported_image_refs acr-e2e.local/acr-api-test
+    printf "%s\n" "${imported_image_refs[@]}"
+  ' -- "${HARNESS}")"
+  rm -rf "${state_root}"
+
+  expected=$'acr-e2e.local/acr-api-test:v1\nacr-e2e.local/acr-api-test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nacr-e2e.local/acr-api-test@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+  [[ "${output}" == "${expected}" ]] || fail 'OCI import aliases were not all tracked for cleanup'
+}
+
+test_cleanup_retries_and_preserves_unrelated_refs() {
+  local state_root fake_bin output
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+refs="${FAKE_REFS}"
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) cat "${refs}" ;;
+  *" ctr -n k8s.io images rm "*)
+    ref="${*: -1}"
+    count_file="${FAKE_STATE}/remove-count"
+    count="$(cat "${count_file}" 2>/dev/null || printf 0)"
+    printf '%s\n' "$((count + 1))" >"${count_file}"
+    [[ "${count}" -ge 1 ]] || exit 1
+    grep -Fxv "${ref}" "${refs}" >"${refs}.next" || true
+    mv "${refs}.next" "${refs}"
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/docker"
+  printf '%s\n%s\n' "acr-e2e.local/acr-api-run:v1" "unrelated.example/keep:v1" >"${state_root}/refs"
+  output="$(PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" FAKE_STATE="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    shift
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    imported_image_refs=("acr-e2e.local/acr-api-run:v1")
+    cleanup_kind_images
+    printf "attempts=%s\n" "$(cat "${FAKE_STATE}/remove-count")"
+    cat "${FAKE_REFS}"
+  ' -- "${HARNESS}")"
+  rm -rf "${state_root}"
+  [[ "${output}" == $'attempts=2\nunrelated.example/keep:v1' ]] || fail 'cleanup did not retry tracked removal while preserving unrelated refs'
+}
+
+test_cleanup_preserves_untracked_same_run_alias() {
+  local state_root fake_bin output
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) cat "${FAKE_REFS}" ;;
+  *" ctr -n k8s.io images rm "*)
+    ref="${*: -1}"
+    grep -Fxv "${ref}" "${FAKE_REFS}" >"${FAKE_REFS}.next" || true
+    mv "${FAKE_REFS}.next" "${FAKE_REFS}"
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/docker"
+  printf '%s\n%s\n' \
+    'acr-e2e.local/acr-api-run:v1' \
+    'acr-e2e.local/acr-api-run:preexisting-alias' >"${state_root}/refs"
+  output="$(PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    shift
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    kind_image_refs_before="acr-e2e.local/acr-api-run:preexisting-alias"
+    imported_image_refs=("acr-e2e.local/acr-api-run:v1")
+    cleanup_kind_images
+    cat "${FAKE_REFS}"
+  ' -- "${HARNESS}")"
+  rm -rf "${state_root}"
+  [[ "${output}" == 'acr-e2e.local/acr-api-run:preexisting-alias' ]] || fail 'cleanup removed an untracked same-run alias'
+}
+
+test_cleanup_recovers_from_transient_list_failure() {
+  local state_root fake_bin
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*)
+    count="$(cat "${FAKE_STATE}/list-count" 2>/dev/null || printf 0)"
+    printf '%s\n' "$((count + 1))" >"${FAKE_STATE}/list-count"
+    [[ "${count}" -ge 1 ]] || exit 1
+    cat "${FAKE_REFS}"
+    ;;
+  *" ctr -n k8s.io images rm "*)
+    ref="${*: -1}"
+    grep -Fxv "${ref}" "${FAKE_REFS}" >"${FAKE_REFS}.next" || true
+    mv "${FAKE_REFS}.next" "${FAKE_REFS}"
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/docker"
+  printf '%s\n' 'acr-e2e.local/acr-api-run:v1' >"${state_root}/refs"
+  if ! PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" FAKE_STATE="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    shift
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    imported_image_refs=("acr-e2e.local/acr-api-run:v1")
+    cleanup_kind_images
+  ' -- "${HARNESS}"; then
+    rm -rf "${state_root}"
+    fail 'cleanup did not recover from a transient Kind reference list failure'
+  fi
+  [[ ! -s "${state_root}/refs" ]] || fail 'cleanup left a tracked ref after transient list recovery'
+  rm -rf "${state_root}"
+}
+
+test_cleanup_fails_after_exhausted_list_retries() {
+  local state_root fake_bin
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*)
+    count="$(cat "${FAKE_STATE}/list-count" 2>/dev/null || printf 0)"
+    printf '%s\n' "$((count + 1))" >"${FAKE_STATE}/list-count"
+    exit 1
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/docker"
+  if PATH="${fake_bin}:${PATH}" FAKE_STATE="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    shift
+    source "${harness}"
+    cluster=fake
+    cleanup_kind_images
+  ' -- "${HARNESS}"; then
+    rm -rf "${state_root}"
+    fail 'cleanup succeeded after Kind reference list retries were exhausted'
+  fi
+  [[ "$(cat "${state_root}/list-count")" == 4 ]] || fail 'cleanup did not use its bounded list retry budget before failing'
+  rm -rf "${state_root}"
+}
+
+test_cleanup_reconciles_created_registry_delta_after_transient_list_failure() {
+  local state_root fake_bin output
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*)
+    count="$(cat "${FAKE_STATE}/list-count" 2>/dev/null || printf 0)"
+    printf '%s\n' "$((count + 1))" >"${FAKE_STATE}/list-count"
+    [[ "${count}" -ge 1 ]] || exit 1
+    cat "${FAKE_REFS}"
+    ;;
+  *" ctr -n k8s.io images rm "*)
+    ref="${*: -1}"
+    grep -Fxv "${ref}" "${FAKE_REFS}" >"${FAKE_REFS}.next" || true
+    mv "${FAKE_REFS}.next" "${FAKE_REFS}"
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/docker"
+  printf '%s\n%s\n' \
+    'registry.example:5000/acr-api-run@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    'registry.example:5000/acr-api-run@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' >"${state_root}/refs"
+  output="$(PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" FAKE_STATE="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    shift
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    ACR_E2E_REGISTRY_ENDPOINT=registry.example:5000
+    kind_image_refs_before="registry.example:5000/acr-api-run@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    imported_image_refs=()
+    cleanup_kind_images
+    cat "${FAKE_REFS}"
+  ' -- "${HARNESS}")"
+  [[ "${output}" == 'registry.example:5000/acr-api-run@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ]] || fail 'cleanup did not reconcile and remove the post-baseline registry alias'
+  rm -rf "${state_root}"
+}
+
+test_publish_refuses_preexisting_registry_target_before_registration_DISABLED() {
+  local state_root fake_bin target
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  target='registry.example:5000/acr-api-run@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) printf '%s\n' "${FAKE_TARGET}" ;;
+  *" ctr -n k8s.io images tag "*|*" ctr -n k8s.io images push "*|*" ctr -n k8s.io images rm "*) touch "${FAKE_OPERATIONS}" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/docker"
+  if PATH="${fake_bin}:${PATH}" FAKE_TARGET="${target}" FAKE_OPERATIONS="${state_root}/operations" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    shift
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    ACR_E2E_REGISTRY_ENDPOINT=registry.example:5000
+    kind_image_refs_before="${FAKE_TARGET}"
+    register_imported_image_ref() { touch "${FAKE_OPERATIONS}"; }
+    publish_image_to_fixture_registry "acr-e2e.local/acr-api-run@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  ' -- "${HARNESS}"; then
+    rm -rf "${state_root}"
+    fail 'publish accepted a pre-existing registry target'
+  fi
+  [[ ! -e "${state_root}/operations" ]] || fail 'publish registered or mutated a pre-existing registry target'
+  rm -rf "${state_root}"
+}
+
+test_prepare_run_rejects_alias_before_arming_cleanup() {
+  local state_root fake_bin
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/kind" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' fake
+EOF
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) printf '%s\n' 'acr-e2e.local/acr-api-run:preexisting-alias' ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/kind" "${fake_bin}/docker"
+  if PATH="${fake_bin}:${PATH}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    state_root="$2"
+    shift 2
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    require_tools() { :; }
+    establish_source_guard() { :; }
+    load_fixture_exports() { :; }
+    assert_fixture_ready() { :; }
+    kube() { printf "%s\n" "$*" >>"${state_root}/kube"; return 1; }
+    on_exit() { : >"${state_root}/cleanup-armed"; }
+    prepare_run
+  ' -- "${HARNESS}" "${state_root}"; then
+    rm -rf "${state_root}"
+    fail 'prepare_run accepted a pre-existing same-run Kind alias'
+  fi
+  [[ ! -e "${state_root}/cleanup-armed" ]] || fail 'cleanup trap armed before ownership preflight'
+  [[ "$(cat "${state_root}/kube")" == 'get namespace acr-run' ]] || fail 'prepare_run created resources before rejecting alias ownership'
+  rm -rf "${state_root}"
+}
+
+test_prepare_run_rejects_registry_target_before_arming_cleanup() {
+  local state_root fake_bin target unrelated
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  target='registry.example:5000/acr-api-run@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  unrelated='unrelated.example/keep@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+  printf '%s\n%s\n' "${target}" "${unrelated}" >"${state_root}/refs"
+  cat >"${fake_bin}/kind" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' fake
+EOF
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) cat "${FAKE_REFS}" ;;
+  *" ctr -n k8s.io images import "*|*" ctr -n k8s.io images tag "*|*" ctr -n k8s.io images rm "*) touch "${FAKE_OPERATIONS}" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/kind" "${fake_bin}/docker"
+  if PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" FAKE_OPERATIONS="${state_root}/operations" FAKE_TARGET="${target}" ACR_E2E_STATE_ROOT="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    state_root="$2"
+    shift 2
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    scenario=missing-image-pull-secret
+    ACR_E2E_REGISTRY_ENDPOINT=registry.example:5000
+    require_tools() { :; }
+    establish_source_guard() { :; }
+    load_fixture_exports() { :; }
+    assert_fixture_ready() { :; }
+    prepare_registry_image_aliases() { prepared_registry_target="${FAKE_TARGET}"; }
+    kube() { printf "%s\n" "$*" >>"${state_root}/kube"; return 1; }
+    on_exit() { : >"${state_root}/cleanup-armed"; }
+    prepare_run
+  ' -- "${HARNESS}" "${state_root}"; then
+    rm -rf "${state_root}"
+    fail 'prepare_run accepted a pre-existing registry target'
+  fi
+  [[ ! -e "${state_root}/cleanup-armed" ]] || fail 'cleanup trap armed before registry ownership preflight'
+  [[ ! -e "${state_root}/operations" ]] || fail 'registry collision attempted import, tag, or removal'
+  [[ "$(cat "${state_root}/refs")" == "${target}"$'\n'"${unrelated}" ]] || fail 'registry collision changed pre-existing references'
+  rm -rf "${state_root}"
+}
+
+test_preflight_allows_absent_registry_target() {
+  local state_root fake_bin target unrelated
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  target='registry.example:5000/acr-api-run@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  unrelated='unrelated.example/keep@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+  printf '%s\n' "${unrelated}" >"${state_root}/refs"
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) cat "${FAKE_REFS}" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/docker"
+  if ! PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    target="$2"
+    shift 2
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    preflight_cleanup_ownership "${target}"
+  ' -- "${HARNESS}" "${target}"; then
+    rm -rf "${state_root}"
+    fail 'preflight rejected an absent registry target'
+  fi
+  [[ "$(cat "${state_root}/refs")" == "${unrelated}" ]] || {
+    rm -rf "${state_root}"
+    fail 'preflight changed an unrelated Kind image reference'
+  }
+  rm -rf "${state_root}"
+}
+
+test_prepare_run_rejects_grep_error_before_arming_cleanup() {
+  local state_root fake_bin
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  printf '%s\n' 'unrelated.example/keep@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' >"${state_root}/refs"
+  cat >"${fake_bin}/kind" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' fake
+EOF
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) cat "${FAKE_REFS}" ;;
+  *" ctr -n k8s.io images import "*|*" ctr -n k8s.io images tag "*|*" ctr -n k8s.io images rm "*)
+    printf '%s\n' "$*" >>"${FAKE_OPERATIONS}"
+    exit 99
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+  cat >"${fake_bin}/grep" <<'EOF'
+#!/usr/bin/env bash
+input="$(cat)"
+if [[ "${input}" == fake ]]; then
+  if [[ "${ACR_E2E_TEST_INJECT_IMAGE_MUTATION:-0}" == 1 ]]; then
+    docker exec fake ctr -n k8s.io images import /tmp/injected-mutation
+  fi
+  exit 0
+fi
+exit 2
+EOF
+  chmod +x "${fake_bin}/kind" "${fake_bin}/docker" "${fake_bin}/grep"
+  if PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" FAKE_OPERATIONS="${state_root}/operations" ACR_E2E_STATE_ROOT="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    state_root="$2"
+    shift 2
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    scenario=missing-image-pull-secret
+    ACR_E2E_REGISTRY_ENDPOINT=registry.example:5000
+    target="registry.example:5000/acr-api-run@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    require_tools() { :; }
+    establish_source_guard() { :; }
+    load_fixture_exports() { :; }
+    assert_fixture_ready() { :; }
+    prepare_registry_image_aliases() { prepared_registry_target="${target}"; }
+    kube() { printf "%s\n" "$*" >>"${state_root}/kube"; return 1; }
+    on_exit() { : >"${state_root}/cleanup-armed"; }
+    prepare_run
+  ' -- "${HARNESS}" "${state_root}"; then
+    rm -rf "${state_root}"
+    fail 'prepare_run accepted a grep tool failure'
+  fi
+  [[ ! -e "${state_root}/cleanup-armed" ]] || fail 'cleanup trap armed after grep tool failure'
+  [[ ! -s "${state_root}/operations" ]] || fail 'grep tool failure caused an image mutation'
+  [[ "$(cat "${state_root}/refs")" == 'unrelated.example/keep@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' ]] || fail 'grep tool failure changed pre-existing references'
+  rm -rf "${state_root}"
+}
+
+test_prepare_run_rejects_docker_list_error_before_arming_cleanup() {
+  local state_root fake_bin target unrelated
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  target='registry.example:5000/acr-api-run@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  unrelated='unrelated.example/keep@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+  printf '%s\n%s\n' "${target}" "${unrelated}" >"${state_root}/refs"
+  cp "${state_root}/refs" "${state_root}/refs.baseline"
+  cat >"${fake_bin}/kind" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' fake
+EOF
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) exit 2 ;;
+  *" ctr -n k8s.io images import "*|*" ctr -n k8s.io images tag "*|*" ctr -n k8s.io images rm "*)
+    touch "${FAKE_OPERATIONS}"
+    exit 99
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/kind" "${fake_bin}/docker"
+  if PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" FAKE_OPERATIONS="${state_root}/operations" ACR_E2E_STATE_ROOT="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    state_root="$2"
+    shift 2
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    scenario=missing-image-pull-secret
+    require_tools() { :; }
+    establish_source_guard() { :; }
+    load_fixture_exports() { :; }
+    assert_fixture_ready() { :; }
+    prepare_registry_image_aliases() { :; }
+    kube() { printf "%s\n" "$*" >>"${state_root}/kube"; return 1; }
+    on_exit() { : >"${state_root}/cleanup-armed"; }
+    prepare_run
+  ' -- "${HARNESS}" "${state_root}"; then
+    rm -rf "${state_root}"
+    fail 'prepare_run accepted a Docker image-list failure'
+  fi
+  [[ ! -e "${state_root}/cleanup-armed" ]] || fail 'cleanup trap armed after Docker image-list failure'
+  [[ ! -e "${state_root}/operations" ]] || fail 'Docker image-list failure caused an image mutation'
+  cmp -s "${state_root}/refs.baseline" "${state_root}/refs" || fail 'Docker image-list failure changed pre-existing references'
+  rm -rf "${state_root}"
+}
+
+test_partial_operations_reconcile_created_aliases() {
+  local state_root fake_bin fake_root phase
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  fake_root="${state_root}/root"
+  mkdir -p "${fake_bin}" "${fake_root}/scripts/container"
+  : >"${state_root}/refs"
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+digest='sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+refs="${FAKE_REFS}"
+case " $* " in
+  *" version --format "*) printf 'amd64\n' ;;
+  *" ctr -n k8s.io images list -q "*)
+    if [[ -e "${FAKE_STATE}/fail-next-list" ]]; then
+      rm -f "${FAKE_STATE}/fail-next-list"
+      exit 1
+    fi
+    cat "${refs}"
+    ;;
+  *" ctr -n k8s.io images import "*)
+    printf 'import\n' >>"${FAKE_STATE}/operations"
+    printf '%s\n%s\n' "acr-e2e.local/acr-api-run@${digest}" "acr-e2e.local/acr-api-run@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" >>"${refs}"
+    [[ "${FAIL_PHASE}" != import ]] || : >"${FAKE_STATE}/fail-next-list"
+    [[ "${FAIL_PHASE}" != import ]] || exit 1
+    ;;
+  *" ctr -n k8s.io images tag "*)
+    printf 'tag\n' >>"${FAKE_STATE}/operations"
+    printf '%s\n' 'acr-e2e.local/acr-api-run:v1' >>"${refs}"
+    [[ "${FAIL_PHASE}" != tag ]] || : >"${FAKE_STATE}/fail-next-list"
+    [[ "${FAIL_PHASE}" != tag ]] || exit 1
+    ;;
+  *" ctr -n k8s.io images rm "*)
+    ref="${*: -1}"
+    grep -Fxv "${ref}" "${refs}" >"${refs}.next" || true
+    mv "${refs}.next" "${refs}"
+    ;;
+  *" mkdir -p /var/lib/acr-e2e "*|*" rm -f /var/lib/acr-e2e/"*) : ;;
+  *) : ;;
+esac
+EOF
+  cat >"${fake_root}/scripts/container/build.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "${fake_bin}/docker" "${fake_root}/scripts/container/build.sh"
+  for phase in import tag; do
+    : >"${state_root}/refs"
+    : >"${state_root}/operations"
+    if PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" FAKE_STATE="${state_root}" FAIL_PHASE="${phase}" ACR_E2E_LIB_ONLY=1 bash -c '
+      harness="$1"
+      root="$2"
+      shift 2
+      source "${harness}"
+      REPO_ROOT="${root}"
+      cluster=fake
+      run_id=run
+      run_dir="${TMPDIR:-/tmp}"
+      assert_source_guard() { :; }
+      image_digest_from_oci() { printf "%s\n" "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"; }
+      trap cleanup_kind_images EXIT
+      build_local_image v1
+    ' -- "${HARNESS}" "${fake_root}"; then
+      rm -rf "${state_root}"
+      fail "partial ${phase} unexpectedly succeeded"
+    fi
+    [[ ! -s "${state_root}/refs" ]] || {
+      rm -rf "${state_root}"
+      fail "partial ${phase} left a tracked Kind alias after cleanup"
+    }
+    grep -Fxq "${phase}" "${state_root}/operations" || {
+      rm -rf "${state_root}"
+      fail "partial ${phase} did not reach the corresponding ctr operation"
+    }
+  done
+  rm -rf "${state_root}"
+}
+
+test_cleanup_fails_when_owned_ref_remains() {
+  local state_root fake_bin
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) printf '%s\n' 'acr-e2e.local/acr-api-run@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' ;;
+  *" ctr -n k8s.io images rm "*) exit 1 ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/docker"
+  if PATH="${fake_bin}:${PATH}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    shift
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    imported_image_refs=("acr-e2e.local/acr-api-run@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    cleanup_kind_images
+  ' -- "${HARNESS}"; then
+    rm -rf "${state_root}"
+    fail 'cleanup succeeded although a tracked ref remained after bounded retries'
+  fi
+  rm -rf "${state_root}"
+}
+
+test_import_tracking_records_every_new_alias
+test_cleanup_retries_and_preserves_unrelated_refs
+test_cleanup_preserves_untracked_same_run_alias
+test_cleanup_recovers_from_transient_list_failure
+test_cleanup_fails_after_exhausted_list_retries
+test_cleanup_reconciles_created_registry_delta_after_transient_list_failure
+test_prepare_run_rejects_alias_before_arming_cleanup
+test_prepare_run_rejects_registry_target_before_arming_cleanup
+test_preflight_allows_absent_registry_target
+test_prepare_run_rejects_grep_error_before_arming_cleanup
+test_prepare_run_rejects_docker_list_error_before_arming_cleanup
+test_partial_operations_reconcile_created_aliases
+test_cleanup_fails_when_owned_ref_remains
+printf 'RESULT: Kind Helm harness contract tests passed\n'

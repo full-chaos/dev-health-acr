@@ -11,9 +11,9 @@
 #     --image "$TEST_IMAGE_DIGEST"
 #
 # Negative scenarios (each must fail closed pre-apply, exit 1, naming the
-# violation):
+# violation): use any scenario listed by --help.
 #   bash scripts/deploy/test-helm.sh --values <v> --image <img> \
-#     --scenario mutable-image|invalid-secret-ref|invalid-image-pull-secret-ref|shared-runtime-migration-dsn|injected-mcp
+#     --scenario <name>
 #
 # Exit codes:
 #   0  requested scenario passed (happy rendered + all gates; or negative failed as required)
@@ -36,7 +36,10 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
   --chart     Chart directory (default: deploy/helm/acr).
   --scenario  happy (default) or one of the negative scenarios:
               mutable-image, invalid-secret-ref, invalid-image-pull-secret-ref,
-              shared-runtime-migration-dsn, injected-mcp.
+              shared-runtime-migration-dsn, injected-mcp, entitlement-path,
+              pgbouncer-missing-pooler, extra-container, direct-with-pooler,
+              http-url, userinfo-url, query-url, fragment-url, unknown-root-key,
+              unknown-config-key, alternate-port, mutable-token-copy-image.
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -83,6 +86,15 @@ trap 'rm -rf "$workdir"' EXIT
 
 pass() { printf '  ok   %s\n' "$1"; }
 fail_gate() { printf '  FAIL %s\n' "$1" >&2; exit 1; }
+
+container_block() {
+  local name="$1"
+  awk -v name="$name" '
+    $0 == "        - name: " name { inside = 1 }
+    inside && $0 ~ /^        - name: / && $0 != "        - name: " name { exit }
+    inside { print }
+  ' "$rendered"
+}
 
 render() {
   # Render with the base happy inputs plus any scenario overrides ($@).
@@ -184,6 +196,10 @@ case "$scenario" in
     negative alternate-port "addr" \
       --set-string "config.addr=:9090"
     exit 0 ;;
+  mutable-token-copy-image)
+    negative mutable-token-copy-image "mutable-image: security.tokenCopyImage" \
+      --set-string "security.tokenCopyImage=registry.internal/dev-health-acr/token-copy:latest"
+    exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;
 esac
@@ -220,7 +236,7 @@ rendered="$workdir/rendered.yaml"
 if [[ -n "$KUBECONFORM" ]]; then
   "$KUBECONFORM" -strict -ignore-missing-schemas -summary "$rendered" >"$workdir/kubeconform.txt" 2>&1 \
     || { cat "$workdir/kubeconform.txt" >&2; fail_gate "kubeconform: schema validation failed"; }
-  pass "kubeconform: schema validation passed ($("$KUBECONFORM" -version 2>/dev/null | head -1))"
+  pass "kubeconform: schema validation passed ($("$KUBECONFORM" -v 2>/dev/null | head -1))"
 else
   printf '  SKIP kubeconform not installed (install github.com/yannh/kubeconform to enable this gate)\n' >&2
 fi
@@ -254,12 +270,63 @@ if grep -qiE '^\s*stringData:\s*$' "$rendered"; then
 fi
 pass "secret-ref: credentials and imagePullSecrets are existing-Secret references only"
 
-# Gate 8: pod-security (restricted) posture.
-for token in 'runAsNonRoot: true' 'readOnlyRootFilesystem: true' 'allowPrivilegeEscalation: false' 'type: RuntimeDefault'; do
-  grep -qF "$token" "$rendered" || fail_gate "pod-security: expected '$token' not found"
-done
-grep -q 'drop:' "$rendered" && grep -q '\- ALL' "$rendered" || fail_gate "pod-security: capabilities are not dropped (drop: [ALL])"
-pass "pod-security: restricted context (nonroot, RO rootfs, no-privesc, drop ALL, seccomp)"
+# Gate 8: the projected Secret filename, rather than its source key, is copied by the init container.
+distinct_token_render="$workdir/distinct-token.yaml"
+render \
+  --set-string 'credentials.entitlementToken.key=source-token' \
+  --set-string 'config.entitlement.tokenFileName=runtime-token' \
+  >"$distinct_token_render"
+grep -qF 'cp /source/runtime-token /target/runtime-token' "$distinct_token_render" \
+  || fail_gate "entitlement-token: init container must copy the projected token filename"
+pass "entitlement-token: init container copies the projected Secret filename"
+
+token_copy_image="registry.example/token-copy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+token_copy_render="$(render --set-string "security.tokenCopyImage=${token_copy_image}")"
+token_copy_block="$(awk '/        - name: prepare-entitlement-token/{inside=1} inside{print} inside && /^      containers:/{exit}' <<<"${token_copy_render}")"
+grep -Fq "image: \"${token_copy_image}\"" <<<"${token_copy_block}" \
+  || fail_gate "token-copy-image: prepare-entitlement-token does not use security.tokenCopyImage"
+pass "token-copy-image: prepare-entitlement-token uses the configured immutable image"
+
+assert_restricted_container() {
+  local name="$1" block
+  block="$(container_block "$name")"
+  [[ -n "$block" ]] || fail_gate "restricted-container: $name is missing"
+  for token in 'runAsNonRoot: true' 'runAsUser: 65532' 'readOnlyRootFilesystem: true' 'allowPrivilegeEscalation: false' 'privileged: false' 'type: RuntimeDefault'; do
+    grep -qF "$token" <<<"$block" || fail_gate "restricted-container: $name must render '$token'"
+  done
+  if ! grep -qF 'drop:' <<<"$block" || ! grep -qF -- '- ALL' <<<"$block"; then
+    fail_gate "restricted-container: $name must drop all capabilities"
+  fi
+  if grep -qE 'runAsUser: 0|runAsNonRoot: false|CHOWN' <<<"$block"; then
+    fail_gate "restricted-container: $name must not request root or CHOWN"
+  fi
+}
+
+assert_restricted_container prepare-entitlement-token
+assert_restricted_container acr-api
+assert_restricted_container acr-migrate
+pass "pod-security: every rendered API, migration, and present init container is Restricted-compatible"
+
+# Gate 9: exact native-TLS dependency ports and Gateway-only API ingress.
+python3 - "$rendered" <<'PY' || exit 1
+import sys
+docs = open(sys.argv[1]).read().split('\n---\n')
+policies = [d for d in docs if '\nkind: NetworkPolicy' in ('\n'+d)]
+api = next((d for d in policies if 'component: api' in d), '')
+migrate = next((d for d in policies if 'component: migration' in d), '')
+def fail(msg):
+    print('  FAIL network-policy: '+msg, file=sys.stderr); sys.exit(1)
+if not api or not migrate: fail('API and migration NetworkPolicies must both render')
+for port in ('port: 5432', 'port: 9440', 'port: 443'):
+    if port not in api: fail('API egress is missing TLS-native '+port)
+if 'port: 8443' in api or 'port: 8123' in api: fail('API egress contains a legacy plaintext/non-default ClickHouse port')
+if 'protocol: TCP' not in api: fail('API egress must explicitly use TCP')
+if 'port: 8080' not in api or 'namespaceSelector:' not in api: fail('API ingress must be constrained to the configured Gateway namespace selector')
+if 'port: 5432' not in migrate or 'protocol: TCP' not in migrate: fail('migration policy must allow TCP PostgreSQL only')
+for port in ('port: 9440', 'port: 443', 'port: 8080'):
+    if port in migrate: fail('migration policy must not allow non-PostgreSQL dependency '+port)
+print('  ok   network-policy: API permits TCP TLS-native Postgres/ClickHouse/Ops ports and Gateway ingress; migration permits only DNS + TCP Postgres')
+PY
 
 # Gate 9: migration ordering via pre-install/pre-upgrade hook.
 python3 - "$rendered" <<'PY' || exit 1
@@ -324,7 +391,9 @@ PY
 for key in 'ACR_EVIDENCE_ID_ACTIVE_KID' 'ACR_EVIDENCE_ID_KEYS'; do
   grep -q "$key" "$rendered" || fail_gate "evidence-keys: $key not wired into the Deployment"
 done
-grep -q 'ACR_EVIDENCE_ID_KEYS' "$rendered" && grep -A3 'ACR_EVIDENCE_ID_KEYS' "$rendered" | grep -q 'secretKeyRef:' || fail_gate "evidence-keys: ACR_EVIDENCE_ID_KEYS must come from a secretKeyRef"
+if ! { grep -q 'ACR_EVIDENCE_ID_KEYS' "$rendered" && grep -A3 'ACR_EVIDENCE_ID_KEYS' "$rendered" | grep -q 'secretKeyRef:'; }; then
+  fail_gate "evidence-keys: ACR_EVIDENCE_ID_KEYS must come from a secretKeyRef"
+fi
 pass "evidence-keys: ACR_EVIDENCE_ID_ACTIVE_KID + ACR_EVIDENCE_ID_KEYS sourced from existing Secret"
 
 # Gate 13: entitlement URL is an origin (no path).
@@ -361,6 +430,11 @@ pgb=$(render --set-string config.postgresConnectionKind=pgbouncer \
 grep -q 'ACR_POSTGRES_POOLER_ADMIN_DSN' <<<"$pgb" || fail_gate "pgbouncer: runtime ACR_POSTGRES_POOLER_ADMIN_DSN not wired in pgbouncer mode"
 grep -q 'ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN' <<<"$pgb" || fail_gate "pgbouncer: migration ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN not wired in pgbouncer mode"
 pass "pgbouncer: connection kind pgbouncer wires runtime + migration pooler admin DSNs"
+
+pg_ca_mounts=$(grep -c '/var/run/acr/postgres-ca' "$rendered")
+[[ "$pg_ca_mounts" -ge 2 ]] || fail_gate "postgres-tls: Deployment and migration Job must mount the PostgreSQL CA bundle (found $pg_ca_mounts)"
+grep -Eq 'secretName: "?acr-postgres-ca"?' "$rendered" || fail_gate "postgres-tls: existing PostgreSQL CA Secret reference missing"
+pass "postgres-tls: Deployment and migration Job mount the existing CA bundle for verified DSNs"
 
 custom_projection="$(render \
   --set-string credentials.entitlementToken.key=entitlement.custom \

@@ -63,7 +63,7 @@ validate_name() {
 }
 
 state_dir() { echo "${STATE_ROOT}/$1"; }
-kube() { kubectl --context "kind-$1" "${@:2}"; }
+kube() { kubectl --context "kind-$1" --request-timeout=10s "${@:2}"; }
 
 # Per-fixture Docker object names, deterministically derived from the validated
 # cluster name so every fixture owns a uniquely named network + registry and
@@ -495,6 +495,7 @@ cmd_create() {
   command -v kind >/dev/null 2>&1 || die "kind not installed"
   command -v kubectl >/dev/null 2>&1 || die "kubectl not installed"
   command -v openssl >/dev/null 2>&1 || die "openssl not installed"
+  command -v htpasswd >/dev/null 2>&1 || die "htpasswd not installed"
   require_kind_version
 
   # Unique-resource guard: refuse to reuse an existing cluster, network, OR
@@ -607,15 +608,22 @@ preload_images() {
 # BEFORE the cluster, so the Kind node can be attached to that same network and
 # reach the registry by name. Nothing is host-published; isolation is by network.
 provision_registry_network() {
-  local name="$1" net reg
+  local name="$1" net reg auth_dir
   net="$(net_name "${name}")"; reg="$(reg_name "${name}")"
   log "provisioning fixture network ${net} and registry ${reg}"
   FIXTURE_NETWORK_ID="$(docker network create --label "${FIXTURE_LABEL_KEY}=${FIXTURE_ID}" "${net}")" || die "failed to create network ${net}"
   [[ "${FIXTURE_NETWORK_ID}" =~ ^[a-f0-9]{64}$ ]] || die "failed to record network ownership identity"
   write_fixture_identity "${name}"
-  # Registry attached ONLY to this fixture's network; no -p host publish.
+  auth_dir="$(state_dir "${name}")/registry-auth"
+  install -d -m 700 "${auth_dir}" || die "failed to create fixture registry auth directory"
+  umask 077
+  htpasswd -Bbn fixture fixture >"${auth_dir}/htpasswd" || die "failed to create fixture registry credentials"
+  # Registry attached ONLY to this fixture's network; no -p host publish. It
+  # requires the fixture pull secret so imagePullSecret tests exercise auth.
   FIXTURE_REGISTRY_ID="$(docker run -d --restart=no --name "${reg}" --network "${net}" --label "${FIXTURE_LABEL_KEY}=${FIXTURE_ID}" \
-    -e REGISTRY_HTTP_ADDR=0.0.0.0:5000 "${ACR_E2E_IMG_REGISTRY}")" \
+    -e REGISTRY_HTTP_ADDR=0.0.0.0:5000 -e REGISTRY_AUTH=htpasswd \
+    -e REGISTRY_AUTH_HTPASSWD_REALM=fixture -e REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd \
+    -v "${auth_dir}:/auth:ro" "${ACR_E2E_IMG_REGISTRY}")" \
     || die "failed to start registry ${reg}"
   [[ "${FIXTURE_REGISTRY_ID}" =~ ^[a-f0-9]{64}$ ]] || die "failed to record registry ownership identity"
   write_fixture_identity "${name}"
@@ -874,6 +882,9 @@ data:
         <readonly_profile>
           <readonly>2</readonly>
         </readonly_profile>
+        <bootstrap_profile>
+          <readonly>0</readonly>
+        </bootstrap_profile>
       </profiles>
       <users>
         <default>
@@ -882,6 +893,12 @@ data:
           <networks><ip>::/0</ip></networks>
           <quota>default</quota>
         </default>
+        <readonly>
+          <password></password>
+          <profile>readonly_profile</profile>
+          <networks><ip>::/0</ip></networks>
+          <quota>default</quota>
+        </readonly>
         <fixture_admin>
           <password></password>
           <profile>default</profile>
@@ -889,6 +906,16 @@ data:
           <quota>default</quota>
         </fixture_admin>
       </users>
+    </clickhouse>
+  tls.xml: |
+    <clickhouse>
+      <tcp_port_secure>9440</tcp_port_secure>
+      <openSSL>
+        <server>
+          <certificateFile>/tls/tls.crt</certificateFile>
+          <privateKeyFile>/tls/tls.key</privateKeyFile>
+        </server>
+      </openSSL>
     </clickhouse>
 ---
 apiVersion: v1
@@ -948,7 +975,7 @@ metadata:
   labels: { app: clickhouse }
 spec:
   selector: { app: clickhouse }
-  ports: [{ name: http, port: 8123, targetPort: 8123 }, { name: native, port: 9000, targetPort: 9000 }, { name: secure-native, port: 8443, targetPort: 9440 }]
+  ports: [{ name: http, port: 8123, targetPort: 8123 }, { name: native, port: 9000, targetPort: 9000 }, { name: native-tls, port: 9440, targetPort: 9440 }]
 EOF
 }
 
@@ -957,6 +984,9 @@ bootstrap_clickhouse_catalog() {
   kube "${name}" -n "${NS_DEPS}" exec deploy/clickhouse -- \
     clickhouse-client --host 127.0.0.1 --user fixture_admin --query \
     'CREATE TABLE IF NOT EXISTS repos (id UUID, org_id String, repo String, ref Nullable(String)) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo)'
+  kube "${name}" -n "${NS_DEPS}" exec deploy/clickhouse -- \
+    clickhouse-client --host 127.0.0.1 --user fixture_admin --query \
+    "INSERT INTO repos SELECT toUUID('00000000-0000-0000-0000-000000000019'), 'acr-readiness-probe', 'acr/readiness-probe', NULL WHERE NOT EXISTS (SELECT 1 FROM repos WHERE id = toUUID('00000000-0000-0000-0000-000000000019'))"
 }
 
 deploy_ops_entitlement() {
@@ -976,7 +1006,11 @@ data:
       location = /entitlement {
         if (\$http_authorization != "Bearer ${token}") { return 401; }
         default_type application/json;
-        return 200 '{"entitlement":"agent_context_runtime","status":"active","fixture":"acr-e2e"}';
+        return 200 '{"schema_version":"acr_service_health.v1","service":"dev-health-ops","status":"ok"}';
+      }
+      location ~ ^/api/v1/internal/acr/entitlements/([A-Za-z0-9._-]+)$ {
+        default_type application/json;
+        return 200 '{"schema_version":"acr_entitlement.v1","org_id":"$1","agent_context_runtime":true}';
       }
       location = /healthz { return 200 'ok'; }
       location = /api/v1/internal/acr/health {
@@ -1069,7 +1103,7 @@ spec:
   hostnames: ["acr.local"]
   rules:
     - matches:
-        - path: { type: PathPrefix, value: /entitlement }
+        - path: { type: PathPrefix, value: /api/v1/internal/acr }
       backendRefs:
         - name: ops-entitlement
           port: 8443
@@ -1123,6 +1157,7 @@ spec:
         - podSelector: { matchLabels: { acr-e2e/access: allowed } }
         - namespaceSelector: { matchLabels: { acr-e2e/access: allowed } }
           podSelector: { matchLabels: { acr-e2e/access: allowed } }
+        - namespaceSelector: { matchLabels: { acr-e2e.fullchaos.dev/consumer-fixture-id: ${FIXTURE_ID} } }
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ${NS_GW} } }
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: envoy-gateway-system } }
 EOF
@@ -1162,6 +1197,7 @@ ACR_E2E_POSTGRES_PORT="5432"
 ACR_E2E_POSTGRES_DB="acr"
 ACR_E2E_CLICKHOUSE_HOST="clickhouse.${NS_DEPS}.svc.cluster.local"
 ACR_E2E_CLICKHOUSE_HTTP_PORT="8123"
+ACR_E2E_CLICKHOUSE_NATIVE_PORT="9440"
 ACR_E2E_OPS_ENTITLEMENT_HOST="ops-entitlement.${NS_DEPS}.svc.cluster.local"
 ACR_E2E_OPS_ENTITLEMENT_PORT="8443"
 ACR_E2E_CA_CERT="${cdir}/ca.crt"
@@ -1220,7 +1256,7 @@ verify_clean_git_provenance() {
   [[ -z "${status}" ]] || die "verification refuses untracked working tree attribution"
 
   VERIFY_COMMIT_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
-  VERIFY_HEAD_TREE_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD^{tree})"
+  VERIFY_HEAD_TREE_SHA="$(git -C "${REPO_ROOT}" rev-parse "HEAD^{tree}")"
   VERIFY_INDEX_TREE_SHA="$(git -C "${REPO_ROOT}" write-tree)"
   [[ "${VERIFY_COMMIT_SHA}" =~ ^[a-f0-9]{40}$ && "${VERIFY_HEAD_TREE_SHA}" =~ ^[a-f0-9]{40}$ && "${VERIFY_INDEX_TREE_SHA}" == "${VERIFY_HEAD_TREE_SHA}" ]] || die "verification cannot establish exact clean Git provenance"
   VERIFY_GIT_PROVENANCE_CAPTURED_AT_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -1251,7 +1287,7 @@ cmd_verify() {
 
   # 3. Default CNI disabled + Calico running from explicit digest references.
   check "default CNI disabled (no kindnet daemonset)" \
-    bash -c "! kubectl --context kind-${name} -n kube-system get ds kindnet >/dev/null 2>&1"
+    bash -c "! kubectl --context kind-${name} --request-timeout=10s -n kube-system get ds kindnet >/dev/null 2>&1"
   verify_pod_image "${name}" kube-system "k8s-app=calico-node" initContainers upgrade-ipam "${ACR_E2E_IMG_CALICO_CNI}"
   verify_pod_image "${name}" kube-system "k8s-app=calico-node" initContainers install-cni "${ACR_E2E_IMG_CALICO_CNI}"
   verify_pod_image "${name}" kube-system "k8s-app=calico-node" initContainers ebpf-bootstrap "${ACR_E2E_IMG_CALICO_NODE}"
@@ -1262,7 +1298,7 @@ cmd_verify() {
   check "Gateway API CRD gateways established" \
     kube "${name}" get crd gateways.gateway.networking.k8s.io
   check "Gateway API bundle version ${ACR_E2E_GATEWAY_API_VERSION}" \
-    bash -c "kubectl --context kind-${name} get crd gateways.gateway.networking.k8s.io -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}' | grep -qx ${ACR_E2E_GATEWAY_API_VERSION}"
+    bash -c "kubectl --context kind-${name} --request-timeout=10s get crd gateways.gateway.networking.k8s.io -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}' | grep -qx ${ACR_E2E_GATEWAY_API_VERSION}"
 
   # 5. Envoy Gateway control plane + data-plane are digest-configured and running.
   verify_pod_image "${name}" envoy-gateway-system "control-plane=envoy-gateway" containers envoy-gateway "${ACR_E2E_IMG_ENVOY_GATEWAY}"
@@ -1283,7 +1319,7 @@ cmd_verify() {
 
   # 7. TLS chains: every leaf verifies against the fixture CA.
   verify_tls_chain "${name}" postgres 5432 postgres
-  verify_tls_chain "${name}" clickhouse 8443
+  verify_tls_chain "${name}" clickhouse 9440
   verify_tls_chain "${name}" ops-entitlement 8443
 
   # 8. Read-only ClickHouse: SELECT ok, INSERT denied.
@@ -1291,15 +1327,15 @@ cmd_verify() {
 
   # 9. Programmed Gateway + resolved backend TLS + real north-south request.
   check "Gateway Programmed=True" \
-    bash -c "kubectl --context kind-${name} -n ${NS_GW} get gateway acr-gateway -o jsonpath='{.status.conditions[?(@.type==\"Programmed\")].status}' | grep -qx True"
+    bash -c "kubectl --context kind-${name} --request-timeout=10s -n ${NS_GW} get gateway acr-gateway -o jsonpath='{.status.conditions[?(@.type==\"Programmed\")].status}' | grep -qx True"
   check "HTTPRoute Accepted=True" \
-    bash -c "kubectl --context kind-${name} -n ${NS_DEPS} get httproute ops-entitlement -o jsonpath='{.status.parents[0].conditions[?(@.type==\"Accepted\")].status}' | grep -qx True"
+    bash -c "kubectl --context kind-${name} --request-timeout=10s -n ${NS_DEPS} get httproute ops-entitlement -o jsonpath='{.status.parents[0].conditions[?(@.type==\"Accepted\")].status}' | grep -qx True"
   check "HTTPRoute ResolvedRefs=True" \
-    bash -c "kubectl --context kind-${name} -n ${NS_DEPS} get httproute ops-entitlement -o jsonpath='{.status.parents[0].conditions[?(@.type==\"ResolvedRefs\")].status}' | grep -qx True"
+    bash -c "kubectl --context kind-${name} --request-timeout=10s -n ${NS_DEPS} get httproute ops-entitlement -o jsonpath='{.status.parents[0].conditions[?(@.type==\"ResolvedRefs\")].status}' | grep -qx True"
   check "BackendTLSPolicy Accepted=True" \
-    bash -c "kubectl --context kind-${name} -n ${NS_DEPS} get backendtlspolicy ops-entitlement -o jsonpath='{.status.ancestors[0].conditions[?(@.type==\"Accepted\")].status}' | grep -qx True"
+    bash -c "kubectl --context kind-${name} --request-timeout=10s -n ${NS_DEPS} get backendtlspolicy ops-entitlement -o jsonpath='{.status.ancestors[0].conditions[?(@.type==\"Accepted\")].status}' | grep -qx True"
   check "BackendTLSPolicy ResolvedRefs=True" \
-    bash -c "kubectl --context kind-${name} -n ${NS_DEPS} get backendtlspolicy ops-entitlement -o jsonpath='{.status.ancestors[0].conditions[?(@.type==\"ResolvedRefs\")].status}' | grep -qx True"
+    bash -c "kubectl --context kind-${name} --request-timeout=10s -n ${NS_DEPS} get backendtlspolicy ops-entitlement -o jsonpath='{.status.ancestors[0].conditions[?(@.type==\"ResolvedRefs\")].status}' | grep -qx True"
   verify_north_south_entitlement "${name}"
 
   # 10. NetworkPolicy enforcement (deny-by-default proven).
@@ -1386,7 +1422,7 @@ pf_start() { # ctx ns target rport -> sets globals PF_PID and PF_LPORT
   # visible to pf_stop; otherwise the backgrounded forward would leak.
   local ctx="$1" ns="$2" tgt="$3" rport="$4" i ready=0
   PF_LPORT=$(( (RANDOM % 20000) + 20000 ))
-  kubectl --context "${ctx}" -n "${ns}" port-forward "svc/${tgt}" "${PF_LPORT}:${rport}" >/dev/null 2>&1 &
+  kubectl --context "${ctx}" --request-timeout=10s -n "${ns}" port-forward "svc/${tgt}" "${PF_LPORT}:${rport}" >/dev/null 2>&1 &
   PF_PID=$!
   for i in $(seq 1 40); do
     # The probe fd is opened in a subshell, so nothing to close in this shell.
@@ -1500,13 +1536,14 @@ gateway_entitlement_response() {
   curl --noproxy '*' --max-time 5 --silent --show-error --cacert "${ca}" \
     -H 'Authorization: Bearer acr-e2e-ops-token-initial' \
     --resolve "acr.local:${lport}:127.0.0.1" -w '\n__HTTP_%{http_code}__' \
-    "https://acr.local:${lport}/entitlement" 2>&1 || true
+    "https://acr.local:${lport}/api/v1/internal/acr/health" 2>&1 || true
 }
 
 entitlement_response_active() {
   local body="$1"
-  grep -Fq '"entitlement":"agent_context_runtime"' <<<"${body}" \
-    && grep -Fq '"status":"active"' <<<"${body}" \
+  grep -Fq '"schema_version":"acr_service_health.v1"' <<<"${body}" \
+    && grep -Fq '"service":"dev-health-ops"' <<<"${body}" \
+    && grep -Fq '"status":"ok"' <<<"${body}" \
     && grep -Fq '__HTTP_200__' <<<"${body}"
 }
 
@@ -1527,11 +1564,17 @@ verify_tls_chain() {
 }
 
 verify_clickhouse_readonly() {
-  local name="$1" lport sel body code; local ctx="kind-${name}"
+  local name="$1" lport sel catalog body code; local ctx="kind-${name}"
   pf_start "${ctx}" "${NS_DEPS}" clickhouse 8123; lport="${PF_LPORT}"
-  sel="$(curl -s "http://127.0.0.1:${lport}/?query=SELECT%201" 2>/dev/null || true)"
+  sel="$(curl -s "http://127.0.0.1:${lport}/?user=readonly&query=SELECT%201" 2>/dev/null || true)"
   if [[ "${sel//[$'\r\n ']/}" == "1" ]]; then ok "ClickHouse SELECT works"; else fail "ClickHouse SELECT failed (got: ${sel})"; VERIFY_FAILURES=$((VERIFY_FAILURES+1)); fi
-  body="$(curl --request POST -s -w '\n__HTTP_%{http_code}__' --data-binary "CREATE TABLE t_${RANDOM}(a Int8) ENGINE=Memory" "http://127.0.0.1:${lport}/" 2>&1 || true)"
+  catalog="$(curl -s --get "http://127.0.0.1:${lport}/" --data-urlencode 'user=readonly' --data-urlencode "query=SELECT toString(id), repo, ifNull(ref, '') FROM repos FINAL WHERE org_id = 'acr-readiness-probe' AND repo = 'acr/readiness-probe' LIMIT 1" 2>/dev/null || true)"
+  if [[ "${catalog//[$'\r\n\t ']/}" == "00000000-0000-0000-0000-000000000019acr/readiness-probe" ]]; then
+    ok "ClickHouse readonly runtime catalog probe row is available"
+  else
+    fail "ClickHouse readonly runtime catalog probe row is unavailable (got: ${catalog})"; VERIFY_FAILURES=$((VERIFY_FAILURES+1))
+  fi
+  body="$(curl --request POST -s -w '\n__HTTP_%{http_code}__' --data-binary "CREATE TABLE t_${RANDOM}(a Int8) ENGINE=Memory" "http://127.0.0.1:${lport}/?user=readonly" 2>&1 || true)"
   pf_stop
   code="$(sed -n 's/.*__HTTP_\([0-9]*\)__.*/\1/p' <<<"${body}")"
   if [[ "${code}" != "200" ]] && grep -qiE "readonly|read.only|Cannot execute|ACCESS_DENIED" <<<"${body}"; then
@@ -1584,7 +1627,7 @@ verify_isolation() {
   check "node ${node} not on host-global 'kind' network" \
     bash -c "! docker network inspect kind -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null | tr ' ' '\n' | grep -qx ${node}"
   # Registry actually serves the v2 API on the fixture network.
-  out="$(docker run --rm --network "${net}" "${ACR_E2E_IMG_PROBE}" wget -qO- "http://${reg}:5000/v2/" 2>/dev/null || true)"
+  out="$(docker run --rm --network "${net}" "${ACR_E2E_IMG_PROBE}" wget -qO- --header='Authorization: Basic Zml4dHVyZTpmaXh0dXJl' "http://${reg}:5000/v2/" 2>/dev/null || true)"
   if [[ "${out}" == "{}" ]]; then ok "registry ${reg} serves /v2/ on ${net}"; else fail "registry ${reg} not serving on ${net}"; VERIFY_FAILURES=$((VERIFY_FAILURES+1)); fi
 }
 
@@ -1645,7 +1688,9 @@ validate_verification_evidence() {
   index_clean="$(awk -F= '$1 == "index_clean" { print $2 }' "${evidence}")"
   captured="$(awk -F= '$1 == "git_provenance_captured_at_utc" { print $2 }' "${evidence}")"
   [[ "${commit}" == "${VERIFY_COMMIT_SHA}" && "${head_tree}" == "${VERIFY_HEAD_TREE_SHA}" && "${index_tree}" == "${VERIFY_INDEX_TREE_SHA}" && "${tree_clean}" == true && "${index_clean}" == true && "${captured}" == "${VERIFY_GIT_PROVENANCE_CAPTURED_AT_UTC}" ]] || die "verification evidence does not match captured clean Git provenance"
-  git -C "${REPO_ROOT}" diff --quiet -- && git -C "${REPO_ROOT}" diff --cached --quiet -- || die "verification attribution became dirty"
+  if ! git -C "${REPO_ROOT}" diff --quiet -- || ! git -C "${REPO_ROOT}" diff --cached --quiet --; then
+    die "verification attribution became dirty"
+  fi
   if [[ ! "${started}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || ! "${verified}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || ! "${written}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || "${started}" > "${verified}" || "${verified}" > "${written}" ]]; then
     die "verification evidence timestamps are invalid or out of order"
   fi

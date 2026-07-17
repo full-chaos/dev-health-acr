@@ -32,6 +32,13 @@
         "properties": { "name": { "type": "string" } }
       }
     },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tokenCopyImage": { "type": "string" }
+      }
+    },
     "serviceAccount": {
       "type": "object",
       "additionalProperties": false,
@@ -75,7 +82,7 @@
             "tokenFileName": { "type": "string" }
           }
         },
-        "clickhouseCaBundle": {
+        "postgresCaBundle": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
@@ -83,7 +90,7 @@
             "key": { "type": "string" }
           }
         },
-        "postgresCaBundle": {
+        "clickhouseCaBundle": {
           "type": "object",
           "additionalProperties": false,
           "properties": {

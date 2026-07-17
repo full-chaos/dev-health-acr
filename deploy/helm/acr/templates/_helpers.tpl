@@ -95,8 +95,17 @@ Immutable image guard. Rejects an empty or mutable (non-@sha256) reference.
 {{- if not $ref -}}
 {{- fail "mutable-image: image.reference is required and must be an immutable @sha256 digest reference" -}}
 {{- end -}}
+
 {{- if not (regexMatch "@sha256:[0-9a-f]{64}$" $ref) -}}
 {{- fail (printf "mutable-image: image.reference %q must be pinned to an immutable @sha256:<digest>; mutable tags are rejected" $ref) -}}
+{{- end -}}
+{{- $ref -}}
+{{- end -}}
+
+{{- define "acr.tokenCopyImage" -}}
+{{- $ref := .Values.security.tokenCopyImage | default "" -}}
+{{- if not (regexMatch "@sha256:[0-9a-f]{64}$" $ref) -}}
+{{- fail "mutable-image: security.tokenCopyImage must be an immutable @sha256 digest reference" -}}
 {{- end -}}
 {{- $ref -}}
 {{- end -}}
