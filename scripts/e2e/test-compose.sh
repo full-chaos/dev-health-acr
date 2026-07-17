@@ -4,8 +4,9 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 script="$root/scripts/e2e/compose.sh"
 pki="$root/scripts/deploy/local-pki.sh"
+receipt_validator="$root/scripts/e2e/validate-error-receipt.sh"
 
-bash -n "$script" "$pki"
+bash -n "$script" "$pki" "$receipt_validator"
 bash -n "$root/scripts/e2e/test-acr-db-init.sh"
 for scenario in happy existing-volume missing-ops-token invalid-ca revoked-acr-token clickhouse-read-denied migration-failure; do
   grep -Fq "$scenario" "$script"
@@ -36,7 +37,7 @@ printf '%s\n' "$revoked_acr_token_case" | grep -Fq 'expect_typed_http_error 401 
 printf '%s\n' "$revoked_acr_token_case" | grep -Fq 'acr-rotated-token'
 grep -Fq "http_status=\"\$(\"\$@\" --output \"\$response_body\" --write-out '%{http_code}')\"" "$script"
 grep -Fq "if [[ \"\$http_status\" != \"\$expected_http_status\" ]]; then" "$script"
-grep -Fq "jq -e --arg code \"\$expected_code\" 'type == \"object\" and .code == \$code' \"\$response_body\"" "$script"
+grep -Fq 'validate-error-receipt.sh' "$script"
 test "$(grep -Fc 'response_body' "$script")" -eq 4
 if grep -Fq "cat \"\$response_body\"" "$script"; then exit 1; fi
 grep -Fq "expect_failure 1 'Code: 164.*readonly'" "$script"
@@ -166,11 +167,26 @@ collision_status=$?
 set -e
 test "$collision_status" -eq 1
 grep -Fq 'refusing pre-existing Compose project name' "$tmp/collision.log"
-for response in '{"code":"unrelated"}' 'not-json'; do
-  if printf '%s\n' "$response" | jq -e 'type == "object" and .code == "invalid_token"' >/dev/null 2>&1; then
+valid_receipt="$tmp/valid-receipt.json"
+cat > "$valid_receipt" <<'EOF'
+{"schema_version":"error.v1","request_id":"req_test","error":{"code":"invalid_token","message":"token is invalid","http_status":401,"retryable":false,"details":{}}}
+EOF
+"$receipt_validator" 401 invalid_token 401 "$valid_receipt"
+for response in \
+  '{"code":"invalid_token"}' \
+  '{"schema_version":"error.v1","request_id":"req_test","error":{"code":"invalid_token","message":"token is invalid","http_status":401,"retryable":false,"unexpected":true}}' \
+  '{"schema_version":"error.v1","request_id":"req_test","error":{"code":"invalid_token","message":"token is invalid","http_status":403,"retryable":false}}' \
+  '{"schema_version":"error.v1","request_id":"req_test","error":{"code":"repo_forbidden","message":"token is invalid","http_status":401,"retryable":false}}' \
+  'not-json'; do
+  response_file="$tmp/receipt.json"
+  printf '%s\n' "$response" > "$response_file"
+  if "$receipt_validator" 401 invalid_token 401 "$response_file"; then
     exit 1
   fi
 done
+if "$receipt_validator" 401 invalid_token 500 "$valid_receipt"; then
+  exit 1
+fi
 "$pki" --out "$tmp" --dns 'localhost,acr-ops-tls,127.0.0.1'
 openssl verify -CAfile "$tmp/ca.crt" "$tmp/acr.crt" >/dev/null
 openssl x509 -in "$tmp/acr.crt" -noout -ext subjectAltName | grep -q 'DNS:acr-ops-tls'

@@ -414,9 +414,7 @@ expect_typed_http_error() {
   if [[ "$http_status" != "$expected_http_status" ]]; then
     die "expected HTTP status ${expected_http_status}, got ${http_status}"
   fi
-  if ! jq -e --arg code "$expected_code" 'type == "object" and .code == $code' "$response_body" >/dev/null; then
-    die "expected HTTP ${expected_http_status} response with typed ${expected_code} error"
-  fi
+  "$REPO_ROOT/scripts/e2e/validate-error-receipt.sh" "$expected_http_status" "$expected_code" "$http_status" "$response_body" || die "expected HTTP ${expected_http_status} response with typed ${expected_code} error"
 }
 
 prepare_acr_database() {
