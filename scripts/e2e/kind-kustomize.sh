@@ -128,6 +128,8 @@ gateway:
         sectionName: https
     hostnames: [${KUSTOMIZE_E2E_GATEWAY_HOSTNAME}]
 networkPolicy:
+  egress:
+    entitlementPort: ${KUSTOMIZE_E2E_OPS_PORT}
   ingressNamespaceSelectors:
     - matchLabels:
         kubernetes.io/metadata.name: envoy-gateway-system

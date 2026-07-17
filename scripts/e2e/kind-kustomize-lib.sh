@@ -166,6 +166,15 @@ patches:
           - namespaceSelector:
               matchLabels:
                 kubernetes.io/metadata.name: envoy-gateway-system
+  - target:
+      group: networking.k8s.io
+      version: v1
+      kind: NetworkPolicy
+      name: acr-api
+    patch: |-
+      - op: replace
+        path: /spec/egress/3/ports/0/port
+        value: ${KUSTOMIZE_E2E_OPS_PORT}
 EOF
   if [[ "$deny_egress" == true ]]; then
     cat >>"${directory}/kustomization.yaml" <<'EOF'

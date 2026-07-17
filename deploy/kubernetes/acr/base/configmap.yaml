@@ -22,7 +22,7 @@ data:
   ACR_MAX_SERIALIZED_BYTES: "262144"
   ACR_REQUESTS_PER_MINUTE: "60"
   ACR_ENABLE_EPISODE_WRITEBACK: "false"
-  ACR_DEV_HEALTH_ENTITLEMENT_URL: https://ops.dev-health.internal
+  ACR_DEV_HEALTH_ENTITLEMENT_URL: https://ops.dev-health.internal:443
   ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT: 5s
   ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /var/run/acr/entitlement/token
   ACR_CLICKHOUSE_CA_BUNDLE: /var/run/acr/clickhouse-ca/ca.crt

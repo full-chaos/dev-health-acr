@@ -33,4 +33,4 @@ spec:
           port: 9440
     - ports:
         - protocol: TCP
-          port: 8443
+          port: 443

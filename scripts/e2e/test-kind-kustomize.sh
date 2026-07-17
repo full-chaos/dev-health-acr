@@ -53,7 +53,7 @@ test_hardening_seams_are_present() {
 }
 
 test_parity_keeps_dependency_port_meanings_separate() {
-  local parity_tokens api_policy literal_dollar='$'
+  local parity_tokens api_policy literal_dollar='$' fixture_policy_port helm_policy_port
   parity_tokens="$(grep 'for token in .*acr-migrate' "${HARNESS}")"
   api_policy="${ROOT}/deploy/kubernetes/acr/base/networkpolicy-api.yaml"
   [[ "${parity_tokens}" != *"port:"* ]] || fail 'port parity is coupled to untyped shared tokens'
@@ -62,7 +62,48 @@ test_parity_keeps_dependency_port_meanings_separate() {
   grep -Fq 'network_policy_tcp_ports' "${HARNESS}" || fail 'parity does not scope dependency ports to NetworkPolicy documents'
   grep -Fq "KUSTOMIZE_E2E_OPS_PORT=\"${literal_dollar}(e2e_fixture_value \"${literal_dollar}file\" ACR_E2E_OPS_ENTITLEMENT_PORT)\"" "${LIBRARY}" || fail 'Kustomize does not load the entitlement port from the fixture export'
   grep -Fq "https://${literal_dollar}{KUSTOMIZE_E2E_OPS_HOST}:${literal_dollar}{KUSTOMIZE_E2E_OPS_PORT}" "${LIBRARY}" || fail 'Kustomize entitlement URL does not use its semantic fixture port'
-  grep -Fq 'port: 8443' "${api_policy}" || fail 'API policy does not allow the fixture entitlement HTTPS port'
+  grep -Fq 'port: 443' "${api_policy}" || fail 'API policy does not allow the base entitlement HTTPS port'
+  grep -Fq 'path: /spec/egress/3/ports/0/port' "${LIBRARY}" || fail 'fixture does not patch the API entitlement policy port'
+  fixture_policy_port="value: ${literal_dollar}{KUSTOMIZE_E2E_OPS_PORT}"
+  helm_policy_port="entitlementPort: ${literal_dollar}{KUSTOMIZE_E2E_OPS_PORT}"
+  grep -Fq "${fixture_policy_port}" "${LIBRARY}" || fail 'fixture policy does not source the entitlement port export'
+  grep -Fq "${helm_policy_port}" "${HARNESS}" || fail 'Helm values do not source the entitlement port export'
+}
+
+test_base_and_fixture_entitlement_ports_render() {
+  local state_root base_render fixture_render base_url fixture_url base_ports fixture_ports
+  state_root="$(mktemp -d)"
+  base_render="${state_root}/base.yaml"
+  fixture_render="${state_root}/fixture.yaml"
+  if command -v kustomize >/dev/null 2>&1; then
+    kustomize build "${ROOT}/deploy/kubernetes/acr/base" >"${base_render}"
+  else
+    kubectl kustomize "${ROOT}/deploy/kubernetes/acr/base" >"${base_render}"
+  fi
+  base_url="$(yq -r 'select(.kind == "ConfigMap" and .metadata.name == "acr-config") | .data.ACR_DEV_HEALTH_ENTITLEMENT_URL' "${base_render}")"
+  base_ports="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "acr-api") | .spec.egress[]?.ports[]? | select(.protocol == "TCP") | .port' "${base_render}")"
+  [[ "${base_url}" == 'https://ops.dev-health.internal:443' ]] || fail "base entitlement URL = ${base_url}"
+  require_output "${base_ports}" 443
+  require_output "${base_ports}" 9440
+  if grep -Fqx 8443 <<<"${base_ports}"; then rm -rf "${state_root}"; fail 'base policy retains fixture entitlement port'; fi
+
+  # shellcheck source=kind-kustomize-lib.sh
+  source "${LIBRARY}"
+  export KUSTOMIZE_E2E_WORK="${state_root}/work"
+  export KUSTOMIZE_E2E_NAMESPACE=acr-test
+  export KUSTOMIZE_E2E_GATEWAY_NAMESPACE=envoy-gateway-system
+  export KUSTOMIZE_E2E_OPS_HOST=ops.example.test
+  export KUSTOMIZE_E2E_OPS_PORT=8443
+  mkdir -p "${KUSTOMIZE_E2E_WORK}"
+  e2e_render registry.example.test/acr-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef test false
+  cp "${KUSTOMIZE_E2E_WORK}/rendered.yaml" "${fixture_render}"
+  fixture_url="$(yq -r 'select(.kind == "ConfigMap" and .metadata.name == "acr-config") | .data.ACR_DEV_HEALTH_ENTITLEMENT_URL' "${fixture_render}")"
+  fixture_ports="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "acr-api") | .spec.egress[]?.ports[]? | select(.protocol == "TCP") | .port' "${fixture_render}")"
+  [[ "${fixture_url}" == 'https://ops.example.test:8443' ]] || fail "fixture entitlement URL = ${fixture_url}"
+  require_output "${fixture_ports}" 8443
+  require_output "${fixture_ports}" 9440
+  if grep -Fqx 443 <<<"${fixture_ports}"; then rm -rf "${state_root}"; fail 'fixture policy retains base entitlement port'; fi
+  rm -rf "${state_root}"
 }
 
 test_verification_evidence_requires_clean_git_provenance() {
@@ -222,6 +263,7 @@ test_self_test_requires_a_fixture_and_runs_scenarios
 test_mutable_image_is_rejected_before_cluster_access
 test_hardening_seams_are_present
 test_parity_keeps_dependency_port_meanings_separate
+test_base_and_fixture_entitlement_ports_render
 test_verification_evidence_requires_clean_git_provenance
 test_verification_provenance_rejects_dirty_worktree
 test_verification_provenance_rejects_dirty_index
