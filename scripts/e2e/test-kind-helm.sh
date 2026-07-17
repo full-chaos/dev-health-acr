@@ -388,6 +388,102 @@ EOF
   rm -rf "${state_root}"
 }
 
+test_prepare_run_rejects_grep_error_before_arming_cleanup() {
+  local state_root fake_bin
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  printf '%s\n' 'unrelated.example/keep@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' >"${state_root}/refs"
+  cat >"${fake_bin}/kind" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' fake
+EOF
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) cat "${FAKE_REFS}" ;;
+  *) exit 1 ;;
+esac
+EOF
+  cat >"${fake_bin}/grep" <<'EOF'
+#!/usr/bin/env bash
+input="$(cat)"
+[[ "${input}" == fake ]] && exit 0
+exit 2
+EOF
+  chmod +x "${fake_bin}/kind" "${fake_bin}/docker" "${fake_bin}/grep"
+  if PATH="${fake_bin}:${PATH}" FAKE_REFS="${state_root}/refs" ACR_E2E_STATE_ROOT="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    state_root="$2"
+    shift 2
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    scenario=missing-image-pull-secret
+    ACR_E2E_REGISTRY_ENDPOINT=registry.example:5000
+    target="registry.example:5000/acr-api-run@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    require_tools() { :; }
+    establish_source_guard() { :; }
+    load_fixture_exports() { :; }
+    assert_fixture_ready() { :; }
+    prepare_registry_image_aliases() { prepared_registry_target="${target}"; }
+    kube() { printf "%s\n" "$*" >>"${state_root}/kube"; return 1; }
+    on_exit() { : >"${state_root}/cleanup-armed"; }
+    prepare_run
+  ' -- "${HARNESS}" "${state_root}"; then
+    rm -rf "${state_root}"
+    fail 'prepare_run accepted a grep tool failure'
+  fi
+  [[ ! -e "${state_root}/cleanup-armed" ]] || fail 'cleanup trap armed after grep tool failure'
+  [[ ! -e "${state_root}/operations" ]] || fail 'grep tool failure caused an image mutation'
+  [[ "$(cat "${state_root}/refs")" == 'unrelated.example/keep@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' ]] || fail 'grep tool failure changed pre-existing references'
+  rm -rf "${state_root}"
+}
+
+test_prepare_run_rejects_docker_list_error_before_arming_cleanup() {
+  local state_root fake_bin
+  state_root="$(mktemp -d)"
+  fake_bin="${state_root}/bin"
+  mkdir -p "${fake_bin}"
+  printf '%s\n' 'unrelated.example/keep@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' >"${state_root}/refs"
+  cat >"${fake_bin}/kind" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' fake
+EOF
+  cat >"${fake_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" ctr -n k8s.io images list -q "*) exit 2 ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "${fake_bin}/kind" "${fake_bin}/docker"
+  if PATH="${fake_bin}:${PATH}" ACR_E2E_STATE_ROOT="${state_root}" ACR_E2E_LIB_ONLY=1 bash -c '
+    harness="$1"
+    state_root="$2"
+    shift 2
+    source "${harness}"
+    cluster=fake
+    run_id=run
+    scenario=missing-image-pull-secret
+    require_tools() { :; }
+    establish_source_guard() { :; }
+    load_fixture_exports() { :; }
+    assert_fixture_ready() { :; }
+    prepare_registry_image_aliases() { :; }
+    kube() { printf "%s\n" "$*" >>"${state_root}/kube"; return 1; }
+    on_exit() { : >"${state_root}/cleanup-armed"; }
+    prepare_run
+  ' -- "${HARNESS}" "${state_root}"; then
+    rm -rf "${state_root}"
+    fail 'prepare_run accepted a Docker image-list failure'
+  fi
+  [[ ! -e "${state_root}/cleanup-armed" ]] || fail 'cleanup trap armed after Docker image-list failure'
+  [[ ! -e "${state_root}/operations" ]] || fail 'Docker image-list failure caused an image mutation'
+  [[ "$(cat "${state_root}/refs")" == 'unrelated.example/keep@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' ]] || fail 'Docker image-list failure changed pre-existing references'
+  rm -rf "${state_root}"
+}
+
 test_partial_operations_reconcile_created_aliases() {
   local state_root fake_bin fake_root phase
   state_root="$(mktemp -d)"
@@ -505,6 +601,8 @@ test_cleanup_reconciles_created_registry_delta_after_transient_list_failure
 test_prepare_run_rejects_alias_before_arming_cleanup
 test_prepare_run_rejects_registry_target_before_arming_cleanup
 test_preflight_allows_absent_registry_target
+test_prepare_run_rejects_grep_error_before_arming_cleanup
+test_prepare_run_rejects_docker_list_error_before_arming_cleanup
 test_partial_operations_reconcile_created_aliases
 test_cleanup_fails_when_owned_ref_remains
 printf 'RESULT: Kind Helm harness contract tests passed\n'

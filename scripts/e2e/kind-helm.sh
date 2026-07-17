@@ -191,9 +191,22 @@ assert_kind_images_absent() {
   local ref
   shift
   for ref in "$@"; do
-    grep -Fxq "${ref}" <<<"${kind_image_refs_before}" && die "refusing to reuse a pre-existing Kind image reference: ${ref}"
+    if is_preexisting_kind_image_ref "${ref}"; then
+      die "refusing to reuse a pre-existing Kind image reference: ${ref}"
+    fi
   done
   return 0
+}
+
+is_preexisting_kind_image_ref() {
+  local ref="$1" status
+  if grep -Fxq "${ref}" <<<"${kind_image_refs_before}"; then
+    return 0
+  else
+    status=$?
+  fi
+  [[ "${status}" -eq 1 ]] && return 1
+  die "could not inspect pre-existing Kind image references"
 }
 
 preflight_cleanup_ownership() {
@@ -208,7 +221,7 @@ preflight_cleanup_ownership() {
   done <<<"${kind_image_refs_before}"
   for target in "$@"; do
     [[ -n "${target}" ]] || continue
-    if grep -Fxq "${target}" <<<"${kind_image_refs_before}"; then
+    if is_preexisting_kind_image_ref "${target}"; then
       die "refusing to reuse a pre-existing registry image reference: ${target}"
     fi
   done
@@ -220,7 +233,7 @@ record_imported_image_refs() {
   refs="$(docker exec "${node}" ctr -n k8s.io images list -q)" || return 1
   while IFS= read -r ref || [[ -n "${ref}" ]]; do
     [[ "${ref}" == "${repo}:"* || "${ref}" == "${repo}@"* ]] || continue
-    grep -Fxq "${ref}" <<<"${kind_image_refs_before}" && continue
+    is_preexisting_kind_image_ref "${ref}" && continue
     register_imported_image_ref "${ref}"
   done <<<"${refs}"
 }
@@ -229,7 +242,7 @@ reconcile_created_image_refs() {
   local refs="$1" ref
   while IFS= read -r ref || [[ -n "${ref}" ]]; do
     is_kind_run_image_ref "${ref}" || continue
-    grep -Fxq "${ref}" <<<"${kind_image_refs_before}" && continue
+    is_preexisting_kind_image_ref "${ref}" && continue
     register_imported_image_ref "${ref}"
   done <<<"${refs}"
 }
