@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tag="${1:?usage: revoke-private-release.sh TAG INCIDENT_REFERENCE}"
-incident="${2:?usage: revoke-private-release.sh TAG INCIDENT_REFERENCE}"
 repo="full-chaos/dev-health-acr"
+root="$(cd "$(dirname "$0")/../.." && pwd -P)"
+source "$root/scripts/release/approval-receipt.sh"
+approval_parse_options "$@" || { printf 'usage: revoke-private-release.sh --approval-receipt RECEIPT --digest sha256:DIGEST [--dry-run] TAG INCIDENT_REFERENCE\n' >&2; exit 1; }
+((${#APPROVAL_ARGS[@]} == 2)) || exit 1
+tag="${APPROVAL_ARGS[0]}"
+incident="${APPROVAL_ARGS[1]}"
+version="${tag#v}"
+[[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(dev|beta)\.(1|[1-9][0-9]*))?$ ]] || exit 1
+approval_verify "$APPROVAL_RECEIPT" revoke_private_release "$repo" "github-release:$repo:$tag" "$version" "$APPROVAL_DIGEST" || exit 1
+if "$APPROVAL_DRY_RUN"; then
+  printf 'dry-run approved: release revocation remains blocked before GitHub access\n'
+  exit 0
+fi
 actor="$(gh api user --jq .login)"
 operators="$(gh variable get ACR_RELEASE_OPERATORS --repo "$repo")"
 [[ ",$operators," == *",$actor,"* ]]

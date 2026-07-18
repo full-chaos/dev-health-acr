@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tag="${1:?usage: publish-private-release.sh TAG RUN_ID}"
-run_id="${2:?usage: publish-private-release.sh TAG RUN_ID}"
 repo="full-chaos/dev-health-acr"
 fingerprint="9DCD0E7D385C8247E2F5E7FC2C43EBC02D8C8781"
-root="$(git rev-parse --show-toplevel)"
+root="$(cd "$(dirname "$0")/../.." && pwd -P)"
+source "$root/scripts/release/approval-receipt.sh"
+approval_parse_options "$@" || { printf 'usage: publish-private-release.sh --approval-receipt RECEIPT --digest sha256:DIGEST [--dry-run] TAG RUN_ID\n' >&2; exit 1; }
+((${#APPROVAL_ARGS[@]} == 2)) || exit 1
+tag="${APPROVAL_ARGS[0]}"
+run_id="${APPROVAL_ARGS[1]}"
+version="${tag#v}"
+[[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(dev|beta)\.(1|[1-9][0-9]*))?$ ]] || exit 1
+approval_verify "$APPROVAL_RECEIPT" publish_private_release "$repo" "github-release:$repo:$tag" "$version" "$APPROVAL_DIGEST" || exit 1
+if "$APPROVAL_DRY_RUN"; then
+  printf 'dry-run approved: private release publication remains blocked before GitHub access\n'
+  exit 0
+fi
 tmp="$(mktemp -d)"
 draft_created=false
 cleanup() {
@@ -42,11 +52,11 @@ git -C "$tmp/repo" merge-base --is-ancestor "$commit" origin/main
 test "$(gh api "repos/$repo/actions/runs/$run_id" --jq '[.name, .event, .conclusion, .head_branch, .head_sha, (.path | split("@")[0])] | @tsv')" = "Release	push	success	$tag	$commit	.github/workflows/release.yml"
 gh run download "$run_id" --repo "$repo" --name release --dir "$tmp/release"
 cd "$tmp/release"
-version="${tag#v}"
 jq -e --arg version "$version" --arg commit "$commit" '.schema_version == "release_manifest.v1" and .version == $version and .commit == $commit and (.artifacts | length == 10)' release-manifest.json >/dev/null
 jq -r '.artifacts[] | "\(.sha256)  \(.name)"' release-manifest.json > "$tmp/builder-SHA256SUMS"
 check_sums "$tmp/builder-SHA256SUMS"
 check_sums SHA256SUMS
+test "sha256:$(shasum -a 256 SHA256SUMS | awk '{print $1}')" = "$APPROVAL_DIGEST"
 cosign version | awk '$1 == "GitVersion:" && $2 == "v3.1.1" { found = 1 } END { exit !found }'
 key_dir="${HOME}/.config/acr/release"
 test -r "$key_dir/cosign.key"; test -r "$root/signing/cosign.pub"

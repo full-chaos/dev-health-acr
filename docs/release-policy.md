@@ -37,8 +37,23 @@ commit. No Cosign private key or password is stored in GitHub.
 After the Actions run succeeds, an authorized operator runs:
 
 ```bash
-scripts/release/publish-private-release.sh vX.Y.Z RUN_ID
+scripts/release/publish-private-release.sh \
+  --approval-receipt RECEIPT.json --digest sha256:DIGEST vX.Y.Z RUN_ID
 ```
+
+Every remote subcommand requires `--approval-receipt RECEIPT.json` (an
+owner-signed, single-use approval receipt with an adjacent detached
+`RECEIPT.json.asc` signature) and a matching `--digest sha256:DIGEST`. Add
+`--dry-run` to validate the receipt and every precondition without performing
+the action or consuming the receipt's single-use nonce.
+
+The approval-verification key, its exact fingerprint, and the nonce ledger are
+the trust anchors that enforce owner/operator separation. Run these scripts only
+in a trusted release environment with controlled environment variables: the
+`ACR_APPROVAL_VERIFICATION_KEY`, `ACR_APPROVAL_FINGERPRINT`, and
+`ACR_APPROVAL_LEDGER` overrides exist for automated testing and must not be
+attacker-influenced in production, because a caller that redirects them to its
+own key or a fresh ledger could self-sign or replay approvals.
 
 The script verifies the authenticated GitHub actor/repository allowlist, clones
 the configured private origin into a temporary directory, verifies the signed
@@ -90,7 +105,7 @@ if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expec
 
 ## Revocation
 
-Run `scripts/release/revoke-private-release.sh TAG INCIDENT_REFERENCE` locally
+Run `scripts/release/revoke-private-release.sh --approval-receipt RECEIPT.json --digest sha256:DIGEST TAG INCIDENT_REFERENCE` locally
 as an allowlisted operator and type the exact confirmation. The script lists
 Release assets, deletes each asset in a separate fail-closed CLI call, then
 preserves the immutable signed tag and a clearly marked revoked Release record
