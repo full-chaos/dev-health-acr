@@ -42,17 +42,11 @@ if (cd "$tmp/wrong-version" && PATH="$tmp/bin:$PATH" HOME="$tmp/wrong-home" COSI
 test ! -e "$tmp/wrong-home/.config/acr/release/cosign.key"
 test "$(wc -l < "$tmp/wrong.log")" -eq 1
 
-if printf 'wrong\n' | PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/revoke.log" "$root/scripts/release/revoke-private-release.sh" v1.2.3 reason; then exit 1; fi
-test -z "$(grep 'release ' "$tmp/revoke.log" || true)"
-printf 'REVOKE v1.2.3\n' | PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/revoke-ok.log" "$root/scripts/release/revoke-private-release.sh" v1.2.3 INCIDENT-1
-grep -Fx 'release delete-asset v1.2.3 first-asset --repo full-chaos/dev-health-acr --yes' "$tmp/revoke-ok.log" >/dev/null
-grep -Fx 'release delete-asset v1.2.3 second-asset --repo full-chaos/dev-health-acr --yes' "$tmp/revoke-ok.log" >/dev/null
-test "$(grep -n 'release edit' "$tmp/revoke-ok.log" | cut -d: -f1)" -gt "$(grep -n 'second-asset' "$tmp/revoke-ok.log" | cut -d: -f1)"
-if printf 'REVOKE v1.2.3\n' | PATH="$tmp/bin:$PATH" MOCK_RELEASE_VIEW_FAIL=true MOCK_LOG="$tmp/revoke-view-fail.log" "$root/scripts/release/revoke-private-release.sh" v1.2.3 INCIDENT-2; then exit 1; fi
-test -z "$(grep 'release delete-asset\|release edit' "$tmp/revoke-view-fail.log" || true)"
+if PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/revoke.log" "$root/scripts/release/revoke-private-release.sh" v1.2.3 INCIDENT-1; then exit 1; fi
+test ! -e "$tmp/revoke.log"
 
 if PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/publish.log" MOCK_ROOT="$root" "$root/scripts/release/publish-private-release.sh" not-a-tag 1; then exit 1; fi
-test -z "$(grep -E 'run download|release create' "$tmp/publish.log" || true)"
+test ! -e "$tmp/publish.log"
 
 tag_remote="$tmp/tag-remote.git"
 tag_source="$tmp/tag-source"

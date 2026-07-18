@@ -4,6 +4,7 @@ set -euo pipefail
 require() { command -v "$1" >/dev/null || { printf '%s is required\n' "$1" >&2; exit 1; }; }
 require jq
 require tar
+(($# > 0)) || { printf 'at least one OCI archive is required\n' >&2; exit 1; }
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
