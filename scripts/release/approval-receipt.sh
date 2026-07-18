@@ -51,20 +51,41 @@ approval_consume_nonce() {
   local ledger="$1"
   local nonce="$2"
   local receipt="$3"
-  local lock="$ledger/.lock"
   local record
-
   umask 077
   mkdir -p "$ledger"
-  mkdir "$lock" 2>/dev/null || return 1
-  [[ ! -e "$ledger/$nonce" ]] || { rmdir "$lock"; return 1; }
-  record="$(mktemp "$ledger/.receipt.XXXXXX")"
-  shasum -a 256 "$receipt" >"$record"
-  mv "$record" "$ledger/$nonce"
-  rmdir "$lock"
+  record="$(mktemp "$ledger/.receipt.XXXXXX")" || return 1
+  shasum -a 256 "$receipt" >"$record" || { rm -f "$record"; return 1; }
+  # Atomically claim the single-use nonce: a hard link fails if the nonce file
+  # already exists, so concurrent or replayed consumption cannot both succeed.
+  # This needs no lock and has no signal-interruption window.
+  if ln "$record" "$ledger/$nonce" 2>/dev/null; then
+    rm -f "$record"
+    return 0
+  fi
+  rm -f "$record"
+  return 1
 }
 
 approval_verify() {
+  local receipt_in="$1"
+  local snapdir rc
+  [[ -f "$receipt_in" && -f "${receipt_in}.asc" ]] || return 1
+  snapdir="$(mktemp -d)" || return 1
+  # Snapshot the receipt and its detached signature once into a private (0700)
+  # directory so every check and the nonce consumption operate on identical,
+  # attacker-immutable bytes (closes a receipt/signature TOCTOU swap window).
+  if ! { cp "$receipt_in" "$snapdir/receipt.json" && cp "${receipt_in}.asc" "$snapdir/receipt.json.asc"; }; then
+    rm -rf "$snapdir"
+    return 1
+  fi
+  _approval_verify_impl "$snapdir/receipt.json" "$2" "$3" "$4" "$5" "$6"
+  rc=$?
+  rm -rf "$snapdir"
+  return $rc
+}
+
+_approval_verify_impl() {
   local receipt="$1"
   local action="$2"
   local repository="$3"
@@ -122,6 +143,12 @@ approval_verify() {
   grep -F -- "[GNUPG:] VALIDSIG $fingerprint " <<<"$status" >/dev/null || { rm -rf "$gnupg"; return 1; }
   rm -rf "$gnupg"
 
+  # A dry run is a non-mutating preview: it performs every read-only check above
+  # but must not consume the single-use nonce, so the same receipt still
+  # authorizes the real action. Only the real action consumes (single use).
+  if [[ "${APPROVAL_DRY_RUN:-false}" == true ]]; then
+    return 0
+  fi
   nonce="$(jq -r '.nonce' "$receipt")"
   ledger="${ACR_APPROVAL_LEDGER:-${XDG_STATE_HOME:-$HOME/.local/state}/acr/release-approval-ledger}"
   approval_consume_nonce "$ledger" "$nonce" "$receipt"

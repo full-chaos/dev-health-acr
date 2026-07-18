@@ -30,14 +30,14 @@ expect_verify_failure() {
 
 archive_dir="$tmp/archive"
 copy_release "$archive_dir"
-archive="$(jq -r '.artifacts[] | select(.product == "acr-mcp" and .os == "linux" and .arch == "amd64") | .name' "$archive_dir/release-manifest.json")"
+archive="$(jq -r '.artifacts[] | select(.product == "acr-mcp" and .goos == "linux" and .goarch == "amd64") | .name' "$archive_dir/release-manifest.json")"
 [[ -n "$archive" && -f "$archive_dir/$archive" ]]
 printf '\nTAMPER\n' >> "$archive_dir/$archive"
 expect_verify_failure "$archive_dir"
 
 checksum_dir="$tmp/checksum"
 copy_release "$checksum_dir"
-archive="$(jq -r '.artifacts[] | select(.product == "acr-api" and .os == "darwin" and .arch == "amd64") | .name' "$checksum_dir/release-manifest.json")"
+archive="$(jq -r '.artifacts[] | select(.product == "acr-api" and .goos == "darwin" and .goarch == "amd64") | .name' "$checksum_dir/release-manifest.json")"
 while read -r checksum name; do
   if [[ "$name" == "$archive" ]]; then
     printf '%064d  %s\n' 0 "$name"

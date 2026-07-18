@@ -107,9 +107,6 @@ else
   reject "$tmp/noncanonical.json"
   write_receipt "$tmp/expired.json" record_owner_gate "$owner_target" 0.0.0-dev.1 private 00000000000000000000000000000014 "$(iso_time "$((now - 1200))")" "$(iso_time "$((now - 600))")"
   reject "$tmp/expired.json"
-  write_receipt "$tmp/replay.json" record_owner_gate "$owner_target" 0.0.0-dev.1 private 00000000000000000000000000000015 "$issued" "$expires"
-  run_gate record-owner-gate.sh "$tmp/replay.json" "$owner_target" 0.0.0-dev.1 "$owner_target" 0.0.0-dev.1
-  reject "$tmp/replay.json"
   write_receipt "$tmp/mutated.json" record_owner_gate "$owner_target" 0.0.0-dev.1 private 00000000000000000000000000000016 "$issued" "$expires"
   jq --arg target 'owner-gate:full-chaos/dev-health-acr:v9.9.9' '.target = $target' "$tmp/mutated.json" | jq -cS . | tr -d '\n' > "$tmp/mutated.json.tmp"
   mv "$tmp/mutated.json.tmp" "$tmp/mutated.json"
@@ -124,6 +121,30 @@ else
   printf '{' > "$tmp/malformed.json"
   gpg --batch --homedir "$tmp/gnupg" --armor --detach-sign --output "$tmp/malformed.json.asc" "$tmp/malformed.json"
   reject "$tmp/malformed.json"
+  # Nonce lifecycle: a dry-run verification is a non-mutating preview and must
+  # never consume the single-use nonce, so the same receipt can still authorize
+  # the real action; only the real action consumes the nonce, and replaying a
+  # consumed nonce is rejected. Exercised directly against the library because
+  # the gate wrappers intentionally exit 1 on the real (non-dry-run) path.
+  (
+    life_ledger="$tmp/ledger-lifecycle"
+    life_nonce=00000000000000000000000000000015
+    export ACR_APPROVAL_LEDGER="$life_ledger"
+    export ACR_APPROVAL_VERIFICATION_KEY="$tmp/approval-test-key.asc"
+    export ACR_APPROVAL_FINGERPRINT="$fingerprint"
+    source "$root/scripts/release/approval-receipt.sh"
+    write_receipt "$tmp/replay.json" record_owner_gate "$owner_target" 0.0.0-dev.1 private "$life_nonce" "$issued" "$expires"
+    export APPROVAL_DRY_RUN=true
+    approval_verify "$tmp/replay.json" record_owner_gate full-chaos/dev-health-acr "$owner_target" 0.0.0-dev.1 "$digest"
+    approval_verify "$tmp/replay.json" record_owner_gate full-chaos/dev-health-acr "$owner_target" 0.0.0-dev.1 "$digest"
+    [[ ! -e "$life_ledger/$life_nonce" ]]
+    export APPROVAL_DRY_RUN=false
+    approval_verify "$tmp/replay.json" record_owner_gate full-chaos/dev-health-acr "$owner_target" 0.0.0-dev.1 "$digest"
+    [[ -e "$life_ledger/$life_nonce" ]]
+    if approval_verify "$tmp/replay.json" record_owner_gate full-chaos/dev-health-acr "$owner_target" 0.0.0-dev.1 "$digest"; then
+      exit 1
+    fi
+  )
 fi
 
 [[ ! -s "$tmp/network.log" ]]

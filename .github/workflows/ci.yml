@@ -32,6 +32,10 @@ jobs:
         run: |
           shellcheck scripts/release/*.sh
           scripts/release/test_release_scripts.sh
+      - name: Test remote release approval gates
+        run: |
+          scripts/release/test-remote-gates.sh --mode dry-run --fixtures testdata/release-approvals
+          scripts/release/test-remote-gates.sh --mode reject-invalid --fixtures testdata/release-approvals
       - run: make verify
       - name: Test hosted runtime with disposable dependencies
         run: make hosted-integration
