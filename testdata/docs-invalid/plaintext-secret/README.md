@@ -1,0 +1,3 @@
+# Invalid fixture
+
+ACR_API_TOKEN=fcacr_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG

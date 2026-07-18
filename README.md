@@ -76,6 +76,18 @@ make hosted-integration
 go build ./cmd/acr-api ./cmd/acr-mcp ./cmd/contractcheck
 ```
 
+## Deployment and operations
+
+The private ACR developer and operator lifecycle, including ownership,
+TLS-local Compose, private Helm/Kustomize, migration/rollback boundaries,
+credential rotation, backup/restore responsibilities, observability,
+troubleshooting, and sidecar setup is in
+[`docs/operations.md`](docs/operations.md). The offline documentation gate is:
+
+```bash
+bash scripts/docs/verify.sh
+```
+
 ## Container images
 
 Reproducible, hardened container images for `acr-api` (plus the separate
