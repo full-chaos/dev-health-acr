@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Offline documentation verifier for container/backlog claims.
+# Offline documentation verifier for private ACR deployment claims.
 #
 # Validates, without Docker or network access:
 #   - README.md links docs/container-images.md and lists the exact
@@ -13,8 +13,12 @@
 #     docs/container-images.md names a target that exists in Makefile.
 #   - docs/container-images.md never claims local Compose behavior is
 #     merged, verified, or complete (Compose remains pending elsewhere).
-#   - no tracked Markdown file contains the forbidden public-publication
-#     claim about ACR packaging.
+#   - new developer/operator documentation references real commands, paths,
+#     and environment variables without requiring Docker or a network.
+#   - Helm schema and trusted-web JWKS terminology stays aligned with the
+#     checked-in deployment and service contracts.
+#   - documentation rejects unsafe ownership, production HTTP, plaintext
+#     credential, schema-rollback, and absolute-path claims.
 #
 # Usage: scripts/docs/verify.sh [--root DIR]
 #
@@ -69,6 +73,25 @@ readme="$root/README.md"
 container_doc="$root/docs/container-images.md"
 backlog="$root/docs/implementation-backlog.md"
 makefile="$root/Makefile"
+operations_doc="$root/docs/operations.md"
+fixture_mode=false
+[ -f "$root/.docs-invalid-fixture" ] && fixture_mode=true
+
+doc_scan_files=()
+if [ -f "$operations_doc" ]; then
+  doc_scan_files+=("$operations_doc")
+  [ -f "$readme" ] && doc_scan_files+=("$readme")
+else
+  while IFS= read -r -d '' md_file; do
+    doc_scan_files+=("$md_file")
+  done < <(find "$root" -name '*.md' \
+    -not -path '*/.git/*' \
+    -not -path '*/.omo/*' \
+    -not -path '*/.tmp/*' \
+    -not -path '*/node_modules/*' \
+    -not -path '*/vendor/*' \
+    -print0 2>/dev/null)
+fi
 
 # --- 1. Forbidden public-publication claim -----------------------------
 # Runs first and unconditionally over every tracked Markdown file under
@@ -85,6 +108,7 @@ done < <(find "$root" -name '*.md' \
   -not -path '*/.git/*' \
   -not -path '*/.omo/*' \
   -not -path '*/.tmp/*' \
+  -not -path '*/testdata/docs-invalid/*' \
   -not -path '*/node_modules/*' \
   -not -path '*/vendor/*' \
   -print0 2>/dev/null)
@@ -95,7 +119,41 @@ else
   ok "no forbidden publication claim found"
 fi
 
-# --- 2. README links docs/container-images.md and lists commands -------
+# --- 2. Unsafe developer/operator claims ---------------------------------
+# The real tree scans its new operations surface. A partial invalid fixture has
+# no operations guide, so all of its Markdown is scanned instead.
+unsafe_claim() {
+  local label="$1" pattern="$2"
+  local hits=""
+  local f
+  for f in "${doc_scan_files[@]}"; do
+    if grep -Eiq "$pattern" "$f"; then
+      hits="$hits${hits:+ }${f#"$root"/}"
+    fi
+  done
+  if [ -n "$hits" ]; then
+    fail "$label present in: $hits"
+  else
+    ok "no $label found"
+  fi
+}
+
+unsafe_claim 'Ops-packaged ACR claim' '(dev-health-ops|Dev Health Ops).{0,80}(packages|packaged|distributes|published).{0,80}ACR|ACR.{0,80}(packages|packaged|distributes|published).{0,80}(dev-health-ops|Dev Health Ops)'
+unsafe_claim 'production HTTP endpoint' 'production.{0,80}http://|http://[^[:space:]]{0,80}production'
+unsafe_claim 'plaintext ACR credential' 'fcacr_[A-Za-z0-9_-]{43}'
+unsafe_claim 'supported schema rollback claim' 'ACR supports schema rollback|schema rollback is supported|schema rollback is allowed|schema rollback is performed'
+unsafe_claim 'absolute filesystem path' '/(Users|home|tmp|var|opt|etc)/'
+
+if [ "$fixture_mode" = true ]; then
+  if [ "$fail_count" -ne 0 ]; then
+    printf '\ndocs verification FAILED (%s check(s))\n' "$fail_count" >&2
+    exit 1
+  fi
+  printf '\ndocs verification OK\n'
+  exit 0
+fi
+
+# --- 3. README links docs/container-images.md and lists commands -------
 required_commands="make container-contract
 make container-pins
 make container-test
@@ -124,7 +182,7 @@ $required_commands
 EOF
 fi
 
-# --- 3. docs/container-images.md exists and is linkable -----------------
+# --- 4. docs/container-images.md exists and is linkable -----------------
 if [ ! -f "$container_doc" ]; then
   fail "docs/container-images.md missing at $root"
 else
@@ -141,7 +199,7 @@ else
   fi
 fi
 
-# --- 4. Backlog records Todo 8 complete / Todo 9 pending -----------------
+# --- 5. Backlog records Todo 8 complete / Todo 9 pending -----------------
 if [ ! -f "$backlog" ]; then
   fail "docs/implementation-backlog.md missing at $root"
 else
@@ -164,7 +222,7 @@ else
   fi
 fi
 
-# --- 5. Local Markdown links resolve -------------------------------------
+# --- 6. Local Markdown links resolve -------------------------------------
 check_links_in_file() {
   file="$1"
   file_dir="$(dirname "$file")"
@@ -199,7 +257,7 @@ if [ -n "$link_check_files" ]; then
   fi
 fi
 
-# --- 6. make snippets reference real Makefile targets ---------------------
+# --- 7. make snippets reference real Makefile targets ---------------------
 if [ -f "$makefile" ]; then
   snippet_files=""
   [ -f "$readme" ] && snippet_files="$snippet_files $readme"
@@ -218,6 +276,54 @@ if [ -f "$makefile" ]; then
   fi
 else
   ok "Makefile not present under --root; skipping make-target snippet check"
+fi
+
+# --- 8. Operations commands, environment, schema, and JWKS ----------------
+if [ ! -f "$operations_doc" ]; then
+  fail "docs/operations.md missing at $root"
+else
+  command_failures_before=$fail_count
+  while IFS= read -r command_path; do
+    [ -n "$command_path" ] || continue
+    if [ ! -e "$root/$command_path" ]; then
+      fail "docs/operations.md references missing command path '$command_path'"
+    fi
+  done < <(grep -oE '(bash|sh)[[:space:]]+(scripts|deploy)/[A-Za-z0-9._/-]+' "$operations_doc" | awk '{print $2}' | sort -u)
+
+  while IFS= read -r go_path; do
+    [ -n "$go_path" ] || continue
+    if [ ! -e "$root/$go_path" ]; then
+      fail "docs/operations.md references missing Go command path '$go_path'"
+    fi
+  done < <(grep -oE 'go run[[:space:]]+\./cmd/[A-Za-z0-9._/-]+' "$operations_doc" | awk '{print $3}' | sort -u)
+
+  if [ "$fail_count" -eq "$command_failures_before" ]; then
+    ok "operations command paths exist"
+  fi
+
+  env_failures_before=$fail_count
+  while IFS= read -r environment_name; do
+    [ -n "$environment_name" ] || continue
+    if ! grep -Rqs --include='*.go' --include='*.sh' --include='*.yml' --include='*.yaml' --include='*.json' --include='Makefile' \
+      --exclude-dir=.git --exclude-dir=.omo --exclude-dir=.tmp --exclude-dir=testdata \
+      "$environment_name" "$root/cmd" "$root/internal" "$root/deploy" "$root/scripts" "$root/Makefile" 2>/dev/null; then
+      fail "docs/operations.md references undocumented environment name '$environment_name'"
+    fi
+  done < <(grep -oE '(ACR|TEST)_[A-Z0-9_]+' "$operations_doc" | sort -u)
+  if [ "$fail_count" -eq "$env_failures_before" ]; then
+    ok "operations environment names are read by code or deployment artifacts"
+  fi
+
+  if [ -f "$root/deploy/helm/acr/values.schema.json" ] \
+    && grep -qF 'deploy/helm/acr/values.schema.json' "$operations_doc" \
+    && grep -qF 'ACR_WEB_ASSERTION_ISSUER' "$operations_doc" \
+    && grep -qF 'ACR_WEB_ASSERTION_AUDIENCE' "$operations_doc" \
+    && grep -qF 'ACR_WEB_ASSERTION_JWKS_FILE' "$operations_doc" \
+    && grep -qi 'JWKS' "$operations_doc"; then
+    ok "operations schema and JWKS terminology is consistent"
+  else
+    fail "operations schema/JWKS terminology is incomplete or values schema is missing"
+  fi
 fi
 
 if [ "$fail_count" -ne 0 ]; then
