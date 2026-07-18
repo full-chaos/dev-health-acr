@@ -26,6 +26,7 @@ var exampleSchemaPairs = map[string]string{
 	"mcp_source_evidence_response.v1.json":      "mcp_source_evidence_response.v1.schema.json",
 	"mcp_record_episode_request.v1.json":        "mcp_record_episode_request.v1.schema.json",
 	"mcp_record_episode_response.v1.json":       "mcp_record_episode_response.v1.schema.json",
+	"evaluation_demo.v1.json":                   "evaluation_demo.v1.schema.json",
 }
 
 // Options configures repository contract validation.

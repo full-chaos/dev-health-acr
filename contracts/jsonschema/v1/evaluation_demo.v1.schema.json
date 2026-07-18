@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.dev-health.example/acr/evaluation_demo.v1.schema.json",
+  "title": "Deterministic evaluation demo metrics v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "metrics"],
+  "properties": {
+    "schema_version": {"const": "evaluation_demo.v1"},
+    "metrics": {"$ref": "#/$defs/metrics"}
+  },
+  "$defs": {
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cold", "context"],
+      "properties": {
+        "cold": {"$ref": "#/$defs/surface"},
+        "context": {"$ref": "#/$defs/surface"}
+      }
+    },
+    "surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["factual_error_rate", "file_test_recall", "citation_precision", "irrelevant_item_rate", "plan_latency", "token_cost"],
+      "properties": {
+        "factual_error_rate": {"$ref": "#/$defs/ratio"},
+        "file_test_recall": {"$ref": "#/$defs/ratio"},
+        "citation_precision": {"$ref": "#/$defs/ratio"},
+        "irrelevant_item_rate": {"$ref": "#/$defs/ratio"},
+        "plan_latency": {"$ref": "#/$defs/cost"},
+        "token_cost": {"$ref": "#/$defs/cost"}
+      }
+    },
+    "ratio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator", "value", "unit"],
+      "properties": {
+        "numerator": {"type": "integer", "minimum": 0},
+        "denominator": {"type": "integer", "minimum": 0},
+        "value": {"type": ["number", "null"]},
+        "unit": {"const": "ratio"},
+        "note": {"type": "string", "minLength": 1}
+      }
+    },
+    "cost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "unit"],
+      "properties": {
+        "value": {"type": "integer", "minimum": 0},
+        "unit": {"enum": ["logical_steps", "estimated_context_tokens"]},
+        "note": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

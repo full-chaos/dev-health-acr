@@ -1,0 +1,254 @@
+{
+  "schema_version": "acr_evaluation_demo.v1",
+  "result": "complete",
+  "disclosure": "Deterministic fixture measurement only; no live model or customer data is used, and no agent-outcome claim is made.",
+  "fixture": {
+    "corpus_version": "2026-07-10.1",
+    "scenario_id": "widget-service-checkout-flake",
+    "repository": "example-org/widget-service"
+  },
+  "repeats": [
+    {
+      "index": 1,
+      "tasks": [
+        {
+          "task_id": "task-001-checkout-flake-exact-commit",
+          "input_hash": "b680ce45c645a1240804c9bd629dae7f38ed1da780ee1d3c0a119beb9ec21f53",
+          "expected_evidence_ids": [
+            "ev-ci-checkout-001",
+            "ev-commit-checkout-001"
+          ],
+          "cold": {
+            "plan_status": "no_acr_context",
+            "claims": []
+          },
+          "context": {
+            "packet_status": "complete",
+            "context_packet_id": "pkt_73d6c67e4ae1f4ce9fe7f0d8",
+            "citations": [
+              {
+                "evidence_ref_id": "ev-ci-checkout-001",
+                "entity_id": "checkout-e2e-run-4821",
+                "safe_uri": "https://example.invalid/ci/runs/4821",
+                "excerpt": "Synthetic CI check run showing an intermittent failure in the checkout end-to-end suite at commit a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2. The 'add-to-cart' step failed twice before succeeding on retry."
+              },
+              {
+                "evidence_ref_id": "ev-commit-checkout-001",
+                "entity_id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                "safe_uri": "https://example.invalid/commits/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                "excerpt": "Synthetic commit that introduced a fixed-delay wait before asserting the cart drawer is visible, a common source of flaky UI timing in the checkout suite."
+              }
+            ],
+            "estimated_tokens": 157
+          }
+        },
+        {
+          "task_id": "task-002-auth-refactor-branch",
+          "input_hash": "14857dc8fb469dd09bd8dbebe900b3657c65e2df37960ae26bee6edd3736ad43",
+          "expected_evidence_ids": [
+            "ev-commit-auth-002",
+            "ev-pr-auth-002"
+          ],
+          "cold": {
+            "plan_status": "no_acr_context",
+            "claims": []
+          },
+          "context": {
+            "packet_status": "complete",
+            "context_packet_id": "pkt_a187cce94a802f7f0d888954",
+            "citations": [
+              {
+                "evidence_ref_id": "ev-pr-auth-002",
+                "entity_id": "pr-1042",
+                "safe_uri": "https://example.invalid/pulls/1042",
+                "excerpt": "Synthetic pull request review discussion flagging that the new typed token struct should reject tokens with a missing expiry field rather than defaulting to a long-lived session."
+              },
+              {
+                "evidence_ref_id": "ev-commit-auth-002",
+                "entity_id": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+                "safe_uri": "https://example.invalid/commits/b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+                "excerpt": "Synthetic commit refactoring session cookie parsing into a typed token struct with explicit expiry handling, on the main branch of the fictional widget-service repository."
+              }
+            ],
+            "estimated_tokens": 157
+          }
+        },
+        {
+          "task_id": "task-003-unindexed-branch-empty",
+          "input_hash": "691c43604df00bafdaa390750a2460e0b22a39799072c705e14f1ca64f7a56d3",
+          "expected_evidence_ids": [],
+          "cold": {
+            "plan_status": "no_acr_context",
+            "claims": []
+          },
+          "context": {
+            "packet_status": "empty",
+            "context_packet_id": "pkt_44206692e5dff296a39b4e96",
+            "citations": [],
+            "estimated_tokens": 0
+          }
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "tasks": [
+        {
+          "task_id": "task-001-checkout-flake-exact-commit",
+          "input_hash": "b680ce45c645a1240804c9bd629dae7f38ed1da780ee1d3c0a119beb9ec21f53",
+          "expected_evidence_ids": [
+            "ev-ci-checkout-001",
+            "ev-commit-checkout-001"
+          ],
+          "cold": {
+            "plan_status": "no_acr_context",
+            "claims": []
+          },
+          "context": {
+            "packet_status": "complete",
+            "context_packet_id": "pkt_73d6c67e4ae1f4ce9fe7f0d8",
+            "citations": [
+              {
+                "evidence_ref_id": "ev-ci-checkout-001",
+                "entity_id": "checkout-e2e-run-4821",
+                "safe_uri": "https://example.invalid/ci/runs/4821",
+                "excerpt": "Synthetic CI check run showing an intermittent failure in the checkout end-to-end suite at commit a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2. The 'add-to-cart' step failed twice before succeeding on retry."
+              },
+              {
+                "evidence_ref_id": "ev-commit-checkout-001",
+                "entity_id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                "safe_uri": "https://example.invalid/commits/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                "excerpt": "Synthetic commit that introduced a fixed-delay wait before asserting the cart drawer is visible, a common source of flaky UI timing in the checkout suite."
+              }
+            ],
+            "estimated_tokens": 157
+          }
+        },
+        {
+          "task_id": "task-002-auth-refactor-branch",
+          "input_hash": "14857dc8fb469dd09bd8dbebe900b3657c65e2df37960ae26bee6edd3736ad43",
+          "expected_evidence_ids": [
+            "ev-commit-auth-002",
+            "ev-pr-auth-002"
+          ],
+          "cold": {
+            "plan_status": "no_acr_context",
+            "claims": []
+          },
+          "context": {
+            "packet_status": "complete",
+            "context_packet_id": "pkt_a187cce94a802f7f0d888954",
+            "citations": [
+              {
+                "evidence_ref_id": "ev-pr-auth-002",
+                "entity_id": "pr-1042",
+                "safe_uri": "https://example.invalid/pulls/1042",
+                "excerpt": "Synthetic pull request review discussion flagging that the new typed token struct should reject tokens with a missing expiry field rather than defaulting to a long-lived session."
+              },
+              {
+                "evidence_ref_id": "ev-commit-auth-002",
+                "entity_id": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+                "safe_uri": "https://example.invalid/commits/b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+                "excerpt": "Synthetic commit refactoring session cookie parsing into a typed token struct with explicit expiry handling, on the main branch of the fictional widget-service repository."
+              }
+            ],
+            "estimated_tokens": 157
+          }
+        },
+        {
+          "task_id": "task-003-unindexed-branch-empty",
+          "input_hash": "691c43604df00bafdaa390750a2460e0b22a39799072c705e14f1ca64f7a56d3",
+          "expected_evidence_ids": [],
+          "cold": {
+            "plan_status": "no_acr_context",
+            "claims": []
+          },
+          "context": {
+            "packet_status": "empty",
+            "context_packet_id": "pkt_44206692e5dff296a39b4e96",
+            "citations": [],
+            "estimated_tokens": 0
+          }
+        }
+      ]
+    }
+  ],
+  "metrics": {
+    "cold": {
+      "factual_error_rate": {
+        "numerator": 0,
+        "denominator": 0,
+        "value": null,
+        "unit": "ratio",
+        "note": "no observed claims are emitted without ACR context"
+      },
+      "file_test_recall": {
+        "numerator": 0,
+        "denominator": 0,
+        "value": null,
+        "unit": "ratio",
+        "note": "the public corpus has no file or test identifier ground truth"
+      },
+      "citation_precision": {
+        "numerator": 0,
+        "denominator": 0,
+        "value": null,
+        "unit": "ratio",
+        "note": "no citations are emitted without ACR context"
+      },
+      "irrelevant_item_rate": {
+        "numerator": 0,
+        "denominator": 0,
+        "value": null,
+        "unit": "ratio",
+        "note": "no packet items are emitted without ACR context"
+      },
+      "plan_latency": {
+        "value": 3,
+        "unit": "logical_steps",
+        "note": "One deterministic planning step per task; not wall-clock latency."
+      },
+      "token_cost": {
+        "value": 0,
+        "unit": "estimated_context_tokens"
+      }
+    },
+    "context": {
+      "factual_error_rate": {
+        "numerator": 0,
+        "denominator": 4,
+        "value": 0,
+        "unit": "ratio"
+      },
+      "file_test_recall": {
+        "numerator": 0,
+        "denominator": 0,
+        "value": null,
+        "unit": "ratio",
+        "note": "the public corpus has no file or test identifier ground truth"
+      },
+      "citation_precision": {
+        "numerator": 4,
+        "denominator": 4,
+        "value": 1,
+        "unit": "ratio"
+      },
+      "irrelevant_item_rate": {
+        "numerator": 0,
+        "denominator": 4,
+        "value": 0,
+        "unit": "ratio"
+      },
+      "plan_latency": {
+        "value": 7,
+        "unit": "logical_steps",
+        "note": "One planning step plus one cited-packet-item inspection per task; not wall-clock latency."
+      },
+      "token_cost": {
+        "value": 314,
+        "unit": "estimated_context_tokens",
+        "note": "Uses the real packet budget estimator."
+      }
+    }
+  }
+}

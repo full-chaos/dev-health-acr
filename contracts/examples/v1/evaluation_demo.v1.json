@@ -1,0 +1,81 @@
+{
+  "schema_version": "evaluation_demo.v1",
+  "metrics": {
+    "cold": {
+      "factual_error_rate": {
+        "numerator": 0,
+        "denominator": 0,
+        "value": null,
+        "unit": "ratio",
+        "note": "no observed claims are emitted without ACR context"
+      },
+      "file_test_recall": {
+        "numerator": 0,
+        "denominator": 0,
+        "value": null,
+        "unit": "ratio",
+        "note": "the public corpus has no file or test identifier ground truth"
+      },
+      "citation_precision": {
+        "numerator": 0,
+        "denominator": 0,
+        "value": null,
+        "unit": "ratio",
+        "note": "no citations are emitted without ACR context"
+      },
+      "irrelevant_item_rate": {
+        "numerator": 0,
+        "denominator": 0,
+        "value": null,
+        "unit": "ratio",
+        "note": "no packet items are emitted without ACR context"
+      },
+      "plan_latency": {
+        "value": 3,
+        "unit": "logical_steps",
+        "note": "One deterministic planning step per task; not wall-clock latency."
+      },
+      "token_cost": {
+        "value": 0,
+        "unit": "estimated_context_tokens"
+      }
+    },
+    "context": {
+      "factual_error_rate": {
+        "numerator": 0,
+        "denominator": 4,
+        "value": 0,
+        "unit": "ratio"
+      },
+      "file_test_recall": {
+        "numerator": 0,
+        "denominator": 0,
+        "value": null,
+        "unit": "ratio",
+        "note": "the public corpus has no file or test identifier ground truth"
+      },
+      "citation_precision": {
+        "numerator": 4,
+        "denominator": 4,
+        "value": 1,
+        "unit": "ratio"
+      },
+      "irrelevant_item_rate": {
+        "numerator": 0,
+        "denominator": 4,
+        "value": 0,
+        "unit": "ratio"
+      },
+      "plan_latency": {
+        "value": 7,
+        "unit": "logical_steps",
+        "note": "One planning step plus one cited-packet-item inspection per task; not wall-clock latency."
+      },
+      "token_cost": {
+        "value": 314,
+        "unit": "estimated_context_tokens",
+        "note": "Uses the real packet budget estimator."
+      }
+    }
+  }
+}
