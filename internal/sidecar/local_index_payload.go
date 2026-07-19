@@ -10,7 +10,11 @@ func localEvidenceBundleUsage(bundle LocalEvidenceBundle) (int, int, int, error)
 	if len(bundle.Evidence) > maxLocalEvidenceItems {
 		return 0, 0, 0, invalidLocalIndexValue(ErrInvalidLocalEvidenceBundle, "evidence count")
 	}
-	payloadBytes := len(bundle.ProviderID) + len(bundle.ProviderVersion) + len(bundle.QueryID) + len(bundle.QueryVersion)
+	metadataBytes, err := localBundleMetadataBytes(bundle)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	payloadBytes := len(bundle.ProviderID) + len(bundle.ProviderVersion) + len(bundle.QueryID) + len(bundle.QueryVersion) + metadataBytes
 	tokens := 0
 	for index, evidence := range bundle.Evidence {
 		if err := ValidateLocalExpandedEvidence(evidence); err != nil {
@@ -21,7 +25,11 @@ func localEvidenceBundleUsage(bundle LocalEvidenceBundle) (int, int, int, error)
 				return 0, 0, 0, invalidLocalIndexValue(ErrInvalidLocalEvidenceBundle, "duplicate evidence")
 			}
 		}
-		payloadBytes += len(evidence.ID) + len(evidence.Locator) + len(evidence.Title) + len(evidence.Excerpt)
+		evidenceMetadataBytes, err := localEvidenceMetadataBytes(evidence)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		payloadBytes += len(evidence.ID) + len(evidence.Locator) + len(evidence.Title) + len(evidence.Excerpt) + evidenceMetadataBytes
 		if payloadBytes > maxLocalEvidenceBundlePayloadBytes || evidence.EstimatedTokens > maxLocalEvidenceTokens-tokens {
 			return 0, 0, 0, invalidLocalIndexValue(ErrInvalidLocalEvidenceBundle, "evidence budget")
 		}

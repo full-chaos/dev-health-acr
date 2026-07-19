@@ -40,10 +40,10 @@ func localBundleWithPayloadBytes(t *testing.T, want int) LocalEvidenceBundle {
 	bundle := LocalEvidenceBundle{
 		ProviderID: "fixture", ProviderVersion: "1.0.0", QueryID: "task-context", QueryVersion: "v1",
 		Evidence: []LocalExpandedEvidence{
-			{ID: "evidence-01", Locator: "locator-01", Title: "Local symbol"},
-			{ID: "evidence-02", Locator: "locator-02", Title: "Local symbol"},
-			{ID: "evidence-03", Locator: "locator-03", Title: "Local symbol"},
-			{ID: "evidence-04", Locator: "locator-04", Title: "Local symbol"},
+			{ID: "evidence-01", Locator: "locator-01", Title: "Local symbol", QueryID: "query", Relation: "definition", RepositoryPath: "internal/example.go", StartLine: 1},
+			{ID: "evidence-02", Locator: "locator-02", Title: "Local symbol", QueryID: "query", Relation: "definition", RepositoryPath: "internal/example.go", StartLine: 1},
+			{ID: "evidence-03", Locator: "locator-03", Title: "Local symbol", QueryID: "query", Relation: "definition", RepositoryPath: "internal/example.go", StartLine: 1},
+			{ID: "evidence-04", Locator: "locator-04", Title: "Local symbol", QueryID: "query", Relation: "definition", RepositoryPath: "internal/example.go", StartLine: 1},
 		},
 	}
 	remaining := want - providerBundlePayloadBytes(bundle)
@@ -72,9 +72,9 @@ func localBundleWithPayloadBytes(t *testing.T, want int) LocalEvidenceBundle {
 }
 
 func providerBundlePayloadBytes(bundle LocalEvidenceBundle) int {
-	bytes := len(bundle.ProviderID) + len(bundle.ProviderVersion) + len(bundle.QueryID) + len(bundle.QueryVersion)
+	bytes := len(bundle.ProviderID) + len(bundle.ProviderVersion) + len(bundle.QueryID) + len(bundle.QueryVersion) + 1
 	for _, evidence := range bundle.Evidence {
-		bytes += len(evidence.ID) + len(evidence.Locator) + len(evidence.Title) + len(evidence.Excerpt)
+		bytes += len(evidence.ID) + len(evidence.Locator) + len(evidence.Title) + len(evidence.Excerpt) + len(evidence.QueryID) + len(evidence.Relation) + len(evidence.RepositoryPath) + decimalDigits(evidence.StartLine)
 	}
 	return bytes
 }
