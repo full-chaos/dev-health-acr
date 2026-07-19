@@ -104,13 +104,17 @@ I/O.
   CodeGraph's SQLite storage.
 - Parsing `codegraph explore` or `codegraph node` output as a data source.
 - Claiming or inferring an indexed Git commit or ref. CodeGraph 1.2.0's
-  `status --json` exposes no commit/ref field. Raw CodeGraph JSON must never
-  carry an unambiguous `indexed*`, `git*`, or commit-SHA-shaped key at any
-  nesting level, even if its value is `indexed_commit_unknown`. Generic
-  `commit`, `ref`, and `revision` keys are rejected only on the `status`
-  object or its `index` object, so harmless additive fields such as a query
-  node's `ref` retain additive tolerance. Only ACR's downstream normalized
-  output may emit the literal sentinel `indexed_commit_unknown`; it MUST NOT
+  `status --json` exposes no commit/ref field. At every nesting level, raw
+  CodeGraph JSON rejects exactly `indexedCommit`, `indexed_commit`,
+  `indexedRef`, `indexed_ref`, `indexedGitSha`, `indexedRevision`,
+  `gitCommit`, `gitRef`, `gitRevision`, `gitSha`, `gitSHA`, `git_sha`,
+  `GitSha`, `GitSHA`, `GIT_SHA`, `commitSha`, `commitSHA`, `commit_sha`,
+  `CommitSha`, `CommitSHA`, and `COMMIT_SHA`, even when a value is
+  `indexed_commit_unknown`. At the `status` root and `status.index` only,
+  it also rejects `commit`, `ref`, `revision`, `commitId`, `commit_id`, and
+  `sha`; those ambiguous names remain tolerated in additive query/files/
+  callers payloads. Only ACR's downstream normalized output may emit the
+  literal sentinel `indexed_commit_unknown`; it MUST NOT
   substitute the working tree's current `HEAD`, infer a value from
   `.codegraph/codegraph.db`, or infer one from
   `lastIndexed`/`pendingChanges` timestamps.

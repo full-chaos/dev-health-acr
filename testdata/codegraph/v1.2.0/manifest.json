@@ -41,6 +41,12 @@
     "gitCommit",
     "gitRef",
     "gitRevision",
+    "gitSha",
+    "gitSHA",
+    "git_sha",
+    "GitSha",
+    "GitSHA",
+    "GIT_SHA",
     "commitSha",
     "commitSHA",
     "commit_sha",
@@ -48,7 +54,7 @@
     "CommitSHA",
     "COMMIT_SHA"
   ],
-  "status_provenance_keys": ["commit", "ref", "revision"],
+  "status_provenance_keys": ["commit", "ref", "revision", "commitId", "commit_id", "sha"],
   "indexed_commit_sentinel": "indexed_commit_unknown",
   "local_only_fields": {
     "status": ["projectPath", "indexPath"]
