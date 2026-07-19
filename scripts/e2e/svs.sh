@@ -25,7 +25,7 @@ TASK_BRANCH="main"
 TASK_REFERENCE="CHAOS-2914"
 
 usage() {
-  printf 'usage: %s --web-root <dev-health-web> --compose <root-compose.yml> --overlay <acr.compose.yml> --project <acr-svs-name> [--scenario happy]\n' "$0" >&2
+  printf 'usage: %s --web-root <dev-health-web> --compose <root-compose.yml> --overlay <acr.compose.yml> --project <acr-svs-name> [--scenario happy|foreign-repo|false-entitlement|bad-credential|malformed-evidence|assertion-confusion|default-writeback]\n' "$0" >&2
 }
 
 svs_die() { printf '[acr-svs] FAIL: %s\n' "$*" >&2; exit 1; }
@@ -43,7 +43,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ "$SCENARIO" == "happy" ]] || { usage; exit 2; }
+case "$SCENARIO" in happy|foreign-repo|false-entitlement|bad-credential|malformed-evidence|assertion-confusion|default-writeback) ;; *) usage; exit 2 ;; esac
 [[ -d "$WEB_ROOT" && -f "$WEB_ROOT/package.json" && -f "$COMPOSE_FILE" && -f "$OVERLAY_FILE" ]] || { usage; exit 2; }
 [[ "$PROJECT" =~ ^acr-svs-[a-z0-9][a-z0-9-]{2,40}$ ]] || svs_die 'project must be an isolated acr-svs-* name'
 [[ "$PROJECT" != "dev-health" && "$PROJECT" != "default" ]] || svs_die 'refusing the operator default Compose project'
@@ -113,6 +113,12 @@ services:
       valkey: { condition: service_healthy }
     networks: [dev-health]
 EOF
+  if [[ "$SCENARIO" != 'happy' ]]; then
+    cat >> "$STATE/svs.override.yml" <<'EOF'
+  migrate:
+    entrypoint: ["sh", "-c", "python -m dev_health_ops.cli migrate postgres"]
+EOF
+  fi
 }
 
 enable_cross_surface_request_id() {
@@ -281,6 +287,160 @@ preserve_evidence() {
   jq -n --arg project "$PROJECT" --arg scenario "$SCENARIO" --arg api_packet "$(jq -r '.context_packet_id' "$STATE/api-packet.json")" --arg evidence "$(<"$STATE/evidence-id")" '{project:$project,scenario:$scenario,packet_id:$api_packet,evidence_ref_id:$evidence,writeback:"disabled"}' > "$EVIDENCE_DIR/manifest.json"
 }
 
+acr_table_count() {
+  local table
+  case "$1" in
+    snapshots) table='acr.context_packet_snapshots' ;;
+    episodes) table='acr.agent_episodes' ;;
+    *) svs_die 'unknown ACR persistence probe' ;;
+  esac
+  compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres \
+    psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 \
+    -c "SELECT count(*) FROM ${table}"
+}
+
+assert_no_forbidden_persistence() {
+  local snapshots_before="$1" episodes_before="$2" snapshots_after episodes_after
+  snapshots_after="$(acr_table_count snapshots)"
+  episodes_after="$(acr_table_count episodes)"
+  [[ "$snapshots_after" == "$snapshots_before" ]] || svs_die "${SCENARIO} persisted a context packet despite denial"
+  [[ "$episodes_after" == "$episodes_before" ]] || svs_die "${SCENARIO} persisted an agent episode despite denial"
+}
+
+remove_runtime_entitlement() {
+  local remaining
+  compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres \
+    psql -h postgres -U "$POSTGRES_USER" -d devhealth -v ON_ERROR_STOP=1 \
+    -c "DELETE FROM org_feature_overrides USING feature_flags WHERE org_feature_overrides.feature_id = feature_flags.id AND org_feature_overrides.org_id = '$(<"$STATE/org-id")' AND feature_flags.key = 'agent_context_runtime'" >/dev/null
+  remaining="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres \
+    psql -h postgres -U "$POSTGRES_USER" -d devhealth -At -v ON_ERROR_STOP=1 \
+    -c "SELECT count(*) FROM org_feature_overrides JOIN feature_flags ON feature_flags.id = org_feature_overrides.feature_id WHERE org_feature_overrides.org_id = '$(<"$STATE/org-id")' AND feature_flags.key = 'agent_context_runtime'")"
+  [[ "$remaining" == '0' ]] || svs_die 'failed to remove the isolated runtime entitlement override'
+  compose exec -T valkey valkey-cli FLUSHDB >/dev/null
+}
+
+bootstrap_failure_ops() {
+  local output org_id token db
+  compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-ops-tls >/dev/null
+  if ! output="$(compose exec -T api dev-hops admin orgs create --name "${PROJECT} SVS" --slug "$PROJECT" --description 'isolated SVS control plane' --tier community)"; then
+    printf '%s\n' "$output" >&2
+    svs_die 'Ops organization provisioning failed'
+  fi
+  org_id="$(printf '%s\n' "$output" | sed -nE 's/.*id:[[:space:]]*([0-9a-fA-F-]{36}).*/\1/p')"
+  [[ "$org_id" =~ ^[0-9a-fA-F-]{36}$ ]] || svs_die 'Ops organization provisioning did not return an ID'
+  compose exec -T api dev-hops admin bundles assign-org --org-id "$org_id" --feature-key agent_context_runtime --reason 'isolated SVS control plane' --expires-days 1 >/dev/null
+  token="$(compose exec -T api dev-hops service-credentials create --service acr --scope entitlements:read)"
+  [[ "$token" == svc_acr_* ]] || svs_die 'Ops credential provisioning returned an invalid token shape'
+  write_secret "$STATE/secrets/ops-token" "$token"
+  printf '%s' "$org_id" > "$STATE/org-id"
+  db="acr_${PROJECT//-/}_e2e"
+  compose exec -T clickhouse clickhouse-client --user default --password ch --query "CREATE DATABASE IF NOT EXISTS ${db}" >/dev/null
+  compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:8123/${db} dev-hops migrate clickhouse" >/dev/null
+  compose exec -T clickhouse clickhouse-client --user default --password ch --multiquery <<EOF >/dev/null
+CREATE USER IF NOT EXISTS acr_reader IDENTIFIED BY '$(<"$STATE/secrets/clickhouse-password")';
+ALTER USER acr_reader SETTINGS readonly = 2;
+GRANT SELECT ON ${db}.* TO acr_reader;
+EOF
+}
+
+start_failure_runtime() {
+  bootstrap_failure_ops
+  if [[ "$SCENARIO" == 'false-entitlement' ]]; then
+    remove_runtime_entitlement
+  fi
+  compose up -d acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
+  wait_https_ready
+  record_acl_probe
+  create_acr_credential
+  if [[ "$SCENARIO" != 'false-entitlement' ]]; then
+    rotate_acr_credential
+  fi
+}
+
+preserve_failure_evidence() {
+  local expected_status="$1" expected_code="$2"
+  EVIDENCE_DIR="$REPO_ROOT/.omo/evidence/task-23-acr-project-completion/$PROJECT"
+  mkdir -p "$EVIDENCE_DIR"
+  cp "$STATE/${SCENARIO}.response.json" "$EVIDENCE_DIR/"
+  jq -n \
+    --arg project "$PROJECT" \
+    --arg scenario "$SCENARIO" \
+    --arg status "$expected_status" \
+    --arg code "$expected_code" \
+    --arg boundary "$SAFE_BOUNDARY" \
+    '{project:$project,scenario:$scenario,expected_http_status:($status | tonumber),expected_error_code:$code,safe_boundary:$boundary,forbidden_persistence:"unchanged"}' \
+    > "$EVIDENCE_DIR/manifest.json"
+}
+
+run_failure_scenario() {
+  local token snapshots_before episodes_before expected_status expected_code
+  svs_note "starting isolated ${SCENARIO} fail-closed scenario"
+  start_failure_runtime
+  if [[ "$SCENARIO" == 'false-entitlement' ]]; then
+    token="$(<"$STATE/secrets/acr-token")"
+  else
+    token="$(<"$STATE/secrets/acr-rotated-token")"
+  fi
+  write_context_request
+  snapshots_before="$(acr_table_count snapshots)"
+  episodes_before="$(acr_table_count episodes)"
+
+  case "$SCENARIO" in
+    foreign-repo)
+      jq '.repository.slug = "acme/foreign"' "$STATE/request.json" > "$STATE/foreign-request.json"
+      expected_status=403
+      expected_code=repo_forbidden
+      expect_typed_http_error "$expected_status" "$expected_code" curl --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' \
+        -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' \
+        --data-binary @"$STATE/foreign-request.json" "https://localhost:${PORT}/api/v1/agent-context/context-packets"
+      SAFE_BOUNDARY='repository authorization rejected an out-of-scope repository before packet assembly'
+      ;;
+    false-entitlement)
+      expected_status=403
+      expected_code=feature_not_enabled
+      expect_typed_http_error "$expected_status" "$expected_code" curl --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' \
+        -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' \
+        --data-binary @"$STATE/request.json" "https://localhost:${PORT}/api/v1/agent-context/context-packets"
+      SAFE_BOUNDARY='the entitlement boundary rejected an organization without agent_context_runtime before packet assembly'
+      ;;
+    bad-credential)
+      expected_status=401
+      expected_code=invalid_token
+      expect_typed_http_error "$expected_status" "$expected_code" curl --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' \
+        -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer $(<"$STATE/secrets/acr-token")" \
+        "https://localhost:${PORT}/api/v1/agent-context/capabilities"
+      SAFE_BOUNDARY='the immediately revoked credential returned a typed authentication denial before protected reads'
+      ;;
+    malformed-evidence)
+      expected_status=404
+      expected_code=not_found
+      expect_typed_http_error "$expected_status" "$expected_code" curl --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' \
+        -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer ${token}" \
+        "https://localhost:${PORT}/api/v1/agent-context/evidence/bad"
+      SAFE_BOUNDARY='the evidence boundary collapsed a malformed reference to the typed not-found response'
+      ;;
+    assertion-confusion)
+      expected_status=401
+      expected_code=invalid_token
+      expect_typed_http_error "$expected_status" "$expected_code" curl --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' \
+        -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer ${token}" -H 'X-ACR-Web-Assertion: invalid.jwt.parts' -H 'Content-Type: application/json' \
+        --data-binary @"$STATE/request.json" "https://localhost:${PORT}/api/v1/agent-context/context-packets"
+      SAFE_BOUNDARY='a malformed web assertion took precedence and could not fall back to the otherwise valid bearer credential'
+      ;;
+    default-writeback)
+      expected_status=403
+      expected_code=insufficient_scope
+      expect_typed_http_error "$expected_status" "$expected_code" curl --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' \
+        -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' \
+        --data-binary '{}' "https://localhost:${PORT}/api/v1/agent-context/episodes"
+      SAFE_BOUNDARY='the default read-only credential rejected episode writeback before request handling'
+      ;;
+  esac
+
+  assert_no_forbidden_persistence "$snapshots_before" "$episodes_before"
+  preserve_failure_evidence "$expected_status" "$expected_code"
+}
+
 assert_project_unused
 prepare_state
 write_web_assertion_material
@@ -288,20 +448,24 @@ ensure_image
 render_override
 render_svs_override
 assert_safe_render
-svs_note 'starting isolated API, MCP, and web happy path'
-start_happy
-bootstrap_web_user
-compose up -d bugsink web-svs >/dev/null
-wait_web_ready
-assert_canonical_account_login
-enable_cross_surface_request_id
-write_context_request
-capture_api_surface
-clear_packet_snapshot "$STATE/api-packet.json"
-capture_mcp_surface
-clear_packet_snapshot "$STATE/mcp-packet.json"
-capture_browser_surface
-assert_cross_surface_agreement
-preserve_evidence
-SAFE_BOUNDARY='real TLS API, host-local MCP, and authenticated browser BFF agreed on packet and evidence IDs; writeback remained disabled'
+if [[ "$SCENARIO" == 'happy' ]]; then
+  svs_note 'starting isolated API, MCP, and web happy path'
+  start_happy
+  bootstrap_web_user
+  compose up -d bugsink web-svs >/dev/null
+  wait_web_ready
+  assert_canonical_account_login
+  enable_cross_surface_request_id
+  write_context_request
+  capture_api_surface
+  clear_packet_snapshot "$STATE/api-packet.json"
+  capture_mcp_surface
+  clear_packet_snapshot "$STATE/mcp-packet.json"
+  capture_browser_surface
+  assert_cross_surface_agreement
+  preserve_evidence
+  SAFE_BOUNDARY='real TLS API, host-local MCP, and authenticated browser BFF agreed on packet and evidence IDs; writeback remained disabled'
+else
+  run_failure_scenario
+fi
 svs_note "PASS: ${SCENARIO}: ${SAFE_BOUNDARY}"
