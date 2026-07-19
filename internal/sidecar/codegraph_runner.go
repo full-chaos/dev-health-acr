@@ -101,6 +101,9 @@ func runCodeGraphStatus(ctx context.Context, path string) ([]byte, error) {
 	}
 	cmd.Stderr = &boundedBuffer{limit: maxCodeGraphStderrBytes}
 	if err := cmd.Start(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, ErrCodeGraphUnavailable
 	}
 	output, readErr := decodeCodeGraphJSON(stdout)

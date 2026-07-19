@@ -83,6 +83,47 @@ func TestCodeGraphRunner_KillsOnTimeout(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
+func TestCodeGraphRunner_preservesContextErrorWhenProcessCannotStart(t *testing.T) {
+	tests := []struct {
+		name    string
+		context func() (context.Context, context.CancelFunc)
+		wantErr error
+	}{
+		{
+			name: "cancelled",
+			context: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx, func() {}
+			},
+			wantErr: context.Canceled,
+		},
+		{
+			name: "deadline exceeded",
+			context: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+				return ctx, cancel
+			},
+			wantErr: context.DeadlineExceeded,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			runner := newTestCodeGraphRunner(t, `printf '{}'`)
+			ctx, cancel := test.context()
+			defer cancel()
+
+			// When
+			_, err := runner.Status(ctx)
+
+			// Then
+			require.ErrorIs(t, err, test.wantErr)
+			require.NotErrorIs(t, err, ErrCodeGraphUnavailable)
+		})
+	}
+}
+
 func TestCodeGraphRunner_DoesNotPassACRCredentialsToChild(t *testing.T) {
 	// Given
 	t.Setenv("ACR_API_TOKEN", "canary-secret")
