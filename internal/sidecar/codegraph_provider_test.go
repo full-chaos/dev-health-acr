@@ -168,6 +168,27 @@ func TestCodeGraphProvider_Capabilities_rejectsExactIndexPathSymlinkOutsideRoot(
 	require.False(t, capabilities.Available)
 }
 
+func TestCodeGraphProvider_ContextForTask_preservesCandidateTimeout(t *testing.T) {
+	// Given
+	provider, workspace, _ := newFixtureCodeGraphProvider(t)
+	status := strings.ReplaceAll(readCodeGraphFixture(t, "status"), "<local-only:absolute-project-path>", workspace.GitRoot)
+	status = strings.ReplaceAll(status, "<local-only:absolute-index-path>", filepath.Join(workspace.GitRoot, ".codegraph"))
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	require.NoError(t, os.WriteFile(statusPath, []byte(status), 0o600))
+	executable := filepath.Join(t.TempDir(), "codegraph")
+	script := "#!/bin/sh\nif [ \"$1\" = status ]; then /bin/cat " + shellQuote(statusPath) + "; else sleep 10; fi\n"
+	require.NoError(t, os.WriteFile(executable, []byte(script), 0o700))
+	provider.runner = CodeGraphRunner{Config: LocalIndexConfig{Executable: executable, Timeout: 100 * time.Millisecond}, resolveExecutable: func(string) (string, error) { return executable, nil }}
+	request := LocalContextRequest{TaskID: "CHAOS-3007", Goal: "inspect local evidence", MaxItems: 1, MaxOutputTokens: 125, Workspace: &workspace}
+
+	// When
+	_, err := provider.ContextForTask(t.Context(), request)
+
+	// Then
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NotErrorIs(t, err, ErrLocalIndexUnavailable)
+}
+
 func readCodeGraphFixture(t *testing.T, name string) string {
 	t.Helper()
 	_, sourceFile, _, found := runtime.Caller(0)
