@@ -84,7 +84,7 @@ func newFixtureCodeGraphProvider(t *testing.T) (*CodeGraphLocalIndexProvider, Lo
 		fixture := readCodeGraphFixture(t, name)
 		if name == "status" {
 			fixture = strings.ReplaceAll(fixture, "<local-only:absolute-project-path>", canonicalRoot)
-			fixture = strings.ReplaceAll(fixture, "<local-only:absolute-index-path>", filepath.Join(canonicalRoot, ".codegraph", "codegraph.db"))
+			fixture = strings.ReplaceAll(fixture, "<local-only:absolute-index-path>", filepath.Join(canonicalRoot, ".codegraph"))
 		}
 		require.NoError(t, os.WriteFile(filepath.Join(fixtureDir, name+".json"), []byte(fixture), 0o600))
 	}
@@ -93,7 +93,7 @@ func newFixtureCodeGraphProvider(t *testing.T) (*CodeGraphLocalIndexProvider, Lo
 	executable := filepath.Join(root, "codegraph")
 	require.NoError(t, os.WriteFile(executable, []byte(script), 0o700))
 	runner := CodeGraphRunner{
-		Config:            LocalIndexConfig{Executable: executable, Timeout: time.Second, MaxItems: 5, MaxOutputTokens: 1000},
+		Config:            LocalIndexConfig{Executable: executable, Timeout: 3 * time.Second, MaxItems: 5, MaxOutputTokens: 1000},
 		resolveExecutable: func(string) (string, error) { return executable, nil },
 	}
 	workspace := LocalWorkspaceSnapshot{
@@ -105,6 +105,44 @@ func newFixtureCodeGraphProvider(t *testing.T) (*CodeGraphLocalIndexProvider, Lo
 		ChangedFilesState: LocalChangedFilesComplete,
 	}
 	return NewCodeGraphLocalIndexProvider(runner, workspace), workspace, commandLog
+}
+
+func TestCodeGraphProvider_Capabilities_acceptsOnlyCanonicalIndexDirectory(t *testing.T) {
+	// Given
+	provider, workspace, _ := newFixtureCodeGraphProvider(t)
+	cases := []struct {
+		name      string
+		indexPath string
+		available bool
+	}{
+		{name: "canonical index directory", indexPath: filepath.Join(workspace.GitRoot, ".codegraph"), available: true},
+		{name: "database beneath index directory", indexPath: filepath.Join(workspace.GitRoot, ".codegraph", "codegraph.db")},
+		{name: "sibling index directory", indexPath: filepath.Join(filepath.Dir(workspace.GitRoot), ".codegraph")},
+		{name: "ancestor index directory", indexPath: filepath.Join(filepath.Dir(filepath.Dir(workspace.GitRoot)), ".codegraph")},
+	}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			status := strings.ReplaceAll(readCodeGraphFixture(t, "status"), "<local-only:absolute-project-path>", workspace.GitRoot)
+			status = strings.ReplaceAll(status, "<local-only:absolute-index-path>", test.indexPath)
+			fixturePath := filepath.Join(t.TempDir(), "status.json")
+			require.NoError(t, os.WriteFile(fixturePath, []byte(status), 0o600))
+			executable := filepath.Join(t.TempDir(), "codegraph")
+			require.NoError(t, os.WriteFile(executable, []byte("#!/bin/sh\n/bin/cat "+shellQuote(fixturePath)+"\n"), 0o700))
+			provider.runner = CodeGraphRunner{
+				Config:            LocalIndexConfig{Executable: executable, Timeout: 3 * time.Second},
+				resolveExecutable: func(string) (string, error) { return executable, nil },
+			}
+
+			// When
+			capabilities, err := provider.Capabilities(t.Context())
+
+			// Then
+			require.NoError(t, err)
+			require.Equal(t, test.available, capabilities.Available)
+		})
+	}
 }
 
 func readCodeGraphFixture(t *testing.T, name string) string {

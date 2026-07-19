@@ -185,7 +185,7 @@ func localStatusPayload(t *testing.T, fixture string) []byte {
 	root, err := canonicalCodeGraphRoot(t.TempDir())
 	require.NoError(t, err)
 	fixture = strings.ReplaceAll(fixture, "<local-only:absolute-project-path>", root)
-	fixture = strings.ReplaceAll(fixture, "<local-only:absolute-index-path>", root+"/.codegraph/codegraph.db")
+	fixture = strings.ReplaceAll(fixture, "<local-only:absolute-index-path>", root+"/.codegraph")
 	return []byte(fixture)
 }
 

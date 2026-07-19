@@ -99,7 +99,7 @@ func (p *CodeGraphLocalIndexProvider) status(ctx context.Context, workspace Loca
 		return codeGraphStatus{}, err
 	}
 	status, err := decodeCodeGraphStatus(payload)
-	if err != nil || !sameLocalPath(status.ProjectPath, workspace.GitRoot) || !sameLocalPath(filepath.Dir(filepath.Dir(status.IndexPath)), workspace.GitRoot) {
+	if err != nil || !sameLocalPath(status.ProjectPath, workspace.GitRoot) || !sameLocalPath(status.IndexPath, filepath.Join(workspace.GitRoot, ".codegraph")) {
 		return codeGraphStatus{}, errCodeGraphDecode
 	}
 	return status, nil
