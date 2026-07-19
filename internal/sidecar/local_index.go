@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -49,10 +50,25 @@ type LocalIndexCapabilities struct {
 
 // LocalContextRequest is a bounded, provider-neutral request for local evidence.
 type LocalContextRequest struct {
-	TaskID          string
-	Task            string
-	MaxItems        int
-	MaxOutputTokens int
+	TaskID              string
+	Task                string
+	TaskRef             string
+	RequestedCategories []string
+	Workspace           *LocalWorkspace
+	MaxItems            int
+	MaxOutputTokens     int
+}
+
+// LocalWorkspace is a trusted, provider-neutral snapshot supplied by scope
+// resolution. Root is operational-only and must never enter evidence output.
+type LocalWorkspace struct {
+	Root                 string
+	RepositorySlug       string
+	Branch               string
+	CommitSHA            string
+	Detached             bool
+	TargetFiles          []string
+	TargetFilesTruncated bool
 }
 
 // LocalEvidenceBundle is an ordered, bounded local evidence result.
@@ -61,6 +77,7 @@ type LocalEvidenceBundle struct {
 	ProviderVersion string
 	QueryID         string
 	QueryVersion    string
+	IndexedAt       *time.Time
 	Evidence        []LocalExpandedEvidence
 }
 
@@ -107,6 +124,9 @@ func ValidateLocalIndexCapabilities(capabilities LocalIndexCapabilities) error {
 func ValidateLocalContextRequest(request LocalContextRequest) error {
 	if !boundedNonEmpty(request.TaskID, maxLocalTaskIDBytes) || !boundedNonEmpty(request.Task, maxLocalTaskBytes) {
 		return invalidLocalIndexValue(ErrInvalidLocalContextRequest, "task")
+	}
+	if (request.TaskRef != "" && !validCodeGraphText(request.TaskRef, maxLocalTaskIDBytes)) || !validRequestedCategories(request.RequestedCategories) {
+		return invalidLocalIndexValue(ErrInvalidLocalContextRequest, "local request")
 	}
 	if !boundedPositive(request.MaxItems, maxLocalEvidenceItems) || !boundedPositive(request.MaxOutputTokens, maxLocalEvidenceTokens) {
 		return invalidLocalIndexValue(ErrInvalidLocalContextRequest, "limits")
@@ -168,6 +188,10 @@ func NormalizeLocalEvidenceBundleForRequest(request LocalContextRequest, capabil
 
 func copyLocalEvidenceBundle(bundle LocalEvidenceBundle) LocalEvidenceBundle {
 	normalized := bundle
+	if bundle.IndexedAt != nil {
+		indexedAt := *bundle.IndexedAt
+		normalized.IndexedAt = &indexedAt
+	}
 	normalized.Evidence = make([]LocalExpandedEvidence, len(bundle.Evidence))
 	copy(normalized.Evidence, bundle.Evidence)
 	return normalized

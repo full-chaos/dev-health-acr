@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +18,7 @@ func TestCodeGraphRunner_ReturnsStreamingJSONForFixedStatusCommand(t *testing.T)
 	runner := newTestCodeGraphRunner(t, `printf '{"version":"1.2.0"}'`)
 
 	// When
-	result, err := runner.Status(context.Background())
+	result, err := runner.Status(context.Background(), t.TempDir())
 
 	// Then
 	require.NoError(t, err)
@@ -29,7 +30,7 @@ func TestCodeGraphRunner_RejectsUntrustedExecutable(t *testing.T) {
 	runner := CodeGraphRunner{Config: LocalIndexConfig{Executable: filepath.Join(t.TempDir(), "codegraph")}}
 
 	// When
-	_, err := runner.Status(context.Background())
+	_, err := runner.Status(context.Background(), t.TempDir())
 
 	// Then
 	require.ErrorIs(t, err, ErrCodeGraphUnavailable)
@@ -42,7 +43,7 @@ func TestCodeGraphRunner_RedactsPath(t *testing.T) {
 	runner := CodeGraphRunner{Config: LocalIndexConfig{Executable: path}}
 
 	// When
-	_, err := runner.Status(context.Background())
+	_, err := runner.Status(context.Background(), t.TempDir())
 
 	// Then
 	require.ErrorIs(t, err, ErrCodeGraphUnavailable)
@@ -54,7 +55,7 @@ func TestCodeGraphRunner_KillsOversizedOutput(t *testing.T) {
 	runner := newTestCodeGraphRunner(t, `printf '"'; head -c 1048577 /dev/zero | tr '\000' a; printf '"'`)
 
 	// When
-	_, err := runner.Status(context.Background())
+	_, err := runner.Status(context.Background(), t.TempDir())
 
 	// Then
 	require.ErrorIs(t, err, ErrCodeGraphOutputTooLarge)
@@ -65,7 +66,7 @@ func TestCodeGraphRunner_RejectsMalformedJSON(t *testing.T) {
 	runner := newTestCodeGraphRunner(t, `printf '{not-json}'`)
 
 	// When
-	_, err := runner.Status(context.Background())
+	_, err := runner.Status(context.Background(), t.TempDir())
 
 	// Then
 	require.ErrorIs(t, err, ErrCodeGraphUnavailable)
@@ -77,7 +78,7 @@ func TestCodeGraphRunner_KillsOnTimeout(t *testing.T) {
 	runner.Config.Timeout = 100 * time.Millisecond
 
 	// When
-	_, err := runner.Status(context.Background())
+	_, err := runner.Status(context.Background(), t.TempDir())
 
 	// Then
 	require.ErrorIs(t, err, context.DeadlineExceeded)
@@ -115,7 +116,7 @@ func TestCodeGraphRunner_preservesContextErrorWhenProcessCannotStart(t *testing.
 			defer cancel()
 
 			// When
-			_, err := runner.Status(ctx)
+			_, err := runner.Status(ctx, t.TempDir())
 
 			// Then
 			require.ErrorIs(t, err, test.wantErr)
@@ -130,7 +131,7 @@ func TestCodeGraphRunner_DoesNotPassACRCredentialsToChild(t *testing.T) {
 	runner := newTestCodeGraphRunner(t, `test -z "$ACR_API_TOKEN" && printf '{}'`)
 
 	// When
-	_, err := runner.Status(context.Background())
+	_, err := runner.Status(context.Background(), t.TempDir())
 
 	// Then
 	require.NoError(t, err)
@@ -158,4 +159,63 @@ func TestCodeGraphRunner_RejectsArbitraryArguments(t *testing.T) {
 	require.ErrorIs(t, err, ErrCodeGraphArgumentsRejected)
 	require.False(t, errors.Is(err, context.Canceled))
 	require.NotContains(t, err.Error(), strings.Join([]string{"--unsafe"}, ""))
+}
+
+func TestCodeGraphRunner_TypedCommands_useFixedJSONArgvAndTrustedRoot(t *testing.T) {
+	// Given
+	runner, root, commandLog := newRecordingCodeGraphRunner(t)
+	query := codeGraphQueryRequest{GitRoot: root, Search: "Assemble", Limit: 3}
+
+	// When
+	_, statusErr := runner.Status(t.Context(), root)
+	_, queryErr := runner.Query(t.Context(), query)
+	_, callersErr := runner.Callers(t.Context(), query)
+	_, calleesErr := runner.Callees(t.Context(), query)
+	_, impactErr := runner.Impact(t.Context(), query)
+	_, affectedErr := runner.Affected(t.Context(), codeGraphAffectedRequest{GitRoot: root, Files: []string{"internal/sidecar/local_index.go"}})
+	_, filesErr := runner.Files(t.Context(), codeGraphFilesRequest{GitRoot: root, Filter: "internal/sidecar", Pattern: "*.go"})
+
+	// Then
+	for _, err := range []error{statusErr, queryErr, callersErr, calleesErr, impactErr, affectedErr, filesErr} {
+		require.NoError(t, err)
+	}
+	commands, err := os.ReadFile(commandLog)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		root + "|status --json",
+		root + "|query --json Assemble --limit 3",
+		root + "|callers --json Assemble --limit 3",
+		root + "|callees --json Assemble --limit 3",
+		root + "|impact --json Assemble --depth 2",
+		root + "|affected --json internal/sidecar/local_index.go --depth 2",
+		root + "|files --json --filter internal/sidecar --pattern *.go --max-depth 2 --no-metadata",
+	}, strings.Split(strings.TrimSpace(string(commands)), "\n"))
+}
+
+func TestCodeGraphRunner_TypedCommands_rejectControlsAndUnsafePaths(t *testing.T) {
+	// Given
+	runner, root, commandLog := newRecordingCodeGraphRunner(t)
+
+	// When
+	_, queryErr := runner.Query(t.Context(), codeGraphQueryRequest{GitRoot: root, Search: "unsafe\nquery", Limit: 1})
+	_, affectedErr := runner.Affected(t.Context(), codeGraphAffectedRequest{GitRoot: root, Files: []string{"/private/local.go"}})
+	_, filesErr := runner.Files(t.Context(), codeGraphFilesRequest{GitRoot: root, Filter: "../unsafe"})
+
+	// Then
+	require.ErrorIs(t, queryErr, ErrCodeGraphArgumentsRejected)
+	require.ErrorIs(t, affectedErr, ErrCodeGraphArgumentsRejected)
+	require.ErrorIs(t, filesErr, ErrCodeGraphArgumentsRejected)
+	_, err := os.Stat(commandLog)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func newRecordingCodeGraphRunner(t *testing.T) (CodeGraphRunner, string, string) {
+	t.Helper()
+	root, err := canonicalCodeGraphRoot(t.TempDir())
+	require.NoError(t, err)
+	commandLog := filepath.Join(root, "commands.log")
+	executable := filepath.Join(root, "codegraph")
+	script := "#!/bin/sh\nprintf '%s|%s\\n' \"$PWD\" \"$*\" >> " + strconv.Quote(commandLog) + "\nprintf '{}'\n"
+	require.NoError(t, os.WriteFile(executable, []byte(script), 0o700))
+	return CodeGraphRunner{Config: LocalIndexConfig{Executable: executable, Timeout: time.Second}, resolveExecutable: func(string) (string, error) { return executable, nil }}, root, commandLog
 }

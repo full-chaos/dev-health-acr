@@ -2,20 +2,19 @@ package sidecar
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
 const (
-	maxCodeGraphStdoutBytes = 1 << 20
-	maxCodeGraphStderrBytes = 8 << 10
-	codeGraphWaitDelay      = time.Second
+	maxCodeGraphStdoutBytes     = 1 << 20
+	maxCodeGraphStderrBytes     = 8 << 10
+	codeGraphTraversalDepth     = 2
+	codeGraphJSONQueryVersion   = "codegraph-json-contract-v1"
+	codeGraphCommandResultLimit = 12
 )
 
 var (
@@ -24,27 +23,106 @@ var (
 	ErrCodeGraphArgumentsRejected = errors.New("codegraph arguments are not permitted")
 )
 
-// CodeGraphRunner executes only fixed, read-only CodeGraph JSON commands.
+// CodeGraphRunner executes only ADR-0005's fixed, read-only CodeGraph JSON commands.
 type CodeGraphRunner struct {
 	Config            LocalIndexConfig
 	resolveExecutable func(string) (string, error)
 }
 
-// Status executes the fixed `codegraph status --json` contract command.
-func (r CodeGraphRunner) Status(ctx context.Context) ([]byte, error) {
-	return r.Run(ctx, "status", nil)
+type codeGraphQueryRequest struct {
+	GitRoot string
+	Search  string
+	Limit   int
 }
 
-// Run rejects all caller-supplied arguments. The only supported command in
-// this foundation is the fixed status probe; later adapters add typed commands.
-func (r CodeGraphRunner) Run(ctx context.Context, command string, arguments []string) ([]byte, error) {
-	if len(arguments) != 0 {
+type codeGraphAffectedRequest struct {
+	GitRoot string
+	Files   []string
+}
+
+type codeGraphFilesRequest struct {
+	GitRoot string
+	Filter  string
+	Pattern string
+}
+
+func (r CodeGraphRunner) Status(ctx context.Context, gitRoot string) ([]byte, error) {
+	return r.run(ctx, gitRoot, []string{"status", "--json"})
+}
+
+func (r CodeGraphRunner) Query(ctx context.Context, request codeGraphQueryRequest) ([]byte, error) {
+	if !validCodeGraphText(request.Search, maxLocalTaskBytes) || !validCodeGraphLimit(request.Limit) {
 		return nil, ErrCodeGraphArgumentsRejected
 	}
-	if command != "status" {
+	return r.run(ctx, request.GitRoot, []string{"query", "--json", request.Search, "--limit", strconv.Itoa(request.Limit)})
+}
+
+func (r CodeGraphRunner) Callers(ctx context.Context, request codeGraphQueryRequest) ([]byte, error) {
+	if !validCodeGraphText(request.Search, maxLocalEvidenceTitleBytes) || !validCodeGraphLimit(request.Limit) {
 		return nil, ErrCodeGraphArgumentsRejected
 	}
-	if r.Config.Provider == LocalIndexProviderDisabled || r.Config.Err != nil {
+	return r.run(ctx, request.GitRoot, []string{"callers", "--json", request.Search, "--limit", strconv.Itoa(request.Limit)})
+}
+
+func (r CodeGraphRunner) Callees(ctx context.Context, request codeGraphQueryRequest) ([]byte, error) {
+	if !validCodeGraphText(request.Search, maxLocalEvidenceTitleBytes) || !validCodeGraphLimit(request.Limit) {
+		return nil, ErrCodeGraphArgumentsRejected
+	}
+	return r.run(ctx, request.GitRoot, []string{"callees", "--json", request.Search, "--limit", strconv.Itoa(request.Limit)})
+}
+
+func (r CodeGraphRunner) Impact(ctx context.Context, request codeGraphQueryRequest) ([]byte, error) {
+	if !validCodeGraphText(request.Search, maxLocalEvidenceTitleBytes) {
+		return nil, ErrCodeGraphArgumentsRejected
+	}
+	return r.run(ctx, request.GitRoot, []string{"impact", "--json", request.Search, "--depth", strconv.Itoa(codeGraphTraversalDepth)})
+}
+
+func (r CodeGraphRunner) Affected(ctx context.Context, request codeGraphAffectedRequest) ([]byte, error) {
+	if len(request.Files) == 0 || len(request.Files) > DefaultMaxChangedFiles {
+		return nil, ErrCodeGraphArgumentsRejected
+	}
+	arguments := make([]string, 0, len(request.Files)+4)
+	arguments = append(arguments, "affected", "--json")
+	for _, file := range request.Files {
+		if !validRepositoryRelativePath(file) {
+			return nil, ErrCodeGraphArgumentsRejected
+		}
+		arguments = append(arguments, file)
+	}
+	arguments = append(arguments, "--depth", strconv.Itoa(codeGraphTraversalDepth))
+	return r.run(ctx, request.GitRoot, arguments)
+}
+
+func (r CodeGraphRunner) Files(ctx context.Context, request codeGraphFilesRequest) ([]byte, error) {
+	if request.Filter != "" && !validRepositoryRelativePath(request.Filter) {
+		return nil, ErrCodeGraphArgumentsRejected
+	}
+	if request.Pattern != "" && !validCodeGraphText(request.Pattern, maxLocalEvidenceLocatorBytes) {
+		return nil, ErrCodeGraphArgumentsRejected
+	}
+	arguments := []string{"files", "--json"}
+	if request.Filter != "" {
+		arguments = append(arguments, "--filter", request.Filter)
+	}
+	if request.Pattern != "" {
+		arguments = append(arguments, "--pattern", request.Pattern)
+	}
+	arguments = append(arguments, "--max-depth", strconv.Itoa(codeGraphTraversalDepth), "--no-metadata")
+	return r.run(ctx, request.GitRoot, arguments)
+}
+
+// Run keeps the Task 3 generic seam intentionally inert: typed methods above
+// are the only command construction surface.
+func (r CodeGraphRunner) Run(_ context.Context, _ string, _ []string) ([]byte, error) {
+	return nil, ErrCodeGraphArgumentsRejected
+}
+
+func (r CodeGraphRunner) run(ctx context.Context, gitRoot string, arguments []string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !trustedCodeGraphRoot(gitRoot) || r.Config.Provider == LocalIndexProviderDisabled || r.Config.Err != nil {
 		return nil, ErrCodeGraphUnavailable
 	}
 	path, err := r.executable()
@@ -53,7 +131,7 @@ func (r CodeGraphRunner) Run(ctx context.Context, command string, arguments []st
 	}
 	deadline, cancel := context.WithTimeout(ctx, r.timeout())
 	defer cancel()
-	return runCodeGraphStatus(deadline, path)
+	return runCodeGraphJSON(deadline, path, gitRoot, arguments)
 }
 
 func (r CodeGraphRunner) executable() (string, error) {
@@ -87,79 +165,6 @@ func (r CodeGraphRunner) timeout() time.Duration {
 	return r.Config.Timeout
 }
 
-func runCodeGraphStatus(ctx context.Context, path string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, path, "status", "--json")
-	cmd.Env = credentialSafeEnviron()
-	cmd.Stdin = nil
-	configureKeyringProcessGroup(cmd)
-	cmd.Cancel = func() error { return killKeyringProcessGroup(cmd) }
-	cmd.WaitDelay = codeGraphWaitDelay
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, ErrCodeGraphUnavailable
-	}
-	cmd.Stderr = &boundedBuffer{limit: maxCodeGraphStderrBytes}
-	if err := cmd.Start(); err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, ErrCodeGraphUnavailable
-	}
-	output, readErr := decodeCodeGraphJSON(stdout)
-	if readErr != nil {
-		_ = killKeyringProcessGroup(cmd)
-		_ = cmd.Wait()
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if errors.Is(readErr, ErrCodeGraphOutputTooLarge) {
-			return nil, ErrCodeGraphOutputTooLarge
-		}
-		return nil, ErrCodeGraphUnavailable
-	}
-	if err := cmd.Wait(); err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("codegraph status failed: %w", ErrCodeGraphUnavailable)
-	}
-	return output, nil
-}
-
-func decodeCodeGraphJSON(reader io.Reader) ([]byte, error) {
-	limited := &codeGraphOutputReader{reader: reader}
-	decoder := json.NewDecoder(limited)
-	var output json.RawMessage
-	if err := decoder.Decode(&output); err != nil {
-		return nil, err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return nil, errors.New("codegraph returned multiple JSON values")
-		}
-		return nil, err
-	}
-	return output, nil
-}
-
-type codeGraphOutputReader struct {
-	reader io.Reader
-	read   int
-}
-
-func (r *codeGraphOutputReader) Read(p []byte) (int, error) {
-	if r.read > maxCodeGraphStdoutBytes {
-		return 0, ErrCodeGraphOutputTooLarge
-	}
-	if remaining := maxCodeGraphStdoutBytes + 1 - r.read; len(p) > remaining {
-		p = p[:remaining]
-	}
-	n, err := r.reader.Read(p)
-	r.read += n
-	if r.read > maxCodeGraphStdoutBytes {
-		return n, ErrCodeGraphOutputTooLarge
-	}
-	return n, err
+func validCodeGraphLimit(limit int) bool {
+	return limit > 0 && limit <= codeGraphCommandResultLimit
 }
