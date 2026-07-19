@@ -3,6 +3,8 @@ package sidecar
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -172,4 +174,62 @@ func TestNormalizeLocalEvidenceBundleForRequest_rejectsMetadataMismatch(t *testi
 	if !errors.Is(err, ErrInvalidLocalEvidenceBundle) {
 		t.Fatalf("NormalizeLocalEvidenceBundleForRequest() error = %v, want ErrInvalidLocalEvidenceBundle", err)
 	}
+}
+
+func TestLocalIndexProviderLimits_acceptExactGlobalItemCeilingDeterministically(t *testing.T) {
+	// Given
+	capabilities := LocalIndexCapabilities{ProviderID: "fixture", ProviderVersion: "1.0.0", Available: true, MaxItems: 12, MaxOutputTokens: 128}
+	request := LocalContextRequest{TaskID: "task-1", Task: "summarize", MaxItems: 12, MaxOutputTokens: 128}
+	bundle := LocalEvidenceBundle{ProviderID: "fixture", ProviderVersion: "1.0.0", QueryID: "task-context", QueryVersion: "v1", Evidence: localEvidenceItems(12)}
+
+	// When
+	first, firstErr := NormalizeLocalEvidenceBundleForRequest(request, capabilities, bundle)
+	second, secondErr := NormalizeLocalEvidenceBundleForRequest(request, capabilities, bundle)
+
+	// Then
+	if err := ValidateLocalIndexCapabilities(capabilities); err != nil {
+		t.Fatalf("ValidateLocalIndexCapabilities() error = %v", err)
+	}
+	if err := ValidateLocalContextRequest(request); err != nil {
+		t.Fatalf("ValidateLocalContextRequest() error = %v", err)
+	}
+	if firstErr != nil {
+		t.Fatalf("NormalizeLocalEvidenceBundleForRequest() first error = %v", firstErr)
+	}
+	if secondErr != nil {
+		t.Fatalf("NormalizeLocalEvidenceBundleForRequest() second error = %v", secondErr)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("NormalizeLocalEvidenceBundleForRequest() is not deterministic: first=%#v second=%#v", first, second)
+	}
+	if !reflect.DeepEqual(bundle.Evidence, localEvidenceItems(12)) {
+		t.Fatal("NormalizeLocalEvidenceBundleForRequest() mutated the input bundle")
+	}
+}
+
+func TestLocalIndexProviderLimits_rejectsOneOverGlobalItemCeiling(t *testing.T) {
+	// Given
+	capabilities := LocalIndexCapabilities{ProviderID: "fixture", ProviderVersion: "1.0.0", Available: true, MaxItems: 13, MaxOutputTokens: 128}
+	request := LocalContextRequest{TaskID: "task-1", Task: "summarize", MaxItems: 13, MaxOutputTokens: 128}
+	bundle := LocalEvidenceBundle{ProviderID: "fixture", ProviderVersion: "1.0.0", QueryID: "task-context", QueryVersion: "v1", Evidence: localEvidenceItems(13)}
+
+	// When / Then
+	if err := ValidateLocalIndexCapabilities(capabilities); !errors.Is(err, ErrInvalidLocalIndexCapabilities) {
+		t.Fatalf("ValidateLocalIndexCapabilities() error = %v, want ErrInvalidLocalIndexCapabilities", err)
+	}
+	if err := ValidateLocalContextRequest(request); !errors.Is(err, ErrInvalidLocalContextRequest) {
+		t.Fatalf("ValidateLocalContextRequest() error = %v, want ErrInvalidLocalContextRequest", err)
+	}
+	if _, err := NormalizeLocalEvidenceBundle(bundle); !errors.Is(err, ErrInvalidLocalEvidenceBundle) {
+		t.Fatalf("NormalizeLocalEvidenceBundle() error = %v, want ErrInvalidLocalEvidenceBundle", err)
+	}
+}
+
+func localEvidenceItems(count int) []LocalExpandedEvidence {
+	evidence := make([]LocalExpandedEvidence, count)
+	for index := range evidence {
+		id := fmt.Sprintf("evidence-%d", index+1)
+		evidence[index] = LocalExpandedEvidence{ID: id, Locator: "locator-" + id, Title: "Relevant local symbol", Excerpt: "safe excerpt", EstimatedTokens: 1}
+	}
+	return evidence
 }

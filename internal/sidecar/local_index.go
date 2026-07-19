@@ -18,7 +18,7 @@ const (
 	maxLocalEvidenceLocatorBytes       = 512
 	maxLocalEvidenceTitleBytes         = 512
 	maxLocalEvidenceExcerptBytes       = 8192
-	maxLocalEvidenceItems              = 8
+	maxLocalEvidenceItems              = 12
 	maxLocalEvidenceTokens             = 4000
 	maxLocalEvidenceBundlePayloadBytes = 32768
 )
