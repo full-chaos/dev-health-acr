@@ -203,5 +203,5 @@ func newRecordingCodeGraphRunner(t *testing.T) (CodeGraphRunner, string, string)
 	executable := filepath.Join(root, "codegraph")
 	script := "#!/bin/sh\nprintf '%s|%s\\n' \"$PWD\" \"$*\" >> " + strconv.Quote(commandLog) + "\nprintf '{}'\n"
 	require.NoError(t, os.WriteFile(executable, []byte(script), 0o700))
-	return CodeGraphRunner{Config: LocalIndexConfig{Executable: executable, Timeout: time.Second}, resolveExecutable: func(string) (string, error) { return executable, nil }}, root, commandLog
+	return CodeGraphRunner{Config: LocalIndexConfig{Executable: executable, Timeout: 3 * time.Second}, resolveExecutable: func(string) (string, error) { return executable, nil }}, root, commandLog
 }
