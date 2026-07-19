@@ -27,12 +27,12 @@ type localIndexClassification struct {
 }
 
 func (c localIndexClassification) omit(policy LocalIndexStalePolicy) bool {
-	return policy == LocalIndexStaleStrict && (c.Freshness == LocalIndexFreshnessStale || slices.Contains(c.Warnings, "local_worktree_mismatch") || slices.Contains(c.Warnings, "local_workspace_dirty"))
+	return policy == LocalIndexStaleStrict && (slices.Contains(c.Warnings, "local_index_stale") || slices.Contains(c.Warnings, "local_worktree_mismatch") || slices.Contains(c.Warnings, "local_workspace_dirty"))
 }
 
 func classifyCodeGraphWorkspace(workspace LocalWorkspaceSnapshot) localIndexClassification {
 	if workspace.ChangedFilesState == LocalChangedFilesTruncated {
-		return localIndexClassification{Status: LocalIndexStatusDegraded, Freshness: LocalIndexFreshnessUnknown, Warnings: []string{"changed_files_truncated"}}
+		return localIndexClassification{Status: LocalIndexStatusDegraded, Freshness: LocalIndexFreshnessStale, Warnings: []string{"changed_files_truncated"}}
 	}
 	return localIndexClassification{Status: LocalIndexStatusAvailable, Freshness: LocalIndexFreshnessUnknown}
 }

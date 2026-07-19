@@ -54,7 +54,7 @@ func (p *CodeGraphLocalIndexProvider) ContextForTask(ctx context.Context, reques
 	}
 	workspace, err := normalizeCodeGraphWorkspace(request.Workspace)
 	configuredWorkspace, configuredErr := normalizeCodeGraphWorkspace(&p.workspace)
-	if err != nil || configuredErr != nil || !sameCodeGraphWorkspace(workspace, configuredWorkspace) {
+	if err != nil || configuredErr != nil || !sameCodeGraphWorkspaceScope(workspace, configuredWorkspace) || (workspace.ChangedFilesState == LocalChangedFilesComplete && !sameCodeGraphWorkspace(workspace, configuredWorkspace)) {
 		return LocalEvidenceBundle{}, newLocalIndexError(LocalIndexErrorWorktreeMismatch, LocalIndexStatusUnavailable, LocalIndexFreshnessStale, []string{"local_worktree_mismatch"}, ErrInvalidLocalContextRequest)
 	}
 	status, err := p.status(ctx, workspace)
@@ -69,6 +69,9 @@ func (p *CodeGraphLocalIndexProvider) ContextForTask(ctx context.Context, reques
 	classification.Warnings = append(classification.Warnings, workspaceClassification.Warnings...)
 	if workspaceClassification.Status == LocalIndexStatusDegraded {
 		classification.Status = LocalIndexStatusDegraded
+	}
+	if workspaceClassification.Freshness == LocalIndexFreshnessStale {
+		classification.Freshness = LocalIndexFreshnessStale
 	}
 	if classification.omit(p.runner.Config.StalePolicy) {
 		return LocalEvidenceBundle{}, newLocalIndexError(LocalIndexErrorStale, LocalIndexStatusUnavailable, classification.Freshness, classification.Warnings, errCodeGraphMismatch)
@@ -178,6 +181,10 @@ func sameCodeGraphWorkspace(left, right LocalWorkspaceSnapshot) bool {
 		}
 	}
 	return true
+}
+
+func sameCodeGraphWorkspaceScope(left, right LocalWorkspaceSnapshot) bool {
+	return left.Repository == right.Repository && left.GitRoot == right.GitRoot && left.Branch == right.Branch && left.CommitSHA == right.CommitSHA && left.Detached == right.Detached
 }
 
 var _ LocalIndexProvider = (*CodeGraphLocalIndexProvider)(nil)

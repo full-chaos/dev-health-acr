@@ -29,7 +29,7 @@ func NewLocalWorkspaceSnapshot(info WorkspaceInfo, expectedSlug string, filesReq
 }
 
 func normalizeCodeGraphWorkspace(workspace *LocalWorkspaceSnapshot) (LocalWorkspaceSnapshot, error) {
-	if workspace == nil || workspace.ChangedFilesState == LocalChangedFilesTruncated || (workspace.ChangedFilesState != LocalChangedFilesNotRequested && workspace.ChangedFilesState != LocalChangedFilesComplete) {
+	if workspace == nil || (workspace.ChangedFilesState != LocalChangedFilesNotRequested && workspace.ChangedFilesState != LocalChangedFilesComplete && workspace.ChangedFilesState != LocalChangedFilesTruncated) || (workspace.ChangedFilesState == LocalChangedFilesNotRequested && len(workspace.ChangedFiles) != 0) {
 		return LocalWorkspaceSnapshot{}, ErrInvalidLocalContextRequest
 	}
 	if !validRepositorySlug(workspace.Repository.Slug) || !validCodeGraphText(workspace.Repository.Host, maxLocalEvidenceLocatorBytes) || !validCommitSHA(workspace.CommitSHA) || (workspace.Detached && workspace.Branch != "") || (!workspace.Detached && !validCodeGraphText(workspace.Branch, maxLocalTaskIDBytes)) {
@@ -39,7 +39,11 @@ func normalizeCodeGraphWorkspace(workspace *LocalWorkspaceSnapshot) (LocalWorksp
 	if err != nil {
 		return LocalWorkspaceSnapshot{}, ErrInvalidLocalContextRequest
 	}
-	files, err := normalizeRepositoryPaths(workspace.ChangedFiles)
+	normalizePaths := normalizeRepositoryPaths
+	if workspace.ChangedFilesState == LocalChangedFilesTruncated {
+		normalizePaths = normalizeTruncatedRepositoryPaths
+	}
+	files, err := normalizePaths(workspace.ChangedFiles)
 	if err != nil {
 		return LocalWorkspaceSnapshot{}, ErrInvalidLocalContextRequest
 	}
@@ -101,6 +105,24 @@ func normalizeRepositoryPaths(paths []string) ([]string, error) {
 			return nil, fmt.Errorf("duplicate path")
 		}
 		output = append(output, path)
+	}
+	return output, nil
+}
+
+func normalizeTruncatedRepositoryPaths(paths []string) ([]string, error) {
+	if len(paths) > DefaultMaxChangedFiles {
+		return nil, fmt.Errorf("too many paths")
+	}
+	normalized := append([]string(nil), paths...)
+	sort.Strings(normalized)
+	output := normalized[:0]
+	for _, path := range normalized {
+		if !validRepositoryRelativePath(path) {
+			return nil, fmt.Errorf("invalid path")
+		}
+		if len(output) == 0 || output[len(output)-1] != path {
+			output = append(output, path)
+		}
 	}
 	return output, nil
 }

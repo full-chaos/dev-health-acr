@@ -20,9 +20,6 @@ func (p *CodeGraphLocalIndexProvider) collectCandidates(ctx context.Context, wor
 	}
 	candidates := nodeCandidates(nodes)
 	anchors := nodes[:min(2, len(nodes))]
-	if workspace.ChangedFilesState == LocalChangedFilesNotRequested {
-		return nil, ErrCodeGraphArgumentsRejected
-	}
 	if len(workspace.ChangedFiles) > 0 && workspace.ChangedFilesState == LocalChangedFilesComplete && allowsCodeGraphAffected(request.RequestedCategories) {
 		payload, err := p.runner.Affected(ctx, codeGraphAffectedRequest{GitRoot: workspace.GitRoot, Files: workspace.ChangedFiles})
 		if err != nil {
@@ -33,6 +30,9 @@ func (p *CodeGraphLocalIndexProvider) collectCandidates(ctx context.Context, wor
 			return nil, err
 		}
 		candidates = append(candidates, affectedCandidates(affected)...)
+		anchors = anchors[:min(1, len(anchors))]
+	}
+	if workspace.ChangedFilesState != LocalChangedFilesComplete {
 		anchors = anchors[:min(1, len(anchors))]
 	}
 	if !allowsCodeGraphRelationships(request.RequestedCategories) {
@@ -46,7 +46,11 @@ func (p *CodeGraphLocalIndexProvider) collectCandidates(ctx context.Context, wor
 		candidates = append(candidates, relations...)
 	}
 	if request.TaskRef != "" && len(anchors) < 2 {
-		payload, err := p.runner.Files(ctx, codeGraphFilesRequest{GitRoot: workspace.GitRoot, Filter: directoryForCodeGraphFiles(workspace.ChangedFiles)})
+		filter := ""
+		if workspace.ChangedFilesState == LocalChangedFilesComplete {
+			filter = directoryForCodeGraphFiles(workspace.ChangedFiles)
+		}
+		payload, err := p.runner.Files(ctx, codeGraphFilesRequest{GitRoot: workspace.GitRoot, Filter: filter})
 		if err != nil {
 			return nil, err
 		}

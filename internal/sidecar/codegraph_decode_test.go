@@ -192,25 +192,49 @@ func TestCodeGraphProvider_Deterministic_decodesAllCanonicalFixtures(t *testing.
 	require.NotEmpty(t, files)
 }
 
-func TestCodeGraphProvider_ContextForTask_rejectsTruncatedOrMismatchedWorkspace(t *testing.T) {
+func TestCodeGraphProvider_ContextForTask_rejectsMismatchedWorkspace(t *testing.T) {
 	// Given
 	provider, workspace, _ := newFixtureCodeGraphProvider(t)
-	truncatedWorkspace := workspace
-	truncatedWorkspace.ChangedFilesState = LocalChangedFilesTruncated
 	mismatchedWorkspace := workspace
 	mismatchedWorkspace.Repository.Slug = "other/repository"
 	alteredFilesWorkspace := workspace
 	alteredFilesWorkspace.ChangedFiles = []string{"internal/sidecar/local_index.go"}
 
 	// When
-	_, truncatedErr := provider.ContextForTask(t.Context(), LocalContextRequest{TaskID: "CHAOS-3007", Goal: "safe local context", MaxItems: 1, MaxOutputTokens: 125, Workspace: &truncatedWorkspace})
 	_, mismatchErr := provider.ContextForTask(t.Context(), LocalContextRequest{TaskID: "CHAOS-3007", Goal: "safe local context", MaxItems: 1, MaxOutputTokens: 125, Workspace: &mismatchedWorkspace})
 	_, alteredFilesErr := provider.ContextForTask(t.Context(), LocalContextRequest{TaskID: "CHAOS-3007", Goal: "safe local context", MaxItems: 1, MaxOutputTokens: 125, Workspace: &alteredFilesWorkspace})
 
 	// Then
-	require.ErrorIs(t, truncatedErr, ErrInvalidLocalContextRequest)
 	require.ErrorIs(t, mismatchErr, ErrInvalidLocalContextRequest)
 	require.ErrorIs(t, alteredFilesErr, ErrInvalidLocalContextRequest)
+}
+
+func TestCodeGraphStatus_worktreeMismatchStringClassifiesStale(t *testing.T) {
+	// Given
+	object := decodeJSONObject(t, localStatusPayload(t, readCodeGraphFixture(t, "status")))
+	payload := appendStatusField(t, object, "worktreeMismatch", []byte(`"index built for another worktree"`))
+
+	// When
+	status, err := decodeCodeGraphStatus(payload)
+
+	// Then
+	require.NoError(t, err)
+	classification := classifyCodeGraphStatus(status)
+	require.Equal(t, LocalIndexStatusDegraded, classification.Status)
+	require.Equal(t, LocalIndexFreshnessStale, classification.Freshness)
+	require.Equal(t, []string{"local_worktree_mismatch", "indexed_commit_unknown"}, classification.Warnings)
+}
+
+func TestCodeGraphStatus_rejectsBooleanWorktreeMismatch(t *testing.T) {
+	// Given
+	object := decodeJSONObject(t, localStatusPayload(t, readCodeGraphFixture(t, "status")))
+	payload := appendStatusField(t, object, "worktreeMismatch", []byte("true"))
+
+	// When
+	_, err := decodeCodeGraphStatus(payload)
+
+	// Then
+	require.ErrorIs(t, err, errCodeGraphDecode)
 }
 
 func localStatusPayload(t *testing.T, fixture string) []byte {

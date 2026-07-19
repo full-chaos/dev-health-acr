@@ -51,9 +51,9 @@ func codeGraphWorktreeMismatch(object map[string]json.RawMessage) (bool, error) 
 	if !found || string(raw) == "null" {
 		return false, nil
 	}
-	var mismatch bool
+	var mismatch string
 	if err := json.Unmarshal(raw, &mismatch); err != nil {
 		return false, errCodeGraphDecode
 	}
-	return mismatch, nil
+	return mismatch != "", nil
 }

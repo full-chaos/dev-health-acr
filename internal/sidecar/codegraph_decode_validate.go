@@ -231,7 +231,7 @@ func validWorktreeMismatch(raw json.RawMessage) bool {
 		return true
 	}
 	var value string
-	return json.Unmarshal(raw, &value) == nil && validCodeGraphText(value, maxLocalTaskBytes)
+	return json.Unmarshal(raw, &value) == nil && safeOptionalText(value, maxLocalTaskBytes)
 }
 
 func validNullableText(raw json.RawMessage) bool {
