@@ -77,7 +77,7 @@ func decodeCodeGraphQuery(payload []byte) ([]codeGraphNode, error) {
 		return nil, err
 	}
 	var entries []map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &entries); err != nil {
+	if err := json.Unmarshal(payload, &entries); err != nil || entries == nil {
 		return nil, errCodeGraphDecode
 	}
 	nodes := make([]codeGraphNode, 0, len(entries))
@@ -177,7 +177,7 @@ func decodeCodeGraphFiles(payload []byte) ([]codeGraphFile, error) {
 		return nil, err
 	}
 	var entries []map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &entries); err != nil {
+	if err := json.Unmarshal(payload, &entries); err != nil || entries == nil {
 		return nil, errCodeGraphDecode
 	}
 	files := make([]codeGraphFile, 0, len(entries))

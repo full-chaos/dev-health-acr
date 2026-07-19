@@ -82,6 +82,24 @@ func TestCodeGraphProvider_ControlCharacter_rejectsNode(t *testing.T) {
 	require.ErrorIs(t, err, errCodeGraphDecode)
 }
 
+func TestCodeGraphProvider_TopLevelArrays_rejectNullAndAcceptEmpty(t *testing.T) {
+	// Given
+	nullPayload := []byte("null")
+	emptyPayload := []byte("[]")
+
+	// When
+	_, nullQueryErr := decodeCodeGraphQuery(nullPayload)
+	_, emptyQueryErr := decodeCodeGraphQuery(emptyPayload)
+	_, nullFilesErr := decodeCodeGraphFiles(nullPayload)
+	_, emptyFilesErr := decodeCodeGraphFiles(emptyPayload)
+
+	// Then
+	require.ErrorIs(t, nullQueryErr, errCodeGraphDecode)
+	require.NoError(t, emptyQueryErr)
+	require.ErrorIs(t, nullFilesErr, errCodeGraphDecode)
+	require.NoError(t, emptyFilesErr)
+}
+
 func TestCodeGraphProvider_Oversized_rejectsNode(t *testing.T) {
 	// Given
 	payload := []byte(strings.Replace(readCodeGraphFixture(t, "query"), `"Assembler::Assemble"`, `"`+strings.Repeat("x", maxLocalTaskBytes+1)+`"`, 1))

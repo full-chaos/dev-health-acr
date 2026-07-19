@@ -3,6 +3,7 @@ package sidecar
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -36,6 +37,9 @@ func (p *CodeGraphLocalIndexProvider) Capabilities(ctx context.Context) (LocalIn
 	}
 	status, err := p.status(ctx, workspace)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return LocalIndexCapabilities{}, err
+		}
 		return LocalIndexCapabilities{}, nil
 	}
 	return LocalIndexCapabilities{ProviderID: codeGraphProviderID, ProviderVersion: status.Version, Available: true, MaxItems: p.itemLimit(), MaxOutputTokens: p.tokenLimit()}, nil
@@ -55,6 +59,9 @@ func (p *CodeGraphLocalIndexProvider) ContextForTask(ctx context.Context, reques
 	}
 	status, err := p.status(ctx, workspace)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return LocalEvidenceBundle{}, err
+		}
 		return LocalEvidenceBundle{}, ErrLocalIndexUnavailable
 	}
 	candidates, err := p.collectCandidates(ctx, workspace, request)
@@ -99,10 +106,24 @@ func (p *CodeGraphLocalIndexProvider) status(ctx context.Context, workspace Loca
 		return codeGraphStatus{}, err
 	}
 	status, err := decodeCodeGraphStatus(payload)
-	if err != nil || status.ProjectPath != workspace.GitRoot || status.IndexPath != filepath.Join(workspace.GitRoot, ".codegraph") {
+	if err != nil || status.ProjectPath != workspace.GitRoot || status.IndexPath != filepath.Join(workspace.GitRoot, ".codegraph") || !trustedCodeGraphIndex(workspace.GitRoot) {
 		return codeGraphStatus{}, errCodeGraphDecode
 	}
 	return status, nil
+}
+
+func trustedCodeGraphIndex(root string) bool {
+	index := filepath.Join(root, ".codegraph")
+	info, err := os.Lstat(index)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	resolvedIndex, err := filepath.EvalSymlinks(index)
+	return err == nil && resolvedIndex == filepath.Join(resolvedRoot, ".codegraph")
 }
 
 func (p *CodeGraphLocalIndexProvider) collectCandidates(ctx context.Context, workspace LocalWorkspaceSnapshot, request LocalContextRequest) ([]codeGraphCandidate, error) {

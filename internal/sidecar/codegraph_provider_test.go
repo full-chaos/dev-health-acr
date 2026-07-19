@@ -78,6 +78,7 @@ func newFixtureCodeGraphProvider(t *testing.T) (*CodeGraphLocalIndexProvider, Lo
 	root := t.TempDir()
 	canonicalRoot, err := canonicalCodeGraphRoot(root)
 	require.NoError(t, err)
+	require.NoError(t, os.Mkdir(filepath.Join(canonicalRoot, ".codegraph"), 0o700))
 	fixtureDir := filepath.Join(root, "fixtures")
 	require.NoError(t, os.Mkdir(fixtureDir, 0o700))
 	for _, name := range []string{"status", "query", "callers", "callees", "impact", "affected", "files"} {
@@ -121,13 +122,14 @@ func TestCodeGraphProvider_Capabilities_acceptsOnlyCanonicalIndexDirectory(t *te
 		{name: "sibling index directory", indexPath: filepath.Join(filepath.Dir(workspace.GitRoot), ".codegraph")},
 		{name: "ancestor index directory", indexPath: filepath.Join(filepath.Dir(filepath.Dir(workspace.GitRoot)), ".codegraph")},
 		{name: "traversal index directory", indexPath: workspace.GitRoot + "/.codegraph/../.codegraph"},
-		{name: "symlink escape", indexPath: filepath.Join(workspace.GitRoot, "index-link"), symlink: true},
+		{name: "symlink escape", indexPath: filepath.Join(workspace.GitRoot, ".codegraph"), symlink: true},
 	}
 
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			// Given
 			if test.symlink {
+				require.NoError(t, os.Remove(test.indexPath))
 				require.NoError(t, os.Symlink(t.TempDir(), test.indexPath))
 			}
 			status := strings.ReplaceAll(readCodeGraphFixture(t, "status"), "<local-only:absolute-project-path>", workspace.GitRoot)
