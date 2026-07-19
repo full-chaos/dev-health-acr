@@ -49,6 +49,21 @@ func TestCodeGraphProvider_MissingField_rejectsRequiredStatusField(t *testing.T)
 	require.ErrorIs(t, decodeErr, errCodeGraphDecode)
 }
 
+func TestCodeGraphProvider_StatusLanguages_rejectsNullAndAcceptsEmpty(t *testing.T) {
+	// Given
+	object := decodeJSONObject(t, localStatusPayload(t, readCodeGraphFixture(t, "status")))
+	nullPayload := appendStatusField(t, object, "languages", []byte("null"))
+	emptyPayload := appendStatusField(t, object, "languages", []byte("[]"))
+
+	// When
+	_, nullErr := decodeCodeGraphStatus(nullPayload)
+	_, emptyErr := decodeCodeGraphStatus(emptyPayload)
+
+	// Then
+	require.ErrorIs(t, nullErr, errCodeGraphDecode)
+	require.NoError(t, emptyErr)
+}
+
 func TestCodeGraphProvider_UnsupportedVersion_rejectsStatus(t *testing.T) {
 	// Given
 	payload := []byte(strings.Replace(string(localStatusPayload(t, readCodeGraphFixture(t, "status"))), `"1.2.0"`, `"2.0.0"`, 1))
@@ -212,6 +227,14 @@ func decodeJSONObject(t *testing.T, payload []byte) map[string]json.RawMessage {
 	var object map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(payload, &object))
 	return object
+}
+
+func appendStatusField(t *testing.T, object map[string]json.RawMessage, field string, value []byte) []byte {
+	t.Helper()
+	object[field] = value
+	payload, err := json.Marshal(object)
+	require.NoError(t, err)
+	return payload
 }
 
 func readCodeGraphFixtureAt(t *testing.T, directory, name string) string {

@@ -234,7 +234,7 @@ func TestBuildCodeGraphEvidence_usesCommandQueryIDs(t *testing.T) {
 	}
 
 	// When
-	evidence, err := buildCodeGraphEvidence(candidates, len(candidates), 1000)
+	evidence, _, err := buildCodeGraphEvidence(candidates, len(candidates), 1000)
 
 	// Then
 	require.NoError(t, err)
@@ -246,7 +246,7 @@ func TestBuildCodeGraphEvidence_rejectsUnknownCommand(t *testing.T) {
 	candidates := []codeGraphCandidate{{Command: codeGraphCommand("unknown"), Type: "definition", Locator: "node:one", Title: "definition: one"}}
 
 	// When
-	_, err := buildCodeGraphEvidence(candidates, 1, 1000)
+	_, _, err := buildCodeGraphEvidence(candidates, 1, 1000)
 
 	// Then
 	require.ErrorIs(t, err, errCodeGraphDecode)

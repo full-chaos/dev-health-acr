@@ -109,7 +109,7 @@ func validRepositoryRelativePath(value string) bool {
 	if !validCodeGraphText(value, maxLocalEvidenceLocatorBytes) || filepath.IsAbs(value) || strings.HasPrefix(value, "\\") || hasWindowsAbsolutePathPrefix(value) || strings.Contains(value, "\\") {
 		return false
 	}
-	for _, part := range strings.Split(value, "/") {
+	for part := range strings.SplitSeq(value, "/") {
 		if part == "" || part == "." || part == ".." {
 			return false
 		}

@@ -202,7 +202,7 @@ func validStatusMap(raw json.RawMessage) bool {
 
 func validStatusLanguages(raw json.RawMessage) bool {
 	var values []string
-	if json.Unmarshal(raw, &values) != nil {
+	if json.Unmarshal(raw, &values) != nil || values == nil {
 		return false
 	}
 	for _, value := range values {

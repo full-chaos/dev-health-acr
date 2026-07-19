@@ -67,11 +67,16 @@ func (p *CodeGraphLocalIndexProvider) ContextForTask(ctx context.Context, reques
 		}
 		return LocalEvidenceBundle{}, ErrLocalIndexUnavailable
 	}
-	evidence, err := buildCodeGraphEvidence(candidates, min(request.MaxItems, p.itemLimit()), min(request.MaxOutputTokens, p.tokenLimit()))
+	evidence, candidateTruncated, err := buildCodeGraphEvidence(candidates, min(request.MaxItems, p.itemLimit()), min(request.MaxOutputTokens, p.tokenLimit()))
 	if err != nil {
 		return LocalEvidenceBundle{}, ErrLocalIndexUnavailable
 	}
-	bundle := LocalEvidenceBundle{ProviderID: codeGraphProviderID, ProviderVersion: status.Version, QueryID: "query", QueryVersion: codeGraphJSONQueryVersion, IndexedAt: &status.LastIndexedAt, Warnings: []string{"indexed_commit_unknown"}, Evidence: evidence}
+	bundle := LocalEvidenceBundle{ProviderID: codeGraphProviderID, ProviderVersion: status.Version, QueryID: "query", QueryVersion: codeGraphJSONQueryVersion, IndexedAt: &status.LastIndexedAt, Warnings: []string{"indexed_commit_unknown"}, Truncated: candidateTruncated, Evidence: evidence}
+	bundle, payloadTruncated, err := trimCodeGraphEvidence(bundle)
+	if err != nil {
+		return LocalEvidenceBundle{}, ErrLocalIndexUnavailable
+	}
+	bundle.Truncated = bundle.Truncated || payloadTruncated
 	normalized, err := NormalizeLocalEvidenceBundleForRequest(request, LocalIndexCapabilities{ProviderID: codeGraphProviderID, ProviderVersion: status.Version, Available: true, MaxItems: p.itemLimit(), MaxOutputTokens: p.tokenLimit()}, bundle)
 	if err != nil {
 		return LocalEvidenceBundle{}, ErrLocalIndexUnavailable
