@@ -57,11 +57,11 @@ cg_validate_fixture() {
   fi
 }
 
-# cg_scan_indexed_commit_keys <fixture-file> <manifest-json>
+# cg_scan_indexed_commit_keys <fixture-file> <manifest-json> <command-name>
 # Detects any forbidden raw indexed-commit/ref-shaped key recursively.
 cg_scan_indexed_commit_keys() {
-  local fixture="$1" manifest_json="$2" report ok
-  report=$(jq --argjson m "$manifest_json" -f "$cg_lib_dir/scan-indexed-commit.jq" "$fixture")
+  local fixture="$1" manifest_json="$2" cmd="$3" report ok
+  report=$(jq --argjson m "$manifest_json" --arg cmd "$cmd" -f "$cg_lib_dir/scan-indexed-commit.jq" "$fixture")
   ok=$(jq -r '.ok' <<<"$report")
   if [ "$ok" != "true" ]; then
     printf 'error: %s carries a forbidden raw indexed-commit/ref field:\n%s\n' "$fixture" "$report" >&2

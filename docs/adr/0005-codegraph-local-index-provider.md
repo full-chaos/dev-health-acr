@@ -96,8 +96,8 @@ I/O.
   `explore`/`node` emit mixed human/JSON text never suitable for parsing;
   the rest manage installation, daemons, or telemetry unrelated to reading
   an existing index.
-- Non-JSON output modes (omitting `--json`, or `--format text|table|tree` on
-  `files`) — never parsed as a data source.
+- Non-JSON output modes (omitting `--json`) and every use of `files --format`
+  — never parsed as a data source or invoked in production.
 - Direct reads of `.codegraph/*.db`, `.codegraph/*.db-wal`,
   `.codegraph/*.db-shm`, or any other CodeGraph-internal file — the CLI's
   JSON output is the only supported interface; ACR never touches
@@ -105,9 +105,12 @@ I/O.
 - Parsing `codegraph explore` or `codegraph node` output as a data source.
 - Claiming or inferring an indexed Git commit or ref. CodeGraph 1.2.0's
   `status --json` exposes no commit/ref field. Raw CodeGraph JSON must never
-  carry an indexed commit/ref-shaped key at any nesting level, even if its
-  value is `indexed_commit_unknown`. Only ACR's downstream normalized output
-  may emit the literal sentinel `indexed_commit_unknown`; it MUST NOT
+  carry an unambiguous `indexed*` or `git*` commit/ref/revision-shaped key at
+  any nesting level, even if its value is `indexed_commit_unknown`. Generic
+  `commit`, `ref`, and `revision` keys are rejected only on the `status`
+  object or its `index` object, so harmless additive fields such as a query
+  node's `ref` retain additive tolerance. Only ACR's downstream normalized
+  output may emit the literal sentinel `indexed_commit_unknown`; it MUST NOT
   substitute the working tree's current `HEAD`, infer a value from
   `.codegraph/codegraph.db`, or infer one from
   `lastIndexed`/`pendingChanges` timestamps.
@@ -124,8 +127,8 @@ I/O.
   it is **not** graph traversal. CodeGraph 1.2.0 help defines it as
   "Maximum directory depth for tree format"; it does not establish an
   evidence/dependency traversal limit for JSON results. CodeGraph 1.2.0 also
-  advertises `files --format <tree|flat|grouped>`, but ACR's fixed allowlist
-  intentionally excludes `--format`.
+  offers an optional `--format` flag, but ACR's fixed allowlist forbids that
+  flag entirely, regardless of value.
 
 ### Required JSON fields per command
 

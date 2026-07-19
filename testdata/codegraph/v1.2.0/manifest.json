@@ -40,11 +40,9 @@
     "indexedRevision",
     "gitCommit",
     "gitRef",
-    "commitSha",
-    "commit",
-    "ref",
-    "revision"
+    "gitRevision"
   ],
+  "status_provenance_keys": ["commit", "ref", "revision"],
   "indexed_commit_sentinel": "indexed_commit_unknown",
   "local_only_fields": {
     "status": ["projectPath", "indexPath"]

@@ -29,6 +29,11 @@ source "$script_dir/lib/contract.sh"
 fixtures=""
 scenario="happy"
 
+integrity_failure() {
+  printf 'error: integrity failure: %s\n' "$1" >&2
+  exit 3
+}
+
 usage() {
   sed -n '2,22p' "${BASH_SOURCE[0]}"
 }
@@ -69,26 +74,42 @@ done
 fixtures="$(cd "$fixtures" && pwd)"
 
 manifest_file="$fixtures/manifest.json"
-manifest_json="$(cg_manifest_json "$manifest_file")"
-cg_check_caps "$manifest_json"
-cg_validate_manifest "$manifest_json"
+if ! manifest_json="$(cg_manifest_json "$manifest_file")"; then
+  integrity_failure 'cannot read manifest'
+fi
+if ! cg_check_caps "$manifest_json"; then
+  integrity_failure 'manifest cap validation failed'
+fi
+if ! cg_validate_manifest "$manifest_json"; then
+  integrity_failure 'manifest fixed-argv validation failed'
+fi
 
 canonical_commands=(status query callers callees impact affected files)
 
 run_happy() {
   local cmd
-  cg_validate_fixture_versions "$fixtures" "$manifest_json"
+  if ! cg_validate_fixture_versions "$fixtures" "$manifest_json"; then
+    return 3
+  fi
   for cmd in "${canonical_commands[@]}"; do
-    cg_validate_fixture "$fixtures/$cmd.json" "$manifest_json" "$cmd"
-    cg_scan_indexed_commit_keys "$fixtures/$cmd.json" "$manifest_json"
+    if ! cg_validate_fixture "$fixtures/$cmd.json" "$manifest_json" "$cmd"; then
+      return 3
+    fi
+    if ! cg_scan_indexed_commit_keys "$fixtures/$cmd.json" "$manifest_json" "$cmd"; then
+      return 3
+    fi
     printf 'ok: %s canonical fixture satisfies the pinned contract\n' "$cmd"
   done
-  cg_validate_fixture "$fixtures/additive/status.json" "$manifest_json" status
-  cg_scan_indexed_commit_keys "$fixtures/additive/status.json" "$manifest_json"
+  if ! cg_validate_fixture "$fixtures/additive/status.json" "$manifest_json" status; then
+    return 3
+  fi
+  if ! cg_scan_indexed_commit_keys "$fixtures/additive/status.json" "$manifest_json" status; then
+    return 3
+  fi
   printf 'ok: additive status fixture tolerates an unknown field\n'
   if cg_validate_fixture "$fixtures/invalid/missing-field-status.json" "$manifest_json" status 2>/dev/null; then
     printf 'error: missing-field-status.json unexpectedly passed validation\n' >&2
-    return 1
+    return 3
   fi
   printf 'ok: missing-field-status.json is correctly rejected\n'
   printf 'PASS: all permitted CodeGraph 1.2.0 commands satisfy the pinned contract\n'
@@ -107,7 +128,7 @@ run_forbidden_command() {
 
 run_inferred_indexed_commit() {
   local file="$fixtures/invalid/inferred-indexed-commit.json"
-  if cg_scan_indexed_commit_keys "$file" "$manifest_json" 2>/dev/null; then
+  if cg_scan_indexed_commit_keys "$file" "$manifest_json" status 2>/dev/null; then
     printf 'error: fixture integrity failure: inferred-indexed-commit.json passed the raw commit/ref scan\n' >&2
     return 3
   fi
@@ -149,7 +170,12 @@ run_missing_field() {
 
 run_additive_field() {
   local file="$fixtures/additive/status.json"
-  cg_validate_fixture "$file" "$manifest_json" status
+  if ! cg_validate_fixture "$file" "$manifest_json" status; then
+    return 3
+  fi
+  if ! cg_scan_indexed_commit_keys "$file" "$manifest_json" status; then
+    return 3
+  fi
   printf 'ok: additive status fixture tolerates an unknown field\n'
 }
 
