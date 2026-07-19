@@ -1,0 +1,4 @@
+{
+  "reason": "omitting --json causes codegraph to emit human-oriented colorized table/tree text, which is never a permitted production data source",
+  "attempted_argv": ["codegraph", "query", "Assemble", "--limit", "1"]
+}

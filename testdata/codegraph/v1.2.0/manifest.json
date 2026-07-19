@@ -1,0 +1,132 @@
+{
+  "contract_version": "1",
+  "adr": "docs/adr/0005-codegraph-local-index-provider.md",
+  "supported_codegraph_version_range": ">=1.2.0,<2.0.0",
+  "observed_codegraph_version": "1.2.0",
+  "observed_at_commit": "439acd2e79f1833bd403d5b0a7ad8288c505dbab",
+  "read_only": true,
+  "max_commands_per_task": 8,
+  "max_traversal_depth": 2,
+  "forbidden_commands": [
+    "init",
+    "index",
+    "sync",
+    "uninit",
+    "explore",
+    "node",
+    "daemon",
+    "daemons",
+    "unlock",
+    "install",
+    "uninstall",
+    "telemetry",
+    "upgrade"
+  ],
+  "forbidden_indexed_commit_keys": [
+    "indexedCommit",
+    "indexed_commit",
+    "indexedRef",
+    "indexed_ref",
+    "indexedGitSha",
+    "gitCommit",
+    "commitSha",
+    "commit"
+  ],
+  "indexed_commit_sentinel": "indexed_commit_unknown",
+  "local_only_fields": {
+    "status": ["projectPath", "indexPath"]
+  },
+  "commands": {
+    "status": {
+      "argv": ["codegraph", "status", "--json"],
+      "shape": "object",
+      "required_fields": [
+        "initialized",
+        "version",
+        "projectPath",
+        "indexPath",
+        "lastIndexed",
+        "fileCount",
+        "nodeCount",
+        "edgeCount",
+        "dbSizeBytes",
+        "backend",
+        "journalMode",
+        "nodesByKind",
+        "languages",
+        "pendingChanges",
+        "worktreeMismatch",
+        "index"
+      ],
+      "nullable_fields": ["worktreeMismatch"]
+    },
+    "query": {
+      "argv": ["codegraph", "query", "--json", "<search>", "[--limit N]"],
+      "shape": "array",
+      "entry_required_fields": ["node", "score"],
+      "entry_nested_field": "node",
+      "entry_nested_required_fields": [
+        "id",
+        "kind",
+        "name",
+        "qualifiedName",
+        "filePath",
+        "language",
+        "startLine",
+        "endLine",
+        "startColumn",
+        "endColumn",
+        "signature",
+        "visibility",
+        "isExported",
+        "isAsync",
+        "isStatic",
+        "isAbstract",
+        "updatedAt"
+      ],
+      "example_argv": ["codegraph", "query", "--json", "Assemble", "--limit", "3"]
+    },
+    "callers": {
+      "argv": ["codegraph", "callers", "--json", "<symbol>", "[--limit N]"],
+      "shape": "object",
+      "required_fields": ["symbol", "callers"],
+      "array_field": "callers",
+      "array_field_entry_required_fields": ["name", "kind", "filePath", "startLine"],
+      "example_argv": ["codegraph", "callers", "--json", "Assemble", "--limit", "3"]
+    },
+    "callees": {
+      "argv": ["codegraph", "callees", "--json", "<symbol>", "[--limit N]"],
+      "shape": "object",
+      "required_fields": ["symbol", "callees"],
+      "array_field": "callees",
+      "array_field_entry_required_fields": ["name", "kind", "filePath", "startLine"],
+      "example_argv": ["codegraph", "callees", "--json", "Assemble", "--limit", "3"]
+    },
+    "impact": {
+      "argv": ["codegraph", "impact", "--json", "<symbol>", "[--depth N]"],
+      "shape": "object",
+      "required_fields": ["symbol", "depth", "nodeCount", "edgeCount", "affected"],
+      "array_field": "affected",
+      "array_field_entry_required_fields": ["name", "kind", "filePath", "startLine"],
+      "max_depth": 2,
+      "cli_default_depth": 2,
+      "example_argv": ["codegraph", "impact", "--json", "Assemble", "--depth", "2"]
+    },
+    "affected": {
+      "argv": ["codegraph", "affected", "--json", "[files...]", "[--stdin]", "[--depth N]", "[--filter GLOB]"],
+      "shape": "object",
+      "required_fields": ["changedFiles", "affectedTests", "totalDependentsTraversed"],
+      "max_depth": 2,
+      "cli_default_depth": 5,
+      "production_requires_explicit_depth": true,
+      "example_argv": ["codegraph", "affected", "--json", "acr/internal/contextpacket/assembler.go", "--depth", "2"]
+    },
+    "files": {
+      "argv": ["codegraph", "files", "--json", "[--filter DIR]", "[--pattern GLOB]", "[--max-depth N]", "[--no-metadata]"],
+      "shape": "array",
+      "entry_required_fields": ["path", "language", "nodeCount", "size"],
+      "max_depth": 2,
+      "example_argv": ["codegraph", "files", "--json", "--filter", "acr/internal/contextpacket", "--max-depth", "2"]
+    }
+  }
+}

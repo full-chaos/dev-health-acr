@@ -1,0 +1,38 @@
+[
+  {
+    "path": "acr/internal/contextpacket/adapter_test.go",
+    "language": "go",
+    "nodeCount": 14,
+    "size": 4162
+  },
+  {
+    "path": "acr/internal/contextpacket/adversarial_test.go",
+    "language": "go",
+    "nodeCount": 16,
+    "size": 7047
+  },
+  {
+    "path": "acr/internal/contextpacket/assembler.go",
+    "language": "go",
+    "nodeCount": 25,
+    "size": 10542
+  },
+  {
+    "path": "acr/internal/contextpacket/assembler_test.go",
+    "language": "go",
+    "nodeCount": 28,
+    "size": 7503
+  },
+  {
+    "path": "acr/internal/contextpacket/bindings.go",
+    "language": "go",
+    "nodeCount": 4,
+    "size": 644
+  },
+  {
+    "path": "acr/internal/contextpacket/budget.go",
+    "language": "go",
+    "nodeCount": 11,
+    "size": 2469
+  }
+]

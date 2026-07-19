@@ -1,0 +1,70 @@
+[
+  {
+    "node": {
+      "id": "method:c3fd9dda283154052c1c07c633a351e9",
+      "kind": "method",
+      "name": "Assemble",
+      "qualifiedName": "Assembler::Assemble",
+      "filePath": "acr/internal/contextpacket/assembler.go",
+      "language": "go",
+      "startLine": 54,
+      "endLine": 135,
+      "startColumn": 0,
+      "endColumn": 1,
+      "signature": "(ctx context.Context, principal storage.Principal, request contractsv1.ContextPacketRequest) (packet contractsv1.ContextPacket, resultErr error)",
+      "visibility": null,
+      "isExported": false,
+      "isAsync": false,
+      "isStatic": false,
+      "isAbstract": false,
+      "returnType": "ContextPacket",
+      "updatedAt": 1783774616381
+    },
+    "score": 120.05183339840593
+  },
+  {
+    "node": {
+      "id": "method:922867dafc7fa16ec816e89fc1fdd461",
+      "kind": "method",
+      "name": "Assemble",
+      "qualifiedName": "ContextPacketAssembler::Assemble",
+      "filePath": "acr/internal/api/runtime.go",
+      "language": "go",
+      "startLine": 33,
+      "endLine": 33,
+      "startColumn": 1,
+      "endColumn": 114,
+      "signature": "(context.Context, storage.Principal, contractsv1.ContextPacketRequest) (contractsv1.ContextPacket, error)",
+      "visibility": null,
+      "isExported": false,
+      "isAsync": false,
+      "isStatic": false,
+      "isAbstract": false,
+      "updatedAt": 1784390819584
+    },
+    "score": 107.11023059070126
+  },
+  {
+    "node": {
+      "id": "method:d22d1e935b0ff700f01cf25b09b4c4ae",
+      "kind": "method",
+      "name": "Assemble",
+      "qualifiedName": "failingAssembler::Assemble",
+      "filePath": "acr/internal/api/read_context_test.go",
+      "language": "go",
+      "startLine": 80,
+      "endLine": 82,
+      "startColumn": 0,
+      "endColumn": 1,
+      "signature": "(context.Context, storage.Principal, contractsv1.ContextPacketRequest) (contractsv1.ContextPacket, error)",
+      "visibility": null,
+      "isExported": false,
+      "isAsync": false,
+      "isStatic": false,
+      "isAbstract": false,
+      "returnType": "ContextPacket",
+      "updatedAt": 1783947133585
+    },
+    "score": 92.11023059070126
+  }
+]

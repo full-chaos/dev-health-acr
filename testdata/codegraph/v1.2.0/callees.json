@@ -1,0 +1,23 @@
+{
+  "symbol": "Assemble",
+  "callees": [
+    {
+      "name": "startTrace",
+      "kind": "method",
+      "filePath": "acr/internal/contextpacket/trace.go",
+      "startLine": 22
+    },
+    {
+      "name": "operationOutcome",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/observation.go",
+      "startLine": 74
+    },
+    {
+      "name": "observePacket",
+      "kind": "method",
+      "filePath": "acr/internal/contextpacket/observation.go",
+      "startLine": 130
+    }
+  ]
+}

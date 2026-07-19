@@ -1,0 +1,4 @@
+{
+  "reason": "reading .codegraph's SQLite files directly bypasses the CLI JSON contract this ADR pins and is never permitted in production",
+  "attempted_argv": ["cat", ".codegraph/codegraph.db"]
+}

@@ -1,0 +1,41 @@
+{
+  "initialized": true,
+  "version": "1.2.0",
+  "projectPath": "<local-only:absolute-project-path>",
+  "indexPath": "<local-only:absolute-index-path>",
+  "lastIndexed": "2026-07-19T12:34:19.682Z",
+  "fileCount": 3719,
+  "nodeCount": 59738,
+  "edgeCount": 161050,
+  "dbSizeBytes": 744927232,
+  "backend": "node-sqlite",
+  "journalMode": "wal",
+  "nodesByKind": {
+    "class": 2928,
+    "constant": 1831,
+    "enum": 1,
+    "enum_member": 4,
+    "file": 3410,
+    "function": 16355,
+    "import": 18308,
+    "interface": 372,
+    "method": 7211,
+    "property": 4119,
+    "route": 151,
+    "struct": 410,
+    "type_alias": 1304,
+    "variable": 3334
+  },
+  "languages": ["go", "javascript", "python", "tsx", "typescript", "xml", "yaml"],
+  "pendingChanges": { "added": 0, "modified": 0, "removed": 0 },
+  "worktreeMismatch": null,
+  "index": {
+    "builtWithVersion": "1.2.0",
+    "builtWithExtractionVersion": 24,
+    "currentExtractionVersion": 24,
+    "reindexRecommended": false
+  },
+  "futureDiagnostic": {
+    "note": "an unknown-at-authoring-time field a later 1.x CodeGraph release may add; consumers must tolerate and ignore it"
+  }
+}
