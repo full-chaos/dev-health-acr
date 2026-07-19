@@ -15,7 +15,7 @@ import (
 const maxLocalRequestedCategories = 8
 
 func NewLocalWorkspaceSnapshot(info WorkspaceInfo, expectedSlug string, filesRequested bool) (LocalWorkspaceSnapshot, error) {
-	if info.Remote == nil || strings.ToLower(strings.TrimSpace(info.Remote.Slug())) != strings.ToLower(strings.TrimSpace(expectedSlug)) {
+	if info.Remote == nil || !strings.EqualFold(strings.TrimSpace(info.Remote.Slug()), strings.TrimSpace(expectedSlug)) {
 		return LocalWorkspaceSnapshot{}, ErrInvalidLocalContextRequest
 	}
 	state := LocalChangedFilesNotRequested

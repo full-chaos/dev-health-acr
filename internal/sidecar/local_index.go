@@ -3,9 +3,7 @@ package sidecar
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
-	"unicode"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -128,73 +126,6 @@ func invalidLocalIndexValue(sentinel error, field string) error {
 	return &localIndexValidationError{sentinel: sentinel, field: field}
 }
 
-func ValidateLocalIndexCapabilities(capabilities LocalIndexCapabilities) error {
-	if !capabilities.Available {
-		if capabilities.ProviderID != "" || capabilities.ProviderVersion != "" || capabilities.MaxItems != 0 || capabilities.MaxOutputTokens != 0 {
-			return invalidLocalIndexValue(ErrInvalidLocalIndexCapabilities, "unavailable capabilities")
-		}
-		return nil
-	}
-	if !boundedNonEmpty(capabilities.ProviderID, maxLocalIndexProviderIDBytes) || !boundedNonEmpty(capabilities.ProviderVersion, maxLocalIndexProviderVersionBytes) {
-		return invalidLocalIndexValue(ErrInvalidLocalIndexCapabilities, "provider")
-	}
-	if !boundedPositive(capabilities.MaxItems, maxLocalEvidenceItems) || !boundedPositive(capabilities.MaxOutputTokens, maxLocalEvidenceTokens) {
-		return invalidLocalIndexValue(ErrInvalidLocalIndexCapabilities, "limits")
-	}
-	return nil
-}
-
-func ValidateLocalContextRequest(request LocalContextRequest) error {
-	if !boundedNonEmpty(request.TaskID, maxLocalTaskIDBytes) || !boundedNonEmpty(request.Goal, maxLocalTaskBytes) {
-		return invalidLocalIndexValue(ErrInvalidLocalContextRequest, "task")
-	}
-	if (request.TaskRef != "" && !validCodeGraphText(request.TaskRef, maxLocalTaskIDBytes)) || !validRequestedCategories(request.RequestedCategories) {
-		return invalidLocalIndexValue(ErrInvalidLocalContextRequest, "local request")
-	}
-	if !boundedPositive(request.MaxItems, maxLocalEvidenceItems) || !boundedPositive(request.MaxOutputTokens, maxLocalEvidenceTokens) {
-		return invalidLocalIndexValue(ErrInvalidLocalContextRequest, "limits")
-	}
-	return nil
-}
-
-func ValidateLocalEvidenceBundle(bundle LocalEvidenceBundle) error {
-	_, _, _, err := localEvidenceBundleUsage(bundle)
-	return err
-}
-
-func ValidateLocalEvidenceBundleForRequest(request LocalContextRequest, capabilities LocalIndexCapabilities, bundle LocalEvidenceBundle) error {
-	if err := ValidateLocalContextRequest(request); err != nil {
-		return err
-	}
-	if err := ValidateLocalIndexCapabilities(capabilities); err != nil {
-		return err
-	}
-	if !capabilities.Available {
-		return ErrLocalIndexUnavailable
-	}
-	if bundle.ProviderID != capabilities.ProviderID || bundle.ProviderVersion != capabilities.ProviderVersion {
-		return invalidLocalIndexValue(ErrInvalidLocalEvidenceBundle, "provider metadata")
-	}
-	if len(bundle.Evidence) > request.MaxItems || len(bundle.Evidence) > capabilities.MaxItems {
-		return invalidLocalIndexValue(ErrInvalidLocalEvidenceBundle, "evidence count")
-	}
-	_, tokens, _, err := localEvidenceBundleUsage(bundle)
-	if err != nil {
-		return err
-	}
-	if tokens > request.MaxOutputTokens || tokens > capabilities.MaxOutputTokens {
-		return invalidLocalIndexValue(ErrInvalidLocalEvidenceBundle, "evidence tokens")
-	}
-	return nil
-}
-
-func ValidateLocalExpandedEvidence(evidence LocalExpandedEvidence) error {
-	if !boundedNonEmpty(evidence.ID, maxLocalEvidenceIDBytes) || !boundedLocalLocator(evidence.Locator) || !boundedNonEmpty(evidence.Title, maxLocalEvidenceTitleBytes) || len(evidence.Excerpt) > maxLocalEvidenceExcerptBytes || evidence.EstimatedTokens < 0 || evidence.EstimatedTokens > maxLocalEvidenceTokens {
-		return invalidLocalIndexValue(ErrInvalidLocalEvidenceBundle, "evidence")
-	}
-	return nil
-}
-
 func NormalizeLocalEvidenceBundle(bundle LocalEvidenceBundle) (LocalEvidenceBundle, error) {
 	if err := ValidateLocalEvidenceBundle(bundle); err != nil {
 		return LocalEvidenceBundle{}, err
@@ -247,30 +178,6 @@ func (DisabledLocalIndexProvider) ResolveEvidence(ctx context.Context, _ string)
 		return LocalExpandedEvidence{}, err
 	}
 	return LocalExpandedEvidence{}, ErrLocalEvidenceNotFound
-}
-
-func boundedNonEmpty(value string, maximum int) bool {
-	return len(value) <= maximum && strings.TrimSpace(value) != ""
-}
-
-func boundedPositive(value, maximum int) bool {
-	return value > 0 && value <= maximum
-}
-
-func boundedLocalLocator(value string) bool {
-	if !boundedNonEmpty(value, maxLocalEvidenceLocatorBytes) || strings.HasPrefix(value, "/") || strings.HasPrefix(value, "\\") || hasWindowsAbsolutePathPrefix(value) {
-		return false
-	}
-	for _, character := range value {
-		if unicode.IsControl(character) {
-			return false
-		}
-	}
-	return true
-}
-
-func hasWindowsAbsolutePathPrefix(value string) bool {
-	return len(value) >= 3 && ((value[0] >= 'a' && value[0] <= 'z') || (value[0] >= 'A' && value[0] <= 'Z')) && value[1] == ':' && (value[2] == '/' || value[2] == '\\')
 }
 
 var _ LocalIndexProvider = DisabledLocalIndexProvider{}

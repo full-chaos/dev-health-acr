@@ -153,6 +153,21 @@ func TestCodeGraphProvider_Capabilities_acceptsOnlyCanonicalIndexDirectory(t *te
 	}
 }
 
+func TestCodeGraphProvider_Capabilities_rejectsExactIndexPathSymlinkOutsideRoot(t *testing.T) {
+	// Given
+	provider, workspace, _ := newFixtureCodeGraphProvider(t)
+	index := filepath.Join(workspace.GitRoot, ".codegraph")
+	require.NoError(t, os.Remove(index))
+	require.NoError(t, os.Symlink(t.TempDir(), index))
+
+	// When
+	capabilities, err := provider.Capabilities(t.Context())
+
+	// Then
+	require.NoError(t, err)
+	require.False(t, capabilities.Available)
+}
+
 func readCodeGraphFixture(t *testing.T, name string) string {
 	t.Helper()
 	_, sourceFile, _, found := runtime.Caller(0)

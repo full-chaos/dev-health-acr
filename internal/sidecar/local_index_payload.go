@@ -10,6 +10,9 @@ func localEvidenceBundleUsage(bundle LocalEvidenceBundle) (int, int, int, error)
 	if len(bundle.Evidence) > maxLocalEvidenceItems {
 		return 0, 0, 0, invalidLocalIndexValue(ErrInvalidLocalEvidenceBundle, "evidence count")
 	}
+	if err := validateLocalEvidenceMetadata(bundle); err != nil {
+		return 0, 0, 0, err
+	}
 	metadataBytes, err := localBundleMetadataBytes(bundle)
 	if err != nil {
 		return 0, 0, 0, err
