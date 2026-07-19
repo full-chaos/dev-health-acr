@@ -119,8 +119,16 @@ var mcpRenderedMarkdownNullCheck = mcpNullCheck{
 	keys: []string{"markdown", "untrusted", "truncated"},
 }
 
+var mcpLocalContextNullCheck = mcpNullCheck{
+	keys: []string{"provider", "status", "provider_version", "query_version", "indexed_at", "indexed_ref", "indexed_commit", "freshness", "warnings", "items", "evidence_refs"},
+}
+
+var mcpFederatedBudgetNullCheck = mcpNullCheck{
+	keys: []string{"max_items", "max_output_tokens", "max_serialized_bytes", "hosted_items_used", "local_items_used", "total_items_used", "hosted_estimated_tokens", "local_estimated_tokens", "total_estimated_tokens", "hosted_serialized_bytes", "local_serialized_bytes", "total_serialized_bytes", "hosted_truncated", "local_truncated", "truncated"},
+}
+
 var mcpContextForTaskRequestNullCheck = mcpNullCheck{
-	keys: []string{"goal", "repository", "scope", "budget"},
+	keys: []string{"goal", "repository", "scope", "budget", "requested_categories"},
 	nested: map[string]mcpNullCheck{
 		"repository": mcpRepositoryNullCheck,
 		"scope":      mcpScopeNullCheck,
@@ -133,9 +141,11 @@ var mcpSourceEvidenceRequestNullCheck = mcpNullCheck{
 }
 
 var mcpContextForTaskResponseNullCheck = mcpNullCheck{
-	keys: []string{"schema_version", "structured", "rendered_markdown"},
+	keys: []string{"schema_version", "structured", "rendered_markdown", "local_context", "federated_budget"},
 	nested: map[string]mcpNullCheck{
 		"rendered_markdown": mcpRenderedMarkdownNullCheck,
+		"local_context":     mcpLocalContextNullCheck,
+		"federated_budget":  mcpFederatedBudgetNullCheck,
 	},
 }
 
@@ -186,6 +196,9 @@ func (r *MCPSourceEvidenceRequest) UnmarshalJSON(data []byte) error {
 // separate contract owned by validate_packet.go/validate_packet_nested.go.
 func (r *MCPContextForTaskResponse) UnmarshalJSON(data []byte) error {
 	if err := mcpContextForTaskResponseNullCheck.apply(data, "context_for_task response"); err != nil {
+		return err
+	}
+	if err := validateMCPLocalContextPayload(data); err != nil {
 		return err
 	}
 	type mcpContextForTaskResponseAlias MCPContextForTaskResponse

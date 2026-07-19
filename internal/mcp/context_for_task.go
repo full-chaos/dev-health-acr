@@ -56,7 +56,7 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 		Goal:       input.Goal,
 		Repository: repo,
 		Scope:      scope,
-		Options:    budgetOptions(input.Budget, boot.Capabilities.Limits),
+		Options:    budgetOptions(input.Budget, input.RequestedCategories, boot.Capabilities.Limits),
 	}
 
 	packet, err := boot.Client.ContextPacket(ctx, hostedReq)
@@ -88,11 +88,12 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 // caller requests are both bounded by what the hosted API actually
 // grants this credential, never forwarded as an over-limit request the
 // hosted side would have to reject anyway.
-func budgetOptions(budget *contractsv1.MCPBudget, limits contractsv1.CapabilityLimits) contractsv1.PacketOptions {
+func budgetOptions(budget *contractsv1.MCPBudget, requestedCategories []contractsv1.PacketCategory, limits contractsv1.CapabilityLimits) contractsv1.PacketOptions {
 	opts := contractsv1.PacketOptions{
-		MaxItems:           defaultMaxItems,
-		MaxOutputTokens:    defaultMaxOutputTokens,
-		MaxSerializedBytes: defaultMaxSerializedBytes,
+		RequestedCategories: append([]contractsv1.PacketCategory(nil), requestedCategories...),
+		MaxItems:            defaultMaxItems,
+		MaxOutputTokens:     defaultMaxOutputTokens,
+		MaxSerializedBytes:  defaultMaxSerializedBytes,
 	}
 	if budget != nil {
 		if budget.MaxItems != 0 {

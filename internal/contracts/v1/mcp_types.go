@@ -29,10 +29,11 @@ const (
 // the sidecar fills fixed safe defaults before mapping to
 // ContextPacketRequest.
 type MCPContextForTaskRequest struct {
-	Goal       string             `json:"goal"`
-	Repository *MCPRepositoryRef  `json:"repository,omitempty"`
-	Scope      *MCPRequestedScope `json:"scope,omitempty"`
-	Budget     *MCPBudget         `json:"budget,omitempty"`
+	Goal                string             `json:"goal"`
+	Repository          *MCPRepositoryRef  `json:"repository,omitempty"`
+	Scope               *MCPRequestedScope `json:"scope,omitempty"`
+	Budget              *MCPBudget         `json:"budget,omitempty"`
+	RequestedCategories []PacketCategory   `json:"requested_categories,omitempty"`
 }
 
 // MCPRepositoryRef accepts only an explicit "owner/repo" slug. Unlike the
@@ -85,6 +86,67 @@ type MCPContextForTaskResponse struct {
 	SchemaVersion    string              `json:"schema_version"`
 	Structured       ContextPacket       `json:"structured"`
 	RenderedMarkdown MCPRenderedMarkdown `json:"rendered_markdown"`
+	LocalContext     *MCPLocalContext    `json:"local_context,omitempty"`
+	FederatedBudget  *MCPFederatedBudget `json:"federated_budget,omitempty"`
+}
+
+// MCPLocalContextStatus reports whether the generic local provider supplied
+// usable evidence, supplied degraded evidence, or was unavailable. The
+// provider itself remains opaque to this MCP contract.
+type MCPLocalContextStatus string
+
+const (
+	MCPLocalContextAvailable   MCPLocalContextStatus = "available"
+	MCPLocalContextDegraded    MCPLocalContextStatus = "degraded"
+	MCPLocalContextUnavailable MCPLocalContextStatus = "unavailable"
+)
+
+// MCPLocalFreshness is intentionally provider-neutral. A provider without an
+// indexed revision can report unknown instead of inferring a repository ref.
+type MCPLocalFreshness string
+
+const (
+	MCPLocalFreshnessFresh   MCPLocalFreshness = "fresh"
+	MCPLocalFreshnessStale   MCPLocalFreshness = "stale"
+	MCPLocalFreshnessUnknown MCPLocalFreshness = "unknown"
+)
+
+// MCPLocalContext carries bounded, normalized local evidence. It never
+// exposes a provider's raw payload, filesystem paths, or provider-specific
+// structs; items and evidence_refs retain the existing portable v1 shapes.
+type MCPLocalContext struct {
+	Provider        string                `json:"provider"`
+	Status          MCPLocalContextStatus `json:"status"`
+	ProviderVersion string                `json:"provider_version"`
+	QueryVersion    string                `json:"query_version"`
+	IndexedAt       *time.Time            `json:"indexed_at,omitempty"`
+	IndexedRef      string                `json:"indexed_ref,omitempty"`
+	IndexedCommit   string                `json:"indexed_commit,omitempty"`
+	Freshness       MCPLocalFreshness     `json:"freshness"`
+	Warnings        []string              `json:"warnings"`
+	Items           []ContextPacketItem   `json:"items"`
+	EvidenceRefs    []EvidenceRef         `json:"evidence_refs"`
+}
+
+// MCPFederatedBudget reports only packet-content usage. The caller maxima and
+// hosted/local/total counters exclude the MCP envelope, this budget object,
+// and rendered_markdown; those wrappers remain bounded by their own contracts.
+type MCPFederatedBudget struct {
+	MaxItems              int  `json:"max_items"`
+	MaxOutputTokens       int  `json:"max_output_tokens"`
+	MaxSerializedBytes    int  `json:"max_serialized_bytes"`
+	HostedItemsUsed       int  `json:"hosted_items_used"`
+	LocalItemsUsed        int  `json:"local_items_used"`
+	TotalItemsUsed        int  `json:"total_items_used"`
+	HostedEstimatedTokens int  `json:"hosted_estimated_tokens"`
+	LocalEstimatedTokens  int  `json:"local_estimated_tokens"`
+	TotalEstimatedTokens  int  `json:"total_estimated_tokens"`
+	HostedSerializedBytes int  `json:"hosted_serialized_bytes"`
+	LocalSerializedBytes  int  `json:"local_serialized_bytes"`
+	TotalSerializedBytes  int  `json:"total_serialized_bytes"`
+	HostedTruncated       bool `json:"hosted_truncated"`
+	LocalTruncated        bool `json:"local_truncated"`
+	Truncated             bool `json:"truncated"`
 }
 
 // MCPSourceEvidenceRequest is the input contract for the source_evidence

@@ -37,8 +37,28 @@
           "type": "boolean"
         }
       }
+    },
+    "local_context": {
+      "$ref": "#/$defs/mcp_local_context.v1"
+    },
+    "federated_budget": {
+      "$ref": "#/$defs/mcp_federated_budget.v1"
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "local_context"
+        ]
+      },
+      "then": {
+        "required": [
+          "federated_budget"
+        ]
+      }
+    }
+  ],
   "$defs": {
     "context_packet.v1": {
       "title": "ACR Context Packet v1",
@@ -673,6 +693,335 @@
                 "minItems": 1
               }
             }
+          }
+        }
+      ]
+    },
+    "mcp_local_context.v1": {
+      "title": "ACR MCP Local Context v1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "status",
+        "provider_version",
+        "query_version",
+        "freshness",
+        "warnings",
+        "items",
+        "evidence_refs"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "status": {
+          "enum": [
+            "available",
+            "degraded",
+            "unavailable"
+          ]
+        },
+        "provider_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "query_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "indexed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "indexed_ref": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "indexed_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,64}$"
+        },
+        "freshness": {
+          "enum": [
+            "fresh",
+            "stale",
+            "unknown"
+          ]
+        },
+        "warnings": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/context_packet_item.v1"
+          }
+        },
+        "evidence_refs": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/mcp_local_evidence_ref.v1"
+          }
+        }
+      }
+    },
+    "mcp_federated_budget.v1": {
+      "title": "ACR MCP Federated Budget v1",
+      "description": "Caller maxima and usage count only hosted ContextPacket content plus local evidence content. The MCP envelope, federated_budget object, and rendered_markdown are outside these maxima.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_items",
+        "max_output_tokens",
+        "max_serialized_bytes",
+        "hosted_items_used",
+        "local_items_used",
+        "total_items_used",
+        "hosted_estimated_tokens",
+        "local_estimated_tokens",
+        "total_estimated_tokens",
+        "hosted_serialized_bytes",
+        "local_serialized_bytes",
+        "total_serialized_bytes",
+        "hosted_truncated",
+        "local_truncated",
+        "truncated"
+      ],
+      "properties": {
+        "max_items": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 500,
+          "maximum": 16000
+        },
+        "max_serialized_bytes": {
+          "type": "integer",
+          "minimum": 8192,
+          "maximum": 1048576
+        },
+        "hosted_items_used": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "local_items_used": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_items_used": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hosted_estimated_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "local_estimated_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_estimated_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hosted_serialized_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "local_serialized_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_serialized_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hosted_truncated": {
+          "type": "boolean"
+        },
+        "local_truncated": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "evidence_ref.v1": {
+      "title": "ACR Evidence Reference v1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "evidence_ref_id",
+        "source",
+        "provenance",
+        "confidence",
+        "citation",
+        "observed_at",
+        "availability"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "evidence_ref.v1"
+        },
+        "evidence_ref_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "system",
+            "entity_type",
+            "entity_id",
+            "display_label"
+          ],
+          "properties": {
+            "system": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "entity_type": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "entity_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "display_label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            "safe_uri": {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 2048
+            }
+          }
+        },
+        "provenance": {
+          "enum": [
+            "native",
+            "explicit_text",
+            "heuristic",
+            "derived"
+          ]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "citation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "event_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source_version": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "snapshot_hash": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "content_digest": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "availability": {
+          "enum": [
+            "available",
+            "stale",
+            "redacted",
+            "deleted",
+            "unauthorized"
+          ]
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "mcp_local_evidence_ref.v1": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/evidence_ref.v1"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "metadata": {
+              "$ref": "#/$defs/mcp_local_metadata.v1"
+            }
+          }
+        }
+      ]
+    },
+    "mcp_local_metadata.v1": {
+      "type": "object",
+      "not": {
+        "required": [
+          "codegraph_payload"
+        ]
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/mcp_local_metadata_value.v1"
+      }
+    },
+    "mcp_local_metadata_value.v1": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/mcp_local_metadata.v1"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/mcp_local_metadata_value.v1"
           }
         }
       ]

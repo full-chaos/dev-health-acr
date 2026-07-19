@@ -28,6 +28,9 @@ func (r MCPContextForTaskRequest) Validate() error {
 			return fmt.Errorf("budget: %w", err)
 		}
 	}
+	if len(r.RequestedCategories) > 5 || !uniquePacketCategories(r.RequestedCategories) {
+		return fmt.Errorf("requested_categories violates v1 bounds")
+	}
 	return nil
 }
 
@@ -95,6 +98,29 @@ func (r MCPContextForTaskResponse) Validate() error {
 	}
 	if err := r.RenderedMarkdown.Validate(); err != nil {
 		return fmt.Errorf("rendered_markdown: %w", err)
+	}
+	if r.LocalContext != nil {
+		if err := r.LocalContext.Validate(); err != nil {
+			return fmt.Errorf("local_context: %w", err)
+		}
+		if r.FederatedBudget == nil {
+			return fmt.Errorf("federated_budget is required when local_context is present")
+		}
+		if r.FederatedBudget.LocalItemsUsed != len(r.LocalContext.Items) {
+			return fmt.Errorf("federated_budget.local_items_used must match local_context.items")
+		}
+		localBytes, err := r.LocalContext.packetContentSerializedBytes()
+		if err != nil {
+			return fmt.Errorf("local_context packet content: %w", err)
+		}
+		if r.FederatedBudget.LocalSerializedBytes != localBytes {
+			return fmt.Errorf("federated_budget.local_serialized_bytes must match local_context packet content")
+		}
+	}
+	if r.FederatedBudget != nil {
+		if err := r.FederatedBudget.Validate(r.Structured.Budget); err != nil {
+			return fmt.Errorf("federated_budget: %w", err)
+		}
 	}
 	return nil
 }
