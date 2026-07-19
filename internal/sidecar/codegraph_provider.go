@@ -5,11 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"sync"
-
-	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 const codeGraphProviderID = "codegraph"
@@ -126,88 +122,6 @@ func trustedCodeGraphIndex(root string) bool {
 	return err == nil && resolvedIndex == filepath.Join(resolvedRoot, ".codegraph")
 }
 
-func (p *CodeGraphLocalIndexProvider) collectCandidates(ctx context.Context, workspace LocalWorkspaceSnapshot, request LocalContextRequest) ([]codeGraphCandidate, error) {
-	query, err := p.runner.Query(ctx, codeGraphQueryRequest{GitRoot: workspace.GitRoot, Search: codeGraphSearch(request), Limit: p.itemLimit()})
-	if err != nil {
-		return nil, err
-	}
-	nodes, err := decodeCodeGraphQuery(query)
-	if err != nil {
-		return nil, err
-	}
-	candidates := nodeCandidates(nodes)
-	anchors := nodes[:min(2, len(nodes))]
-	if len(workspace.ChangedFiles) > 0 && allowsCodeGraphAffected(request.RequestedCategories) {
-		affected, affectedErr := p.runner.Affected(ctx, codeGraphAffectedRequest{GitRoot: workspace.GitRoot, Files: workspace.ChangedFiles})
-		if affectedErr != nil {
-			return nil, affectedErr
-		}
-		result, decodeErr := decodeCodeGraphAffected(affected)
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		candidates = append(candidates, affectedCandidates(result)...)
-		if len(anchors) > 1 {
-			anchors = anchors[:1]
-		}
-	}
-	if !allowsCodeGraphRelationships(request.RequestedCategories) {
-		anchors = nil
-	}
-	for _, anchor := range anchors {
-		relations, relationErr := p.anchorCandidates(ctx, workspace.GitRoot, anchor.Name)
-		if relationErr != nil {
-			return nil, relationErr
-		}
-		candidates = append(candidates, relations...)
-	}
-	if request.TaskRef != "" && len(anchors) < 2 {
-		files, filesErr := p.runner.Files(ctx, codeGraphFilesRequest{GitRoot: workspace.GitRoot, Filter: directoryForCodeGraphFiles(workspace.ChangedFiles)})
-		if filesErr != nil {
-			return nil, filesErr
-		}
-		decoded, decodeErr := decodeCodeGraphFiles(files)
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		candidates = append(candidates, fileCandidates(decoded)...)
-	}
-	sort.Slice(candidates, func(left, right int) bool { return codeGraphCandidateLess(candidates[left], candidates[right]) })
-	if duplicateCodeGraphCandidates(candidates) {
-		return nil, errCodeGraphDecode
-	}
-	return candidates, nil
-}
-
-func (p *CodeGraphLocalIndexProvider) anchorCandidates(ctx context.Context, root, symbol string) ([]codeGraphCandidate, error) {
-	request := codeGraphQueryRequest{GitRoot: root, Search: symbol, Limit: p.itemLimit()}
-	callers, err := p.runner.Callers(ctx, request)
-	if err != nil {
-		return nil, err
-	}
-	calleePayload, err := p.runner.Callees(ctx, request)
-	if err != nil {
-		return nil, err
-	}
-	impactPayload, err := p.runner.Impact(ctx, request)
-	if err != nil {
-		return nil, err
-	}
-	callerRelations, err := decodeCodeGraphRelations(callers, "callers")
-	if err != nil {
-		return nil, err
-	}
-	calleeRelations, err := decodeCodeGraphRelations(calleePayload, "callees")
-	if err != nil {
-		return nil, err
-	}
-	impactRelations, err := decodeCodeGraphImpact(impactPayload)
-	if err != nil {
-		return nil, err
-	}
-	return append(append(relationCandidates(codeGraphCommandCallers, "caller", callerRelations), relationCandidates(codeGraphCommandCallees, "callee", calleeRelations)...), relationCandidates(codeGraphCommandImpact, "impact", impactRelations)...), nil
-}
-
 func (p *CodeGraphLocalIndexProvider) itemLimit() int {
 	if p.runner.Config.MaxItems > 0 && p.runner.Config.MaxItems <= maxLocalEvidenceItems {
 		return p.runner.Config.MaxItems
@@ -242,34 +156,6 @@ func sameCodeGraphWorkspace(left, right LocalWorkspaceSnapshot) bool {
 		}
 	}
 	return true
-}
-
-func codeGraphSearch(request LocalContextRequest) string {
-	parts := []string{request.Goal}
-	if request.TaskRef != "" {
-		parts = append(parts, request.TaskRef)
-	}
-	for _, category := range request.RequestedCategories {
-		parts = append(parts, string(category))
-	}
-	return strings.Join(parts, " ")
-}
-
-func allowsCodeGraphAffected(categories []contractsv1.PacketCategory) bool {
-	return len(categories) == 0 || hasCodeGraphCategory(categories, contractsv1.CategoryAction) || hasCodeGraphCategory(categories, contractsv1.CategoryEvidence)
-}
-
-func allowsCodeGraphRelationships(categories []contractsv1.PacketCategory) bool {
-	return len(categories) == 0 || hasCodeGraphCategory(categories, contractsv1.CategoryCause) || hasCodeGraphCategory(categories, contractsv1.CategoryEvidence)
-}
-
-func hasCodeGraphCategory(categories []contractsv1.PacketCategory, wanted contractsv1.PacketCategory) bool {
-	for _, category := range categories {
-		if category == wanted {
-			return true
-		}
-	}
-	return false
 }
 
 var _ LocalIndexProvider = (*CodeGraphLocalIndexProvider)(nil)
