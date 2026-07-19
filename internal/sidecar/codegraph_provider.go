@@ -25,25 +25,29 @@ func NewCodeGraphLocalIndexProvider(runner CodeGraphRunner, workspace LocalWorks
 
 func (p *CodeGraphLocalIndexProvider) Capabilities(ctx context.Context) (LocalIndexCapabilities, error) {
 	if err := ctx.Err(); err != nil {
-		return LocalIndexCapabilities{}, err
+		return LocalIndexCapabilities{}, localIndexFailure(err)
 	}
 	workspace, err := normalizeCodeGraphWorkspace(&p.workspace)
 	if err != nil {
-		return LocalIndexCapabilities{}, nil
+		return LocalIndexCapabilities{}, localIndexFailure(errCodeGraphMismatch)
 	}
 	status, err := p.status(ctx, workspace)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return LocalIndexCapabilities{}, err
+			return LocalIndexCapabilities{}, localIndexFailure(err)
 		}
-		return LocalIndexCapabilities{}, nil
+		return LocalIndexCapabilities{}, localIndexFailure(err)
 	}
-	return LocalIndexCapabilities{ProviderID: codeGraphProviderID, ProviderVersion: status.Version, Available: true, MaxItems: p.itemLimit(), MaxOutputTokens: p.tokenLimit()}, nil
+	classification := classifyCodeGraphStatus(status)
+	if classification.omit(p.runner.Config.StalePolicy) {
+		return LocalIndexCapabilities{}, newLocalIndexError(LocalIndexErrorStale, LocalIndexStatusUnavailable, classification.Freshness, classification.Warnings, errCodeGraphMismatch)
+	}
+	return LocalIndexCapabilities{ProviderID: codeGraphProviderID, ProviderVersion: status.Version, Available: true, MaxItems: p.itemLimit(), MaxOutputTokens: p.tokenLimit(), Status: classification.Status, Freshness: classification.Freshness}, nil
 }
 
 func (p *CodeGraphLocalIndexProvider) ContextForTask(ctx context.Context, request LocalContextRequest) (LocalEvidenceBundle, error) {
 	if err := ctx.Err(); err != nil {
-		return LocalEvidenceBundle{}, err
+		return LocalEvidenceBundle{}, localIndexFailure(err)
 	}
 	if err := ValidateLocalContextRequest(request); err != nil {
 		return LocalEvidenceBundle{}, ErrInvalidLocalContextRequest
@@ -51,35 +55,48 @@ func (p *CodeGraphLocalIndexProvider) ContextForTask(ctx context.Context, reques
 	workspace, err := normalizeCodeGraphWorkspace(request.Workspace)
 	configuredWorkspace, configuredErr := normalizeCodeGraphWorkspace(&p.workspace)
 	if err != nil || configuredErr != nil || !sameCodeGraphWorkspace(workspace, configuredWorkspace) {
-		return LocalEvidenceBundle{}, ErrInvalidLocalContextRequest
+		return LocalEvidenceBundle{}, newLocalIndexError(LocalIndexErrorWorktreeMismatch, LocalIndexStatusUnavailable, LocalIndexFreshnessStale, []string{"local_worktree_mismatch"}, ErrInvalidLocalContextRequest)
 	}
 	status, err := p.status(ctx, workspace)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return LocalEvidenceBundle{}, err
+			return LocalEvidenceBundle{}, localIndexFailure(err)
 		}
-		return LocalEvidenceBundle{}, ErrLocalIndexUnavailable
+		return LocalEvidenceBundle{}, localIndexFailure(err)
+	}
+	classification := classifyCodeGraphStatus(status)
+	workspaceClassification := classifyCodeGraphWorkspace(workspace)
+	classification.Warnings = append(classification.Warnings, workspaceClassification.Warnings...)
+	if workspaceClassification.Status == LocalIndexStatusDegraded {
+		classification.Status = LocalIndexStatusDegraded
+	}
+	if classification.omit(p.runner.Config.StalePolicy) {
+		return LocalEvidenceBundle{}, newLocalIndexError(LocalIndexErrorStale, LocalIndexStatusUnavailable, classification.Freshness, classification.Warnings, errCodeGraphMismatch)
 	}
 	candidates, err := p.collectCandidates(ctx, workspace, request)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return LocalEvidenceBundle{}, err
+			return LocalEvidenceBundle{}, localIndexFailure(err)
 		}
-		return LocalEvidenceBundle{}, ErrLocalIndexUnavailable
+		return LocalEvidenceBundle{}, localIndexFailure(err)
 	}
 	evidence, candidateTruncated, err := buildCodeGraphEvidence(candidates, min(request.MaxItems, p.itemLimit()), min(request.MaxOutputTokens, p.tokenLimit()))
 	if err != nil {
-		return LocalEvidenceBundle{}, ErrLocalIndexUnavailable
+		return LocalEvidenceBundle{}, localIndexFailure(err)
 	}
-	bundle := LocalEvidenceBundle{ProviderID: codeGraphProviderID, ProviderVersion: status.Version, QueryID: "query", QueryVersion: codeGraphJSONQueryVersion, IndexedAt: &status.LastIndexedAt, Warnings: []string{"indexed_commit_unknown"}, Truncated: candidateTruncated, Evidence: evidence}
+	warnings := append([]string(nil), classification.Warnings...)
+	if candidateTruncated {
+		warnings = append(warnings, string(LocalIndexErrorQueryBudgetExhausted))
+	}
+	bundle := LocalEvidenceBundle{ProviderID: codeGraphProviderID, ProviderVersion: status.Version, QueryID: "query", QueryVersion: codeGraphJSONQueryVersion, IndexedAt: &status.LastIndexedAt, Warnings: warnings, Status: classification.Status, Freshness: classification.Freshness, Truncated: candidateTruncated, Evidence: evidence}
 	bundle, payloadTruncated, err := trimCodeGraphEvidence(bundle)
 	if err != nil {
-		return LocalEvidenceBundle{}, ErrLocalIndexUnavailable
+		return LocalEvidenceBundle{}, localIndexFailure(err)
 	}
 	bundle.Truncated = bundle.Truncated || payloadTruncated
-	normalized, err := NormalizeLocalEvidenceBundleForRequest(request, LocalIndexCapabilities{ProviderID: codeGraphProviderID, ProviderVersion: status.Version, Available: true, MaxItems: p.itemLimit(), MaxOutputTokens: p.tokenLimit()}, bundle)
+	normalized, err := NormalizeLocalEvidenceBundleForRequest(request, LocalIndexCapabilities{ProviderID: codeGraphProviderID, ProviderVersion: status.Version, Available: true, MaxItems: p.itemLimit(), MaxOutputTokens: p.tokenLimit(), Status: classification.Status, Freshness: classification.Freshness}, bundle)
 	if err != nil {
-		return LocalEvidenceBundle{}, ErrLocalIndexUnavailable
+		return LocalEvidenceBundle{}, localIndexFailure(err)
 	}
 	p.remember(normalized.Evidence)
 	return normalized, nil

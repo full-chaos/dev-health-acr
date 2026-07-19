@@ -26,7 +26,7 @@ func runCodeGraphJSON(ctx context.Context, path, gitRoot string, arguments []str
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, ErrCodeGraphUnavailable
+		return nil, errors.Join(errCodeGraphDecode, ErrCodeGraphUnavailable)
 	}
 	cmd.Stderr = &boundedBuffer{limit: maxCodeGraphStderrBytes}
 	if err := cmd.Start(); err != nil {
@@ -51,7 +51,7 @@ func runCodeGraphJSON(ctx context.Context, path, gitRoot string, arguments []str
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, fmt.Errorf("codegraph command failed: %w", ErrCodeGraphUnavailable)
+		return nil, fmt.Errorf("codegraph command failed: %w", errors.Join(errCodeGraphUnsupported, ErrCodeGraphUnavailable))
 	}
 	return output, nil
 }

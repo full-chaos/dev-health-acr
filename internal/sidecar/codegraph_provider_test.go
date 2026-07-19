@@ -147,7 +147,11 @@ func TestCodeGraphProvider_Capabilities_acceptsOnlyCanonicalIndexDirectory(t *te
 			capabilities, err := provider.Capabilities(t.Context())
 
 			// Then
-			require.NoError(t, err)
+			if test.available {
+				require.NoError(t, err)
+			} else {
+				require.ErrorAs(t, err, new(*LocalIndexError))
+			}
 			require.Equal(t, test.available, capabilities.Available)
 		})
 	}
@@ -164,7 +168,7 @@ func TestCodeGraphProvider_Capabilities_rejectsExactIndexPathSymlinkOutsideRoot(
 	capabilities, err := provider.Capabilities(t.Context())
 
 	// Then
-	require.NoError(t, err)
+	require.ErrorAs(t, err, new(*LocalIndexError))
 	require.False(t, capabilities.Available)
 }
 

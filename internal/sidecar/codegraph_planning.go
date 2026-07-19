@@ -20,7 +20,10 @@ func (p *CodeGraphLocalIndexProvider) collectCandidates(ctx context.Context, wor
 	}
 	candidates := nodeCandidates(nodes)
 	anchors := nodes[:min(2, len(nodes))]
-	if len(workspace.ChangedFiles) > 0 && allowsCodeGraphAffected(request.RequestedCategories) {
+	if workspace.ChangedFilesState == LocalChangedFilesNotRequested {
+		return nil, ErrCodeGraphArgumentsRejected
+	}
+	if len(workspace.ChangedFiles) > 0 && workspace.ChangedFilesState == LocalChangedFilesComplete && allowsCodeGraphAffected(request.RequestedCategories) {
 		payload, err := p.runner.Affected(ctx, codeGraphAffectedRequest{GitRoot: workspace.GitRoot, Files: workspace.ChangedFiles})
 		if err != nil {
 			return nil, err

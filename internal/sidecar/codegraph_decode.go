@@ -3,16 +3,22 @@ package sidecar
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"math"
 	"sort"
 	"time"
 )
 
 type codeGraphStatus struct {
-	Version       string
-	ProjectPath   string
-	IndexPath     string
-	LastIndexedAt time.Time
+	Version            string
+	ProjectPath        string
+	IndexPath          string
+	LastIndexedAt      time.Time
+	PendingChanges     int
+	WorktreeMismatch   bool
+	ReindexRecommended bool
+	ExtractionMismatch bool
+	IndexedCommit      string
 }
 
 type codeGraphNode struct {
@@ -50,12 +56,18 @@ func decodeCodeGraphStatus(payload []byte) (codeGraphStatus, error) {
 		return codeGraphStatus{}, err
 	}
 	initialized, err := requiredBool(object, "initialized")
-	if err != nil || !initialized {
+	if err != nil {
 		return codeGraphStatus{}, errCodeGraphDecode
 	}
+	if !initialized {
+		return codeGraphStatus{}, errCodeGraphMissing
+	}
 	version, err := requiredText(object, "version", maxLocalIndexProviderVersionBytes)
-	if err != nil || !supportedCodeGraphVersion(version) {
+	if err != nil {
 		return codeGraphStatus{}, errCodeGraphDecode
+	}
+	if !supportedCodeGraphVersion(version) {
+		return codeGraphStatus{}, errors.Join(errCodeGraphDecode, errCodeGraphIncompatible)
 	}
 	projectPath, err := requiredAbsolutePath(object, "projectPath")
 	if err != nil {
@@ -69,7 +81,11 @@ func decodeCodeGraphStatus(payload []byte) (codeGraphStatus, error) {
 	if err != nil || !requiredStatusFields(object) {
 		return codeGraphStatus{}, errCodeGraphDecode
 	}
-	return codeGraphStatus{Version: version, ProjectPath: projectPath, IndexPath: indexPath, LastIndexedAt: lastIndexed}, nil
+	pending, mismatch, reindex, extractionMismatch, err := codeGraphStatusFreshness(object)
+	if err != nil {
+		return codeGraphStatus{}, errCodeGraphDecode
+	}
+	return codeGraphStatus{Version: version, ProjectPath: projectPath, IndexPath: indexPath, LastIndexedAt: lastIndexed, PendingChanges: pending, WorktreeMismatch: mismatch, ReindexRecommended: reindex, ExtractionMismatch: extractionMismatch}, nil
 }
 
 func decodeCodeGraphQuery(payload []byte) ([]codeGraphNode, error) {

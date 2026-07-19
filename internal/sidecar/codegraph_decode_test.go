@@ -20,7 +20,7 @@ func TestCodeGraphProvider_Capabilities_reportsPinnedVersionFromStatus(t *testin
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, LocalIndexCapabilities{ProviderID: codeGraphProviderID, ProviderVersion: "1.2.0", Available: true, MaxItems: 5, MaxOutputTokens: 1000}, capabilities)
+	require.Equal(t, LocalIndexCapabilities{ProviderID: codeGraphProviderID, ProviderVersion: "1.2.0", Available: true, MaxItems: 5, MaxOutputTokens: 1000, Status: LocalIndexStatusAvailable, Freshness: LocalIndexFreshnessFresh}, capabilities)
 }
 
 func TestCodeGraphProvider_AdditiveFields_acceptsUnknownStatusField(t *testing.T) {

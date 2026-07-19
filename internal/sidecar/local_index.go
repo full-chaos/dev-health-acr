@@ -46,6 +46,8 @@ type LocalIndexCapabilities struct {
 	Available       bool
 	MaxItems        int
 	MaxOutputTokens int
+	Status          LocalIndexStatus
+	Freshness       LocalIndexFreshness
 }
 
 // LocalContextRequest is a bounded, provider-neutral request for local evidence.
@@ -94,6 +96,8 @@ type LocalEvidenceBundle struct {
 	IndexedRef      string
 	IndexedCommit   string
 	Warnings        []string
+	Status          LocalIndexStatus
+	Freshness       LocalIndexFreshness
 	Truncated       bool
 	Evidence        []LocalExpandedEvidence
 }
