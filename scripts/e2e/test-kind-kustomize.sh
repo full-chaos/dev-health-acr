@@ -88,6 +88,7 @@ test_base_and_fixture_entitlement_ports_render() {
   if grep -Fqx 8443 <<<"${base_ports}"; then rm -rf "${state_root}"; fail 'base policy retains fixture entitlement port'; fi
 
   # shellcheck source=kind-kustomize-lib.sh
+  # shellcheck disable=SC1091
   source "${LIBRARY}"
   export KUSTOMIZE_E2E_WORK="${state_root}/work"
   export KUSTOMIZE_E2E_NAMESPACE=acr-test

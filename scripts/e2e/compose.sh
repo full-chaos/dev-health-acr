@@ -27,24 +27,32 @@ die() { printf '[compose-e2e] FAIL: %s\n' "$*" >&2; exit 1; }
 note() { printf '[compose-e2e] %s\n' "$*" >&2; }
 redact_log() { sed -E -e 's/(fcacr|svc_acr)_[[:alnum:]_-]+/REDACTED/g' -e 's#(postgresql?|clickhouse)://[^[:space:]]+#REDACTED_DSN#g'; }
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --compose) COMPOSE_FILE="${2:-}"; shift 2 ;;
-    --overlay) OVERLAY_FILE="${2:-}"; shift 2 ;;
-    --project) PROJECT="${2:-}"; shift 2 ;;
-    --scenario) SCENARIO="${2:-}"; shift 2 ;;
-    -h|--help) usage; exit 0 ;;
-    *) usage; exit 2 ;;
-  esac
-done
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --compose) COMPOSE_FILE="${2:-}"; shift 2 ;;
+      --overlay) OVERLAY_FILE="${2:-}"; shift 2 ;;
+      --project) PROJECT="${2:-}"; shift 2 ;;
+      --scenario) SCENARIO="${2:-}"; shift 2 ;;
+      -h|--help) usage; exit 0 ;;
+      *) usage; exit 2 ;;
+    esac
+  done
 
-case "$SCENARIO" in happy|existing-volume|missing-ops-token|invalid-ca|revoked-acr-token|clickhouse-read-denied|migration-failure) ;; *) usage; exit 2 ;; esac
-[[ -f "$COMPOSE_FILE" && -f "$OVERLAY_FILE" ]] || { usage; exit 2; }
-[[ "$PROJECT" =~ ^acr-e2e-[a-z0-9][a-z0-9-]{2,40}$ ]] || die 'project must be an isolated acr-e2e-* name'
-[[ "$PROJECT" != dev-health && "$PROJECT" != default ]] || die 'refusing the operator default Compose project'
-for tool in docker openssl curl git jq; do command -v "$tool" >/dev/null || die "$tool is required"; done
+  case "$SCENARIO" in happy|existing-volume|missing-ops-token|invalid-ca|revoked-acr-token|clickhouse-read-denied|migration-failure) ;; *) usage; exit 2 ;; esac
+  [[ -f "$COMPOSE_FILE" && -f "$OVERLAY_FILE" ]] || { usage; exit 2; }
+  [[ "$PROJECT" =~ ^acr-(e2e|svs)-[a-z0-9][a-z0-9-]{2,40}$ ]] || die 'project must be an isolated acr-e2e-* or acr-svs-* name'
+  [[ "$PROJECT" != dev-health && "$PROJECT" != default ]] || die 'refusing the operator default Compose project'
+  for tool in docker openssl curl git jq; do command -v "$tool" >/dev/null || die "$tool is required"; done
+}
 
-compose() { "${COMPOSE[@]}" -p "$PROJECT" --project-directory "$STATE/stage" -f "$STATE/stage/compose.yml" -f "$OVERLAY_FILE" -f "$STATE/override.yml" "$@"; }
+compose() {
+  local files=(-f "$STATE/stage/compose.yml" -f "$OVERLAY_FILE" -f "$STATE/override.yml")
+  if [[ -f "$STATE/svs.override.yml" ]]; then
+    files+=(-f "$STATE/svs.override.yml")
+  fi
+  "${COMPOSE[@]}" -p "$PROJECT" --project-directory "$STATE/stage" "${files[@]}" "$@"
+}
 
 owned_receipt() {
   local containers volumes networks
@@ -134,7 +142,7 @@ prepare_state() {
   ln -s "$(cd "$(dirname "$COMPOSE_FILE")" && pwd)/ops" "$STATE/stage/ops"
   ln -s "$(cd "$(dirname "$COMPOSE_FILE")" && pwd)/web" "$STATE/stage/web"
   ln -s "$REPO_ROOT/deploy" "$STATE/stage/deploy"
-  "$REPO_ROOT/scripts/deploy/local-pki.sh" --out "$STATE/pki" --dns 'localhost,acr-api,acr-ops-tls,clickhouse,postgres,127.0.0.1'
+  "$REPO_ROOT/scripts/deploy/local-pki.sh" --out "$STATE/pki" --dns 'localhost,acr-api,acr-tls-proxy,acr-ops-tls,clickhouse,postgres,127.0.0.1'
   PORT="$(free_port)"
   write_secret "$STATE/secrets/postgres-password" "$(random_secret)"
   write_secret "$STATE/secrets/runtime-password" "$(random_secret)"
@@ -283,7 +291,6 @@ bootstrap_ops() {
   [[ "$token" == svc_acr_* ]] || die 'Ops credential provisioning returned an invalid token shape'
   write_secret "$STATE/secrets/ops-token" "$token"
   db="acr_${PROJECT//-/}_e2e"
-  compose exec -T api dev-hops migrate clickhouse >/dev/null
   compose exec -T clickhouse clickhouse-client --user default --password ch --query "CREATE DATABASE IF NOT EXISTS ${db}" >/dev/null
   compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:8123/${db} dev-hops migrate clickhouse" >/dev/null
   compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:8123/${db} dev-hops fixtures generate --sink \"\$CLICKHOUSE_URI\" --db-type clickhouse --repo-name acme/live-e2e --provider synthetic --days 14 --commits-per-day 6 --pr-count 24 --seed 20260219 --with-metrics --with-work-graph" >/dev/null
@@ -472,24 +479,31 @@ run_failure() {
   return 1
 }
 
-assert_project_unused
-prepare_state
-ensure_image
-render_override
-assert_safe_render
+main() {
+  parse_args "$@"
+  assert_project_unused
+  prepare_state
+  ensure_image
+  render_override
+  assert_safe_render
 
-if [[ "$SCENARIO" == happy ]]; then
-  start_happy
-elif [[ "$SCENARIO" == existing-volume ]]; then
-  start_happy
-  inject_existing_volume_drift
-  compose down --remove-orphans >/dev/null
-  compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-ops-tls acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
-  wait_https_ready
-  record_acl_probe
-  run_mcp "$(<"$STATE/secrets/acr-rotated-token")"
-  SAFE_BOUNDARY='existing project-scoped volumes survived a complete application restart and reconciled role, password, ownership, and ACL drift'
-else
-  run_failure
+  if [[ "$SCENARIO" == happy ]]; then
+    start_happy
+  elif [[ "$SCENARIO" == existing-volume ]]; then
+    start_happy
+    inject_existing_volume_drift
+    compose down --remove-orphans >/dev/null
+    compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-ops-tls acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
+    wait_https_ready
+    record_acl_probe
+    run_mcp "$(<"$STATE/secrets/acr-rotated-token")"
+    SAFE_BOUNDARY='existing project-scoped volumes survived a complete application restart and reconciled role, password, ownership, and ACL drift'
+  else
+    run_failure
+  fi
+  note "PASS: ${SCENARIO}: ${SAFE_BOUNDARY}"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
 fi
-note "PASS: ${SCENARIO}: ${SAFE_BOUNDARY}"
