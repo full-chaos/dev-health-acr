@@ -114,16 +114,22 @@ func TestCodeGraphProvider_Capabilities_acceptsOnlyCanonicalIndexDirectory(t *te
 		name      string
 		indexPath string
 		available bool
+		symlink   bool
 	}{
 		{name: "canonical index directory", indexPath: filepath.Join(workspace.GitRoot, ".codegraph"), available: true},
 		{name: "database beneath index directory", indexPath: filepath.Join(workspace.GitRoot, ".codegraph", "codegraph.db")},
 		{name: "sibling index directory", indexPath: filepath.Join(filepath.Dir(workspace.GitRoot), ".codegraph")},
 		{name: "ancestor index directory", indexPath: filepath.Join(filepath.Dir(filepath.Dir(workspace.GitRoot)), ".codegraph")},
+		{name: "traversal index directory", indexPath: workspace.GitRoot + "/.codegraph/../.codegraph"},
+		{name: "symlink escape", indexPath: filepath.Join(workspace.GitRoot, "index-link"), symlink: true},
 	}
 
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			// Given
+			if test.symlink {
+				require.NoError(t, os.Symlink(t.TempDir(), test.indexPath))
+			}
 			status := strings.ReplaceAll(readCodeGraphFixture(t, "status"), "<local-only:absolute-project-path>", workspace.GitRoot)
 			status = strings.ReplaceAll(status, "<local-only:absolute-index-path>", test.indexPath)
 			fixturePath := filepath.Join(t.TempDir(), "status.json")
