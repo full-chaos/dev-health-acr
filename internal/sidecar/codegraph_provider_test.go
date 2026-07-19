@@ -185,3 +185,53 @@ func TestCodeGraphProvider_ResolveEvidence_returnsNotFoundForMalformedLocator(t 
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrLocalEvidenceNotFound))
 }
+
+func TestBuildCodeGraphEvidence_usesCommandQueryIDs(t *testing.T) {
+	// Given
+	candidates := []codeGraphCandidate{
+		{Command: codeGraphCommandQuery, Type: "definition", Locator: "node:one", Title: "definition: one"},
+		{Command: codeGraphCommandCallers, Type: "caller", Locator: "caller:one", Title: "caller: one"},
+		{Command: codeGraphCommandCallees, Type: "callee", Locator: "callee:one", Title: "callee: one"},
+		{Command: codeGraphCommandImpact, Type: "impact", Locator: "impact:one", Title: "impact: one"},
+		{Command: codeGraphCommandAffected, Type: "affected", Locator: "affected:one", Title: "affected: one"},
+		{Command: codeGraphCommandFiles, Type: "file", Locator: "file:one", Title: "file: one"},
+	}
+
+	// When
+	evidence, err := buildCodeGraphEvidence(candidates, len(candidates), 1000)
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, []string{"query", "callers", "callees", "impact", "affected", "files"}, []string{evidence[0].QueryID, evidence[1].QueryID, evidence[2].QueryID, evidence[3].QueryID, evidence[4].QueryID, evidence[5].QueryID})
+}
+
+func TestBuildCodeGraphEvidence_rejectsUnknownCommand(t *testing.T) {
+	// Given
+	candidates := []codeGraphCandidate{{Command: codeGraphCommand("unknown"), Type: "definition", Locator: "node:one", Title: "definition: one"}}
+
+	// When
+	_, err := buildCodeGraphEvidence(candidates, 1, 1000)
+
+	// Then
+	require.ErrorIs(t, err, errCodeGraphDecode)
+}
+
+func TestCodeGraphProvider_preservesStatusTimeout(t *testing.T) {
+	// Given
+	provider, workspace, _ := newFixtureCodeGraphProvider(t)
+	executable := filepath.Join(t.TempDir(), "codegraph")
+	require.NoError(t, os.WriteFile(executable, []byte("#!/bin/sh\nsleep 10\n"), 0o700))
+	provider.runner = CodeGraphRunner{
+		Config:            LocalIndexConfig{Executable: executable, Timeout: 100 * time.Millisecond},
+		resolveExecutable: func(string) (string, error) { return executable, nil },
+	}
+	request := LocalContextRequest{TaskID: "CHAOS-3007", Goal: "inspect local evidence", MaxItems: 1, MaxOutputTokens: 125, Workspace: &workspace}
+
+	// When
+	_, capabilitiesErr := provider.Capabilities(t.Context())
+	_, contextErr := provider.ContextForTask(t.Context(), request)
+
+	// Then
+	require.ErrorIs(t, capabilitiesErr, context.DeadlineExceeded)
+	require.ErrorIs(t, contextErr, context.DeadlineExceeded)
+}

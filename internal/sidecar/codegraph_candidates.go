@@ -9,6 +9,7 @@ import (
 )
 
 type codeGraphCandidate struct {
+	Command codeGraphCommand
 	Type    string
 	Locator string
 	Title   string
@@ -17,19 +18,30 @@ type codeGraphCandidate struct {
 	Line    int
 }
 
+type codeGraphCommand string
+
+const (
+	codeGraphCommandQuery    codeGraphCommand = "query"
+	codeGraphCommandCallers  codeGraphCommand = "callers"
+	codeGraphCommandCallees  codeGraphCommand = "callees"
+	codeGraphCommandImpact   codeGraphCommand = "impact"
+	codeGraphCommandAffected codeGraphCommand = "affected"
+	codeGraphCommandFiles    codeGraphCommand = "files"
+)
+
 func nodeCandidates(nodes []codeGraphNode) []codeGraphCandidate {
 	candidates := make([]codeGraphCandidate, 0, len(nodes))
 	for _, node := range nodes {
-		candidates = append(candidates, codeGraphCandidate{Type: "definition", Locator: "node:" + node.ID, Title: boundedCandidateText("definition: " + node.Name), Excerpt: codeGraphProvenance(node.FilePath, node.Line), Path: node.FilePath, Line: node.Line})
+		candidates = append(candidates, codeGraphCandidate{Command: codeGraphCommandQuery, Type: "definition", Locator: "node:" + node.ID, Title: boundedCandidateText("definition: " + node.Name), Excerpt: codeGraphProvenance(node.FilePath, node.Line), Path: node.FilePath, Line: node.Line})
 	}
 	return candidates
 }
 
-func relationCandidates(kind string, relations []codeGraphRelation) []codeGraphCandidate {
+func relationCandidates(command codeGraphCommand, kind string, relations []codeGraphRelation) []codeGraphCandidate {
 	candidates := make([]codeGraphCandidate, 0, len(relations))
 	for _, relation := range relations {
 		locator := kind + ":" + relation.FilePath + "#" + strconv.Itoa(relation.Line) + ":" + relation.Name
-		candidates = append(candidates, codeGraphCandidate{Type: kind, Locator: locator, Title: boundedCandidateText(kind + ": " + relation.Name), Excerpt: codeGraphProvenance(relation.FilePath, relation.Line), Path: relation.FilePath, Line: relation.Line})
+		candidates = append(candidates, codeGraphCandidate{Command: command, Type: kind, Locator: locator, Title: boundedCandidateText(kind + ": " + relation.Name), Excerpt: codeGraphProvenance(relation.FilePath, relation.Line), Path: relation.FilePath, Line: relation.Line})
 	}
 	return candidates
 }
@@ -37,10 +49,10 @@ func relationCandidates(kind string, relations []codeGraphRelation) []codeGraphC
 func affectedCandidates(affected codeGraphAffected) []codeGraphCandidate {
 	candidates := make([]codeGraphCandidate, 0, len(affected.ChangedFiles)+len(affected.AffectedTests))
 	for _, path := range affected.ChangedFiles {
-		candidates = append(candidates, codeGraphCandidate{Type: "affected", Locator: "affected:" + path, Title: boundedCandidateText("affected: " + path), Excerpt: path})
+		candidates = append(candidates, codeGraphCandidate{Command: codeGraphCommandAffected, Type: "affected", Locator: "affected:" + path, Title: boundedCandidateText("affected: " + path), Excerpt: path})
 	}
 	for _, path := range affected.AffectedTests {
-		candidates = append(candidates, codeGraphCandidate{Type: "test", Locator: "test:" + path, Title: boundedCandidateText("test: " + path), Excerpt: path})
+		candidates = append(candidates, codeGraphCandidate{Command: codeGraphCommandAffected, Type: "test", Locator: "test:" + path, Title: boundedCandidateText("test: " + path), Excerpt: path})
 	}
 	return candidates
 }
@@ -48,7 +60,7 @@ func affectedCandidates(affected codeGraphAffected) []codeGraphCandidate {
 func fileCandidates(files []codeGraphFile) []codeGraphCandidate {
 	candidates := make([]codeGraphCandidate, 0, len(files))
 	for _, file := range files {
-		candidates = append(candidates, codeGraphCandidate{Type: "file", Locator: "file:" + file.Path, Title: boundedCandidateText("file: " + file.Path), Excerpt: file.Language})
+		candidates = append(candidates, codeGraphCandidate{Command: codeGraphCommandFiles, Type: "file", Locator: "file:" + file.Path, Title: boundedCandidateText("file: " + file.Path), Excerpt: file.Language})
 	}
 	return candidates
 }
@@ -60,7 +72,8 @@ func buildCodeGraphEvidence(candidates []codeGraphCandidate, itemLimit, tokenLim
 		if len(evidence) == itemLimit {
 			break
 		}
-		if !boundedLocalLocator(candidate.Locator) || !boundedNonEmpty(candidate.Title, maxLocalEvidenceTitleBytes) || len(candidate.Excerpt) > maxLocalEvidenceExcerptBytes {
+		queryID, validCommand := candidate.Command.queryID()
+		if !validCommand || !boundedLocalLocator(candidate.Locator) || !boundedNonEmpty(candidate.Title, maxLocalEvidenceTitleBytes) || len(candidate.Excerpt) > maxLocalEvidenceExcerptBytes {
 			return nil, errCodeGraphDecode
 		}
 		estimatedTokens := max(1, (len(candidate.Title)+len(candidate.Excerpt)+3)/4)
@@ -68,10 +81,19 @@ func buildCodeGraphEvidence(candidates []codeGraphCandidate, itemLimit, tokenLim
 			break
 		}
 		sum := sha256.Sum256([]byte(candidate.Type + "\x00" + candidate.Locator))
-		evidence = append(evidence, LocalExpandedEvidence{ID: "cg:" + hex.EncodeToString(sum[:]), Locator: candidate.Locator, Title: candidate.Title, Excerpt: candidate.Excerpt, EstimatedTokens: estimatedTokens, QueryID: "query", Relation: candidate.Type, RepositoryPath: candidate.Path, StartLine: candidate.Line})
+		evidence = append(evidence, LocalExpandedEvidence{ID: "cg:" + hex.EncodeToString(sum[:]), Locator: candidate.Locator, Title: candidate.Title, Excerpt: candidate.Excerpt, EstimatedTokens: estimatedTokens, QueryID: queryID, Relation: candidate.Type, RepositoryPath: candidate.Path, StartLine: candidate.Line})
 		remaining -= estimatedTokens
 	}
 	return evidence, nil
+}
+
+func (command codeGraphCommand) queryID() (string, bool) {
+	switch command {
+	case codeGraphCommandQuery, codeGraphCommandCallers, codeGraphCommandCallees, codeGraphCommandImpact, codeGraphCommandAffected, codeGraphCommandFiles:
+		return string(command), true
+	default:
+		return "", false
+	}
 }
 
 func codeGraphCandidateLess(left, right codeGraphCandidate) bool {

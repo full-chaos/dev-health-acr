@@ -205,7 +205,7 @@ func (p *CodeGraphLocalIndexProvider) anchorCandidates(ctx context.Context, root
 	if err != nil {
 		return nil, err
 	}
-	return append(append(relationCandidates("caller", callerRelations), relationCandidates("callee", calleeRelations)...), relationCandidates("impact", impactRelations)...), nil
+	return append(append(relationCandidates(codeGraphCommandCallers, "caller", callerRelations), relationCandidates(codeGraphCommandCallees, "callee", calleeRelations)...), relationCandidates(codeGraphCommandImpact, "impact", impactRelations)...), nil
 }
 
 func (p *CodeGraphLocalIndexProvider) itemLimit() int {
