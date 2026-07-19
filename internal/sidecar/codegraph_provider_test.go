@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,8 +22,8 @@ func TestCodeGraphProvider_ContextForTask_returnsDeterministicBoundedFixtureEvid
 	provider, workspace, commandLog := newFixtureCodeGraphProvider(t)
 	request := LocalContextRequest{
 		TaskID:              "CHAOS-3007",
-		Task:                "consume the local index safely",
-		RequestedCategories: []string{"maintenance"},
+		Goal:                "consume the local index safely",
+		RequestedCategories: []contractsv1.PacketCategory{contractsv1.CategoryEvidence},
 		MaxItems:            5,
 		MaxOutputTokens:     1000,
 		Workspace:           &workspace,
@@ -40,7 +41,7 @@ func TestCodeGraphProvider_ContextForTask_returnsDeterministicBoundedFixtureEvid
 	require.Equal(t, codeGraphJSONQueryVersion, first.QueryVersion)
 	require.NotEmpty(t, first.Evidence)
 	require.LessOrEqual(t, len(first.Evidence), request.MaxItems)
-	require.NotContains(t, strings.Join(localEvidenceLocators(first.Evidence), "\n"), workspace.Root)
+	require.NotContains(t, strings.Join(localEvidenceLocators(first.Evidence), "\n"), workspace.GitRoot)
 
 	resolved, resolveErr := provider.ResolveEvidence(context.Background(), first.Evidence[0].Locator)
 	require.NoError(t, resolveErr)
@@ -54,14 +55,14 @@ func TestCodeGraphProvider_ContextForTask_returnsDeterministicBoundedFixtureEvid
 	require.LessOrEqual(t, len(lines)/2, codeGraphCommandsPerTask)
 	require.Equal(t, []string{
 		"status --json",
-		"query --json consume the local index safely maintenance --limit 5",
-		"affected --json acr/internal/contextpacket/assembler.go --depth 2",
+		"query --json consume the local index safely evidence --limit 5",
+		"affected --json --stdin --depth 2",
 		"callers --json Assemble --limit 5",
 		"callees --json Assemble --limit 5",
 		"impact --json Assemble --depth 2",
 		"status --json",
-		"query --json consume the local index safely maintenance --limit 5",
-		"affected --json acr/internal/contextpacket/assembler.go --depth 2",
+		"query --json consume the local index safely evidence --limit 5",
+		"affected --json --stdin --depth 2",
 		"callers --json Assemble --limit 5",
 		"callees --json Assemble --limit 5",
 		"impact --json Assemble --depth 2",
@@ -72,7 +73,7 @@ func TestCodeGraphProvider_ContextForTask_returnsDeterministicBoundedFixtureEvid
 	}
 }
 
-func newFixtureCodeGraphProvider(t *testing.T) (*CodeGraphLocalIndexProvider, LocalWorkspace, string) {
+func newFixtureCodeGraphProvider(t *testing.T) (*CodeGraphLocalIndexProvider, LocalWorkspaceSnapshot, string) {
 	t.Helper()
 	root := t.TempDir()
 	canonicalRoot, err := canonicalCodeGraphRoot(root)
@@ -95,12 +96,13 @@ func newFixtureCodeGraphProvider(t *testing.T) (*CodeGraphLocalIndexProvider, Lo
 		Config:            LocalIndexConfig{Executable: executable, Timeout: time.Second, MaxItems: 5, MaxOutputTokens: 1000},
 		resolveExecutable: func(string) (string, error) { return executable, nil },
 	}
-	workspace := LocalWorkspace{
-		RepositorySlug: "full-chaos/dev-health-acr",
-		Root:           canonicalRoot,
-		Branch:         "feat/chaos-3007",
-		CommitSHA:      "0123456789abcdef0123456789abcdef01234567",
-		TargetFiles:    []string{"acr/internal/contextpacket/assembler.go"},
+	workspace := LocalWorkspaceSnapshot{
+		Repository:        LocalRepositoryIdentity{Host: "github.com", Slug: "full-chaos/dev-health-acr"},
+		GitRoot:           canonicalRoot,
+		Branch:            "feat/chaos-3007",
+		CommitSHA:         "0123456789abcdef0123456789abcdef01234567",
+		ChangedFiles:      []string{"acr/internal/contextpacket/assembler.go"},
+		ChangedFilesState: LocalChangedFilesComplete,
 	}
 	return NewCodeGraphLocalIndexProvider(runner, workspace), workspace, commandLog
 }

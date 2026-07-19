@@ -163,16 +163,16 @@ func TestCodeGraphProvider_ContextForTask_rejectsTruncatedOrMismatchedWorkspace(
 	// Given
 	provider, workspace, _ := newFixtureCodeGraphProvider(t)
 	truncatedWorkspace := workspace
-	truncatedWorkspace.TargetFilesTruncated = true
+	truncatedWorkspace.ChangedFilesState = LocalChangedFilesTruncated
 	mismatchedWorkspace := workspace
-	mismatchedWorkspace.RepositorySlug = "other/repository"
+	mismatchedWorkspace.Repository.Slug = "other/repository"
 	alteredFilesWorkspace := workspace
-	alteredFilesWorkspace.TargetFiles = []string{"internal/sidecar/local_index.go"}
+	alteredFilesWorkspace.ChangedFiles = []string{"internal/sidecar/local_index.go"}
 
 	// When
-	_, truncatedErr := provider.ContextForTask(t.Context(), LocalContextRequest{TaskID: "CHAOS-3007", Task: "safe local context", MaxItems: 1, MaxOutputTokens: 125, Workspace: &truncatedWorkspace})
-	_, mismatchErr := provider.ContextForTask(t.Context(), LocalContextRequest{TaskID: "CHAOS-3007", Task: "safe local context", MaxItems: 1, MaxOutputTokens: 125, Workspace: &mismatchedWorkspace})
-	_, alteredFilesErr := provider.ContextForTask(t.Context(), LocalContextRequest{TaskID: "CHAOS-3007", Task: "safe local context", MaxItems: 1, MaxOutputTokens: 125, Workspace: &alteredFilesWorkspace})
+	_, truncatedErr := provider.ContextForTask(t.Context(), LocalContextRequest{TaskID: "CHAOS-3007", Goal: "safe local context", MaxItems: 1, MaxOutputTokens: 125, Workspace: &truncatedWorkspace})
+	_, mismatchErr := provider.ContextForTask(t.Context(), LocalContextRequest{TaskID: "CHAOS-3007", Goal: "safe local context", MaxItems: 1, MaxOutputTokens: 125, Workspace: &mismatchedWorkspace})
+	_, alteredFilesErr := provider.ContextForTask(t.Context(), LocalContextRequest{TaskID: "CHAOS-3007", Goal: "safe local context", MaxItems: 1, MaxOutputTokens: 125, Workspace: &alteredFilesWorkspace})
 
 	// Then
 	require.ErrorIs(t, truncatedErr, ErrInvalidLocalContextRequest)

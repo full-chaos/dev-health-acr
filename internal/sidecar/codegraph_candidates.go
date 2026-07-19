@@ -13,12 +13,14 @@ type codeGraphCandidate struct {
 	Locator string
 	Title   string
 	Excerpt string
+	Path    string
+	Line    int
 }
 
 func nodeCandidates(nodes []codeGraphNode) []codeGraphCandidate {
 	candidates := make([]codeGraphCandidate, 0, len(nodes))
 	for _, node := range nodes {
-		candidates = append(candidates, codeGraphCandidate{Type: "definition", Locator: "node:" + node.ID, Title: boundedCandidateText("definition: " + node.Name), Excerpt: codeGraphProvenance(node.FilePath, node.Line)})
+		candidates = append(candidates, codeGraphCandidate{Type: "definition", Locator: "node:" + node.ID, Title: boundedCandidateText("definition: " + node.Name), Excerpt: codeGraphProvenance(node.FilePath, node.Line), Path: node.FilePath, Line: node.Line})
 	}
 	return candidates
 }
@@ -27,7 +29,7 @@ func relationCandidates(kind string, relations []codeGraphRelation) []codeGraphC
 	candidates := make([]codeGraphCandidate, 0, len(relations))
 	for _, relation := range relations {
 		locator := kind + ":" + relation.FilePath + "#" + strconv.Itoa(relation.Line) + ":" + relation.Name
-		candidates = append(candidates, codeGraphCandidate{Type: kind, Locator: locator, Title: boundedCandidateText(kind + ": " + relation.Name), Excerpt: codeGraphProvenance(relation.FilePath, relation.Line)})
+		candidates = append(candidates, codeGraphCandidate{Type: kind, Locator: locator, Title: boundedCandidateText(kind + ": " + relation.Name), Excerpt: codeGraphProvenance(relation.FilePath, relation.Line), Path: relation.FilePath, Line: relation.Line})
 	}
 	return candidates
 }
@@ -66,7 +68,7 @@ func buildCodeGraphEvidence(candidates []codeGraphCandidate, itemLimit, tokenLim
 			break
 		}
 		sum := sha256.Sum256([]byte(candidate.Type + "\x00" + candidate.Locator))
-		evidence = append(evidence, LocalExpandedEvidence{ID: "cg:" + hex.EncodeToString(sum[:]), Locator: candidate.Locator, Title: candidate.Title, Excerpt: candidate.Excerpt, EstimatedTokens: estimatedTokens})
+		evidence = append(evidence, LocalExpandedEvidence{ID: "cg:" + hex.EncodeToString(sum[:]), Locator: candidate.Locator, Title: candidate.Title, Excerpt: candidate.Excerpt, EstimatedTokens: estimatedTokens, QueryID: "query", Relation: candidate.Type, RepositoryPath: candidate.Path, StartLine: candidate.Line})
 		remaining -= estimatedTokens
 	}
 	return evidence, nil

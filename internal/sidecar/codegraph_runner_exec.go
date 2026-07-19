@@ -1,6 +1,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,11 +13,13 @@ import (
 
 const codeGraphWaitDelay = time.Second
 
-func runCodeGraphJSON(ctx context.Context, path, gitRoot string, arguments []string) ([]byte, error) {
+func runCodeGraphJSON(ctx context.Context, path, gitRoot string, arguments []string, input []byte) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, path, arguments...)
 	cmd.Dir = gitRoot
 	cmd.Env = credentialSafeEnviron()
-	cmd.Stdin = nil
+	if input != nil {
+		cmd.Stdin = bytes.NewReader(input)
+	}
 	configureKeyringProcessGroup(cmd)
 	cmd.Cancel = func() error { return killKeyringProcessGroup(cmd) }
 	cmd.WaitDelay = codeGraphWaitDelay

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 const (
@@ -51,24 +53,37 @@ type LocalIndexCapabilities struct {
 // LocalContextRequest is a bounded, provider-neutral request for local evidence.
 type LocalContextRequest struct {
 	TaskID              string
-	Task                string
+	Goal                string
 	TaskRef             string
-	RequestedCategories []string
-	Workspace           *LocalWorkspace
+	RequestedCategories []contractsv1.PacketCategory
+	Workspace           *LocalWorkspaceSnapshot
 	MaxItems            int
 	MaxOutputTokens     int
 }
 
-// LocalWorkspace is a trusted, provider-neutral snapshot supplied by scope
-// resolution. Root is operational-only and must never enter evidence output.
-type LocalWorkspace struct {
-	Root                 string
-	RepositorySlug       string
-	Branch               string
-	CommitSHA            string
-	Detached             bool
-	TargetFiles          []string
-	TargetFilesTruncated bool
+type LocalChangedFilesState string
+
+const (
+	LocalChangedFilesNotRequested LocalChangedFilesState = "not_requested"
+	LocalChangedFilesComplete     LocalChangedFilesState = "complete"
+	LocalChangedFilesTruncated    LocalChangedFilesState = "truncated"
+)
+
+type LocalRepositoryIdentity struct {
+	Host string
+	Slug string
+}
+
+// LocalWorkspaceSnapshot is a trusted, provider-neutral scope snapshot.
+// GitRoot is operational-only and never enters an evidence result.
+type LocalWorkspaceSnapshot struct {
+	GitRoot           string
+	Repository        LocalRepositoryIdentity
+	Branch            string
+	CommitSHA         string
+	Detached          bool
+	ChangedFiles      []string
+	ChangedFilesState LocalChangedFilesState
 }
 
 // LocalEvidenceBundle is an ordered, bounded local evidence result.
@@ -78,6 +93,10 @@ type LocalEvidenceBundle struct {
 	QueryID         string
 	QueryVersion    string
 	IndexedAt       *time.Time
+	IndexedRef      string
+	IndexedCommit   string
+	Warnings        []string
+	Truncated       bool
 	Evidence        []LocalExpandedEvidence
 }
 
@@ -88,6 +107,10 @@ type LocalExpandedEvidence struct {
 	Title           string
 	Excerpt         string
 	EstimatedTokens int
+	QueryID         string
+	Relation        string
+	RepositoryPath  string
+	StartLine       int
 }
 
 type localIndexValidationError struct {
@@ -122,7 +145,7 @@ func ValidateLocalIndexCapabilities(capabilities LocalIndexCapabilities) error {
 }
 
 func ValidateLocalContextRequest(request LocalContextRequest) error {
-	if !boundedNonEmpty(request.TaskID, maxLocalTaskIDBytes) || !boundedNonEmpty(request.Task, maxLocalTaskBytes) {
+	if !boundedNonEmpty(request.TaskID, maxLocalTaskIDBytes) || !boundedNonEmpty(request.Goal, maxLocalTaskBytes) {
 		return invalidLocalIndexValue(ErrInvalidLocalContextRequest, "task")
 	}
 	if (request.TaskRef != "" && !validCodeGraphText(request.TaskRef, maxLocalTaskIDBytes)) || !validRequestedCategories(request.RequestedCategories) {
@@ -192,6 +215,7 @@ func copyLocalEvidenceBundle(bundle LocalEvidenceBundle) LocalEvidenceBundle {
 		indexedAt := *bundle.IndexedAt
 		normalized.IndexedAt = &indexedAt
 	}
+	normalized.Warnings = append([]string(nil), bundle.Warnings...)
 	normalized.Evidence = make([]LocalExpandedEvidence, len(bundle.Evidence))
 	copy(normalized.Evidence, bundle.Evidence)
 	return normalized

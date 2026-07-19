@@ -46,7 +46,7 @@ func assertLocalIndexProviderContract(t *testing.T, provider LocalIndexProvider)
 
 	// Given
 	ctx := context.Background()
-	request := LocalContextRequest{TaskID: "task-1", Task: "summarize the local evidence", MaxItems: 1, MaxOutputTokens: 128}
+	request := LocalContextRequest{TaskID: "task-1", Goal: "summarize the local evidence", MaxItems: 1, MaxOutputTokens: 128}
 
 	// When
 	capabilities, err := provider.Capabilities(ctx)

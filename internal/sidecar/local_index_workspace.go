@@ -8,39 +8,57 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 const maxLocalRequestedCategories = 8
 
-func normalizeCodeGraphWorkspace(workspace *LocalWorkspace) (LocalWorkspace, error) {
-	if workspace == nil || workspace.TargetFilesTruncated {
-		return LocalWorkspace{}, ErrInvalidLocalContextRequest
+func NewLocalWorkspaceSnapshot(info WorkspaceInfo, expectedSlug string, filesRequested bool) (LocalWorkspaceSnapshot, error) {
+	if info.Remote == nil || strings.ToLower(strings.TrimSpace(info.Remote.Slug())) != strings.ToLower(strings.TrimSpace(expectedSlug)) {
+		return LocalWorkspaceSnapshot{}, ErrInvalidLocalContextRequest
 	}
-	if !validRepositorySlug(workspace.RepositorySlug) || !validCommitSHA(workspace.CommitSHA) || (workspace.Detached && workspace.Branch != "") || (!workspace.Detached && !validCodeGraphText(workspace.Branch, maxLocalTaskIDBytes)) {
-		return LocalWorkspace{}, ErrInvalidLocalContextRequest
+	state := LocalChangedFilesNotRequested
+	if filesRequested {
+		state = LocalChangedFilesComplete
+		if info.ChangedFilesTruncated {
+			state = LocalChangedFilesTruncated
+		}
 	}
-	root, err := canonicalCodeGraphRoot(workspace.Root)
+	return normalizeCodeGraphWorkspace(&LocalWorkspaceSnapshot{GitRoot: info.GitRoot, Repository: LocalRepositoryIdentity{Host: info.Remote.Host, Slug: info.Remote.Slug()}, Branch: info.Branch, CommitSHA: info.CommitSHA, Detached: info.Detached, ChangedFiles: info.ChangedFiles, ChangedFilesState: state})
+}
+
+func normalizeCodeGraphWorkspace(workspace *LocalWorkspaceSnapshot) (LocalWorkspaceSnapshot, error) {
+	if workspace == nil || workspace.ChangedFilesState == LocalChangedFilesTruncated || (workspace.ChangedFilesState != LocalChangedFilesNotRequested && workspace.ChangedFilesState != LocalChangedFilesComplete) {
+		return LocalWorkspaceSnapshot{}, ErrInvalidLocalContextRequest
+	}
+	if !validRepositorySlug(workspace.Repository.Slug) || !validCodeGraphText(workspace.Repository.Host, maxLocalEvidenceLocatorBytes) || !validCommitSHA(workspace.CommitSHA) || (workspace.Detached && workspace.Branch != "") || (!workspace.Detached && !validCodeGraphText(workspace.Branch, maxLocalTaskIDBytes)) {
+		return LocalWorkspaceSnapshot{}, ErrInvalidLocalContextRequest
+	}
+	root, err := canonicalCodeGraphRoot(workspace.GitRoot)
 	if err != nil {
-		return LocalWorkspace{}, ErrInvalidLocalContextRequest
+		return LocalWorkspaceSnapshot{}, ErrInvalidLocalContextRequest
 	}
-	files, err := normalizeRepositoryPaths(workspace.TargetFiles)
+	files, err := normalizeRepositoryPaths(workspace.ChangedFiles)
 	if err != nil {
-		return LocalWorkspace{}, ErrInvalidLocalContextRequest
+		return LocalWorkspaceSnapshot{}, ErrInvalidLocalContextRequest
 	}
 	normalized := *workspace
-	normalized.Root = root
-	normalized.TargetFiles = files
+	normalized.GitRoot = root
+	normalized.ChangedFiles = files
 	return normalized, nil
 }
 
-func validRequestedCategories(categories []string) bool {
+func validRequestedCategories(categories []contractsv1.PacketCategory) bool {
 	if len(categories) > maxLocalRequestedCategories {
 		return false
 	}
+	seen := map[contractsv1.PacketCategory]bool{}
 	for _, category := range categories {
-		if !validCodeGraphText(category, maxLocalEvidenceTitleBytes) {
+		if seen[category] || (category != contractsv1.CategoryState && category != contractsv1.CategoryPressure && category != contractsv1.CategoryCause && category != contractsv1.CategoryEvidence && category != contractsv1.CategoryAction) {
 			return false
 		}
+		seen[category] = true
 	}
 	return true
 }

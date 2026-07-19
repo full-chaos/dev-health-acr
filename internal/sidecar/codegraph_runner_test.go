@@ -2,7 +2,6 @@ package sidecar
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -148,19 +147,6 @@ func newTestCodeGraphRunner(t *testing.T, body string) CodeGraphRunner {
 	}
 }
 
-func TestCodeGraphRunner_RejectsArbitraryArguments(t *testing.T) {
-	// Given
-	runner := newTestCodeGraphRunner(t, `printf '{}'`)
-
-	// When
-	_, err := runner.Run(context.Background(), "status", []string{"--unsafe"})
-
-	// Then
-	require.ErrorIs(t, err, ErrCodeGraphArgumentsRejected)
-	require.False(t, errors.Is(err, context.Canceled))
-	require.NotContains(t, err.Error(), strings.Join([]string{"--unsafe"}, ""))
-}
-
 func TestCodeGraphRunner_TypedCommands_useFixedJSONArgvAndTrustedRoot(t *testing.T) {
 	// Given
 	runner, root, commandLog := newRecordingCodeGraphRunner(t)
@@ -187,7 +173,7 @@ func TestCodeGraphRunner_TypedCommands_useFixedJSONArgvAndTrustedRoot(t *testing
 		root + "|callers --json Assemble --limit 3",
 		root + "|callees --json Assemble --limit 3",
 		root + "|impact --json Assemble --depth 2",
-		root + "|affected --json internal/sidecar/local_index.go --depth 2",
+		root + "|affected --json --stdin --depth 2",
 		root + "|files --json --filter internal/sidecar --pattern *.go --max-depth 2 --no-metadata",
 	}, strings.Split(strings.TrimSpace(string(commands)), "\n"))
 }

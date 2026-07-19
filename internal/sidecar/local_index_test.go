@@ -81,7 +81,7 @@ func TestLocalIndexProviderContract_Cancellation(t *testing.T) {
 	provider := NewDisabledLocalIndexProvider()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	request := LocalContextRequest{TaskID: "task-1", Task: "summarize", MaxItems: 1, MaxOutputTokens: 128}
+	request := LocalContextRequest{TaskID: "task-1", Goal: "summarize", MaxItems: 1, MaxOutputTokens: 128}
 
 	// When / Then
 	if _, err := provider.Capabilities(ctx); !errors.Is(err, context.Canceled) {
@@ -110,7 +110,7 @@ func TestLocalIndexProviderContract_NotFound(t *testing.T) {
 
 func TestValidateLocalContextRequest_rejectsUnboundedRequest(t *testing.T) {
 	// Given
-	request := LocalContextRequest{TaskID: "task-1", Task: "summarize", MaxItems: maxLocalEvidenceItems + 1, MaxOutputTokens: 128}
+	request := LocalContextRequest{TaskID: "task-1", Goal: "summarize", MaxItems: maxLocalEvidenceItems + 1, MaxOutputTokens: 128}
 
 	// When
 	err := ValidateLocalContextRequest(request)
@@ -132,7 +132,7 @@ func TestNormalizeLocalEvidenceBundleForRequest_rejectsSmallerRequestLimitsBefor
 	}{
 		{
 			name:    "items",
-			request: LocalContextRequest{TaskID: "task-1", Task: "summarize", MaxItems: 1, MaxOutputTokens: 128},
+			request: LocalContextRequest{TaskID: "task-1", Goal: "summarize", MaxItems: 1, MaxOutputTokens: 128},
 			bundle: LocalEvidenceBundle{
 				ProviderID: "fixture", ProviderVersion: "1.0.0", QueryID: "task-context", QueryVersion: "v1",
 				Evidence: []LocalExpandedEvidence{evidence, {ID: "evidence-2", Locator: "locator-2", Title: "Second local symbol", Excerpt: "safe excerpt", EstimatedTokens: 1}},
@@ -140,7 +140,7 @@ func TestNormalizeLocalEvidenceBundleForRequest_rejectsSmallerRequestLimitsBefor
 		},
 		{
 			name:    "tokens",
-			request: LocalContextRequest{TaskID: "task-1", Task: "summarize", MaxItems: 1, MaxOutputTokens: 1},
+			request: LocalContextRequest{TaskID: "task-1", Goal: "summarize", MaxItems: 1, MaxOutputTokens: 1},
 			bundle: LocalEvidenceBundle{
 				ProviderID: "fixture", ProviderVersion: "1.0.0", QueryID: "task-context", QueryVersion: "v1",
 				Evidence: []LocalExpandedEvidence{{ID: "evidence-1", Locator: "locator-1", Title: "Relevant local symbol", Excerpt: "safe excerpt", EstimatedTokens: 2}},
@@ -163,7 +163,7 @@ func TestNormalizeLocalEvidenceBundleForRequest_rejectsSmallerRequestLimitsBefor
 
 func TestNormalizeLocalEvidenceBundleForRequest_rejectsMetadataMismatch(t *testing.T) {
 	// Given
-	request := LocalContextRequest{TaskID: "task-1", Task: "summarize", MaxItems: 1, MaxOutputTokens: 128}
+	request := LocalContextRequest{TaskID: "task-1", Goal: "summarize", MaxItems: 1, MaxOutputTokens: 128}
 	capabilities := LocalIndexCapabilities{ProviderID: "fixture", ProviderVersion: "1.0.0", Available: true, MaxItems: 1, MaxOutputTokens: 128}
 	bundle := LocalEvidenceBundle{ProviderID: "fixture", ProviderVersion: "2.0.0", QueryID: "task-context", QueryVersion: "v1"}
 
@@ -179,7 +179,7 @@ func TestNormalizeLocalEvidenceBundleForRequest_rejectsMetadataMismatch(t *testi
 func TestLocalIndexProviderLimits_acceptExactGlobalItemCeilingDeterministically(t *testing.T) {
 	// Given
 	capabilities := LocalIndexCapabilities{ProviderID: "fixture", ProviderVersion: "1.0.0", Available: true, MaxItems: 12, MaxOutputTokens: 128}
-	request := LocalContextRequest{TaskID: "task-1", Task: "summarize", MaxItems: 12, MaxOutputTokens: 128}
+	request := LocalContextRequest{TaskID: "task-1", Goal: "summarize", MaxItems: 12, MaxOutputTokens: 128}
 	bundle := LocalEvidenceBundle{ProviderID: "fixture", ProviderVersion: "1.0.0", QueryID: "task-context", QueryVersion: "v1", Evidence: localEvidenceItems(12)}
 
 	// When
@@ -210,7 +210,7 @@ func TestLocalIndexProviderLimits_acceptExactGlobalItemCeilingDeterministically(
 func TestLocalIndexProviderLimits_rejectsOneOverGlobalItemCeiling(t *testing.T) {
 	// Given
 	capabilities := LocalIndexCapabilities{ProviderID: "fixture", ProviderVersion: "1.0.0", Available: true, MaxItems: 13, MaxOutputTokens: 128}
-	request := LocalContextRequest{TaskID: "task-1", Task: "summarize", MaxItems: 13, MaxOutputTokens: 128}
+	request := LocalContextRequest{TaskID: "task-1", Goal: "summarize", MaxItems: 13, MaxOutputTokens: 128}
 	bundle := LocalEvidenceBundle{ProviderID: "fixture", ProviderVersion: "1.0.0", QueryID: "task-context", QueryVersion: "v1", Evidence: localEvidenceItems(13)}
 
 	// When / Then

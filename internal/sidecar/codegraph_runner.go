@@ -1,11 +1,13 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -82,16 +84,15 @@ func (r CodeGraphRunner) Affected(ctx context.Context, request codeGraphAffected
 	if len(request.Files) == 0 || len(request.Files) > DefaultMaxChangedFiles {
 		return nil, ErrCodeGraphArgumentsRejected
 	}
-	arguments := make([]string, 0, len(request.Files)+4)
-	arguments = append(arguments, "affected", "--json")
+	arguments := []string{"affected", "--json", "--stdin", "--depth", strconv.Itoa(codeGraphTraversalDepth)}
+	input := make([]string, 0, len(request.Files))
 	for _, file := range request.Files {
 		if !validRepositoryRelativePath(file) {
 			return nil, ErrCodeGraphArgumentsRejected
 		}
-		arguments = append(arguments, file)
+		input = append(input, file)
 	}
-	arguments = append(arguments, "--depth", strconv.Itoa(codeGraphTraversalDepth))
-	return r.run(ctx, request.GitRoot, arguments)
+	return r.runInput(ctx, request.GitRoot, arguments, []byte(strings.Join(input, "\n")+"\n"))
 }
 
 func (r CodeGraphRunner) Files(ctx context.Context, request codeGraphFilesRequest) ([]byte, error) {
@@ -112,12 +113,6 @@ func (r CodeGraphRunner) Files(ctx context.Context, request codeGraphFilesReques
 	return r.run(ctx, request.GitRoot, arguments)
 }
 
-// Run keeps the Task 3 generic seam intentionally inert: typed methods above
-// are the only command construction surface.
-func (r CodeGraphRunner) Run(_ context.Context, _ string, _ []string) ([]byte, error) {
-	return nil, ErrCodeGraphArgumentsRejected
-}
-
 func (r CodeGraphRunner) run(ctx context.Context, gitRoot string, arguments []string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -131,7 +126,23 @@ func (r CodeGraphRunner) run(ctx context.Context, gitRoot string, arguments []st
 	}
 	deadline, cancel := context.WithTimeout(ctx, r.timeout())
 	defer cancel()
-	return runCodeGraphJSON(deadline, path, gitRoot, arguments)
+	return runCodeGraphJSON(deadline, path, gitRoot, arguments, nil)
+}
+
+func (r CodeGraphRunner) runInput(ctx context.Context, gitRoot string, arguments []string, input []byte) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !trustedCodeGraphRoot(gitRoot) || r.Config.Provider == LocalIndexProviderDisabled || r.Config.Err != nil {
+		return nil, ErrCodeGraphUnavailable
+	}
+	path, err := r.executable()
+	if err != nil {
+		return nil, ErrCodeGraphUnavailable
+	}
+	deadline, cancel := context.WithTimeout(ctx, r.timeout())
+	defer cancel()
+	return runCodeGraphJSON(deadline, path, gitRoot, arguments, bytes.Clone(input))
 }
 
 func (r CodeGraphRunner) executable() (string, error) {
