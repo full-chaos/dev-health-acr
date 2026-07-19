@@ -40,7 +40,13 @@
     "indexedRevision",
     "gitCommit",
     "gitRef",
-    "gitRevision"
+    "gitRevision",
+    "commitSha",
+    "commitSHA",
+    "commit_sha",
+    "CommitSha",
+    "CommitSHA",
+    "COMMIT_SHA"
   ],
   "status_provenance_keys": ["commit", "ref", "revision"],
   "indexed_commit_sentinel": "indexed_commit_unknown",

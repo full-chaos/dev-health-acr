@@ -117,6 +117,9 @@ run_happy() {
 
 run_forbidden_command() {
   local file="$fixtures/invalid/forbidden-command.json" verb
+  if ! cg_validate_negative_fixture "$file" "$manifest_json" "forbidden-command"; then
+    return 3
+  fi
   verb="$(jq -r '.attempted_argv[1]' "$file")"
   if jq -e --arg v "$verb" '.forbidden_commands | index($v) != null' <<<"$manifest_json" >/dev/null; then
     printf 'rejected: forbidden CodeGraph command "%s" is not permitted in production\n' "$verb" >&2
@@ -128,6 +131,9 @@ run_forbidden_command() {
 
 run_inferred_indexed_commit() {
   local file="$fixtures/invalid/inferred-indexed-commit.json"
+  if ! cg_validate_negative_fixture "$file" "$manifest_json" "inferred-indexed-commit"; then
+    return 3
+  fi
   if cg_scan_indexed_commit_keys "$file" "$manifest_json" status 2>/dev/null; then
     printf 'error: fixture integrity failure: inferred-indexed-commit.json passed the raw commit/ref scan\n' >&2
     return 3
@@ -138,6 +144,9 @@ run_inferred_indexed_commit() {
 
 run_unsupported_version() {
   local file="$fixtures/invalid/unsupported-version.json" version
+  if ! cg_validate_negative_fixture "$file" "$manifest_json" "unsupported-version"; then
+    return 3
+  fi
   version="$(jq -r '.version' "$file")"
   if cg_version_in_range "$version" "$manifest_json"; then
     printf 'error: fixture integrity failure: version %s was unexpectedly supported\n' "$version" >&2
@@ -150,6 +159,9 @@ run_unsupported_version() {
 
 run_non_json_mode() {
   local file="$fixtures/invalid/non-json-mode.json"
+  if ! cg_validate_negative_fixture "$file" "$manifest_json" "non-json-mode"; then
+    return 3
+  fi
   if jq -e '.attempted_argv | index("--json") != null' "$file" >/dev/null; then
     printf 'error: fixture integrity failure: attempted_argv already contains --json\n' >&2
     return 3
@@ -160,6 +172,9 @@ run_non_json_mode() {
 
 run_missing_field() {
   local file="$fixtures/invalid/missing-field-status.json"
+  if ! cg_validate_negative_fixture "$file" "$manifest_json" "missing-field"; then
+    return 3
+  fi
   if cg_validate_fixture "$file" "$manifest_json" status 2>/dev/null; then
     printf 'error: fixture integrity failure: missing-field-status.json passed validation\n' >&2
     return 3
@@ -181,6 +196,9 @@ run_additive_field() {
 
 run_sqlite_access() {
   local file="$fixtures/invalid/sqlite-access.json"
+  if ! cg_validate_negative_fixture "$file" "$manifest_json" "sqlite-access"; then
+    return 3
+  fi
   if jq -e '.attempted_argv | any(test("\\.codegraph/.*\\.db"))' "$file" >/dev/null; then
     printf 'rejected: direct .codegraph/*.db access bypasses the CLI JSON contract\n' >&2
     return 1

@@ -57,6 +57,28 @@ cg_validate_fixture() {
   fi
 }
 
+# cg_validate_negative_fixture <fixture-file> <manifest-json> <scenario-name>
+# Validates syntax and the scenario's structural precondition before its
+# rejection predicate runs. This preserves exit 1 for intentional negatives.
+cg_validate_negative_fixture() {
+  local fixture="$1" manifest_json="$2" scenario="$3" report ok
+  if ! jq -e . "$fixture" >/dev/null; then
+    printf 'error: %s is not valid JSON\n' "$fixture" >&2
+    return 1
+  fi
+  if ! report=$(jq --argjson m "$manifest_json" --arg scenario "$scenario" \
+    -f "$cg_lib_dir/validate-negative-fixture.jq" "$fixture"); then
+    printf 'error: %s could not be structurally validated\n' "$fixture" >&2
+    return 1
+  fi
+  ok=$(jq -r '.ok' <<<"$report")
+  if [ "$ok" != "true" ]; then
+    printf 'error: %s is not a structurally valid %s negative fixture:\n%s\n' \
+      "$fixture" "$scenario" "$report" >&2
+    return 1
+  fi
+}
+
 # cg_scan_indexed_commit_keys <fixture-file> <manifest-json> <command-name>
 # Detects any forbidden raw indexed-commit/ref-shaped key recursively.
 cg_scan_indexed_commit_keys() {

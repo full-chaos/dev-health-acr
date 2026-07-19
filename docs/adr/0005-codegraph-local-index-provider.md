@@ -105,8 +105,8 @@ I/O.
 - Parsing `codegraph explore` or `codegraph node` output as a data source.
 - Claiming or inferring an indexed Git commit or ref. CodeGraph 1.2.0's
   `status --json` exposes no commit/ref field. Raw CodeGraph JSON must never
-  carry an unambiguous `indexed*` or `git*` commit/ref/revision-shaped key at
-  any nesting level, even if its value is `indexed_commit_unknown`. Generic
+  carry an unambiguous `indexed*`, `git*`, or commit-SHA-shaped key at any
+  nesting level, even if its value is `indexed_commit_unknown`. Generic
   `commit`, `ref`, and `revision` keys are rejected only on the `status`
   object or its `index` object, so harmless additive fields such as a query
   node's `ref` retain additive tolerance. Only ACR's downstream normalized

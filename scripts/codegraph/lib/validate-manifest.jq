@@ -3,7 +3,9 @@
 def error_if($condition; $message):
   if $condition then [$message] else [] end;
 
-. as $m
+["indexedCommit", "indexed_commit", "indexedRef", "indexed_ref", "indexedGitSha", "indexedRevision", "gitCommit", "gitRef", "gitRevision", "commitSha", "commitSHA", "commit_sha", "CommitSha", "CommitSHA", "COMMIT_SHA"] as $forbidden_provenance_keys
+
+| . as $m
 | {
   status: ["codegraph", "status", "--json"],
   query: ["codegraph", "query", "--json", "<search>", "[--limit N]"],
@@ -30,6 +32,7 @@ def error_if($condition; $message):
     error_if((.provider_version_field != "status.version"); "provider_version_field must be status.version"),
     error_if((.query_version != "codegraph-json-contract-v1"); "query_version must be codegraph-json-contract-v1"),
     error_if((.transport != {"mode": "subprocess-json-stdout", "socket_access": false, "direct_sqlite_access": false}); "transport must be subprocess JSON stdout with socket and SQLite access disabled"),
+    error_if((.forbidden_indexed_commit_keys != $forbidden_provenance_keys); "forbidden_indexed_commit_keys must include exact global indexed/git/commit-sha provenance keys"),
     error_if((.status_provenance_keys != ["commit", "ref", "revision"]); "status_provenance_keys must scope generic provenance names to status/index"),
     error_if((.read_only != true); "read_only must be true"),
     error_if((.max_commands_per_task != 8); "max_commands_per_task must be 8"),
