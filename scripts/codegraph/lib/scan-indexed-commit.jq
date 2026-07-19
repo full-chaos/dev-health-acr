@@ -1,9 +1,14 @@
-# Detects any forbidden indexed-commit-shaped key whose value is not the
-# indexed_commit_unknown sentinel. Invoked as:
+# Detects forbidden raw indexed-commit/ref-shaped keys recursively. The
+# indexed_commit_unknown sentinel belongs only to ACR's downstream normalized
+# output; it never makes a raw CodeGraph field acceptable. Invoked as:
 # jq --argjson m <manifest> -f this <fixture>
 . as $doc
 | ($m.forbidden_indexed_commit_keys) as $keys
-| ($m.indexed_commit_sentinel) as $sentinel
-| ([ $keys[] as $k | select(($doc | type) == "object" and ($doc | has($k))) | { key: $k, value: $doc[$k] } ]) as $present
-| ([ $present[] | select(.value != $sentinel) ]) as $violations
-| { present: $present, violations: $violations, ok: ($violations == []) }
+| ([
+    ([[]] + [paths(objects)])[] as $path
+    | getpath($path) as $object
+    | $object | keys_unsorted[] as $key
+    | select($keys | index($key))
+    | { path: ($path + [$key]), key: $key, value: $object[$key] }
+  ]) as $violations
+| { violations: $violations, ok: ($violations == []) }

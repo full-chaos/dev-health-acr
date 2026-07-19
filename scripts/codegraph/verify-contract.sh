@@ -71,11 +71,13 @@ fixtures="$(cd "$fixtures" && pwd)"
 manifest_file="$fixtures/manifest.json"
 manifest_json="$(cg_manifest_json "$manifest_file")"
 cg_check_caps "$manifest_json"
+cg_validate_manifest "$manifest_json"
 
 canonical_commands=(status query callers callees impact affected files)
 
 run_happy() {
   local cmd
+  cg_validate_fixture_versions "$fixtures" "$manifest_json"
   for cmd in "${canonical_commands[@]}"; do
     cg_validate_fixture "$fixtures/$cmd.json" "$manifest_json" "$cmd"
     cg_scan_indexed_commit_keys "$fixtures/$cmd.json" "$manifest_json"
@@ -99,15 +101,15 @@ run_forbidden_command() {
     printf 'rejected: forbidden CodeGraph command "%s" is not permitted in production\n' "$verb" >&2
     return 1
   fi
-  printf 'error: "%s" was unexpectedly not classified as forbidden\n' "$verb" >&2
-  return 1
+  printf 'error: manifest integrity failure: "%s" is not classified as forbidden\n' "$verb" >&2
+  return 3
 }
 
 run_inferred_indexed_commit() {
   local file="$fixtures/invalid/inferred-indexed-commit.json"
   if cg_scan_indexed_commit_keys "$file" "$manifest_json" 2>/dev/null; then
-    printf 'error: inferred-indexed-commit.json unexpectedly passed the indexed-commit scan\n' >&2
-    return 1
+    printf 'error: fixture integrity failure: inferred-indexed-commit.json passed the raw commit/ref scan\n' >&2
+    return 3
   fi
   printf 'rejected: fixture claims an inferred indexed commit; contract requires indexed_commit_unknown\n' >&2
   return 1
@@ -117,8 +119,8 @@ run_unsupported_version() {
   local file="$fixtures/invalid/unsupported-version.json" version
   version="$(jq -r '.version' "$file")"
   if cg_version_in_range "$version" "$manifest_json"; then
-    printf 'error: version %s was unexpectedly accepted as supported\n' "$version" >&2
-    return 1
+    printf 'error: fixture integrity failure: version %s was unexpectedly supported\n' "$version" >&2
+    return 3
   fi
   printf 'rejected: CodeGraph version %s is outside the supported range %s\n' \
     "$version" "$(jq -r '.supported_codegraph_version_range' <<<"$manifest_json")" >&2
@@ -128,8 +130,8 @@ run_unsupported_version() {
 run_non_json_mode() {
   local file="$fixtures/invalid/non-json-mode.json"
   if jq -e '.attempted_argv | index("--json") != null' "$file" >/dev/null; then
-    printf 'error: attempted_argv unexpectedly already contains --json\n' >&2
-    return 1
+    printf 'error: fixture integrity failure: attempted_argv already contains --json\n' >&2
+    return 3
   fi
   printf 'rejected: attempted invocation omits --json and would emit non-JSON output\n' >&2
   return 1
@@ -138,8 +140,8 @@ run_non_json_mode() {
 run_missing_field() {
   local file="$fixtures/invalid/missing-field-status.json"
   if cg_validate_fixture "$file" "$manifest_json" status 2>/dev/null; then
-    printf 'error: missing-field-status.json unexpectedly passed validation\n' >&2
-    return 1
+    printf 'error: fixture integrity failure: missing-field-status.json passed validation\n' >&2
+    return 3
   fi
   printf 'rejected: missing-field-status.json is missing a required status field\n' >&2
   return 1
@@ -157,8 +159,8 @@ run_sqlite_access() {
     printf 'rejected: direct .codegraph/*.db access bypasses the CLI JSON contract\n' >&2
     return 1
   fi
-  printf 'error: sqlite-access.json unexpectedly did not reference a .codegraph/*.db path\n' >&2
-  return 1
+  printf 'error: fixture integrity failure: sqlite-access.json lacks a .codegraph/*.db path\n' >&2
+  return 3
 }
 
 case "$scenario" in

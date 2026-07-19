@@ -42,6 +42,25 @@ proving each one was read-only.
 
 `>=1.2.0,<2.0.0`. Observed installed version: `1.2.0`.
 
+Version values are strict numeric `X.Y.Z` SemVer: exactly three
+non-negative decimal components without leading zeroes (except `0`).
+Pre-release/build suffixes, partial versions, and four-component values such
+as `1.2.0.1` are unsupported. The fixture directory version, manifest's
+observed version, and `status.version` must all agree exactly before ACR may
+consume a local result.
+
+### Provider and query identifiers
+
+- `provider_id` is the literal `codegraph`.
+- `provider_version` comes only from `status.version`; it must be an exact
+  supported version as defined above.
+- `query_id` is the fixed permitted command name (`status`, `query`,
+  `callers`, `callees`, `impact`, `affected`, or `files`), not unbounded
+  user-supplied search/symbol text.
+- `query_version` is the ACR contract identifier
+  `codegraph-json-contract-v1`; it identifies the pinned argv/JSON decoding
+  contract and is not claimed to be a field emitted by CodeGraph.
+
 ### Permitted production argv (exactly these, always with `--json`)
 
 1. `codegraph status --json`
@@ -53,7 +72,21 @@ proving each one was read-only.
 7. `codegraph files --json [--filter DIR] [--pattern GLOB] [--max-depth N] [--no-metadata]`
 
 No other CodeGraph subcommand, flag, or output mode may be invoked, or
-documented as a production data source, anywhere in this repository.
+documented as a production data source, anywhere in this repository. The
+manifest is an allowlist rather than a configurable command template: the
+verifier checks every `argv` and canonical example exactly, and any drift is
+a contract-integrity failure.
+
+### Transport boundary
+
+ACR invokes only a bounded `codegraph` child process with this fixed argv and
+accepts a single JSON result from its stdout (apart from the newline-separated
+repo-relative filenames permitted on `affected --stdin`). ACR itself does
+not connect to, read from, or write to a CodeGraph daemon socket, named pipe,
+HTTP endpoint, or other IPC transport; it never speaks a socket JSON protocol
+to CodeGraph. This restriction is about ACR's boundary: CodeGraph may manage
+its own internals, but ACR's only supported integration is subprocess JSON
+I/O.
 
 ### Forbidden commands and behaviors
 
@@ -71,22 +104,28 @@ documented as a production data source, anywhere in this repository.
   CodeGraph's SQLite storage.
 - Parsing `codegraph explore` or `codegraph node` output as a data source.
 - Claiming or inferring an indexed Git commit or ref. CodeGraph 1.2.0's
-  `status --json` exposes no commit/ref field. Every consumer that would
-  otherwise report an indexed commit MUST instead emit the literal sentinel
-  `indexed_commit_unknown` and MUST NOT substitute the working tree's
-  current `HEAD`, infer it from `.codegraph/codegraph.db`, or infer it from
+  `status --json` exposes no commit/ref field. Raw CodeGraph JSON must never
+  carry an indexed commit/ref-shaped key at any nesting level, even if its
+  value is `indexed_commit_unknown`. Only ACR's downstream normalized output
+  may emit the literal sentinel `indexed_commit_unknown`; it MUST NOT
+  substitute the working tree's current `HEAD`, infer a value from
+  `.codegraph/codegraph.db`, or infer one from
   `lastIndexed`/`pendingChanges` timestamps.
 
 ### Production caps
 
 - At most **8** CodeGraph commands per ACR task/request.
-- At most traversal depth **2** for any command accepting `--depth`/
-  `--max-depth`.
+- At most graph traversal depth **2** for `impact` and `affected`.
 - `affected`'s own CLI default depth is `5`; production argv MUST pass
   `--depth 2` explicitly — never rely on the tool default.
 - `impact`'s CLI default depth is already `2`; production argv may pass
   `--depth 2` explicitly for clarity but must never exceed it.
-- `files --max-depth` is capped at `2`.
+- `files --max-depth` is fixed at `2` as a bounded presentation option, but
+  it is **not** graph traversal. CodeGraph 1.2.0 help defines it as
+  "Maximum directory depth for tree format"; it does not establish an
+  evidence/dependency traversal limit for JSON results. CodeGraph 1.2.0 also
+  advertises `files --format <tree|flat|grouped>`, but ACR's fixed allowlist
+  intentionally excludes `--format`.
 
 ### Required JSON fields per command
 
@@ -124,6 +163,9 @@ strings `"<local-only:absolute-project-path>"` and
 `codegraph` binary — it only parses the checked-in JSON fixtures — so it
 cannot mutate a CodeGraph index by construction.
 
+`make verify` executes this contract gate through the `codegraph-contract`
+target, after Go contract parity and before the binaries are built.
+
 - `--scenario happy` (default): every canonical fixture (`status`, `query`,
   `callers`, `callees`, `impact`, `affected`, `files`) satisfies its
   required-field declaration and carries no forbidden indexed-commit field;
@@ -132,9 +174,12 @@ cannot mutate a CodeGraph index by construction.
 - `--scenario forbidden-command`: rejects a captured attempt to invoke
   `codegraph explore`. Exit 1.
 - `--scenario inferred-indexed-commit`: rejects a fixture that wrongly
-  substitutes the working tree `HEAD` for an indexed commit. Exit 1.
+  substitutes the working tree `HEAD` for an indexed commit. Recursive raw
+  commit/ref-key scanning rejects the key regardless of its value. Exit 1.
 - `--scenario unsupported-version`: rejects a fixture reporting version
-  `1.1.9`, which predates the supported range. Exit 1.
+  `1.1.9`, which predates the supported range. Strict SemVer/range checks
+  also reject malformed `1.2.0.1` and the exclusive upper boundary `2.0.0`.
+  Exit 1.
 - `--scenario non-json-mode`: rejects a captured attempt to invoke
   `codegraph query` without `--json`. Exit 1.
 - `--scenario missing-field`: rejects a `status` fixture missing `fileCount`.

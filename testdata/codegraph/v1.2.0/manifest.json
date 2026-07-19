@@ -2,8 +2,17 @@
   "contract_version": "1",
   "adr": "docs/adr/0005-codegraph-local-index-provider.md",
   "supported_codegraph_version_range": ">=1.2.0,<2.0.0",
+  "fixture_version": "1.2.0",
   "observed_codegraph_version": "1.2.0",
   "observed_at_commit": "439acd2e79f1833bd403d5b0a7ad8288c505dbab",
+  "provider_id": "codegraph",
+  "provider_version_field": "status.version",
+  "query_version": "codegraph-json-contract-v1",
+  "transport": {
+    "mode": "subprocess-json-stdout",
+    "socket_access": false,
+    "direct_sqlite_access": false
+  },
   "read_only": true,
   "max_commands_per_task": 8,
   "max_traversal_depth": 2,
@@ -28,9 +37,13 @@
     "indexedRef",
     "indexed_ref",
     "indexedGitSha",
+    "indexedRevision",
     "gitCommit",
+    "gitRef",
     "commitSha",
-    "commit"
+    "commit",
+    "ref",
+    "revision"
   ],
   "indexed_commit_sentinel": "indexed_commit_unknown",
   "local_only_fields": {
@@ -39,94 +52,182 @@
   "commands": {
     "status": {
       "argv": ["codegraph", "status", "--json"],
-      "shape": "object",
-      "required_fields": [
-        "initialized",
-        "version",
-        "projectPath",
-        "indexPath",
-        "lastIndexed",
-        "fileCount",
-        "nodeCount",
-        "edgeCount",
-        "dbSizeBytes",
-        "backend",
-        "journalMode",
-        "nodesByKind",
-        "languages",
-        "pendingChanges",
-        "worktreeMismatch",
-        "index"
-      ],
-      "nullable_fields": ["worktreeMismatch"]
+      "example_argv": ["codegraph", "status", "--json"],
+      "schema": {
+        "type": "object",
+        "required": {
+          "initialized": {"type": "boolean"},
+          "version": {"type": "string"},
+          "projectPath": {"type": "string"},
+          "indexPath": {"type": "string"},
+          "lastIndexed": {"type": "string"},
+          "fileCount": {"type": "integer", "minimum": 0},
+          "nodeCount": {"type": "integer", "minimum": 0},
+          "edgeCount": {"type": "integer", "minimum": 0},
+          "dbSizeBytes": {"type": "integer", "minimum": 0},
+          "backend": {"type": "string"},
+          "journalMode": {"type": "string"},
+          "nodesByKind": {"type": "object", "required": {}},
+          "languages": {"type": "array", "items": {"type": "string"}},
+          "pendingChanges": {
+            "type": "object",
+            "required": {
+              "added": {"type": "integer", "minimum": 0},
+              "modified": {"type": "integer", "minimum": 0},
+              "removed": {"type": "integer", "minimum": 0}
+            }
+          },
+          "worktreeMismatch": {"one_of": [{"type": "null"}, {"type": "string"}]},
+          "index": {
+            "type": "object",
+            "required": {
+              "builtWithVersion": {"type": "string"},
+              "builtWithExtractionVersion": {"type": "integer", "minimum": 0},
+              "currentExtractionVersion": {"type": "integer", "minimum": 0},
+              "reindexRecommended": {"type": "boolean"}
+            }
+          }
+        }
+      }
     },
     "query": {
       "argv": ["codegraph", "query", "--json", "<search>", "[--limit N]"],
-      "shape": "array",
-      "entry_required_fields": ["node", "score"],
-      "entry_nested_field": "node",
-      "entry_nested_required_fields": [
-        "id",
-        "kind",
-        "name",
-        "qualifiedName",
-        "filePath",
-        "language",
-        "startLine",
-        "endLine",
-        "startColumn",
-        "endColumn",
-        "signature",
-        "visibility",
-        "isExported",
-        "isAsync",
-        "isStatic",
-        "isAbstract",
-        "updatedAt"
-      ],
-      "example_argv": ["codegraph", "query", "--json", "Assemble", "--limit", "3"]
+      "example_argv": ["codegraph", "query", "--json", "Assemble", "--limit", "3"],
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": {
+            "node": {
+              "type": "object",
+              "required": {
+                "id": {"type": "string"},
+                "kind": {"type": "string"},
+                "name": {"type": "string"},
+                "qualifiedName": {"type": "string"},
+                "filePath": {"type": "string"},
+                "language": {"type": "string"},
+                "startLine": {"type": "integer", "minimum": 0},
+                "endLine": {"type": "integer", "minimum": 0},
+                "startColumn": {"type": "integer", "minimum": 0},
+                "endColumn": {"type": "integer", "minimum": 0},
+                "signature": {"type": "string"},
+                "visibility": {"one_of": [{"type": "null"}, {"type": "string"}]},
+                "isExported": {"type": "boolean"},
+                "isAsync": {"type": "boolean"},
+                "isStatic": {"type": "boolean"},
+                "isAbstract": {"type": "boolean"},
+                "updatedAt": {"type": "integer", "minimum": 0}
+              }
+            },
+            "score": {"type": "number"}
+          }
+        }
+      }
     },
     "callers": {
       "argv": ["codegraph", "callers", "--json", "<symbol>", "[--limit N]"],
-      "shape": "object",
-      "required_fields": ["symbol", "callers"],
-      "array_field": "callers",
-      "array_field_entry_required_fields": ["name", "kind", "filePath", "startLine"],
-      "example_argv": ["codegraph", "callers", "--json", "Assemble", "--limit", "3"]
+      "example_argv": ["codegraph", "callers", "--json", "Assemble", "--limit", "3"],
+      "schema": {
+        "type": "object",
+        "required": {
+          "symbol": {"type": "string"},
+          "callers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": {
+                "name": {"type": "string"},
+                "kind": {"type": "string"},
+                "filePath": {"type": "string"},
+                "startLine": {"type": "integer", "minimum": 0}
+              }
+            }
+          }
+        }
+      }
     },
     "callees": {
       "argv": ["codegraph", "callees", "--json", "<symbol>", "[--limit N]"],
-      "shape": "object",
-      "required_fields": ["symbol", "callees"],
-      "array_field": "callees",
-      "array_field_entry_required_fields": ["name", "kind", "filePath", "startLine"],
-      "example_argv": ["codegraph", "callees", "--json", "Assemble", "--limit", "3"]
+      "example_argv": ["codegraph", "callees", "--json", "Assemble", "--limit", "3"],
+      "schema": {
+        "type": "object",
+        "required": {
+          "symbol": {"type": "string"},
+          "callees": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": {
+                "name": {"type": "string"},
+                "kind": {"type": "string"},
+                "filePath": {"type": "string"},
+                "startLine": {"type": "integer", "minimum": 0}
+              }
+            }
+          }
+        }
+      }
     },
     "impact": {
       "argv": ["codegraph", "impact", "--json", "<symbol>", "[--depth N]"],
-      "shape": "object",
-      "required_fields": ["symbol", "depth", "nodeCount", "edgeCount", "affected"],
-      "array_field": "affected",
-      "array_field_entry_required_fields": ["name", "kind", "filePath", "startLine"],
+      "example_argv": ["codegraph", "impact", "--json", "Assemble", "--depth", "2"],
       "max_depth": 2,
       "cli_default_depth": 2,
-      "example_argv": ["codegraph", "impact", "--json", "Assemble", "--depth", "2"]
+      "schema": {
+        "type": "object",
+        "required": {
+          "symbol": {"type": "string"},
+          "depth": {"type": "integer", "minimum": 0, "maximum": 2},
+          "nodeCount": {"type": "integer", "minimum": 0},
+          "edgeCount": {"type": "integer", "minimum": 0},
+          "affected": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": {
+                "name": {"type": "string"},
+                "kind": {"type": "string"},
+                "filePath": {"type": "string"},
+                "startLine": {"type": "integer", "minimum": 0}
+              }
+            }
+          }
+        }
+      }
     },
     "affected": {
       "argv": ["codegraph", "affected", "--json", "[files...]", "[--stdin]", "[--depth N]", "[--filter GLOB]"],
-      "shape": "object",
-      "required_fields": ["changedFiles", "affectedTests", "totalDependentsTraversed"],
+      "example_argv": ["codegraph", "affected", "--json", "acr/internal/contextpacket/assembler.go", "--depth", "2"],
       "max_depth": 2,
       "cli_default_depth": 5,
       "production_requires_explicit_depth": true,
-      "example_argv": ["codegraph", "affected", "--json", "acr/internal/contextpacket/assembler.go", "--depth", "2"]
+      "schema": {
+        "type": "object",
+        "required": {
+          "changedFiles": {"type": "array", "items": {"type": "string"}},
+          "affectedTests": {"type": "array", "items": {"type": "string"}},
+          "totalDependentsTraversed": {"type": "integer", "minimum": 0}
+        }
+      }
     },
     "files": {
       "argv": ["codegraph", "files", "--json", "[--filter DIR]", "[--pattern GLOB]", "[--max-depth N]", "[--no-metadata]"],
-      "shape": "array",
-      "entry_required_fields": ["path", "language", "nodeCount", "size"],
+      "example_argv": ["codegraph", "files", "--json", "--filter", "acr/internal/contextpacket", "--max-depth", "2"],
       "max_depth": 2,
-      "example_argv": ["codegraph", "files", "--json", "--filter", "acr/internal/contextpacket", "--max-depth", "2"]
+      "max_depth_scope": "tree_presentation_only",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": {
+            "path": {"type": "string"},
+            "language": {"type": "string"},
+            "nodeCount": {"type": "integer", "minimum": 0},
+            "size": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
     }
   }
 }
