@@ -38,7 +38,7 @@ func runCodeGraphJSON(ctx context.Context, path, gitRoot string, command codeGra
 	output, readErr := decodeCodeGraphJSON(stdout)
 	if readErr != nil {
 		if errors.Is(readErr, io.EOF) {
-			waitErr := cmd.Wait()
+			waitErr := waitCodeGraphProcessGroup(cmd, processGroup)
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
@@ -52,8 +52,7 @@ func runCodeGraphJSON(ctx context.Context, path, gitRoot string, command codeGra
 		}
 		_ = stdout.Close()
 		_ = killKeyringProcessGroupID(processGroup)
-		_ = cmd.Wait()
-		_ = killKeyringProcessGroupID(processGroup)
+		_ = waitCodeGraphProcessGroup(cmd, processGroup)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -62,7 +61,7 @@ func runCodeGraphJSON(ctx context.Context, path, gitRoot string, command codeGra
 		}
 		return nil, errors.Join(errCodeGraphDecode, ErrCodeGraphUnavailable)
 	}
-	if err := cmd.Wait(); err != nil {
+	if err := waitCodeGraphProcessGroup(cmd, processGroup); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -72,6 +71,12 @@ func runCodeGraphJSON(ctx context.Context, path, gitRoot string, command codeGra
 		return nil, errors.Join(errCodeGraphUnsupported, ErrCodeGraphUnavailable)
 	}
 	return output, nil
+}
+
+func waitCodeGraphProcessGroup(cmd *exec.Cmd, processGroup int) error {
+	waitErr := cmd.Wait()
+	_ = killKeyringProcessGroupID(processGroup)
+	return waitErr
 }
 
 func decodeCodeGraphJSON(reader io.Reader) ([]byte, error) {
