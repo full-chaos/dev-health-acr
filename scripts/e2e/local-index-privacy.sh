@@ -41,7 +41,7 @@ cat >"$tmp/codegraph" <<EOF
 set -euo pipefail
 case "\$1" in
   status) printf '{"initialized":true,"version":"1.2.0","projectPath":"%s","indexPath":"%s/.codegraph","lastIndexed":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","fileCount":1,"nodeCount":1,"edgeCount":0,"dbSizeBytes":1,"backend":"sqlite","journalMode":"wal","nodesByKind":{},"languages":[],"pendingChanges":{"added":0,"modified":0,"removed":0},"worktreeMismatch":null,"index":{"reindexRecommended":false,"builtWithVersion":"1.2.0","builtWithExtractionVersion":1,"currentExtractionVersion":1}}\n' "\$PWD" "\$PWD" ;;
-  query) printf '[{"node":{"id":"%s","kind":"function","name":"%s","qualifiedName":"privacy.Local","filePath":"local-source.txt","startLine":1,"endLine":1,"startColumn":0,"endColumn":1,"language":"Go","signature":"func Local()","updatedAt":0,"isExported":true,"isAsync":false,"isStatic":false,"isAbstract":false,"visibility":null},"score":1}]\n' "$local_locator_sentinel" "$graph_payload_sentinel" ;;
+  query) printf '[{"node":{"id":"%s","kind":"function","name":"%s %s %s","qualifiedName":"privacy.Local","filePath":"local-source.txt","startLine":1,"endLine":1,"startColumn":0,"endColumn":1,"language":"Go","signature":"func Local()","updatedAt":0,"isExported":true,"isAsync":false,"isStatic":false,"isAbstract":false,"visibility":null},"score":1}]\n' "$local_locator_sentinel" "$graph_payload_sentinel" "$local_locator_sentinel" "$absolute_root_sentinel" ;;
   callers) printf '{"symbol":"privacy.Local","callers":[]}\n' ;;
   callees) printf '{"symbol":"privacy.Local","callees":[]}\n' ;;
   impact) printf '{"symbol":"privacy.Local","depth":2,"nodeCount":0,"edgeCount":0,"affected":[]}\n' ;;
@@ -84,8 +84,9 @@ for _ in {1..50}; do [[ -s "$tmp/port" ]] && break; sleep 0.1; done
 go build -o "$tmp/acr-mcp" ./cmd/acr-mcp
 cat >"$root/.tmp/local-index-privacy-driver.go" <<'GO'
 package main
-import("context";"encoding/json";"os";"os/exec";"time"; mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp")
-func main(){ctx,c:=context.WithTimeout(context.Background(),20*time.Second);defer c();cmd:=exec.CommandContext(ctx,os.Getenv("PRIVACY_MCP"),"serve");cmd.Dir=os.Getenv("PRIVACY_WORKSPACE");cmd.Env=os.Environ();cl:=mcpsdk.NewClient(&mcpsdk.Implementation{Name:"privacy",Version:"1.0.0"},nil);s,e:=cl.Connect(ctx,&mcpsdk.CommandTransport{Command:cmd},nil);if e!=nil{panic(e)};defer s.Close();r,e:=s.CallTool(ctx,&mcpsdk.CallToolParams{Name:"context_for_task",Arguments:map[string]any{"goal":"privacy probe","repository":map[string]any{"slug":"acme/widgets"},"scope":map[string]any{"branch":os.Getenv("PRIVACY_BRANCH")}}});if e!=nil||r.IsError{panic("context failed")};var response struct{LocalContext struct{EvidenceRefs []struct{EvidenceRefID string `json:"evidence_ref_id"`} `json:"evidence_refs"`} `json:"local_context"`};raw,_:=json.Marshal(r.StructuredContent);if json.Unmarshal(raw,&response)!=nil||len(response.LocalContext.EvidenceRefs)!=1{panic("local evidence missing")};r,e=s.CallTool(ctx,&mcpsdk.CallToolParams{Name:"source_evidence",Arguments:map[string]any{"evidence_ref_id":"ev_example_001"}});if e!=nil||r.IsError{panic("hosted evidence failed")};r,e=s.CallTool(ctx,&mcpsdk.CallToolParams{Name:"source_evidence",Arguments:map[string]any{"evidence_ref_id":response.LocalContext.EvidenceRefs[0].EvidenceRefID}});if e!=nil||r.IsError{panic("local evidence failed")}}
+import("context";"encoding/json";"os";"os/exec";"strings";"time"; mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp")
+func mustContain(payload []byte, values ...string){for _,value:=range values{if value==""||!strings.Contains(string(payload),value){panic("local sentinel missing")}}}
+func main(){graph,locator,workspace:=os.Getenv("GRAPH_PAYLOAD_SENTINEL"),os.Getenv("LOCAL_LOCATOR_SENTINEL"),os.Getenv("ABSOLUTE_ROOT_SENTINEL");ctx,c:=context.WithTimeout(context.Background(),20*time.Second);defer c();cmd:=exec.CommandContext(ctx,os.Getenv("PRIVACY_MCP"),"serve");cmd.Dir=os.Getenv("PRIVACY_WORKSPACE");cmd.Env=os.Environ();cl:=mcpsdk.NewClient(&mcpsdk.Implementation{Name:"privacy",Version:"1.0.0"},nil);s,e:=cl.Connect(ctx,&mcpsdk.CommandTransport{Command:cmd},nil);if e!=nil{panic(e)};defer s.Close();r,e:=s.CallTool(ctx,&mcpsdk.CallToolParams{Name:"context_for_task",Arguments:map[string]any{"goal":"privacy probe","repository":map[string]any{"slug":"acme/widgets"},"scope":map[string]any{"branch":os.Getenv("PRIVACY_BRANCH")}}});if e!=nil||r.IsError{panic("context failed")};var response struct{LocalContext struct{EvidenceRefs []struct{EvidenceRefID string `json:"evidence_ref_id"`} `json:"evidence_refs"`} `json:"local_context"`};raw,_:=json.Marshal(r.StructuredContent);if json.Unmarshal(raw,&response)!=nil||len(response.LocalContext.EvidenceRefs)!=1{panic("local evidence missing")};mustContain(raw,graph,locator,workspace);r,e=s.CallTool(ctx,&mcpsdk.CallToolParams{Name:"source_evidence",Arguments:map[string]any{"evidence_ref_id":"ev_example_001"}});if e!=nil||r.IsError{panic("hosted evidence failed")};r,e=s.CallTool(ctx,&mcpsdk.CallToolParams{Name:"source_evidence",Arguments:map[string]any{"evidence_ref_id":response.LocalContext.EvidenceRefs[0].EvidenceRefID}});if e!=nil||r.IsError{panic("local evidence failed")};expanded,_:=json.Marshal(r.StructuredContent);mustContain(expanded,graph,locator,workspace)}
 GO
 port="$(<"$tmp/port")"
 token="fcacr_$(python3 - <<'PY'
@@ -93,18 +94,35 @@ import base64
 print(base64.urlsafe_b64encode(bytes([7])*32).decode().rstrip('='))
 PY
 )"
-ACR_API_URL="https://localhost:$port" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_API_TOKEN="$token" ACR_SIDECAR_VERSION=1.0.0 ACR_LOCAL_INDEX_PROVIDER=codegraph ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" PRIVACY_MCP="$tmp/acr-mcp" PRIVACY_WORKSPACE="$tmp/workspace" PRIVACY_BRANCH="$workspace_branch" GRAPH_PAYLOAD_SENTINEL="$graph_payload_sentinel" LOCAL_LOCATOR_SENTINEL="$local_locator_sentinel" go run "$root/.tmp/local-index-privacy-driver.go"
+ACR_API_URL="https://localhost:$port" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_API_TOKEN="$token" ACR_SIDECAR_VERSION=1.0.0 ACR_LOCAL_INDEX_PROVIDER=codegraph ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" PRIVACY_MCP="$tmp/acr-mcp" PRIVACY_WORKSPACE="$tmp/workspace" PRIVACY_BRANCH="$workspace_branch" GRAPH_PAYLOAD_SENTINEL="$graph_payload_sentinel" LOCAL_LOCATOR_SENTINEL="$local_locator_sentinel" ABSOLUTE_ROOT_SENTINEL="$absolute_root_sentinel" go run "$root/.tmp/local-index-privacy-driver.go"
 
 ACR_API_TOKEN="$token" SOURCE_SENTINEL="$source_sentinel" INDEX_SENTINEL="$index_sentinel" GRAPH_PAYLOAD_SENTINEL="$graph_payload_sentinel" LOCAL_LOCATOR_SENTINEL="$local_locator_sentinel" ABSOLUTE_ROOT_SENTINEL="$absolute_root_sentinel" python3 - "$capture" "$scenario" "$receipt" <<'PY'
 import json,sys
 capture,scenario,receipt=sys.argv[1:]
 rows=[json.loads(line) for line in open(capture)]
-packet=next(row for row in rows if row['path'].endswith('/context-packets'))
-if scenario=='injected-source-leak': packet['body']+=' local_source_negative_control:'+__import__('os').environ['SOURCE_SENTINEL']
-if scenario=='injected-path-leak': packet['body']+=' local_root_negative_control:'+__import__('os').environ['ABSOLUTE_ROOT_SENTINEL']
 sentinels={'source':__import__('os').environ['SOURCE_SENTINEL'],'index':__import__('os').environ['INDEX_SENTINEL'],'absolute_root':__import__('os').environ['ABSOLUTE_ROOT_SENTINEL'],'graph_payload':__import__('os').environ['GRAPH_PAYLOAD_SENTINEL'],'local_locator':__import__('os').environ['LOCAL_LOCATOR_SENTINEL']}
-joined='\n'.join(json.dumps(row,sort_keys=True) for row in rows)
-leaks=[name for name,value in sentinels.items() if value in joined]
+def copy_records(records): return [json.loads(json.dumps(record)) for record in records]
+def packet_record(records): return next(record for record in records if record['path'].endswith('/context-packets'))
+def sentinel_matches(records):
+ joined='\n'.join(json.dumps(record,sort_keys=True) for record in records)
+ return [name for name,value in sentinels.items() if value in joined]
+def inject(records, field, value):
+ mutated=copy_records(records)
+ packet=packet_record(mutated)
+ body=json.loads(packet['body'])
+ body[field]=value
+ packet['body']=json.dumps(body,sort_keys=True,separators=(',',':'))
+ return mutated
+leaks=sentinel_matches(rows)
+if scenario=='injected-source-leak': rows=inject(rows,'local_source_negative_control',sentinels['source']); leaks=sentinel_matches(rows)
+if scenario=='injected-path-leak': rows=inject(rows,'local_root_negative_control',sentinels['absolute_root']); leaks=sentinel_matches(rows)
+for name in ('graph_payload','local_locator'):
+ if name not in sentinel_matches(inject(rows,'privacy_'+name+'_negative_control',sentinels[name])): raise SystemExit('in-memory verifier probe failed')
+if leaks:
+ codes={'injected-source-leak':'local_source_negative_control','injected-path-leak':'local_root_negative_control'}
+ if scenario=='no-upload': raise SystemExit('privacy verifier rejected sentinel_'+leaks[0])
+ print('privacy verifier rejected '+codes[scenario])
+ sys.exit(1)
 counts={'capabilities':sum(r['method']=='GET' and r['path'].endswith('/capabilities') for r in rows),'context_packet':sum(r['method']=='POST' and r['path'].endswith('/context-packets') for r in rows),'hosted_evidence':sum(r['method']=='GET' and '/evidence/' in r['path'] for r in rows)}
 unexpected=len(rows)-sum(counts.values())
 authorization=sum(1 for r in rows if r['headers'].get('Authorization')=='Bearer '+__import__('os').environ.get('ACR_API_TOKEN',''))
@@ -113,7 +131,6 @@ non_authorization_matches=sum(token in str(value) for row in rows for key,value 
 shape_valid=counts=={'capabilities':1,'context_packet':1,'hosted_evidence':1} and unexpected==0 and all((r['method'],r['path'].split('?')[0]) in {('GET','/api/v1/agent-context/capabilities'),('POST','/api/v1/agent-context/context-packets')} or (r['method']=='GET' and r['path'].startswith('/api/v1/agent-context/evidence/')) for r in rows)
 verdict='pass' if not leaks and shape_valid and authorization==3 and non_authorization_matches==0 else 'reject'
 if scenario!='no-upload': verdict='reject'
-codes={'injected-source-leak':'local_source_negative_control','injected-path-leak':'local_root_negative_control'}
 safe={'schema_version':'context_fabric_privacy_receipt.v1','task':'CHAOS-3007 Task 8','mode':'local-index','scenario':scenario,'verdict':verdict,'source_revision':__import__('subprocess').check_output(['git','rev-parse','HEAD'],text=True).strip(),'tls_verified':True,'request_counts':{**counts,'unexpected':unexpected},'request_shape_valid':shape_valid,'local_expansion_hosted_request_count':0,'zero_match_counts':{k:(0 if k not in leaks else 1) for k in sentinels},'credential':{'authorization_header_count':authorization,'non_authorization_match_count':non_authorization_matches},'rejection_code':(codes.get(scenario,'sentinel_'+leaks[0] if leaks else 'verification_failed') if verdict=='reject' else '')}
 if scenario=='no-upload': json.dump(safe,open(receipt,'w'),sort_keys=True);print('privacy receipt: pass')
 else: print('privacy verifier rejected '+safe['rejection_code']);sys.exit(1)
