@@ -20,7 +20,10 @@ if [[ -n "$(git -C "$root" status --porcelain)" ]]; then
   exit 1
 fi
 backup="$(mktemp -d)"
+restored=0
 restore_receipts() {
+  [[ "$restored" == 0 ]] || return
+  restored=1
   for name in context-fabric-08-no-upload.json context-fabric-09-mixed-mcp.json context-fabric-09-live-mcp.json; do
     if [[ -e "$backup/$name" ]]; then cp "$backup/$name" "$evidence/$name"; else rm -f "$evidence/$name"; fi
   done
@@ -72,7 +75,7 @@ task9_before="$(shasum -a 256 "$task9" | awk '{print $1}')"
 printf '{"stale":true}\n' > "$live"
 if "$root/scripts/e2e/mcp-codegraph-live.sh" --repo /definitely-missing --scenario mixed; then exit 1; fi
 [[ ! -e "$live" ]] || exit 1
-for receipt in "$task8" "$task9"; do
+for receipt in "$task8" "$task9" "$live"; do
   python3 - "$receipt" <<'PY'
 import json,os,stat,sys
 assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode)==0o600

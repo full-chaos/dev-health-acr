@@ -106,7 +106,7 @@ for _ in $(seq 1 50); do [[ -s "$tmp/port" ]] && break; sleep .05; done
 [[ -s "$tmp/port" ]] || { echo "fixture host did not start: $(<"$tmp/host.err")" >&2; exit 1; }
 port=$(<"$tmp/port")
 
-go build -ldflags '-X github.com/full-chaos/dev-health-acr/internal/version.Version=0.1.0 -X github.com/full-chaos/dev-health-acr/internal/version.Commit=0123456789abcdef0123456789abcdef01234567 -X github.com/full-chaos/dev-health-acr/internal/version.Date=2026-07-10T14:00:00Z' -o "$tmp/acr-mcp" ./cmd/acr-mcp
+go -C "$root" build -ldflags '-X github.com/full-chaos/dev-health-acr/internal/version.Version=0.1.0 -X github.com/full-chaos/dev-health-acr/internal/version.Commit=0123456789abcdef0123456789abcdef01234567 -X github.com/full-chaos/dev-health-acr/internal/version.Date=2026-07-10T14:00:00Z' -o "$tmp/acr-mcp" ./cmd/acr-mcp
 source_identity_unchanged=false
 if [[ "$(git -C "$root" rev-parse HEAD)" == "$source_revision" && -z "$(git -C "$root" status --porcelain)" ]]; then source_identity_unchanged=true; fi
 [[ "$source_identity_unchanged" == true ]] || { printf 'canonical source identity changed during build\n' >&2; exit 1; }
@@ -245,11 +245,11 @@ r={"schema_version":"context_fabric_mcp_codegraph_receipt.v1","task":"CHAOS-3007
 if scenario=='mixed':
  import os,subprocess,tempfile
  root=os.environ['SOURCE_ROOT']
- if subprocess.check_output(['git','-C',root,'rev-parse','HEAD'],text=True).strip()!=r['source_revision'] or subprocess.check_output(['git','-C',root,'status','--porcelain'],text=True): raise SystemExit('source changed before receipt publication')
  fd,temporary=tempfile.mkstemp(prefix='.context-fabric-09-',dir=os.path.dirname(sys.argv[3]))
  try:
   os.fchmod(fd,0o600)
   with os.fdopen(fd,'w',encoding='utf-8') as output: json.dump(r,output,sort_keys=True,separators=(',',':')); output.write('\n'); output.flush(); os.fsync(output.fileno())
+  if subprocess.check_output(['git','-C',root,'rev-parse','HEAD'],text=True).strip()!=r['source_revision'] or subprocess.check_output(['git','-C',root,'status','--porcelain'],text=True): raise SystemExit('source changed before receipt publication')
   os.replace(temporary,sys.argv[3])
  finally:
   if os.path.exists(temporary): os.unlink(temporary)

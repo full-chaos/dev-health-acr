@@ -153,11 +153,11 @@ if verdict!='pass':
  sys.exit(1)
 import os,subprocess,tempfile
 root=os.environ['SOURCE_ROOT']
-if subprocess.check_output(['git','-C',root,'rev-parse','HEAD'],text=True).strip()!=safe['source_revision'] or subprocess.check_output(['git','-C',root,'status','--porcelain'],text=True): raise SystemExit('source changed before receipt publication')
 fd,temporary=tempfile.mkstemp(prefix='.context-fabric-08-',dir=os.path.dirname(receipt))
 try:
  os.fchmod(fd,0o600)
  with os.fdopen(fd,'w',encoding='utf-8') as out: json.dump(safe,out,sort_keys=True,separators=(',',':')); out.write('\n'); out.flush(); os.fsync(out.fileno())
+ if subprocess.check_output(['git','-C',root,'rev-parse','HEAD'],text=True).strip()!=safe['source_revision'] or subprocess.check_output(['git','-C',root,'status','--porcelain'],text=True): raise SystemExit('source changed before receipt publication')
  os.replace(temporary,receipt)
 finally:
  if os.path.exists(temporary): os.unlink(temporary)

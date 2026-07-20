@@ -179,7 +179,7 @@ for _ in $(seq 1 50); do [[ -s "$tmp/port" ]] && break; sleep .05; done
 [[ -s "$tmp/port" ]] || { printf '%s\n' 'live fixture host did not start' >&2; exit 1; }
 port=$(<"$tmp/port")
 
-go build -ldflags '-X github.com/full-chaos/dev-health-acr/internal/version.Version=0.1.0 -X github.com/full-chaos/dev-health-acr/internal/version.Commit=0123456789abcdef0123456789abcdef01234567 -X github.com/full-chaos/dev-health-acr/internal/version.Date=2026-07-10T14:00:00Z' -o "$tmp/acr-mcp" ./cmd/acr-mcp
+go -C "$root" build -ldflags '-X github.com/full-chaos/dev-health-acr/internal/version.Version=0.1.0 -X github.com/full-chaos/dev-health-acr/internal/version.Commit=0123456789abcdef0123456789abcdef01234567 -X github.com/full-chaos/dev-health-acr/internal/version.Date=2026-07-10T14:00:00Z' -o "$tmp/acr-mcp" ./cmd/acr-mcp
 source_identity_unchanged=false
 if [[ "$(git -C "$root" rev-parse HEAD)" == "$source_revision" && -z "$(git -C "$root" status --porcelain)" ]]; then source_identity_unchanged=true; fi
 [[ "$source_identity_unchanged" == true ]] || { printf 'canonical source identity changed during build\n' >&2; exit 1; }
@@ -270,11 +270,11 @@ if before!=after: raise SystemExit('real index changed')
 r={'schema_version':'context_fabric_mcp_codegraph_receipt.v1','task':'CHAOS-3007 Task 9','mode':'live','scenario':'mixed','verdict':'pass','source_revision':__import__('os').environ['SOURCE_REVISION'],'source_worktree_clean':True,'source_identity_unchanged':__import__('os').environ['SOURCE_IDENTITY_UNCHANGED']=='true','harness_sha256':__import__('os').environ['HARNESS_SHA256'],'binary_sha256':__import__('os').environ['BINARY_SHA256'],'tls_verified':True,'workspace_head_revision':__import__('os').environ['WORKSPACE_HEAD_REVISION'],'workspace_head_unchanged':True,'indexed_commit_state':'unknown','mcp':{'framing':bool(lines),'initialize':bool(by_id.get(1,{}).get('result')),'initialized_notification':True,'tools':len(tools),'record_episode_present':'record_episode' in {x.get('name') for x in tools},'context_ok':True,'hosted_expand_ok':True,'local_expand_ok':True},'federation':{'hosted_packet_unchanged':True,'ids_disjoint':True,'packet_content_within_budget':True,'envelope_excluded':True,'federated_budget_excluded':True,'rendered_markdown_excluded':True},'codegraph':{'command_counts':dict(sorted(counts.items())),'forbidden_command_count':0,'status_before_sha256':sys.argv[6],'status_after_sha256':sys.argv[7],'index_before':before,'index_after':after,'persistent_identity_replacement_detected':False,'index_kind':'live'},'cleanup':{'processes_stopped':True,'listeners_stopped':True,'temporary_material_removed':True}}
 import os,subprocess,tempfile
 root=os.environ['SOURCE_ROOT']
-if subprocess.check_output(['git','-C',root,'rev-parse','HEAD'],text=True).strip()!=r['source_revision'] or subprocess.check_output(['git','-C',root,'status','--porcelain'],text=True): raise SystemExit('source changed before receipt publication')
 fd,temporary=tempfile.mkstemp(prefix='.context-fabric-09-live-',dir=os.path.dirname(sys.argv[3]))
 try:
  os.fchmod(fd,0o600)
  with os.fdopen(fd,'w',encoding='utf-8') as output: json.dump(r,output,sort_keys=True,separators=(',',':')); output.write('\n'); output.flush(); os.fsync(output.fileno())
+ if subprocess.check_output(['git','-C',root,'rev-parse','HEAD'],text=True).strip()!=r['source_revision'] or subprocess.check_output(['git','-C',root,'status','--porcelain'],text=True): raise SystemExit('source changed before receipt publication')
  os.replace(temporary,sys.argv[3])
 finally:
  if os.path.exists(temporary): os.unlink(temporary)
