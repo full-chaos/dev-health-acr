@@ -103,18 +103,3 @@ func TestFederation_HostedOnlyBudget(t *testing.T) {
 	require.Equal(t, defaultMaxOutputTokens, requested.Options.MaxOutputTokens)
 	require.Equal(t, defaultMaxSerializedBytes, requested.Options.MaxSerializedBytes)
 }
-
-func TestFederation_PacketContentAccounting(t *testing.T) { TestFederation_BudgetPartition(t) }
-func TestFederation_EnvelopeExcluded(t *testing.T)        { TestFederation_BudgetPartition(t) }
-func TestFederation_Provenance(t *testing.T)              { TestFederation_BudgetPartition(t) }
-func TestFederation_DeterministicIDs(t *testing.T)        { TestFederation_BudgetPartition(t) }
-func TestFederation_DisjointIDs(t *testing.T)             { TestFederation_BudgetPartition(t) }
-func TestFederation_LocalRouting(t *testing.T)            { TestFederation_BudgetPartition(t) }
-func TestFederation_HostedRouting(t *testing.T)           { TestFederation_HostedOnlyBudget(t) }
-func TestFederation_CacheLifecycle(t *testing.T)          { TestFederation_BudgetPartition(t) }
-func TestFederation_LocalContentOverflow(t *testing.T)    { TestFederation_BudgetPartition(t) }
-func TestFederation_ForcedIDCollision(t *testing.T)       { TestFederation_BudgetPartition(t) }
-func TestFederation_UnknownLocalID(t *testing.T)          { TestFederation_BudgetPartition(t) }
-func TestFederation_EvictedLocalID(t *testing.T)          { TestFederation_BudgetPartition(t) }
-func TestFederation_ProviderTimeout(t *testing.T)         { TestFederation_HostedOnlyBudget(t) }
-func TestFederation_HostedError(t *testing.T)             { TestFederation_HostedOnlyBudget(t) }
