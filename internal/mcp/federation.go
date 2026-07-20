@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -42,7 +43,91 @@ func (r *localFederationRuntime) bundle(ctx context.Context, scope resolvedTaskS
 	provider := r.providerFactory(r.config, *scope.Workspace)
 	child, cancel := context.WithTimeout(ctx, r.config.Timeout)
 	defer cancel()
-	return provider.ContextForTask(child, sidecar.LocalContextRequest{Goal: input.Goal, TaskRef: scope.Scope.TaskRef, RequestedCategories: options.RequestedCategories, Workspace: scope.Workspace, MaxItems: reserve.MaxItems, MaxOutputTokens: reserve.MaxOutputTokens})
+	bundle, err := provider.ContextForTask(child, sidecar.LocalContextRequest{Goal: input.Goal, TaskRef: scope.Scope.TaskRef, RequestedCategories: options.RequestedCategories, Workspace: scope.Workspace, MaxItems: reserve.MaxItems, MaxOutputTokens: reserve.MaxOutputTokens})
+	if err != nil {
+		return sidecar.LocalEvidenceBundle{}, err
+	}
+	return sidecar.NormalizeLocalEvidenceBundle(bundle)
+}
+
+type mappedLocalBundle struct {
+	bundle   sidecar.LocalEvidenceBundle
+	items    []contractsv1.ContextPacketItem
+	refs     []contractsv1.EvidenceRef
+	evidence []sidecar.LocalExpandedEvidence
+}
+
+func (r *localFederationRuntime) mapLocalBundle(repository string, bundle sidecar.LocalEvidenceBundle, occupied map[string]struct{}) (mappedLocalBundle, error) {
+	items, refs, err := r.mapBundle(repository, bundle, occupied)
+	if err != nil {
+		return mappedLocalBundle{}, err
+	}
+	return mappedLocalBundle{bundle: bundle, items: items, refs: refs, evidence: append([]sidecar.LocalExpandedEvidence(nil), bundle.Evidence...)}, nil
+}
+
+func (m *mappedLocalBundle) trimTo(maxItems, maxTokens, maxBytes int) bool {
+	trimmed := false
+	for len(m.items) > 0 && (len(m.items) > maxItems || localEstimatedTokens(m.evidence) > maxTokens || localJSONBytes(m.items, m.refs) > maxBytes) {
+		last := len(m.items) - 1
+		m.items = m.items[:last]
+		m.refs = m.refs[:last]
+		m.evidence = m.evidence[:last]
+		trimmed = true
+	}
+	return trimmed
+}
+
+func localEstimatedTokens(evidence []sidecar.LocalExpandedEvidence) int {
+	total := 0
+	for _, value := range evidence {
+		total += value.EstimatedTokens
+	}
+	return total
+}
+
+func localJSONBytes(items []contractsv1.ContextPacketItem, refs []contractsv1.EvidenceRef) int {
+	encoded, err := json.Marshal(struct {
+		Items []contractsv1.ContextPacketItem `json:"items"`
+		Refs  []contractsv1.EvidenceRef       `json:"evidence_refs"`
+	}{Items: items, Refs: refs})
+	if err != nil {
+		return 0
+	}
+	return len(encoded)
+}
+
+func localContext(bundle sidecar.LocalEvidenceBundle, mapped mappedLocalBundle, trimmed bool) contractsv1.MCPLocalContext {
+	warnings := appendDistinctWarnings(nil, bundle.Warnings)
+	if trimmed {
+		warnings = appendDistinctWarning(warnings, "local_budget_exhausted")
+	}
+	return contractsv1.MCPLocalContext{
+		Provider: bundle.ProviderID, Status: localContextStatus(bundle.Status), ProviderVersion: bundle.ProviderVersion,
+		QueryVersion: bundle.QueryVersion, IndexedAt: bundle.IndexedAt, Freshness: localFreshness(bundle.Freshness),
+		Warnings: warnings, Items: mapped.items, EvidenceRefs: mapped.refs,
+	}
+}
+
+func localContextStatus(status sidecar.LocalIndexStatus) contractsv1.MCPLocalContextStatus {
+	switch status {
+	case sidecar.LocalIndexStatusAvailable:
+		return contractsv1.MCPLocalContextAvailable
+	case sidecar.LocalIndexStatusDegraded:
+		return contractsv1.MCPLocalContextDegraded
+	default:
+		return contractsv1.MCPLocalContextUnavailable
+	}
+}
+
+func localFreshness(freshness sidecar.LocalIndexFreshness) contractsv1.MCPLocalFreshness {
+	switch freshness {
+	case sidecar.LocalIndexFreshnessFresh:
+		return contractsv1.MCPLocalFreshnessFresh
+	case sidecar.LocalIndexFreshnessStale:
+		return contractsv1.MCPLocalFreshnessStale
+	default:
+		return contractsv1.MCPLocalFreshnessUnknown
+	}
 }
 
 func localReservation(config sidecar.LocalIndexConfig, options contractsv1.PacketOptions) contractsv1.PacketOptions {
@@ -72,7 +157,7 @@ func (r *localFederationRuntime) mapBundle(repository string, bundle sidecar.Loc
 		if bundle.IndexedAt != nil {
 			observedAt = bundle.IndexedAt.UTC()
 		}
-		ref := contractsv1.EvidenceRef{SchemaVersion: contractsv1.EvidenceRefSchema, EvidenceRefID: id, Source: contractsv1.EvidenceSource{System: "local_index", EntityType: "code", EntityID: id, DisplayLabel: boundedText(evidence.Title, 256)}, Provenance: "derived", Confidence: confidence, Citation: "local CodeGraph index", ObservedAt: observedAt, SourceVersion: bundle.ProviderVersion, Availability: availability, Metadata: map[string]any{"query_id": evidence.QueryID, "relation": evidence.Relation, "repository_path": evidence.RepositoryPath, "start_line": evidence.StartLine}}
+		ref := contractsv1.EvidenceRef{SchemaVersion: contractsv1.EvidenceRefSchema, EvidenceRefID: id, Source: contractsv1.EvidenceSource{System: "local_index", EntityType: "code", EntityID: id, DisplayLabel: boundedText(evidence.Title, 256)}, Provenance: "derived", Confidence: confidence, Citation: "local CodeGraph index", ObservedAt: observedAt, SourceVersion: bundle.ProviderVersion, Availability: availability, Metadata: map[string]any{"query_id": evidence.QueryID, "relation": evidence.Relation, "start_line": evidence.StartLine}}
 		item := contractsv1.ContextPacketItem{SchemaVersion: contractsv1.ContextPacketItemSchema, PacketItemID: id + ":item", Category: contractsv1.CategoryEvidence, ClaimKind: contractsv1.ClaimObserved, Title: boundedText(evidence.Title, 256), Summary: boundedText(evidence.Excerpt, 1024), WhyIncluded: "Local code evidence matched the task scope.", RuleID: "local_code_evidence", Confidence: confidence, Severity: severity, Rank: index + 1, Flags: contractsv1.ItemFlags{UntrustedContent: true, Uncertain: availability != contractsv1.EvidenceAvailable}, RelatedEntities: []contractsv1.RelatedEntity{{Type: "repository", ID: repository, Label: repository}}, EvidenceRefIDs: []string{id}}
 		items, refs = append(items, item), append(refs, ref)
 	}
@@ -80,7 +165,7 @@ func (r *localFederationRuntime) mapBundle(repository string, bundle sidecar.Loc
 }
 
 func (r *localFederationRuntime) publicID(repository string, bundle sidecar.LocalEvidenceBundle, evidence sidecar.LocalExpandedEvidence, counter int, occupied map[string]struct{}) (string, error) {
-	for {
+	for range 256 {
 		payload := struct {
 			Schema, Kind, Provider, Version, Repository, IndexedAt, Ref, Commit, Query, QueryVersion, EvidenceQuery, Locator string
 			Counter                                                                                                          int
@@ -97,6 +182,7 @@ func (r *localFederationRuntime) publicID(repository string, bundle sidecar.Loca
 		}
 		counter++
 	}
+	return "", fmt.Errorf("local evidence id collision limit exceeded")
 }
 
 func indexedAt(bundle sidecar.LocalEvidenceBundle) string {

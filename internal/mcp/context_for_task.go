@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"slices"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
@@ -54,18 +55,17 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 
 	options := budgetOptions(input.Budget, input.RequestedCategories, boot.Capabilities.Limits)
 	hostedOptions := options
-	var localBundle sidecar.LocalEvidenceBundle
-	var localItems []contractsv1.ContextPacketItem
-	var localRefs []contractsv1.EvidenceRef
+	var local mappedLocalBundle
+	localSucceeded := false
 	if boot.local != nil && boot.local.eligible(resolved.Workspace) {
 		bundle, localErr := boot.local.bundle(ctx, resolved, input, options)
 		if localErr != nil && ctx.Err() != nil {
 			return toolErrorResult(ctx.Err()), nil
 		}
 		if localErr == nil {
-			localBundle = bundle
-			localItems, localRefs, localErr = boot.local.mapBundle(resolved.Repository.Slug, bundle, map[string]struct{}{})
+			local, localErr = boot.local.mapLocalBundle(resolved.Repository.Slug, bundle, map[string]struct{}{})
 			if localErr == nil {
+				localSucceeded = true
 				reserve := localReservation(boot.local.config, options)
 				hostedOptions.MaxItems -= reserve.MaxItems
 				hostedOptions.MaxOutputTokens -= reserve.MaxOutputTokens
@@ -85,24 +85,6 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 	if err != nil {
 		return toolErrorResult(err), nil
 	}
-	if len(localRefs) > 0 {
-		packet.Items = append(packet.Items, localItems...)
-		packet.Warnings = append(packet.Warnings, localBundle.Warnings...)
-		packet.Warnings = appendDistinctWarning(packet.Warnings, "local_context")
-		packet.Warnings = appendDistinctWarning(packet.Warnings, "federated_budget")
-		packet.Budget.MaxItems = options.MaxItems
-		packet.Budget.MaxOutputTokens = options.MaxOutputTokens
-		packet.Budget.MaxSerializedBytes = options.MaxSerializedBytes
-		packet.Budget.ItemsUsed += len(localItems)
-		for _, evidence := range localBundle.Evidence {
-			packet.Budget.EstimatedTokens += evidence.EstimatedTokens
-		}
-		for index := range packet.Items {
-			packet.Items[index].Rank = index + 1
-		}
-		packet.Budget.SerializedBytes = federatedJSONBytes(packet.Items, localRefs)
-	}
-
 	rendered, truncated := sidecar.RenderContextPacketMarkdown(packet, renderedMarkdownMaxBytes)
 	response := contractsv1.MCPContextForTaskResponse{
 		SchemaVersion: contractsv1.MCPContextForTaskResponseSchema,
@@ -113,6 +95,20 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 			Truncated: truncated,
 		},
 	}
+	if localSucceeded {
+		trimmed := local.trimTo(options.MaxItems-packet.Budget.ItemsUsed, options.MaxOutputTokens-packet.Budget.EstimatedTokens, options.MaxSerializedBytes-packet.Budget.SerializedBytes)
+		context := localContext(local.bundle, local, trimmed)
+		response.LocalContext = &context
+		localTokens := localEstimatedTokens(local.evidence)
+		localBytes := localJSONBytes(local.items, local.refs)
+		response.FederatedBudget = &contractsv1.MCPFederatedBudget{
+			MaxItems: options.MaxItems, MaxOutputTokens: options.MaxOutputTokens, MaxSerializedBytes: options.MaxSerializedBytes,
+			HostedItemsUsed: packet.Budget.ItemsUsed, LocalItemsUsed: len(local.items), TotalItemsUsed: packet.Budget.ItemsUsed + len(local.items),
+			HostedEstimatedTokens: packet.Budget.EstimatedTokens, LocalEstimatedTokens: localTokens, TotalEstimatedTokens: packet.Budget.EstimatedTokens + localTokens,
+			HostedSerializedBytes: packet.Budget.SerializedBytes, LocalSerializedBytes: localBytes, TotalSerializedBytes: packet.Budget.SerializedBytes + localBytes,
+			HostedTruncated: packet.Budget.Truncated, LocalTruncated: local.bundle.Truncated || trimmed, Truncated: packet.Budget.Truncated || local.bundle.Truncated || trimmed,
+		}
+	}
 	if err := response.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "internal", message: "the assembled response failed contract validation"}), nil
 	}
@@ -121,36 +117,30 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 	if buildErr != nil {
 		return result, buildErr
 	}
-	if len(localRefs) > 0 {
-		boot.local.cache.putBatch(cacheEntries(localBundle, localRefs))
+	if localSucceeded && len(local.refs) > 0 {
+		boot.local.cache.putBatch(cacheEntries(local))
 	}
 	return result, nil
 }
 
 func appendDistinctWarning(warnings []string, warning string) []string {
-	for _, value := range warnings {
-		if value == warning {
-			return warnings
-		}
+	if slices.Contains(warnings, warning) {
+		return warnings
 	}
 	return append(warnings, warning)
 }
 
-func federatedJSONBytes(items []contractsv1.ContextPacketItem, refs []contractsv1.EvidenceRef) int {
-	encoded, err := json.Marshal(struct {
-		Items []contractsv1.ContextPacketItem `json:"items"`
-		Refs  []contractsv1.EvidenceRef       `json:"evidence_refs"`
-	}{items, refs})
-	if err != nil {
-		return 0
+func appendDistinctWarnings(warnings []string, additions []string) []string {
+	for _, warning := range additions {
+		warnings = appendDistinctWarning(warnings, warning)
 	}
-	return len(encoded)
+	return warnings
 }
 
-func cacheEntries(bundle sidecar.LocalEvidenceBundle, refs []contractsv1.EvidenceRef) []cachedLocalEvidence {
-	entries := make([]cachedLocalEvidence, 0, len(refs))
-	for index := range refs {
-		entries = append(entries, cachedLocalEvidence{evidence: bundle.Evidence[index], ref: refs[index]})
+func cacheEntries(mapped mappedLocalBundle) []cachedLocalEvidence {
+	entries := make([]cachedLocalEvidence, 0, len(mapped.refs))
+	for index := range mapped.refs {
+		entries = append(entries, cachedLocalEvidence{evidence: mapped.evidence[index], ref: mapped.refs[index]})
 	}
 	return entries
 }
