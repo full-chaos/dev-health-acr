@@ -73,8 +73,6 @@ task9_before="$(shasum -a 256 "$task9" | awk '{print $1}')"
 "$root/scripts/e2e/mcp-codegraph-live.sh" --self-test
 [[ "$task9_before" == "$(shasum -a 256 "$task9" | awk '{print $1}')" ]] || exit 1
 printf '{"stale":true}\n' > "$live"
-if "$root/scripts/e2e/mcp-codegraph-live.sh" --repo /definitely-missing --scenario mixed; then exit 1; fi
-[[ ! -e "$live" ]] || exit 1
 for receipt in "$task8" "$task9" "$live"; do
   python3 - "$receipt" <<'PY'
 import json,os,stat,sys
@@ -82,6 +80,9 @@ assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode)==0o600
 json.load(open(sys.argv[1]))
 PY
 done
+printf '{"stale":true}\n' > "$live"
+if "$root/scripts/e2e/mcp-codegraph-live.sh" --repo /definitely-missing --scenario mixed; then exit 1; fi
+[[ ! -e "$live" ]] || exit 1
 out_of_tree="$(mktemp -d)"
 (cd "$out_of_tree" && "$root/scripts/e2e/local-index-privacy.sh" --scenario no-upload)
 rm -rf "$out_of_tree"
