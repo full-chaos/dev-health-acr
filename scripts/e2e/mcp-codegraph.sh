@@ -33,6 +33,11 @@ PY
   fi
 }
 trap record_noncanonical_failure ERR
+expected_failure_complete() {
+  local expected_exit_code=$1
+  printf 'ACR_E2E_EXPECTED_FAILURE_VALIDATED scenario=%s exit_code=%d\n' "$scenario" "$expected_exit_code"
+  exit "$expected_exit_code"
+}
 mkdir -p "$evidence_dir"
 if [[ "$scenario" == "$canonical_scenario" ]]; then rm -f "$receipt"; fi
 if [[ "$scenario" == "$canonical_scenario" && "${ACR_E2E_FORCE_CANONICAL_FAILURE:-}" == 1 ]]; then exit 1; fi
@@ -191,6 +196,9 @@ PY
   mcp_exit=0
   wait "$mcp_pid" || mcp_exit=$?
   if (( mcp_exit != 0 )); then
+    if [[ "$scenario" == post-response-process-failure && "$mcp_exit" -eq 42 ]]; then
+      expected_failure_complete 44
+    fi
     printf 'MCP process exited unexpectedly after responses: status=%d\n' "$mcp_exit" >&2
     exit "$mcp_exit"
   fi
@@ -234,6 +242,7 @@ else:
  if scenario=='local-timeout':
   local_context=context.get('local_context',{})
   if local_context.get('status')!='unavailable' or local_context.get('warnings')!=['local_index_timeout']: raise SystemExit('timed-out local provider did not expose bounded degradation')
+ if scenario in ('local-timeout','hosted-unavailable','incompatible-version') and __import__('os').environ.get('ACR_E2E_FORCE_EXPECTED_FAILURE_ASSERTION')=='1': raise SystemExit('forced expected-failure semantic assertion')
  content_bytes=len(json.dumps({'structured':packet},separators=(',',':')).encode())+len(json.dumps({'local_context':context.get('local_context',{})},separators=(',',':')).encode())
  budget=packet.get('budget',{}).get('max_serialized_bytes',0)
  if not 0<content_bytes<=budget: raise SystemExit('packet content budget exceeded')
@@ -269,4 +278,8 @@ if scenario=='mixed':
   if os.path.exists(temporary): os.unlink(temporary)
 print(json.dumps({"verdict":r['verdict'],"scenario":scenario},separators=(',',':')))
 PY
-[[ "$scenario" != hosted-unavailable && "$scenario" != incompatible-version && "$scenario" != local-timeout ]] || exit 1
+case "$scenario" in
+  local-timeout) expected_failure_complete 41 ;;
+  hosted-unavailable) expected_failure_complete 42 ;;
+  incompatible-version) expected_failure_complete 43 ;;
+esac

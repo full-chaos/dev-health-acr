@@ -55,16 +55,27 @@ git -C "$root" checkout -- "$mutation_target"
 printf '{"sentinel":"task9"}\n' > "$task9"
 task9_before="$(shasum -a 256 "$task9" | awk '{print $1}')"
 for scenario in hosted-only local-timeout packet-content-overflow hosted-unavailable incompatible-version writeback-default post-response-process-failure; do
+  scenario_log="$backup/$scenario.log"
   set +e
-  "$root/scripts/e2e/mcp-codegraph.sh" --scenario "$scenario"
-  status=$?
+  "$root/scripts/e2e/mcp-codegraph.sh" --scenario "$scenario" >"$scenario_log" 2>&1
+  exit_code=$?
   set -e
   case "$scenario" in
-    local-timeout|hosted-unavailable|incompatible-version|post-response-process-failure) [[ "$status" -ne 0 ]] || exit 1 ;;
-    *) [[ "$status" -eq 0 ]] || exit 1 ;;
+    local-timeout) [[ "$exit_code" -eq 41 ]] && grep -Fxq 'ACR_E2E_EXPECTED_FAILURE_VALIDATED scenario=local-timeout exit_code=41' "$scenario_log" || exit 1 ;;
+    hosted-unavailable) [[ "$exit_code" -eq 42 ]] && grep -Fxq 'ACR_E2E_EXPECTED_FAILURE_VALIDATED scenario=hosted-unavailable exit_code=42' "$scenario_log" || exit 1 ;;
+    incompatible-version) [[ "$exit_code" -eq 43 ]] && grep -Fxq 'ACR_E2E_EXPECTED_FAILURE_VALIDATED scenario=incompatible-version exit_code=43' "$scenario_log" || exit 1 ;;
+    post-response-process-failure) [[ "$exit_code" -eq 44 ]] && grep -Fxq 'ACR_E2E_EXPECTED_FAILURE_VALIDATED scenario=post-response-process-failure exit_code=44' "$scenario_log" || exit 1 ;;
+    *) [[ "$exit_code" -eq 0 ]] || exit 1 ;;
   esac
   [[ "$task9_before" == "$(shasum -a 256 "$task9" | awk '{print $1}')" ]] || exit 1
 done
+forced_failure_log="$backup/forced-expected-failure.log"
+set +e
+ACR_E2E_FORCE_EXPECTED_FAILURE_ASSERTION=1 "$root/scripts/e2e/mcp-codegraph.sh" --scenario local-timeout >"$forced_failure_log" 2>&1
+forced_failure_exit=$?
+set -e
+[[ "$forced_failure_exit" -eq 1 ]] || exit 1
+if grep -Fq 'ACR_E2E_EXPECTED_FAILURE_VALIDATED' "$forced_failure_log"; then exit 1; fi
 printf '{"stale":true}\n' > "$task9"
 if ACR_E2E_FORCE_CANONICAL_FAILURE=1 "$root/scripts/e2e/mcp-codegraph.sh" --scenario mixed; then exit 1; fi
 [[ ! -e "$task9" ]] || exit 1
