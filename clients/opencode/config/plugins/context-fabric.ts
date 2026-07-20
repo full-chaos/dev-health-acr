@@ -52,11 +52,11 @@ async function runOfflineDoctor(directory: string, abort: AbortSignal): Promise<
   let outputBytes = 0
   let outcome: StatusOutcome | undefined
   let exitCode: number | null = null
+  let termination: Promise<boolean> | undefined
   const stop = (next: StatusOutcome): void => {
     if (outcome !== undefined) return
     outcome = next
-    terminate(child, "SIGTERM")
-    setTimeout(() => terminate(child, "SIGKILL"), 100).unref()
+    termination = terminate(child, "SIGTERM")
   }
   const append = (chunk: Buffer): void => {
     if (outcome !== undefined) return
@@ -90,6 +90,7 @@ async function runOfflineDoctor(directory: string, abort: AbortSignal): Promise<
 
   try {
     await reaped
+    if (termination !== undefined && !(await termination)) return { kind: "spawn_failed" }
   } finally {
     clearTimeout(timeout)
     abort.removeEventListener("abort", onAbort)
@@ -100,21 +101,35 @@ async function runOfflineDoctor(directory: string, abort: AbortSignal): Promise<
   return { kind: "completed", output: Buffer.concat(output).toString("utf8") }
 }
 
-function terminate(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
-  if (child.pid === undefined || child.killed) return
+async function terminate(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): Promise<boolean> {
+  if (child.pid === undefined || child.killed) return true
   if (process.platform === "win32") {
-    child.kill(signal)
-    return
+    return terminateWindowsTree(child.pid)
   }
   try {
     process.kill(-child.pid, signal)
+    setTimeout(() => {
+      if (!child.killed && child.pid !== undefined) process.kill(-child.pid, "SIGKILL")
+    }, 100).unref()
+    return true
   } catch (error) {
     if (error instanceof Error) {
       child.kill(signal)
-      return
+      return true
     }
     throw error
   }
+}
+
+function terminateWindowsTree(pid: number): Promise<boolean> {
+  const cleanup = spawn("taskkill.exe", ["/pid", String(pid), "/t", "/f"], {
+    stdio: "ignore",
+    windowsHide: true,
+  })
+  return new Promise((resolve) => {
+    cleanup.once("error", () => resolve(false))
+    cleanup.once("close", (code) => resolve(code === 0))
+  })
 }
 
 export default plugin
