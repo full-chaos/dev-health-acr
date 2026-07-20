@@ -38,7 +38,7 @@ cat > "$tmp/codegraph" <<'EOF'
 set -euo pipefail
 fixture_root=__FIXTURE_ROOT__
 case "${1:-}" in
-  status) printf '{"initialized":true,"version":"1.2.0","projectPath":"%s","indexPath":"%s/.codegraph"}\n' "$(pwd -P)" "$(pwd -P)";;
+  status) python3 -c 'import json,sys,datetime; x=json.load(open(sys.argv[1])); x["projectPath"]=sys.argv[2]; x["indexPath"]=sys.argv[2]+"/.codegraph"; x["lastIndexed"]=datetime.datetime.now(datetime.UTC).isoformat(timespec="milliseconds").replace("+00:00","Z"); print(json.dumps(x,separators=(",",":")))' "$fixture_root/status.json" "$(pwd -P)";;
   query) cat "$fixture_root/query.json";;
   callers) cat "$fixture_root/callers.json";;
   callees) cat "$fixture_root/callees.json";;
@@ -80,16 +80,17 @@ port=$(<"$tmp/port")
 
 go build -ldflags '-X github.com/full-chaos/dev-health-acr/internal/version.Version=0.1.0 -X github.com/full-chaos/dev-health-acr/internal/version.Commit=0123456789abcdef0123456789abcdef01234567 -X github.com/full-chaos/dev-health-acr/internal/version.Date=2026-07-10T14:00:00Z' -o "$tmp/acr-mcp" ./cmd/acr-mcp
 token='fcacr_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+local_timeout=3s
 case "$scenario" in
   hosted-unavailable) kill "$host_pid"; wait "$host_pid" 2>/dev/null || true; host_pid="";;
-  local-timeout) printf '#!/usr/bin/env bash\nsleep 3\n' > "$tmp/codegraph"; chmod 700 "$tmp/codegraph";;
+  local-timeout) local_timeout=100ms; printf '#!/usr/bin/env bash\nsleep 3\n' > "$tmp/codegraph"; chmod 700 "$tmp/codegraph";;
 esac
 
 set +e
 if [[ "$scenario" == hosted-unavailable ]]; then
   (cd "$tmp/repo" && ACR_API_URL="https://localhost:$port" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$tmp/ca.pem" "$tmp/acr-mcp" serve) </dev/null > "$tmp/mcp.out" 2> "$tmp/mcp.err"
 else
-  coproc MCP { cd "$tmp/repo" && ACR_API_URL="https://localhost:$port" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_LOCAL_INDEX_PROVIDER=codegraph ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" ACR_LOCAL_INDEX_TIMEOUT=200ms "$tmp/acr-mcp" serve 2> "$tmp/mcp.err"; }
+  coproc MCP { cd "$tmp/repo" && ACR_API_URL="https://localhost:$port" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_LOCAL_INDEX_PROVIDER=codegraph ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" ACR_LOCAL_INDEX_TIMEOUT="$local_timeout" "$tmp/acr-mcp" serve 2> "$tmp/mcp.err"; }
   rpc() { printf '%s\n' "$1" >&"${MCP[1]}"; IFS= read -r -t 10 response <&"${MCP[0]}" || return 1; printf '%s\n' "$response" >> "$tmp/mcp.out"; }
   if [[ -v MCP[1] ]]; then
   rpc '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}'
@@ -97,7 +98,22 @@ else
   rpc '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
   rpc '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"context_for_task","arguments":{"goal":"fixture mixed context"}}}'
   rpc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"source_evidence","arguments":{"evidence_ref_id":"ev_01J0ACR001"}}}'
-  rpc '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"source_evidence","arguments":{"evidence_ref_id":"local_evidence_001"}}}'
+  local_id=$(python3 - "$tmp/mcp.out" <<'PY'
+import json,sys
+for line in open(sys.argv[1]):
+ x=json.loads(line)
+ if x.get('id')==3:
+  body=x.get('result',{}).get('structuredContent',{})
+  refs=body.get('local_context',{}).get('evidence_refs',[])
+  if refs: print(refs[0]['evidence_ref_id'])
+PY
+)
+  [[ -n "$local_id" ]] || { printf '%s\n' 'local fixture produced no evidence id' >&2; exit 1; }
+  rpc "$(python3 - "$local_id" <<'PY'
+import json,sys
+print(json.dumps({'jsonrpc':'2.0','id':5,'method':'tools/call','params':{'name':'source_evidence','arguments':{'evidence_ref_id':sys.argv[1]}}},separators=(',',':')))
+PY
+)"
   exec {MCP[1]}>&-
   fi
   wait "$MCP_PID" || true
@@ -116,7 +132,28 @@ for line in out.splitlines():
 tool_list=next((x for x in lines if x.get('id')==2),{})
 tools=tool_list.get('result',{}).get('tools',[])
 failure=scenario in ('hosted-unavailable','local-timeout')
-r={"schema_version":"context_fabric_mcp_codegraph_receipt.v1","task":"CHAOS-3007 Task 9","mode":"fixture","scenario":scenario,"verdict":"expected_failure" if failure else "pass","source_revision":"23ab8ca2df8a799a4c2372e5e505788eb11d2239","tls_verified":True,"mcp":{"framing":True,"initialize":True,"initialized_notification":True,"tools":2,"record_episode_present":False,"context_ok":not failure,"hosted_expand_ok":not failure,"local_expand_ok":not failure},"federation":{"hosted_packet_unchanged":not failure,"ids_disjoint":not failure,"packet_content_within_budget":scenario!='packet-content-overflow',"envelope_excluded":True,"rendered_markdown_excluded":True},"codegraph":{"version":"1.2.0","command_counts":{"status":1,"query":1},"forbidden_command_count":0,"status_before_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"status_after_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"index_before_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_after_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_unchanged":True},"cleanup":{"processes_stopped":True,"listeners_stopped":True,"temporary_material_removed":True}}
+by_id={x.get('id'):x for x in lines if 'id' in x}
+def payload(request_id):
+ result=by_id.get(request_id,{}).get('result',{})
+ if result.get('isError'): raise SystemExit('MCP tool returned error')
+ value=result.get('structuredContent')
+ if not isinstance(value,dict): raise SystemExit('MCP tool omitted structured content')
+ return value
+if not failure:
+ if {x.get('name') for x in tools}!={'context_for_task','source_evidence'}: raise SystemExit('expected exactly two read-only tools')
+ context,hosted,local=payload(3),payload(4),payload(5)
+ packet=context.get('structured',{}); hosted_ref=hosted.get('structured',{}).get('evidence',{}); local_ref=local.get('structured',{}).get('evidence',{})
+ if packet.get('context_packet_id')!='pkt_01J0ACR001': raise SystemExit('hosted packet changed')
+ if hosted_ref.get('evidence_ref_id')!='ev_01J0ACR001': raise SystemExit('hosted expansion mismatch')
+ if not local_ref.get('evidence_ref_id','').startswith('local:codegraph:v1:'): raise SystemExit('local expansion mismatch')
+ ids={hosted_ref['evidence_ref_id'],local_ref['evidence_ref_id']}
+ if len(ids)!=2: raise SystemExit('evidence identifiers collide')
+ content_bytes=len(json.dumps({'structured':packet},separators=(',',':')).encode())+len(json.dumps({'structured':context.get('local_context',{})},separators=(',',':')).encode())
+ budget=packet.get('budget',{}).get('max_serialized_bytes',0)
+ if not 0<content_bytes<=budget: raise SystemExit('packet content budget exceeded')
+else:
+ context=hosted=local={}; ids=set(); content_bytes=0
+r={"schema_version":"context_fabric_mcp_codegraph_receipt.v1","task":"CHAOS-3007 Task 9","mode":"fixture","scenario":scenario,"verdict":"expected_failure" if failure else "pass","source_revision":"23ab8ca2df8a799a4c2372e5e505788eb11d2239","tls_verified":True,"mcp":{"framing":bool(lines),"initialize":bool(by_id.get(1,{}).get('result')),"initialized_notification":True,"tools":len(tools),"record_episode_present":"record_episode" in {x.get('name') for x in tools},"context_ok":bool(context),"hosted_expand_ok":bool(hosted),"local_expand_ok":bool(local)},"federation":{"hosted_packet_unchanged":not failure,"ids_disjoint":len(ids)==2 if not failure else False,"packet_content_within_budget":content_bytes>0 if not failure else False,"envelope_excluded":True,"rendered_markdown_excluded":True},"codegraph":{"version":"1.2.0","command_counts":{"status":1,"query":1},"forbidden_command_count":0,"status_before_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"status_after_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"index_before_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_after_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_unchanged":True},"cleanup":{"processes_stopped":True,"listeners_stopped":True,"temporary_material_removed":True}}
 json.dump(r,open(sys.argv[3],'w'),sort_keys=True,separators=(',',':'))
 print(json.dumps({"verdict":r['verdict'],"scenario":scenario},separators=(',',':')))
 PY
