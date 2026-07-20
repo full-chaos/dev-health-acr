@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -145,15 +146,54 @@ func mergeCodeGraphClassification(status codeGraphStatus, workspace LocalWorkspa
 func trustedCodeGraphIndex(root string) bool {
 	index := filepath.Join(root, ".codegraph")
 	info, err := os.Lstat(index)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+	if err != nil || verifyCurrentUserOwned(info) != nil {
 		return false
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return false
 	}
+	if err := verifyCurrentUserOwnedDir(resolvedRoot); err != nil {
+		return false
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		resolvedIndex, err := filepath.EvalSymlinks(index)
+		return err == nil && resolvedIndex == filepath.Join(resolvedRoot, ".codegraph")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	managedRoot := filepath.Join(home, ".omo", "codegraph", "projects")
+	resolvedManagedRoot, err := filepath.EvalSymlinks(managedRoot)
+	if err != nil || verifyCurrentUserOwnedDir(resolvedManagedRoot) != nil {
+		return false
+	}
 	resolvedIndex, err := filepath.EvalSymlinks(index)
-	return err == nil && resolvedIndex == filepath.Join(resolvedRoot, ".codegraph")
+	if err != nil || filepath.Dir(resolvedIndex) != resolvedManagedRoot || strings.Contains(filepath.Base(resolvedIndex), string(filepath.Separator)) {
+		return false
+	}
+	return trustedCodeGraphDB(resolvedIndex)
+}
+
+func verifyCurrentUserOwned(info os.FileInfo) error {
+	if err := verifyTrustedCABundleOwnership(info); err != nil || info.Mode().Perm()&0o022 != 0 {
+		return errUntrustedFileOwnership
+	}
+	return nil
+}
+
+func verifyCurrentUserOwnedDir(path string) error {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return errUntrustedFileOwnership
+	}
+	return verifyCurrentUserOwned(info)
+}
+
+func trustedCodeGraphDB(index string) bool {
+	info, err := os.Lstat(filepath.Join(index, "codegraph.db"))
+	return err == nil && info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 && info.Size() > 0 && verifyCurrentUserOwned(info) == nil
 }
 
 func (p *CodeGraphLocalIndexProvider) itemLimit() int {
