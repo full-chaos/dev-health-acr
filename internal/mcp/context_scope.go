@@ -40,13 +40,19 @@ import (
 // repo.Slug. Every other discovery failure (no repo, ambiguous remote,
 // detached HEAD with no commits, and so on) is silently treated as
 // "nothing to fill in".
-func resolveScope(ctx context.Context, session *mcpsdk.ServerSession, req contractsv1.MCPContextForTaskRequest) (contractsv1.RepositoryRef, contractsv1.RequestedScope, error) {
-	repo := contractsv1.RepositoryRef{}
+type resolvedTaskScope struct {
+	Repository contractsv1.RepositoryRef
+	Scope      contractsv1.RequestedScope
+	Workspace  *sidecar.LocalWorkspaceSnapshot
+}
+
+func resolveTaskScope(ctx context.Context, session *mcpsdk.ServerSession, req contractsv1.MCPContextForTaskRequest) (resolvedTaskScope, error) {
+	result := resolvedTaskScope{}
+	repo := &result.Repository
+	scope := &result.Scope
 	if req.Repository != nil {
 		repo.Slug = req.Repository.Slug
 	}
-
-	scope := contractsv1.RequestedScope{}
 	explicitFiles := false
 	wantChangedFiles := false
 	if req.Scope != nil {
@@ -61,15 +67,15 @@ func resolveScope(ctx context.Context, session *mcpsdk.ServerSession, req contra
 	}
 
 	if repo.Slug != "" && scope.Branch != "" && scope.CommitSHA != "" && !wantChangedFiles {
-		return repo, scope, nil
+		return result, nil
 	}
 
 	mcpRoots, rootsErr := resolveMCPFileRoots(ctx, session)
 	if rootsErr != nil {
 		if isPropagatedDiscoveryError(rootsErr) {
-			return repo, scope, rootsErr
+			return result, rootsErr
 		}
-		return repo, scope, nil
+		return result, nil
 	}
 
 	opts := sidecar.DiscoverOptions{
@@ -79,9 +85,9 @@ func resolveScope(ctx context.Context, session *mcpsdk.ServerSession, req contra
 	info, err := sidecar.DiscoverWorkspace(ctx, opts)
 	if err != nil {
 		if isPropagatedDiscoveryError(err) {
-			return repo, scope, err
+			return result, err
 		}
-		return repo, scope, nil
+		return result, nil
 	}
 
 	// explicitRepoSlug is empty when the caller left repository resolution
@@ -115,9 +121,9 @@ func resolveScope(ctx context.Context, session *mcpsdk.ServerSession, req contra
 		// carrying neither slug, so it is safe wherever a plain error is
 		// safe.
 		if wantChangedFiles {
-			return repo, scope, ErrRepositoryScopeMismatch
+			return result, ErrRepositoryScopeMismatch
 		}
-		return repo, scope, nil
+		return result, nil
 	}
 
 	if scope.Branch == "" {
@@ -134,13 +140,22 @@ func resolveScope(ctx context.Context, session *mcpsdk.ServerSession, req contra
 		// incomplete", so this fails closed with a sanitized typed error
 		// instead of inventing a speculative new field.
 		if info.ChangedFilesTruncated {
-			return repo, scope, ErrChangedFilesTruncated
+			return result, ErrChangedFilesTruncated
 		}
 		if len(info.ChangedFiles) > 0 {
 			scope.Files = info.ChangedFiles
 		}
 	}
-	return repo, scope, nil
+	workspace, snapshotErr := sidecar.NewLocalWorkspaceSnapshot(info, repo.Slug, wantChangedFiles)
+	if snapshotErr == nil {
+		result.Workspace = &workspace
+	}
+	return result, nil
+}
+
+func resolveScope(ctx context.Context, session *mcpsdk.ServerSession, req contractsv1.MCPContextForTaskRequest) (contractsv1.RepositoryRef, contractsv1.RequestedScope, error) {
+	resolved, err := resolveTaskScope(ctx, session, req)
+	return resolved.Repository, resolved.Scope, err
 }
 
 // isPropagatedDiscoveryError reports whether a workspace discovery

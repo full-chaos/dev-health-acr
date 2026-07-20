@@ -36,7 +36,7 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 		return toolErrorResult(&classifiedError{category: "validation", message: "context_for_task arguments failed schema validation"}), nil
 	}
 
-	repo, scope, err := resolveScope(ctx, req.Session, input)
+	resolved, err := resolveTaskScope(ctx, req.Session, input)
 	if err != nil {
 		return toolErrorResult(err), nil
 	}
@@ -48,20 +48,59 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 	// ContextPacketRequest.Validate()'s own generic, unclassified error
 	// surfacing through classify()'s generic "internal" fallback -- and
 	// avoids ever constructing a hosted request that cannot succeed.
-	if repo.Slug == "" {
+	if resolved.Repository.Slug == "" {
 		return toolErrorResult(&classifiedError{category: "validation", message: "context_for_task requires either an explicit repository or a discoverable local Git workspace to resolve one"}), nil
+	}
+
+	options := budgetOptions(input.Budget, input.RequestedCategories, boot.Capabilities.Limits)
+	hostedOptions := options
+	var localBundle sidecar.LocalEvidenceBundle
+	var localItems []contractsv1.ContextPacketItem
+	var localRefs []contractsv1.EvidenceRef
+	if boot.local != nil && boot.local.eligible(resolved.Workspace) {
+		bundle, localErr := boot.local.bundle(ctx, resolved, input, options)
+		if localErr != nil && ctx.Err() != nil {
+			return toolErrorResult(ctx.Err()), nil
+		}
+		if localErr == nil {
+			localBundle = bundle
+			localItems, localRefs, localErr = boot.local.mapBundle(resolved.Repository.Slug, bundle, map[string]struct{}{})
+			if localErr == nil {
+				reserve := localReservation(boot.local.config, options)
+				hostedOptions.MaxItems -= reserve.MaxItems
+				hostedOptions.MaxOutputTokens -= reserve.MaxOutputTokens
+				hostedOptions.MaxSerializedBytes -= reserve.MaxSerializedBytes
+			}
+		}
 	}
 
 	hostedReq := contractsv1.ContextPacketRequest{
 		Goal:       input.Goal,
-		Repository: repo,
-		Scope:      scope,
-		Options:    budgetOptions(input.Budget, input.RequestedCategories, boot.Capabilities.Limits),
+		Repository: resolved.Repository,
+		Scope:      resolved.Scope,
+		Options:    hostedOptions,
 	}
 
 	packet, err := boot.Client.ContextPacket(ctx, hostedReq)
 	if err != nil {
 		return toolErrorResult(err), nil
+	}
+	if len(localRefs) > 0 {
+		packet.Items = append(packet.Items, localItems...)
+		packet.Warnings = append(packet.Warnings, localBundle.Warnings...)
+		packet.Warnings = appendDistinctWarning(packet.Warnings, "local_context")
+		packet.Warnings = appendDistinctWarning(packet.Warnings, "federated_budget")
+		packet.Budget.MaxItems = options.MaxItems
+		packet.Budget.MaxOutputTokens = options.MaxOutputTokens
+		packet.Budget.MaxSerializedBytes = options.MaxSerializedBytes
+		packet.Budget.ItemsUsed += len(localItems)
+		for _, evidence := range localBundle.Evidence {
+			packet.Budget.EstimatedTokens += evidence.EstimatedTokens
+		}
+		for index := range packet.Items {
+			packet.Items[index].Rank = index + 1
+		}
+		packet.Budget.SerializedBytes = federatedJSONBytes(packet.Items, localRefs)
 	}
 
 	rendered, truncated := sidecar.RenderContextPacketMarkdown(packet, renderedMarkdownMaxBytes)
@@ -78,7 +117,42 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 		return toolErrorResult(&classifiedError{category: "internal", message: "the assembled response failed contract validation"}), nil
 	}
 
-	return buildToolResult(response, response.RenderedMarkdown.Markdown)
+	result, buildErr := buildToolResult(response, response.RenderedMarkdown.Markdown)
+	if buildErr != nil {
+		return result, buildErr
+	}
+	if len(localRefs) > 0 {
+		boot.local.cache.putBatch(cacheEntries(localBundle, localRefs))
+	}
+	return result, nil
+}
+
+func appendDistinctWarning(warnings []string, warning string) []string {
+	for _, value := range warnings {
+		if value == warning {
+			return warnings
+		}
+	}
+	return append(warnings, warning)
+}
+
+func federatedJSONBytes(items []contractsv1.ContextPacketItem, refs []contractsv1.EvidenceRef) int {
+	encoded, err := json.Marshal(struct {
+		Items []contractsv1.ContextPacketItem `json:"items"`
+		Refs  []contractsv1.EvidenceRef       `json:"evidence_refs"`
+	}{items, refs})
+	if err != nil {
+		return 0
+	}
+	return len(encoded)
+}
+
+func cacheEntries(bundle sidecar.LocalEvidenceBundle, refs []contractsv1.EvidenceRef) []cachedLocalEvidence {
+	entries := make([]cachedLocalEvidence, 0, len(refs))
+	for index := range refs {
+		entries = append(entries, cachedLocalEvidence{evidence: bundle.Evidence[index], ref: refs[index]})
+	}
+	return entries
 }
 
 // budgetOptions maps an optional MCP budget override onto hosted

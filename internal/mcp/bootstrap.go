@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
@@ -17,6 +19,7 @@ type Bootstrap struct {
 	Config       sidecar.Config
 	Client       *sidecar.Client
 	Capabilities contractsv1.Capabilities
+	local        *localFederationRuntime
 }
 
 // CapabilityProbe contains a validated hosted capabilities response before
@@ -75,7 +78,7 @@ func NewBootstrapWithIdentity(ctx context.Context, identity version.Info) (*Boot
 	if err := probe.CheckCompatibility(); err != nil {
 		return nil, err
 	}
-	return &Bootstrap{Config: probe.Config, Client: probe.Client, Capabilities: probe.Capabilities}, nil
+	return &Bootstrap{Config: probe.Config, Client: probe.Client, Capabilities: probe.Capabilities, local: newLocalFederationRuntime(sidecar.LoadLocalIndexConfig(), time.Now, sha256.Sum256)}, nil
 }
 
 // ProbeCapabilities resolves the compiled identity, constructs the hardened
