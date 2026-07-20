@@ -94,7 +94,11 @@ func validateClientPackage(packagePath string, bundle ClientBundle) error {
 		if err != nil {
 			return invalidBundle("package.unreadable")
 		}
-		return validateClientPackageContents(string(raw))
+		relativePath, err := filepath.Rel(packagePath, path)
+		if err != nil {
+			return invalidBundle("package.unreadable")
+		}
+		return validateClientPackageContents(filepath.Base(packagePath), filepath.ToSlash(relativePath), string(raw))
 	})
 }
 
@@ -112,7 +116,14 @@ func loadClientPackageManifest(path string) (clientPackageManifest, error) {
 	return manifest, nil
 }
 
-func validateClientPackageContents(contents string) error {
+func validateClientPackageContents(clientName, relativePath, contents string) error {
+	if clientName == "opencode" && relativePath == "config/opencode.json" {
+		withoutSchema, err := withoutCanonicalOpenCodeSchema(contents)
+		if err != nil {
+			return invalidBundle("package.direct_api")
+		}
+		contents = withoutSchema
+	}
 	for _, forbidden := range []struct {
 		needle string
 		class  string
@@ -139,6 +150,24 @@ func validateClientPackageContents(contents string) error {
 		}
 	}
 	return nil
+}
+
+func withoutCanonicalOpenCodeSchema(contents string) (string, error) {
+	decoder := json.NewDecoder(strings.NewReader(contents))
+	var config map[string]json.RawMessage
+	if err := decoder.Decode(&config); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return "", invalidBundle("package.direct_api")
+	}
+	var schema string
+	if rawSchema, ok := config["$schema"]; !ok || json.Unmarshal(rawSchema, &schema) != nil || schema != "https://opencode.ai/config.json" {
+		return "", invalidBundle("package.direct_api")
+	}
+	delete(config, "$schema")
+	remaining, err := json.Marshal(config)
+	if err != nil {
+		return "", invalidBundle("package.direct_api")
+	}
+	return string(remaining), nil
 }
 
 func equalStrings(got, want []string) bool {

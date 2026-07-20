@@ -136,6 +136,53 @@ func TestClientPackageRoots_rejects_enabled_package_defaults(t *testing.T) {
 	}
 }
 
+func TestClientPackageRoots_allows_only_canonical_OpenCode_schema_URL(t *testing.T) {
+
+	// Given
+	root := t.TempDir()
+	bundle := validClientBundle()
+	writeValidClientTree(t, root, bundle)
+	writeFile(t, filepath.Join(root, "clients", "opencode", "config", "opencode.json"), `{"$schema":"https://opencode.ai/config.json","mcp":{"acr":{"type":"local","command":["acr-mcp","serve"]}}}`)
+
+	// When
+	err := ValidateClientPackageRoots(root, bundle)
+
+	// Then
+	if err != nil {
+		t.Fatalf("canonical OpenCode schema URL rejected: %v", err)
+	}
+}
+
+func TestClientPackageRoots_rejects_noncanonical_OpenCode_schema_URL(t *testing.T) {
+
+	// Given
+	root := t.TempDir()
+	bundle := validClientBundle()
+	writeValidClientTree(t, root, bundle)
+	writeFile(t, filepath.Join(root, "clients", "opencode", "config", "opencode.json"), `{"$schema":"https://example.invalid/config.json"}`)
+
+	// When
+	err := ValidateClientPackageRoots(root, bundle)
+
+	// Then
+	assertClientBundleClassification(t, err, "package.direct_api")
+}
+
+func TestClientPackageRoots_rejects_canonical_OpenCode_schema_outside_OpenCode_package(t *testing.T) {
+
+	// Given
+	root := t.TempDir()
+	bundle := validClientBundle()
+	writeValidClientTree(t, root, bundle)
+	writeFile(t, filepath.Join(root, "clients", "codex", "config", "opencode.json"), `{"$schema":"https://opencode.ai/config.json"}`)
+
+	// When
+	err := ValidateClientPackageRoots(root, bundle)
+
+	// Then
+	assertClientBundleClassification(t, err, "package.direct_api")
+}
+
 func TestClientPackageVerifier_distinguishes_aggregate_and_invalid_fixture_modes(t *testing.T) {
 	// Given
 	verifier := filepath.Join("..", "..", "scripts", "clients", "verify-packages.sh")
