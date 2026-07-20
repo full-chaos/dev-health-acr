@@ -52,10 +52,14 @@ func probeLocalIndex() localIndexReport {
 	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer cancel()
 	info, err := discoverDoctorWorkspace(ctx, sidecar.DiscoverOptions{IncludeChangedFiles: false})
-	if err != nil || info.Remote == nil || info.Remote.Slug() == "" {
+	if err != nil {
 		return report
 	}
-	report.WorkspaceDiscovered, report.RepositoryIdentityAvailable = true, true
+	report.WorkspaceDiscovered = true
+	if info.Remote == nil || info.Remote.Slug() == "" {
+		return report
+	}
+	report.RepositoryIdentityAvailable = true
 	snapshot, err := sidecar.NewLocalWorkspaceSnapshot(info, info.Remote.Slug(), false)
 	if err != nil {
 		return report
@@ -63,21 +67,30 @@ func probeLocalIndex() localIndexReport {
 	report.WorkspaceScopeValid = true
 	provider := newDoctorLocalProvider(config, snapshot)
 	caps, err := provider.Capabilities(ctx)
-	report.IndexChecked, report.VersionChecked, report.WorktreeMismatchChecked = err == nil, err == nil, err == nil
-	applyLocalIndexError(&report, err)
 	if err != nil {
+		applyCapabilitiesError(&report, err)
 		return report
 	}
-	report.IndexReadable, report.Available, report.VersionCompatible = true, caps.Available, true
+	report.IndexChecked, report.VersionChecked, report.WorktreeMismatchChecked = true, true, true
+	report.IndexReadable, report.Available, report.VersionCompatible = caps.Available, caps.Available, true
 	report.ProviderVersion, report.Status, report.Freshness = caps.ProviderVersion, string(caps.Status), string(caps.Freshness)
+	if !caps.Available {
+		return report
+	}
 	bundle, err := provider.ContextForTask(ctx, sidecar.LocalContextRequest{TaskID: "acr-mcp-doctor-local-index", Goal: "local index diagnostic", RequestedCategories: []contractsv1.PacketCategory{contractsv1.CategoryState}, Workspace: &snapshot, MaxItems: 1, MaxOutputTokens: 125})
 	report.QueryChecked = true
-	applyLocalIndexError(&report, err)
 	if err != nil {
+		report.Available = false
+		applyQueryError(&report, err)
 		return report
 	}
 	report.QuerySucceeded, report.ResultCount = true, len(bundle.Evidence)
-	for _, warning := range bundle.Warnings {
+	applyLocalIndexWarnings(&report, bundle.Warnings)
+	return report
+}
+
+func applyLocalIndexWarnings(report *localIndexReport, warnings []string) {
+	for _, warning := range warnings {
 		if warning == string(sidecar.LocalIndexErrorIndexedCommitUnknown) {
 			report.IndexedCommitStatus = warning
 		}
@@ -85,7 +98,18 @@ func probeLocalIndex() localIndexReport {
 			report.WorktreeMismatchDetected = true
 		}
 	}
-	return report
+}
+
+func applyCapabilitiesError(report *localIndexReport, err error) {
+	applyLocalIndexError(report, err)
+	var localErr *sidecar.LocalIndexError
+	if errors.As(err, &localErr) && localErr.Code() != sidecar.LocalIndexErrorExecutableAbsent {
+		report.IndexChecked, report.VersionChecked = true, true
+	}
+}
+
+func applyQueryError(report *localIndexReport, err error) {
+	applyLocalIndexError(report, err)
 }
 
 func applyLocalIndexError(report *localIndexReport, err error) {
@@ -97,14 +121,11 @@ func applyLocalIndexError(report *localIndexReport, err error) {
 		return
 	}
 	report.ErrorCode, report.Status, report.Freshness = string(localErr.Code()), string(localErr.Status()), string(localErr.Freshness())
+	applyLocalIndexWarnings(report, localErr.Warnings())
 	if localErr.Code() == sidecar.LocalIndexErrorIncompatibleVersion {
 		report.VersionCompatible = false
 	}
 	if localErr.Code() == sidecar.LocalIndexErrorWorktreeMismatch {
-		report.IndexChecked, report.VersionChecked, report.WorktreeMismatchChecked = true, true, true
 		report.WorktreeMismatchDetected = true
-	}
-	if localErr.Code() != sidecar.LocalIndexErrorExecutableAbsent {
-		report.IndexChecked, report.VersionChecked = true, true
 	}
 }

@@ -3,6 +3,7 @@ package diagnostics
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/json"
 	"io"
 	"reflect"
 	"strings"
@@ -88,6 +89,22 @@ func TestBuildOmitsLiveReportFileWhenNotRequested(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsLocalIndexBuildProjectsHealthWithoutChangingFileList(t *testing.T) {
+	input := sampleInput()
+	input.Static.LocalIndex = LocalIndexReport{ProviderMode: "codegraph", QueryChecked: true, QuerySucceeded: false, Status: "unavailable", ErrorCode: "local_index_timeout"}
+	archive, err := Build(input, time.Date(2026, 7, 12, 15, 4, 5, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if names := tarEntryNames(t, archive); len(names) != 3 || !slicesContains(names, staticReportFile) {
+		t.Fatalf("unexpected static bundle files: %v", names)
+	}
+	report := staticReportFromArchive(t, archive)
+	if report.LocalIndex.ErrorCode != "local_index_timeout" || report.LocalIndex.QuerySucceeded || !report.LocalIndex.QueryChecked {
+		t.Fatalf("unexpected local-index static report: %#v", report.LocalIndex)
+	}
+}
+
 // TestBuildRejectsArchiveExceedingBound proves an adversarially large
 // Checks list -- for example a future caller wiring in an unbounded
 // source -- is rejected by Build rather than silently producing an
@@ -114,31 +131,19 @@ func TestBuildRejectsArchiveExceedingBound(t *testing.T) {
 // widen what this package can carry without a reviewer seeing this test
 // fail and updating the allowlist deliberately.
 func TestDiagnosticsTypesExposeOnlyAllowlistedFields(t *testing.T) {
-	allowed := map[string]bool{
-		"Service": true, "Version": true, "Commit": true, "BuildDate": true, "GOOS": true, "GOARCH": true,
-		"Name": true, "Status": true, "Detail": true,
-		"TimeoutSeconds": true, "MaxResponseBytes": true, "MaxRequestBodyBytes": true,
-		"AllowInsecureLoopback": true, "ProxyConfigured": true, "CABundleConfigured": true,
-		"APIURLSet": true, "APIURLValid": true, "CredentialSet": true, "CredentialSource": true,
-		"CredentialShapeValid": true, "WriteEnabled": true, "TranscriptCaptureEnabled": true,
-		"LogLevel": true, "Bounds": true, "Checks": true,
-		"LocalIndex":   true,
-		"ProviderMode": true, "ConfigValid": true, "WorkspaceDiscovered": true, "RepositoryIdentityAvailable": true, "WorkspaceScopeValid": true,
-		"IndexChecked": true, "IndexReadable": true, "Available": true, "ProviderVersion": true, "VersionChecked": true, "VersionCompatible": true,
-		"Freshness": true, "MaxItems": true, "MaxOutputTokens": true, "WorktreeMismatchChecked": true, "WorktreeMismatchDetected": true,
-		"QueryChecked": true, "QuerySucceeded": true, "ResultCount": true, "IndexedCommitStatus": true, "ErrorCode": true,
-		"Reachable": true, "AgentContextRuntime": true, "ContextReadScope": true,
-		"EvidenceReadScope": true, "EpisodeWriteScope": true, "RecordEpisodeActive": true,
-		"EnabledTools": true,
-		"Identity":     true, "Static": true, "Live": true,
+	allowed := map[reflect.Type]map[string]bool{
+		reflect.TypeOf(Identity{}):         {"Service": true, "Version": true, "Commit": true, "BuildDate": true, "GOOS": true, "GOARCH": true},
+		reflect.TypeOf(CheckResult{}):      {"Name": true, "Status": true, "Detail": true},
+		reflect.TypeOf(ConfigBounds{}):     {"TimeoutSeconds": true, "MaxResponseBytes": true, "MaxRequestBodyBytes": true, "AllowInsecureLoopback": true, "ProxyConfigured": true, "CABundleConfigured": true},
+		reflect.TypeOf(LocalIndexReport{}): {"ProviderMode": true, "ConfigValid": true, "WorkspaceDiscovered": true, "RepositoryIdentityAvailable": true, "WorkspaceScopeValid": true, "IndexChecked": true, "IndexReadable": true, "Available": true, "ProviderVersion": true, "VersionChecked": true, "VersionCompatible": true, "Status": true, "Freshness": true, "MaxItems": true, "MaxOutputTokens": true, "WorktreeMismatchChecked": true, "WorktreeMismatchDetected": true, "QueryChecked": true, "QuerySucceeded": true, "ResultCount": true, "IndexedCommitStatus": true, "ErrorCode": true},
+		reflect.TypeOf(StaticReport{}):     {"APIURLSet": true, "APIURLValid": true, "CredentialSet": true, "CredentialSource": true, "CredentialShapeValid": true, "WriteEnabled": true, "TranscriptCaptureEnabled": true, "LogLevel": true, "Status": true, "Bounds": true, "Checks": true, "LocalIndex": true},
+		reflect.TypeOf(LiveReport{}):       {"Reachable": true, "Detail": true, "AgentContextRuntime": true, "ContextReadScope": true, "EvidenceReadScope": true, "EpisodeWriteScope": true, "RecordEpisodeActive": true, "TranscriptCaptureEnabled": true, "EnabledTools": true},
+		reflect.TypeOf(Input{}):            {"Identity": true, "Static": true, "Live": true},
 	}
-
-	types := []any{Identity{}, CheckResult{}, ConfigBounds{}, LocalIndexReport{}, StaticReport{}, LiveReport{}, Input{}}
-	for _, sample := range types {
-		typ := reflect.TypeOf(sample)
+	for typ, fields := range allowed {
 		for i := 0; i < typ.NumField(); i++ {
 			name := typ.Field(i).Name
-			if !allowed[name] {
+			if !fields[name] {
 				t.Fatalf("type %s has an unexpected field %q not present in the safe-field allowlist; if this field is intentional and secrets-free, add it to the allowlist deliberately", typ.Name(), name)
 			}
 		}
@@ -160,6 +165,29 @@ func tarEntryNames(t *testing.T, archive []byte) []string {
 		names = append(names, header.Name)
 	}
 	return names
+}
+
+func staticReportFromArchive(t *testing.T, archive []byte) StaticReport {
+	t.Helper()
+	reader := tar.NewReader(bytes.NewReader(archive))
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar next: %v", err)
+		}
+		if header.Name == staticReportFile {
+			var report StaticReport
+			if err := json.NewDecoder(reader).Decode(&report); err != nil {
+				t.Fatalf("decode static report: %v", err)
+			}
+			return report
+		}
+	}
+	t.Fatal("missing static report")
+	return StaticReport{}
 }
 
 func slicesContains(haystack []string, needle string) bool {
