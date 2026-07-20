@@ -24,7 +24,6 @@ type codeGraphCandidate struct {
 type codeGraphCommand string
 
 const (
-	codeGraphCommandStatus   codeGraphCommand = "status"
 	codeGraphCommandQuery    codeGraphCommand = "query"
 	codeGraphCommandCallers  codeGraphCommand = "callers"
 	codeGraphCommandCallees  codeGraphCommand = "callees"

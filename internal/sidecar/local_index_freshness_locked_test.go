@@ -19,9 +19,9 @@ func TestValidateLocalIndexCapabilities_rejectsInvalidStatusFreshnessCombination
 		require.NoError(t, ValidateLocalIndexCapabilities(capabilities))
 	}
 	invalid := []LocalIndexCapabilities{
-		LocalIndexCapabilities{Available: false, Status: LocalIndexStatusAvailable, Freshness: LocalIndexFreshnessUnknown},
-		LocalIndexCapabilities{ProviderID: "fixture", ProviderVersion: "1", Available: true, MaxItems: 1, MaxOutputTokens: 1, Status: LocalIndexStatusUnavailable, Freshness: LocalIndexFreshnessUnknown},
-		LocalIndexCapabilities{ProviderID: "fixture", ProviderVersion: "1", Available: true, MaxItems: 1, MaxOutputTokens: 1, Status: LocalIndexStatusAvailable, Freshness: LocalIndexFreshnessStale},
+		{Available: false, Status: LocalIndexStatusAvailable, Freshness: LocalIndexFreshnessUnknown},
+		{ProviderID: "fixture", ProviderVersion: "1", Available: true, MaxItems: 1, MaxOutputTokens: 1, Status: LocalIndexStatusUnavailable, Freshness: LocalIndexFreshnessUnknown},
+		{ProviderID: "fixture", ProviderVersion: "1", Available: true, MaxItems: 1, MaxOutputTokens: 1, Status: LocalIndexStatusAvailable, Freshness: LocalIndexFreshnessStale},
 	}
 	for _, capabilities := range invalid {
 		require.ErrorIs(t, ValidateLocalIndexCapabilities(capabilities), ErrInvalidLocalIndexCapabilities)
