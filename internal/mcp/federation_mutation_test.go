@@ -62,6 +62,7 @@ func TestFederation_MapBundle_rejectsDuplicateLocators(t *testing.T) {
 	bundle := validLocalBundle(now)
 	duplicate := bundle.Evidence[0]
 	duplicate.ID = "another-id"
+	duplicate.QueryID = "other-query"
 	bundle.Evidence = append(bundle.Evidence, duplicate)
 	runtime := newLocalFederationRuntime(sidecar.LocalIndexConfig{}, func() time.Time { return now }, sha256.Sum256)
 
