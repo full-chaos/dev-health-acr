@@ -96,8 +96,11 @@ SH
 chmod 700 "$faulty"
 "$faulty" "$barrier" & faulty_one=$!
 "$faulty" "$barrier" & faulty_two=$!
-wait "$faulty_one"
-if wait "$faulty_two"; then exit 1; fi
+set +e
+wait "$faulty_one"; faulty_one_status=$?
+wait "$faulty_two"; faulty_two_status=$?
+set -e
+[[ "$faulty_one_status" -ne "$faulty_two_status" ]] || exit 1
 rm -f "$barrier/fixed.tmp"
 python3 - "$task8" "$task9" "$root" <<'PY'
 import json,subprocess,sys
