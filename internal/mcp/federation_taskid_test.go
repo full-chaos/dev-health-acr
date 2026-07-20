@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,23 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	"github.com/stretchr/testify/require"
 )
+
+type taskIDCapturingProvider struct {
+	request sidecar.LocalContextRequest
+}
+
+func (p *taskIDCapturingProvider) Capabilities(context.Context) (sidecar.LocalIndexCapabilities, error) {
+	return sidecar.LocalIndexCapabilities{}, nil
+}
+
+func (p *taskIDCapturingProvider) ContextForTask(_ context.Context, request sidecar.LocalContextRequest) (sidecar.LocalEvidenceBundle, error) {
+	p.request = request
+	return validLocalBundle(time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)), nil
+}
+
+func (p *taskIDCapturingProvider) ResolveEvidence(context.Context, string) (sidecar.LocalExpandedEvidence, error) {
+	return sidecar.LocalExpandedEvidence{}, sidecar.ErrLocalEvidenceNotFound
+}
 
 func TestFederation_LocalTaskID_isCanonicalAndBudgetInvariant(t *testing.T) {
 	asOf := time.Date(2026, 7, 19, 1, 2, 3, 0, time.UTC)
@@ -22,6 +40,26 @@ func TestFederation_LocalTaskID_isCanonicalAndBudgetInvariant(t *testing.T) {
 	require.Len(t, first, 78)
 	require.True(t, strings.HasPrefix(first, "local-task:v1:"))
 	require.Regexp(t, `^local-task:v1:[0-9a-f]{64}$`, first)
+}
+
+func TestFederation_LocalTaskID_isForwardedToProvider(t *testing.T) {
+	// Given
+	now := time.Date(2026, 7, 19, 1, 2, 3, 0, time.UTC)
+	provider := &taskIDCapturingProvider{}
+	runtime := newLocalFederationRuntime(sidecar.LocalIndexConfig{MaxItems: 5, MaxOutputTokens: 1000, MaxSerializedBytes: 65536, Timeout: time.Second}, func() time.Time { return now }, nil)
+	runtime.providerFactory = func(sidecar.LocalIndexConfig, sidecar.LocalWorkspaceSnapshot) sidecar.LocalIndexProvider {
+		return provider
+	}
+	scope := resolvedTaskScope{Repository: contractsv1.RepositoryRef{Slug: "acme/widgets"}, Scope: contractsv1.RequestedScope{TaskRef: "CHAOS-3007"}, Workspace: &sidecar.LocalWorkspaceSnapshot{}}
+	input := contractsv1.MCPContextForTaskRequest{Goal: "inspect"}
+	options := contractsv1.PacketOptions{MaxItems: 20, MaxOutputTokens: 4000, MaxSerializedBytes: 262144}
+
+	// When
+	_, err := runtime.bundle(context.Background(), scope, input, options)
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, localTaskID(scope, input, options), provider.request.TaskID)
 }
 
 func TestFederation_MapBundle_rejectsDuplicateProviderIDsBeforeHosted(t *testing.T) {
