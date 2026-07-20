@@ -76,6 +76,23 @@ make hosted-integration
 go build ./cmd/acr-api ./cmd/acr-mcp ./cmd/contractcheck
 ```
 
+## Optional local CodeGraph evidence
+
+`acr-mcp` can supplement, but never replace, an authoritative hosted context
+packet with bounded evidence from an **existing** local CodeGraph index. The
+sidecar owns neither CodeGraph installation nor index creation, refresh, or
+storage. Its direct/managed guard accepts only the supported read-only JSON
+commands (`status`, `query`, `callers`, `callees`, `impact`, `affected`, and
+`files`) from CodeGraph `>=1.2.0,<2.0.0`; it never runs `init`, `index`, or
+`sync`.
+
+The optional local configuration is isolated from hosted sidecar configuration:
+invalid, unavailable, stale, or incompatible local state degrades to hosted-only
+operation rather than blocking hosted bootstrap. See
+[`docs/mcp-sidecar.md`](docs/mcp-sidecar.md) for exact settings and
+[`docs/operations.md`](docs/operations.md) for diagnostic and verification
+limits.
+
 ## Deployment and operations
 
 The private ACR developer and operator lifecycle, including ownership,
