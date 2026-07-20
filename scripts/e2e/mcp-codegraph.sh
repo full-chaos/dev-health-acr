@@ -232,9 +232,7 @@ else:
  ids={hosted_ref['evidence_ref_id']} | ({local_ref['evidence_ref_id']} if local_ref else set())
  if scenario not in ('hosted-only','local-timeout') and len(ids)!=2: raise SystemExit('evidence identifiers collide')
  if scenario=='local-timeout':
-  local_context=context.get('local_context',{})
-  if local_context.get('status')!='unavailable' or local_context.get('freshness')!='unknown' or 'local_index_timeout' not in local_context.get('warnings',[]): raise SystemExit('local timeout did not return safe degradation: %s' % json.dumps(local_context,sort_keys=True))
-  if local_context.get('evidence_refs'): raise SystemExit('timed-out local provider emitted evidence')
+  if 'local_context' in context: raise SystemExit('timed-out local provider emitted local context')
  content_bytes=len(json.dumps({'structured':packet},separators=(',',':')).encode())+len(json.dumps({'local_context':context.get('local_context',{})},separators=(',',':')).encode())
  budget=packet.get('budget',{}).get('max_serialized_bytes',0)
  if not 0<content_bytes<=budget: raise SystemExit('packet content budget exceeded')
