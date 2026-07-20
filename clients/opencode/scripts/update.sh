@@ -25,8 +25,10 @@ parent="$(dirname "$config_root")"
 stage="$(mktemp -d "$parent/.context-fabric-opencode.XXXXXX")"
 link="$(mktemp "$parent/.context-fabric-opencode.link.XXXXXX")"
 rm "$link"
+published=0
 cleanup() {
-  rm -rf "$stage" "$link"
+  rm -rf "$link"
+  if (( ! published )); then rm -rf "$stage"; fi
 }
 trap cleanup EXIT
 cp -R "$package_root/config/." "$stage/"
@@ -37,6 +39,10 @@ if mv --version >/dev/null 2>&1; then
 else
   mv -hf "$link" "$config_root"
 fi
-rm -rf "$previous_stage"
+published=1
 trap - EXIT
+if ! rm -rf "$previous_stage"; then
+  printf '%s\n' 'updated Context Fabric OpenCode config; old owned stage cleanup failed' >&2
+  exit 1
+fi
 printf 'updated Context Fabric OpenCode config at %s\n' "$config_root"

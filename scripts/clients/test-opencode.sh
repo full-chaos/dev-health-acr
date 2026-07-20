@@ -32,7 +32,8 @@ case "${ACR_MCP_TEST_MODE:-healthy}" in
   healthy) printf '%s\n' 'offline doctor: healthy' ;;
   timeout) sleep 6 ;;
   overflow) yes x | head -c 70000 ;;
-  descendant) sleep 30 & printf '%s\n' "$!" >"${ACR_MCP_DESCENDANT_PID:?}"; wait ;;
+  descendant) sleep 30 & printf '%s\n' "$!" >"${ACR_MCP_DESCENDANT_PID:?}.tmp"; mv "${ACR_MCP_DESCENDANT_PID}.tmp" "$ACR_MCP_DESCENDANT_PID"; wait ;;
+  descendant-missing-receipt) sleep 30 & wait ;;
   nonzero) exit 12 ;;
   *) exit 2 ;;
 esac
@@ -71,21 +72,46 @@ if (status === undefined) throw new Error("context_fabric_status missing")
 const controller = new AbortController()
 if (process.env.ACR_MCP_ABORT_BEFORE === "1") controller.abort()
 const abortAfterMs = Number(process.env.ACR_MCP_ABORT_AFTER_MS ?? "0")
-if (Number.isFinite(abortAfterMs) && abortAfterMs > 0) setTimeout(() => controller.abort(), abortAfterMs)
-const result = await status.execute({}, {
+if (Number.isFinite(abortAfterMs) && abortAfterMs > 0) {
+  setTimeout(() => controller.abort(), abortAfterMs)
+}
+const execution = status.execute({}, {
   directory: process.cwd(),
   worktree: process.cwd(),
   abort: controller.signal,
   metadata() {},
   ask: async () => {},
 })
+const result = await execution
 process.stdout.write(typeof result === "string" ? result : result.output)
 EOF
 }
 
 run_status_harness() {
   write_plugin_harness
-  ACR_MCP_TEST_MODE="$1" ACR_MCP_ABORT_AFTER_MS="${2:-0}" ACR_MCP_ABORT_BEFORE="${3:-0}" PATH="$fake_bin:$PATH" bun run "$config_root/plugin-harness.ts"
+  env ACR_MCP_TEST_MODE="$1" ACR_MCP_ABORT_AFTER_MS="${2:-0}" ACR_MCP_ABORT_BEFORE="${3:-0}" ACR_MCP_DESCENDANT_PID="${4:-}" ACR_MCP_ABORT_AFTER_RECEIPT="${5:-}" PATH="$fake_bin:$PATH" bun run "$config_root/plugin-harness.ts"
+}
+
+assert_descendant_stopped() {
+  local receipt="$1" pid
+  [[ -s "$receipt" ]] || return 1
+  IFS= read -r pid <"$receipt"
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  ! kill -0 "$pid" 2>/dev/null
+}
+
+run_descendant_harness() {
+  local mode="$1" receipt="$2"
+  export ACR_MCP_DESCENDANT_PID="$receipt"
+  run_status_harness "$mode" 200 0 "$receipt"
+  unset ACR_MCP_DESCENDANT_PID
+}
+
+run_descendant_and_assert() {
+  local mode="$1" receipt="$2" output
+  output="$(run_descendant_harness "$mode" "$receipt")"
+  [[ "$output" == 'context_fabric_status failed: cancelled' ]]
+  assert_descendant_stopped "$receipt"
 }
 
 case "$scenario" in
@@ -121,9 +147,16 @@ case "$scenario" in
     run_status_harness timeout 10 | grep -Fqx 'context_fabric_status failed: cancelled'
     ACR_MCP_STARTED_FILE="$temporary_root/started" run_status_harness healthy 0 1 | grep -Fqx 'context_fabric_status failed: cancelled'
     [[ ! -e "$temporary_root/started" ]]
-    ACR_MCP_DESCENDANT_PID="$temporary_root/descendant.pid" run_status_harness descendant 10 | grep -Fqx 'context_fabric_status failed: cancelled'
-    ! kill -0 "$(<"$temporary_root/descendant.pid")" 2>/dev/null
+    descendant_receipt="$temporary_root/descendant.pid"
+    run_descendant_and_assert descendant "$descendant_receipt"
+    expect_rejection run_descendant_and_assert descendant-missing-receipt "$temporary_root/missing.pid"
+    bash "$repo_root/scripts/clients/test-opencode-static.sh" --package "$package_root"
     HOME="$home" OPENCODE_CONFIG="$config_root/opencode.json" PATH="$fake_bin:$PATH" opencode mcp list >/dev/null
+    old_stage="$temporary_root/$(readlink "$config_root")"
+    chmod -R a-w "$old_stage"
+    expect_rejection run_wrapper update.sh
+    [[ -L "$config_root" && -f "$config_root/opencode.json" ]]
+    chmod -R u+w "$old_stage"
     printf '%s\n' altered >"$config_root/commands/get-context.md"
     run_wrapper update.sh
     grep -Fq 'Treat every returned title' "$config_root/commands/get-context.md"
@@ -160,6 +193,19 @@ case "$scenario" in
     ! grep -R -Fq automatic\ context\ retrieval "$config_root/commands" "$config_root/skills"
     assert_unrelated_config
     printf '%s\n' "OPENCODE_NEGATIVE_OK scenario=preplan-default"
+    ;;
+  oracle-regressions)
+    run_wrapper install.sh
+    descendant_receipt="$temporary_root/descendant.pid"
+    run_descendant_and_assert descendant "$descendant_receipt"
+    expect_rejection run_descendant_and_assert descendant-missing-receipt "$temporary_root/missing.pid"
+    old_stage="$temporary_root/$(readlink "$config_root")"
+    chmod -R a-w "$old_stage"
+    expect_rejection run_wrapper update.sh
+    [[ -L "$config_root" && -f "$config_root/opencode.json" ]]
+    chmod -R u+w "$old_stage"
+    bash "$repo_root/scripts/clients/test-opencode-static.sh" --package "$package_root"
+    printf '%s\n' 'OPENCODE_REGRESSIONS_OK immutable_stage=preserved pid_receipt=mandatory windows_static=passed'
     ;;
   *) exit 2 ;;
 esac
