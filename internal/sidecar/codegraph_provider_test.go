@@ -79,6 +79,7 @@ func newFixtureCodeGraphProvider(t *testing.T) (*CodeGraphLocalIndexProvider, Lo
 	canonicalRoot, err := canonicalCodeGraphRoot(root)
 	require.NoError(t, err)
 	require.NoError(t, os.Mkdir(filepath.Join(canonicalRoot, ".codegraph"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(canonicalRoot, ".codegraph", "codegraph.db"), []byte("index"), 0o600))
 	fixtureDir := filepath.Join(root, "fixtures")
 	require.NoError(t, os.Mkdir(fixtureDir, 0o700))
 	for _, name := range []string{"status", "query", "callers", "callees", "impact", "affected", "files"} {
@@ -129,8 +130,10 @@ func TestCodeGraphProvider_Capabilities_acceptsOnlyCanonicalIndexDirectory(t *te
 		t.Run(test.name, func(t *testing.T) {
 			// Given
 			if test.symlink {
-				require.NoError(t, os.Remove(test.indexPath))
+				require.NoError(t, os.RemoveAll(test.indexPath))
 				require.NoError(t, os.Symlink(t.TempDir(), test.indexPath))
+			} else if test.available {
+				require.NoError(t, os.WriteFile(filepath.Join(workspace.GitRoot, ".codegraph", "codegraph.db"), []byte("index"), 0o600))
 			}
 			status := strings.ReplaceAll(readCodeGraphFixture(t, "status"), "<local-only:absolute-project-path>", workspace.GitRoot)
 			status = strings.ReplaceAll(status, "<local-only:absolute-index-path>", test.indexPath)
@@ -161,7 +164,7 @@ func TestCodeGraphProvider_Capabilities_rejectsExactIndexPathSymlinkOutsideRoot(
 	// Given
 	provider, workspace, _ := newFixtureCodeGraphProvider(t)
 	index := filepath.Join(workspace.GitRoot, ".codegraph")
-	require.NoError(t, os.Remove(index))
+	require.NoError(t, os.RemoveAll(index))
 	require.NoError(t, os.Symlink(t.TempDir(), index))
 
 	// When

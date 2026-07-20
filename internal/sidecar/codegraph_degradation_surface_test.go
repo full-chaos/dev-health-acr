@@ -19,7 +19,7 @@ func TestCodeGraphDegradation_Absent(t *testing.T) {
 
 func TestCodeGraphDegradation_MissingIndex(t *testing.T) {
 	provider, workspace, _ := newFixtureCodeGraphProvider(t)
-	require.NoError(t, os.Remove(filepath.Join(workspace.GitRoot, ".codegraph")))
+	require.NoError(t, os.RemoveAll(filepath.Join(workspace.GitRoot, ".codegraph")))
 	assertCodeGraphCapabilitiesFailure(t, provider, LocalIndexErrorMissing, LocalIndexFreshnessUnknown, "local_index_missing")
 }
 

@@ -226,40 +226,6 @@ func trustedCodeGraphGroupWritableMetadata(uid, gid int, mode os.FileMode, effec
 	return uid == effectiveUID && gid == effectiveGID && mode&0o002 == 0 && mode&0o020 != 0
 }
 
-type codeGraphDBGuard struct {
-	file *os.File
-	info os.FileInfo
-}
-
-func openManagedCodeGraphDB(root string) (codeGraphDBGuard, error) {
-	index, err := os.Lstat(filepath.Join(root, ".codegraph"))
-	if err != nil || index.Mode()&os.ModeSymlink == 0 {
-		return codeGraphDBGuard{}, nil
-	}
-	if !trustedCodeGraphIndex(root) {
-		return codeGraphDBGuard{}, errCodeGraphMissing
-	}
-	file, err := os.Open(filepath.Join(root, ".codegraph", "codegraph.db"))
-	if err != nil {
-		return codeGraphDBGuard{}, errCodeGraphMissing
-	}
-	info, err := file.Stat()
-	if err != nil || verifyCurrentUserOwned(info) != nil {
-		_ = file.Close()
-		return codeGraphDBGuard{}, errCodeGraphMissing
-	}
-	return codeGraphDBGuard{file, info}, nil
-}
-
-func (g codeGraphDBGuard) unchanged(root string) bool {
-	if g.file == nil {
-		return true
-	}
-	defer g.file.Close()
-	current, err := os.Stat(filepath.Join(root, ".codegraph", "codegraph.db"))
-	return err == nil && trustedCodeGraphIndex(root) && os.SameFile(g.info, current)
-}
-
 func verifyCurrentUserOwned(info os.FileInfo) error {
 	return verifyCurrentUserOnlyOwnership(info)
 }
@@ -270,11 +236,6 @@ func verifyCurrentUserOwnedDir(path string) error {
 		return errUntrustedFileOwnership
 	}
 	return verifyCurrentUserOwned(info)
-}
-
-func trustedCodeGraphDB(index string) bool {
-	info, err := os.Lstat(filepath.Join(index, "codegraph.db"))
-	return err == nil && info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 && info.Size() > 0 && verifyCurrentUserOwned(info) == nil
 }
 
 func (p *CodeGraphLocalIndexProvider) itemLimit() int {

@@ -17,7 +17,7 @@ func TestCodeGraphRunner_ReturnsStreamingJSONForFixedStatusCommand(t *testing.T)
 	runner := newTestCodeGraphRunner(t, `printf '{"version":"1.2.0"}'`)
 
 	// When
-	result, err := runner.Status(context.Background(), t.TempDir())
+	result, err := runner.Status(context.Background(), directGuardFixture(t))
 
 	// Then
 	require.NoError(t, err)
@@ -29,7 +29,7 @@ func TestCodeGraphRunner_RejectsUntrustedExecutable(t *testing.T) {
 	runner := CodeGraphRunner{Config: LocalIndexConfig{Executable: filepath.Join(t.TempDir(), "codegraph")}}
 
 	// When
-	_, err := runner.Status(context.Background(), t.TempDir())
+	_, err := runner.Status(context.Background(), directGuardFixture(t))
 
 	// Then
 	require.ErrorIs(t, err, errCodeGraphExecutableAbsent)
@@ -42,7 +42,7 @@ func TestCodeGraphRunner_RedactsPath(t *testing.T) {
 	runner := CodeGraphRunner{Config: LocalIndexConfig{Executable: path}}
 
 	// When
-	_, err := runner.Status(context.Background(), t.TempDir())
+	_, err := runner.Status(context.Background(), directGuardFixture(t))
 
 	// Then
 	require.ErrorIs(t, err, ErrCodeGraphUnavailable)
@@ -54,7 +54,7 @@ func TestCodeGraphRunner_KillsOversizedOutput(t *testing.T) {
 	runner := newTestCodeGraphRunner(t, `printf '"'; head -c 1048577 /dev/zero | tr '\000' a; printf '"'`)
 
 	// When
-	_, err := runner.Status(context.Background(), t.TempDir())
+	_, err := runner.Status(context.Background(), directGuardFixture(t))
 
 	// Then
 	require.ErrorIs(t, err, ErrCodeGraphOutputTooLarge)
@@ -65,7 +65,7 @@ func TestCodeGraphRunner_RejectsMalformedJSON(t *testing.T) {
 	runner := newTestCodeGraphRunner(t, `printf '{not-json}'`)
 
 	// When
-	_, err := runner.Status(context.Background(), t.TempDir())
+	_, err := runner.Status(context.Background(), directGuardFixture(t))
 
 	// Then
 	require.ErrorIs(t, err, errCodeGraphDecode)
@@ -77,7 +77,7 @@ func TestCodeGraphRunner_KillsOnTimeout(t *testing.T) {
 	runner.Config.Timeout = 100 * time.Millisecond
 
 	// When
-	_, err := runner.Status(context.Background(), t.TempDir())
+	_, err := runner.Status(context.Background(), directGuardFixture(t))
 
 	// Then
 	require.ErrorIs(t, err, context.DeadlineExceeded)
@@ -110,7 +110,7 @@ func TestCodeGraphRunner_classifiesCommandExitWithoutLeakingCommandOutput(t *tes
 		t.Run(test.name, func(t *testing.T) {
 			// Given
 			runner := newTestCodeGraphRunner(t, `printf '/private/path' >&2; exit 7`)
-			root := t.TempDir()
+			root := directGuardFixture(t)
 
 			// When
 			err := test.command(runner, t.Context(), root)
@@ -154,7 +154,7 @@ func TestCodeGraphRunner_preservesContextErrorWhenProcessCannotStart(t *testing.
 			defer cancel()
 
 			// When
-			_, err := runner.Status(ctx, t.TempDir())
+			_, err := runner.Status(ctx, directGuardFixture(t))
 
 			// Then
 			require.ErrorIs(t, err, test.wantErr)
@@ -169,7 +169,7 @@ func TestCodeGraphRunner_DoesNotPassACRCredentialsToChild(t *testing.T) {
 	runner := newTestCodeGraphRunner(t, `test -z "$ACR_API_TOKEN" && printf '{}'`)
 
 	// When
-	_, err := runner.Status(context.Background(), t.TempDir())
+	_, err := runner.Status(context.Background(), directGuardFixture(t))
 
 	// Then
 	require.NoError(t, err)
@@ -238,6 +238,8 @@ func newRecordingCodeGraphRunner(t *testing.T) (CodeGraphRunner, string, string)
 	t.Helper()
 	root, err := canonicalCodeGraphRoot(t.TempDir())
 	require.NoError(t, err)
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".codegraph"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codegraph", "codegraph.db"), []byte("index"), 0o600))
 	commandLog := filepath.Join(root, "commands.log")
 	executable := filepath.Join(root, "codegraph")
 	script := "#!/bin/sh\nprintf '%s|%s\\n' \"$PWD\" \"$*\" >> " + strconv.Quote(commandLog) + "\nprintf '{}'\n"

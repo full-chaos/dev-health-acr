@@ -138,10 +138,11 @@ func (r CodeGraphRunner) run(ctx context.Context, gitRoot string, command codeGr
 	}
 	deadline, cancel := context.WithTimeout(ctx, r.timeout())
 	defer cancel()
-	guard, err := openManagedCodeGraphDB(gitRoot)
+	guard, err := openCodeGraphDB(gitRoot)
 	if err != nil {
 		return nil, err
 	}
+	defer guard.close()
 	payload, err := runCodeGraphJSON(deadline, path, gitRoot, command, arguments, nil)
 	if !guard.unchanged(gitRoot) {
 		return nil, errCodeGraphMissing
@@ -162,10 +163,11 @@ func (r CodeGraphRunner) runInput(ctx context.Context, gitRoot string, command c
 	}
 	deadline, cancel := context.WithTimeout(ctx, r.timeout())
 	defer cancel()
-	guard, err := openManagedCodeGraphDB(gitRoot)
+	guard, err := openCodeGraphDB(gitRoot)
 	if err != nil {
 		return nil, err
 	}
+	defer guard.close()
 	payload, err := runCodeGraphJSON(deadline, path, gitRoot, command, arguments, bytes.Clone(input))
 	if !guard.unchanged(gitRoot) {
 		return nil, errCodeGraphMissing

@@ -31,6 +31,8 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterDecodeFailure(t *testing.T) {
 			run := func(t *testing.T) {
 				t.Helper()
 				directory := t.TempDir()
+				require.NoError(t, os.Mkdir(filepath.Join(directory, ".codegraph"), 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(directory, ".codegraph", "codegraph.db"), []byte("index"), 0o600))
 				shellPIDPath := filepath.Join(directory, "shell.pid")
 				grandchildPIDPath := filepath.Join(directory, "grandchild.pid")
 				runner := newTestCodeGraphRunner(t, "printf '%s\\n' \"$$\" > "+shellQuote(shellPIDPath)+"\n"+
@@ -83,6 +85,8 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterCommandExit(t *testing.T) {
 			run := func(t *testing.T) {
 				t.Helper()
 				directory := t.TempDir()
+				require.NoError(t, os.Mkdir(filepath.Join(directory, ".codegraph"), 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(directory, ".codegraph", "codegraph.db"), []byte("index"), 0o600))
 				shellPIDPath := filepath.Join(directory, "shell.pid")
 				grandchildPIDPath := filepath.Join(directory, "grandchild.pid")
 				runner := newTestCodeGraphRunner(t, "printf '%s\\n' \"$$\" > "+shellQuote(shellPIDPath)+"\n"+
