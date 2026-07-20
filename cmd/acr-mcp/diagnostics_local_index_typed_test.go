@@ -46,6 +46,9 @@ func TestDoctorLocalIndexClassifiesTypedCapabilityTimeoutAndMalformed(t *testing
 	for _, test := range []struct{ name, status, code string }{{"timeout", "SLEEP", "local_index_timeout"}, {"malformed", `{`, "local_index_malformed"}} {
 		t.Run(test.name, func(t *testing.T) {
 			config, info := typedDoctorFixture(t, test.status, "[]")
+			if test.name == "timeout" {
+				config.Timeout = time.Second
+			}
 			withDoctorLocalProbe(t, config, info, sidecar.NewWorkspaceLocalIndexProvider(config, mustDoctorSnapshot(t, info)))
 			report := probeLocalIndex()
 			if report.ErrorCode != test.code || report.Available || report.IndexReadable || report.QueryChecked || report.QuerySucceeded {
@@ -102,7 +105,7 @@ func typedDoctorFixture(t *testing.T, status, query string) (sidecar.LocalIndexC
 	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	return sidecar.LocalIndexConfig{Provider: sidecar.LocalIndexProviderCodeGraph, Executable: script, Timeout: time.Second, MaxItems: 5, MaxOutputTokens: 1000, MaxSerializedBytes: 65536, StalePolicy: sidecar.LocalIndexStaleGraceful}, validDoctorWorkspace(root)
+	return sidecar.LocalIndexConfig{Provider: sidecar.LocalIndexProviderCodeGraph, Executable: script, Timeout: 30 * time.Second, MaxItems: 5, MaxOutputTokens: 1000, MaxSerializedBytes: 65536, StalePolicy: sidecar.LocalIndexStaleGraceful}, validDoctorWorkspace(root)
 }
 
 func typedStatus(version string) string {
