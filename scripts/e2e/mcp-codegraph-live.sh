@@ -1,9 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
-usage() { echo "usage: $0 --repo <path> [--self-test|--self-test-mutation]" >&2; }
-repo=""; mode=live
-while [[ $# -gt 0 ]]; do case "$1" in --repo) repo=${2:-}; shift 2;; --self-test) mode=self-test; shift;; --self-test-mutation) mode=self-test-mutation; shift;; *) usage; exit 2;; esac; done
-[[ -n "$repo" ]] || { usage; exit 2; }
+usage() { echo "usage: $0 --repo <path> --scenario mixed | $0 --self-test | $0 --self-test-mutation" >&2; }
+repo=""; mode=live; scenario=""
+while [[ $# -gt 0 ]]; do case "$1" in --repo) repo=${2:-}; shift 2;; --scenario) scenario=${2:-}; shift 2;; --self-test) mode=self-test; shift;; --self-test-mutation) mode=self-test-mutation; shift;; *) usage; exit 2;; esac; done
+if [[ $mode != live ]]; then
+  [[ -z "$repo$scenario" ]] || { usage; exit 2; }
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  mkdir -p "$tmp/repo/.codegraph" "$tmp/bin"; printf index > "$tmp/repo/.codegraph/codegraph.db"
+  cat > "$tmp/bin/codegraph" <<'EOF'
+#!/usr/bin/env bash
+printf '{"initialized":true,"version":"1.2.0","projectPath":"%s","indexPath":"%s/.codegraph"}\n' "$(pwd -P)" "$(pwd -P)"
+EOF
+  chmod 700 "$tmp/bin/codegraph"
+  if [[ $mode == self-test-mutation ]]; then printf x >> "$tmp/repo/.codegraph/codegraph.db"; exit 1; fi
+  PATH="$tmp/bin:$PATH" "$0" --repo "$tmp/repo" --scenario mixed
+  exit $?
+fi
+[[ -n "$repo" && "$scenario" == mixed ]] || { usage; exit 2; }
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
 repo="$(cd "$repo" && pwd -P)"
 [[ -d "$repo/.codegraph" && ! -L "$repo/.codegraph" && -f "$repo/.codegraph/codegraph.db" && ! -L "$repo/.codegraph/codegraph.db" ]] || exit 1
@@ -16,7 +29,6 @@ v=tuple(map(int,x['version'].split('.')[:3]))
 assert (1,2,0)<=v<(2,0,0) and x.get('initialized')
 assert x.get('projectPath')==repo and x.get('indexPath')==repo+'/.codegraph'
 PY
-if [[ $mode == self-test-mutation ]]; then printf x >> "$repo/.codegraph/codegraph.db"; exit 1; fi
 after=$(shasum -a 256 "$repo/.codegraph/codegraph.db" | cut -d' ' -f1)
 [[ "$before" == "$after" ]] || exit 1
 mkdir -p "$root/.omo/evidence"
