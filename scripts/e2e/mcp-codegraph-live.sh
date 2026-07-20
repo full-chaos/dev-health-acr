@@ -14,10 +14,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
-live_receipt="$root/.omo/evidence/context-fabric-09-live-mcp.json"
+evidence_dir="${ACR_E2E_EVIDENCE_DIR:-$root/.omo/evidence}"
+receipt_name="${ACR_E2E_LIVE_RECEIPT_NAME:-context-fabric-09-live-mcp.json}"
+live_receipt="$evidence_dir/$receipt_name"
 source_revision="$(git -C "$root" rev-parse HEAD)"
 [[ -z "$(git -C "$root" status --porcelain)" ]] || { printf 'canonical source worktree must be clean\n' >&2; exit 1; }
-mkdir -p "$(dirname "$live_receipt")"
+self_test_evidence=""
+if [[ "$mode" != live ]]; then
+  self_test_evidence="$(mktemp -d)"
+  evidence_dir="$self_test_evidence"
+  receipt_name="context-fabric-09-self-test-mcp.json"
+  live_receipt="$evidence_dir/$receipt_name"
+fi
+mkdir -p "$evidence_dir"
 rm -f "$live_receipt"
 tmp=""
 mcp_pid=""
@@ -30,6 +39,7 @@ cleanup() {
   if [[ -n "$mcp_pid" ]]; then wait "$mcp_pid" 2>/dev/null || true; fi
   if [[ -n "$host_pid" ]]; then wait "$host_pid" 2>/dev/null || true; fi
   if [[ -n "$tmp" ]]; then rm -rf "$tmp"; fi
+  if [[ -n "$self_test_evidence" ]]; then rm -rf "$self_test_evidence"; fi
   exit "$command_status"
 }
 trap cleanup EXIT INT TERM
@@ -65,10 +75,18 @@ case "\${1:-}" in
 esac
 EOF
   chmod 700 "$tmp/bin/codegraph"
+  mkdir -p "$tmp/evidence"
   if [[ "$mode" == self-test-mutation ]]; then
-    ACR_E2E_MUTATE_INDEX_AFTER_PREFLIGHT=1 PATH="$tmp/bin:$PATH" "$0" --repo "$tmp/repo" --scenario mixed
+    ACR_E2E_EVIDENCE_DIR="$tmp/evidence" ACR_E2E_LIVE_RECEIPT_NAME=context-fabric-09-self-test-mcp.json ACR_E2E_RECEIPT_MODE=self-test ACR_E2E_INDEX_KIND=fixture ACR_E2E_MUTATE_INDEX_AFTER_PREFLIGHT=1 PATH="$tmp/bin:$PATH" "$0" --repo "$tmp/repo" --scenario mixed
   else
-    PATH="$tmp/bin:$PATH" "$0" --repo "$tmp/repo" --scenario mixed
+    ACR_E2E_EVIDENCE_DIR="$tmp/evidence" ACR_E2E_LIVE_RECEIPT_NAME=context-fabric-09-self-test-mcp.json ACR_E2E_RECEIPT_MODE=self-test ACR_E2E_INDEX_KIND=fixture PATH="$tmp/bin:$PATH" "$0" --repo "$tmp/repo" --scenario mixed
+    python3 - "$tmp/evidence/context-fabric-09-self-test-mcp.json" <<'PY'
+import json,sys
+receipt=json.load(open(sys.argv[1]))
+assert receipt['mode']=='self-test'
+assert receipt['codegraph']['index_kind']=='fixture'
+assert receipt['workspace_head_unchanged']
+PY
   fi
   exit $?
 fi
@@ -127,6 +145,7 @@ PY
 
 before_identity="$(db_identity)"
 status_before="$(status_hash)"
+workspace_head_before="$(git -C "$repo" rev-parse HEAD)"
 validate_status
 if [[ "${ACR_E2E_MUTATE_INDEX_AFTER_PREFLIGHT:-}" == 1 ]]; then
   printf x >> "$repo/.codegraph/codegraph.db"
@@ -230,13 +249,13 @@ mcp_pid=""
 
 after_identity="$(db_identity)"
 status_after="$(status_hash)"
+workspace_head_after="$(git -C "$repo" rev-parse HEAD)"
 validate_status
 # Detect persistent target/DB replacement before and after the live session;
 # this snapshot guard does not claim to close every swap-and-restore race.
 [[ "$before_identity" == "$after_identity" && "$status_before" == "$status_after" ]] || exit 1
 
-mkdir -p "$root/.omo/evidence"
-SOURCE_ROOT="$root" SOURCE_REVISION="$source_revision" SOURCE_IDENTITY_UNCHANGED="$source_identity_unchanged" HARNESS_SHA256="$(shasum -a 256 "$0" | awk '{print $1}')" BINARY_SHA256="$(shasum -a 256 "$tmp/acr-mcp" | awk '{print $1}')" WORKSPACE_HEAD_REVISION="$(git -C "$repo" rev-parse HEAD)" python3 - "$tmp/mcp.out" "$command_log" "$live_receipt" "$before_identity" "$after_identity" "$status_before" "$status_after" <<'PY'
+SOURCE_ROOT="$root" SOURCE_REVISION="$source_revision" SOURCE_IDENTITY_UNCHANGED="$source_identity_unchanged" HARNESS_SHA256="$(shasum -a 256 "$0" | awk '{print $1}')" BINARY_SHA256="$(shasum -a 256 "$tmp/acr-mcp" | awk '{print $1}')" WORKSPACE_HEAD_BEFORE="$workspace_head_before" WORKSPACE_HEAD_AFTER="$workspace_head_after" RECEIPT_MODE="${ACR_E2E_RECEIPT_MODE:-live}" INDEX_KIND="${ACR_E2E_INDEX_KIND:-live}" python3 - "$tmp/mcp.out" "$command_log" "$live_receipt" "$before_identity" "$after_identity" "$status_before" "$status_after" <<'PY'
 import collections,json,sys
 lines=[]
 for line in open(sys.argv[1],encoding='utf-8'):
@@ -267,7 +286,10 @@ counts=collections.Counter(line.strip() for line in open(sys.argv[2],encoding='u
 if set(counts)-allowed or not counts.get('status') or not counts.get('query'): raise SystemExit('unexpected or incomplete CodeGraph command audit')
 before=json.loads(sys.argv[4]); after=json.loads(sys.argv[5])
 if before!=after: raise SystemExit('real index changed')
-r={'schema_version':'context_fabric_mcp_codegraph_receipt.v1','task':'CHAOS-3007 Task 9','mode':'live','scenario':'mixed','verdict':'pass','source_revision':__import__('os').environ['SOURCE_REVISION'],'source_worktree_clean':True,'source_identity_unchanged':__import__('os').environ['SOURCE_IDENTITY_UNCHANGED']=='true','harness_sha256':__import__('os').environ['HARNESS_SHA256'],'binary_sha256':__import__('os').environ['BINARY_SHA256'],'tls_verified':True,'workspace_head_revision':__import__('os').environ['WORKSPACE_HEAD_REVISION'],'workspace_head_unchanged':True,'indexed_commit_state':'unknown','mcp':{'framing':bool(lines),'initialize':bool(by_id.get(1,{}).get('result')),'initialized_notification':True,'tools':len(tools),'record_episode_present':'record_episode' in {x.get('name') for x in tools},'context_ok':True,'hosted_expand_ok':True,'local_expand_ok':True},'federation':{'hosted_packet_unchanged':True,'ids_disjoint':True,'packet_content_within_budget':True,'envelope_excluded':True,'federated_budget_excluded':True,'rendered_markdown_excluded':True},'codegraph':{'command_counts':dict(sorted(counts.items())),'forbidden_command_count':0,'status_before_sha256':sys.argv[6],'status_after_sha256':sys.argv[7],'index_before':before,'index_after':after,'persistent_identity_replacement_detected':False,'index_kind':'live'},'cleanup':{'processes_stopped':True,'listeners_stopped':True,'temporary_material_removed':True}}
+import os
+workspace_before=os.environ['WORKSPACE_HEAD_BEFORE']; workspace_after=os.environ['WORKSPACE_HEAD_AFTER']
+if workspace_before!=workspace_after: raise SystemExit('workspace HEAD changed')
+r={'schema_version':'context_fabric_mcp_codegraph_receipt.v1','task':'CHAOS-3007 Task 9','mode':os.environ['RECEIPT_MODE'],'scenario':'mixed','verdict':'pass','source_revision':os.environ['SOURCE_REVISION'],'source_worktree_clean':True,'source_identity_unchanged':os.environ['SOURCE_IDENTITY_UNCHANGED']=='true','harness_sha256':os.environ['HARNESS_SHA256'],'binary_sha256':os.environ['BINARY_SHA256'],'tls_verified':True,'workspace_head_before':workspace_before,'workspace_head_after':workspace_after,'workspace_head_unchanged':workspace_before==workspace_after,'indexed_commit_state':'unknown','mcp':{'framing':bool(lines),'initialize':bool(by_id.get(1,{}).get('result')),'initialized_notification':True,'tools':len(tools),'record_episode_present':'record_episode' in {x.get('name') for x in tools},'context_ok':True,'hosted_expand_ok':True,'local_expand_ok':True},'federation':{'hosted_packet_unchanged':True,'ids_disjoint':True,'packet_content_within_budget':True,'envelope_excluded':True,'federated_budget_excluded':True,'rendered_markdown_excluded':True},'codegraph':{'command_counts':dict(sorted(counts.items())),'forbidden_command_count':0,'status_before_sha256':sys.argv[6],'status_after_sha256':sys.argv[7],'index_before':before,'index_after':after,'persistent_identity_replacement_detected':False,'index_kind':os.environ['INDEX_KIND']},'cleanup':{'processes_stopped':True,'listeners_stopped':True,'temporary_material_removed':True}}
 import os,subprocess,tempfile
 root=os.environ['SOURCE_ROOT']
 fd,temporary=tempfile.mkstemp(prefix='.context-fabric-09-live-',dir=os.path.dirname(sys.argv[3]))

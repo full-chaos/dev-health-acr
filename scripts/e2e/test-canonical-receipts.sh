@@ -2,11 +2,11 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
-evidence="$root/.omo/evidence"
+evidence="$(mktemp -d)"
+export ACR_E2E_EVIDENCE_DIR="$evidence"
 task8="$evidence/context-fabric-08-no-upload.json"
 task9="$evidence/context-fabric-09-mixed-mcp.json"
 live="$evidence/context-fabric-09-live-mcp.json"
-mkdir -p "$evidence"
 if ! git -C "$root" diff --quiet; then
   printf 'test requires a clean source worktree\n' >&2
   exit 1
@@ -27,7 +27,7 @@ restore_receipts() {
   for name in context-fabric-08-no-upload.json context-fabric-09-mixed-mcp.json context-fabric-09-live-mcp.json; do
     if [[ -e "$backup/$name" ]]; then cp "$backup/$name" "$evidence/$name"; else rm -f "$evidence/$name"; fi
   done
-  rm -rf "$backup"
+  rm -rf "$backup" "$evidence"
 }
 trap restore_receipts EXIT INT TERM
 for name in context-fabric-08-no-upload.json context-fabric-09-mixed-mcp.json context-fabric-09-live-mcp.json; do
@@ -54,7 +54,7 @@ git -C "$root" checkout -- "$mutation_target"
 
 printf '{"sentinel":"task9"}\n' > "$task9"
 task9_before="$(shasum -a 256 "$task9" | awk '{print $1}')"
-for scenario in hosted-only local-timeout packet-content-overflow hosted-unavailable writeback-default post-response-process-failure; do
+for scenario in hosted-only local-timeout packet-content-overflow hosted-unavailable incompatible-version writeback-default post-response-process-failure; do
   set +e
   "$root/scripts/e2e/mcp-codegraph.sh" --scenario "$scenario"
   status=$?
@@ -115,7 +115,7 @@ task9_before="$(shasum -a 256 "$task9" | awk '{print $1}')"
 "$root/scripts/e2e/mcp-codegraph-live.sh" --self-test
 [[ "$task9_before" == "$(shasum -a 256 "$task9" | awk '{print $1}')" ]] || exit 1
 printf '{"stale":true}\n' > "$live"
-for receipt in "$task8" "$task9" "$live"; do
+for receipt in "$task8" "$task9"; do
   python3 - "$receipt" <<'PY'
 import json,os,stat,sys
 assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode)==0o600

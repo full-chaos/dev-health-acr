@@ -9,8 +9,9 @@ fi
 
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
 canonical_scenario="no-upload"
-canonical_receipt="$root/.omo/evidence/context-fabric-08-no-upload.json"
-scenario_ledger="$root/.omo/evidence/context-fabric-08-scenarios.jsonl"
+evidence_dir="${ACR_E2E_EVIDENCE_DIR:-$root/.omo/evidence}"
+canonical_receipt="$evidence_dir/context-fabric-08-no-upload.json"
+scenario_ledger="$evidence_dir/context-fabric-08-scenarios.jsonl"
 source_revision="$(git -C "$root" rev-parse HEAD)"
 [[ -z "$(git -C "$root" status --porcelain)" ]] || { printf 'canonical source worktree must be clean\n' >&2; exit 1; }
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/acr-local-index-privacy.XXXXXX")"
@@ -32,7 +33,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-mkdir -p "$tmp/workspace/.codegraph" "$root/.omo/evidence" "$root/.tmp"
+mkdir -p "$tmp/workspace/.codegraph" "$evidence_dir" "$root/.tmp"
 if [[ "$scenario" == "$canonical_scenario" ]]; then rm -f "$receipt"; fi
 if [[ "$scenario" == "$canonical_scenario" && "${ACR_E2E_FORCE_CANONICAL_FAILURE:-}" == 1 ]]; then exit 1; fi
 printf '%s\n' "$source_sentinel" >"$tmp/workspace/local-source.txt"
