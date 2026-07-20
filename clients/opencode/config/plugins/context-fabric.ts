@@ -115,7 +115,7 @@ function waitForClose(reaped: Promise<void>): Promise<boolean> {
 async function terminate(child: ReturnType<typeof spawn>, setEscalation: (timer: ReturnType<typeof setTimeout>) => void, reportEscalationFailure: () => void): Promise<boolean> {
   if (child.pid === undefined || child.killed) return true
   if (process.platform === "win32") {
-    return terminateWindowsTree(child.pid)
+    return terminateWindowsTree(child)
   }
   try {
     process.kill(-child.pid, "SIGTERM")
@@ -130,23 +130,26 @@ async function terminate(child: ReturnType<typeof spawn>, setEscalation: (timer:
     return true
   } catch (error) {
     if (error instanceof Error) {
-      child.kill(signal)
+      child.kill("SIGTERM")
       return true
     }
     throw error
   }
 }
 
-function terminateWindowsTree(pid: number): Promise<boolean> {
-  const cleanup = spawn("taskkill.exe", ["/pid", String(pid), "/t", "/f"], {
+async function terminateWindowsTree(child: ReturnType<typeof spawn>): Promise<boolean> {
+  if (child.pid === undefined) return true
+  const cleanup = spawn("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {
     stdio: "ignore",
     windowsHide: true,
   })
-  return new Promise((resolve) => {
+  const succeeded = await new Promise<boolean>((resolve) => {
     const timer = setTimeout(() => { cleanup.kill("SIGKILL"); resolve(false) }, CLEANUP_TIMEOUT_MS)
     cleanup.once("error", () => { clearTimeout(timer); resolve(false) })
     cleanup.once("close", (code) => { clearTimeout(timer); resolve(code === 0) })
   })
+  if (!succeeded) child.kill("SIGKILL")
+  return succeeded
 }
 
 export default plugin
