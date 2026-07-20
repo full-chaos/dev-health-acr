@@ -76,3 +76,52 @@ func TestTrustedCodeGraphIndexRejectsExtraACLForGroupWritableRoot(t *testing.T) 
 	require.NoError(t, os.Symlink(target, filepath.Join(repo, ".codegraph")))
 	require.False(t, trustedCodeGraphIndex(repo))
 }
+
+func TestTrustedCodeGraphIndexRejectsWorldWritableRoot(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	repo, err := os.MkdirTemp(home, "acr-codegraph-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(repo) })
+	require.NoError(t, os.Chmod(repo, 0o777))
+	managed := filepath.Join(home, ".omo", "codegraph", "projects")
+	target, err := os.MkdirTemp(managed, "acr-test-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(target) })
+	require.NoError(t, os.WriteFile(filepath.Join(target, "codegraph.db"), []byte("index"), 0o600))
+	require.NoError(t, os.Symlink(target, filepath.Join(repo, ".codegraph")))
+	require.False(t, trustedCodeGraphIndex(repo))
+}
+
+func TestTrustedCodeGraphIndexRejectsManagedDatabaseSymlink(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	managed := filepath.Join(home, ".omo", "codegraph", "projects")
+	target, err := os.MkdirTemp(managed, "acr-test-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(target) })
+	outside := filepath.Join(target, "outside")
+	require.NoError(t, os.WriteFile(outside, []byte("index"), 0o600))
+	require.NoError(t, os.Symlink(outside, filepath.Join(target, "codegraph.db")))
+	repo, err := os.MkdirTemp(home, "acr-codegraph-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(repo) })
+	require.NoError(t, os.Symlink(target, filepath.Join(repo, ".codegraph")))
+	require.False(t, trustedCodeGraphIndex(repo))
+}
+
+func TestTrustedCodeGraphIndexRejectsWritableManagedTarget(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	managed := filepath.Join(home, ".omo", "codegraph", "projects")
+	target, err := os.MkdirTemp(managed, "acr-test-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(target) })
+	require.NoError(t, os.Chmod(target, 0o775))
+	require.NoError(t, os.WriteFile(filepath.Join(target, "codegraph.db"), []byte("index"), 0o600))
+	repo, err := os.MkdirTemp(home, "acr-codegraph-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(repo) })
+	require.NoError(t, os.Symlink(target, filepath.Join(repo, ".codegraph")))
+	require.False(t, trustedCodeGraphIndex(repo))
+}
