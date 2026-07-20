@@ -240,7 +240,7 @@ acr-mcp doctor --bundle ./acr-diagnostics.tar --live
 The `--output` (or `--bundle`) path is required and explicit -- there is no default destination, so a bundle is never written somewhere you didn't ask for. The bundle is a deterministic tar archive (mode `0600`, written atomically, refuses to overwrite a symlink) containing:
 
 - `manifest.json` -- a schema-versioned index (`diagnostics_bundle_manifest.v1`) with the bundle's file list, generation time, and build identity.
-- `doctor-static.json` -- the same static report `acr-mcp doctor --offline` prints: presence/validity flags and bounded, non-secret configuration values only.
+- `doctor-static.json` -- the same static report `acr-mcp doctor --offline` prints: presence/validity flags, bounded non-secret configuration values, and independently classified local-index health. The local check uses only an existing local index, never contacts the hosted API, and reports fixed enums, booleans, versions, and counts rather than repository roots, executable/index paths, source, raw CodeGraph output, or credentials. An unavailable local index does not change hosted doctor status.
 - `doctor-live.json` -- present only when `--live` is passed: a sanitized real hosted-capabilities check (booleans and enabled-tool names only). This `--live` flag is the diagnostics/bundle command's own explicit opt-in -- independent of plain `acr-mcp doctor`'s automatic live-check behavior (see [Proxy and Custom CA Configuration](proxy-and-custom-ca.md#verifying-proxy-and-ca-configuration)) -- so a bundle is always static-only unless you pass `--live` yourself.
 - `README.md` -- an interpretation guide for the bundle itself, including an explicit list of what it never contains.
 

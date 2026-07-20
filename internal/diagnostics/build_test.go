@@ -122,13 +122,18 @@ func TestDiagnosticsTypesExposeOnlyAllowlistedFields(t *testing.T) {
 		"APIURLSet": true, "APIURLValid": true, "CredentialSet": true, "CredentialSource": true,
 		"CredentialShapeValid": true, "WriteEnabled": true, "TranscriptCaptureEnabled": true,
 		"LogLevel": true, "Bounds": true, "Checks": true,
+		"LocalIndex":   true,
+		"ProviderMode": true, "ConfigValid": true, "WorkspaceDiscovered": true, "RepositoryIdentityAvailable": true, "WorkspaceScopeValid": true,
+		"IndexChecked": true, "IndexReadable": true, "Available": true, "ProviderVersion": true, "VersionChecked": true, "VersionCompatible": true,
+		"Freshness": true, "MaxItems": true, "MaxOutputTokens": true, "WorktreeMismatchChecked": true, "WorktreeMismatchDetected": true,
+		"QueryChecked": true, "QuerySucceeded": true, "ResultCount": true, "IndexedCommitStatus": true, "ErrorCode": true,
 		"Reachable": true, "AgentContextRuntime": true, "ContextReadScope": true,
 		"EvidenceReadScope": true, "EpisodeWriteScope": true, "RecordEpisodeActive": true,
 		"EnabledTools": true,
 		"Identity":     true, "Static": true, "Live": true,
 	}
 
-	types := []any{Identity{}, CheckResult{}, ConfigBounds{}, StaticReport{}, LiveReport{}, Input{}}
+	types := []any{Identity{}, CheckResult{}, ConfigBounds{}, LocalIndexReport{}, StaticReport{}, LiveReport{}, Input{}}
 	for _, sample := range types {
 		typ := reflect.TypeOf(sample)
 		for i := 0; i < typ.NumField(); i++ {

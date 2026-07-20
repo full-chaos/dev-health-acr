@@ -50,6 +50,7 @@ type doctorReport struct {
 	Checks                   []diagnostic     `json:"checks"`
 	Status                   string           `json:"status"`
 	LiveCheck                *doctorLiveCheck `json:"live_check,omitempty"`
+	LocalIndex               localIndexReport `json:"local_index"`
 }
 
 // doctorLiveCheck is populated by plain `acr-mcp doctor` (live is its
@@ -157,6 +158,17 @@ func runDoctor() doctorReport {
 	if credentialSet && !credentialShapeValid {
 		status = "invalid_configuration"
 	}
+	localIndex := probeLocalIndex()
+	switch {
+	case !localIndex.ConfigValid:
+		checks = append(checks, diagnostic{Name: "local_index", Status: "warning", Detail: "local-index configuration is invalid"})
+	case !localIndex.WorkspaceDiscovered:
+		checks = append(checks, diagnostic{Name: "local_index", Status: "warning", Detail: "local-index workspace is unavailable"})
+	case !localIndex.Available:
+		checks = append(checks, diagnostic{Name: "local_index", Status: "warning", Detail: "local index is unavailable"})
+	default:
+		checks = append(checks, diagnostic{Name: "local_index", Status: "ok", Detail: "local index is available"})
+	}
 	report := doctorReport{
 		Service:              "dev-health-acr-mcp",
 		Version:              info.Version,
@@ -169,6 +181,7 @@ func runDoctor() doctorReport {
 		CredentialShapeValid: credentialShapeValid,
 		Checks:               checks,
 		Status:               status,
+		LocalIndex:           localIndex,
 	}
 	if configErr == nil {
 		report.LogLevel = cfg.LogLevel.String()
