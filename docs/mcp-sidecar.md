@@ -60,8 +60,10 @@ Boolean (`true`/`false`). When `true`, enables the `record_episode` tool if all 
 
 CodeGraph is an optional local evidence provider, not an ACR-managed service.
 The sidecar consumes an existing index read-only and never installs CodeGraph,
-creates or refreshes an index, reads its SQLite files, or parses human-oriented
-output. Its direct/managed guard permits only CodeGraph `>=1.2.0,<2.0.0` JSON
+creates or refreshes an index, queries or parses CodeGraph SQLite storage, or
+parses human-oriented output. On supported Unix platforms it may perform a
+bounded read-only `codegraph.db` identity check; it does not use that file as an
+evidence/query store. Its direct/managed guard permits only CodeGraph `>=1.2.0,<2.0.0` JSON
 commands `status`, `query`, `callers`, `callees`, `impact`, `affected`, and
 `files`; it never invokes `init`, `index`, or `sync`.
 

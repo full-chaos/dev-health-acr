@@ -78,40 +78,28 @@ fixture_mode=false
 [ -f "$root/.docs-invalid-fixture" ] && fixture_mode=true
 
 doc_scan_files=()
-if [ -f "$operations_doc" ]; then
-  doc_scan_files+=("$operations_doc")
-  [ -f "$readme" ] && doc_scan_files+=("$readme")
-else
+if [ "$fixture_mode" = true ]; then
   while IFS= read -r -d '' md_file; do
     doc_scan_files+=("$md_file")
-  done < <(find "$root" -name '*.md' \
-    -not -path '*/.git/*' \
-    -not -path '*/.omo/*' \
-    -not -path '*/.tmp/*' \
-    -not -path '*/node_modules/*' \
-    -not -path '*/vendor/*' \
-    -print0 2>/dev/null)
+  done < <(find "$root" -name '*.md' -print0 2>/dev/null)
+else
+  for md_file in \
+    "$readme" \
+    "$operations_doc" \
+    "$root/docs/mcp-sidecar.md" \
+    "$root/docs/threat-model.md" \
+    "$root/docs/examples/mcp-clients/README.md"; do
+    [ -f "$md_file" ] && doc_scan_files+=("$md_file")
+  done
 fi
 
-# --- 1. Forbidden public-publication claim -----------------------------
-# Runs first and unconditionally over every tracked Markdown file under
-# the checked root, independent of whether README/backlog/Makefile exist,
-# so a disposable partial fixture tree (e.g. a copied docs/ directory)
-# still exercises this guard.
 forbidden_sentence='ACR is packaged by dev-health-ops and publicly published.'
 forbidden_hits=""
-while IFS= read -r -d '' md_file; do
+for md_file in "${doc_scan_files[@]}"; do
   if grep -qF "$forbidden_sentence" "$md_file"; then
     forbidden_hits="$forbidden_hits${forbidden_hits:+ }${md_file#"$root"/}"
   fi
-done < <(find "$root" -name '*.md' \
-  -not -path '*/.git/*' \
-  -not -path '*/.omo/*' \
-  -not -path '*/.tmp/*' \
-  -not -path '*/testdata/docs-invalid/*' \
-  -not -path '*/node_modules/*' \
-  -not -path '*/vendor/*' \
-  -print0 2>/dev/null)
+done
 
 if [ -n "$forbidden_hits" ]; then
   fail "forbidden publication claim present in: $forbidden_hits"

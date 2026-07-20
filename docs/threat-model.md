@@ -38,7 +38,9 @@ Trust does not transfer across an arrow automatically:
 - ClickHouse is read-only evidence. ACR Postgres owns operational state. Neither path uses External Push.
 - ACR's CodeGraph integration is direct/managed guarded: it consumes an existing
   local index through fixed read-only JSON commands only. It never installs,
-  creates, refreshes, reads SQLite from, or uploads CodeGraph source/index data.
+  creates, refreshes, queries/parses SQLite storage, or uploads CodeGraph
+  source/index data. A bounded read-only `codegraph.db` identity check is allowed
+  on supported Unix platforms and is not an evidence/query implementation.
 - Local provider failure is never authority for a local-only result. Hosted
   bootstrap and the hosted packet remain required; unavailable local state
   degrades to hosted-only behavior.

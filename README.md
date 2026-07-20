@@ -87,8 +87,10 @@ commands (`status`, `query`, `callers`, `callees`, `impact`, `affected`, and
 `sync`.
 
 The optional local configuration is isolated from hosted sidecar configuration:
-invalid, unavailable, stale, or incompatible local state degrades to hosted-only
-operation rather than blocking hosted bootstrap. See
+invalid, unavailable, or incompatible local state degrades to hosted-only
+operation rather than blocking hosted bootstrap. With the default `graceful`
+policy, usable stale local evidence remains labeled stale beside the hosted
+packet; `strict` omits stale or mismatched local evidence. See
 [`docs/mcp-sidecar.md`](docs/mcp-sidecar.md) for exact settings and
 [`docs/operations.md`](docs/operations.md) for diagnostic and verification
 limits.
