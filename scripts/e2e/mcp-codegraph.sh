@@ -36,12 +36,22 @@ chmod 600 "$tmp/ca.pem"
 cat > "$tmp/codegraph" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+fixture_root=__FIXTURE_ROOT__
 case "${1:-}" in
   status) printf '{"initialized":true,"version":"1.2.0","projectPath":"%s","indexPath":"%s/.codegraph"}\n' "$(pwd -P)" "$(pwd -P)";;
-  query|explore) printf '[]\n';;
+  query) cat "$fixture_root/query.json";;
+  callers) cat "$fixture_root/callers.json";;
+  callees) cat "$fixture_root/callees.json";;
+  impact) cat "$fixture_root/impact.json";;
+  affected) cat "$fixture_root/affected.json";;
+  files) cat "$fixture_root/files.json";;
   *) exit 64;;
 esac
 EOF
+python3 - "$tmp/codegraph" "$root/testdata/codegraph/v1.2.0" <<'PY'
+import pathlib,sys
+p=pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace('__FIXTURE_ROOT__', sys.argv[2]))
+PY
 chmod 700 "$tmp/codegraph"
 
 cat > "$tmp/host.py" <<'PY'
