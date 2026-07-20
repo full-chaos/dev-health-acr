@@ -73,9 +73,9 @@ printf '{"stale":true}\n' > "$live"
 if "$root/scripts/e2e/mcp-codegraph-live.sh" --repo /definitely-missing --scenario mixed; then exit 1; fi
 [[ ! -e "$live" ]] || exit 1
 for receipt in "$task8" "$task9"; do
-  [[ "$(stat -f '%Lp' "$receipt")" == 600 ]] || exit 1
   python3 - "$receipt" <<'PY'
-import json,sys
+import json,os,stat,sys
+assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode)==0o600
 json.load(open(sys.argv[1]))
 PY
 done
