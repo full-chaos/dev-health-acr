@@ -3,6 +3,7 @@
 package sidecar
 
 import (
+	"errors"
 	"os/exec"
 	"syscall"
 )
@@ -37,8 +38,23 @@ func configureKeyringProcessGroup(cmd *exec.Cmd) {
 // of being orphaned to keep running, and keep the pipe open, for
 // however long it likes.
 func killKeyringProcessGroup(cmd *exec.Cmd) error {
+	return killKeyringProcessGroupID(captureKeyringProcessGroup(cmd))
+}
+
+func captureKeyringProcessGroup(cmd *exec.Cmd) int {
 	if cmd.Process == nil {
+		return 0
+	}
+	return cmd.Process.Pid
+}
+
+func killKeyringProcessGroupID(processGroup int) error {
+	if processGroup <= 0 {
 		return nil
 	}
-	return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	err := syscall.Kill(-processGroup, syscall.SIGKILL)
+	if errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	return err
 }

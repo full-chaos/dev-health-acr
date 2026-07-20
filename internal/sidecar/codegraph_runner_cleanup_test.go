@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -13,7 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCodeGraphRunner_ReapsChildAfterDecodeFailure(t *testing.T) {
+func TestCodeGraphRunner_ReapsProcessGroupAfterDecodeFailure(t *testing.T) {
+	requireProcessGroupKill(t)
+
 	for _, test := range []struct {
 		name    string
 		output  string
@@ -23,31 +26,74 @@ func TestCodeGraphRunner_ReapsChildAfterDecodeFailure(t *testing.T) {
 		{name: "oversized", output: `printf '\"'; head -c 1048577 /dev/zero | tr '\000' x; printf '\"'`, wantErr: ErrCodeGraphOutputTooLarge},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			pidPath := filepath.Join(t.TempDir(), "child.pid")
-			runner := newTestCodeGraphRunner(t, "printf '%s' \"$$\" > "+shellQuote(pidPath)+"\n"+test.output+"\nsleep 30")
+			run := func(t *testing.T) {
+				t.Helper()
+				directory := t.TempDir()
+				shellPIDPath := filepath.Join(directory, "shell.pid")
+				grandchildPIDPath := filepath.Join(directory, "grandchild.pid")
+				runner := newTestCodeGraphRunner(t, "printf '%s\\n' \"$$\" > "+shellQuote(shellPIDPath)+"\n"+
+					"sh -c 'printf \"%s\\n\" \"$$\" > \"$1\"; sleep 30' sh "+shellQuote(grandchildPIDPath)+" &\n"+
+					"while [ ! -s "+shellQuote(grandchildPIDPath)+" ]; do :; done\n"+
+					test.output+"\n"+
+					"sh -c 'sleep 30' &")
+				runner.Config.Timeout = 10 * time.Second
 
-			started := time.Now()
-			_, err := runner.Status(context.Background(), t.TempDir())
-			elapsed := time.Since(started)
+				started := time.Now()
+				_, err := runner.Status(context.Background(), directory)
+				elapsed := time.Since(started)
 
-			require.Less(t, elapsed, 1500*time.Millisecond)
-			require.ErrorIs(t, err, test.wantErr)
-			require.NotErrorIs(t, err, context.DeadlineExceeded)
-			assertCodeGraphChildExited(t, pidPath)
+				require.Less(t, elapsed, 5*time.Second)
+				require.ErrorIs(t, err, test.wantErr)
+				require.NotErrorIs(t, err, context.DeadlineExceeded)
+				assertCodeGraphProcessExited(t, shellPIDPath)
+				assertCodeGraphProcessExited(t, grandchildPIDPath)
+				assertCodeGraphProcessGroupExited(t, shellPIDPath)
+			}
+
+			for range 50 {
+				run(t)
+			}
+
+			t.Run("concurrent", func(t *testing.T) {
+				for range 20 {
+					t.Run("cleanup", func(t *testing.T) {
+						t.Parallel()
+						run(t)
+					})
+				}
+			})
 		})
 	}
 }
 
-func assertCodeGraphChildExited(t *testing.T, pidPath string) {
+func assertCodeGraphProcessExited(t *testing.T, pidPath string) {
 	t.Helper()
 	payload, err := os.ReadFile(pidPath)
 	require.NoError(t, err)
-	pid, err := strconv.Atoi(string(payload))
+	pid, err := strconv.Atoi(strings.TrimSpace(string(payload)))
 	require.NoError(t, err)
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		err = syscall.Kill(pid, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.ErrorIs(t, err, syscall.ESRCH)
+}
+
+func assertCodeGraphProcessGroupExited(t *testing.T, pidPath string) {
+	t.Helper()
+	payload, err := os.ReadFile(pidPath)
+	require.NoError(t, err)
+	pgid, err := strconv.Atoi(strings.TrimSpace(string(payload)))
+	require.NoError(t, err)
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		err = syscall.Kill(-pgid, 0)
 		if errors.Is(err, syscall.ESRCH) {
 			return
 		}

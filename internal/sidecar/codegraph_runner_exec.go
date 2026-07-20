@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const codeGraphWaitDelay = time.Second
+const codeGraphWaitDelay = 100 * time.Millisecond
 
 func runCodeGraphJSON(ctx context.Context, path, gitRoot string, command codeGraphRunCommand, arguments []string, input []byte) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, path, arguments...)
@@ -34,6 +34,7 @@ func runCodeGraphJSON(ctx context.Context, path, gitRoot string, command codeGra
 		}
 		return nil, errors.Join(errCodeGraphExecutableAbsent, ErrCodeGraphUnavailable)
 	}
+	processGroup := captureKeyringProcessGroup(cmd)
 	output, readErr := decodeCodeGraphJSON(stdout)
 	if readErr != nil {
 		if errors.Is(readErr, io.EOF) {
@@ -49,9 +50,10 @@ func runCodeGraphJSON(ctx context.Context, path, gitRoot string, command codeGra
 			}
 			return nil, errors.Join(errCodeGraphDecode, ErrCodeGraphUnavailable)
 		}
-		_ = killKeyringProcessGroup(cmd)
 		_ = stdout.Close()
+		_ = killKeyringProcessGroupID(processGroup)
 		_ = cmd.Wait()
+		_ = killKeyringProcessGroupID(processGroup)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
