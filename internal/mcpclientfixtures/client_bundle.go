@@ -66,10 +66,10 @@ func LoadClientBundle(path string) (ClientBundle, error) {
 	decoder.DisallowUnknownFields()
 	var bundle ClientBundle
 	if err := decoder.Decode(&bundle); err != nil {
-		return ClientBundle{}, fmt.Errorf("decode client bundle: %w", err)
+		return ClientBundle{}, invalidBundle("decode")
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return ClientBundle{}, fmt.Errorf("decode client bundle: trailing JSON")
+		return ClientBundle{}, invalidBundle("decode")
 	}
 	if err := bundle.Validate(); err != nil {
 		return ClientBundle{}, err
