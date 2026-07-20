@@ -249,6 +249,8 @@ if scenario=='mixed':
  try:
   os.fchmod(fd,0o600)
   with os.fdopen(fd,'w',encoding='utf-8') as output: json.dump(r,output,sort_keys=True,separators=(',',':')); output.write('\n'); output.flush(); os.fsync(output.fileno())
+  hook=os.environ.get('ACR_E2E_RECEIPT_POST_FSYNC_HOOK')
+  if hook: subprocess.run([hook],check=True)
   if subprocess.check_output(['git','-C',root,'rev-parse','HEAD'],text=True).strip()!=r['source_revision'] or subprocess.check_output(['git','-C',root,'status','--porcelain'],text=True): raise SystemExit('source changed before receipt publication')
   os.replace(temporary,sys.argv[3])
  finally:

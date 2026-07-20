@@ -43,6 +43,14 @@ done
 printf '{"stale":true}\n' > "$task8"
 if ACR_E2E_FORCE_CANONICAL_FAILURE=1 "$root/scripts/e2e/local-index-privacy.sh" --scenario no-upload; then exit 1; fi
 [[ ! -e "$task8" ]] || exit 1
+mutation_target="$root/contracts/examples/v1/capabilities.v1.json"
+mutation_hook="$backup/mutate-source"
+printf '#!/usr/bin/env bash\nprintf x >> %q\n' "$mutation_target" > "$mutation_hook"
+chmod 700 "$mutation_hook"
+printf '{"stale":true}\n' > "$task8"
+if ACR_E2E_RECEIPT_POST_FSYNC_HOOK="$mutation_hook" "$root/scripts/e2e/local-index-privacy.sh" --scenario no-upload; then exit 1; fi
+[[ ! -e "$task8" ]] || exit 1
+git -C "$root" checkout -- "$mutation_target"
 
 printf '{"sentinel":"task9"}\n' > "$task9"
 task9_before="$(shasum -a 256 "$task9" | awk '{print $1}')"
@@ -60,6 +68,11 @@ if ACR_E2E_FORCE_CANONICAL_FAILURE=1 "$root/scripts/e2e/mcp-codegraph.sh" --scen
 
 "$root/scripts/e2e/local-index-privacy.sh" --scenario no-upload
 "$root/scripts/e2e/mcp-codegraph.sh" --scenario mixed
+rm -f "$task9"
+"$root/scripts/e2e/mcp-codegraph.sh" --scenario mixed & first_writer=$!
+"$root/scripts/e2e/mcp-codegraph.sh" --scenario mixed & second_writer=$!
+wait "$first_writer" && wait "$second_writer"
+if compgen -G "$evidence/.context-fabric-09-*" >/dev/null; then exit 1; fi
 python3 - "$task8" "$task9" "$root" <<'PY'
 import json,subprocess,sys
 head=subprocess.check_output(['git','-C',sys.argv[3],'rev-parse','HEAD'],text=True).strip()

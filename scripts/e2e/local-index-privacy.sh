@@ -157,6 +157,8 @@ fd,temporary=tempfile.mkstemp(prefix='.context-fabric-08-',dir=os.path.dirname(r
 try:
  os.fchmod(fd,0o600)
  with os.fdopen(fd,'w',encoding='utf-8') as out: json.dump(safe,out,sort_keys=True,separators=(',',':')); out.write('\n'); out.flush(); os.fsync(out.fileno())
+ hook=os.environ.get('ACR_E2E_RECEIPT_POST_FSYNC_HOOK')
+ if hook: subprocess.run([hook],check=True)
  if subprocess.check_output(['git','-C',root,'rev-parse','HEAD'],text=True).strip()!=safe['source_revision'] or subprocess.check_output(['git','-C',root,'status','--porcelain'],text=True): raise SystemExit('source changed before receipt publication')
  os.replace(temporary,receipt)
 finally:
