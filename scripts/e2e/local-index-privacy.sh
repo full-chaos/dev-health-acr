@@ -90,7 +90,7 @@ server_pid=$!
 for _ in {1..50}; do [[ -s "$tmp/port" ]] && break; sleep 0.1; done
 [[ -s "$tmp/port" ]] || { printf 'privacy fixture did not start\n' >&2; exit 1; }
 
-go build -o "$tmp/acr-mcp" ./cmd/acr-mcp
+go -C "$root" build -o "$tmp/acr-mcp" ./cmd/acr-mcp
 source_identity_unchanged=false
 if [[ "$(git -C "$root" rev-parse HEAD)" == "$source_revision" && -z "$(git -C "$root" status --porcelain)" ]]; then source_identity_unchanged=true; fi
 [[ "$source_identity_unchanged" == true ]] || { printf 'canonical source identity changed during build\n' >&2; exit 1; }
@@ -107,7 +107,7 @@ import base64
 print(base64.urlsafe_b64encode(bytes([7])*32).decode().rstrip('='))
 PY
 )"
-ACR_API_URL="https://localhost:$port" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_API_TOKEN="$token" ACR_SIDECAR_VERSION=1.0.0 ACR_LOCAL_INDEX_PROVIDER=codegraph ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" PRIVACY_MCP="$tmp/acr-mcp" PRIVACY_WORKSPACE="$tmp/workspace" PRIVACY_BRANCH="$workspace_branch" GRAPH_PAYLOAD_SENTINEL="$graph_payload_sentinel" LOCAL_LOCATOR_SENTINEL="$local_locator_sentinel" ABSOLUTE_ROOT_SENTINEL="$absolute_root_sentinel" PRIVACY_RAW_BOUNDARY_PROBE="$raw_boundary_probe" PRIVACY_CAPTURE="$capture" PRIVACY_EXPANSION_COUNTS="$expansion_counts" go run "$root/.tmp/local-index-privacy-driver.go"
+ACR_API_URL="https://localhost:$port" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_API_TOKEN="$token" ACR_SIDECAR_VERSION=1.0.0 ACR_LOCAL_INDEX_PROVIDER=codegraph ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" PRIVACY_MCP="$tmp/acr-mcp" PRIVACY_WORKSPACE="$tmp/workspace" PRIVACY_BRANCH="$workspace_branch" GRAPH_PAYLOAD_SENTINEL="$graph_payload_sentinel" LOCAL_LOCATOR_SENTINEL="$local_locator_sentinel" ABSOLUTE_ROOT_SENTINEL="$absolute_root_sentinel" PRIVACY_RAW_BOUNDARY_PROBE="$raw_boundary_probe" PRIVACY_CAPTURE="$capture" PRIVACY_EXPANSION_COUNTS="$expansion_counts" go -C "$root" run "$root/.tmp/local-index-privacy-driver.go"
 
 ACR_API_TOKEN="$token" SOURCE_SENTINEL="$source_sentinel" INDEX_SENTINEL="$index_sentinel" GRAPH_PAYLOAD_SENTINEL="$graph_payload_sentinel" LOCAL_LOCATOR_SENTINEL="$local_locator_sentinel" ABSOLUTE_ROOT_SENTINEL="$absolute_root_sentinel" SOURCE_ROOT="$root" SOURCE_REVISION="$source_revision" SOURCE_CLEAN=true SOURCE_IDENTITY_UNCHANGED="$source_identity_unchanged" HARNESS_SHA256="$(shasum -a 256 "$0" | awk '{print $1}')" BINARY_SHA256="$(shasum -a 256 "$tmp/acr-mcp" | awk '{print $1}')" python3 - "$capture" "$scenario" "$receipt" "$expansion_counts" "$scenario_ledger" <<'PY'
 import json,sys
