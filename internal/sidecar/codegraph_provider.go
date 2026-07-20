@@ -38,9 +38,9 @@ func (p *CodeGraphLocalIndexProvider) Capabilities(ctx context.Context) (LocalIn
 		}
 		return LocalIndexCapabilities{}, localIndexFailure(err)
 	}
-	classification := classifyCodeGraphStatus(status)
+	classification := mergeCodeGraphClassification(status, workspace)
 	if classification.omit(p.runner.Config.StalePolicy) {
-		return LocalIndexCapabilities{}, newLocalIndexError(LocalIndexErrorStale, LocalIndexStatusUnavailable, classification.Freshness, classification.Warnings, errCodeGraphMismatch)
+		return LocalIndexCapabilities{}, newLocalIndexError(LocalIndexErrorStale, LocalIndexStatusUnavailable, classification.Freshness, classification.Warnings, classification.staleCause())
 	}
 	return LocalIndexCapabilities{ProviderID: codeGraphProviderID, ProviderVersion: status.Version, Available: true, MaxItems: p.itemLimit(), MaxOutputTokens: p.tokenLimit(), Status: classification.Status, Freshness: classification.Freshness}, nil
 }
@@ -64,18 +64,10 @@ func (p *CodeGraphLocalIndexProvider) ContextForTask(ctx context.Context, reques
 		}
 		return LocalEvidenceBundle{}, localIndexFailure(err)
 	}
-	classification := classifyCodeGraphStatus(status)
-	workspaceClassification := classifyCodeGraphWorkspace(workspace)
-	classification.Warnings = append(classification.Warnings, workspaceClassification.Warnings...)
-	if workspaceClassification.Status == LocalIndexStatusDegraded {
-		classification.Status = LocalIndexStatusDegraded
-	}
-	if workspaceClassification.Freshness == LocalIndexFreshnessStale {
-		classification.Freshness = LocalIndexFreshnessStale
-	}
+	classification := mergeCodeGraphClassification(status, workspace)
 	classification.Warnings = canonicalBundleWarnings(classification.Warnings, false, status.IndexedCommit)
 	if classification.omit(p.runner.Config.StalePolicy) {
-		return LocalEvidenceBundle{}, newLocalIndexError(LocalIndexErrorStale, LocalIndexStatusUnavailable, classification.Freshness, classification.Warnings, errCodeGraphMismatch)
+		return LocalEvidenceBundle{}, newLocalIndexError(LocalIndexErrorStale, LocalIndexStatusUnavailable, classification.Freshness, classification.Warnings, classification.staleCause())
 	}
 	candidates, err := p.collectCandidates(ctx, workspace, request)
 	if err != nil {
@@ -135,6 +127,19 @@ func (p *CodeGraphLocalIndexProvider) status(ctx context.Context, workspace Loca
 		return codeGraphStatus{}, errCodeGraphMissing
 	}
 	return status, nil
+}
+
+func mergeCodeGraphClassification(status codeGraphStatus, workspace LocalWorkspaceSnapshot) localIndexClassification {
+	classification := classifyCodeGraphStatus(status)
+	workspaceClassification := classifyCodeGraphWorkspace(workspace)
+	classification.Warnings = append(classification.Warnings, workspaceClassification.Warnings...)
+	if workspaceClassification.Status == LocalIndexStatusDegraded {
+		classification.Status = LocalIndexStatusDegraded
+	}
+	if workspaceClassification.Freshness == LocalIndexFreshnessStale {
+		classification.Freshness = LocalIndexFreshnessStale
+	}
+	return classification
 }
 
 func trustedCodeGraphIndex(root string) bool {

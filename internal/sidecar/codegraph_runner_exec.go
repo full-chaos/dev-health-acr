@@ -36,18 +36,27 @@ func runCodeGraphJSON(ctx context.Context, path, gitRoot string, command codeGra
 	}
 	output, readErr := decodeCodeGraphJSON(stdout)
 	if readErr != nil {
-		waitErr := cmd.Wait()
+		if errors.Is(readErr, io.EOF) {
+			waitErr := cmd.Wait()
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if waitErr != nil {
+				if command == codeGraphRunStatus {
+					return nil, errors.Join(errCodeGraphMissing, ErrCodeGraphUnavailable)
+				}
+				return nil, errors.Join(errCodeGraphUnsupported, ErrCodeGraphUnavailable)
+			}
+			return nil, errors.Join(errCodeGraphDecode, ErrCodeGraphUnavailable)
+		}
+		_ = killKeyringProcessGroup(cmd)
+		_ = stdout.Close()
+		_ = cmd.Wait()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		if errors.Is(readErr, ErrCodeGraphOutputTooLarge) {
 			return nil, ErrCodeGraphOutputTooLarge
-		}
-		if waitErr != nil {
-			if command == codeGraphRunStatus {
-				return nil, errors.Join(errCodeGraphMissing, ErrCodeGraphUnavailable)
-			}
-			return nil, errors.Join(errCodeGraphUnsupported, ErrCodeGraphUnavailable)
 		}
 		return nil, errors.Join(errCodeGraphDecode, ErrCodeGraphUnavailable)
 	}

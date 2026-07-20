@@ -30,6 +30,13 @@ func (c localIndexClassification) omit(policy LocalIndexStalePolicy) bool {
 	return policy == LocalIndexStaleStrict && (slices.Contains(c.Warnings, "local_index_stale") || slices.Contains(c.Warnings, "local_worktree_mismatch") || slices.Contains(c.Warnings, "local_workspace_dirty"))
 }
 
+func (c localIndexClassification) staleCause() error {
+	if slices.Contains(c.Warnings, "local_worktree_mismatch") {
+		return errCodeGraphMismatch
+	}
+	return errCodeGraphStale
+}
+
 func classifyCodeGraphWorkspace(workspace LocalWorkspaceSnapshot) localIndexClassification {
 	if workspace.ChangedFilesState == LocalChangedFilesTruncated {
 		return localIndexClassification{Status: LocalIndexStatusDegraded, Freshness: LocalIndexFreshnessStale, Warnings: []string{"changed_files_truncated"}}

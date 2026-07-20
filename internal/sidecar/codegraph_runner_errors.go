@@ -31,6 +31,7 @@ var (
 	errLocalIndexDisabled        = errors.New("local index disabled")
 	errCodeGraphMissing          = errors.New("codegraph index missing")
 	errCodeGraphMismatch         = errors.New("codegraph worktree mismatch")
+	errCodeGraphStale            = errors.New("codegraph index stale")
 	errCodeGraphUnsupported      = errors.New("codegraph unsupported capability")
 	errCodeGraphIncompatible     = errors.New("codegraph incompatible version")
 )

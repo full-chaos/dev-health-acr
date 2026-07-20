@@ -41,6 +41,23 @@ func TestCodeGraphProvider_ContextForTask_truncatedWorkspaceReturnsDegradedEvide
 	}
 }
 
+func TestCodeGraphProvider_Capabilities_mergesTruncatedWorkspaceUnderBothPolicies(t *testing.T) {
+	for _, policy := range []LocalIndexStalePolicy{LocalIndexStaleGraceful, LocalIndexStaleStrict} {
+		t.Run(string(policy), func(t *testing.T) {
+			provider, _, _ := newFixtureCodeGraphProvider(t)
+			provider.runner.Config.StalePolicy = policy
+			provider.workspace.ChangedFilesState = LocalChangedFilesTruncated
+
+			capabilities, err := provider.Capabilities(context.Background())
+
+			require.NoError(t, err)
+			require.True(t, capabilities.Available)
+			require.Equal(t, LocalIndexStatusDegraded, capabilities.Status)
+			require.Equal(t, LocalIndexFreshnessStale, capabilities.Freshness)
+		})
+	}
+}
+
 func TestCodeGraphProvider_ContextForTask_notRequestedEmptyFilesSkipsAffected(t *testing.T) {
 	// Given
 	provider, workspace, commandLog := newFixtureCodeGraphProvider(t)

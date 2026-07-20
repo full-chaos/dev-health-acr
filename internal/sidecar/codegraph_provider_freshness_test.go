@@ -52,6 +52,53 @@ func TestCodeGraphProvider_StrictPolicyOmitsDecodedWorktreeMismatch(t *testing.T
 	}
 }
 
+func TestCodeGraphProvider_StrictStaleCauseReflectsActualCondition(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		configure    func(*CodeGraphLocalIndexProvider, *LocalWorkspaceSnapshot, string)
+		wantMismatch bool
+		wantStale    bool
+	}{
+		{name: "worktree mismatch", configure: func(_ *CodeGraphLocalIndexProvider, _ *LocalWorkspaceSnapshot, log string) {
+			writeFixtureStatusField(t, log, "worktreeMismatch", []byte(`"other worktree"`))
+		}, wantMismatch: true},
+		{name: "pending", configure: func(_ *CodeGraphLocalIndexProvider, _ *LocalWorkspaceSnapshot, log string) {
+			writeFixtureStatusField(t, log, "pendingChanges", []byte(`{"added":1,"modified":0,"removed":0}`))
+		}, wantStale: true},
+		{name: "reindex", configure: func(_ *CodeGraphLocalIndexProvider, _ *LocalWorkspaceSnapshot, log string) {
+			writeFixtureStatusField(t, log, "index", []byte(`{"builtWithVersion":"1.2.0","reindexRecommended":true,"builtWithExtractionVersion":1,"currentExtractionVersion":1}`))
+		}, wantStale: true},
+		{name: "extraction", configure: func(_ *CodeGraphLocalIndexProvider, _ *LocalWorkspaceSnapshot, log string) {
+			writeFixtureStatusField(t, log, "index", []byte(`{"builtWithVersion":"1.2.0","reindexRecommended":false,"builtWithExtractionVersion":1,"currentExtractionVersion":2}`))
+		}, wantStale: true},
+		{name: "workspace dirty and truncated", configure: func(_ *CodeGraphLocalIndexProvider, workspace *LocalWorkspaceSnapshot, log string) {
+			workspace.ChangedFilesState = LocalChangedFilesTruncated
+			writeFixtureStatusField(t, log, "pendingChanges", []byte(`{"added":1,"modified":0,"removed":0}`))
+		}, wantStale: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			provider, _, commandLog := newFixtureCodeGraphProvider(t)
+			provider.runner.Config.StalePolicy = LocalIndexStaleStrict
+			test.configure(provider, &provider.workspace, commandLog)
+
+			_, err := provider.Capabilities(context.Background())
+
+			var localErr *LocalIndexError
+			require.ErrorAs(t, err, &localErr)
+			require.Equal(t, LocalIndexErrorStale, localErr.Code())
+			require.Equal(t, LocalIndexFreshnessStale, localErr.Freshness())
+			if test.wantMismatch {
+				require.ErrorIs(t, err, errCodeGraphMismatch)
+			} else {
+				require.NotErrorIs(t, err, errCodeGraphMismatch)
+			}
+			if test.wantStale {
+				require.ErrorIs(t, err, errCodeGraphStale)
+			}
+		})
+	}
+}
+
 func TestCodeGraphStatus_decodesOnlyNullableStringWorktreeMismatch(t *testing.T) {
 	for _, test := range []struct {
 		name         string
