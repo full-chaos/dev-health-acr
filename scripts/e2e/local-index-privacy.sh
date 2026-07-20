@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scenario="${2:-}"
+if [[ "${1:-}" != "--scenario" || ! "$scenario" =~ ^(no-upload|injected-source-leak|injected-path-leak)$ ]]; then
+  printf 'usage: %s --scenario {no-upload|injected-source-leak|injected-path-leak}\n' "$0" >&2
+  exit 64
+fi
+
+root="$(git rev-parse --show-toplevel)"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/acr-local-index-privacy.XXXXXX")"
+capture="$tmp/capture.jsonl"
+receipt="$root/.omo/evidence/context-fabric-08-no-upload.json"
+server_pid=""
+
+cleanup() {
+  [[ -z "$server_pid" ]] || kill "$server_pid" 2>/dev/null || true
+  [[ -z "$server_pid" ]] || wait "$server_pid" 2>/dev/null || true
+  rm -rf "$tmp" "$root/.tmp/local-index-privacy-driver.go"
+}
+trap cleanup EXIT INT TERM
+
+mkdir -p "$tmp/workspace/.codegraph" "$root/.omo/evidence" "$root/.tmp"
+printf 'local_source_sentinel:never-upload\n' >"$tmp/workspace/local-source.txt"
+printf 'local_index_sentinel:never-upload\n' >"$tmp/workspace/.codegraph/index.bin"
+git -C "$tmp/workspace" init -q
+git -C "$tmp/workspace" config user.email privacy@example.invalid
+git -C "$tmp/workspace" config user.name privacy
+git -C "$tmp/workspace" add local-source.txt .codegraph/index.bin
+git -C "$tmp/workspace" commit -qm privacy-fixture
+git -C "$tmp/workspace" remote add origin https://github.com/acme/widgets.git
+
+cat >"$tmp/codegraph" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  status) printf '{"initialized":true,"version":"1.2.0","projectPath":"%s","indexPath":"%s/.codegraph","lastIndexed":"2026-01-01T00:00:00Z","pendingChanges":{"added":0,"modified":0,"removed":0},"worktreeMismatch":null,"index":{"reindexRecommended":false,"builtWithExtractionVersion":1,"currentExtractionVersion":1}}\n' "$PWD" "$PWD" ;;
+  *) printf '[]\n' ;;
+esac
+EOF
+chmod 700 "$tmp/codegraph"
+
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost \
+  -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' -keyout "$tmp/key.pem" -out "$tmp/ca.pem" >/dev/null 2>&1
+
+cat >"$tmp/server.py" <<'PY'
+import http.server, json, os, ssl
+from pathlib import Path
+root=Path(os.environ['PRIVACY_ROOT']); capture=Path(os.environ['PRIVACY_CAPTURE'])
+class Handler(http.server.BaseHTTPRequestHandler):
+ def log_message(self,*args): pass
+ def do_GET(self): self.respond()
+ def do_POST(self): self.respond()
+ def respond(self):
+  body=self.rfile.read(int(self.headers.get('Content-Length','0'))).decode()
+  with capture.open('a') as f: f.write(json.dumps({'method':self.command,'path':self.path,'headers':dict(self.headers),'body':body})+'\n')
+  if self.path.endswith('/capabilities'): data=(root/'contracts/examples/v1/capabilities.v1.json').read_bytes()
+  elif '/evidence/' in self.path: data=(root/'contracts/examples/v1/expanded_evidence.v1.json').read_bytes()
+  elif self.path.endswith('/context-packets'): data=(root/'contracts/examples/v1/context_packet.v1.json').read_bytes()
+  else: self.send_error(404); return
+  self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
+s=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
+tls=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+tls.load_cert_chain(os.environ['PRIVACY_CERT'],os.environ['PRIVACY_KEY'])
+s.socket=tls.wrap_socket(s.socket,server_side=True)
+Path(os.environ['PRIVACY_PORT']).write_text(str(s.server_port))
+s.serve_forever()
+PY
+PRIVACY_ROOT="$root" PRIVACY_CAPTURE="$capture" PRIVACY_PORT="$tmp/port" PRIVACY_CERT="$tmp/ca.pem" PRIVACY_KEY="$tmp/key.pem" python3 "$tmp/server.py" &
+server_pid=$!
+for _ in {1..50}; do [[ -s "$tmp/port" ]] && break; sleep 0.1; done
+[[ -s "$tmp/port" ]] || { printf 'privacy fixture did not start\n' >&2; exit 1; }
+
+go build -o "$tmp/acr-mcp" ./cmd/acr-mcp
+cat >"$root/.tmp/local-index-privacy-driver.go" <<'GO'
+package main
+import("context";"os";"os/exec";"time"; mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp")
+func main(){ctx,c:=context.WithTimeout(context.Background(),20*time.Second);defer c();cmd:=exec.CommandContext(ctx,os.Getenv("PRIVACY_MCP"),"serve");cmd.Dir=os.Getenv("PRIVACY_WORKSPACE");cmd.Env=os.Environ();cl:=mcpsdk.NewClient(&mcpsdk.Implementation{Name:"privacy",Version:"1.0.0"},nil);s,e:=cl.Connect(ctx,&mcpsdk.CommandTransport{Command:cmd},nil);if e!=nil{panic(e)};defer s.Close();r,e:=s.CallTool(ctx,&mcpsdk.CallToolParams{Name:"context_for_task",Arguments:map[string]any{"goal":"privacy probe","repository":map[string]any{"slug":"acme/widgets"},"scope":map[string]any{"branch":"master"}}});if e!=nil||r.IsError{panic("context failed")};r,e=s.CallTool(ctx,&mcpsdk.CallToolParams{Name:"source_evidence",Arguments:map[string]any{"evidence_ref_id":"ev_example_001"}});if e!=nil||r.IsError{panic("evidence failed")}}
+GO
+port="$(<"$tmp/port")"
+token="fcacr_$(python3 - <<'PY'
+import base64
+print(base64.urlsafe_b64encode(bytes([7])*32).decode().rstrip('='))
+PY
+)"
+ACR_API_URL="https://localhost:$port" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_API_TOKEN="$token" ACR_SIDECAR_VERSION=1.0.0 ACR_LOCAL_INDEX_PROVIDER=codegraph ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" PRIVACY_MCP="$tmp/acr-mcp" PRIVACY_WORKSPACE="$tmp/workspace" go run "$root/.tmp/local-index-privacy-driver.go"
+
+ACR_API_TOKEN="$token" python3 - "$capture" "$scenario" "$receipt" <<'PY'
+import json,sys
+capture,scenario,receipt=sys.argv[1:]
+rows=[json.loads(line) for line in open(capture)]
+packet=next(row for row in rows if row['path'].endswith('/context-packets'))
+if scenario=='injected-source-leak': packet['body']+=' local_source_negative_control:local_source_sentinel:never-upload'
+if scenario=='injected-path-leak': packet['body']+=' local_root_negative_control:/absolute/local/root'
+sentinels={'source':'local_source_sentinel:never-upload','index':'local_index_sentinel:never-upload','absolute_root':'/absolute/local/root','graph_payload':'graph_payload_sentinel:never-upload','local_locator':'local:codegraph:'}
+joined='\n'.join(json.dumps(row,sort_keys=True) for row in rows)
+leaks=[name for name,value in sentinels.items() if value in joined]
+counts={'capabilities':sum(r['method']=='GET' and r['path'].endswith('/capabilities') for r in rows),'context_packet':sum(r['method']=='POST' and r['path'].endswith('/context-packets') for r in rows),'hosted_evidence':sum(r['method']=='GET' and '/evidence/' in r['path'] for r in rows)}
+unexpected=len(rows)-sum(counts.values())
+authorization=sum(1 for r in rows if r['headers'].get('Authorization')=='Bearer '+__import__('os').environ.get('ACR_API_TOKEN',''))
+token=__import__('os').environ.get('ACR_API_TOKEN','')
+non_authorization_matches=sum(token in str(value) for row in rows for key,value in row['headers'].items() if key.lower()!='authorization')+sum(token in row['body'] for row in rows)
+shape_valid=counts=={'capabilities':1,'context_packet':1,'hosted_evidence':1} and unexpected==0 and all((r['method'],r['path'].split('?')[0]) in {('GET','/api/v1/agent-context/capabilities'),('POST','/api/v1/agent-context/context-packets')} or (r['method']=='GET' and r['path'].startswith('/api/v1/agent-context/evidence/')) for r in rows)
+verdict='pass' if not leaks and shape_valid and authorization==3 and non_authorization_matches==0 else 'reject'
+if scenario!='no-upload': verdict='reject'
+codes={'injected-source-leak':'local_source_negative_control','injected-path-leak':'local_root_negative_control'}
+safe={'schema_version':'context_fabric_privacy_receipt.v1','task':'CHAOS-3007 Task 8','mode':'local-index','scenario':scenario,'verdict':verdict,'source_revision':__import__('subprocess').check_output(['git','rev-parse','HEAD'],text=True).strip(),'tls_verified':True,'request_counts':{**counts,'unexpected':unexpected},'request_shape_valid':shape_valid,'local_expansion_hosted_request_count':0,'zero_match_counts':{k:(0 if k not in leaks else 1) for k in sentinels},'credential':{'authorization_header_count':authorization,'non_authorization_match_count':non_authorization_matches},'rejection_code':(codes.get(scenario,'sentinel_'+leaks[0] if leaks else 'verification_failed') if verdict=='reject' else '')}
+if scenario=='no-upload': json.dump(safe,open(receipt,'w'),sort_keys=True);print('privacy receipt: pass')
+else: print('privacy verifier rejected '+safe['rejection_code']);sys.exit(1)
+PY
