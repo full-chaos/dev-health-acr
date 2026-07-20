@@ -198,7 +198,7 @@ func trustedCodeGraphRepositoryRoot(root, home string) bool {
 	if !ok || int(stat.Uid) != os.Geteuid() || int(stat.Gid) != os.Getegid() || info.Mode().Perm()&0o002 != 0 || info.Mode().Perm()&0o020 == 0 {
 		return false
 	}
-	if !codeGraphRootHasOnlyBaseACL(root) {
+	if !codeGraphACLCheck(root) {
 		return false
 	}
 	for ancestor := filepath.Dir(root); ; ancestor = filepath.Dir(ancestor) {

@@ -2,4 +2,4 @@
 
 package sidecar
 
-func codeGraphRootHasOnlyBaseACL(string) bool { return false }
+var codeGraphACLCheck = func(string) bool { return false }

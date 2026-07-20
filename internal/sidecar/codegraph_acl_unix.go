@@ -8,6 +8,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+var codeGraphACLCheck = codeGraphRootHasOnlyBaseACL
+
 func codeGraphRootHasOnlyBaseACL(path string) bool {
 	name := "system.posix_acl_access"
 	if err := aclAbsent(path, name); err == nil {
