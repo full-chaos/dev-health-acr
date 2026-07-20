@@ -21,11 +21,11 @@ if [[ -n "$fixture" ]]; then fixture="$(resolve_path "$fixture")"; contract="$fi
 contract="$(resolve_path "$contract")"
 package_root="$(resolve_path "${package_root:-$repo_root}")"
 if [[ -z "$fixture" ]]; then
-  MCP_CLIENT_BUNDLE_PATH="$contract" MCP_CLIENT_ROOT="$package_root" go test -v ./internal/mcpclientfixtures -run '^TestClientBundle_validates_shared_contract$' -count=1 | grep -F 'CLIENT_BUNDLE_OK'
+  (cd "$repo_root" && MCP_CLIENT_BUNDLE_PATH="$contract" MCP_CLIENT_ROOT="$package_root" go test -v ./internal/mcpclientfixtures -run '^TestClientBundle_validates_shared_contract$' -count=1) | grep -F 'CLIENT_BUNDLE_OK'
 fi
 fixture_root="${fixture:-$repo_root/clients/conformance/fixtures}"
 if [[ ! -d "$fixture_root" ]]; then
   printf '%s\n' 'CLIENT_FIXTURE_ERROR classification=fixture.missing' >&2
   exit 1
 fi
-MCP_CLIENT_FIXTURE_ROOT="$fixture_root" go test -v ./internal/mcpclientfixtures -run '^TestClientFixtureRunner_rejects_exact_classifications$' -count=1 | grep -F 'CLIENT_FIXTURES_OK'
+(cd "$repo_root" && MCP_CLIENT_FIXTURE_ROOT="$fixture_root" go test -v ./internal/mcpclientfixtures -run '^TestClientFixtureRunner_rejects_exact_classifications$' -count=1) | grep -F 'CLIENT_FIXTURES_OK'
