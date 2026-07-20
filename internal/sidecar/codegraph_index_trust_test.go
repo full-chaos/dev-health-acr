@@ -3,6 +3,7 @@ package sidecar
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -163,5 +164,21 @@ func TestTrustedCodeGraphGroupWritableMetadata(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, tc.want, trustedCodeGraphGroupWritableMetadata(tc.uid, tc.gid, os.FileMode(tc.mode), os.Geteuid(), os.Getegid()))
 		})
+	}
+}
+
+func TestVerifyCurrentUserOwnedRejectsForeignManagedObjects(t *testing.T) {
+	foreign := uint32(os.Geteuid() + 1)
+	cases := []struct {
+		name string
+		info os.FileInfo
+		want bool
+	}{
+		{"owner", fakeFileInfo{mode: 0o700, stat: syscall.Stat_t{Uid: foreign}}, false},
+		{"writable target", fakeFileInfo{mode: 0o720, stat: syscall.Stat_t{Uid: uint32(os.Geteuid())}}, false},
+		{"secure object", fakeFileInfo{mode: 0o700, stat: syscall.Stat_t{Uid: uint32(os.Geteuid())}}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, verifyCurrentUserOwned(tc.info) == nil) })
 	}
 }
