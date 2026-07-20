@@ -69,10 +69,36 @@ if ACR_E2E_FORCE_CANONICAL_FAILURE=1 "$root/scripts/e2e/mcp-codegraph.sh" --scen
 "$root/scripts/e2e/local-index-privacy.sh" --scenario no-upload
 "$root/scripts/e2e/mcp-codegraph.sh" --scenario mixed
 rm -f "$task9"
-"$root/scripts/e2e/mcp-codegraph.sh" --scenario mixed & first_writer=$!
-"$root/scripts/e2e/mcp-codegraph.sh" --scenario mixed & second_writer=$!
+barrier="$backup/publication-barrier"
+mkdir -p "$barrier"
+barrier_hook="$backup/wait-at-publication-barrier"
+cat > "$barrier_hook" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+touch "$ACR_E2E_RECEIPT_BARRIER/ready-$$"
+while [[ ! -e "$ACR_E2E_RECEIPT_BARRIER/release" ]]; do sleep .01; done
+SH
+chmod 700 "$barrier_hook"
+ACR_E2E_RECEIPT_BARRIER="$barrier" ACR_E2E_RECEIPT_POST_FSYNC_HOOK="$barrier_hook" "$root/scripts/e2e/mcp-codegraph.sh" --scenario mixed & first_writer=$!
+ACR_E2E_RECEIPT_BARRIER="$barrier" ACR_E2E_RECEIPT_POST_FSYNC_HOOK="$barrier_hook" "$root/scripts/e2e/mcp-codegraph.sh" --scenario mixed & second_writer=$!
+for _ in $(seq 1 1000); do [[ "$(compgen -G "$barrier/ready-*" | wc -l | tr -d ' ')" == 2 ]] && break; sleep .01; done
+[[ "$(compgen -G "$barrier/ready-*" | wc -l | tr -d ' ')" == 2 ]] || exit 1
+touch "$barrier/release"
 wait "$first_writer" && wait "$second_writer"
 if compgen -G "$evidence/.context-fabric-09-*" >/dev/null; then exit 1; fi
+faulty="$backup/fixed-temp-writer"
+cat > "$faulty" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+set -C
+: > "$1/fixed.tmp"
+SH
+chmod 700 "$faulty"
+"$faulty" "$barrier" & faulty_one=$!
+"$faulty" "$barrier" & faulty_two=$!
+wait "$faulty_one"
+if wait "$faulty_two"; then exit 1; fi
+rm -f "$barrier/fixed.tmp"
 python3 - "$task8" "$task9" "$root" <<'PY'
 import json,subprocess,sys
 head=subprocess.check_output(['git','-C',sys.argv[3],'rev-parse','HEAD'],text=True).strip()
