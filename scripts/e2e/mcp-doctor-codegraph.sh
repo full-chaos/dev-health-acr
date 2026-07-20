@@ -46,6 +46,6 @@ if scenario == "healthy": assert local["query_succeeded"] and local["result_coun
 if scenario == "missing-index": assert local["error_code"] == "local_index_missing"
 if scenario == "unsupported-version": assert local["error_code"] == "local_index_incompatible_version"
 if scenario == "path-sentinel":
-    raw=pathlib.Path(sys.argv[1]).read_text(); assert sentinel not in raw and "codegraph" not in raw.lower() or "provider_mode" in raw
+    raw=pathlib.Path(sys.argv[1]).read_text(); assert sentinel not in raw and ("codegraph" not in raw.lower() or "provider_mode" in raw)
 PY
 cat "$out"
