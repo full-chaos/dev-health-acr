@@ -198,6 +198,9 @@ func trustedCodeGraphRepositoryRoot(root, home string) bool {
 	if !ok || int(stat.Uid) != os.Geteuid() || int(stat.Gid) != os.Getegid() || info.Mode().Perm()&0o002 != 0 || info.Mode().Perm()&0o020 == 0 {
 		return false
 	}
+	if !codeGraphRootHasOnlyBaseACL(root) {
+		return false
+	}
 	for ancestor := filepath.Dir(root); ; ancestor = filepath.Dir(ancestor) {
 		ancestorInfo, ancestorErr := os.Stat(ancestor)
 		if ancestorErr != nil || !ancestorInfo.IsDir() || verifyCurrentUserOwned(ancestorInfo) != nil {
@@ -210,6 +213,40 @@ func trustedCodeGraphRepositoryRoot(root, home string) bool {
 			return false
 		}
 	}
+}
+
+type codeGraphDBGuard struct {
+	file *os.File
+	info os.FileInfo
+}
+
+func openManagedCodeGraphDB(root string) (codeGraphDBGuard, error) {
+	index, err := os.Lstat(filepath.Join(root, ".codegraph"))
+	if err != nil || index.Mode()&os.ModeSymlink == 0 {
+		return codeGraphDBGuard{}, nil
+	}
+	if !trustedCodeGraphIndex(root) {
+		return codeGraphDBGuard{}, errCodeGraphMissing
+	}
+	file, err := os.Open(filepath.Join(root, ".codegraph", "codegraph.db"))
+	if err != nil {
+		return codeGraphDBGuard{}, errCodeGraphMissing
+	}
+	info, err := file.Stat()
+	if err != nil || verifyCurrentUserOwned(info) != nil {
+		_ = file.Close()
+		return codeGraphDBGuard{}, errCodeGraphMissing
+	}
+	return codeGraphDBGuard{file, info}, nil
+}
+
+func (g codeGraphDBGuard) unchanged(root string) bool {
+	if g.file == nil {
+		return true
+	}
+	defer g.file.Close()
+	current, err := os.Stat(filepath.Join(root, ".codegraph", "codegraph.db"))
+	return err == nil && trustedCodeGraphIndex(root) && os.SameFile(g.info, current)
 }
 
 func verifyCurrentUserOwned(info os.FileInfo) error {
