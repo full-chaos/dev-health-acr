@@ -31,10 +31,11 @@ that implementation is allowed to depend on, so:
 All fields, commands, and caps below were observed directly against the
 installed `codegraph` binary (`codegraph --version` → `1.2.0`) run read-only
 against this monorepo's indexed checkout at commit
-`439acd2e79f1833bd403d5b0a7ad8288c505dbab`. `.codegraph/codegraph.db`'s
-sha256 (`6a3009d317cec2fb4bad21a6343b50f8f95749d8b4abb5ef2c7d66686dca369c`)
-was identical before and after every observation command in this task,
-proving each one was read-only.
+`439acd2e79f1833bd403d5b0a7ad8288c505dbab`. The observation commands left
+the index hash unchanged. At runtime, ACR may perform a bounded, read-only,
+no-follow open of `.codegraph/codegraph.db` only to validate its expected
+identity and regular-file type; CLI JSON remains the sole context/evidence data
+interface.
 
 ## Decision
 
@@ -99,9 +100,11 @@ I/O.
 - Non-JSON output modes (omitting `--json`) and every use of `files --format`
   — never parsed as a data source or invoked in production.
 - Direct reads of `.codegraph/*.db`, `.codegraph/*.db-wal`,
-  `.codegraph/*.db-shm`, or any other CodeGraph-internal file — the CLI's
-  JSON output is the only supported interface; ACR never touches
-  CodeGraph's SQLite storage.
+  `.codegraph/*.db-shm`, or any other CodeGraph-internal file as a
+  context/evidence query source — the CLI's JSON output is the only supported
+  data interface. The sidecar's bounded read-only, no-follow
+  `codegraph.db` identity/regular-file validation is permitted and does not
+  read SQLite contents or mutate storage.
 - Parsing `codegraph explore` or `codegraph node` output as a data source.
 - Claiming or inferring an indexed Git commit or ref. CodeGraph 1.2.0's
   `status --json` exposes no commit/ref field. At every nesting level, raw

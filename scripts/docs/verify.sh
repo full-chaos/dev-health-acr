@@ -95,7 +95,22 @@ fi
 
 forbidden_sentence='ACR is packaged by dev-health-ops and publicly published.'
 forbidden_hits=""
-for md_file in "${doc_scan_files[@]}"; do
+publication_scan_files=()
+if [ "$fixture_mode" = true ]; then
+  publication_scan_files=("${doc_scan_files[@]}")
+else
+  while IFS= read -r -d '' md_file; do
+    publication_scan_files+=("$md_file")
+  done < <(find "$root" -name '*.md' \
+    -not -path '*/.git/*' \
+    -not -path '*/.omo/*' \
+    -not -path '*/.tmp/*' \
+    -not -path '*/testdata/docs-invalid/*' \
+    -not -path '*/node_modules/*' \
+    -not -path '*/vendor/*' \
+    -print0 2>/dev/null)
+fi
+for md_file in "${publication_scan_files[@]}"; do
   if grep -qF "$forbidden_sentence" "$md_file"; then
     forbidden_hits="$forbidden_hits${forbidden_hits:+ }${md_file#"$root"/}"
   fi
