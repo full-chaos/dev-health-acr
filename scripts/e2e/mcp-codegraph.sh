@@ -76,9 +76,12 @@ case "$scenario" in
 esac
 
 set +e
-coproc MCP { cd "$tmp/repo" && ACR_API_URL="https://localhost:$port" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_LOCAL_INDEX_PROVIDER=codegraph ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" ACR_LOCAL_INDEX_TIMEOUT=200ms "$tmp/acr-mcp" serve 2> "$tmp/mcp.err"; }
-rpc() { printf '%s\n' "$1" >&"${MCP[1]}"; IFS= read -r -t 10 response <&"${MCP[0]}" || return 1; printf '%s\n' "$response" >> "$tmp/mcp.out"; }
-if [[ -v MCP[1] ]]; then
+if [[ "$scenario" == hosted-unavailable ]]; then
+  (cd "$tmp/repo" && ACR_API_URL="https://localhost:$port" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$tmp/ca.pem" "$tmp/acr-mcp" serve) </dev/null > "$tmp/mcp.out" 2> "$tmp/mcp.err"
+else
+  coproc MCP { cd "$tmp/repo" && ACR_API_URL="https://localhost:$port" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_LOCAL_INDEX_PROVIDER=codegraph ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" ACR_LOCAL_INDEX_TIMEOUT=200ms "$tmp/acr-mcp" serve 2> "$tmp/mcp.err"; }
+  rpc() { printf '%s\n' "$1" >&"${MCP[1]}"; IFS= read -r -t 10 response <&"${MCP[0]}" || return 1; printf '%s\n' "$response" >> "$tmp/mcp.out"; }
+  if [[ -v MCP[1] ]]; then
   rpc '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' >&"${MCP[1]}"
   rpc '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
@@ -86,8 +89,9 @@ if [[ -v MCP[1] ]]; then
   rpc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"source_evidence","arguments":{"evidence_ref_id":"ev_01J0ACR001"}}}'
   rpc '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"source_evidence","arguments":{"evidence_ref_id":"local_evidence_001"}}}'
   exec {MCP[1]}>&-
+  fi
+  wait "$MCP_PID" || true
 fi
-wait "$MCP_PID" || true
 set -e
 
 receipt="$root/.omo/evidence/context-fabric-09-mixed-mcp.json"
