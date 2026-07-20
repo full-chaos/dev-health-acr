@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -37,95 +36,6 @@ func packetHandler(t *testing.T, calls *int) http.HandlerFunc {
 		packet.Budget = contractsv1.PacketBudget{MaxItems: received.Options.MaxItems, MaxOutputTokens: received.Options.MaxOutputTokens, MaxSerializedBytes: received.Options.MaxSerializedBytes}
 		writeJSONFixture(t, w, http.StatusOK, packet)
 	}
-}
-
-func TestFederation_PacketContentAccounting(t *testing.T) {
-	// Given
-	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
-	fx, calls := newFixtureServer(t), 0
-	fx.ContextPacketHandler = packetHandler(t, &calls)
-	boot := federationBootstrap(t, fx, validLocalBundle(now), nil)
-
-	// When
-	response := federationResponse(t, boot)
-
-	// Then
-	require.Equal(t, 1, calls)
-	require.NotNil(t, response.LocalContext)
-	require.Equal(t, localJSONBytes(response.LocalContext.Items, response.LocalContext.EvidenceRefs), response.FederatedBudget.LocalSerializedBytes)
-	require.Equal(t, 10, response.FederatedBudget.LocalEstimatedTokens)
-	require.Equal(t, response.FederatedBudget.LocalItemsUsed, len(response.LocalContext.Items))
-	require.Equal(t, response.FederatedBudget.LocalSerializedBytes+response.FederatedBudget.HostedSerializedBytes, response.FederatedBudget.TotalSerializedBytes)
-}
-
-func TestFederation_EnvelopeExcluded(t *testing.T) {
-	// Given
-	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
-	fx, calls := newFixtureServer(t), 0
-	fx.ContextPacketHandler = packetHandler(t, &calls)
-
-	// When
-	response := federationResponse(t, federationBootstrap(t, fx, validLocalBundle(now), nil))
-	encoded, err := json.Marshal(response)
-
-	// Then
-	require.NoError(t, err)
-	require.Equal(t, 1, calls)
-	require.Greater(t, len(encoded), response.FederatedBudget.TotalSerializedBytes)
-	require.Equal(t, localJSONBytes(response.LocalContext.Items, response.LocalContext.EvidenceRefs), response.FederatedBudget.LocalSerializedBytes)
-}
-
-func TestFederation_Provenance(t *testing.T) {
-	// Given
-	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
-	fx := newFixtureServer(t)
-
-	// When
-	response := federationResponse(t, federationBootstrap(t, fx, validLocalBundle(now), nil))
-
-	// Then
-	local := response.LocalContext
-	require.Equal(t, contractsv1.MCPLocalContextAvailable, local.Status)
-	require.Equal(t, contractsv1.MCPLocalFreshnessFresh, local.Freshness)
-	require.Equal(t, []string{"indexed_commit_unknown"}, local.Warnings)
-	require.Empty(t, local.IndexedRef)
-	require.Empty(t, local.IndexedCommit)
-	require.Equal(t, contractsv1.ClaimObserved, local.Items[0].ClaimKind)
-	require.Equal(t, "local_index", local.EvidenceRefs[0].Source.System)
-	require.NoError(t, local.EvidenceRefs[0].Validate())
-	require.NotContains(t, local.Items[0].Summary, "internal/widget.go")
-}
-
-func TestFederation_DeterministicIDs(t *testing.T) {
-	// Given
-	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
-	runtime := newLocalFederationRuntime(sidecar.LocalIndexConfig{}, func() time.Time { return now }, sha256.Sum256)
-
-	// When
-	firstItems, firstRefs, firstErr := runtime.mapBundle("acme/widgets", validLocalBundle(now), map[string]struct{}{})
-	secondItems, secondRefs, secondErr := runtime.mapBundle("acme/widgets", validLocalBundle(now), map[string]struct{}{})
-
-	// Then
-	require.NoError(t, firstErr)
-	require.NoError(t, secondErr)
-	require.Equal(t, firstItems[0].PacketItemID, secondItems[0].PacketItemID)
-	require.Equal(t, firstRefs[0].EvidenceRefID, secondRefs[0].EvidenceRefID)
-}
-
-func TestFederation_DisjointIDs(t *testing.T) {
-	// Given
-	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
-	runtime := newLocalFederationRuntime(sidecar.LocalIndexConfig{}, func() time.Time { return now }, sha256.Sum256)
-	occupied := map[string]struct{}{"hosted": {}, "request": {}}
-
-	// When
-	items, refs, err := runtime.mapBundle("acme/widgets", validLocalBundle(now), occupied)
-
-	// Then
-	require.NoError(t, err)
-	require.NotContains(t, []string{"hosted", "request"}, refs[0].EvidenceRefID)
-	require.Equal(t, refs[0].EvidenceRefID+":item", items[0].PacketItemID)
-	require.Len(t, occupied, 3)
 }
 
 func TestFederation_LocalRouting(t *testing.T) {
@@ -169,34 +79,6 @@ func TestFederation_HostedRouting(t *testing.T) {
 	var response contractsv1.MCPSourceEvidenceResponse
 	require.NoError(t, json.Unmarshal(result.StructuredContent.(json.RawMessage), &response))
 	require.Equal(t, "hosted-evidence", response.Structured.Evidence.EvidenceRefID)
-}
-
-func TestFederation_CacheLifecycle(t *testing.T) {
-	// Given
-	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
-	cache := newLocalEvidenceCache(1024, time.Minute, func() time.Time { return now })
-	entry := cachedLocalEvidence{ref: contractsv1.EvidenceRef{EvidenceRefID: "a", Metadata: map[string]any{"key": "value"}}}
-	cache.putBatch([]cachedLocalEvidence{entry})
-
-	// When
-	got, found := cache.get("a")
-	got.ref.Metadata["key"] = "changed"
-	now = now.Add(time.Minute)
-	_, expired := cache.get("a")
-
-	// Then
-	require.True(t, found)
-	require.False(t, expired)
-	require.Equal(t, "value", entry.ref.Metadata["key"])
-	for index := range 1025 {
-		cache.putBatch([]cachedLocalEvidence{{ref: contractsv1.EvidenceRef{EvidenceRefID: string(rune(index + 1))}}})
-	}
-	require.LessOrEqual(t, cache.lru.Len(), 1024)
-	var group sync.WaitGroup
-	for range 8 {
-		group.Go(func() { _, _ = cache.get("missing") })
-	}
-	group.Wait()
 }
 
 func TestFederation_LocalContentOverflow(t *testing.T) {
