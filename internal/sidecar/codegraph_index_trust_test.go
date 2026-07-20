@@ -125,3 +125,24 @@ func TestTrustedCodeGraphIndexRejectsWritableManagedTarget(t *testing.T) {
 	require.NoError(t, os.Symlink(target, filepath.Join(repo, ".codegraph")))
 	require.False(t, trustedCodeGraphIndex(repo))
 }
+
+func TestTrustedCodeGraphIndexRejectsNonDirectManagedTargets(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	managed := filepath.Join(home, ".omo", "codegraph", "projects")
+	outside := t.TempDir()
+	direct, err := os.MkdirTemp(managed, "acr-test-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(direct) })
+	nested := filepath.Join(direct, "nested")
+	require.NoError(t, os.Mkdir(nested, 0o700))
+	for _, target := range []string{outside, nested} {
+		t.Run(filepath.Base(target), func(t *testing.T) {
+			repo, createErr := os.MkdirTemp(home, "acr-codegraph-")
+			require.NoError(t, createErr)
+			t.Cleanup(func() { _ = os.RemoveAll(repo) })
+			require.NoError(t, os.Symlink(target, filepath.Join(repo, ".codegraph")))
+			require.False(t, trustedCodeGraphIndex(repo))
+		})
+	}
+}
