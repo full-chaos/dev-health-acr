@@ -106,3 +106,4 @@ r={"schema_version":"context_fabric_mcp_codegraph_receipt.v1","task":"CHAOS-3007
 json.dump(r,open(sys.argv[3],'w'),sort_keys=True,separators=(',',':'))
 print(json.dumps({"verdict":r['verdict'],"scenario":scenario},separators=(',',':')))
 PY
+[[ "$scenario" != hosted-unavailable && "$scenario" != local-timeout ]] || exit 1
