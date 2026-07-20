@@ -14,8 +14,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
+live_receipt="$root/.omo/evidence/context-fabric-09-live-mcp.json"
 source_revision="$(git -C "$root" rev-parse HEAD)"
 [[ -z "$(git -C "$root" status --porcelain)" ]] || { printf 'canonical source worktree must be clean\n' >&2; exit 1; }
+mkdir -p "$(dirname "$live_receipt")"
+rm -f "$live_receipt"
 tmp=""
 mcp_pid=""
 host_pid=""
@@ -233,7 +236,7 @@ validate_status
 [[ "$before_identity" == "$after_identity" && "$status_before" == "$status_after" ]] || exit 1
 
 mkdir -p "$root/.omo/evidence"
-SOURCE_REVISION="$source_revision" SOURCE_IDENTITY_UNCHANGED="$source_identity_unchanged" HARNESS_SHA256="$(shasum -a 256 "$0" | awk '{print $1}')" BINARY_SHA256="$(shasum -a 256 "$tmp/acr-mcp" | awk '{print $1}')" WORKSPACE_HEAD_REVISION="$(git -C "$repo" rev-parse HEAD)" python3 - "$tmp/mcp.out" "$command_log" "$root/.omo/evidence/context-fabric-09-live-mcp.json" "$before_identity" "$after_identity" "$status_before" "$status_after" <<'PY'
+SOURCE_ROOT="$root" SOURCE_REVISION="$source_revision" SOURCE_IDENTITY_UNCHANGED="$source_identity_unchanged" HARNESS_SHA256="$(shasum -a 256 "$0" | awk '{print $1}')" BINARY_SHA256="$(shasum -a 256 "$tmp/acr-mcp" | awk '{print $1}')" WORKSPACE_HEAD_REVISION="$(git -C "$repo" rev-parse HEAD)" python3 - "$tmp/mcp.out" "$command_log" "$live_receipt" "$before_identity" "$after_identity" "$status_before" "$status_after" <<'PY'
 import collections,json,sys
 lines=[]
 for line in open(sys.argv[1],encoding='utf-8'):
@@ -265,8 +268,14 @@ if set(counts)-allowed or not counts.get('status') or not counts.get('query'): r
 before=json.loads(sys.argv[4]); after=json.loads(sys.argv[5])
 if before!=after: raise SystemExit('real index changed')
 r={'schema_version':'context_fabric_mcp_codegraph_receipt.v1','task':'CHAOS-3007 Task 9','mode':'live','scenario':'mixed','verdict':'pass','source_revision':__import__('os').environ['SOURCE_REVISION'],'source_worktree_clean':True,'source_identity_unchanged':__import__('os').environ['SOURCE_IDENTITY_UNCHANGED']=='true','harness_sha256':__import__('os').environ['HARNESS_SHA256'],'binary_sha256':__import__('os').environ['BINARY_SHA256'],'tls_verified':True,'workspace_head_revision':__import__('os').environ['WORKSPACE_HEAD_REVISION'],'workspace_head_unchanged':True,'indexed_commit_state':'unknown','mcp':{'framing':bool(lines),'initialize':bool(by_id.get(1,{}).get('result')),'initialized_notification':True,'tools':len(tools),'record_episode_present':'record_episode' in {x.get('name') for x in tools},'context_ok':True,'hosted_expand_ok':True,'local_expand_ok':True},'federation':{'hosted_packet_unchanged':True,'ids_disjoint':True,'packet_content_within_budget':True,'envelope_excluded':True,'federated_budget_excluded':True,'rendered_markdown_excluded':True},'codegraph':{'command_counts':dict(sorted(counts.items())),'forbidden_command_count':0,'status_before_sha256':sys.argv[6],'status_after_sha256':sys.argv[7],'index_before':before,'index_after':after,'persistent_identity_replacement_detected':False,'index_kind':'live'},'cleanup':{'processes_stopped':True,'listeners_stopped':True,'temporary_material_removed':True}}
-temporary=sys.argv[3]+'.tmp'
-with open(temporary,'w',encoding='utf-8') as output:
- import os; os.fchmod(output.fileno(),0o600); json.dump(r,output,sort_keys=True,separators=(',',':')); output.write('\n')
-os.replace(temporary,sys.argv[3])
+import os,subprocess,tempfile
+root=os.environ['SOURCE_ROOT']
+if subprocess.check_output(['git','-C',root,'rev-parse','HEAD'],text=True).strip()!=r['source_revision'] or subprocess.check_output(['git','-C',root,'status','--porcelain'],text=True): raise SystemExit('source changed before receipt publication')
+fd,temporary=tempfile.mkstemp(prefix='.context-fabric-09-live-',dir=os.path.dirname(sys.argv[3]))
+try:
+ os.fchmod(fd,0o600)
+ with os.fdopen(fd,'w',encoding='utf-8') as output: json.dump(r,output,sort_keys=True,separators=(',',':')); output.write('\n'); output.flush(); os.fsync(output.fileno())
+ os.replace(temporary,sys.argv[3])
+finally:
+ if os.path.exists(temporary): os.unlink(temporary)
 PY

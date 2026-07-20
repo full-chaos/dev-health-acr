@@ -5,6 +5,7 @@ root="$(cd "$(dirname "$0")/../.." && pwd -P)"
 evidence="$root/.omo/evidence"
 task8="$evidence/context-fabric-08-no-upload.json"
 task9="$evidence/context-fabric-09-mixed-mcp.json"
+live="$evidence/context-fabric-09-live-mcp.json"
 mkdir -p "$evidence"
 if ! git -C "$root" diff --quiet; then
   printf 'test requires a clean source worktree\n' >&2
@@ -18,6 +19,17 @@ if [[ -n "$(git -C "$root" status --porcelain)" ]]; then
   printf 'test requires no untracked source files\n' >&2
   exit 1
 fi
+backup="$(mktemp -d)"
+restore_receipts() {
+  for name in context-fabric-08-no-upload.json context-fabric-09-mixed-mcp.json context-fabric-09-live-mcp.json; do
+    if [[ -e "$backup/$name" ]]; then cp "$backup/$name" "$evidence/$name"; else rm -f "$evidence/$name"; fi
+  done
+  rm -rf "$backup"
+}
+trap restore_receipts EXIT INT TERM
+for name in context-fabric-08-no-upload.json context-fabric-09-mixed-mcp.json context-fabric-09-live-mcp.json; do
+  [[ ! -e "$evidence/$name" ]] || cp "$evidence/$name" "$backup/$name"
+done
 
 printf '{"sentinel":"task8"}\n' > "$task8"
 task8_before="$(shasum -a 256 "$task8" | awk '{print $1}')"
@@ -57,4 +69,16 @@ PY
 task9_before="$(shasum -a 256 "$task9" | awk '{print $1}')"
 "$root/scripts/e2e/mcp-codegraph-live.sh" --self-test
 [[ "$task9_before" == "$(shasum -a 256 "$task9" | awk '{print $1}')" ]] || exit 1
-rm -f "$task8" "$task9" "$evidence/context-fabric-09-live-mcp.json"
+printf '{"stale":true}\n' > "$live"
+if "$root/scripts/e2e/mcp-codegraph-live.sh" --repo /definitely-missing --scenario mixed; then exit 1; fi
+[[ ! -e "$live" ]] || exit 1
+for receipt in "$task8" "$task9"; do
+  [[ "$(stat -f '%Lp' "$receipt")" == 600 ]] || exit 1
+  python3 - "$receipt" <<'PY'
+import json,sys
+json.load(open(sys.argv[1]))
+PY
+done
+out_of_tree="$(mktemp -d)"
+(cd "$out_of_tree" && "$root/scripts/e2e/local-index-privacy.sh" --scenario no-upload)
+rm -rf "$out_of_tree"

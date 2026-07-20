@@ -7,7 +7,7 @@ if [[ "${1:-}" != "--scenario" || ! "$scenario" =~ ^(no-upload|injected-source-l
   exit 64
 fi
 
-root="$(git rev-parse --show-toplevel)"
+root="$(cd "$(dirname "$0")/../.." && pwd -P)"
 canonical_scenario="no-upload"
 canonical_receipt="$root/.omo/evidence/context-fabric-08-no-upload.json"
 scenario_ledger="$root/.omo/evidence/context-fabric-08-scenarios.jsonl"
@@ -109,7 +109,7 @@ PY
 )"
 ACR_API_URL="https://localhost:$port" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_API_TOKEN="$token" ACR_SIDECAR_VERSION=1.0.0 ACR_LOCAL_INDEX_PROVIDER=codegraph ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" PRIVACY_MCP="$tmp/acr-mcp" PRIVACY_WORKSPACE="$tmp/workspace" PRIVACY_BRANCH="$workspace_branch" GRAPH_PAYLOAD_SENTINEL="$graph_payload_sentinel" LOCAL_LOCATOR_SENTINEL="$local_locator_sentinel" ABSOLUTE_ROOT_SENTINEL="$absolute_root_sentinel" PRIVACY_RAW_BOUNDARY_PROBE="$raw_boundary_probe" PRIVACY_CAPTURE="$capture" PRIVACY_EXPANSION_COUNTS="$expansion_counts" go run "$root/.tmp/local-index-privacy-driver.go"
 
-ACR_API_TOKEN="$token" SOURCE_SENTINEL="$source_sentinel" INDEX_SENTINEL="$index_sentinel" GRAPH_PAYLOAD_SENTINEL="$graph_payload_sentinel" LOCAL_LOCATOR_SENTINEL="$local_locator_sentinel" ABSOLUTE_ROOT_SENTINEL="$absolute_root_sentinel" SOURCE_REVISION="$source_revision" SOURCE_CLEAN=true SOURCE_IDENTITY_UNCHANGED="$source_identity_unchanged" HARNESS_SHA256="$(shasum -a 256 "$0" | awk '{print $1}')" BINARY_SHA256="$(shasum -a 256 "$tmp/acr-mcp" | awk '{print $1}')" python3 - "$capture" "$scenario" "$receipt" "$expansion_counts" "$scenario_ledger" <<'PY'
+ACR_API_TOKEN="$token" SOURCE_SENTINEL="$source_sentinel" INDEX_SENTINEL="$index_sentinel" GRAPH_PAYLOAD_SENTINEL="$graph_payload_sentinel" LOCAL_LOCATOR_SENTINEL="$local_locator_sentinel" ABSOLUTE_ROOT_SENTINEL="$absolute_root_sentinel" SOURCE_ROOT="$root" SOURCE_REVISION="$source_revision" SOURCE_CLEAN=true SOURCE_IDENTITY_UNCHANGED="$source_identity_unchanged" HARNESS_SHA256="$(shasum -a 256 "$0" | awk '{print $1}')" BINARY_SHA256="$(shasum -a 256 "$tmp/acr-mcp" | awk '{print $1}')" python3 - "$capture" "$scenario" "$receipt" "$expansion_counts" "$scenario_ledger" <<'PY'
 import json,sys
 capture,scenario,receipt,expansion_counts,ledger=sys.argv[1:]
 rows=[json.loads(line) for line in open(capture)]
@@ -151,9 +151,15 @@ if verdict!='pass':
  with open(ledger,'a',encoding='utf-8') as out: out.write(json.dumps({'task':safe['task'],'scenario':scenario,'result':'reject','actual_exit':1},sort_keys=True,separators=(',',':'))+'\n')
  print('privacy verifier failed')
  sys.exit(1)
-temporary=receipt+'.tmp'
-with open(temporary,'w',encoding='utf-8') as out:
- import os; os.fchmod(out.fileno(),0o600); json.dump(safe,out,sort_keys=True,separators=(',',':')); out.write('\n')
-os.replace(temporary,receipt)
+import os,subprocess,tempfile
+root=os.environ['SOURCE_ROOT']
+if subprocess.check_output(['git','-C',root,'rev-parse','HEAD'],text=True).strip()!=safe['source_revision'] or subprocess.check_output(['git','-C',root,'status','--porcelain'],text=True): raise SystemExit('source changed before receipt publication')
+fd,temporary=tempfile.mkstemp(prefix='.context-fabric-08-',dir=os.path.dirname(receipt))
+try:
+ os.fchmod(fd,0o600)
+ with os.fdopen(fd,'w',encoding='utf-8') as out: json.dump(safe,out,sort_keys=True,separators=(',',':')); out.write('\n'); out.flush(); os.fsync(out.fileno())
+ os.replace(temporary,receipt)
+finally:
+ if os.path.exists(temporary): os.unlink(temporary)
 print('privacy receipt: pass')
 PY
