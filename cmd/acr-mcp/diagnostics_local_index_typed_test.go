@@ -18,8 +18,8 @@ func TestDoctorLocalIndexClassifiesTypedCapabilityFailures(t *testing.T) {
 		name, status, wantCode       string
 		indexChecked, versionChecked bool
 	}{
-		{"missing", `{"initialized":false,"version":"1.2.0"}`, "local_index_missing", true, true},
-		{"incompatible", typedStatus("2.0.0"), "local_index_incompatible_version", true, true},
+		{"missing", `{"initialized":false,"version":"1.2.0"}`, "local_index_missing", true, false},
+		{"incompatible", typedStatus("2.0.0"), "local_index_incompatible_version", false, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			config, info := typedDoctorFixture(t, test.status, "[]")

@@ -103,8 +103,20 @@ func applyLocalIndexWarnings(report *localIndexReport, warnings []string) {
 func applyCapabilitiesError(report *localIndexReport, err error) {
 	applyLocalIndexError(report, err)
 	var localErr *sidecar.LocalIndexError
-	if errors.As(err, &localErr) && localErr.Code() != sidecar.LocalIndexErrorExecutableAbsent {
-		report.IndexChecked, report.VersionChecked = true, true
+	if !errors.As(err, &localErr) {
+		return
+	}
+	switch localErr.Code() {
+	case sidecar.LocalIndexErrorMissing:
+		report.IndexChecked = true
+	case sidecar.LocalIndexErrorIncompatibleVersion:
+		report.VersionChecked = true
+	case sidecar.LocalIndexErrorStale:
+		report.IndexChecked, report.IndexReadable = true, true
+		report.VersionChecked, report.VersionCompatible = true, true
+		report.WorktreeMismatchChecked = true
+	case sidecar.LocalIndexErrorWorktreeMismatch:
+		report.WorktreeMismatchChecked, report.WorktreeMismatchDetected = true, true
 	}
 }
 

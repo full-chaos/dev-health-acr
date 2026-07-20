@@ -21,6 +21,25 @@ func TestDoctorLocalIndexClassifiesStrictStaleQueryFailure(t *testing.T) {
 	assertStrictDoctorReport(t, report, false)
 }
 
+func TestDoctorLocalIndexClassifiesStrictStaleCapabilityFailure(t *testing.T) {
+	status := strings.Replace(typedStatus("1.2.0"), `"reindexRecommended":false`, `"reindexRecommended":true`, 1)
+	config, info := typedDoctorFixture(t, status, "[]")
+	config.StalePolicy = sidecar.LocalIndexStaleStrict
+	withDoctorLocalProbe(t, config, info, sidecar.NewWorkspaceLocalIndexProvider(config, mustDoctorSnapshot(t, info)))
+	report := probeLocalIndex()
+	assertStrictCapabilityReport(t, report, false)
+}
+
+func TestDoctorLocalIndexClassifiesStrictDirtyWorktreeMismatchCapabilityFailure(t *testing.T) {
+	status := strings.Replace(typedStatus("1.2.0"), `"worktreeMismatch":null`, `"worktreeMismatch":"different worktree"`, 1)
+	status = strings.Replace(status, `"added":0`, `"added":1`, 1)
+	config, info := typedDoctorFixture(t, status, "[]")
+	config.StalePolicy = sidecar.LocalIndexStaleStrict
+	withDoctorLocalProbe(t, config, info, sidecar.NewWorkspaceLocalIndexProvider(config, mustDoctorSnapshot(t, info)))
+	report := probeLocalIndex()
+	assertStrictCapabilityReport(t, report, true)
+}
+
 func TestDoctorLocalIndexClassifiesStrictDirtyWorktreeMismatchQueryFailure(t *testing.T) {
 	status := strings.Replace(typedStatus("1.2.0"), `"worktreeMismatch":null`, `"worktreeMismatch":"different worktree"`, 1)
 	status = strings.Replace(status, `"added":0`, `"added":1`, 1)
@@ -72,6 +91,22 @@ func assertStrictDoctorReport(t *testing.T, report localIndexReport, mismatch bo
 	t.Helper()
 	if report.Available || report.Status != "unavailable" || report.Freshness != "stale" || report.ErrorCode != "local_index_stale" || !report.QueryChecked || report.QuerySucceeded || !report.IndexChecked || !report.IndexReadable || !report.VersionChecked || !report.VersionCompatible || !report.WorktreeMismatchChecked || report.WorktreeMismatchDetected != mismatch || report.ProviderVersion != "1.2.0" || report.IndexedCommitStatus != "indexed_commit_unknown" {
 		t.Fatalf("unexpected strict report: %#v", report)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"different worktree", "local_workspace_dirty", "full-chaos/acr", "0123456789abcdef0123456789abcdef01234567"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("report leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func assertStrictCapabilityReport(t *testing.T, report localIndexReport, mismatch bool) {
+	t.Helper()
+	if report.Available || report.Status != "unavailable" || report.Freshness != "stale" || report.ErrorCode != "local_index_stale" || report.QueryChecked || !report.IndexChecked || !report.IndexReadable || !report.VersionChecked || !report.VersionCompatible || !report.WorktreeMismatchChecked || report.WorktreeMismatchDetected != mismatch || report.IndexedCommitStatus != "indexed_commit_unknown" {
+		t.Fatalf("unexpected strict capability report: %#v", report)
 	}
 	encoded, err := json.Marshal(report)
 	if err != nil {
