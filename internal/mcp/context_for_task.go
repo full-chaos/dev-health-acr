@@ -164,6 +164,15 @@ func collectPacketIDs(value any, ids map[string]struct{}) {
 					ids[id] = struct{}{}
 				}
 			}
+			if key == "evidence_ref_ids" {
+				if values, ok := child.([]any); ok {
+					for _, id := range values {
+						if value, ok := id.(string); ok {
+							ids[value] = struct{}{}
+						}
+					}
+				}
+			}
 			collectPacketIDs(child, ids)
 		}
 	case []any:

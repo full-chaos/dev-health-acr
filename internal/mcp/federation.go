@@ -143,7 +143,7 @@ func localJSONBytes(items []contractsv1.ContextPacketItem, refs []contractsv1.Ev
 }
 
 func localContext(bundle sidecar.LocalEvidenceBundle, mapped mappedLocalBundle, trimmed bool) contractsv1.MCPLocalContext {
-	warnings := appendDistinctWarnings(nil, bundle.Warnings)
+	warnings := appendDistinctWarnings(make([]string, 0, len(bundle.Warnings)+1), bundle.Warnings)
 	if trimmed {
 		warnings = appendDistinctWarning(warnings, "local_budget_exhausted")
 	}
