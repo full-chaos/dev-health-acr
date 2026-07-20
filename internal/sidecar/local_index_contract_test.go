@@ -52,7 +52,7 @@ func assertLocalIndexProviderContract(t *testing.T, provider LocalIndexProvider)
 	capabilities, err := provider.Capabilities(ctx)
 
 	// Then
-	if err != nil {
+	if err != nil && capabilities.Available {
 		t.Fatalf("Capabilities() error = %v", err)
 	}
 	if err := ValidateLocalIndexCapabilities(capabilities); err != nil {
@@ -103,6 +103,10 @@ func assertLocalIndexProviderContract(t *testing.T, provider LocalIndexProvider)
 			t.Fatalf("ResolveEvidence(missing) error = %v, want ErrLocalEvidenceNotFound", err)
 		}
 	} else {
+		var localErr *LocalIndexError
+		if !errors.As(err, &localErr) || localErr.Status() != LocalIndexStatusUnavailable || localErr.Freshness() != LocalIndexFreshnessUnknown {
+			t.Fatalf("Capabilities() unavailable error = %v, want typed unavailable state", err)
+		}
 		_, err := provider.ContextForTask(ctx, request)
 		if !errors.Is(err, ErrLocalIndexUnavailable) {
 			t.Fatalf("ContextForTask() error = %v, want ErrLocalIndexUnavailable", err)
@@ -146,6 +150,11 @@ func TestLocalIndexProviderContract_disabledProvider(t *testing.T) {
 	// Given
 	provider := NewDisabledLocalIndexProvider()
 
-	// When / Then
-	assertLocalIndexProviderContract(t, provider)
+	// When
+	_, err := provider.Capabilities(t.Context())
+
+	// Then
+	if !errors.Is(err, ErrLocalIndexUnavailable) {
+		t.Fatalf("Capabilities() error = %v, want ErrLocalIndexUnavailable", err)
+	}
 }

@@ -32,7 +32,7 @@ func TestCodeGraphRunner_RejectsUntrustedExecutable(t *testing.T) {
 	_, err := runner.Status(context.Background(), t.TempDir())
 
 	// Then
-	require.ErrorIs(t, err, ErrCodeGraphUnavailable)
+	require.ErrorIs(t, err, errCodeGraphExecutableAbsent)
 	require.NotContains(t, err.Error(), runner.Config.Executable)
 }
 
@@ -68,7 +68,7 @@ func TestCodeGraphRunner_RejectsMalformedJSON(t *testing.T) {
 	_, err := runner.Status(context.Background(), t.TempDir())
 
 	// Then
-	require.ErrorIs(t, err, ErrCodeGraphUnavailable)
+	require.ErrorIs(t, err, errCodeGraphDecode)
 }
 
 func TestCodeGraphRunner_KillsOnTimeout(t *testing.T) {
@@ -81,6 +81,45 @@ func TestCodeGraphRunner_KillsOnTimeout(t *testing.T) {
 
 	// Then
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestCodeGraphRunner_classifiesCommandExitWithoutLeakingCommandOutput(t *testing.T) {
+	tests := []struct {
+		name    string
+		command func(CodeGraphRunner, context.Context, string) error
+		wantErr error
+	}{
+		{
+			name: "status missing",
+			command: func(runner CodeGraphRunner, ctx context.Context, root string) error {
+				_, err := runner.Status(ctx, root)
+				return err
+			},
+			wantErr: errCodeGraphMissing,
+		},
+		{
+			name: "query unsupported",
+			command: func(runner CodeGraphRunner, ctx context.Context, root string) error {
+				_, err := runner.Query(ctx, codeGraphQueryRequest{GitRoot: root, Search: "safe", Limit: 1})
+				return err
+			},
+			wantErr: errCodeGraphUnsupported,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			runner := newTestCodeGraphRunner(t, `printf '/private/path' >&2; exit 7`)
+			root := t.TempDir()
+
+			// When
+			err := test.command(runner, t.Context(), root)
+
+			// Then
+			require.ErrorIs(t, err, test.wantErr)
+			require.NotContains(t, err.Error(), "/private/path")
+		})
+	}
 }
 
 func TestCodeGraphRunner_preservesContextErrorWhenProcessCannotStart(t *testing.T) {

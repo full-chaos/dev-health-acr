@@ -13,12 +13,12 @@ const (
 
 func ValidateLocalIndexCapabilities(capabilities LocalIndexCapabilities) error {
 	if !capabilities.Available {
-		if capabilities.ProviderID != "" || capabilities.ProviderVersion != "" || capabilities.MaxItems != 0 || capabilities.MaxOutputTokens != 0 {
+		if capabilities.ProviderID != "" || capabilities.ProviderVersion != "" || capabilities.MaxItems != 0 || capabilities.MaxOutputTokens != 0 || capabilities.Status != LocalIndexStatusUnavailable || capabilities.Freshness != LocalIndexFreshnessUnknown {
 			return invalidLocalIndexValue(ErrInvalidLocalIndexCapabilities, "unavailable capabilities")
 		}
 		return nil
 	}
-	if !boundedNonEmpty(capabilities.ProviderID, maxLocalIndexProviderIDBytes) || !boundedNonEmpty(capabilities.ProviderVersion, maxLocalIndexProviderVersionBytes) || !boundedPositive(capabilities.MaxItems, maxLocalEvidenceItems) || !boundedPositive(capabilities.MaxOutputTokens, maxLocalEvidenceTokens) {
+	if !validCodeGraphText(capabilities.ProviderID, maxLocalIndexProviderIDBytes) || !validCodeGraphText(capabilities.ProviderVersion, maxLocalIndexProviderVersionBytes) || !boundedPositive(capabilities.MaxItems, maxLocalEvidenceItems) || !boundedPositive(capabilities.MaxOutputTokens, maxLocalEvidenceTokens) || !validUsableLocalIndexState(capabilities.Status, capabilities.Freshness) {
 		return invalidLocalIndexValue(ErrInvalidLocalIndexCapabilities, "capabilities")
 	}
 	return nil

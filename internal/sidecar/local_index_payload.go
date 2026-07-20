@@ -1,10 +1,10 @@
 package sidecar
 
 func localEvidenceBundleUsage(bundle LocalEvidenceBundle) (int, int, int, error) {
-	if !boundedNonEmpty(bundle.ProviderID, maxLocalIndexProviderIDBytes) || !boundedNonEmpty(bundle.ProviderVersion, maxLocalIndexProviderVersionBytes) {
+	if !validCodeGraphText(bundle.ProviderID, maxLocalIndexProviderIDBytes) || !validCodeGraphText(bundle.ProviderVersion, maxLocalIndexProviderVersionBytes) || !validUsableLocalIndexState(bundle.Status, bundle.Freshness) {
 		return 0, 0, 0, invalidLocalIndexValue(ErrInvalidLocalEvidenceBundle, "provider")
 	}
-	if !boundedNonEmpty(bundle.QueryID, maxLocalIndexQueryIDBytes) || !boundedNonEmpty(bundle.QueryVersion, maxLocalIndexQueryVersionBytes) {
+	if !validCodeGraphText(bundle.QueryID, maxLocalIndexQueryIDBytes) || !validCodeGraphText(bundle.QueryVersion, maxLocalIndexQueryVersionBytes) {
 		return 0, 0, 0, invalidLocalIndexValue(ErrInvalidLocalEvidenceBundle, "query")
 	}
 	if len(bundle.Evidence) > maxLocalEvidenceItems {
@@ -12,6 +12,9 @@ func localEvidenceBundleUsage(bundle LocalEvidenceBundle) (int, int, int, error)
 	}
 	if err := validateLocalEvidenceMetadata(bundle); err != nil {
 		return 0, 0, 0, err
+	}
+	if !validBundleWarnings(bundle) {
+		return 0, 0, 0, invalidLocalIndexValue(ErrInvalidLocalEvidenceBundle, "warnings")
 	}
 	metadataBytes, err := localBundleMetadataBytes(bundle)
 	if err != nil {

@@ -93,7 +93,7 @@ func TestCodeGraphProvider_ContextForTask_worktreeMismatchStringHonorsPolicies(t
 	require.NoError(t, gracefulErr)
 	require.Equal(t, LocalIndexStatusDegraded, graceful.Status)
 	require.Equal(t, LocalIndexFreshnessStale, graceful.Freshness)
-	require.Equal(t, []string{"local_worktree_mismatch", "indexed_commit_unknown", "local_query_budget_exhausted"}, graceful.Warnings)
+	require.Equal(t, []string{"local_worktree_mismatch", "local_query_budget_exhausted", "indexed_commit_unknown"}, graceful.Warnings)
 	var localErr *LocalIndexError
 	require.True(t, errors.As(strictErr, &localErr))
 	require.Equal(t, LocalIndexErrorStale, localErr.Code())

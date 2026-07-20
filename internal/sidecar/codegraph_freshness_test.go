@@ -49,7 +49,7 @@ func TestLocalIndexError_accessorsAndCancellation(t *testing.T) {
 }
 
 func TestCodeGraphDegradation_Absent(t *testing.T) {
-	require.Equal(t, LocalIndexErrorExecutableAbsent, localIndexErrorCodeFor(ErrCodeGraphUnavailable))
+	require.Equal(t, LocalIndexErrorExecutableAbsent, localIndexErrorCodeFor(errCodeGraphExecutableAbsent))
 }
 func TestCodeGraphDegradation_MissingIndex(t *testing.T) {
 	require.Equal(t, LocalIndexErrorMissing, localIndexErrorCodeFor(errCodeGraphMissing))

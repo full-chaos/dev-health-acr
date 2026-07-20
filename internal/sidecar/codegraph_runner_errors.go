@@ -26,10 +26,13 @@ const (
 )
 
 var (
-	errCodeGraphMissing      = errors.New("codegraph index missing")
-	errCodeGraphMismatch     = errors.New("codegraph worktree mismatch")
-	errCodeGraphUnsupported  = errors.New("codegraph unsupported capability")
-	errCodeGraphIncompatible = errors.New("codegraph incompatible version")
+	errCodeGraphExecutableAbsent = errors.New("codegraph executable absent")
+	errLocalIndexConfigInvalid   = errors.New("local index configuration invalid")
+	errLocalIndexDisabled        = errors.New("local index disabled")
+	errCodeGraphMissing          = errors.New("codegraph index missing")
+	errCodeGraphMismatch         = errors.New("codegraph worktree mismatch")
+	errCodeGraphUnsupported      = errors.New("codegraph unsupported capability")
+	errCodeGraphIncompatible     = errors.New("codegraph incompatible version")
 )
 
 // LocalIndexError is a safe, structured local-index failure classification.
@@ -60,6 +63,10 @@ func localIndexErrorCodeFor(err error) LocalIndexErrorCode {
 		return LocalIndexErrorTimeout
 	case errors.Is(err, ErrCodeGraphOutputTooLarge):
 		return LocalIndexErrorOversized
+	case errors.Is(err, errLocalIndexDisabled):
+		return LocalIndexErrorDisabled
+	case errors.Is(err, errCodeGraphExecutableAbsent):
+		return LocalIndexErrorExecutableAbsent
 	case errors.Is(err, errCodeGraphMissing):
 		return LocalIndexErrorMissing
 	case errors.Is(err, errCodeGraphMismatch):
@@ -71,7 +78,7 @@ func localIndexErrorCodeFor(err error) LocalIndexErrorCode {
 	case errors.Is(err, errCodeGraphDecode):
 		return LocalIndexErrorMalformed
 	default:
-		return LocalIndexErrorExecutableAbsent
+		return LocalIndexErrorMalformed
 	}
 }
 

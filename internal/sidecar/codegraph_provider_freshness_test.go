@@ -24,7 +24,7 @@ func TestCodeGraphProvider_ContextForTask_degradesForDecodedWorktreeMismatch(t *
 	require.NotEmpty(t, bundle.Evidence)
 	require.Equal(t, LocalIndexStatusDegraded, bundle.Status)
 	require.Equal(t, LocalIndexFreshnessStale, bundle.Freshness)
-	require.Equal(t, []string{"local_worktree_mismatch", "indexed_commit_unknown"}, bundle.Warnings[:2])
+	require.Equal(t, []string{"local_worktree_mismatch", "local_query_budget_exhausted", "indexed_commit_unknown"}, bundle.Warnings)
 	require.NotContains(t, bundle.Warnings, "index built for another worktree")
 }
 

@@ -24,6 +24,7 @@ type codeGraphCandidate struct {
 type codeGraphCommand string
 
 const (
+	codeGraphCommandStatus   codeGraphCommand = "status"
 	codeGraphCommandQuery    codeGraphCommand = "query"
 	codeGraphCommandCallers  codeGraphCommand = "callers"
 	codeGraphCommandCallees  codeGraphCommand = "callees"
@@ -104,9 +105,14 @@ func trimCodeGraphEvidence(bundle LocalEvidenceBundle) (LocalEvidenceBundle, boo
 		if err == nil {
 			return bundle, truncated, nil
 		}
-		if !codeGraphPayloadBudgetError(err) || len(bundle.Evidence) == 0 {
+		if !codeGraphPayloadBudgetError(err) {
 			return LocalEvidenceBundle{}, false, err
 		}
+		if len(bundle.Evidence) == 0 {
+			return LocalEvidenceBundle{}, false, ErrCodeGraphOutputTooLarge
+		}
+		bundle.Truncated = true
+		bundle.Warnings = canonicalBundleWarnings(bundle.Warnings, true, bundle.IndexedCommit)
 		bundle.Evidence = bundle.Evidence[:len(bundle.Evidence)-1]
 		truncated = true
 	}

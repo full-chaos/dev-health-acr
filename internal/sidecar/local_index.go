@@ -164,7 +164,7 @@ func (DisabledLocalIndexProvider) Capabilities(ctx context.Context) (LocalIndexC
 	if err := ctx.Err(); err != nil {
 		return LocalIndexCapabilities{}, err
 	}
-	return LocalIndexCapabilities{}, nil
+	return LocalIndexCapabilities{Status: LocalIndexStatusUnavailable, Freshness: LocalIndexFreshnessUnknown}, localIndexFailure(errors.Join(errLocalIndexDisabled, ErrLocalIndexUnavailable))
 }
 
 func (DisabledLocalIndexProvider) ContextForTask(ctx context.Context, request LocalContextRequest) (LocalEvidenceBundle, error) {
@@ -174,7 +174,7 @@ func (DisabledLocalIndexProvider) ContextForTask(ctx context.Context, request Lo
 	if err := ValidateLocalContextRequest(request); err != nil {
 		return LocalEvidenceBundle{}, err
 	}
-	return LocalEvidenceBundle{}, ErrLocalIndexUnavailable
+	return LocalEvidenceBundle{}, localIndexFailure(errors.Join(errLocalIndexDisabled, ErrLocalIndexUnavailable))
 }
 
 func (DisabledLocalIndexProvider) ResolveEvidence(ctx context.Context, _ string) (LocalExpandedEvidence, error) {

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os/exec"
 	"time"
@@ -13,7 +12,7 @@ import (
 
 const codeGraphWaitDelay = time.Second
 
-func runCodeGraphJSON(ctx context.Context, path, gitRoot string, arguments []string, input []byte) ([]byte, error) {
+func runCodeGraphJSON(ctx context.Context, path, gitRoot string, command codeGraphRunCommand, arguments []string, input []byte) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, path, arguments...)
 	cmd.Dir = gitRoot
 	cmd.Env = credentialSafeEnviron()
@@ -26,32 +25,40 @@ func runCodeGraphJSON(ctx context.Context, path, gitRoot string, arguments []str
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, errors.Join(errCodeGraphDecode, ErrCodeGraphUnavailable)
+		return nil, errors.Join(errCodeGraphExecutableAbsent, ErrCodeGraphUnavailable)
 	}
 	cmd.Stderr = &boundedBuffer{limit: maxCodeGraphStderrBytes}
 	if err := cmd.Start(); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, ErrCodeGraphUnavailable
+		return nil, errors.Join(errCodeGraphExecutableAbsent, ErrCodeGraphUnavailable)
 	}
 	output, readErr := decodeCodeGraphJSON(stdout)
 	if readErr != nil {
-		_ = killKeyringProcessGroup(cmd)
-		_ = cmd.Wait()
+		waitErr := cmd.Wait()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		if errors.Is(readErr, ErrCodeGraphOutputTooLarge) {
 			return nil, ErrCodeGraphOutputTooLarge
 		}
-		return nil, ErrCodeGraphUnavailable
+		if waitErr != nil {
+			if command == codeGraphRunStatus {
+				return nil, errors.Join(errCodeGraphMissing, ErrCodeGraphUnavailable)
+			}
+			return nil, errors.Join(errCodeGraphUnsupported, ErrCodeGraphUnavailable)
+		}
+		return nil, errors.Join(errCodeGraphDecode, ErrCodeGraphUnavailable)
 	}
 	if err := cmd.Wait(); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, fmt.Errorf("codegraph command failed: %w", errors.Join(errCodeGraphUnsupported, ErrCodeGraphUnavailable))
+		if command == codeGraphRunStatus {
+			return nil, errors.Join(errCodeGraphMissing, ErrCodeGraphUnavailable)
+		}
+		return nil, errors.Join(errCodeGraphUnsupported, ErrCodeGraphUnavailable)
 	}
 	return output, nil
 }

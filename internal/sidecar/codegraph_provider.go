@@ -87,11 +87,8 @@ func (p *CodeGraphLocalIndexProvider) ContextForTask(ctx context.Context, reques
 	if err != nil {
 		return LocalEvidenceBundle{}, localIndexFailure(err)
 	}
-	warnings := append([]string(nil), classification.Warnings...)
-	if candidateTruncated {
-		warnings = append(warnings, string(LocalIndexErrorQueryBudgetExhausted))
-	}
-	bundle := LocalEvidenceBundle{ProviderID: codeGraphProviderID, ProviderVersion: status.Version, QueryID: "query", QueryVersion: codeGraphJSONQueryVersion, IndexedAt: &status.LastIndexedAt, Warnings: warnings, Status: classification.Status, Freshness: classification.Freshness, Truncated: candidateTruncated, Evidence: evidence}
+	bundle := LocalEvidenceBundle{ProviderID: codeGraphProviderID, ProviderVersion: status.Version, QueryID: "query", QueryVersion: codeGraphJSONQueryVersion, IndexedAt: &status.LastIndexedAt, Status: classification.Status, Freshness: classification.Freshness, Truncated: candidateTruncated, Evidence: evidence}
+	bundle.Warnings = canonicalBundleWarnings(classification.Warnings, bundle.Truncated, bundle.IndexedCommit)
 	bundle, payloadTruncated, err := trimCodeGraphEvidence(bundle)
 	if err != nil {
 		return LocalEvidenceBundle{}, localIndexFailure(err)
@@ -127,8 +124,14 @@ func (p *CodeGraphLocalIndexProvider) status(ctx context.Context, workspace Loca
 		return codeGraphStatus{}, err
 	}
 	status, err := decodeCodeGraphStatus(payload)
-	if err != nil || status.ProjectPath != workspace.GitRoot || status.IndexPath != filepath.Join(workspace.GitRoot, ".codegraph") || !trustedCodeGraphIndex(workspace.GitRoot) {
-		return codeGraphStatus{}, errCodeGraphDecode
+	if err != nil {
+		return codeGraphStatus{}, err
+	}
+	if status.ProjectPath != workspace.GitRoot || status.IndexPath != filepath.Join(workspace.GitRoot, ".codegraph") {
+		return codeGraphStatus{}, errCodeGraphMismatch
+	}
+	if !trustedCodeGraphIndex(workspace.GitRoot) {
+		return codeGraphStatus{}, errCodeGraphMissing
 	}
 	return status, nil
 }
@@ -190,8 +193,11 @@ func sameCodeGraphWorkspaceScope(left, right LocalWorkspaceSnapshot) bool {
 var _ LocalIndexProvider = (*CodeGraphLocalIndexProvider)(nil)
 
 func NewWorkspaceLocalIndexProvider(config LocalIndexConfig, snapshot LocalWorkspaceSnapshot) LocalIndexProvider {
-	if config.Err != nil || config.Provider == LocalIndexProviderDisabled {
-		return NewDisabledLocalIndexProvider()
+	if config.Err != nil {
+		return newUnavailableLocalIndexProvider(errors.Join(errLocalIndexConfigInvalid, config.Err))
+	}
+	if config.Provider == LocalIndexProviderDisabled {
+		return newUnavailableLocalIndexProvider(errLocalIndexDisabled)
 	}
 	return NewCodeGraphLocalIndexProvider(CodeGraphRunner{Config: config}, snapshot)
 }
