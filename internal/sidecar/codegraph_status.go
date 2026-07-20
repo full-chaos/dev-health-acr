@@ -35,15 +35,18 @@ func codeGraphPendingChanges(object map[string]json.RawMessage) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	total := 0
+	dirty := false
 	for _, field := range []string{"added", "modified", "removed"} {
 		value, valueErr := requiredInt(pending, field)
 		if valueErr != nil || value < 0 {
 			return 0, errCodeGraphDecode
 		}
-		total += value
+		dirty = dirty || value > 0
 	}
-	return total, nil
+	if dirty {
+		return 1, nil
+	}
+	return 0, nil
 }
 
 func codeGraphWorktreeMismatch(object map[string]json.RawMessage) (bool, error) {

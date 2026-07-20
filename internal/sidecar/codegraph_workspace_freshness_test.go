@@ -99,3 +99,26 @@ func TestCodeGraphProvider_ContextForTask_worktreeMismatchStringHonorsPolicies(t
 	require.Equal(t, LocalIndexErrorStale, localErr.Code())
 	require.Equal(t, []string{"local_worktree_mismatch", "indexed_commit_unknown"}, localErr.Warnings())
 }
+
+func TestCodeGraphProvider_ContextForTask_canonicalizesCoexistingFreshnessWarnings(t *testing.T) {
+	// Given
+	provider, workspace, commandLog := newFixtureCodeGraphProvider(t)
+	writeFixtureStatusField(t, commandLog, "worktreeMismatch", []byte(`"different worktree"`))
+	writeFixtureStatusField(t, commandLog, "pendingChanges", []byte(`{"added":1,"modified":0,"removed":0}`))
+	workspace.ChangedFilesState = LocalChangedFilesTruncated
+	workspace.ChangedFiles = []string{"internal/sidecar/codegraph_provider.go"}
+	request := LocalContextRequest{TaskID: "CHAOS-3007", Goal: "safe local context", MaxItems: 1, MaxOutputTokens: 125, Workspace: &workspace}
+
+	// When
+	graceful, gracefulErr := provider.ContextForTask(context.Background(), request)
+	provider.runner.Config.StalePolicy = LocalIndexStaleStrict
+	_, strictErr := provider.ContextForTask(context.Background(), request)
+
+	// Then
+	require.NoError(t, gracefulErr)
+	require.Equal(t, []string{"local_worktree_mismatch", "local_index_stale", "local_workspace_dirty", "changed_files_truncated", "local_query_budget_exhausted", "indexed_commit_unknown"}, graceful.Warnings)
+	require.NoError(t, ValidateLocalEvidenceBundle(graceful))
+	var localErr *LocalIndexError
+	require.ErrorAs(t, strictErr, &localErr)
+	require.Equal(t, []string{"local_worktree_mismatch", "local_index_stale", "local_workspace_dirty", "changed_files_truncated", "indexed_commit_unknown"}, localErr.Warnings())
+}

@@ -73,6 +73,7 @@ func (p *CodeGraphLocalIndexProvider) ContextForTask(ctx context.Context, reques
 	if workspaceClassification.Freshness == LocalIndexFreshnessStale {
 		classification.Freshness = LocalIndexFreshnessStale
 	}
+	classification.Warnings = canonicalBundleWarnings(classification.Warnings, false, status.IndexedCommit)
 	if classification.omit(p.runner.Config.StalePolicy) {
 		return LocalEvidenceBundle{}, newLocalIndexError(LocalIndexErrorStale, LocalIndexStatusUnavailable, classification.Freshness, classification.Warnings, errCodeGraphMismatch)
 	}

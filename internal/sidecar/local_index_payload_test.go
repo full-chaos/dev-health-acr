@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestNormalizeLocalEvidenceBundle_acceptsExactProviderPayloadCeiling(t *testing.T) {
@@ -33,6 +35,51 @@ func TestNormalizeLocalEvidenceBundle_rejectsProviderPayloadOneOverWithoutLeak(t
 	if strings.Contains(err.Error(), "/private/acr/provider-payload") {
 		t.Fatalf("payload error leaked local content: %q", err)
 	}
+}
+
+func TestNormalizeLocalEvidenceBundle_countsFreshnessEnumsAt32768ByteBoundary(t *testing.T) {
+	// Given
+	bundle := localFreshBundleWithPayloadBytes(t, 32768)
+
+	// When
+	_, err := NormalizeLocalEvidenceBundle(bundle)
+
+	// Then
+	require.NoError(t, err)
+}
+
+func TestNormalizeLocalEvidenceBundle_rejectsFreshnessEnumsAt32769Bytes(t *testing.T) {
+	// Given
+	bundle := localFreshBundleWithPayloadBytes(t, 32769)
+
+	// When
+	_, err := NormalizeLocalEvidenceBundle(bundle)
+
+	// Then
+	require.ErrorIs(t, err, ErrInvalidLocalEvidenceBundle)
+	require.NotContains(t, err.Error(), "/private/acr/provider-payload")
+}
+
+func TestTrimCodeGraphEvidence_dropsTailWhenFreshnessEnumsExceedPayloadBudget(t *testing.T) {
+	// Given
+	bundle := localBundleWithPayloadBytes(t, maxLocalEvidenceBundlePayloadBytes-len("indexed_commit_unknown"))
+	bundle.Warnings = []string{"indexed_commit_unknown"}
+
+	// When
+	withoutEnums, withoutEnumsTruncated, withoutEnumsErr := trimCodeGraphEvidence(bundle)
+	bundle.Status = LocalIndexStatusAvailable
+	bundle.Freshness = LocalIndexFreshnessFresh
+	withEnums, withEnumsTruncated, withEnumsErr := trimCodeGraphEvidence(bundle)
+
+	// Then
+	require.NoError(t, withoutEnumsErr)
+	require.False(t, withoutEnumsTruncated)
+	require.Len(t, withoutEnums.Evidence, 4)
+	require.NoError(t, withEnumsErr)
+	require.True(t, withEnumsTruncated)
+	require.Len(t, withEnums.Evidence, 3)
+	require.Equal(t, withoutEnums.Evidence[:3], withEnums.Evidence)
+	require.NoError(t, ValidateLocalEvidenceBundle(withEnums))
 }
 
 func localBundleWithPayloadBytes(t *testing.T, want int) LocalEvidenceBundle {
@@ -71,8 +118,21 @@ func localBundleWithPayloadBytes(t *testing.T, want int) LocalEvidenceBundle {
 	return bundle
 }
 
+func localFreshBundleWithPayloadBytes(t *testing.T, want int) LocalEvidenceBundle {
+	t.Helper()
+	bundle := localBundleWithPayloadBytes(t, want-len(LocalIndexStatusAvailable)-len(LocalIndexFreshnessFresh)-len("indexed_commit_unknown"))
+	bundle.Status = LocalIndexStatusAvailable
+	bundle.Freshness = LocalIndexFreshnessFresh
+	bundle.Warnings = []string{"indexed_commit_unknown"}
+	require.Equal(t, want, providerBundlePayloadBytes(bundle))
+	return bundle
+}
+
 func providerBundlePayloadBytes(bundle LocalEvidenceBundle) int {
-	bytes := len(bundle.ProviderID) + len(bundle.ProviderVersion) + len(bundle.QueryID) + len(bundle.QueryVersion) + 1
+	bytes := len(bundle.ProviderID) + len(bundle.ProviderVersion) + len(bundle.QueryID) + len(bundle.QueryVersion) + len(bundle.Status) + len(bundle.Freshness) + 1
+	for _, warning := range bundle.Warnings {
+		bytes += len(warning)
+	}
 	for _, evidence := range bundle.Evidence {
 		bytes += len(evidence.ID) + len(evidence.Locator) + len(evidence.Title) + len(evidence.Excerpt) + len(evidence.QueryID) + len(evidence.Relation) + len(evidence.RepositoryPath) + decimalDigits(evidence.StartLine)
 	}

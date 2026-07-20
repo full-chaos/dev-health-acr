@@ -3,8 +3,10 @@ package sidecar
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -77,6 +79,39 @@ func TestCodeGraphStatus_decodesOnlyNullableStringWorktreeMismatch(t *testing.T)
 			}
 			require.NoError(t, err)
 			require.Equal(t, test.wantMismatch, status.WorktreeMismatch)
+		})
+	}
+}
+
+func TestCodeGraphStatus_marksAnyValidatedPendingChangeAsDirty(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		pending []byte
+		wantErr error
+	}{
+		{name: "added", pending: []byte(`{"added":1,"modified":0,"removed":0}`)},
+		{name: "modified", pending: []byte(`{"added":0,"modified":1,"removed":0}`)},
+		{name: "removed", pending: []byte(`{"added":0,"modified":0,"removed":1}`)},
+		{name: "multiple maximum integers", pending: []byte(`{"added":` + strconv.Itoa(math.MaxInt) + `,"modified":` + strconv.Itoa(math.MaxInt) + `,"removed":0}`)},
+		{name: "negative is malformed", pending: []byte(`{"added":-1,"modified":0,"removed":0}`), wantErr: errCodeGraphDecode},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			object := decodeJSONObject(t, localStatusPayload(t, readCodeGraphFixture(t, "status")))
+			payload := appendStatusField(t, object, "pendingChanges", test.pending)
+
+			// When
+			status, err := decodeCodeGraphStatus(payload)
+
+			// Then
+			if test.wantErr != nil {
+				require.ErrorIs(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			classification := classifyCodeGraphStatus(status)
+			require.Equal(t, LocalIndexFreshnessStale, classification.Freshness)
+			require.Contains(t, classification.Warnings, "local_workspace_dirty")
 		})
 	}
 }

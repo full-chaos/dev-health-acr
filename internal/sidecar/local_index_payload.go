@@ -20,7 +20,7 @@ func localEvidenceBundleUsage(bundle LocalEvidenceBundle) (int, int, int, error)
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	payloadBytes := len(bundle.ProviderID) + len(bundle.ProviderVersion) + len(bundle.QueryID) + len(bundle.QueryVersion) + metadataBytes
+	payloadBytes := len(bundle.ProviderID) + len(bundle.ProviderVersion) + len(bundle.QueryID) + len(bundle.QueryVersion) + len(bundle.Status) + len(bundle.Freshness) + metadataBytes
 	tokens := 0
 	for index, evidence := range bundle.Evidence {
 		if err := ValidateLocalExpandedEvidence(evidence); err != nil {
