@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"regexp"
 )
 
@@ -33,9 +32,17 @@ type ClientBundle struct {
 	Scenarios             []ClientScenario `json:"scenarios"`
 }
 type ClientScenario struct {
-	Name           string `json:"name"`
-	Input          string `json:"input"`
-	ExpectedOutput string `json:"expected_output"`
+	Name           string               `json:"name"`
+	Input          ClientScenarioInput  `json:"input"`
+	ExpectedOutput ClientScenarioOutput `json:"expected_output"`
+}
+type ClientScenarioInput struct {
+	Tool  string `json:"tool"`
+	State string `json:"state"`
+}
+type ClientScenarioOutput struct {
+	Kind    string `json:"kind"`
+	Visible bool   `json:"visible"`
 }
 
 type ClientServer struct {
@@ -66,10 +73,10 @@ func LoadClientBundle(path string) (ClientBundle, error) {
 	decoder.DisallowUnknownFields()
 	var bundle ClientBundle
 	if err := decoder.Decode(&bundle); err != nil {
-		return ClientBundle{}, invalidBundle("decode")
+		return ClientBundle{}, invalidBundle(bundleDecodeClassification(raw))
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return ClientBundle{}, invalidBundle("decode")
+		return ClientBundle{}, invalidBundle("decode.trailing")
 	}
 	if err := bundle.Validate(); err != nil {
 		return ClientBundle{}, err
@@ -77,69 +84,95 @@ func LoadClientBundle(path string) (ClientBundle, error) {
 	return bundle, nil
 }
 
-func (b ClientBundle) Validate() error {
-	if b.SchemaVersion != ClientBundleSchema || !semVerPattern.MatchString(b.BundleVersion) || !semVerPattern.MatchString(b.MinimumSidecarVersion) {
-		return invalidBundle("identity")
+func bundleDecodeClassification(raw []byte) string {
+	for _, classifiedField := range []struct {
+		field string
+		class string
+	}{
+		{`"credential"`, "bundle.credentials"},
+		{`"codegraph_command"`, "bundle.codegraph"},
+		{`"client_specific_contract"`, "bundle.contract_fork"},
+		{`"installer"`, "bundle.mutable_installer"},
+		{`"package_path"`, "namespace.out_of_namespace"},
+	} {
+		if bytes.Contains(raw, []byte(classifiedField.field)) {
+			return classifiedField.class
+		}
 	}
-	if b.Server.Command != "acr-mcp" || len(b.Server.Args) != 1 || b.Server.Args[0] != "serve" {
-		return invalidBundle("server")
+	return "decode"
+}
+
+func (b ClientBundle) Validate() error {
+	if b.SchemaVersion != ClientBundleSchema {
+		return invalidBundle("identity.schema")
+	}
+	if !semVerPattern.MatchString(b.BundleVersion) || !semVerPattern.MatchString(b.MinimumSidecarVersion) {
+		return invalidBundle("identity.semver")
+	}
+	if b.Server.Command != "acr-mcp" {
+		return invalidBundle("server.command")
+	}
+	if len(b.Server.Args) != 1 || b.Server.Args[0] != "serve" {
+		return invalidBundle("server.args")
 	}
 	want := map[string]bool{"opencode": true, "claude-code": true, "codex": true, "cursor": true}
 	if len(b.SupportedClients) != len(want) {
-		return invalidBundle("supported_clients")
+		return invalidBundle("supported_clients.missing")
 	}
 	for _, client := range b.SupportedClients {
 		if !want[client] {
-			return invalidBundle("supported_clients")
+			return invalidBundle("supported_clients.missing")
 		}
 		delete(want, client)
 	}
-	if len(want) != 0 || b.Workflow.ContextTool != "context_for_task" || b.Workflow.EvidenceTool != "source_evidence" || b.Workflow.UnavailableState != "visible" || b.Workflow.IncompatibleState != "visible" || b.Workflow.UntrustedContent != "treat_as_untrusted" || b.Workflow.WritebackEnabledByDefault || b.Workflow.PreplanEnabledByDefault {
-		return invalidBundle("workflow")
+	if len(want) != 0 {
+		return invalidBundle("supported_clients.missing")
+	}
+	if b.Workflow.ContextTool != "context_for_task" || b.Workflow.EvidenceTool != "source_evidence" {
+		return invalidBundle("workflow.tools")
+	}
+	if b.Workflow.UnavailableState != "visible" || b.Workflow.IncompatibleState != "visible" || b.Workflow.UntrustedContent != "treat_as_untrusted" {
+		return invalidBundle("workflow.safety")
+	}
+	if b.Workflow.WritebackEnabledByDefault {
+		return invalidBundle("workflow.writeback_default")
+	}
+	if b.Workflow.PreplanEnabledByDefault {
+		return invalidBundle("workflow.preplan_default")
 	}
 	if b.Ownership.Install != "client-owned" || b.Ownership.Update != "client-owned" || b.Ownership.Uninstall != "client-owned" {
 		return invalidBundle("ownership")
 	}
-	if len(b.Scenarios) < 3 {
+	if len(b.Scenarios) != len(clientScenarioExpectations) {
 		return invalidBundle("scenarios")
 	}
+	seen := make(map[string]struct{}, len(b.Scenarios))
 	for _, scenario := range b.Scenarios {
-		if scenario.Name == "" || scenario.Input == "" || scenario.ExpectedOutput == "" {
+		if _, duplicate := seen[scenario.Name]; duplicate {
+			return invalidBundle("scenarios")
+		}
+		seen[scenario.Name] = struct{}{}
+		if expected, ok := clientScenarioExpectations[scenario.Name]; !ok || expected != scenario {
 			return invalidBundle("scenarios")
 		}
 	}
 	return nil
 }
 
+var clientScenarioExpectations = map[string]ClientScenario{
+	"context":     {Name: "context", Input: ClientScenarioInput{Tool: "context_for_task", State: "available"}, ExpectedOutput: ClientScenarioOutput{Kind: "structured_context", Visible: true}},
+	"evidence":    {Name: "evidence", Input: ClientScenarioInput{Tool: "source_evidence", State: "available"}, ExpectedOutput: ClientScenarioOutput{Kind: "structured_evidence", Visible: true}},
+	"unavailable": {Name: "unavailable", Input: ClientScenarioInput{Tool: "context_for_task", State: "unavailable"}, ExpectedOutput: ClientScenarioOutput{Kind: "visible_degradation", Visible: true}},
+}
+
+func (b ClientBundle) ConformanceExpectations() map[string]ClientScenarioOutput {
+	expectations := make(map[string]ClientScenarioOutput, len(b.Scenarios))
+	for _, scenario := range b.Scenarios {
+		expectations[scenario.Name] = scenario.ExpectedOutput
+	}
+	return expectations
+}
+
 func ValidateClientPackageRoots(root string, bundle ClientBundle) error {
-	allowed := map[string]bool{"conformance": true, "opencode": true, "claude-code": true, "codex": true, "cursor": true}
-	entries, err := os.ReadDir(filepath.Join(root, "clients"))
-	if err != nil {
-		return fmt.Errorf("read client roots: %w", err)
-	}
-	for _, entry := range entries {
-		if !allowed[entry.Name()] {
-			return invalidBundle("clients namespace")
-		}
-	}
-	for _, client := range bundle.SupportedClients {
-		packagePath := filepath.Join(root, "clients", client)
-		if info, err := os.Stat(packagePath); err != nil || !info.IsDir() {
-			return invalidBundle("client package")
-		}
-		raw, err := os.ReadFile(filepath.Join(packagePath, "package.v1.json"))
-		if err != nil {
-			return invalidBundle("client package")
-		}
-		var manifest struct {
-			BundleVersion         string   `json:"bundle_version"`
-			MinimumSidecarVersion string   `json:"minimum_sidecar_version"`
-			Command               string   `json:"command"`
-			Args                  []string `json:"args"`
-		}
-		if err := json.Unmarshal(raw, &manifest); err != nil || manifest.BundleVersion != bundle.BundleVersion || manifest.MinimumSidecarVersion != bundle.MinimumSidecarVersion || manifest.Command != "acr-mcp" || len(manifest.Args) != 1 || manifest.Args[0] != "serve" {
-			return invalidBundle("client package")
-		}
-	}
-	return nil
+	return validateClientPackageTree(root, bundle)
 }
