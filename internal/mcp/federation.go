@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -15,6 +17,8 @@ import (
 )
 
 const localEvidencePrefix = "local:codegraph:v1:"
+
+var errLocalFederationFinalize = errors.New("mcp: local federation finalization failed")
 
 type localFederationRuntime struct {
 	config          sidecar.LocalIndexConfig
@@ -43,11 +47,36 @@ func (r *localFederationRuntime) bundle(ctx context.Context, scope resolvedTaskS
 	provider := r.providerFactory(r.config, *scope.Workspace)
 	child, cancel := context.WithTimeout(ctx, r.config.Timeout)
 	defer cancel()
-	bundle, err := provider.ContextForTask(child, sidecar.LocalContextRequest{Goal: input.Goal, TaskRef: scope.Scope.TaskRef, RequestedCategories: options.RequestedCategories, Workspace: scope.Workspace, MaxItems: reserve.MaxItems, MaxOutputTokens: reserve.MaxOutputTokens})
+	bundle, err := provider.ContextForTask(child, sidecar.LocalContextRequest{TaskID: localTaskID(scope, input, options), Goal: input.Goal, TaskRef: scope.Scope.TaskRef, RequestedCategories: options.RequestedCategories, Workspace: scope.Workspace, MaxItems: reserve.MaxItems, MaxOutputTokens: reserve.MaxOutputTokens})
 	if err != nil {
 		return sidecar.LocalEvidenceBundle{}, err
 	}
 	return sidecar.NormalizeLocalEvidenceBundle(bundle)
+}
+
+func localTaskID(scope resolvedTaskScope, input contractsv1.MCPContextForTaskRequest, options contractsv1.PacketOptions) string {
+	files := append([]string(nil), scope.Scope.Files...)
+	sort.Strings(files)
+	categories := make([]string, len(options.RequestedCategories))
+	for i, category := range options.RequestedCategories {
+		categories[i] = string(category)
+	}
+	sort.Strings(categories)
+	state := sidecar.LocalChangedFilesNotRequested
+	if scope.Workspace != nil {
+		state = scope.Workspace.ChangedFilesState
+	}
+	asOf := ""
+	if scope.Scope.AsOf != nil {
+		asOf = scope.Scope.AsOf.UTC().Format(time.RFC3339Nano)
+	}
+	payload, _ := json.Marshal(struct {
+		Schema, Repository, Goal, Branch, Commit, TaskRef, ChangedFilesState, AsOf string
+		Files, Categories                                                          []string
+		TimeWindowDays                                                             int
+	}{"local-task.v1", strings.ToLower(scope.Repository.Slug), input.Goal, scope.Scope.Branch, strings.ToLower(scope.Scope.CommitSHA), scope.Scope.TaskRef, string(state), asOf, files, categories, scope.Scope.TimeWindowDays})
+	digest := sha256.Sum256(payload)
+	return "local-task:v1:" + hex.EncodeToString(digest[:])
 }
 
 type mappedLocalBundle struct {
@@ -58,11 +87,28 @@ type mappedLocalBundle struct {
 }
 
 func (r *localFederationRuntime) mapLocalBundle(repository string, bundle sidecar.LocalEvidenceBundle, occupied map[string]struct{}) (mappedLocalBundle, error) {
+	if err := validateDistinctLocalEvidence(bundle); err != nil {
+		return mappedLocalBundle{}, err
+	}
 	items, refs, err := r.mapBundle(repository, bundle, occupied)
 	if err != nil {
 		return mappedLocalBundle{}, err
 	}
 	return mappedLocalBundle{bundle: bundle, items: items, refs: refs, evidence: append([]sidecar.LocalExpandedEvidence(nil), bundle.Evidence...)}, nil
+}
+
+func validateDistinctLocalEvidence(bundle sidecar.LocalEvidenceBundle) error {
+	seenIDs, seenLocators, seenKeys := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
+	for _, evidence := range bundle.Evidence {
+		key := evidence.QueryID + "\x00" + evidence.Locator
+		for value, seen := range map[string]map[string]struct{}{evidence.ID: seenIDs, evidence.Locator: seenLocators, key: seenKeys} {
+			if _, exists := seen[value]; exists {
+				return fmt.Errorf("duplicate local evidence")
+			}
+			seen[value] = struct{}{}
+		}
+	}
+	return nil
 }
 
 func (m *mappedLocalBundle) trimTo(maxItems, maxTokens, maxBytes int) bool {
@@ -144,7 +190,7 @@ func (r *localFederationRuntime) mapBundle(repository string, bundle sidecar.Loc
 	items := make([]contractsv1.ContextPacketItem, 0, len(bundle.Evidence))
 	refs := make([]contractsv1.EvidenceRef, 0, len(bundle.Evidence))
 	for index, evidence := range bundle.Evidence {
-		id, err := r.publicID(repository, bundle, evidence, index, occupied)
+		id, err := r.publicID(repository, bundle, evidence, occupied)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -164,12 +210,12 @@ func (r *localFederationRuntime) mapBundle(repository string, bundle sidecar.Loc
 	return items, refs, nil
 }
 
-func (r *localFederationRuntime) publicID(repository string, bundle sidecar.LocalEvidenceBundle, evidence sidecar.LocalExpandedEvidence, counter int, occupied map[string]struct{}) (string, error) {
-	for range 256 {
+func (r *localFederationRuntime) publicID(repository string, bundle sidecar.LocalEvidenceBundle, evidence sidecar.LocalExpandedEvidence, occupied map[string]struct{}) (string, error) {
+	for counter := range 256 {
 		payload := struct {
 			Schema, Kind, Provider, Version, Repository, IndexedAt, Ref, Commit, Query, QueryVersion, EvidenceQuery, Locator string
 			Counter                                                                                                          int
-		}{contractsv1.EvidenceRefSchema, "code", bundle.ProviderID, bundle.ProviderVersion, strings.ToLower(repository), indexedAt(bundle), "", "indexed_commit_unknown", bundle.QueryID, bundle.QueryVersion, evidence.QueryID, evidence.Locator, counter}
+		}{contractsv1.EvidenceRefSchema, "code", bundle.ProviderID, bundle.ProviderVersion, strings.ToLower(repository), indexedAt(bundle), bundle.IndexedRef, bundle.IndexedCommit, bundle.QueryID, bundle.QueryVersion, evidence.QueryID, evidence.Locator, counter}
 		encoded, err := json.Marshal(payload)
 		if err != nil {
 			return "", err
@@ -180,9 +226,8 @@ func (r *localFederationRuntime) publicID(repository string, bundle sidecar.Loca
 			occupied[id] = struct{}{}
 			return id, nil
 		}
-		counter++
 	}
-	return "", fmt.Errorf("local evidence id collision limit exceeded")
+	return "", errLocalFederationFinalize
 }
 
 func indexedAt(bundle sidecar.LocalEvidenceBundle) string {

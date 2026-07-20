@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
@@ -56,15 +57,16 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 	options := budgetOptions(input.Budget, input.RequestedCategories, boot.Capabilities.Limits)
 	hostedOptions := options
 	var local mappedLocalBundle
+	var bundle sidecar.LocalEvidenceBundle
 	localSucceeded := false
-	if boot.local != nil && boot.local.eligible(resolved.Workspace) {
-		bundle, localErr := boot.local.bundle(ctx, resolved, input, options)
+	if boot.local != nil && resolved.LocalEligible && boot.local.eligible(resolved.Workspace) {
+		var localErr error
+		bundle, localErr = boot.local.bundle(ctx, resolved, input, options)
 		if localErr != nil && ctx.Err() != nil {
 			return toolErrorResult(ctx.Err()), nil
 		}
 		if localErr == nil {
-			local, localErr = boot.local.mapLocalBundle(resolved.Repository.Slug, bundle, map[string]struct{}{})
-			if localErr == nil {
+			if localErr = validateDistinctLocalEvidence(bundle); localErr == nil {
 				localSucceeded = true
 				reserve := localReservation(boot.local.config, options)
 				hostedOptions.MaxItems -= reserve.MaxItems
@@ -84,6 +86,12 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 	packet, err := boot.Client.ContextPacket(ctx, hostedReq)
 	if err != nil {
 		return toolErrorResult(err), nil
+	}
+	if localSucceeded {
+		local, err = boot.local.mapLocalBundle(resolved.Repository.Slug, bundle, occupiedPacketIDs(packet))
+		if err != nil {
+			return toolErrorResult(&classifiedError{category: "internal", message: "local federation finalization failed"}), nil
+		}
 	}
 	rendered, truncated := sidecar.RenderContextPacketMarkdown(packet, renderedMarkdownMaxBytes)
 	response := contractsv1.MCPContextForTaskResponse{
@@ -112,15 +120,53 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 	if err := response.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "internal", message: "the assembled response failed contract validation"}), nil
 	}
-
 	result, buildErr := buildToolResult(response, response.RenderedMarkdown.Markdown)
 	if buildErr != nil {
 		return result, buildErr
+	}
+	if boot.hostedRoutes != nil {
+		for id := range occupiedPacketIDs(packet) {
+			if strings.HasPrefix(id, localEvidencePrefix) {
+				boot.hostedRoutes.put(id)
+			}
+		}
 	}
 	if localSucceeded && len(local.refs) > 0 {
 		boot.local.cache.putBatch(cacheEntries(local))
 	}
 	return result, nil
+}
+
+func occupiedPacketIDs(packet contractsv1.ContextPacket) map[string]struct{} {
+	encoded, err := json.Marshal(packet)
+	if err != nil {
+		return map[string]struct{}{}
+	}
+	var value any
+	if json.Unmarshal(encoded, &value) != nil {
+		return map[string]struct{}{}
+	}
+	ids := map[string]struct{}{}
+	collectPacketIDs(value, ids)
+	return ids
+}
+
+func collectPacketIDs(value any, ids map[string]struct{}) {
+	switch node := value.(type) {
+	case map[string]any:
+		for key, child := range node {
+			if key == "request_id" || key == "context_packet_id" || key == "evidence_ref_id" || key == "packet_item_id" || key == "check_id" || key == "step_id" {
+				if id, ok := child.(string); ok {
+					ids[id] = struct{}{}
+				}
+			}
+			collectPacketIDs(child, ids)
+		}
+	case []any:
+		for _, child := range node {
+			collectPacketIDs(child, ids)
+		}
+	}
 }
 
 func appendDistinctWarning(warnings []string, warning string) []string {

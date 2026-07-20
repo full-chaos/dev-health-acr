@@ -20,6 +20,7 @@ type Bootstrap struct {
 	Client       *sidecar.Client
 	Capabilities contractsv1.Capabilities
 	local        *localFederationRuntime
+	hostedRoutes *hostedRouteCache
 }
 
 // CapabilityProbe contains a validated hosted capabilities response before
@@ -78,7 +79,7 @@ func NewBootstrapWithIdentity(ctx context.Context, identity version.Info) (*Boot
 	if err := probe.CheckCompatibility(); err != nil {
 		return nil, err
 	}
-	return &Bootstrap{Config: probe.Config, Client: probe.Client, Capabilities: probe.Capabilities, local: newLocalFederationRuntime(sidecar.LoadLocalIndexConfig(), time.Now, sha256.Sum256)}, nil
+	return &Bootstrap{Config: probe.Config, Client: probe.Client, Capabilities: probe.Capabilities, local: newLocalFederationRuntime(sidecar.LoadLocalIndexConfig(), time.Now, sha256.Sum256), hostedRoutes: newHostedRouteCache(1024, 30*time.Minute, time.Now)}, nil
 }
 
 // ProbeCapabilities resolves the compiled identity, constructs the hardened

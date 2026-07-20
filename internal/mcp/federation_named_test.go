@@ -204,6 +204,7 @@ func TestFederation_LocalContentOverflow(t *testing.T) {
 	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
 	bundle := validLocalBundle(now)
 	second := bundle.Evidence[0]
+	second.ID = "private-secondary"
 	second.Locator = "secondary-symbol"
 	bundle.Evidence = append(bundle.Evidence, second)
 	fx, calls := newFixtureServer(t), 0

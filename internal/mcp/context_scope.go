@@ -41,9 +41,10 @@ import (
 // detached HEAD with no commits, and so on) is silently treated as
 // "nothing to fill in".
 type resolvedTaskScope struct {
-	Repository contractsv1.RepositoryRef
-	Scope      contractsv1.RequestedScope
-	Workspace  *sidecar.LocalWorkspaceSnapshot
+	Repository    contractsv1.RepositoryRef
+	Scope         contractsv1.RequestedScope
+	Workspace     *sidecar.LocalWorkspaceSnapshot
+	LocalEligible bool
 }
 
 func resolveTaskScope(ctx context.Context, session *mcpsdk.ServerSession, req contractsv1.MCPContextForTaskRequest) (resolvedTaskScope, error) {
@@ -66,7 +67,8 @@ func resolveTaskScope(ctx context.Context, session *mcpsdk.ServerSession, req co
 		wantChangedFiles = !explicitFiles && req.Scope.IncludeChangedFiles != nil && *req.Scope.IncludeChangedFiles
 	}
 
-	if repo.Slug != "" && scope.Branch != "" && scope.CommitSHA != "" && !wantChangedFiles {
+	needWorkspace := localWorkspaceRequired()
+	if !needWorkspace && repo.Slug != "" && scope.Branch != "" && scope.CommitSHA != "" && !wantChangedFiles {
 		return result, nil
 	}
 
@@ -149,8 +151,30 @@ func resolveTaskScope(ctx context.Context, session *mcpsdk.ServerSession, req co
 	workspace, snapshotErr := sidecar.NewLocalWorkspaceSnapshot(info, repo.Slug, wantChangedFiles)
 	if snapshotErr == nil {
 		result.Workspace = &workspace
+		result.LocalEligible = localScopeMatches(req, result)
 	}
 	return result, nil
+}
+
+func localWorkspaceRequired() bool {
+	config := sidecar.LoadLocalIndexConfig()
+	return config.Err == nil && config.Provider != sidecar.LocalIndexProviderDisabled
+}
+
+func localScopeMatches(req contractsv1.MCPContextForTaskRequest, resolved resolvedTaskScope) bool {
+	if resolved.Workspace == nil || resolved.Workspace.Repository.Slug == "" {
+		return false
+	}
+	if req.Repository != nil && normalizeSlugForComparison(req.Repository.Slug) != normalizeSlugForComparison(resolved.Workspace.Repository.Slug) {
+		return false
+	}
+	if req.Scope == nil {
+		return true
+	}
+	if req.Scope.Branch != "" && req.Scope.Branch != resolved.Workspace.Branch {
+		return false
+	}
+	return req.Scope.CommitSHA == "" || strings.EqualFold(req.Scope.CommitSHA, resolved.Workspace.CommitSHA)
 }
 
 func resolveScope(ctx context.Context, session *mcpsdk.ServerSession, req contractsv1.MCPContextForTaskRequest) (contractsv1.RepositoryRef, contractsv1.RequestedScope, error) {
