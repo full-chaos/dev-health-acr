@@ -28,4 +28,8 @@ if [[ ! -d "$fixture_root" ]]; then
   printf '%s\n' 'CLIENT_FIXTURE_ERROR classification=fixture.missing' >&2
   exit 1
 fi
+if [[ -n "$fixture" ]]; then
+  (cd "$repo_root" && MCP_CLIENT_FIXTURE_ROOT="$fixture_root" go test -v ./internal/mcpclientfixtures -run '^TestClientFixtureRunner_rejects_exact_classifications$' -count=1) | grep -F 'CLIENT_INVALID_FIXTURE classification='
+  exit 1
+fi
 (cd "$repo_root" && MCP_CLIENT_FIXTURE_ROOT="$fixture_root" go test -v ./internal/mcpclientfixtures -run '^TestClientFixtureRunner_rejects_exact_classifications$' -count=1) | grep -F 'CLIENT_FIXTURES_OK'
