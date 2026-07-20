@@ -8,9 +8,14 @@ if [[ "${1:-}" != "--scenario" || ! "$scenario" =~ ^(no-upload|injected-source-l
 fi
 
 root="$(git rev-parse --show-toplevel)"
+canonical_scenario="no-upload"
+canonical_receipt="$root/.omo/evidence/context-fabric-08-no-upload.json"
+scenario_ledger="$root/.omo/evidence/context-fabric-08-scenarios.jsonl"
+source_revision="$(git -C "$root" rev-parse HEAD)"
+[[ -z "$(git -C "$root" status --porcelain)" ]] || { printf 'canonical source worktree must be clean\n' >&2; exit 1; }
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/acr-local-index-privacy.XXXXXX")"
 capture="$tmp/capture.jsonl"
-receipt="$root/.omo/evidence/context-fabric-08-no-upload.json"
+receipt="$canonical_receipt"
 server_pid=""
 source_sentinel="local_source_sentinel:${RANDOM}${RANDOM}"
 index_sentinel="local_index_sentinel:${RANDOM}${RANDOM}"
@@ -28,7 +33,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 mkdir -p "$tmp/workspace/.codegraph" "$root/.omo/evidence" "$root/.tmp"
-rm -f "$receipt"
+if [[ "$scenario" == "$canonical_scenario" ]]; then rm -f "$receipt"; fi
+if [[ "$scenario" == "$canonical_scenario" && "${ACR_E2E_FORCE_CANONICAL_FAILURE:-}" == 1 ]]; then exit 1; fi
 printf '%s\n' "$source_sentinel" >"$tmp/workspace/local-source.txt"
 printf '%s\n' "$index_sentinel" >"$tmp/workspace/.codegraph/index.bin"
 git -C "$tmp/workspace" init -q
@@ -85,6 +91,9 @@ for _ in {1..50}; do [[ -s "$tmp/port" ]] && break; sleep 0.1; done
 [[ -s "$tmp/port" ]] || { printf 'privacy fixture did not start\n' >&2; exit 1; }
 
 go build -o "$tmp/acr-mcp" ./cmd/acr-mcp
+source_identity_unchanged=false
+if [[ "$(git -C "$root" rev-parse HEAD)" == "$source_revision" && -z "$(git -C "$root" status --porcelain)" ]]; then source_identity_unchanged=true; fi
+[[ "$source_identity_unchanged" == true ]] || { printf 'canonical source identity changed during build\n' >&2; exit 1; }
 cat >"$root/.tmp/local-index-privacy-driver.go" <<'GO'
 package main
 import("context";"encoding/json";"os";"os/exec";"strconv";"strings";"time"; mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp")
@@ -100,9 +109,9 @@ PY
 )"
 ACR_API_URL="https://localhost:$port" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_API_TOKEN="$token" ACR_SIDECAR_VERSION=1.0.0 ACR_LOCAL_INDEX_PROVIDER=codegraph ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" PRIVACY_MCP="$tmp/acr-mcp" PRIVACY_WORKSPACE="$tmp/workspace" PRIVACY_BRANCH="$workspace_branch" GRAPH_PAYLOAD_SENTINEL="$graph_payload_sentinel" LOCAL_LOCATOR_SENTINEL="$local_locator_sentinel" ABSOLUTE_ROOT_SENTINEL="$absolute_root_sentinel" PRIVACY_RAW_BOUNDARY_PROBE="$raw_boundary_probe" PRIVACY_CAPTURE="$capture" PRIVACY_EXPANSION_COUNTS="$expansion_counts" go run "$root/.tmp/local-index-privacy-driver.go"
 
-ACR_API_TOKEN="$token" SOURCE_SENTINEL="$source_sentinel" INDEX_SENTINEL="$index_sentinel" GRAPH_PAYLOAD_SENTINEL="$graph_payload_sentinel" LOCAL_LOCATOR_SENTINEL="$local_locator_sentinel" ABSOLUTE_ROOT_SENTINEL="$absolute_root_sentinel" python3 - "$capture" "$scenario" "$receipt" "$expansion_counts" <<'PY'
+ACR_API_TOKEN="$token" SOURCE_SENTINEL="$source_sentinel" INDEX_SENTINEL="$index_sentinel" GRAPH_PAYLOAD_SENTINEL="$graph_payload_sentinel" LOCAL_LOCATOR_SENTINEL="$local_locator_sentinel" ABSOLUTE_ROOT_SENTINEL="$absolute_root_sentinel" SOURCE_REVISION="$source_revision" SOURCE_CLEAN=true SOURCE_IDENTITY_UNCHANGED="$source_identity_unchanged" HARNESS_SHA256="$(shasum -a 256 "$0" | awk '{print $1}')" BINARY_SHA256="$(shasum -a 256 "$tmp/acr-mcp" | awk '{print $1}')" python3 - "$capture" "$scenario" "$receipt" "$expansion_counts" "$scenario_ledger" <<'PY'
 import json,sys
-capture,scenario,receipt,expansion_counts=sys.argv[1:]
+capture,scenario,receipt,expansion_counts,ledger=sys.argv[1:]
 rows=[json.loads(line) for line in open(capture)]
 sentinels={'source':__import__('os').environ['SOURCE_SENTINEL'],'index':__import__('os').environ['INDEX_SENTINEL'],'absolute_root':__import__('os').environ['ABSOLUTE_ROOT_SENTINEL'],'graph_payload':__import__('os').environ['GRAPH_PAYLOAD_SENTINEL'],'local_locator':__import__('os').environ['LOCAL_LOCATOR_SENTINEL']}
 def copy_records(records): return [json.loads(json.dumps(record)) for record in records]
@@ -137,10 +146,14 @@ non_authorization_matches=sum(token in str(value) for row in rows for key,value 
 shape_valid=counts=={'capabilities':1,'context_packet':1,'hosted_evidence':1} and unexpected==0 and all((r['method'],r['path'].split('?')[0]) in {('GET','/api/v1/agent-context/capabilities'),('POST','/api/v1/agent-context/context-packets')} or (r['method']=='GET' and r['path'].startswith('/api/v1/agent-context/evidence/')) for r in rows)
 verdict='pass' if not leaks and shape_valid and authorization==3 and non_authorization_matches==0 else 'reject'
 if scenario=='forced-invariant-failure': verdict='reject'
-safe={'schema_version':'context_fabric_privacy_receipt.v1','task':'CHAOS-3007 Task 8','mode':'local-index','scenario':scenario,'verdict':verdict,'source_revision':__import__('subprocess').check_output(['git','rev-parse','HEAD'],text=True).strip(),'tls_verified':True,'request_counts':{**counts,'unexpected':unexpected},'request_shape_valid':shape_valid,'local_expansion_hosted_request_count':after_local-before_local,'zero_match_counts':{k:(0 if k not in leaks else 1) for k in sentinels},'credential':{'authorization_header_count':authorization,'non_authorization_match_count':non_authorization_matches},'rejection_code':(codes.get(scenario,'sentinel_'+leaks[0] if leaks else 'verification_failed') if verdict=='reject' else '')}
+safe={'schema_version':'context_fabric_privacy_receipt.v1','task':'CHAOS-3007 Task 8','mode':'local-index','scenario':scenario,'verdict':verdict,'source_revision':__import__('os').environ['SOURCE_REVISION'],'source_worktree_clean':__import__('os').environ['SOURCE_CLEAN']=='true','source_identity_unchanged':__import__('os').environ['SOURCE_IDENTITY_UNCHANGED']=='true','harness_sha256':__import__('os').environ['HARNESS_SHA256'],'binary_sha256':__import__('os').environ['BINARY_SHA256'],'tls_verified':True,'request_counts':{**counts,'unexpected':unexpected},'request_shape_valid':shape_valid,'local_expansion_hosted_request_count':after_local-before_local,'zero_match_counts':{k:(0 if k not in leaks else 1) for k in sentinels},'credential':{'authorization_header_count':authorization,'non_authorization_match_count':non_authorization_matches},'rejection_code':(codes.get(scenario,'sentinel_'+leaks[0] if leaks else 'verification_failed') if verdict=='reject' else '')}
 if verdict!='pass':
+ with open(ledger,'a',encoding='utf-8') as out: out.write(json.dumps({'task':safe['task'],'scenario':scenario,'result':'reject','actual_exit':1},sort_keys=True,separators=(',',':'))+'\n')
  print('privacy verifier failed')
  sys.exit(1)
-json.dump(safe,open(receipt,'w'),sort_keys=True)
+temporary=receipt+'.tmp'
+with open(temporary,'w',encoding='utf-8') as out:
+ import os; os.fchmod(out.fileno(),0o600); json.dump(safe,out,sort_keys=True,separators=(',',':')); out.write('\n')
+os.replace(temporary,receipt)
 print('privacy receipt: pass')
 PY

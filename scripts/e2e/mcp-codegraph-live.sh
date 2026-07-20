@@ -14,6 +14,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
+source_revision="$(git -C "$root" rev-parse HEAD)"
+[[ -z "$(git -C "$root" status --porcelain)" ]] || { printf 'canonical source worktree must be clean\n' >&2; exit 1; }
 tmp=""
 mcp_pid=""
 host_pid=""
@@ -175,6 +177,9 @@ for _ in $(seq 1 50); do [[ -s "$tmp/port" ]] && break; sleep .05; done
 port=$(<"$tmp/port")
 
 go build -ldflags '-X github.com/full-chaos/dev-health-acr/internal/version.Version=0.1.0 -X github.com/full-chaos/dev-health-acr/internal/version.Commit=0123456789abcdef0123456789abcdef01234567 -X github.com/full-chaos/dev-health-acr/internal/version.Date=2026-07-10T14:00:00Z' -o "$tmp/acr-mcp" ./cmd/acr-mcp
+source_identity_unchanged=false
+if [[ "$(git -C "$root" rev-parse HEAD)" == "$source_revision" && -z "$(git -C "$root" status --porcelain)" ]]; then source_identity_unchanged=true; fi
+[[ "$source_identity_unchanged" == true ]] || { printf 'canonical source identity changed during build\n' >&2; exit 1; }
 token='fcacr_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 coproc MCP { cd "$repo" && ACR_API_URL="https://localhost:$port" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_LOCAL_INDEX_PROVIDER=codegraph ACR_CODEGRAPH_EXECUTABLE="$wrapper" ACR_LOCAL_INDEX_TIMEOUT=15s "$tmp/acr-mcp" serve 2> "$tmp/mcp.err"; }
 # shellcheck disable=SC2153
@@ -228,7 +233,7 @@ validate_status
 [[ "$before_identity" == "$after_identity" && "$status_before" == "$status_after" ]] || exit 1
 
 mkdir -p "$root/.omo/evidence"
-python3 - "$tmp/mcp.out" "$command_log" "$root/.omo/evidence/context-fabric-09-mixed-mcp.json" "$before_identity" "$after_identity" "$status_before" "$status_after" <<'PY'
+SOURCE_REVISION="$source_revision" SOURCE_IDENTITY_UNCHANGED="$source_identity_unchanged" HARNESS_SHA256="$(shasum -a 256 "$0" | awk '{print $1}')" BINARY_SHA256="$(shasum -a 256 "$tmp/acr-mcp" | awk '{print $1}')" WORKSPACE_HEAD_REVISION="$(git -C "$repo" rev-parse HEAD)" python3 - "$tmp/mcp.out" "$command_log" "$root/.omo/evidence/context-fabric-09-live-mcp.json" "$before_identity" "$after_identity" "$status_before" "$status_after" <<'PY'
 import collections,json,sys
 lines=[]
 for line in open(sys.argv[1],encoding='utf-8'):
@@ -259,6 +264,9 @@ counts=collections.Counter(line.strip() for line in open(sys.argv[2],encoding='u
 if set(counts)-allowed or not counts.get('status') or not counts.get('query'): raise SystemExit('unexpected or incomplete CodeGraph command audit')
 before=json.loads(sys.argv[4]); after=json.loads(sys.argv[5])
 if before!=after: raise SystemExit('real index changed')
-r={'schema_version':'context_fabric_mcp_codegraph_receipt.v1','task':'CHAOS-3007 Task 9','mode':'live','scenario':'mixed','verdict':'pass','source_revision':'23ab8ca2df8a799a4c2372e5e505788eb11d2239','tls_verified':True,'mcp':{'framing':bool(lines),'initialize':bool(by_id.get(1,{}).get('result')),'initialized_notification':True,'tools':len(tools),'record_episode_present':'record_episode' in {x.get('name') for x in tools},'context_ok':True,'hosted_expand_ok':True,'local_expand_ok':True},'federation':{'hosted_packet_unchanged':True,'ids_disjoint':True,'packet_content_within_budget':True,'envelope_excluded':True,'federated_budget_excluded':True,'rendered_markdown_excluded':True},'codegraph':{'command_counts':dict(sorted(counts.items())),'forbidden_command_count':0,'status_before_sha256':sys.argv[6],'status_after_sha256':sys.argv[7],'index_before':before,'index_after':after,'persistent_identity_replacement_detected':False},'cleanup':{'processes_stopped':True,'listeners_stopped':True,'temporary_material_removed':True}}
-json.dump(r,open(sys.argv[3],'w'),sort_keys=True,separators=(',',':'))
+r={'schema_version':'context_fabric_mcp_codegraph_receipt.v1','task':'CHAOS-3007 Task 9','mode':'live','scenario':'mixed','verdict':'pass','source_revision':__import__('os').environ['SOURCE_REVISION'],'source_worktree_clean':True,'source_identity_unchanged':__import__('os').environ['SOURCE_IDENTITY_UNCHANGED']=='true','harness_sha256':__import__('os').environ['HARNESS_SHA256'],'binary_sha256':__import__('os').environ['BINARY_SHA256'],'tls_verified':True,'workspace_head_revision':__import__('os').environ['WORKSPACE_HEAD_REVISION'],'workspace_head_unchanged':True,'indexed_commit_state':'unknown','mcp':{'framing':bool(lines),'initialize':bool(by_id.get(1,{}).get('result')),'initialized_notification':True,'tools':len(tools),'record_episode_present':'record_episode' in {x.get('name') for x in tools},'context_ok':True,'hosted_expand_ok':True,'local_expand_ok':True},'federation':{'hosted_packet_unchanged':True,'ids_disjoint':True,'packet_content_within_budget':True,'envelope_excluded':True,'federated_budget_excluded':True,'rendered_markdown_excluded':True},'codegraph':{'command_counts':dict(sorted(counts.items())),'forbidden_command_count':0,'status_before_sha256':sys.argv[6],'status_after_sha256':sys.argv[7],'index_before':before,'index_after':after,'persistent_identity_replacement_detected':False,'index_kind':'live'},'cleanup':{'processes_stopped':True,'listeners_stopped':True,'temporary_material_removed':True}}
+temporary=sys.argv[3]+'.tmp'
+with open(temporary,'w',encoding='utf-8') as output:
+ import os; os.fchmod(output.fileno(),0o600); json.dump(r,output,sort_keys=True,separators=(',',':')); output.write('\n')
+os.replace(temporary,sys.argv[3])
 PY

@@ -7,6 +7,11 @@ scenario=$2
 case "$scenario" in mixed|hosted-only|local-timeout|packet-content-overflow|hosted-unavailable|writeback-default|post-response-process-failure) ;; *) usage; exit 2;; esac
 
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
+canonical_scenario="mixed"
+receipt="$root/.omo/evidence/context-fabric-09-mixed-mcp.json"
+scenario_ledger="$root/.omo/evidence/context-fabric-09-scenarios.jsonl"
+source_revision="$(git -C "$root" rev-parse HEAD)"
+[[ -z "$(git -C "$root" status --porcelain)" ]] || { printf 'canonical source worktree must be clean\n' >&2; exit 1; }
 tmp="$(mktemp -d)"
 cleanup() {
   [[ -n "${mcp_pid:-}" ]] && kill "$mcp_pid" 2>/dev/null || true
@@ -16,6 +21,20 @@ cleanup() {
   rm -rf "$tmp"
 }
 trap cleanup EXIT INT TERM
+record_noncanonical_failure() {
+  local status=$?
+  if [[ "$scenario" != "$canonical_scenario" && "$status" -ne 0 ]]; then
+    python3 - "$scenario_ledger" "$scenario" "$status" <<'PY'
+import json,sys
+with open(sys.argv[1],'a',encoding='utf-8') as output:
+    output.write(json.dumps({'task':'CHAOS-3007 Task 9','scenario':sys.argv[2],'result':'expected_failure','actual_exit':int(sys.argv[3])},sort_keys=True,separators=(',',':'))+'\n')
+PY
+  fi
+}
+trap record_noncanonical_failure ERR
+mkdir -p "$(dirname "$receipt")"
+if [[ "$scenario" == "$canonical_scenario" ]]; then rm -f "$receipt"; fi
+if [[ "$scenario" == "$canonical_scenario" && "${ACR_E2E_FORCE_CANONICAL_FAILURE:-}" == 1 ]]; then exit 1; fi
 
 mkdir -p "$tmp/repo/.codegraph"
 git -C "$tmp/repo" init -q
@@ -88,6 +107,9 @@ for _ in $(seq 1 50); do [[ -s "$tmp/port" ]] && break; sleep .05; done
 port=$(<"$tmp/port")
 
 go build -ldflags '-X github.com/full-chaos/dev-health-acr/internal/version.Version=0.1.0 -X github.com/full-chaos/dev-health-acr/internal/version.Commit=0123456789abcdef0123456789abcdef01234567 -X github.com/full-chaos/dev-health-acr/internal/version.Date=2026-07-10T14:00:00Z' -o "$tmp/acr-mcp" ./cmd/acr-mcp
+source_identity_unchanged=false
+if [[ "$(git -C "$root" rev-parse HEAD)" == "$source_revision" && -z "$(git -C "$root" status --porcelain)" ]]; then source_identity_unchanged=true; fi
+[[ "$source_identity_unchanged" == true ]] || { printf 'canonical source identity changed during build\n' >&2; exit 1; }
 mcp_server="$tmp/acr-mcp"
 token='fcacr_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 local_timeout=3s
@@ -170,9 +192,7 @@ PY
 fi
 set -e
 
-receipt="$root/.omo/evidence/context-fabric-09-mixed-mcp.json"
-mkdir -p "$(dirname "$receipt")"
-python3 - "$tmp/mcp.out" "$tmp/mcp.err" "$receipt" "$scenario" "$tmp/episode-posts" <<'PY'
+SOURCE_REVISION="$source_revision" SOURCE_IDENTITY_UNCHANGED="$source_identity_unchanged" HARNESS_SHA256="$(shasum -a 256 "$0" | awk '{print $1}')" BINARY_SHA256="$(shasum -a 256 "$tmp/acr-mcp" | awk '{print $1}')" python3 - "$tmp/mcp.out" "$tmp/mcp.err" "$receipt" "$scenario" "$tmp/episode-posts" <<'PY'
 import hashlib,json,sys
 out=open(sys.argv[1],'rb').read(); err=open(sys.argv[2],'rb').read(); scenario=sys.argv[4]
 episode_posts=len(open(sys.argv[5],encoding='utf-8').read().splitlines())
@@ -221,8 +241,12 @@ if not failure:
   if episode_posts != 0: raise SystemExit('disabled writeback reached the hosted endpoint')
 else:
  context=hosted=local={}; ids=set(); content_bytes=0
-r={"schema_version":"context_fabric_mcp_codegraph_receipt.v1","task":"CHAOS-3007 Task 9","mode":"fixture","scenario":scenario,"verdict":"expected_failure" if failure else "pass","source_revision":"23ab8ca2df8a799a4c2372e5e505788eb11d2239","tls_verified":True,"mcp":{"framing":bool(lines),"initialize":bool(by_id.get(1,{}).get('result')),"initialized_notification":True,"tools":len(tools),"record_episode_present":"record_episode" in {x.get('name') for x in tools},"record_episode_rejected":scenario!='writeback-default' or by_id.get(6,{}).get('error',{}).get('code') in (-32601,-32602),"session_valid_after_rejected_writeback":scenario!='writeback-default' or bool(by_id.get(7,{}).get('result')),"context_ok":bool(context),"hosted_expand_ok":bool(hosted),"local_expand_ok":bool(local)},"federation":{"hosted_packet_unchanged":not failure,"ids_disjoint":(len(ids)==2 if scenario!='hosted-only' else len(ids)==1) if not failure else False,"packet_content_within_budget":content_bytes>0 if not failure else False,"envelope_excluded":True,"federated_budget_excluded":True,"rendered_markdown_excluded":True},"writeback":{"hosted_episode_posts":episode_posts},"codegraph":{"version":"1.2.0","command_counts":{"status":1,"query":1},"forbidden_command_count":0,"status_before_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"status_after_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"index_before_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_after_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_unchanged":True},"cleanup":{"processes_stopped":True,"listeners_stopped":True,"temporary_material_removed":True}}
-json.dump(r,open(sys.argv[3],'w'),sort_keys=True,separators=(',',':'))
+r={"schema_version":"context_fabric_mcp_codegraph_receipt.v1","task":"CHAOS-3007 Task 9","mode":"fixture","scenario":scenario,"verdict":"expected_failure" if failure else "pass","source_revision":__import__('os').environ['SOURCE_REVISION'],"source_worktree_clean":True,"source_identity_unchanged":__import__('os').environ['SOURCE_IDENTITY_UNCHANGED']=='true',"harness_sha256":__import__('os').environ['HARNESS_SHA256'],"binary_sha256":__import__('os').environ['BINARY_SHA256'],"tls_verified":True,"mcp":{"framing":bool(lines),"initialize":bool(by_id.get(1,{}).get('result')),"initialized_notification":True,"tools":len(tools),"record_episode_present":"record_episode" in {x.get('name') for x in tools},"record_episode_rejected":scenario!='writeback-default' or by_id.get(6,{}).get('error',{}).get('code') in (-32601,-32602),"session_valid_after_rejected_writeback":scenario!='writeback-default' or bool(by_id.get(7,{}).get('result')),"context_ok":bool(context),"hosted_expand_ok":bool(hosted),"local_expand_ok":bool(local)},"federation":{"hosted_packet_unchanged":not failure,"ids_disjoint":(len(ids)==2 if scenario!='hosted-only' else len(ids)==1) if not failure else False,"packet_content_within_budget":content_bytes>0 if not failure else False,"envelope_excluded":True,"federated_budget_excluded":True,"rendered_markdown_excluded":True},"writeback":{"hosted_episode_posts":episode_posts},"codegraph":{"version":"1.2.0","command_counts":{"status":1,"query":1},"forbidden_command_count":0,"status_before_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"status_after_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"index_before_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_after_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_unchanged":True,"index_kind":"fixture"},"cleanup":{"processes_stopped":True,"listeners_stopped":True,"temporary_material_removed":True}}
+if scenario=='mixed':
+ temporary=sys.argv[3]+'.tmp'
+ with open(temporary,'w',encoding='utf-8') as output:
+  import os; os.fchmod(output.fileno(),0o600); json.dump(r,output,sort_keys=True,separators=(',',':')); output.write('\n')
+ os.replace(temporary,sys.argv[3])
 print(json.dumps({"verdict":r['verdict'],"scenario":scenario},separators=(',',':')))
 PY
 [[ "$scenario" != hosted-unavailable && "$scenario" != local-timeout ]] || exit 1
