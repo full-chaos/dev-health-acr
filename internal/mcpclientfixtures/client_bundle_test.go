@@ -1,7 +1,6 @@
 package mcpclientfixtures
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,20 +15,75 @@ func TestClientBundle_validates_shared_contract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateClientPackageRoots(filepath.Join("..", ".."), bundle); err != nil {
+	root := os.Getenv("MCP_CLIENT_ROOT")
+	if root == "" {
+		root = filepath.Join("..", "..")
+	}
+	if err := ValidateClientPackageRoots(root, bundle); err != nil {
 		t.Fatal(err)
+	}
+	t.Logf("CLIENT_BUNDLE_OK root=%s", root)
+}
+
+func TestClientFixtureRunner_rejects_exact_classifications(t *testing.T) {
+	fixtureRoot := os.Getenv("MCP_CLIENT_FIXTURE_ROOT")
+	if fixtureRoot == "" {
+		fixtureRoot = filepath.Join("..", "..", "clients", "conformance", "fixtures")
+	}
+	if err := ValidateClientFixtures(fixtureRoot); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("CLIENT_FIXTURES_OK root=%s", fixtureRoot)
+}
+
+func TestClientBundle_exposes_typed_scenario_expectations(t *testing.T) {
+	// Given
+	bundle := validClientBundle()
+
+	// When
+	expectations := bundle.ConformanceExpectations()
+
+	// Then
+	if got := expectations["context"]; got != (ClientScenarioOutput{Kind: "structured_context", Visible: true}) {
+		t.Fatalf("context expectation = %#v", got)
+	}
+	if got := expectations["evidence"]; got != (ClientScenarioOutput{Kind: "structured_evidence", Visible: true}) {
+		t.Fatalf("evidence expectation = %#v", got)
+	}
+	if got := expectations["unavailable"]; got != (ClientScenarioOutput{Kind: "visible_degradation", Visible: true}) {
+		t.Fatalf("unavailable expectation = %#v", got)
 	}
 }
 
-func TestClientBundle_rejects_invalid_contracts(t *testing.T) {
-	for _, name := range []string{"invalid-bare-acr-mcp", "invalid-direct-api", "invalid-writeback-default", "invalid-preplan-default", "invalid-semver", "invalid-unsupported-command", "invalid-missing-clients", "invalid-credential-storage", "invalid-codegraph-command", "invalid-client-fork", "invalid-mutable-installer", "invalid-out-of-namespace"} {
-		_, err := LoadClientBundle(filepath.Join("..", "..", "clients", "conformance", "fixtures", name, "client-bundle.v1.json"))
-		if !errors.Is(err, ErrInvalidClientBundle) {
-			t.Fatalf("%s error = %v", name, err)
-		}
-		var typed *ClientBundleError
-		if !errors.As(err, &typed) {
-			t.Fatalf("%s error is not typed", name)
-		}
+func TestClientPackageRoots_rejects_package_manifest_unknown_fields(t *testing.T) {
+	// Given
+	root := t.TempDir()
+	bundle := validClientBundle()
+	writeValidClientTree(t, root, bundle)
+	writeFile(t, filepath.Join(root, "clients", "opencode", "package.v1.json"), `{"bundle_version":"1.0.0","minimum_sidecar_version":"1.0.0","command":"acr-mcp","args":["serve"],"mcp_commands":["context_for_task","source_evidence"],"unexpected":true}`)
+
+	// When
+	err := ValidateClientPackageRoots(root, bundle)
+
+	// Then
+	assertClientBundleClassification(t, err, "package.manifest_decode")
+}
+
+func TestClientPackageRoots_rejects_symlinked_package_directory(t *testing.T) {
+	// Given
+	root := t.TempDir()
+	bundle := validClientBundle()
+	writeValidClientTree(t, root, bundle)
+	if err := os.RemoveAll(filepath.Join(root, "clients", "opencode")); err != nil {
+		t.Fatal(err)
 	}
+	if err := os.Symlink(filepath.Join(root, "clients", "cursor"), filepath.Join(root, "clients", "opencode")); err != nil {
+		t.Skipf("symlink unsupported on this platform: %v", err)
+	}
+
+	// When
+	err := ValidateClientPackageRoots(root, bundle)
+
+	// Then
+	assertClientBundleClassification(t, err, "package.symlink")
 }
