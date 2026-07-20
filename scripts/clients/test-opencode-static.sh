@@ -31,9 +31,10 @@ require_wrapper_contract() {
   grep -Fq 'New-Item -ItemType SymbolicLink' "$update" || return 1
   grep -Fq 'Get-OwnedStage' "$uninstall" || return 1
   grep -Fq 'refusing to remove a target not owned by Context Fabric' "$uninstall" || return 1
-  grep -Fq 'taskkill.exe' "$root/config/plugins/context-fabric.ts" || return 1
-  grep -Fq '"/t", "/f"' "$root/config/plugins/context-fabric.ts" || return 1
-  if grep -A3 'process.platform === "win32"' "$root/config/plugins/context-fabric.ts" | grep -Fq 'child.kill'; then return 1; fi
+  local cleanup="$root/config/lib/doctor-process-cleanup.ts"
+  grep -Fq 'taskkill.exe' "$cleanup" || return 1
+  grep -Fq '["/pid", String(child.pid), "/t", "/f"]' "$cleanup" || return 1
+  grep -Fq 'runOfflineDoctor' "$root/config/plugins/context-fabric.ts" || return 1
 }
 
 assert_mutation_rejected() {
