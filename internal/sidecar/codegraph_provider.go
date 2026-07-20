@@ -177,10 +177,7 @@ func trustedCodeGraphIndex(root string) bool {
 }
 
 func verifyCurrentUserOwned(info os.FileInfo) error {
-	if err := verifyTrustedCABundleOwnership(info); err != nil || info.Mode().Perm()&0o022 != 0 {
-		return errUntrustedFileOwnership
-	}
-	return nil
+	return verifyCurrentUserOnlyOwnership(info)
 }
 
 func verifyCurrentUserOwnedDir(path string) error {
