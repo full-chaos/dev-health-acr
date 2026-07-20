@@ -22,6 +22,10 @@ const (
 	defaultMaxSerializedBytes = 262144 // 256 KiB
 )
 
+var validateFederatedResponse = func(response contractsv1.MCPContextForTaskResponse) error {
+	return response.Validate()
+}
+
 // handleContextForTask implements the context_for_task tool: decode and
 // validate the MCP request, resolve repository/scope via explicit-request >
 // MCP-roots > cwd precedence, call the hosted context-packet endpoint, and
@@ -117,7 +121,7 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 			HostedTruncated: packet.Budget.Truncated, LocalTruncated: local.bundle.Truncated || trimmed, Truncated: packet.Budget.Truncated || local.bundle.Truncated || trimmed,
 		}
 	}
-	if err := response.Validate(); err != nil {
+	if err := validateFederatedResponse(response); err != nil {
 		return toolErrorResult(&classifiedError{category: "internal", message: "the assembled response failed contract validation"}), nil
 	}
 	result, buildErr := buildToolResult(response, response.RenderedMarkdown.Markdown)

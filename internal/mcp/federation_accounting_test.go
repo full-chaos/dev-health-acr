@@ -97,5 +97,7 @@ func TestFederation_DisjointIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, []string{"hosted", "request"}, refs[0].EvidenceRefID)
 	require.Equal(t, refs[0].EvidenceRefID+":item", items[0].PacketItemID)
-	require.Len(t, occupied, 3)
+	require.Contains(t, occupied, refs[0].EvidenceRefID)
+	require.Contains(t, occupied, items[0].PacketItemID)
+	require.Len(t, occupied, 4)
 }

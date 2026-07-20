@@ -25,13 +25,14 @@ func handleSourceEvidence(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 
 	var evidence contractsv1.ExpandedEvidence
 	if strings.HasPrefix(input.EvidenceRefID, localEvidencePrefix) {
-		if boot.local != nil {
+		routeHosted := boot.hostedRoutes != nil && boot.hostedRoutes.has(input.EvidenceRefID)
+		if !routeHosted && boot.local != nil {
 			cached, found := boot.local.cache.get(input.EvidenceRefID)
 			if found {
 				evidence = contractsv1.ExpandedEvidence{SchemaVersion: contractsv1.ExpandedEvidenceSchema, Evidence: cached.ref, ResolvedAt: boot.local.clock().UTC(), Availability: cached.ref.Availability, Excerpt: boundedText(cached.evidence.Excerpt, 1000), Structured: map[string]any{}}
 			}
 		}
-		if evidence.SchemaVersion == "" && (boot.hostedRoutes == nil || !boot.hostedRoutes.has(input.EvidenceRefID)) {
+		if evidence.SchemaVersion == "" && !routeHosted {
 			return toolErrorResult(&classifiedError{category: "no_data", message: "local evidence is unavailable"}), nil
 		}
 	}

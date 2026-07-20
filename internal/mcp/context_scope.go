@@ -47,6 +47,8 @@ type resolvedTaskScope struct {
 	LocalEligible bool
 }
 
+var discoverWorkspace = sidecar.DiscoverWorkspace
+
 func resolveTaskScope(ctx context.Context, session *mcpsdk.ServerSession, req contractsv1.MCPContextForTaskRequest) (resolvedTaskScope, error) {
 	result := resolvedTaskScope{}
 	repo := &result.Repository
@@ -84,7 +86,7 @@ func resolveTaskScope(ctx context.Context, session *mcpsdk.ServerSession, req co
 		MCPFileRoots:        mcpRoots,
 		IncludeChangedFiles: wantChangedFiles,
 	}
-	info, err := sidecar.DiscoverWorkspace(ctx, opts)
+	info, err := discoverWorkspace(ctx, opts)
 	if err != nil {
 		if isPropagatedDiscoveryError(err) {
 			return result, err

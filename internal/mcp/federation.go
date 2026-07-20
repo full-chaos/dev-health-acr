@@ -149,7 +149,7 @@ func localContext(bundle sidecar.LocalEvidenceBundle, mapped mappedLocalBundle, 
 	}
 	return contractsv1.MCPLocalContext{
 		Provider: bundle.ProviderID, Status: localContextStatus(bundle.Status), ProviderVersion: bundle.ProviderVersion,
-		QueryVersion: bundle.QueryVersion, IndexedAt: bundle.IndexedAt, Freshness: localFreshness(bundle.Freshness),
+		QueryVersion: bundle.QueryVersion, IndexedAt: bundle.IndexedAt, IndexedRef: bundle.IndexedRef, IndexedCommit: bundle.IndexedCommit, Freshness: localFreshness(bundle.Freshness),
 		Warnings: warnings, Items: mapped.items, EvidenceRefs: mapped.refs,
 	}
 }
@@ -222,8 +222,12 @@ func (r *localFederationRuntime) publicID(repository string, bundle sidecar.Loca
 		}
 		digest := r.hash(encoded)
 		id := localEvidencePrefix + hex.EncodeToString(digest[:])
-		if _, exists := occupied[id]; !exists {
+		itemID := id + ":item"
+		_, evidenceOccupied := occupied[id]
+		_, itemOccupied := occupied[itemID]
+		if !evidenceOccupied && !itemOccupied {
 			occupied[id] = struct{}{}
+			occupied[itemID] = struct{}{}
 			return id, nil
 		}
 	}
