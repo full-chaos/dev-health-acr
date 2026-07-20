@@ -46,12 +46,11 @@ func TestReadBoundedRegularFileRejectsFIFOWithoutBlocking(t *testing.T) {
 	}
 }
 
-// TestReadBoundedRegularFileFIFOSwapRaceNeverBlocks proves that under
-// real, continuous concurrent path swapping between a regular file and a
-// named pipe with no reader or writer connected, readBoundedRegularFile
-// never blocks: every call must return (successfully or with an error)
-// well within the test's overall deadline, even though some calls will
-// race against the path being a FIFO at the exact moment of open(2).
+// TestReadBoundedRegularFileFIFOSwapRaceNeverBlocks exercises continuous
+// swapping between a regular file and an unconnected named pipe. It detects
+// persistent replacement that blocks the Darwin/Linux atomic-open path during
+// the bounded test interval; it does not claim to close every swap-and-restore
+// race.
 func TestReadBoundedRegularFileFIFOSwapRaceNeverBlocks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "path")

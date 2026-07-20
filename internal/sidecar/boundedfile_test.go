@@ -15,10 +15,10 @@ import (
 // the shared implementation behind the CA-bundle and credential-file
 // reads covered end to end in api_client_cacert_test.go, config_ca_test.go,
 // and credential_file_test.go. The two adversarial tests at the bottom
-// prove, under real concurrent path swapping rather than a single
+// exercise, under real concurrent path swapping rather than a single
 // before/after snapshot, that the atomic O_NOFOLLOW/O_NONBLOCK open this
-// package now uses instead of a separate lstat-then-open check can never
-// be raced into following a symlink or blocking on a FIFO.
+// package uses instead of a separate lstat-then-open check rejects the
+// persistent replacements observed by these Darwin/Linux tests.
 
 func TestReadBoundedRegularFileAcceptsRegularFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "regular")
@@ -98,15 +98,11 @@ func TestDescribeFileErrorNeverEchoesPath(t *testing.T) {
 	}
 }
 
-// TestReadBoundedRegularFileSymlinkSwapRaceNeverFollows proves that under
-// real, continuous concurrent path swapping between a regular file and a
-// symlink to an unrelated "secret" file, readBoundedRegularFile can never
-// be raced into returning data read through the symlink. Every rename
-// used to perform the swap is a single atomic filesystem operation, so
-// this is not merely a before/after snapshot test: the goal is to prove
-// the atomic O_NOFOLLOW open holds even when the race window is actively,
-// repeatedly exercised for the whole test duration, not just at one
-// instant.
+// TestReadBoundedRegularFileSymlinkSwapRaceNeverFollows exercises continuous
+// swapping between a regular file and a symlink to an unrelated secret file.
+// Every rename used to perform the swap is atomic, so the test detects
+// persistent identity replacement while the Darwin/Linux atomic-open path is
+// actively exercised. It does not claim to close every swap-and-restore race.
 func TestReadBoundedRegularFileSymlinkSwapRaceNeverFollows(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires elevated privileges on windows")

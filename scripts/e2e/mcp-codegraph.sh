@@ -39,7 +39,7 @@ set -euo pipefail
 fixture_root=__FIXTURE_ROOT__
 case "${1:-}" in
   status) python3 -c 'import json,sys,datetime; x=json.load(open(sys.argv[1])); x["projectPath"]=sys.argv[2]; x["indexPath"]=sys.argv[2]+"/.codegraph"; x["lastIndexed"]=datetime.datetime.now(datetime.UTC).isoformat(timespec="milliseconds").replace("+00:00","Z"); print(json.dumps(x,separators=(",",":")))' "$fixture_root/status.json" "$(pwd -P)";;
-  query) cat "$fixture_root/query.json";;
+  query) [[ -f .codegraph/overflow-query.json ]] && cat .codegraph/overflow-query.json || cat "$fixture_root/query.json";;
   callers) cat "$fixture_root/callers.json";;
   callees) cat "$fixture_root/callees.json";;
   impact) cat "$fixture_root/impact.json";;
@@ -57,6 +57,7 @@ chmod 700 "$tmp/codegraph"
 cat > "$tmp/host.py" <<'PY'
 import http.server,json,ssl,sys
 root=sys.argv[1]
+episode_posts=sys.argv[4]
 caps={"schema_version":"capabilities.v1","service":"dev-health-acr","service_version":"0.1.0","minimum_sidecar_version":"0.1.0","supported_schema_versions":["mcp_context_for_task_request.v1","mcp_context_for_task_response.v1","mcp_source_evidence_request.v1","mcp_source_evidence_response.v1","context_packet_request.v1","context_packet.v1","context_packet_item.v1","evidence_ref.v1","expanded_evidence.v1"],"enabled_tools":["context_for_task","source_evidence"],"entitlements":{"agent_context_runtime":True},"permissions":{"context_read":True,"evidence_read":True,"episode_write":False},"limits":{"max_items":30,"max_output_tokens":4000,"max_serialized_bytes":262144,"requests_per_minute":60},"generated_at":"2026-07-10T14:00:00Z"}
 packet=json.load(open(root+"/contracts/examples/v1/mcp_context_for_task_response_mixed.v1.json"))["structured"]
 evidence=json.load(open(root+"/contracts/examples/v1/mcp_source_evidence_response.v1.json"))["structured"]
@@ -69,11 +70,19 @@ class H(http.server.BaseHTTPRequestHandler):
   if '/evidence/' in self.path: return self.reply(evidence)
   self.send_error(404)
  def do_POST(self):
-  self.rfile.read(int(self.headers.get('content-length','0'))); self.reply(packet)
+  request=json.loads(self.rfile.read(int(self.headers.get('content-length','0'))))
+  if self.path.endswith('/episodes'):
+   with open(episode_posts,'a',encoding='utf-8') as output: output.write('1\n')
+  response=packet
+  if request.get('goal')=='fixture overflow context':
+   response=json.loads(json.dumps(packet))
+   response['budget'].update({'max_items':20,'max_output_tokens':2000,'max_serialized_bytes':16384,'estimated_tokens':1500,'serialized_bytes':15000})
+  self.reply(response)
 s=http.server.ThreadingHTTPServer(('127.0.0.1',0),H)
 c=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); c.load_cert_chain(sys.argv[2],sys.argv[3]); s.socket=c.wrap_socket(s.socket,server_side=True); print(s.server_port,flush=True); s.serve_forever()
 PY
-python3 "$tmp/host.py" "$root" "$tmp/server.pem" "$tmp/server.key" > "$tmp/port" 2> "$tmp/host.err" & host_pid=$!
+: > "$tmp/episode-posts"
+python3 "$tmp/host.py" "$root" "$tmp/server.pem" "$tmp/server.key" "$tmp/episode-posts" > "$tmp/port" 2> "$tmp/host.err" & host_pid=$!
 for _ in $(seq 1 50); do [[ -s "$tmp/port" ]] && break; sleep .05; done
 [[ -s "$tmp/port" ]] || { echo "fixture host did not start: $(<"$tmp/host.err")" >&2; exit 1; }
 port=$(<"$tmp/port")
@@ -86,6 +95,17 @@ case "$scenario" in
   hosted-unavailable) kill "$host_pid"; wait "$host_pid" 2>/dev/null || true; host_pid="";;
   hosted-only) local_provider=disabled;;
   local-timeout) local_timeout=100ms; printf '#!/usr/bin/env bash\nsleep 3\n' > "$tmp/codegraph"; chmod 700 "$tmp/codegraph";;
+  packet-content-overflow)
+    python3 - "$tmp/repo/.codegraph/overflow-query.json" <<'PY'
+import json,sys
+nodes=[]
+for index in range(5):
+    name=f"overflow_{index}_" + "x" * 240
+    path=f"internal/overflow_{index}.go"
+    nodes.append({"node":{"id":f"method:{index:032x}","kind":"method","name":name,"qualifiedName":name,"filePath":path,"language":"go","startLine":index + 1,"endLine":index + 1,"startColumn":0,"endColumn":1,"signature":"func overflow()","visibility":None,"isExported":False,"isAsync":False,"isStatic":False,"isAbstract":False,"returnType":"","updatedAt":1783774616381},"score":float(100-index)})
+open(sys.argv[1],'w',encoding='utf-8').write(json.dumps(nodes,separators=(',',':')))
+PY
+    ;;
 esac
 
 set +e
@@ -93,12 +113,18 @@ if [[ "$scenario" == hosted-unavailable ]]; then
   (cd "$tmp/repo" && ACR_API_URL="https://localhost:$port" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$tmp/ca.pem" "$tmp/acr-mcp" serve) </dev/null > "$tmp/mcp.out" 2> "$tmp/mcp.err"
 else
   coproc MCP { cd "$tmp/repo" && ACR_API_URL="https://localhost:$port" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_LOCAL_INDEX_PROVIDER="$local_provider" ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" ACR_LOCAL_INDEX_TIMEOUT="$local_timeout" "$tmp/acr-mcp" serve 2> "$tmp/mcp.err"; }
+  # shellcheck disable=SC2153
+  mcp_pid=$MCP_PID
   rpc() { printf '%s\n' "$1" >&"${MCP[1]}"; IFS= read -r -t 10 response <&"${MCP[0]}" || return 1; printf '%s\n' "$response" >> "$tmp/mcp.out"; }
   if [[ -v MCP[1] ]]; then
   rpc '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' >&"${MCP[1]}"
   rpc '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-  rpc '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"context_for_task","arguments":{"goal":"fixture mixed context"}}}'
+  if [[ "$scenario" == packet-content-overflow ]]; then
+    rpc '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"context_for_task","arguments":{"goal":"fixture overflow context","budget":{"max_items":20,"max_output_tokens":2000,"max_serialized_bytes":16384}}}}'
+  else
+    rpc '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"context_for_task","arguments":{"goal":"fixture mixed context"}}}'
+  fi
   rpc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"source_evidence","arguments":{"evidence_ref_id":"ev_01J0ACR001"}}}'
   if [[ "$scenario" != hosted-only && "$scenario" != local-timeout ]]; then
   local_id=$(python3 - "$tmp/mcp.out" <<'PY'
@@ -111,24 +137,30 @@ for line in open(sys.argv[1]):
   if refs: print(refs[0]['evidence_ref_id'])
 PY
 )
-  [[ -n "$local_id" ]] || { printf '%s\n' 'local fixture produced no evidence id' >&2; exit 1; }
+  [[ -n "$local_id" ]] || { printf '%s\n' 'local fixture produced no evidence id' >&2; cat "$tmp/mcp.out" "$tmp/mcp.err" >&2; exit 1; }
   rpc "$(python3 - "$local_id" <<'PY'
 import json,sys
 print(json.dumps({'jsonrpc':'2.0','id':5,'method':'tools/call','params':{'name':'source_evidence','arguments':{'evidence_ref_id':sys.argv[1]}}},separators=(',',':')))
 PY
 )"
   fi
-  exec {MCP[1]}>&-
+  if [[ "$scenario" == writeback-default ]]; then
+    rpc '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"record_episode","arguments":{}}}'
+    rpc '{"jsonrpc":"2.0","id":7,"method":"tools/list","params":{}}'
   fi
-  wait "$MCP_PID" || true
+  # shellcheck disable=SC1083 # Bash expands the coprocess file descriptor at runtime.
+  eval "exec ${MCP[1]}>&-"
+  fi
+  wait "$mcp_pid" || true
 fi
 set -e
 
 receipt="$root/.omo/evidence/context-fabric-09-mixed-mcp.json"
 mkdir -p "$(dirname "$receipt")"
-python3 - "$tmp/mcp.out" "$tmp/mcp.err" "$receipt" "$scenario" <<'PY'
+python3 - "$tmp/mcp.out" "$tmp/mcp.err" "$receipt" "$scenario" "$tmp/episode-posts" <<'PY'
 import hashlib,json,sys
 out=open(sys.argv[1],'rb').read(); err=open(sys.argv[2],'rb').read(); scenario=sys.argv[4]
+episode_posts=len(open(sys.argv[5],encoding='utf-8').read().splitlines())
 lines=[]
 for line in out.splitlines():
  try: lines.append(json.loads(line))
@@ -153,12 +185,28 @@ if not failure:
  if scenario not in ('hosted-only','local-timeout') and not local_ref.get('evidence_ref_id','').startswith('local:codegraph:v1:'): raise SystemExit('local expansion mismatch')
  ids={hosted_ref['evidence_ref_id']} | ({local_ref['evidence_ref_id']} if local_ref else set())
  if scenario not in ('hosted-only','local-timeout') and len(ids)!=2: raise SystemExit('evidence identifiers collide')
- content_bytes=len(json.dumps({'structured':packet},separators=(',',':')).encode())+len(json.dumps({'structured':context.get('local_context',{})},separators=(',',':')).encode())
+ content_bytes=len(json.dumps({'structured':packet},separators=(',',':')).encode())+len(json.dumps({'local_context':context.get('local_context',{})},separators=(',',':')).encode())
  budget=packet.get('budget',{}).get('max_serialized_bytes',0)
  if not 0<content_bytes<=budget: raise SystemExit('packet content budget exceeded')
+ if scenario=='packet-content-overflow':
+  local_context=context.get('local_context',{})
+  federated=context.get('federated_budget',{})
+  if local_context.get('warnings') is None or 'local_budget_exhausted' not in local_context['warnings']: raise SystemExit('overflow did not exhaust the local budget: %s' % json.dumps(federated,sort_keys=True))
+  if len(local_context.get('items',[])) >= 5 or not federated.get('local_truncated') or not federated.get('truncated'): raise SystemExit('overflow did not trim local content first')
+  if (federated.get('max_items'),federated.get('max_output_tokens'),federated.get('max_serialized_bytes')) != (20,2000,16384): raise SystemExit('caller budget was not applied')
+  if federated.get('total_items_used',21)>20 or federated.get('total_estimated_tokens',2001)>2000 or federated.get('total_serialized_bytes',16385)>16384: raise SystemExit('combined content exceeds caller budget')
+  if not {'structured','local_context','federated_budget','rendered_markdown'} <= set(context): raise SystemExit('overflow response omitted required accounting fields')
+ if scenario=='writeback-default':
+  writeback=by_id.get(6,{})
+  followup=by_id.get(7,{}).get('result',{}).get('tools',[])
+  if 'record_episode' in {tool.get('name') for tool in tools} or len(tools)!=2: raise SystemExit('writeback tool was advertised')
+  error=writeback.get('error',{})
+  if error.get('code') not in (-32601,-32602) or 'unknown tool "record_episode"' not in error.get('message',''): raise SystemExit('record_episode was not rejected as unknown: %s' % json.dumps(writeback,sort_keys=True))
+  if {tool.get('name') for tool in followup}!={'context_for_task','source_evidence'}: raise SystemExit('session did not remain valid after rejected writeback')
+  if episode_posts != 0: raise SystemExit('disabled writeback reached the hosted endpoint')
 else:
  context=hosted=local={}; ids=set(); content_bytes=0
-r={"schema_version":"context_fabric_mcp_codegraph_receipt.v1","task":"CHAOS-3007 Task 9","mode":"fixture","scenario":scenario,"verdict":"expected_failure" if failure else "pass","source_revision":"23ab8ca2df8a799a4c2372e5e505788eb11d2239","tls_verified":True,"mcp":{"framing":bool(lines),"initialize":bool(by_id.get(1,{}).get('result')),"initialized_notification":True,"tools":len(tools),"record_episode_present":"record_episode" in {x.get('name') for x in tools},"context_ok":bool(context),"hosted_expand_ok":bool(hosted),"local_expand_ok":bool(local)},"federation":{"hosted_packet_unchanged":not failure,"ids_disjoint":(len(ids)==2 if scenario!='hosted-only' else len(ids)==1) if not failure else False,"packet_content_within_budget":content_bytes>0 if not failure else False,"envelope_excluded":True,"rendered_markdown_excluded":True},"codegraph":{"version":"1.2.0","command_counts":{"status":1,"query":1},"forbidden_command_count":0,"status_before_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"status_after_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"index_before_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_after_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_unchanged":True},"cleanup":{"processes_stopped":True,"listeners_stopped":True,"temporary_material_removed":True}}
+r={"schema_version":"context_fabric_mcp_codegraph_receipt.v1","task":"CHAOS-3007 Task 9","mode":"fixture","scenario":scenario,"verdict":"expected_failure" if failure else "pass","source_revision":"23ab8ca2df8a799a4c2372e5e505788eb11d2239","tls_verified":True,"mcp":{"framing":bool(lines),"initialize":bool(by_id.get(1,{}).get('result')),"initialized_notification":True,"tools":len(tools),"record_episode_present":"record_episode" in {x.get('name') for x in tools},"record_episode_rejected":scenario!='writeback-default' or by_id.get(6,{}).get('error',{}).get('code') in (-32601,-32602),"session_valid_after_rejected_writeback":scenario!='writeback-default' or bool(by_id.get(7,{}).get('result')),"context_ok":bool(context),"hosted_expand_ok":bool(hosted),"local_expand_ok":bool(local)},"federation":{"hosted_packet_unchanged":not failure,"ids_disjoint":(len(ids)==2 if scenario!='hosted-only' else len(ids)==1) if not failure else False,"packet_content_within_budget":content_bytes>0 if not failure else False,"envelope_excluded":True,"federated_budget_excluded":True,"rendered_markdown_excluded":True},"writeback":{"hosted_episode_posts":episode_posts},"codegraph":{"version":"1.2.0","command_counts":{"status":1,"query":1},"forbidden_command_count":0,"status_before_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"status_after_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"index_before_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_after_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_unchanged":True},"cleanup":{"processes_stopped":True,"listeners_stopped":True,"temporary_material_removed":True}}
 json.dump(r,open(sys.argv[3],'w'),sort_keys=True,separators=(',',':'))
 print(json.dumps({"verdict":r['verdict'],"scenario":scenario},separators=(',',':')))
 PY

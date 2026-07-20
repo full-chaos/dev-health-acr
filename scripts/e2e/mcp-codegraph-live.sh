@@ -18,16 +18,24 @@ tmp=""
 mcp_pid=""
 host_pid=""
 cleanup() {
-  [[ -n "$mcp_pid" ]] && kill "$mcp_pid" 2>/dev/null || true
-  [[ -n "$host_pid" ]] && kill "$host_pid" 2>/dev/null || true
-  [[ -n "$mcp_pid" ]] && wait "$mcp_pid" 2>/dev/null || true
-  [[ -n "$host_pid" ]] && wait "$host_pid" 2>/dev/null || true
-  [[ -n "$tmp" ]] && rm -rf "$tmp"
+  local command_status=$?
+  trap - EXIT INT TERM
+  if [[ -n "$mcp_pid" ]]; then kill "$mcp_pid" 2>/dev/null || true; fi
+  if [[ -n "$host_pid" ]]; then kill "$host_pid" 2>/dev/null || true; fi
+  if [[ -n "$mcp_pid" ]]; then wait "$mcp_pid" 2>/dev/null || true; fi
+  if [[ -n "$host_pid" ]]; then wait "$host_pid" 2>/dev/null || true; fi
+  if [[ -n "$tmp" ]]; then rm -rf "$tmp"; fi
+  exit "$command_status"
 }
 trap cleanup EXIT INT TERM
 
 if [[ "$mode" != live ]]; then
   [[ -z "$repo$scenario" ]] || { usage; exit 2; }
+  set +e
+  "$0" >/dev/null 2>&1
+  missing_flags_status=$?
+  set -e
+  [[ "$missing_flags_status" == 2 ]] || exit 1
   tmp="$(mktemp -d)"
   mkdir -p "$tmp/repo/.codegraph" "$tmp/bin"
   git -C "$tmp/repo" init -q
@@ -215,6 +223,8 @@ mcp_pid=""
 after_identity="$(db_identity)"
 status_after="$(status_hash)"
 validate_status
+# Detect persistent target/DB replacement before and after the live session;
+# this snapshot guard does not claim to close every swap-and-restore race.
 [[ "$before_identity" == "$after_identity" && "$status_before" == "$status_after" ]] || exit 1
 
 mkdir -p "$root/.omo/evidence"
@@ -249,6 +259,6 @@ counts=collections.Counter(line.strip() for line in open(sys.argv[2],encoding='u
 if set(counts)-allowed or not counts.get('status') or not counts.get('query'): raise SystemExit('unexpected or incomplete CodeGraph command audit')
 before=json.loads(sys.argv[4]); after=json.loads(sys.argv[5])
 if before!=after: raise SystemExit('real index changed')
-r={'schema_version':'context_fabric_mcp_codegraph_receipt.v1','task':'CHAOS-3007 Task 9','mode':'live','scenario':'mixed','verdict':'pass','source_revision':'23ab8ca2df8a799a4c2372e5e505788eb11d2239','tls_verified':True,'mcp':{'framing':bool(lines),'initialize':bool(by_id.get(1,{}).get('result')),'initialized_notification':True,'tools':len(tools),'record_episode_present':'record_episode' in {x.get('name') for x in tools},'context_ok':True,'hosted_expand_ok':True,'local_expand_ok':True},'federation':{'hosted_packet_unchanged':True,'ids_disjoint':True,'packet_content_within_budget':True,'envelope_excluded':True,'federated_budget_excluded':True,'rendered_markdown_excluded':True},'codegraph':{'command_counts':dict(sorted(counts.items())),'forbidden_command_count':0,'status_before_sha256':sys.argv[6],'status_after_sha256':sys.argv[7],'index_before':before,'index_after':after,'index_unchanged':True},'cleanup':{'processes_stopped':True,'listeners_stopped':True,'temporary_material_removed':True}}
+r={'schema_version':'context_fabric_mcp_codegraph_receipt.v1','task':'CHAOS-3007 Task 9','mode':'live','scenario':'mixed','verdict':'pass','source_revision':'23ab8ca2df8a799a4c2372e5e505788eb11d2239','tls_verified':True,'mcp':{'framing':bool(lines),'initialize':bool(by_id.get(1,{}).get('result')),'initialized_notification':True,'tools':len(tools),'record_episode_present':'record_episode' in {x.get('name') for x in tools},'context_ok':True,'hosted_expand_ok':True,'local_expand_ok':True},'federation':{'hosted_packet_unchanged':True,'ids_disjoint':True,'packet_content_within_budget':True,'envelope_excluded':True,'federated_budget_excluded':True,'rendered_markdown_excluded':True},'codegraph':{'command_counts':dict(sorted(counts.items())),'forbidden_command_count':0,'status_before_sha256':sys.argv[6],'status_after_sha256':sys.argv[7],'index_before':before,'index_after':after,'persistent_identity_replacement_detected':False},'cleanup':{'processes_stopped':True,'listeners_stopped':True,'temporary_material_removed':True}}
 json.dump(r,open(sys.argv[3],'w'),sort_keys=True,separators=(',',':'))
 PY
