@@ -2,8 +2,8 @@
 set -euo pipefail
 
 scenario="${2:-}"
-if [[ "${1:-}" != "--scenario" || ! "$scenario" =~ ^(no-upload|injected-source-leak|injected-path-leak)$ ]]; then
-  printf 'usage: %s --scenario {no-upload|injected-source-leak|injected-path-leak}\n' "$0" >&2
+if [[ "${1:-}" != "--scenario" || ! "$scenario" =~ ^(no-upload|injected-source-leak|injected-path-leak|forced-invariant-failure)$ ]]; then
+  printf 'usage: %s --scenario {no-upload|injected-source-leak|injected-path-leak|forced-invariant-failure}\n' "$0" >&2
   exit 64
 fi
 
@@ -28,6 +28,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 mkdir -p "$tmp/workspace/.codegraph" "$root/.omo/evidence" "$root/.tmp"
+rm -f "$receipt"
 printf '%s\n' "$source_sentinel" >"$tmp/workspace/local-source.txt"
 printf '%s\n' "$index_sentinel" >"$tmp/workspace/.codegraph/index.bin"
 git -C "$tmp/workspace" init -q
@@ -117,12 +118,12 @@ def inject(records, field, value):
  packet['body']=json.dumps(body,sort_keys=True,separators=(',',':'))
  return mutated
 leaks=sentinel_matches(rows)
+codes={'injected-source-leak':'local_source_negative_control','injected-path-leak':'local_root_negative_control'}
 if scenario=='injected-source-leak': rows=inject(rows,'local_source_negative_control',sentinels['source']); leaks=sentinel_matches(rows)
 if scenario=='injected-path-leak': rows=inject(rows,'local_root_negative_control',sentinels['absolute_root']); leaks=sentinel_matches(rows)
 for name in ('graph_payload','local_locator'):
  if name not in sentinel_matches(inject(rows,'privacy_'+name+'_negative_control',sentinels[name])): raise SystemExit('in-memory verifier probe failed')
 if leaks:
- codes={'injected-source-leak':'local_source_negative_control','injected-path-leak':'local_root_negative_control'}
  if scenario=='no-upload': raise SystemExit('privacy verifier rejected sentinel_'+leaks[0])
  print('privacy verifier rejected '+codes[scenario])
  sys.exit(1)
@@ -135,8 +136,11 @@ token=__import__('os').environ.get('ACR_API_TOKEN','')
 non_authorization_matches=sum(token in str(value) for row in rows for key,value in row['headers'].items() if key.lower()!='authorization')+sum(token in row['body'] for row in rows)
 shape_valid=counts=={'capabilities':1,'context_packet':1,'hosted_evidence':1} and unexpected==0 and all((r['method'],r['path'].split('?')[0]) in {('GET','/api/v1/agent-context/capabilities'),('POST','/api/v1/agent-context/context-packets')} or (r['method']=='GET' and r['path'].startswith('/api/v1/agent-context/evidence/')) for r in rows)
 verdict='pass' if not leaks and shape_valid and authorization==3 and non_authorization_matches==0 else 'reject'
-if scenario!='no-upload': verdict='reject'
+if scenario=='forced-invariant-failure': verdict='reject'
 safe={'schema_version':'context_fabric_privacy_receipt.v1','task':'CHAOS-3007 Task 8','mode':'local-index','scenario':scenario,'verdict':verdict,'source_revision':__import__('subprocess').check_output(['git','rev-parse','HEAD'],text=True).strip(),'tls_verified':True,'request_counts':{**counts,'unexpected':unexpected},'request_shape_valid':shape_valid,'local_expansion_hosted_request_count':after_local-before_local,'zero_match_counts':{k:(0 if k not in leaks else 1) for k in sentinels},'credential':{'authorization_header_count':authorization,'non_authorization_match_count':non_authorization_matches},'rejection_code':(codes.get(scenario,'sentinel_'+leaks[0] if leaks else 'verification_failed') if verdict=='reject' else '')}
-if scenario=='no-upload': json.dump(safe,open(receipt,'w'),sort_keys=True);print('privacy receipt: pass')
-else: print('privacy verifier rejected '+safe['rejection_code']);sys.exit(1)
+if verdict!='pass':
+ print('privacy verifier failed')
+ sys.exit(1)
+json.dump(safe,open(receipt,'w'),sort_keys=True)
+print('privacy receipt: pass')
 PY
