@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,6 +42,38 @@ func TestDoctorLocalIndexClassifiesTypedQueryTimeout(t *testing.T) {
 	}
 }
 
+func TestDoctorLocalIndexClassifiesTypedCapabilityTimeoutAndMalformed(t *testing.T) {
+	for _, test := range []struct{ name, status, code string }{{"timeout", "SLEEP", "local_index_timeout"}, {"malformed", `{`, "local_index_malformed"}} {
+		t.Run(test.name, func(t *testing.T) {
+			config, info := typedDoctorFixture(t, test.status, "[]")
+			withDoctorLocalProbe(t, config, info, sidecar.NewWorkspaceLocalIndexProvider(config, mustDoctorSnapshot(t, info)))
+			report := probeLocalIndex()
+			if report.ErrorCode != test.code || report.Available || report.IndexReadable || report.QueryChecked || report.QuerySucceeded {
+				t.Fatalf("unexpected capability failure: %#v", report)
+			}
+		})
+	}
+}
+
+func TestDoctorLocalIndexClassifiesTypedQueryCancellationAndSafeSerialization(t *testing.T) {
+	config, info := typedDoctorFixture(t, typedStatus("1.2.0"), "[]")
+	provider := cancellingDoctorProvider{provider: sidecar.NewWorkspaceLocalIndexProvider(config, mustDoctorSnapshot(t, info))}
+	withDoctorLocalProbe(t, config, info, provider)
+	report := probeLocalIndex()
+	if report.ErrorCode != "local_index_cancelled" || report.Available || !report.QueryChecked || report.QuerySucceeded || !report.IndexReadable || report.ProviderVersion != "1.2.0" {
+		t.Fatalf("unexpected query cancellation: %#v", report)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"/private/secret", "full-chaos/acr", "0123456789abcdef0123456789abcdef01234567", "cause text", "arbitrary warning"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("report leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
 func typedDoctorFixture(t *testing.T, status, query string) (sidecar.LocalIndexConfig, sidecar.WorkspaceInfo) {
 	t.Helper()
 	root := t.TempDir()
@@ -60,7 +94,11 @@ func typedDoctorFixture(t *testing.T, status, query string) (sidecar.LocalIndexC
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := "#!/usr/bin/env bash\nset -eu\ncase \"$1\" in\nstatus) cat <<'JSON'\n" + strings.ReplaceAll(status, "ROOT", canonicalRoot) + "\nJSON\n;;\nquery) " + query + ";;\nesac\n"
+	statusCommand := "cat <<'JSON'\n" + strings.ReplaceAll(status, "ROOT", canonicalRoot) + "\nJSON\n"
+	if status == "SLEEP" {
+		statusCommand = "sleep 2"
+	}
+	body := "#!/usr/bin/env bash\nset -eu\ncase \"$1\" in\nstatus) " + statusCommand + ";;\nquery) " + query + ";;\n*) printf '[]\\n';;\nesac\n"
 	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -86,4 +124,18 @@ func runDoctorGit(t *testing.T, root string, arguments ...string) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", arguments, err, output)
 	}
+}
+
+type cancellingDoctorProvider struct{ provider sidecar.LocalIndexProvider }
+
+func (p cancellingDoctorProvider) Capabilities(ctx context.Context) (sidecar.LocalIndexCapabilities, error) {
+	return p.provider.Capabilities(ctx)
+}
+func (p cancellingDoctorProvider) ContextForTask(ctx context.Context, request sidecar.LocalContextRequest) (sidecar.LocalEvidenceBundle, error) {
+	child, cancel := context.WithCancel(ctx)
+	cancel()
+	return p.provider.ContextForTask(child, request)
+}
+func (p cancellingDoctorProvider) ResolveEvidence(ctx context.Context, id string) (sidecar.LocalExpandedEvidence, error) {
+	return p.provider.ResolveEvidence(ctx, id)
 }
