@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-usage() { echo "usage: $0 --scenario mixed|hosted-only|local-timeout|packet-content-overflow|hosted-unavailable|writeback-default" >&2; }
+usage() { echo "usage: $0 --scenario mixed|hosted-only|local-timeout|packet-content-overflow|hosted-unavailable|writeback-default|post-response-process-failure" >&2; }
 [[ $# == 2 && $1 == --scenario ]] || { usage; exit 2; }
 scenario=$2
-case "$scenario" in mixed|hosted-only|local-timeout|packet-content-overflow|hosted-unavailable|writeback-default) ;; *) usage; exit 2;; esac
+case "$scenario" in mixed|hosted-only|local-timeout|packet-content-overflow|hosted-unavailable|writeback-default|post-response-process-failure) ;; *) usage; exit 2;; esac
 
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
 tmp="$(mktemp -d)"
@@ -88,6 +88,7 @@ for _ in $(seq 1 50); do [[ -s "$tmp/port" ]] && break; sleep .05; done
 port=$(<"$tmp/port")
 
 go build -ldflags '-X github.com/full-chaos/dev-health-acr/internal/version.Version=0.1.0 -X github.com/full-chaos/dev-health-acr/internal/version.Commit=0123456789abcdef0123456789abcdef01234567 -X github.com/full-chaos/dev-health-acr/internal/version.Date=2026-07-10T14:00:00Z' -o "$tmp/acr-mcp" ./cmd/acr-mcp
+mcp_server="$tmp/acr-mcp"
 token='fcacr_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 local_timeout=3s
 local_provider=codegraph
@@ -95,6 +96,15 @@ case "$scenario" in
   hosted-unavailable) kill "$host_pid"; wait "$host_pid" 2>/dev/null || true; host_pid="";;
   hosted-only) local_provider=disabled;;
   local-timeout) local_timeout=100ms; printf '#!/usr/bin/env bash\nsleep 3\n' > "$tmp/codegraph"; chmod 700 "$tmp/codegraph";;
+  post-response-process-failure)
+    cat > "$tmp/acr-mcp-driver" <<EOF
+#!/usr/bin/env bash
+"$tmp/acr-mcp" "\$@"
+exit 42
+EOF
+    chmod 700 "$tmp/acr-mcp-driver"
+    mcp_server="$tmp/acr-mcp-driver"
+    ;;
   packet-content-overflow)
     python3 - "$tmp/repo/.codegraph/overflow-query.json" <<'PY'
 import json,sys
@@ -112,7 +122,7 @@ set +e
 if [[ "$scenario" == hosted-unavailable ]]; then
   (cd "$tmp/repo" && ACR_API_URL="https://localhost:$port" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$tmp/ca.pem" "$tmp/acr-mcp" serve) </dev/null > "$tmp/mcp.out" 2> "$tmp/mcp.err"
 else
-  coproc MCP { cd "$tmp/repo" && ACR_API_URL="https://localhost:$port" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_LOCAL_INDEX_PROVIDER="$local_provider" ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" ACR_LOCAL_INDEX_TIMEOUT="$local_timeout" "$tmp/acr-mcp" serve 2> "$tmp/mcp.err"; }
+  coproc MCP { cd "$tmp/repo" && ACR_API_URL="https://localhost:$port" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_LOCAL_INDEX_PROVIDER="$local_provider" ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" ACR_LOCAL_INDEX_TIMEOUT="$local_timeout" "$mcp_server" serve 2> "$tmp/mcp.err"; }
   # shellcheck disable=SC2153
   mcp_pid=$MCP_PID
   rpc() { printf '%s\n' "$1" >&"${MCP[1]}"; IFS= read -r -t 10 response <&"${MCP[0]}" || return 1; printf '%s\n' "$response" >> "$tmp/mcp.out"; }
@@ -151,7 +161,12 @@ PY
   # shellcheck disable=SC1083 # Bash expands the coprocess file descriptor at runtime.
   eval "exec ${MCP[1]}>&-"
   fi
-  wait "$mcp_pid" || true
+  mcp_exit=0
+  wait "$mcp_pid" || mcp_exit=$?
+  if (( mcp_exit != 0 )); then
+    printf 'MCP process exited unexpectedly after responses: status=%d\n' "$mcp_exit" >&2
+    exit "$mcp_exit"
+  fi
 fi
 set -e
 

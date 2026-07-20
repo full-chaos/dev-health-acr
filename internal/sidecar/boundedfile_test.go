@@ -98,12 +98,10 @@ func TestDescribeFileErrorNeverEchoesPath(t *testing.T) {
 	}
 }
 
-// TestReadBoundedRegularFileSymlinkSwapRaceNeverFollows exercises continuous
-// swapping between a regular file and a symlink to an unrelated secret file.
-// Every rename used to perform the swap is atomic, so the test detects
-// persistent identity replacement while the Darwin/Linux atomic-open path is
-// actively exercised. It does not claim to close every swap-and-restore race.
-func TestReadBoundedRegularFileSymlinkSwapRaceNeverFollows(t *testing.T) {
+// TestReadBoundedRegularFileUsesValidatedOpenHandleDuringPersistentSymlinkReplacement
+// exercises a persistent replacement of the path with a symlink to an unrelated
+// secret file. Successful reads must come from the validated regular-file handle.
+func TestReadBoundedRegularFileUsesValidatedOpenHandleDuringPersistentSymlinkReplacement(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires elevated privileges on windows")
 	}
@@ -120,9 +118,7 @@ func TestReadBoundedRegularFileSymlinkSwapRaceNeverFollows(t *testing.T) {
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		iteration := 0
 		for {
 			select {
@@ -144,7 +140,7 @@ func TestReadBoundedRegularFileSymlinkSwapRaceNeverFollows(t *testing.T) {
 			}
 			_ = os.Rename(tmpFile, path)
 		}
-	}()
+	})
 
 	deadline := time.Now().Add(500 * time.Millisecond)
 	attempts, successes := 0, 0
@@ -156,13 +152,13 @@ func TestReadBoundedRegularFileSymlinkSwapRaceNeverFollows(t *testing.T) {
 			if string(data) != string(legit) {
 				close(stop)
 				wg.Wait()
-				t.Fatalf("readBoundedRegularFile returned data that did not come from the verified regular file (possible symlink follow): %q", data)
+				t.Fatalf("readBoundedRegularFile returned data outside the validated regular-file handle during persistent symlink replacement: %q", data)
 			}
 		}
 	}
 	close(stop)
 	wg.Wait()
 	if attempts == 0 || successes == 0 {
-		t.Fatalf("race test did not exercise both states: attempts=%d successes=%d", attempts, successes)
+		t.Fatalf("persistent replacement fixture did not produce a validated regular-file read: attempts=%d successes=%d", attempts, successes)
 	}
 }
