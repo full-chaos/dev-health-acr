@@ -182,3 +182,25 @@ func TestVerifyCurrentUserOwnedRejectsForeignManagedObjects(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, verifyCurrentUserOwned(tc.info) == nil) })
 	}
 }
+
+func TestTrustedCodeGraphIndexRejectsWritableAncestor(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	managed := filepath.Join(home, ".omo", "codegraph", "projects")
+	for _, mode := range []os.FileMode{0o775, 0o777} {
+		t.Run(mode.String(), func(t *testing.T) {
+			parent, createErr := os.MkdirTemp(home, "acr-parent-")
+			require.NoError(t, createErr)
+			t.Cleanup(func() { _ = os.RemoveAll(parent) })
+			require.NoError(t, os.Chmod(parent, mode))
+			repo := filepath.Join(parent, "repo")
+			require.NoError(t, os.Mkdir(repo, 0o700))
+			target, targetErr := os.MkdirTemp(managed, "acr-test-")
+			require.NoError(t, targetErr)
+			t.Cleanup(func() { _ = os.RemoveAll(target) })
+			require.NoError(t, os.WriteFile(filepath.Join(target, "codegraph.db"), []byte("index"), 0o600))
+			require.NoError(t, os.Symlink(target, filepath.Join(repo, ".codegraph")))
+			require.False(t, trustedCodeGraphIndex(repo))
+		})
+	}
+}

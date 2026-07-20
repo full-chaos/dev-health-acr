@@ -192,7 +192,7 @@ func trustedCodeGraphRepositoryRoot(root, home string) bool {
 		return false
 	}
 	if verifyCurrentUserOwned(info) == nil {
-		return true
+		return trustedCodeGraphAncestors(root, home)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || !trustedCodeGraphGroupWritableMetadata(int(stat.Uid), int(stat.Gid), info.Mode().Perm(), os.Geteuid(), os.Getegid()) {
@@ -200,6 +200,13 @@ func trustedCodeGraphRepositoryRoot(root, home string) bool {
 	}
 	if !codeGraphACLCheck(root) {
 		return false
+	}
+	return trustedCodeGraphAncestors(root, home)
+}
+
+func trustedCodeGraphAncestors(root, home string) bool {
+	if !strings.HasPrefix(root, home+string(filepath.Separator)) {
+		return true
 	}
 	for ancestor := filepath.Dir(root); ; ancestor = filepath.Dir(ancestor) {
 		ancestorInfo, ancestorErr := os.Stat(ancestor)
