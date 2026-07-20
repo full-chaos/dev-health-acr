@@ -3,6 +3,7 @@ import { tool, type Plugin } from "@opencode-ai/plugin"
 
 const STATUS_TIMEOUT_MS = 5_000
 const MAX_STATUS_OUTPUT_BYTES = 64 * 1024
+const CLEANUP_TIMEOUT_MS = 1_000
 
 type StatusOutcome =
   | { readonly kind: "completed"; readonly output: string }
@@ -53,10 +54,12 @@ async function runOfflineDoctor(directory: string, abort: AbortSignal): Promise<
   let outcome: StatusOutcome | undefined
   let exitCode: number | null = null
   let termination: Promise<boolean> | undefined
+  let escalation: ReturnType<typeof setTimeout> | undefined
+  let escalationFailed = false
   const stop = (next: StatusOutcome): void => {
     if (outcome !== undefined) return
     outcome = next
-    termination = terminate(child, "SIGTERM")
+    termination = terminate(child, (timer) => { escalation = timer }, () => { escalationFailed = true })
   }
   const append = (chunk: Buffer): void => {
     if (outcome !== undefined) return
@@ -89,8 +92,9 @@ async function runOfflineDoctor(directory: string, abort: AbortSignal): Promise<
   if (abort.aborted) onAbort()
 
   try {
-    await reaped
-    if (termination !== undefined && !(await termination)) return { kind: "spawn_failed" }
+    const closed = await waitForClose(reaped)
+    if (escalation !== undefined) clearTimeout(escalation)
+    if (!closed || escalationFailed || (termination !== undefined && !(await termination))) return { kind: "spawn_failed" }
   } finally {
     clearTimeout(timeout)
     abort.removeEventListener("abort", onAbort)
@@ -101,16 +105,28 @@ async function runOfflineDoctor(directory: string, abort: AbortSignal): Promise<
   return { kind: "completed", output: Buffer.concat(output).toString("utf8") }
 }
 
-async function terminate(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): Promise<boolean> {
+function waitForClose(reaped: Promise<void>): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), STATUS_TIMEOUT_MS + CLEANUP_TIMEOUT_MS)
+    reaped.then(() => { clearTimeout(timer); resolve(true) })
+  })
+}
+
+async function terminate(child: ReturnType<typeof spawn>, setEscalation: (timer: ReturnType<typeof setTimeout>) => void, reportEscalationFailure: () => void): Promise<boolean> {
   if (child.pid === undefined || child.killed) return true
   if (process.platform === "win32") {
     return terminateWindowsTree(child.pid)
   }
   try {
-    process.kill(-child.pid, signal)
-    setTimeout(() => {
-      if (!child.killed && child.pid !== undefined) process.kill(-child.pid, "SIGKILL")
-    }, 100).unref()
+    process.kill(-child.pid, "SIGTERM")
+    const timer = setTimeout(() => {
+      if (child.pid === undefined) return
+      try { process.kill(-child.pid, "SIGKILL") } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("ESRCH")) reportEscalationFailure()
+      }
+    }, 100)
+    timer.unref()
+    setEscalation(timer)
     return true
   } catch (error) {
     if (error instanceof Error) {
@@ -127,8 +143,9 @@ function terminateWindowsTree(pid: number): Promise<boolean> {
     windowsHide: true,
   })
   return new Promise((resolve) => {
-    cleanup.once("error", () => resolve(false))
-    cleanup.once("close", (code) => resolve(code === 0))
+    const timer = setTimeout(() => { cleanup.kill("SIGKILL"); resolve(false) }, CLEANUP_TIMEOUT_MS)
+    cleanup.once("error", () => { clearTimeout(timer); resolve(false) })
+    cleanup.once("close", (code) => { clearTimeout(timer); resolve(code === 0) })
   })
 }
 

@@ -97,7 +97,11 @@ assert_descendant_stopped() {
   [[ -s "$receipt" ]] || return 1
   IFS= read -r pid <"$receipt"
   [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
-  ! kill -0 "$pid" 2>/dev/null
+  local deadline=$(( $(date +%s) + 2 ))
+  while kill -0 "$pid" 2>/dev/null; do
+    (( $(date +%s) < deadline )) || return 1
+    sleep 0.05
+  done
 }
 
 run_descendant_harness() {
