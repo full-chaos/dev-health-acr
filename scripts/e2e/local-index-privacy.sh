@@ -37,10 +37,11 @@ if [[ "$scenario" == "$canonical_scenario" ]]; then rm -f "$receipt"; fi
 if [[ "$scenario" == "$canonical_scenario" && "${ACR_E2E_FORCE_CANONICAL_FAILURE:-}" == 1 ]]; then exit 1; fi
 printf '%s\n' "$source_sentinel" >"$tmp/workspace/local-source.txt"
 printf '%s\n' "$index_sentinel" >"$tmp/workspace/.codegraph/index.bin"
+printf '%s\n' "$index_sentinel" >"$tmp/workspace/.codegraph/codegraph.db"
 git -C "$tmp/workspace" init -q
 git -C "$tmp/workspace" config user.email privacy@example.invalid
 git -C "$tmp/workspace" config user.name privacy
-git -C "$tmp/workspace" add local-source.txt .codegraph/index.bin
+git -C "$tmp/workspace" add local-source.txt .codegraph/index.bin .codegraph/codegraph.db
 git -C "$tmp/workspace" commit -qm privacy-fixture
 git -C "$tmp/workspace" remote add origin https://github.com/acme/widgets.git
 workspace_branch="$(git -C "$tmp/workspace" branch --show-current)"
