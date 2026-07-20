@@ -100,7 +100,7 @@ else
   rpc '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
   rpc '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"context_for_task","arguments":{"goal":"fixture mixed context"}}}'
   rpc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"source_evidence","arguments":{"evidence_ref_id":"ev_01J0ACR001"}}}'
-  if [[ "$scenario" != hosted-only ]]; then
+  if [[ "$scenario" != hosted-only && "$scenario" != local-timeout ]]; then
   local_id=$(python3 - "$tmp/mcp.out" <<'PY'
 import json,sys
 for line in open(sys.argv[1]):
@@ -146,13 +146,13 @@ def payload(request_id):
 if not failure:
  if {x.get('name') for x in tools}!={'context_for_task','source_evidence'}: raise SystemExit('expected exactly two read-only tools')
  context,hosted=payload(3),payload(4)
- local=payload(5) if scenario!='hosted-only' else {}
+ local=payload(5) if scenario not in ('hosted-only','local-timeout') else {}
  packet=context.get('structured',{}); hosted_ref=hosted.get('structured',{}).get('evidence',{}); local_ref=local.get('structured',{}).get('evidence',{})
  if packet.get('context_packet_id')!='pkt_01J0ACR001': raise SystemExit('hosted packet changed')
  if hosted_ref.get('evidence_ref_id')!='ev_01J0ACR001': raise SystemExit('hosted expansion mismatch')
- if scenario!='hosted-only' and not local_ref.get('evidence_ref_id','').startswith('local:codegraph:v1:'): raise SystemExit('local expansion mismatch')
+ if scenario not in ('hosted-only','local-timeout') and not local_ref.get('evidence_ref_id','').startswith('local:codegraph:v1:'): raise SystemExit('local expansion mismatch')
  ids={hosted_ref['evidence_ref_id']} | ({local_ref['evidence_ref_id']} if local_ref else set())
- if scenario!='hosted-only' and len(ids)!=2: raise SystemExit('evidence identifiers collide')
+ if scenario not in ('hosted-only','local-timeout') and len(ids)!=2: raise SystemExit('evidence identifiers collide')
  content_bytes=len(json.dumps({'structured':packet},separators=(',',':')).encode())+len(json.dumps({'structured':context.get('local_context',{})},separators=(',',':')).encode())
  budget=packet.get('budget',{}).get('max_serialized_bytes',0)
  if not 0<content_bytes<=budget: raise SystemExit('packet content budget exceeded')
