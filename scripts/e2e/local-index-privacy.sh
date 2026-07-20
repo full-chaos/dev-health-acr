@@ -12,6 +12,11 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/acr-local-index-privacy.XXXXXX")"
 capture="$tmp/capture.jsonl"
 receipt="$root/.omo/evidence/context-fabric-08-no-upload.json"
 server_pid=""
+source_sentinel="local_source_sentinel:${RANDOM}${RANDOM}"
+index_sentinel="local_index_sentinel:${RANDOM}${RANDOM}"
+graph_payload_sentinel="graph_payload_sentinel:${RANDOM}${RANDOM}"
+local_locator_sentinel="local_locator_sentinel:${RANDOM}${RANDOM}"
+absolute_root_sentinel="$tmp/workspace"
 
 cleanup() {
   [[ -z "$server_pid" ]] || kill "$server_pid" 2>/dev/null || true
@@ -21,20 +26,25 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 mkdir -p "$tmp/workspace/.codegraph" "$root/.omo/evidence" "$root/.tmp"
-printf 'local_source_sentinel:never-upload\n' >"$tmp/workspace/local-source.txt"
-printf 'local_index_sentinel:never-upload\n' >"$tmp/workspace/.codegraph/index.bin"
+printf '%s\n' "$source_sentinel" >"$tmp/workspace/local-source.txt"
+printf '%s\n' "$index_sentinel" >"$tmp/workspace/.codegraph/index.bin"
 git -C "$tmp/workspace" init -q
 git -C "$tmp/workspace" config user.email privacy@example.invalid
 git -C "$tmp/workspace" config user.name privacy
 git -C "$tmp/workspace" add local-source.txt .codegraph/index.bin
 git -C "$tmp/workspace" commit -qm privacy-fixture
 git -C "$tmp/workspace" remote add origin https://github.com/acme/widgets.git
+workspace_branch="$(git -C "$tmp/workspace" branch --show-current)"
 
-cat >"$tmp/codegraph" <<'EOF'
+cat >"$tmp/codegraph" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-case "$1" in
-  status) printf '{"initialized":true,"version":"1.2.0","projectPath":"%s","indexPath":"%s/.codegraph","lastIndexed":"2026-01-01T00:00:00Z","pendingChanges":{"added":0,"modified":0,"removed":0},"worktreeMismatch":null,"index":{"reindexRecommended":false,"builtWithExtractionVersion":1,"currentExtractionVersion":1}}\n' "$PWD" "$PWD" ;;
+case "\$1" in
+  status) printf '{"initialized":true,"version":"1.2.0","projectPath":"%s","indexPath":"%s/.codegraph","lastIndexed":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","fileCount":1,"nodeCount":1,"edgeCount":0,"dbSizeBytes":1,"backend":"sqlite","journalMode":"wal","nodesByKind":{},"languages":[],"pendingChanges":{"added":0,"modified":0,"removed":0},"worktreeMismatch":null,"index":{"reindexRecommended":false,"builtWithVersion":"1.2.0","builtWithExtractionVersion":1,"currentExtractionVersion":1}}\n' "\$PWD" "\$PWD" ;;
+  query) printf '[{"node":{"id":"%s","kind":"function","name":"%s","qualifiedName":"privacy.Local","filePath":"local-source.txt","startLine":1,"endLine":1,"startColumn":0,"endColumn":1,"language":"Go","signature":"func Local()","updatedAt":0,"isExported":true,"isAsync":false,"isStatic":false,"isAbstract":false,"visibility":null},"score":1}]\n' "$local_locator_sentinel" "$graph_payload_sentinel" ;;
+  callers) printf '{"symbol":"privacy.Local","callers":[]}\n' ;;
+  callees) printf '{"symbol":"privacy.Local","callees":[]}\n' ;;
+  impact) printf '{"symbol":"privacy.Local","depth":2,"nodeCount":0,"edgeCount":0,"affected":[]}\n' ;;
   *) printf '[]\n' ;;
 esac
 EOF
@@ -74,8 +84,8 @@ for _ in {1..50}; do [[ -s "$tmp/port" ]] && break; sleep 0.1; done
 go build -o "$tmp/acr-mcp" ./cmd/acr-mcp
 cat >"$root/.tmp/local-index-privacy-driver.go" <<'GO'
 package main
-import("context";"os";"os/exec";"time"; mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp")
-func main(){ctx,c:=context.WithTimeout(context.Background(),20*time.Second);defer c();cmd:=exec.CommandContext(ctx,os.Getenv("PRIVACY_MCP"),"serve");cmd.Dir=os.Getenv("PRIVACY_WORKSPACE");cmd.Env=os.Environ();cl:=mcpsdk.NewClient(&mcpsdk.Implementation{Name:"privacy",Version:"1.0.0"},nil);s,e:=cl.Connect(ctx,&mcpsdk.CommandTransport{Command:cmd},nil);if e!=nil{panic(e)};defer s.Close();r,e:=s.CallTool(ctx,&mcpsdk.CallToolParams{Name:"context_for_task",Arguments:map[string]any{"goal":"privacy probe","repository":map[string]any{"slug":"acme/widgets"},"scope":map[string]any{"branch":"master"}}});if e!=nil||r.IsError{panic("context failed")};r,e=s.CallTool(ctx,&mcpsdk.CallToolParams{Name:"source_evidence",Arguments:map[string]any{"evidence_ref_id":"ev_example_001"}});if e!=nil||r.IsError{panic("evidence failed")}}
+import("context";"encoding/json";"os";"os/exec";"time"; mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp")
+func main(){ctx,c:=context.WithTimeout(context.Background(),20*time.Second);defer c();cmd:=exec.CommandContext(ctx,os.Getenv("PRIVACY_MCP"),"serve");cmd.Dir=os.Getenv("PRIVACY_WORKSPACE");cmd.Env=os.Environ();cl:=mcpsdk.NewClient(&mcpsdk.Implementation{Name:"privacy",Version:"1.0.0"},nil);s,e:=cl.Connect(ctx,&mcpsdk.CommandTransport{Command:cmd},nil);if e!=nil{panic(e)};defer s.Close();r,e:=s.CallTool(ctx,&mcpsdk.CallToolParams{Name:"context_for_task",Arguments:map[string]any{"goal":"privacy probe","repository":map[string]any{"slug":"acme/widgets"},"scope":map[string]any{"branch":os.Getenv("PRIVACY_BRANCH")}}});if e!=nil||r.IsError{panic("context failed")};var response struct{LocalContext struct{EvidenceRefs []struct{EvidenceRefID string `json:"evidence_ref_id"`} `json:"evidence_refs"`} `json:"local_context"`};raw,_:=json.Marshal(r.StructuredContent);if json.Unmarshal(raw,&response)!=nil||len(response.LocalContext.EvidenceRefs)!=1{panic("local evidence missing")};r,e=s.CallTool(ctx,&mcpsdk.CallToolParams{Name:"source_evidence",Arguments:map[string]any{"evidence_ref_id":"ev_example_001"}});if e!=nil||r.IsError{panic("hosted evidence failed")};r,e=s.CallTool(ctx,&mcpsdk.CallToolParams{Name:"source_evidence",Arguments:map[string]any{"evidence_ref_id":response.LocalContext.EvidenceRefs[0].EvidenceRefID}});if e!=nil||r.IsError{panic("local evidence failed")}}
 GO
 port="$(<"$tmp/port")"
 token="fcacr_$(python3 - <<'PY'
@@ -83,16 +93,16 @@ import base64
 print(base64.urlsafe_b64encode(bytes([7])*32).decode().rstrip('='))
 PY
 )"
-ACR_API_URL="https://localhost:$port" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_API_TOKEN="$token" ACR_SIDECAR_VERSION=1.0.0 ACR_LOCAL_INDEX_PROVIDER=codegraph ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" PRIVACY_MCP="$tmp/acr-mcp" PRIVACY_WORKSPACE="$tmp/workspace" go run "$root/.tmp/local-index-privacy-driver.go"
+ACR_API_URL="https://localhost:$port" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_API_TOKEN="$token" ACR_SIDECAR_VERSION=1.0.0 ACR_LOCAL_INDEX_PROVIDER=codegraph ACR_CODEGRAPH_EXECUTABLE="$tmp/codegraph" PRIVACY_MCP="$tmp/acr-mcp" PRIVACY_WORKSPACE="$tmp/workspace" PRIVACY_BRANCH="$workspace_branch" GRAPH_PAYLOAD_SENTINEL="$graph_payload_sentinel" LOCAL_LOCATOR_SENTINEL="$local_locator_sentinel" go run "$root/.tmp/local-index-privacy-driver.go"
 
-ACR_API_TOKEN="$token" python3 - "$capture" "$scenario" "$receipt" <<'PY'
+ACR_API_TOKEN="$token" SOURCE_SENTINEL="$source_sentinel" INDEX_SENTINEL="$index_sentinel" GRAPH_PAYLOAD_SENTINEL="$graph_payload_sentinel" LOCAL_LOCATOR_SENTINEL="$local_locator_sentinel" ABSOLUTE_ROOT_SENTINEL="$absolute_root_sentinel" python3 - "$capture" "$scenario" "$receipt" <<'PY'
 import json,sys
 capture,scenario,receipt=sys.argv[1:]
 rows=[json.loads(line) for line in open(capture)]
 packet=next(row for row in rows if row['path'].endswith('/context-packets'))
-if scenario=='injected-source-leak': packet['body']+=' local_source_negative_control:local_source_sentinel:never-upload'
-if scenario=='injected-path-leak': packet['body']+=' local_root_negative_control:/absolute/local/root'
-sentinels={'source':'local_source_sentinel:never-upload','index':'local_index_sentinel:never-upload','absolute_root':'/absolute/local/root','graph_payload':'graph_payload_sentinel:never-upload','local_locator':'local:codegraph:'}
+if scenario=='injected-source-leak': packet['body']+=' local_source_negative_control:'+__import__('os').environ['SOURCE_SENTINEL']
+if scenario=='injected-path-leak': packet['body']+=' local_root_negative_control:'+__import__('os').environ['ABSOLUTE_ROOT_SENTINEL']
+sentinels={'source':__import__('os').environ['SOURCE_SENTINEL'],'index':__import__('os').environ['INDEX_SENTINEL'],'absolute_root':__import__('os').environ['ABSOLUTE_ROOT_SENTINEL'],'graph_payload':__import__('os').environ['GRAPH_PAYLOAD_SENTINEL'],'local_locator':__import__('os').environ['LOCAL_LOCATOR_SENTINEL']}
 joined='\n'.join(json.dumps(row,sort_keys=True) for row in rows)
 leaks=[name for name,value in sentinels.items() if value in joined]
 counts={'capabilities':sum(r['method']=='GET' and r['path'].endswith('/capabilities') for r in rows),'context_packet':sum(r['method']=='POST' and r['path'].endswith('/context-packets') for r in rows),'hosted_evidence':sum(r['method']=='GET' and '/evidence/' in r['path'] for r in rows)}
