@@ -3,7 +3,6 @@ package sidecar
 import (
 	"os"
 	"path/filepath"
-	"syscall"
 )
 
 // codeGraphDBGuard pins every path identity used to locate a CodeGraph database.
@@ -51,14 +50,8 @@ func openCodeGraphDB(root string) (codeGraphDBGuard, error) {
 	if err != nil || !trustedCodeGraphDatabase(logicalDatabase) {
 		return codeGraphDBGuard{}, errCodeGraphMissing
 	}
-	fd, err := syscall.Open(resolvedDatabasePath, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	file, openedDatabase, err := openTrustedCodeGraphDatabase(resolvedDatabasePath, logicalDatabase)
 	if err != nil {
-		return codeGraphDBGuard{}, errCodeGraphMissing
-	}
-	file := os.NewFile(uintptr(fd), "codegraph.db")
-	openedDatabase, err := file.Stat()
-	if err != nil || !trustedCodeGraphDatabase(openedDatabase) || !os.SameFile(logicalDatabase, openedDatabase) {
-		_ = file.Close()
 		return codeGraphDBGuard{}, errCodeGraphMissing
 	}
 	return codeGraphDBGuard{
@@ -72,6 +65,19 @@ func openCodeGraphDB(root string) (codeGraphDBGuard, error) {
 		resolvedIndexPath:    resolvedIndexPath,
 		resolvedDatabasePath: resolvedDatabasePath,
 	}, nil
+}
+
+func openTrustedCodeGraphDatabase(path string, expected os.FileInfo) (*os.File, os.FileInfo, error) {
+	file, err := openCodeGraphDatabase(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := file.Stat()
+	if err != nil || !trustedCodeGraphDatabase(info) || !os.SameFile(expected, info) {
+		_ = file.Close()
+		return nil, nil, errCodeGraphMissing
+	}
+	return file, info, nil
 }
 
 func (g codeGraphDBGuard) unchanged(root string) bool {

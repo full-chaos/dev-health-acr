@@ -92,6 +92,9 @@ func typedDoctorFixture(t *testing.T, status, query string) (sidecar.LocalIndexC
 	if err := os.Mkdir(filepath.Join(root, ".codegraph"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, ".codegraph", "codegraph.db"), []byte("index"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	script := filepath.Join(root, "codegraph")
 	canonicalRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {

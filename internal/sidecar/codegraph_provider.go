@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 )
 
 const codeGraphProviderID = "codegraph"
@@ -194,8 +193,7 @@ func trustedCodeGraphRepositoryRoot(root, home string) bool {
 	if verifyCurrentUserOwned(info) == nil {
 		return trustedCodeGraphAncestors(root, home)
 	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || !trustedCodeGraphGroupWritableMetadata(int(stat.Uid), int(stat.Gid), info.Mode().Perm(), os.Geteuid(), os.Getegid()) {
+	if !trustedCodeGraphGroupWritableRoot(info) {
 		return false
 	}
 	if !codeGraphACLCheck(root) {
