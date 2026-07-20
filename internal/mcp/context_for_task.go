@@ -62,6 +62,7 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 	hostedOptions := options
 	var local mappedLocalBundle
 	var bundle sidecar.LocalEvidenceBundle
+	var localFailure *contractsv1.MCPLocalContext
 	localSucceeded := false
 	if boot.local != nil && resolved.LocalEligible && boot.local.eligible(resolved.Workspace) {
 		var localErr error
@@ -76,6 +77,11 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 				hostedOptions.MaxItems -= reserve.MaxItems
 				hostedOptions.MaxOutputTokens -= reserve.MaxOutputTokens
 				hostedOptions.MaxSerializedBytes -= reserve.MaxSerializedBytes
+			}
+		}
+		if localErr != nil {
+			if context, timedOut := boot.local.unavailableContext(localErr); timedOut {
+				localFailure = &context
 			}
 		}
 	}
@@ -119,6 +125,16 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 			HostedEstimatedTokens: packet.Budget.EstimatedTokens, LocalEstimatedTokens: localTokens, TotalEstimatedTokens: packet.Budget.EstimatedTokens + localTokens,
 			HostedSerializedBytes: packet.Budget.SerializedBytes, LocalSerializedBytes: localBytes, TotalSerializedBytes: packet.Budget.SerializedBytes + localBytes,
 			HostedTruncated: packet.Budget.Truncated, LocalTruncated: local.bundle.Truncated || trimmed, Truncated: packet.Budget.Truncated || local.bundle.Truncated || trimmed,
+		}
+	} else if localFailure != nil {
+		response.LocalContext = localFailure
+		localBytes := localJSONBytes(localFailure.Items, localFailure.EvidenceRefs)
+		response.FederatedBudget = &contractsv1.MCPFederatedBudget{
+			MaxItems: options.MaxItems, MaxOutputTokens: options.MaxOutputTokens, MaxSerializedBytes: options.MaxSerializedBytes,
+			HostedItemsUsed: packet.Budget.ItemsUsed, TotalItemsUsed: packet.Budget.ItemsUsed,
+			HostedEstimatedTokens: packet.Budget.EstimatedTokens, TotalEstimatedTokens: packet.Budget.EstimatedTokens,
+			HostedSerializedBytes: packet.Budget.SerializedBytes, LocalSerializedBytes: localBytes, TotalSerializedBytes: packet.Budget.SerializedBytes + localBytes,
+			HostedTruncated: packet.Budget.Truncated, Truncated: packet.Budget.Truncated,
 		}
 	}
 	if err := validateFederatedResponse(response); err != nil {

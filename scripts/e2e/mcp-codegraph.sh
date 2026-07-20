@@ -181,7 +181,7 @@ print(json.dumps({'jsonrpc':'2.0','id':5,'method':'tools/call','params':{'name':
 PY
 )"
   fi
-  if [[ "$scenario" == writeback-default ]]; then
+  if [[ "$scenario" == writeback-default || "$scenario" == mixed ]]; then
     rpc '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"record_episode","arguments":{}}}'
     rpc '{"jsonrpc":"2.0","id":7,"method":"tools/list","params":{}}'
   fi
@@ -232,7 +232,8 @@ else:
  ids={hosted_ref['evidence_ref_id']} | ({local_ref['evidence_ref_id']} if local_ref else set())
  if scenario not in ('hosted-only','local-timeout') and len(ids)!=2: raise SystemExit('evidence identifiers collide')
  if scenario=='local-timeout':
-  if 'local_context' in context: raise SystemExit('timed-out local provider emitted local context')
+  local_context=context.get('local_context',{})
+  if local_context.get('status')!='unavailable' or local_context.get('warnings')!=['local_index_timeout']: raise SystemExit('timed-out local provider did not expose bounded degradation')
  content_bytes=len(json.dumps({'structured':packet},separators=(',',':')).encode())+len(json.dumps({'local_context':context.get('local_context',{})},separators=(',',':')).encode())
  budget=packet.get('budget',{}).get('max_serialized_bytes',0)
  if not 0<content_bytes<=budget: raise SystemExit('packet content budget exceeded')
@@ -244,7 +245,7 @@ else:
   if (federated.get('max_items'),federated.get('max_output_tokens'),federated.get('max_serialized_bytes')) != (20,2000,16384): raise SystemExit('caller budget was not applied')
   if federated.get('total_items_used',21)>20 or federated.get('total_estimated_tokens',2001)>2000 or federated.get('total_serialized_bytes',16385)>16384: raise SystemExit('combined content exceeds caller budget')
   if not {'structured','local_context','federated_budget','rendered_markdown'} <= set(context): raise SystemExit('overflow response omitted required accounting fields')
- if scenario=='writeback-default':
+ if scenario in ('writeback-default','mixed'):
   writeback=by_id.get(6,{})
   followup=by_id.get(7,{}).get('result',{}).get('tools',[])
   if 'record_episode' in {tool.get('name') for tool in tools} or len(tools)!=2: raise SystemExit('writeback tool was advertised')
@@ -252,7 +253,7 @@ else:
   if error.get('code') != -32602 or 'unknown tool "record_episode"' not in error.get('message',''): raise SystemExit('record_episode was not rejected as unknown: %s' % json.dumps(writeback,sort_keys=True))
   if {tool.get('name') for tool in followup}!={'context_for_task','source_evidence'}: raise SystemExit('session did not remain valid after rejected writeback')
   if episode_posts != 0: raise SystemExit('disabled writeback reached the hosted endpoint')
-r={"schema_version":"context_fabric_mcp_codegraph_receipt.v1","task":"CHAOS-3007 Task 9","mode":"fixture","scenario":scenario,"verdict":"expected_failure" if scenario in set(bootstrap_failure)|{'local-timeout'} else "pass","source_revision":__import__('os').environ['SOURCE_REVISION'],"source_worktree_clean":True,"source_identity_unchanged":__import__('os').environ['SOURCE_IDENTITY_UNCHANGED']=='true',"harness_sha256":__import__('os').environ['HARNESS_SHA256'],"binary_sha256":__import__('os').environ['BINARY_SHA256'],"tls_verified":True,"mcp":{"framing":bool(lines),"initialize":bool(by_id.get(1,{}).get('result')),"initialized_notification":True,"tools":len(tools),"record_episode_present":"record_episode" in {x.get('name') for x in tools},"record_episode_rejected":scenario!='writeback-default' or by_id.get(6,{}).get('error',{}).get('code') == -32602,"session_valid_after_rejected_writeback":scenario!='writeback-default' or bool(by_id.get(7,{}).get('result')),"context_ok":bool(context),"hosted_expand_ok":bool(hosted),"local_expand_ok":bool(local)},"federation":{"hosted_packet_unchanged":not failure,"ids_disjoint":(len(ids)==2 if scenario!='hosted-only' else len(ids)==1) if not failure else False,"packet_content_within_budget":content_bytes>0 if not failure else False,"envelope_excluded":True,"federated_budget_excluded":True,"rendered_markdown_excluded":True},"writeback":{"hosted_episode_posts":episode_posts},"codegraph":{"version":"1.2.0","command_counts":{"status":1,"query":1},"forbidden_command_count":0,"status_before_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"status_after_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"index_before_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_after_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_unchanged":True,"index_kind":"fixture"},"cleanup":{"processes_stopped":True,"listeners_stopped":True,"temporary_material_removed":True}}
+r={"schema_version":"context_fabric_mcp_codegraph_receipt.v1","task":"CHAOS-3007 Task 9","mode":"fixture","scenario":scenario,"verdict":"expected_failure" if scenario in set(bootstrap_failure)|{'local-timeout'} else "pass","source_revision":__import__('os').environ['SOURCE_REVISION'],"source_worktree_clean":True,"source_identity_unchanged":__import__('os').environ['SOURCE_IDENTITY_UNCHANGED']=='true',"harness_sha256":__import__('os').environ['HARNESS_SHA256'],"binary_sha256":__import__('os').environ['BINARY_SHA256'],"tls_verified":True,"mcp":{"framing":bool(lines),"initialize":bool(by_id.get(1,{}).get('result')),"initialized_notification":True,"tools":len(tools),"record_episode_present":"record_episode" in {x.get('name') for x in tools},"record_episode_rejected":scenario not in ('writeback-default','mixed') or by_id.get(6,{}).get('error',{}).get('code') == -32602,"session_valid_after_rejected_writeback":scenario not in ('writeback-default','mixed') or bool(by_id.get(7,{}).get('result')),"context_ok":bool(context),"hosted_expand_ok":bool(hosted),"local_expand_ok":bool(local)},"federation":{"hosted_packet_unchanged":not failure,"ids_disjoint":(len(ids)==2 if scenario!='hosted-only' else len(ids)==1) if not failure else False,"packet_content_within_budget":content_bytes>0 if not failure else False,"envelope_excluded":True,"federated_budget_excluded":True,"rendered_markdown_excluded":True},"writeback":{"hosted_episode_posts":episode_posts},"codegraph":{"version":"1.2.0","command_counts":{"status":1,"query":1},"forbidden_command_count":0,"status_before_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"status_after_sha256":hashlib.sha256(b'fixture-status').hexdigest(),"index_before_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_after_sha256":hashlib.sha256(b'fixture-index\n').hexdigest(),"index_unchanged":True,"index_kind":"fixture"},"cleanup":{"processes_stopped":True,"listeners_stopped":True,"temporary_material_removed":True}}
 if scenario=='mixed':
  import os,subprocess,tempfile
  root=os.environ['SOURCE_ROOT']

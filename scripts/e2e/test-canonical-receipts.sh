@@ -59,7 +59,10 @@ for scenario in hosted-only local-timeout packet-content-overflow hosted-unavail
   "$root/scripts/e2e/mcp-codegraph.sh" --scenario "$scenario"
   status=$?
   set -e
-  [[ "$status" -eq 0 || "$status" -gt 0 ]] || exit 1
+  case "$scenario" in
+    local-timeout|hosted-unavailable|incompatible-version|post-response-process-failure) [[ "$status" -ne 0 ]] || exit 1 ;;
+    *) [[ "$status" -eq 0 ]] || exit 1 ;;
+  esac
   [[ "$task9_before" == "$(shasum -a 256 "$task9" | awk '{print $1}')" ]] || exit 1
 done
 printf '{"stale":true}\n' > "$task9"
@@ -110,6 +113,11 @@ for path,task in zip(sys.argv[1:3],('CHAOS-3007 Task 8','CHAOS-3007 Task 9')):
     assert receipt['task']==task and receipt['source_revision']==head
     assert receipt['source_worktree_clean'] and receipt['source_identity_unchanged']
     assert receipt['harness_sha256'] and receipt['binary_sha256'] and receipt['tls_verified']
+task9=json.load(open(sys.argv[2]))
+assert task9['scenario']=='mixed' and task9['verdict']=='pass'
+assert task9['mcp']['record_episode_rejected'] is True
+assert task9['mcp']['session_valid_after_rejected_writeback'] is True
+assert task9['writeback']['hosted_episode_posts']==0
 PY
 task9_before="$(shasum -a 256 "$task9" | awk '{print $1}')"
 "$root/scripts/e2e/mcp-codegraph-live.sh" --self-test

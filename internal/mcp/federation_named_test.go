@@ -160,8 +160,13 @@ func TestFederation_ProviderTimeout(t *testing.T) {
 
 	// Then
 	require.Equal(t, 1, calls)
-	require.Nil(t, response.LocalContext)
-	require.Nil(t, response.FederatedBudget)
+	require.NotNil(t, response.LocalContext)
+	require.Equal(t, contractsv1.MCPLocalContextUnavailable, response.LocalContext.Status)
+	require.Equal(t, []string{"local_index_timeout"}, response.LocalContext.Warnings)
+	require.Empty(t, response.LocalContext.Items)
+	require.Empty(t, response.LocalContext.EvidenceRefs)
+	require.NotNil(t, response.FederatedBudget)
+	require.Zero(t, response.FederatedBudget.LocalItemsUsed)
 }
 
 func TestFederation_HostedError(t *testing.T) {

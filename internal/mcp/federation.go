@@ -154,6 +154,29 @@ func localContext(bundle sidecar.LocalEvidenceBundle, mapped mappedLocalBundle, 
 	}
 }
 
+func (r *localFederationRuntime) unavailableContext(err error) (contractsv1.MCPLocalContext, bool) {
+	provider := "local_index"
+	if r.config.Provider == sidecar.LocalIndexProviderAuto || r.config.Provider == sidecar.LocalIndexProviderCodeGraph {
+		provider = "codegraph"
+	}
+	warning := ""
+	var localErr *sidecar.LocalIndexError
+	if errors.As(err, &localErr) {
+		if localErr.Code() != sidecar.LocalIndexErrorTimeout {
+			return contractsv1.MCPLocalContext{}, false
+		}
+		warning = string(localErr.Code())
+	} else if errors.Is(err, context.DeadlineExceeded) {
+		warning = string(sidecar.LocalIndexErrorTimeout)
+	} else {
+		return contractsv1.MCPLocalContext{}, false
+	}
+	return contractsv1.MCPLocalContext{
+		Provider: provider, Status: contractsv1.MCPLocalContextUnavailable, ProviderVersion: "unavailable", QueryVersion: "unavailable",
+		Freshness: contractsv1.MCPLocalFreshnessUnknown, Warnings: []string{warning}, Items: []contractsv1.ContextPacketItem{}, EvidenceRefs: []contractsv1.EvidenceRef{},
+	}, true
+}
+
 func localContextStatus(status sidecar.LocalIndexStatus) contractsv1.MCPLocalContextStatus {
 	switch status {
 	case sidecar.LocalIndexStatusAvailable:
