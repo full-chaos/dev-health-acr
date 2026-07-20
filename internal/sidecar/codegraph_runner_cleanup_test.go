@@ -37,7 +37,7 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterDecodeFailure(t *testing.T) {
 				grandchildPIDPath := filepath.Join(directory, "grandchild.pid")
 				runner := newTestCodeGraphRunner(t, "printf '%s\\n' \"$$\" > "+shellQuote(shellPIDPath)+"\n"+
 					"sh -c 'printf \"%s\\n\" \"$$\" > \"$1\"; sleep 30' sh "+shellQuote(grandchildPIDPath)+" &\n"+
-					"while [ ! -s "+shellQuote(grandchildPIDPath)+" ]; do :; done\n"+
+					"while [ ! -s "+shellQuote(grandchildPIDPath)+" ]; do sleep 0.01; done\n"+
 					test.output+"\n"+
 					"sh -c 'sleep 30' &")
 				runner.Config.Timeout = 10 * time.Second
@@ -91,7 +91,7 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterCommandExit(t *testing.T) {
 				grandchildPIDPath := filepath.Join(directory, "grandchild.pid")
 				runner := newTestCodeGraphRunner(t, "printf '%s\\n' \"$$\" > "+shellQuote(shellPIDPath)+"\n"+
 					"sh -c 'printf \"%s\\n\" \"$$\" > \"$1\"; exec sleep 30' sh "+shellQuote(grandchildPIDPath)+" </dev/null >/dev/null 2>&1 &\n"+
-					"while [ ! -s "+shellQuote(grandchildPIDPath)+" ]; do :; done\n"+
+					"while [ ! -s "+shellQuote(grandchildPIDPath)+" ]; do sleep 0.01; done\n"+
 					test.output)
 				runner.Config.Timeout = 10 * time.Second
 
