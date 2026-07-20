@@ -195,7 +195,7 @@ func trustedCodeGraphRepositoryRoot(root, home string) bool {
 		return true
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || int(stat.Uid) != os.Geteuid() || int(stat.Gid) != os.Getegid() || info.Mode().Perm()&0o002 != 0 || info.Mode().Perm()&0o020 == 0 {
+	if !ok || !trustedCodeGraphGroupWritableMetadata(int(stat.Uid), int(stat.Gid), info.Mode().Perm(), os.Geteuid(), os.Getegid()) {
 		return false
 	}
 	if !codeGraphACLCheck(root) {
@@ -213,6 +213,10 @@ func trustedCodeGraphRepositoryRoot(root, home string) bool {
 			return false
 		}
 	}
+}
+
+func trustedCodeGraphGroupWritableMetadata(uid, gid int, mode os.FileMode, effectiveUID, effectiveGID int) bool {
+	return uid == effectiveUID && gid == effectiveGID && mode&0o002 == 0 && mode&0o020 != 0
 }
 
 type codeGraphDBGuard struct {

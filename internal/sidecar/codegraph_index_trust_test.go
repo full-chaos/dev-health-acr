@@ -146,3 +146,22 @@ func TestTrustedCodeGraphIndexRejectsNonDirectManagedTargets(t *testing.T) {
 		})
 	}
 }
+
+func TestTrustedCodeGraphGroupWritableMetadata(t *testing.T) {
+	cases := []struct {
+		name           string
+		uid, gid, mode int
+		want           bool
+	}{
+		{"primary group", os.Geteuid(), os.Getegid(), 0o775, true},
+		{"foreign group", os.Geteuid(), os.Getegid() + 1, 0o775, false},
+		{"wrong owner", os.Geteuid() + 1, os.Getegid(), 0o775, false},
+		{"world writable", os.Geteuid(), os.Getegid(), 0o777, false},
+		{"not group writable", os.Geteuid(), os.Getegid(), 0o755, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, trustedCodeGraphGroupWritableMetadata(tc.uid, tc.gid, os.FileMode(tc.mode), os.Geteuid(), os.Getegid()))
+		})
+	}
+}
