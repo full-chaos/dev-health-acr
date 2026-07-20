@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 const codeGraphProviderID = "codegraph"
@@ -146,17 +147,20 @@ func mergeCodeGraphClassification(status codeGraphStatus, workspace LocalWorkspa
 func trustedCodeGraphIndex(root string) bool {
 	index := filepath.Join(root, ".codegraph")
 	info, err := os.Lstat(index)
-	if err != nil || verifyCurrentUserOwned(info) != nil {
+	if err != nil {
 		return false
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return false
 	}
-	if err := verifyCurrentUserOwnedDir(resolvedRoot); err != nil {
-		return false
-	}
 	if info.Mode()&os.ModeSymlink == 0 {
+		if err := verifyCurrentUserOwnedDir(resolvedRoot); err != nil {
+			return false
+		}
+		if verifyCurrentUserOwned(info) != nil {
+			return false
+		}
 		resolvedIndex, err := filepath.EvalSymlinks(index)
 		return err == nil && resolvedIndex == filepath.Join(resolvedRoot, ".codegraph")
 	}
@@ -173,7 +177,39 @@ func trustedCodeGraphIndex(root string) bool {
 	if err != nil || filepath.Dir(resolvedIndex) != resolvedManagedRoot || strings.Contains(filepath.Base(resolvedIndex), string(filepath.Separator)) {
 		return false
 	}
+	if err := verifyCurrentUserOwnedDir(resolvedIndex); err != nil {
+		return false
+	}
+	if !trustedCodeGraphRepositoryRoot(resolvedRoot, home) {
+		return false
+	}
 	return trustedCodeGraphDB(resolvedIndex)
+}
+
+func trustedCodeGraphRepositoryRoot(root, home string) bool {
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	if verifyCurrentUserOwned(info) == nil {
+		return true
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Geteuid() || int(stat.Gid) != os.Getegid() || info.Mode().Perm()&0o002 != 0 || info.Mode().Perm()&0o020 == 0 {
+		return false
+	}
+	for ancestor := filepath.Dir(root); ; ancestor = filepath.Dir(ancestor) {
+		ancestorInfo, ancestorErr := os.Stat(ancestor)
+		if ancestorErr != nil || !ancestorInfo.IsDir() || verifyCurrentUserOwned(ancestorInfo) != nil {
+			return false
+		}
+		if ancestor == home {
+			return true
+		}
+		if ancestor == filepath.Dir(ancestor) || !strings.HasPrefix(ancestor, home+string(filepath.Separator)) {
+			return false
+		}
+	}
 }
 
 func verifyCurrentUserOwned(info os.FileInfo) error {

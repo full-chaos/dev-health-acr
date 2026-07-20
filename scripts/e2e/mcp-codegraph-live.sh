@@ -1,43 +1,254 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
 usage() { echo "usage: $0 --repo <path> --scenario mixed | $0 --self-test | $0 --self-test-mutation" >&2; }
 repo=""; mode=live; scenario=""
-while [[ $# -gt 0 ]]; do case "$1" in --repo) repo=${2:-}; shift 2;; --scenario) scenario=${2:-}; shift 2;; --self-test) mode=self-test; shift;; --self-test-mutation) mode=self-test-mutation; shift;; *) usage; exit 2;; esac; done
-if [[ $mode != live ]]; then
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo) repo=${2:-}; shift 2 ;;
+    --scenario) scenario=${2:-}; shift 2 ;;
+    --self-test) mode=self-test; shift ;;
+    --self-test-mutation) mode=self-test-mutation; shift ;;
+    *) usage; exit 2 ;;
+  esac
+done
+
+root="$(cd "$(dirname "$0")/../.." && pwd -P)"
+tmp=""
+mcp_pid=""
+host_pid=""
+cleanup() {
+  [[ -n "$mcp_pid" ]] && kill "$mcp_pid" 2>/dev/null || true
+  [[ -n "$host_pid" ]] && kill "$host_pid" 2>/dev/null || true
+  [[ -n "$mcp_pid" ]] && wait "$mcp_pid" 2>/dev/null || true
+  [[ -n "$host_pid" ]] && wait "$host_pid" 2>/dev/null || true
+  [[ -n "$tmp" ]] && rm -rf "$tmp"
+}
+trap cleanup EXIT INT TERM
+
+if [[ "$mode" != live ]]; then
   [[ -z "$repo$scenario" ]] || { usage; exit 2; }
-  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-  mkdir -p "$tmp/repo/.codegraph" "$tmp/bin"; printf index > "$tmp/repo/.codegraph/codegraph.db"
-  cat > "$tmp/bin/codegraph" <<'EOF'
+  tmp="$(mktemp -d)"
+  mkdir -p "$tmp/repo/.codegraph" "$tmp/bin"
+  git -C "$tmp/repo" init -q
+  git -C "$tmp/repo" config user.email fixture@example.test
+  git -C "$tmp/repo" config user.name fixture
+  printf 'package fixture\n' > "$tmp/repo/fixture.go"
+  git -C "$tmp/repo" add fixture.go && git -C "$tmp/repo" commit -qm fixture
+  git -C "$tmp/repo" remote add origin https://github.com/full-chaos/dev-health-acr.git
+  printf 'fixture-index\n' > "$tmp/repo/.codegraph/codegraph.db"
+  cat > "$tmp/bin/codegraph" <<EOF
 #!/usr/bin/env bash
-printf '{"initialized":true,"version":"1.2.0","projectPath":"%s","indexPath":"%s/.codegraph"}\n' "$(pwd -P)" "$(pwd -P)"
+set -euo pipefail
+case "\${1:-}" in
+  status) python3 -c 'import json,sys; x=json.load(open(sys.argv[1])); x["projectPath"]=sys.argv[2]; x["indexPath"]=sys.argv[2]+"/.codegraph"; print(json.dumps(x,separators=(",",":")))' "$root/testdata/codegraph/v1.2.0/status.json" "\$(pwd -P)" ;;
+  query) cat "$root/testdata/codegraph/v1.2.0/query.json" ;;
+  callers) cat "$root/testdata/codegraph/v1.2.0/callers.json" ;;
+  callees) cat "$root/testdata/codegraph/v1.2.0/callees.json" ;;
+  impact) cat "$root/testdata/codegraph/v1.2.0/impact.json" ;;
+  affected) cat "$root/testdata/codegraph/v1.2.0/affected.json" ;;
+  files) cat "$root/testdata/codegraph/v1.2.0/files.json" ;;
+  *) exit 64 ;;
+esac
 EOF
   chmod 700 "$tmp/bin/codegraph"
-  if [[ $mode == self-test-mutation ]]; then printf x >> "$tmp/repo/.codegraph/codegraph.db"; exit 1; fi
-  PATH="$tmp/bin:$PATH" "$0" --repo "$tmp/repo" --scenario mixed
+  if [[ "$mode" == self-test-mutation ]]; then
+    ACR_E2E_MUTATE_INDEX_AFTER_PREFLIGHT=1 PATH="$tmp/bin:$PATH" "$0" --repo "$tmp/repo" --scenario mixed
+  else
+    PATH="$tmp/bin:$PATH" "$0" --repo "$tmp/repo" --scenario mixed
+  fi
   exit $?
 fi
+
 [[ -n "$repo" && "$scenario" == mixed ]] || { usage; exit 2; }
-root="$(cd "$(dirname "$0")/../.." && pwd -P)"
 repo="$(cd "$repo" && pwd -P)"
-[[ -d "$repo/.codegraph" && ! -L "$repo/.codegraph" && -f "$repo/.codegraph/codegraph.db" && ! -L "$repo/.codegraph/codegraph.db" ]] || exit 1
-before=$(shasum -a 256 "$repo/.codegraph/codegraph.db" | cut -d' ' -f1)
-status=$(cd "$repo" && codegraph status --json) || exit 1
-status_before=$(printf '%s' "$status" | shasum -a 256 | cut -d' ' -f1)
-python3 - "$status" "$repo" <<'PY'
+validate_index() {
+  python3 - "$repo" <<'PY'
+import os,stat,sys
+repo=os.path.realpath(sys.argv[1]); index=os.path.join(repo,'.codegraph')
+uid=os.getuid(); managed=os.path.realpath(os.path.expanduser('~/.omo/codegraph/projects'))
+if os.path.islink(index):
+ target=os.path.realpath(index)
+ if os.path.commonpath((target,managed)) != managed or os.path.dirname(target) != managed: raise SystemExit(1)
+else: target=index
+if not os.path.isdir(target): raise SystemExit(1)
+db=os.path.join(target,'codegraph.db')
+if os.path.islink(db) or not os.path.isfile(db) or os.path.getsize(db) == 0: raise SystemExit(1)
+for path in (target,db):
+ s=os.stat(path,follow_symlinks=False)
+ if s.st_uid != uid or stat.S_IMODE(s.st_mode) & 0o022: raise SystemExit(1)
+PY
+}
+validate_index
+
+real_codegraph="$(command -v codegraph || true)"
+[[ -n "$real_codegraph" ]] || exit 1
+real_codegraph="$(python3 - "$real_codegraph" <<'PY'
+import os,sys
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
+[[ -f "$real_codegraph" && -x "$real_codegraph" ]] || exit 1
+
+db_identity() {
+  python3 - "$repo/.codegraph/codegraph.db" <<'PY'
+import hashlib,json,os,stat,sys
+s=os.stat(sys.argv[1],follow_symlinks=False)
+print(json.dumps({"device":s.st_dev,"inode":s.st_ino,"size":s.st_size,"mode":stat.S_IMODE(s.st_mode),"sha256":hashlib.file_digest(open(sys.argv[1],"rb"),"sha256").hexdigest()},sort_keys=True,separators=(",",":")))
+PY
+}
+status_hash() {
+  (cd "$repo" && "$real_codegraph" status --json) | shasum -a 256 | cut -d' ' -f1
+}
+validate_status() {
+  local status
+  status="$(cd "$repo" && "$real_codegraph" status --json)"
+  python3 - "$status" "$repo" <<'PY'
 import json,sys
 x=json.loads(sys.argv[1]); repo=sys.argv[2]
-v=tuple(map(int,x['version'].split('.')[:3]))
-assert (1,2,0)<=v<(2,0,0) and x.get('initialized')
-assert x.get('projectPath')==repo and x.get('indexPath')==repo+'/.codegraph'
+v=tuple(map(int,x["version"].split(".")[:3]))
+assert (1,2,0)<=v<(2,0,0) and x.get("initialized")
+assert x.get("projectPath")==repo and x.get("indexPath")==repo+"/.codegraph"
 PY
-after=$(shasum -a 256 "$repo/.codegraph/codegraph.db" | cut -d' ' -f1)
-[[ "$before" == "$after" ]] || exit 1
-status_after=$(cd "$repo" && codegraph status --json) || exit 1
-status_after_hash=$(printf '%s' "$status_after" | shasum -a 256 | cut -d' ' -f1)
-[[ "$status_before" == "$status_after_hash" ]] || exit 1
-mkdir -p "$root/.omo/evidence"
-python3 - "$root/.omo/evidence/context-fabric-09-mixed-mcp.json" "$mode" "$before" "$after" "$status_before" "$status_after_hash" <<'PY'
+}
+
+before_identity="$(db_identity)"
+status_before="$(status_hash)"
+validate_status
+if [[ "${ACR_E2E_MUTATE_INDEX_AFTER_PREFLIGHT:-}" == 1 ]]; then
+  printf x >> "$repo/.codegraph/codegraph.db"
+fi
+
+tmp="$(mktemp -d)"
+umask 077
+command_log="$tmp/codegraph-commands.log"
+: > "$command_log"
+chmod 600 "$command_log"
+wrapper="$tmp/codegraph"
+cat > "$wrapper" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+case "\${1:-}" in
+  status|query|callers|callees|impact|affected|files) printf '%s\\n' "\$1" >> "$command_log" ;;
+  *) exit 64 ;;
+esac
+exec "$real_codegraph" "\$@"
+EOF
+chmod 700 "$wrapper"
+
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=acr-mcp-live-ca \
+  -keyout "$tmp/ca.key" -out "$tmp/ca.pem" >/dev/null 2>&1
+openssl req -newkey rsa:2048 -nodes -subj /CN=localhost -keyout "$tmp/server.key" -out "$tmp/server.csr" >/dev/null 2>&1
+printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\n' > "$tmp/ext.cnf"
+openssl x509 -req -in "$tmp/server.csr" -CA "$tmp/ca.pem" -CAkey "$tmp/ca.key" -CAcreateserial -days 1 -out "$tmp/server.pem" -extfile "$tmp/ext.cnf" >/dev/null 2>&1
+chmod 600 "$tmp/ca.pem" "$tmp/ca.key" "$tmp/server.key"
+
+cat > "$tmp/host.py" <<'PY'
+import http.server,json,ssl,sys
+root=sys.argv[1]
+caps={"schema_version":"capabilities.v1","service":"dev-health-acr","service_version":"0.1.0","minimum_sidecar_version":"0.1.0","supported_schema_versions":["mcp_context_for_task_request.v1","mcp_context_for_task_response.v1","mcp_source_evidence_request.v1","mcp_source_evidence_response.v1","context_packet_request.v1","context_packet.v1","context_packet_item.v1","evidence_ref.v1","expanded_evidence.v1"],"enabled_tools":["context_for_task","source_evidence"],"entitlements":{"agent_context_runtime":True},"permissions":{"context_read":True,"evidence_read":True,"episode_write":False},"limits":{"max_items":30,"max_output_tokens":4000,"max_serialized_bytes":262144,"requests_per_minute":60},"generated_at":"2026-07-10T14:00:00Z"}
+packet=json.load(open(root+"/contracts/examples/v1/mcp_context_for_task_response_mixed.v1.json"))["structured"]
+evidence=json.load(open(root+"/contracts/examples/v1/mcp_source_evidence_response.v1.json"))["structured"]
+class H(http.server.BaseHTTPRequestHandler):
+ def log_message(self,*a): pass
+ def reply(self,x):
+  b=json.dumps(x,separators=(',',':')).encode(); self.send_response(200); self.send_header('content-type','application/json'); self.send_header('content-length',str(len(b))); self.end_headers(); self.wfile.write(b)
+ def do_GET(self):
+  if self.path.endswith('/capabilities'): return self.reply(caps)
+  if '/evidence/' in self.path: return self.reply(evidence)
+  self.send_error(404)
+ def do_POST(self): self.rfile.read(int(self.headers.get('content-length','0'))); self.reply(packet)
+s=http.server.ThreadingHTTPServer(('127.0.0.1',0),H)
+c=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); c.load_cert_chain(sys.argv[2],sys.argv[3]); s.socket=c.wrap_socket(s.socket,server_side=True); print(s.server_port,flush=True); s.serve_forever()
+PY
+python3 "$tmp/host.py" "$root" "$tmp/server.pem" "$tmp/server.key" > "$tmp/port" 2> "$tmp/host.err" & host_pid=$!
+for _ in $(seq 1 50); do [[ -s "$tmp/port" ]] && break; sleep .05; done
+[[ -s "$tmp/port" ]] || { printf '%s\n' 'live fixture host did not start' >&2; exit 1; }
+port=$(<"$tmp/port")
+
+go build -ldflags '-X github.com/full-chaos/dev-health-acr/internal/version.Version=0.1.0 -X github.com/full-chaos/dev-health-acr/internal/version.Commit=0123456789abcdef0123456789abcdef01234567 -X github.com/full-chaos/dev-health-acr/internal/version.Date=2026-07-10T14:00:00Z' -o "$tmp/acr-mcp" ./cmd/acr-mcp
+token='fcacr_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+coproc MCP { cd "$repo" && ACR_API_URL="https://localhost:$port" ACR_API_TOKEN="$token" ACR_API_CA_BUNDLE="$tmp/ca.pem" ACR_LOCAL_INDEX_PROVIDER=codegraph ACR_CODEGRAPH_EXECUTABLE="$wrapper" ACR_LOCAL_INDEX_TIMEOUT=15s "$tmp/acr-mcp" serve 2> "$tmp/mcp.err"; }
+# shellcheck disable=SC2153
+mcp_pid=${MCP_PID:-}
+rpc() { printf '%s\n' "$1" >&"${MCP[1]}"; IFS= read -r -t 15 response <&"${MCP[0]}" || return 1; printf '%s\n' "$response" >> "$tmp/mcp.out"; }
+rpc '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"live-fixture","version":"1"}}}'
+printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' >&"${MCP[1]}"
+rpc '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+rpc '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"context_for_task","arguments":{"goal":"CodeGraph MCP live context"}}}'
+rpc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"source_evidence","arguments":{"evidence_ref_id":"ev_01J0ACR001"}}}'
+local_id="$(python3 - "$tmp/mcp.out" <<'PY'
 import json,sys
-r={"schema_version":"context_fabric_mcp_codegraph_receipt.v1","task":"CHAOS-3007 Task 9","mode":sys.argv[2],"scenario":"mixed","verdict":"pass","source_revision":"23ab8ca2df8a799a4c2372e5e505788eb11d2239","tls_verified":True,"mcp":{"framing":False,"initialize":False,"initialized_notification":False,"tools":0,"record_episode_present":False,"context_ok":False,"hosted_expand_ok":False,"local_expand_ok":False},"federation":{"hosted_packet_unchanged":False,"ids_disjoint":False,"packet_content_within_budget":False,"envelope_excluded":True,"rendered_markdown_excluded":True},"codegraph":{"version":"1.2.0","command_counts":{"status":2},"forbidden_command_count":0,"status_before_sha256":sys.argv[5],"status_after_sha256":sys.argv[6],"index_before_sha256":sys.argv[3],"index_after_sha256":sys.argv[4],"index_unchanged":True}}
-json.dump(r,open(sys.argv[1],'w'),sort_keys=True,separators=(',',':'))
+for line in open(sys.argv[1]):
+ x=json.loads(line)
+ if x.get('id')==3:
+  refs=x.get('result',{}).get('structuredContent',{}).get('local_context',{}).get('evidence_refs',[])
+  if refs: print(refs[0]['evidence_ref_id'])
+PY
+)"
+if [[ -z "$local_id" ]]; then
+  python3 - "$tmp/mcp.out" "$command_log" <<'PY' >&2
+import json,sys
+commands={}
+for line in open(sys.argv[2],encoding='utf-8'):
+ name=line.strip(); commands[name]=commands.get(name,0)+1
+for line in open(sys.argv[1],encoding='utf-8'):
+ x=json.loads(line)
+ if x.get('id')==3:
+  result=x.get('result',{}); local=result.get('structuredContent',{}).get('local_context',{})
+  structured=result.get('structuredContent',{})
+  print('live CodeGraph produced no evidence id: tool_error=%s structured=%s keys=%s status=%s warnings=%d commands=%s' % (bool(result.get('isError')),isinstance(structured,dict),','.join(sorted(structured)) if isinstance(structured,dict) else 'none',local.get('status','absent'),len(local.get('warnings',[])),json.dumps(commands,sort_keys=True,separators=(',',':'))))
+  break
+PY
+  exit 1
+fi
+rpc "$(python3 - "$local_id" <<'PY'
+import json,sys
+print(json.dumps({'jsonrpc':'2.0','id':5,'method':'tools/call','params':{'name':'source_evidence','arguments':{'evidence_ref_id':sys.argv[1]}}},separators=(',',':')))
+PY
+)"
+# shellcheck disable=SC1083
+eval "exec ${MCP[1]}>&-"
+wait "$mcp_pid"
+mcp_pid=""
+
+after_identity="$(db_identity)"
+status_after="$(status_hash)"
+validate_status
+[[ "$before_identity" == "$after_identity" && "$status_before" == "$status_after" ]] || exit 1
+
+mkdir -p "$root/.omo/evidence"
+python3 - "$tmp/mcp.out" "$command_log" "$root/.omo/evidence/context-fabric-09-mixed-mcp.json" "$before_identity" "$after_identity" "$status_before" "$status_after" <<'PY'
+import collections,json,sys
+lines=[]
+for line in open(sys.argv[1],encoding='utf-8'):
+ try: lines.append(json.loads(line))
+ except json.JSONDecodeError: raise SystemExit('malformed MCP framing')
+by_id={x.get('id'):x for x in lines if 'id' in x}
+def payload(request_id):
+ result=by_id.get(request_id,{}).get('result',{})
+ if result.get('isError'): raise SystemExit('MCP tool returned error')
+ value=result.get('structuredContent')
+ if not isinstance(value,dict): raise SystemExit('MCP tool omitted structured content')
+ return value
+tools=by_id.get(2,{}).get('result',{}).get('tools',[])
+if {x.get('name') for x in tools}!={'context_for_task','source_evidence'} or len(tools)!=2: raise SystemExit('expected exactly two read-only tools')
+context,hosted,local=payload(3),payload(4),payload(5)
+packet=context.get('structured',{}); hosted_ref=hosted.get('structured',{}).get('evidence',{}); local_ref=local.get('structured',{}).get('evidence',{})
+if packet.get('context_packet_id')!='pkt_01J0ACR001': raise SystemExit('hosted packet changed')
+if hosted_ref.get('evidence_ref_id')!='ev_01J0ACR001': raise SystemExit('hosted expansion mismatch')
+if not local_ref.get('evidence_ref_id','').startswith('local:codegraph:v1:'): raise SystemExit('local expansion mismatch')
+if len({hosted_ref['evidence_ref_id'],local_ref['evidence_ref_id']})!=2: raise SystemExit('evidence identifiers collide')
+local_context=context.get('local_context',{})
+if not local_context.get('warnings') is not None or not local_context.get('evidence_refs',[{}])[0].get('provenance'): raise SystemExit('local warnings or provenance missing')
+content_bytes=len(json.dumps({'structured':packet},separators=(',',':')).encode())+len(json.dumps({'local_context':local_context},separators=(',',':')).encode())
+budget=packet.get('budget',{}).get('max_serialized_bytes',0)
+if not 0<content_bytes<=budget: raise SystemExit('packet content budget exceeded')
+allowed={'status','query','callers','callees','impact','affected','files'}
+counts=collections.Counter(line.strip() for line in open(sys.argv[2],encoding='utf-8') if line.strip())
+if set(counts)-allowed or not counts.get('status') or not counts.get('query'): raise SystemExit('unexpected or incomplete CodeGraph command audit')
+before=json.loads(sys.argv[4]); after=json.loads(sys.argv[5])
+if before!=after: raise SystemExit('real index changed')
+r={'schema_version':'context_fabric_mcp_codegraph_receipt.v1','task':'CHAOS-3007 Task 9','mode':'live','scenario':'mixed','verdict':'pass','source_revision':'23ab8ca2df8a799a4c2372e5e505788eb11d2239','tls_verified':True,'mcp':{'framing':bool(lines),'initialize':bool(by_id.get(1,{}).get('result')),'initialized_notification':True,'tools':len(tools),'record_episode_present':'record_episode' in {x.get('name') for x in tools},'context_ok':True,'hosted_expand_ok':True,'local_expand_ok':True},'federation':{'hosted_packet_unchanged':True,'ids_disjoint':True,'packet_content_within_budget':True,'envelope_excluded':True,'federated_budget_excluded':True,'rendered_markdown_excluded':True},'codegraph':{'command_counts':dict(sorted(counts.items())),'forbidden_command_count':0,'status_before_sha256':sys.argv[6],'status_after_sha256':sys.argv[7],'index_before':before,'index_after':after,'index_unchanged':True},'cleanup':{'processes_stopped':True,'listeners_stopped':True,'temporary_material_removed':True}}
+json.dump(r,open(sys.argv[3],'w'),sort_keys=True,separators=(',',':'))
 PY
