@@ -87,6 +87,9 @@ func validateClientPackage(packagePath string, bundle ClientBundle) error {
 		if entry.IsDir() || filepath.Base(path) == "package.v1.json" {
 			return nil
 		}
+		if filepath.Base(path) == "client-bundle.v1.json" {
+			return invalidBundle("package.contract_fork")
+		}
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return invalidBundle("package.unreadable")
@@ -121,6 +124,12 @@ func validateClientPackageContents(contents string) error {
 		{"codegraph", "package.codegraph"},
 		{"client-bundle.v1.json", "package.contract_fork"},
 		{"record_episode", "package.mcp_commands"},
+		{`"writeback_enabled_by_default":true`, "package.writeback_default"},
+		{`"writeback_enabled_by_default": true`, "package.writeback_default"},
+		{`writeback_enabled_by_default = true`, "package.writeback_default"},
+		{`"preplan_enabled_by_default":true`, "package.preplan_default"},
+		{`"preplan_enabled_by_default": true`, "package.preplan_default"},
+		{`preplan_enabled_by_default = true`, "package.preplan_default"},
 		{"curl ", "package.mutable_installer"},
 		{"/latest", "package.mutable_installer"},
 		{"/main", "package.mutable_installer"},
