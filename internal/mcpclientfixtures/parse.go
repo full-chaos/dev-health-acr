@@ -1,54 +1,80 @@
 package mcpclientfixtures
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 )
+
+const (
+	parserClassSyntax = "syntax"
+	parserClassShape  = "shape"
+	parserClassPolicy = "policy"
+)
+
+// ConfigParseError classifies untrusted client configuration failures without
+// returning client configuration content to callers.
+type ConfigParseError struct {
+	class string
+	err   error
+}
+
+func (e *ConfigParseError) Error() string { return e.err.Error() }
+
+func (e *ConfigParseError) Unwrap() error { return e.err }
+
+func (e *ConfigParseError) Class() string { return e.class }
+
+func newConfigParseError(class, format string, args ...any) error {
+	return &ConfigParseError{class: class, err: fmt.Errorf(format, args...)}
+}
 
 // StdioServerEntry is the structural shape of one "mcpServers" entry in
 // the Claude Code and Cursor JSON-shaped client configs.
 type StdioServerEntry struct {
-	Type    string            `json:"type"`
-	Command string            `json:"command"`
-	Args    []string          `json:"args"`
-	Env     map[string]string `json:"env"`
+	Type    string
+	Command string
+	Args    []string
+	Env     map[string]string
 }
 
 func ParseCommandArrayMCP(data []byte) (StdioServerEntry, error) {
-	var doc struct {
-		Schema string `json:"$schema"`
-		MCP    map[string]struct {
-			Type    string   `json:"type"`
-			Command []string `json:"command"`
-		} `json:"mcp"`
+	root, err := strictJSONObject(data)
+	if err != nil {
+		return StdioServerEntry{}, err
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&doc); err != nil {
-		return StdioServerEntry{}, fmt.Errorf("parse MCP command-array JSON: %w", err)
+	if err := requireKeys(root, "$schema", "mcp"); err != nil {
+		return StdioServerEntry{}, err
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return StdioServerEntry{}, fmt.Errorf("parse MCP command-array JSON trailing data")
+	schema, err := requiredJSONString(root, "$schema")
+	if err != nil || schema != "https://opencode.ai/config.json" {
+		return StdioServerEntry{}, newConfigParseError(parserClassShape, "MCP command-array JSON has invalid schema")
 	}
-	if len(doc.MCP) != 1 {
-		return StdioServerEntry{}, fmt.Errorf("MCP command-array JSON must contain exactly one server")
+	mcp, err := requiredJSONObject(root, "mcp")
+	if err != nil || len(mcp) != 1 {
+		return StdioServerEntry{}, newConfigParseError(parserClassShape, "MCP command-array JSON must contain exactly one server")
 	}
-	if doc.Schema != "https://opencode.ai/config.json" {
-		return StdioServerEntry{}, fmt.Errorf("MCP command-array JSON has invalid schema")
+	entryRaw, ok := mcp["acr"]
+	if !ok {
+		return StdioServerEntry{}, newConfigParseError(parserClassShape, "MCP command-array JSON has no acr server")
 	}
-	entry, ok := doc.MCP["acr"]
-	if !ok || entry.Type != "local" || len(entry.Command) != 2 || entry.Command[0] != "acr-mcp" || entry.Command[1] != "serve" {
-		return StdioServerEntry{}, fmt.Errorf("MCP command-array JSON must contain exact acr-mcp serve registration")
+	entry, err := rawJSONObject(entryRaw)
+	if err != nil {
+		return StdioServerEntry{}, err
 	}
-	return StdioServerEntry{Type: entry.Type, Command: entry.Command[0], Args: entry.Command[1:]}, nil
+	if err := requireKeys(entry, "type", "command"); err != nil {
+		return StdioServerEntry{}, err
+	}
+	typ, err := requiredJSONString(entry, "type")
+	if err != nil || typ != "local" {
+		return StdioServerEntry{}, newConfigParseError(parserClassShape, "MCP command-array JSON must use local type")
+	}
+	command, err := requiredJSONStringArray(entry, "command")
+	if err != nil || !equalStrings(command, []string{"acr-mcp", "serve"}) {
+		return StdioServerEntry{}, newConfigParseError(parserClassShape, "MCP command-array JSON must contain exact acr-mcp serve registration")
+	}
+	return StdioServerEntry{Type: typ, Command: command[0], Args: command[1:]}, nil
 }
 
-// ParseStdioJSON parses a Claude Code or Cursor "mcpServers"-shaped JSON
-// document (encoding/json handles the format; this just names the
-// expected shape) and returns the "acr" entry, failing if it is absent.
 func ParseStdioJSON(data []byte) (StdioServerEntry, error) {
 	return parseStdioJSON(data, "cursor")
 }
@@ -66,69 +92,123 @@ func ParseCodexJSON(data []byte) (StdioServerEntry, error) {
 }
 
 func parseStdioJSON(data []byte, client string) (StdioServerEntry, error) {
-	var doc struct {
-		MCPServers map[string]struct {
-			Type                     string            `json:"type"`
-			Command                  string            `json:"command"`
-			Args                     []string          `json:"args"`
-			Env                      map[string]string `json:"env"`
-			Enabled                  *bool             `json:"enabled"`
-			Required                 *bool             `json:"required"`
-			DefaultToolsApprovalMode string            `json:"default_tools_approval_mode"`
-			EnabledTools             []string          `json:"enabled_tools"`
-		} `json:"mcpServers"`
+	root, err := strictJSONObject(data)
+	if err != nil {
+		return StdioServerEntry{}, err
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&doc); err != nil {
-		return StdioServerEntry{}, fmt.Errorf("parse mcpServers JSON: %w", err)
+	if err := requireKeys(root, "mcpServers"); err != nil {
+		return StdioServerEntry{}, err
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return StdioServerEntry{}, fmt.Errorf("parse mcpServers JSON trailing data")
+	servers, err := requiredJSONObject(root, "mcpServers")
+	if err != nil || len(servers) != 1 {
+		return StdioServerEntry{}, newConfigParseError(parserClassShape, "mcpServers JSON must contain exactly one server")
 	}
-	if len(doc.MCPServers) != 1 {
-		return StdioServerEntry{}, fmt.Errorf("mcpServers JSON must contain exactly one server")
-	}
-	entry, ok := doc.MCPServers["acr"]
+	rawEntry, ok := servers["acr"]
 	if !ok {
-		return StdioServerEntry{}, fmt.Errorf("mcpServers JSON has no \"acr\" entry")
+		return StdioServerEntry{}, newConfigParseError(parserClassShape, "mcpServers JSON has no acr entry")
 	}
-	if client != "documentation" && (entry.Command != "acr-mcp" || len(entry.Args) != 1 || entry.Args[0] != "serve") {
-		return StdioServerEntry{}, fmt.Errorf("mcpServers JSON must contain exact acr-mcp serve registration")
+	entry, err := rawJSONObject(rawEntry)
+	if err != nil {
+		return StdioServerEntry{}, err
 	}
-	if client == "documentation" && (entry.Command == "" || len(entry.Args) != 1 || entry.Args[0] != "serve") {
-		return StdioServerEntry{}, fmt.Errorf("documentation mcpServers JSON must contain a serve registration")
+	allowed, required := stdioFields(client)
+	if allowed == nil {
+		return StdioServerEntry{}, newConfigParseError(parserClassShape, "unknown client parser %q", client)
 	}
-	if client != "documentation" && len(entry.Env) != 0 {
-		return StdioServerEntry{}, fmt.Errorf("mcpServers JSON must not inject environment")
+	if err := requireKnownKeys(entry, allowed, required...); err != nil {
+		return StdioServerEntry{}, err
 	}
+	command, err := requiredJSONString(entry, "command")
+	if err != nil || command == "" {
+		return StdioServerEntry{}, newConfigParseError(parserClassShape, "mcpServers JSON must contain a command")
+	}
+	args, err := requiredJSONStringArray(entry, "args")
+	if err != nil || len(args) != 1 || args[0] != "serve" {
+		return StdioServerEntry{}, newConfigParseError(parserClassShape, "mcpServers JSON must contain exact serve arguments")
+	}
+	if client != "documentation" && command != "acr-mcp" {
+		return StdioServerEntry{}, newConfigParseError(parserClassShape, "mcpServers JSON must contain exact acr-mcp serve registration")
+	}
+
+	result := StdioServerEntry{Command: command, Args: args}
 	switch client {
 	case "cursor":
-		if entry.Type != "stdio" || entry.Enabled != nil || entry.Required != nil || entry.DefaultToolsApprovalMode != "" || entry.EnabledTools != nil {
-			return StdioServerEntry{}, fmt.Errorf("Cursor mcpServers JSON has invalid acr shape")
+		result.Type, err = requiredJSONString(entry, "type")
+		if err != nil || result.Type != "stdio" {
+			return StdioServerEntry{}, newConfigParseError(parserClassShape, "Cursor mcpServers JSON has invalid acr shape")
 		}
 	case "claude-code":
-		if entry.Type != "" || entry.Enabled != nil || entry.Required != nil || entry.DefaultToolsApprovalMode != "" || entry.EnabledTools != nil {
-			return StdioServerEntry{}, fmt.Errorf("Claude Code mcpServers JSON has invalid acr shape")
-		}
 	case "codex":
-		if entry.Type != "" || entry.Enabled == nil || !*entry.Enabled || entry.Required == nil || *entry.Required || entry.DefaultToolsApprovalMode != "prompt" || !equalStrings(entry.EnabledTools, []string{"context_for_task", "source_evidence"}) {
-			return StdioServerEntry{}, fmt.Errorf("Codex mcpServers JSON has invalid acr shape")
+		if err := requireJSONBool(entry, "enabled", true); err != nil {
+			return StdioServerEntry{}, err
+		}
+		if err := requireJSONBool(entry, "required", false); err != nil {
+			return StdioServerEntry{}, err
+		}
+		approval, approvalErr := requiredJSONString(entry, "default_tools_approval_mode")
+		tools, toolsErr := requiredJSONStringArray(entry, "enabled_tools")
+		if approvalErr != nil || approval != "prompt" || toolsErr != nil || !equalStrings(tools, []string{"context_for_task", "source_evidence"}) {
+			return StdioServerEntry{}, newConfigParseError(parserClassShape, "Codex mcpServers JSON has invalid acr shape")
 		}
 	case "documentation":
-		if entry.Type != "" && entry.Type != "stdio" {
-			return StdioServerEntry{}, fmt.Errorf("documentation mcpServers JSON must use stdio when typed")
+		if rawType, ok := entry["type"]; ok {
+			result.Type, err = rawJSONString(rawType)
+			if err != nil || result.Type != "stdio" {
+				return StdioServerEntry{}, newConfigParseError(parserClassShape, "documentation mcpServers JSON must use stdio when typed")
+			}
 		}
-	default:
-		return StdioServerEntry{}, fmt.Errorf("unknown client parser %q", client)
+		result.Env, err = optionalStringMap(entry, "env")
+		if err != nil {
+			return StdioServerEntry{}, err
+		}
 	}
-	return StdioServerEntry{Type: entry.Type, Command: entry.Command, Args: entry.Args, Env: entry.Env}, nil
+	return result, nil
 }
 
-// ParseLaunchScriptExec extracts the final `exec ...` invocation line from
-// launch-sidecar.sh, without a general shell parser: it returns the exact
-// trailing line so a caller can assert it targets exactly the sidecar
-// binary variable and the "serve" subcommand.
+func stdioFields(client string) (map[string]bool, []string) {
+	switch client {
+	case "cursor":
+		return keySet("type", "command", "args"), []string{"type", "command", "args"}
+	case "claude-code":
+		return keySet("command", "args"), []string{"command", "args"}
+	case "codex":
+		return keySet("command", "args", "enabled", "required", "default_tools_approval_mode", "enabled_tools"), []string{"command", "args", "enabled", "required", "default_tools_approval_mode", "enabled_tools"}
+	case "documentation":
+		return keySet("type", "command", "args", "env"), []string{"command", "args"}
+	default:
+		return nil, nil
+	}
+}
+
+// ParseCodexPolicyYAML validates the exact structural policy fragment emitted
+// for Codex without accepting a YAML implementation or permissive text match.
+func ParseCodexPolicyYAML(data []byte) error {
+	lines := strings.Split(string(data), "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) != 5 {
+		return newConfigParseError(parserClassSyntax, "Codex policy YAML has unsupported content")
+	}
+	expected := []string{
+		"interface:",
+		"  display_name: Context Fabric",
+		"  short_description: Request evidence-backed context explicitly.",
+		"policy:",
+		"  allow_implicit_invocation: false",
+	}
+	for index, line := range expected {
+		if lines[index] != line {
+			class := parserClassShape
+			if index == len(expected)-1 && strings.HasPrefix(lines[index], "  allow_implicit_invocation:") {
+				class = parserClassPolicy
+			}
+			return newConfigParseError(class, "Codex policy YAML has invalid line %d", index+1)
+		}
+	}
+	return nil
+}
+
 func ParseLaunchScriptExec(data []byte) (string, error) {
 	lines := strings.Split(string(data), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {

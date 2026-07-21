@@ -1,10 +1,15 @@
 package mcpclientfixtures
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+type classifiedParserError interface {
+	Class() string
+}
 
 // TestParseStdioJSONMatchesCanonicalModel structurally parses the checked-
 // in Claude Code and Cursor JSON fixtures (not just a substring match) and
@@ -73,6 +78,87 @@ func TestParseStdioJSONRejectsAmbiguousOrUnsafeRegistrations(t *testing.T) {
 				t.Fatal("unsafe registration was accepted")
 			}
 		})
+	}
+}
+
+func TestClientConfigParsersRejectNonCanonicalJSON(t *testing.T) {
+	validOpenCode := `{"$schema":"https://opencode.ai/config.json","mcp":{"acr":{"type":"local","command":["acr-mcp","serve"]}}}`
+	validClaude := `{"mcpServers":{"acr":{"command":"acr-mcp","args":["serve"]}}}`
+	validCodex := `{"mcpServers":{"acr":{"command":"acr-mcp","args":["serve"],"enabled":true,"required":false,"default_tools_approval_mode":"prompt","enabled_tools":["context_for_task","source_evidence"]}}}`
+	validCursor := `{"mcpServers":{"acr":{"type":"stdio","command":"acr-mcp","args":["serve"]}}}`
+
+	cases := []struct {
+		name      string
+		parse     func([]byte) (StdioServerEntry, error)
+		doc       string
+		wantClass string
+	}{
+		{"opencode duplicate root key", ParseCommandArrayMCP, `{"$schema":"wrong","$schema":"https://opencode.ai/config.json","mcp":{"acr":{"type":"local","command":["acr-mcp","serve"]}}}`, "syntax"},
+		{"opencode case alias", ParseCommandArrayMCP, `{"$schema":"https://opencode.ai/config.json","MCP":{"acr":{"type":"local","command":["acr-mcp","serve"]}}}`, "shape"},
+		{"claude duplicate command", ParseClaudeCodeJSON, `{"mcpServers":{"acr":{"command":"wrong","command":"acr-mcp","args":["serve"]}}}`, "syntax"},
+		{"claude null type", ParseClaudeCodeJSON, `{"mcpServers":{"acr":{"type":null,"command":"acr-mcp","args":["serve"]}}}`, "shape"},
+		{"claude null env", ParseClaudeCodeJSON, `{"mcpServers":{"acr":{"command":"acr-mcp","args":["serve"],"env":null}}}`, "shape"},
+		{"codex case alias", ParseCodexJSON, `{"McpServers":{"acr":{"command":"acr-mcp","args":["serve"],"enabled":true,"required":false,"default_tools_approval_mode":"prompt","enabled_tools":["context_for_task","source_evidence"]}}}`, "shape"},
+		{"cursor null enabled", ParseStdioJSON, `{"mcpServers":{"acr":{"type":"stdio","command":"acr-mcp","args":["serve"],"enabled":null}}}`, "shape"},
+		{"cursor null env", ParseStdioJSON, `{"mcpServers":{"acr":{"type":"stdio","command":"acr-mcp","args":["serve"],"env":null}}}`, "shape"},
+		{"cursor loader override", ParseStdioJSON, `{"mcpServers":{"acr":{"type":"stdio","command":"acr-mcp","args":["serve"],"loader":"node"}}}`, "shape"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given: a JSON document that Go's default decoder may silently coerce.
+			// When: the native client parser validates the complete document.
+			_, err := tc.parse([]byte(tc.doc))
+			// Then: it rejects the document with a typed shape classification.
+			if err == nil {
+				t.Fatal("noncanonical configuration was accepted")
+			}
+			var classified classifiedParserError
+			if !errors.As(err, &classified) || classified.Class() != tc.wantClass {
+				t.Fatalf("expected %s-classified parser error, got %v", tc.wantClass, err)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name    string
+		parse   func([]byte) (StdioServerEntry, error)
+		doc     string
+		wantErr bool
+	}{
+		{"opencode malformed unicode", ParseCommandArrayMCP, `{"$schema":"\ud800","mcp":`, true},
+		{"claude malformed escape", ParseClaudeCodeJSON, `{"mcpServers":{"acr":{"command":"acr\x","args":["serve"]}}}`, true},
+		{"codex wrong root shape", ParseCodexJSON, `[]`, true},
+		{"cursor trailing content", ParseStdioJSON, validCursor + "\n{}", true},
+		{"opencode valid control", ParseCommandArrayMCP, validOpenCode, false},
+		{"claude valid control", ParseClaudeCodeJSON, validClaude, false},
+		{"codex valid control", ParseCodexJSON, validCodex, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.parse([]byte(tc.doc))
+			if err == nil && tc.wantErr {
+				t.Fatal("malformed configuration was accepted")
+			}
+			if err != nil && !tc.wantErr {
+				t.Fatalf("valid configuration was rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestParseDocumentationStdioJSONRejectsInvalidUTF8(t *testing.T) {
+	// Given: a documentation fixture with malformed UTF-8 in an environment value.
+	doc := []byte("{\"mcpServers\":{\"acr\":{\"type\":\"stdio\",\"command\":\"acr-mcp\",\"args\":[\"serve\"],\"env\":{\"TOKEN\":\"")
+	doc = append(doc, 0xff)
+	doc = append(doc, []byte("\"}}}}")...)
+
+	// When: the JSON parser consumes the complete fixture.
+	_, err := ParseDocumentationStdioJSON(doc)
+
+	// Then: malformed text is rejected as syntax instead of replacement-decoded.
+	var classified classifiedParserError
+	if !errors.As(err, &classified) || classified.Class() != "syntax" {
+		t.Fatalf("expected syntax-classified parser error, got %v", err)
 	}
 }
 

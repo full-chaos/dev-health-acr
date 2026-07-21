@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // CodexServerEntry is the structural shape this package's Codex TOML
@@ -48,8 +49,11 @@ func ParseCodexTOML(data []byte) (CodexServerEntry, error) {
 			continue
 		case strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]"):
 			section = strings.TrimSuffix(strings.TrimPrefix(line, "["), "]")
+			if section != "mcp_servers.acr" && section != "mcp_servers.acr.env" {
+				return CodexServerEntry{}, newConfigParseError(parserClassShape, "line %d: unrecognized table %q", lineNumber, section)
+			}
 			if seenTables[section] {
-				return CodexServerEntry{}, fmt.Errorf("line %d: duplicate table [%s]", lineNumber+1, section)
+				return CodexServerEntry{}, newConfigParseError(parserClassShape, "line %d: duplicate table [%s]", lineNumber, section)
 			}
 			seenTables[section] = true
 			if seenKeys[section] == nil {
@@ -59,23 +63,26 @@ func ParseCodexTOML(data []byte) (CodexServerEntry, error) {
 		}
 		key, value, ok := strings.Cut(line, "=")
 		if !ok {
-			return CodexServerEntry{}, fmt.Errorf("line %d: expected a \"key = value\" assignment, got %q", lineNumber+1, rawLine)
+			return CodexServerEntry{}, newConfigParseError(parserClassSyntax, "line %d: expected a key = value assignment", lineNumber)
 		}
 		key = strings.TrimSpace(key)
 		value = strings.TrimSpace(value)
 		if seenKeys[section] == nil {
-			return CodexServerEntry{}, fmt.Errorf("line %d: assignment %q outside of any [table]", lineNumber+1, key)
+			return CodexServerEntry{}, newConfigParseError(parserClassShape, "line %d: assignment %q outside of any table", lineNumber, key)
 		}
 		if seenKeys[section][key] {
-			return CodexServerEntry{}, fmt.Errorf("line %d: duplicate key %q already defined earlier in [%s]", lineNumber+1, key, section)
+			return CodexServerEntry{}, newConfigParseError(parserClassShape, "line %d: duplicate key %q already defined earlier in [%s]", lineNumber, key, section)
 		}
 		seenKeys[section][key] = true
 		if err := assignCodexField(&entry, section, key, value); err != nil {
-			return CodexServerEntry{}, fmt.Errorf("line %d: %w", lineNumber+1, err)
+			return CodexServerEntry{}, newConfigParseError(parserClassShape, "line %d: invalid TOML assignment", lineNumber)
 		}
 	}
+	if !seenKeys["mcp_servers.acr"]["enabled"] {
+		return CodexServerEntry{}, newConfigParseError(parserClassShape, "missing required key \"enabled\" in [mcp_servers.acr]")
+	}
 	if err := entry.validateRequiredFields(); err != nil {
-		return CodexServerEntry{}, err
+		return CodexServerEntry{}, newConfigParseError(parserClassShape, "%v", err)
 	}
 	return entry, nil
 }
@@ -91,6 +98,12 @@ func (e CodexServerEntry) validateRequiredFields() error {
 	if len(e.Args) == 0 {
 		return fmt.Errorf("missing required key \"args\" in [mcp_servers.acr]")
 	}
+	if !equalStrings(e.Args, []string{"serve"}) {
+		return fmt.Errorf("args in [mcp_servers.acr] must be exactly [\"serve\"]")
+	}
+	if !e.Enabled {
+		return fmt.Errorf("required key \"enabled\" in [mcp_servers.acr] must be true")
+	}
 	if e.Env["ACR_API_URL"] == "" {
 		return fmt.Errorf("missing required key \"ACR_API_URL\" in [mcp_servers.acr.env]")
 	}
@@ -105,6 +118,9 @@ func assignCodexField(entry *CodexServerEntry, section, key, value string) error
 	case "mcp_servers.acr":
 		return assignCodexServerField(entry, key, value)
 	case "mcp_servers.acr.env":
+		if key != "ACR_API_URL" && key != "ACR_API_TOKEN_FILE" && key != "ACR_API_TIMEOUT" {
+			return fmt.Errorf("unrecognized key %q in [mcp_servers.acr.env]", key)
+		}
 		str, err := parseTOMLString(value)
 		if err != nil {
 			return err
@@ -131,11 +147,10 @@ func assignCodexServerField(entry *CodexServerEntry, key, value string) error {
 		}
 		entry.Args = list
 	case "enabled":
-		b, err := strconv.ParseBool(value)
-		if err != nil {
-			return fmt.Errorf("parse boolean %q: %w", value, err)
+		if value != "true" {
+			return fmt.Errorf("enabled must be the lowercase boolean true")
 		}
-		entry.Enabled = b
+		entry.Enabled = true
 	case "startup_timeout_sec":
 		f, err := strconv.ParseFloat(value, 64)
 		if err != nil {
@@ -157,19 +172,25 @@ func assignCodexServerField(entry *CodexServerEntry, key, value string) error {
 // unsupported/incomplete escape sequence, is rejected rather than passed
 // through unescaped or silently truncated.
 func parseTOMLString(value string) (string, error) {
+	if !utf8.ValidString(value) {
+		return "", fmt.Errorf("string must be valid UTF-8")
+	}
 	if len(value) < 2 || value[0] != '"' || value[len(value)-1] != '"' {
-		return "", fmt.Errorf("expected a quoted string, got %q", value)
+		return "", fmt.Errorf("expected a quoted string")
 	}
 	inner := value[1 : len(value)-1]
 	var b strings.Builder
 	for i := 0; i < len(inner); i++ {
 		if inner[i] != '\\' {
+			if inner[i] == '"' || inner[i] < 0x20 {
+				return "", fmt.Errorf("invalid unescaped character in string")
+			}
 			b.WriteByte(inner[i])
 			continue
 		}
 		i++
 		if i >= len(inner) {
-			return "", fmt.Errorf("string ends with an incomplete escape sequence: %q", value)
+			return "", fmt.Errorf("string ends with an incomplete escape sequence")
 		}
 		switch inner[i] {
 		case '"':
@@ -192,16 +213,19 @@ func parseTOMLString(value string) (string, error) {
 				digits = 8
 			}
 			if i+digits >= len(inner) {
-				return "", fmt.Errorf("incomplete unicode escape in %q", value)
+				return "", fmt.Errorf("incomplete unicode escape")
 			}
 			code, err := strconv.ParseInt(inner[i+1:i+1+digits], 16, 32)
 			if err != nil {
-				return "", fmt.Errorf("invalid unicode escape in %q: %w", value, err)
+				return "", fmt.Errorf("invalid unicode escape")
+			}
+			if code > utf8.MaxRune || code >= 0xD800 && code <= 0xDFFF {
+				return "", fmt.Errorf("invalid unicode scalar value")
 			}
 			b.WriteRune(rune(code))
 			i += digits
 		default:
-			return "", fmt.Errorf("unsupported escape sequence \\%c in %q", inner[i], value)
+			return "", fmt.Errorf("unsupported escape sequence")
 		}
 	}
 	return b.String(), nil
