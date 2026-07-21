@@ -1,9 +1,10 @@
-package mcpclientfixtures
+package mcpclientfixtures_test
 
 import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/mcpclientfixtures"
 	"github.com/full-chaos/dev-health-acr/internal/releasebuild"
 )
 
@@ -22,19 +23,19 @@ import (
 // for the adversarial, executed proof against a real multi-archive-plus-
 // SBOM manifest.
 func TestInstallSidecarSnippetVerifiesOnlyTheDownloadedArchive(t *testing.T) {
-	if strings.Contains(InstallSidecarSnippet, "--check SHA256SUMS") {
+	if strings.Contains(mcpclientfixtures.InstallSidecarSnippet, "--check SHA256SUMS") {
 		t.Fatal("expected the checksum step to verify only the downloaded archive's matching SHA256SUMS line, not batch-check the whole file directly")
 	}
-	if !strings.Contains(InstallSidecarSnippet, "awk -v name=\"$archive\" '$2 == name'") {
+	if !strings.Contains(mcpclientfixtures.InstallSidecarSnippet, "awk -v name=\"$archive\" '$2 == name'") {
 		t.Fatal("expected the checksum step to select the SHA256SUMS line with an exact-field awk match ('$2 == name'), not a substring/prefix grep that would also match the archive's own .spdx.json SBOM sibling")
 	}
-	if !strings.Contains(InstallSidecarSnippet, "= 1") {
+	if !strings.Contains(mcpclientfixtures.InstallSidecarSnippet, "= 1") {
 		t.Fatal("expected an explicit exactly-one-line assertion before trusting the selected checksum line")
 	}
-	if !strings.Contains(InstallSidecarSnippet, `archive="acr-mcp_<version>_<os>_<arch>.tar.gz"`) {
+	if !strings.Contains(mcpclientfixtures.InstallSidecarSnippet, `archive="acr-mcp_<version>_<os>_<arch>.tar.gz"`) {
 		t.Fatal("expected an explicit archive= variable naming the single downloaded artifact, reused for both the checksum check and extraction")
 	}
-	if !strings.Contains(InstallSidecarSnippet, `tar -xzf "$archive"`) {
+	if !strings.Contains(mcpclientfixtures.InstallSidecarSnippet, `tar -xzf "$archive"`) {
 		t.Fatal("expected extraction to reuse the same $archive variable rather than repeating the filename literally")
 	}
 }
@@ -58,21 +59,21 @@ func TestInstallSidecarSnippetReleaseArchiveExtensionMatchesReleaseBuild(t *test
 		t.Fatalf("expected releasebuild's own non-Windows archive extension to be \".tar.gz\", got %q -- update this test and InstallSidecarSnippet together if the release format intentionally changed", posixExt)
 	}
 	wantArchiveDecl := `archive="acr-mcp_<version>_<os>_<arch>` + posixExt + `"`
-	if !strings.Contains(InstallSidecarSnippet, wantArchiveDecl) {
+	if !strings.Contains(mcpclientfixtures.InstallSidecarSnippet, wantArchiveDecl) {
 		t.Fatalf("expected InstallSidecarSnippet's archive declaration to use releasebuild's real non-Windows extension %q, want to contain %q", posixExt, wantArchiveDecl)
 	}
 	wantExtract := `tar -xzf "$archive"`
 	if posixExt != ".tar.gz" {
 		t.Fatalf("this test's extraction-command assertion is hard-coded for .tar.gz and must be updated if releasebuild's extension changes")
 	}
-	if !strings.Contains(InstallSidecarSnippet, wantExtract) {
+	if !strings.Contains(mcpclientfixtures.InstallSidecarSnippet, wantExtract) {
 		t.Fatalf("expected InstallSidecarSnippet to extract with gzip-decompressing tar (%q) to match the .tar.gz archive releasebuild produces", wantExtract)
 	}
 	windowsName := releasebuild.ArtifactName(releasebuild.Target{Product: "acr-mcp", GOOS: "windows", GOARCH: "amd64"}, "1.2.3")
 	if !strings.HasSuffix(windowsName, ".zip") {
 		t.Fatalf("expected releasebuild's Windows archive extension to remain .zip, got %q", windowsName)
 	}
-	if !strings.Contains(InstallSidecarWindowsSnippet, `$archive = "acr-mcp_<version>_windows_amd64.zip"`) {
+	if !strings.Contains(mcpclientfixtures.InstallSidecarWindowsSnippet, `$archive = "acr-mcp_<version>_windows_amd64.zip"`) {
 		t.Fatal("expected InstallSidecarWindowsSnippet's archive assignment to keep the .zip extension releasebuild produces for Windows")
 	}
 }
@@ -84,10 +85,10 @@ func TestInstallSidecarSnippetReleaseArchiveExtensionMatchesReleaseBuild(t *test
 // another as a prefix), and must assert exactly one such line exists
 // before trusting it.
 func TestInstallSidecarWindowsSnippetVerifiesOnlyTheDownloadedArchive(t *testing.T) {
-	if !strings.Contains(InstallSidecarWindowsSnippet, `Where-Object { $_.EndsWith("  $archive") }`) {
+	if !strings.Contains(mcpclientfixtures.InstallSidecarWindowsSnippet, `Where-Object { $_.EndsWith("  $archive") }`) {
 		t.Fatal("expected an end-anchored EndsWith filter locating only the single SHA256SUMS line matching $archive")
 	}
-	if !strings.Contains(InstallSidecarWindowsSnippet, ".Count -ne 1") {
+	if !strings.Contains(mcpclientfixtures.InstallSidecarWindowsSnippet, ".Count -ne 1") {
 		t.Fatal("expected an explicit exactly-one-line assertion before trusting the filtered checksum line")
 	}
 }
