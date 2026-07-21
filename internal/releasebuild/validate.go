@@ -61,6 +61,10 @@ func Verify(dir string) error {
 		if actual != artifact.SHA256 {
 			return fmt.Errorf("checksum mismatch for %s", artifact.Name)
 		}
+		target := Target{Product: artifact.Product, GOOS: artifact.GOOS, GOARCH: artifact.GOARCH}
+		if err := verifyArchiveLayout(filepath.Join(dir, artifact.Name), target, Identity{Version: manifest.Version, Commit: manifest.Commit, Date: manifest.Date}); err != nil {
+			return fmt.Errorf("verify %s layout: %w", artifact.Name, err)
+		}
 	}
 	return nil
 }

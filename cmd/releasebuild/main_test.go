@@ -22,7 +22,7 @@ func TestRunner_build_writes_manifest_path_when_inputs_are_clean(t *testing.T) {
 		}),
 		gitStatus: func(context.Context, string) error { return nil },
 	}
-	args := []string{"build", "--root", t.TempDir(), "--out", output, "--version", "1.2.3", "--commit", "0123456789abcdef0123456789abcdef01234567", "--date", "2026-07-12T13:14:15Z"}
+	args := []string{"build", "--root", releaseSourceRoot(t), "--out", output, "--version", "1.2.3", "--commit", "0123456789abcdef0123456789abcdef01234567", "--date", "2026-07-12T13:14:15Z"}
 
 	// When
 	err := runner.run(context.Background(), args, stdout)
@@ -67,7 +67,7 @@ func TestRunner_verify_reports_success(t *testing.T) {
 	dir := t.TempDir()
 	manifest, err := releasebuild.NewBuilder(releasebuild.CompilerFunc(func(_ context.Context, request releasebuild.CompileRequest) error {
 		return os.WriteFile(request.OutputPath, []byte("binary"), 0o755)
-	})).Build(context.Background(), releasebuild.Request{OutputDir: dir, Identity: releasebuild.Identity{Version: "1.2.3", Commit: "0123456789abcdef0123456789abcdef01234567", Date: "2026-07-12T13:14:15Z"}})
+	})).Build(context.Background(), releasebuild.Request{SourceDir: releaseSourceRoot(t), OutputDir: dir, Identity: releasebuild.Identity{Version: "1.2.3", Commit: "0123456789abcdef0123456789abcdef01234567", Date: "2026-07-12T13:14:15Z"}})
 	if err != nil || len(manifest.Artifacts) == 0 {
 		t.Fatalf("build fixture: manifest=%#v err=%v", manifest, err)
 	}
@@ -172,4 +172,13 @@ func buildReleasebuildBinary(t *testing.T) string {
 		t.Fatalf("build releasebuild binary: %v: %s", err, output)
 	}
 	return binary
+}
+
+func releaseSourceRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repository root: %v", err)
+	}
+	return root
 }

@@ -3,13 +3,16 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
 release_dir=""
+target=""
 while (($#)); do
   case "$1" in
     --release-dir) release_dir="${2:?}"; shift 2 ;;
+    --target) target="${2:?}"; shift 2 ;;
     *) exit 1 ;;
   esac
 done
 [[ -d "$release_dir" ]]
+[[ -z "$target" || "$target" == "clients" ]]
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -35,6 +38,18 @@ archive="$(jq -r '.artifacts[] | select(.product == "acr-mcp" and .goos == "linu
 printf '\nTAMPER\n' >> "$archive_dir/$archive"
 expect_verify_failure "$archive_dir"
 
+if [[ "$target" == "clients" ]]; then
+  clients_dir="$tmp/clients"
+  copy_release "$clients_dir"
+  archive="$(jq -r '.artifacts[] | select(.product == "acr-mcp" and .goos == "linux" and .goarch == "amd64") | .name' "$clients_dir/release-manifest.json")"
+  unpacked="$tmp/unpacked-clients"
+  mkdir "$unpacked"
+  tar -xzf "$clients_dir/$archive" -C "$unpacked"
+  printf '\nTAMPER\n' >> "$unpacked/clients/opencode/README.md"
+  tar -C "$unpacked" -czf "$clients_dir/$archive" .
+  expect_verify_failure "$clients_dir"
+fi
+
 checksum_dir="$tmp/checksum"
 copy_release "$checksum_dir"
 archive="$(jq -r '.artifacts[] | select(.product == "acr-api" and .goos == "darwin" and .goarch == "amd64") | .name' "$checksum_dir/release-manifest.json")"
@@ -54,4 +69,4 @@ jq '(.artifacts[] | select(.product == "acr-mcp") | .product) = "acr-api"' "$sid
 mv "$sidecar_dir/release-manifest.json.tmp" "$sidecar_dir/release-manifest.json"
 expect_verify_failure "$sidecar_dir"
 go test "$root/internal/mcpclientfixtures" -run '^TestInstallSidecarSnippetNeverExtractsAfterCosignVerificationFails$' -count=1
-printf 'archive, checksum, and incompatible-sidecar tamper gates rejected as expected\n'
+printf 'archive, client asset, checksum, and incompatible-sidecar tamper gates rejected as expected\n'
