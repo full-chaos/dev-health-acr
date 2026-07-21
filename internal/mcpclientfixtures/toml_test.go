@@ -30,6 +30,17 @@ func TestParseCodexTOMLRejectsDuplicateKey(t *testing.T) {
 	}
 }
 
+func TestParseCodexTOMLRejectsDuplicateTable(t *testing.T) {
+	// Given: a TOML document that reopens the ACR server table.
+	doc := validCodexTOML + "\n[mcp_servers.acr]\ncommand = \"acr-mcp\"\nargs = [\"serve\"]\nenabled = true\n"
+	// When: the structural parser consumes the document.
+	_, err := ParseCodexTOML([]byte(doc))
+	// Then: duplicate table headers cannot replace a validated registration.
+	if err == nil || !strings.Contains(err.Error(), "duplicate table") {
+		t.Fatalf("expected duplicate-table rejection, got: %v", err)
+	}
+}
+
 // TestParseCodexTOMLRejectsMissingRequiredFields covers each of the four
 // fields this fixture family requires: dropping any one of them must fail
 // closed instead of returning a silently incomplete entry.
