@@ -20,6 +20,14 @@ if [[ "$config_root" != /* ]] || ! stage="$(owned_stage)"; then
   printf '%s\n' 'refusing to remove a target not owned by Context Fabric' >&2
   exit 1
 fi
+parent="$(dirname "$config_root")"
 rm "$config_root"
 rm -rf "$stage"
+for entry in "$parent"/.context-fabric-cursor.*; do
+  [[ -e "$entry" ]] || continue
+  [[ -d "$entry" && ! -L "$entry" ]] || continue
+  [[ -f "$entry/$owner_file" && ! -L "$entry/$owner_file" ]] || continue
+  [[ "$(cat "$entry/$owner_file" 2>/dev/null)" == "$owner_value" ]] || continue
+  rm -rf "$entry"
+done
 printf 'removed Context Fabric Cursor plugin at %s\n' "$config_root"

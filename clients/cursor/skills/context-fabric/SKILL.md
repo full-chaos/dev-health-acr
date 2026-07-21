@@ -1,6 +1,7 @@
 ---
 name: context-fabric
 description: Use only when the user explicitly requests ACR Context Fabric context or evidence for a task.
+disable-model-invocation: true
 ---
 
 # Context Fabric

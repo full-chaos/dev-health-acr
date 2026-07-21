@@ -24,6 +24,14 @@ function Get-OwnedStage {
 if (-not [IO.Path]::IsPathRooted($configRoot)) { throw "refusing to remove a target not owned by Context Fabric" }
 $stage = Get-OwnedStage $configRoot
 if ($null -eq $stage) { throw "refusing to remove a target not owned by Context Fabric" }
+$parent = Split-Path -Parent $configRoot
 Remove-Item -Force -LiteralPath $configRoot
 Remove-Item -Recurse -Force -LiteralPath $stage
+Get-ChildItem -Force -LiteralPath $parent -Filter ".context-fabric-cursor.*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+  $marker = Join-Path $_.FullName $ownerFile
+  $markerItem = Get-Item -Force -LiteralPath $marker -ErrorAction SilentlyContinue
+  if ($null -eq $markerItem -or $markerItem.LinkType) { return }
+  if ((Get-Content -Raw -LiteralPath $marker) -ne $ownerValue) { return }
+  Remove-Item -Recurse -Force -LiteralPath $_.FullName
+}
 Write-Output "removed Context Fabric Cursor plugin at $configRoot"
