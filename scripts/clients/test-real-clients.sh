@@ -234,7 +234,7 @@ PY
 if [[ -n "$required" ]]; then
   [[ "$required" == "opencode,claude-code,codex" ]] || exit 2
   run_native_adapter_stub_selftest
-  package_prefix="clients"
+  package_prefix="$repo_root/clients"
   if [[ -n "$release_dir" ]]; then package_prefix="$release_dir/clients"; fi
   run_if_available opencode test-opencode.sh --package "$package_prefix/opencode" --scenario lifecycle
   run_if_available claude test-claude-code.sh --package "$package_prefix/claude-code" --scenario lifecycle
