@@ -3,7 +3,6 @@ package mcpclientfixtures
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -70,7 +69,19 @@ func TestClientServeCommand(t *testing.T) {
 	}
 
 	// Then
-	if !strings.Contains(string(policy), "allow_implicit_invocation: false") {
-		t.Fatal("Codex must directly disable implicit invocation")
+	if err := ParseCodexPolicyYAML(policy); err != nil {
+		t.Fatalf("ParseCodexPolicyYAML: %v", err)
+	}
+}
+
+func TestParseCodexPolicyYAMLRejectsNonCanonicalPolicy(t *testing.T) {
+	for _, policy := range []string{
+		"policy:\n  allow_implicit_invocation: true\n",
+		"policy:\n  allow_implicit_invocation: false\n  extra: value\n",
+		"policy:\n  allow_implicit_invocation: false\n# trailing content\n",
+	} {
+		if err := ParseCodexPolicyYAML([]byte(policy)); err == nil {
+			t.Fatal("noncanonical Codex policy was accepted")
+		}
 	}
 }
