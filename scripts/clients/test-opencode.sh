@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+bash_dir="$(dirname "$BASH")"
 package_path=""
 scenario=""
 while (($#)); do
@@ -11,8 +12,8 @@ while (($#)); do
     *) exit 2 ;;
   esac
 done
-[[ -n "$package_path" && -n "$scenario" ]] || exit 2
-if [[ "$package_path" = /* ]]; then package_root="$package_path"; else package_root="$repo_root/$package_path"; fi
+[[ -n "$package_path" && -n "$scenario" && "$package_path" = /* ]] || exit 2
+package_root="$package_path"
 [[ -d "$package_root" ]] || exit 2
 
 temporary_root="$(mktemp -d)"
@@ -48,7 +49,7 @@ EOF
 chmod +x "$fake_bin/acr-mcp"
 
 run_wrapper() {
-  HOME="$home" OPENCODE_CONFIG_DIR="$config_root" PATH="$fake_bin:$PATH" "$package_root/scripts/$1"
+  env -i HOME="$home" XDG_CONFIG_HOME="$temporary_root/xdg" CLAUDE_CONFIG_DIR="$temporary_root/claude" CODEX_HOME="$temporary_root/codex" CODEX_SQLITE_HOME="$temporary_root/codex-sqlite" OPENCODE_CONFIG_DIR="$config_root" ACR_NATIVE_DUMMY_TOKEN=not-a-secret PATH="$fake_bin:$bash_dir:/usr/bin:/bin" "$package_root/scripts/$1"
 }
 
 expect_rejection() {
@@ -131,7 +132,8 @@ assert_descendant_stopped() {
 }
 
 run_descendant_harness() {
-  local mode="$1" receipt="$2" doctor_receipt="$3" abort_receipt="$receipt"
+  local mode="$1" receipt="$2" doctor_receipt="$3"
+  local abort_receipt="$receipt"
   if [[ "$mode" == descendant-malformed-receipt ]]; then abort_receipt="$doctor_receipt"; fi
   export ACR_MCP_DESCENDANT_PID="$receipt"
   export ACR_MCP_DOCTOR_RECEIPT="$doctor_receipt"

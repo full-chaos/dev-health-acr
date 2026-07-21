@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+bash_dir="$(dirname "$BASH")"
 package_path=""
 scenario=""
 real_client_if_installed=0
@@ -13,8 +14,8 @@ while (($#)); do
     *) exit 2 ;;
   esac
 done
-[[ -n "$package_path" && -n "$scenario" ]] || exit 2
-if [[ "$package_path" = /* ]]; then package_root="$package_path"; else package_root="$repo_root/$package_path"; fi
+[[ -n "$package_path" && -n "$scenario" && "$package_path" = /* ]] || exit 2
+package_root="$package_path"
 [[ -d "$package_root" ]] || exit 2
 
 temporary_root="$(mktemp -d)"
@@ -51,7 +52,7 @@ assert_absent() {
 }
 
 run_wrapper() {
-  HOME="$home" CURSOR_PLUGIN_DIR="$config_root" "$package_root/scripts/$1"
+  env -i HOME="$home" XDG_CONFIG_HOME="$temporary_root/xdg" CLAUDE_CONFIG_DIR="$temporary_root/claude" CODEX_HOME="$temporary_root/codex" CODEX_SQLITE_HOME="$temporary_root/codex-sqlite" CURSOR_PLUGIN_DIR="$config_root" ACR_NATIVE_DUMMY_TOKEN=not-a-secret PATH="$bash_dir:/usr/bin:/bin" "$package_root/scripts/$1"
 }
 
 plant_unrelated_markers() {
