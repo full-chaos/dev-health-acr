@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2 {
+	if len(os.Args) < 2 {
 		os.Exit(2)
 	}
 	client := nativeadapters.Client(os.Args[1])

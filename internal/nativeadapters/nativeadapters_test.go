@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -11,7 +12,7 @@ import (
 )
 
 func TestBuildExactClientContracts(t *testing.T) {
-	roots := Roots{Home: "/tmp/home", Config: "/tmp/config", Work: "/tmp/work"}
+	roots := Roots{Home: "/tmp/home", Config: "/tmp/config", Work: "/tmp/work", Sidecar: "/tmp/bin/acr-mcp"}
 	cases := []struct {
 		client Client
 		args   []string
@@ -30,7 +31,7 @@ func TestBuildExactClientContracts(t *testing.T) {
 			if !reflect.DeepEqual(invocation.Args, test.args) {
 				t.Fatalf("args = %#v", invocation.Args)
 			}
-			if invocation.Dir != roots.Work || invocation.Env[0] != "HOME=/tmp/home" || invocation.Env[len(invocation.Env)-1] != "PATH=/usr/bin:/bin" {
+			if invocation.Dir != roots.Work || invocation.Env[0] != "HOME=/tmp/home" || invocation.Env[len(invocation.Env)-1] != "PATH=/tmp/bin:/usr/bin:/bin" {
 				t.Fatalf("unsafe invocation: %#v", invocation)
 			}
 		})
@@ -51,7 +52,7 @@ func TestRunDeadlineOutputLimitAndRedaction(t *testing.T) {
 		}
 		os.Exit(0)
 	}
-	roots := Roots{Home: "/tmp/home", Config: "/tmp/config", Work: t.TempDir()}
+	roots := Roots{Home: "/tmp/home", Config: "/tmp/config", Work: t.TempDir(), Sidecar: "/tmp/bin/acr-mcp"}
 	for _, test := range []struct {
 		mode    string
 		want    string
@@ -67,13 +68,13 @@ func TestRunDeadlineOutputLimitAndRedaction(t *testing.T) {
 			}
 		})
 	}
-	if got := Redact("not-a-secret /tmp/home /tmp/config /tmp/work", Roots{Home: "/tmp/home", Config: "/tmp/config", Work: "/tmp/work"}); got != "[REDACTED] [ISOLATED_PATH] [ISOLATED_PATH] [ISOLATED_PATH]" {
+	if got := Redact("not-a-secret /tmp/home /tmp/config /tmp/work /tmp/bin/acr-mcp", Roots{Home: "/tmp/home", Config: "/tmp/config", Work: "/tmp/work", Sidecar: "/tmp/bin/acr-mcp"}); got != "[REDACTED] [ISOLATED_PATH] [ISOLATED_PATH] [ISOLATED_PATH] [ISOLATED_PATH]" {
 		t.Fatalf("redaction = %q", got)
 	}
 }
 
 func TestBuildRejectsAmbientRoots(t *testing.T) {
-	_, err := Build(OpenCode, "/bin/client", Roots{Home: "/tmp/home", Config: "relative", Work: "/tmp/work"})
+	_, err := Build(OpenCode, "/bin/client", Roots{Home: "/tmp/home", Config: "relative", Work: "/tmp/work", Sidecar: "/tmp/bin/acr-mcp"})
 	if err == nil {
 		t.Fatal("Build accepted relative root")
 	}
@@ -106,6 +107,26 @@ func TestRecordCapturesAllowlistedEnvironmentAndExactEvents(t *testing.T) {
 	}
 	if err := Parse(Codex, output.Bytes()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRecordingStubAcceptsAndCapturesInvocation(t *testing.T) {
+	records := t.TempDir()
+	command := exec.Command("go", "run", "../../cmd/native-client-recording-stub", "codex", "exec", "--json")
+	command.Env = append(os.Environ(), "ACR_NATIVE_RECORDS="+records)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Parse(Codex, output); err != nil {
+		t.Fatal(err)
+	}
+	recording, err := os.ReadFile(filepath.Join(records, "codex.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(recording, []byte(`"args":["exec","--json"]`)) || !bytes.Contains(recording, []byte(`"config":{"mcpServers"`)) {
+		t.Fatalf("recording = %s", recording)
 	}
 }
 

@@ -17,9 +17,10 @@ const (
 )
 
 type Roots struct {
-	Home   string
-	Config string
-	Work   string
+	Home    string
+	Config  string
+	Work    string
+	Sidecar string
 }
 
 type Invocation struct {
@@ -34,7 +35,7 @@ func Build(client Client, binary string, roots Roots) (Invocation, error) {
 	if binary == "" {
 		return Invocation{}, fmt.Errorf("native adapter: binary is required")
 	}
-	for _, path := range []string{roots.Home, roots.Config, roots.Work} {
+	for _, path := range []string{roots.Home, roots.Config, roots.Work, roots.Sidecar} {
 		if !filepath.IsAbs(path) {
 			return Invocation{}, fmt.Errorf("native adapter: root must be absolute")
 		}
@@ -46,7 +47,7 @@ func Build(client Client, binary string, roots Roots) (Invocation, error) {
 		"CODEX_HOME=" + filepath.Join(roots.Config, "codex"),
 		"CODEX_SQLITE_HOME=" + filepath.Join(roots.Config, "codex-sqlite"),
 		"ACR_NATIVE_DUMMY_TOKEN=not-a-secret",
-		"PATH=/usr/bin:/bin",
+		"PATH=" + filepath.Dir(roots.Sidecar) + ":/usr/bin:/bin",
 	}
 	invocation := Invocation{Client: client, Binary: binary, Env: env, Dir: roots.Work}
 	switch client {
