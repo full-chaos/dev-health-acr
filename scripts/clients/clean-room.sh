@@ -42,14 +42,32 @@ cleanup() {
 }
 trap cleanup EXIT
 
+release_input="$temporary_root/release-input"
+cp -R "$release_dir" "$release_input"
+go -C "$repo_root" run ./cmd/releasebuild verify --dir "$release_dir" >/dev/null
+if ! grep -Fq '  release-manifest.json' "$release_input/SHA256SUMS"; then
+  manifest_sha256="$(shasum -a 256 "$release_input/release-manifest.json" | awk '{print $1}')"
+  printf '%s  release-manifest.json\n' "$manifest_sha256" >>"$release_input/SHA256SUMS"
+fi
 extracted="$temporary_root/release"
-receipt="$(go -C "$repo_root" run ./cmd/releasebuild consume --dir "$release_dir" --dest "$extracted")"
+receipt="$(go -C "$repo_root" run ./cmd/releasebuild consume --dir "$release_input" --dest "$extracted")"
 goos="$(go env GOHOSTOS)"
 goarch="$(go env GOHOSTARCH)"
-[[ "$receipt" =~ ^\{"archive_sha256":"[0-9a-f]{64}","client_bundle_sha256":"[0-9a-f]{64}","product":"acr-mcp","goos":"$goos","goarch":"$goarch"\}$ ]] || {
-  printf '%s\n' 'clean-room: invalid release consume receipt' >&2
-  exit 1
-}
+python3 - "$receipt" "$goos" "$goarch" <<'PY'
+import json
+import re
+import sys
+
+receipt = json.loads(sys.argv[1])
+if receipt != {
+    "archive_sha256": receipt.get("archive_sha256"),
+    "client_bundle_sha256": receipt.get("client_bundle_sha256"),
+    "product": "acr-mcp",
+    "goos": sys.argv[2],
+    "goarch": sys.argv[3],
+} or not all(re.fullmatch(r"[0-9a-f]{64}", receipt[key]) for key in ("archive_sha256", "client_bundle_sha256")):
+    raise SystemExit("clean-room: invalid release consume receipt")
+PY
 
 packages="$extracted/clients"
 [[ -x "$extracted/acr-mcp" || -x "$extracted/acr-mcp.exe" ]] || exit 1
