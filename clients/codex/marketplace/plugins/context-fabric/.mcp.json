@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "acr": {
+      "command": "acr-mcp",
+      "args": ["serve"],
+      "enabled": true,
+      "required": false,
+      "default_tools_approval_mode": "prompt",
+      "enabled_tools": ["context_for_task", "source_evidence"]
+    }
+  }
+}

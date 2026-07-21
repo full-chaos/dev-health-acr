@@ -1,0 +1,12 @@
+{
+  "name": "context-fabric",
+  "version": "1.0.0",
+  "description": "Evidence-backed context and source evidence for an explicit task.",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Context Fabric",
+    "shortDescription": "Request evidence-backed context explicitly.",
+    "category": "Productivity"
+  }
+}

@@ -1,0 +1,5 @@
+interface:
+  display_name: Context Fabric
+  short_description: Request evidence-backed context explicitly.
+policy:
+  allow_implicit_invocation: false
