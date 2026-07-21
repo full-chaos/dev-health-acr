@@ -25,7 +25,7 @@ func TestParseStdioJSONMatchesCanonicalModel(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			entry, err := ParseStdioJSON(data)
+			entry, err := ParseDocumentationStdioJSON(data)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -46,6 +46,31 @@ func TestParseStdioJSONMatchesCanonicalModel(t *testing.T) {
 			}
 			if entry.Env["ACR_API_TIMEOUT"] != ExampleTimeout {
 				t.Fatalf("expected ACR_API_TIMEOUT %q, got %q", ExampleTimeout, entry.Env["ACR_API_TIMEOUT"])
+			}
+		})
+	}
+}
+
+func TestParseStdioJSONRejectsAmbiguousOrUnsafeRegistrations(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		doc  string
+	}{
+		{"extra server", `{"mcpServers":{"acr":{"type":"stdio","command":"acr-mcp","args":["serve"]},"other":{"type":"stdio","command":"other","args":[]}}}`},
+		{"environment injection", `{"mcpServers":{"acr":{"type":"stdio","command":"acr-mcp","args":["serve"],"env":{"HOME":"/tmp"}}}}`},
+		{"wrong type", `{"mcpServers":{"acr":{"type":"http","command":"acr-mcp","args":["serve"]}}}`},
+		{"extra field", `{"mcpServers":{"acr":{"type":"stdio","command":"acr-mcp","args":["serve"],"cwd":"/tmp"}}}`},
+		{"empty command", `{"mcpServers":{"acr":{"type":"stdio","command":"","args":["serve"]}}}`},
+		{"extra argument", `{"mcpServers":{"acr":{"type":"stdio","command":"acr-mcp","args":["serve","--debug"]}}}`},
+		{"trailing document", `{"mcpServers":{"acr":{"type":"stdio","command":"acr-mcp","args":["serve"]}}}{}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given: an untrusted registration variant.
+			// When: it is parsed as a client configuration.
+			_, err := ParseStdioJSON([]byte(tc.doc))
+			// Then: only the canonical server shape is accepted.
+			if err == nil {
+				t.Fatal("unsafe registration was accepted")
 			}
 		})
 	}

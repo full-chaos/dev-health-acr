@@ -17,13 +17,15 @@ if [[ -n "$fixture" ]]; then
   metadata="$fixture/fixture.v1.json"
   [[ -f "$metadata" ]] || exit 2
   expected="$(python3 - "$metadata" <<'PY'
-import json,sys
+import json,re,sys
 try:
- value=json.load(open(sys.argv[1],encoding='utf-8'))
- expected=value['expected_classification']
- assert isinstance(expected,str) and expected
+ with open(sys.argv[1], encoding='utf-8') as source:
+  value=json.load(source)
+ expected=value.get('expected_classification') if isinstance(value,dict) else None
+ if not isinstance(expected,str) or re.fullmatch(r'[a-z0-9][a-z0-9._-]*', expected) is None:
+  raise ValueError('invalid classification')
  print(expected)
-except Exception:
+except (OSError, ValueError, json.JSONDecodeError, TypeError):
  raise SystemExit(2)
 PY
 )" || exit 2
@@ -38,7 +40,8 @@ PY
     printf 'secret material leaked in conformance output\n' >&2
     exit 1
   fi
-  grep -Fqx "CLIENT_INVALID_FIXTURE classification=$expected" "$output" || exit 1
+  marker="CLIENT_INVALID_FIXTURE classification=$expected"
+  [[ "$(grep -Ec "(^|[[:space:]])${marker}$" "$output")" == 1 ]] || exit 1
   printf 'CLIENT_CONFORMANCE_NEGATIVE_OK fixture=%s classification=%s exit=1\n' "$(basename "$fixture")" "$expected"
   exit 1
 fi

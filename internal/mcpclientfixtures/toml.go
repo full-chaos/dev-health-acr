@@ -37,14 +37,21 @@ type CodexServerEntry struct {
 func ParseCodexTOML(data []byte) (CodexServerEntry, error) {
 	entry := CodexServerEntry{Env: map[string]string{}}
 	var section string
+	seenTables := map[string]bool{}
 	seenKeys := map[string]map[string]bool{}
-	for lineNumber, rawLine := range strings.Split(string(data), "\n") {
+	lineNumber := 0
+	for rawLine := range strings.SplitSeq(string(data), "\n") {
+		lineNumber++
 		line := strings.TrimSpace(rawLine)
 		switch {
 		case line == "", strings.HasPrefix(line, "#"):
 			continue
 		case strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]"):
 			section = strings.TrimSuffix(strings.TrimPrefix(line, "["), "]")
+			if seenTables[section] {
+				return CodexServerEntry{}, fmt.Errorf("line %d: duplicate table [%s]", lineNumber+1, section)
+			}
+			seenTables[section] = true
 			if seenKeys[section] == nil {
 				seenKeys[section] = map[string]bool{}
 			}
@@ -209,7 +216,7 @@ func parseTOMLStringArray(value string) ([]string, error) {
 		return nil, nil
 	}
 	var result []string
-	for _, part := range strings.Split(inner, ",") {
+	for part := range strings.SplitSeq(inner, ",") {
 		str, err := parseTOMLString(strings.TrimSpace(part))
 		if err != nil {
 			return nil, err

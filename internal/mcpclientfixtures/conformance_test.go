@@ -39,8 +39,8 @@ func TestClientServeCommand(t *testing.T) {
 		parse func([]byte) (StdioServerEntry, error)
 	}{
 		{"opencode", "clients/opencode/config/opencode.json", ParseCommandArrayMCP},
-		{"claude-code", "clients/claude-code/marketplace/plugins/context-fabric/.mcp.json", ParseStdioJSON},
-		{"codex", "clients/codex/marketplace/plugins/context-fabric/.mcp.json", ParseStdioJSON},
+		{"claude-code", "clients/claude-code/marketplace/plugins/context-fabric/.mcp.json", ParseClaudeCodeJSON},
+		{"codex", "clients/codex/marketplace/plugins/context-fabric/.mcp.json", ParseCodexJSON},
 		{"cursor", "clients/cursor/mcp.json", ParseStdioJSON},
 	}
 
