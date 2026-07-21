@@ -132,26 +132,46 @@ shopt -s nullglob
 for cmd_file in "$package_root"/commands/*.md; do
   validate_frontmatter "$cmd_file" "name description" "name description"
 done
-# Structured always-apply policy: exactly one rule (the no-automatic-use
-# guard) may set alwaysApply:true, and only with its exact restrictive
-# body -- any other always-applied rule, or a guard with weakened
-# content, is a policy violation, not a lexical string check.
-allowed_always_apply_rule="no-automatic-use.mdc"
-guard_required_phrase="Never call the \`context_for_task\` or \`source_evidence\` MCP tools"
-guard_seen=0
+# Exact canonical content for the two control rules: a phrase-presence or
+# frontmatter-allowlist check is not enough, since extra or reworded
+# content, or an added description/globs field that would make the
+# manual-only preplan rule agent-decided instead, would still pass a
+# looser check. Both rules must match their canonical text byte-for-byte
+# (frontmatter and body together); any deviation fails.
+canonical_guard_rule='---
+alwaysApply: true
+---
+
+# Context Fabric: no automatic use
+
+Never call the `context_for_task` or `source_evidence` MCP tools from the `acr` server on your own judgment. Only call them when the user explicitly invokes the `get-context` or `plan-with-context-fabric` command, explicitly invokes the `context-fabric` skill, or explicitly asks in this turn for ACR Context Fabric context or evidence. Their registration as MCP tools is not an invitation to use them; treat them as unavailable to your own initiative otherwise. This rule does not itself retrieve context or evidence.'
+canonical_preplan_rule='---
+alwaysApply: false
+---
+
+# Optional pre-plan workflow (inert)
+
+This rule only applies when explicitly invoked as `@preplan-optional`. To use Context Fabric before planning, run the `plan-with-context-fabric` command yourself; nothing in this plugin starts context retrieval on its own.'
+
+guard_file="$package_root/rules/no-automatic-use.mdc"
+preplan_file="$package_root/rules/preplan-optional.mdc"
+[[ -f "$guard_file" ]] || fail "rule.guard_missing"
+actual_guard="$(cat "$guard_file")"
+[[ "$actual_guard" == "$canonical_guard_rule" ]] || fail "rule.guard_content_mismatch"
+[[ -f "$preplan_file" ]] || fail "rule.preplan_missing"
+actual_preplan="$(cat "$preplan_file")"
+[[ "$actual_preplan" == "$canonical_preplan_rule" ]] || fail "rule.preplan_content_mismatch"
+
+# Every other rule file: generic frontmatter allowlist, and it must not be
+# alwaysApply:true -- only the canonical guard above may be.
+shopt -s nullglob
 for rule_file in "$package_root"/rules/*.mdc; do
-  validate_frontmatter "$rule_file" "description globs alwaysApply" ""
   rule_basename="$(basename "$rule_file")"
+  [[ "$rule_basename" == "no-automatic-use.mdc" || "$rule_basename" == "preplan-optional.mdc" ]] && continue
+  validate_frontmatter "$rule_file" "description globs alwaysApply" ""
   always_apply_value="$(awk 'NR==1{next} /^---$/{exit} /^alwaysApply:/{sub(/^alwaysApply:[[:space:]]*/,""); print; exit}' "$rule_file")"
-  if [[ "$rule_basename" == "$allowed_always_apply_rule" ]]; then
-    guard_seen=1
-    [[ "$always_apply_value" == "true" ]] || fail "rule.guard_must_be_always_apply:$rule_basename"
-    grep -Fq -- "$guard_required_phrase" "$rule_file" || fail "rule.guard_content_mismatch:$rule_basename"
-  else
-    [[ "$always_apply_value" != "true" ]] || fail "rule.unexpected_always_apply:$rule_basename"
-  fi
+  [[ "$always_apply_value" != "true" ]] || fail "rule.unexpected_always_apply:$rule_basename"
 done
-(( guard_seen == 1 )) || fail "rule.guard_missing:$allowed_always_apply_rule"
 shopt -u nullglob
 
 skill_file="$package_root/skills/context-fabric/SKILL.md"

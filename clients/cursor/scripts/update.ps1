@@ -4,89 +4,85 @@ param()
 $ErrorActionPreference = "Stop"
 $packageRoot = Split-Path -Parent $PSScriptRoot
 $configRoot = if ($env:CURSOR_PLUGIN_DIR) { $env:CURSOR_PLUGIN_DIR } else { Join-Path $HOME ".cursor/plugins/local/context-fabric" }
-$ownerFile = ".context-fabric-owner.v1"
-$ownerValue = "context-fabric-cursor.v1"
-# Stages for this target live in a directory scoped to the target's own
-# name, never in the shared parent -- so a sibling install under the same
-# parent can never observe or delete this target's generations. Every
-# generation is retained on disk until an owned uninstall removes it.
-$stagesRoot = "$configRoot.stages"
+$markerFile = ".context-fabric-owner.v1"
+$markerValue = "context-fabric-cursor.v1"
 
-function Get-OwnedStage {
+$payloadFiles = @(
+  ".cursor-plugin/plugin.json",
+  "mcp.json",
+  "commands/get-context.md",
+  "commands/plan-with-context-fabric.md",
+  "rules/context-fabric.mdc",
+  "rules/preplan-optional.mdc",
+  "rules/no-automatic-use.mdc",
+  "skills/context-fabric/SKILL.md"
+)
+
+# A target is owned only if it is a real directory (never a symlink or
+# junction -- that would be a leftover from an earlier, unsafe design) and
+# carries our exact marker. Never adopt an unowned or legacy-linked target.
+function Test-OwnedDirectory {
   param([string]$Root)
   $item = Get-Item -Force -LiteralPath $Root -ErrorAction SilentlyContinue
-  if ($null -eq $item -or $item.LinkType -ne "SymbolicLink") { return $null }
-  $target = [string]$item.Target
-  $prefix = (Split-Path -Leaf $Root) + ".stages/"
-  if (-not $target.StartsWith($prefix)) { return $null }
-  $remainder = $target.Substring($prefix.Length)
-  if ($remainder.Length -eq 0 -or $remainder.Contains("/") -or $remainder.Contains("\")) { return $null }
-  $stage = Join-Path "$Root.stages" $remainder
-  $marker = Join-Path $stage $ownerFile
-  $stageItem = Get-Item -Force -LiteralPath $stage -ErrorAction SilentlyContinue
+  if ($null -eq $item -or -not $item.PSIsContainer -or $item.LinkType) { return $false }
+  $marker = Join-Path $Root $markerFile
   $markerItem = Get-Item -Force -LiteralPath $marker -ErrorAction SilentlyContinue
-  if ($null -eq $stageItem -or $stageItem.LinkType -or $null -eq $markerItem -or $markerItem.LinkType) { return $null }
-  if ((Get-Content -Raw -LiteralPath $marker) -ne $ownerValue) { return $null }
-  return $stage
+  if ($null -eq $markerItem -or $markerItem.LinkType) { return $false }
+  if ((Get-Content -Raw -LiteralPath $marker) -ne $markerValue) { return $false }
+  return $true
 }
 
-# Atomically replace the symlink at $Destination with $Source using a
-# single, checked native syscall -- never a delete-then-create pair, which
-# would leave a window where $Destination briefly does not exist. Windows
-# uses MoveFileEx with the single, bounded MOVEFILE_REPLACE_EXISTING flag
-# (no MOVEFILE_COPY_ALLOWED, no delayed-reboot flag); everywhere else uses
-# POSIX rename(2), which atomically replaces an existing symlink target by
-# directory-entry swap without dereferencing it.
-function Invoke-AtomicReplace {
-  param([string]$Source, [string]$Destination)
-  if ($IsWindows) {
-    if (-not ([System.Management.Automation.PSTypeName]"ContextFabricNative.Interop").Type) {
-      Add-Type -Namespace ContextFabricNative -Name Interop -MemberDefinition @'
-[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
-public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, uint dwFlags);
-'@
-    }
-    $moveFileReplaceExisting = 0x1
-    $ok = [ContextFabricNative.Interop]::MoveFileEx($Source, $Destination, $moveFileReplaceExisting)
-    if (-not $ok) {
-      $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
-      throw "MoveFileEx atomic replace failed with Win32 error $errorCode"
-    }
-  } else {
-    if (-not ([System.Management.Automation.PSTypeName]"ContextFabricNative.Interop").Type) {
-      Add-Type -Namespace ContextFabricNative -Name Interop -MemberDefinition @'
-[System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
-public static extern int rename(string oldpath, string newpath);
-'@
-    }
-    $result = [ContextFabricNative.Interop]::rename($Source, $Destination)
-    if ($result -ne 0) {
-      $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
-      throw "rename atomic replace failed with errno $errorCode"
-    }
-  }
+# Replace one regular file atomically: copy into a same-directory temp
+# file, then atomically move it over the destination with File.Move's
+# checked overwrite=true overload -- a single filesystem operation, so the
+# destination is never briefly absent, on Windows or elsewhere.
+function Invoke-AtomicWrite {
+  param([string]$Destination, [string]$Source)
+  $destDir = Split-Path -Parent $Destination
+  New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+  $tmp = Join-Path $destDir (".atomic." + [Guid]::NewGuid().ToString("N"))
+  Copy-Item -Path $Source -Destination $tmp
+  [System.IO.File]::Move($tmp, $Destination, $true)
 }
 
 if (-not [IO.Path]::IsPathRooted($configRoot)) { throw "refusing to update a target not owned by Context Fabric" }
-if ($null -eq (Get-OwnedStage $configRoot)) { throw "refusing to update a target not owned by Context Fabric" }
-New-Item -ItemType Directory -Force -Path $stagesRoot | Out-Null
-$stage = Join-Path $stagesRoot ([Guid]::NewGuid().ToString("N"))
-$parent = Split-Path -Parent $configRoot
-$link = Join-Path $parent (".context-fabric-cursor.link." + [Guid]::NewGuid().ToString("N"))
-$targetName = Split-Path -Leaf $configRoot
-try {
-  New-Item -ItemType Directory -Path $stage | Out-Null
-  New-Item -ItemType Directory -Path (Join-Path $stage ".cursor-plugin") | Out-Null
-  Copy-Item -Path (Join-Path $packageRoot ".cursor-plugin/plugin.json") -Destination (Join-Path $stage ".cursor-plugin/plugin.json")
-  Copy-Item -Path (Join-Path $packageRoot "mcp.json") -Destination (Join-Path $stage "mcp.json")
-  Copy-Item -Recurse -Path (Join-Path $packageRoot "commands") -Destination (Join-Path $stage "commands")
-  Copy-Item -Recurse -Path (Join-Path $packageRoot "rules") -Destination (Join-Path $stage "rules")
-  Copy-Item -Recurse -Path (Join-Path $packageRoot "skills") -Destination (Join-Path $stage "skills")
-  Set-Content -NoNewline -Path (Join-Path $stage $ownerFile) -Value $ownerValue
-  New-Item -ItemType SymbolicLink -Path $link -Target "$targetName.stages/$(Split-Path -Leaf $stage)" | Out-Null
-  Invoke-AtomicReplace -Source $link -Destination $configRoot
-} finally {
-  if (Test-Path -LiteralPath $link) { Remove-Item -Force -LiteralPath $link }
-  if ((Test-Path -LiteralPath $stage) -and ((Get-OwnedStage $configRoot) -ne $stage)) { Remove-Item -Recurse -Force -LiteralPath $stage }
+$existing = Get-Item -Force -LiteralPath $configRoot -ErrorAction SilentlyContinue
+if ($null -ne $existing -and $existing.LinkType) {
+  throw "refusing to operate on a legacy symlink or junction target; remove it manually first"
 }
-Write-Output "updated Context Fabric Cursor plugin at $configRoot (all prior generations retained under $stagesRoot until uninstall)"
+if (-not (Test-OwnedDirectory -Root $configRoot)) {
+  throw "refusing to update a target not owned by Context Fabric"
+}
+
+# Full staged validation before any mutation: every required source file
+# must exist and be readable before the target is touched at all.
+foreach ($rel in $payloadFiles) {
+  $src = Join-Path $packageRoot $rel
+  if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { throw "package source missing required file: $rel" }
+}
+
+# Required directories exist before any file is replaced. If a prior update
+# was interrupted partway, rerunning starts here again and converges: every
+# required path is created (idempotently) before any content is touched.
+New-Item -ItemType Directory -Force -Path (Join-Path $configRoot ".cursor-plugin") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $configRoot "commands") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $configRoot "rules") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $configRoot "skills/context-fabric") | Out-Null
+
+# Each file is replaced individually and atomically (see Invoke-AtomicWrite
+# above). A failure partway through this loop leaves every already-replaced
+# file on its new content, every not-yet-reached file on its old content,
+# and the target directory itself always fully populated -- no required
+# path is ever missing. Rerunning the whole update after a failure is
+# safe: it simply re-replaces every file and converges to the same state.
+foreach ($rel in $payloadFiles) {
+  Invoke-AtomicWrite -Destination (Join-Path $configRoot $rel) -Source (Join-Path $packageRoot $rel)
+}
+
+# Commit/version marker replaced last, after every content file: proves
+# this update ran to completion. A failure above never reaches this line.
+$markerTmp = Join-Path $configRoot (".atomic." + [Guid]::NewGuid().ToString("N"))
+Set-Content -NoNewline -Path $markerTmp -Value $markerValue
+[System.IO.File]::Move($markerTmp, (Join-Path $configRoot $markerFile), $true)
+
+Write-Output "updated Context Fabric Cursor plugin at $configRoot"
