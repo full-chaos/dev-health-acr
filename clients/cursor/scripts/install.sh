@@ -5,6 +5,8 @@ package_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 config_root="${CURSOR_PLUGIN_DIR:-${HOME:?HOME is required}/.cursor/plugins/local/context-fabric}"
 marker_file=".context-fabric-owner.v1"
 marker_prefix="context-fabric-cursor.v1"
+target_created=0
+install_complete=0
 
 # The plugin lives at $config_root as a stable, owned, real directory --
 # never a symlink or junction. Updates replace files in place; there is no
@@ -85,6 +87,14 @@ write_marker() {
   atomic_write_text "$marker_tmp" "$marker_value" "$config_root/$marker_file"
 }
 
+cleanup_failed_install() {
+  (( install_complete || ! target_created )) && return 0
+  [[ -L "$config_root" ]] && return 0
+  rm -rf "$config_root"
+}
+
+trap cleanup_failed_install EXIT
+
 if [[ "$config_root" != /* ]]; then
   printf '%s\n' 'CURSOR_PLUGIN_DIR must be an absolute path' >&2
   exit 2
@@ -100,6 +110,8 @@ if [[ -e "$config_root" ]]; then
     printf '%s\n' 'refusing to install into a non-empty target' >&2
     exit 1
   fi
+else
+  target_created=1
 fi
 
 # Full staged validation before any mutation: every required source file
@@ -134,5 +146,6 @@ done
 # execution never reaches this line and the marker still reflects "not yet
 # owned" (absent) or the prior owned state, so a rerun converges safely.
 write_marker "$marker_value"
+install_complete=1
 
 printf 'installed Context Fabric Cursor plugin at %s\n' "$config_root"
