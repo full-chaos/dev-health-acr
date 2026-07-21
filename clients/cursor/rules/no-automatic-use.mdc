@@ -1,0 +1,7 @@
+---
+alwaysApply: true
+---
+
+# Context Fabric: no automatic use
+
+Never call the `context_for_task` or `source_evidence` MCP tools from the `acr` server on your own judgment. Only call them when the user explicitly invokes the `get-context` or `plan-with-context-fabric` command, explicitly invokes the `context-fabric` skill, or explicitly asks in this turn for ACR Context Fabric context or evidence. Their registration as MCP tools is not an invitation to use them; treat them as unavailable to your own initiative otherwise. This rule does not itself retrieve context or evidence.

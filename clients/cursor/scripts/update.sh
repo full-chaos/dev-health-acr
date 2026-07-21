@@ -5,37 +5,32 @@ package_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 config_root="${CURSOR_PLUGIN_DIR:-${HOME:?HOME is required}/.cursor/plugins/local/context-fabric}"
 owner_file=".context-fabric-owner.v1"
 owner_value="context-fabric-cursor.v1"
+# Stages for this target live in a directory scoped to the target's own
+# name, never in the shared parent -- so a sibling install under the same
+# parent can never observe, prune, or delete this target's generations.
+stages_root="${config_root}.stages"
 
 owned_stage() {
-  local link stage
+  local link prefix remainder stage
   [[ -L "$config_root" ]] || return 1
   link="$(readlink "$config_root")"
-  [[ "$link" == .context-fabric-cursor.* && "$link" != */* ]] || return 1
-  stage="$(dirname "$config_root")/$link"
+  prefix="$(basename "$config_root").stages/"
+  [[ "${link:0:${#prefix}}" == "$prefix" ]] || return 1
+  remainder="${link:${#prefix}}"
+  [[ -n "$remainder" && "$remainder" != */* ]] || return 1
+  stage="$stages_root/$remainder"
   [[ -d "$stage" && ! -L "$stage" && -f "$stage/$owner_file" && ! -L "$stage/$owner_file" ]] || return 1
   [[ "$(cat "$stage/$owner_file")" == "$owner_value" ]] || return 1
   printf '%s\n' "$stage"
 }
 
-prune_older_generations() {
-  local parent="$1" keep="$2" entry
-  for entry in "$parent"/.context-fabric-cursor.*; do
-    [[ -e "$entry" ]] || continue
-    [[ -d "$entry" && ! -L "$entry" ]] || continue
-    [[ "$entry" == "$keep" ]] && continue
-    [[ -f "$entry/$owner_file" && ! -L "$entry/$owner_file" ]] || continue
-    [[ "$(cat "$entry/$owner_file" 2>/dev/null)" == "$owner_value" ]] || continue
-    rm -rf "$entry"
-  done
-}
-
-if [[ "$config_root" != /* ]] || ! previous_stage="$(owned_stage)"; then
+if [[ "$config_root" != /* ]] || ! owned_stage >/dev/null; then
   printf '%s\n' 'refusing to update a target not owned by Context Fabric' >&2
   exit 1
 fi
+mkdir -p "$stages_root"
+stage="$(mktemp -d "$stages_root/XXXXXX")"
 parent="$(dirname "$config_root")"
-prune_older_generations "$parent" "$previous_stage"
-stage="$(mktemp -d "$parent/.context-fabric-cursor.XXXXXX")"
 link="$(mktemp "$parent/.context-fabric-cursor.link.XXXXXX")"
 rm "$link"
 published=0
@@ -51,7 +46,8 @@ cp -R "$package_root/commands" "$stage/commands"
 cp -R "$package_root/rules" "$stage/rules"
 cp -R "$package_root/skills" "$stage/skills"
 printf '%s\n' "$owner_value" >"$stage/$owner_file"
-ln -s "$(basename "$stage")" "$link"
+target_name="$(basename "$config_root")"
+ln -s "$target_name.stages/$(basename "$stage")" "$link"
 if mv --version >/dev/null 2>&1; then
   mv -Tf "$link" "$config_root"
 else
@@ -59,4 +55,7 @@ else
 fi
 published=1
 trap - EXIT
-printf 'updated Context Fabric Cursor plugin at %s (retained previous generation %s)\n' "$config_root" "$previous_stage"
+# Every prior generation is retained on disk under $stages_root until an
+# owned uninstall removes it -- a reader that resolved any earlier
+# generation, however long ago, still finds it intact.
+printf 'updated Context Fabric Cursor plugin at %s (all prior generations retained under %s until uninstall)\n' "$config_root" "$stages_root"

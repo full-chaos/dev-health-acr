@@ -38,10 +38,18 @@ for field in displayName description version homepage repository license logo pu
 done
 
 resolve_component_path() {
-  local value="$1" resolved
+  local value="$1" resolved segment segments
+  case "$value" in
+    /*) return 1 ;;
+  esac
+  [[ "$value" != *"//"* ]] || return 1
   resolved="${value#./}"
-  if [[ -e "$package_root/$resolved" ]]; then return 0; fi
-  return 1
+  IFS='/' read -ra segments <<<"$resolved"
+  for segment in "${segments[@]}"; do
+    [[ "$segment" != ".." ]] || return 1
+  done
+  [[ -e "$package_root/$resolved" ]] || return 1
+  return 0
 }
 
 for field in rules skills commands agents; do
@@ -78,7 +86,11 @@ esac
 mcp_top_keys="$(jq -r '(keys - ["mcpServers"]) | join(",")' "$mcp_json")"
 [[ -z "$mcp_top_keys" ]] || fail "mcp.json.unknown_top_field:$mcp_top_keys"
 jq -e 'has("mcpServers")' "$mcp_json" >/dev/null || fail "mcp.json.mcpServers_missing"
-jq -e '.mcpServers | has("acr")' "$mcp_json" >/dev/null || fail "mcp.json.acr_server_missing"
+# Exactly the intended single server -- no extra registrations riding along.
+server_count="$(jq '.mcpServers | length' "$mcp_json")"
+[[ "$server_count" == "1" ]] || fail "mcp.json.server_count:$server_count"
+server_names="$(jq -r '.mcpServers | keys | join(",")' "$mcp_json")"
+[[ "$server_names" == "acr" ]] || fail "mcp.json.unexpected_server:$server_names"
 
 allowed_server_keys='["type","command","args","env","envFile"]'
 unknown_server_keys="$(jq -r --argjson allowed "$allowed_server_keys" '.mcpServers.acr | (keys - $allowed) | join(",")' "$mcp_json")"
@@ -120,9 +132,26 @@ shopt -s nullglob
 for cmd_file in "$package_root"/commands/*.md; do
   validate_frontmatter "$cmd_file" "name description" "name description"
 done
+# Structured always-apply policy: exactly one rule (the no-automatic-use
+# guard) may set alwaysApply:true, and only with its exact restrictive
+# body -- any other always-applied rule, or a guard with weakened
+# content, is a policy violation, not a lexical string check.
+allowed_always_apply_rule="no-automatic-use.mdc"
+guard_required_phrase="Never call the \`context_for_task\` or \`source_evidence\` MCP tools"
+guard_seen=0
 for rule_file in "$package_root"/rules/*.mdc; do
   validate_frontmatter "$rule_file" "description globs alwaysApply" ""
+  rule_basename="$(basename "$rule_file")"
+  always_apply_value="$(awk 'NR==1{next} /^---$/{exit} /^alwaysApply:/{sub(/^alwaysApply:[[:space:]]*/,""); print; exit}' "$rule_file")"
+  if [[ "$rule_basename" == "$allowed_always_apply_rule" ]]; then
+    guard_seen=1
+    [[ "$always_apply_value" == "true" ]] || fail "rule.guard_must_be_always_apply:$rule_basename"
+    grep -Fq -- "$guard_required_phrase" "$rule_file" || fail "rule.guard_content_mismatch:$rule_basename"
+  else
+    [[ "$always_apply_value" != "true" ]] || fail "rule.unexpected_always_apply:$rule_basename"
+  fi
 done
+(( guard_seen == 1 )) || fail "rule.guard_missing:$allowed_always_apply_rule"
 shopt -u nullglob
 
 skill_file="$package_root/skills/context-fabric/SKILL.md"

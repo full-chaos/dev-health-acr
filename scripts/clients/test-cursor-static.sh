@@ -14,7 +14,10 @@ if [[ "$package_path" = /* ]]; then package_root="$package_path"; else package_r
 
 fail() { printf 'CURSOR_POWERSHELL_FAIL reason=%s\n' "$1" >&2; exit 1; }
 
-# --- Structural token parity: fast, portable, no pwsh required ---
+# --- Structural token parity: fast, portable, no pwsh required. Covers the
+# Windows-only MoveFileEx branch statically, since it cannot be executed on
+# this (or most CI) machines -- the non-Windows rename() branch gets real
+# execution proof further down instead. ---
 require_wrapper_contract() {
   local root="$1"
   local install="$root/scripts/install.ps1"
@@ -30,8 +33,19 @@ require_wrapper_contract() {
   grep -Fq 'New-Item -ItemType Directory' "$install" || return 1
   grep -Fq 'Get-OwnedStage' "$update" || return 1
   grep -Fq 'refusing to update a target not owned by Context Fabric' "$update" || return 1
-  grep -Fq 'Move-Item -LiteralPath $link -Destination $configRoot' "$update" || return 1
   grep -Fq 'New-Item -ItemType SymbolicLink' "$update" || return 1
+  # Windows branch: a single, bounded, checked MoveFileEx replace -- no
+  # copy-fallback flag, no delayed-reboot flag, and the return value is
+  # checked with a thrown, non-swallowed error on failure.
+  grep -Fq 'kernel32.dll' "$update" || return 1
+  grep -Fq 'MoveFileEx(' "$update" || return 1
+  grep -Fq '$moveFileReplaceExisting = 0x1' "$update" || return 1
+  grep -Fq 'if (-not $ok)' "$update" || return 1
+  grep -Fq 'GetLastWin32Error()' "$update" || return 1
+  # Non-Windows branch: POSIX rename(2), also checked.
+  grep -Fq 'DllImport("libc"' "$update" || return 1
+  grep -Fq 'rename(' "$update" || return 1
+  grep -Fq 'if ($result -ne 0)' "$update" || return 1
   grep -Fq 'Get-OwnedStage' "$uninstall" || return 1
   grep -Fq 'refusing to remove a target not owned by Context Fabric' "$uninstall" || return 1
 }
@@ -44,9 +58,12 @@ assert_mutation_rejected() {
   case "$needle" in
     CURSOR_PLUGIN_DIR) perl -0pi -e 's/CURSOR_PLUGIN_DIR/REMOVED/g' "$copy/scripts/$file" ;;
     Get-OwnedStage) perl -0pi -e 's/Get-OwnedStage/REMOVED/g' "$copy/scripts/$file" ;;
-    'Move-Item -Destination') perl -0pi -e 's/Move-Item -LiteralPath \$link -Destination/REMOVED -LiteralPath \$link -Destination/' "$copy/scripts/$file" ;;
     'New-Item -ItemType SymbolicLink') perl -0pi -e 's/SymbolicLink/REMOVED/g' "$copy/scripts/$file" ;;
     'refusing to install into a non-empty target') perl -0pi -e 's/non-empty target/REMOVED/g' "$copy/scripts/$file" ;;
+    windows-checked-error) perl -0pi -e 's/if \(-not \$ok\) \{[^}]*\}/REMOVED/s' "$copy/scripts/$file" ;;
+    windows-replace-flag) perl -0pi -e 's/\$moveFileReplaceExisting = 0x1/REMOVED/' "$copy/scripts/$file" ;;
+    windows-movefileex-call) perl -0pi -e 's/MoveFileEx\(/REMOVED(/g' "$copy/scripts/$file" ;;
+    posix-checked-error) perl -0pi -e 's/if \(\$result -ne 0\) \{[^}]*\}/REMOVED/s' "$copy/scripts/$file" ;;
     *) exit 2 ;;
   esac
   if require_wrapper_contract "$copy"; then
@@ -61,8 +78,11 @@ require_wrapper_contract "$package_root"
 assert_mutation_rejected 'install.ps1' CURSOR_PLUGIN_DIR
 assert_mutation_rejected 'install.ps1' 'refusing to install into a non-empty target'
 assert_mutation_rejected 'update.ps1' Get-OwnedStage
-assert_mutation_rejected 'update.ps1' 'Move-Item -Destination'
 assert_mutation_rejected 'update.ps1' 'New-Item -ItemType SymbolicLink'
+assert_mutation_rejected 'update.ps1' windows-checked-error
+assert_mutation_rejected 'update.ps1' windows-replace-flag
+assert_mutation_rejected 'update.ps1' windows-movefileex-call
+assert_mutation_rejected 'update.ps1' posix-checked-error
 assert_mutation_rejected 'uninstall.ps1' Get-OwnedStage
 
 if ! command -v pwsh >/dev/null 2>&1; then
@@ -70,7 +90,11 @@ if ! command -v pwsh >/dev/null 2>&1; then
   exit 0
 fi
 
-# --- Real pwsh execution: functional lifecycle + behavioral mutation proofs ---
+# --- Real pwsh execution: functional lifecycle + behavioral mutation
+# proofs, clearly separated from the Windows-only static proof above
+# because this process itself is never running on Windows here (macOS/
+# Linux pwsh exercises the POSIX rename() branch of Invoke-AtomicReplace
+# for real; the MoveFileEx branch is covered only by the static checks). ---
 work="$(mktemp -d)"
 cleanup() { chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"; }
 trap cleanup EXIT
@@ -79,25 +103,31 @@ pwsh_install() { HOME="$1" CURSOR_PLUGIN_DIR="$2" pwsh -NoProfile -File "$3/scri
 pwsh_update()  { HOME="$1" CURSOR_PLUGIN_DIR="$2" pwsh -NoProfile -File "$3/scripts/update.ps1"; }
 pwsh_uninstall() { HOME="$1" CURSOR_PLUGIN_DIR="$2" pwsh -NoProfile -File "$3/scripts/uninstall.ps1"; }
 
-# 1. Real functional lifecycle against the shipped scripts.
+# 1. Real functional lifecycle against the shipped scripts, including
+#    retention across several updates for a reader that resolved once.
 lifecycle_home="$work/lifecycle-home"
 lifecycle_config="$lifecycle_home/.cursor/plugins/local/context-fabric"
 mkdir -p "$lifecycle_home"
 pwsh_install "$lifecycle_home" "$lifecycle_config" "$package_root" >/dev/null || fail "real_install_execution"
 [[ -f "$lifecycle_config/mcp.json" ]] || fail "real_install_missing_mcp_json"
-pwsh_update "$lifecycle_home" "$lifecycle_config" "$package_root" >/dev/null || fail "real_update_execution"
+original_resolved="$(dirname "$lifecycle_config")/$(readlink "$lifecycle_config")"
+for _ in 1 2 3; do
+  pwsh_update "$lifecycle_home" "$lifecycle_config" "$package_root" >/dev/null || fail "real_update_execution"
+done
 [[ -f "$lifecycle_config/mcp.json" ]] || fail "real_update_missing_mcp_json"
+[[ -f "$original_resolved/mcp.json" ]] || fail "real_update_pruned_a_retained_generation"
 pwsh_uninstall "$lifecycle_home" "$lifecycle_config" "$package_root" >/dev/null || fail "real_uninstall_execution"
 [[ ! -e "$lifecycle_config" ]] || fail "real_uninstall_left_config_root"
+[[ ! -e "$original_resolved" ]] || fail "real_uninstall_left_a_retained_generation"
 
 setup_forged_target() {
-  local config="$1" stage
+  local config="$1" stages
   mkdir -p "$(dirname "$config")"
-  stage="$(dirname "$config")/.context-fabric-cursor.forged"
-  rm -rf "$config" "$stage"
-  mkdir -p "$stage"
-  printf 'not-context-fabric' >"$stage/.context-fabric-owner.v1"
-  ln -s "$(basename "$stage")" "$config"
+  stages="${config}.stages"
+  rm -rf "$config" "$stages"
+  mkdir -p "$stages/forged"
+  printf 'not-context-fabric' >"$stages/forged/.context-fabric-owner.v1"
+  ln -s "$(basename "$config").stages/forged" "$config"
 }
 
 # 2. Real rejection of a forged (wrong-owner) target with the shipped scripts.
@@ -156,4 +186,4 @@ else
   fail "mutation_c_not_detected_forged_owner_still_rejected"
 fi
 
-printf '%s\n' 'CURSOR_POWERSHELL_STATIC_OK mutation_proofs=passed semantic_proof=passed real_execution=passed'
+printf '%s\n' 'CURSOR_POWERSHELL_STATIC_OK mutation_proofs=passed windows_branch_static=passed semantic_proof=passed real_execution=passed'
