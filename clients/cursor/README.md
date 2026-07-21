@@ -13,7 +13,7 @@ A Cursor plugin that adds explicit, evidence-backed ACR context and evidence ret
 
 ## Install
 
-Run `scripts/install.sh`. By default the plugin is installed at `$HOME/.cursor/plugins/local/context-fabric`; set `CURSOR_PLUGIN_DIR` to an absolute path to override the target. The target is always a stable, real, owned directory — never a symlink — and the installer refuses to write into a non-empty target it does not already own, refuses legacy links instead of trying to migrate them, and never touches an existing project or user `.cursor/mcp.json` or `.cursor/rules` directory. Windows PowerShell/NTFS lifecycle validation is deferred to [CHAOS-3058](https://linear.app/full-chaos/issue/CHAOS-3058); this package does not claim full Windows lifecycle support.
+Run `scripts/install.sh`. By default the plugin is installed at `$HOME/.cursor/plugins/local/context-fabric`; set `CURSOR_PLUGIN_DIR` to an absolute path to override the target. The target is always a stable, real, owned directory — never a symlink — and the installer refuses to write into a non-empty target it does not already own, refuses legacy links instead of trying to migrate them, and never touches an existing project or user `.cursor/mcp.json` or `.cursor/rules` directory. Windows PowerShell/NTFS lifecycle validation is deferred to CHAOS-3058; this package does not claim full Windows lifecycle support.
 
 Use `scripts/update.sh` / `scripts/update.ps1` to refresh an owned install in place, and `scripts/uninstall.sh` / `scripts/uninstall.ps1` to remove it. Both refuse to act on a target this plugin did not install, and refuse a legacy symlink or junction the same way install does.
 

@@ -187,7 +187,13 @@ run_overwrite_unrelated() {
     mkdir -p "$mutated_marker_root"
     printf '%s\n' sentinel >"$mutated_marker_root/sentinel-file"
   done
-  printf '%s\n' 'contextXfabric-cursorYv1 12-34' >"$temporary_root/mutated-marker-dot/.context-fabric-owner.v1"
+  local old_permissive_marker_regex='^context-fabric-cursor.v1 [0-9]+-[0-9]+$'
+  local dot_only_mutated_marker='context-fabric-cursorXv1 12-34'
+  [[ "$dot_only_mutated_marker" =~ $old_permissive_marker_regex ]] || {
+    printf '%s\n' 'marker mutation no longer proves the old unescaped-dot regex would accept it' >&2
+    exit 1
+  }
+  printf '%s\n' "$dot_only_mutated_marker" >"$temporary_root/mutated-marker-dot/.context-fabric-owner.v1"
   printf '%s\n' 'context-fabric-cursor.v1 12-34 extra' >"$temporary_root/mutated-marker-extra/.context-fabric-owner.v1"
   for mutated_marker_root in "$temporary_root/mutated-marker-dot" "$temporary_root/mutated-marker-extra"; do
     expect_rejection env HOME="$home" CURSOR_PLUGIN_DIR="$mutated_marker_root" "$package_root/scripts/update.sh"
@@ -499,11 +505,15 @@ FAKE
 
 run_install_failure_retry() {
   local failed_config="$temporary_root/install-failure-config"
+  local preexisting_empty_config="$temporary_root/install-failure-preexisting-empty"
   local fake_bin="$temporary_root/install-failure-mv-bin"
   mkdir "$fake_bin"
   cat >"$fake_bin/mv" <<'FAKE'
 #!/usr/bin/env bash
-if [[ "${!#}" == */mcp.json ]]; then exit 73; fi
+if [[ "${!#}" == */mcp.json ]]; then
+  if [[ -n "${CURSOR_TEST_UNRELATED_PATH:-}" ]]; then printf '%s\n' unrelated >"$CURSOR_TEST_UNRELATED_PATH"; fi
+  exit 73
+fi
 exec /bin/mv "$@"
 FAKE
   chmod +x "$fake_bin/mv"
@@ -512,7 +522,51 @@ FAKE
   HOME="$home" CURSOR_PLUGIN_DIR="$failed_config" "$package_root/scripts/install.sh" >/dev/null
   assert_installed_tree "$failed_config"
   HOME="$home" CURSOR_PLUGIN_DIR="$failed_config" "$package_root/scripts/uninstall.sh" >/dev/null
-  printf '%s\n' 'CURSOR_INSTALL_FAILURE_RETRY_OK partial_target_cleaned=passed retry_converged=passed'
+
+  mkdir "$preexisting_empty_config"
+  expect_rejection env PATH="$fake_bin:$PATH" HOME="$home" CURSOR_PLUGIN_DIR="$preexisting_empty_config" "$package_root/scripts/install.sh"
+  [[ -d "$preexisting_empty_config" && ! -L "$preexisting_empty_config" ]]
+  [[ -z "$(find "$preexisting_empty_config" -mindepth 1 -print -quit)" ]]
+  HOME="$home" CURSOR_PLUGIN_DIR="$preexisting_empty_config" "$package_root/scripts/install.sh" >/dev/null
+  assert_installed_tree "$preexisting_empty_config"
+  HOME="$home" CURSOR_PLUGIN_DIR="$preexisting_empty_config" "$package_root/scripts/uninstall.sh" >/dev/null
+
+  local concurrent_content_config="$temporary_root/install-failure-concurrent-content"
+  local concurrent_content_file="$concurrent_content_config/unrelated-content"
+  mkdir "$concurrent_content_config"
+  expect_rejection env PATH="$fake_bin:$PATH" CURSOR_TEST_UNRELATED_PATH="$concurrent_content_file" HOME="$home" CURSOR_PLUGIN_DIR="$concurrent_content_config" "$package_root/scripts/install.sh"
+  [[ -f "$concurrent_content_file" ]]
+  [[ -z "$(find "$concurrent_content_config" -mindepth 1 -maxdepth 1 ! -name unrelated-content -print -quit)" ]]
+  printf '%s\n' 'CURSOR_INSTALL_FAILURE_RETRY_OK absent_target_cleanup=passed preexisting_empty_cleanup=passed concurrent_unrelated_content_preserved=passed retry_converged=passed'
+}
+
+run_install_contention_preserves_unrelated() {
+  local contested_config="$temporary_root/install-contention-config"
+  local fake_bin="$temporary_root/install-contention-cp-bin"
+  local lock_ready="$temporary_root/install-contention-lock-ready"
+  local release_copy="$temporary_root/install-contention-release-copy"
+  mkdir "$fake_bin"
+  cat >"$fake_bin/cp" <<'FAKE'
+#!/usr/bin/env bash
+: "${CURSOR_TEST_LOCK_READY:?}"
+: "${CURSOR_TEST_RELEASE_COPY:?}"
+: >"$CURSOR_TEST_LOCK_READY"
+while [[ ! -e "$CURSOR_TEST_RELEASE_COPY" ]]; do sleep 0.01; done
+exec /bin/cp "$@"
+FAKE
+  chmod +x "$fake_bin/cp"
+  env PATH="$fake_bin:$PATH" CURSOR_TEST_LOCK_READY="$lock_ready" CURSOR_TEST_RELEASE_COPY="$release_copy" HOME="$home" CURSOR_PLUGIN_DIR="$contested_config" "$package_root/scripts/install.sh" >/dev/null &
+  local installer_pid=$!
+  while [[ ! -e "$lock_ready" ]]; do sleep 0.01; done
+  expect_rejection env HOME="$home" CURSOR_PLUGIN_DIR="$contested_config" "$package_root/scripts/install.sh"
+  printf '%s\n' unrelated >"$temporary_root/unrelated-sibling"
+  [[ -f "$temporary_root/unrelated-sibling" ]]
+  : >"$release_copy"
+  wait "$installer_pid"
+  assert_installed_tree "$contested_config"
+  [[ -f "$temporary_root/unrelated-sibling" ]]
+  HOME="$home" CURSOR_PLUGIN_DIR="$contested_config" "$package_root/scripts/uninstall.sh" >/dev/null
+  printf '%s\n' 'CURSOR_INSTALL_CONTENTION_OK lock_rejection=passed unrelated_content_preserved=passed'
 }
 
 # Running update repeatedly with no change to the source must converge to
@@ -627,6 +681,7 @@ case "$scenario" in
   payload-path-hardening) run_payload_path_hardening ;;
   marker-failure-retry) run_marker_failure_retry ;;
   install-failure-retry) run_install_failure_retry ;;
+  install-contention) run_install_contention_preserves_unrelated ;;
   idempotency) run_idempotency ;;
   two-install-isolation) run_two_install_isolation ;;
   concurrent-readers) run_concurrent_readers ;;
