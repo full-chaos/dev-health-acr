@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "acr": {
+      "type": "stdio",
+      "command": "acr-mcp",
+      "args": ["serve"]
+    }
+  }
+}
