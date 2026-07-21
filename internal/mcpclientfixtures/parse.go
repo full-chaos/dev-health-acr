@@ -15,6 +15,23 @@ type StdioServerEntry struct {
 	Env     map[string]string `json:"env"`
 }
 
+func ParseCommandArrayMCP(data []byte) (StdioServerEntry, error) {
+	var doc struct {
+		MCP map[string]struct {
+			Type    string   `json:"type"`
+			Command []string `json:"command"`
+		} `json:"mcp"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return StdioServerEntry{}, fmt.Errorf("parse MCP command-array JSON: %w", err)
+	}
+	entry, ok := doc.MCP["acr"]
+	if !ok || len(entry.Command) == 0 {
+		return StdioServerEntry{}, fmt.Errorf("MCP command-array JSON has no acr command")
+	}
+	return StdioServerEntry{Type: entry.Type, Command: entry.Command[0], Args: entry.Command[1:]}, nil
+}
+
 // ParseStdioJSON parses a Claude Code or Cursor "mcpServers"-shaped JSON
 // document (encoding/json handles the format; this just names the
 // expected shape) and returns the "acr" entry, failing if it is absent.
