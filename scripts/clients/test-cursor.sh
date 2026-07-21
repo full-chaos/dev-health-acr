@@ -374,13 +374,10 @@ run_native_check_regression() {
 exit 42
 FAKE
   chmod +x "$fake_bin/agent"
-  (
-    PATH="$fake_bin:$PATH"
-    if run_native_cursor_check >/dev/null 2>&1; then
-      printf '%s\n' 'expected native check failure did not occur' >&2
-      exit 1
-    fi
-  )
+  if PATH="$fake_bin:$PATH" run_native_cursor_check >/dev/null 2>&1; then
+    printf '%s\n' 'expected native check failure did not occur' >&2
+    exit 1
+  fi
   run_wrapper uninstall.sh
   printf '%s\n' 'CURSOR_NATIVE_REGRESSION_OK fake_agent_exit42=propagated'
 }
@@ -424,6 +421,67 @@ run_mid_update_failure_retry() {
 
   run_wrapper uninstall.sh
   printf '%s\n' 'CURSOR_MID_UPDATE_FAILURE_RETRY_OK'
+}
+
+# An owned target can still contain attacker-controlled child links or
+# directories at payload paths. Updates must reject both before any write can
+# escape the target or accidentally publish a temporary file inside a
+# directory, then leave no .atomic residue and converge once repaired.
+run_payload_path_hardening() {
+  run_wrapper install.sh
+  local outside="$temporary_root/payload-link-outside"
+  local marker_before
+  marker_before="$(cat "$config_root/.context-fabric-owner.v1")"
+  mkdir -p "$outside"
+  rm -rf "$config_root/commands"
+  ln -s "$outside" "$config_root/commands"
+  expect_rejection run_wrapper update.sh
+  [[ -L "$config_root/commands" ]]
+  [[ -z "$(find "$outside" -mindepth 1 -print -quit)" ]]
+  [[ "$(cat "$config_root/.context-fabric-owner.v1")" == "$marker_before" ]]
+  [[ -z "$(find "$config_root" -name '.atomic.*' -print -quit)" ]]
+  rm "$config_root/commands"
+  mkdir "$config_root/commands"
+  run_wrapper update.sh
+
+  rm -f "$config_root/mcp.json"
+  mkdir "$config_root/mcp.json"
+  expect_rejection run_wrapper update.sh
+  [[ -d "$config_root/mcp.json" ]]
+  [[ -z "$(find "$config_root" -name '.atomic.*' -print -quit)" ]]
+  rmdir "$config_root/mcp.json"
+  run_wrapper update.sh
+  assert_installed_tree "$config_root"
+  run_wrapper uninstall.sh
+  printf '%s\n' 'CURSOR_PAYLOAD_PATH_HARDENING_OK child_links=blocked directory_destinations=blocked temp_cleanup=passed'
+}
+
+# A failed move must remove its temp file, preserve the old marker, and a
+# later retry must publish a new content-derived marker only after all files.
+run_marker_failure_retry() {
+  local mutable_package="$temporary_root/mutable-package"
+  local mutable_config="$temporary_root/mutable-config"
+  local fake_bin="$temporary_root/fake-mv-bin"
+  cp -R "$package_root" "$mutable_package"
+  HOME="$home" CURSOR_PLUGIN_DIR="$mutable_config" "$mutable_package/scripts/install.sh" >/dev/null
+  local marker_before
+  marker_before="$(cat "$mutable_config/.context-fabric-owner.v1")"
+  printf '\nchanged after install\n' >>"$mutable_package/mcp.json"
+  mkdir "$fake_bin"
+  cat >"$fake_bin/mv" <<'FAKE'
+#!/usr/bin/env bash
+if [[ "${!#}" == */mcp.json ]]; then exit 73; fi
+exec /bin/mv "$@"
+FAKE
+  chmod +x "$fake_bin/mv"
+  expect_rejection env PATH="$fake_bin:$PATH" HOME="$home" CURSOR_PLUGIN_DIR="$mutable_config" "$mutable_package/scripts/update.sh"
+  [[ "$(cat "$mutable_config/.context-fabric-owner.v1")" == "$marker_before" ]]
+  [[ -z "$(find "$mutable_config" -name '.atomic.*' -print -quit)" ]]
+  HOME="$home" CURSOR_PLUGIN_DIR="$mutable_config" "$mutable_package/scripts/update.sh" >/dev/null
+  [[ "$(cat "$mutable_config/.context-fabric-owner.v1")" != "$marker_before" ]]
+  diff -q "$mutable_package/mcp.json" "$mutable_config/mcp.json" >/dev/null
+  HOME="$home" CURSOR_PLUGIN_DIR="$mutable_config" "$mutable_package/scripts/uninstall.sh" >/dev/null
+  printf '%s\n' 'CURSOR_MARKER_FAILURE_RETRY_OK marker_last=passed failure_safe=passed retry_converged=passed'
 }
 
 # Running update repeatedly with no change to the source must converge to
@@ -535,6 +593,8 @@ case "$scenario" in
   exact-preplan-semantics) run_exact_preplan_semantics ;;
   native-check-regression) run_native_check_regression ;;
   mid-update-failure-retry) run_mid_update_failure_retry ;;
+  payload-path-hardening) run_payload_path_hardening ;;
+  marker-failure-retry) run_marker_failure_retry ;;
   idempotency) run_idempotency ;;
   two-install-isolation) run_two_install_isolation ;;
   concurrent-readers) run_concurrent_readers ;;

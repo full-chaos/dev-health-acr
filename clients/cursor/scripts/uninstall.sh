@@ -3,7 +3,7 @@ set -euo pipefail
 
 config_root="${CURSOR_PLUGIN_DIR:-${HOME:?HOME is required}/.cursor/plugins/local/context-fabric}"
 marker_file=".context-fabric-owner.v1"
-marker_value="context-fabric-cursor.v1"
+marker_prefix="context-fabric-cursor.v1"
 
 # Only ever remove a target proven owned: a real directory (never a symlink
 # or junction) carrying our exact marker. An unowned or legacy-linked
@@ -11,7 +11,7 @@ marker_value="context-fabric-cursor.v1"
 owned_directory() {
   [[ -d "$config_root" && ! -L "$config_root" ]] || return 1
   [[ -f "$config_root/$marker_file" && ! -L "$config_root/$marker_file" ]] || return 1
-  [[ "$(cat "$config_root/$marker_file" 2>/dev/null)" == "$marker_value" ]] || return 1
+  [[ "$(cat "$config_root/$marker_file" 2>/dev/null)" =~ ^${marker_prefix}\ [0-9]+-[0-9]+$ ]] || return 1
   return 0
 }
 
