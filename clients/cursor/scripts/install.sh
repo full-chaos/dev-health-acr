@@ -11,6 +11,7 @@ lock_acquired=0
 lock_dir=""
 install_owner_file=""
 install_owner_token=""
+owner_setup_failed=0
 created_payload_files=()
 created_payload_dirs=()
 
@@ -120,11 +121,15 @@ run_owns_created_target() {
 
 cleanup_failed_install() {
   (( install_complete )) && return 0
-  if (( target_created )) && run_owns_created_target; then
-    cleanup_created_payload
-    rm -f -- "$install_owner_file"
-    install_owner_file=""
-    [[ -d "$config_root" && ! -L "$config_root" ]] && rmdir -- "$config_root" 2>/dev/null || true
+  if (( target_created )); then
+    if run_owns_created_target; then
+      cleanup_created_payload
+      rm -f -- "$install_owner_file"
+      install_owner_file=""
+      [[ -d "$config_root" && ! -L "$config_root" ]] && rmdir -- "$config_root" 2>/dev/null || true
+    elif (( owner_setup_failed )); then
+      [[ -d "$config_root" && ! -L "$config_root" ]] && rmdir -- "$config_root" 2>/dev/null || true
+    fi
   else
     cleanup_created_payload
   fi
@@ -143,6 +148,9 @@ if [[ "$config_root" != /* ]]; then
   printf '%s\n' 'CURSOR_PLUGIN_DIR must be an absolute path' >&2
   exit 2
 fi
+while [[ "$config_root" != / && "$config_root" == */ ]]; do
+  config_root="${config_root%/}"
+done
 config_parent="$(dirname "$config_root")"
 mkdir -p "$config_parent"
 [[ -d "$config_parent" && ! -L "$config_parent" ]] || {
@@ -172,9 +180,17 @@ else
     exit 1
   }
   target_created=1
-  install_owner_file="$(mktemp "$config_root/.install-owner.XXXXXX")"
+  install_owner_file="$(mktemp "$config_root/.install-owner.XXXXXX")" || {
+    owner_setup_failed=1
+    exit 1
+  }
   install_owner_token="${BASHPID}-${RANDOM}-${RANDOM}"
-  printf '%s\n' "$install_owner_token" >"$install_owner_file"
+  printf '%s\n' "$install_owner_token" >"$install_owner_file" || {
+    rm -f -- "$install_owner_file"
+    install_owner_file=""
+    owner_setup_failed=1
+    exit 1
+  }
 fi
 
 # Full staged validation before any mutation: every required source file
