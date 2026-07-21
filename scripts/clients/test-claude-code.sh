@@ -15,23 +15,21 @@ while (($#)); do
   esac
 done
 
-[[ -n "$scenario" ]] || exit 2
-if [[ -n "$package_path" ]]; then
-  [[ "$package_path" = /* ]] || exit 2
-  package_root="$package_path"
-  marketplace_root="$package_root/marketplace"
-fi
+[[ -n "$scenario" && -n "$package_path" && "$package_path" = /* ]] || exit 2
+package_root="$package_path"
+marketplace_root="$package_root/marketplace"
 [[ -d "$marketplace_root" ]] || exit 2
-command -v claude >/dev/null
+claude_bin="$(command -v claude)"
 
 temporary_root="$(mktemp -d)"
 cleanup() { rm -rf "$temporary_root"; }
 trap cleanup EXIT
 home="$temporary_root/home"
+claude_root="$temporary_root/claude"
 mkdir -p "$home"
 
 run_claude() {
-  HOME="$home" claude "$@"
+  env -i HOME="$home" XDG_CONFIG_HOME="$temporary_root/xdg" CLAUDE_CONFIG_DIR="$claude_root" CODEX_HOME="$temporary_root/codex" CODEX_SQLITE_HOME="$temporary_root/codex-sqlite" ACR_NATIVE_DUMMY_TOKEN=not-a-secret PATH=/usr/bin:/bin "$claude_bin" "$@"
 }
 
 expect_rejection() {
@@ -75,8 +73,8 @@ case "$scenario" in
     ! run_claude plugin list --json | grep -Fq 'context-fabric@context-fabric'
     run_claude plugin marketplace remove --scope user context-fabric
     ! run_claude plugin marketplace list | grep -Fq 'context-fabric'
-    if grep -R -Fq --exclude-dir=cache 'context-fabric' "$home/.claude"; then exit 1; fi
-    test -d "$home/.claude/plugins/cache/context-fabric/context-fabric/1.0.1"
+    if grep -R -Fq --exclude-dir=cache 'context-fabric' "$claude_root"; then exit 1; fi
+    test -d "$claude_root/plugins/cache/context-fabric/context-fabric/1.0.1"
     printf '%s\n' 'CLAUDE_CODE_LIFECYCLE_OK marketplace=passed install=passed mcp=loaded native_update=1.0.0-to-1.0.1 active_state=removed native_orphan_cache=retained model_credentials=not-required'
     ;;
   bare-acr-mcp)
