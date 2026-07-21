@@ -5,11 +5,13 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 mode=""
 required=""
 cursor_if_installed=0
+release_dir=""
 while (($#)); do
   case "$1" in
-    --self-test|--self-test-leaked-home) mode="$1"; shift ;;
+    --self-test|--self-test-leaked-home|--self-test-release-dir) mode="$1"; shift ;;
     --require) required="$2"; shift 2 ;;
     --cursor-if-installed) cursor_if_installed=1; shift ;;
+    --release-dir) release_dir="$2"; shift 2 ;;
     *) exit 2 ;;
   esac
 done
@@ -18,6 +20,20 @@ done
 temporary_root="$(mktemp -d)"
 cleanup() { chmod -R u+w "$temporary_root" 2>/dev/null || true; rm -rf "$temporary_root"; }
 trap cleanup EXIT
+
+validate_release_dir() {
+  local release="$1"
+  [[ -d "$release" && -x "$release/acr-mcp" ]] || return 1
+  [[ -f "$release/clients/conformance/client-bundle.v1.json" ]] || return 1
+  local client
+  for client in opencode claude-code codex cursor; do
+    [[ -f "$release/clients/$client/package.v1.json" ]] || return 1
+  done
+}
+
+if [[ -n "$release_dir" ]]; then
+  validate_release_dir "$release_dir" || exit 2
+fi
 
 assert_no_owned_state() {
   local home="$1"
@@ -33,6 +49,17 @@ if [[ "$mode" == --self-test-leaked-home ]]; then
   rm -f "$home/.claude/plugins/leaked" "$home/.codex/plugins/leaked"
   assert_no_owned_state "$home"
   printf '%s\n' 'REAL_CLIENT_LEAKED_HOME_OK detected=1 cleaned=1'
+  exit 0
+fi
+
+if [[ "$mode" == --self-test-release-dir ]]; then
+  release="$temporary_root/release"
+  mkdir -p "$release/clients"
+  cp -R "$repo_root/clients/." "$release/clients/"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$release/acr-mcp"
+  chmod 700 "$release/acr-mcp"
+  validate_release_dir "$release"
+  printf '%s\n' 'REAL_CLIENT_RELEASE_DIR_SELF_TEST_OK release_assets=validated'
   exit 0
 fi
 

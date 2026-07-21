@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -23,6 +24,9 @@ func ValidateClientFixtures(fixturesRoot string) error {
 	}
 	entries, err := os.ReadDir(fixturesRoot)
 	if err != nil {
+		return invalidBundle("fixture.missing")
+	}
+	if len(entries) == 0 {
 		return invalidBundle("fixture.missing")
 	}
 	for _, entry := range entries {
@@ -64,7 +68,7 @@ func loadClientFixture(path string) (clientFixture, error) {
 	var fixture clientFixture
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&fixture); err != nil || fixture.ExpectedClassification == "" {
+	if err := decoder.Decode(&fixture); err != nil || fixture.ExpectedClassification == "" || decoder.Decode(&struct{}{}) != io.EOF {
 		return clientFixture{}, invalidBundle("fixture.malformed")
 	}
 	return fixture, nil
@@ -75,6 +79,12 @@ func materializeClientFixtureTree(fixtureRoot string, bundle ClientBundle, symli
 	if err != nil {
 		return "", fmt.Errorf("create fixture tree: %w", err)
 	}
+	complete := false
+	defer func() {
+		if !complete {
+			_ = os.RemoveAll(root)
+		}
+	}()
 	for _, client := range bundle.SupportedClients {
 		packageRoot := filepath.Join(root, "clients", client)
 		if err := os.MkdirAll(packageRoot, 0o755); err != nil {
@@ -96,6 +106,7 @@ func materializeClientFixtureTree(fixtureRoot string, bundle ClientBundle, symli
 			return "", invalidBundle("fixture.symlink_unsupported")
 		}
 	}
+	complete = true
 	return root, nil
 }
 
