@@ -85,6 +85,28 @@ func TestRunner_verify_reports_success(t *testing.T) {
 	}
 }
 
+func TestRunner_consume_emits_sanitized_receipt_when_inputs_are_valid(t *testing.T) {
+	// Given
+	var output bytes.Buffer
+	r := runner{consume: func(_ context.Context, request releasebuild.ConsumeRequest) (releasebuild.Receipt, error) {
+		if request.ReleaseDir != "release" || request.Destination != "destination" {
+			t.Fatalf("unexpected request: %#v", request)
+		}
+		return releasebuild.Receipt{ArchiveSHA256: "archive", ClientBundleSHA256: "clients", Product: "acr-mcp", GOOS: "darwin", GOARCH: "arm64"}, nil
+	}}
+
+	// When
+	err := r.run(context.Background(), []string{"consume", "--dir", "release", "--dest", "destination"}, &output)
+
+	// Then
+	if err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+	if got, want := output.String(), "{\"archive_sha256\":\"archive\",\"client_bundle_sha256\":\"clients\",\"product\":\"acr-mcp\",\"goos\":\"darwin\",\"goarch\":\"arm64\"}\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
 func TestCleanGitCheckout_rejects_non_repository_directory(t *testing.T) {
 	// Given
 	dir := t.TempDir()
@@ -107,9 +129,10 @@ func TestReleasebuild_help_and_invalid_commands_are_process_usable(t *testing.T)
 		wantExitOK bool
 		wantOutput string
 	}{
-		{name: "root help", args: []string{"--help"}, wantExitOK: true, wantOutput: "Usage: releasebuild <build|verify>"},
+		{name: "root help", args: []string{"--help"}, wantExitOK: true, wantOutput: "Usage: releasebuild <build|verify|consume>"},
 		{name: "build help", args: []string{"build", "--help"}, wantExitOK: true, wantOutput: "Usage: releasebuild build"},
 		{name: "verify help", args: []string{"verify", "--help"}, wantExitOK: true, wantOutput: "Usage: releasebuild verify"},
+		{name: "consume help", args: []string{"consume", "--help"}, wantExitOK: true, wantOutput: "Usage: releasebuild consume"},
 		{name: "missing command", wantOutput: "Try 'releasebuild --help'"},
 		{name: "invalid command", args: []string{"publish"}, wantOutput: "Try 'releasebuild --help'"},
 	}
