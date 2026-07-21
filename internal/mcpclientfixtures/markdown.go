@@ -80,6 +80,28 @@ func ExtractHeredocBlocks(shellBlock string, delimiter string) []string {
 	return blocks
 }
 
+// ExtractPowerShellHereStrings returns the content of every single-quoted
+// PowerShell here-string in an already fence-stripped block.
+func ExtractPowerShellHereStrings(shellBlock string) []string {
+	lines := strings.Split(shellBlock, "\n")
+	var blocks []string
+	for i := 0; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) != "@'" {
+			continue
+		}
+		var content []string
+		var indent string
+		if len(lines) > i+1 {
+			indent = leadingWhitespace(lines[i+1])
+		}
+		for i++; i < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[i]), "'@"); i++ {
+			content = append(content, strings.TrimPrefix(lines[i], indent))
+		}
+		blocks = append(blocks, strings.Join(content, "\n"))
+	}
+	return blocks
+}
+
 // leadingWhitespace returns the leading run of spaces and tabs in line.
 func leadingWhitespace(line string) string {
 	trimmedLen := len(line) - len(strings.TrimLeft(line, " \t"))

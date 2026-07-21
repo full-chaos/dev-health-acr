@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -101,8 +102,8 @@ func TestCursorSetupStepHeredocMatchesCanonicalModel(t *testing.T) {
 	root := findRepoRoot(t)
 	data := readDoc(t, root, "docs/examples/mcp-clients/cursor.md")
 	var heredocJSON string
-	for _, block := range ExtractFencedBlocks(data, "bash") {
-		for _, doc := range ExtractHeredocBlocks(block, "EOF") {
+	for _, block := range ExtractFencedBlocks(data, "powershell") {
+		for _, doc := range ExtractPowerShellHereStrings(block) {
 			if strings.Contains(doc, `"mcpServers"`) {
 				heredocJSON = doc
 			}
@@ -153,6 +154,106 @@ func TestClaudeCodeAddJSONCLIReferenceStaysValidAndServeOnly(t *testing.T) {
 	if len(entry.Args) != 1 || entry.Args[0] != ServeArg {
 		t.Fatalf("expected args [%q], got %#v", ServeArg, entry.Args)
 	}
+}
+
+func TestClientDocLocalAnchorsResolve(t *testing.T) {
+	root := findRepoRoot(t)
+	for _, relPath := range docPaths {
+		t.Run(relPath, func(t *testing.T) {
+			data := string(readDoc(t, root, relPath))
+			for _, target := range localMarkdownTargets(data) {
+				if target.anchor == "" {
+					continue
+				}
+				targetPath := filepath.Join(filepath.Dir(filepath.Join(root, relPath)), target.path)
+				if target.path == "" {
+					targetPath = filepath.Join(root, relPath)
+				}
+				targetData, err := os.ReadFile(targetPath)
+				if err != nil {
+					t.Fatalf("link %q points to missing document: %v", target.raw, err)
+				}
+				if !headingAnchors(string(targetData))[target.anchor] {
+					t.Fatalf("link %q points to missing anchor #%s", target.raw, target.anchor)
+				}
+			}
+		})
+	}
+}
+
+func TestWindowsClientGuidanceUsesEnvironmentCredential(t *testing.T) {
+	root := findRepoRoot(t)
+	for _, relPath := range []string{
+		"docs/examples/mcp-clients/claude-code.md",
+		"docs/examples/mcp-clients/codex.md",
+		"docs/examples/mcp-clients/cursor.md",
+	} {
+		t.Run(relPath, func(t *testing.T) {
+			data := string(readDoc(t, root, relPath))
+			start := strings.Index(data, "### Installing on Windows")
+			if start < 0 {
+				t.Fatal("missing Windows installation section")
+			}
+			section := data[start:]
+			if end := strings.Index(section, "\n## "); end >= 0 {
+				section = section[:end]
+			}
+			if !strings.Contains(section, "ACR_API_TOKEN") {
+				t.Fatal("Windows installation must document ACR_API_TOKEN")
+			}
+			for _, line := range strings.Split(section, "\n") {
+				trimmed := strings.TrimSpace(line)
+				if strings.Contains(trimmed, "ACR_API_TOKEN_FILE") &&
+					!strings.Contains(trimmed, "Do not") &&
+					!strings.Contains(trimmed, "Keep") {
+					t.Fatalf("Windows installation contains token-file guidance: %q", line)
+				}
+			}
+		})
+	}
+}
+
+type markdownTarget struct {
+	raw, path, anchor string
+}
+
+var markdownLinkPattern = regexp.MustCompile(`\]\(([^)]+)\)`)
+
+func localMarkdownTargets(data string) []markdownTarget {
+	var targets []markdownTarget
+	for _, match := range markdownLinkPattern.FindAllStringSubmatch(data, -1) {
+		raw := match[1]
+		if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") || strings.HasPrefix(raw, "mailto:") {
+			continue
+		}
+		parts := strings.SplitN(raw, "#", 2)
+		path := parts[0]
+		if path == "" {
+			path = ""
+		}
+		anchor := ""
+		if len(parts) == 2 {
+			anchor = strings.ToLower(parts[1])
+		}
+		targets = append(targets, markdownTarget{raw: raw, path: path, anchor: anchor})
+	}
+	return targets
+}
+
+var headingPattern = regexp.MustCompile(`(?m)^#{1,6}[ \t]+(.+?)\s*$`)
+
+func headingAnchors(data string) map[string]bool {
+	anchors := make(map[string]bool)
+	for _, match := range headingPattern.FindAllStringSubmatch(data, -1) {
+		heading := strings.TrimSpace(match[1])
+		heading = strings.TrimSuffix(heading, "#")
+		heading = strings.ToLower(heading)
+		heading = strings.ReplaceAll(heading, "`", "")
+		heading = regexp.MustCompile(`[^a-z0-9 _-]`).ReplaceAllString(heading, "")
+		heading = strings.Join(strings.Fields(heading), "-")
+		anchors[heading] = true
+	}
+	return anchors
 }
 
 // TestEveryDocOnlyReferencesRealACRMCPSubcommands scans every fenced bash

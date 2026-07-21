@@ -35,7 +35,7 @@ server registration is the local STDIO process `acr-mcp serve`.
    ```
 
    See `docs/release-policy.md` for the full verification runbook.
-   Windows users: see [Installing on Windows](#installing-on-windows) below.
+   Windows users: see [Installing on Windows](README.md#installing-on-windows).
 
    **Development only:** `go build` produces an unversioned `dev` binary. A
    production ACR API rejects a `dev`-identified sidecar outright (426 Upgrade
