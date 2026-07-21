@@ -21,9 +21,12 @@ payload_files=(
 # junction -- that would be a leftover from an earlier, unsafe design) and
 # carries our exact marker. Never adopt an unowned or legacy-linked target.
 owned_directory() {
+  local marker prefix revision extra
   [[ -d "$config_root" && ! -L "$config_root" ]] || return 1
   [[ -f "$config_root/$marker_file" && ! -L "$config_root/$marker_file" ]] || return 1
-  [[ "$(cat "$config_root/$marker_file" 2>/dev/null)" =~ ^${marker_prefix}\ [0-9]+-[0-9]+$ ]] || return 1
+  marker="$(cat "$config_root/$marker_file" 2>/dev/null)" || return 1
+  read -r prefix revision extra <<<"$marker"
+  [[ "$marker" == "$prefix $revision" && "$prefix" == "$marker_prefix" && "$revision" =~ ^[0-9]+-[0-9]+$ && -z "$extra" ]] || return 1
   return 0
 }
 

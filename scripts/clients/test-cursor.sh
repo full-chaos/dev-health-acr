@@ -182,6 +182,19 @@ run_overwrite_unrelated() {
   [[ -f "$wrong_marker_root/sentinel-file" ]]
   grep -Fq wrong-owner "$wrong_marker_root/.context-fabric-owner.v1"
 
+  local mutated_marker_root
+  for mutated_marker_root in "$temporary_root/mutated-marker-dot" "$temporary_root/mutated-marker-extra"; do
+    mkdir -p "$mutated_marker_root"
+    printf '%s\n' sentinel >"$mutated_marker_root/sentinel-file"
+  done
+  printf '%s\n' 'contextXfabric-cursorYv1 12-34' >"$temporary_root/mutated-marker-dot/.context-fabric-owner.v1"
+  printf '%s\n' 'context-fabric-cursor.v1 12-34 extra' >"$temporary_root/mutated-marker-extra/.context-fabric-owner.v1"
+  for mutated_marker_root in "$temporary_root/mutated-marker-dot" "$temporary_root/mutated-marker-extra"; do
+    expect_rejection env HOME="$home" CURSOR_PLUGIN_DIR="$mutated_marker_root" "$package_root/scripts/update.sh"
+    expect_rejection env HOME="$home" CURSOR_PLUGIN_DIR="$mutated_marker_root" "$package_root/scripts/uninstall.sh"
+    [[ -f "$mutated_marker_root/sentinel-file" ]]
+  done
+
   missing_marker_root="$temporary_root/missing-marker"
   mkdir -p "$missing_marker_root/.cursor-plugin"
   printf '%s\n' sentinel >"$missing_marker_root/sentinel-file"
@@ -484,6 +497,24 @@ FAKE
   printf '%s\n' 'CURSOR_MARKER_FAILURE_RETRY_OK marker_last=passed failure_safe=passed retry_converged=passed'
 }
 
+run_install_failure_retry() {
+  local failed_config="$temporary_root/install-failure-config"
+  local fake_bin="$temporary_root/install-failure-mv-bin"
+  mkdir "$fake_bin"
+  cat >"$fake_bin/mv" <<'FAKE'
+#!/usr/bin/env bash
+if [[ "${!#}" == */mcp.json ]]; then exit 73; fi
+exec /bin/mv "$@"
+FAKE
+  chmod +x "$fake_bin/mv"
+  expect_rejection env PATH="$fake_bin:$PATH" HOME="$home" CURSOR_PLUGIN_DIR="$failed_config" "$package_root/scripts/install.sh"
+  [[ ! -e "$failed_config" ]]
+  HOME="$home" CURSOR_PLUGIN_DIR="$failed_config" "$package_root/scripts/install.sh" >/dev/null
+  assert_installed_tree "$failed_config"
+  HOME="$home" CURSOR_PLUGIN_DIR="$failed_config" "$package_root/scripts/uninstall.sh" >/dev/null
+  printf '%s\n' 'CURSOR_INSTALL_FAILURE_RETRY_OK partial_target_cleaned=passed retry_converged=passed'
+}
+
 # Running update repeatedly with no change to the source must converge to
 # the identical result every time (no accumulating drift, no error on a
 # repeat run), and installing into a pre-existing empty directory must
@@ -595,6 +626,7 @@ case "$scenario" in
   mid-update-failure-retry) run_mid_update_failure_retry ;;
   payload-path-hardening) run_payload_path_hardening ;;
   marker-failure-retry) run_marker_failure_retry ;;
+  install-failure-retry) run_install_failure_retry ;;
   idempotency) run_idempotency ;;
   two-install-isolation) run_two_install_isolation ;;
   concurrent-readers) run_concurrent_readers ;;
