@@ -2,28 +2,31 @@
 set -euo pipefail
 
 config_root="${CURSOR_PLUGIN_DIR:-${HOME:?HOME is required}/.cursor/plugins/local/context-fabric}"
-owner_file=".context-fabric-owner.v1"
-owner_value="context-fabric-cursor.v1"
-stages_root="${config_root}.stages"
+marker_file=".context-fabric-owner.v1"
+marker_value="context-fabric-cursor.v1"
 
-owned_stage() {
-  local link prefix remainder stage
-  [[ -L "$config_root" ]] || return 1
-  link="$(readlink "$config_root")"
-  prefix="$(basename "$config_root").stages/"
-  [[ "${link:0:${#prefix}}" == "$prefix" ]] || return 1
-  remainder="${link:${#prefix}}"
-  [[ -n "$remainder" && "$remainder" != */* ]] || return 1
-  stage="$stages_root/$remainder"
-  [[ -d "$stage" && ! -L "$stage" && -f "$stage/$owner_file" && ! -L "$stage/$owner_file" ]] || return 1
-  [[ "$(cat "$stage/$owner_file")" == "$owner_value" ]] || return 1
-  printf '%s\n' "$stage"
+# Only ever remove a target proven owned: a real directory (never a symlink
+# or junction) carrying our exact marker. An unowned or legacy-linked
+# target is left completely untouched.
+owned_directory() {
+  [[ -d "$config_root" && ! -L "$config_root" ]] || return 1
+  [[ -f "$config_root/$marker_file" && ! -L "$config_root/$marker_file" ]] || return 1
+  [[ "$(cat "$config_root/$marker_file" 2>/dev/null)" == "$marker_value" ]] || return 1
+  return 0
 }
 
-if [[ "$config_root" != /* ]] || ! owned_stage >/dev/null; then
+if [[ "$config_root" != /* ]]; then
   printf '%s\n' 'refusing to remove a target not owned by Context Fabric' >&2
   exit 1
 fi
-rm "$config_root"
-rm -rf "$stages_root"
+if [[ -L "$config_root" ]]; then
+  printf '%s\n' 'refusing to operate on a legacy symlink or junction target; remove it manually first' >&2
+  exit 1
+fi
+owned_directory || {
+  printf '%s\n' 'refusing to remove a target not owned by Context Fabric' >&2
+  exit 1
+}
+
+rm -rf "$config_root"
 printf 'removed Context Fabric Cursor plugin at %s\n' "$config_root"
