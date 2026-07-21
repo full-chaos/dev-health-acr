@@ -1,0 +1,20 @@
+{
+  "name": "context-fabric",
+  "interface": {
+    "displayName": "Context Fabric"
+  },
+  "plugins": [
+    {
+      "name": "context-fabric",
+      "source": {
+        "source": "local",
+        "path": "./plugins/context-fabric"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
