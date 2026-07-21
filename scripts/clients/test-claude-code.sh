@@ -5,15 +5,23 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 package_root="$repo_root/clients/claude-code"
 marketplace_root="$package_root/marketplace"
 scenario=""
+package_path=""
 
 while (($#)); do
   case "$1" in
+    --package) package_path="$2"; shift 2 ;;
     --scenario) scenario="$2"; shift 2 ;;
     *) exit 2 ;;
   esac
 done
 
 [[ -n "$scenario" ]] || exit 2
+if [[ -n "$package_path" ]]; then
+  [[ "$package_path" = /* ]] || exit 2
+  package_root="$package_path"
+  marketplace_root="$package_root/marketplace"
+fi
+[[ -d "$marketplace_root" ]] || exit 2
 command -v claude >/dev/null
 
 temporary_root="$(mktemp -d)"

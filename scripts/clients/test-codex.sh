@@ -2,8 +2,19 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-[[ $# -eq 0 ]] || exit 2
 package_root="$repo_root/clients/codex/marketplace"
+while (($#)); do
+  case "$1" in
+    --package)
+      [[ "$2" = /* ]] || exit 2
+      package_root="$2"
+      [[ -d "$package_root/.agents" ]] || package_root="$package_root/marketplace"
+      shift 2
+      ;;
+    *) exit 2 ;;
+  esac
+done
+[[ -d "$package_root" ]] || exit 2
 temporary_root="$(mktemp -d)"
 cleanup() { chmod -R u+w "$temporary_root" 2>/dev/null || true; rm -rf "$temporary_root"; }
 trap cleanup EXIT
