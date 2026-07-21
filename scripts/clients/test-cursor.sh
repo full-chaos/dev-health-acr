@@ -540,6 +540,39 @@ FAKE
   printf '%s\n' 'CURSOR_INSTALL_FAILURE_RETRY_OK absent_target_cleanup=passed preexisting_empty_cleanup=passed concurrent_unrelated_content_preserved=passed retry_converged=passed'
 }
 
+run_install_path_normalization() {
+  local target="$temporary_root/trailing-slash-target"
+  HOME="$home" CURSOR_PLUGIN_DIR="$target///" "$package_root/scripts/install.sh" >/dev/null
+  assert_installed_tree "$target"
+  [[ ! -e "$target.install.lock" ]]
+  HOME="$home" CURSOR_PLUGIN_DIR="$target" "$package_root/scripts/uninstall.sh" >/dev/null
+  printf '%s\n' 'CURSOR_INSTALL_PATH_NORMALIZATION_OK trailing_slashes=passed lock_cleanup=passed'
+}
+
+run_owner_token_failure_retry() {
+  local target="$temporary_root/owner-token-write-failure"
+  local fake_bin="$temporary_root/owner-token-write-failure-bin"
+  mkdir "$fake_bin"
+  cat >"$fake_bin/mktemp" <<'FAKE'
+#!/usr/bin/env bash
+if [[ "$1" == */.install-owner.XXXXXX ]]; then
+  owner_file="$(/usr/bin/mktemp "$1")"
+  chmod a-w "$owner_file"
+  printf '%s\n' "$owner_file"
+  exit 0
+fi
+exec /usr/bin/mktemp "$@"
+FAKE
+  chmod +x "$fake_bin/mktemp"
+  expect_rejection env PATH="$fake_bin:$PATH" HOME="$home" CURSOR_PLUGIN_DIR="$target" "$package_root/scripts/install.sh"
+  [[ ! -e "$target" && ! -e "$target.install.lock" ]]
+  [[ -z "$(find "$temporary_root" -name '.install-owner.*' -print -quit)" ]]
+  HOME="$home" CURSOR_PLUGIN_DIR="$target" "$package_root/scripts/install.sh" >/dev/null
+  assert_installed_tree "$target"
+  HOME="$home" CURSOR_PLUGIN_DIR="$target" "$package_root/scripts/uninstall.sh" >/dev/null
+  printf '%s\n' 'CURSOR_OWNER_TOKEN_FAILURE_RETRY_OK owner_residue=absent lock_residue=absent retry_converged=passed'
+}
+
 run_install_contention_preserves_unrelated() {
   local contested_config="$temporary_root/install-contention-config"
   local fake_bin="$temporary_root/install-contention-cp-bin"
@@ -681,6 +714,8 @@ case "$scenario" in
   payload-path-hardening) run_payload_path_hardening ;;
   marker-failure-retry) run_marker_failure_retry ;;
   install-failure-retry) run_install_failure_retry ;;
+  install-path-normalization) run_install_path_normalization ;;
+  owner-token-failure-retry) run_owner_token_failure_retry ;;
   install-contention) run_install_contention_preserves_unrelated ;;
   idempotency) run_idempotency ;;
   two-install-isolation) run_two_install_isolation ;;
