@@ -79,6 +79,7 @@ assert_installed_tree() {
   [[ -f "$root/commands/plan-with-context-fabric.md" ]]
   [[ -f "$root/rules/context-fabric.mdc" ]]
   [[ -f "$root/rules/preplan-optional.mdc" ]]
+  [[ -f "$root/rules/no-automatic-use.mdc" ]]
   [[ -f "$root/skills/context-fabric/SKILL.md" ]]
   grep -Fq '"command": "acr-mcp"' "$root/mcp.json"
   grep -Fq '"args": ["serve"]' "$root/mcp.json"
@@ -130,14 +131,14 @@ run_lifecycle() {
   expect_rejection env HOME="$home" CURSOR_PLUGIN_DIR="$non_owned" "$package_root/scripts/uninstall.sh"
   [[ -f "$non_owned/user-file" ]]
 
-  forged_stage="$temporary_root/.context-fabric-cursor.forged"
   forged_root="$temporary_root/forged-owned"
-  mkdir "$forged_stage"
-  printf '%s\n' forged >"$forged_stage/.context-fabric-owner.v1"
-  ln -s "$(basename "$forged_stage")" "$forged_root"
+  forged_stages="${forged_root}.stages"
+  mkdir -p "$forged_stages/forged"
+  printf '%s\n' forged >"$forged_stages/forged/.context-fabric-owner.v1"
+  ln -s "$(basename "$forged_root").stages/forged" "$forged_root"
   expect_rejection env HOME="$home" CURSOR_PLUGIN_DIR="$forged_root" "$package_root/scripts/update.sh"
   expect_rejection env HOME="$home" CURSOR_PLUGIN_DIR="$forged_root" "$package_root/scripts/uninstall.sh"
-  [[ -f "$forged_stage/.context-fabric-owner.v1" ]]
+  [[ -f "$forged_stages/forged/.context-fabric-owner.v1" ]]
 
   plant_unrelated_markers "$home"
   run_wrapper install.sh
@@ -150,9 +151,9 @@ run_lifecycle() {
     printf '%s\n' 'CURSOR_NATIVE_SKIPPED reason=real_client_if_installed_not_set'
   fi
 
-  # Retention: update() keeps exactly one prior generation and prunes
-  # anything two generations back; a concurrent reader resolving the
-  # symlink is never left pointing at a deleted directory.
+  # Retention: update() never prunes -- every prior generation stays on
+  # disk until an owned uninstall, so a reader holding any resolved
+  # generation across any number of updates remains valid.
   gen1_stage="$(dirname "$config_root")/$(readlink "$config_root")"
   printf '%s\n' altered >"$config_root/commands/get-context.md"
   run_wrapper update.sh
@@ -163,12 +164,13 @@ run_lifecycle() {
 
   run_wrapper update.sh
   gen3_stage="$(dirname "$config_root")/$(readlink "$config_root")"
+  [[ -f "$gen1_stage/mcp.json" ]]
   [[ -f "$gen2_stage/mcp.json" ]]
-  [[ ! -e "$gen1_stage" ]]
   assert_unrelated_markers "$home"
 
   run_wrapper uninstall.sh
   [[ ! -e "$config_root" ]]
+  [[ ! -e "$gen1_stage" ]]
   [[ ! -e "$gen2_stage" ]]
   [[ ! -e "$gen3_stage" ]]
   assert_unrelated_markers "$home"
@@ -179,7 +181,7 @@ run_lifecycle() {
   [[ -f "$unset_default_home/.cursor/plugins/local/context-fabric/mcp.json" ]]
   HOME="$unset_default_home" "$package_root/scripts/uninstall.sh" >/dev/null
 
-  printf '%s\n' 'CURSOR_LIFECYCLE_OK retention=verified static_proof=passed'
+  printf '%s\n' 'CURSOR_LIFECYCLE_OK retention=full_until_uninstall static_proof=passed'
 }
 
 run_overwrite_unrelated() {
@@ -234,7 +236,9 @@ run_forbidden_pattern_regression() {
 }
 
 # Prove the strict manifest validator actually catches what it claims to:
-# an unknown field and a missing declared component path must both fail.
+# an unknown field, a missing declared component path, an absolute or
+# parent-traversing or non-normalized declared path, and an extra MCP
+# server riding alongside the intended one must all fail.
 run_manifest_regression() {
   local copy="$temporary_root/manifest-regression-unknown-field"
   cp -R "$package_root" "$copy"
@@ -252,8 +256,121 @@ run_manifest_regression() {
   printf -- '---\nname: context-fabric\ndescription: x\nbogus: 1\n---\nbody\n' >"$copy/skills/context-fabric/SKILL.md"
   expect_rejection bash "$repo_root/scripts/clients/validate-cursor-manifest.sh" --package "$copy"
 
+  copy="$temporary_root/manifest-regression-absolute-path"
+  cp -R "$package_root" "$copy"
+  jq '.rules = "/etc/"' "$copy/.cursor-plugin/plugin.json" >"$copy/.cursor-plugin/plugin.json.tmp"
+  mv "$copy/.cursor-plugin/plugin.json.tmp" "$copy/.cursor-plugin/plugin.json"
+  expect_rejection bash "$repo_root/scripts/clients/validate-cursor-manifest.sh" --package "$copy"
+
+  copy="$temporary_root/manifest-regression-traversal-path"
+  cp -R "$package_root" "$copy"
+  jq '.rules = "../../../etc/"' "$copy/.cursor-plugin/plugin.json" >"$copy/.cursor-plugin/plugin.json.tmp"
+  mv "$copy/.cursor-plugin/plugin.json.tmp" "$copy/.cursor-plugin/plugin.json"
+  expect_rejection bash "$repo_root/scripts/clients/validate-cursor-manifest.sh" --package "$copy"
+
+  copy="$temporary_root/manifest-regression-non-normalized-path"
+  cp -R "$package_root" "$copy"
+  jq '.rules = "./rules//"' "$copy/.cursor-plugin/plugin.json" >"$copy/.cursor-plugin/plugin.json.tmp"
+  mv "$copy/.cursor-plugin/plugin.json.tmp" "$copy/.cursor-plugin/plugin.json"
+  expect_rejection bash "$repo_root/scripts/clients/validate-cursor-manifest.sh" --package "$copy"
+
+  copy="$temporary_root/manifest-regression-extra-server"
+  cp -R "$package_root" "$copy"
+  jq '.mcpServers.evil = {"type":"stdio","command":"evil","args":[]}' "$copy/mcp.json" >"$copy/mcp.json.tmp"
+  mv "$copy/mcp.json.tmp" "$copy/mcp.json"
+  expect_rejection bash "$repo_root/scripts/clients/validate-cursor-manifest.sh" --package "$copy"
   bash "$repo_root/scripts/clients/validate-cursor-manifest.sh" --package "$package_root"
   printf '%s\n' 'CURSOR_MANIFEST_REGRESSION_OK'
+}
+
+# Prove the structured always-apply rule policy actually catches what it
+# claims to: mutating the optional preplan rule to alwaysApply:true must
+# fail (it must stay manual-only), and a guard rule present but with
+# weakened content must also fail -- the guard is accepted only with its
+# exact restrictive content and alwaysApply:true.
+run_always_apply_regression() {
+  local copy="$temporary_root/always-apply-preplan-mutant"
+  cp -R "$package_root" "$copy"
+  perl -0pi -e 's/alwaysApply: false/alwaysApply: true/' "$copy/rules/preplan-optional.mdc"
+  grep -Fq 'alwaysApply: true' "$copy/rules/preplan-optional.mdc"
+  expect_rejection bash "$repo_root/scripts/clients/validate-cursor-manifest.sh" --package "$copy"
+
+  copy="$temporary_root/always-apply-guard-content-mutant"
+  cp -R "$package_root" "$copy"
+  printf -- '---\nalwaysApply: true\n---\nDo whatever seems useful.\n' >"$copy/rules/no-automatic-use.mdc"
+  expect_rejection bash "$repo_root/scripts/clients/validate-cursor-manifest.sh" --package "$copy"
+
+  copy="$temporary_root/always-apply-guard-not-applied-mutant"
+  cp -R "$package_root" "$copy"
+  perl -0pi -e 's/alwaysApply: true/alwaysApply: false/' "$copy/rules/no-automatic-use.mdc"
+  expect_rejection bash "$repo_root/scripts/clients/validate-cursor-manifest.sh" --package "$copy"
+
+  bash "$repo_root/scripts/clients/validate-cursor-manifest.sh" --package "$package_root"
+  printf '%s\n' 'CURSOR_ALWAYS_APPLY_REGRESSION_OK'
+}
+
+# A reader that resolves the symlink once and holds that path across
+# several later update() calls must still find its files -- generations
+# are retained on disk until an owned uninstall, never pruned.
+run_slow_reader_multi_update() {
+  run_wrapper install.sh
+  local original_resolved
+  original_resolved="$(dirname "$config_root")/$(readlink "$config_root")"
+  [[ -f "$original_resolved/mcp.json" ]]
+  local update_count
+  for ((update_count = 1; update_count <= 5; update_count++)); do
+    run_wrapper update.sh >/dev/null
+  done
+  if [[ ! -f "$original_resolved/mcp.json" ]]; then
+    printf 'slow reader generation was lost across updates\n' >&2
+    exit 1
+  fi
+  if [[ ! -f "$original_resolved/.context-fabric-owner.v1" ]]; then
+    printf 'slow reader owner marker was lost across updates\n' >&2
+    exit 1
+  fi
+  run_wrapper uninstall.sh
+  if [[ -e "$original_resolved" ]]; then
+    printf 'uninstall did not clean up the retained generation\n' >&2
+    exit 1
+  fi
+  printf '%s\n' 'CURSOR_SLOW_READER_OK generations=6 retained_until_uninstall=true'
+}
+
+# Two independent installs sharing the same parent directory must never
+# observe, prune, or delete each other's generations -- stages are scoped
+# to the exact target path, not the shared parent.
+run_two_install_isolation() {
+  local config_a="$home/.cursor/plugins/local/context-fabric-a"
+  local config_b="$home/.cursor/plugins/local/context-fabric-b"
+  HOME="$home" CURSOR_PLUGIN_DIR="$config_a" "$package_root/scripts/install.sh" >/dev/null
+  HOME="$home" CURSOR_PLUGIN_DIR="$config_b" "$package_root/scripts/install.sh" >/dev/null
+  local update_count
+  for ((update_count = 1; update_count <= 3; update_count++)); do
+    HOME="$home" CURSOR_PLUGIN_DIR="$config_a" "$package_root/scripts/update.sh" >/dev/null
+  done
+  local a_count b_count
+  a_count="$(find "${config_a}.stages" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+  b_count="$(find "${config_b}.stages" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+  if [[ "$a_count" != 4 ]]; then
+    printf 'unexpected A generation count: %s\n' "$a_count" >&2
+    exit 1
+  fi
+  if [[ "$b_count" != 1 ]]; then
+    printf 'B was affected by A updates: count=%s\n' "$b_count" >&2
+    exit 1
+  fi
+  HOME="$home" CURSOR_PLUGIN_DIR="$config_a" "$package_root/scripts/uninstall.sh" >/dev/null
+  if [[ -e "$config_a" || -e "${config_a}.stages" ]]; then
+    printf 'uninstall of A left residue\n' >&2
+    exit 1
+  fi
+  if [[ ! -f "$config_b/mcp.json" ]]; then
+    printf 'B was damaged by uninstalling A\n' >&2
+    exit 1
+  fi
+  HOME="$home" CURSOR_PLUGIN_DIR="$config_b" "$package_root/scripts/uninstall.sh" >/dev/null
+  printf '%s\n' 'CURSOR_TWO_INSTALL_ISOLATION_OK'
 }
 
 # Prove native-check failures actually propagate: a fake `agent` binary
@@ -335,6 +452,9 @@ case "$scenario" in
   automatic-default) run_automatic_default ;;
   forbidden-pattern-regression) run_forbidden_pattern_regression ;;
   manifest-regression) run_manifest_regression ;;
+  always-apply-regression) run_always_apply_regression ;;
+  slow-reader-multi-update) run_slow_reader_multi_update ;;
+  two-install-isolation) run_two_install_isolation ;;
   native-check-regression) run_native_check_regression ;;
   concurrent-readers) run_concurrent_readers ;;
   out-of-tree) run_out_of_tree ;;

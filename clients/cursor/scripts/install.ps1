@@ -6,6 +6,7 @@ $packageRoot = Split-Path -Parent $PSScriptRoot
 $configRoot = if ($env:CURSOR_PLUGIN_DIR) { $env:CURSOR_PLUGIN_DIR } else { Join-Path $HOME ".cursor/plugins/local/context-fabric" }
 $ownerFile = ".context-fabric-owner.v1"
 $ownerValue = "context-fabric-cursor.v1"
+$stagesRoot = "$configRoot.stages"
 
 if (-not [IO.Path]::IsPathRooted($configRoot)) { throw "CURSOR_PLUGIN_DIR must be an absolute path" }
 if (Test-Path -LiteralPath $configRoot) {
@@ -13,9 +14,8 @@ if (Test-Path -LiteralPath $configRoot) {
   if ($entries.Count -eq 0) { Remove-Item -LiteralPath $configRoot -Force } else { throw "refusing to install into a non-empty target" }
 }
 
-$parent = Split-Path -Parent $configRoot
-New-Item -ItemType Directory -Force -Path $parent | Out-Null
-$stage = Join-Path $parent (".context-fabric-cursor." + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force -Path $stagesRoot | Out-Null
+$stage = Join-Path $stagesRoot ([Guid]::NewGuid().ToString("N"))
 $installed = $false
 try {
   New-Item -ItemType Directory -Path $stage | Out-Null
@@ -26,7 +26,8 @@ try {
   Copy-Item -Recurse -Path (Join-Path $packageRoot "rules") -Destination (Join-Path $stage "rules")
   Copy-Item -Recurse -Path (Join-Path $packageRoot "skills") -Destination (Join-Path $stage "skills")
   Set-Content -NoNewline -Path (Join-Path $stage $ownerFile) -Value $ownerValue
-  New-Item -ItemType SymbolicLink -Path $configRoot -Target (Split-Path -Leaf $stage) | Out-Null
+  $targetName = Split-Path -Leaf $configRoot
+  New-Item -ItemType SymbolicLink -Path $configRoot -Target "$targetName.stages/$(Split-Path -Leaf $stage)" | Out-Null
   $installed = $true
 } finally {
   if (-not $installed -and (Test-Path -LiteralPath $stage)) { Remove-Item -Recurse -Force -LiteralPath $stage }

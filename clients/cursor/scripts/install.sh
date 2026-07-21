@@ -5,6 +5,10 @@ package_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 config_root="${CURSOR_PLUGIN_DIR:-${HOME:?HOME is required}/.cursor/plugins/local/context-fabric}"
 owner_file=".context-fabric-owner.v1"
 owner_value="context-fabric-cursor.v1"
+# Stages for this target live in a directory scoped to the target's own
+# name, never in the shared parent -- so a sibling install under the same
+# parent can never observe, prune, or delete this target's generations.
+stages_root="${config_root}.stages"
 
 if [[ "$config_root" != /* ]]; then
   printf '%s\n' 'CURSOR_PLUGIN_DIR must be an absolute path' >&2
@@ -19,9 +23,8 @@ if [[ -e "$config_root" ]]; then
   fi
 fi
 
-parent="$(dirname "$config_root")"
-mkdir -p "$parent"
-stage="$(mktemp -d "$parent/.context-fabric-cursor.XXXXXX")"
+mkdir -p "$stages_root"
+stage="$(mktemp -d "$stages_root/XXXXXX")"
 installed=0
 cleanup() { if (( ! installed )); then rm -rf "$stage"; fi; }
 trap cleanup EXIT
@@ -32,7 +35,8 @@ cp -R "$package_root/commands" "$stage/commands"
 cp -R "$package_root/rules" "$stage/rules"
 cp -R "$package_root/skills" "$stage/skills"
 printf '%s\n' "$owner_value" >"$stage/$owner_file"
-ln -s "$(basename "$stage")" "$config_root"
+target_name="$(basename "$config_root")"
+ln -s "$target_name.stages/$(basename "$stage")" "$config_root"
 installed=1
 trap - EXIT
 printf 'installed Context Fabric Cursor plugin at %s\n' "$config_root"

@@ -6,14 +6,22 @@ $packageRoot = Split-Path -Parent $PSScriptRoot
 $configRoot = if ($env:CURSOR_PLUGIN_DIR) { $env:CURSOR_PLUGIN_DIR } else { Join-Path $HOME ".cursor/plugins/local/context-fabric" }
 $ownerFile = ".context-fabric-owner.v1"
 $ownerValue = "context-fabric-cursor.v1"
+# Stages for this target live in a directory scoped to the target's own
+# name, never in the shared parent -- so a sibling install under the same
+# parent can never observe or delete this target's generations. Every
+# generation is retained on disk until an owned uninstall removes it.
+$stagesRoot = "$configRoot.stages"
 
 function Get-OwnedStage {
   param([string]$Root)
   $item = Get-Item -Force -LiteralPath $Root -ErrorAction SilentlyContinue
   if ($null -eq $item -or $item.LinkType -ne "SymbolicLink") { return $null }
   $target = [string]$item.Target
-  if ($target -notmatch '^\.context-fabric-cursor\.[A-Za-z0-9]+$') { return $null }
-  $stage = Join-Path (Split-Path -Parent $Root) $target
+  $prefix = (Split-Path -Leaf $Root) + ".stages/"
+  if (-not $target.StartsWith($prefix)) { return $null }
+  $remainder = $target.Substring($prefix.Length)
+  if ($remainder.Length -eq 0 -or $remainder.Contains("/") -or $remainder.Contains("\")) { return $null }
+  $stage = Join-Path "$Root.stages" $remainder
   $marker = Join-Path $stage $ownerFile
   $stageItem = Get-Item -Force -LiteralPath $stage -ErrorAction SilentlyContinue
   $markerItem = Get-Item -Force -LiteralPath $marker -ErrorAction SilentlyContinue
@@ -22,25 +30,50 @@ function Get-OwnedStage {
   return $stage
 }
 
-function Remove-OlderGenerations {
-  param([string]$Parent, [string]$Keep)
-  Get-ChildItem -Force -LiteralPath $Parent -Filter ".context-fabric-cursor.*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-    if ($_.FullName -eq $Keep) { return }
-    $marker = Join-Path $_.FullName $ownerFile
-    $markerItem = Get-Item -Force -LiteralPath $marker -ErrorAction SilentlyContinue
-    if ($null -eq $markerItem -or $markerItem.LinkType) { return }
-    if ((Get-Content -Raw -LiteralPath $marker) -ne $ownerValue) { return }
-    Remove-Item -Recurse -Force -LiteralPath $_.FullName
+# Atomically replace the symlink at $Destination with $Source using a
+# single, checked native syscall -- never a delete-then-create pair, which
+# would leave a window where $Destination briefly does not exist. Windows
+# uses MoveFileEx with the single, bounded MOVEFILE_REPLACE_EXISTING flag
+# (no MOVEFILE_COPY_ALLOWED, no delayed-reboot flag); everywhere else uses
+# POSIX rename(2), which atomically replaces an existing symlink target by
+# directory-entry swap without dereferencing it.
+function Invoke-AtomicReplace {
+  param([string]$Source, [string]$Destination)
+  if ($IsWindows) {
+    if (-not ([System.Management.Automation.PSTypeName]"ContextFabricNative.Interop").Type) {
+      Add-Type -Namespace ContextFabricNative -Name Interop -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, uint dwFlags);
+'@
+    }
+    $moveFileReplaceExisting = 0x1
+    $ok = [ContextFabricNative.Interop]::MoveFileEx($Source, $Destination, $moveFileReplaceExisting)
+    if (-not $ok) {
+      $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+      throw "MoveFileEx atomic replace failed with Win32 error $errorCode"
+    }
+  } else {
+    if (-not ([System.Management.Automation.PSTypeName]"ContextFabricNative.Interop").Type) {
+      Add-Type -Namespace ContextFabricNative -Name Interop -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+public static extern int rename(string oldpath, string newpath);
+'@
+    }
+    $result = [ContextFabricNative.Interop]::rename($Source, $Destination)
+    if ($result -ne 0) {
+      $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+      throw "rename atomic replace failed with errno $errorCode"
+    }
   }
 }
 
 if (-not [IO.Path]::IsPathRooted($configRoot)) { throw "refusing to update a target not owned by Context Fabric" }
-$previousStage = Get-OwnedStage $configRoot
-if ($null -eq $previousStage) { throw "refusing to update a target not owned by Context Fabric" }
+if ($null -eq (Get-OwnedStage $configRoot)) { throw "refusing to update a target not owned by Context Fabric" }
+New-Item -ItemType Directory -Force -Path $stagesRoot | Out-Null
+$stage = Join-Path $stagesRoot ([Guid]::NewGuid().ToString("N"))
 $parent = Split-Path -Parent $configRoot
-Remove-OlderGenerations -Parent $parent -Keep $previousStage
-$stage = Join-Path $parent (".context-fabric-cursor." + [Guid]::NewGuid().ToString("N"))
 $link = Join-Path $parent (".context-fabric-cursor.link." + [Guid]::NewGuid().ToString("N"))
+$targetName = Split-Path -Leaf $configRoot
 try {
   New-Item -ItemType Directory -Path $stage | Out-Null
   New-Item -ItemType Directory -Path (Join-Path $stage ".cursor-plugin") | Out-Null
@@ -50,11 +83,10 @@ try {
   Copy-Item -Recurse -Path (Join-Path $packageRoot "rules") -Destination (Join-Path $stage "rules")
   Copy-Item -Recurse -Path (Join-Path $packageRoot "skills") -Destination (Join-Path $stage "skills")
   Set-Content -NoNewline -Path (Join-Path $stage $ownerFile) -Value $ownerValue
-  New-Item -ItemType SymbolicLink -Path $link -Target (Split-Path -Leaf $stage) | Out-Null
-  if (Test-Path -LiteralPath $configRoot) { Remove-Item -Force -LiteralPath $configRoot }
-  Move-Item -LiteralPath $link -Destination $configRoot -Force
+  New-Item -ItemType SymbolicLink -Path $link -Target "$targetName.stages/$(Split-Path -Leaf $stage)" | Out-Null
+  Invoke-AtomicReplace -Source $link -Destination $configRoot
 } finally {
   if (Test-Path -LiteralPath $link) { Remove-Item -Force -LiteralPath $link }
   if ((Test-Path -LiteralPath $stage) -and ((Get-OwnedStage $configRoot) -ne $stage)) { Remove-Item -Recurse -Force -LiteralPath $stage }
 }
-Write-Output "updated Context Fabric Cursor plugin at $configRoot (retained previous generation $previousStage)"
+Write-Output "updated Context Fabric Cursor plugin at $configRoot (all prior generations retained under $stagesRoot until uninstall)"
