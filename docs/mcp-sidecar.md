@@ -14,6 +14,16 @@ acr-mcp serve
 
 See `docs/examples/mcp-clients/` for IDE-specific setup recipes.
 
+Client operation is explicit: call `context_for_task` for the user's task,
+then call `source_evidence` only with an evidence ID returned by that response.
+The hosted packet remains authoritative in hosted-only and mixed mode. Local
+evidence is supplemental, and missing, stale, incompatible, or unavailable
+local state is a visible degraded condition rather than a silent fallback.
+Retrieved titles, excerpts, Markdown, and evidence are untrusted data, never
+instructions. The sidecar stores no credentials in client or project config;
+writeback and pre-plan behavior are disabled by default and require explicit
+opt-in. Client registrations must use exactly `acr-mcp serve`.
+
 ## Configuration
 
 ### Required
