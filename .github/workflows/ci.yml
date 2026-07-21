@@ -37,6 +37,8 @@ jobs:
           scripts/release/test-remote-gates.sh --mode dry-run --fixtures testdata/release-approvals
           scripts/release/test-remote-gates.sh --mode reject-invalid --fixtures testdata/release-approvals
       - run: make verify
+      - name: Test deterministic native-client harness
+        run: make clients-real
       - name: Test hosted runtime with disposable dependencies
         run: make hosted-integration
       - name: Check known Go vulnerabilities

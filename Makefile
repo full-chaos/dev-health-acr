@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test hosted-integration vet contract-write contract-test codegraph-contract canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan
+.PHONY: fmt fmt-check test hosted-integration clients-real vet contract-write contract-test codegraph-contract canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -15,6 +15,12 @@ test:
 
 hosted-integration:
 	ACR_HOSTED_INTEGRATION=1 go test ./cmd/acr-api -run '^TestHostedRuntime_real_binary_serves_and_fails_readiness_safely$$' -count=1 -v
+
+clients-real:
+	bash scripts/clients/test-conformance.sh --clients opencode,claude-code,codex,cursor
+	bash scripts/clients/test-real-clients.sh --self-test
+	bash scripts/clients/test-real-clients.sh --self-test-release-dir
+	bash scripts/clients/test-real-clients.sh --self-test-leaked-home
 
 vet:
 	go vet ./...
