@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -22,8 +21,8 @@ func Run(ctx context.Context, invocation Invocation) (Result, error) {
 	command := exec.Command(invocation.Binary, invocation.Args...)
 	command.Env = invocation.Env
 	command.Dir = invocation.Dir
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	output := &limitedBuffer{limit: maxOutput}
+	output := &limitedBuffer{limit: maxOutput, overflow: make(chan struct{}, 1)}
+	configureProcess(command)
 	command.Stdout, command.Stderr = output, output
 	if err := command.Start(); err != nil {
 		return Result{}, fmt.Errorf("native adapter start: %w", err)
@@ -38,12 +37,16 @@ func Run(ctx context.Context, invocation Invocation) (Result, error) {
 		if err != nil {
 			return Result{}, fmt.Errorf("native adapter exit: %w", err)
 		}
+	case <-output.overflow:
+		stopProcess(command)
+		<-written
+		return Result{}, ErrOutputLimit
 	case <-ctx.Done():
-		terminate(command.Process.Pid)
+		stopProcess(command)
 		select {
 		case <-written:
 		case <-time.After(2 * time.Second):
-			_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+			killProcess(command)
 			<-written
 		}
 		return Result{}, fmt.Errorf("native adapter deadline: %w", ctx.Err())
@@ -54,13 +57,12 @@ func Run(ctx context.Context, invocation Invocation) (Result, error) {
 	return Result{Output: output.Bytes()}, nil
 }
 
-func terminate(pid int) { _ = syscall.Kill(-pid, syscall.SIGTERM) }
-
 type limitedBuffer struct {
 	mu       sync.Mutex
 	buffer   bytes.Buffer
 	limit    int
 	exceeded bool
+	overflow chan struct{}
 }
 
 func (buffer *limitedBuffer) Write(value []byte) (int, error) {
@@ -72,6 +74,10 @@ func (buffer *limitedBuffer) Write(value []byte) (int, error) {
 			_, _ = buffer.buffer.Write(value[:remaining])
 		}
 		buffer.exceeded = true
+		select {
+		case buffer.overflow <- struct{}{}:
+		default:
+		}
 		return len(value), nil
 	}
 	return buffer.buffer.Write(value)
@@ -87,7 +93,7 @@ func Redact(value string, roots Roots) string {
 	for _, secret := range []string{"not-a-secret", "ACR_NATIVE_DUMMY_TOKEN"} {
 		value = strings.ReplaceAll(value, secret, "[REDACTED]")
 	}
-	for _, path := range []string{roots.Home, roots.Config, roots.Work} {
+	for _, path := range []string{roots.Home, roots.Config, roots.Work, roots.Sidecar} {
 		value = strings.ReplaceAll(value, path, "[ISOLATED_PATH]")
 	}
 	return value
