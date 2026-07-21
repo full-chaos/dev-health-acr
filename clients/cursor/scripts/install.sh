@@ -7,6 +7,12 @@ marker_file=".context-fabric-owner.v1"
 marker_prefix="context-fabric-cursor.v1"
 target_created=0
 install_complete=0
+lock_acquired=0
+lock_dir=""
+install_owner_file=""
+install_owner_token=""
+created_payload_files=()
+created_payload_dirs=()
 
 # The plugin lives at $config_root as a stable, owned, real directory --
 # never a symlink or junction. Updates replace files in place; there is no
@@ -35,17 +41,16 @@ atomic_write() {
     printf 'refusing to write through a non-directory or symlinked payload parent: %s\n' "$dest_dir" >&2
     return 1
   fi
-  if [[ -e "$dest" || -L "$dest" ]]; then
-    [[ -f "$dest" && ! -L "$dest" ]] || {
-      printf 'refusing to replace a non-regular or symlinked payload destination: %s\n' "$dest" >&2
-      return 1
-    }
-  fi
+  [[ ! -e "$dest" && ! -L "$dest" ]] || {
+    printf 'refusing to replace an existing payload destination during install: %s\n' "$dest" >&2
+    return 1
+  }
   tmp="$(mktemp "$dest_dir/.atomic.XXXXXX")" || return 1
   if ! cp "$src" "$tmp" || ! mv -f "$tmp" "$dest"; then
     rm -f "$tmp"
     return 1
   fi
+  created_payload_files+=("$dest")
 }
 
 ensure_real_directory() {
@@ -57,6 +62,7 @@ ensure_real_directory() {
     }
   else
     mkdir "$directory"
+    created_payload_dirs+=("$directory")
   fi
 }
 
@@ -78,27 +84,77 @@ write_marker() {
       return 1
     fi
   }
-  if [[ -e "$config_root/$marker_file" || -L "$config_root/$marker_file" ]]; then
-    [[ -f "$config_root/$marker_file" && ! -L "$config_root/$marker_file" ]] || {
-      printf 'refusing to replace a non-regular or symlinked marker\n' >&2
-      return 1
-    }
-  fi
-  atomic_write_text "$marker_tmp" "$marker_value" "$config_root/$marker_file"
+  [[ ! -e "$config_root/$marker_file" && ! -L "$config_root/$marker_file" ]] || {
+    printf 'refusing to replace an existing marker during install\n' >&2
+    return 1
+  }
+  atomic_write_text "$marker_tmp" "$marker_value" "$config_root/$marker_file" || return 1
+  created_payload_files+=("$config_root/$marker_file")
+}
+
+release_install_lock() {
+  (( lock_acquired )) || return 0
+  rmdir -- "$lock_dir" || {
+    printf 'refusing to leave an unremovable install lock: %s\n' "$lock_dir" >&2
+    return 1
+  }
+  lock_acquired=0
+}
+
+cleanup_created_payload() {
+  local path index
+  for (( index = ${#created_payload_files[@]} - 1; index >= 0; index-- )); do
+    path="${created_payload_files[index]}"
+    [[ -f "$path" && ! -L "$path" ]] && rm -f -- "$path"
+  done
+  for (( index = ${#created_payload_dirs[@]} - 1; index >= 0; index-- )); do
+    path="${created_payload_dirs[index]}"
+    [[ -d "$path" && ! -L "$path" ]] && rmdir -- "$path" 2>/dev/null || true
+  done
+}
+
+run_owns_created_target() {
+  [[ -n "$install_owner_file" && -f "$install_owner_file" && ! -L "$install_owner_file" ]] || return 1
+  [[ "$(cat "$install_owner_file")" == "$install_owner_token" ]]
 }
 
 cleanup_failed_install() {
-  (( install_complete || ! target_created )) && return 0
-  [[ -L "$config_root" ]] && return 0
-  rm -rf "$config_root"
+  (( install_complete )) && return 0
+  if (( target_created )) && run_owns_created_target; then
+    cleanup_created_payload
+    rm -f -- "$install_owner_file"
+    install_owner_file=""
+    [[ -d "$config_root" && ! -L "$config_root" ]] && rmdir -- "$config_root" 2>/dev/null || true
+  else
+    cleanup_created_payload
+  fi
 }
 
-trap cleanup_failed_install EXIT
+cleanup_install() {
+  local status=$?
+  cleanup_failed_install
+  release_install_lock || status=1
+  exit "$status"
+}
+
+trap cleanup_install EXIT
 
 if [[ "$config_root" != /* ]]; then
   printf '%s\n' 'CURSOR_PLUGIN_DIR must be an absolute path' >&2
   exit 2
 fi
+config_parent="$(dirname "$config_root")"
+mkdir -p "$config_parent"
+[[ -d "$config_parent" && ! -L "$config_parent" ]] || {
+  printf 'refusing to create an install lock beneath a non-directory or symlinked parent: %s\n' "$config_parent" >&2
+  exit 1
+}
+lock_dir="${config_root}.install.lock"
+mkdir -- "$lock_dir" || {
+  printf 'refusing to install while another install holds the target lock: %s\n' "$config_root" >&2
+  exit 1
+}
+lock_acquired=1
 if [[ -L "$config_root" ]]; then
   printf '%s\n' 'refusing to operate on a legacy symlink or junction target; remove it manually first' >&2
   exit 1
@@ -111,7 +167,14 @@ if [[ -e "$config_root" ]]; then
     exit 1
   fi
 else
+  mkdir -- "$config_root" || {
+    printf 'refusing to install because the target appeared during creation: %s\n' "$config_root" >&2
+    exit 1
+  }
   target_created=1
+  install_owner_file="$(mktemp "$config_root/.install-owner.XXXXXX")"
+  install_owner_token="${BASHPID}-${RANDOM}-${RANDOM}"
+  printf '%s\n' "$install_owner_token" >"$install_owner_file"
 fi
 
 # Full staged validation before any mutation: every required source file
@@ -125,12 +188,6 @@ done
 
 marker_value="$marker_prefix $(payload_revision)"
 
-# Required directories exist before any file is replaced.
-mkdir -p "$config_root"
-[[ -d "$config_root" && ! -L "$config_root" ]] || {
-  printf '%s\n' 'refusing to operate on a legacy symlink or junction target; remove it manually first' >&2
-  exit 1
-}
 ensure_real_directory "$config_root/.cursor-plugin"
 ensure_real_directory "$config_root/commands"
 ensure_real_directory "$config_root/rules"
@@ -146,6 +203,14 @@ done
 # execution never reaches this line and the marker still reflects "not yet
 # owned" (absent) or the prior owned state, so a rerun converges safely.
 write_marker "$marker_value"
+if (( target_created )); then
+  run_owns_created_target || {
+    printf '%s\n' 'refusing to complete an install whose created target ownership changed' >&2
+    exit 1
+  }
+  rm -f -- "$install_owner_file"
+  install_owner_file=""
+fi
 install_complete=1
 
 printf 'installed Context Fabric Cursor plugin at %s\n' "$config_root"
