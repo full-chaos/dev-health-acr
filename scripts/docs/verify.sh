@@ -150,6 +150,12 @@ unsafe_claim 'ACR-owned CodeGraph index lifecycle claim' 'ACR (runs|run) CodeGra
 unsafe_claim 'ACR SQLite access claim' 'ACR (reads|read|accesses|access).*SQLite'
 unsafe_claim 'inferred indexed commit claim' 'ACR infers.*indexed commit|indexed commit.*(workspace HEAD|current HEAD)'
 unsafe_claim 'local configuration breaks hosted bootstrap claim' 'local (configuration|config).{0,80}(prevents|blocks|fails).{0,80}hosted bootstrap'
+unsafe_claim 'bare acr-mcp server registration' "bare[[:space:]]+acr-mcp|command[[:space:]]*[:=][[:space:]]*[\"']acr-mcp[\"'][[:space:]]*$"
+unsafe_claim 'credential copied into project configuration' 'copy (credentials|tokens?) into (a )?project|credential(s)? (in|inside) project (file|config)'
+unsafe_claim 'CodeGraph initialization or reindex claim' 'initialize CodeGraph|initialise CodeGraph|reindex CodeGraph|rebuild CodeGraph|CodeGraph initialization is supported'
+unsafe_claim 'direct hosted or CodeGraph call claim' 'call(s)? (the )?(hosted )?API directly|directly call(s)? CodeGraph|direct CodeGraph call'
+unsafe_claim 'automatic pre-plan claim' 'automatic(ally)?[[:space:]]+pre-plan|pre-plan.{0,40}(automatic|enabled by default)'
+unsafe_claim 'public release claim' 'public(ly)?[[:space:]]+(release|published)|production release has been created or published'
 
 if [ "$fixture_mode" = true ]; then
   if [ "$fail_count" -ne 0 ]; then
@@ -174,6 +180,13 @@ require_doc_text() {
 mcp_doc="$root/docs/mcp-sidecar.md"
 threat_doc="$root/docs/threat-model.md"
 client_doc="$root/docs/examples/mcp-clients/README.md"
+client_docs=(
+  "$root/docs/examples/mcp-clients/README.md"
+  "$root/docs/examples/mcp-clients/opencode.md"
+  "$root/docs/examples/mcp-clients/claude-code.md"
+  "$root/docs/examples/mcp-clients/codex.md"
+  "$root/docs/examples/mcp-clients/cursor.md"
+)
 require_doc_text "$readme" "CodeGraph \`>=1.2.0,<2.0.0\`" "README pins the supported CodeGraph range"
 require_doc_text "$readme" "it never runs \`init\`, \`index\`, or" "README documents the read-only direct/managed guard"
 require_doc_text "$mcp_doc" "\`ACR_LOCAL_INDEX_PROVIDER\`" "sidecar documents local provider configuration"
@@ -184,6 +197,28 @@ require_doc_text "$operations_doc" 'ACR_E2E_EXPECTED_FAILURE_VALIDATED' 'operati
 require_doc_text "$operations_doc" 'residual final-wave F2 risk' 'operations discloses the live-CodeGraph residual risk'
 require_doc_text "$threat_doc" 'never uploaded to acr-api' 'threat model documents the local upload boundary'
 require_doc_text "$client_doc" 'clients must not call' 'client examples preserve sidecar ownership'
+
+for client_doc_path in "${client_docs[@]}"; do
+  client_name="${client_doc_path##*/}"
+  require_doc_text "$client_doc_path" 'acr-mcp serve' "$client_name documents exact serve registration"
+  require_doc_text "$client_doc_path" 'acr-mcp doctor --offline' "$client_name documents offline doctor"
+  require_doc_text "$client_doc_path" 'context_for_task' "$client_name documents context workflow"
+  require_doc_text "$client_doc_path" 'source_evidence' "$client_name documents evidence workflow"
+  require_doc_text "$client_doc_path" 'untrusted data' "$client_name documents untrusted content"
+  require_doc_text "$client_doc_path" 'degraded' "$client_name documents visible degradation"
+  require_doc_text "$client_doc_path" 'disabled by default' "$client_name documents disabled defaults"
+  require_doc_text "$client_doc_path" 'README.md' "$client_name links shared index"
+done
+
+for package_readme in "$root"/clients/{opencode,claude-code,codex}/README.md; do
+  if [ ! -f "$package_readme" ]; then
+    fail "client package README is missing: ${package_readme#"$root"/}"
+  elif grep -Fq 'Reserved Task 12 namespace' "$package_readme"; then
+    fail "stale client package README placeholder: ${package_readme#"$root"/}"
+  else
+    ok "client package README is actionable: ${package_readme#"$root"/}"
+  fi
+done
 
 # --- 3. README links docs/container-images.md and lists commands -------
 required_commands="make container-contract

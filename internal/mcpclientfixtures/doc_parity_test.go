@@ -12,6 +12,7 @@ import (
 // this test suite covers, relative to the repository root.
 var docPaths = []string{
 	"docs/examples/mcp-clients/README.md",
+	"docs/examples/mcp-clients/opencode.md",
 	"docs/examples/mcp-clients/claude-code.md",
 	"docs/examples/mcp-clients/cursor.md",
 	"docs/examples/mcp-clients/codex.md",
