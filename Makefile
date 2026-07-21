@@ -1,7 +1,8 @@
-.PHONY: fmt fmt-check test hosted-integration clients-real vet contract-write contract-test codegraph-contract canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan
+.PHONY: fmt fmt-check test hosted-integration clients-real ci-evidence ci-evidence-test vet contract-write contract-test codegraph-contract canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
+CI_EVIDENCE_OUTPUT ?= .tmp/ci-evidence
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './vendor/*')
@@ -21,6 +22,12 @@ clients-real:
 	bash scripts/clients/test-real-clients.sh --self-test
 	bash scripts/clients/test-real-clients.sh --self-test-release-dir
 	bash scripts/clients/test-real-clients.sh --self-test-leaked-home
+
+ci-evidence:
+	bash scripts/clients/ci-evidence-gate.sh --mode generate --out "$(CI_EVIDENCE_OUTPUT)"
+
+ci-evidence-test:
+	bash scripts/clients/test-ci-evidence.sh
 
 vet:
 	go vet ./...

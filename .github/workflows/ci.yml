@@ -39,6 +39,16 @@ jobs:
       - run: make verify
       - name: Test deterministic native-client harness
         run: make clients-real
+      - name: Generate Task 14-17 CI evidence receipts
+        run: make ci-evidence
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: task14-17-ci-evidence
+          path: .tmp/ci-evidence/
+          if-no-files-found: warn
+          retention-days: 7
       - name: Test hosted runtime with disposable dependencies
         run: make hosted-integration
       - name: Check known Go vulnerabilities
