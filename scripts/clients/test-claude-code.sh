@@ -55,14 +55,21 @@ case "$scenario" in
     run_claude plugin list --available --json | grep -Fq 'context-fabric'
     run_claude plugin install --scope user context-fabric@context-fabric
     run_claude plugin list --json | grep -Fq 'context-fabric@context-fabric'
+    run_claude plugin list --json | grep -Fq '"version": "1.0.0"'
     run_claude plugin details context-fabric@context-fabric | grep -Fq 'MCP servers (1)  acr'
+    perl -0pi -e 's/"version": "1\.0\.0"/"version": "1.0.1"/' "$install_source/.claude-plugin/marketplace.json"
+    perl -0pi -e 's/"version": "1\.0\.0"/"version": "1.0.1"/; s/local MCP sidecar/local MCP sidecar update-fixture/' "$install_source/plugins/context-fabric/.claude-plugin/plugin.json"
+    run_claude plugin marketplace update context-fabric
     run_claude plugin update --scope user context-fabric@context-fabric
-    go test ./internal/mcp -run '^TestCommandTransportE2EBothToolsAgainstLiveTLSFixture$' -count=1
+    run_claude plugin list --json | grep -Fq '"version": "1.0.1"'
+    run_claude plugin details context-fabric@context-fabric | grep -Fq 'update-fixture'
     run_claude plugin uninstall --scope user context-fabric@context-fabric
     ! run_claude plugin list --json | grep -Fq 'context-fabric@context-fabric'
     run_claude plugin marketplace remove --scope user context-fabric
-    ! test -e "$home/.claude/plugins/marketplaces/context-fabric"
-    printf '%s\n' 'CLAUDE_CODE_LIFECYCLE_OK marketplace=passed install=passed mcp=loaded hosted_mixed_evidence_fixture=passed update=passed uninstall=passed model_credentials=not-required'
+    ! run_claude plugin marketplace list | grep -Fq 'context-fabric'
+    if grep -R -Fq --exclude-dir=cache 'context-fabric' "$home/.claude"; then exit 1; fi
+    test -d "$home/.claude/plugins/cache/context-fabric/context-fabric/1.0.1"
+    printf '%s\n' 'CLAUDE_CODE_LIFECYCLE_OK marketplace=passed install=passed mcp=loaded native_update=1.0.0-to-1.0.1 active_state=removed native_orphan_cache=retained model_credentials=not-required'
     ;;
   bare-acr-mcp)
     copy="$temporary_root/marketplace"
