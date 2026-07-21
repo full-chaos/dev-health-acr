@@ -61,16 +61,21 @@ if [[ -n "$required" ]]; then
   exit 0
 fi
 
-for client in opencode claude codex; do
-  if command -v "$client" >/dev/null 2>&1; then
-    case "$client" in
-      opencode) run_if_available opencode test-opencode.sh --package clients/opencode --scenario lifecycle ;;
-      claude) run_if_available claude test-claude-code.sh --scenario lifecycle ;;
-      codex) run_if_available codex test-codex.sh ;;
-    esac
+# --self-test validates the conformance harness wiring deterministically,
+# independent of whether any native client is installed or of its exact
+# version -- native per-client lifecycles are exercised by the --require path
+# (F3). It records which native clients are available so callers see the
+# environment honestly.
+go -C "$repo_root" test -race -count=1 -run 'TestClientConformance|TestClientServeCommand' ./internal/mcpclientfixtures
+available=""
+unavailable=""
+for probe in opencode:opencode claude-code:claude codex:codex cursor:agent; do
+  client="${probe%%:*}"
+  binary="${probe##*:}"
+  if command -v "$binary" >/dev/null 2>&1; then
+    available="${available:+$available,}$client"
   else
-    printf 'REAL_CLIENT_UNAVAILABLE client=%s\n' "$client"
+    unavailable="${unavailable:+$unavailable,}$client"
   fi
 done
-bash "$repo_root/scripts/clients/test-cursor.sh" --package clients/cursor --scenario lifecycle --real-client-if-installed
-printf '%s\n' 'REAL_CLIENT_SELF_TEST_OK required_clients=not_enforced cursor_client=installed_or_not_installed'
+printf 'REAL_CLIENT_SELF_TEST_OK available=%s unavailable=%s registration=acr-mcp_serve\n' "${available:-none}" "${unavailable:-none}"
