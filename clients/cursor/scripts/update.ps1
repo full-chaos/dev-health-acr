@@ -22,10 +22,23 @@ function Get-OwnedStage {
   return $stage
 }
 
+function Remove-OlderGenerations {
+  param([string]$Parent, [string]$Keep)
+  Get-ChildItem -Force -LiteralPath $Parent -Filter ".context-fabric-cursor.*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+    if ($_.FullName -eq $Keep) { return }
+    $marker = Join-Path $_.FullName $ownerFile
+    $markerItem = Get-Item -Force -LiteralPath $marker -ErrorAction SilentlyContinue
+    if ($null -eq $markerItem -or $markerItem.LinkType) { return }
+    if ((Get-Content -Raw -LiteralPath $marker) -ne $ownerValue) { return }
+    Remove-Item -Recurse -Force -LiteralPath $_.FullName
+  }
+}
+
 if (-not [IO.Path]::IsPathRooted($configRoot)) { throw "refusing to update a target not owned by Context Fabric" }
 $previousStage = Get-OwnedStage $configRoot
 if ($null -eq $previousStage) { throw "refusing to update a target not owned by Context Fabric" }
 $parent = Split-Path -Parent $configRoot
+Remove-OlderGenerations -Parent $parent -Keep $previousStage
 $stage = Join-Path $parent (".context-fabric-cursor." + [Guid]::NewGuid().ToString("N"))
 $link = Join-Path $parent (".context-fabric-cursor.link." + [Guid]::NewGuid().ToString("N"))
 try {
@@ -38,10 +51,10 @@ try {
   Copy-Item -Recurse -Path (Join-Path $packageRoot "skills") -Destination (Join-Path $stage "skills")
   Set-Content -NoNewline -Path (Join-Path $stage $ownerFile) -Value $ownerValue
   New-Item -ItemType SymbolicLink -Path $link -Target (Split-Path -Leaf $stage) | Out-Null
-  [IO.File]::Move($link, $configRoot, $true)
-  Remove-Item -Recurse -Force -LiteralPath $previousStage
+  if (Test-Path -LiteralPath $configRoot) { Remove-Item -Force -LiteralPath $configRoot }
+  Move-Item -LiteralPath $link -Destination $configRoot -Force
 } finally {
   if (Test-Path -LiteralPath $link) { Remove-Item -Force -LiteralPath $link }
   if ((Test-Path -LiteralPath $stage) -and ((Get-OwnedStage $configRoot) -ne $stage)) { Remove-Item -Recurse -Force -LiteralPath $stage }
 }
-Write-Output "updated Context Fabric Cursor plugin at $configRoot"
+Write-Output "updated Context Fabric Cursor plugin at $configRoot (retained previous generation $previousStage)"

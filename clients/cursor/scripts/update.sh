@@ -17,11 +17,24 @@ owned_stage() {
   printf '%s\n' "$stage"
 }
 
+prune_older_generations() {
+  local parent="$1" keep="$2" entry
+  for entry in "$parent"/.context-fabric-cursor.*; do
+    [[ -e "$entry" ]] || continue
+    [[ -d "$entry" && ! -L "$entry" ]] || continue
+    [[ "$entry" == "$keep" ]] && continue
+    [[ -f "$entry/$owner_file" && ! -L "$entry/$owner_file" ]] || continue
+    [[ "$(cat "$entry/$owner_file" 2>/dev/null)" == "$owner_value" ]] || continue
+    rm -rf "$entry"
+  done
+}
+
 if [[ "$config_root" != /* ]] || ! previous_stage="$(owned_stage)"; then
   printf '%s\n' 'refusing to update a target not owned by Context Fabric' >&2
   exit 1
 fi
 parent="$(dirname "$config_root")"
+prune_older_generations "$parent" "$previous_stage"
 stage="$(mktemp -d "$parent/.context-fabric-cursor.XXXXXX")"
 link="$(mktemp "$parent/.context-fabric-cursor.link.XXXXXX")"
 rm "$link"
@@ -46,8 +59,4 @@ else
 fi
 published=1
 trap - EXIT
-if ! rm -rf "$previous_stage"; then
-  printf '%s\n' 'updated Context Fabric Cursor plugin; old owned stage cleanup failed' >&2
-  exit 1
-fi
-printf 'updated Context Fabric Cursor plugin at %s\n' "$config_root"
+printf 'updated Context Fabric Cursor plugin at %s (retained previous generation %s)\n' "$config_root" "$previous_stage"
