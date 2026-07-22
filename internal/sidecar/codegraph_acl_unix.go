@@ -2,29 +2,16 @@
 
 package sidecar
 
-import (
-	"errors"
-
-	"golang.org/x/sys/unix"
-)
+import "golang.org/x/sys/unix"
 
 var codeGraphACLCheck = codeGraphRootHasOnlyBaseACL
 
 func codeGraphRootHasOnlyBaseACL(path string) bool {
-	name := "system.posix_acl_access"
-	if err := aclAbsent(path, name); err == nil {
-		return true
-	}
-	if err := aclAbsent(path, "com.apple.macl"); err == nil {
-		return true
-	}
-	return false
+	_, posixACLErr := unix.Getxattr(path, "system.posix_acl_access", nil)
+	_, maclErr := unix.Getxattr(path, "com.apple.macl", nil)
+	return aclAttributesAbsent(posixACLErr, maclErr)
 }
 
-func aclAbsent(path, name string) error {
-	_, err := unix.Getxattr(path, name, nil)
-	if errors.Is(err, unix.ENODATA) || errors.Is(err, unix.ENOATTR) {
-		return nil
-	}
-	return err
+func aclAttributesAbsent(posixACLErr, maclErr error) bool {
+	return isACLAttributeMissing(posixACLErr) && isACLAttributeMissing(maclErr)
 }

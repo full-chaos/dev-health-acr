@@ -3,6 +3,7 @@
 package sidecar
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -22,8 +23,7 @@ func TestTrustedCodeGraphIndexRejectsArbitrarySymlink(t *testing.T) {
 func TestTrustedCodeGraphIndexAcceptsManagedSymlink(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
-	managedRoot := filepath.Join(home, ".omo", "codegraph", "projects")
-	require.NoError(t, os.MkdirAll(managedRoot, 0o700))
+	managedRoot := managedCodeGraphFixtureRoot(t, home)
 	target, err := os.MkdirTemp(managedRoot, "acr-test-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(target) })
@@ -40,7 +40,7 @@ func TestTrustedCodeGraphIndexAcceptsPrimaryGroupWritableManagedRoot(t *testing.
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(repo) })
 	require.NoError(t, os.Chmod(repo, 0o775))
-	managed := filepath.Join(home, ".omo", "codegraph", "projects")
+	managed := managedCodeGraphFixtureRoot(t, home)
 	target, err := os.MkdirTemp(managed, "acr-test-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(target) })
@@ -71,7 +71,7 @@ func TestTrustedCodeGraphIndexRejectsExtraACLForGroupWritableRoot(t *testing.T) 
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(repo) })
 	require.NoError(t, os.Chmod(repo, 0o775))
-	managed := filepath.Join(home, ".omo", "codegraph", "projects")
+	managed := managedCodeGraphFixtureRoot(t, home)
 	target, err := os.MkdirTemp(managed, "acr-test-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(target) })
@@ -87,7 +87,7 @@ func TestTrustedCodeGraphIndexRejectsWorldWritableRoot(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(repo) })
 	require.NoError(t, os.Chmod(repo, 0o777))
-	managed := filepath.Join(home, ".omo", "codegraph", "projects")
+	managed := managedCodeGraphFixtureRoot(t, home)
 	target, err := os.MkdirTemp(managed, "acr-test-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(target) })
@@ -99,7 +99,7 @@ func TestTrustedCodeGraphIndexRejectsWorldWritableRoot(t *testing.T) {
 func TestTrustedCodeGraphIndexRejectsManagedDatabaseSymlink(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
-	managed := filepath.Join(home, ".omo", "codegraph", "projects")
+	managed := managedCodeGraphFixtureRoot(t, home)
 	target, err := os.MkdirTemp(managed, "acr-test-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(target) })
@@ -116,7 +116,7 @@ func TestTrustedCodeGraphIndexRejectsManagedDatabaseSymlink(t *testing.T) {
 func TestTrustedCodeGraphIndexRejectsWritableManagedTarget(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
-	managed := filepath.Join(home, ".omo", "codegraph", "projects")
+	managed := managedCodeGraphFixtureRoot(t, home)
 	target, err := os.MkdirTemp(managed, "acr-test-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(target) })
@@ -132,7 +132,7 @@ func TestTrustedCodeGraphIndexRejectsWritableManagedTarget(t *testing.T) {
 func TestTrustedCodeGraphIndexRejectsNonDirectManagedTargets(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
-	managed := filepath.Join(home, ".omo", "codegraph", "projects")
+	managed := managedCodeGraphFixtureRoot(t, home)
 	outside := t.TempDir()
 	direct, err := os.MkdirTemp(managed, "acr-test-")
 	require.NoError(t, err)
@@ -188,7 +188,7 @@ func TestVerifyCurrentUserOwnedRejectsForeignManagedObjects(t *testing.T) {
 func TestTrustedCodeGraphIndexRejectsWritableAncestor(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
-	managed := filepath.Join(home, ".omo", "codegraph", "projects")
+	managed := managedCodeGraphFixtureRoot(t, home)
 	for _, mode := range []os.FileMode{0o775, 0o777} {
 		t.Run(mode.String(), func(t *testing.T) {
 			parent, createErr := os.MkdirTemp(home, "acr-parent-")
@@ -205,4 +205,29 @@ func TestTrustedCodeGraphIndexRejectsWritableAncestor(t *testing.T) {
 			require.False(t, trustedCodeGraphIndex(repo))
 		})
 	}
+}
+
+func TestManagedCodeGraphFixtureRootCreatesMissingDirectory(t *testing.T) {
+	// Given
+	home := t.TempDir()
+
+	// When
+	managedRoot := managedCodeGraphFixtureRoot(t, home)
+
+	// Then
+	info, err := os.Stat(managedRoot)
+	require.NoError(t, err)
+	require.True(t, info.IsDir())
+	require.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+}
+
+func managedCodeGraphFixtureRoot(t *testing.T, home string) string {
+	t.Helper()
+	managedRoot := filepath.Join(home, ".omo", "codegraph", "projects")
+	if _, err := os.Stat(managedRoot); errors.Is(err, os.ErrNotExist) {
+		require.NoError(t, os.MkdirAll(managedRoot, 0o700))
+	} else {
+		require.NoError(t, err)
+	}
+	return managedRoot
 }
