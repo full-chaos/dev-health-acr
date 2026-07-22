@@ -2,6 +2,8 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ops_root="${DEV_HEALTH_OPS_DIR:-$repo_root/../dev-health-ops}"
+web_root="${DEV_HEALTH_WEB_DIR:-$repo_root/../dev-health-web}"
 state_dir="${CONTEXT_FABRIC_LOCAL_STATE_DIR:-$repo_root/.local/context-fabric}"
 reset=false
 
@@ -30,6 +32,17 @@ for command in openssl python3; do
     exit 1
   }
 done
+
+[[ -f "$ops_root/compose.yml" ]] || {
+  printf 'dev-health-ops checkout not found: %s\n' "$ops_root" >&2
+  exit 1
+}
+[[ -f "$web_root/Dockerfile" && -f "$web_root/deploy/compose/web.compose.yml" ]] || {
+  printf 'dev-health-web checkout or Compose model not found: %s\n' "$web_root" >&2
+  exit 1
+}
+ops_root="$(cd "$ops_root" && pwd -P)"
+web_root="$(cd "$web_root" && pwd -P)"
 
 case "$state_dir" in
   /*) ;;
@@ -105,14 +118,28 @@ openssl genpkey -algorithm Ed25519 -out "$web_key" >/dev/null 2>&1
 public_x="$({ openssl pkey -in "$web_key" -pubout -outform DER 2>/dev/null || exit 1; } | tail -c 32 | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
 python3 - "$web_jwks" "$web_kid" "$public_x" <<'PY'
 from __future__ import annotations
+
 import json
 import sys
 from pathlib import Path
+
 Path(sys.argv[1]).write_text(
     json.dumps(
-        {"keys": [{"kty": "OKP", "crv": "Ed25519", "x": sys.argv[3], "kid": sys.argv[2], "use": "sig", "alg": "EdDSA"}]},
+        {
+            "keys": [
+                {
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "x": sys.argv[3],
+                    "kid": sys.argv[2],
+                    "use": "sig",
+                    "alg": "EdDSA",
+                }
+            ]
+        },
         separators=(",", ":"),
-    ) + "\n",
+    )
+    + "\n",
     encoding="utf-8",
 )
 PY
@@ -123,11 +150,19 @@ org_slug="context-fabric-local-$(openssl rand -hex 5)"
 repo_name="acme/live-e2e"
 cat >"$state_dir/compose.env" <<EOF_ENV
 COMPOSE_PROJECT_NAME=dev-health-context-fabric
-DEV_HEALTH_OPS_COMPOSE=$repo_root/../dev-health-ops/compose.yml
-DEV_HEALTH_WEB_COMPOSE=$repo_root/../dev-health-web/deploy/compose/web.compose.yml
+DEV_HEALTH_OPS_DIR=$ops_root
+DEV_HEALTH_OPS_COMPOSE=$ops_root/compose.yml
+DEV_HEALTH_WEB_DIR=$web_root
+DEV_HEALTH_WEB_COMPOSE=$web_root/deploy/compose/web.compose.yml
+DEV_HEALTH_NETWORK_NAME=dev-health-context-fabric
 ACR_IMAGE=dev-health-acr:local
 DEV_HEALTH_WEB_IMAGE=dev-health-web:local
 BUGSINK_SECRET_KEY=$(random_hex)
+POSTGRES_USER=postgres
+ACR_RUNTIME_DB_USER=acr_runtime
+ACR_MIGRATION_DB_USER=acr_migration
+ACR_ENABLE_EPISODE_WRITEBACK=false
+ACR_DEV_HEALTH_ENTITLEMENT_URL=https://acr-ops-tls:8443
 ACR_LOCAL_STATE_DIR=$state_dir
 ACR_LOCAL_PKI_DIR=$pki
 ACR_POSTGRES_ADMIN_PASSWORD_FILE=$secrets/postgres-admin-password
@@ -145,6 +180,7 @@ ACR_WEB_ASSERTION_JWKS_FILE=$web_jwks
 ACR_WEB_ASSERTION_KID=$web_kid
 ACR_WEB_ASSERTION_ISSUER=dev-health-web
 ACR_WEB_ASSERTION_AUDIENCE=dev-health-acr
+ACR_REQUEST_TIMEOUT_MS=5000
 ACR_DB_NAME=$acr_db
 ACR_EVIDENCE_DB=$evidence_db
 ACR_LOCAL_ORG_SLUG=$org_slug
@@ -155,17 +191,18 @@ DEV_HEALTH_WEB_PORT=3000
 EOF_ENV
 chmod 600 "$state_dir/compose.env"
 
-cat >"$state_dir/client.env" <<EOF_CLIENT
-export ACR_API_URL=https://localhost:8444
-export ACR_API_CA_BUNDLE=$pki/ca.crt
-export ACR_API_TOKEN_FILE=$secrets/acr-client-token
-export ACR_LOCAL_INDEX_PROVIDER=disabled
-export ACR_ENABLE_WRITEBACK=false
-export ACR_SIDECAR_VERSION=1.0.0
-export ACR_SIDECAR_CLIENT_VERSION=1.0.0
-export ACR_LOCAL_TEST_REPOSITORY=$repo_name
-export ACR_LOCAL_TEST_BRANCH=main
-EOF_CLIENT
+{
+  printf 'export PATH=%q:"$PATH"\n' "$state_dir"
+  printf 'export ACR_API_URL=%q\n' 'https://localhost:8444'
+  printf 'export ACR_API_CA_BUNDLE=%q\n' "$pki/ca.crt"
+  printf 'export ACR_API_TOKEN_FILE=%q\n' "$secrets/acr-client-token"
+  printf 'export ACR_LOCAL_INDEX_PROVIDER=%q\n' 'disabled'
+  printf 'export ACR_ENABLE_WRITEBACK=%q\n' 'false'
+  printf 'export ACR_SIDECAR_VERSION=%q\n' '1.0.0'
+  printf 'export ACR_SIDECAR_CLIENT_VERSION=%q\n' '1.0.0'
+  printf 'export ACR_LOCAL_TEST_REPOSITORY=%q\n' "$repo_name"
+  printf 'export ACR_LOCAL_TEST_BRANCH=%q\n' 'main'
+} >"$state_dir/client.env"
 chmod 600 "$state_dir/client.env"
 
 printf 'Context Fabric local state created at %s\n' "$state_dir"
