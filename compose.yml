@@ -1,0 +1,10 @@
+name: dev-health-context-fabric
+
+# Context Fabric is a platform Compose application, not a copied Ops stack.
+# Docker Compose 2.20.3+ resolves each included model relative to its owning
+# repository, then the root compose.override.yml applies the local TLS/bootstrap
+# integration across the combined graph.
+include:
+  - path: ${DEV_HEALTH_OPS_COMPOSE:-../dev-health-ops/compose.yml}
+  - path: deploy/compose/acr.compose.yml
+  - path: ${DEV_HEALTH_WEB_COMPOSE:-../dev-health-web/deploy/compose/web.compose.yml}
