@@ -6,11 +6,12 @@ root="$(cd "$script_dir/../.." && pwd -P)"
 plan=""
 evidence=""
 reviews=""
+lineage=""
 check_only=0
 self_test=0
 
 usage() {
-  printf '%s\n' 'Usage: verify-context-fabric-clients.sh --plan FILE --evidence DIR --check-only [--reviews DIR] [--root DIR] | --self-test'
+  printf '%s\n' 'Usage: verify-context-fabric-clients.sh --plan FILE --evidence DIR --check-only [--reviews DIR] [--lineage FILE] [--root DIR] | --self-test'
 }
 
 while (($#)); do
@@ -18,6 +19,7 @@ while (($#)); do
     --plan) plan="${2:?missing value}"; shift 2 ;;
     --evidence) evidence="${2:?missing value}"; shift 2 ;;
     --reviews) reviews="${2:?missing value}"; shift 2 ;;
+    --lineage) lineage="${2:?missing value}"; shift 2 ;;
     --root) root="${2:?missing value}"; shift 2 ;;
     --check-only) check_only=1; shift ;;
     --self-test) self_test=1; shift ;;
@@ -70,11 +72,12 @@ fi
 [[ -n "$plan" && -n "$evidence" && "$check_only" == 1 ]] || { usage >&2; exit 2; }
 [[ -f "$plan" && -d "$evidence" ]] || { printf '%s\n' 'FAIL: plan or evidence is missing' >&2; exit 1; }
 [[ -z "$reviews" || -d "$reviews" ]] || { printf '%s\n' 'FAIL: reviews directory is missing' >&2; exit 1; }
+[[ -n "$lineage" ]] || lineage="$evidence/context-fabric-replay-lineage.json"
 [[ -n "${CONTEXT_FABRIC_CLOSEOUT_SELFTEST:-}" || -z "$(git -C "$root" status --porcelain=v1)" ]] || { printf '%s\n' 'FAIL: dirty source worktree' >&2; exit 1; }
 
-python3 - "$root" "$plan" "$evidence" <<'PY'
+python3 - "$root" "$plan" "$evidence" "$lineage" <<'PY'
 import hashlib,json,re,subprocess,sys
-root,plan,evidence=sys.argv[1:]
+root,plan,evidence,lineage=sys.argv[1:]
 expected={
  '1':('context-fabric-01-codegraph-contract.md','73abfdc16d53253c52c046e067e6eb083a1293eb2e714d26c2a54c1787a491a9'),
  '2':('context-fabric-02-provider-contract.txt','f43b0d83191c55e9f60c164700b72e2cc1b0410b55576a930b09797cd15fa9c8'),
@@ -83,16 +86,16 @@ expected={
  '5':('context-fabric-05-freshness-errors.json','138e2a62806f399e33a64b27c72a5f73f87c8eefa7c5d873d4af02a2a68e21d9'),
  '6':('context-fabric-06-mcp-contracts.txt','49e74a3fc624b08666c48f76efdf4755e89e93f8a8ae1a4c77e72dc0220fa33e'),
  '7':('context-fabric-07-federation-routing.json','e45b56e89d50e6674691d6aea3545ffbb34facebde370862a4511cea87ee1299'),
- '8':('context-fabric-08-no-upload.json','5ffd9b765eadd39cacbd25725fb13b027114a2865e884558b3b8c411d95be056'),
- '9':('context-fabric-09-mixed-mcp.json','b58028850c616690555821cb28d1a5759ea307a54488b08c06d79008f0f798c4'),
+ '8':('context-fabric-08-no-upload.json','301842d9e6d317a3fdd7a2c97134e3b7620212cac9f59180bcc05528db065bbd'),
+ '9':('context-fabric-09-mixed-mcp.json','3f9bfb7817a49f28ede4f13d26e68926fff8de570cc227cee47ea75afc7f7173'),
  '10':('context-fabric-10-doctor-diagnostics.json','d0e552d29d516c7a3870b5a20964f47ce14c8b0f39b1c759dea148b314f2489c'),
- '11':('context-fabric-11-chaos-3007-closeout.md','9a59f5aaba6cf56b08adf5f6e3414e4b6842bfcf076f7411a064516c39bb78b4'),
- '12':('context-fabric-12-client-contract.json','7fd9f555304417cd33333ada9c86aaf4945d1d273139a2225b19251b0db6d184'),
- '13':('context-fabric-13-opencode.json','0887673844d276ef4865e83f7708fbe42da71fa011ebb5295499c39687b6cd85'),
+ '11':('context-fabric-11-chaos-3007-closeout.md','0439ced1a585457ad10192d32431b68473466721994b67b41f7eed8bee63273d'),
+ '12':('context-fabric-12-client-contract.json','ecf3c894075066b423c249f08ca8038b44d2be58a82a4a83b4fc4fc752e9ab3c'),
+ '13':('context-fabric-13-opencode.json','7eed49e126125faf3b49bf3cd52ff7f1061e1a29cf31a6a1df35f375707cc930'),
  '14':('task-14-acr-project-completion.json','be43630dd600927b252b2da63d8cdc75002835b0a7465787f03d5c869517bc36'),
  '17':('context-fabric-17-conformance.json','715d8c193ae437c97815f4dd03dba25787381cccd7d7ca18be30739d210a6301'),
- '18':('context-fabric-18-release-bundle.txt','5a619a0b9c0f53118eadac7eeca01ee4002c70aad08179ebac5bc39e08fe5668'),
- '19':('context-fabric-19-client-docs.md','29316c6e708338c22d0bccba6973c1ac65420d9757c7aaeaee5196aa5341f3b1'),
+ '18':('context-fabric-18-release-bundle.txt','ee5b17f5b1c78b0ded58c9739a061a0a380dc145748091c4f6e184932cf564df'),
+ '19':('context-fabric-19-client-docs.md','d81ecdc18e992436348ae2e5bd0abdb9328a4ef3c25afde19397917681a7cb73'),
 }
 def fail(message): raise SystemExit('FAIL: '+message)
 for task,(name,want) in expected.items():
@@ -116,9 +119,34 @@ if 'two_builds=byte_identical' not in release or 'release_verify_build_1=pass' n
 docs=open(f'{evidence}/context-fabric-19-client-docs.md',encoding='utf-8').read()
 if 'Cursor native client: `cursor_client=not_installed`' not in docs or 'Documentation anchors and Windows credential guidance self-tests: PASS.' not in docs: fail('Task 19 documentation receipt failed')
 head=subprocess.check_output(['git','-C',root,'rev-parse','HEAD'],text=True).strip()
+nonancestors=set()
 for name,_ in expected.values():
  text=open(f'{evidence}/{name}',encoding='utf-8',errors='ignore').read()
  for commit in set(re.findall(r'(?im)(?:source_revision|source_head|source revision|final full sha|^head)\s*[":=` ]+([0-9a-f]{7,40})',text)):
-  if subprocess.run(['git','-C',root,'cat-file','-e',commit+'^{commit}'],capture_output=True).returncode == 0 and subprocess.run(['git','-C',root,'merge-base','--is-ancestor',commit,head],capture_output=True).returncode != 0: fail(f'stale/non-ancestor source: {commit}')
+  if subprocess.run(['git','-C',root,'cat-file','-e',commit+'^{commit}'],capture_output=True).returncode != 0: fail(f'missing receipt source commit: {commit}')
+  full=subprocess.check_output(['git','-C',root,'rev-parse',commit+'^{commit}'],text=True).strip()
+  if subprocess.run(['git','-C',root,'merge-base','--is-ancestor',full,head],capture_output=True).returncode != 0: nonancestors.add(full)
+if nonancestors:
+ try: replay=json.load(open(lineage))
+ except (FileNotFoundError,json.JSONDecodeError): fail('missing or invalid replay-lineage attestation')
+ boundary='1dcfafe4d14d4d5cd14ef384445d7ee3e917bcfc'
+ checkpoint='ce4c9f4847bd175536b6f987eee68047ff01a0ed'
+ landed='9a9626305dcbeffea9d08fad8ac6230147ae8724'
+ skipped='b3e48db3783a381f341f9f580ec31ef9dd3cae8a'
+ if replay.get('schema_version')!='context_fabric_replay_lineage.v1' or replay.get('verdict')!='pass': fail('replay-lineage attestation failed')
+ if replay.get('source_revision')!=head: fail('stale replay-lineage source revision')
+ if replay.get('original_chaos_3007_boundary')!=boundary or replay.get('original_checkpoint')!=checkpoint or replay.get('landed_chaos_3007')!=landed: fail('replay-lineage boundary mismatch')
+ if set(replay.get('receipt_sources',[]))!=nonancestors: fail('replay-lineage receipt source mismatch')
+ replay_info=replay.get('replay',{})
+ if replay_info.get('original_commit_count')!=48 or replay_info.get('replayed_commit_count')!=47 or replay_info.get('skipped_commit')!=skipped or not replay_info.get('skip_reason'): fail('replay-lineage commit mapping mismatch')
+ if subprocess.run(['git','-C',root,'merge-base','--is-ancestor',landed,head],capture_output=True).returncode != 0: fail('landed CHAOS-3007 is not an ancestor')
+ for source in nonancestors:
+  if subprocess.run(['git','-C',root,'merge-base','--is-ancestor',source,checkpoint],capture_output=True).returncode != 0: fail(f'untrusted replay source: {source}')
+ changed=subprocess.check_output(['git','-C',root,'diff','--name-only',boundary,checkpoint,'--'],text=True).splitlines()
+ for path in changed:
+  if path.startswith('scripts/closeout/') or path=='internal/sidecar/codegraph_acl_unix.go': continue
+  if subprocess.run(['git','-C',root,'diff','--quiet',checkpoint,head,'--',path]).returncode != 0: fail(f'replayed path differs from checkpoint: {path}')
+ for path in ('internal/sidecar/codegraph_acl_unix.go','internal/sidecar/codegraph_acl_darwin.go','internal/sidecar/codegraph_acl_linux.go'):
+  if subprocess.run(['git','-C',root,'diff','--quiet',landed,head,'--',path]).returncode != 0: fail(f'landed ACL hardening changed during replay: {path}')
 print('CONTEXT_FABRIC_CLIENT_CLOSEOUT_OK tasks=1-19 mode=pre-final external_status_mutated=false')
 PY
