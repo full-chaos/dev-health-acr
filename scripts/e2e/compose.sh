@@ -14,10 +14,10 @@ COMPOSE=(docker compose)
 SAFE_BOUNDARY=""
 ACR_CLIENT_VERSION_HEADER="X-ACR-Client-Version: 1.0.0"
 POSTGRES_IMAGE="postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
-CLICKHOUSE_IMAGE="clickhouse/clickhouse-server:latest@sha256:1d1f6508eba2dccce2cee9913907c5f7766327debc57a6b1991f2c9e3176c163"
+CLICKHOUSE_IMAGE="clickhouse/clickhouse-server:latest@sha256:fdc22372465a336fa47e9deab61fad8277b9e2f2473234a1294b33b53f01d377"
 PGBOUNCER_IMAGE="edoburu/pgbouncer:latest@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd"
-VALKEY_IMAGE="valkey/valkey:9-alpine@sha256:c9b77919daeba2c02ad954d0c844cc4e7142069d177b89c5fd771f405daf9e02"
-MAILPIT_IMAGE="axllent/mailpit:latest@sha256:5a49a77c5bdbe7c5474450b4f46348d09949df3695257729c93a30369382d4f6"
+VALKEY_IMAGE="valkey/valkey:9-alpine@sha256:ee91f7a174ac4d6a6b0685b3a60e321f0a9dbbb691f9b0e285be2ba1d1be8328"
+MAILPIT_IMAGE="axllent/mailpit:latest@sha256:b868afa176bfd6cce2323ea316cd99ccad77915e51e595748f6d786700ecf109"
 NGINX_IMAGE="nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10"
 
 # allow: SIZE_OK — the isolated scenario lifecycle shares one trap-owned state directory.
