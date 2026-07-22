@@ -6,10 +6,12 @@
 | "(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)" as $semver
 | ($version | test("^\($semver)$")) as $version_valid
 | ($range | test("^>=\($semver),<\($semver)$")) as $range_valid
-| if $range_valid then
-    ($range | capture("^>=(?<low>\($semver)),<(?<high>\($semver))$"))
-  else { low: null, high: null }
-  end as $bounds
+| (
+    if $range_valid then
+      ($range | capture("^>=(?<low>\($semver)),<(?<high>\($semver))$"))
+    else { low: null, high: null }
+    end
+  ) as $bounds
 | if ($version_valid and $range_valid) then
     ($version | split(".") | map(tonumber)) as $v
     | ($bounds.low | split(".") | map(tonumber)) as $lo
