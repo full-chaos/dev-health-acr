@@ -70,7 +70,7 @@ const installSidecarSnippetRaw = `1. **Install the sidecar binary.** The normal 
    ` + "```" + `
 
    See @BT@docs/release-policy.md@BT@ for the full verification runbook.
-   Windows users: see [Installing on Windows](#installing-on-windows) below.
+   Windows users: see [Installing on Windows](README.md#installing-on-windows).
 
    **Development only:** @BT@go build@BT@ produces an unversioned @BT@dev@BT@ binary. A
    production ACR API rejects a @BT@dev@BT@-identified sidecar outright (426 Upgrade

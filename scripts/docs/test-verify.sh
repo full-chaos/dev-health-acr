@@ -8,7 +8,13 @@ for fixture_and_label in \
   'acr-runs-codegraph-index:ACR-owned CodeGraph index lifecycle claim' \
   'sqlite-access:ACR SQLite access claim' \
   'inferred-indexed-commit:inferred indexed commit claim' \
-  'local-config-breaks-hosted:local configuration breaks hosted bootstrap claim'; do
+  'local-config-breaks-hosted:local configuration breaks hosted bootstrap claim' \
+  'bare-acr-mcp-server:bare acr-mcp server registration' \
+  'credential-in-project:credential copied into project configuration' \
+  'codegraph-init:CodeGraph initialization or reindex claim' \
+  'direct-api:direct hosted or CodeGraph call claim' \
+  'automatic-preplan:automatic pre-plan claim' \
+  'public-release:public release claim'; do
   fixture="${fixture_and_label%%:*}"
   label="${fixture_and_label#*:}"
   set +e

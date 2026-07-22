@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,11 +17,12 @@ import (
 
 var errDirtyCheckout = errors.New("git checkout is dirty")
 
-const rootUsage = `Usage: releasebuild <build|verify> [flags]
+const rootUsage = `Usage: releasebuild <build|verify|consume> [flags]
 
 Commands:
-  build   create deterministic release archives
-  verify  verify release archives and checksums
+	build   create deterministic release archives
+	verify  verify release archives and checksums
+	consume verify and extract the host acr-mcp release artifact
 `
 
 const buildUsage = `Usage: releasebuild build --out DIR --version VERSION --commit SHA --date UTC_TIMESTAMP [--root DIR]
@@ -33,9 +35,15 @@ const verifyUsage = `Usage: releasebuild verify --dir DIR
 Verifies the release manifest and SHA256SUMS.
 `
 
+const consumeUsage = `Usage: releasebuild consume --dir DIR --dest DIR
+
+Verifies and extracts the current-host acr-mcp release artifact.
+`
+
 type runner struct {
 	compiler  releasebuild.Compiler
 	gitStatus func(context.Context, string) error
+	consume   func(context.Context, releasebuild.ConsumeRequest) (releasebuild.Receipt, error)
 }
 
 func main() {
@@ -60,9 +68,42 @@ func (r runner) run(ctx context.Context, args []string, output io.Writer) error 
 		return r.build(ctx, args[1:], output)
 	case "verify":
 		return r.verify(args[1:], output)
+	case "consume":
+		return r.consumeRelease(ctx, args[1:], output)
 	default:
 		return fmt.Errorf("unsupported command %q", args[0])
 	}
+}
+
+func (r runner) consumeRelease(ctx context.Context, args []string, output io.Writer) error {
+	if helpRequested(args) {
+		_, err := fmt.Fprint(output, consumeUsage)
+		return err
+	}
+	flags := flag.NewFlagSet("consume", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	dir := flags.String("dir", "", "release directory")
+	destination := flags.String("dest", "", "empty extraction destination")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("consume does not accept positional arguments")
+	}
+	consume := r.consume
+	if consume == nil {
+		consume = releasebuild.Consume
+	}
+	receipt, err := consume(ctx, releasebuild.ConsumeRequest{ReleaseDir: *dir, Destination: *destination})
+	if err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(receipt)
+	if err != nil {
+		return fmt.Errorf("encode receipt: %w", err)
+	}
+	_, err = fmt.Fprintln(output, string(encoded))
+	return err
 }
 
 func (r runner) build(ctx context.Context, args []string, output io.Writer) error {

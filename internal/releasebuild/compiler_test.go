@@ -89,3 +89,27 @@ func TestReleaseBinaries_version_command_matches_release_workflow_smoke_expectat
 		})
 	}
 }
+
+func TestGoCompiler_crossCompilesMCPFromDarwinToLinux(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Darwin-specific cross-compilation regression")
+	}
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repository root: %v", err)
+	}
+
+	// When
+	err = (GoCompiler{}).Compile(context.Background(), CompileRequest{
+		SourceDir:  root,
+		OutputPath: filepath.Join(t.TempDir(), "acr-mcp-linux"),
+		Target:     Target{Product: "acr-mcp", GOOS: "linux", GOARCH: runtime.GOARCH},
+		Identity:   testIdentity(),
+		BuildFlags: reproducibleBuildFlags,
+	})
+
+	// Then
+	if err != nil {
+		t.Fatalf("cross-compile acr-mcp for Linux: %v", err)
+	}
+}

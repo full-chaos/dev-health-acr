@@ -33,8 +33,9 @@ func TestIdentity_Validate_rejects_noncanonical_release_identity(t *testing.T) {
 func TestVerify_rejects_duplicate_manifest_artifacts(t *testing.T) {
 	// Given
 	dir := t.TempDir()
+	source := writeClientSource(t)
 	builder := NewBuilder(CompilerFunc(writeTestBinary))
-	manifest, err := builder.Build(context.Background(), Request{OutputDir: dir, Identity: testIdentity()})
+	manifest, err := builder.Build(context.Background(), Request{SourceDir: source, OutputDir: dir, Identity: testIdentity()})
 	if err != nil {
 		t.Fatalf("build release: %v", err)
 	}
@@ -55,8 +56,9 @@ func TestVerify_rejects_duplicate_manifest_artifacts(t *testing.T) {
 func TestVerify_rejects_path_traversal_in_manifest(t *testing.T) {
 	// Given
 	dir := t.TempDir()
+	source := writeClientSource(t)
 	builder := NewBuilder(CompilerFunc(writeTestBinary))
-	manifest, err := builder.Build(context.Background(), Request{OutputDir: dir, Identity: testIdentity()})
+	manifest, err := builder.Build(context.Background(), Request{SourceDir: source, OutputDir: dir, Identity: testIdentity()})
 	if err != nil {
 		t.Fatalf("build release: %v", err)
 	}

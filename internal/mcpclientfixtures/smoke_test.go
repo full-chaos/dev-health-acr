@@ -112,7 +112,7 @@ func TestFixtureCommandAndArgsStartRealVersionedSTDIOServer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entry, err := ParseStdioJSON([]byte(RenderClaudeCodeJSON()))
+	entry, err := ParseDocumentationStdioJSON([]byte(RenderClaudeCodeJSON()))
 	if err != nil {
 		t.Fatalf("parse the canonical model's own rendered JSON: %v", err)
 	}

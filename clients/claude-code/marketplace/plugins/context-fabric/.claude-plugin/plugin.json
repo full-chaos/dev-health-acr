@@ -1,0 +1,8 @@
+{
+  "name": "context-fabric",
+  "version": "1.0.0",
+  "description": "Retrieve evidence-backed ACR task context through its local MCP sidecar only on explicit request.",
+  "author": {
+    "name": "Full Chaos"
+  }
+}

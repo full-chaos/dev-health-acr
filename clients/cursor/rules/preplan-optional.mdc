@@ -1,0 +1,7 @@
+---
+alwaysApply: false
+---
+
+# Optional pre-plan workflow (inert)
+
+This rule only applies when explicitly invoked as `@preplan-optional`. To use Context Fabric before planning, run the `plan-with-context-fabric` command yourself; nothing in this plugin starts context retrieval on its own.

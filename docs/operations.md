@@ -284,8 +284,19 @@ available and otherwise self-skip without claiming execution:
 
 ```bash
 bash scripts/docs/verify.sh
+bash scripts/clients/clean-room.sh --release-dir .tmp/context-fabric-release --clients opencode,claude-code,codex,cursor
 bash scripts/docs/clean-room.sh --mode compose --compose ../compose.yml --overlay deploy/compose/acr.compose.yml
 bash scripts/docs/clean-room.sh --mode helm --cluster "$ACR_KIND_CLUSTER"
 bash scripts/docs/clean-room.sh --mode kustomize --cluster "$ACR_KUSTOMIZE_CLUSTER"
 bash scripts/docs/clean-room.sh --mode mcp
 ```
+
+The client clean-room consumes a verified Task18 `acr-mcp` archive and uses
+temporary HOME/config roots. It exercises exact `acr-mcp serve` registration,
+offline doctor, explicit context/evidence, update, uninstall, residue, and
+unrelated-config preservation for the four bundled packages. Unix/Linux/macOS
+are the exercised platforms. Cursor package/fixture validation is mandatory;
+native Cursor is conditional and reports its installed/not-installed state.
+Cursor Windows/NTFS lifecycle remains deferred to CHAOS-3058. No client guide
+claims a production release, credential storage, CodeGraph initialization, or
+default pre-plan/writeback.

@@ -69,10 +69,23 @@ func RenderClaudeCodeFullExampleJSON() string {
 }
 
 // RenderCursorSetupStepJSON renders cursor.md's "Create the config
-// directory and file" heredoc variant: identical fields to
-// RenderCursorJSON's primary template, minus ACR_API_TIMEOUT.
+// directory and file" here-string variant: it forwards the Windows process's
+// ACR_API_TOKEN environment value and omits ACR_API_TIMEOUT.
 func RenderCursorSetupStepJSON() string {
-	return renderStdioJSONWith(stdioJSONOptions{Command: ExampleCommand, TokenFileValue: "${env:HOME}/.acr/token"})
+	return fmt.Sprintf(`{
+  "mcpServers": {
+    "acr": {
+      "type": "stdio",
+      "command": %q,
+      "args": [%q],
+      "env": {
+        "ACR_API_URL": %q,
+        "ACR_API_TOKEN": "${env:ACR_API_TOKEN}"
+      }
+    }
+  }
+}
+`, ExampleCommand, ServeArg, ExampleAPIURL)
 }
 
 // RenderCursorFullExampleJSON renders cursor.md's "Example: Full

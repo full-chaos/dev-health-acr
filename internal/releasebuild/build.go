@@ -36,6 +36,10 @@ func (b Builder) Build(ctx context.Context, request Request) (Manifest, error) {
 	if err := validateOutputLocation(request.SourceDir, request.OutputDir); err != nil {
 		return Manifest{}, err
 	}
+	clientAssets, err := loadClientAssets(request.SourceDir, request.Identity)
+	if err != nil {
+		return Manifest{}, err
+	}
 	if err := prepareOutput(request.OutputDir); err != nil {
 		return Manifest{}, err
 	}
@@ -52,7 +56,7 @@ func (b Builder) Build(ctx context.Context, request Request) (Manifest, error) {
 		if err := b.compiler.Compile(ctx, compile); err != nil {
 			return Manifest{}, fmt.Errorf("compile %s: %w", target.String(), err)
 		}
-		artifact, err := packageBinary(request.OutputDir, binaryPath, target, request.Identity.Version)
+		artifact, err := packageBinary(request.OutputDir, binaryPath, target, request.Identity.Version, clientAssets)
 		if err != nil {
 			return Manifest{}, err
 		}
@@ -118,14 +122,18 @@ func prepareOutput(dir string) error {
 	return nil
 }
 
-func packageBinary(outputDir, binaryPath string, target Target, version string) (Artifact, error) {
+func packageBinary(outputDir, binaryPath string, target Target, version string, clientAssets clientAssets) (Artifact, error) {
 	name := ArtifactName(target, version)
 	path := filepath.Join(outputDir, name)
+	members := []archiveMember{{Name: target.Product + binaryExtension(target), SourcePath: binaryPath, Mode: 0o755}}
+	if target.Product == "acr-mcp" {
+		members = append(members, clientAssets.members()...)
+	}
 	if target.GOOS == "windows" {
-		if err := writeZIP(path, binaryPath, target.Product+".exe"); err != nil {
+		if err := writeZIP(path, members); err != nil {
 			return Artifact{}, err
 		}
-	} else if err := writeTarGZ(path, binaryPath, target.Product); err != nil {
+	} else if err := writeTarGZ(path, members); err != nil {
 		return Artifact{}, err
 	}
 	checksum, err := sha256File(path)
@@ -135,7 +143,7 @@ func packageBinary(outputDir, binaryPath string, target Target, version string) 
 	return Artifact{Name: name, Product: target.Product, GOOS: target.GOOS, GOARCH: target.GOARCH, SHA256: checksum}, nil
 }
 
-func writeTarGZ(destination, binaryPath, archiveName string) (err error) {
+func writeTarGZ(destination string, members []archiveMember) (err error) {
 	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return fmt.Errorf("create archive %s: %w", destination, err)
@@ -150,10 +158,15 @@ func writeTarGZ(destination, binaryPath, archiveName string) (err error) {
 	defer func() { err = closeWithError(err, gzipWriter, "gzip archive") }()
 	tarWriter := tar.NewWriter(gzipWriter)
 	defer func() { err = closeWithError(err, tarWriter, "tar archive") }()
-	return writeArchiveEntry(tarWriter, binaryPath, archiveName)
+	for _, member := range members {
+		if err := writeTarMember(tarWriter, member); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func writeZIP(destination, binaryPath, archiveName string) (err error) {
+func writeZIP(destination string, members []archiveMember) (err error) {
 	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return fmt.Errorf("create archive %s: %w", destination, err)
@@ -161,45 +174,40 @@ func writeZIP(destination, binaryPath, archiveName string) (err error) {
 	defer func() { err = closeWithError(err, output, "archive") }()
 	writer := zip.NewWriter(output)
 	defer func() { err = closeWithError(err, writer, "zip archive") }()
-	info, err := os.Stat(binaryPath)
-	if err != nil {
-		return fmt.Errorf("stat binary: %w", err)
+	for _, member := range members {
+		if err := writeZIPMember(writer, member); err != nil {
+			return err
+		}
 	}
-	header := &zip.FileHeader{Name: archiveName, Method: zip.Deflate}
+	return nil
+}
+
+func writeTarMember(writer *tar.Writer, member archiveMember) error {
+	size, err := member.Size()
+	if err != nil {
+		return err
+	}
+	header := &tar.Header{Name: member.Name, Mode: member.Mode, Size: size, ModTime: archiveEpoch, Format: tar.FormatUSTAR}
+	if err := writer.WriteHeader(header); err != nil {
+		return fmt.Errorf("write tar header: %w", err)
+	}
+	return member.CopyTo(writer, size)
+}
+
+func writeZIPMember(writer *zip.Writer, member archiveMember) error {
+	size, err := member.Size()
+	if err != nil {
+		return err
+	}
+	header := &zip.FileHeader{Name: member.Name, Method: zip.Deflate}
 	// ZIP's DOS timestamp cannot represent the Unix epoch, so use its earliest value.
 	header.Modified = time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC)
-	header.SetMode(0o755)
+	header.SetMode(os.FileMode(member.Mode))
 	entry, err := writer.CreateHeader(header)
 	if err != nil {
 		return fmt.Errorf("create zip entry: %w", err)
 	}
-	return copyBinary(entry, binaryPath, info.Size())
-}
-
-func writeArchiveEntry(writer *tar.Writer, binaryPath, archiveName string) error {
-	info, err := os.Stat(binaryPath)
-	if err != nil {
-		return fmt.Errorf("stat binary: %w", err)
-	}
-	header := &tar.Header{Name: archiveName, Mode: 0o755, Size: info.Size(), ModTime: archiveEpoch, Format: tar.FormatUSTAR}
-	if err := writer.WriteHeader(header); err != nil {
-		return fmt.Errorf("write tar header: %w", err)
-	}
-	return copyBinary(writer, binaryPath, info.Size())
-}
-
-func copyBinary(destination io.Writer, binaryPath string, size int64) error {
-	input, err := os.Open(binaryPath)
-	if err != nil {
-		return fmt.Errorf("open binary: %w", err)
-	}
-	defer input.Close()
-	if copied, err := io.Copy(destination, input); err != nil {
-		return fmt.Errorf("copy binary: %w", err)
-	} else if copied != size {
-		return fmt.Errorf("copy binary: copied %d bytes, want %d", copied, size)
-	}
-	return nil
+	return member.CopyTo(entry, size)
 }
 
 func writeMetadata(outputDir string, manifest Manifest) error {

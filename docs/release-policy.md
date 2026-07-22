@@ -72,6 +72,12 @@ the signature over the full manifest, then verify exactly the archive they
 downloaded. Never run a bare full-manifest checksum command when other listed
 assets were not downloaded.
 
+The signed `acr-mcp` archives also contain the four client packages and their
+conformance identity. The Task19 clean-room check consumes an archive only
+after this signature and targeted checksum verification, then validates the
+bundled client bytes. This is current private release policy; it does not claim
+that a production release has been created or published.
+
 ```bash
 set -euo pipefail
 git verify-tag v1.2.3

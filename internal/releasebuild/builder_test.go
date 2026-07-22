@@ -19,14 +19,15 @@ func TestBuild_produces_identical_release_trees_when_inputs_match(t *testing.T) 
 	identity := testIdentity()
 	first := t.TempDir()
 	second := t.TempDir()
+	source := writeClientSource(t)
 	builder := NewBuilder(CompilerFunc(writeTestBinary))
 
 	// When
-	firstManifest, err := builder.Build(context.Background(), Request{OutputDir: first, Identity: identity})
+	firstManifest, err := builder.Build(context.Background(), Request{SourceDir: source, OutputDir: first, Identity: identity})
 	if err != nil {
 		t.Fatalf("build first release: %v", err)
 	}
-	secondManifest, err := builder.Build(context.Background(), Request{OutputDir: second, Identity: identity})
+	secondManifest, err := builder.Build(context.Background(), Request{SourceDir: source, OutputDir: second, Identity: identity})
 	if err != nil {
 		t.Fatalf("build second release: %v", err)
 	}
@@ -44,8 +45,9 @@ func TestBuild_produces_identical_release_trees_when_inputs_match(t *testing.T) 
 func TestVerify_rejects_tampered_artifact(t *testing.T) {
 	// Given
 	dir := t.TempDir()
+	source := writeClientSource(t)
 	builder := NewBuilder(CompilerFunc(writeTestBinary))
-	manifest, err := builder.Build(context.Background(), Request{OutputDir: dir, Identity: testIdentity()})
+	manifest, err := builder.Build(context.Background(), Request{SourceDir: source, OutputDir: dir, Identity: testIdentity()})
 	if err != nil {
 		t.Fatalf("build release: %v", err)
 	}
@@ -66,8 +68,9 @@ func TestVerify_rejects_tampered_artifact(t *testing.T) {
 func TestBuild_normalizes_tar_metadata(t *testing.T) {
 	// Given
 	dir := t.TempDir()
+	source := writeClientSource(t)
 	builder := NewBuilder(CompilerFunc(writeTestBinary))
-	manifest, err := builder.Build(context.Background(), Request{OutputDir: dir, Identity: testIdentity()})
+	manifest, err := builder.Build(context.Background(), Request{SourceDir: source, OutputDir: dir, Identity: testIdentity()})
 	if err != nil {
 		t.Fatalf("build release: %v", err)
 	}
@@ -96,12 +99,13 @@ func TestBuild_normalizes_tar_metadata(t *testing.T) {
 func TestBuild_declares_full_supported_matrix_and_injected_identity(t *testing.T) {
 	// Given
 	dir := t.TempDir()
+	source := writeClientSource(t)
 	compiler := &recordingCompiler{}
 	identity := testIdentity()
 	builder := NewBuilder(compiler)
 
 	// When
-	manifest, err := builder.Build(context.Background(), Request{OutputDir: dir, Identity: identity})
+	manifest, err := builder.Build(context.Background(), Request{SourceDir: source, OutputDir: dir, Identity: identity})
 	if err != nil {
 		t.Fatalf("build release: %v", err)
 	}
