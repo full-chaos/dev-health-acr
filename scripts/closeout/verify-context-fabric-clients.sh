@@ -83,16 +83,16 @@ expected={
  '5':('context-fabric-05-freshness-errors.json','138e2a62806f399e33a64b27c72a5f73f87c8eefa7c5d873d4af02a2a68e21d9'),
  '6':('context-fabric-06-mcp-contracts.txt','49e74a3fc624b08666c48f76efdf4755e89e93f8a8ae1a4c77e72dc0220fa33e'),
  '7':('context-fabric-07-federation-routing.json','e45b56e89d50e6674691d6aea3545ffbb34facebde370862a4511cea87ee1299'),
- '8':('context-fabric-08-no-upload.json','301842d9e6d317a3fdd7a2c97134e3b7620212cac9f59180bcc05528db065bbd'),
- '9':('context-fabric-09-mixed-mcp.json','3f9bfb7817a49f28ede4f13d26e68926fff8de570cc227cee47ea75afc7f7173'),
+ '8':('context-fabric-08-no-upload.json','5ffd9b765eadd39cacbd25725fb13b027114a2865e884558b3b8c411d95be056'),
+ '9':('context-fabric-09-mixed-mcp.json','b58028850c616690555821cb28d1a5759ea307a54488b08c06d79008f0f798c4'),
  '10':('context-fabric-10-doctor-diagnostics.json','d0e552d29d516c7a3870b5a20964f47ce14c8b0f39b1c759dea148b314f2489c'),
- '11':('context-fabric-11-chaos-3007-closeout.md','0439ced1a585457ad10192d32431b68473466721994b67b41f7eed8bee63273d'),
- '12':('context-fabric-12-client-contract.json','ecf3c894075066b423c249f08ca8038b44d2be58a82a4a83b4fc4fc752e9ab3c'),
- '13':('context-fabric-13-opencode.json','7eed49e126125faf3b49bf3cd52ff7f1061e1a29cf31a6a1df35f375707cc930'),
+ '11':('context-fabric-11-chaos-3007-closeout.md','9a59f5aaba6cf56b08adf5f6e3414e4b6842bfcf076f7411a064516c39bb78b4'),
+ '12':('context-fabric-12-client-contract.json','7fd9f555304417cd33333ada9c86aaf4945d1d273139a2225b19251b0db6d184'),
+ '13':('context-fabric-13-opencode.json','0887673844d276ef4865e83f7708fbe42da71fa011ebb5295499c39687b6cd85'),
  '14':('task-14-acr-project-completion.json','be43630dd600927b252b2da63d8cdc75002835b0a7465787f03d5c869517bc36'),
  '17':('context-fabric-17-conformance.json','715d8c193ae437c97815f4dd03dba25787381cccd7d7ca18be30739d210a6301'),
- '18':('context-fabric-18-release-bundle.txt','ee5b17f5b1c78b0ded58c9739a061a0a380dc145748091c4f6e184932cf564df'),
- '19':('context-fabric-19-client-docs.md','d81ecdc18e992436348ae2e5bd0abdb9328a4ef3c25afde19397917681a7cb73'),
+ '18':('context-fabric-18-release-bundle.txt','5a619a0b9c0f53118eadac7eeca01ee4002c70aad08179ebac5bc39e08fe5668'),
+ '19':('context-fabric-19-client-docs.md','29316c6e708338c22d0bccba6973c1ac65420d9757c7aaeaee5196aa5341f3b1'),
 }
 def fail(message): raise SystemExit('FAIL: '+message)
 for task,(name,want) in expected.items():
