@@ -1,0 +1,257 @@
+x-acr-local-build: &acr-local-build
+  image: ${ACR_IMAGE:-dev-health-acr:local}
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: acr-api
+    args:
+      VERSION: 0.0.0-local
+      COMMIT: local
+      BUILD_DATE: 1970-01-01T00:00:00Z
+
+x-ops-local-build: &ops-local-build
+  build:
+    context: ../dev-health-ops
+    dockerfile: docker/Dockerfile
+    target: api
+    args:
+      SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+
+services:
+  # The local root graph installs one generated certificate into service-owned
+  # volumes before Postgres or ClickHouse starts. The setup command creates the
+  # source PKI; Compose owns the install ordering and all service lifecycle.
+  acr-pki-install:
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    user: "0:0"
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        cp /input/ca.crt /input/server.crt /input/server.key /postgres-tls/;
+        chown -R 70:70 /postgres-tls;
+        chmod 600 /postgres-tls/server.key;
+        cp /input/ca.crt /input/server.crt /input/server.key /clickhouse-tls/;
+        chown -R 101:101 /clickhouse-tls;
+        chmod 600 /clickhouse-tls/server.key
+    volumes:
+      - ${ACR_LOCAL_PKI_DIR:?run context-fabric-local-init.sh first}:/input:ro
+      - acr_local_postgres_tls:/postgres-tls
+      - acr_local_clickhouse_tls:/clickhouse-tls
+    networks: [dev-health]
+
+  postgres:
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/context-fabric/tls/server.crt
+      - -c
+      - ssl_key_file=/run/context-fabric/tls/server.key
+      - -c
+      - ssl_ca_file=/run/context-fabric/tls/ca.crt
+    volumes:
+      - acr_local_postgres_tls:/run/context-fabric/tls:ro
+    depends_on:
+      acr-pki-install:
+        condition: service_completed_successfully
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest@sha256:fdc22372465a336fa47e9deab61fad8277b9e2f2473234a1294b33b53f01d377
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - acr_local_clickhouse_tls:/run/context-fabric/tls:ro
+      - ./deploy/compose/clickhouse-tls.xml:/etc/clickhouse-server/config.d/context-fabric-tls.xml:ro
+      - ./deploy/compose/clickhouse-client-tls.xml:/etc/clickhouse-client/config.d/context-fabric-tls.xml:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          clickhouse-client
+          --config-file=/etc/clickhouse-client/config.d/context-fabric-tls.xml
+          --secure --host clickhouse --port 9440 --user ch --password ch
+          --query 'SELECT 1'
+      interval: 5s
+      timeout: 5s
+      retries: 18
+      start_period: 15s
+    depends_on:
+      acr-pki-install:
+        condition: service_completed_successfully
+
+  acr-clickhouse-db-init:
+    image: clickhouse/clickhouse-server:latest@sha256:fdc22372465a336fa47e9deab61fad8277b9e2f2473234a1294b33b53f01d377
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        clickhouse-client --host clickhouse --user ch --password ch
+        --query "CREATE DATABASE IF NOT EXISTS ${ACR_EVIDENCE_DB:?ACR_EVIDENCE_DB is required}"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    networks: [dev-health]
+
+  acr-ops-bootstrap:
+    <<: *ops-local-build
+    restart: "no"
+    entrypoint: ["/bin/sh", "/bootstrap/bootstrap-ops.sh"]
+    environment:
+      POSTGRES_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/postgres
+      DATABASE_URI: postgresql+asyncpg://postgres:postgres@pgbouncer:6432/postgres
+      PGBOUNCER_TRANSACTION_MODE: "true"
+      CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/default
+      ACR_LOCAL_STATE_DIR: /state/runtime
+      ACR_LOCAL_ORG_SLUG: ${ACR_LOCAL_ORG_SLUG:?ACR_LOCAL_ORG_SLUG is required}
+      ACR_OPS_TOKEN_FILE: /state/secrets/acr-ops-token
+    volumes:
+      - ./deploy/compose/bootstrap-ops.sh:/bootstrap/bootstrap-ops.sh:ro
+      - ${ACR_LOCAL_STATE_DIR:?run context-fabric-local-init.sh first}:/state
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [dev-health]
+
+  acr-evidence-bootstrap:
+    <<: *ops-local-build
+    restart: "no"
+    entrypoint: ["/bin/sh", "/bootstrap/bootstrap-evidence.sh"]
+    environment:
+      ACR_LOCAL_STATE_DIR: /state/runtime
+      ACR_EVIDENCE_DB: ${ACR_EVIDENCE_DB:?ACR_EVIDENCE_DB is required}
+      ACR_LOCAL_REPOSITORY: ${ACR_LOCAL_REPOSITORY:?ACR_LOCAL_REPOSITORY is required}
+    volumes:
+      - ./deploy/compose/bootstrap-evidence.sh:/bootstrap/bootstrap-evidence.sh:ro
+      - ${ACR_LOCAL_STATE_DIR:?run context-fabric-local-init.sh first}:/state
+    depends_on:
+      acr-clickhouse-db-init:
+        condition: service_completed_successfully
+      acr-ops-bootstrap:
+        condition: service_completed_successfully
+    networks: [dev-health]
+
+  acr-clickhouse-acl:
+    image: clickhouse/clickhouse-server:latest@sha256:fdc22372465a336fa47e9deab61fad8277b9e2f2473234a1294b33b53f01d377
+    restart: "no"
+    entrypoint: ["/bin/sh", "/bootstrap/bootstrap-clickhouse.sh"]
+    environment:
+      ACR_LOCAL_STATE_DIR: /state/runtime
+      ACR_EVIDENCE_DB: ${ACR_EVIDENCE_DB:?ACR_EVIDENCE_DB is required}
+      ACR_LOCAL_REPOSITORY: ${ACR_LOCAL_REPOSITORY:?ACR_LOCAL_REPOSITORY is required}
+      ACR_LOCAL_BRANCH: ${ACR_LOCAL_BRANCH:-main}
+      ACR_CLICKHOUSE_READER_PASSWORD_FILE: /run/secrets/clickhouse-reader-password
+    volumes:
+      - ./deploy/compose/bootstrap-clickhouse.sh:/bootstrap/bootstrap-clickhouse.sh:ro
+      - ${ACR_LOCAL_STATE_DIR:?run context-fabric-local-init.sh first}:/state
+      - ${ACR_LOCAL_STATE_DIR:?run context-fabric-local-init.sh first}/secrets/clickhouse-reader-password:/run/secrets/clickhouse-reader-password:ro
+    depends_on:
+      acr-evidence-bootstrap:
+        condition: service_completed_successfully
+    networks: [dev-health]
+
+  acr-ops-tls:
+    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+    restart: unless-stopped
+    volumes:
+      - ${ACR_LOCAL_PKI_DIR:?run context-fabric-local-init.sh first}:/run/context-fabric/pki:ro
+      - ./deploy/compose/nginx-ops.conf:/etc/nginx/nginx.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://localhost:8443/ready >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 18
+      start_period: 10s
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [dev-health]
+
+  acr-db-init:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  acr-migrate:
+    <<: *acr-local-build
+
+  acr-db-acl:
+    depends_on:
+      acr-migrate:
+        condition: service_completed_successfully
+
+  acr-api:
+    <<: *acr-local-build
+    environment:
+      ACR_ENVIRONMENT: development
+      ACR_REQUIRE_BACKING_STORES: "true"
+      ACR_DEV_HEALTH_ENTITLEMENT_URL: https://acr-ops-tls:8443
+      ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE: /run/secrets/acr_ca
+      ACR_WEB_ASSERTION_ISSUER: ${ACR_WEB_ASSERTION_ISSUER:?ACR_WEB_ASSERTION_ISSUER is required}
+      ACR_WEB_ASSERTION_AUDIENCE: ${ACR_WEB_ASSERTION_AUDIENCE:?ACR_WEB_ASSERTION_AUDIENCE is required}
+      ACR_WEB_ASSERTION_JWKS_FILE: /run/context-fabric/web/assertion.jwks.json
+    volumes:
+      - ${ACR_WEB_ASSERTION_JWKS_FILE:?ACR_WEB_ASSERTION_JWKS_FILE is required}:/run/context-fabric/web/assertion.jwks.json:ro
+    depends_on:
+      acr-db-acl:
+        condition: service_completed_successfully
+      acr-clickhouse-acl:
+        condition: service_completed_successfully
+      acr-ops-bootstrap:
+        condition: service_completed_successfully
+      acr-ops-tls:
+        condition: service_healthy
+
+  acr-credentials:
+    <<: *acr-local-build
+    profiles: [tools]
+    command: ["credentials", "list", "--help"]
+    environment:
+      ACR_ENVIRONMENT: development
+      ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
+    secrets:
+      - acr_runtime_dsn
+      - acr_ca
+    networks: [dev-health]
+
+  acr-tls:
+    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:${ACR_LOCAL_PORT:-8444}:8443
+    volumes:
+      - ${ACR_LOCAL_PKI_DIR:?run context-fabric-local-init.sh first}:/run/context-fabric/pki:ro
+      - ./deploy/compose/nginx-acr.conf:/etc/nginx/nginx.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://localhost:8443/readyz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 15s
+    depends_on:
+      acr-api:
+        condition: service_healthy
+    networks: [dev-health]
+
+  # These Ops services remain available through --profile full-ops but are not
+  # needed by the Context Fabric plugin fixture.
+  billing-edge:
+    profiles: [full-ops]
+  worker:
+    profiles: [full-ops]
+  worker-ingest:
+    profiles: [full-ops]
+  worker-external-ingest:
+    profiles: [full-ops]
+  worker-heavy:
+    profiles: [full-ops]
+  beat:
+    profiles: [full-ops]
+  bugsink:
+    profiles: [full-ops]
+
+volumes:
+  acr_local_postgres_tls: {}
+  acr_local_clickhouse_tls: {}
