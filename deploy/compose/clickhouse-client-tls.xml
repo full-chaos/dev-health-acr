@@ -1,0 +1,12 @@
+<clickhouse>
+  <openSSL>
+    <client>
+      <loadDefaultCAFile>false</loadDefaultCAFile>
+      <caConfig>/run/context-fabric/tls/ca.crt</caConfig>
+      <verificationMode>strict</verificationMode>
+      <invalidCertificateHandler>
+        <name>RejectCertificateHandler</name>
+      </invalidCertificateHandler>
+    </client>
+  </openSSL>
+</clickhouse>
