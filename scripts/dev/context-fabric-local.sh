@@ -83,14 +83,14 @@ render_ops_compose_root() {
   local target="$caller_root/compose.yml"
 
   # Render the selected Ops Compose source first so build contexts and bind mounts
-  # resolve against the real checkout. The generated caller root contains only
-  # the services used by the verified Context Fabric lifecycle; it is derived on
-  # every run and is not a second checked-in copy of the Ops stack.
-  BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-context-fabric-local-placeholder}" \
-    docker compose \
-      --project-directory "$ops_dir" \
-      -f "$ops_dir/compose.yml" \
-      config --format json >"$rendered"
+  # resolve against the real checkout. Interpolation stays disabled at this stage:
+  # the disposable fixture must not copy optional credentials from the developer's
+  # shell or Ops .env file, and its generated database values are supplied only at
+  # the final Compose render. The generated caller root is not a checked-in copy.
+  docker compose \
+    --project-directory "$ops_dir" \
+    -f "$ops_dir/compose.yml" \
+    config --no-interpolate --format json >"$rendered"
 
   python3 - "$rendered" "$target" <<'PY'
 from __future__ import annotations
@@ -150,6 +150,14 @@ services["pgbouncer"]["environment"] = {
     "RESERVE_POOL_SIZE": "5",
     "ADMIN_USERS": "${POSTGRES_USER}",
 }
+services["migrate"]["entrypoint"] = [
+    "sh",
+    "-c",
+    (
+        'if [ -n "$$POSTGRES_URI" ]; then dev-hops migrate postgres; fi '
+        "&& dev-hops migrate clickhouse"
+    ),
+]
 services["migrate"]["environment"] = {
     "POSTGRES_URI": (
         "postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}"
