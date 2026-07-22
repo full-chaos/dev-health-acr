@@ -32,6 +32,26 @@ func assertCodeGraphProcessGroupExited(t *testing.T, pidPath string) {
 	})
 }
 
+func TestCodeGraphLinuxProcessGone(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "enoent", err: fmt.Errorf("read proc stat: %w", &os.PathError{Op: "read", Path: "/proc/1/stat", Err: syscall.ENOENT}), want: true},
+		{name: "esrch", err: fmt.Errorf("kill process: %w", &os.PathError{Op: "kill", Path: "1", Err: syscall.ESRCH}), want: true},
+		{name: "eacces", err: fmt.Errorf("read proc stat: %w", &os.PathError{Op: "read", Path: "/proc/1/stat", Err: syscall.EACCES}), want: false},
+		{name: "eio", err: fmt.Errorf("read proc stat: %w", &os.PathError{Op: "read", Path: "/proc/1/stat", Err: syscall.EIO}), want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, codeGraphLinuxProcessGone(test.err))
+		})
+	}
+}
+
 func assertCodeGraphCleanupExited(t *testing.T, exited func() (bool, error)) {
 	t.Helper()
 	deadline := time.NewTimer(time.Second)
@@ -52,16 +72,20 @@ func assertCodeGraphCleanupExited(t *testing.T, exited func() (bool, error)) {
 	}
 }
 
+func codeGraphLinuxProcessGone(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH)
+}
+
 func codeGraphLinuxProcessExited(pid int) (bool, error) {
 	err := syscall.Kill(pid, 0)
-	if errors.Is(err, syscall.ESRCH) {
+	if codeGraphLinuxProcessGone(err) {
 		return true, nil
 	}
 	if err != nil {
 		return false, err
 	}
 	state, _, err := codeGraphLinuxProcessState(pid)
-	if errors.Is(err, os.ErrNotExist) {
+	if codeGraphLinuxProcessGone(err) {
 		return true, nil
 	}
 	if err != nil {
@@ -81,7 +105,7 @@ func codeGraphLinuxProcessGroupExited(processGroup int) (bool, error) {
 			continue
 		}
 		state, group, err := codeGraphLinuxProcessState(pid)
-		if errors.Is(err, os.ErrNotExist) {
+		if codeGraphLinuxProcessGone(err) {
 			continue
 		}
 		if err != nil {
