@@ -24,6 +24,22 @@ func TestManagedCodeGraphGuard_discardsOutputWhenSymlinkTargetReplaced(t *testin
 	_ = first
 }
 
+func TestManagedCodeGraphGuard_createsMissingManagedParent(t *testing.T) {
+	// Given
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// When
+	repo, first, second := managedGuardFixture(t)
+
+	// Then
+	for _, path := range []string{repo, first, second} {
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		require.True(t, info.IsDir())
+	}
+}
+
 func TestManagedCodeGraphGuard_discardsOutputWhenDatabaseReplaced(t *testing.T) {
 	repo, target, _ := managedGuardFixture(t)
 	guard, err := openCodeGraphDB(repo)
@@ -129,7 +145,7 @@ func managedGuardFixture(t *testing.T) (string, string, string) {
 	t.Helper()
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
-	managed := filepath.Join(home, ".omo", "codegraph", "projects")
+	managed := managedCodeGraphFixtureRoot(t, home)
 	first, err := os.MkdirTemp(managed, "acr-guard-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(first) })

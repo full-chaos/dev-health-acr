@@ -1,6 +1,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +11,17 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestDecodeCodeGraphJSON_preservesOutputLimitError_whenLimitReadAlsoHasBytes(t *testing.T) {
+	// Given
+	payload := []byte(strings.Repeat(" ", maxCodeGraphStdoutBytes) + "not-json")
+
+	// When
+	_, err := decodeCodeGraphJSON(bytes.NewReader(payload))
+
+	// Then
+	require.ErrorIs(t, err, ErrCodeGraphOutputTooLarge)
+}
 
 func TestCodeGraphProvider_Capabilities_reportsPinnedVersionFromStatus(t *testing.T) {
 	// Given

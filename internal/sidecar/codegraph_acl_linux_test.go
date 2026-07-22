@@ -31,24 +31,13 @@ func TestIsACLAttributeMissingRejectsLinuxPermissionError(t *testing.T) {
 	require.False(t, missing)
 }
 
-func TestACLAttributesAbsentAcceptsBothMissingLinuxACLs(t *testing.T) {
+func TestCodeGraphRootHasOnlyBaseACL_acceptsLinuxRootWithoutPOSIXACL(t *testing.T) {
 	// Given
-	missingErr := unix.ENODATA
+	root := t.TempDir()
 
 	// When
-	absent := aclAttributesAbsent(missingErr, missingErr)
+	trusted := codeGraphRootHasOnlyBaseACL(root)
 
 	// Then
-	require.True(t, absent)
-}
-
-func TestACLAttributesAbsentRejectsPresentLinuxACL(t *testing.T) {
-	// Given
-	missingErr := unix.ENODATA
-
-	// When
-	absent := aclAttributesAbsent(missingErr, nil)
-
-	// Then
-	require.False(t, absent)
+	require.True(t, trusted)
 }

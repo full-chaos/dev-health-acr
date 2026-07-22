@@ -4,12 +4,8 @@ package sidecar
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -25,7 +21,7 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterDecodeFailure(t *testing.T) {
 		wantErr error
 	}{
 		{name: "malformed", output: "printf '{not-json}'", wantErr: errCodeGraphDecode},
-		{name: "oversized", output: `printf '\"'; head -c 1048577 /dev/zero | tr '\000' x; printf '\"'`, wantErr: ErrCodeGraphOutputTooLarge},
+		{name: "oversized", output: `head -c 1048576 /dev/zero | tr '\000' ' '; printf not-json`, wantErr: ErrCodeGraphOutputTooLarge},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			run := func(t *testing.T) {
@@ -121,40 +117,4 @@ func TestCodeGraphRunner_ReapsProcessGroupAfterCommandExit(t *testing.T) {
 			})
 		})
 	}
-}
-
-func assertCodeGraphProcessExited(t *testing.T, pidPath string) {
-	t.Helper()
-	payload, err := os.ReadFile(pidPath)
-	require.NoError(t, err)
-	pid, err := strconv.Atoi(strings.TrimSpace(string(payload)))
-	require.NoError(t, err)
-
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		err = syscall.Kill(pid, 0)
-		if errors.Is(err, syscall.ESRCH) {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	require.ErrorIs(t, err, syscall.ESRCH)
-}
-
-func assertCodeGraphProcessGroupExited(t *testing.T, pidPath string) {
-	t.Helper()
-	payload, err := os.ReadFile(pidPath)
-	require.NoError(t, err)
-	pgid, err := strconv.Atoi(strings.TrimSpace(string(payload)))
-	require.NoError(t, err)
-
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		err = syscall.Kill(-pgid, 0)
-		if errors.Is(err, syscall.ESRCH) {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	require.ErrorIs(t, err, syscall.ESRCH)
 }

@@ -84,10 +84,19 @@ func decodeCodeGraphJSON(reader io.Reader) ([]byte, error) {
 	decoder := json.NewDecoder(limited)
 	var output json.RawMessage
 	if err := decoder.Decode(&output); err != nil {
+		if limited.exceeded {
+			return nil, ErrCodeGraphOutputTooLarge
+		}
 		return nil, err
+	}
+	if limited.exceeded {
+		return nil, ErrCodeGraphOutputTooLarge
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if limited.exceeded {
+			return nil, ErrCodeGraphOutputTooLarge
+		}
 		if err == nil {
 			return nil, errors.New("codegraph returned multiple JSON values")
 		}
@@ -97,8 +106,9 @@ func decodeCodeGraphJSON(reader io.Reader) ([]byte, error) {
 }
 
 type codeGraphOutputReader struct {
-	reader io.Reader
-	read   int
+	reader   io.Reader
+	read     int
+	exceeded bool
 }
 
 func (r *codeGraphOutputReader) Read(p []byte) (int, error) {
@@ -111,6 +121,7 @@ func (r *codeGraphOutputReader) Read(p []byte) (int, error) {
 	n, err := r.reader.Read(p)
 	r.read += n
 	if r.read > maxCodeGraphStdoutBytes {
+		r.exceeded = true
 		return n, ErrCodeGraphOutputTooLarge
 	}
 	return n, err
