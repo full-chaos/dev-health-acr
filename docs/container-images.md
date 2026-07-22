@@ -43,7 +43,7 @@ GitHub action commit SHA):
 | Dockerfile frontend | `docker/dockerfile:1.20@sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d` |
 | Go builder | `golang:1.26.5-alpine3.23@sha256:622e56dbc11a8cfe87cafa2331e9a201877271cbff918af53d3be315f3da88cc` |
 | API runtime | `gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35` |
-| MCP runtime | `cgr.dev/chainguard/git:latest@sha256:7671e64c37b99739fd52eb5ae4299e957c5095e083d6ee5dcd1845ce850a7614` |
+| MCP runtime | `cgr.dev/chainguard/git:latest@sha256:62135ba579e1ac309441b3de21983230a4979603ab879bafa6d2773e8d5fd626` |
 | QEMU binfmt | `docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0` |
 | Buildx CLI | `v0.35.0` linux-amd64 asset, SHA-256 `d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda` |
 | BuildKit driver | `moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1` |
