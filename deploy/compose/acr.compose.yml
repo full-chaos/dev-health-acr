@@ -67,7 +67,7 @@ services:
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
       ACR_CLICKHOUSE_CA_BUNDLE: /run/secrets/acr_ca
-      ACR_DEV_HEALTH_ENTITLEMENT_URL: https://api:8000
+      ACR_DEV_HEALTH_ENTITLEMENT_URL: ${ACR_DEV_HEALTH_ENTITLEMENT_URL:?ACR_DEV_HEALTH_ENTITLEMENT_URL must be an HTTPS origin}
       ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /run/secrets/acr_ops_token
       ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE: /run/secrets/acr_ca
       ACR_EVIDENCE_ID_ACTIVE_KID_FILE: /run/secrets/acr_evidence_active_kid
@@ -79,7 +79,7 @@ services:
       api: { condition: service_healthy }
       acr-db-acl: { condition: service_completed_successfully }
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/readyz"]
+      test: ["CMD", "/usr/local/bin/acr-api", "healthcheck"]
       interval: 15s
       timeout: 10s
       retries: 3
