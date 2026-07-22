@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -60,6 +62,29 @@ func TestVersionCommand(t *testing.T) {
 	_ = reader.Close()
 	if got, want := strings.TrimSpace(output.String()), "1.2.3-rc.1+build.7 commit=0123456789abcdef0123456789abcdef01234567 built=2026-07-12T15:04:05Z"; got != want {
 		t.Fatalf("version output = %q, want %q", got, want)
+	}
+}
+
+func TestHealthcheckCommandAcceptsReadyEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	if err := run([]string{"healthcheck", "--url", server.URL}); err != nil {
+		t.Fatalf("healthcheck failed: %v", err)
+	}
+}
+
+func TestHealthcheckCommandRejectsUnavailableEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		http.Error(writer, "not ready", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(server.Close)
+
+	err := run([]string{"healthcheck", "--url", server.URL})
+	if err == nil || !strings.Contains(err.Error(), "503 Service Unavailable") {
+		t.Fatalf("healthcheck error = %v", err)
 	}
 }
 
