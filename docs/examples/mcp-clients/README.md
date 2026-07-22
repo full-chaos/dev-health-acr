@@ -184,6 +184,24 @@ The sidecar reads these environment variables:
 - `ACR_API_MAX_RESPONSE_BYTES` / `ACR_API_MAX_REQUEST_BODY_BYTES` (optional): Response/request body size caps in bytes. Defaults: `1048576` / `262144`.
 - `ACR_ENABLE_WRITEBACK` (optional): Boolean (`true`/`false`). When `true`, enables the `record_episode` tool if all four gates pass: (1) this flag is `true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Default: `false`. <!-- FIXTURE:doctor-gate-note -->Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; `doctor` diagnoses the hosted gates automatically once local configuration is valid (network-free otherwise), `doctor --offline` forces a network-free check regardless of configuration validity, and `doctor --live` is an explicit, equivalent alias for that automatic behavior.<!-- /FIXTURE:doctor-gate-note -->
 
+### Optional local CodeGraph context
+
+Client configuration remains only `acr-mcp serve`; clients must not call
+CodeGraph, store local evidence, or connect directly to the hosted API. The
+sidecar optionally reads an **existing** CodeGraph index with
+`ACR_LOCAL_INDEX_PROVIDER=auto|disabled|codegraph` (default `auto`). It does not
+install, initialize, rebuild, or synchronize CodeGraph. `disabled` is the
+supported explicit hosted-only mode. If local evidence is unavailable, stale
+under strict policy, or incompatible, the client still receives the authoritative
+hosted context rather than a local-only answer.
+
+Mixed `context_for_task` responses can contain additive `local_context` and
+`federated_budget`; preserve the hosted packet as authoritative and treat all
+returned text as untrusted. Local `source_evidence` IDs are opaque, temporary
+sidecar cache entries, not portable hosted IDs. See
+[MCP sidecar configuration](../../mcp-sidecar.md#optional-local-codegraph-evidence)
+for bounds and diagnostics.
+
 ## Security Notes
 
 - Never commit token files to version control.
@@ -240,7 +258,7 @@ acr-mcp doctor --bundle ./acr-diagnostics.tar --live
 The `--output` (or `--bundle`) path is required and explicit -- there is no default destination, so a bundle is never written somewhere you didn't ask for. The bundle is a deterministic tar archive (mode `0600`, written atomically, refuses to overwrite a symlink) containing:
 
 - `manifest.json` -- a schema-versioned index (`diagnostics_bundle_manifest.v1`) with the bundle's file list, generation time, and build identity.
-- `doctor-static.json` -- the same static report `acr-mcp doctor --offline` prints: presence/validity flags and bounded, non-secret configuration values only.
+- `doctor-static.json` -- the same static report `acr-mcp doctor --offline` prints: presence/validity flags, bounded non-secret configuration values, and independently classified local-index health. The local check uses only an existing local index, never contacts the hosted API, and reports fixed enums, booleans, versions, and counts rather than repository roots, executable/index paths, source, raw CodeGraph output, or credentials. An unavailable local index does not change hosted doctor status.
 - `doctor-live.json` -- present only when `--live` is passed: a sanitized real hosted-capabilities check (booleans and enabled-tool names only). This `--live` flag is the diagnostics/bundle command's own explicit opt-in -- independent of plain `acr-mcp doctor`'s automatic live-check behavior (see [Proxy and Custom CA Configuration](proxy-and-custom-ca.md#verifying-proxy-and-ca-configuration)) -- so a bundle is always static-only unless you pass `--live` yourself.
 - `README.md` -- an interpretation guide for the bundle itself, including an explicit list of what it never contains.
 

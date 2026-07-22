@@ -1,0 +1,236 @@
+{
+  "symbol": "Assemble",
+  "depth": 2,
+  "nodeCount": 38,
+  "edgeCount": 34,
+  "affected": [
+    {
+      "name": "Assemble",
+      "kind": "method",
+      "filePath": "acr/internal/contextpacket/assembler.go",
+      "startLine": 54
+    },
+    {
+      "name": "TestAssembler_rejects_bundle_outside_resolved_repository_scope",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/adversarial_test.go",
+      "startLine": 16
+    },
+    {
+      "name": "TestAssembler_excludes_undisplayable_evidence_content",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/adversarial_test.go",
+      "startLine": 35
+    },
+    {
+      "name": "TestAssembler_filters_to_requested_categories",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/adversarial_test.go",
+      "startLine": 60
+    },
+    {
+      "name": "TestAssembler_degrades_schema_invalid_evidence_without_exposing_it",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/adversarial_test.go",
+      "startLine": 82
+    },
+    {
+      "name": "TestAssembler_rejects_schema_invalid_resolved_scope",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/adversarial_test.go",
+      "startLine": 103
+    },
+    {
+      "name": "TestAssembler_uses_total_tie_breaker_and_serializes_empty_collections",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/adversarial_test.go",
+      "startLine": 115
+    },
+    {
+      "name": "TestAssembler_uses_fixed_corpus_for_exact_commit_scope",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/assembler_test.go",
+      "startLine": 18
+    },
+    {
+      "name": "TestAssembler_applies_stable_branch_ranking_and_budgets",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/assembler_test.go",
+      "startLine": 41
+    },
+    {
+      "name": "TestAssembler_marks_empty_corpus_scope_without_fabricating_items",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/assembler_test.go",
+      "startLine": 65
+    },
+    {
+      "name": "TestAssembler_marks_partial_and_timeout_retrieval",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/assembler_test.go",
+      "startLine": 82
+    },
+    {
+      "name": "TestFixtureDriver_assembles_every_fixed_corpus_task",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/driver_test.go",
+      "startLine": 15
+    },
+    {
+      "name": "BenchmarkAssembler_fixtureExactCommit",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/latency_test.go",
+      "startLine": 10
+    },
+    {
+      "name": "TestAssembler_fixtureP95CompletesWithinTwoSeconds",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/latency_test.go",
+      "startLine": 21
+    },
+    {
+      "name": "TestAssembler_uses_stable_category_tie_order_and_deduplicates_evidence",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/policy_test.go",
+      "startLine": 34
+    },
+    {
+      "name": "TestAssembler_truncates_when_token_or_byte_budget_is_exhausted",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/policy_test.go",
+      "startLine": 61
+    },
+    {
+      "name": "TestAssembler_marks_only_fresh_or_stale_catalog_sources_available",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/policy_test.go",
+      "startLine": 98
+    },
+    {
+      "name": "TestAssembler_ranks_provenance_freshness_goal_category_confidence_then_totalTie",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/ranking_test.go",
+      "startLine": 14
+    },
+    {
+      "name": "TestAssembler_deduplicates_canonical_identifier_entity_and_content",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/ranking_test.go",
+      "startLine": 48
+    },
+    {
+      "name": "TestAssembler_emits_sorted_deduplicated_actions_per_rule",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/ranking_test.go",
+      "startLine": 79
+    },
+    {
+      "name": "TestAssembler_bounds_derived_item_title_and_identifier",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/ranking_test.go",
+      "startLine": 106
+    },
+    {
+      "name": "TestAssembler_serializes_every_fixture_packet_against_canonical_v1_schema",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/schema_validation_test.go",
+      "startLine": 14
+    },
+    {
+      "name": "TestAssembler_serializes_repo_fallback_and_unresolved_packets_against_canonical_v1_schema",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/schema_validation_test.go",
+      "startLine": 46
+    },
+    {
+      "name": "TestAssembler_validates_request_evidence_items_and_packet_with_canonical_schemas",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/schema_validation_test.go",
+      "startLine": 79
+    },
+    {
+      "name": "TestAssembler_savesExactSnapshotAfterEvidenceChanges",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/snapshot_test.go",
+      "startLine": 16
+    },
+    {
+      "name": "TestAssembler_failsWhenSnapshotSaveIsInterrupted",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/snapshot_test.go",
+      "startLine": 48
+    },
+    {
+      "name": "TestAssembler_preservesDegradedTimeoutWhenSnapshotContextExpires",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/snapshot_test.go",
+      "startLine": 60
+    },
+    {
+      "name": "TestAssembler_persistsAdapterDeadlineWithActiveParentContext",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/snapshot_test.go",
+      "startLine": 75
+    },
+    {
+      "name": "TestAssembler_persistsPacketCompatibleWithEpisodeLink",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/snapshot_test.go",
+      "startLine": 88
+    },
+    {
+      "name": "TestAssembler_propagates_cancelled_context",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/adapter_test.go",
+      "startLine": 58
+    },
+    {
+      "name": "TestSeededProtectedFlowCorrelatesRealPacketPipeline",
+      "kind": "function",
+      "filePath": "acr/internal/api/seeded_flow_test.go",
+      "startLine": 23
+    },
+    {
+      "name": "runRepeat",
+      "kind": "function",
+      "filePath": "acr/internal/evaldemo/run.go",
+      "startLine": 112
+    },
+    {
+      "name": "Run",
+      "kind": "function",
+      "filePath": "acr/internal/evaldemo/run.go",
+      "startLine": 20
+    },
+    {
+      "name": "Assemble",
+      "kind": "method",
+      "filePath": "acr/internal/api/runtime.go",
+      "startLine": 33
+    },
+    {
+      "name": "Assemble",
+      "kind": "method",
+      "filePath": "acr/internal/api/read_context_test.go",
+      "startLine": 80
+    },
+    {
+      "name": "Assemble",
+      "kind": "method",
+      "filePath": "acr/internal/api/read_context_test.go",
+      "startLine": 86
+    },
+    {
+      "name": "handleContextPacket",
+      "kind": "method",
+      "filePath": "acr/internal/api/read_routes.go",
+      "startLine": 15
+    },
+    {
+      "name": "ANY POST /api/v1/agent-context/context-packets",
+      "kind": "route",
+      "filePath": "acr/internal/api/app.go",
+      "startLine": 75
+    }
+  ]
+}

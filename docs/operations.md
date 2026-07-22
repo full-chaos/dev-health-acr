@@ -242,6 +242,39 @@ is read-only by default (`context_for_task` and `source_evidence`). Episode
 writeback remains disabled unless every local and server authorization gate is
 enabled; it is not an External Push substitute.
 
+### Optional existing CodeGraph index
+
+The sidecar may consume an existing local CodeGraph index as supplemental,
+untrusted evidence. ACR does not install CodeGraph or create, refresh, repair,
+or store an index. Configure `ACR_LOCAL_INDEX_PROVIDER=disabled` for explicit
+hosted-only behavior, leave it at `auto` for optional discovery, or set it to
+`codegraph` to require the provider attempt. The detailed bounds for timeout,
+items, tokens, serialized bytes, stale policy, and the optional executable are
+in [MCP sidecar](mcp-sidecar.md#optional-local-codegraph-evidence).
+
+Only the existing index's supported read-only JSON commands are used. Do not
+operate `init`, `index`, or `sync` through ACR. Missing, stale, incompatible,
+timed-out, or mismatched local state remains a local degradation; operators must
+not treat it as a hosted outage. `doctor --offline` reports this safely without
+hosted network traffic or paths/source/index payloads. CodeGraph's unavailable
+indexed commit is reported as `indexed_commit_unknown`, never inferred from the
+current workspace.
+
+Fixture harnesses prove protocol and no-upload behavior. `mcp-codegraph-live.sh
+--self-test` tests the live harness itself, not a supported installed CodeGraph
+or an operator's index. The residual final-wave F2 risk is live mixed evidence:
+it requires a supported installed CodeGraph and a pre-existing index, captures
+pre/post hashes, and proves no mutation. Do not claim that evidence before F2.
+
+Expected-failure fixture scenarios complete only after their semantic assertions
+and emit `ACR_E2E_EXPECTED_FAILURE_VALIDATED` with distinct exit codes: local
+timeout `41`, hosted unavailable `42`, incompatible version `43`, and
+post-response process failure `44`. A generic nonzero exit is not a valid
+expected-failure result. Canonical receipts are ignored local evidence, mode
+`0600`, atomically published only after the source revision remains clean, and
+record the harness/binary hashes, scenario verdict, and (for mixed MCP) rejected
+writeback/session validity/zero hosted episode posts.
+
 ## Documentation acceptance drivers
 
 The documentation verifier is offline: it checks local links, documented

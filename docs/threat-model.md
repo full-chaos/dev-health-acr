@@ -22,6 +22,10 @@ dev-health-ops entitlement source
 acr-api
   -> read-only, scoped ClickHouse evidence adapters
   -> ACR-owned Postgres credentials, snapshots, episodes, and audit events
+
+Existing local CodeGraph index
+  -> read-only JSON commands inside acr-mcp
+  -> bounded local evidence only; never uploaded to acr-api
 ```
 
 Trust does not transfer across an arrow automatically:
@@ -32,6 +36,14 @@ Trust does not transfer across an arrow automatically:
 - A trusted web assertion and an ACR client credential are distinct authentication paths. A Dev Health license artifact is never an ACR bearer credential.
 - Every opaque packet, evidence, and episode lookup rechecks organization and repository authorization. A denied explicit repository selector may return `repo_forbidden`; a foreign, deleted, or unknown opaque object must use the same generic not-found response so existence is not disclosed.
 - ClickHouse is read-only evidence. ACR Postgres owns operational state. Neither path uses External Push.
+- ACR's CodeGraph integration is direct/managed guarded: it consumes an existing
+  local index through fixed read-only JSON commands only. It never installs,
+  creates, refreshes, queries/parses SQLite storage, or uploads CodeGraph
+  source/index data. A bounded read-only `codegraph.db` identity check is allowed
+  on supported Unix platforms and is not an evidence/query implementation.
+- Local provider failure is never authority for a local-only result. Hosted
+  bootstrap and the hosted packet remain required; unavailable local state
+  degrades to hosted-only behavior.
 
 ## Data classes
 
@@ -112,6 +124,17 @@ CHAOS-2904 and CHAOS-2917 implement these rules without changing v1 wire semanti
 - CHAOS-2906 allowlists provider URI generation and bounds excerpts/structured fields. It strips hidden provider fields and never exposes credentials or transcript bodies.
 - `dev-health-web` sanitizes untrusted Markdown/HTML and external links before rendering. No source text becomes executable HTML, JavaScript, shell, prompt, or tool instruction.
 - Public demos and fixtures require explicit synthetic/public-safe review. CHAOS-2918 owns the fixed corpus and hash manifest.
+
+## Local CodeGraph privacy boundary
+
+The local provider can return bounded, untrusted, repository-relative evidence
+to the MCP client, but it must not send raw source, complete CodeGraph JSON,
+index bytes, local roots, local locators, credentials, or provider payloads to
+the hosted API. Local evidence IDs are opaque sidecar identifiers; expansion is
+served from the bounded local cache and unknown/expired IDs do not fall through
+to hosted expansion. The Task 8 capture harness exercises these negative upload
+sentinels; its receipt is evidence of fixture coverage, not a claim that an
+operator has run a live CodeGraph environment.
 
 ## Limits: current contract versus downstream enforcement
 

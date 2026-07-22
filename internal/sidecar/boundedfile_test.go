@@ -15,10 +15,10 @@ import (
 // the shared implementation behind the CA-bundle and credential-file
 // reads covered end to end in api_client_cacert_test.go, config_ca_test.go,
 // and credential_file_test.go. The two adversarial tests at the bottom
-// prove, under real concurrent path swapping rather than a single
+// exercise, under real concurrent path swapping rather than a single
 // before/after snapshot, that the atomic O_NOFOLLOW/O_NONBLOCK open this
-// package now uses instead of a separate lstat-then-open check can never
-// be raced into following a symlink or blocking on a FIFO.
+// package uses instead of a separate lstat-then-open check rejects the
+// persistent replacements observed by these Darwin/Linux tests.
 
 func TestReadBoundedRegularFileAcceptsRegularFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "regular")
@@ -98,16 +98,10 @@ func TestDescribeFileErrorNeverEchoesPath(t *testing.T) {
 	}
 }
 
-// TestReadBoundedRegularFileSymlinkSwapRaceNeverFollows proves that under
-// real, continuous concurrent path swapping between a regular file and a
-// symlink to an unrelated "secret" file, readBoundedRegularFile can never
-// be raced into returning data read through the symlink. Every rename
-// used to perform the swap is a single atomic filesystem operation, so
-// this is not merely a before/after snapshot test: the goal is to prove
-// the atomic O_NOFOLLOW open holds even when the race window is actively,
-// repeatedly exercised for the whole test duration, not just at one
-// instant.
-func TestReadBoundedRegularFileSymlinkSwapRaceNeverFollows(t *testing.T) {
+// TestReadBoundedRegularFileUsesValidatedOpenHandleDuringPersistentSymlinkReplacement
+// exercises a persistent replacement of the path with a symlink to an unrelated
+// secret file. Successful reads must come from the validated regular-file handle.
+func TestReadBoundedRegularFileUsesValidatedOpenHandleDuringPersistentSymlinkReplacement(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires elevated privileges on windows")
 	}
@@ -124,9 +118,7 @@ func TestReadBoundedRegularFileSymlinkSwapRaceNeverFollows(t *testing.T) {
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		iteration := 0
 		for {
 			select {
@@ -148,7 +140,7 @@ func TestReadBoundedRegularFileSymlinkSwapRaceNeverFollows(t *testing.T) {
 			}
 			_ = os.Rename(tmpFile, path)
 		}
-	}()
+	})
 
 	deadline := time.Now().Add(500 * time.Millisecond)
 	attempts, successes := 0, 0
@@ -160,13 +152,13 @@ func TestReadBoundedRegularFileSymlinkSwapRaceNeverFollows(t *testing.T) {
 			if string(data) != string(legit) {
 				close(stop)
 				wg.Wait()
-				t.Fatalf("readBoundedRegularFile returned data that did not come from the verified regular file (possible symlink follow): %q", data)
+				t.Fatalf("readBoundedRegularFile returned data outside the validated regular-file handle during persistent symlink replacement: %q", data)
 			}
 		}
 	}
 	close(stop)
 	wg.Wait()
 	if attempts == 0 || successes == 0 {
-		t.Fatalf("race test did not exercise both states: attempts=%d successes=%d", attempts, successes)
+		t.Fatalf("persistent replacement fixture did not produce a validated regular-file read: attempts=%d successes=%d", attempts, successes)
 	}
 }

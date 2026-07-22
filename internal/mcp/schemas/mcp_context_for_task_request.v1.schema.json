@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ACR MCP context_for_task Request v1",
-  "description": "Ergonomic goal-only-by-default input for the context_for_task MCP tool. Only goal is required; repository, scope, and budget are optional overrides. There is no caller-supplied schema_version wire field: tool identity is established by the MCP call itself, not a wire field, matching the source_evidence request contract. scope.as_of pins retrieval to a point in time; scope.include_changed_files is a tri-state opt-in (omitted: sidecar default; true: include bounded git-changed files when scope.files is not explicitly set; false: never auto-include them) that lets a caller distinguish 'not specified' from an explicit choice. The sidecar maps omitted fields to fixed safe defaults before calling the hosted HTTP contract.",
+  "description": "Ergonomic goal-only-by-default input for the context_for_task MCP tool. Only goal is required; repository, scope, budget, and requested_categories are optional overrides. There is no caller-supplied schema_version wire field: tool identity is established by the MCP call itself, not a wire field, matching the source_evidence request contract. scope.as_of pins retrieval to a point in time; scope.include_changed_files is a tri-state opt-in (omitted: sidecar default; true: include bounded git-changed files when scope.files is not explicitly set; false: never auto-include them) that lets a caller distinguish 'not specified' from an explicit choice. The sidecar maps omitted fields to fixed safe defaults before calling the hosted HTTP contract.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -87,6 +87,20 @@
           "minimum": 8192,
           "maximum": 1048576
         }
+      }
+    },
+    "requested_categories": {
+      "type": "array",
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "state",
+          "pressure",
+          "cause",
+          "evidence",
+          "action"
+        ]
       }
     }
   },

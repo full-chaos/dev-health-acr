@@ -45,3 +45,11 @@ func verifyTrustedCABundleOwnership(info os.FileInfo) error {
 	}
 	return nil
 }
+
+func verifyCurrentUserOnlyOwnership(info os.FileInfo) error {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Geteuid() || info.Mode().Perm()&0o022 != 0 {
+		return errUntrustedFileOwnership
+	}
+	return nil
+}

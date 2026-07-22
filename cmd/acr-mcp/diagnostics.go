@@ -197,6 +197,7 @@ func toDiagnosticsInput(report doctorReport) diagnostics.Input {
 			Status:                   report.Status,
 			Bounds:                   loadConfigBounds(),
 			Checks:                   checks,
+			LocalIndex:               diagnostics.LocalIndexReport{ProviderMode: report.LocalIndex.ProviderMode, ConfigValid: report.LocalIndex.ConfigValid, WorkspaceDiscovered: report.LocalIndex.WorkspaceDiscovered, RepositoryIdentityAvailable: report.LocalIndex.RepositoryIdentityAvailable, WorkspaceScopeValid: report.LocalIndex.WorkspaceScopeValid, IndexChecked: report.LocalIndex.IndexChecked, IndexReadable: report.LocalIndex.IndexReadable, Available: report.LocalIndex.Available, ProviderVersion: report.LocalIndex.ProviderVersion, VersionChecked: report.LocalIndex.VersionChecked, VersionCompatible: report.LocalIndex.VersionCompatible, Status: report.LocalIndex.Status, Freshness: report.LocalIndex.Freshness, MaxItems: report.LocalIndex.MaxItems, MaxOutputTokens: report.LocalIndex.MaxOutputTokens, WorktreeMismatchChecked: report.LocalIndex.WorktreeMismatchChecked, WorktreeMismatchDetected: report.LocalIndex.WorktreeMismatchDetected, QueryChecked: report.LocalIndex.QueryChecked, QuerySucceeded: report.LocalIndex.QuerySucceeded, ResultCount: report.LocalIndex.ResultCount, IndexedCommitStatus: report.LocalIndex.IndexedCommitStatus, ErrorCode: report.LocalIndex.ErrorCode},
 		},
 	}
 	if report.LiveCheck != nil {

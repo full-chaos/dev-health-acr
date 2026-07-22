@@ -1,0 +1,22 @@
+{
+  "initialized": true,
+  "version": "1.2.0",
+  "projectPath": "<local-only:absolute-project-path>",
+  "indexPath": "<local-only:absolute-index-path>",
+  "lastIndexed": "2026-07-19T12:34:19.682Z",
+  "nodeCount": 59738,
+  "edgeCount": 161050,
+  "dbSizeBytes": 744927232,
+  "backend": "node-sqlite",
+  "journalMode": "wal",
+  "nodesByKind": {},
+  "languages": ["go"],
+  "pendingChanges": { "added": 0, "modified": 0, "removed": 0 },
+  "worktreeMismatch": null,
+  "index": {
+    "builtWithVersion": "1.2.0",
+    "builtWithExtractionVersion": 24,
+    "currentExtractionVersion": 24,
+    "reindexRecommended": false
+  }
+}

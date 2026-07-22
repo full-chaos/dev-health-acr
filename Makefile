@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test hosted-integration vet contract-write contract-test build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan
+.PHONY: fmt fmt-check test hosted-integration vet contract-write contract-test codegraph-contract canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -25,13 +25,19 @@ contract-write:
 contract-test:
 	go run ./cmd/contractcheck
 
+codegraph-contract:
+	bash scripts/codegraph/verify-contract.sh --fixtures testdata/codegraph/v1.2.0
+
+canonical-receipts:
+	bash scripts/e2e/test-canonical-receipts.sh
+
 build:
 	go build -o .tmp/acr-api ./cmd/acr-api
 	go build -o .tmp/acr-mcp ./cmd/acr-mcp
 	go build -o .tmp/contractcheck ./cmd/contractcheck
 	go build -o .tmp/acr-migrate ./cmd/acr-migrate
 
-verify: fmt-check vet test contract-test build
+verify: fmt-check vet test contract-test codegraph-contract canonical-receipts build
 
 container-contract:
 	bash scripts/container/test-contract.sh

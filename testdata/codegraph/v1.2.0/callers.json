@@ -1,0 +1,23 @@
+{
+  "symbol": "Assemble",
+  "callers": [
+    {
+      "name": "TestAssembler_rejects_bundle_outside_resolved_repository_scope",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/adversarial_test.go",
+      "startLine": 16
+    },
+    {
+      "name": "TestAssembler_excludes_undisplayable_evidence_content",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/adversarial_test.go",
+      "startLine": 35
+    },
+    {
+      "name": "TestAssembler_filters_to_requested_categories",
+      "kind": "function",
+      "filePath": "acr/internal/contextpacket/adversarial_test.go",
+      "startLine": 60
+    }
+  ]
+}

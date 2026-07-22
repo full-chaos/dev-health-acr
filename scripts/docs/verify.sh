@@ -78,40 +78,43 @@ fixture_mode=false
 [ -f "$root/.docs-invalid-fixture" ] && fixture_mode=true
 
 doc_scan_files=()
-if [ -f "$operations_doc" ]; then
-  doc_scan_files+=("$operations_doc")
-  [ -f "$readme" ] && doc_scan_files+=("$readme")
-else
+if [ "$fixture_mode" = true ]; then
   while IFS= read -r -d '' md_file; do
     doc_scan_files+=("$md_file")
+  done < <(find "$root" -name '*.md' -print0 2>/dev/null)
+else
+  for md_file in \
+    "$readme" \
+    "$operations_doc" \
+    "$root/docs/mcp-sidecar.md" \
+    "$root/docs/threat-model.md" \
+    "$root/docs/examples/mcp-clients/README.md"; do
+    [ -f "$md_file" ] && doc_scan_files+=("$md_file")
+  done
+fi
+
+forbidden_sentence='ACR is packaged by dev-health-ops and publicly published.'
+forbidden_hits=""
+publication_scan_files=()
+if [ "$fixture_mode" = true ]; then
+  publication_scan_files=("${doc_scan_files[@]}")
+else
+  while IFS= read -r -d '' md_file; do
+    publication_scan_files+=("$md_file")
   done < <(find "$root" -name '*.md' \
     -not -path '*/.git/*' \
     -not -path '*/.omo/*' \
     -not -path '*/.tmp/*' \
+    -not -path '*/testdata/docs-invalid/*' \
     -not -path '*/node_modules/*' \
     -not -path '*/vendor/*' \
     -print0 2>/dev/null)
 fi
-
-# --- 1. Forbidden public-publication claim -----------------------------
-# Runs first and unconditionally over every tracked Markdown file under
-# the checked root, independent of whether README/backlog/Makefile exist,
-# so a disposable partial fixture tree (e.g. a copied docs/ directory)
-# still exercises this guard.
-forbidden_sentence='ACR is packaged by dev-health-ops and publicly published.'
-forbidden_hits=""
-while IFS= read -r -d '' md_file; do
+for md_file in "${publication_scan_files[@]}"; do
   if grep -qF "$forbidden_sentence" "$md_file"; then
     forbidden_hits="$forbidden_hits${forbidden_hits:+ }${md_file#"$root"/}"
   fi
-done < <(find "$root" -name '*.md' \
-  -not -path '*/.git/*' \
-  -not -path '*/.omo/*' \
-  -not -path '*/.tmp/*' \
-  -not -path '*/testdata/docs-invalid/*' \
-  -not -path '*/node_modules/*' \
-  -not -path '*/vendor/*' \
-  -print0 2>/dev/null)
+done
 
 if [ -n "$forbidden_hits" ]; then
   fail "forbidden publication claim present in: $forbidden_hits"
@@ -143,6 +146,10 @@ unsafe_claim 'production HTTP endpoint' 'production.{0,80}http://|http://[^[:spa
 unsafe_claim 'plaintext ACR credential' 'fcacr_[A-Za-z0-9_-]{43}'
 unsafe_claim 'supported schema rollback claim' 'ACR supports schema rollback|schema rollback is supported|schema rollback is allowed|schema rollback is performed'
 unsafe_claim 'absolute filesystem path' '/(Users|home|tmp|var|opt|etc)/'
+unsafe_claim 'ACR-owned CodeGraph index lifecycle claim' 'ACR (runs|run) CodeGraph (init|index|sync)'
+unsafe_claim 'ACR SQLite access claim' 'ACR (reads|read|accesses|access).*SQLite'
+unsafe_claim 'inferred indexed commit claim' 'ACR infers.*indexed commit|indexed commit.*(workspace HEAD|current HEAD)'
+unsafe_claim 'local configuration breaks hosted bootstrap claim' 'local (configuration|config).{0,80}(prevents|blocks|fails).{0,80}hosted bootstrap'
 
 if [ "$fixture_mode" = true ]; then
   if [ "$fail_count" -ne 0 ]; then
@@ -152,6 +159,31 @@ if [ "$fixture_mode" = true ]; then
   printf '\ndocs verification OK\n'
   exit 0
 fi
+
+require_doc_text() {
+  local file="$1" text="$2" label="$3"
+  if [ ! -f "$file" ]; then
+    fail "$label documentation file is missing: ${file#"$root"/}"
+  elif grep -Fq "$text" "$file"; then
+    ok "$label"
+  else
+    fail "$label is missing from ${file#"$root"/}"
+  fi
+}
+
+mcp_doc="$root/docs/mcp-sidecar.md"
+threat_doc="$root/docs/threat-model.md"
+client_doc="$root/docs/examples/mcp-clients/README.md"
+require_doc_text "$readme" "CodeGraph \`>=1.2.0,<2.0.0\`" "README pins the supported CodeGraph range"
+require_doc_text "$readme" "it never runs \`init\`, \`index\`, or" "README documents the read-only direct/managed guard"
+require_doc_text "$mcp_doc" "\`ACR_LOCAL_INDEX_PROVIDER\`" "sidecar documents local provider configuration"
+require_doc_text "$mcp_doc" "\`indexed_commit_unknown\`" "sidecar documents unknown indexed commits"
+require_doc_text "$mcp_doc" 'excluded from those caller limits' 'sidecar documents packet-content exclusions'
+require_doc_text "$mcp_doc" '1024-entry, 30-minute local cache' 'sidecar documents local cache lifetime'
+require_doc_text "$operations_doc" 'ACR_E2E_EXPECTED_FAILURE_VALIDATED' 'operations documents semantic expected-failure markers'
+require_doc_text "$operations_doc" 'residual final-wave F2 risk' 'operations discloses the live-CodeGraph residual risk'
+require_doc_text "$threat_doc" 'never uploaded to acr-api' 'threat model documents the local upload boundary'
+require_doc_text "$client_doc" 'clients must not call' 'client examples preserve sidecar ownership'
 
 # --- 3. README links docs/container-images.md and lists commands -------
 required_commands="make container-contract

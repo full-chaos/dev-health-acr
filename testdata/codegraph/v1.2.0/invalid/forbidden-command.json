@@ -1,0 +1,4 @@
+{
+  "reason": "codegraph explore emits mixed human/JSON text and is never a permitted production data source; codegraph init/index/sync/uninit/node/daemon/unlock/install/uninstall/telemetry/upgrade are likewise forbidden",
+  "attempted_argv": ["codegraph", "explore", "Assembler"]
+}

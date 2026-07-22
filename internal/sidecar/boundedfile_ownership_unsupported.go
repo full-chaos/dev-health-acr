@@ -23,3 +23,7 @@ var errUntrustedFileOwnership = errors.New("must be owned by the current user or
 func verifyTrustedCABundleOwnership(os.FileInfo) error {
 	return errUntrustedFileOwnership
 }
+
+func verifyCurrentUserOnlyOwnership(os.FileInfo) error {
+	return errUntrustedFileOwnership
+}

@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"slices"
+	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
@@ -20,6 +22,10 @@ const (
 	defaultMaxSerializedBytes = 262144 // 256 KiB
 )
 
+var validateFederatedResponse = func(response contractsv1.MCPContextForTaskResponse) error {
+	return response.Validate()
+}
+
 // handleContextForTask implements the context_for_task tool: decode and
 // validate the MCP request, resolve repository/scope via explicit-request >
 // MCP-roots > cwd precedence, call the hosted context-packet endpoint, and
@@ -36,7 +42,7 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 		return toolErrorResult(&classifiedError{category: "validation", message: "context_for_task arguments failed schema validation"}), nil
 	}
 
-	repo, scope, err := resolveScope(ctx, req.Session, input)
+	resolved, err := resolveTaskScope(ctx, req.Session, input)
 	if err != nil {
 		return toolErrorResult(err), nil
 	}
@@ -48,22 +54,55 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 	// ContextPacketRequest.Validate()'s own generic, unclassified error
 	// surfacing through classify()'s generic "internal" fallback -- and
 	// avoids ever constructing a hosted request that cannot succeed.
-	if repo.Slug == "" {
+	if resolved.Repository.Slug == "" {
 		return toolErrorResult(&classifiedError{category: "validation", message: "context_for_task requires either an explicit repository or a discoverable local Git workspace to resolve one"}), nil
+	}
+
+	options := budgetOptions(input.Budget, input.RequestedCategories, boot.Capabilities.Limits)
+	hostedOptions := options
+	var local mappedLocalBundle
+	var bundle sidecar.LocalEvidenceBundle
+	var localFailure *contractsv1.MCPLocalContext
+	localSucceeded := false
+	if boot.local != nil && resolved.LocalEligible && boot.local.eligible(resolved.Workspace) {
+		var localErr error
+		bundle, localErr = boot.local.bundle(ctx, resolved, input, options)
+		if localErr != nil && ctx.Err() != nil {
+			return toolErrorResult(ctx.Err()), nil
+		}
+		if localErr == nil {
+			if localErr = validateDistinctLocalEvidence(bundle); localErr == nil {
+				localSucceeded = true
+				reserve := localReservation(boot.local.config, options)
+				hostedOptions.MaxItems -= reserve.MaxItems
+				hostedOptions.MaxOutputTokens -= reserve.MaxOutputTokens
+				hostedOptions.MaxSerializedBytes -= reserve.MaxSerializedBytes
+			}
+		}
+		if localErr != nil {
+			if context, timedOut := boot.local.unavailableContext(localErr); timedOut {
+				localFailure = &context
+			}
+		}
 	}
 
 	hostedReq := contractsv1.ContextPacketRequest{
 		Goal:       input.Goal,
-		Repository: repo,
-		Scope:      scope,
-		Options:    budgetOptions(input.Budget, boot.Capabilities.Limits),
+		Repository: resolved.Repository,
+		Scope:      resolved.Scope,
+		Options:    hostedOptions,
 	}
 
 	packet, err := boot.Client.ContextPacket(ctx, hostedReq)
 	if err != nil {
 		return toolErrorResult(err), nil
 	}
-
+	if localSucceeded {
+		local, err = boot.local.mapLocalBundle(resolved.Repository.Slug, bundle, occupiedPacketIDs(packet))
+		if err != nil {
+			return toolErrorResult(&classifiedError{category: "internal", message: "local federation finalization failed"}), nil
+		}
+	}
 	rendered, truncated := sidecar.RenderContextPacketMarkdown(packet, renderedMarkdownMaxBytes)
 	response := contractsv1.MCPContextForTaskResponse{
 		SchemaVersion: contractsv1.MCPContextForTaskResponseSchema,
@@ -74,11 +113,111 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 			Truncated: truncated,
 		},
 	}
-	if err := response.Validate(); err != nil {
+	if localSucceeded {
+		trimmed := local.trimTo(options.MaxItems-packet.Budget.ItemsUsed, options.MaxOutputTokens-packet.Budget.EstimatedTokens, options.MaxSerializedBytes-packet.Budget.SerializedBytes)
+		context := localContext(local.bundle, local, trimmed)
+		response.LocalContext = &context
+		localTokens := localEstimatedTokens(local.evidence)
+		localBytes := localJSONBytes(local.items, local.refs)
+		response.FederatedBudget = &contractsv1.MCPFederatedBudget{
+			MaxItems: options.MaxItems, MaxOutputTokens: options.MaxOutputTokens, MaxSerializedBytes: options.MaxSerializedBytes,
+			HostedItemsUsed: packet.Budget.ItemsUsed, LocalItemsUsed: len(local.items), TotalItemsUsed: packet.Budget.ItemsUsed + len(local.items),
+			HostedEstimatedTokens: packet.Budget.EstimatedTokens, LocalEstimatedTokens: localTokens, TotalEstimatedTokens: packet.Budget.EstimatedTokens + localTokens,
+			HostedSerializedBytes: packet.Budget.SerializedBytes, LocalSerializedBytes: localBytes, TotalSerializedBytes: packet.Budget.SerializedBytes + localBytes,
+			HostedTruncated: packet.Budget.Truncated, LocalTruncated: local.bundle.Truncated || trimmed, Truncated: packet.Budget.Truncated || local.bundle.Truncated || trimmed,
+		}
+	} else if localFailure != nil {
+		response.LocalContext = localFailure
+		localBytes := localJSONBytes(localFailure.Items, localFailure.EvidenceRefs)
+		response.FederatedBudget = &contractsv1.MCPFederatedBudget{
+			MaxItems: options.MaxItems, MaxOutputTokens: options.MaxOutputTokens, MaxSerializedBytes: options.MaxSerializedBytes,
+			HostedItemsUsed: packet.Budget.ItemsUsed, TotalItemsUsed: packet.Budget.ItemsUsed,
+			HostedEstimatedTokens: packet.Budget.EstimatedTokens, TotalEstimatedTokens: packet.Budget.EstimatedTokens,
+			HostedSerializedBytes: packet.Budget.SerializedBytes, LocalSerializedBytes: localBytes, TotalSerializedBytes: packet.Budget.SerializedBytes + localBytes,
+			HostedTruncated: packet.Budget.Truncated, Truncated: packet.Budget.Truncated,
+		}
+	}
+	if err := validateFederatedResponse(response); err != nil {
 		return toolErrorResult(&classifiedError{category: "internal", message: "the assembled response failed contract validation"}), nil
 	}
+	result, buildErr := buildToolResult(response, response.RenderedMarkdown.Markdown)
+	if buildErr != nil {
+		return result, buildErr
+	}
+	if boot.hostedRoutes != nil {
+		for id := range occupiedPacketIDs(packet) {
+			if strings.HasPrefix(id, localEvidencePrefix) {
+				boot.hostedRoutes.put(id)
+			}
+		}
+	}
+	if localSucceeded && len(local.refs) > 0 {
+		boot.local.cache.putBatch(cacheEntries(local))
+	}
+	return result, nil
+}
 
-	return buildToolResult(response, response.RenderedMarkdown.Markdown)
+func occupiedPacketIDs(packet contractsv1.ContextPacket) map[string]struct{} {
+	encoded, err := json.Marshal(packet)
+	if err != nil {
+		return map[string]struct{}{}
+	}
+	var value any
+	if json.Unmarshal(encoded, &value) != nil {
+		return map[string]struct{}{}
+	}
+	ids := map[string]struct{}{}
+	collectPacketIDs(value, ids)
+	return ids
+}
+
+func collectPacketIDs(value any, ids map[string]struct{}) {
+	switch node := value.(type) {
+	case map[string]any:
+		for key, child := range node {
+			if key == "request_id" || key == "context_packet_id" || key == "evidence_ref_id" || key == "packet_item_id" || key == "check_id" || key == "step_id" {
+				if id, ok := child.(string); ok {
+					ids[id] = struct{}{}
+				}
+			}
+			if key == "evidence_ref_ids" {
+				if values, ok := child.([]any); ok {
+					for _, id := range values {
+						if value, ok := id.(string); ok {
+							ids[value] = struct{}{}
+						}
+					}
+				}
+			}
+			collectPacketIDs(child, ids)
+		}
+	case []any:
+		for _, child := range node {
+			collectPacketIDs(child, ids)
+		}
+	}
+}
+
+func appendDistinctWarning(warnings []string, warning string) []string {
+	if slices.Contains(warnings, warning) {
+		return warnings
+	}
+	return append(warnings, warning)
+}
+
+func appendDistinctWarnings(warnings []string, additions []string) []string {
+	for _, warning := range additions {
+		warnings = appendDistinctWarning(warnings, warning)
+	}
+	return warnings
+}
+
+func cacheEntries(mapped mappedLocalBundle) []cachedLocalEvidence {
+	entries := make([]cachedLocalEvidence, 0, len(mapped.refs))
+	for index := range mapped.refs {
+		entries = append(entries, cachedLocalEvidence{evidence: mapped.evidence[index], ref: mapped.refs[index]})
+	}
+	return entries
 }
 
 // budgetOptions maps an optional MCP budget override onto hosted
@@ -88,11 +227,12 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 // caller requests are both bounded by what the hosted API actually
 // grants this credential, never forwarded as an over-limit request the
 // hosted side would have to reject anyway.
-func budgetOptions(budget *contractsv1.MCPBudget, limits contractsv1.CapabilityLimits) contractsv1.PacketOptions {
+func budgetOptions(budget *contractsv1.MCPBudget, requestedCategories []contractsv1.PacketCategory, limits contractsv1.CapabilityLimits) contractsv1.PacketOptions {
 	opts := contractsv1.PacketOptions{
-		MaxItems:           defaultMaxItems,
-		MaxOutputTokens:    defaultMaxOutputTokens,
-		MaxSerializedBytes: defaultMaxSerializedBytes,
+		RequestedCategories: append([]contractsv1.PacketCategory(nil), requestedCategories...),
+		MaxItems:            defaultMaxItems,
+		MaxOutputTokens:     defaultMaxOutputTokens,
+		MaxSerializedBytes:  defaultMaxSerializedBytes,
 	}
 	if budget != nil {
 		if budget.MaxItems != 0 {

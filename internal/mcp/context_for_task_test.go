@@ -204,7 +204,7 @@ func TestHandleContextForTaskHonorsCancellation(t *testing.T) {
 // supplied no budget override at all.
 func TestBudgetOptionsDefaultsAreClampedToHostedLimits(t *testing.T) {
 	limits := contractsv1.CapabilityLimits{MaxItems: 10, MaxOutputTokens: 600, MaxSerializedBytes: 9000, RequestsPerMinute: 60}
-	opts := budgetOptions(nil, limits)
+	opts := budgetOptions(nil, nil, limits)
 	if opts.MaxItems != 10 || opts.MaxOutputTokens != 600 || opts.MaxSerializedBytes != 9000 {
 		t.Fatalf("expected defaults clamped to hosted limits, got: %#v", opts)
 	}
@@ -217,7 +217,7 @@ func TestBudgetOptionsDefaultsAreClampedToHostedLimits(t *testing.T) {
 func TestBudgetOptionsCallerRequestIsClampedToHostedLimits(t *testing.T) {
 	limits := contractsv1.CapabilityLimits{MaxItems: 10, MaxOutputTokens: 600, MaxSerializedBytes: 9000, RequestsPerMinute: 60}
 	budget := &contractsv1.MCPBudget{MaxItems: 50, MaxOutputTokens: 16000, MaxSerializedBytes: 1048576}
-	opts := budgetOptions(budget, limits)
+	opts := budgetOptions(budget, nil, limits)
 	if opts.MaxItems != 10 || opts.MaxOutputTokens != 600 || opts.MaxSerializedBytes != 9000 {
 		t.Fatalf("expected caller request clamped to hosted limits, got: %#v", opts)
 	}
@@ -228,11 +228,11 @@ func TestBudgetOptionsCallerRequestIsClampedToHostedLimits(t *testing.T) {
 // caller overrides behave exactly as before this fix.
 func TestBudgetOptionsUnclampedWhenWithinHostedLimits(t *testing.T) {
 	limits := contractsv1.CapabilityLimits{MaxItems: 30, MaxOutputTokens: 4000, MaxSerializedBytes: 262144, RequestsPerMinute: 60}
-	if opts := budgetOptions(nil, limits); opts.MaxItems != defaultMaxItems || opts.MaxOutputTokens != defaultMaxOutputTokens || opts.MaxSerializedBytes != defaultMaxSerializedBytes {
+	if opts := budgetOptions(nil, nil, limits); opts.MaxItems != defaultMaxItems || opts.MaxOutputTokens != defaultMaxOutputTokens || opts.MaxSerializedBytes != defaultMaxSerializedBytes {
 		t.Fatalf("expected unclamped defaults, got: %#v", opts)
 	}
 	budget := &contractsv1.MCPBudget{MaxItems: 5}
-	if opts := budgetOptions(budget, limits); opts.MaxItems != 5 {
+	if opts := budgetOptions(budget, nil, limits); opts.MaxItems != 5 {
 		t.Fatalf("expected unclamped caller override, got: %#v", opts)
 	}
 }

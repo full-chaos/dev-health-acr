@@ -69,6 +69,7 @@ func requestNullCanaries() []struct {
 		{"context_for_task_scope_include_changed_files", "mcp_context_for_task_request.v1.schema.json", "mcp_context_for_task_request_full.v1.json", []string{"scope", "include_changed_files"}},
 		{"context_for_task_budget", "mcp_context_for_task_request.v1.schema.json", "mcp_context_for_task_request_full.v1.json", []string{"budget"}},
 		{"context_for_task_budget_max_items", "mcp_context_for_task_request.v1.schema.json", "mcp_context_for_task_request_full.v1.json", []string{"budget", "max_items"}},
+		{"context_for_task_requested_categories", "mcp_context_for_task_request.v1.schema.json", "mcp_context_for_task_request_full.v1.json", []string{"requested_categories"}},
 		{"source_evidence_evidence_ref_id", "mcp_source_evidence_request.v1.schema.json", "mcp_source_evidence_request.v1.json", []string{"evidence_ref_id"}},
 	}
 }
@@ -170,6 +171,11 @@ func TestMCPResponseExplicitNullRejectedAtDecodeBoundary(t *testing.T) {
 		{"context_for_task_structured", "mcp_context_for_task_response.v1.schema.json", "mcp_context_for_task_response.v1.json", []string{"structured"}},
 		{"context_for_task_rendered_markdown", "mcp_context_for_task_response.v1.schema.json", "mcp_context_for_task_response.v1.json", []string{"rendered_markdown"}},
 		{"context_for_task_rendered_markdown_truncated", "mcp_context_for_task_response.v1.schema.json", "mcp_context_for_task_response.v1.json", []string{"rendered_markdown", "truncated"}},
+		{"context_for_task_local_context", "mcp_context_for_task_response.v1.schema.json", "mcp_context_for_task_response_mixed.v1.json", []string{"local_context"}},
+		{"context_for_task_local_context_provider", "mcp_context_for_task_response.v1.schema.json", "mcp_context_for_task_response_mixed.v1.json", []string{"local_context", "provider"}},
+		{"context_for_task_federated_budget", "mcp_context_for_task_response.v1.schema.json", "mcp_context_for_task_response_mixed.v1.json", []string{"federated_budget"}},
+		{"context_for_task_federated_budget_max_items", "mcp_context_for_task_response.v1.schema.json", "mcp_context_for_task_response_mixed.v1.json", []string{"federated_budget", "max_items"}},
+		{"context_for_task_federated_budget_hosted_truncated", "mcp_context_for_task_response.v1.schema.json", "mcp_context_for_task_response_mixed.v1.json", []string{"federated_budget", "hosted_truncated"}},
 		{"source_evidence_structured", "mcp_source_evidence_response.v1.schema.json", "mcp_source_evidence_response.v1.json", []string{"structured"}},
 		{"source_evidence_rendered_markdown", "mcp_source_evidence_response.v1.schema.json", "mcp_source_evidence_response.v1.json", []string{"rendered_markdown"}},
 		{"source_evidence_rendered_markdown_untrusted", "mcp_source_evidence_response.v1.schema.json", "mcp_source_evidence_response.v1.json", []string{"rendered_markdown", "untrusted"}},

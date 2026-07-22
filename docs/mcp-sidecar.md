@@ -56,6 +56,44 @@ Identify this sidecar instance to the hosted API (client info payload, `X-ACR-Cl
 **ACR_ENABLE_WRITEBACK**
 Boolean (`true`/`false`). When `true`, enables the `record_episode` tool if all four gates pass: (1) this flag is `true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Default: `false`. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; plain doctor (or `doctor --live`) diagnoses the hosted gates.
 
+### Optional local CodeGraph evidence
+
+CodeGraph is an optional local evidence provider, not an ACR-managed service.
+The sidecar consumes an existing index read-only and never installs CodeGraph,
+creates or refreshes an index, queries or parses CodeGraph SQLite storage, or
+parses human-oriented output. On supported Unix platforms it may perform a
+bounded read-only `codegraph.db` identity check; it does not use that file as an
+evidence/query store. Its direct/managed guard permits only CodeGraph `>=1.2.0,<2.0.0` JSON
+commands `status`, `query`, `callers`, `callees`, `impact`, `affected`, and
+`files`; it never invokes `init`, `index`, or `sync`.
+
+| Variable | Default | Accepted values / bounds |
+| --- | --- | --- |
+| `ACR_LOCAL_INDEX_PROVIDER` | `auto` | `auto`, `disabled`, or `codegraph` |
+| `ACR_CODEGRAPH_EXECUTABLE` | trusted-name resolution | optional absolute executable path |
+| `ACR_LOCAL_INDEX_TIMEOUT` | `3s` | Go duration, `100ms`–`15s` |
+| `ACR_LOCAL_INDEX_MAX_ITEMS` | `5` | `1`–`12` |
+| `ACR_LOCAL_INDEX_MAX_OUTPUT_TOKENS` | `1000` | `125`–`4000` |
+| `ACR_LOCAL_INDEX_MAX_SERIALIZED_BYTES` | `65536` | `2048`–`262144` |
+| `ACR_LOCAL_INDEX_STALE_POLICY` | `graceful` | `graceful` or `strict` |
+
+`disabled` gives hosted-only results. `auto` and `codegraph` attempt the local
+provider only after hosted bootstrap remains usable. Invalid settings, a missing
+or incompatible executable/index, a timeout, or a workspace mismatch never
+turn a hosted request into local-only success. Under `graceful`, usable stale
+evidence is labeled stale; under `strict`, stale or mismatched local evidence is
+omitted. CodeGraph 1.2.0 does not expose an indexed commit, so the sidecar emits
+`indexed_commit_unknown` rather than substituting the workspace HEAD.
+
+When local evidence is usable, `context_for_task` preserves the hosted packet
+unchanged and may add `local_context` plus `federated_budget`. Packet-content
+limits apply to hosted packet content plus local items/evidence only; the MCP
+envelope, `federated_budget`, and `rendered_markdown` are separately bounded and
+excluded from those caller limits. Local identifiers are opaque
+`local:codegraph:v1:<sha256>` values. Their source expansion is served only from
+the sidecar's bounded 1024-entry, 30-minute local cache; unknown or expired local
+IDs are safe not-found responses and are never sent to the hosted API.
+
 ## Credential Management
 
 ### Platform Support

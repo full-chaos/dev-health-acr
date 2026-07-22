@@ -1,0 +1,5 @@
+{
+  "changedFiles": ["acr/internal/contextpacket/assembler.go"],
+  "affectedTests": [],
+  "totalDependentsTraversed": 52
+}

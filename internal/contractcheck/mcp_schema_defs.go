@@ -40,6 +40,11 @@ var mcpResponseDefsSyncs = []mcpResponseDefsSync{
 		canonicalFile: "context_packet_item.v1.schema.json",
 	},
 	{
+		responseFile:  "mcp_context_for_task_response.v1.schema.json",
+		defKey:        "evidence_ref.v1",
+		canonicalFile: "evidence_ref.v1.schema.json",
+	},
+	{
 		responseFile:   "mcp_source_evidence_response.v1.schema.json",
 		defKey:         "expanded_evidence.v1",
 		canonicalFile:  "expanded_evidence.v1.schema.json",

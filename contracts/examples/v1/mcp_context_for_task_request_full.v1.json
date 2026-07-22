@@ -18,5 +18,9 @@
     "max_items": 30,
     "max_output_tokens": 4000,
     "max_serialized_bytes": 262144
-  }
+  },
+  "requested_categories": [
+    "state",
+    "action"
+  ]
 }

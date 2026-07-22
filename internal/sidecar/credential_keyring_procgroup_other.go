@@ -20,3 +20,12 @@ func killKeyringProcessGroup(cmd *exec.Cmd) error {
 	}
 	return cmd.Process.Kill()
 }
+
+func captureKeyringProcessGroup(cmd *exec.Cmd) int {
+	if cmd.Process == nil {
+		return 0
+	}
+	return cmd.Process.Pid
+}
+
+func killKeyringProcessGroupID(_ int) error { return nil }

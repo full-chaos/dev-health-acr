@@ -54,17 +54,43 @@ type ConfigBounds struct {
 // bounded, non-secret config values. It never carries the configured API
 // URL, any userinfo, the bearer credential value, or a CA bundle/token file path.
 type StaticReport struct {
-	APIURLSet                bool          `json:"api_url_set"`
-	APIURLValid              bool          `json:"api_url_valid"`
-	CredentialSet            bool          `json:"credential_set"`
-	CredentialSource         string        `json:"credential_source,omitempty"`
-	CredentialShapeValid     bool          `json:"credential_shape_valid"`
-	WriteEnabled             bool          `json:"write_enabled"`
-	TranscriptCaptureEnabled bool          `json:"transcript_capture_enabled"`
-	LogLevel                 string        `json:"log_level,omitempty"`
-	Status                   string        `json:"status"`
-	Bounds                   *ConfigBounds `json:"bounds,omitempty"`
-	Checks                   []CheckResult `json:"checks"`
+	APIURLSet                bool             `json:"api_url_set"`
+	APIURLValid              bool             `json:"api_url_valid"`
+	CredentialSet            bool             `json:"credential_set"`
+	CredentialSource         string           `json:"credential_source,omitempty"`
+	CredentialShapeValid     bool             `json:"credential_shape_valid"`
+	WriteEnabled             bool             `json:"write_enabled"`
+	TranscriptCaptureEnabled bool             `json:"transcript_capture_enabled"`
+	LogLevel                 string           `json:"log_level,omitempty"`
+	Status                   string           `json:"status"`
+	Bounds                   *ConfigBounds    `json:"bounds,omitempty"`
+	Checks                   []CheckResult    `json:"checks"`
+	LocalIndex               LocalIndexReport `json:"local_index"`
+}
+
+type LocalIndexReport struct {
+	ProviderMode                string `json:"provider_mode"`
+	ConfigValid                 bool   `json:"config_valid"`
+	WorkspaceDiscovered         bool   `json:"workspace_discovered"`
+	RepositoryIdentityAvailable bool   `json:"repository_identity_available"`
+	WorkspaceScopeValid         bool   `json:"workspace_scope_valid"`
+	IndexChecked                bool   `json:"index_checked"`
+	IndexReadable               bool   `json:"index_readable"`
+	Available                   bool   `json:"available"`
+	ProviderVersion             string `json:"provider_version,omitempty"`
+	VersionChecked              bool   `json:"version_checked"`
+	VersionCompatible           bool   `json:"version_compatible"`
+	Status                      string `json:"status"`
+	Freshness                   string `json:"freshness"`
+	MaxItems                    int    `json:"max_items"`
+	MaxOutputTokens             int    `json:"max_output_tokens"`
+	WorktreeMismatchChecked     bool   `json:"worktree_mismatch_checked"`
+	WorktreeMismatchDetected    bool   `json:"worktree_mismatch_detected"`
+	QueryChecked                bool   `json:"query_checked"`
+	QuerySucceeded              bool   `json:"query_succeeded"`
+	ResultCount                 int    `json:"result_count"`
+	IndexedCommitStatus         string `json:"indexed_commit_status,omitempty"`
+	ErrorCode                   string `json:"error_code,omitempty"`
 }
 
 // LiveReport mirrors the sanitized `acr-mcp doctor --live` result: booleans

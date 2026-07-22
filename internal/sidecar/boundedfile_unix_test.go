@@ -46,13 +46,10 @@ func TestReadBoundedRegularFileRejectsFIFOWithoutBlocking(t *testing.T) {
 	}
 }
 
-// TestReadBoundedRegularFileFIFOSwapRaceNeverBlocks proves that under
-// real, continuous concurrent path swapping between a regular file and a
-// named pipe with no reader or writer connected, readBoundedRegularFile
-// never blocks: every call must return (successfully or with an error)
-// well within the test's overall deadline, even though some calls will
-// race against the path being a FIFO at the exact moment of open(2).
-func TestReadBoundedRegularFileFIFOSwapRaceNeverBlocks(t *testing.T) {
+// TestReadBoundedRegularFileKeepsValidatedOpenNonBlockingDuringPersistentFIFOReplacement
+// exercises a persistent replacement of the path with an unconnected named pipe.
+// The validated open must return rather than block while that replacement is active.
+func TestReadBoundedRegularFileKeepsValidatedOpenNonBlockingDuringPersistentFIFOReplacement(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "path")
 	legit := []byte("legit-regular-content")
@@ -62,9 +59,7 @@ func TestReadBoundedRegularFileFIFOSwapRaceNeverBlocks(t *testing.T) {
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case <-stop:
@@ -84,7 +79,7 @@ func TestReadBoundedRegularFileFIFOSwapRaceNeverBlocks(t *testing.T) {
 			}
 			_ = os.Rename(tmpFile, path)
 		}
-	}()
+	})
 
 	done := make(chan struct{})
 	go func() {
@@ -100,7 +95,7 @@ func TestReadBoundedRegularFileFIFOSwapRaceNeverBlocks(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		close(stop)
 		wg.Wait()
-		t.Fatal("readBoundedRegularFile blocked during a FIFO-swap race instead of rejecting the FIFO state via O_NONBLOCK")
+		t.Fatal("readBoundedRegularFile blocked while persistent FIFO replacement was active instead of returning from the validated nonblocking open")
 	}
 	close(stop)
 	wg.Wait()

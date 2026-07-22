@@ -1,0 +1,1 @@
+ACR reads SQLite indexes.
