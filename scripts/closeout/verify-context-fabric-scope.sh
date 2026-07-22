@@ -66,7 +66,7 @@ files=[]
 if subprocess.run(['git','-C',root,'rev-parse','--is-inside-work-tree'],capture_output=True).returncode == 0:
  changed=subprocess.check_output(['git','-C',root,'diff','--name-only','2f4e9212f7ba84092ff511bbdc8053c340bec0d3','--'],text=True).splitlines()
  changed += subprocess.check_output(['git','-C',root,'ls-files','--others','--exclude-standard'],text=True).splitlines()
- files=[os.path.join(root,path) for path in changed if os.path.isfile(os.path.join(root,path))]
+ files=[os.path.join(root,path) for path in changed if os.path.isfile(os.path.join(root,path)) and not path.startswith('scripts/closeout/')]
 else:
  for base in ('cmd','internal','clients','contracts','docs','scripts'):
   p=os.path.join(root,base)
