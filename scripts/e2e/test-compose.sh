@@ -129,7 +129,7 @@ grep -Fq 'REVOKE ALL ON TABLES FROM :"runtime_user"' "$root/deploy/compose/acr-d
 if grep -Fq 'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"runtime_user"' "$root/deploy/compose/acr-db-init.sh"; then exit 1; fi
 for image in \
   'postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15' \
-  'clickhouse/clickhouse-server:latest@sha256:fdc22372465a336fa47e9deab61fad8277b9e2f2473234a1294b33b53f01d377' \
+  'clickhouse/clickhouse-server:latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5' \
   'edoburu/pgbouncer:latest@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd' \
   'valkey/valkey:9-alpine@sha256:ee91f7a174ac4d6a6b0685b3a60e321f0a9dbbb691f9b0e285be2ba1d1be8328' \
   'axllent/mailpit:latest@sha256:b868afa176bfd6cce2323ea316cd99ccad77915e51e595748f6d786700ecf109' \

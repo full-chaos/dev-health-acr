@@ -60,7 +60,7 @@ EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/acr-api"]
 CMD ["serve"]
 
-FROM cgr.dev/chainguard/git:latest@sha256:62135ba579e1ac309441b3de21983230a4979603ab879bafa6d2773e8d5fd626 AS acr-mcp-base
+FROM cgr.dev/chainguard/git:latest@sha256:7e0cf19de437467abd96f7ba86cf107d8872d0de85c9956dc2a69ad34eeff73b AS acr-mcp-base
 
 FROM build AS acr-mcp-root
 COPY --from=acr-mcp-base / /mcp-root
