@@ -66,7 +66,7 @@ func assertIntegrationExecutionLimit(t *testing.T, options Options) {
 	t.Helper()
 
 	// Given
-	limited, err := NewClickHouseQueryClientWithOptions(Options{DSN: options.DSN, TLS: options.TLS, MaxExecutionTime: 1, QueryTimeout: 10 * time.Second})
+	limited, err := NewClickHouseQueryClientWithOptions(Options{DSN: options.DSN, Environment: options.Environment, TLS: options.TLS, MaxExecutionTime: 1, QueryTimeout: 10 * time.Second})
 	if err != nil {
 		t.Fatalf("create execution-limited client: %v", err)
 	}

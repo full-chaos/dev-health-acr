@@ -14,7 +14,7 @@ func openClickHouse(_ context.Context, request clickHouseOpenRequest) (clickHous
 	if err != nil {
 		return clickHouseComponents{}, err
 	}
-	client, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{DSN: request.config.ClickHouseDSN, TLS: tlsConfig})
+	client, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{DSN: request.config.ClickHouseDSN, Environment: request.config.Environment, TLS: tlsConfig})
 	if err != nil {
 		return clickHouseComponents{}, err
 	}

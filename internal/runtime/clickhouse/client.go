@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -27,6 +28,7 @@ var (
 
 type Options struct {
 	DSN              string
+	Environment      string
 	TLS              *tls.Config
 	DialTimeout      time.Duration
 	ReadTimeout      time.Duration
@@ -56,6 +58,10 @@ func NewClickHouseQueryClientWithOptions(options Options) (*Client, error) {
 	if strings.TrimSpace(options.DSN) == "" {
 		return nil, ErrInvalidConfiguration
 	}
+	connectionURL, err := url.Parse(options.DSN)
+	if err != nil {
+		return nil, fmt.Errorf("parse ClickHouse connection: %w", ErrInvalidConfiguration)
+	}
 	configured, err := clickhousedriver.ParseDSN(options.DSN)
 	if err != nil {
 		return nil, fmt.Errorf("parse ClickHouse connection: %w", ErrInvalidConfiguration)
@@ -64,7 +70,13 @@ func NewClickHouseQueryClientWithOptions(options Options) (*Client, error) {
 		return nil, fmt.Errorf("validate ClickHouse settings: %w", ErrInvalidConfiguration)
 	}
 	applyOptions(configured, options)
-	if configured.TLS == nil || configured.TLS.InsecureSkipVerify {
+	if strings.EqualFold(connectionURL.Scheme, "http") && configured.TLS != nil {
+		return nil, fmt.Errorf("validate ClickHouse TLS: %w", ErrInvalidConfiguration)
+	}
+	if configured.TLS == nil && options.Environment != "development" && options.Environment != "test" {
+		return nil, fmt.Errorf("validate ClickHouse TLS: %w", ErrInvalidConfiguration)
+	}
+	if configured.TLS != nil && configured.TLS.InsecureSkipVerify {
 		return nil, fmt.Errorf("validate ClickHouse TLS: %w", ErrInvalidConfiguration)
 	}
 	connection, err := clickhousedriver.Open(configured)

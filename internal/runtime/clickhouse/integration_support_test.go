@@ -29,7 +29,7 @@ func integrationClient(t *testing.T) (*Client, Options) {
 		}
 		t.Skip("ACR_CLICKHOUSE_INTEGRATION_ISOLATED=1 is required before the integration test can target seeded data")
 	}
-	options := Options{DSN: dsn, TLS: integrationTLSConfig(t), QueryTimeout: 10 * time.Second}
+	options := Options{DSN: dsn, Environment: "test", TLS: integrationTLSConfig(t), QueryTimeout: 10 * time.Second}
 	client, err := NewClickHouseQueryClientWithOptions(options)
 	if err != nil {
 		t.Fatalf("NewClickHouseQueryClientWithOptions() error = %v", err)
@@ -46,7 +46,7 @@ func integrationTLSConfig(t *testing.T) *tls.Config {
 	t.Helper()
 	certificatePath := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_CA_FILE")
 	if certificatePath == "" {
-		t.Fatal("ACR_CLICKHOUSE_INTEGRATION_CA_FILE is required to verify the real ClickHouse TLS certificate")
+		return nil
 	}
 	certificate, err := os.ReadFile(certificatePath)
 	if err != nil {
@@ -57,6 +57,19 @@ func integrationTLSConfig(t *testing.T) *tls.Config {
 		t.Fatal("parse ClickHouse CA file")
 	}
 	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: os.Getenv("ACR_CLICKHOUSE_INTEGRATION_TLS_SERVER_NAME")}
+}
+
+func TestIntegrationTLSConfig_allows_plaintext_when_CA_file_unset(t *testing.T) {
+	// Given
+	t.Setenv("ACR_CLICKHOUSE_INTEGRATION_CA_FILE", "")
+
+	// When
+	config := integrationTLSConfig(t)
+
+	// Then
+	if config != nil {
+		t.Fatalf("integrationTLSConfig() = %#v, want nil", config)
+	}
 }
 
 func assertIntegrationServerRejectsMutation(t *testing.T, options Options) {

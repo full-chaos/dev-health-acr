@@ -64,6 +64,9 @@ ClickHouse catalog probe, and checks the entitlement service before listening.
 Hosted, credential-administration, and migration PostgreSQL/PgBouncer network
 DSNs require certificate-verified TLS; Unix sockets are accepted without TLS.
 The plaintext override is rejected outside `ACR_ENVIRONMENT=test`.
+ClickHouse must use certificate-verified TLS in staging and production. Plaintext
+ClickHouse is accepted only in development and test environments; supplying a CA
+bundle keeps certificate verification enabled in every environment.
 
 Each listed secret pair accepts exactly one source. A `_FILE` source must name
 a regular, non-symlink file that is not writable by group or others; its

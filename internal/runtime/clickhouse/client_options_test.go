@@ -10,20 +10,89 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 )
 
-func TestNewClickHouseQueryClientWithOptions_requires_verified_TLS(t *testing.T) {
-	for _, dsn := range []string{
-		"clickhouse://readonly@example.invalid:9000/default",
-		"clickhouse://readonly@example.invalid:9440/default?secure=true&skip_verify=true",
-	} {
-		t.Run(dsn, func(t *testing.T) {
+func TestNewClickHouseQueryClientWithOptions_allows_plaintext_DSN_in_local_environments(t *testing.T) {
+	for _, environment := range []string{"development", "test"} {
+		t.Run(environment, func(t *testing.T) {
+			// Given
+			options := Options{DSN: "clickhouse://readonly@example.invalid:9000/default", Environment: environment}
+
 			// When
-			_, err := NewClickHouseQueryClientWithOptions(Options{DSN: dsn})
+			client, err := NewClickHouseQueryClientWithOptions(options)
+
+			// Then
+			if err != nil {
+				t.Fatalf("NewClickHouseQueryClientWithOptions() error = %v, want nil", err)
+			}
+			if err := client.Close(); err != nil {
+				t.Fatalf("Close() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestNewClickHouseQueryClientWithOptions_requires_TLS_outside_local_environments(t *testing.T) {
+	for _, environment := range []string{"", "staging", "production"} {
+		t.Run(environment, func(t *testing.T) {
+			// Given
+			options := Options{DSN: "clickhouse://readonly@example.invalid:9000/default", Environment: environment}
+
+			// When
+			_, err := NewClickHouseQueryClientWithOptions(options)
 
 			// Then
 			if !errors.Is(err, ErrInvalidConfiguration) {
 				t.Fatalf("NewClickHouseQueryClientWithOptions() error = %v, want ErrInvalidConfiguration", err)
 			}
 		})
+	}
+}
+
+func TestNewClickHouseQueryClientWithOptions_allows_verified_TLS_in_production(t *testing.T) {
+	// Given
+	options := Options{
+		DSN:         "https://readonly@example.invalid:8443/default?secure=true",
+		Environment: "production",
+	}
+
+	// When
+	client, err := NewClickHouseQueryClientWithOptions(options)
+
+	// Then
+	if err != nil {
+		t.Fatalf("NewClickHouseQueryClientWithOptions() error = %v, want nil", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil", err)
+	}
+}
+
+func TestNewClickHouseQueryClientWithOptions_rejects_plain_HTTP_with_TLS_config(t *testing.T) {
+	// Given
+	options := Options{
+		DSN:         "http://readonly@example.invalid:8123/default",
+		Environment: "production",
+		TLS:         &tls.Config{MinVersion: tls.VersionTLS12},
+	}
+
+	// When
+	_, err := NewClickHouseQueryClientWithOptions(options)
+
+	// Then
+	if !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("NewClickHouseQueryClientWithOptions() error = %v, want ErrInvalidConfiguration", err)
+	}
+}
+
+func TestNewClickHouseQueryClientWithOptions_rejects_TLS_without_verification(t *testing.T) {
+	// Given
+	dsn := "clickhouse://readonly@example.invalid:9440/default?secure=true&skip_verify=true"
+
+	// When
+	_, err := NewClickHouseQueryClientWithOptions(Options{DSN: dsn})
+
+	// Then
+	if !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("NewClickHouseQueryClientWithOptions() error = %v, want ErrInvalidConfiguration", err)
 	}
 }
 
