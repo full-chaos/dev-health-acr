@@ -40,52 +40,36 @@ commit. No Cosign private key or password is stored in GitHub.
 
 Release publication requires Cosign v3.1.1 and Skopeo v1.23.0 on the trusted
 operator machine. The authenticated `gh` token must have private repository and
-`write:packages` access; deletion uses a separate credential with
+`write:packages` access. Add that scope with
+`gh auth refresh -h github.com -s write:packages`; deletion uses a separate credential with
 `delete:packages`. The organization package policy must default new GHCR
 packages to private. Both `dev-health-acr/acr-api` and
 `dev-health-acr/acr-mcp` must be pre-provisioned, linked to this repository,
 and private; the publisher refuses a missing or non-private package before
 uploading bytes.
 
-After the Actions run succeeds, download the complete artifact and use
-`container-release-manifest.json` to request one approval receipt for each
-image digest. Publish both images before publishing the GitHub Release:
+After the Actions run succeeds, download the complete artifact and read the
+immutable image and checksum digests from its manifests. Publish both images
+before publishing the GitHub Release:
 
 ```bash
 gh run download RUN_ID --repo full-chaos/dev-health-acr \
   --name release --dir .tmp/release-vX.Y.Z
 
 scripts/release/publish-private-image.sh \
-  --approval-receipt ACR_API_IMAGE.json --digest sha256:API_INDEX_DIGEST \
+  --digest sha256:API_INDEX_DIGEST \
   acr-api vX.Y.Z RUN_ID
 scripts/release/publish-private-image.sh \
-  --approval-receipt ACR_MCP_IMAGE.json --digest sha256:MCP_INDEX_DIGEST \
+  --digest sha256:MCP_INDEX_DIGEST \
   acr-mcp vX.Y.Z RUN_ID
 scripts/release/publish-private-release.sh \
-  --approval-receipt GITHUB_RELEASE.json --digest sha256:SHA256SUMS_DIGEST \
+  --digest sha256:SHA256SUMS_DIGEST \
   vX.Y.Z RUN_ID
 ```
 
-The image approval target is
-`oci-image:ghcr.io/full-chaos/dev-health-acr/PRODUCT@sha256:DIGEST`; the receipt's
-separate version field binds that digest to the approved release version.
-The GitHub Release approval target remains
-`github-release:full-chaos/dev-health-acr:TAG`. All three receipts are private,
-owner-signed, and single use.
-
-Every remote subcommand requires `--approval-receipt RECEIPT.json` (an
-owner-signed, single-use approval receipt with an adjacent detached
-`RECEIPT.json.asc` signature) and a matching `--digest sha256:DIGEST`. Add
-`--dry-run` to validate the receipt and all local preconditions without remote
-access, performing the action, or consuming the receipt's single-use nonce.
-
-The approval-verification key, its exact fingerprint, and the nonce ledger are
-the trust anchors that enforce owner/operator separation. Run these scripts only
-in a trusted release environment with controlled environment variables: the
-`ACR_APPROVAL_VERIFICATION_KEY`, `ACR_APPROVAL_FINGERPRINT`, and
-`ACR_APPROVAL_LEDGER` overrides exist for automated testing and must not be
-attacker-influenced in production, because a caller that redirects them to its
-own key or a fresh ledger could self-sign or replay approvals.
+These standard publication commands use the authenticated GitHub identity,
+repository operator allowlist, signed release tag, successful workflow run, and
+explicit immutable digest. They do not accept or require approval receipts.
 
 The image publisher verifies the exact successful workflow run and complete
 release artifact, then copies the approved multi-platform OCI archive to its
@@ -119,10 +103,32 @@ the signature over the full manifest, then verify exactly the archive they
 downloaded. Never run a bare full-manifest checksum command when other listed
 assets were not downloaded.
 
+## Optional MCP binary approval
+
+The signed receipt implementation remains available only for a future policy
+that may require separate owner approval of the MCP binary set. It is not part
+of the normal release path and no publisher calls it. To validate or consume an
+owner-signed, expiring, single-use receipt for an exact MCP artifact-set digest:
+
+```bash
+scripts/release/verify-mcp-binary-approval.sh \
+  --approval-receipt MCP_APPROVAL.json \
+  --digest sha256:MCP_BINARY_SET_DIGEST \
+  release-manifest.json vX.Y.Z
+```
+
+`MCP_BINARY_SET_DIGEST` is the SHA-256 of the canonical sorted JSON projection
+of the five `acr-mcp` entries in `release-manifest.json`; the verifier computes
+that value itself and rejects a receipt for any other bytes. Add `--dry-run` to
+verify the receipt without consuming its nonce. Nonce single-use is enforced by
+one controlled local ledger; copying a receipt to a fresh ledger is outside that
+guarantee. The
+`ACR_APPROVAL_VERIFICATION_KEY`, `ACR_APPROVAL_FINGERPRINT`, and
+`ACR_APPROVAL_LEDGER` overrides are test-only trust-boundary controls and must
+not be attacker-controlled if this optional gate is activated.
+
 Automated authenticated consumer verification and exact GHCR package-version
-revocation are tracked in CHAOS-3067. Until that operator workflow lands,
-`verify-private-consumer.sh` validates approval receipts only in `--dry-run`
-mode and fails closed before remote access on every real invocation.
+revocation remain tracked in CHAOS-3067; neither blocks normal publication.
 
 The signed `acr-mcp` archives also contain the four client packages and their
 conformance identity. The Task19 clean-room check consumes an archive only
@@ -163,7 +169,7 @@ if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expec
 
 ## Revocation
 
-Run `scripts/release/revoke-private-release.sh --approval-receipt RECEIPT.json --digest sha256:DIGEST TAG INCIDENT_REFERENCE` locally
+Run `scripts/release/revoke-private-release.sh TAG INCIDENT_REFERENCE` locally
 as an allowlisted operator and type the exact confirmation. The script lists
 Release assets, deletes each asset in a separate fail-closed CLI call, then
 preserves the immutable signed tag and a clearly marked revoked Release record

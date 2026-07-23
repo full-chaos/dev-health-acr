@@ -4,8 +4,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/fixture" "$tmp/gnupg" "$tmp/home/.config/acr/release"
-chmod 700 "$tmp/gnupg"
+mkdir -p "$tmp/bin" "$tmp/fixture" "$tmp/home/.config/acr/release"
 
 tag=v1.2.3
 version=1.2.3
@@ -16,7 +15,6 @@ archive="${product}_${version}_linux_multiarch.oci.tar"
 remote_raw='{"manifests":[{"platform":{"architecture":"amd64","os":"linux"}},{"platform":{"architecture":"arm64","os":"linux"}}],"schemaVersion":2}'
 digest="sha256:$(printf '%s' "$remote_raw" | shasum -a 256 | awk '{print $1}')"
 repository="ghcr.io/full-chaos/dev-health-acr/$product"
-target="oci-image:${repository}@${digest}"
 
 printf 'fixture archive\n' >"$tmp/fixture/$archive"
 archive_sha256="$(shasum -a 256 "$tmp/fixture/$archive" | awk '{print $1}')"
@@ -47,6 +45,7 @@ case "$1 $2" in
   'api orgs/full-chaos/packages/container/dev-health-acr%2Facr-api') printf 'private\n' ;;
   'auth token') printf 'registry-secret\n' ;;
   'repo view') printf 'full-chaos/dev-health-acr\ttrue\n' ;;
+  'repo clone') mkdir -p "$4" ;;
   'run download')
     while (($#)); do
       if [[ "$1" == --dir ]]; then
@@ -61,6 +60,37 @@ case "$1 $2" in
   'variable get') printf 'chrisgeo\n' ;;
   *) exit 1 ;;
 esac
+EOF
+
+cat >"$tmp/bin/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'git %s\n' "$*" >>"$MOCK_LOG"
+[[ "$1" == -C ]]
+case "$3" in
+  fetch) exit 0 ;;
+  verify-tag) printf '[GNUPG:] VALIDSIG %s fixture\n' "$MOCK_FINGERPRINT" ;;
+  cat-file) printf 'tag\n' ;;
+  rev-list) printf '%s\n' "$MOCK_COMMIT" ;;
+  rev-parse)
+    if [[ "$4" == refs/tags/* ]]; then printf '%s\n' "$MOCK_TAG_OBJECT"; else printf '%s\n' "$MOCK_COMMIT"; fi
+    ;;
+  merge-base) exit 0 ;;
+  ls-remote) printf '%s\t%s\n%s\t%s\n' "$MOCK_TAG_OBJECT" "$5" "$MOCK_COMMIT" "$6" ;;
+  *) exit 1 ;;
+esac
+EOF
+
+cat >"$tmp/bin/gpg" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'gpg %s\n' "$*" >>"$MOCK_LOG"
+if [[ " $* " == *' --import '* ]]; then exit 0; fi
+if [[ " $* " == *' --with-colons --fingerprint '* ]]; then
+  printf 'fpr:::::::::%s:\n' "$MOCK_FINGERPRINT"
+  exit 0
+fi
+exit 1
 EOF
 
 cat >"$tmp/bin/skopeo" <<'EOF'
@@ -101,36 +131,18 @@ EOF
 chmod 755 "$tmp/bin"/*
 touch "$tmp/home/.config/acr/release/cosign.key" "$tmp/cosign.pub"
 
-gpg --batch --homedir "$tmp/gnupg" --pinentry-mode loopback --passphrase '' \
-  --quick-generate-key 'ACR image approval test <approval@example.invalid>' ed25519 sign 1d >/dev/null 2>&1
-fingerprint="$(gpg --batch --homedir "$tmp/gnupg" --with-colons --list-keys | awk -F: '$1 == "fpr" {print $10; exit}')"
-gpg --batch --homedir "$tmp/gnupg" --armor --export "$fingerprint" >"$tmp/approval-key.asc"
-now="$(date -u +%s)"
-iso_time() { date -u -r "$1" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d "@$1" '+%Y-%m-%dT%H:%M:%SZ'; }
-receipt="$(jq -cnS \
-  --arg target "$target" \
-  --arg version "$version" \
-  --arg digest "$digest" \
-  --arg issued "$(iso_time "$now")" \
-  --arg expires "$(iso_time "$((now + 600))")" \
-  '{schema_version:"approval_receipt.v1",action:"publish_private_image",repository:"full-chaos/dev-health-acr",target:$target,version:$version,digest:$digest,visibility:"private",decision:"approve",issued_at:$issued,expires_at:$expires,nonce:"00000000000000000000000000000001"}')"
-printf '%s' "$receipt" >"$tmp/receipt.json"
-gpg --batch --homedir "$tmp/gnupg" --armor --detach-sign --output "$tmp/receipt.json.asc" "$tmp/receipt.json"
-
 PATH="$tmp/bin:$PATH" \
 HOME="$tmp/home" \
 COSIGN_PASSWORD=test \
-ACR_COSIGN_PUBLIC_KEY="$tmp/cosign.pub" \
-ACR_APPROVAL_LEDGER="$tmp/ledger" \
-ACR_APPROVAL_VERIFICATION_KEY="$tmp/approval-key.asc" \
-ACR_APPROVAL_FINGERPRINT="$fingerprint" \
 MOCK_LOG="$tmp/commands.log" \
 MOCK_FIXTURE="$tmp/fixture" \
 MOCK_STATE="$tmp/published" \
 MOCK_REMOTE_RAW="$remote_raw" \
 MOCK_DIGEST="$digest" \
+MOCK_FINGERPRINT=9DCD0E7D385C8247E2F5E7FC2C43EBC02D8C8781 \
+MOCK_TAG_OBJECT=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+MOCK_COMMIT="$commit" \
   "$root/scripts/release/publish-private-image.sh" \
-    --approval-receipt "$tmp/receipt.json" \
     --digest "$digest" \
     "$product" "$tag" "$run_id"
 
@@ -139,9 +151,31 @@ grep -F 'oci-archive:' "$tmp/commands.log" >/dev/null
 if grep -F "docker://${repository}:${tag}" "$tmp/commands.log"; then exit 1; fi
 grep -F 'cosign sign' "$tmp/commands.log" | grep -F "${repository}@${digest}" >/dev/null
 grep -F 'cosign verify' "$tmp/commands.log" | grep -F "${repository}@${digest}" >/dev/null
+grep -F 'verify-tag --raw v1.2.3' "$tmp/commands.log" >/dev/null
+grep -F 'merge-base --is-ancestor' "$tmp/commands.log" >/dev/null
+grep -F 'ls-remote origin' "$tmp/commands.log" >/dev/null
 if grep -F 'registry-secret' "$tmp/commands.log"; then exit 1; fi
 digest_copy_line="$(grep -nF "docker://${repository}@${digest}" "$tmp/commands.log" | grep -F 'skopeo copy' | cut -d: -f1 | sort -n | awk 'NR == 1 { print }')"
 sign_line="$(grep -nF "${repository}@${digest}" "$tmp/commands.log" | grep -F 'cosign sign' | cut -d: -f1)"
 test "$digest_copy_line" -lt "$sign_line"
+
+wrong_digest=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+if PATH="$tmp/bin:$PATH" \
+  HOME="$tmp/home" \
+  COSIGN_PASSWORD=test \
+  MOCK_LOG="$tmp/mismatch.log" \
+  MOCK_FIXTURE="$tmp/fixture" \
+  MOCK_STATE="$tmp/published" \
+  MOCK_REMOTE_RAW="$remote_raw" \
+  MOCK_DIGEST="$wrong_digest" \
+  MOCK_FINGERPRINT=9DCD0E7D385C8247E2F5E7FC2C43EBC02D8C8781 \
+  MOCK_TAG_OBJECT=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+  MOCK_COMMIT="$commit" \
+  "$root/scripts/release/publish-private-image.sh" \
+    --digest "$wrong_digest" \
+    "$product" "$tag" "$run_id"; then
+  exit 1
+fi
+if grep -F 'skopeo copy' "$tmp/mismatch.log"; then exit 1; fi
 
 printf 'private image publisher fixture passed\n'

@@ -4,18 +4,14 @@ set -euo pipefail
 repo="full-chaos/dev-health-acr"
 fingerprint="9DCD0E7D385C8247E2F5E7FC2C43EBC02D8C8781"
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
-source "$root/scripts/release/approval-receipt.sh"
-approval_parse_options "$@" || { printf 'usage: publish-private-release.sh --approval-receipt RECEIPT --digest sha256:DIGEST [--dry-run] TAG RUN_ID\n' >&2; exit 1; }
-((${#APPROVAL_ARGS[@]} == 2)) || exit 1
-tag="${APPROVAL_ARGS[0]}"
-run_id="${APPROVAL_ARGS[1]}"
+[[ $# -eq 4 && "$1" == --digest ]] || { printf 'usage: publish-private-release.sh --digest sha256:DIGEST TAG RUN_ID\n' >&2; exit 1; }
+release_digest="$2"
+tag="$3"
+run_id="$4"
 version="${tag#v}"
+[[ "$release_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 1
 [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(dev|beta)\.(1|[1-9][0-9]*))?$ ]] || exit 1
-approval_verify "$APPROVAL_RECEIPT" publish_private_release "$repo" "github-release:$repo:$tag" "$version" "$APPROVAL_DIGEST" || exit 1
-if "$APPROVAL_DRY_RUN"; then
-  printf 'dry-run approved: private release publication remains blocked before GitHub access\n'
-  exit 0
-fi
+[[ "$run_id" =~ ^[1-9][0-9]*$ ]] || exit 1
 tmp="$(mktemp -d)"
 draft_created=false
 cleanup() {
@@ -93,7 +89,7 @@ jq -e --arg tag "$tag" --arg version "$version" --arg commit "$commit" '
 jq -r '.artifacts[] | "\(.sha256)  \(.name)"' release-manifest.json > "$tmp/builder-SHA256SUMS"
 check_sums "$tmp/builder-SHA256SUMS"
 check_sums SHA256SUMS
-test "sha256:$(checksum_file SHA256SUMS)" = "$APPROVAL_DIGEST"
+test "sha256:$(checksum_file SHA256SUMS)" = "$release_digest"
 skopeo --version | awk '$1 == "skopeo" && $2 == "version" && $3 == "1.23.0" { found = 1 } END { exit !found }'
 cosign version | awk '$1 == "GitVersion:" && $2 == "v3.1.1" { found = 1 } END { exit !found }'
 key_dir="${HOME}/.config/acr/release"

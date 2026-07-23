@@ -116,7 +116,7 @@ non-root numeric UID/GID `65532:65532`, read-only root filesystem, the
 deny-all build-context wrapper, and SBOM/scan gates. Local targets keep outputs
 under `.tmp/`; a signed tagged release adds the verified OCI archives to the
 private GitHub Release and publishes their approved digests to private GHCR
-packages through the owner/operator approval gate.
+packages through the authenticated operator command.
 
 ```bash
 make container-contract
