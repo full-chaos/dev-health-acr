@@ -26,16 +26,28 @@ jobs:
           test -x scripts/release/setup-cosign-key.sh
           test -x scripts/release/export-tag-signing-key.sh
           test -x scripts/release/publish-private-release.sh
+          test -x scripts/release/publish-private-image.sh
           test -x scripts/release/revoke-private-release.sh
+          test -x scripts/release/assemble-release-assets.sh
+          test -x scripts/release/test-assemble-release-assets.sh
+          test -x scripts/release/test-container-release-manifest.sh
+          test -x scripts/release/test-publish-private-image.sh
           test -x scripts/release/test_release_scripts.sh
+          test -x scripts/release/write-container-release-manifest.sh
       - name: Check release scripts
         run: |
           shellcheck scripts/release/*.sh
+          scripts/release/test-assemble-release-assets.sh
+          scripts/release/test-container-release-manifest.sh
+          scripts/release/test-publish-private-image.sh
           scripts/release/test_release_scripts.sh
       - name: Test remote release approval gates
         run: |
-          scripts/release/test-remote-gates.sh --mode dry-run --fixtures testdata/release-approvals
-          scripts/release/test-remote-gates.sh --mode reject-invalid --fixtures testdata/release-approvals
+          approval_gates=scripts/release/test-remote-gates.sh
+          "$approval_gates" --mode dry-run \
+            --fixtures testdata/release-approvals
+          "$approval_gates" --mode reject-invalid \
+            --fixtures testdata/release-approvals
       - run: make verify
       - name: Test deterministic native-client harness
         run: make clients-real
@@ -92,6 +104,8 @@ jobs:
       - name: Build and validate multi-architecture OCI archives
         run: make container-oci
       - name: Scan immutable amd64 and arm64 OCI images and generate SPDX SBOMs
+        env:
+          CONTAINER_SCAN_OCI_ROOT: .tmp/container-oci
         run: make container-scan
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

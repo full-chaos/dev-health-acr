@@ -4,8 +4,10 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp_root="${repo_root}/.tmp"
 stable_report_root="${tmp_root}/container-reports"
+source_oci_root="${CONTAINER_SCAN_OCI_ROOT:-}"
 lock_timeout="${CONTAINER_PUBLISH_LOCK_TIMEOUT:-60}"
 work_root=""
+exact_archives=false
 
 trivy_image='aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c'
 syft_image='anchore/syft:v1.46.0@sha256:473a60e3a58e29aca3aedb3e99e787bb4ef273917e44d10fcbea4330a07320bb'
@@ -32,6 +34,12 @@ scan_root="${work_root}/layouts"
 report_root="${work_root}/reports"
 trivy_cache="${work_root}/trivy-cache"
 mkdir -p "$scan_root" "$report_root" "$trivy_cache"
+if [[ -n "$source_oci_root" ]]; then
+  source_oci_root="$(cd "$source_oci_root" && pwd -P)"
+  test -f "$source_oci_root/acr-api.tar"
+  test -f "$source_oci_root/acr-mcp.tar"
+  exact_archives=true
+fi
 
 cleanup() {
   if [[ -n "$work_root" ]]; then
@@ -58,10 +66,45 @@ build_layout() {
   tar -xf "$archive" -C "$layout"
 }
 
-build_layout acr-api amd64
-build_layout acr-api arm64
-build_layout acr-mcp amd64
-build_layout acr-mcp arm64
+materialize_archive_layouts() {
+  local product="$1"
+  local archive="${source_oci_root}/${product}.tar"
+  local source_layout="${scan_root}/${product}-source"
+  local root_index image_index_digest image_index
+  local architecture layout
+
+  mkdir -p "$source_layout"
+  tar -xf "$archive" -C "$source_layout"
+  root_index="$(<"${source_layout}/index.json")"
+  image_index_digest="$(jq -er '.manifests | select(length == 1) | .[0].digest' <<<"$root_index")"
+  image_index="${source_layout}/blobs/sha256/${image_index_digest#sha256:}"
+  test -f "$image_index"
+
+  for architecture in amd64 arm64; do
+    layout="${scan_root}/${product}-${architecture}"
+    mkdir -p "$layout"
+    cp "${source_layout}/oci-layout" "$layout/oci-layout"
+    ln -s "../${product}-source/blobs" "$layout/blobs"
+    jq -e --arg architecture "$architecture" '
+      {
+        schemaVersion: 2,
+        mediaType: "application/vnd.oci.image.index.v1+json",
+        manifests: [.manifests[] | select(.platform.os == "linux" and .platform.architecture == $architecture)]
+      } |
+      select(.manifests | length == 1)
+    ' "$image_index" >"$layout/index.json"
+  done
+}
+
+if "$exact_archives"; then
+  materialize_archive_layouts acr-api
+  materialize_archive_layouts acr-mcp
+else
+  build_layout acr-api amd64
+  build_layout acr-api arm64
+  build_layout acr-mcp amd64
+  build_layout acr-mcp arm64
+fi
 
 docker pull "$trivy_image" >/dev/null
 docker pull "$syft_image" >/dev/null
@@ -104,6 +147,8 @@ printf '%s\n%s\n' "$trivy_db" "$trivy_db_layer" >"${report_root}/trivy-db-snapsh
 
 failures=0
 for name in acr-api-amd64 acr-api-arm64 acr-mcp-amd64 acr-mcp-arm64; do
+  trivy_input="/scan/$name"
+  syft_source="oci-dir:/scan/$name"
   if ! docker run --rm --pull=never --network none \
     --user "${scanner_uid}:${scanner_gid}" \
     --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777 \
@@ -116,7 +161,7 @@ for name in acr-api-amd64 acr-api-arm64 acr-mcp-amd64 acr-mcp-arm64; do
     --cache-dir /tmp/trivy-cache \
     --skip-db-update \
     --skip-version-check \
-    --input "/scan/${name}" \
+    --input "$trivy_input" \
     --severity HIGH,CRITICAL \
     --exit-code 1 \
     --format json \
@@ -131,7 +176,7 @@ for name in acr-api-amd64 acr-api-arm64 acr-mcp-amd64 acr-mcp-arm64; do
     -e HOME=/tmp -e SYFT_CHECK_FOR_APP_UPDATE=false \
     -v "${scan_root}:/scan:ro" \
     -v "${report_root}:/reports" \
-    "$syft_image" "oci-dir:/scan/${name}" \
+    "$syft_image" "$syft_source" \
     -o "spdx-json=/reports/${name}.spdx.json"; then
     failures=1
   fi
@@ -147,4 +192,8 @@ done
 test "$failures" -eq 0 || { printf 'one or more image scan or SBOM gates failed\n' >&2; exit 1; }
 bash "${repo_root}/scripts/container/publish-directory.sh" "$stable_report_root" "$report_root" "$lock_timeout"
 report_root=""
-printf 'four offline image scans and four immutable Syft SBOMs passed\n'
+if "$exact_archives"; then
+  printf 'four exact-archive scans and four immutable Syft SBOMs passed\n'
+else
+  printf 'four offline image scans and four immutable Syft SBOMs passed\n'
+fi

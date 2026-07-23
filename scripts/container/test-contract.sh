@@ -73,7 +73,11 @@ if grep -q 'rm -rf .tmp/container-oci' "${repo_root}/Makefile"; then
   printf 'container-oci must not delete the shared stable directory before building\n' >&2
   exit 1
 fi
-test "$(grep -c '^build_layout acr-' "${repo_root}/scripts/container/scan.sh")" -eq 4
+test "$(grep -c '^[[:space:]]*build_layout acr-' "${repo_root}/scripts/container/scan.sh")" -eq 4
+grep -q 'CONTAINER_SCAN_OCI_ROOT' "${repo_root}/scripts/container/scan.sh"
+grep -q 'materialize_archive_layouts acr-api' "${repo_root}/scripts/container/scan.sh"
+grep -q 'materialize_archive_layouts acr-mcp' "${repo_root}/scripts/container/scan.sh"
+grep -q 'ln -s "../[$]{product}-source/blobs"' "${repo_root}/scripts/container/scan.sh"
 scan_failure_line="$(grep -n 'one or more image scan or SBOM gates failed' "${repo_root}/scripts/container/scan.sh" | cut -d: -f1)"
 scan_publish_line="$(grep -n 'publish-directory.sh' "${repo_root}/scripts/container/scan.sh" | cut -d: -f1)"
 test "$scan_failure_line" -lt "$scan_publish_line" || {

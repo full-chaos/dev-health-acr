@@ -23,11 +23,14 @@ credentials, evidence bodies, customer data, or local filesystem paths.
 ### Verification
 
 - Obtain `signing/cosign.pub` only from a reviewed repository commit, then
-  download release archives, SPDX JSON, authoritative `SHA256SUMS`, and
+  download binary and OCI archives, SPDX JSON, authoritative `SHA256SUMS`, and
   `SHA256SUMS.sig`; the public key is not a Release asset.
 - Run `cosign verify-blob --key signing/cosign.pub --signature SHA256SUMS.sig --insecure-ignore-tlog SHA256SUMS`.
 - Set `archive='<downloaded filename>'`, select `awk -v name="$archive" '$2 == name' SHA256SUMS`, require exactly one line, then verify that line with `sha256sum --check -` or `shasum -a 256 --check -` on macOS.
 - Do not extract or execute an archive until tag, Cosign, and targeted checksum verification succeed.
+- Verify the `acr-api` and `acr-mcp` GHCR references from
+  `container-release-manifest.json` by immutable digest and Cosign signature;
+  never deploy a mutable tag.
 
 ### Security and operations
 

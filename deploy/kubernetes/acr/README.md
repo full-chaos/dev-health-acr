@@ -11,7 +11,7 @@ the API Deployment only after migration success.
 
 ```bash
 bash deploy/kubernetes/acr/scripts/apply.sh --overlay staging \
-  --image registry.internal/dev-health/acr-api@sha256:<64-hex-digest>
+  --image ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:<64-hex-digest>
 ```
 
 Wait for an existing rollout:
@@ -26,7 +26,8 @@ schema migration or changes the migration Job.
 
 ```bash
 bash deploy/kubernetes/acr/scripts/rollback.sh --overlay staging \
-  --image registry.internal/dev-health/acr-api@sha256:<64-hex-digest> --apply
+  --image ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:<64-hex-digest> \
+  --apply
 ```
 
 Run offline policy validation with `scripts/deploy/test-kustomize.sh`.

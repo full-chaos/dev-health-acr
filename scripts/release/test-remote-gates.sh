@@ -71,7 +71,7 @@ now="$(date -u +%s)"
 issued="$(iso_time "$now")"
 expires="$(iso_time "$((now + 600))")"
 release_target="github-release:full-chaos/dev-health-acr:v0.0.0-dev.1"
-image_target="registry.internal/acr@${digest}"
+image_target="oci-image:ghcr.io/full-chaos/dev-health-acr/acr-api@${digest}"
 consumer_target="github-download:full-chaos/dev-health-acr:v0.0.0-dev.1"
 owner_target="owner-gate:full-chaos/dev-health-acr:v0.0.0-dev.1"
 
@@ -79,7 +79,7 @@ if [[ "$mode" == dry-run ]]; then
   write_receipt "$tmp/publish.json" publish_private_release "$release_target" 0.0.0-dev.1 private 00000000000000000000000000000001 "$issued" "$expires"
   run_gate publish-private-release.sh "$tmp/publish.json" "$release_target" 0.0.0-dev.1 v0.0.0-dev.1 1
   write_receipt "$tmp/image.json" publish_private_image "$image_target" 0.0.0-dev.1 private 00000000000000000000000000000002 "$issued" "$expires"
-  run_gate publish-private-image.sh "$tmp/image.json" "$image_target" 0.0.0-dev.1 "$image_target" 0.0.0-dev.1
+  run_gate publish-private-image.sh "$tmp/image.json" "$image_target" 0.0.0-dev.1 acr-api v0.0.0-dev.1 1
   write_receipt "$tmp/consumer.json" verify_private_consumer "$consumer_target" 0.0.0-dev.1 private 00000000000000000000000000000003 "$issued" "$expires"
   run_gate verify-private-consumer.sh "$tmp/consumer.json" "$consumer_target" 0.0.0-dev.1 "$consumer_target" 0.0.0-dev.1
   write_receipt "$tmp/revoke.json" revoke_private_release "$release_target" 0.0.0-dev.1 private 00000000000000000000000000000004 "$issued" "$expires"
@@ -113,9 +113,9 @@ else
   reject "$tmp/mutated.json"
   write_receipt "$tmp/public.json" record_owner_gate "$owner_target" 0.0.0-dev.1 public 00000000000000000000000000000017 "$issued" "$expires"
   reject "$tmp/public.json"
-  mutable_target="registry.internal/acr:latest@${digest}"
+  mutable_target="oci-image:ghcr.io/full-chaos/dev-health-acr/acr-api@${digest}"
   write_receipt "$tmp/mutable.json" publish_private_image "$mutable_target" 0.0.0-dev.1 private 00000000000000000000000000000018 "$issued" "$expires"
-  if run_gate publish-private-image.sh "$tmp/mutable.json" "$mutable_target" 0.0.0-dev.1 "$mutable_target" 0.0.0-dev.1; then
+  if run_gate publish-private-image.sh "$tmp/mutable.json" "$mutable_target" 0.0.0-dev.1 acr-api latest 1; then
     exit 1
   fi
   printf '{' > "$tmp/malformed.json"

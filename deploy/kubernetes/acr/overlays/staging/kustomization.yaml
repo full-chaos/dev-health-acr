@@ -6,7 +6,7 @@ resources:
   - httproute.yaml
 images:
   - name: acr-api
-    newName: registry.internal/dev-health/acr-api
+    newName: ghcr.io/full-chaos/dev-health-acr/acr-api
     digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 patches:
   - path: config.yaml

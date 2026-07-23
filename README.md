@@ -113,8 +113,10 @@ Reproducible, hardened container images for `acr-api` (plus the separate
 `acr-migrate` command) and `acr-mcp` are documented in
 [`docs/container-images.md`](docs/container-images.md): pinned build inputs,
 non-root numeric UID/GID `65532:65532`, read-only root filesystem, the
-deny-all build-context wrapper, and SBOM/scan gates. No target below pushes
-or publishes an image; every archive and report stays local under `.tmp/`.
+deny-all build-context wrapper, and SBOM/scan gates. Local targets keep outputs
+under `.tmp/`; a signed tagged release adds the verified OCI archives to the
+private GitHub Release and publishes their approved digests to private GHCR
+packages through the owner/operator approval gate.
 
 ```bash
 make container-contract

@@ -2,13 +2,17 @@
 
 The GitHub `Release` workflow is read-only. It validates the canonical,
 annotated GPG-signed tag, exact pinned signer fingerprint, operator allowlist,
-`main` ancestry, deterministic matrix build, vulnerability scan, SBOMs, and
-native Linux/macOS/Windows smoke tests. It uploads only the private Actions
-artifact named `release`; it never receives signing keys and cannot create,
-edit, delete, or publish a GitHub Release.
+`main` ancestry, deterministic binary matrix, vulnerability scans, SBOMs,
+native Linux/macOS/Windows smoke tests, and the exact Linux AMD64/ARM64 OCI
+archives for `acr-api` and `acr-mcp`. Only after every gate passes does it
+assemble the private Actions artifact named `release`. The workflow never
+receives signing or registry keys and cannot create, edit, delete, or publish a
+GitHub Release or GHCR package.
 
-`SHA256SUMS` is recomputed after SBOM generation and is the authoritative sorted
-manifest for every archive, every `*.spdx.json`, and `release-manifest.json`.
+`SHA256SUMS` is recomputed after binary and container assembly and is the
+authoritative sorted manifest for every binary archive, OCI archive,
+`*.spdx.json`, `release-manifest.json`, and
+`container-release-manifest.json`.
 `release-manifest.json` remains the builder identity/target manifest. Windows
 ARM64 is deliberately deferred because the supported release matrix currently
 contains Windows AMD64 only; adding it requires builder, native-runner, and
@@ -34,18 +38,46 @@ commit. No Cosign private key or password is stored in GitHub.
 
 ## Local publish contract
 
-After the Actions run succeeds, an authorized operator runs:
+Release publication requires Cosign v3.1.1 and Skopeo v1.23.0 on the trusted
+operator machine. The authenticated `gh` token must have private repository and
+`write:packages` access; deletion uses a separate credential with
+`delete:packages`. The organization package policy must default new GHCR
+packages to private. Both `dev-health-acr/acr-api` and
+`dev-health-acr/acr-mcp` must be pre-provisioned, linked to this repository,
+and private; the publisher refuses a missing or non-private package before
+uploading bytes.
+
+After the Actions run succeeds, download the complete artifact and use
+`container-release-manifest.json` to request one approval receipt for each
+image digest. Publish both images before publishing the GitHub Release:
 
 ```bash
+gh run download RUN_ID --repo full-chaos/dev-health-acr \
+  --name release --dir .tmp/release-vX.Y.Z
+
+scripts/release/publish-private-image.sh \
+  --approval-receipt ACR_API_IMAGE.json --digest sha256:API_INDEX_DIGEST \
+  acr-api vX.Y.Z RUN_ID
+scripts/release/publish-private-image.sh \
+  --approval-receipt ACR_MCP_IMAGE.json --digest sha256:MCP_INDEX_DIGEST \
+  acr-mcp vX.Y.Z RUN_ID
 scripts/release/publish-private-release.sh \
-  --approval-receipt RECEIPT.json --digest sha256:DIGEST vX.Y.Z RUN_ID
+  --approval-receipt GITHUB_RELEASE.json --digest sha256:SHA256SUMS_DIGEST \
+  vX.Y.Z RUN_ID
 ```
+
+The image approval target is
+`oci-image:ghcr.io/full-chaos/dev-health-acr/PRODUCT@sha256:DIGEST`; the receipt's
+separate version field binds that digest to the approved release version.
+The GitHub Release approval target remains
+`github-release:full-chaos/dev-health-acr:TAG`. All three receipts are private,
+owner-signed, and single use.
 
 Every remote subcommand requires `--approval-receipt RECEIPT.json` (an
 owner-signed, single-use approval receipt with an adjacent detached
 `RECEIPT.json.asc` signature) and a matching `--digest sha256:DIGEST`. Add
-`--dry-run` to validate the receipt and every precondition without performing
-the action or consuming the receipt's single-use nonce.
+`--dry-run` to validate the receipt and all local preconditions without remote
+access, performing the action, or consuming the receipt's single-use nonce.
 
 The approval-verification key, its exact fingerprint, and the nonce ledger are
 the trust anchors that enforce owner/operator separation. Run these scripts only
@@ -55,7 +87,19 @@ in a trusted release environment with controlled environment variables: the
 attacker-influenced in production, because a caller that redirects them to its
 own key or a fresh ledger could self-sign or replay approvals.
 
-The script verifies the authenticated GitHub actor/repository allowlist, clones
+The image publisher verifies the exact successful workflow run and complete
+release artifact, then copies the approved multi-platform OCI archive to its
+untagged GHCR digest with `skopeo copy --all --preserve-digests`. It requires the
+remote index digest and Linux AMD64/ARM64 platform set to match the manifest,
+requires the GHCR package to remain private and anonymously unreadable, signs
+and verifies the digest with the local Cosign key, and does not create a GHCR
+tag. The signed container release manifest is the release-version-to-digest
+mapping, eliminating mutable-tag replacement and publication races. The
+publisher never rebuilds an image. Deployments consume only `@sha256:`
+references.
+
+The GitHub Release publisher verifies the authenticated GitHub
+actor/repository allowlist, clones
 the configured private origin into a temporary directory, verifies the signed
 tag and remote `main` ancestry, requires the named Release workflow run to have
 successfully built that exact commit, downloads its artifact, validates the
@@ -63,14 +107,22 @@ builder manifest and final checksums, signs `SHA256SUMS` locally with
 `--use-signing-config=false --new-bundle-format=false --tlog-upload=false`, and
 verifies it with the tracked key. It creates a draft Release, uploads assets,
 downloads the draft into a fresh directory for independent signature/checksum
-verification, re-fetches the tag again, then publishes with prerelease/latest
-semantics. `signing/cosign.pub` is never a Release asset: obtain it only from a
-reviewed repository commit before verifying `SHA256SUMS.sig`.
+verification, verifies both private GHCR digests and Cosign signatures, re-fetches
+the tag again, then publishes with prerelease/latest semantics. The GitHub
+Release includes both OCI archives as offline/private installation assets in
+addition to the API and MCP binaries. `signing/cosign.pub` is never a Release
+asset: obtain it only from a reviewed repository commit before verifying
+`SHA256SUMS.sig`.
 
 Consumers obtain `signing/cosign.pub` from a reviewed repository commit, verify
 the signature over the full manifest, then verify exactly the archive they
 downloaded. Never run a bare full-manifest checksum command when other listed
 assets were not downloaded.
+
+Automated authenticated consumer verification and exact GHCR package-version
+revocation are tracked in CHAOS-3067. Until that operator workflow lands,
+`verify-private-consumer.sh` validates approval receipts only in `--dry-run`
+mode and fails closed before remote access on every real invocation.
 
 The signed `acr-mcp` archives also contain the four client packages and their
 conformance identity. The Task19 clean-room check consumes an archive only
@@ -116,17 +168,22 @@ as an allowlisted operator and type the exact confirmation. The script lists
 Release assets, deletes each asset in a separate fail-closed CLI call, then
 preserves the immutable signed tag and a clearly marked revoked Release record
 containing the incident/audit reference. It cannot erase already-downloaded
-bytes. Credential revocation is the security control; a server version denylist
-is a separate compatibility control.
+bytes. Compromised GHCR image digests must also be denied in deployment controls
+and deleted as exact package versions by an independently approved operator
+holding the separate `delete:packages` credential. Deletion cannot retract
+already-pulled bytes. Credential revocation is the security control; a server
+version denylist is a separate compatibility control. Automating this separately
+approved GHCR action is tracked in CHAOS-3067; the current revocation script
+removes GitHub Release assets only and does not claim to revoke GHCR bytes.
 
 ## Rollback and non-production exercise
 
 Rollback selects a previously verified immutable tag, re-runs the targeted
-signature/checksum verification, and deploys that exact version through the
-normal deployment control. Never move a tag, replace an asset, or rebuild an
-old version. Record the incident reference, rollback tag, operator, UTC start
-and completion times, verification output reference, and post-rollback health
-result.
+signature/checksum verification, verifies the matching GHCR Cosign signature,
+and deploys the exact `@sha256:` digest through the normal deployment control.
+Never move a tag, replace an asset, or rebuild an old version. Record the
+incident reference, rollback tag and digest, operator, UTC start and completion
+times, verification output reference, and post-rollback health result.
 
 Exercise the procedure only with a new `-dev.N` tag in non-production: complete
 the read-only Release workflow, perform the local draft publish/verification,
