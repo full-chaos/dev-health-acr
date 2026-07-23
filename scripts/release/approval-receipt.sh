@@ -55,7 +55,11 @@ approval_consume_nonce() {
   umask 077
   mkdir -p "$ledger"
   record="$(mktemp "$ledger/.receipt.XXXXXX")" || return 1
-  shasum -a 256 "$receipt" >"$record" || { rm -f "$record"; return 1; }
+  if command -v sha256sum >/dev/null; then
+    sha256sum "$receipt" >"$record" || { rm -f "$record"; return 1; }
+  else
+    shasum -a 256 "$receipt" >"$record" || { rm -f "$record"; return 1; }
+  fi
   # Atomically claim the single-use nonce: a hard link fails if the nonce file
   # already exists, so concurrent or replayed consumption cannot both succeed.
   # This needs no lock and has no signal-interruption window.

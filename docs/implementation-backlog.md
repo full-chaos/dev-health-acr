@@ -12,8 +12,10 @@ remains valid and is tracked here rather than re-executed.
   **complete**: merged at `11c44ef812f9f9ae71a044d64f00ebae1ea1602f`
   (`feat(containers): add hardened reproducible images (CHAOS-2943)`). See
   [`container-images.md`](container-images.md) and
-  `.omo/evidence/task-8-acr-developer-deployment.txt`. No target publishes or
-  pushes an image to any registry.
+  `.omo/evidence/task-8-acr-developer-deployment.txt`. CHAOS-3066 restores the
+  release requirement omitted from that implementation: tagged builds attach
+  the verified OCI archives to the private GitHub Release and publish their
+  exact approved digests to private GHCR packages.
 - **Todo 9** (root local Compose integration with isolated ACR persistence and
   migrations) is **pending**. It is not yet implemented or tested here; the
   equivalent work continues under `.omo/plans/acr-project-completion.md` Todo 7

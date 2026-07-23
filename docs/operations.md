@@ -111,7 +111,7 @@ immutable-image requirements rather than copying plaintext values into a
 values file.
 
 ```bash
-TEST_IMAGE_DIGEST=registry.internal/dev-health/acr-api@sha256:<64-hex-digest> \
+TEST_IMAGE_DIGEST=ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:<64-hex-digest> \
   bash scripts/deploy/test-helm.sh \
   --values deploy/helm/acr/values-development.yaml \
   --image "$TEST_IMAGE_DIGEST"
@@ -136,7 +136,7 @@ immutable digest:
 
 ```bash
 bash deploy/kubernetes/acr/scripts/apply.sh --overlay staging \
-  --image registry.internal/dev-health/acr-api@sha256:<64-hex-digest>
+  --image ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:<64-hex-digest>
 bash deploy/kubernetes/acr/scripts/wait.sh --overlay staging
 ```
 
@@ -169,7 +169,8 @@ application-only rollback helper; it never changes migration history:
 
 ```bash
 bash deploy/kubernetes/acr/scripts/rollback.sh --overlay staging \
-  --image registry.internal/dev-health/acr-api@sha256:<64-hex-digest> --apply
+  --image ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:<64-hex-digest> \
+  --apply
 ```
 
 Promotion and private release revocation are described in

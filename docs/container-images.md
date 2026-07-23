@@ -48,7 +48,7 @@ GitHub action commit SHA):
 | Buildx CLI | `v0.35.0` linux-amd64 asset, SHA-256 `d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda` |
 | BuildKit driver | `moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1` |
 | Scanner | `aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c` |
-| Scanner DB snapshot | `ghcr.io/aquasecurity/trivy-db@sha256:d1f9baeef9aa5fc4c2c631ee8813033e7ec3442950e2b06d33aa1bc84618bc81` |
+| Scanner DB snapshot | `ghcr.io/aquasecurity/trivy-db@sha256:ada5860f7d7b96affdd0ba2cd27f5fdfc8a366f1999539f4fc0cac6402a27c1f` |
 | SBOM generator | `anchore/syft:v1.46.0@sha256:473a60e3a58e29aca3aedb3e99e787bb4ef273917e44d10fcbea4330a07320bb` |
 | Migration smoke database | `postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193` |
 | Compose E2E PostgreSQL helper | `postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15` |
@@ -115,9 +115,14 @@ make container-oci
 make container-scan
 ```
 
-`container-oci` produces unpushed OCI archives for `linux/amd64` and
+`container-oci` produces local OCI archives for `linux/amd64` and
 `linux/arm64`; verification requires Linux platform labels and extracts each
-target executable to inspect its ELF header (`x86-64` or `AArch64`).
+target executable to inspect its ELF header (`x86-64` or `AArch64`). A tagged
+Release workflow renames the verified outputs to
+`acr-api_VERSION_linux_multiarch.oci.tar` and
+`acr-mcp_VERSION_linux_multiarch.oci.tar`, records their archive and OCI index
+digests in `container-release-manifest.json`, and includes them in the final
+private Actions artifact.
 
 `scripts/container/build.sh` writes each OCI export to a unique temporary path
 and renames it into place only after `validate-oci.sh` confirms every
@@ -149,11 +154,15 @@ earlier layer's same-named entry) so the extracted binary reflects the
 actual final merged filesystem rather than the first layer that happens to
 contain a same-named entry.
 
-`container-scan` builds four independent OCI layouts and writes four Trivy
-reports and four SPDX JSON SBOMs:
+`container-scan` writes four Trivy reports and four SPDX JSON SBOMs:
 
 - `acr-api-amd64`, `acr-api-arm64`
 - `acr-mcp-amd64`, `acr-mcp-arm64`
+
+The ordinary local target builds independent layouts. The tagged Release
+workflow sets `CONTAINER_SCAN_OCI_ROOT=.tmp/container-oci`, so Trivy and Syft
+select both platforms directly from the exact multi-platform archives that are
+later attached and copied to GHCR; it performs no release-scan rebuild.
 
 Each invocation uses unique OCI layout, scanner cache, and report staging roots.
 It pulls the digest-pinned Trivy and Syft images, downloads the pinned Trivy DB
@@ -188,6 +197,13 @@ the dirty tree off as clean -- the resulting `VERSION` and `COMMIT` build
 args are both suffixed `-dirty` so the image is never confused for one
 built from the labeled commit alone.
 
-All `.tmp/container-*` archives, reports, images, and temporary containers are
-disposable. The CI upload is short-lived reports only; no target pushes or
-publishes an image.
+Ordinary `.tmp/container-*` archives, reports, images, and temporary containers
+remain disposable. Release builds are the exception: an owner-approved operator
+copies the exact verified OCI archives, without rebuilding, to the private GHCR
+packages `ghcr.io/full-chaos/dev-health-acr/acr-api` and
+`ghcr.io/full-chaos/dev-health-acr/acr-mcp`. Images are published and signed by
+immutable digest only; no mutable GHCR tag is created. The signed release
+manifest maps versions to digests, and deployment references use the approved
+`@sha256:` digest. The same OCI archives and container SBOMs are attached to the
+private GitHub Release for offline verification. See
+[`release-policy.md`](release-policy.md).

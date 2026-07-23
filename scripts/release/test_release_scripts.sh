@@ -42,11 +42,30 @@ if (cd "$tmp/wrong-version" && PATH="$tmp/bin:$PATH" HOME="$tmp/wrong-home" COSI
 test ! -e "$tmp/wrong-home/.config/acr/release/cosign.key"
 test "$(wc -l < "$tmp/wrong.log")" -eq 1
 
-if PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/revoke.log" "$root/scripts/release/revoke-private-release.sh" v1.2.3 INCIDENT-1; then exit 1; fi
+if PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/revoke.log" "$root/scripts/release/revoke-private-release.sh" not-a-tag INCIDENT-1; then exit 1; fi
 test ! -e "$tmp/revoke.log"
+if PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/revoke-empty.log" "$root/scripts/release/revoke-private-release.sh" v1.2.3 ''; then exit 1; fi
+test ! -e "$tmp/revoke-empty.log"
 
 if PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/publish.log" MOCK_ROOT="$root" "$root/scripts/release/publish-private-release.sh" not-a-tag 1; then exit 1; fi
 test ! -e "$tmp/publish.log"
+
+digest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+if PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/invalid-digest.log" MOCK_ROOT="$root" \
+  "$root/scripts/release/publish-private-release.sh" --digest sha256:bad v1.2.3 1; then
+  exit 1
+fi
+test ! -e "$tmp/invalid-digest.log"
+if PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/invalid-run.log" MOCK_ROOT="$root" \
+  "$root/scripts/release/publish-private-release.sh" --digest "$digest" v1.2.3 invalid; then
+  exit 1
+fi
+test ! -e "$tmp/invalid-run.log"
+if PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/standard-publish.log" MOCK_ROOT="$root" \
+  "$root/scripts/release/publish-private-release.sh" --digest "$digest" v1.2.3 1; then
+  exit 1
+fi
+grep -F 'repo view full-chaos/dev-health-acr' "$tmp/standard-publish.log" >/dev/null
 
 tag_remote="$tmp/tag-remote.git"
 tag_source="$tmp/tag-source"
@@ -125,3 +144,25 @@ grep -v '^[[:space:]]*go-version:' "$ci_workflow" > "$tmp/ci-missing-go-version.
 if assert_go_version_pins "$tmp/ci-missing-go-version.yml" "$release_workflow"; then exit 1; fi
 sed 's/^\([[:space:]]*go-version:\).*/\1 "1.26.4"/' "$ci_workflow" > "$tmp/ci-mismatched-go-version.yml"
 if assert_go_version_pins "$tmp/ci-mismatched-go-version.yml" "$release_workflow"; then exit 1; fi
+
+grep -F 'name: binary-release' "$release_workflow" >/dev/null
+grep -F 'name: container-release' "$release_workflow" >/dev/null
+grep -F 'name: release' "$release_workflow" >/dev/null
+grep -F 'make container-oci' "$release_workflow" >/dev/null
+grep -F 'CONTAINER_SCAN_OCI_ROOT: .tmp/container-oci' "$ci_workflow" >/dev/null
+grep -F 'CONTAINER_SCAN_OCI_ROOT: .tmp/container-oci' "$release_workflow" >/dev/null
+grep -F 'write-container-release-manifest.sh' "$release_workflow" >/dev/null
+grep -F 'assemble-release-assets.sh' "$release_workflow" >/dev/null
+if grep -F 'packages: write' "$release_workflow"; then exit 1; fi
+grep -F 'skopeo copy --all --preserve-digests' "$root/scripts/release/publish-private-image.sh" >/dev/null
+grep -F 'gh run download' "$root/scripts/release/publish-private-image.sh" | grep -F -- '--name release' >/dev/null
+grep -F 'container-release-manifest.json' "$root/scripts/release/publish-private-release.sh" >/dev/null
+grep -F 'cosign verify --key' "$root/scripts/release/publish-private-release.sh" | grep -F 'signing/cosign.pub' >/dev/null
+grep -F '## Private distribution' "$root/scripts/release/publish-private-release.sh" >/dev/null
+grep -F -- '--json isDraft --jq .isDraft' "$root/scripts/release/publish-private-release.sh" >/dev/null
+grep -F 'release_state' "$root/scripts/release/publish-private-release.sh" | grep -F '== false' >/dev/null
+grep -F 'checksum_file SHA256SUMS' "$root/scripts/release/publish-private-release.sh" | grep -F 'release_digest' >/dev/null
+for script in publish-private-image.sh publish-private-release.sh revoke-private-release.sh; do
+  if grep -F 'approval-receipt.sh' "$root/scripts/release/$script"; then exit 1; fi
+done
+grep -F 'approval-receipt.sh' "$root/scripts/release/verify-mcp-binary-approval.sh" >/dev/null

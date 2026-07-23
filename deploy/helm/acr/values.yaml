@@ -11,7 +11,8 @@ nameOverride: ""
 fullnameOverride: ""
 
 # Immutable application image. Supplied at deploy time as a fully qualified
-# digest reference, e.g. registry.internal/dev-health-acr/acr-api@sha256:<64 hex>.
+# digest reference, e.g.
+# ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:<64 hex>.
 # A bare/mutable tag (for example :latest) is rejected before rendering.
 image:
   reference: ""
