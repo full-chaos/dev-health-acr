@@ -11,3 +11,5 @@
 /acr-mcp
 /modeloracle
 /.omo/
+**/.playwright**
+**/.ruff_cache/

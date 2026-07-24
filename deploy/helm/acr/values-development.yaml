@@ -31,6 +31,11 @@ config:
   entitlementCaBundle:
     existingSecret: acr-entitlement-ca
     key: ca.crt
+  webAssertion:
+    issuer: dev-health-web
+    audience: dev-health-acr
+    existingSecret: acr-web-assertion-jwks
+    key: web-jwks.json
 
 credentials:
   runtime:

@@ -180,6 +180,11 @@ spec:
               mountPath: /var/run/acr/entitlement-ca
               readOnly: true
             {{- end }}
+            {{- if and (or (eq .Values.config.environment "development") (eq .Values.config.environment "test")) .Values.config.webAssertion.existingSecret }}
+            - name: web-assertion-jwks
+              mountPath: {{ .Values.config.webAssertion.mountPath | quote }}
+              readOnly: true
+            {{- end }}
       # deployment.extraContainers is intentionally never rendered; the
       volumes:
         - name: tmp
@@ -219,4 +224,12 @@ spec:
             items:
               - key: {{ .Values.config.clickhouseCaBundle.key | quote }}
                 path: ca.crt
+        {{- end }}
+        {{- if and (or (eq .Values.config.environment "development") (eq .Values.config.environment "test")) .Values.config.webAssertion.existingSecret }}
+        - name: web-assertion-jwks
+          secret:
+            secretName: {{ .Values.config.webAssertion.existingSecret | quote }}
+            items:
+              - key: {{ .Values.config.webAssertion.key | quote }}
+                path: {{ .Values.config.webAssertion.key | quote }}
         {{- end }}

@@ -2,3 +2,4 @@
 # fresh context containing only reviewed source extensions.
 *
 !Dockerfile
+**/.playwright**
