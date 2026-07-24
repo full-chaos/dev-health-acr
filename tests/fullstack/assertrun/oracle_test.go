@@ -9,34 +9,7 @@ import (
 	"testing"
 )
 
-// task001UnavailableSources pins the exact, current-truth set of catalog sources task-001's
-// oracle expects to be unavailable. Two confirmed, filed, NOT-fixed-inside-CHAOS-3065 product
-// bugs are why this is non-empty:
-//
-//   - CHAOS-3068: internal/contextpacket/source_queries.go's incidents.v1 still queries the
-//     `incidents` table, which ops migration 068_drop_legacy_incidents.sql drops in favor of
-//     operational_incidents (a different column shape, not a drop-in rename). incidents.v1
-//     therefore always fails with source_unavailable, for every task, regardless of seeding.
-//   - CHAOS-3069: internal/contextpacket/source_executor.go's scanEvidenceRow scans
-//     `confidence` into a *float64, but clickhouse-go v2.47's Float32.ScanRow rejects any
-//     destination that is not *float32/**float32/sql.Scanner. work_graph.v1,
-//     ai_workflow_artifacts.v1, ai_review_outcomes.v1, and deployment_incident_provenance.v1
-//     are the catalog entries that project a bare Float32 confidence column, so all four fail
-//     on every row, for every organization -- confirmed against the live acr-api log (five
-//     evidence queries with "outcome":"failure") and the clickhouse-go driver source.
-//
-// When either bug is fixed, its source(s) drop out of task-001's oracle and this constant
-// must be updated to match -- see docs/fullstack-acceptance.md and
-// testdata/fullstack/v1/README.md's "Packet status" section for the full reasoning. A test
-// this loose (e.g. just "non-empty") would let a real regression -- the set silently growing
-// again -- through unnoticed, which defeats the point of the tripwire.
-var task001UnavailableSources = []string{
-	"incidents.v1",                      // CHAOS-3068
-	"work_graph.v1",                     // CHAOS-3069
-	"ai_workflow_artifacts.v1",          // CHAOS-3069
-	"ai_review_outcomes.v1",             // CHAOS-3069
-	"deployment_incident_provenance.v1", // CHAOS-3069
-}
+var task001UnavailableSources = []string{}
 
 // TestLoadOracle_RealFixtureFiles decodes the actual testdata/fullstack/v1/expected/task-*
 // oracle files landed by the fixture owner. It exists to catch silent decode drift: if the
@@ -58,7 +31,7 @@ func TestLoadOracle_RealFixtureFiles(t *testing.T) {
 	}{
 		{
 			file: "task-001.oracle.json", taskID: "task-001-checkout-flake-exact-commit",
-			wantPacketStatus: "partial", wantScopeResolution: "exact_commit",
+			wantPacketStatus: "complete", wantScopeResolution: "exact_commit",
 		},
 		{
 			file: "task-002.oracle.json", taskID: "task-002-auth-refactor-branch",
@@ -172,7 +145,7 @@ func TestLoadOracle_RealFixtureFiles(t *testing.T) {
 	wantSources := append([]string(nil), task001UnavailableSources...)
 	sort.Strings(wantSources)
 	if !reflect.DeepEqual(gotSources, wantSources) {
-		t.Fatalf("task-001 expected_unavailable_sources = %v, want exactly %v (CHAOS-3068 + CHAOS-3069; update task001UnavailableSources when either is fixed)", gotSources, wantSources)
+		t.Fatalf("task-001 expected_unavailable_sources = %v, want exactly %v", gotSources, wantSources)
 	}
 	if !task001.ExpectedUnavailableSourcesExact {
 		t.Fatal("task-001 expected_unavailable_sources_exact should be true")

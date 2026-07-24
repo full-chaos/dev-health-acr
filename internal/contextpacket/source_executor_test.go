@@ -101,7 +101,7 @@ func TestClickHouseSourceExecutor_bounds_source_rows_before_ranking(t *testing.T
 	// Given
 	rows := make([][]any, 101)
 	for index := range rows {
-		rows[index] = []any{"acr:v1:test:1", "dev_health", "test", "1", "test", "", "native", 0.9, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+		rows[index] = []any{"acr:v1:test:1", "dev_health", "test", "1", "test", "", "native", 0.9000000000000001, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	}
 	client := &boundedRowClient{rows: &rowScanner{rows: rows}}
 	executor := contextpacket.NewClickHouseSourceExecutor(client)
@@ -115,6 +115,9 @@ func TestClickHouseSourceExecutor_bounds_source_rows_before_ranking(t *testing.T
 	}
 	if len(evidence) != 100 || client.rows.row != 100 {
 		t.Fatalf("evidence=%d scanned=%d, want 100", len(evidence), client.rows.row)
+	}
+	if evidence[0].Confidence != 0.9000000000000001 {
+		t.Fatalf("confidence = %.17g, want Float64 precision", evidence[0].Confidence)
 	}
 	if !strings.Contains(client.statement, "ORDER BY observed_at DESC, evidence_ref_id ASC LIMIT {source_row_limit:UInt32}") {
 		t.Fatalf("query is not deterministically bounded: %s", client.statement)
@@ -161,7 +164,7 @@ func (c *rowClient) Query(_ context.Context, statement string, _ []contextpacket
 			if err := c.fail[query.ID]; err != nil {
 				return nil, err
 			}
-			return &rowScanner{rows: [][]any{{"acr:v1:test:1", "dev_health", "test", "1", query.ID, "", "native", 0.9, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}}}, nil
+			return &rowScanner{rows: [][]any{{"acr:v1:test:1", "dev_health", "test", "1", query.ID, "", "native", 0.9000000000000001, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}}}, nil
 		}
 	}
 	return nil, errors.New("unexpected query")

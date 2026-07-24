@@ -142,12 +142,49 @@ VALUES
 -- but are NOT part of any task's required_evidence -- see fixture-manifest.json
 -- and README.md's "background density, not required evidence" note.
 --
--- NOTE: `incidents.v1` (source_queries.go) still queries a table named
--- `incidents`, which ops migration 068_drop_legacy_incidents.sql drops in
--- favor of `operational_incidents`. That table no longer exists after a full
--- migration run, so incidents.v1 always fails with source_unavailable no
--- matter what is seeded here -- there is nothing to insert for it. See the
--- delivery report / README for this finding.
+-- incidents.v1 reaches canonical incidents through active service-to-repository mappings.
+INSERT INTO operational_service_repository_mappings
+    (org_id, provider, provider_instance_id, source_entity_type, external_id,
+     source_version_at, id, observed_at, last_synced, service_id, repo_id,
+     repo_full_name, repo_provider, mapping_kind, rule_id, valid_from, valid_to, is_active,
+     relationship_provenance, relationship_confidence)
+VALUES
+    ('__ORG_ID__', 'synthetic', 'fixture', 'service_repository_mapping', 'widget-service',
+     '2026-01-14 11:00:00.000000', 'mapping-widget-service', '2026-01-14 11:00:00.000000',
+     '2026-01-14 12:00:00.000000', 'service-widget', '00000000-3065-4000-8000-000000000001',
+     'example-org/widget-service', 'synthetic', 'admin_configuration_exact',
+     'service_repository_mapping.admin.v1', '2026-01-01 00:00:00.000000', NULL, 1,
+     'admin_configuration', 1.0),
+    ('__ORG_ID__', 'synthetic', 'fixture', 'service_repository_mapping', 'other-service',
+     '2026-01-14 11:00:00.000000', 'mapping-other-service', '2026-01-14 11:00:00.000000',
+     '2026-01-14 12:00:00.000000', 'service-other', '00000000-3065-4000-8000-000000000002',
+     'example-org/other-service', 'synthetic', 'admin_configuration_exact',
+     'service_repository_mapping.admin.v1', '2026-01-01 00:00:00.000000', NULL, 1,
+     'admin_configuration', 1.0);
+
+INSERT INTO operational_incidents
+    (org_id, provider, provider_instance_id, source_entity_type, external_id,
+     source_version_at, id, source_id, source_url, source_event_at, source_event_id,
+     observed_at, last_synced, raw_status, raw_severity, raw_priority,
+     normalized_status, normalized_severity, normalized_priority,
+     relationship_provenance, relationship_confidence, service_id,
+     service_external_id, escalation_policy_id, title, description, started_at,
+     resolved_at, is_deleted, deleted_at)
+VALUES
+    ('__ORG_ID__', 'synthetic', 'fixture', 'incident', 'widget-incident-001',
+     '2026-01-14 11:10:00.000000', 'incident-widget-001', NULL,
+     'https://example.invalid/incidents/widget-incident-001', '2026-01-14 11:10:00.000000',
+     'widget-incident-001', '2026-01-14 11:10:00.000000', '2026-01-14 12:00:00.000000',
+     'open', 'low', NULL, 'open', 'low', NULL, 'native', 1.0, 'service-widget', NULL, NULL,
+     'Synthetic widget-service incident', 'Fixture-only canonical operational incident.',
+     '2026-01-14 11:10:00.000000', NULL, 0, NULL),
+    ('__ORG_ID__', 'synthetic', 'fixture', 'incident', 'other-incident-001',
+     '2026-01-14 11:20:00.000000', 'incident-other-001', NULL,
+     'https://example.invalid/incidents/other-incident-001', '2026-01-14 11:20:00.000000',
+     'other-incident-001', '2026-01-14 11:20:00.000000', '2026-01-14 12:00:00.000000',
+     'open', 'low', NULL, 'open', 'low', NULL, 'native', 1.0, 'service-other', NULL, NULL,
+     'Synthetic other-service incident', 'Foreign canonical operational incident.',
+     '2026-01-14 11:20:00.000000', NULL, 0, NULL);
 
 -- work_items.v1 (EvidenceScopeRepo)
 INSERT INTO work_items

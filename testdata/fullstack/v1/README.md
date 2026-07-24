@@ -177,40 +177,15 @@ is not derived from any ACR code.
 
 ## Packet status
 
-**`PacketComplete` is currently unreachable for every task, for every organization on Dev
-Health, not just this fixture -- for TWO independent, confirmed product bugs, plus one
-structural limitation.** This is the single most important finding from authoring these
-oracles, and it overrides both `testdata/evaluation/v1/tasks.json`'s `expected_status` field
-and `docs/fullstack-acceptance.md` section 5's "Expected packet" column for tasks 001-003. The
-team lead independently verified both bugs live (see Consequences 2 and 3 below) -- neither is
-being fixed inside CHAOS-3065, so every oracle here asserts `partial`/`degraded` as ground
-truth, with an exact `expected_unavailable_sources` tripwire per task (`expected_unavailable_sources_exact:
-true`, see each oracle's own file) so the day either bug *is* fixed, the affected oracle(s) fail
-loudly instead of silently staying green forever.
+Task-001 is `complete`: it is commit-pinned with no branch, executes every catalog scope class,
+and its oracle asserts an exact empty `expected_unavailable_sources` set. `incidents.v1` joins
+the canonical `operational_incidents` table through its active service-to-repository mapping; the
+catalog normalizes every confidence projection to `Float64`, which `scanEvidenceRow` preserves.
 
-**Two independent bugs, two independent fixes, landing separately** (both only ever affect
-task-001 -- see Consequence 1 for why 002/003/005 are structurally unaffected by either):
-* **CHAOS-3068** (incidents.v1 queries a dropped table, Consequence 2): fixed by repointing
-  `internal/contextpacket/source_queries.go`'s `incidents.v1` at a real incidents source
-  (`operational_incidents`).
-* **CHAOS-3069** (Float32 confidence-scan bug, Consequence 3): fixed in one place, either
-  scan-side (`source_executor.go`'s `scanEvidenceRow`) or with `toFloat64(confidence)` in the
-  four affected queries.
-
-**What to change in task-001's oracle, per landing order** -- exactly one of these three, never
-more than what actually landed:
-* **If CHAOS-3068 lands first (3069 still open):** `expected_unavailable_sources` drops to
-  exactly the 4 CHAOS-3069 entries
-  (`work_graph.v1`, `ai_workflow_artifacts.v1`, `ai_review_outcomes.v1`,
-  `deployment_incident_provenance.v1`, all `source_unavailable`). `expected_packet_status`
-  **stays** `partial`.
-* **If CHAOS-3069 lands first (3068 still open):** `expected_unavailable_sources` drops to
-  exactly `[{"source":"incidents.v1","reason":"source_unavailable"}]`.
-  `expected_packet_status` **stays** `partial`.
-* **Once both have landed:** `expected_unavailable_sources` becomes `[]`, and **only then**
-  does `expected_packet_status` flip from `partial` to `complete`. No other change to this
-  oracle or the fixture should be needed in any of the three cases. Tasks 002/003/005's oracles
-  do **not** change for either fix, landing in any order.
+Task-002 remains `partial` because its branch scope deliberately skips repository-scoped
+sources. Task-003 remains itemless and `degraded` with explicit unavailable-source disclosure.
+Task-005 remains the `404 not_found` evidence-boundary case. These status differences are
+intentional scope and evidence behavior, not query failures.
 
 `dev-health-source-catalog.v1` (`source_queries.go`) has **17** source queries, scoped
 `commit` / `branch` / `repo`. `source_catalog.go`'s `ExecuteCatalog`:
@@ -235,44 +210,15 @@ sources specifically so task-001 can reach zero `UnavailableSource` (see
 `background_density_rows` in `fixture-manifest.json`); task-002 structurally cannot, no matter
 how much is seeded.
 
-**Consequence 2 -- even task-001 cannot reach `complete` today, because of a real product bug
-(filed as CHAOS-3068, not fixed inside CHAOS-3065).**
-`incidents.v1` still does `FROM incidents AS i ...`, but
-`ops/src/dev_health_ops/migrations/clickhouse/068_drop_legacy_incidents.sql` (`DROP TABLE IF
-EXISTS incidents;`, CHAOS-3062) removes that table in favor of `operational_incidents` (a
-different column shape -- notably no `repo_id` at all -- `066_operational_canonical.sql`), with
-no compatibility view. After a full `dev-hops migrate clickhouse` run, the `incidents` table
-does not exist, so `incidents.v1` always fails with `UnavailableSource{Reason:"source_unavailable"}`
--- for every task, for every organization, forever, regardless of seeding (there is nothing to
-insert). Until `source_queries.go` is repointed at `operational_incidents` (a real design change,
-not a rename, since there's no `repo_id` to join on), this alone is enough to keep
-`PacketComplete` unreachable for task-001.
+**Consequence 2 -- task-001 reaches `complete` with canonical incident evidence.**
+`incidents.v1` reads active `operational_incidents` through active service-to-repository mappings
+for the authorized repository. Unmapped and foreign-repository incidents are not disclosed.
 
-**Consequence 3 -- a second, independent product bug, CHAOS-3069, affects the other 4 of
-task-001's 5 `expected_unavailable_sources`.** `internal/contextpacket/source_executor.go`'s
-`scanEvidenceRow` declares `var confidence float64` and scans every catalog row's `confidence`
-column into it -- but four sources project a genuinely native `Float32`-typed `confidence`
-column straight through with no cast: `work_graph.v1` (`work_graph_edges.confidence Float32`),
-`ai_workflow_artifacts.v1` (`ai_workflow_artifact_edges.confidence Float32`),
-`ai_review_outcomes.v1` (`work_graph_pr_review_outcome_edges.confidence Float32`), and
-`deployment_incident_provenance.v1` (`work_graph_deployment_incident_edges.confidence Float32`).
-Every other catalog query's `confidence` is either a `Float64` literal (`1.0`) or a real
-`Float64` column (e.g. `deployments.v1`'s `release_ref_confidence`), so this is exactly and only
-these four. `clickhouse-go/v2`'s `Float32` column `ScanRow` only accepts `*float32`/`**float32`/
-`sql.Scanner`, so scanning into `*float64` fails with a `ColumnConverterError`, and the
-row-level error surfaces as `UnavailableSource{Reason:"source_unavailable"}` -- indistinguishable,
-from the packet (or the acr-api logs, which record the failure with no error text) alone, from a
-genuine zero-row result. This was confirmed live (acr-api logged exactly these four plus
-`incidents.v1` as failed evidence queries for task-001) and independently by reading the
-`clickhouse-go/v2` module source; the fixture's rows for these four tables are correctly seeded
-and were verified matching every WHERE-clause predicate both live (`fixture-verification.json`)
-and by this author's own from-scratch ClickHouse replay -- **the seed is not the problem here.**
-This bug fires for any organization's data, not just this fixture, and -- like CHAOS-3068 --
-only manifests when the affected query actually executes; since all four are `EvidenceScopeRepo`,
-`ExecuteCatalog` skips them outright (`repo_fallback_branch_not_supported`) whenever a request
-sets `branch`, masking this bug for every branch-scoped task (002/003/005). It only actually
-fires for task-001 (branch empty, commit_sha set -- the one scope shape that unlocks
-`EvidenceScopeRepo` queries in the first place, per Consequence 1).
+**Consequence 3 -- Float32 confidence rows scan successfully.** The catalog promotes every
+confidence projection to `Float64`, and `scanEvidenceRow` preserves the evidence contract's
+`float64` confidence. This includes `work_graph.v1`,
+`ai_workflow_artifacts.v1`, `ai_review_outcomes.v1`, and
+`deployment_incident_provenance.v1`.
 
 `packet_state.go`'s `setStatus()`:
 
@@ -287,9 +233,6 @@ task-003's own branch genuinely has zero matching rows in the 5 branch-scoped so
 matter what else is seeded elsewhere, so its `Unavailable` is never empty either --
 `PacketEmpty` and the literal `no_evidence_found` warning are unreachable for it; the real
 code produces `Degraded` instead (see its oracle's `status_reasoning`).
-
-This whole section is flagged as a finding for `docs/fullstack-acceptance.md`'s owner and
-`internal/contextpacket/source_queries.go`/`packet_state.go`'s owner to reconcile.
 
 ## Cross-task evidence bleed
 

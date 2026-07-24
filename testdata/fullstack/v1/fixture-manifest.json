@@ -43,12 +43,12 @@
   "seed_files": [
     {
       "path": "testdata/fullstack/v1/seed/clickhouse/001_widget_service.sql",
-      "sha256": "329d3e4f0e06184acadb64fe320dbc5a44b2c390a9bdeb16e5051a96c0db9dd8"
+      "sha256": "3f060a99a129f3755ffa779a26370e67d247ffbdd582162ec56635583027fbf9"
     }
   ],
   "org_id_substitution": {
     "token": "__ORG_ID__",
-    "contract": "The orchestrator performs exactly one textual substitution of the literal token __ORG_ID__ with the isolated organization UUID minted by `dev-hops admin orgs create` before executing any seed file. Every org_id column value in the seed file is the quoted literal '__ORG_ID__' (23 occurrences across all tables that have the column). Preflight must assert the substitution happened exactly once per row (no row may still contain the literal token after seeding, and no row may have a different org_id). Note: four tables (ai_workflow_runs, ai_workflow_artifact_edges, work_graph_pr_review_outcome_edges, work_graph_deployment_incident_edges) declare org_id as UUID rather than String; the same '__ORG_ID__' literal is used there and is cast implicitly once substituted with a real UUID string.",
+    "contract": "The orchestrator performs exactly one textual substitution of the literal token __ORG_ID__ with the isolated organization UUID minted by `dev-hops admin orgs create` before executing any seed file. Every org_id column value in the seed file is the quoted literal '__ORG_ID__' (27 occurrences across all tables that have the column). Preflight must assert the substitution happened exactly once per row (no row may still contain the literal token after seeding, and no row may have a different org_id). Note: four tables (ai_workflow_runs, ai_workflow_artifact_edges, work_graph_pr_review_outcome_edges, work_graph_deployment_incident_edges) declare org_id as UUID rather than String; the same '__ORG_ID__' literal is used there and is cast implicitly once substituted with a real UUID string.",
     "org_id_on_git_ci_deployment_tables": {
       "tables": [
         "git_commits",
@@ -67,29 +67,16 @@
     "known_side_effect": "ev-commit-auth-002 and ev-pr-auth-002's corpus-fixed Jan-12 timestamps are more than 24h before this as_of, so pull_requests.v1/pull_request_reviews.v1 watermarks will report status 'stale' (a 'source_stale:<source>' warning) whenever PR #1042 is in scope. This does not affect packet.status (only bundle.Unavailable does) and is not a bug -- do not 'fix' it by moving those two timestamps; they are pinned to the evaluation corpus."
   },
   "background_density_rows": {
-    "description": "testdata/fullstack/v1/seed/clickhouse/001_widget_service.sql seeds one bystander row in each of 10 additional dev-health-source-catalog.v1 tables (work_items, work_item_dependencies, work_graph_edges, ai_workflow_runs, ai_workflow_artifact_edges, work_graph_pr_review_outcome_edges, deployments, work_graph_deployment_incident_edges, file_hotspot_daily, file_complexity_snapshots) purely so task-001's packet has as few UnavailableSource entries as the current code allows. These rows are NOT part of any task's required_evidence and must never be asserted on by tests/fullstack/assertrun -- the evaluation corpus's 4 evidence records remain the only semantic source of truth. 6 of the 10 (work_items, work_item_dependencies, ai_workflow_runs, deployments, file_hotspot_daily, file_complexity_snapshots) resolve cleanly for task-001; the other 4 are correctly seeded and verified-matching but their queries fail at scan time -- see known_query_bugs below. See README.md.",
-    "not_seeded": {
-      "table": "incidents",
-      "reason": "internal/contextpacket/source_queries.go's incidents.v1 query still does `FROM incidents AS i ...`, but ops migration 068_drop_legacy_incidents.sql (`DROP TABLE IF EXISTS incidents;`, CHAOS-3062) removes that table in favor of `operational_incidents` (a different column shape, created in 066_operational_canonical.sql). After a full `dev-hops migrate clickhouse` run the `incidents` table does not exist, so incidents.v1 always fails with UnavailableSource{Reason:\"source_unavailable\"} regardless of seeding -- there is nothing to insert. This is a confirmed product bug (source_queries.go was not updated for CHAOS-3062), filed as CHAOS-3068, that makes literal PacketComplete unreachable for every task, for every organization on Dev Health -- not just this fixture -- until source_queries.go is repointed at operational_incidents (which has no repo_id column, so it is a real design change, not a rename). Not fixed inside CHAOS-3065; not fixed here since it is outside testdata/."
+    "description": "testdata/fullstack/v1/seed/clickhouse/001_widget_service.sql seeds one bystander row in each non-corpus dev-health-source-catalog.v1 table so task-001 exercises a complete packet. The rows are not task required_evidence; the evaluation corpus remains the semantic source of truth.",
+    "canonical_incident": {
+      "table": "operational_incidents",
+      "reason": "incidents.v1 reads the provider-neutral canonical incident table through active service-to-repository mappings. This fixture seeds an in-scope mapping and a foreign-repository mapping to prove repository isolation."
     },
-    "known_query_bugs": [
-      {
-        "bug_id": "incidents_table_dropped",
-        "ticket": "CHAOS-3068",
-        "affected_sources": ["incidents.v1"],
-        "affected_seed_tables": [],
-        "mechanism": "incidents.v1 queries a table (incidents) that migration 068_drop_legacy_incidents.sql drops. Query fails outright: Unknown table expression identifier 'incidents'. Nothing to seed -- the table doesn't exist.",
-        "task_impact": "Fires for every task/scope; masked nowhere. Always contributes exactly one entry (incidents.v1, source_unavailable) wherever this source isn't already scope-skipped for an unrelated reason (task-002/003: repo_fallback_branch_not_supported, since it's also EvidenceScopeRepo)."
-      },
-      {
-        "bug_id": "float32_confidence_scan",
-        "ticket": "CHAOS-3069",
-        "affected_sources": ["work_graph.v1", "ai_workflow_artifacts.v1", "ai_review_outcomes.v1", "deployment_incident_provenance.v1"],
-        "affected_seed_tables": ["work_graph_edges", "ai_workflow_artifact_edges", "work_graph_pr_review_outcome_edges", "work_graph_deployment_incident_edges"],
-        "mechanism": "internal/contextpacket/source_executor.go's scanEvidenceRow declares `var confidence float64` and scans every catalog row's confidence column into it. These four sources project a genuinely native Float32-typed confidence column straight through (their tables declare `confidence Float32`, unlike every other catalog source, which uses a Float64 literal like 1.0 or a real Float64 column such as deployments.v1's release_ref_confidence). clickhouse-go v2's Float32 ScanRow only accepts *float32/**float32/sql.Scanner, so the scan fails with a ColumnConverterError and the row-level error surfaces as UnavailableSource{Reason:\"source_unavailable\"} -- indistinguishable from a genuine zero-row result from the packet alone. Confirmed live: acr-api logs exactly these four plus incidents.v1 as failed evidence queries for task-001, and the underlying rows independently verified present and WHERE-clause-matching (fixture-verification.json probes all green). The seed data for these four tables is correct; nothing to change there.",
-        "task_impact": "Only fires when the affected query actually EXECUTES, which requires the request to not scope-skip it. All four are EvidenceScopeRepo, so ExecuteCatalog skips them outright (repo_fallback_branch_not_supported) whenever a request sets branch -- masking this bug for task-002/003/005 (all branch-scoped). It only actually fires for task-001 (branch empty, commit_sha set -- the one scope shape that unlocks EvidenceScopeRepo queries)."
-      }
-    ]
+    "confidence_scan": {
+      "normalized_type": "Float64",
+      "affected_sources": ["work_graph.v1", "ai_workflow_artifacts.v1", "ai_review_outcomes.v1", "deployment_incident_provenance.v1"],
+      "contract": "The source catalog promotes confidence to Float64 and scanEvidenceRow scans it without precision loss."
+    }
   },
   "fixed_identities": {
     "repositories": [

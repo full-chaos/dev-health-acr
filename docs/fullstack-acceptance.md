@@ -124,30 +124,13 @@ leaves `time_window_days` unset. Neither field has a server-side default, so wit
 the fixture's January 2026 timestamps pass only because time filtering is silently inactive —
 which would break the moment a default appeared, or as wall-clock drift accumulated.
 
-### 5.1 Why no task expects `complete`
+### 5.1 Packet-status expectations
 
-Three independent reasons, and it is worth keeping them apart because only two are bugs.
-
-**A product defect — CHAOS-3068.** `incidents.v1` in the source catalog reads an `incidents`
-table that `dev-health-ops` migration `068_drop_legacy_incidents.sql` (CHAOS-3062) dropped.
-`operational_incidents` replaced it with an incompatible shape (no `repo_id` at all), so it is
-not a rename. That source is therefore permanently unavailable, and `setStatus` downgrades any
-packet with an unavailable source to `partial` — for **every** organization, not just this
-fixture. Not fixed inside this QA work.
-
-**A second product defect — CHAOS-3069.** `scanEvidenceRow` scans every catalog row's
-`confidence` into a `*float64`, and clickhouse-go v2.47's `Float32.ScanRow` accepts only
-`*float32`, `**float32` or a `sql.Scanner` — anything else returns a `ColumnConverterError`.
-Four sources (`work_graph.v1`, `ai_workflow_artifacts.v1`, `ai_review_outcomes.v1`,
-`deployment_incident_provenance.v1`) project a bare `Float32` column, so they fail on every
-row for every organization. This gate is what found it: the fixture seeds a matching row for
-each, `fixture-verification.json` proves all four are present and correctly scoped, and the
-packet still reports them unavailable. Also not fixed here.
-
-Worth recording, because it cost three full runs: `source_unavailable` is the reason code for
-both "returned zero rows" and "the query errored", and the failure path logs no error text —
-so neither the packet nor the service log distinguishes a fixture gap from a broken query.
-That diagnosability gap is filed with CHAOS-3069.
+Task-001 expects `complete` and an exact empty unavailable-source set. `incidents.v1` reads
+canonical `operational_incidents` through active service-to-repository mappings for the resolved
+repository; it does not query the retired `incidents` table or disclose unmapped/foreign rows.
+The shared catalog projection promotes confidence to `Float64`, preserving native Float64 values
+while safely widening native Float32 sources.
 
 **A deliberate control-flow property.** `ExecuteCatalog` skips whole scope classes by design:
 all ten `EvidenceScopeRepo` queries when a branch is set, and both `EvidenceScopeCommit`
@@ -161,15 +144,13 @@ tolerating `partial`:
 
 | Task | Unavailable sources | Why |
 | --- | --- | --- |
-| task-001 | 5 — `incidents.v1` (CHAOS-3068) + the four `Float32` sources (CHAOS-3069) | every other source genuinely resolved; only these two defects block `complete` |
+| task-001 | 0 | commit-pinned with no branch; all seeded catalog sources are available |
 | task-002 | 12 — 10 repo-scoped + 2 commit-scoped | branch-only scope skips those classes by design |
 | task-003 | 17 — all of them | 5 branch-scoped queried and empty, 12 skipped |
 
-Exact-set matching is what makes this useful: it proves the remaining sources really are
-available for task-001, and the day either defect lands, task-001's assertion fails loudly and
-names exactly which sources became available. The assertion message tells the operator what to
-do: shrink the expected set, and when it reaches empty, flip `expected_packet_status` to
-`complete`.
+Exact-set matching is what makes this useful: task-001 now fails when a source becomes
+unavailable, while task-002 and task-003 continue to pin their deliberate scope and empty-data
+disclosures.
 
 The ten background-density rows that make the exact-set assertion meaningful are explicitly
 not semantic. The four evaluation-corpus evidence records remain the only required evidence.
