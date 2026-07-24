@@ -47,8 +47,12 @@ func TestCatalogRows_maps_scanned_rows_and_discloses_missing_sources(t *testing.
 	if len(result.Watermarks) != len(contextpacket.SourceQueryCatalogV1) {
 		t.Fatalf("watermarks=%d, want one per catalog source (%d)", len(result.Watermarks), len(contextpacket.SourceQueryCatalogV1))
 	}
-	if watermarkStatus(result.Watermarks, "ai_workflow_runs.v1") != "fresh" {
-		t.Fatalf("reachable source watermark: %#v", result.Watermarks)
+	// ai_workflow_runs.v1 is repo-scoped and now runs under a branch-scoped
+	// request. Its fixture rows are dated 2026-01-01, so the honest watermark is
+	// stale: reachable, but not recent. A status of unavailable or missing would
+	// mean the scope gate had silently excluded it again.
+	if status := watermarkStatus(result.Watermarks, "ai_workflow_runs.v1"); status != "stale" {
+		t.Fatalf("repository-wide source watermark = %q, want stale: %#v", status, result.Watermarks)
 	}
 	if watermarkStatus(result.Watermarks, "pull_requests.v1") != "unavailable" {
 		t.Fatalf("missing source watermark: %#v", result.Watermarks)

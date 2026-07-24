@@ -159,7 +159,12 @@ func TestSourceCatalog_normalizes_confidence_to_float64(t *testing.T) {
 	}
 }
 
-func TestSourceCatalog_skips_commit_sources_without_commit_scope(t *testing.T) {
+// Commit-scoped sources are no longer skipped wholesale on a repo-wide request.
+// They may run without a commit ONLY when the statement provably tolerates an
+// empty commit_sha. This asserts that safety invariant rather than the old
+// blanket gate, so a future commit-scoped source cannot be made repo-wide
+// readable without the predicate that makes it safe.
+func TestSourceCatalog_runs_commit_sources_without_commit_only_when_sql_allows(t *testing.T) {
 	plan := contextpacket.ReadPlan{OrgID: "org", RepoID: "00000000-0000-0000-0000-000000000001", RepoSlug: "owner/repo", Branch: "main"}
 	executor := &catalogRecorder{}
 
@@ -168,13 +173,24 @@ func TestSourceCatalog_skips_commit_sources_without_commit_scope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute catalog: %v", err)
 	}
-	if executor.queried["git_commits.v1"] || executor.queried["git_commit_files.v1"] {
-		t.Fatalf("commit scoped queries executed without a commit: %#v", executor.queried)
-	}
-	for _, source := range []string{"git_commits.v1", "git_commit_files.v1"} {
-		if !containsUnavailable(result.Unavailable, source, "commit_scope_not_requested") {
-			t.Fatalf("%s was not disclosed as skipped: %#v", source, result.Unavailable)
+	commitSources := 0
+	for _, query := range contextpacket.SourceQueryCatalogV1 {
+		if query.Scope != contextpacket.EvidenceScopeCommit {
+			continue
 		}
+		commitSources++
+		if executor.queried[query.ID] {
+			if !strings.Contains(query.Statement, "{commit_sha:String} = ''") {
+				t.Fatalf("%s ran without a commit but its statement has no empty-commit predicate: %s", query.ID, query.Statement)
+			}
+			continue
+		}
+		if !containsUnavailable(result.Unavailable, query.ID, "commit_scope_not_requested") {
+			t.Fatalf("%s was gated but not disclosed accurately: %#v", query.ID, result.Unavailable)
+		}
+	}
+	if commitSources == 0 {
+		t.Fatal("no commit-scoped sources in catalog; this test would assert nothing")
 	}
 }
 
