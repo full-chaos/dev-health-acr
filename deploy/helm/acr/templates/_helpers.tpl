@@ -88,7 +88,8 @@ fails with the supplied violation label.
 {{- end -}}
 
 {{/*
-Immutable image guard. Rejects an empty or mutable (non-@sha256) reference.
+Immutable image guard. Production requires a digest; development and test may
+use a local kind-loaded tag, which has no registry manifest to resolve.
 */}}
 {{- define "acr.image" -}}
 {{- $ref := .Values.image.reference | default "" -}}
@@ -97,7 +98,13 @@ Immutable image guard. Rejects an empty or mutable (non-@sha256) reference.
 {{- end -}}
 
 {{- if not (regexMatch "@sha256:[0-9a-f]{64}$" $ref) -}}
+{{- if or (eq .Values.config.environment "development") (eq .Values.config.environment "test") -}}
+{{- if not (regexMatch "^[a-zA-Z0-9][a-zA-Z0-9._/-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*$" $ref) -}}
+{{- fail (printf "mutable-image: development/test image.reference %q must be a local tagged image or immutable @sha256 digest" $ref) -}}
+{{- end -}}
+{{- else -}}
 {{- fail (printf "mutable-image: image.reference %q must be pinned to an immutable @sha256:<digest>; mutable tags are rejected" $ref) -}}
+{{- end -}}
 {{- end -}}
 {{- $ref -}}
 {{- end -}}

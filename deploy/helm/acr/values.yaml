@@ -11,9 +11,10 @@ nameOverride: ""
 fullnameOverride: ""
 
 # Immutable application image. Supplied at deploy time as a fully qualified
-# digest reference, e.g.
+# digest reference in production, e.g.
 # ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:<64 hex>.
-# A bare/mutable tag (for example :latest) is rejected before rendering.
+# A bare/mutable tag (for example :latest) is rejected before rendering outside
+# development and test, where a kind-loaded image has no registry digest.
 image:
   reference: ""
   pullPolicy: IfNotPresent
@@ -71,6 +72,14 @@ config:
   entitlementCaBundle:
     existingSecret: ""
     key: ca.crt
+  # Web-BFF assertion verification is intentionally enabled only for test and
+  # development renders. The Secret is mounted read-only into acr-api.
+  webAssertion:
+    issuer: ""
+    audience: ""
+    existingSecret: ""
+    key: web-jwks.json
+    mountPath: /var/run/acr/web-assertion
 
 # Existing-Secret-only credential contract. Each existingSecret is the NAME of a
 # Secret that already exists in the release namespace. This chart validates the

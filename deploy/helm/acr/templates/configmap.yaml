@@ -25,6 +25,18 @@ data:
   ACR_MAX_SERIALIZED_BYTES: {{ .Values.config.maxSerializedBytes | quote }}
   ACR_REQUESTS_PER_MINUTE: {{ .Values.config.requestsPerMinute | quote }}
   ACR_ENABLE_EPISODE_WRITEBACK: {{ .Values.config.enableEpisodeWriteback | quote }}
+  {{- if eq .Values.config.environment "test" }}
+  ACR_ALLOW_INSECURE_POSTGRES: "true"
+  {{- end }}
+  {{- if or (eq .Values.config.environment "development") (eq .Values.config.environment "test") }}
+  {{- with .Values.config.webAssertion }}
+  {{- if and .issuer .audience .existingSecret }}
+  ACR_WEB_ASSERTION_ISSUER: {{ .issuer | quote }}
+  ACR_WEB_ASSERTION_AUDIENCE: {{ .audience | quote }}
+  ACR_WEB_ASSERTION_JWKS_FILE: {{ printf "%s/%s" (.mountPath | trimSuffix "/") .key | quote }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
   {{- with .Values.config.entitlement }}
   ACR_DEV_HEALTH_ENTITLEMENT_URL: {{ .url | quote }}
   ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT: {{ .timeout | quote }}

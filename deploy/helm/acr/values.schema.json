@@ -105,6 +105,17 @@
             "existingSecret": { "type": "string" },
             "key": { "type": "string" }
           }
+        },
+        "webAssertion": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "issuer": { "type": "string" },
+            "audience": { "type": "string" },
+            "existingSecret": { "type": "string" },
+            "key": { "type": "string" },
+            "mountPath": { "type": "string" }
+          }
         }
       }
     },
