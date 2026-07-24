@@ -1,0 +1,294 @@
+---
+name: fullstack-acceptance
+
+# Full-stack Context Fabric acceptance (CHAOS-3065).
+#
+# The offline contract checks run in ci.yml through `make verify`. This
+# workflow runs the heavyweight gate instead: the real Dev Health product
+# slice, the real acr-api, the real host-local acr-mcp sidecar, and a real
+# headless OpenCode session driven by a deterministic local model.
+#
+# It needs a checkout of the sibling full-chaos/dev-health monorepo for
+# compose.yml, the Ops image and dev-health-web, so it cannot run on forks.
+# Fork pull requests are skipped rather than failed; `make verify` still
+# covers the contract surface there.
+
+"on":
+  pull_request:
+  push:
+    tags: ["v*"]
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: smoke or full
+        required: false
+        default: full
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fullstack-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OPENCODE_PINNED_VERSION: 1.18.4
+  # The acceptance client loads this provider package at runtime. It is
+  # pre-warmed into the npm cache so the graded run itself never depends on a
+  # live registry. See docs/fullstack-acceptance.md section 6.
+  PROVIDER_NPM_SPEC: "@ai-sdk/openai-compatible@3.0.14"
+
+jobs:
+  # This gate boots the product slice, so it needs a token that can read the private sibling
+  # repository. Without one, actions/checkout fails with "Input required and not supplied:
+  # token" — which names neither the missing secret nor the repository it was for. Both jobs
+  # below are gated on this check instead, so an unconfigured repository reports a skip with an
+  # actionable message rather than a red X with a cryptic cause. The `secrets` context is not
+  # available in a job-level `if`, which is why this is a job rather than a condition.
+  preflight:
+    name: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      product_repo_readable: ${{ steps.token.outputs.present }}
+    steps:
+      - id: token
+        env:
+          PRODUCT_REPO_TOKEN: ${{ secrets.DEV_HEALTH_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${PRODUCT_REPO_TOKEN:-}" ]]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo "::warning title=Full-stack acceptance skipped::DEV_HEALTH_REPO_TOKEN is not configured on this repository, so full-chaos/dev-health cannot be checked out and the gate cannot boot the product slice. Add a repository secret holding a token with read access to that repository to enable it."
+          fi
+
+  compose:
+    name: compose acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    needs: preflight
+    # A fork PR has no access to the private sibling repository, and neither does a repository
+    # without the token secret configured.
+    if: >-
+      needs.preflight.outputs.product_repo_readable == 'true' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          path: dev-health-acr
+          persist-credentials: false
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: full-chaos/dev-health
+          path: dev-health
+          token: ${{ secrets.DEV_HEALTH_REPO_TOKEN }}
+          persist-credentials: false
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.26.5'
+          cache: false
+
+      - name: Install the pinned OpenCode release
+        run: |
+          npm install --global --no-fund --no-audit \
+            "opencode-ai@${OPENCODE_PINNED_VERSION}"
+          observed="$(opencode --version)"
+          if [ "$observed" != "$OPENCODE_PINNED_VERSION" ]; then
+            echo "want OpenCode $OPENCODE_PINNED_VERSION, got $observed" >&2
+            exit 1
+          fi
+
+      # OpenCode fetches its own ~83MB @opencode-ai/plugin + @opencode-ai/sdk
+      # bootstrap on a cold cache regardless of provider, and --pure and the
+      # OPENCODE_DISABLE_* vars do not suppress it. The provider adapter is
+      # installed on first use too. One throwaway run warms both. The native
+      # deps are arch-specific, so this must run on the runner's own OS/arch.
+      - name: Pre-warm the OpenCode and provider caches
+        run: |
+          npm cache add "$PROVIDER_NPM_SPEC"
+          warm="$RUNNER_TEMP/opencode-warm"
+          mkdir -p "$warm"/{config,data,cache,state}
+          printf '%s' '{"$schema":"https://opencode.ai/config.json"}' \
+            > "$warm/config/opencode.json"
+          export HOME="$warm"
+          export XDG_CONFIG_HOME="$warm/config" XDG_DATA_HOME="$warm/data"
+          export XDG_CACHE_HOME="$warm/cache" XDG_STATE_HOME="$warm/state"
+          timeout 300 opencode --pure run --format json "warmup" || true
+          test -d "$warm/.npm" || echo "note: npm cache did not materialise" >&2
+
+      - name: Record the operator client configuration is absent
+        run: |
+          test ! -e "$HOME/.config/opencode"
+          test ! -e "$HOME/.local/share/opencode"
+
+      # Release gate: exercise the released sidecar archive rather than a
+      # source build, so the artifact customers install is what the gate
+      # proves.
+      - name: Stage the released acr-mcp archive
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: dev-health-acr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p .tmp/release-mcp
+          gh release download "$GITHUB_REF_NAME" \
+            --pattern "acr-mcp_${version}_linux_amd64.tar.gz" \
+            --dir .tmp/release-mcp
+          tar -xzf ".tmp/release-mcp/acr-mcp_${version}_linux_amd64.tar.gz" \
+            -C .tmp/release-mcp
+          test "$(.tmp/release-mcp/acr-mcp version)" = "$version"
+          echo "ACR_MCP_BINARY=$PWD/.tmp/release-mcp/acr-mcp" >> "$GITHUB_ENV"
+
+      # Without this the release job would gate a source build of acr-api while
+      # claiming to gate the release: `ensure_image` builds from the checkout
+      # whenever ACR_E2E_IMAGE is unset. Pinning the published digest makes the
+      # container customers pull the one under test.
+      - name: Pin the released acr-api image by digest
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/acr-api:${GITHUB_REF_NAME}"
+          docker pull "$image"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$image")"
+          case "$digest" in
+            *@sha256:*) ;;
+            *) echo "released image did not resolve to a digest: ${digest}" >&2; exit 1 ;;
+          esac
+          echo "ACR_E2E_IMAGE=$digest" >> "$GITHUB_ENV"
+
+      - name: Require the release run to grade the released image
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          test -n "${ACR_E2E_IMAGE:-}"
+          test -n "${ACR_MCP_BINARY:-}"
+
+      - name: Run the full-stack acceptance gate
+        working-directory: dev-health-acr
+        env:
+          E2E_SCENARIO: >-
+            ${{ github.event.inputs.scenario ||
+                (github.event_name == 'pull_request' && 'smoke' || 'full') }}
+          # Set by the release-gate step above; empty elsewhere, which
+          # makes the driver build acr-mcp from source as usual.
+          ACR_MCP_BINARY: ${{ env.ACR_MCP_BINARY }}
+          # Set by the release-gate step above; empty elsewhere, where the
+          # driver builds and pins the API image from the checkout instead.
+          ACR_E2E_IMAGE: ${{ env.ACR_E2E_IMAGE }}
+          # The web agreement check is expensive; on a pull request it is
+          # handled by the contract-path job below instead.
+          E2E_WEB: >-
+            ${{ github.event_name == 'pull_request' && 'off' || 'on' }}
+          DEV_HEALTH_ROOT: ${{ github.workspace }}/dev-health
+          E2E_WEB_ROOT: ${{ github.workspace }}/dev-health/web
+          E2E_PROJECT: acr-fs-ci-${{ github.run_id }}
+          # Both caches are warmed above, so the graded run must not reach
+          # the registry; a miss should fail loudly, not silently refetch.
+          PROVIDER_NPM_OFFLINE: 'true'
+        run: make fullstack-opencode-e2e
+
+      - name: Prove the runner client configuration was never created
+        if: always()
+        run: |
+          test ! -e "$HOME/.config/opencode"
+          test ! -e "$HOME/.local/share/opencode"
+
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: fullstack-acceptance-${{ github.run_id }}
+          path: dev-health-acr/.tmp/fullstack/
+          if-no-files-found: warn
+          retention-days: 7
+
+  web-contract-changed:
+    name: web agreement (contract paths)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    needs: preflight
+    if: >-
+      needs.preflight.outputs.product_repo_readable == 'true' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          path: dev-health-acr
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Decide whether the ACR/web contract changed
+        id: decide
+        working-directory: dev-health-acr
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          # The wire contract, plus everything that implements or grades the web agreement
+          # itself. The first four paths cover a change to what the two sides exchange; the
+          # last three cover a change to the check. Without them a PR could rewrite the
+          # browser driver, the L6 comparison, or the web half of the orchestrator and merge
+          # having never run a single browser-agreement check, since the only job that runs
+          # one on a PR is this one.
+          paths='^(contracts/|internal/contracts/|internal/api/'
+          paths="${paths}|testdata/fullstack/"
+          paths="${paths}|scripts/e2e/svs-browser\.mjs"
+          paths="${paths}|scripts/e2e/fullstack-opencode\.sh"
+          paths="${paths}|tests/fullstack/assertrun/)"
+          if git diff --name-only "$base" "$head" | grep -Eq "$paths"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        if: steps.decide.outputs.run == 'true'
+        with:
+          repository: full-chaos/dev-health
+          path: dev-health
+          token: ${{ secrets.DEV_HEALTH_REPO_TOKEN }}
+          persist-credentials: false
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        if: steps.decide.outputs.run == 'true'
+        with:
+          go-version: '1.26.5'
+          cache: false
+      - name: Install the pinned OpenCode release
+        if: steps.decide.outputs.run == 'true'
+        run: |
+          npm install --global --no-fund --no-audit \
+            "opencode-ai@${OPENCODE_PINNED_VERSION}"
+          test "$(opencode --version)" = "$OPENCODE_PINNED_VERSION"
+      - name: Pre-warm the provider package into the npm cache
+        if: steps.decide.outputs.run == 'true'
+        run: npm cache add "$PROVIDER_NPM_SPEC"
+      - name: Run the gate with the live Context Packet Explorer check
+        if: steps.decide.outputs.run == 'true'
+        working-directory: dev-health-acr
+        env:
+          E2E_SCENARIO: full
+          E2E_WEB: 'on'
+          DEV_HEALTH_ROOT: ${{ github.workspace }}/dev-health
+          E2E_WEB_ROOT: ${{ github.workspace }}/dev-health/web
+          E2E_PROJECT: acr-fs-web-${{ github.run_id }}
+        run: make fullstack-opencode-e2e
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always() && steps.decide.outputs.run == 'true'
+        with:
+          name: fullstack-web-agreement-${{ github.run_id }}
+          path: dev-health-acr/.tmp/fullstack/
+          if-no-files-found: warn
+          retention-days: 7

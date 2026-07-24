@@ -13,6 +13,9 @@ IMAGE="${ACR_E2E_IMAGE:-}"
 COMPOSE=(docker compose)
 SAFE_BOUNDARY=""
 ACR_CLIENT_VERSION_HEADER="X-ACR-Client-Version: 1.0.0"
+# Repository the scoped ACR credential and the built-in MCP probe target. Suites that seed a
+# different corpus override this before create_acr_credential runs.
+ACR_E2E_REPOSITORY_SCOPE="${ACR_E2E_REPOSITORY_SCOPE:-acme/live-e2e}"
 POSTGRES_IMAGE="postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
 CLICKHOUSE_IMAGE="clickhouse/clickhouse-server:latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5"
 PGBOUNCER_IMAGE="edoburu/pgbouncer:latest@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd"
@@ -46,12 +49,27 @@ parse_args() {
   for tool in docker openssl curl git jq; do command -v "$tool" >/dev/null || die "$tool is required"; done
 }
 
-compose() {
-  local files=(-f "$STATE/stage/compose.yml" -f "$OVERLAY_FILE" -f "$STATE/override.yml")
+compose_files() {
+  printf '%s\0' -f "$STATE/stage/compose.yml" -f "$OVERLAY_FILE" -f "$STATE/override.yml"
   if [[ -f "$STATE/svs.override.yml" ]]; then
-    files+=(-f "$STATE/svs.override.yml")
+    printf '%s\0' -f "$STATE/svs.override.yml"
   fi
+}
+
+compose() {
+  local files=()
+  while IFS= read -r -d '' entry; do files+=("$entry"); done < <(compose_files)
   "${COMPOSE[@]}" -p "$PROJECT" --project-directory "$STATE/stage" "${files[@]}" "$@"
+}
+
+# compose_argv emits the fully-resolved argv that compose() runs, NUL-separated so a path
+# containing spaces survives. It exists because compose is a shell function: a tool that has
+# to invoke the same command from its own process — the fixture verifier shells out to run
+# ClickHouse probes — cannot be handed the word "compose", as no such executable exists.
+compose_argv() {
+  local files=()
+  while IFS= read -r -d '' entry; do files+=("$entry"); done < <(compose_files)
+  printf '%s\0' "${COMPOSE[@]}" -p "$PROJECT" --project-directory "$STATE/stage" "${files[@]}"
 }
 
 owned_receipt() {
@@ -228,6 +246,10 @@ services:
       ACR_CLICKHOUSE_CA_BUNDLE: /run/secrets/acr_ca
       ACR_DEV_HEALTH_ENTITLEMENT_URL: https://acr-ops-tls:8443
       ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE: /run/secrets/acr_ca
+      # Defaults to the service's own default (60/min), so existing consumers are unchanged.
+      # A suite that legitimately issues more reads than a production client would raises it
+      # explicitly rather than being throttled into an unrelated-looking failure.
+      ACR_REQUESTS_PER_MINUTE: "${ACR_E2E_REQUESTS_PER_MINUTE:-60}"
   acr-credentials:
     image: "${IMAGE}"
     environment:
@@ -252,7 +274,15 @@ volumes:
   acr_e2e_postgres_tls: {}
   acr_e2e_clickhouse_tls: {}
 EOF
-  export ACR_IMAGE="$IMAGE" POSTGRES_USER=devhealth POSTGRES_PASSWORD="$pg" POSTGRES_PORT="$postgres_port" CLICKHOUSE_USER=default CLICKHOUSE_PASSWORD=ch CLICKHOUSE_HTTP_PORT="$clickhouse_http_port" CLICKHOUSE_NATIVE_PORT="$clickhouse_native_port" REDIS_PORT="$redis_port" ACR_DB_NAME="$db" ACR_RUNTIME_DB_USER=acr_runtime ACR_MIGRATION_DB_USER=acr_migration ACR_POSTGRES_ADMIN_PASSWORD_FILE="$STATE/secrets/postgres-password" ACR_RUNTIME_DB_PASSWORD_FILE="$STATE/secrets/runtime-password" ACR_MIGRATION_DB_PASSWORD_FILE="$STATE/secrets/migration-password" ACR_RUNTIME_DSN_FILE="$STATE/secrets/runtime-dsn" ACR_MIGRATION_DSN_FILE="$STATE/secrets/migration-dsn" ACR_CLICKHOUSE_DSN_FILE="$STATE/secrets/clickhouse-dsn" ACR_OPS_TOKEN_FILE="$STATE/secrets/ops-token" ACR_CA_FILE="$STATE/pki/ca.crt" ACR_EVIDENCE_ACTIVE_KID_FILE="$STATE/secrets/evidence-kid" ACR_EVIDENCE_KEYS_FILE="$STATE/secrets/evidence-keys"
+  # CLICKHOUSE_DB is load-bearing and was missing: every ops service's CLICKHOUSE_URI in the
+  # product compose file resolves ${CLICKHOUSE_DB:-default}, so without it the long-running
+  # `api` container reads the literal `default` database for its whole lifetime, while every
+  # migration and seed in this driver targets the isolated per-project database. The
+  # application therefore saw an empty-but-valid schema and answered 200 {"repositories": []}.
+  # Nothing caught it because ACR's own ClickHouse access uses a separately parameterized DSN
+  # that always named the right database, and the fixture probes queried that database
+  # directly rather than through the application.
+  export ACR_IMAGE="$IMAGE" POSTGRES_USER=devhealth POSTGRES_PASSWORD="$pg" POSTGRES_PORT="$postgres_port" CLICKHOUSE_USER=default CLICKHOUSE_PASSWORD=ch CLICKHOUSE_DB="$db" CLICKHOUSE_HTTP_PORT="$clickhouse_http_port" CLICKHOUSE_NATIVE_PORT="$clickhouse_native_port" REDIS_PORT="$redis_port" ACR_DB_NAME="$db" ACR_RUNTIME_DB_USER=acr_runtime ACR_MIGRATION_DB_USER=acr_migration ACR_POSTGRES_ADMIN_PASSWORD_FILE="$STATE/secrets/postgres-password" ACR_RUNTIME_DB_PASSWORD_FILE="$STATE/secrets/runtime-password" ACR_MIGRATION_DB_PASSWORD_FILE="$STATE/secrets/migration-password" ACR_RUNTIME_DSN_FILE="$STATE/secrets/runtime-dsn" ACR_MIGRATION_DSN_FILE="$STATE/secrets/migration-dsn" ACR_CLICKHOUSE_DSN_FILE="$STATE/secrets/clickhouse-dsn" ACR_OPS_TOKEN_FILE="$STATE/secrets/ops-token" ACR_CA_FILE="$STATE/pki/ca.crt" ACR_EVIDENCE_ACTIVE_KID_FILE="$STATE/secrets/evidence-kid" ACR_EVIDENCE_KEYS_FILE="$STATE/secrets/evidence-keys"
 }
 
 assert_safe_render() {
@@ -277,9 +307,24 @@ wait_https_ready() {
   done
 }
 
-bootstrap_ops() {
-  local output org_id token db scoped_repo_count
-  compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-ops-tls >/dev/null
+# Evidence seeding is the only part of Ops bootstrap that differs between suites, so it is
+# a named hook. The default reproduces the historical synthetic corpus byte for byte;
+# scripts/e2e/fullstack-opencode.sh substitutes a versioned deterministic projection.
+ACR_E2E_SEED_HOOK="${ACR_E2E_SEED_HOOK:-seed_synthetic_evidence}"
+
+ops_clickhouse_database() { printf 'acr_%s_e2e' "${PROJECT//-/}"; }
+
+clickhouse_query() { compose exec -T clickhouse clickhouse-client --user default --password ch --query "$1"; }
+
+provision_ops_control_plane() {
+  local output org_id token
+  # The isolated ClickHouse database is created before the ops services start, not in
+  # provision_evidence_database below: those services resolve CLICKHOUSE_DB at container start
+  # and connect immediately, so a database that does not exist yet is a boot failure rather
+  # than a later one.
+  compose up -d --wait clickhouse >/dev/null
+  clickhouse_query "CREATE DATABASE IF NOT EXISTS $(ops_clickhouse_database)" >/dev/null
+  compose up -d postgres valkey pgbouncer mailpit migrate api acr-ops-tls >/dev/null
   if ! output="$(compose exec -T api dev-hops admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community)"; then
     printf '%s\n' "$output" >&2
     die 'Ops organization provisioning failed'
@@ -290,16 +335,42 @@ bootstrap_ops() {
   token="$(compose exec -T api dev-hops service-credentials create --service acr --scope entitlements:read)"
   [[ "$token" == svc_acr_* ]] || die 'Ops credential provisioning returned an invalid token shape'
   write_secret "$STATE/secrets/ops-token" "$token"
-  db="acr_${PROJECT//-/}_e2e"
-  compose exec -T clickhouse clickhouse-client --user default --password ch --query "CREATE DATABASE IF NOT EXISTS ${db}" >/dev/null
+  printf '%s' "$org_id" > "$STATE/org-id"
+}
+
+provision_evidence_database() {
+  local db
+  db="$(ops_clickhouse_database)"
+  clickhouse_query "CREATE DATABASE IF NOT EXISTS ${db}" >/dev/null
   compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:8123/${db} dev-hops migrate clickhouse" >/dev/null
-  compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:8123/${db} dev-hops fixtures generate --sink \"\$CLICKHOUSE_URI\" --db-type clickhouse --repo-name acme/live-e2e --provider synthetic --days 14 --commits-per-day 6 --pr-count 24 --seed 20260219 --with-metrics --with-work-graph" >/dev/null
-  compose exec -T clickhouse clickhouse-client --user default --password ch --query "INSERT INTO ${db}.repos (id, repo, ref, created_at, settings, tags, last_synced, org_id, provider) SELECT generateUUIDv4(), 'acme/live-e2e', 'main', now64(3), NULL, NULL, now64(3), '${org_id}', 'synthetic'" >/dev/null
-  scoped_repo_count="$(compose exec -T clickhouse clickhouse-client --user default --password ch --query "SELECT count() FROM ${db}.repos FINAL WHERE org_id = '${org_id}' AND repo = 'acme/live-e2e'")"
+}
+
+# assert_scoped_repository fails closed when a suite's evidence does not resolve to exactly
+# one repository row; ClickHouseScopeResolver rejects an ambiguous scope, so two rows would
+# surface as an opaque assembly error much later.
+assert_scoped_repository() {
+  local slug="$1" db org_id scoped_repo_count
+  db="$(ops_clickhouse_database)"
+  org_id="$(<"$STATE/org-id")"
+  scoped_repo_count="$(clickhouse_query "SELECT count() FROM ${db}.repos FINAL WHERE org_id = '${org_id}' AND repo = '${slug}'")"
   if [[ "$scoped_repo_count" != "1" ]]; then
-    note "project-scoped repository evidence count=${scoped_repo_count}"
+    note "project-scoped repository evidence count=${scoped_repo_count} for ${slug}"
     die 'project-scoped repository evidence provisioning failed'
   fi
+}
+
+seed_synthetic_evidence() {
+  local db org_id
+  db="$(ops_clickhouse_database)"
+  org_id="$(<"$STATE/org-id")"
+  compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:8123/${db} dev-hops fixtures generate --sink \"\$CLICKHOUSE_URI\" --db-type clickhouse --repo-name acme/live-e2e --provider synthetic --days 14 --commits-per-day 6 --pr-count 24 --seed 20260219 --with-metrics --with-work-graph" >/dev/null
+  clickhouse_query "INSERT INTO ${db}.repos (id, repo, ref, created_at, settings, tags, last_synced, org_id, provider) SELECT generateUUIDv4(), 'acme/live-e2e', 'main', now64(3), NULL, NULL, now64(3), '${org_id}', 'synthetic'" >/dev/null
+  assert_scoped_repository 'acme/live-e2e'
+}
+
+grant_clickhouse_reader() {
+  local db
+  db="$(ops_clickhouse_database)"
   compose exec -T clickhouse clickhouse-client --user default --password ch --multiquery <<EOF >/dev/null
 CREATE USER IF NOT EXISTS acr_reader IDENTIFIED BY '$(<"$STATE/secrets/clickhouse-password")';
 CREATE TABLE IF NOT EXISTS ${db}.acr_e2e_readonly_probe (probe_id UUID) ENGINE = Memory;
@@ -307,13 +378,19 @@ GRANT INSERT ON ${db}.acr_e2e_readonly_probe TO acr_reader;
 ALTER USER acr_reader SETTINGS readonly = 2;
 GRANT SELECT ON ${db}.* TO acr_reader;
 EOF
-  printf '%s' "$org_id" > "$STATE/org-id"
+}
+
+bootstrap_ops() {
+  provision_ops_control_plane
+  provision_evidence_database
+  "$ACR_E2E_SEED_HOOK"
+  grant_clickhouse_reader
 }
 
 create_acr_credential() {
   local token credential_stderr
   credential_stderr="$STATE/acr-credentials.stderr"
-  if ! token="$(compose run --rm --no-deps acr-credentials credentials create --org-id "$(<"$STATE/org-id")" --repository-scope acme/live-e2e --scope context:read,evidence:read --name compose-e2e --actor compose-e2e 2>"$credential_stderr")"; then
+  if ! token="$(compose run --rm --no-deps acr-credentials credentials create --org-id "$(<"$STATE/org-id")" --repository-scope "$ACR_E2E_REPOSITORY_SCOPE" --scope context:read,evidence:read --name compose-e2e --actor compose-e2e 2>"$credential_stderr")"; then
     redact_log < "$credential_stderr" >&2 || true
     die 'ACR credential provisioning failed'
   fi
@@ -327,7 +404,7 @@ rotate_acr_credential() {
   credential_id="$(compose run --rm --no-deps acr-credentials credentials list --org-id "$(<"$STATE/org-id")" --json | sed -nE 's/.*"credential_id":"([^"]+)".*/\1/p' | head -1)"
   [[ -n "$credential_id" ]] || die 'ACR credential rotation did not return a credential ID'
   credential_stderr="$STATE/acr-credentials-rotate.stderr"
-  if ! token="$(compose run --rm --no-deps acr-credentials credentials rotate --org-id "$(<"$STATE/org-id")" --credential-id "$credential_id" --repository-scope acme/live-e2e --scope context:read,evidence:read --name compose-e2e-rotated --actor compose-e2e --overlap 0s 2>"$credential_stderr")"; then
+  if ! token="$(compose run --rm --no-deps acr-credentials credentials rotate --org-id "$(<"$STATE/org-id")" --credential-id "$credential_id" --repository-scope "$ACR_E2E_REPOSITORY_SCOPE" --scope context:read,evidence:read --name compose-e2e-rotated --actor compose-e2e --overlap 0s 2>"$credential_stderr")"; then
     redact_log < "$credential_stderr" >&2 || true
     die 'ACR credential rotation failed'
   fi
@@ -378,7 +455,7 @@ run_mcp() {
     mcp_shutdown "$mcp_pid" "$mcp_input" "$mcp_output"
     die 'MCP initialize did not return a negotiated protocol version'
   fi
-  printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"context_for_task","arguments":{"goal":"inspect live evidence","repository":{"slug":"acme/live-e2e"},"scope":{"branch":"main"}}}}' >&"$mcp_input"
+  printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' "$(jq -cn --arg slug "$ACR_E2E_REPOSITORY_SCOPE" '{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:"context_for_task",arguments:{goal:"inspect live evidence",repository:{slug:$slug},scope:{branch:"main"}}}}')" >&"$mcp_input"
   if ! IFS= read -r -t 30 context_response <&"$mcp_output" || ! printf '%s\n' "$context_response" | jq -e '(.result.isError // false) == false and .result.structuredContent.schema_version == "mcp_context_for_task_response.v1"' >/dev/null; then
     mcp_shutdown "$mcp_pid" "$mcp_input" "$mcp_output"
     die 'context_for_task did not return a valid MCP response'
@@ -396,13 +473,35 @@ run_mcp() {
   mcp_shutdown "$mcp_pid" "$mcp_input" "$mcp_output"
 }
 
-start_happy() {
+# build_host_mcp produces the host-local sidecar the suite drives. The release gate sets
+# ACR_MCP_BINARY to an extracted release archive instead, so the artifact customers actually
+# install is the one under test rather than a source build of the same tree.
+build_host_mcp() {
+  if [[ -n "${ACR_MCP_BINARY:-}" ]]; then
+    [[ -x "$ACR_MCP_BINARY" ]] || die 'ACR_MCP_BINARY is not an executable sidecar'
+    cp "$ACR_MCP_BINARY" "$STATE/acr-mcp"
+    chmod 0755 "$STATE/acr-mcp"
+    note "using the released sidecar at ${ACR_MCP_BINARY##*/} instead of a source build"
+    return 0
+  fi
+  go build -o "$STATE/acr-mcp" ./cmd/acr-mcp
+}
+
+# prepare_stack is the reusable boundary: after it returns, the isolated stack is seeded,
+# TLS-ready, holds a scoped ACR credential at $STATE/secrets/acr-token, and has a host-local
+# acr-mcp binary at $STATE/acr-mcp. It deliberately performs no client assertions, so suites
+# can attach their own test hook without inheriting this file's smoke expectations.
+prepare_stack() {
   bootstrap_ops
   compose up -d acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
   wait_https_ready
   record_acl_probe
   create_acr_credential
-  go build -o "$STATE/acr-mcp" ./cmd/acr-mcp
+  build_host_mcp
+}
+
+start_happy() {
+  prepare_stack
   run_mcp "$(<"$STATE/secrets/acr-token")"
   rotate_acr_credential
   run_mcp "$(<"$STATE/secrets/acr-rotated-token")"

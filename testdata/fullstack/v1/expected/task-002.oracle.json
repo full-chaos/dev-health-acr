@@ -1,0 +1,83 @@
+{
+  "schema_version": "fullstack_task_oracle.v1",
+  "task_id": "task-002-auth-refactor-branch",
+  "profile_membership": ["full"],
+  "request": {
+    "expected_http_status": 200,
+    "repo": "example-org/widget-service",
+    "branch": "main"
+  },
+  "expected_packet_status": "partial",
+  "expected_scope_resolution": "branch_filtered",
+  "status_reasoning": "Unlike task-001, this is NOT primarily about the incidents.v1 product bug (see task-001's oracle) -- task-002 cannot reach PacketComplete under ANY fixture, seeded or not, for a purely structural reason: with branch set, source_catalog.go's ExecuteCatalog unconditionally skips all 10 EvidenceScopeRepo queries (reason repo_fallback_branch_not_supported) and, with no commit_sha, unconditionally skips both EvidenceScopeCommit queries (reason commit_scope_not_requested) -- 12 UnavailableSource entries guaranteed before a single ClickHouse query even runs. The only request shape that avoids skipping any scope class is 'branch empty AND commit_sha set' (task-001's shape, and the only one) -- a request cannot simultaneously be 'branch-filtered, no commit' (this task's whole purpose) and also unlock EvidenceScopeRepo. So even after the incidents.v1 bug is fixed, task-002 will still show these same 12 unavailable sources and still be 'partial', by design of ExecuteCatalog's scope-class gating, not by fixture gap. bundle.Unavailable is therefore always non-empty here, so setStatus() forces PacketPartial even though real evidence (PR #1042 + its review, plus the checkout-e2e CI run and repository freshness) is present.",
+  "expected_unavailable_sources": [
+    {"source": "work_items.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "work_item_dependencies.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "work_graph.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "ai_workflow_runs.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "ai_workflow_artifacts.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "ai_review_outcomes.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "deployments.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "incidents.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "deployment_incident_provenance.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "file_hotspots.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "git_commits.v1", "reason": "commit_scope_not_requested"},
+    {"source": "git_commit_files.v1", "reason": "commit_scope_not_requested"}
+  ],
+  "expected_unavailable_sources_exact": true,
+  "expected_unavailable_sources_note": "Exactly 12: the 10 EvidenceScopeRepo sources (skipped because branch is set) plus the 2 EvidenceScopeCommit sources (skipped because commit_sha is empty) -- note incidents.v1 appears here for the SAME reason as the other 9 repo-scoped sources (repo_fallback_branch_not_supported), not because of the incidents.v1/operational_incidents product bug (task-001's oracle) -- that bug is masked here by the branch-scope skip that would exclude it anyway. Fixing incidents.v1 will NOT change this task's status or this list; do not update this oracle when that bug is fixed. Four of the ten repo-scoped sources here (work_graph.v1, ai_workflow_artifacts.v1, ai_review_outcomes.v1, deployment_incident_provenance.v1) also happen to have a second, independent bug, CHAOS-3069 (task-001's oracle: source_executor.go's scanEvidenceRow can't scan their native Float32 confidence column into its float64 target) -- but that bug can only fire once a query actually executes, and ExecuteCatalog skips these four here for scope reasons before they ever run, same as incidents.v1. So this task is unaffected by, and this list does NOT change when, either CHAOS-3068 or CHAOS-3069 lands -- both are masked by the branch-scope skip for any branch-scoped task. The 5 branch-scoped sources (repository_freshness.v1, pull_requests.v1, pull_request_reviews.v1, ci_pipeline_runs.v1, file_complexity.v1) are all genuinely available for branch=main, thanks to the fixture's ref='main'/branch='main' values, and must NOT appear in this list -- if any of them do, that's a real regression.",
+  "commit_evidence_unreachable_note": "IMPORTANT: internal/contextpacket/source_queries.go declares git_commits.v1 and git_commit_files.v1 as EvidenceScopeCommit. internal/contextpacket/source_catalog.go's ExecuteCatalog skips every EvidenceScopeCommit query whenever plan.CommitSHA == \"\" (see 'if plan.CommitSHA == \"\" && query.Scope == EvidenceScopeCommit { ...continue }'). This task's scope is branch-only per docs/fullstack-acceptance.md section 5, so git_commits.v1 NEVER runs and commit b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3 (ev-commit-auth-002 in the evaluation corpus) cannot appear in this packet under any circumstances -- this is a structural property of the current assembler, not a fixture gap. testdata/evaluation/v1/tasks.json's task-002 lists ev-commit-auth-002 as an expected_evidence_id for the ORIGINAL (non-full-stack) evaluation harness; that expectation does not carry over to this ClickHouse-backed catalog. required_evidence below intentionally omits it. Flagged in the delivery report.",
+  "required_evidence": [
+    {
+      "corpus_evidence_id": "ev-pr-auth-002",
+      "query_id": "pull_requests.v1",
+      "derived_locator": "acr:v1:pull-request:1042",
+      "entity_type": "pull_request",
+      "entity_id": "1042",
+      "packet_category": "evidence",
+      "rule_id": "evidence.observed.reference.v1"
+    },
+    {
+      "corpus_evidence_id": "ev-pr-auth-002",
+      "query_id": "pull_request_reviews.v1",
+      "derived_locator": "acr:v1:review:review-1042-001",
+      "entity_type": "pull_request_review",
+      "entity_id": "review-1042-001",
+      "packet_category": "evidence",
+      "rule_id": "evidence.observed.reference.v1"
+    }
+  ],
+  "evidence_ref_id_matching_contract": "See README.md#evidence-ref-id-matching. Match by (query_id, entity_type, entity_id), never by string-comparing derived_locator against the wire evidence_ref_id.",
+  "known_additional_evidence_note": "ci_pipeline_runs.v1, repository_freshness.v1, and file_complexity.v1 are also branch-scoped and will surface the checkout-e2e-run-4821 CI run, the repository freshness row, and the cart_drawer.ts complexity snapshot (all filtered to branch/ref=main, which matches). That is expected cross-task bleed / fixture density, not a defect -- none of it is required_evidence.",
+  "forbidden_evidence": [
+    {
+      "corpus_evidence_id": null,
+      "query_id": "git_commits.v1",
+      "derived_locator": "acr:v1:commit:c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+      "entity_type": "commit",
+      "entity_id": "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+      "reason": "belongs to example-org/other-service; must never appear in a widget-service packet"
+    }
+  ],
+  "required_packet_categories": ["evidence"],
+  "required_rule_ids": ["evidence.observed.reference.v1"],
+  "required_checks": ["check.evidence.observed.reference.v1"],
+  "min_expandable_evidence": 2,
+  "required_findings": [
+    {
+      "claim_id": "finding:pull-request:1042",
+      "claim_kind": "observed",
+      "must_cite_entity": {"entity_type": "pull_request", "entity_id": "1042"}
+    },
+    {
+      "claim_id": "finding:review:review-1042-001",
+      "claim_kind": "observed",
+      "must_cite_entity": {"entity_type": "pull_request_review", "entity_id": "review-1042-001"}
+    }
+  ],
+  "forbidden_claims": [
+    {"reason": "must not fabricate a claim about example-org/other-service", "forbidden_entity": {"entity_type": "commit", "entity_id": "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"}},
+    {"reason": "must not fabricate a claim citing commit b2c3d4... -- it is not retrievable under branch-only scope; a compliant agent can only discuss it if it never invents an evidence_ref_id for it", "forbidden_entity": {"entity_type": "commit", "entity_id": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3"}}
+  ],
+  "claim_id_convention_note": "See README.md#claim-id-convention."
+}

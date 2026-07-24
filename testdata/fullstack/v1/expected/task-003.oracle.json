@@ -1,0 +1,75 @@
+{
+  "schema_version": "fullstack_task_oracle.v1",
+  "task_id": "task-003-unindexed-branch-empty",
+  "profile_membership": ["smoke", "full"],
+  "request": {
+    "expected_http_status": 200,
+    "repo": "example-org/widget-service",
+    "branch": "release/1.4-unindexed"
+  },
+  "expected_packet_status": "degraded",
+  "expected_scope_resolution": "branch_filtered",
+  "status_reasoning": "testdata/evaluation/v1/tasks.json and docs/fullstack-acceptance.md section 5 both say this task's expected packet status is 'empty'. That is NOT what internal/contextpacket/packet_state.go's setStatus() actually produces given the real dev-health-source-catalog.v1 (17 sources): with branch=release/1.4-unindexed, every one of the 5 EvidenceScopeBranch queries runs and returns zero rows ('no_evidence' -- this holds regardless of the 10 background-density rows added for task-001, since none of them are on this branch), the 10 EvidenceScopeRepo queries are skipped ('repo_fallback_branch_not_supported'), and the 2 EvidenceScopeCommit queries are skipped ('commit_scope_not_requested') -- all 17 sources end up in bundle.Unavailable, unconditionally, for this scope shape, independent of the incidents.v1 product bug (task-001's oracle) and independent of how rich the rest of the fixture is. setStatus()'s branch for len(packet.Items)==0 is: 'if candidateCount>0 -> Partial; else if len(bundle.Unavailable)>0 -> Degraded; else -> Empty, warn no_evidence_found'. Because Unavailable is non-empty here, the Degraded branch fires, not the Empty branch. PacketEmpty and the literal 'no_evidence_found' warning are UNREACHABLE for this task by any fixture: they require bundle.Unavailable to be empty, which is impossible once even one branch-scoped source returns zero rows for a branch nothing was ever seeded on -- true no matter how many other sources are populated elsewhere. This is a genuine mismatch between the design doc / evaluation corpus and the real code -- flagged prominently in the delivery report for the doc owner / packet_state.go owner to reconcile (either relax setStatus's Empty/Degraded split, or update the doc's expected statuses). Unlike task-001, there is no future code fix that flips this task to 'empty' -- it is a permanent property of an intentionally-populated fixture being probed on a branch with zero rows, so this status_reasoning does not need revisiting when incidents.v1 is fixed.",
+  "expected_unavailable_sources": [
+    {"source": "repository_freshness.v1", "reason": "no_evidence"},
+    {"source": "pull_requests.v1", "reason": "no_evidence"},
+    {"source": "pull_request_reviews.v1", "reason": "no_evidence"},
+    {"source": "ci_pipeline_runs.v1", "reason": "no_evidence"},
+    {"source": "file_complexity.v1", "reason": "no_evidence"},
+    {"source": "work_items.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "work_item_dependencies.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "work_graph.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "ai_workflow_runs.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "ai_workflow_artifacts.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "ai_review_outcomes.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "deployments.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "incidents.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "deployment_incident_provenance.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "file_hotspots.v1", "reason": "repo_fallback_branch_not_supported"},
+    {"source": "git_commits.v1", "reason": "commit_scope_not_requested"},
+    {"source": "git_commit_files.v1", "reason": "commit_scope_not_requested"}
+  ],
+  "expected_unavailable_sources_exact": true,
+  "expected_unavailable_sources_note": "All 17 of 17 catalog sources, by construction: 5 branch-scoped sources genuinely queried and genuinely empty for this branch ('no_evidence'), 10 repo-scoped sources skipped outright because branch is set, 2 commit-scoped sources skipped outright because commit_sha is empty. incidents.v1 appears here for the repo_fallback_branch_not_supported reason (same as the other 9 repo-scoped sources), not because of its own product bug -- fixing incidents.v1 will not change this list. Same goes for the second, independent bug, CHAOS-3069, described in task-001's oracle (source_executor.go's scanEvidenceRow can't scan the native Float32 confidence column of work_graph.v1/ai_workflow_artifacts.v1/ai_review_outcomes.v1/deployment_incident_provenance.v1): it can only fire once a query executes, and all four are skipped here for scope reasons before that happens. Fixing CHAOS-3068 or CHAOS-3069 (independently or together) leaves this task's 17-entry list unchanged.",
+  "required_evidence": [],
+  "forbidden_evidence": [
+    {
+      "corpus_evidence_id": null,
+      "query_id": "git_commits.v1",
+      "derived_locator": "acr:v1:commit:c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+      "entity_type": "commit",
+      "entity_id": "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+      "reason": "belongs to example-org/other-service; must never appear anywhere"
+    },
+    {
+      "corpus_evidence_id": "ev-commit-checkout-001",
+      "query_id": "git_commits.v1",
+      "derived_locator": "acr:v1:commit:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+      "entity_type": "commit",
+      "entity_id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+      "reason": "task-003's branch (release/1.4-unindexed) has zero seeded rows anywhere; no evidence from any other task's scope may leak in here"
+    },
+    {
+      "corpus_evidence_id": "ev-pr-auth-002",
+      "query_id": "pull_requests.v1",
+      "derived_locator": "acr:v1:pull-request:1042",
+      "entity_type": "pull_request",
+      "entity_id": "1042",
+      "reason": "PR #1042's head/base branches are main and auth-refactor-typed-tokens, neither of which is release/1.4-unindexed"
+    }
+  ],
+  "required_packet_categories": [],
+  "required_rule_ids": [],
+  "required_checks": [],
+  "min_expandable_evidence": 0,
+  "required_findings": [],
+  "findings_must_be_empty": true,
+  "required_disclosure": {
+    "description": "Because the literal 'no_evidence_found' warning is unreachable (see status_reasoning), the assertion tool should instead require packet.Status == 'degraded' AND packet.Items == [] AND at least one packet.Warnings entry of the form 'source_unavailable:<source>:<reason>', e.g. the deterministic, always-present entry below.",
+    "required_warning_prefix": "source_unavailable:ci_pipeline_runs.v1:no_evidence",
+    "agent_result_assumption": "assumptions[] in the agent's context_fabric_agent_result.v1 output must include an explicit statement that no evidence was found for this branch (a synthesized disclosure, not a literal copy of an ACR warning string, since the deterministic scripted model authors the final message from the live tool result)."
+  },
+  "forbidden_claims": [
+    {"reason": "task-003 must not fabricate any finding; there is no evidence to cite", "forbidden_entity": {"entity_type": "*", "entity_id": "*"}}
+  ]
+}

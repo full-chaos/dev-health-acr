@@ -1,7 +1,20 @@
-.PHONY: fmt fmt-check test hosted-integration clients-real vet contract-write contract-test codegraph-contract canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan
+.PHONY: fmt fmt-check test hosted-integration clients-real vet contract-write contract-test codegraph-contract canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
+
+# Full-stack Context Fabric acceptance (CHAOS-3065). See docs/fullstack-acceptance.md.
+# The product repo is the parent of this checkout for a plain clone, but a git worktree lives
+# at <root>/acr/worktrees/<name>, where the parent is the worktrees directory. Pick the
+# nearest ancestor that actually holds the product compose file, so the documented one-command
+# entry point works from either layout; an explicit DEV_HEALTH_ROOT always wins.
+DEV_HEALTH_ROOT ?= $(firstword $(foreach d,$(abspath ..) $(abspath ../..) $(abspath ../../..) $(abspath ../../../..),$(if $(wildcard $(d)/compose.yml),$(d))))
+E2E_COMPOSE ?= $(DEV_HEALTH_ROOT)/compose.yml
+E2E_WEB_ROOT ?= $(DEV_HEALTH_ROOT)/web
+E2E_SCENARIO ?= smoke
+E2E_MODEL ?= scripted
+E2E_WEB ?= auto
+E2E_PROJECT ?= acr-fs-$(shell date -u +%Y%m%d)-$(shell echo $$$$)
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './vendor/*')
@@ -37,13 +50,26 @@ codegraph-contract:
 canonical-receipts:
 	bash scripts/e2e/test-canonical-receipts.sh
 
+fullstack-contract:
+	bash scripts/e2e/test-fullstack-opencode.sh
+
+fullstack-opencode-e2e:
+	bash scripts/e2e/fullstack-opencode.sh \
+		--compose "$(E2E_COMPOSE)" \
+		--overlay deploy/compose/acr.compose.yml \
+		--web-root "$(E2E_WEB_ROOT)" \
+		--project "$(E2E_PROJECT)" \
+		--scenario "$(E2E_SCENARIO)" \
+		--model "$(E2E_MODEL)" \
+		--web "$(E2E_WEB)"
+
 build:
 	go build -o .tmp/acr-api ./cmd/acr-api
 	go build -o .tmp/acr-mcp ./cmd/acr-mcp
 	go build -o .tmp/contractcheck ./cmd/contractcheck
 	go build -o .tmp/acr-migrate ./cmd/acr-migrate
 
-verify: fmt-check vet test contract-test codegraph-contract canonical-receipts build
+verify: fmt-check vet test contract-test codegraph-contract canonical-receipts fullstack-contract build
 
 container-contract:
 	bash scripts/container/test-contract.sh
