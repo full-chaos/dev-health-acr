@@ -55,10 +55,56 @@ func setStatus(packet *contractsv1.ContextPacket, bundle storage.EvidenceBundle,
 	}
 }
 
+// evidenceRowError identifies WHICH source emitted an invalid evidence row and
+// WHICH validation rule it broke. Rule is one of validateEvidence's fixed
+// messages and is always safe to surface. SourceVersion is a bounded catalog
+// query ID ONLY on the ClickHouse path, where ExecuteCatalogObserved stamps it
+// from the query definition; any other store may supply arbitrary text of up to
+// 512 bytes, so it must NOT be surfaced directly -- use safeSource(). Neither
+// field ever carries row content.
+type evidenceRowError struct {
+	SourceVersion string
+	Rule          string
+}
+
+func (e *evidenceRowError) Error() string {
+	return "invalid evidence row from " + e.SourceVersion + ": " + e.Rule
+}
+
+// safeSource returns SourceVersion only when it is a recognized catalog query
+// ID. Evidence can originate from stores whose SourceVersion is arbitrary,
+// caller-influenced text, so echoing it into a packet reason or warning would
+// reflect untrusted input straight back into the response. Unrecognized values
+// collapse to a fixed token.
+func (e *evidenceRowError) safeSource() string {
+	if _, ok := evidenceSourceCodes[e.SourceVersion]; ok {
+		return e.SourceVersion
+	}
+	return "unknown_source"
+}
+
+// evidenceRuleCode maps validateEvidence's fixed messages to stable, bounded
+// tokens safe for machine-readable disclosure. Unrecognized input collapses to
+// invalid_other rather than echoing an arbitrary string.
+func evidenceRuleCode(rule string) string {
+	switch rule {
+	case "invalid evidence_ref":
+		return "invalid_shape"
+	case "invalid evidence confidence":
+		return "invalid_confidence"
+	case "invalid evidence provenance":
+		return "invalid_provenance"
+	case "invalid evidence availability":
+		return "invalid_availability"
+	default:
+		return "invalid_other"
+	}
+}
+
 func validateEvidenceBundle(evidence []contractsv1.EvidenceRef) error {
 	for _, ref := range evidence {
 		if err := validateEvidence(ref); err != nil {
-			return fmt.Errorf("validate retrieved evidence: %w", err)
+			return fmt.Errorf("validate retrieved evidence: %w", &evidenceRowError{SourceVersion: ref.SourceVersion, Rule: err.Error()})
 		}
 	}
 	return nil

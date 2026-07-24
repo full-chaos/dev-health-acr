@@ -95,8 +95,25 @@ func TestAssembler_degrades_schema_invalid_evidence_without_exposing_it(t *testi
 	if err != nil {
 		t.Fatalf("assemble invalid evidence: %v", err)
 	}
-	if packet.Status != contractsv1.PacketDegraded || len(packet.Items) != 0 || !contains(packet.Warnings, "evidence_retrieval_unavailable") {
-		t.Fatalf("invalid evidence was not degraded safely: %#v", packet)
+	if packet.Status != contractsv1.PacketDegraded || len(packet.Items) != 0 {
+		t.Fatalf("invalid evidence was not degraded: %#v", packet)
+	}
+	// The reason is classified rather than collapsed into a single generic token,
+	// so a malformed row is diagnosable without a rebuild. The source segment must
+	// be the fixed unknown_source token: this fixture supplies a hostile 513-byte
+	// SourceVersion, and echoing it would reflect untrusted input into the packet.
+	const wantReason = "evidence_data_invalid:unknown_source:invalid_shape"
+	if !contains(packet.Warnings, wantReason) || !contains(packet.Coverage.DegradedReasons, wantReason) {
+		t.Fatalf("invalid evidence was not classified safely: %#v", packet)
+	}
+	// Enforce what this test's name promises. The previous assertion only matched a
+	// fixed generic string, so non-exposure held by accident rather than by check.
+	rendered, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatalf("marshal packet: %v", err)
+	}
+	if strings.Contains(string(rendered), strings.Repeat("s", 64)) {
+		t.Fatalf("hostile SourceVersion leaked into packet: %s", rendered)
 	}
 }
 
