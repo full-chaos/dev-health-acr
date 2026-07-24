@@ -930,6 +930,47 @@ func TestAssertRun_UnavailableSourcesBecameAvailableNamesCHAOS3068(t *testing.T)
 	}
 }
 
+func TestAssertRun_UnavailableSourcesExact_accepts_empty_sets(t *testing.T) {
+	// Given
+	dir := setupRunDir(t)
+	oracle := filepath.Join(dir, "oracle.json")
+	writeFile(t, oracle, `{"schema_version":"fullstack_task_oracle.v1","task_id":"`+testTaskID+`",
+	  "expected_packet_status":"complete","expected_unavailable_sources":[],"expected_unavailable_sources_exact":true}`)
+
+	// When
+	code, report := runAssertRunArgs(t, dir, oracle)
+
+	// Then
+	if code != 0 || !report.OK {
+		t.Fatalf("expected an exact empty unavailable-source set to pass: code=%d report=%+v", code, report)
+	}
+	if !findCheck(t, report, "L2", "unavailable_sources_exact").OK {
+		t.Fatal("unavailable_sources_exact should run and pass for an exact empty set")
+	}
+}
+
+func TestAssertRun_UnavailableSourcesExact_rejects_unexpected_source_when_expected_empty(t *testing.T) {
+	// Given
+	dir := setupRunDir(t)
+	packetPath := filepath.Join(dir, "context-packet-"+testTaskID+".json")
+	packet := strings.Replace(validContextPacket("complete", "exact_commit"), `"sources_unavailable":[]`, `"sources_unavailable":[{"source":"incidents.v1","reason":"source_unavailable"}]`, 1)
+	writeFile(t, packetPath, packet)
+	oracle := filepath.Join(dir, "oracle.json")
+	writeFile(t, oracle, `{"schema_version":"fullstack_task_oracle.v1","task_id":"`+testTaskID+`",
+	  "expected_packet_status":"complete","expected_unavailable_sources":[],"expected_unavailable_sources_exact":true}`)
+
+	// When
+	code, report := runAssertRunArgs(t, dir, oracle)
+
+	// Then
+	if code == 0 || report.OK {
+		t.Fatal("expected an unexpected unavailable source to fail exact-set validation")
+	}
+	if findCheck(t, report, "L2", "unavailable_sources_exact").OK {
+		t.Fatal("unavailable_sources_exact should fail for an unexpected source")
+	}
+}
+
 // TestAssertRun_AsOfPinMismatchFails exercises the optional as_of exact-equality check.
 func TestAssertRun_AsOfPinMismatchFails(t *testing.T) {
 	dir := setupRunDir(t)

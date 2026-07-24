@@ -242,12 +242,7 @@ func layerACRAPI(rc *runContext) *Layer {
 		l.add("forbidden_evidence_entities_absent", len(present) == 0, "none of "+joinIDs(forbidden), joinIDs(present), ifNotEmpty(present, "forbidden entit(y/ies) present"))
 	}
 
-	// Coverage.SourcesUnavailable, per docs/fullstack-acceptance.md section 7 layer 2 and
-	// testdata/fullstack/v1/README.md's "Packet status" section: PacketComplete is currently
-	// unreachable for this fixture (CHAOS-3068, a confirmed product bug, plus structural
-	// scope-class skipping), so every landed oracle pins the exact set of unavailable
-	// sources as a tripwire against that changing silently.
-	if len(rc.oracle.ExpectedUnavailableSources) > 0 {
+	if rc.oracle.ExpectedUnavailableSourcesExact || len(rc.oracle.ExpectedUnavailableSources) > 0 {
 		var expectedPairs, actualPairs []string
 		for _, u := range rc.oracle.ExpectedUnavailableSources {
 			expectedPairs = append(expectedPairs, u.Source+":"+u.Reason)
