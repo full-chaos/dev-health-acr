@@ -9,4 +9,5 @@
 !.env.example
 .tmp/
 /acr-mcp
+/modeloracle
 /.omo/

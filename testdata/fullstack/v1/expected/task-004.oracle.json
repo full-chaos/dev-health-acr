@@ -1,0 +1,31 @@
+{
+  "schema_version": "fullstack_task_oracle.v1",
+  "task_id": "task-004-foreign-repo-denied",
+  "profile_membership": ["full"],
+  "request": {
+    "repo": "example-org/other-service",
+    "branch": "main"
+  },
+  "expected_http_status": 403,
+  "expected_error_code": "repo_forbidden",
+  "denial_reasoning": "internal/api/read_routes.go handleContextPacket calls auth.AuthorizeRepository(principal, slug) immediately after normalizing the requested slug and BEFORE any scope resolution or ClickHouse read runs. On denial it writes writeError(w, r, http.StatusForbidden, \"repo_forbidden\", ...) (read_routes.go line ~44) and records a 'repository_denied' audit entry; internal/sidecar/api_errors.go maps the wire code 'repo_forbidden' back to ErrRepositoryForbidden with HTTPStatus 403 on the client side. The fullstack suite's ACR credential is created via `credentials create --repository-scope $ACR_E2E_REPOSITORY_SCOPE` (scripts/e2e/compose.sh create_acr_credential) scoped to example-org/widget-service only, so example-org/other-service is denied purely by credential scope -- no dependency on ClickHouse content at all. This task exercises the denial path itself; internal/contextpacket never runs for this request.",
+  "expected_packet_status": null,
+  "expected_scope_resolution": null,
+  "required_evidence": [],
+  "forbidden_evidence": [
+    {
+      "corpus_evidence_id": null,
+      "query_id": "git_commits.v1",
+      "derived_locator": "acr:v1:commit:c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+      "entity_type": "commit",
+      "entity_id": "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+      "reason": "even though this commit genuinely exists on example-org/other-service in the fixture, the request must be denied before it is ever read; its presence in ClickHouse only proves the denial is a real authorization boundary and not an accident of empty data"
+    }
+  ],
+  "required_findings": [],
+  "findings_must_be_empty": true,
+  "required_checks": [],
+  "forbidden_claims": [
+    {"reason": "no context packet is ever produced for this request; the agent/model must not fabricate any findings, evidence refs, or packet fields, and must surface the 403 repo_forbidden denial instead", "forbidden_entity": {"entity_type": "*", "entity_id": "*"}}
+  ]
+}

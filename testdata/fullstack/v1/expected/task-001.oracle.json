@@ -1,0 +1,94 @@
+{
+  "schema_version": "fullstack_task_oracle.v1",
+  "task_id": "task-001-checkout-flake-exact-commit",
+  "profile_membership": ["smoke", "full"],
+  "request": {
+    "expected_http_status": 200,
+    "repo": "example-org/widget-service",
+    "commit_sha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+  },
+  "expected_packet_status": "partial",
+  "expected_scope_resolution": "exact_commit",
+  "status_reasoning": "task-001 (branch empty, commit_sha set) is the ONLY scope shape under which internal/contextpacket/source_catalog.go's ExecuteCatalog does not unconditionally skip an entire scope class: EvidenceScopeRepo queries are only skipped when branch is set (it is not, here), and EvidenceScopeCommit queries are only skipped when commit_sha is empty (it is not, here). This fixture seeds a matching row in all 16 seedable dev-health-source-catalog.v1 sources for widget-service (the 6 corpus-relevant sources plus 10 background-density rows -- see fixture-manifest.json's background_density_rows), and the seed data is confirmed correct (fixture-verification.json shows expected=actual=1 for every one of those sources' probes) -- but two INDEPENDENT product bugs still stop this packet from reaching PacketComplete, both confirmed live and both out of scope for CHAOS-3065:\n\n(1) CHAOS-3068: incidents.v1 still does `FROM incidents AS i ...`, but ops migration 068_drop_legacy_incidents.sql (CHAOS-3062) drops that table in favor of operational_incidents (066_operational_canonical.sql, no repo_id column -- not a drop-in replacement). The query errors outright (`Unknown table expression identifier 'incidents'`), for every task, forever.\n\n(2) CHAOS-3069: source_executor.go's scanEvidenceRow declares `var confidence float64` and scans EVERY catalog row's `confidence` column into it, but four sources project a genuinely native `Float32`-typed `confidence` column straight through with no cast: work_graph.v1 (work_graph_edges.confidence Float32), ai_workflow_artifacts.v1 (ai_workflow_artifact_edges.confidence Float32), ai_review_outcomes.v1 (work_graph_pr_review_outcome_edges.confidence Float32), deployment_incident_provenance.v1 (work_graph_deployment_incident_edges.confidence Float32). clickhouse-go v2's Float32 column ScanRow only accepts *float32/**float32/sql.Scanner, so scanning into *float64 fails with a ColumnConverterError, and the row-level error surfaces as UnavailableSource{Reason:\"source_unavailable\"} -- indistinguishable, from the packet alone, from a genuine zero-row result. (Every OTHER catalog query's confidence is either a Float64 literal like `1.0` or a real Float64 column -- e.g. deployments.v1's release_ref_confidence -- so this is exactly and only these four.) This bug fires for ANY organization/data, not just this fixture, and only manifests when the affected EvidenceScopeRepo queries actually execute -- which, per ExecuteCatalog's scope-class gating, is uniquely task-001's shape (see task-002/task-003 oracles: same four sources are skipped there for scope reasons before the query ever runs, so CHAOS-3069 never fires and their existing reasons stand unchanged).\n\nCHAOS-3068 and CHAOS-3069 are independent bugs with independent fixes that will land separately -- do not conflate them. Together these five sources are the exact and only reason this packet is 'partial' rather than 'complete'; every other one of the 17 catalog sources is genuinely available. WHEN CHAOS-3068 LANDS FIRST: expected_unavailable_sources drops to exactly the 4 CHAOS-3069 entries (work_graph.v1, ai_workflow_artifacts.v1, ai_review_outcomes.v1, deployment_incident_provenance.v1); expected_packet_status stays \"partial\". WHEN CHAOS-3069 LANDS FIRST: expected_unavailable_sources drops to exactly [{\"source\":\"incidents.v1\",\"reason\":\"source_unavailable\"}]; expected_packet_status stays \"partial\". WHEN BOTH HAVE LANDED: expected_unavailable_sources becomes [], and ONLY THEN does expected_packet_status flip from \"partial\" to \"complete\" -- no other change to this oracle or the fixture should be needed in any of the three cases. See README.md#packet-status.",
+  "expected_unavailable_sources": [
+    {"source": "incidents.v1", "reason": "source_unavailable"},
+    {"source": "work_graph.v1", "reason": "source_unavailable"},
+    {"source": "ai_workflow_artifacts.v1", "reason": "source_unavailable"},
+    {"source": "ai_review_outcomes.v1", "reason": "source_unavailable"},
+    {"source": "deployment_incident_provenance.v1", "reason": "source_unavailable"}
+  ],
+  "expected_unavailable_sources_exact": true,
+  "expected_unavailable_sources_note": "Exact-set, not just superset: this proves all 12 of the other 17 dev-health-source-catalog.v1 sources really are available for widget-service under this scope (thanks to the 10 background-density rows, 6 of which -- work_items.v1, work_item_dependencies.v1, ai_workflow_runs.v1, deployments.v1, file_hotspots.v1, file_complexity.v1 -- actually succeed), and that exactly two independent, confirmed product bugs (CHAOS-3068 for incidents.v1; CHAOS-3069, the Float32 scanEvidenceRow bug, for the other four) are the only reason this packet isn't complete. All five report reason 'source_unavailable' -- the packet cannot distinguish 'query errored' from 'query returned zero rows' from this field alone (also noted as a gap worth its own fix). If any source OTHER than these five shows up here, that's a real regression, not either known bug.",
+  "required_evidence": [
+    {
+      "corpus_evidence_id": "ev-commit-checkout-001",
+      "query_id": "git_commits.v1",
+      "derived_locator": "acr:v1:commit:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+      "entity_type": "commit",
+      "entity_id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+      "packet_category": "cause",
+      "rule_id": "evidence.observed.cause.v1"
+    },
+    {
+      "corpus_evidence_id": "ev-ci-checkout-001",
+      "query_id": "ci_pipeline_runs.v1",
+      "derived_locator": "acr:v1:ci:checkout-e2e-run-4821",
+      "entity_type": "ci_pipeline_run",
+      "entity_id": "checkout-e2e-run-4821",
+      "packet_category": "evidence",
+      "rule_id": "evidence.observed.reference.v1"
+    },
+    {
+      "corpus_evidence_id": "ev-commit-checkout-001",
+      "query_id": "git_commit_files.v1",
+      "derived_locator": "acr:v1:commit-file:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2:src/checkout/cart_drawer.ts",
+      "entity_type": "commit_file",
+      "entity_id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2:src/checkout/cart_drawer.ts",
+      "packet_category": "evidence",
+      "rule_id": "evidence.observed.reference.v1"
+    },
+    {
+      "corpus_evidence_id": "ev-commit-checkout-001",
+      "query_id": "git_commit_files.v1",
+      "derived_locator": "acr:v1:commit-file:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2:tests/e2e/checkout_flow.spec.ts",
+      "entity_type": "commit_file",
+      "entity_id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2:tests/e2e/checkout_flow.spec.ts",
+      "packet_category": "evidence",
+      "rule_id": "evidence.observed.reference.v1"
+    }
+  ],
+  "evidence_ref_id_matching_contract": "See README.md#evidence-ref-id-matching. The literal evidence_ref_id observed at runtime is an opaque per-request token; match required_evidence entries by (query_id, entity_type, entity_id), never by string-comparing derived_locator against the wire value.",
+  "known_additional_evidence_note": "Because this task's scope leaves branch empty, EvidenceScopeBranch queries (pull_requests.v1, pull_request_reviews.v1, repository_freshness.v1) are NOT filtered to a specific branch and will also surface PR #1042 / its changes_requested review / repository freshness for this repo. Additionally, this task surfaces one item from each of the 6 background-density sources that actually resolve (work_items.v1, work_item_dependencies.v1, ai_workflow_runs.v1, deployments.v1, file_hotspots.v1, file_complexity.v1) -- including one 'deployment' entity, whose entity_type matches evidenceCategoryRule's \"state\" case (rules.go), so a 'state' category item will also legitimately appear. The other 4 background-density sources (work_graph.v1, ai_workflow_artifacts.v1, ai_review_outcomes.v1, deployment_incident_provenance.v1) do NOT surface an item -- their rows are correctly seeded and match every WHERE-clause predicate (verified empirically) but the query itself fails at scan time due to the Float32 confidence-column bug described in status_reasoning, landing those 4 sources in expected_unavailable_sources instead. None of the successfully-surfaced density items is required_evidence (see fixture-manifest.json's background_density_rows) and none of it should ever be asserted on by name/content -- only its presence proves the corresponding source is 'available' for the expected_unavailable_sources tripwire above. This is expected cross-task bleed and fixture density, not a defect -- do not treat any of it as forbidden evidence.",
+  "forbidden_evidence": [
+    {
+      "corpus_evidence_id": null,
+      "query_id": "git_commits.v1",
+      "derived_locator": "acr:v1:commit:c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+      "entity_type": "commit",
+      "entity_id": "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+      "reason": "belongs to example-org/other-service; must never appear in a widget-service packet"
+    }
+  ],
+  "required_packet_categories": ["cause", "evidence"],
+  "required_rule_ids": ["evidence.observed.cause.v1", "evidence.observed.reference.v1"],
+  "required_checks": ["check.evidence.observed.cause.v1", "check.evidence.observed.reference.v1"],
+  "rule_id_reasoning": "Derived from internal/contextpacket/rules.go evidenceCategoryRule(): entity_type 'commit' matches the case (\"commit\",\"change\",\"diff\") -> category=cause, rule=evidence.observed.cause.v1. entity_type values 'ci_pipeline_run', 'commit_file', 'pull_request', 'pull_request_review', 'repository' match none of the named cases and fall through to the default -> category=evidence, rule=evidence.observed.reference.v1. None of this evidence carries acr_rule_id/acr_claim_kind metadata (that override only applies to work_graph-sourced rows), so explicitRuleOutcome() never fires and evidenceCategoryRule() is the whole story. Assumes request.Options.MaxItems is large enough (>= ~10) that allocateCategories() in ranking.go never truncates -- true for any reasonable harness default given only a handful of items are seeded.",
+  "min_expandable_evidence": 4,
+  "min_expandable_evidence_reasoning": "commit (1) + git_commit_stats rows (2) + ci run (1) = 4 evidence refs guaranteed available for source_evidence expansion regardless of any PR/review bleed. Task spec requires >= 2; 4 is the tighter, fixture-backed bound.",
+  "required_findings": [
+    {
+      "claim_id": "finding:commit:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+      "claim_kind": "observed",
+      "must_cite_entity": {"entity_type": "commit", "entity_id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"}
+    },
+    {
+      "claim_id": "finding:ci:checkout-e2e-run-4821",
+      "claim_kind": "observed",
+      "must_cite_entity": {"entity_type": "ci_pipeline_run", "entity_id": "checkout-e2e-run-4821"}
+    }
+  ],
+  "forbidden_claims": [
+    {"reason": "must not fabricate a claim about example-org/other-service", "forbidden_entity": {"entity_type": "commit", "entity_id": "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"}}
+  ],
+  "claim_id_convention_note": "claim_id = 'finding:' + <derived_locator with the 'acr:v1:' prefix stripped>. This is a harness-owned convention defined by this oracle set (testdata/fullstack/v1), not a product contract; see README.md#claim-id-convention."
+}

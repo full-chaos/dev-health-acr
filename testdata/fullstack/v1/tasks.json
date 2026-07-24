@@ -1,0 +1,61 @@
+{
+  "schema_version": "fullstack_tasks.v1",
+  "tasks": [
+    {
+      "task_id": "task-001-checkout-flake-exact-commit",
+      "goal": "Investigate the flaky checkout integration test on a pinned commit.",
+      "scope": {
+        "repo": "example-org/widget-service",
+        "commit_sha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+      },
+      "profiles": ["smoke", "full"],
+      "oracle": "expected/task-001.oracle.json",
+      "notes": "Goal kept verbatim from testdata/evaluation/v1/tasks.json task-001. Scope is commit-only per docs/fullstack-acceptance.md section 5 (exact-commit resolution does not depend on also passing branch)."
+    },
+    {
+      "task_id": "task-002-auth-refactor-branch",
+      "goal": "Review the recent authentication refactor for regression risk before merge.",
+      "scope": {
+        "repo": "example-org/widget-service",
+        "branch": "main"
+      },
+      "profiles": ["full"],
+      "oracle": "expected/task-002.oracle.json",
+      "notes": "Goal kept verbatim from testdata/evaluation/v1/tasks.json task-002. Branch-filtered scope, no commit pin."
+    },
+    {
+      "task_id": "task-003-unindexed-branch-empty",
+      "goal": "Diagnose failing release checks on a branch with no indexed evidence.",
+      "scope": {
+        "repo": "example-org/widget-service",
+        "branch": "release/1.4-unindexed"
+      },
+      "profiles": ["smoke", "full"],
+      "oracle": "expected/task-003.oracle.json",
+      "notes": "Goal kept verbatim from testdata/evaluation/v1/tasks.json task-003. This branch is intentionally absent from every seeded table."
+    },
+    {
+      "task_id": "task-004-foreign-repo-denied",
+      "goal": "Summarize recent CI activity for the other-service repository.",
+      "scope": {
+        "repo": "example-org/other-service",
+        "branch": "main"
+      },
+      "profiles": ["full"],
+      "oracle": "expected/task-004.oracle.json",
+      "notes": "New goal (no corpus equivalent). The fullstack ACR credential is provisioned with repository_scopes limited to example-org/widget-service, so this request must be denied by auth.AuthorizeRepository before any ClickHouse scope resolution runs."
+    },
+    {
+      "task_id": "task-005-unavailable-evidence",
+      "goal": "Expand the CI evidence referenced by a previously issued but now-invalid evidence pointer.",
+      "scope": {
+        "repo": "example-org/widget-service",
+        "branch": "main"
+      },
+      "forged_evidence_ref_id": "ev1_e2efixturekid_ci_RkFLRUZBS0VGQUtFRkFLRQ.RkFLRS1NQUMtVEhBVC1ORVZFUi1NQVRDSC1BTlktLSE",
+      "profiles": ["full"],
+      "oracle": "expected/task-005.oracle.json",
+      "notes": "New goal (no corpus equivalent). context_for_task runs normally against widget-service/main; source_evidence is then called with forged_evidence_ref_id, which is syntactically well-formed (passes the 8-256 char / no-control-char check) but was never issued by this ClickHouse-backed ACR instance for this org, so it cannot route or match any row -- see README for why a literal evidence_ref_id can never be precomputed exactly and why this is still a deterministic, guaranteed-not_found probe."
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "schema_version": "fullstack_task_oracle.v1",
+  "task_id": "task-005-unavailable-evidence",
+  "profile_membership": ["full"],
+  "context_for_task_request": {
+    "expected_http_status": 200,
+    "repo": "example-org/widget-service",
+    "branch": "main",
+    "expected_packet_status": "partial",
+    "expected_scope_resolution": "branch_filtered",
+    "status_reasoning": "Identical shape to task-002's request (same repo, same branch, no commit_sha) -- see task-002.oracle.json's expected_unavailable_sources (the same 12 sources, same reasons) and README.md#packet-status for why this is 'partial' rather than 'complete', and why that stays true even after either CHAOS-3068 (incidents.v1) or CHAOS-3069 (the Float32-scan bug affecting work_graph.v1/ai_workflow_artifacts.v1/ai_review_outcomes.v1/deployment_incident_provenance.v1) lands -- both are masked here by the branch-scope skip, same as task-002.",
+    "expected_unavailable_sources": [
+      {"source": "work_items.v1", "reason": "repo_fallback_branch_not_supported"},
+      {"source": "work_item_dependencies.v1", "reason": "repo_fallback_branch_not_supported"},
+      {"source": "work_graph.v1", "reason": "repo_fallback_branch_not_supported"},
+      {"source": "ai_workflow_runs.v1", "reason": "repo_fallback_branch_not_supported"},
+      {"source": "ai_workflow_artifacts.v1", "reason": "repo_fallback_branch_not_supported"},
+      {"source": "ai_review_outcomes.v1", "reason": "repo_fallback_branch_not_supported"},
+      {"source": "deployments.v1", "reason": "repo_fallback_branch_not_supported"},
+      {"source": "incidents.v1", "reason": "repo_fallback_branch_not_supported"},
+      {"source": "deployment_incident_provenance.v1", "reason": "repo_fallback_branch_not_supported"},
+      {"source": "file_hotspots.v1", "reason": "repo_fallback_branch_not_supported"},
+      {"source": "git_commits.v1", "reason": "commit_scope_not_requested"},
+      {"source": "git_commit_files.v1", "reason": "commit_scope_not_requested"}
+    ],
+    "expected_unavailable_sources_exact": true,
+    "note": "This first call only exists to obtain a real, live evidence_ref_id from context_for_task's response (per docs/fullstack-acceptance.md section 6.1: the deterministic model's step 2 argument must be extracted from the previous live tool result). The forged ref used in the second call below is NOT taken from this response -- it is a fixed, out-of-band value (see forged_evidence_ref_id below) standing in for a pointer that was issued by a since-rotated keyring key / a different org, or was simply never issued at all."
+  },
+  "source_evidence_request": {
+    "evidence_ref_id": "ev1_e2efixturekid_ci_RkFLRUZBS0VGQUtFRkFLRQ.RkFLRS1NQUMtVEhBVC1ORVZFUi1NQVRDSC1BTlktLSE",
+    "expected_http_status": 404,
+    "expected_error_code": "not_found"
+  },
+  "denial_reasoning": "internal/api/read_routes.go handleEvidence rejects the reference outright if it fails the length/whitespace/control-char check (referenceID must be 8-256 runes, no leading/trailing whitespace, no control characters -- validOpaqueEvidenceRefID in internal/contextpacket/evidence_validation.go applies the same rule downstream). This forged ref passes that shape check (87 chars, ASCII only) so it reaches internal/contextpacket/clickhouse_evidence.go ResolveEvidence, which: (1) calls EvidenceIDCodec.Parse -- fails here already because the embedded KID 'e2efixturekid' is not a key in this deployment's EvidenceIDKeyring, so Parse returns ErrInvalidEvidenceID and ResolveEvidence maps that straight to storage.ErrNotFound; even in a deployment that happened to reuse this KID, the tag/MAC still would not route to or match any real (org_id, repo_id, query_id, locator) tuple, landing in the exact same storage.ErrNotFound outcome via routeEvidenceHandle/matchEvidenceHandle. Either branch reaches api/read_routes.go's writeEvidenceError -> writeEvidenceNotFound -> HTTP 404 'not_found', and no adapter.structured()/URL fetch ever runs because Expand() is never reached (ResolveEvidence returns before calling s.resolver.Expand). This is also why a literal evidence_ref_id can never be precomputed for the required_evidence lists in tasks 001-003: the real wire value is an org_id-keyed HMAC minted only at request time (see README.md#evidence-ref-id-matching); task-005 turns that same unforgeability into the assertion itself.",
+  "required_findings": [],
+  "forbidden_claims": [
+    {"reason": "the agent must not fabricate content for the forged ref, and must not report it as available/redacted/stale -- only as not found", "forbidden_entity": {"entity_type": "*", "entity_id": "*"}}
+  ],
+  "required_disclosure": {
+    "description": "The agent's context_fabric_agent_result.v1 output must not contain any finding whose evidence_ref_ids includes the forged ref, and assumptions[] should disclose that one requested evidence pointer could not be resolved.",
+    "no_fetch_assertion": "assertrun must verify (via the sanitized OpenCode event stream / MCP transcript, see docs/fullstack-acceptance.md section 9) that no outbound HTTP request was made to any safe_uri as a result of this call."
+  }
+}

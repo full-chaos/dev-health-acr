@@ -1,0 +1,66 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "contextfabric/oracle",
+  "small_model": "contextfabric/oracle",
+  "share": "disabled",
+  "autoupdate": false,
+  "instructions": [],
+  "plugin": [],
+  "skills": { "paths": [], "urls": [] },
+  "provider": {
+    "contextfabric": {
+      "npm": "__PROVIDER_NPM_SPEC__",
+      "name": "context-fabric-oracle",
+      "options": {
+        "baseURL": "http://127.0.0.1:__MODEL_PORT__/v1",
+        "apiKey": "context-fabric-acceptance",
+        "timeout": 60000
+      },
+      "models": {
+        "oracle": {
+          "name": "context-fabric-oracle",
+          "options": { "temperature": 0 }
+        }
+      }
+    }
+  },
+  "mcp": {
+    "acr": {
+      "type": "local",
+      "command": ["__ACR_MCP_BIN__", "serve"],
+      "enabled": true,
+      "timeout": 60000,
+      "environment": {
+        "ACR_API_URL": "__ACR_API_URL__",
+        "ACR_API_TOKEN_FILE": "__ACR_TOKEN_FILE__",
+        "ACR_API_CA_BUNDLE": "__ACR_CA_BUNDLE__",
+        "ACR_SIDECAR_VERSION": "__ACR_SIDECAR_VERSION__",
+        "ACR_SIDECAR_CLIENT_VERSION": "__ACR_SIDECAR_VERSION__"
+      }
+    }
+  },
+  "permission": {
+    "edit": "deny",
+    "bash": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "task": "deny",
+    "external_directory": "deny"
+  },
+  "tools": {
+    "write": false,
+    "edit": false,
+    "patch": false,
+    "bash": false,
+    "webfetch": false,
+    "websearch": false,
+    "task": false,
+    "todowrite": false,
+    "todoread": false,
+    "read": false,
+    "glob": false,
+    "grep": false,
+    "list": false,
+    "skill": false
+  }
+}

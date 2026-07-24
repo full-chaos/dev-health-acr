@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://testdata.fullchaos.dev/acr/fullstack/v1/context_fabric_agent_result.v1.schema.json",
+  "title": "Context Fabric Agent Result v1",
+  "description": "Harness-owned schema (testdata/fullstack/v1, CHAOS-3065) for the strict JSON final message the headless OpenCode agent must emit after using acr-mcp's context_for_task and source_evidence tools. This is NOT a product wire contract: ACR never produces or consumes this shape, so it intentionally lives outside contracts/ and is not subject to the contract-first rule (see docs/fullstack-acceptance.md section 3).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_id",
+    "packet_status",
+    "scope_resolution",
+    "findings",
+    "recommended_checks",
+    "assumptions"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "context_fabric_agent_result.v1"
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "packet_status": {
+      "description": "Must equal contracts/v1 PacketStatus exactly (internal/contracts/v1/types.go).",
+      "enum": ["complete", "partial", "degraded", "empty"]
+    },
+    "scope_resolution": {
+      "description": "Must equal contracts/v1 ScopeResolution exactly (internal/contracts/v1/types.go).",
+      "enum": ["exact_commit", "branch_filtered", "repo_fallback", "unresolved"]
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim_id", "claim_kind", "summary", "evidence_ref_ids"],
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "claim_kind": {
+            "enum": ["observed", "inferred", "recommendation"]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "evidence_ref_ids": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256
+            },
+            "uniqueItems": true
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "claim_kind": { "const": "observed" } },
+              "required": ["claim_kind"]
+            },
+            "then": {
+              "properties": { "evidence_ref_ids": { "minItems": 1 } }
+            }
+          }
+        ]
+      }
+    },
+    "recommended_checks": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["check_id", "label", "reason"],
+        "properties": {
+          "check_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        }
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      }
+    }
+  }
+}

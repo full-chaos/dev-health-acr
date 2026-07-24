@@ -1,0 +1,236 @@
+{
+  "schema_version": "fullstack_fixture_manifest.v1",
+  "fixture_version": "2026-07-23.1",
+  "description": "Deterministic ClickHouse projection of testdata/evaluation/v1 (CHAOS-2918) for the CHAOS-3065 full-stack OpenCode acceptance gate.",
+  "source_corpus": {
+    "path": "testdata/evaluation/v1",
+    "manifest_path": "testdata/evaluation/v1/manifest.json",
+    "corpus_version": "2026-07-10.1",
+    "consumed_files": [
+      {
+        "path": "scenario.json",
+        "sha256": "41ddf88a1f73ecde8dfe5653fd4381e94ad984fbafe60c5df76077e0274d20b3",
+        "verified": true
+      },
+      {
+        "path": "tasks.json",
+        "sha256": "76d4384b3b0727da3526680c246cec62d6180009e3532a9d0e57d001d052e406",
+        "verified": true
+      },
+      {
+        "path": "evidence/ev-ci-checkout-001.json",
+        "sha256": "38a1a118aba7919c8763ad918ef15d2470eaf07be8bca84055421855ee567adc",
+        "verified": true
+      },
+      {
+        "path": "evidence/ev-commit-checkout-001.json",
+        "sha256": "7ed905c6db62a51e314a18c059c13a716b205e82cd79bfac4419d725b219e462",
+        "verified": true
+      },
+      {
+        "path": "evidence/ev-commit-auth-002.json",
+        "sha256": "fb63cad7faa5a7a6833963ea3aaded482f95dc5dd8237bef2390ef3b6527c30d",
+        "verified": true
+      },
+      {
+        "path": "evidence/ev-pr-auth-002.json",
+        "sha256": "3720d56b79fc7e638b3130bb23e6415a9a70e728db6f9a48fc5d806eba584589",
+        "verified": true
+      }
+    ],
+    "note": "All six SHA-256 values were independently recomputed against the files on disk in this worktree on 2026-07-23 and matched testdata/evaluation/v1/manifest.json exactly. No stale hash was found."
+  },
+  "seed_files": [
+    {
+      "path": "testdata/fullstack/v1/seed/clickhouse/001_widget_service.sql",
+      "sha256": "329d3e4f0e06184acadb64fe320dbc5a44b2c390a9bdeb16e5051a96c0db9dd8"
+    }
+  ],
+  "org_id_substitution": {
+    "token": "__ORG_ID__",
+    "contract": "The orchestrator performs exactly one textual substitution of the literal token __ORG_ID__ with the isolated organization UUID minted by `dev-hops admin orgs create` before executing any seed file. Every org_id column value in the seed file is the quoted literal '__ORG_ID__' (23 occurrences across all tables that have the column). Preflight must assert the substitution happened exactly once per row (no row may still contain the literal token after seeding, and no row may have a different org_id). Note: four tables (ai_workflow_runs, ai_workflow_artifact_edges, work_graph_pr_review_outcome_edges, work_graph_deployment_incident_edges) declare org_id as UUID rather than String; the same '__ORG_ID__' literal is used there and is cast implicitly once substituted with a real UUID string.",
+    "org_id_on_git_ci_deployment_tables": {
+      "tables": [
+        "git_commits",
+        "git_commit_stats",
+        "ci_pipeline_runs",
+        "git_pull_requests",
+        "git_pull_request_reviews",
+        "deployments"
+      ],
+      "reason": "These six tables DO have an org_id column, added by the Python migration 027_add_org_id_to_sorting_keys.py (not a .sql file -- a naive grep of *.sql migrations alone will miss it). That migration also rebuilds each table's sorting key with org_id prepended FIRST, e.g. git_commits becomes ORDER BY (org_id, repo_id, hash) -- so org_id is part of the ReplacingMergeTree dedup identity, not merely an inert column. Leaving it unset (defaulting to 'default') would therefore be a real correctness bug, not just cosmetic: it would dedup this fixture's rows against any other org's rows that happened to share the same (repo_id, hash)-style natural key under the shared 'default' bucket. All six INSERTs in 001_widget_service.sql set org_id explicitly to '__ORG_ID__' for this reason. Separately, and still true: source_queries.go's catalog queries never filter these six tables by their own org_id column directly -- every query scopes org via `INNER JOIN repos AS repo ... WHERE repo.org_id = {org_id:String}` instead -- so the explicit org_id value doesn't change any ACR query result; it exists purely for correct ReplacingMergeTree dedup identity. Verified live against a migrated ClickHouse instance (schema_migrations shows 027 applied; DESCRIBE TABLE shows org_id on all six)."
+    }
+  },
+  "as_of_pin": {
+    "value": "2026-01-14T12:00:00.000Z",
+    "contract": "The orchestrator must send this exact value as scope.as_of on every context_for_task call (HTTP request.scope.as_of / MCP tool argument scope.as_of), and leave scope.time_window_days unset (0). Rationale: neither field has a server-side default anywhere in internal/api, internal/mcp, or internal/contextpacket (verified by reading internal/mcp/context_scope.go and internal/contextpacket/read_adapter.go) -- when both are omitted, every source_queries.go time filter of the form '({as_of}=NULL OR ...) AND ({time_window_days}=0 OR ...)' is a no-op, so this fixture's fixed Jan-2026 timestamps have so far worked only because time filtering was silently absent, not because they fall inside any window. That is fragile against wall-clock drift (today is already 2026-07-23, over six months past these timestamps) and against any future default-filling change. Pinning as_of makes packet.generated_at/freshness.as_of exactly this value too (basePacket() in assembler.go uses request.Scope.AsOf when set), so downstream assertions can check it for exact equality.",
+    "known_side_effect": "ev-commit-auth-002 and ev-pr-auth-002's corpus-fixed Jan-12 timestamps are more than 24h before this as_of, so pull_requests.v1/pull_request_reviews.v1 watermarks will report status 'stale' (a 'source_stale:<source>' warning) whenever PR #1042 is in scope. This does not affect packet.status (only bundle.Unavailable does) and is not a bug -- do not 'fix' it by moving those two timestamps; they are pinned to the evaluation corpus."
+  },
+  "background_density_rows": {
+    "description": "testdata/fullstack/v1/seed/clickhouse/001_widget_service.sql seeds one bystander row in each of 10 additional dev-health-source-catalog.v1 tables (work_items, work_item_dependencies, work_graph_edges, ai_workflow_runs, ai_workflow_artifact_edges, work_graph_pr_review_outcome_edges, deployments, work_graph_deployment_incident_edges, file_hotspot_daily, file_complexity_snapshots) purely so task-001's packet has as few UnavailableSource entries as the current code allows. These rows are NOT part of any task's required_evidence and must never be asserted on by tests/fullstack/assertrun -- the evaluation corpus's 4 evidence records remain the only semantic source of truth. 6 of the 10 (work_items, work_item_dependencies, ai_workflow_runs, deployments, file_hotspot_daily, file_complexity_snapshots) resolve cleanly for task-001; the other 4 are correctly seeded and verified-matching but their queries fail at scan time -- see known_query_bugs below. See README.md.",
+    "not_seeded": {
+      "table": "incidents",
+      "reason": "internal/contextpacket/source_queries.go's incidents.v1 query still does `FROM incidents AS i ...`, but ops migration 068_drop_legacy_incidents.sql (`DROP TABLE IF EXISTS incidents;`, CHAOS-3062) removes that table in favor of `operational_incidents` (a different column shape, created in 066_operational_canonical.sql). After a full `dev-hops migrate clickhouse` run the `incidents` table does not exist, so incidents.v1 always fails with UnavailableSource{Reason:\"source_unavailable\"} regardless of seeding -- there is nothing to insert. This is a confirmed product bug (source_queries.go was not updated for CHAOS-3062), filed as CHAOS-3068, that makes literal PacketComplete unreachable for every task, for every organization on Dev Health -- not just this fixture -- until source_queries.go is repointed at operational_incidents (which has no repo_id column, so it is a real design change, not a rename). Not fixed inside CHAOS-3065; not fixed here since it is outside testdata/."
+    },
+    "known_query_bugs": [
+      {
+        "bug_id": "incidents_table_dropped",
+        "ticket": "CHAOS-3068",
+        "affected_sources": ["incidents.v1"],
+        "affected_seed_tables": [],
+        "mechanism": "incidents.v1 queries a table (incidents) that migration 068_drop_legacy_incidents.sql drops. Query fails outright: Unknown table expression identifier 'incidents'. Nothing to seed -- the table doesn't exist.",
+        "task_impact": "Fires for every task/scope; masked nowhere. Always contributes exactly one entry (incidents.v1, source_unavailable) wherever this source isn't already scope-skipped for an unrelated reason (task-002/003: repo_fallback_branch_not_supported, since it's also EvidenceScopeRepo)."
+      },
+      {
+        "bug_id": "float32_confidence_scan",
+        "ticket": "CHAOS-3069",
+        "affected_sources": ["work_graph.v1", "ai_workflow_artifacts.v1", "ai_review_outcomes.v1", "deployment_incident_provenance.v1"],
+        "affected_seed_tables": ["work_graph_edges", "ai_workflow_artifact_edges", "work_graph_pr_review_outcome_edges", "work_graph_deployment_incident_edges"],
+        "mechanism": "internal/contextpacket/source_executor.go's scanEvidenceRow declares `var confidence float64` and scans every catalog row's confidence column into it. These four sources project a genuinely native Float32-typed confidence column straight through (their tables declare `confidence Float32`, unlike every other catalog source, which uses a Float64 literal like 1.0 or a real Float64 column such as deployments.v1's release_ref_confidence). clickhouse-go v2's Float32 ScanRow only accepts *float32/**float32/sql.Scanner, so the scan fails with a ColumnConverterError and the row-level error surfaces as UnavailableSource{Reason:\"source_unavailable\"} -- indistinguishable from a genuine zero-row result from the packet alone. Confirmed live: acr-api logs exactly these four plus incidents.v1 as failed evidence queries for task-001, and the underlying rows independently verified present and WHERE-clause-matching (fixture-verification.json probes all green). The seed data for these four tables is correct; nothing to change there.",
+        "task_impact": "Only fires when the affected query actually EXECUTES, which requires the request to not scope-skip it. All four are EvidenceScopeRepo, so ExecuteCatalog skips them outright (repo_fallback_branch_not_supported) whenever a request sets branch -- masking this bug for task-002/003/005 (all branch-scoped). It only actually fires for task-001 (branch empty, commit_sha set -- the one scope shape that unlocks EvidenceScopeRepo queries)."
+      }
+    ]
+  },
+  "fixed_identities": {
+    "repositories": [
+      {
+        "role": "in_scope",
+        "slug": "example-org/widget-service",
+        "repo_id": "00000000-3065-4000-8000-000000000001",
+        "default_ref": "main",
+        "provider": "synthetic",
+        "last_synced": "2026-01-14T12:00:00.000Z"
+      },
+      {
+        "role": "out_of_scope",
+        "slug": "example-org/other-service",
+        "repo_id": "00000000-3065-4000-8000-000000000002",
+        "default_ref": "main",
+        "provider": "synthetic",
+        "last_synced": "2026-01-14T12:00:00.000Z",
+        "note": "Credential used by the fullstack suite is scoped to example-org/widget-service only; this repository exists so task-004's repo_forbidden denial and the 'no unrelated fixture evidence' assertion have something real to catch."
+      }
+    ],
+    "commits": [
+      {
+        "repo_id": "00000000-3065-4000-8000-000000000001",
+        "hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        "committer_when": "2026-01-13T18:42:00.000Z",
+        "corpus_evidence_id": "ev-commit-checkout-001",
+        "role": "task-001 exact-commit scope"
+      },
+      {
+        "repo_id": "00000000-3065-4000-8000-000000000001",
+        "hash": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+        "committer_when": "2026-01-12T09:05:00.000Z",
+        "corpus_evidence_id": "ev-commit-auth-002",
+        "role": "seeded for traceability; NOT reachable by task-002's branch-only scope -- see README"
+      },
+      {
+        "repo_id": "00000000-3065-4000-8000-000000000002",
+        "hash": "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+        "committer_when": "2026-01-11T09:05:00.000Z",
+        "corpus_evidence_id": null,
+        "role": "other-service filler commit; must never appear in a widget-service packet"
+      }
+    ],
+    "commit_files": [
+      {
+        "commit_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        "file_path": "src/checkout/cart_drawer.ts"
+      },
+      {
+        "commit_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        "file_path": "tests/e2e/checkout_flow.spec.ts"
+      }
+    ],
+    "ci_runs": [
+      {
+        "repo_id": "00000000-3065-4000-8000-000000000001",
+        "run_id": "checkout-e2e-run-4821",
+        "branch": "main",
+        "commit_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        "corpus_evidence_id": "ev-ci-checkout-001"
+      }
+    ],
+    "pull_requests": [
+      {
+        "repo_id": "00000000-3065-4000-8000-000000000001",
+        "number": 1042,
+        "head_branch": "auth-refactor-typed-tokens",
+        "base_branch": "main",
+        "corpus_evidence_id": "ev-pr-auth-002"
+      }
+    ],
+    "pull_request_reviews": [
+      {
+        "repo_id": "00000000-3065-4000-8000-000000000001",
+        "number": 1042,
+        "review_id": "review-1042-001",
+        "state": "changes_requested",
+        "submitted_at": "2026-01-12T14:30:00.000Z",
+        "corpus_evidence_id": "ev-pr-auth-002"
+      }
+    ],
+    "unindexed_branch": {
+      "branch": "release/1.4-unindexed",
+      "note": "Intentionally has zero rows in every table for task-003."
+    }
+  },
+  "expected_row_counts": {
+    "example-org/widget-service": {
+      "repos": 1,
+      "git_commits": 2,
+      "git_commit_stats": 2,
+      "ci_pipeline_runs": 1,
+      "git_pull_requests": 1,
+      "git_pull_request_reviews": 1,
+      "work_items": 1,
+      "work_item_dependencies": 1,
+      "work_graph_edges": 1,
+      "ai_workflow_runs": 1,
+      "ai_workflow_artifact_edges": 1,
+      "work_graph_pr_review_outcome_edges": 1,
+      "deployments": 1,
+      "work_graph_deployment_incident_edges": 1,
+      "file_hotspot_daily": 1,
+      "file_complexity_snapshots": 1
+    },
+    "example-org/other-service": {
+      "repos": 1,
+      "git_commits": 1,
+      "git_commit_stats": 0,
+      "ci_pipeline_runs": 0,
+      "git_pull_requests": 0,
+      "git_pull_request_reviews": 0,
+      "work_items": 0,
+      "work_item_dependencies": 0,
+      "work_graph_edges": 0,
+      "ai_workflow_runs": 0,
+      "ai_workflow_artifact_edges": 0,
+      "work_graph_pr_review_outcome_edges": 0,
+      "deployments": 0,
+      "work_graph_deployment_incident_edges": 0,
+      "file_hotspot_daily": 0,
+      "file_complexity_snapshots": 0
+    }
+  },
+  "expected_row_counts_note": "Counts are per repo_id, optionally tightened with org_id (joined through repos, or filtered directly for the tables listed in org_id_substitution.org_id_on_git_ci_deployment_tables, all of which now have org_id set by this seed: e.g. 'SELECT count() FROM <t> FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID}'). Two tables must NEVER use FINAL: file_hotspot_daily and file_complexity_snapshots are plain MergeTree (PARTITION BY toYYYYMM(...), not ReplacingMergeTree), so FINAL is rejected outright -- count them with a plain 'SELECT count() FROM <t> WHERE repo_id = {repo_id:UUID}' (org_id is set on neither of those two by this seed; scope by repo_id, or join repos, there) (matching why the catalog queries for file_hotspots.v1/file_complexity.v1 use GROUP BY instead of FINAL). Every other table listed here (repos, git_commits, git_commit_stats, ci_pipeline_runs, git_pull_requests, git_pull_request_reviews, work_items, work_item_dependencies, work_graph_edges, ai_workflow_runs, ai_workflow_artifact_edges, work_graph_pr_review_outcome_edges, deployments, work_graph_deployment_incident_edges) is ReplacingMergeTree, has org_id set by this seed, and should use FINAL. Totals are intentionally not listed here: every key must resolve to a repository in fixed_identities.repositories. incidents is never seeded (see background_density_rows and CHAOS-3068).",
+  "scope_probes": [
+    {
+      "description": "widget-service resolves to exactly one repository row for the authenticated org",
+      "query": "SELECT count() FROM repos FINAL WHERE org_id = {org_id:String} AND repo = 'example-org/widget-service'",
+      "expected": 1
+    },
+    {
+      "description": "other-service resolves to exactly one repository row for the authenticated org (used only to prove denial/isolation, never read through the widget-service credential)",
+      "query": "SELECT count() FROM repos FINAL WHERE org_id = {org_id:String} AND repo = 'example-org/other-service'",
+      "expected": 1
+    },
+    {
+      "description": "release/1.4-unindexed has no seeded evidence anywhere for widget-service (task-003 must be genuinely empty, not filtered). Scoped by both org_id and repo_id: git_pull_requests' org_id column (added by migration 027) is set to the real org by this seed, so filtering on it directly is correct and tighter than repo_id alone.",
+      "query": "SELECT count() FROM git_pull_requests FINAL WHERE org_id = {org_id:String} AND repo_id = '00000000-3065-4000-8000-000000000001' AND (head_branch = 'release/1.4-unindexed' OR base_branch = 'release/1.4-unindexed')",
+      "expected": 0
+    }
+  ]
+}

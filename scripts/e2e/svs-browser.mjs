@@ -39,6 +39,103 @@ page.on("console", (message) => {
 });
 page.on("pageerror", (error) => browserErrors.push(error.message));
 
+// captureRepositoryPickerState inspects the live <select> in the DOM rather than
+// inferring anything from a later selectOption timeout: it answers "what did the
+// control actually contain" directly, distinguishing a genuinely empty/disabled
+// picker from one that has options the requested repository just isn't among.
+async function captureRepositoryPickerState() {
+    try {
+        const locator = page.getByLabel("Repository");
+        const count = await locator.count();
+        if (count === 0) return { found: false };
+        return await locator.first().evaluate((element) => ({
+            found: true,
+            tagName: element.tagName,
+            disabled: element.disabled,
+            optionCount: element.options.length,
+            options: Array.from(element.options).map((option) => ({
+                value: option.value,
+                text: option.textContent,
+            })),
+        }));
+    } catch (error) {
+        return { found: false, captureError: String(error) };
+    }
+}
+
+// captureRepositoryCatalogResponse re-issues the same request the Explorer's own
+// client-side fetch makes, from inside the authenticated page context (reusing its
+// session cookies), so a failure artifact can distinguish an "error" catalog.kind
+// from a genuinely empty {repositories: []} from a populated list that simply
+// doesn't contain the expected repository -- without guessing from the DOM alone.
+async function captureRepositoryCatalogResponse() {
+    try {
+        return await page.evaluate(async () => {
+            const response = await fetch("/api/agent-context/repositories", {
+                headers: { Accept: "application/json" },
+            });
+            const text = await response.text();
+            let body = text;
+            try {
+                body = JSON.parse(text);
+            } catch {
+                // leave body as raw text if it is not JSON
+            }
+            return { status: response.status, body };
+        });
+    } catch (error) {
+        return { captureError: String(error) };
+    }
+}
+
+// captureFailureArtifacts is strictly additive: it runs only from the catch block
+// below, immediately before the original error is rethrown, and a failure inside
+// this function must never mask or replace that original error.
+async function captureFailureArtifacts(error) {
+    const dir = dirname(screenshotOutput);
+    await mkdir(dir, { recursive: true });
+    const failureScreenshot = resolve(dir, "failure.png");
+    const failureDom = resolve(dir, "failure-dom.html");
+    const failurePicker = resolve(dir, "failure-picker.json");
+    const failureCatalog = resolve(dir, "failure-catalog.json");
+    const failureSummary = resolve(dir, "failure-summary.json");
+
+    const [picker, catalog] = await Promise.all([
+        captureRepositoryPickerState(),
+        captureRepositoryCatalogResponse(),
+    ]);
+
+    const outcomes = await Promise.allSettled([
+        page.screenshot({ path: failureScreenshot, fullPage: true }),
+        page.content().then((html) => writeFile(failureDom, html)),
+        writeFile(failurePicker, `${JSON.stringify(picker, null, 2)}\n`),
+        writeFile(failureCatalog, `${JSON.stringify(catalog, null, 2)}\n`),
+        writeFile(
+            failureSummary,
+            `${JSON.stringify(
+                {
+                    error: String(error?.message ?? error),
+                    url: page.url(),
+                    authRequestUrls,
+                    directAcrRequests,
+                    browserErrors,
+                },
+                null,
+                2,
+            )}\n`,
+        ),
+    ]);
+    const failedCaptures = outcomes
+        .map((outcome, index) => ({ outcome, index }))
+        .filter(({ outcome }) => outcome.status === "rejected");
+    if (failedCaptures.length > 0) {
+        const labels = ["screenshot", "dom", "picker", "catalog", "summary"];
+        for (const { outcome, index } of failedCaptures) {
+            console.error(`failure artifact capture (${labels[index]}) failed: ${outcome.reason}`);
+        }
+    }
+}
+
 try {
     await page.goto(`${baseUrl}/auth/signin`, { waitUntil: "networkidle" });
     await page.getByLabel("Email").fill(email);
@@ -101,6 +198,11 @@ try {
         writeFile(evidenceOutput, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 }),
         page.screenshot({ path: screenshotOutput, fullPage: true }),
     ]);
+} catch (error) {
+    await captureFailureArtifacts(error).catch((captureError) => {
+        console.error(`failure artifact capture itself failed: ${captureError}`);
+    });
+    throw error;
 } finally {
     await browser.close();
 }

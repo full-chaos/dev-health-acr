@@ -37,6 +37,8 @@ docs/adr/                  # Owned architecture decisions
 | Identity and scope | `internal/auth`, `internal/storage/interfaces.go` | `Principal` comes from authentication, never payloads |
 | Production persistence | `internal/storage/postgres`, `migrations/postgres` | Caller owns DB construction; adapters do not parse DSNs |
 | Security requirements | `docs/threat-model.md` | Current versus downstream controls are explicitly separated |
+| Full-stack acceptance | `scripts/e2e/fullstack-opencode.sh`, `tests/fullstack/`, `testdata/fullstack/v1/` | Real OpenCode against the live stack; contract in `docs/fullstack-acceptance.md` |
+| Isolated stack lifecycle | `scripts/e2e/compose.sh` | Sourceable library; `prepare_stack` is the reusable boundary, `ACR_E2E_SEED_HOOK` swaps the corpus |
 
 ## CODE MAP
 
@@ -103,10 +105,17 @@ make test            # go test ./...
 make vet             # go vet ./...
 make contract-write  # Refresh derived contract artifacts
 make contract-test   # Offline contract parity validation
-make verify          # fmt-check + vet + test + contract-test + build
+make fullstack-contract      # Offline checks for the full-stack acceptance gate
+make verify          # fmt-check + vet + test + contract-test + fullstack-contract + build
+
+make fullstack-opencode-e2e  # Live gate: Dev Health slice + ACR + real headless OpenCode
 ```
 
 CI runs `make verify` on pull requests and pushes to `main`. Builds land in ignored `.tmp/`.
+
+`make fullstack-opencode-e2e` needs Docker, a sibling `full-chaos/dev-health` checkout and the
+pinned OpenCode release; it runs in its own workflow, not in `make verify`. See
+`docs/fullstack-acceptance.md`.
 
 ## INTERFACE OWNERSHIP
 
