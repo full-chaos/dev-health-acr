@@ -104,13 +104,14 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	if bundle.QueryVersion != "" {
 		packet.QueryVersion = bundle.QueryVersion
 	}
-	if err := validateEvidenceBundle(bundle.Evidence); err != nil {
-		return a.degraded(ctx, packet, principal, request, err)
-	}
+	validation := validateEvidenceBundle(bundle.Evidence)
+	bundle.Evidence = validation.valid
+	bundle.Watermarks = validatedEvidenceWatermarks(bundle.Watermarks, validation, packet.Freshness.AsOf)
 	visible, hidden := displayableEvidence(bundle.Evidence)
 	bundle.Evidence = visible
 	bundle.Unavailable = append(bundle.Unavailable, hidden...)
 	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), warnings(bundle)
+	applyEvidenceQuarantine(&packet, validation)
 	rankingStarted := a.options.Now()
 	rankingContext, completeRankingTrace := a.startTrace(ctx, TraceObservation{Stage: TraceStageRanking})
 	ranked, quotaTruncated := rankEvidence(bundle.Evidence, scope, request.Goal, request.Options.IncludeLowConfidence, request.Options.RequestedCategories, request.Options.MaxItems)
@@ -124,7 +125,7 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	if err := finalizePacket(&packet); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
-	setStatus(&packet, bundle, len(ranked))
+	setStatus(&packet, len(ranked))
 	if err := finalizePacket(&packet); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
@@ -170,7 +171,7 @@ func (a *Assembler) degraded(ctx context.Context, packet contractsv1.ContextPack
 		reason = "invalid_evidence_handle"
 		summary = "Evidence was retrieved but could not be addressed for the requested goal."
 	case errors.As(cause, &rowErr):
-		reason = "evidence_data_invalid:" + rowErr.safeSource() + ":" + evidenceRuleCode(rowErr.Rule)
+		reason = rowErr.reason()
 		summary = "Evidence was retrieved but failed validation for the requested goal."
 	}
 	packet.Coverage.DegradedReasons, packet.Warnings, packet.Summary = []string{reason}, []string{reason}, summary

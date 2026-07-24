@@ -35,12 +35,12 @@ func requestedCategories(items []contractsv1.ContextPacketItem, requested []cont
 	}
 	return out
 }
-func setStatus(packet *contractsv1.ContextPacket, bundle storage.EvidenceBundle, candidateCount int) {
+func setStatus(packet *contractsv1.ContextPacket, candidateCount int) {
 	if len(packet.Items) == 0 {
 		if candidateCount > 0 {
 			packet.Status = contractsv1.PacketPartial
 			packet.Warnings = append(packet.Warnings, "context_filtered_or_truncated")
-		} else if len(bundle.Unavailable) > 0 {
+		} else if packet.Coverage.Partial {
 			packet.Status = contractsv1.PacketDegraded
 		} else {
 			packet.Status = contractsv1.PacketEmpty
@@ -48,7 +48,7 @@ func setStatus(packet *contractsv1.ContextPacket, bundle storage.EvidenceBundle,
 		}
 		return
 	}
-	if len(bundle.Unavailable) > 0 || packet.Budget.Truncated {
+	if packet.Coverage.Partial || packet.Budget.Truncated {
 		packet.Status = contractsv1.PacketPartial
 	} else {
 		packet.Status = contractsv1.PacketComplete
@@ -101,13 +101,32 @@ func evidenceRuleCode(rule string) string {
 	}
 }
 
-func validateEvidenceBundle(evidence []contractsv1.EvidenceRef) error {
+func (e *evidenceRowError) reason() string {
+	return "evidence_data_invalid:" + e.safeSource() + ":" + evidenceRuleCode(e.Rule)
+}
+
+type evidenceValidation struct {
+	valid                       []contractsv1.EvidenceRef
+	quarantined                 []*evidenceRowError
+	quarantinedWatermarkSources []string
+}
+
+func validateEvidenceBundle(evidence []contractsv1.EvidenceRef) evidenceValidation {
+	result := evidenceValidation{valid: make([]contractsv1.EvidenceRef, 0, len(evidence))}
 	for _, ref := range evidence {
 		if err := validateEvidence(ref); err != nil {
-			return fmt.Errorf("validate retrieved evidence: %w", &evidenceRowError{SourceVersion: ref.SourceVersion, Rule: err.Error()})
+			result.quarantined = append(result.quarantined, &evidenceRowError{SourceVersion: ref.SourceVersion, Rule: err.Error()})
+			if evidenceString(ref.Source.System, 1, 100) {
+				result.quarantinedWatermarkSources = append(result.quarantinedWatermarkSources, ref.Source.System)
+			}
+			if _, recognized := evidenceSourceCodes[ref.SourceVersion]; recognized {
+				result.quarantinedWatermarkSources = append(result.quarantinedWatermarkSources, ref.SourceVersion)
+			}
+			continue
 		}
+		result.valid = append(result.valid, ref)
 	}
-	return nil
+	return result
 }
 func coverage(b storage.EvidenceBundle) contractsv1.Coverage {
 	considered, available := []string{}, []string{}
