@@ -34,7 +34,7 @@ Trust does not transfer across an arrow automatically:
 - `acr-mcp` does not make evidence trustworthy. It must not execute retrieved instructions and must keep write tools disabled unless the user explicitly enables them.
 - `acr-api` derives organization identity, repositories, permissions, and product entitlement from authenticated server context. Request bodies cannot override them.
 - A trusted web assertion and an ACR client credential are distinct authentication paths. A Dev Health license artifact is never an ACR bearer credential.
-- Every opaque packet, evidence, and episode lookup rechecks organization and repository authorization. A denied explicit repository selector may return `repo_forbidden`; a foreign, deleted, or unknown opaque object must use the same generic not-found response so existence is not disclosed.
+- Every opaque packet, evidence, and episode lookup rechecks organization and repository authorization. Incident evidence reaches a repository only through an active service-to-repository mapping; unmapped and foreign incidents are not disclosed. A denied explicit repository selector may return `repo_forbidden`; a foreign, deleted, or unknown opaque object must use the same generic not-found response so existence is not disclosed.
 - ClickHouse is read-only evidence. ACR Postgres owns operational state. Neither path uses External Push.
 - ACR's CodeGraph integration is direct/managed guarded: it consumes an existing
   local index through fixed read-only JSON commands only. It never installs,
@@ -112,7 +112,7 @@ CHAOS-2904 and CHAOS-2917 implement these rules without changing v1 wire semanti
 
 ## Residency disclosure
 
-- The repository fixes storage roles, not geographic regions: ClickHouse holds read-only engineering evidence and ACR Postgres holds operational state.
+- The repository fixes storage roles, not geographic regions: ClickHouse holds read-only engineering evidence, including service-to-repository associations used to scope incidents, and ACR Postgres holds operational state.
 - The actual region, subprocessors, backups, replicas, and cross-region transfer behavior are deployment facts. Production deployment documentation must disclose them before customer use; this document does not invent a region.
 - `acr-mcp` reads a credential from `ACR_API_TOKEN` (works on every supported platform) or from the caller-selected `ACR_API_TOKEN_FILE`. Token-file (and CA-bundle) loading is supported only on macOS and Linux, where it checks restrictive file permissions; on every other platform, including Windows, it fails closed and refuses to load the file at all. It does not create or manage a home-directory credential file.
 - The sidecar must not persist packets, episode payloads, or raw transcripts locally.
