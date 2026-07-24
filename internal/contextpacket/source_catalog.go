@@ -3,6 +3,7 @@ package contextpacket
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sort"
 	"time"
 
@@ -36,6 +37,8 @@ type CatalogResult struct {
 	Unavailable []contractsv1.UnavailableSource
 }
 
+const repositoryWideSourceLabelSuffix = " (repository-wide)"
+
 func catalogSourceQuery(id string) *SourceQuery {
 	for index := range SourceQueryCatalogV1 {
 		if SourceQueryCatalogV1[index].ID == id {
@@ -58,12 +61,8 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 		if err := ctx.Err(); err != nil {
 			return CatalogResult{}, err
 		}
-		if plan.Branch != "" && query.Scope == EvidenceScopeRepo {
-			result.Unavailable = append(result.Unavailable, contractsv1.UnavailableSource{Source: query.ID, Reason: "repo_fallback_branch_not_supported"})
-			continue
-		}
-		if plan.CommitSHA == "" && query.Scope == EvidenceScopeCommit {
-			result.Unavailable = append(result.Unavailable, contractsv1.UnavailableSource{Source: query.ID, Reason: "commit_scope_not_requested"})
+		if reason := catalogScopeUnavailableReason(query, plan); reason != "" {
+			result.Unavailable = append(result.Unavailable, contractsv1.UnavailableSource{Source: query.ID, Reason: reason})
 			continue
 		}
 		started := time.Now()
@@ -83,12 +82,39 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 		}
 		for index := range rows {
 			rows[index].SourceVersion = query.ID
+			if plan.Branch != "" && query.Scope == EvidenceScopeRepo {
+				rows[index].Source.DisplayLabel += repositoryWideSourceLabelSuffix
+				rows[index].Metadata = withRepositoryWideScope(rows[index].Metadata)
+			}
 		}
 		result.Evidence = append(result.Evidence, rows...)
 	}
 	result.Unavailable = appendMissingCatalogSources(result.Unavailable, result.Evidence)
 	result.Watermarks = catalogWatermarks(plan, result.Evidence, result.Unavailable)
 	return result, nil
+}
+
+func catalogScopeUnavailableReason(query SourceQuery, plan ReadPlan) string {
+	if plan.CommitSHA != "" || query.Scope != EvidenceScopeCommit {
+		return ""
+	}
+	if querySupportsRepoWideRead(query.ID) {
+		return ""
+	}
+	return "commit_scope_not_requested"
+}
+
+func querySupportsRepoWideRead(id string) bool {
+	// Both statements use `({commit_sha:String} = '' OR ...)`, so an empty
+	// commit_sha deliberately selects repository-wide evidence.
+	return id == "git_commits.v1" || id == "git_commit_files.v1"
+}
+
+func withRepositoryWideScope(metadata map[string]any) map[string]any {
+	result := make(map[string]any, len(metadata)+1)
+	maps.Copy(result, metadata)
+	result["scope_breadth"] = "repository-wide"
+	return result
 }
 
 func appendMissingCatalogSources(unavailable []contractsv1.UnavailableSource, evidence []contractsv1.EvidenceRef) []contractsv1.UnavailableSource {
