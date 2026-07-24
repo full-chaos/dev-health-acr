@@ -10,13 +10,51 @@ import (
 )
 
 func TestSourceCatalog_joins_repositories_for_raw_evidence_tables(t *testing.T) {
-	for _, id := range []string{"git_commits.v1", "git_commit_files.v1", "pull_requests.v1", "pull_request_reviews.v1", "ci_pipeline_runs.v1", "deployments.v1", "incidents.v1"} {
+	for _, id := range []string{"git_commits.v1", "git_commit_files.v1", "pull_requests.v1", "pull_request_reviews.v1", "ci_pipeline_runs.v1", "deployments.v1"} {
 		query := catalogQuery(t, id)
 		for _, predicate := range []string{"INNER JOIN repos AS repo FINAL", "repo.org_id = {org_id:String}", "repo.id = {repo_id:UUID}"} {
 			if !strings.Contains(query.Statement, predicate) {
 				t.Fatalf("%s missing %q", id, predicate)
 			}
 		}
+	}
+}
+
+func TestSourceCatalog_readsCanonicalOperationalIncidents(t *testing.T) {
+	// Given
+	query := catalogQuery(t, "incidents.v1")
+
+	// Then
+	for _, projection := range []string{
+		"FROM operational_incidents AS i FINAL",
+		"INNER JOIN operational_service_repository_mappings AS m FINAL ON i.org_id = m.org_id AND i.service_id = m.service_id",
+		"i.org_id = {org_id:String}",
+		"m.org_id = {org_id:String}",
+		"m.repo_id = {repo_id:UUID}",
+		"m.is_active = 1",
+		"m.valid_from <= coalesce({as_of:Nullable(DateTime64(3, 'UTC'))}, now64(6))",
+		"(m.valid_to IS NULL OR m.valid_to > coalesce({as_of:Nullable(DateTime64(3, 'UTC'))}, now64(6)))",
+		"i.is_deleted = 0",
+		"i.id entity_id",
+		"i.title display_label",
+		"ifNull(i.source_url, '') safe_uri",
+		"coalesce(i.started_at, i.source_event_at, i.observed_at) observed_at",
+	} {
+		if !strings.Contains(query.Statement, projection) {
+			t.Fatalf("incidents.v1 missing canonical operational projection %q: %s", projection, query.Statement)
+		}
+	}
+	if strings.Contains(query.Statement, "FROM incidents AS i") || strings.Contains(query.Statement, "i.repo_id") {
+		t.Fatalf("incidents.v1 uses retired incident storage or unavailable repository column: %s", query.Statement)
+	}
+	if !strings.Contains(query.Statement, "LIMIT 1 BY m.repo_id, i.id") {
+		t.Fatalf("incidents.v1 does not deduplicate mapped incidents per repository: %s", query.Statement)
+	}
+	if !strings.Contains(query.Statement, "greatest(0, least(1, coalesce(m.relationship_confidence, i.relationship_confidence, 1.0))) confidence") {
+		t.Fatalf("incidents.v1 does not clamp mapping confidence: %s", query.Statement)
+	}
+	if !strings.Contains(query.Statement, "ORDER BY m.repo_id, i.id, m.relationship_confidence DESC, i.last_synced DESC, m.id ASC") {
+		t.Fatalf("incidents.v1 does not deterministically prefer the highest-confidence mapping: %s", query.Statement)
 	}
 }
 
@@ -43,6 +81,14 @@ func TestSourceCatalog_exports_standard_evidence_columns(t *testing.T) {
 			if strings.Count(query.Statement, alias) < 2 {
 				t.Fatalf("%s missing projection alias %q: %s", query.ID, alias, query.Statement)
 			}
+		}
+	}
+}
+
+func TestSourceCatalog_normalizes_confidence_to_float64(t *testing.T) {
+	for _, query := range contextpacket.SourceQueryCatalogV1 {
+		if !strings.Contains(query.Statement, "toFloat64(confidence) confidence") {
+			t.Fatalf("%s does not normalize confidence to Float64: %s", query.ID, query.Statement)
 		}
 	}
 }
