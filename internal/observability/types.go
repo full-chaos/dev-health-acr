@@ -205,6 +205,12 @@ type EvidenceObservation struct {
 	SourceCoverage SourceCoverage
 }
 
+type EvidenceQuarantineObservation struct {
+	Source   string
+	RuleCode string
+	Count    int64
+}
+
 type EpisodeObservation struct {
 	Outcome        Outcome
 	EpisodeOutcome EpisodeOutcome
@@ -240,4 +246,7 @@ type SupportSnapshot struct {
 	Denial                DenialClass
 	EpisodeOutcome        EpisodeOutcome
 	AuditDelivery         AuditDelivery
+	EvidenceSource        string
+	EvidenceRuleCode      string
+	QuarantinedRows       int64
 }

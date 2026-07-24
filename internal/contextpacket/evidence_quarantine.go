@@ -1,6 +1,7 @@
 package contextpacket
 
 import (
+	"sort"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -65,4 +66,46 @@ func applyEvidenceQuarantine(packet *contractsv1.ContextPacket, validation evide
 	if len(validation.valid) == 0 {
 		packet.Summary = "Evidence was retrieved but failed validation for the requested goal."
 	}
+}
+
+func evidenceQuarantineObservations(validation evidenceValidation) []EvidenceQuarantineObservation {
+	counts := make(map[EvidenceQuarantineObservation]int, len(validation.quarantined))
+	for _, rowErr := range validation.quarantined {
+		observation := EvidenceQuarantineObservation{
+			Source:   rowErr.safeSource(),
+			RuleCode: evidenceRuleCode(rowErr.Rule),
+		}
+		counts[observation]++
+	}
+	observations := make([]EvidenceQuarantineObservation, 0, len(counts))
+	for observation, count := range counts {
+		observation.Count = count
+		observations = append(observations, observation)
+	}
+	sort.Slice(observations, func(i, j int) bool {
+		if observations[i].Source == observations[j].Source {
+			return observations[i].RuleCode < observations[j].RuleCode
+		}
+		return observations[i].Source < observations[j].Source
+	})
+	return observations
+}
+
+func safeEvidenceQuarantineSource(source string) string {
+	if _, ok := evidenceSourceCodes[source]; ok {
+		return source
+	}
+	return "unknown_source"
+}
+
+// NormalizeEvidenceQuarantineObservation prevents callers of the observability
+// seam from reflecting arbitrary source or rule values into telemetry.
+func NormalizeEvidenceQuarantineObservation(observation EvidenceQuarantineObservation) EvidenceQuarantineObservation {
+	observation.Source = safeEvidenceQuarantineSource(observation.Source)
+	switch observation.RuleCode {
+	case "invalid_shape", "invalid_confidence", "invalid_provenance", "invalid_availability":
+	default:
+		observation.RuleCode = "invalid_other"
+	}
+	return observation
 }

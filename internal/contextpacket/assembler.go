@@ -112,6 +112,7 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	bundle.Unavailable = append(bundle.Unavailable, hidden...)
 	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), warnings(bundle)
 	applyEvidenceQuarantine(&packet, validation)
+	a.observeEvidenceQuarantines(ctx, validation)
 	rankingStarted := a.options.Now()
 	rankingContext, completeRankingTrace := a.startTrace(ctx, TraceObservation{Stage: TraceStageRanking})
 	ranked, quotaTruncated := rankEvidence(bundle.Evidence, scope, request.Goal, request.Options.IncludeLowConfidence, request.Options.RequestedCategories, request.Options.MaxItems)
