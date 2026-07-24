@@ -96,8 +96,16 @@ jobs:
           driver-opts: image=moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1
           # yamllint enable rule:line-length
           cache-binary: false
-      - name: Verify mutable tags still resolve to reviewed digests
-        run: make container-pins
+      # `make container-pins` is deliberately not run here. It resolved each reviewed tag over
+      # the network and failed when the digest had moved — but the Dockerfile and the compose
+      # files pin every image by digest, so a moved tag cannot change what is built. It
+      # protected nothing and failed on upstream's release cadence: ten of the reviewed
+      # references are on tags that move by design (`:latest`, `nonroot`, and rolling series
+      # like `postgres:17-alpine`). A red gate that fires for a reason unrelated to the change
+      # under review trains reviewers to click through, which costs more than the signal was
+      # worth. The pin list itself is still load-bearing and still enforced offline:
+      # scripts/e2e/test-compose.sh requires every compose image to appear in it, which is what
+      # keeps an unreviewed image out of the stack.
       - name: Validate container contract and native runtime smoke tests
         run: make container-test
       - name: Rebuild the clean commit reproducibly

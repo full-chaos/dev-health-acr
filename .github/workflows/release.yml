@@ -153,7 +153,9 @@ jobs:
           CONTAINER_SCAN_OCI_ROOT: .tmp/container-oci
         run: |
           set -euo pipefail
-          make container-pins
+          # container-pins is not run: it resolved reviewed tags over the network and failed
+          # whenever upstream moved one, which cannot affect a release whose images are all
+          # digest-pinned. See the note in ci.yml.
           make container-oci
           make container-scan
       - name: Stage container release artifacts

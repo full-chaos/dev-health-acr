@@ -73,7 +73,15 @@ manifests, change the tag and digest together, and record upstream review in
 the PR. For actions, resolve a reviewed release to its full commit SHA. Then
 run all gates below. Never substitute a digest from memory or retain an old
 digest under a new tag. `make container-pins` resolves every reviewed OCI tag
-and rejects tag/digest drift. The Trivy database is a deliberately immutable
+and reports tag/digest drift. It is an on-demand command, deliberately not a CI
+gate: every image is pinned by digest in the Dockerfile and the compose files,
+so a moved tag cannot change what is built, and ten of the reviewed references
+sit on tags that move by design (`:latest`, `nonroot`, rolling series such as
+`postgres:17-alpine`). Gating on it produced red builds on upstream's release
+cadence rather than on anything under review. Run it when you want to know
+whether a newer image exists. What still gates, offline and without flaking, is
+the pin list itself: `scripts/e2e/test-compose.sh` requires every compose image
+to appear in it, so an unreviewed image cannot enter the stack. The Trivy database is a deliberately immutable
 snapshot rather than a stable release tag: refresh its manifest and layer
 digests together at least weekly, confirm `metadata.json` age and chronology,
 and retain the snapshot identity beside the scan reports.
