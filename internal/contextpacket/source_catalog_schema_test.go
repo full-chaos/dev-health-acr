@@ -75,6 +75,72 @@ func TestSourceCatalog_compares_uuid_organizations_as_strings(t *testing.T) {
 	}
 }
 
+func TestSourceCatalog_uses_exact_reviewed_provenance_mapping_per_source(t *testing.T) {
+	tests := []struct {
+		name            string
+		sourceID        string
+		expectedMapping string
+	}{
+		{
+			name:            "AI workflow artifact aliases and native evidence",
+			sourceID:        "ai_workflow_artifacts.v1",
+			expectedMapping: "multiIf(source = 'pr_body', 'explicit_text', source = 'branch_name', 'heuristic', source = 'native', 'native', '') provenance",
+		},
+		{
+			name:            "AI review native evidence",
+			sourceID:        "ai_review_outcomes.v1",
+			expectedMapping: "multiIf(source = 'native', 'native', '') provenance",
+		},
+		{
+			name:            "deployment incident native and inferred evidence",
+			sourceID:        "deployment_incident_provenance.v1",
+			expectedMapping: "multiIf(source = 'native', 'native', source = 'heuristic', 'heuristic', '') provenance",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// When
+			statement := catalogQuery(t, tt.sourceID).Statement
+
+			// Then
+			if strings.Count(statement, "multiIf(source =") != 1 || !strings.Contains(statement, tt.expectedMapping) {
+				t.Fatalf("%s does not use exact reviewed provenance mapping %q: %s", tt.sourceID, tt.expectedMapping, statement)
+			}
+		})
+	}
+}
+
+func TestSourceCatalog_leaves_unknown_raw_provenance_invalid(t *testing.T) {
+	for _, sourceID := range []string{"ai_workflow_artifacts.v1", "ai_review_outcomes.v1", "deployment_incident_provenance.v1"} {
+		t.Run(sourceID, func(t *testing.T) {
+			// When
+			statement := catalogQuery(t, sourceID).Statement
+
+			// Then
+			if !strings.Contains(statement, ", '') provenance") {
+				t.Fatalf("%s does not end its provenance mapping with an invalid fallback: %s", sourceID, statement)
+			}
+			if strings.Contains(statement, "source provenance") {
+				t.Fatalf("%s still projects untrusted raw provenance: %s", sourceID, statement)
+			}
+		})
+	}
+}
+
+func TestSourceCatalog_incidents_does_not_launder_unknown_provenance_as_native(t *testing.T) {
+	// When
+	statement := catalogQuery(t, "incidents.v1").Statement
+
+	// Then
+	expectedMapping := "multiIf(m.relationship_provenance = 'bounded_service_repository_heuristic', 'heuristic', m.relationship_provenance IN ('native', 'native_repository_context', 'admin_configuration', 'pagerduty_service_metadata', 'compass_service_catalog'), 'native', m.relationship_provenance IN ('explicit_text', 'heuristic', 'derived'), m.relationship_provenance, '') provenance"
+	if strings.Count(statement, "multiIf(m.relationship_provenance") != 1 || !strings.Contains(statement, expectedMapping) {
+		t.Fatalf("incidents.v1 does not use exact fail-invalid relationship provenance mapping %q: %s", expectedMapping, statement)
+	}
+	if strings.Contains(statement, "isNull(m.relationship_provenance)") || strings.Contains(statement, "m.relationship_provenance = '', 'native'") {
+		t.Fatalf("incidents.v1 still launders absent relationship provenance as native: %s", statement)
+	}
+}
+
 func TestSourceCatalog_exports_standard_evidence_columns(t *testing.T) {
 	for _, query := range contextpacket.SourceQueryCatalogV1 {
 		for _, alias := range []string{" evidence_ref_id", " system", " entity_type", " entity_id", " display_label", " safe_uri", " provenance", " confidence", " citation", " observed_at"} {
