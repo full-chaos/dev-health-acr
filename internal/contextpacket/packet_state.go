@@ -77,10 +77,7 @@ func (e *evidenceRowError) Error() string {
 // reflect untrusted input straight back into the response. Unrecognized values
 // collapse to a fixed token.
 func (e *evidenceRowError) safeSource() string {
-	if _, ok := evidenceSourceCodes[e.SourceVersion]; ok {
-		return e.SourceVersion
-	}
-	return "unknown_source"
+	return safeEvidenceQuarantineSource(e.SourceVersion)
 }
 
 // evidenceRuleCode maps validateEvidence's fixed messages to stable, bounded

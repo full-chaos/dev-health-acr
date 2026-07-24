@@ -102,6 +102,31 @@ func TestHooksScrubUnknownHighCardinalityDimensions(t *testing.T) {
 	}
 }
 
+func TestHooksScrubUnsafeEvidenceQuarantineDimensions(t *testing.T) {
+	// Given
+	const secret = "Bearer raw-license-and-evidence-secret"
+	sink := &snapshotSink{}
+	hooks := NewHooks(sink, nil)
+
+	// When
+	hooks.ObserveEvidenceQuarantine(context.Background(), EvidenceQuarantineObservation{
+		Source: secret, RuleCode: secret, Count: 2,
+	})
+
+	// Then
+	snapshots := sink.all()
+	if got, want := len(snapshots), 1; got != want {
+		t.Fatalf("snapshot count = %d, want %d", got, want)
+	}
+	snapshot := snapshots[0]
+	if snapshot.EvidenceSource != "unknown_source" || snapshot.EvidenceRuleCode != "invalid_other" || snapshot.QuarantinedRows != 2 {
+		t.Fatalf("quarantine snapshot = %#v", snapshot)
+	}
+	if serialized := fmt.Sprintf("%#v", snapshot); strings.Contains(serialized, secret) {
+		t.Fatalf("quarantine snapshot leaked unsafe value: %q", serialized)
+	}
+}
+
 func TestHooksReplaceUnsafeRequestID(t *testing.T) {
 	t.Parallel()
 
