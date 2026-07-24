@@ -41,14 +41,42 @@ env:
   PROVIDER_NPM_SPEC: "@ai-sdk/openai-compatible@3.0.14"
 
 jobs:
+  # This gate boots the product slice, so it needs a token that can read the private sibling
+  # repository. Without one, actions/checkout fails with "Input required and not supplied:
+  # token" — which names neither the missing secret nor the repository it was for. Both jobs
+  # below are gated on this check instead, so an unconfigured repository reports a skip with an
+  # actionable message rather than a red X with a cryptic cause. The `secrets` context is not
+  # available in a job-level `if`, which is why this is a job rather than a condition.
+  preflight:
+    name: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      product_repo_readable: ${{ steps.token.outputs.present }}
+    steps:
+      - id: token
+        env:
+          PRODUCT_REPO_TOKEN: ${{ secrets.DEV_HEALTH_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${PRODUCT_REPO_TOKEN:-}" ]]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo "::warning title=Full-stack acceptance skipped::DEV_HEALTH_REPO_TOKEN is not configured on this repository, so full-chaos/dev-health cannot be checked out and the gate cannot boot the product slice. Add a repository secret holding a token with read access to that repository to enable it."
+          fi
+
   compose:
     name: compose acceptance
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    # A fork PR has no access to the private sibling repository.
+    needs: preflight
+    # A fork PR has no access to the private sibling repository, and neither does a repository
+    # without the token secret configured.
     if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      needs.preflight.outputs.product_repo_readable == 'true' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -189,7 +217,9 @@ jobs:
     name: web agreement (contract paths)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    needs: preflight
     if: >-
+      needs.preflight.outputs.product_repo_readable == 'true' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
