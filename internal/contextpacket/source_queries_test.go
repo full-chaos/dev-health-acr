@@ -49,7 +49,7 @@ func TestGitCommitsSourceQuery_usesCommitHashWhenMessageExceedsEvidenceBounds(t 
 	}
 }
 
-func TestFileHotspotsSourceQuery_clampsConfidenceToEvidenceBounds(t *testing.T) {
+func TestFileHotspotsSourceQuery_usesDirectFactConfidenceAndKeepsMeasuresInCitation(t *testing.T) {
 	// Given
 	var hotspotQuery contextpacket.SourceQuery
 	for _, query := range contextpacket.SourceQueryCatalogV1 {
@@ -60,11 +60,12 @@ func TestFileHotspotsSourceQuery_clampsConfidenceToEvidenceBounds(t *testing.T) 
 	}
 
 	// When
-	confidenceIsClamped := strings.Contains(hotspotQuery.Statement, "greatest(0, least(argMax(risk_score, day) / 100.0, 1.0)) confidence")
+	const directFactConfidence = "1.0 confidence, concat('churn=', toString(argMax(churn_loc_30d, day)), ', complexity=', toString(argMax(cyclomatic_total, day))) citation"
+	usesDirectFactConfidence := strings.Contains(hotspotQuery.Statement, directFactConfidence)
 
 	// Then
-	if !confidenceIsClamped {
-		t.Fatal("file_hotspots.v1 must clamp confidence to the evidence contract bounds")
+	if !usesDirectFactConfidence {
+		t.Fatal("file_hotspots.v1 must use direct-fact confidence and retain hotspot measures in its citation")
 	}
 }
 
