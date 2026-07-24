@@ -7,6 +7,8 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
 type Sink interface {
@@ -115,6 +117,17 @@ func (h Hooks) ObserveEvidence(ctx context.Context, observation EvidenceObservat
 	snapshot := baseSnapshot(KindEvidence, observation.Outcome, observation.Duration)
 	snapshot.SourceFallback = normalizeSourceFallback(observation.SourceFallback)
 	snapshot.SourceCoverage = normalizeSourceCoverage(observation.SourceCoverage)
+	h.record(ctx, snapshot)
+}
+
+func (h Hooks) ObserveEvidenceQuarantine(ctx context.Context, observation EvidenceQuarantineObservation) {
+	safe := contextpacket.NormalizeEvidenceQuarantineObservation(contextpacket.EvidenceQuarantineObservation{
+		Source: observation.Source, RuleCode: observation.RuleCode,
+	})
+	snapshot := baseSnapshot(KindEvidence, OutcomeSuccess, 0)
+	snapshot.EvidenceSource = safe.Source
+	snapshot.EvidenceRuleCode = safe.RuleCode
+	snapshot.QuarantinedRows = nonNegative(observation.Count)
 	h.record(ctx, snapshot)
 }
 

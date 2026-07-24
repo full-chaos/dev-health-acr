@@ -65,10 +65,23 @@ type PacketObservation struct {
 	VersionMismatch    bool
 }
 
+// EvidenceQuarantineObservation reports rows excluded by validation. Source and
+// RuleCode are produced only by evidenceRowError's bounded safe-source and
+// rule-code mappings.
+type EvidenceQuarantineObservation struct {
+	Source   string
+	RuleCode string
+	Count    int
+}
+
 type AssemblyObserver interface {
 	ObserveStoreQuery(context.Context, StoreQueryObservation)
 	ObserveRanking(context.Context, RankingObservation)
 	ObservePacket(context.Context, PacketObservation)
+}
+
+type EvidenceQuarantineObserver interface {
+	ObserveEvidenceQuarantine(context.Context, EvidenceQuarantineObservation)
 }
 
 func operationOutcome(err error) OperationOutcome {
@@ -145,4 +158,17 @@ func (a *Assembler) observePacket(ctx context.Context, request contractsv1.Conte
 		StaleSources: staleSources, UnavailableSources: len(packet.Coverage.SourcesUnavailable),
 		Compatibility: compatibility, VersionMismatch: versionMismatch,
 	})
+}
+
+func (a *Assembler) observeEvidenceQuarantines(ctx context.Context, validation evidenceValidation) {
+	observer, ok := a.options.Observer.(EvidenceQuarantineObserver)
+	if !ok {
+		return
+	}
+	for _, observation := range evidenceQuarantineObservations(validation) {
+		func() {
+			defer func() { _ = recover() }()
+			observer.ObserveEvidenceQuarantine(ctx, observation)
+		}()
+	}
 }

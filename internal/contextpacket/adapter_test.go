@@ -65,7 +65,7 @@ func TestAssembler_propagates_cancelled_context(t *testing.T) {
 	}
 }
 
-func TestExecuteCatalog_skips_repo_scope_sources_when_branch_is_requested(t *testing.T) {
+func TestExecuteCatalog_runs_repo_scope_sources_when_branch_is_requested(t *testing.T) {
 	plan, err := contextpacket.BuildReadPlanV1(fixturePrincipal(), fixtureRequest("req-query", "main", "abc123"))
 	if err != nil {
 		t.Fatalf("build plan: %v", err)
@@ -76,17 +76,26 @@ func TestExecuteCatalog_skips_repo_scope_sources_when_branch_is_requested(t *tes
 	if err != nil {
 		t.Fatalf("execute catalog: %v", err)
 	}
+	repoQueries := 0
 	for index, bindings := range executor.bindings {
 		if executor.queries[index].Scope == contextpacket.EvidenceScopeRepo {
-			t.Fatalf("branch scope executed repo-wide source %s", executor.queries[index].ID)
+			repoQueries++
 		}
 		if bindings[0].Name != "org_id" || bindings[0].Value != "org-fixture" || bindings[1].Name != "repo_id" || bindings[1].Value != plan.RepoID {
 			t.Fatalf("query %s was not independently org and repo scoped: %#v", executor.queries[index].ID, bindings)
 		}
 	}
+	if repoQueries == 0 {
+		t.Fatal("branch scope did not execute any repository-wide source")
+	}
 	for _, query := range contextpacket.SourceQueryCatalogV1 {
-		if query.Scope == contextpacket.EvidenceScopeRepo && (!containsUnavailable(result.Unavailable, query.ID, "repo_fallback_branch_not_supported") || watermarkStatus(result.Watermarks, query.ID) != "unavailable") {
-			t.Fatalf("branch scope did not classify %s as unavailable: %#v %#v", query.ID, result.Unavailable, result.Watermarks)
+		if query.Scope == contextpacket.EvidenceScopeRepo {
+			if containsUnavailable(result.Unavailable, query.ID, "repo_fallback_branch_not_supported") {
+				t.Fatalf("branch scope excluded reachable source %s: %#v", query.ID, result.Unavailable)
+			}
+			if watermarkStatus(result.Watermarks, query.ID) != "missing" {
+				t.Fatalf("watermark source = %q, want pure source ID %q with missing status", query.ID, query.ID)
+			}
 		}
 	}
 }

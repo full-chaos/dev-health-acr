@@ -60,6 +60,12 @@ func (o assemblyObserver) ObservePacket(ctx context.Context, observation context
 	})
 }
 
+func (o assemblyObserver) ObserveEvidenceQuarantine(ctx context.Context, observation contextpacket.EvidenceQuarantineObservation) {
+	o.hooks.ObserveEvidenceQuarantine(ctx, EvidenceQuarantineObservation{
+		Source: observation.Source, RuleCode: observation.RuleCode, Count: int64(observation.Count),
+	})
+}
+
 func assemblyCompatibility(compatibility contextpacket.CompatibilityOutcome) CompatibilityStatus {
 	switch compatibility {
 	case contextpacket.CompatibilityCompatible:

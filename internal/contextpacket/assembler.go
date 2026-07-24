@@ -104,13 +104,15 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	if bundle.QueryVersion != "" {
 		packet.QueryVersion = bundle.QueryVersion
 	}
-	if err := validateEvidenceBundle(bundle.Evidence); err != nil {
-		return a.degraded(ctx, packet, principal, request, err)
-	}
+	validation := validateEvidenceBundle(bundle.Evidence)
+	bundle.Evidence = validation.valid
+	bundle.Watermarks = validatedEvidenceWatermarks(bundle.Watermarks, validation, packet.Freshness.AsOf)
 	visible, hidden := displayableEvidence(bundle.Evidence)
 	bundle.Evidence = visible
 	bundle.Unavailable = append(bundle.Unavailable, hidden...)
 	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), warnings(bundle)
+	applyEvidenceQuarantine(&packet, validation)
+	a.observeEvidenceQuarantines(ctx, validation)
 	rankingStarted := a.options.Now()
 	rankingContext, completeRankingTrace := a.startTrace(ctx, TraceObservation{Stage: TraceStageRanking})
 	ranked, quotaTruncated := rankEvidence(bundle.Evidence, scope, request.Goal, request.Options.IncludeLowConfidence, request.Options.RequestedCategories, request.Options.MaxItems)
@@ -124,7 +126,7 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	if err := finalizePacket(&packet); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
-	setStatus(&packet, bundle, len(ranked))
+	setStatus(&packet, len(ranked))
 	if err := finalizePacket(&packet); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
@@ -152,13 +154,28 @@ func (a *Assembler) degraded(ctx context.Context, packet contractsv1.ContextPack
 	}
 	packet.Status = contractsv1.PacketDegraded
 	packet.Coverage.Partial = true
+	// Classify the cause into a bounded, fixed vocabulary. The generic default
+	// collapsed every distinct failure into one reason, which made a malformed
+	// evidence row indistinguishable from a genuine retrieval outage and left the
+	// actual culprit undiagnosable without a rebuild. Every branch below emits
+	// only fixed tokens plus a catalog source ID -- never row content, SQL,
+	// bindings, or credentials.
 	reason := "evidence_retrieval_unavailable"
-	if errors.Is(cause, ErrEvidenceScopeMismatch) {
+	summary := "Evidence retrieval did not complete for the requested goal."
+	var rowErr *evidenceRowError
+	switch {
+	case errors.Is(cause, ErrEvidenceScopeMismatch):
 		reason = "evidence_scope_mismatch"
-	} else if errors.Is(cause, context.DeadlineExceeded) {
+	case errors.Is(cause, context.DeadlineExceeded):
 		reason = "evidence_retrieval_timed_out"
+	case errors.Is(cause, ErrInvalidEvidenceID):
+		reason = "invalid_evidence_handle"
+		summary = "Evidence was retrieved but could not be addressed for the requested goal."
+	case errors.As(cause, &rowErr):
+		reason = rowErr.reason()
+		summary = "Evidence was retrieved but failed validation for the requested goal."
 	}
-	packet.Coverage.DegradedReasons, packet.Warnings, packet.Summary = []string{reason}, []string{reason}, "Evidence retrieval did not complete for the requested goal."
+	packet.Coverage.DegradedReasons, packet.Warnings, packet.Summary = []string{reason}, []string{reason}, summary
 	if err := finalizePacket(&packet); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}

@@ -46,6 +46,14 @@ func NewSlogSink(logger *slog.Logger) SlogSink {
 }
 
 func (s SlogSink) Record(snapshot SupportSnapshot) {
+	if snapshot.QuarantinedRows > 0 {
+		s.logger.Warn("evidence rows quarantined",
+			"source", snapshot.EvidenceSource,
+			"rule_code", snapshot.EvidenceRuleCode,
+			"dropped_rows", snapshot.QuarantinedRows,
+		)
+		return
+	}
 	s.logger.Info("observability snapshot",
 		"kind", snapshot.Kind,
 		"request_id", snapshot.RequestID,

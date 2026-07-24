@@ -35,12 +35,12 @@ func requestedCategories(items []contractsv1.ContextPacketItem, requested []cont
 	}
 	return out
 }
-func setStatus(packet *contractsv1.ContextPacket, bundle storage.EvidenceBundle, candidateCount int) {
+func setStatus(packet *contractsv1.ContextPacket, candidateCount int) {
 	if len(packet.Items) == 0 {
 		if candidateCount > 0 {
 			packet.Status = contractsv1.PacketPartial
 			packet.Warnings = append(packet.Warnings, "context_filtered_or_truncated")
-		} else if len(bundle.Unavailable) > 0 {
+		} else if packet.Coverage.Partial {
 			packet.Status = contractsv1.PacketDegraded
 		} else {
 			packet.Status = contractsv1.PacketEmpty
@@ -48,20 +48,82 @@ func setStatus(packet *contractsv1.ContextPacket, bundle storage.EvidenceBundle,
 		}
 		return
 	}
-	if len(bundle.Unavailable) > 0 || packet.Budget.Truncated {
+	if packet.Coverage.Partial || packet.Budget.Truncated {
 		packet.Status = contractsv1.PacketPartial
 	} else {
 		packet.Status = contractsv1.PacketComplete
 	}
 }
 
-func validateEvidenceBundle(evidence []contractsv1.EvidenceRef) error {
+// evidenceRowError identifies WHICH source emitted an invalid evidence row and
+// WHICH validation rule it broke. Rule is one of validateEvidence's fixed
+// messages and is always safe to surface. SourceVersion is a bounded catalog
+// query ID ONLY on the ClickHouse path, where ExecuteCatalogObserved stamps it
+// from the query definition; any other store may supply arbitrary text of up to
+// 512 bytes, so it must NOT be surfaced directly -- use safeSource(). Neither
+// field ever carries row content.
+type evidenceRowError struct {
+	SourceVersion string
+	Rule          string
+}
+
+func (e *evidenceRowError) Error() string {
+	return "invalid evidence row from " + e.SourceVersion + ": " + e.Rule
+}
+
+// safeSource returns SourceVersion only when it is a recognized catalog query
+// ID. Evidence can originate from stores whose SourceVersion is arbitrary,
+// caller-influenced text, so echoing it into a packet reason or warning would
+// reflect untrusted input straight back into the response. Unrecognized values
+// collapse to a fixed token.
+func (e *evidenceRowError) safeSource() string {
+	return safeEvidenceQuarantineSource(e.SourceVersion)
+}
+
+// evidenceRuleCode maps validateEvidence's fixed messages to stable, bounded
+// tokens safe for machine-readable disclosure. Unrecognized input collapses to
+// invalid_other rather than echoing an arbitrary string.
+func evidenceRuleCode(rule string) string {
+	switch rule {
+	case "invalid evidence_ref":
+		return "invalid_shape"
+	case "invalid evidence confidence":
+		return "invalid_confidence"
+	case "invalid evidence provenance":
+		return "invalid_provenance"
+	case "invalid evidence availability":
+		return "invalid_availability"
+	default:
+		return "invalid_other"
+	}
+}
+
+func (e *evidenceRowError) reason() string {
+	return "evidence_data_invalid:" + e.safeSource() + ":" + evidenceRuleCode(e.Rule)
+}
+
+type evidenceValidation struct {
+	valid                       []contractsv1.EvidenceRef
+	quarantined                 []*evidenceRowError
+	quarantinedWatermarkSources []string
+}
+
+func validateEvidenceBundle(evidence []contractsv1.EvidenceRef) evidenceValidation {
+	result := evidenceValidation{valid: make([]contractsv1.EvidenceRef, 0, len(evidence))}
 	for _, ref := range evidence {
 		if err := validateEvidence(ref); err != nil {
-			return fmt.Errorf("validate retrieved evidence: %w", err)
+			result.quarantined = append(result.quarantined, &evidenceRowError{SourceVersion: ref.SourceVersion, Rule: err.Error()})
+			if evidenceString(ref.Source.System, 1, 100) {
+				result.quarantinedWatermarkSources = append(result.quarantinedWatermarkSources, ref.Source.System)
+			}
+			if _, recognized := evidenceSourceCodes[ref.SourceVersion]; recognized {
+				result.quarantinedWatermarkSources = append(result.quarantinedWatermarkSources, ref.SourceVersion)
+			}
+			continue
 		}
+		result.valid = append(result.valid, ref)
 	}
-	return nil
+	return result
 }
 func coverage(b storage.EvidenceBundle) contractsv1.Coverage {
 	considered, available := []string{}, []string{}

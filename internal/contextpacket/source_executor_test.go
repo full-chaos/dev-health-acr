@@ -34,13 +34,27 @@ func TestCatalogRows_maps_scanned_rows_and_discloses_missing_sources(t *testing.
 	if !containsUnavailable(result.Unavailable, "pull_requests.v1", "source_unavailable") {
 		t.Fatalf("missing source was not disclosed: %#v", result.Unavailable)
 	}
-	if !containsUnavailable(result.Unavailable, "work_items.v1", "repo_fallback_branch_not_supported") {
-		t.Fatalf("repo fallback was not disclosed: %#v", result.Unavailable)
+	workItemsReachable := false
+	for _, ref := range result.Evidence {
+		if ref.SourceVersion == "work_items.v1" {
+			workItemsReachable = ref.Source.DisplayLabel == "work_items.v1 (repository-wide)" && ref.Metadata["scope_breadth"] == "repository-wide"
+			break
+		}
+	}
+	if !workItemsReachable {
+		t.Fatalf("repository-wide work-item evidence was not reachable and labeled: %#v", result.Evidence)
 	}
 	if len(result.Watermarks) != len(contextpacket.SourceQueryCatalogV1) {
 		t.Fatalf("watermarks=%d, want one per catalog source (%d)", len(result.Watermarks), len(contextpacket.SourceQueryCatalogV1))
 	}
-	if watermarkStatus(result.Watermarks, "ai_workflow_runs.v1") != "unavailable" {
+	// ai_workflow_runs.v1 is repo-scoped and now runs under a branch-scoped
+	// request. Its fixture rows are dated 2026-01-01, so the honest watermark is
+	// stale: reachable, but not recent. A status of unavailable or missing would
+	// mean the scope gate had silently excluded it again.
+	if status := watermarkStatus(result.Watermarks, "ai_workflow_runs.v1"); status != "stale" {
+		t.Fatalf("repository-wide source watermark = %q, want stale: %#v", status, result.Watermarks)
+	}
+	if watermarkStatus(result.Watermarks, "pull_requests.v1") != "unavailable" {
 		t.Fatalf("missing source watermark: %#v", result.Watermarks)
 	}
 	if len(observer.store) == 0 {

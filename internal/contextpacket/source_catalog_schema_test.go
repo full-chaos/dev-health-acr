@@ -75,6 +75,72 @@ func TestSourceCatalog_compares_uuid_organizations_as_strings(t *testing.T) {
 	}
 }
 
+func TestSourceCatalog_uses_exact_reviewed_provenance_mapping_per_source(t *testing.T) {
+	tests := []struct {
+		name            string
+		sourceID        string
+		expectedMapping string
+	}{
+		{
+			name:            "AI workflow artifact aliases and native evidence",
+			sourceID:        "ai_workflow_artifacts.v1",
+			expectedMapping: "multiIf(source = 'pr_body', 'explicit_text', source = 'branch_name', 'heuristic', source = 'native', 'native', '') provenance",
+		},
+		{
+			name:            "AI review native evidence",
+			sourceID:        "ai_review_outcomes.v1",
+			expectedMapping: "multiIf(source = 'native', 'native', '') provenance",
+		},
+		{
+			name:            "deployment incident native and inferred evidence",
+			sourceID:        "deployment_incident_provenance.v1",
+			expectedMapping: "multiIf(source = 'native', 'native', source = 'heuristic', 'heuristic', '') provenance",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// When
+			statement := catalogQuery(t, tt.sourceID).Statement
+
+			// Then
+			if strings.Count(statement, "multiIf(source =") != 1 || !strings.Contains(statement, tt.expectedMapping) {
+				t.Fatalf("%s does not use exact reviewed provenance mapping %q: %s", tt.sourceID, tt.expectedMapping, statement)
+			}
+		})
+	}
+}
+
+func TestSourceCatalog_leaves_unknown_raw_provenance_invalid(t *testing.T) {
+	for _, sourceID := range []string{"ai_workflow_artifacts.v1", "ai_review_outcomes.v1", "deployment_incident_provenance.v1"} {
+		t.Run(sourceID, func(t *testing.T) {
+			// When
+			statement := catalogQuery(t, sourceID).Statement
+
+			// Then
+			if !strings.Contains(statement, ", '') provenance") {
+				t.Fatalf("%s does not end its provenance mapping with an invalid fallback: %s", sourceID, statement)
+			}
+			if strings.Contains(statement, "source provenance") {
+				t.Fatalf("%s still projects untrusted raw provenance: %s", sourceID, statement)
+			}
+		})
+	}
+}
+
+func TestSourceCatalog_incidents_does_not_launder_unknown_provenance_as_native(t *testing.T) {
+	// When
+	statement := catalogQuery(t, "incidents.v1").Statement
+
+	// Then
+	expectedMapping := "multiIf(m.relationship_provenance = 'bounded_service_repository_heuristic', 'heuristic', m.relationship_provenance IN ('native', 'native_repository_context', 'admin_configuration', 'pagerduty_service_metadata', 'compass_service_catalog'), 'native', m.relationship_provenance IN ('explicit_text', 'heuristic', 'derived'), m.relationship_provenance, '') provenance"
+	if strings.Count(statement, "multiIf(m.relationship_provenance") != 1 || !strings.Contains(statement, expectedMapping) {
+		t.Fatalf("incidents.v1 does not use exact fail-invalid relationship provenance mapping %q: %s", expectedMapping, statement)
+	}
+	if strings.Contains(statement, "isNull(m.relationship_provenance)") || strings.Contains(statement, "m.relationship_provenance = '', 'native'") {
+		t.Fatalf("incidents.v1 still launders absent relationship provenance as native: %s", statement)
+	}
+}
+
 func TestSourceCatalog_exports_standard_evidence_columns(t *testing.T) {
 	for _, query := range contextpacket.SourceQueryCatalogV1 {
 		for _, alias := range []string{" evidence_ref_id", " system", " entity_type", " entity_id", " display_label", " safe_uri", " provenance", " confidence", " citation", " observed_at"} {
@@ -93,7 +159,12 @@ func TestSourceCatalog_normalizes_confidence_to_float64(t *testing.T) {
 	}
 }
 
-func TestSourceCatalog_skips_commit_sources_without_commit_scope(t *testing.T) {
+// Commit-scoped sources are no longer skipped wholesale on a repo-wide request.
+// They may run without a commit ONLY when the statement provably tolerates an
+// empty commit_sha. This asserts that safety invariant rather than the old
+// blanket gate, so a future commit-scoped source cannot be made repo-wide
+// readable without the predicate that makes it safe.
+func TestSourceCatalog_runs_commit_sources_without_commit_only_when_sql_allows(t *testing.T) {
 	plan := contextpacket.ReadPlan{OrgID: "org", RepoID: "00000000-0000-0000-0000-000000000001", RepoSlug: "owner/repo", Branch: "main"}
 	executor := &catalogRecorder{}
 
@@ -102,13 +173,24 @@ func TestSourceCatalog_skips_commit_sources_without_commit_scope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute catalog: %v", err)
 	}
-	if executor.queried["git_commits.v1"] || executor.queried["git_commit_files.v1"] {
-		t.Fatalf("commit scoped queries executed without a commit: %#v", executor.queried)
-	}
-	for _, source := range []string{"git_commits.v1", "git_commit_files.v1"} {
-		if !containsUnavailable(result.Unavailable, source, "commit_scope_not_requested") {
-			t.Fatalf("%s was not disclosed as skipped: %#v", source, result.Unavailable)
+	commitSources := 0
+	for _, query := range contextpacket.SourceQueryCatalogV1 {
+		if query.Scope != contextpacket.EvidenceScopeCommit {
+			continue
 		}
+		commitSources++
+		if executor.queried[query.ID] {
+			if !strings.Contains(query.Statement, "{commit_sha:String} = ''") {
+				t.Fatalf("%s ran without a commit but its statement has no empty-commit predicate: %s", query.ID, query.Statement)
+			}
+			continue
+		}
+		if !containsUnavailable(result.Unavailable, query.ID, "commit_scope_not_requested") {
+			t.Fatalf("%s was gated but not disclosed accurately: %#v", query.ID, result.Unavailable)
+		}
+	}
+	if commitSources == 0 {
+		t.Fatal("no commit-scoped sources in catalog; this test would assert nothing")
 	}
 }
 
