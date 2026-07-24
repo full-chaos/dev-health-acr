@@ -52,15 +52,18 @@ func TestCatalogClickHouseRows_resolves_exact_commit_and_maps_evidence(t *testin
 	if scope.Resolution != contractsv1.ScopeExactCommit || scope.RepoID != "00000000-0000-0000-0000-000000000001" {
 		t.Fatalf("unexpected exact scope: %#v", scope)
 	}
-	expectedEvidence := 0
-	for _, query := range contextpacket.SourceQueryCatalogV1 {
-		if query.Scope != contextpacket.EvidenceScopeRepo {
-			expectedEvidence++
-		}
-	}
-	if len(evidence) != expectedEvidence || len(watermarks) == 0 || len(unavailable) == 0 {
+	if len(evidence) != len(contextpacket.SourceQueryCatalogV1) || len(watermarks) != len(contextpacket.SourceQueryCatalogV1) || len(unavailable) != 0 {
 		t.Fatalf("unexpected catalog result: evidence=%d watermarks=%d unavailable=%d", len(evidence), len(watermarks), len(unavailable))
 	}
+	for _, ref := range evidence {
+		if ref.SourceVersion == "deployments.v1" {
+			if ref.Source.DisplayLabel != "test (repository-wide)" || ref.Metadata["scope_breadth"] != "repository-wide" {
+				t.Fatalf("deployment evidence does not disclose repository-wide breadth: %#v", ref)
+			}
+			return
+		}
+	}
+	t.Fatal("catalog did not return deployments.v1 evidence")
 }
 
 type scopeClient struct{}
