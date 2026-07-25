@@ -9,6 +9,8 @@ import (
 	"sort"
 )
 
+const WebAssertionPermissionCredentialIssue = "credential:issue"
+
 func readAssertionBody(r *http.Request, maximum int64) ([]byte, error) {
 	if r.Body == nil {
 		return []byte{}, nil
@@ -59,7 +61,7 @@ func validWebPermissions(permissions []string) bool {
 	}
 	seen := make(map[string]struct{}, len(permissions))
 	for _, permission := range permissions {
-		if permission != ScopeContextRead && permission != ScopeEvidenceRead {
+		if permission != ScopeContextRead && permission != ScopeEvidenceRead && permission != WebAssertionPermissionCredentialIssue {
 			return false
 		}
 		if _, duplicate := seen[permission]; duplicate {

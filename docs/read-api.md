@@ -32,7 +32,11 @@ read stubs for health and deployment diagnostics.
 
 Every read route accepts either a validated `fcacr_` client credential or a
 trusted web assertion. Credential administration and episode write routes remain
-bearer-only. License keys are never bearer credentials.
+bearer-only, except that device approval accepts a trusted web assertion carrying
+only `credential:issue` for its exact request-bound approval body. This is a
+trusted-assertion permission, never an `fcacr_` credential scope: the assertion
+cannot carry or return a credential secret. License keys are never bearer
+credentials.
 
 A web assertion is a compact Ed25519 JWS in `X-ACR-Web-Assertion`. Enable it
 only by configuring all three fixed values: `ACR_WEB_ASSERTION_ISSUER`,
@@ -43,8 +47,8 @@ is accepted by ACR.
 
 The header must have `alg=EdDSA`, `typ=JWT`, and a known `kid`. Claims require
 the exact configured issuer/audience; a nonempty `sub`, `org_id`, and `jti`;
-explicit normalized repository slugs; and only `context:read` and
-`evidence:read` permissions. `iat` and `nbf` allow at most five seconds of
+explicit normalized repository slugs; and `context:read`, `evidence:read`, or
+the device-approval-only `credential:issue` permission. `iat` and `nbf` allow at most five seconds of
 clock skew, while `exp` is capped to 30 seconds after `iat`. The assertion binds
 the exact uppercase HTTP method, escaped path without a query string, and the
 base64url-without-padding SHA-256 digest of the exact request body. The ACR
@@ -59,6 +63,11 @@ process observes it, writes a bounded replay-denial audit event keyed by the
 web subject, and returns `429`. This is request-bound replay mitigation, not a
 distributed single-use guarantee; deployments that require global replay
 coordination need a shared, separately operated replay store.
+
+The replay cache is intentionally not the device-approval idempotency mechanism.
+Device authorization records use durable compare-and-set transitions to make
+approval decisions idempotent; the replay cache remains bounded, per-process
+request-replay mitigation.
 
 Authentication attempt limiting uses the direct peer address by default. A
 deployment behind shared reverse proxies must set `ACR_TRUSTED_PROXY_CIDRS`;

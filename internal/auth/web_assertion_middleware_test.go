@@ -92,3 +92,34 @@ func TestAuthenticator_webAssertionsCannotAuthenticateWriteRoutes(t *testing.T) 
 	// Then
 	assertContractError(t, response, http.StatusUnauthorized, "invalid_token")
 }
+
+func TestAuthenticator_rejectsMultipleAuthMechanismsForCredentialIssueAssertion(t *testing.T) {
+	// Given
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := NewWebAssertionVerifier(WebAssertionOptions{Issuer: "https://web.example.test", Audience: "acr-api", JWKSPath: writeTestJWKS(t, "current", public), Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticator, err := NewAuthenticator(newMemoryCredentialStore(t), nil, AuthenticatorOptions{Now: func() time.Time { return now }, Limiter: NoopLimiter{}, WebAssertions: verifier})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = authenticator.Close() })
+	body := []byte(`{"device_code":"pending-device-code","repository_scopes":["example-org/widget-service"]}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/oauth/device_approval", bytes.NewReader(body))
+	claims := webAssertionClaims(now, request, body)
+	claims["permissions"] = []string{WebAssertionPermissionCredentialIssue}
+	request.Header.Set(WebAssertionHeader, signTestWebAssertion(t, private, "current", claims))
+	request.Header.Set("Authorization", "Bearer fcacr_multiple_auth_mechanisms")
+
+	// When
+	response := httptest.NewRecorder()
+	authenticator.MiddlewareFor(true, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("multiple auth mechanisms were authorized") })).ServeHTTP(response, request)
+
+	// Then
+	assertContractError(t, response, http.StatusUnauthorized, "invalid_token")
+}
