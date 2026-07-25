@@ -49,7 +49,7 @@ func TestGitCommitsSourceQuery_usesCommitHashWhenMessageExceedsEvidenceBounds(t 
 	}
 }
 
-func TestFileHotspotsSourceQuery_usesDirectFactConfidenceAndKeepsMeasuresInCitation(t *testing.T) {
+func TestFileHotspotsSourceQuery_usesDirectFactsFromLatestReplacementRun(t *testing.T) {
 	// Given
 	var hotspotQuery contextpacket.SourceQuery
 	for _, query := range contextpacket.SourceQueryCatalogV1 {
@@ -60,12 +60,12 @@ func TestFileHotspotsSourceQuery_usesDirectFactConfidenceAndKeepsMeasuresInCitat
 	}
 
 	// When
-	const directFactConfidence = "1.0 confidence, concat('churn=', toString(argMax(churn_loc_30d, day)), ', complexity=', toString(argMax(cyclomatic_total, day))) citation"
+	const directFactConfidence = "1.0 confidence, concat('churn=', toString(churn_loc_30d), ', complexity=', toString(cyclomatic_total)) citation"
 	usesDirectFactConfidence := strings.Contains(hotspotQuery.Statement, directFactConfidence)
 
 	// Then
 	if !usesDirectFactConfidence {
-		t.Fatal("file_hotspots.v1 must use direct-fact confidence and retain hotspot measures in its citation")
+		t.Fatal("file_hotspots.v1 must use direct-fact confidence and measures from the selected replacement run")
 	}
 }
 

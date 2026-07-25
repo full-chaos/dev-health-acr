@@ -19,9 +19,24 @@ func (o assemblyObserver) ObserveStoreQuery(ctx context.Context, observation con
 	}
 	outcome := assemblyOutcome(observation.Outcome)
 	o.hooks.ObserveStore(ctx, StoreObservation{
-		QueryClass: queryClass, Backend: assemblyStoreBackend(observation.Backend), Outcome: outcome, Duration: observation.Duration,
+		QueryClass: queryClass, Backend: assemblyStoreBackend(observation.Backend), Source: StoreSource(observation.SourceID), Phase: assemblyStorePhase(observation.SourcePhase), Outcome: outcome, Duration: observation.Duration,
 		TimedOut: observation.Outcome == contextpacket.OperationTimeout,
 	})
+}
+
+func assemblyStorePhase(phase contextpacket.SourceQueryPhase) StorePhase {
+	switch phase {
+	case contextpacket.SourceQueryPhaseQuery:
+		return StorePhaseQuery
+	case contextpacket.SourceQueryPhaseScan:
+		return StorePhaseScan
+	case contextpacket.SourceQueryPhaseIteration:
+		return StorePhaseIteration
+	case contextpacket.SourceQueryPhaseClose:
+		return StorePhaseClose
+	default:
+		return StorePhaseUnknown
+	}
 }
 
 func assemblyStoreBackend(backend contextpacket.StoreBackend) StoreBackend {

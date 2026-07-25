@@ -2,6 +2,7 @@ package contextpacket
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,6 +26,28 @@ type ClickHouseSourceExecutor struct{ client ClickHouseQueryClient }
 
 const sourceEvidenceRowLimit = 100
 
+type SourceQueryPhase string
+
+const (
+	SourceQueryPhaseUnknown   SourceQueryPhase = "unknown"
+	SourceQueryPhaseQuery     SourceQueryPhase = "query"
+	SourceQueryPhaseScan      SourceQueryPhase = "scan"
+	SourceQueryPhaseIteration SourceQueryPhase = "iteration"
+	SourceQueryPhaseClose     SourceQueryPhase = "close"
+)
+
+type sourceExecutionError struct {
+	phase    SourceQueryPhase
+	sourceID string
+	cause    error
+}
+
+func (e *sourceExecutionError) Error() string {
+	return string(e.phase) + " source " + e.sourceID
+}
+
+func (e *sourceExecutionError) Unwrap() error { return e.cause }
+
 func NewClickHouseSourceExecutor(client ClickHouseQueryClient) *ClickHouseSourceExecutor {
 	return &ClickHouseSourceExecutor{client: client}
 }
@@ -39,25 +62,38 @@ func (e *ClickHouseSourceExecutor) QueryEvidence(ctx context.Context, query Sour
 	queryBindings = append(queryBindings, ClickHouseBinding{Name: "source_row_limit", Value: uint32(sourceEvidenceRowLimit)})
 	rows, err := e.client.Query(ctx, statement, queryBindings)
 	if err != nil {
-		return nil, fmt.Errorf("query source %s: %w", query.ID, err)
+		return nil, &sourceExecutionError{phase: SourceQueryPhaseQuery, sourceID: query.ID, cause: err}
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("close source %s rows: %w", query.ID, closeErr)
+			err = &sourceExecutionError{phase: SourceQueryPhaseClose, sourceID: query.ID, cause: closeErr}
 		}
 	}()
 	evidence := []contractsv1.EvidenceRef{}
 	for len(evidence) < sourceEvidenceRowLimit && rows.Next() {
 		ref, scanErr := scanEvidenceRow(rows)
 		if scanErr != nil {
-			return nil, fmt.Errorf("scan source %s: %w", query.ID, scanErr)
+			return nil, &sourceExecutionError{phase: SourceQueryPhaseScan, sourceID: query.ID, cause: scanErr}
 		}
 		evidence = append(evidence, ref)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate source %s: %w", query.ID, err)
+		return nil, &sourceExecutionError{phase: SourceQueryPhaseIteration, sourceID: query.ID, cause: err}
 	}
 	return evidence, nil
+}
+
+func sourceQueryFailurePhase(err error) SourceQueryPhase {
+	var executionErr *sourceExecutionError
+	if !errors.As(err, &executionErr) {
+		return SourceQueryPhaseUnknown
+	}
+	switch executionErr.phase {
+	case SourceQueryPhaseQuery, SourceQueryPhaseScan, SourceQueryPhaseIteration, SourceQueryPhaseClose:
+		return executionErr.phase
+	default:
+		return SourceQueryPhaseUnknown
+	}
 }
 
 func scanEvidenceRow(rows ClickHouseRowScanner) (contractsv1.EvidenceRef, error) {

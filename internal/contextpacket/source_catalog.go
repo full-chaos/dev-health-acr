@@ -70,7 +70,7 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 		if observer != nil {
 			observer.ObserveStoreQuery(ctx, StoreQueryObservation{
 				Operation: StoreOperationEvidence, Backend: StoreBackendClickHouse,
-				Outcome: operationOutcome(err), Duration: time.Since(started),
+				Outcome: operationOutcome(err), Duration: time.Since(started), SourceID: query.ID, SourcePhase: sourceQueryFailurePhase(err),
 			})
 		}
 		if err != nil {
@@ -82,7 +82,9 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 		}
 		for index := range rows {
 			rows[index].SourceVersion = query.ID
-			if plan.Branch != "" && query.Scope == EvidenceScopeRepo {
+			readsRepositoryWide := query.Scope == EvidenceScopeRepo ||
+				(query.Scope == EvidenceScopeCommit && plan.CommitSHA == "" && querySupportsRepoWideRead(query.ID))
+			if plan.Branch != "" && readsRepositoryWide {
 				rows[index].Source.DisplayLabel += repositoryWideSourceLabelSuffix
 				rows[index].Metadata = withRepositoryWideScope(rows[index].Metadata)
 			}

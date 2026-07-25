@@ -17,6 +17,8 @@ generated request ID for correlation and these bounded dimensions:
 - packet: lifecycle `status`, bytes, tokens, schema/baseline versions,
   compatibility, and source coverage
 - store query class: `packet`, `evidence`, `episode`, or `unknown`
+- store source: one fixed versioned catalog source ID or `unknown`
+- store phase: `query`, `scan`, `iteration`, `close`, or `unknown`
 - `source_fallback`: `none`, `catalog`, `unavailable`, or `unknown`
 - query/ranking versions: canonical `context-query.v1`, `ranker.v2`, or `unknown`
 - denial class: `authentication`, `organization_scope`, `repository_scope`,
@@ -33,6 +35,10 @@ Use the service's existing structured logger to record snapshots. Never add pack
 content, evidence URLs, error text, bearer values, license artifacts, transcripts,
 repository names, organization IDs, or request paths as an attribute or metric
 label.
+
+Store source and phase are support-snapshot and structured-log fields. They are
+intentionally excluded from the default metric labels so a source failure can be
+diagnosed without expanding the service's metric cardinality.
 
 ## Metric mapping
 

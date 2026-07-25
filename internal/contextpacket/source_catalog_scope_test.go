@@ -57,12 +57,12 @@ func TestExecuteCatalog_labels_repository_wide_evidence_when_branch_is_requested
 func TestExecuteCatalog_queries_repo_wide_commit_sources_when_commit_is_not_requested(t *testing.T) {
 	// Given
 	executor := &catalogScopeExecutor{evidenceBySource: map[string][]contractsv1.EvidenceRef{
-		"git_commits.v1":      {{ObservedAt: time.Now().UTC()}},
-		"git_commit_files.v1": {{ObservedAt: time.Now().UTC()}},
+		"git_commits.v1":      {{Source: contractsv1.EvidenceSource{DisplayLabel: "commit"}, ObservedAt: time.Now().UTC()}},
+		"git_commit_files.v1": {{Source: contractsv1.EvidenceSource{DisplayLabel: "commit file"}, ObservedAt: time.Now().UTC()}},
 	}}
 
 	// When
-	_, err := ExecuteCatalog(context.Background(), executor, ReadPlan{})
+	result, err := ExecuteCatalog(context.Background(), executor, ReadPlan{Branch: "main"})
 
 	// Then
 	if err != nil {
@@ -71,6 +71,40 @@ func TestExecuteCatalog_queries_repo_wide_commit_sources_when_commit_is_not_requ
 	for _, source := range []string{"git_commits.v1", "git_commit_files.v1"} {
 		if !slices.Contains(executor.queried, source) {
 			t.Fatalf("%s was not queried without a commit scope", source)
+		}
+	}
+	for _, evidence := range result.Evidence {
+		if evidence.Source.DisplayLabel != "commit (repository-wide)" && evidence.Source.DisplayLabel != "commit file (repository-wide)" {
+			t.Fatalf("display label = %q, want repository-wide label", evidence.Source.DisplayLabel)
+		}
+		if evidence.Metadata["scope_breadth"] != "repository-wide" {
+			t.Fatalf("scope breadth = %#v, want repository-wide", evidence.Metadata["scope_breadth"])
+		}
+	}
+}
+
+func TestExecuteCatalog_keeps_exact_commit_evidence_commit_scoped_when_branch_is_present(t *testing.T) {
+	// Given
+	executor := &catalogScopeExecutor{evidenceBySource: map[string][]contractsv1.EvidenceRef{
+		"git_commits.v1": {{Source: contractsv1.EvidenceSource{DisplayLabel: "commit"}, ObservedAt: time.Now().UTC()}},
+	}}
+
+	// When
+	result, err := ExecuteCatalog(context.Background(), executor, ReadPlan{Branch: "main", CommitSHA: "abc123"})
+
+	// Then
+	if err != nil {
+		t.Fatalf("execute catalog: %v", err)
+	}
+	for _, evidence := range result.Evidence {
+		if evidence.SourceVersion != "git_commits.v1" {
+			continue
+		}
+		if evidence.Source.DisplayLabel != "commit" {
+			t.Fatalf("display label = %q, want exact-commit label", evidence.Source.DisplayLabel)
+		}
+		if _, found := evidence.Metadata["scope_breadth"]; found {
+			t.Fatalf("scope breadth = %#v, want exact-commit metadata", evidence.Metadata["scope_breadth"])
 		}
 	}
 }
