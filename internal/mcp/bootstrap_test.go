@@ -72,6 +72,7 @@ func TestNewBootstrapFailsClearlyOnMissingCredential(t *testing.T) {
 	fx := newFixtureServer(t)
 	setFixtureEnv(t, fx, "")
 	t.Setenv(sidecar.TokenFileEnvironment, "")
+	t.Setenv("HOME", t.TempDir())
 
 	_, err := NewBootstrap(context.Background(), "dev")
 	if err == nil {

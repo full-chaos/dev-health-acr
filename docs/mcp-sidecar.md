@@ -31,11 +31,11 @@ opt-in. Client registrations must use exactly `acr-mcp serve`.
 **ACR_API_URL**
 The base URL of the hosted ACR API. Example: `https://api.dev-health.example.com`
 
-**ACR_API_TOKEN**, an OS keyring entry, or **ACR_API_TOKEN_FILE**
-Your API credential. The sidecar resolves it with a fixed precedence: the process environment always wins, then an optional OS keyring entry, then a token file.
+**ACR_API_TOKEN**, an OS keyring entry, or a token file
+Your API credential. The sidecar resolves it with a fixed precedence: the process environment always wins, then an explicit or default OS keyring entry, then an explicit or default token file.
 - `ACR_API_TOKEN`: Token string in the environment (agent-friendly, less secure for long-running processes).
-- OS keyring (`ACR_API_TOKEN_KEYRING_SERVICE` / `ACR_API_TOKEN_KEYRING_ACCOUNT`): see [Credential Management](#credential-management).
-- `ACR_API_TOKEN_FILE`: Path to a file containing the token. Supported only on macOS and Linux: the file must deny group and world access (mode `0600`, i.e. `info.Mode().Perm()&0o077 == 0`); the sidecar refuses to load it otherwise. **On every other platform, including Windows, the sidecar fails closed and refuses to load a token file at all** -- use `ACR_API_TOKEN` instead; the OS keyring source above is macOS/Linux only too. Preferred for persistent processes on macOS/Linux.
+- OS keyring (`ACR_API_TOKEN_KEYRING_SERVICE` / `ACR_API_TOKEN_KEYRING_ACCOUNT`): see [Credential Management](#credential-management). Without overrides, the service is `dev-health-acr` and the account is the normalized `ACR_API_URL` origin.
+- `ACR_API_TOKEN_FILE`: Optional path override. Without it, the sidecar discovers `~/.acr/token`. Supported only on macOS and Linux: the file must deny group and world access (mode `0600`, i.e. `info.Mode().Perm()&0o077 == 0`); the sidecar refuses to load it otherwise. **On every other platform, including Windows, the sidecar fails closed and refuses to load a token file at all** -- use `ACR_API_TOKEN` instead; the OS keyring source above is macOS/Linux only too. Preferred for persistent processes on macOS/Linux.
 
 ### Optional
 
@@ -127,7 +127,7 @@ acr-mcp serve
 
 ### OS Keyring (ACR_API_TOKEN_KEYRING_SERVICE)
 
-Optional convenience source consulted between the environment and the token file. Set `ACR_API_TOKEN_KEYRING_SERVICE` to enable it; `ACR_API_TOKEN_KEYRING_ACCOUNT` defaults to the current OS user.
+Optional convenience source consulted between the environment and the token file. It defaults to service `dev-health-acr` and account equal to the normalized `ACR_API_URL` origin. `ACR_API_TOKEN_KEYRING_SERVICE` and `ACR_API_TOKEN_KEYRING_ACCOUNT` explicitly override those defaults.
 
 ```bash
 export ACR_API_TOKEN_KEYRING_SERVICE="acr-mcp"
@@ -137,10 +137,11 @@ acr-mcp serve
 - macOS: reads via the `security` CLI (`find-generic-password`).
 - Linux: reads via the `secret-tool` CLI (libsecret).
 - A locked, missing, or unreachable keyring backend falls through to the token file after a bounded 2-second lookup; it never blocks startup or fails hard.
+- Linux persistence writes to `secret-tool` only through stdin; the token never appears in command arguments. macOS intentionally has no keyring writer because its `security` write interface would expose the secret in process arguments; persistence falls back to the token file instead.
 
 ### Token File (ACR_API_TOKEN_FILE, macOS/Linux only)
 
-Recommended for production and long-running sidecars on macOS and Linux. The sidecar reads the file at startup and validates permissions. **Not supported on Windows or any other platform** -- see Platform Support below.
+Recommended fallback for production and long-running sidecars on macOS and Linux. The default path is `~/.acr/token`; `ACR_API_TOKEN_FILE` is an explicit override. The persistence writer creates its default parent with mode `0700`, creates a same-directory no-follow temporary file at `0600`, fsyncs it, atomically renames it, and fsyncs the directory. The sidecar reads the file at startup and validates permissions. **Not supported on Windows or any other platform** -- see Platform Support below.
 
 ```bash
 # Create a restricted file

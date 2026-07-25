@@ -55,13 +55,13 @@ This directory contains setup guides and configuration templates for integrating
    ```
 <!-- /FIXTURE:install-sidecar -->
 
-2. **Create a token file:**
+2. **Create a token file only for manual setup:**
    ```bash
    mkdir -p ~/.acr
    echo "fcacr_your_token_here" > ~/.acr/token
    chmod 600 ~/.acr/token
    ```
-   `fcacr_your_token_here` is a placeholder, not a real token shape -- see [Token Format](../../mcp-sidecar.md#token-format) in the main sidecar doc.
+   `fcacr_your_token_here` is a placeholder, not a real token shape -- see [Token Format](../../mcp-sidecar.md#token-format) in the main sidecar doc. The sidecar discovers this default path automatically; `ACR_API_TOKEN_FILE` is only needed to override it.
 
 3. **Choose your IDE or client:**
    - [OpenCode](opencode.md) - OpenCode plugin package
@@ -157,7 +157,6 @@ Replace `fcacr_your_token_here` with your actual API token (the real shape is `f
 
 ```bash
 export ACR_API_URL="https://api.dev-health.example.com"
-export ACR_API_TOKEN_FILE="$HOME/.acr/token"
 /path/to/acr-mcp doctor --offline
 ```
 
@@ -176,7 +175,7 @@ Follow the guide for your IDE:
 The sidecar reads these environment variables:
 
 - `ACR_API_URL` (required): Base URL of the ACR API.
-- `ACR_API_TOKEN`, an OS keyring entry (`ACR_API_TOKEN_KEYRING_SERVICE`), or `ACR_API_TOKEN_FILE`: API credential (checked in that precedence order; at least one source must resolve).
+- `ACR_API_TOKEN`, an OS keyring entry, or a token file: API credential (checked as environment > explicit/default keyring > explicit/default file; the defaults are service `dev-health-acr`, normalized `ACR_API_URL` account, and `~/.acr/token`).
 - `ACR_API_TIMEOUT` (optional): Request timeout as a Go duration string (e.g. `20s`). Default: `20s`.
 - `ACR_API_PROXY_URL` (optional): HTTP proxy URL.
 - `ACR_API_CA_BUNDLE` (optional): Path to a PEM-encoded CA bundle file.
@@ -206,7 +205,7 @@ for bounds and diagnostics.
 ## Security Notes
 
 - Never commit token files to version control.
-- Use `ACR_API_TOKEN_FILE` for persistent processes on macOS/Linux (preferred there; not supported on Windows -- see below).
+- Use the default `~/.acr/token` fallback for persistent processes on macOS/Linux (or `ACR_API_TOKEN_FILE` to override it; not supported on Windows -- see below).
 - Use `ACR_API_TOKEN` for agent-based workflows (less secure).
 - On Unix/Linux/macOS, token files must have permissions `0600`; the sidecar refuses to load a group- or world-readable file. **`ACR_API_TOKEN_FILE` is not supported on Windows**: the sidecar fails closed and refuses to load any token file there; use `ACR_API_TOKEN` instead -- the OS keyring source is also macOS/Linux only.
 - Tokens are never logged or printed by the sidecar.

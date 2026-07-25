@@ -64,6 +64,8 @@ func TestLoadCredentialPrefersEnvironment(t *testing.T) {
 func TestLoadCredentialRequiresConfiguration(t *testing.T) {
 	t.Setenv(TokenEnvironment, "")
 	t.Setenv(TokenFileEnvironment, "")
+	t.Setenv(APIURLEnvironment, "")
+	t.Setenv("HOME", t.TempDir())
 	if _, err := LoadCredential(); err == nil {
 		t.Fatal("missing credential configuration was accepted")
 	}
@@ -142,6 +144,7 @@ func TestLoadCredentialKeyringLookupContextIsBounded(t *testing.T) {
 	t.Setenv(TokenEnvironment, "")
 	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
 	t.Setenv(TokenFileEnvironment, "")
+	t.Setenv("HOME", t.TempDir())
 	stubKeyringLookup(t, func(ctx context.Context, _, _ string) (string, bool, error) {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Fatal("keyring lookup context must carry a bounded deadline")
@@ -224,6 +227,7 @@ func TestLoadCredentialRejectsShapeInvalidTokenEvenWhenNoFallbackExists(t *testi
 	t.Setenv(TokenEnvironment, "")
 	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
 	t.Setenv(TokenFileEnvironment, "")
+	t.Setenv("HOME", t.TempDir())
 	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
 		return licenseShapedToken, true, nil
 	})
