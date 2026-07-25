@@ -317,7 +317,7 @@ assert_throwaway_home_was_used() {
   # silently, right after a successful client session. `-print -quit` stops find itself.
   client_state_lines > "$after"
   if [[ -f "$STATE/client-state-before" ]]; then
-    written="$(comm -13 "$STATE/client-state-before" "$after" | sed -n '1s/ [0-9]* [0-9]*$//p' || true)"
+    written="$(LC_ALL=C comm -13 "$STATE/client-state-before" "$after" | sed -n '1s/ [0-9]* [0-9]*$//p' || true)"
   else
     written="$(find "$CLIENT_HOME/data" "$CLIENT_HOME/state" "$CLIENT_HOME/cache" \
       -type f -print -quit 2>/dev/null)"
@@ -925,16 +925,15 @@ selected_tasks() {
 # ---------------------------------------------------------------------------
 
 # A suite that only ever sees a well-behaved scripted model proves nothing about its own
-# ability to catch a misbehaving one. This replays one complete task through the deterministic
+# ability to catch a misbehaving one. This replays suitable tasks through the deterministic
 # model with a deliberate fault injected and requires the assertion layers to FAIL. A fault
 # that slips through is a hole in the gate, so it is reported as a failure of this run.
 run_fault_self_test() {
   local task_id fault branch commit plan expected_check spec
   # Each fault is replayed against a task whose live packet makes that fault meaningful, and
-  # the rejection must come from the check that fault targets. `fabricate-findings` only
-  # differs from honest behaviour when the packet is degraded, so replaying it against the
-  # rich task-001 packet proved nothing: it produced an ordinary answer that happened to be
-  # rejected for an unrelated reason, which reads as a pass but tests nothing.
+  # the rejection must come from the check that fault targets. Status inflation and fabricated
+  # findings use task-003 because its live packet is partial while its oracle requires no
+  # branch-specific findings. Replaying either against complete task-001 would be a no-op.
   #
   #   fault | task replayed | check that must fail
   # Check names are the exact ones the assertion tool emits, because assert_rejected_for now
@@ -942,8 +941,8 @@ run_fault_self_test() {
   # only ever satisfied as substrings of the real checks below.
   for spec in \
     'invent-evidence|task-001-checkout-flake-exact-commit|no_invented_evidence_ids' \
-    'inflate-status|task-001-checkout-flake-exact-commit|agent_result_packet_status_matches_live_packet' \
-    'fabricate-findings|task-003-unindexed-branch-empty|degraded_findings_empty' \
+    'inflate-status|task-003-unindexed-branch-empty|agent_result_packet_status_matches_live_packet' \
+    'fabricate-findings|task-003-unindexed-branch-empty|findings_must_be_empty' \
     'skip-evidence|task-001-checkout-flake-exact-commit|source_evidence_meets_expansion_floor' \
     'wrong-scope|task-001-checkout-flake-exact-commit|agent_result_scope_resolution_matches_live_packet' \
     'unsupported-claim|task-001-checkout-flake-exact-commit|observed_finding_has_citation' \
@@ -964,9 +963,8 @@ run_fault_self_test() {
     run_opencode_task "${task_id}-${fault}" "$CLIENT_HOME/prompt-${task_id}.md"
     extract_agent_result "${task_id}-${fault}"
     stop_model_service
-    # The faulted result is asserted under the task's own oracle, so reuse its artifacts. A
-    # degraded task returns no evidence at all, so its expansion directory may be absent —
-    # that is the state the fault is being tested against, not a missing artifact.
+    # The faulted result is asserted under the task's own oracle, so reuse its artifacts.
+    # Expansion directories are copied when present; no-evidence packets may legitimately omit one.
     cp "$ARTIFACTS/context-packet-${task_id}.json" "$ARTIFACTS/context-packet-${task_id}-${fault}.json"
     rm -rf "$ARTIFACTS/expanded-evidence/${task_id}-${fault}"
     if [[ -d "$ARTIFACTS/expanded-evidence/${task_id}" ]]; then

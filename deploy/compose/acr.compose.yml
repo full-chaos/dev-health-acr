@@ -15,7 +15,8 @@ services:
     secrets: [acr_postgres_password, acr_runtime_db_password, acr_migration_db_password]
     volumes:
       - ./deploy/compose/acr-db-init.sh:/usr/local/bin/acr-db-init:ro
-    command: ["/usr/local/bin/acr-db-init", "roles"]
+    entrypoint: ["/usr/local/bin/acr-db-init"]
+    command: ["roles"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -51,7 +52,8 @@ services:
     secrets: [acr_postgres_password, acr_runtime_db_password, acr_migration_db_password]
     volumes:
       - ./deploy/compose/acr-db-init.sh:/usr/local/bin/acr-db-init:ro
-    command: ["/usr/local/bin/acr-db-init", "runtime-acl"]
+    entrypoint: ["/usr/local/bin/acr-db-init"]
+    command: ["runtime-acl"]
     depends_on:
       postgres: { condition: service_healthy }
       acr-migrate: { condition: service_completed_successfully }

@@ -444,7 +444,7 @@ func layerMCP(rc *runContext) *Layer {
 	}
 	sawEvidence := observed.has("source_evidence")
 	switch {
-	case rc.oracle.FindingsMustBeEmpty:
+	case rc.oracle.expectsNoEvidence():
 		l.add("source_evidence_not_called_for_degraded_packet", !sawEvidence,
 			"not observed", fmt.Sprintf("%v", sawEvidence),
 			ifNotEmpty(boolAsList(sawEvidence), "the packet returned no evidence, so any expansion used an invented reference"))
@@ -723,11 +723,13 @@ func layerAgentResult(rc *runContext) *Layer {
 	}
 
 	if rc.oracle.FindingsMustBeEmpty {
-		l.add("degraded_findings_empty", len(result.Findings) == 0, "0 findings", fmt.Sprintf("%d findings", len(result.Findings)), "")
-		// Soft, spirit-of-the-rule check: docs/fullstack-acceptance.md section 7 layer 5 says
-		// an empty/degraded packet must "stay explicit" -- the model is expected to disclose
-		// the degradation (see e.g. task-003's oracle required_disclosure), not just go quiet.
-		l.add("degraded_disclosed_in_assumptions", len(result.Assumptions) > 0, ">=1 assumption", fmt.Sprintf("%d assumptions", len(result.Assumptions)), "")
+		l.add("findings_must_be_empty", len(result.Findings) == 0, "0 findings", fmt.Sprintf("%d findings", len(result.Findings)), "")
+		if rc.oracle.expectsNoEvidence() {
+			// Soft, spirit-of-the-rule check: docs/fullstack-acceptance.md section 7 layer 5 says
+			// an empty/degraded packet must "stay explicit" -- the model is expected to disclose
+			// the degradation (see e.g. task-003's oracle required_disclosure), not just go quiet.
+			l.add("degraded_disclosed_in_assumptions", len(result.Assumptions) > 0, ">=1 assumption", fmt.Sprintf("%d assumptions", len(result.Assumptions)), "")
+		}
 	}
 
 	findingByClaimID := map[string]harnessFinding{}

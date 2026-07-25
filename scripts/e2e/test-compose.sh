@@ -112,7 +112,9 @@ if grep -Fq 'acr-secret-entrypoint' "$root/deploy/compose/acr.compose.yml"; then
 grep -Fq 'entrypoint: ["/usr/local/bin/acr-migrate"]' "$root/deploy/compose/acr.compose.yml"
 grep -Fq 'secrets: [acr_migration_dsn, acr_ca]' "$root/deploy/compose/acr.compose.yml"
 grep -Fq 'acr-db-acl:' "$root/deploy/compose/acr.compose.yml"
-grep -Fq '["/usr/local/bin/acr-db-init", "runtime-acl"]' "$root/deploy/compose/acr.compose.yml"
+[[ "$(grep -Fc 'entrypoint: ["/usr/local/bin/acr-db-init"]' "$root/deploy/compose/acr.compose.yml")" -eq 2 ]]
+grep -Fq 'command: ["roles"]' "$root/deploy/compose/acr.compose.yml"
+grep -Fq 'command: ["runtime-acl"]' "$root/deploy/compose/acr.compose.yml"
 grep -Fq 'acr-db-acl: { condition: service_completed_successfully }' "$root/deploy/compose/acr.compose.yml"
 grep -Fq 'PostgreSQL readiness timed out' "$root/deploy/compose/acr-db-init.sh"
 grep -Fq 'POSTGRES_PASSWORD_FILE' "$root/deploy/compose/acr.compose.yml"

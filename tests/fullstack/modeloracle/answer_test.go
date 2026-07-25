@@ -113,9 +113,9 @@ func TestFaultsProduceTheBehaviourTheSelfTestNeeds(t *testing.T) {
 		t.Fatalf("inflate-status reported %q", inflated.PacketStatus)
 	}
 
-	fabricated := buildResult(planFixture(FaultFabricateFindings), observationFixture("empty"))
+	fabricated := buildResult(planFixture(FaultFabricateFindings), observationFixture("partial"))
 	if len(fabricated.Findings) == 0 {
-		t.Fatal("fabricate-findings must report findings for an empty packet")
+		t.Fatal("fabricate-findings must report a finding where the oracle requires none")
 	}
 
 	// wrong-scope must trip agent_result_scope_resolution_matches_live_packet: the reported

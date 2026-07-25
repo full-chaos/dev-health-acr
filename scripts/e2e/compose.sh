@@ -105,7 +105,7 @@ cleanup() {
   fi
   note "cleanup receipt before: $(owned_receipt)"
   if [[ "$status" -ne 0 ]]; then
-    compose logs --no-color acr-pki-init clickhouse migrate acr-migrate acr-api 2>&1 | redact_log || true
+    compose logs --no-color acr-pki-init clickhouse migrate acr-ops-tls acr-migrate acr-api 2>&1 | redact_log || true
     for service in clickhouse api; do
       health_container="$(compose ps -q "$service" 2>/dev/null || true)"
       if [[ -n "$health_container" ]]; then
@@ -196,8 +196,9 @@ ensure_image() {
 }
 
 render_override() {
-  local pg runtime migration ch db postgres_port clickhouse_http_port clickhouse_native_port redis_port
+  local pg runtime migration ch jwt db postgres_port clickhouse_http_port clickhouse_native_port redis_port
   pg="$(<"$STATE/secrets/postgres-password")"; runtime="$(<"$STATE/secrets/runtime-password")"; migration="$(<"$STATE/secrets/migration-password")"; ch="$(<"$STATE/secrets/clickhouse-password")"
+  jwt="$(random_secret)"
   db="acr_${PROJECT//-/}_e2e"
   write_secret "$STATE/secrets/runtime-dsn" "postgres://acr_runtime:${runtime}@postgres:5432/${db}?sslmode=verify-full&sslrootcert=/run/secrets/acr_ca"
   write_secret "$STATE/secrets/migration-dsn" "postgres://acr_migration:${migration}@postgres:5432/${db}?sslmode=verify-full&sslrootcert=/run/secrets/acr_ca"
@@ -210,22 +211,25 @@ render_override() {
 services:
   postgres:
     image: "${POSTGRES_IMAGE}"
-    ports: []
+    ports: !override []
     environment: { POSTGRES_USER: devhealth, POSTGRES_PASSWORD: "${pg}", POSTGRES_DB: devhealth }
     command: ["postgres", "-c", "ssl=on", "-c", "ssl_cert_file=/run/acr-tls/acr.crt", "-c", "ssl_key_file=/run/acr-tls/acr.key", "-c", "ssl_ca_file=/run/acr-tls/ca.crt"]
     volumes: ["postgres_data:/var/lib/postgresql/data", "${STATE}/stage/ops/docker/init-extra-dbs.sh:/docker-entrypoint-initdb.d/init-extra-dbs.sh:ro", "acr_e2e_postgres_tls:/run/acr-tls:ro"]
     depends_on: { acr-pki-init: { condition: service_completed_successfully } }
   clickhouse:
     image: "${CLICKHOUSE_IMAGE}"
-    ports: []
+    ports: !override []
     environment: { CLICKHOUSE_USER: default, CLICKHOUSE_PASSWORD: ch, CLICKHOUSE_DB: default, CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1" }
     volumes: ["clickhouse_data:/var/lib/clickhouse", "acr_e2e_clickhouse_tls:/run/acr-tls:ro", "${STATE}/clickhouse/tls.xml:/etc/clickhouse-server/config.d/acr-e2e-tls.xml:ro", "${STATE}/clickhouse/client-tls.xml:/etc/clickhouse-client/config.d/acr-e2e-tls.xml:ro", "${STATE}/clickhouse/client-readonly.xml:/run/acr-e2e/clickhouse-client-readonly.xml:ro"]
     healthcheck: { test: ["CMD-SHELL", "clickhouse-client --config-file=/etc/clickhouse-client/config.d/acr-e2e-tls.xml --secure --host clickhouse --port 9440 --user default --password ch --query 'SELECT 1'"], interval: 5s, timeout: 5s, retries: 12, start_period: 10s }
     depends_on: { acr-pki-init: { condition: service_completed_successfully } }
   pgbouncer: { image: "${PGBOUNCER_IMAGE}" }
-  valkey: { image: "${VALKEY_IMAGE}", ports: [] }
+  valkey:
+    image: "${VALKEY_IMAGE}"
+    ports: !override []
   mailpit: { image: "${MAILPIT_IMAGE}" }
   api:
+    environment: { SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0", JWT_SECRET_KEY: "${jwt}" }
     healthcheck: { test: ["CMD", "wget", "--spider", "http://localhost:8000/ready"], interval: 5s, timeout: 5s, retries: 36, start_period: 120s }
   traefik: { ports: [] }
   acr-pki-init:
@@ -236,20 +240,34 @@ services:
     volumes: ["${STATE}/pki:/input:ro", "acr_e2e_postgres_tls:/postgres-tls", "acr_e2e_clickhouse_tls:/clickhouse-tls"]
   acr-api:
     image: "${IMAGE}"
-    ports: []
+    ports: !override []
     healthcheck: { test: ["NONE"] }
-    environment:
+    environment: !override
+      ACR_ADDR: :8080
       ACR_ENVIRONMENT: development
+      ACR_LOG_LEVEL: debug
+      ACR_POSTGRES_CONNECTION_KIND: direct
+      ACR_ENABLE_EPISODE_WRITEBACK: "${ACR_ENABLE_EPISODE_WRITEBACK:-false}"
       ACR_REQUIRE_BACKING_STORES: "true"
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
       ACR_CLICKHOUSE_CA_BUNDLE: /run/secrets/acr_ca
       ACR_DEV_HEALTH_ENTITLEMENT_URL: https://acr-ops-tls:8443
+      ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /run/secrets/acr_ops_token
       ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE: /run/secrets/acr_ca
+      ACR_EVIDENCE_ID_ACTIVE_KID_FILE: /run/secrets/acr_evidence_active_kid
+      ACR_EVIDENCE_ID_KEYS_FILE: /run/secrets/acr_evidence_keys
       # Defaults to the service's own default (60/min), so existing consumers are unchanged.
       # A suite that legitimately issues more reads than a production client would raises it
       # explicitly rather than being throttled into an unrelated-looking failure.
       ACR_REQUESTS_PER_MINUTE: "${ACR_E2E_REQUESTS_PER_MINUTE:-60}"
+    volumes: !override []
+    depends_on: !override
+      postgres: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+      api: { condition: service_healthy }
+      acr-db-acl: { condition: service_completed_successfully }
+      acr-ops-tls: { condition: service_started }
   acr-credentials:
     image: "${IMAGE}"
     environment:
@@ -259,6 +277,10 @@ services:
     networks: [dev-health]
   acr-migrate:
     image: "${IMAGE}"
+    environment: !override
+      ACR_ENVIRONMENT: development
+      ACR_POSTGRES_CONNECTION_KIND: direct
+      ACR_POSTGRES_MIGRATION_DSN_FILE: /run/secrets/acr_migration_dsn
   acr-tls-proxy:
     image: "${NGINX_IMAGE}"
     ports: ["127.0.0.1:${PORT}:8443"]
@@ -287,12 +309,34 @@ EOF
 
 assert_safe_render() {
   compose config > "$STATE/rendered.yml"
+  compose config --format json > "$STATE/rendered.json"
   grep -q '^  acr-api:' "$STATE/rendered.yml" || die 'ACR API missing from rendered stack'
   ! grep -q 'acr-mcp:' "$STATE/rendered.yml" || die 'MCP must remain host-local'
   ! grep -Eq 'name:[[:space:]]*(postgres_data|clickhouse_data|valkey_data)$' "$STATE/rendered.yml" || die 'refusing shared default volume name'
   if ! grep -q 'host_ip: 127.0.0.1' "$STATE/rendered.yml" || ! grep -q 'target: 8443' "$STATE/rendered.yml" || ! grep -q "published: \"${PORT}\"" "$STATE/rendered.yml"; then
     die 'direct localhost TLS endpoint missing'
   fi
+  jq -e '.services["acr-api"].depends_on | keys == ["acr-db-acl","acr-ops-tls","api","clickhouse","postgres"]' "$STATE/rendered.json" >/dev/null \
+    || die 'ACR API inherited an unexpected local-dev dependency'
+  jq -e '(.services["acr-api"].volumes // []) | all(.[]; ((.source // "") | contains("/.acr-dev/") | not))' "$STATE/rendered.json" >/dev/null \
+    || die 'ACR API inherited a local-dev bind mount'
+  if [[ -f "$STATE/svs.override.yml" ]]; then
+    jq -e '[.services["acr-api"].volumes[]?.target] | sort == ["/run/acr-e2e/web-assertions.jwks.json"]' "$STATE/rendered.json" >/dev/null \
+      || die 'web agreement added an unexpected ACR API bind mount'
+  else
+    jq -e '(.services["acr-api"].volumes // []) | length == 0' "$STATE/rendered.json" >/dev/null \
+      || die 'baseline ACR API retained a bind mount'
+  fi
+  jq -e '.services["acr-migrate"].environment | keys == ["ACR_ENVIRONMENT","ACR_POSTGRES_CONNECTION_KIND","ACR_POSTGRES_MIGRATION_DSN_FILE"]' "$STATE/rendered.json" >/dev/null \
+    || die 'ACR migration environment inherited local-dev configuration'
+  jq -e '(.services.api.environment.JWT_SECRET_KEY // "") | length >= 32' "$STATE/rendered.json" >/dev/null \
+    || die 'Ops API is missing its per-run JWT secret'
+  jq -e '.services["acr-api"].environment as $environment | ($environment | has("ACR_POSTGRES_DSN") | not) and ($environment | has("ACR_CLICKHOUSE_DSN") | not) and ($environment | has("ACR_ALLOW_INSECURE_POSTGRES") | not)' "$STATE/rendered.json" >/dev/null \
+    || die 'ACR API environment inherited direct or insecure configuration'
+  jq -e '[.services.postgres, .services.clickhouse, .services.valkey] | all(.[]; ((.ports // []) | length == 0))' "$STATE/rendered.json" >/dev/null \
+    || die 'acceptance infrastructure retained a host port publication'
+  jq -e '.services["acr-db-init"].entrypoint == ["/usr/local/bin/acr-db-init"] and .services["acr-db-init"].command == ["roles"] and .services["acr-db-acl"].entrypoint == ["/usr/local/bin/acr-db-init"] and .services["acr-db-acl"].command == ["runtime-acl"]' "$STATE/rendered.json" >/dev/null \
+    || die 'ACR database jobs inherited local-dev process configuration'
 }
 
 wait_https() { curl --fail --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' "https://localhost:${PORT}$1" >/dev/null; }

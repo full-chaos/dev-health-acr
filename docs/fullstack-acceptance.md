@@ -111,9 +111,9 @@ Before any client runs, the seeder must verify and record in `fixture-verificati
 
 | Task | Scope | Expected packet | Purpose |
 | --- | --- | --- | --- |
-| `task-001-checkout-flake-exact-commit` | `commit_sha=a1b2…` | `partial` / `exact_commit` | ≥2 expandable evidence refs |
-| `task-002-auth-refactor-branch` | `branch=main` | `partial` / `branch_filtered` | branch resolution, disclosed fallbacks |
-| `task-003-unindexed-branch-empty` | `branch=release/1.4-unindexed` | `degraded` / `branch_filtered` | visible degradation, no fabrication |
+| `task-001-checkout-flake-exact-commit` | `commit_sha=a1b2…` | `complete` / `exact_commit` | ≥2 expandable evidence refs |
+| `task-002-auth-refactor-branch` | `branch=main` | `complete` / `branch_filtered` | branch resolution, repository-wide labeling |
+| `task-003-unindexed-branch-empty` | `branch=release/1.4-unindexed` | `partial` / `branch_filtered` | visible branch gaps, no branch-specific fabrication |
 | `task-004-foreign-repo-denied` | `repo=example-org/other-service` | HTTP 403 `repo_forbidden` | credential repository scope |
 | `task-005-unavailable-evidence` | forged/expired evidence ref | typed `not_found`, no URL fetch | evidence boundary |
 
@@ -132,25 +132,23 @@ repository; it does not query the retired `incidents` table or disclose unmapped
 The shared catalog projection promotes confidence to `Float64`, preserving native Float64 values
 while safely widening native Float32 sources.
 
-**A deliberate control-flow property.** `ExecuteCatalog` skips whole scope classes by design:
-all ten `EvidenceScopeRepo` queries when a branch is set, and both `EvidenceScopeCommit`
-queries when no commit is. Each skip records an unavailable source. So only one request shape
-— commit pinned *and* branch empty, which is task-001 — can ever unlock all three classes at
-once. Task-002 is branch-scoped by definition and structurally carries twelve unavailable
-sources no matter what the fixture contains. That is correct behaviour, not a defect.
+**Scope-aware source behavior.** Branch-filtered sources apply the requested branch.
+Repository-scoped sources still execute and label returned items `repository-wide`. The commit
+and commit-file sources use an exact commit when one is supplied and otherwise perform a
+repository-wide read. A branch request therefore does not turn an otherwise available source
+into an unavailable source merely because that source cannot apply the branch filter.
 
-Each oracle therefore asserts the **exact** unavailable-source set rather than merely
-tolerating `partial`:
+Each oracle asserts the **exact** unavailable-source set:
 
 | Task | Unavailable sources | Why |
 | --- | --- | --- |
 | task-001 | 0 | commit-pinned with no branch; all seeded catalog sources are available |
-| task-002 | 12 — 10 repo-scoped + 2 commit-scoped | branch-only scope skips those classes by design |
-| task-003 | 17 — all of them | 5 branch-scoped queried and empty, 12 skipped |
+| task-002 | 0 | all branch-filtered and repository-wide source families have seeded evidence |
+| task-003 | 5 | only the branch-filtered source families have no rows for the unindexed branch |
 
-Exact-set matching is what makes this useful: task-001 now fails when a source becomes
-unavailable, while task-002 and task-003 continue to pin their deliberate scope and empty-data
-disclosures.
+Exact-set matching is what makes this useful: tasks 001 and 002 fail when any source becomes
+unavailable, while task-003 pins the deliberate five-source branch gap and still proves that
+repository-wide evidence remains available without becoming a branch-specific finding.
 
 The ten background-density rows that make the exact-set assertion meaningful are explicitly
 not semantic. The four evaluation-corpus evidence records remain the only required evidence.
@@ -342,7 +340,7 @@ Docker, a network, or OpenCode.
 ### 8.1 The self-test
 
 A suite that only ever sees a well-behaved scripted model proves nothing about its own
-ability to catch a misbehaving one. The `self-test` scenario replays one complete task with a
+ability to catch a misbehaving one. The `self-test` scenario replays suitable tasks with a
 deliberate fault injected into the deterministic model and requires the assertion layers to
 **fail**:
 
@@ -352,8 +350,8 @@ from anywhere else:
 | Fault | What it simulates | Check that must catch it |
 | --- | --- | --- |
 | `invent-evidence` | cites an `evidence_ref_id` no tool response returned | L5 `no_invented_evidence_ids` |
-| `inflate-status` | reports `complete` for a degraded packet | L5 `agent_result_packet_status_matches_live_packet` |
-| `fabricate-findings` | reports findings for an empty packet | L5 `degraded_findings_empty` |
+| `inflate-status` | reports `complete` for task-003's partial packet | L5 `agent_result_packet_status_matches_live_packet` |
+| `fabricate-findings` | reports branch-specific findings where task-003 permits none | L5 `findings_must_be_empty` |
 | `skip-evidence` | never calls `source_evidence` | L3 `source_evidence_meets_expansion_floor` |
 | `wrong-scope` | reports a scope resolution the packet did not resolve to | L5 `agent_result_scope_resolution_matches_live_packet` |
 | `unsupported-claim` | asserts an `observed` finding with no citation | L5 `observed_finding_has_citation[…]` |
@@ -381,8 +379,9 @@ were added after a run where neither held:
 some unrelated reason is indistinguishable from a real catch if you only look at the exit
 status, and it leaves the targeted check silently unproven. `assert_rejected_for` therefore
 requires the named check to appear among the failing ones. This is also why
-`fabricate-findings` is replayed against task-003 rather than task-001: on a rich packet the
-fault is a no-op, so the "rejection" it produced was somebody else's.
+`inflate-status` and `fabricate-findings` are replayed against task-003 rather than task-001:
+task-003 is partial and forbids branch-specific findings, while task-001 is complete and permits
+evidence-backed findings. Using task-001 would make either targeted mutation a no-op.
 
 **Each faulted session must leave its own event stream.** The faulted run's artifacts are
 filed under `<task>-<fault>`, and the run fails outright if
@@ -430,7 +429,7 @@ rather than take it on trust.
 | Temporary bare-bones OpenCode config; the operator's own config is untouched | `render_client_sandbox`, `host_config_digest` / `assert_host_config_untouched`, `assert_throwaway_home_was_used`; pinned by `test-fullstack-opencode.sh` |
 | OpenCode starts the actual `acr-mcp serve` and calls both read tools | `opencode.json.template` registers `["<acr-mcp>", "serve"]`; assertion layer **L3** requires both invocations in the event stream |
 | Packet and evidence validate against current contracts | **L2** validates the packet; **L4** validates the driver's direct-HTTP evidence capture in full, unconditionally. The client's *own* copy is schema-checked only when a client forwards JSON — never, with OpenCode 1.18.4 — and is otherwise tied to the validated capture by `client_and_direct_http_evidence_agree` on entity and availability. The skip is recorded explicitly; see §6.1 |
-| Complete, branch/commit-scoped and empty/degraded behaviour match the oracle | tasks 001 / 002 / 003 and their `expected_packet_status` + `expected_scope_resolution`; see §5.1 for why "complete" currently reads as `partial` |
+| Complete, branch/commit-scoped and partial branch-gap behaviour match the oracle | tasks 001 / 002 / 003 and their `expected_packet_status` + `expected_scope_resolution`; §5.1 pins exact unavailable-source sets |
 | Final response validates against `context_fabric_agent_result.v1` | **L5**, against `testdata/fullstack/v1/schema/` |
 | Every observed claim cites returned evidence; invented IDs, unsupported claims, wrong scope, hidden degradation all fail | **L5** checks, each proven end to end by one of the `self-test` scenario's six injected faults (§8.1) |
 | `record_episode` unavailable by default | `capture_capabilities`, `capture_mcp_tools`, and **L2**/**L3** |
@@ -487,7 +486,7 @@ also fails `required_findings_present`, because with nothing expanded the model'
 selectors match nothing and its own refusal to assert uncitable claims drops both findings into
 assumptions — the targeted check fires on the cause, this one on the effect.
 `fabricate-findings` also fails `agent_result_schema` and `observed_finding_has_citation`,
-because the finding it synthesizes for an empty packet has nothing to cite and so violates the
+because the branch-specific finding it synthesizes has nothing to cite and so violates the
 same `observed` ⇒ `minItems: 1` rule that `unsupported-claim` targets by name. Neither is
 noise: `assert_rejected_for` requires the *targeted* check among the failures, so a fault that
 stopped tripping its own check would still fail the run.

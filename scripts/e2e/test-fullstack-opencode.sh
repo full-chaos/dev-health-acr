@@ -8,6 +8,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 script="$root/scripts/e2e/fullstack-opencode.sh"
 driver="$root/scripts/e2e/compose.sh"
+compose_overlay="$root/deploy/compose/acr.compose.yml"
 fixtures="$root/testdata/fullstack/v1"
 template="$root/tests/fullstack/opencode/opencode.json.template"
 prompt="$root/tests/fullstack/opencode/task-prompt.md"
@@ -22,6 +23,25 @@ grep -Fq 'ACR_E2E_SEED_HOOK' "$driver" || fail 'compose.sh lost the evidence see
 grep -Fq 'ACR_E2E_REPOSITORY_SCOPE' "$driver" || fail 'compose.sh lost the repository scope override'
 grep -Fq 'prepare_stack()' "$driver" || fail 'compose.sh lost the prepared-stack boundary'
 grep -Fq 'assert_scoped_repository' "$driver" || fail 'compose.sh lost the single-repository assertion'
+grep -Fq 'SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"' "$driver" \
+  || fail 'the staged Ops API must receive a deterministic setuptools-scm version'
+grep -Fq 'jwt="$(random_secret)"' "$driver" \
+  || fail 'the isolated Ops API must generate a per-run JWT secret'
+grep -Fq 'JWT_SECRET_KEY: "${jwt}"' "$driver" \
+  || fail 'the isolated Ops API must receive its generated JWT secret'
+[[ "$(grep -Fc 'environment: !override' "$driver")" -eq 2 ]] \
+  || fail 'the ACR migration and runtime environments must replace inherited local-dev variables'
+[[ "$(grep -Fc 'ports: !override []' "$driver")" -eq 4 ]] \
+  || fail 'the acceptance overlay must remove inherited infrastructure and ACR API ports'
+grep -Fq 'volumes: !override []' "$driver" \
+  || fail 'the ACR API must remove inherited local-dev bind mounts'
+grep -Fq 'depends_on: !override' "$driver" \
+  || fail 'the ACR API must replace inherited local-dev dependencies'
+if grep -Eq 'ACR_(POSTGRES_MIGRATION_DSN|POSTGRES_DSN|CLICKHOUSE_DSN|ALLOW_INSECURE_POSTGRES): !reset' "$driver"; then
+  fail 'individual environment resets do not remove inherited Compose map entries'
+fi
+[[ "$(grep -Fc 'entrypoint: ["/usr/local/bin/acr-db-init"]' "$compose_overlay")" -eq 2 ]] \
+  || fail 'the ACR role and ACL jobs must replace inherited Compose entrypoints'
 # prepare_stack must not perform client assertions of its own; start_happy owns those.
 prepared="$(sed -n '/^prepare_stack()/,/^}/p' "$driver")"
 printf '%s' "$prepared" | grep -Fq 'run_mcp' && fail 'prepare_stack must not run the driver smoke probes'
@@ -32,6 +52,7 @@ grep -Fq 'refusing the operator default Compose project' "$script" || fail 'oper
 grep -Fq 'assert_project_unused' "$script" || fail 'pre-existing project guard is missing'
 grep -Fq 'assert_host_config_untouched' "$script" || fail 'host config isolation proof is missing'
 grep -Fq 'assert_throwaway_home_was_used' "$script" || fail 'the positive half of the isolation proof is missing'
+grep -Fq 'LC_ALL=C comm -13' "$script" || fail 'snapshot comparison must use the same C locale as client_state_lines'
 # The operator data directory is routinely tens of GB; hashing it would outlast the run.
 if grep -Eq 'find "\$path" -type f -exec shasum' "$script"; then
   fail 'the isolation proof must fingerprint metadata, never hash the operator installation'
@@ -144,7 +165,7 @@ jq -e . "$fixtures/fixture-manifest.json" >/dev/null || fail 'fixture manifest i
 jq -e '.schema_version == "fullstack_tasks.v1" and (.tasks | length >= 3)' "$fixtures/tasks.json" >/dev/null \
   || fail 'task set is not a valid fullstack_tasks.v1 document'
 jq -e '[.tasks[] | select(.profiles | index("smoke"))] | length >= 2' "$fixtures/tasks.json" >/dev/null \
-  || fail 'the PR smoke profile must cover at least a complete and a degraded task'
+  || fail 'the PR smoke profile must cover at least a complete and a partial task'
 
 seed_count=0
 for seed in "$fixtures"/seed/clickhouse/*.sql; do

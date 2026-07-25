@@ -35,11 +35,11 @@ func TestLoadOracle_RealFixtureFiles(t *testing.T) {
 		},
 		{
 			file: "task-002.oracle.json", taskID: "task-002-auth-refactor-branch",
-			wantPacketStatus: "partial", wantScopeResolution: "branch_filtered",
+			wantPacketStatus: "complete", wantScopeResolution: "branch_filtered",
 		},
 		{
 			file: "task-003.oracle.json", taskID: "task-003-unindexed-branch-empty",
-			wantPacketStatus: "degraded", wantScopeResolution: "branch_filtered",
+			wantPacketStatus: "partial", wantScopeResolution: "branch_filtered",
 			wantFindingsEmpty: true,
 		},
 		{
