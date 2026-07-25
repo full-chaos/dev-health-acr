@@ -743,9 +743,9 @@ func TestAssertRun_DegradedOracleRequiresEmptyFindings(t *testing.T) {
 	if code == 0 || report.OK {
 		t.Fatal("expected the run to fail when a degraded/empty oracle still has findings")
 	}
-	check := findCheck(t, report, "L5", "degraded_findings_empty")
+	check := findCheck(t, report, "L5", "findings_must_be_empty")
 	if check.OK {
-		t.Fatal("degraded_findings_empty should have failed: the agent reported a finding for a degraded packet")
+		t.Fatal("findings_must_be_empty should have failed: the agent reported a finding where the oracle forbids findings")
 	}
 	// This fixture's event stream is otherwise compliant (no source_evidence call for a
 	// packet with nothing to expand), so L3's degraded-specific check must NOT also fire --
@@ -779,6 +779,33 @@ func TestAssertRun_SourceEvidenceCalledForDegradedPacketFails(t *testing.T) {
 	check := findCheck(t, report, "L3", "source_evidence_not_called_for_degraded_packet")
 	if check.OK {
 		t.Fatal("source_evidence_not_called_for_degraded_packet should have failed")
+	}
+}
+
+func TestAssertRun_PartialPacketCanRequireEmptyFindingsAndEvidenceExpansion(t *testing.T) {
+	// Given
+	dir := setupRunDir(t)
+	writeFile(t, filepath.Join(dir, "context-packet-"+testTaskID+".json"), validContextPacket("partial", "branch_filtered"))
+	writeFile(t, filepath.Join(dir, "agent-result-"+testTaskID+".json"),
+		validAgentResult("partial", "branch_filtered", ""))
+	oracle := filepath.Join(dir, "oracle.json")
+	writeFile(t, oracle, `{"schema_version":"fullstack_task_oracle.v1","task_id":"`+testTaskID+`",
+	  "expected_packet_status":"partial","expected_scope_resolution":"branch_filtered",
+	  "findings_must_be_empty":true,"min_expandable_evidence":1}`)
+
+	// When
+	code, report := runAssertRunArgs(t, dir, oracle)
+
+	// Then
+	if code != 0 || !report.OK {
+		for _, layer := range report.Layers {
+			for _, check := range layer.Checks {
+				if !check.OK {
+					t.Logf("FAIL %s/%s: expected=%q actual=%q msg=%q", layer.Layer, check.Name, check.Expected, check.Actual, check.Message)
+				}
+			}
+		}
+		t.Fatalf("expected a partial evidence-backed packet to allow expansion while requiring no findings: code=%d ok=%v", code, report.OK)
 	}
 }
 

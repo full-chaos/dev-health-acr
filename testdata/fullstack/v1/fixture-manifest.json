@@ -1,6 +1,6 @@
 {
   "schema_version": "fullstack_fixture_manifest.v1",
-  "fixture_version": "2026-07-23.1",
+  "fixture_version": "2026-07-25.1",
   "description": "Deterministic ClickHouse projection of testdata/evaluation/v1 (CHAOS-2918) for the CHAOS-3065 full-stack OpenCode acceptance gate.",
   "source_corpus": {
     "path": "testdata/evaluation/v1",
@@ -43,12 +43,12 @@
   "seed_files": [
     {
       "path": "testdata/fullstack/v1/seed/clickhouse/001_widget_service.sql",
-      "sha256": "3f060a99a129f3755ffa779a26370e67d247ffbdd582162ec56635583027fbf9"
+      "sha256": "97bf1054c9effb251274aa3f53da6433f2dcba6fda1c4c4442010adf9a4d6e9c"
     }
   ],
   "org_id_substitution": {
     "token": "__ORG_ID__",
-    "contract": "The orchestrator performs exactly one textual substitution of the literal token __ORG_ID__ with the isolated organization UUID minted by `dev-hops admin orgs create` before executing any seed file. Every org_id column value in the seed file is the quoted literal '__ORG_ID__' (27 occurrences across all tables that have the column). Preflight must assert the substitution happened exactly once per row (no row may still contain the literal token after seeding, and no row may have a different org_id). Note: four tables (ai_workflow_runs, ai_workflow_artifact_edges, work_graph_pr_review_outcome_edges, work_graph_deployment_incident_edges) declare org_id as UUID rather than String; the same '__ORG_ID__' literal is used there and is cast implicitly once substituted with a real UUID string.",
+    "contract": "The orchestrator performs exactly one textual substitution of the literal token __ORG_ID__ with the isolated organization UUID minted by `dev-hops admin orgs create` before executing any seed file. Every org_id column value in the seed file is the quoted literal '__ORG_ID__' (32 occurrences across all tables that have the column). Preflight must assert the substitution happened exactly once per row (no row may still contain the literal token after seeding, and no row may have a different org_id). Note: four tables (ai_workflow_runs, ai_workflow_artifact_edges, work_graph_pr_review_outcome_edges, work_graph_deployment_incident_edges) declare org_id as UUID rather than String; the same '__ORG_ID__' literal is used there and is cast implicitly once substituted with a real UUID string.",
     "org_id_on_git_ci_deployment_tables": {
       "tables": [
         "git_commits",
@@ -161,7 +161,7 @@
     ],
     "unindexed_branch": {
       "branch": "release/1.4-unindexed",
-      "note": "Intentionally has zero rows in every table for task-003."
+      "note": "Intentionally has zero branch-filtered rows; repository-wide evidence remains eligible for task-003."
     }
   },
   "expected_row_counts": {
@@ -180,8 +180,8 @@
       "work_graph_pr_review_outcome_edges": 1,
       "deployments": 1,
       "work_graph_deployment_incident_edges": 1,
-      "file_hotspot_daily": 1,
-      "file_complexity_snapshots": 1
+      "file_hotspot_daily": 3,
+      "file_complexity_snapshots": 4
     },
     "example-org/other-service": {
       "repos": 1,
@@ -202,7 +202,7 @@
       "file_complexity_snapshots": 0
     }
   },
-  "expected_row_counts_note": "Counts are per repo_id, optionally tightened with org_id (joined through repos, or filtered directly for the tables listed in org_id_substitution.org_id_on_git_ci_deployment_tables, all of which now have org_id set by this seed: e.g. 'SELECT count() FROM <t> FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID}'). Two tables must NEVER use FINAL: file_hotspot_daily and file_complexity_snapshots are plain MergeTree (PARTITION BY toYYYYMM(...), not ReplacingMergeTree), so FINAL is rejected outright -- count them with a plain 'SELECT count() FROM <t> WHERE repo_id = {repo_id:UUID}' (org_id is set on neither of those two by this seed; scope by repo_id, or join repos, there) (matching why the catalog queries for file_hotspots.v1/file_complexity.v1 use GROUP BY instead of FINAL). Every other table listed here (repos, git_commits, git_commit_stats, ci_pipeline_runs, git_pull_requests, git_pull_request_reviews, work_items, work_item_dependencies, work_graph_edges, ai_workflow_runs, ai_workflow_artifact_edges, work_graph_pr_review_outcome_edges, deployments, work_graph_deployment_incident_edges) is ReplacingMergeTree, has org_id set by this seed, and should use FINAL. Totals are intentionally not listed here: every key must resolve to a repository in fixed_identities.repositories. incidents is never seeded (see background_density_rows and CHAOS-3068).",
+  "expected_row_counts_note": "Counts are per repo_id, optionally tightened with org_id (joined through repos, or filtered directly for the tables listed in org_id_substitution.org_id_on_git_ci_deployment_tables, all of which now have org_id set by this seed: e.g. 'SELECT count() FROM <t> FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID}'). Two tables must NEVER use FINAL: file_hotspot_daily and file_complexity_snapshots are plain MergeTree (PARTITION BY toYYYYMM(...), not ReplacingMergeTree), so FINAL is rejected outright -- count them with a plain 'SELECT count() FROM <t> WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID}' because this seed sets org_id explicitly on both tables (matching why the catalog queries for file_hotspots.v1/file_complexity.v1 use GROUP BY instead of FINAL). Every other table listed here (repos, git_commits, git_commit_stats, ci_pipeline_runs, git_pull_requests, git_pull_request_reviews, work_items, work_item_dependencies, work_graph_edges, ai_workflow_runs, ai_workflow_artifact_edges, work_graph_pr_review_outcome_edges, deployments, work_graph_deployment_incident_edges) is ReplacingMergeTree, has org_id set by this seed, and should use FINAL. Totals are intentionally not listed here: every key must resolve to a repository in fixed_identities.repositories. incidents is never seeded (see background_density_rows and CHAOS-3068).",
   "scope_probes": [
     {
       "description": "widget-service resolves to exactly one repository row for the authenticated org",

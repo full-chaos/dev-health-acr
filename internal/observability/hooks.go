@@ -102,6 +102,8 @@ func (h Hooks) ObserveStore(ctx context.Context, observation StoreObservation) {
 	snapshot.SourceCoverage = normalizeSourceCoverage(observation.Packet.SourceCoverage)
 	snapshot.StoreQueryClass = normalizeStoreQueryClass(observation.QueryClass)
 	snapshot.StoreBackend = normalizeStoreBackend(observation.Backend)
+	snapshot.StoreSource = normalizeStoreSource(observation.Source)
+	snapshot.StorePhase = normalizeStorePhase(observation.Phase)
 	snapshot.QueryTimedOut = observation.TimedOut
 	h.record(ctx, snapshot)
 }
@@ -164,6 +166,8 @@ func baseSnapshot(kind Kind, outcome Outcome, duration time.Duration) SupportSna
 		SourceCoverage:        SourceCoverageUnknown,
 		StoreQueryClass:       StoreQueryUnknown,
 		StoreBackend:          StoreBackendUnknown,
+		StoreSource:           StoreSourceUnknown,
+		StorePhase:            StorePhaseUnknown,
 		EpisodeOutcome:        EpisodeOutcomeUnknown,
 		AuditDelivery:         AuditDeliveryUnknown,
 	}

@@ -78,14 +78,42 @@ func TestTraceCompletionNormalizesUntrustedOutcome(t *testing.T) {
 	}
 }
 
-func TestSlogSinkIncludesBoundedStoreQueryClass(t *testing.T) {
+func TestSlogSinkIncludesBoundedStoreQueryDetails(t *testing.T) {
 	buffer := &bytes.Buffer{}
 	sink := NewSlogSink(slog.New(slog.NewJSONHandler(buffer, nil)))
 
-	sink.Record(SupportSnapshot{Kind: KindStore, StoreQueryClass: StoreQueryEvidence})
+	sink.Record(SupportSnapshot{
+		Kind:            KindStore,
+		StoreQueryClass: StoreQueryEvidence,
+		StoreSource:     "file_complexity.v1",
+		StorePhase:      StorePhaseIteration,
+	})
 
-	if !strings.Contains(buffer.String(), `"store_query_class":"evidence"`) {
+	if log := buffer.String(); !strings.Contains(log, `"store_query_class":"evidence"`) ||
+		!strings.Contains(log, `"store_source":"file_complexity.v1"`) ||
+		!strings.Contains(log, `"store_phase":"iteration"`) {
 		t.Fatalf("log = %s", buffer.String())
+	}
+}
+
+func TestAssemblyObserverIncludesBoundedSourceFailurePhase(t *testing.T) {
+	// Given
+	sink := NewMemorySink(4)
+	observer := NewAssemblyObserver(NewHooks(sink, nil))
+
+	// When
+	observer.ObserveStoreQuery(context.Background(), contextpacket.StoreQueryObservation{
+		Operation:   contextpacket.StoreOperationEvidence,
+		Backend:     contextpacket.StoreBackendClickHouse,
+		Outcome:     contextpacket.OperationFailure,
+		SourceID:    "file_complexity.v1",
+		SourcePhase: contextpacket.SourceQueryPhaseIteration,
+	})
+
+	// Then
+	snapshot := sink.Snapshots()[0]
+	if snapshot.StoreSource != "file_complexity.v1" || snapshot.StorePhase != StorePhaseIteration {
+		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
 

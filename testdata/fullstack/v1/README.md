@@ -182,33 +182,26 @@ and its oracle asserts an exact empty `expected_unavailable_sources` set. `incid
 the canonical `operational_incidents` table through its active service-to-repository mapping; the
 catalog normalizes every confidence projection to `Float64`, which `scanEvidenceRow` preserves.
 
-Task-002 remains `partial` because its branch scope deliberately skips repository-scoped
-sources. Task-003 remains itemless and `degraded` with explicit unavailable-source disclosure.
-Task-005 remains the `404 not_found` evidence-boundary case. These status differences are
-intentional scope and evidence behavior, not query failures.
+Task-002 is also `complete`: branch-filtered sources apply `main`, while repository-wide sources
+remain available and are labeled accordingly. Task-003 is `partial`: its five branch-filtered
+sources have no rows, but repository-wide sources still return evidence that must not be promoted
+into a branch-specific finding. Task-005 remains the `404 not_found` evidence-boundary case.
 
-`dev-health-source-catalog.v1` (`source_queries.go`) has **17** source queries, scoped
-`commit` / `branch` / `repo`. `source_catalog.go`'s `ExecuteCatalog`:
+`dev-health-source-catalog.v1` (`source_queries.go`) has **17** source queries with different
+scope capabilities. `source_catalog.go`'s `ExecuteCatalog`:
 
-* skips every `repo`-scoped query outright (with an `UnavailableSource`) whenever the request
-  has a branch;
-* skips every `commit`-scoped query outright (with an `UnavailableSource`) whenever the
-  request has no commit sha;
-* and, for every query that *does* run and returns zero rows, `appendMissingCatalogSources`
-  adds a `no_evidence` `UnavailableSource` too.
+* applies a branch predicate only to branch-filtered sources;
+* executes repository-scoped sources on every authorized repository request and labels their
+  returned items `repository-wide`;
+* uses an exact commit predicate when `commit_sha` is present, while the commit and commit-file
+  sources deliberately support a repository-wide read when it is absent;
+* adds a `no_evidence` `UnavailableSource` when an eligible source returns zero rows.
 
-**Consequence 1 -- task-002 (and any branch-scoped task) can never reach `complete`, for any
-fixture.** Its scope is branch-only (`branch=main`, no commit, required by its own "branch
-resolution" purpose), so all 10 `repo`-scoped sources are unconditionally skipped
-(`repo_fallback_branch_not_supported`) and both `commit`-scoped sources are unconditionally
-skipped (`commit_scope_not_requested`) -- 12 guaranteed `UnavailableSource` entries with zero
-dependence on what is seeded. The *only* request shape under which every source is even
-eligible to run is "branch empty AND commit_sha set" (both the repo-scope skip and the
-commit-scope skip are avoided simultaneously) -- exactly task-001's shape, and the only one.
-This fixture now seeds one bystander row in each of the 10 `repo`-scoped/`file_complexity.v1`
-sources specifically so task-001 can reach zero `UnavailableSource` (see
-`background_density_rows` in `fixture-manifest.json`); task-002 structurally cannot, no matter
-how much is seeded.
+**Consequence 1 -- task-002 reaches `complete` without misrepresenting scope.** Its branch-only
+request returns the main-branch PR, review, CI, freshness, and complexity rows. Repository-wide
+work, deployment, incident, AI, hotspot, graph, commit, and commit-file evidence also remains
+available, but the rendered item titles disclose that wider validity where applicable. The
+fixture includes replaced historical code-metric runs to exercise bounded latest-run selection.
 
 **Consequence 2 -- task-001 reaches `complete` with canonical incident evidence.**
 `incidents.v1` reads active `operational_incidents` through active service-to-repository mappings
@@ -229,18 +222,17 @@ items empty:      candidateCount>0            -> Partial + "context_filtered_or_
                   else                        -> Empty + "no_evidence_found"
 ```
 
-task-003's own branch genuinely has zero matching rows in the 5 branch-scoped sources no
-matter what else is seeded elsewhere, so its `Unavailable` is never empty either --
-`PacketEmpty` and the literal `no_evidence_found` warning are unreachable for it; the real
-code produces `Degraded` instead (see its oracle's `status_reasoning`).
+Task-003's own branch genuinely has zero matching rows in the five branch-filtered sources.
+Those five `no_evidence` disclosures coexist with repository-wide evidence, so the real packet
+is `Partial`. The oracle requires zero findings: wider repository evidence may be expanded and
+reported as context, but it cannot support a claim about the unindexed branch.
 
 ## Cross-task evidence bleed
 
 All five tasks share one repository (`example-org/widget-service`) and effectively one
 branch (`main`), because that is what the underlying evaluation corpus models. Several
-source queries are scoped by branch, not by task, so e.g. task-001's exact-commit request
-(which leaves branch empty) will also surface PR #1042 and its review, and task-002's
-branch-only request will also surface the `checkout-e2e-run-4821` CI run. This is expected
-and each oracle notes it explicitly (`known_additional_evidence_note`) -- it is not something
-`forbidden_evidence` should ever flag. Only `example-org/other-service` content is genuinely
-forbidden.
+source queries are scoped by repository, branch, or commit rather than by task. Task-001's
+exact-commit request can therefore surface repository-wide PR #1042 context, task-002's branch
+request also surfaces repository-wide work and commit context, and task-003 still receives
+repository-wide context despite its empty branch-filtered sources. Each oracle records this in
+`known_additional_evidence_note`; only `example-org/other-service` content is genuinely forbidden.

@@ -282,6 +282,15 @@ INSERT INTO file_hotspot_daily
      cyclomatic_avg, blame_concentration, risk_score, computed_at, org_id)
 VALUES
     ('00000000-3065-4000-8000-000000000001', '2026-01-14', 'src/checkout/cart_drawer.ts',
+     180, 8, 30, 2.5, 0.58, 37.0, '2026-01-14 11:00:00', '__ORG_ID__'),
+    ('00000000-3065-4000-8000-000000000001', '2026-01-14', 'src/checkout/replaced.ts',
+     80, 4, 19, 2.1, 0.44, 20.0, '2026-01-14 11:00:00', '__ORG_ID__');
+
+INSERT INTO file_hotspot_daily
+    (repo_id, day, file_path, churn_loc_30d, churn_commits_30d, cyclomatic_total,
+     cyclomatic_avg, blame_concentration, risk_score, computed_at, org_id)
+VALUES
+    ('00000000-3065-4000-8000-000000000001', '2026-01-14', 'src/checkout/cart_drawer.ts',
      220, 9, 34, 2.8, 0.62, 41.5, '2026-01-14 12:00:00', '__ORG_ID__');
 
 -- file_complexity.v1 (EvidenceScopeBranch; ref='main' so it also matches
@@ -291,4 +300,15 @@ INSERT INTO file_complexity_snapshots
      cyclomatic_avg, high_complexity_functions, very_high_complexity_functions, computed_at, org_id)
 VALUES
     ('00000000-3065-4000-8000-000000000001', '2026-01-14', 'main', 'src/checkout/cart_drawer.ts',
-     'typescript', 180, 12, 34, 2.8, 1, 0, '2026-01-14 12:00:00', '__ORG_ID__');
+     'typescript', 170, 11, 30, 2.7, 1, 0, '2026-01-14 11:00:00', '__ORG_ID__'),
+    ('00000000-3065-4000-8000-000000000001', '2026-01-14', 'main', 'src/checkout/replaced.ts',
+     'typescript', 90, 7, 19, 2.2, 1, 0, '2026-01-14 11:00:00', '__ORG_ID__');
+
+INSERT INTO file_complexity_snapshots
+    (repo_id, as_of_day, ref, file_path, language, loc, functions_count, cyclomatic_total,
+     cyclomatic_avg, high_complexity_functions, very_high_complexity_functions, computed_at, org_id)
+VALUES
+    ('00000000-3065-4000-8000-000000000001', '2026-01-14', 'main', 'src/checkout/cart_drawer.ts',
+     'typescript', 180, 12, 34, 2.8, 1, 0, '2026-01-14 12:00:00', '__ORG_ID__'),
+    ('00000000-3065-4000-8000-000000000001', '2026-01-14', 'zzz-tied-ref', 'src/checkout/other_ref.ts',
+     'typescript', 80, 5, 11, 2.2, 0, 0, '2026-01-14 12:00:00', '__ORG_ID__');

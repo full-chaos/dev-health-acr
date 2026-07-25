@@ -215,9 +215,8 @@ func buildResult(plan Plan, observed Observation) agentResult {
 		panic("FaultDowngradeClaimKind: plan has no finding to downgrade the claim_kind of")
 	}
 
-	// A degraded packet's oracle has no planned findings to distort, so the fault has to
-	// invent one outright — which is exactly the behaviour under test: an agent that answers
-	// from background knowledge when the run returned nothing.
+	// A no-findings oracle has no planned finding to distort, so the fault invents one outright.
+	// This models an agent that promotes background or wider-scope context into an unsupported claim.
 	if fabricate && len(result.Findings) == 0 {
 		result.Findings = append(result.Findings, finding{
 			ClaimID:   "fault-fabricated-finding",

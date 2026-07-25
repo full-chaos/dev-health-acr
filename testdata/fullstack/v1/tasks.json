@@ -55,7 +55,7 @@
       "forged_evidence_ref_id": "ev1_e2efixturekid_ci_RkFLRUZBS0VGQUtFRkFLRQ.RkFLRS1NQUMtVEhBVC1ORVZFUi1NQVRDSC1BTlktLSE",
       "profiles": ["full"],
       "oracle": "expected/task-005.oracle.json",
-      "notes": "New goal (no corpus equivalent). context_for_task runs normally against widget-service/main; source_evidence is then called with forged_evidence_ref_id, which is syntactically well-formed (passes the 8-256 char / no-control-char check) but was never issued by this ClickHouse-backed ACR instance for this org, so it cannot route or match any row -- see README for why a literal evidence_ref_id can never be precomputed exactly and why this is still a deterministic, guaranteed-not_found probe."
+      "notes": "New goal (no corpus equivalent). The harness directly requests forged_evidence_ref_id from the evidence endpoint; it does not run context_for_task or OpenCode for this negative boundary case. The reference is syntactically well-formed but was never issued by this ACR instance, so it deterministically returns not_found."
     }
   ]
 }

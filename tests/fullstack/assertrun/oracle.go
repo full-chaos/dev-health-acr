@@ -56,10 +56,7 @@ type Oracle struct {
 	FindingsMustBeEmpty bool                    `json:"findings_must_be_empty,omitempty"`
 
 	// Denial expectations. task-004 puts these at the top level; task-005 nests them under
-	// source_evidence_request (its context_for_task_request block describes a normal 200 the
-	// current orchestrator does not actually issue for that task -- see
-	// scripts/e2e/fullstack-opencode.sh run_unavailable_evidence_task, which only calls the
-	// evidence endpoint directly). httpExpectation() below tries both shapes.
+	// source_evidence_request because it calls the evidence endpoint directly.
 	ExpectedHTTPStatus    int    `json:"expected_http_status,omitempty"`
 	ExpectedErrorCode     string `json:"expected_error_code,omitempty"`
 	SourceEvidenceRequest *struct {
@@ -90,6 +87,13 @@ func (o Oracle) httpExpectation() (status int, code string, ok bool) {
 		return o.SourceEvidenceRequest.ExpectedHTTPStatus, o.SourceEvidenceRequest.ExpectedErrorCode, true
 	}
 	return 0, "", false
+}
+
+func (o Oracle) expectsNoEvidence() bool {
+	if o.ExpectedPacketStatus == nil {
+		return false
+	}
+	return *o.ExpectedPacketStatus == "empty" || *o.ExpectedPacketStatus == "degraded"
 }
 
 // UnavailableSourceOracle mirrors contracts/v1 UnavailableSource, matched against

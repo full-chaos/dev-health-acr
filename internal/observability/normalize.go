@@ -4,6 +4,8 @@ import (
 	"encoding/hex"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
 func parseRequestID(value string) (RequestID, bool) {
@@ -125,6 +127,24 @@ func normalizeSourceCoverage(value SourceCoverage) SourceCoverage {
 		return value
 	default:
 		return SourceCoverageUnknown
+	}
+}
+
+func normalizeStoreSource(value StoreSource) StoreSource {
+	for _, query := range contextpacket.SourceQueryCatalogV1 {
+		if value == StoreSource(query.ID) {
+			return value
+		}
+	}
+	return StoreSourceUnknown
+}
+
+func normalizeStorePhase(value StorePhase) StorePhase {
+	switch value {
+	case StorePhaseQuery, StorePhaseScan, StorePhaseIteration, StorePhaseClose:
+		return value
+	default:
+		return StorePhaseUnknown
 	}
 }
 

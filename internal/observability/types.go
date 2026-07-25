@@ -98,6 +98,20 @@ const (
 	StoreBackendClickHouse StoreBackend = "clickhouse"
 )
 
+type StoreSource string
+
+const StoreSourceUnknown StoreSource = "unknown"
+
+type StorePhase string
+
+const (
+	StorePhaseUnknown   StorePhase = "unknown"
+	StorePhaseQuery     StorePhase = "query"
+	StorePhaseScan      StorePhase = "scan"
+	StorePhaseIteration StorePhase = "iteration"
+	StorePhaseClose     StorePhase = "close"
+)
+
 type EpisodeOutcome string
 
 const (
@@ -185,6 +199,8 @@ type RequestObservation struct {
 type StoreObservation struct {
 	QueryClass StoreQueryClass
 	Backend    StoreBackend
+	Source     StoreSource
+	Phase      StorePhase
 	TimedOut   bool
 	Outcome    Outcome
 	Duration   time.Duration
@@ -239,6 +255,8 @@ type SupportSnapshot struct {
 	SourceCoverage        SourceCoverage
 	StoreQueryClass       StoreQueryClass
 	StoreBackend          StoreBackend
+	StoreSource           StoreSource
+	StorePhase            StorePhase
 	QueryTimedOut         bool
 	SourceFallback        SourceFallback
 	QueryVersion          QueryVersion

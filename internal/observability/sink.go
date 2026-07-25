@@ -73,6 +73,8 @@ func (s SlogSink) Record(snapshot SupportSnapshot) {
 		"compatibility", snapshot.Compatibility,
 		"store_query_class", snapshot.StoreQueryClass,
 		"store_backend", snapshot.StoreBackend,
+		"store_source", snapshot.StoreSource,
+		"store_phase", snapshot.StorePhase,
 		"query_timed_out", snapshot.QueryTimedOut,
 		"source_coverage", snapshot.SourceCoverage,
 		"source_fallback", snapshot.SourceFallback,

@@ -17,7 +17,7 @@ const (
 	FaultInventEvidence Fault = "invent-evidence"
 	// FaultInflateStatus reports a healthier packet status than the packet declared.
 	FaultInflateStatus Fault = "inflate-status"
-	// FaultFabricateFindings reports findings for an empty or degraded packet.
+	// FaultFabricateFindings reports findings where the oracle requires none.
 	FaultFabricateFindings Fault = "fabricate-findings"
 	// FaultSkipEvidence never calls source_evidence.
 	FaultSkipEvidence Fault = "skip-evidence"

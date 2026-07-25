@@ -27,10 +27,12 @@ const (
 )
 
 type StoreQueryObservation struct {
-	Operation StoreOperation
-	Backend   StoreBackend
-	Outcome   OperationOutcome
-	Duration  time.Duration
+	Operation   StoreOperation
+	Backend     StoreBackend
+	Outcome     OperationOutcome
+	Duration    time.Duration
+	SourceID    string
+	SourcePhase SourceQueryPhase
 }
 
 type StoreBackend string
