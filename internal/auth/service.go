@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -27,9 +28,11 @@ type Service struct {
 }
 
 type PreparedCredential struct {
-	token string
-	input storage.CredentialCreateInput
+	complete func(contractsv1.ClientCredential) IssuedCredential
+	input    storage.CredentialCreateInput
 }
+
+const preparedCredentialRedacted = "auth.PreparedCredential{redacted}"
 
 func NewService(store *storage.CredentialLifecycle, options ServiceOptions) (*Service, error) {
 	if store == nil {
@@ -68,7 +71,11 @@ func (s *Service) Create(ctx context.Context, request CreateCredentialRequest) (
 	if err != nil {
 		return IssuedCredential{}, fmt.Errorf("create credential: %w", err)
 	}
-	return prepared.Issued(credential), nil
+	issued, err := prepared.Complete(credential)
+	if err != nil {
+		return IssuedCredential{}, err
+	}
+	return issued, nil
 }
 
 func (s *Service) PrepareCreate(request CreateCredentialRequest) (PreparedCredential, error) {
@@ -84,7 +91,12 @@ func (s *Service) PrepareCreate(request CreateCredentialRequest) (PreparedCreden
 	if err != nil {
 		return PreparedCredential{}, err
 	}
-	return PreparedCredential{token: token, input: input}, nil
+	return PreparedCredential{
+		complete: func(credential contractsv1.ClientCredential) IssuedCredential {
+			return IssuedCredential{Credential: credential, Token: token}
+		},
+		input: input,
+	}, nil
 }
 
 func (p PreparedCredential) StorageInput() storage.CredentialCreateInput {
@@ -95,9 +107,20 @@ func (p PreparedCredential) StorageInput() storage.CredentialCreateInput {
 	return input
 }
 
-func (p PreparedCredential) Issued(credential contractsv1.ClientCredential) IssuedCredential {
-	return IssuedCredential{Credential: credential, Token: p.token}
+func (p PreparedCredential) Complete(credential contractsv1.ClientCredential) (IssuedCredential, error) {
+	if p.complete == nil || credential.CredentialID != p.input.CredentialID || credential.OrgID != p.input.OrgID {
+		return IssuedCredential{}, ErrInvalidCredential
+	}
+	return p.complete(credential), nil
 }
+
+func (PreparedCredential) String() string { return preparedCredentialRedacted }
+
+func (PreparedCredential) GoString() string { return preparedCredentialRedacted }
+
+func (PreparedCredential) LogValue() slog.Value { return slog.StringValue(preparedCredentialRedacted) }
+
+func (PreparedCredential) MarshalJSON() ([]byte, error) { return []byte(`{"redacted":true}`), nil }
 
 func (s *Service) List(ctx context.Context, orgID string) ([]contractsv1.ClientCredential, error) {
 	if orgID == "" {

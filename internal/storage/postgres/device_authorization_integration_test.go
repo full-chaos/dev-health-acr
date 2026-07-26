@@ -73,7 +73,8 @@ func TestDeviceAuthorizationStore_persistsOnlyHashesAndRedeemsExactlyOnce(t *tes
 	}
 	require.Equal(t, 1, successes)
 	require.Equal(t, 1, conflicts)
-	issued := prepared.Issued(success)
+	issued, err := prepared.Complete(success)
+	require.NoError(t, err)
 	var storedHash, rowJSON string
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT token_hash FROM acr.client_credentials WHERE credential_id = $1", success.CredentialID).Scan(&storedHash))
 	require.Equal(t, auth.HashToken(issued.Token), storedHash)
