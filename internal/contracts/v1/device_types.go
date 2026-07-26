@@ -1,7 +1,9 @@
 package v1
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"time"
 )
 
@@ -38,7 +40,15 @@ func (r *DeviceAuthorizationRequest) UnmarshalJSON(data []byte) error {
 		RepositoryHints    *[]string `json:"repository_hints"`
 	}
 	var decoded wire
-	if err := json.Unmarshal(data, &decoded); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return io.ErrUnexpectedEOF
+		}
 		return err
 	}
 	var fields map[string]json.RawMessage

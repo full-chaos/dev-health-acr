@@ -33,6 +33,35 @@ func TestDeviceAuthorizationRequestValidate_rejectsPresentNullOrEmptyHints(t *te
 	}
 }
 
+func TestDeviceAuthorizationRequestDecode_rejectsUnknownFieldsAndTrailingJSON(t *testing.T) {
+	for _, body := range []string{
+		`{"schema_version":"device_authorization_request.v1","unexpected":true}`,
+		`{"schema_version":"device_authorization_request.v1"} {}`,
+	} {
+		var request DeviceAuthorizationRequest
+		if err := request.UnmarshalJSON([]byte(body)); err == nil {
+			t.Fatalf("custom decoder accepted malformed body %s", body)
+		}
+	}
+}
+
+func TestDeviceAuthorizationRequestValidate_rejectsTypedNilRepositoryHints(t *testing.T) {
+	var nilHints []string
+	request := DeviceAuthorizationRequest{
+		SchemaVersion: DeviceAuthorizationRequestSchema, RepositoryHints: &nilHints,
+	}
+	if err := request.Validate(); err == nil {
+		t.Fatal("validator accepted typed nil repository hints")
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := contractcheck.ValidateSerialized("", "device_authorization_request.v1.schema.json", encoded); err == nil {
+		t.Fatal("schema accepted typed nil repository hints")
+	}
+}
+
 func TestDeviceAuthorizationRequestValidate_countsHintRunesLikeSchema(t *testing.T) {
 	valid := strings.Repeat("界", 128)
 	invalid := strings.Repeat("界", 129)

@@ -13,7 +13,7 @@ func (r DeviceAuthorizationRequest) Validate() error {
 		return fmt.Errorf("device authorization request violates v1 bounds")
 	}
 	if (r.organizationIDHintPresent && r.OrganizationIDHint == nil) || (r.repositoryHintsPresent && r.RepositoryHints == nil) ||
-		(r.OrganizationIDHint != nil && *r.OrganizationIDHint == "") {
+		(r.OrganizationIDHint != nil && *r.OrganizationIDHint == "") || (r.RepositoryHints != nil && *r.RepositoryHints == nil) {
 		return fmt.Errorf("device authorization request violates v1 bounds")
 	}
 	var organizationIDHint string
