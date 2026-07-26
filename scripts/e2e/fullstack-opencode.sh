@@ -132,12 +132,22 @@ stop_model_service() {
   MODEL_PID=""
 }
 
+stop_device_login_service() {
+  [[ -n "$DEVICE_LOGIN_PID" ]] || return 0
+  if kill -0 "$DEVICE_LOGIN_PID" 2>/dev/null; then
+    kill -TERM "$DEVICE_LOGIN_PID" 2>/dev/null || true
+    wait "$DEVICE_LOGIN_PID" 2>/dev/null || true
+  fi
+  DEVICE_LOGIN_PID=""
+}
+
 # fullstack_cleanup owns everything this run created: the scripted model process, the
 # throwaway client HOME, and — through the shared driver — the Compose project. Artifacts
 # are deliberately outside $STATE so they survive teardown.
 fullstack_cleanup() {
   local status=$?
   trap '' INT TERM HUP
+  stop_device_login_service
   stop_model_service
   assert_host_config_untouched || status=1
   if [[ -n "$CLIENT_HOME" && -d "$CLIENT_HOME" && "${E2E_DEBUG:-0}" != '1' ]]; then
@@ -1124,14 +1134,14 @@ prepare_device_login_environment() {
 
 redact_device_login_log() {
   sed -E \
-    -e 's/[ABCDEFGHJKMNPQRSTVWXYZ23456789]{8}/REDACTED_DEVICE_CODE/g' \
+    -e 's/[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}/REDACTED_DEVICE_CODE/g' \
     -e 's/(fcacr|svc_acr)_[[:alnum:]_-]+/REDACTED/g' \
     -e 's#(postgresql?|clickhouse)://[^[:space:]]+#REDACTED_DSN#g'
 }
 
 wait_for_device_login_prompt() {
   local output="$STATE/secrets/device-login-output" attempts=0
-  until grep -Eq '^Open https?://[^[:space:]]+ and enter code [A-Z0-9]{8}$' "$output"; do
+  until grep -Eq '^Open https?://[^[:space:]]+ and enter code [ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$' "$output"; do
     attempts=$((attempts + 1))
     if [[ "$attempts" -ge 60 ]] || ! kill -0 "$DEVICE_LOGIN_PID" 2>/dev/null; then
       redact_device_login_log < "$output" > "$ARTIFACTS/logs/device-login-prompt.log" || true
@@ -1157,7 +1167,7 @@ run_device_login_lifecycle() {
   device_login_env "$STATE/acr-mcp" login --repo "$FULLSTACK_REPO_SLUG" >"$output" 2>&1 &
   DEVICE_LOGIN_PID=$!
   wait_for_device_login_prompt
-  sed -nE 's/^Open [^[:space:]]+ and enter code ([A-Z0-9]{8})$/\1/p' "$output" > "$code_file"
+  sed -nE 's/^Open [^[:space:]]+ and enter code ([ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8})$/\1/p' "$output" > "$code_file"
   chmod 600 "$code_file"
   [[ "$(wc -l < "$code_file" | tr -d '[:space:]')" == '1' ]] || fs_die 'device login did not produce exactly one user code'
   if ! env \
@@ -1231,7 +1241,15 @@ record_web_browser_failure() {
 }
 
 bootstrap_web_user() {
-  compose exec -T api dev-hops admin users create --email "$WEB_EMAIL" --password "$WEB_PASSWORD" --full-name 'ACR Full-stack Account' >/dev/null
+  local create_output create_status
+  set +e
+  create_output="$(compose exec -T api dev-hops admin users create --email "$WEB_EMAIL" --password "$WEB_PASSWORD" --full-name 'ACR Full-stack Account' 2>&1)"
+  create_status=$?
+  set -e
+  if [[ "$create_status" -ne 0 ]] && ! grep -Fq "User with email ${WEB_EMAIL} already exists" <<<"$create_output"; then
+    printf '%s\n' "$create_output" | redact_log >&2
+    fs_die "could not create the isolated web user (dev-hops exited ${create_status})"
+  fi
   compose exec -T api dev-hops admin users update --email "$WEB_EMAIL" --verified --org "$(<"$STATE/org-id")" --role owner >/dev/null
   assert_acr_entitlement
 }

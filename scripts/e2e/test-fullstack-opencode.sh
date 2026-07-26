@@ -286,10 +286,16 @@ grep -Fq 'await page.waitForURL((url) => !url.pathname.startsWith("/auth/signin"
   || fail 'the device driver must settle the sign-in redirect before opening the protected approval page'
 grep -Fq 'await page.waitForLoadState("domcontentloaded");' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'the device driver must not wait for background traffic to become idle after sign-in'
-grep -Fq '^[A-Z0-9]{8}$' "$root/scripts/e2e/device-login-browser.mjs" \
+grep -Fq '^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'the browser driver must accept every server-issued eight-character alphanumeric device code'
-grep -Fq '[A-Z0-9]{8}' "$script" \
-  || fail 'the shell prompt parser must accept every server-issued eight-character alphanumeric device code'
+grep -Fq '[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}' "$script" \
+  || fail 'the shell prompt parser must use the exact device-code alphabet'
+grep -Fq 'stop_device_login_service' "$script" \
+  || fail 'the full-stack cleanup must stop a pending device-login process'
+grep -Fq 'User with email ${WEB_EMAIL} already exists' "$script" \
+  || fail 'the browser bootstrap must tolerate only the expected duplicate fixture user'
+grep -Fq 'device approval ${operation} failed:' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'browser preview failures must retain their observed status and safe body'
 [[ -f "$root/scripts/e2e/device-login-browser.mjs" ]] \
   || fail 'the device login Playwright driver is missing'
 

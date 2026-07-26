@@ -17,7 +17,7 @@ const playwright = await import(required("DEVICE_LOGIN_PLAYWRIGHT_MODULE"));
 const chromium = playwright.chromium ?? playwright.default?.chromium;
 
 if (!chromium) throw new Error("Playwright Chromium is unavailable");
-if (!/^[A-Z0-9]{8}$/.test(code)) {
+if (!/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/.test(code)) {
     throw new Error("device code is malformed");
 }
 
@@ -34,6 +34,19 @@ async function captureState(state) {
         await page.setViewportSize({ height: 900, width });
         await page.screenshot({ path: resolve(artifacts, `device-login-${state}-${width}.png`), fullPage: true });
     }
+}
+
+function redactResponseBody(body) {
+    return body
+        .replace(/[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}/g, "REDACTED_DEVICE_CODE")
+        .replace(/(fcacr|svc_acr)_[A-Za-z0-9_-]+/g, "REDACTED")
+        .slice(0, 512);
+}
+
+async function requireDeviceSuccess(response, operation) {
+    if (response.ok()) return;
+    const body = redactResponseBody(await response.text());
+    throw new Error(`device approval ${operation} failed: ${response.status()} ${body}`);
 }
 
 page.on("console", (message) => {
@@ -90,7 +103,7 @@ try {
     );
     await page.getByLabel("Verification code").fill(code);
     await page.getByRole("button", { name: "Preview request" }).click();
-    if (!(await preview).ok()) throw new Error("device approval preview failed");
+    await requireDeviceSuccess(await preview, "preview");
     await page.getByRole("heading", { name: "Review device access" }).waitFor();
     await page.setViewportSize({ height: 844, width: 768 });
     const repositoryChoice = page.getByLabel(repository);
@@ -104,7 +117,7 @@ try {
             response.request().method() === "POST",
     );
     await page.getByRole("button", { name: "Confirm" }).click();
-    if (!(await approval).ok()) throw new Error("device approval failed");
+    await requireDeviceSuccess(await approval, "approval");
     await page.getByRole("heading", { name: "Approval complete" }).waitFor();
     await captureState("success");
 
