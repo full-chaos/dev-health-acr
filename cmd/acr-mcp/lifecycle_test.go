@@ -2,13 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 )
 
@@ -170,6 +174,63 @@ func TestLoginFails_when_deviceAuthorizationIsDeniedOrExpired(t *testing.T) {
 				t.Fatalf("login exit code = %d, want %d", code, lifecycleExitFailure)
 			}
 		})
+	}
+}
+
+func TestLoginRevokesIssuedCredential_whenPersistenceFails(t *testing.T) {
+	// Given
+	token := validDoctorToken(96)
+	createdAt := time.Now().UTC().Truncate(time.Second)
+	revocations := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/oauth/device_authorization":
+			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: "http://" + r.Host + "/acr/device", ExpiresIn: 600, Interval: 5})
+		case "/api/v1/oauth/token":
+			expiresAt := createdAt.Add(30 * 24 * time.Hour)
+			credential := lifecycleCredential(createdAt, "credential-issued", nil)
+			credential.ExpiresAt = &expiresAt
+			writeLifecycleJSON(t, w, contractsv1.DeviceTokenResponse{SchemaVersion: contractsv1.DeviceTokenResponseSchema, AccessToken: token, TokenType: "Bearer", ExpiresIn: 30 * 24 * 60 * 60, Credential: credential})
+		case "/api/v1/auth/credentials/self/revoke":
+			if r.Header.Get("Authorization") != "Bearer "+token {
+				t.Fatal("issued credential was not used for self-revocation")
+			}
+			var request contractsv1.CredentialRevokeRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			revocations++
+			revokedAt := createdAt.Add(time.Minute)
+			writeLifecycleJSON(t, w, contractsv1.CredentialRevokeResponse{SchemaVersion: contractsv1.CredentialRevokeResponseSchema, Credential: lifecycleCredential(createdAt, "credential-issued", &revokedAt)})
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
+	originalPersist := lifecyclePersist
+	lifecyclePersist = func(string) (sidecar.CredentialResult, error) {
+		return sidecar.CredentialResult{}, errors.New("persistence failed")
+	}
+	t.Cleanup(func() { lifecyclePersist = originalPersist })
+	originalWait := lifecycleWait
+	lifecycleWait = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { lifecycleWait = originalWait })
+	originalBrowserOpen := lifecycleBrowserOpen
+	lifecycleBrowserOpen = func(string) error { return nil }
+	t.Cleanup(func() { lifecycleBrowserOpen = originalBrowserOpen })
+
+	// When
+	code := runCLI([]string{"login"})
+
+	// Then
+	if code != lifecycleExitFailure || revocations != 1 {
+		t.Fatalf("login code=%d revocations=%d, want failure and one revoke", code, revocations)
 	}
 }
 
