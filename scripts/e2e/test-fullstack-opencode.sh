@@ -254,4 +254,43 @@ grep -Fq 'CLICKHOUSE_DB="$db"' "$driver" \
 grep -Fq 'the ops api service reads ClickHouse database' "$script" \
   || fail 'the suite no longer asserts the application reads the database it seeds'
 
+grep -Fq 'ACR_DEVICE_VERIFICATION_URL' "$driver" \
+  || fail 'the isolated ACR runtime must receive the concrete web device verification URL'
+grep -Fq 'compose logs --no-color acr-pki-init clickhouse migrate acr-ops-tls acr-migrate acr-api acr-tls-proxy' "$driver" \
+  || fail 'failed isolated runs must retain the TLS proxy diagnostics for device-login transport failures'
+grep -Fq 'run_device_login_lifecycle' "$script" \
+  || fail 'the live gate must exercise CLI login through web approval and lifecycle commands'
+grep -Fq 'record_web_readiness_failure' "$script" \
+  || fail 'web readiness failures must retain sanitized timestamped diagnostics'
+grep -Fq 'device-login-browser.mjs' "$script" \
+  || fail 'the live gate must drive the real approval page with Playwright'
+grep -Fq 'ACR_API_TOKEN_KEYRING_SERVICE' "$script" \
+  || fail 'the device login subprocess must explicitly isolate keyring selectors'
+grep -Fq 'credential file must be mode 0600' "$script" \
+  || fail 'the device login lifecycle must assert fallback-file permissions'
+grep -Fq 'device-login-prompt.log' "$script" \
+  || fail 'device-login prompt failures must retain a redacted diagnostic'
+grep -Fq 'record_web_browser_failure' "$script" \
+  || fail 'browser approval failures must retain the isolated web service diagnostics'
+grep -Fq 'for (const width of [375, 768, 1280])' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must retain all three connected screenshot widths'
+grep -Fq 'await captureState("pending");' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must retain pending connected screenshots'
+grep -Fq 'await captureState("review");' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must retain review connected screenshots'
+grep -Fq 'await captureState("success");' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must retain success connected screenshots'
+grep -Fq 'device-login-network.json' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must retain sanitized browser network evidence'
+grep -Fq 'await page.waitForURL((url) => !url.pathname.startsWith("/auth/signin"));' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the device driver must settle the sign-in redirect before opening the protected approval page'
+grep -Fq 'await page.waitForLoadState("domcontentloaded");' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the device driver must not wait for background traffic to become idle after sign-in'
+grep -Fq '^[A-Z0-9]{8}$' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the browser driver must accept every server-issued eight-character alphanumeric device code'
+grep -Fq '[A-Z0-9]{8}' "$script" \
+  || fail 'the shell prompt parser must accept every server-issued eight-character alphanumeric device code'
+[[ -f "$root/scripts/e2e/device-login-browser.mjs" ]] \
+  || fail 'the device login Playwright driver is missing'
+
 printf 'fullstack opencode contract checks passed\n'

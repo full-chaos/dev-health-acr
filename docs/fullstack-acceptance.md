@@ -324,6 +324,21 @@ verifies, reading back the override row that `decide_feature()` itself consults.
 exists because nothing previously confirmed the grant was in effect, so a regression in the
 driver would have surfaced as that opaque timeout rather than as a named failure.
 
+### 7.1 Device-login approval lifecycle
+
+When the web profile is enabled, the same isolated stack also proves the self-service
+`acr-mcp login` path. The CLI runs from a fresh `HOME` and all XDG roots with token and
+keyring selectors cleared; only its private `0600` fallback credential file is permitted.
+The browser signs in to the seeded admin account, previews one code, confirms the single
+repository scope, then exercises `doctor --live`, refresh, doctor, logout, and the expected
+post-logout failure. The consumed code is replayed through the browser and must return a
+conflict.
+
+The browser retains connected screenshots for the pending, review, and success states at
+375px, 768px, and 1280px. Its network receipt fails on a bearer header, a query string, a
+wildcard or unbounded repository scope, any console/request failure, or a device-route 5xx.
+The driver redacts device codes, credentials, and DSNs before failure artifacts are retained.
+
 ## 8. Commands
 
 ```bash

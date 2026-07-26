@@ -39,6 +39,9 @@ WEB_PORT=""
 WEB_EMAIL=""
 WEB_PASSWORD=""
 WEB_AUTH_SECRET=""
+DEVICE_LOGIN_HOME=""
+DEVICE_LOGIN_BIN=""
+DEVICE_LOGIN_PID=""
 FULLSTACK_REPO_SLUG="example-org/widget-service"
 FULLSTACK_FOREIGN_SLUG="example-org/other-service"
 # The Explorer's licensing entitlement. Named once because the grant and the read-back
@@ -1095,13 +1098,136 @@ services:
 EOF
 }
 
+device_login_env() {
+  env -i \
+    HOME="$DEVICE_LOGIN_HOME" \
+    XDG_CONFIG_HOME="$DEVICE_LOGIN_HOME/config" \
+    XDG_DATA_HOME="$DEVICE_LOGIN_HOME/data" \
+    XDG_CACHE_HOME="$DEVICE_LOGIN_HOME/cache" \
+    XDG_STATE_HOME="$DEVICE_LOGIN_HOME/state" \
+    PATH="$DEVICE_LOGIN_BIN" \
+    ACR_API_URL="https://localhost:${PORT}" \
+    ACR_API_CA_BUNDLE="$STATE/pki/ca.crt" \
+    ACR_API_TOKEN= \
+    ACR_API_TOKEN_FILE= \
+    ACR_API_TOKEN_KEYRING_SERVICE= \
+    ACR_API_TOKEN_KEYRING_ACCOUNT= \
+    "$@"
+}
+
+prepare_device_login_environment() {
+  DEVICE_LOGIN_HOME="$ARTIFACTS/device-login-home"
+  DEVICE_LOGIN_BIN="$ARTIFACTS/device-login-bin"
+  mkdir -p "$DEVICE_LOGIN_HOME" "$DEVICE_LOGIN_BIN"
+  chmod 700 "$DEVICE_LOGIN_HOME" "$DEVICE_LOGIN_BIN"
+}
+
+redact_device_login_log() {
+  sed -E \
+    -e 's/[ABCDEFGHJKMNPQRSTVWXYZ23456789]{8}/REDACTED_DEVICE_CODE/g' \
+    -e 's/(fcacr|svc_acr)_[[:alnum:]_-]+/REDACTED/g' \
+    -e 's#(postgresql?|clickhouse)://[^[:space:]]+#REDACTED_DSN#g'
+}
+
+wait_for_device_login_prompt() {
+  local output="$STATE/secrets/device-login-output" attempts=0
+  until grep -Eq '^Open https?://[^[:space:]]+ and enter code [A-Z0-9]{8}$' "$output"; do
+    attempts=$((attempts + 1))
+    if [[ "$attempts" -ge 60 ]] || ! kill -0 "$DEVICE_LOGIN_PID" 2>/dev/null; then
+      redact_device_login_log < "$output" > "$ARTIFACTS/logs/device-login-prompt.log" || true
+      redact_device_login_log < "$output" >&2 || true
+      fs_note "device login prompt diagnostics retained at logs/device-login-prompt.log"
+      fs_die 'acr-mcp login did not emit a device verification prompt'
+    fi
+    sleep 0.5
+  done
+}
+
+run_device_login_lifecycle() {
+  local output="$STATE/secrets/device-login-output" code_file="$STATE/secrets/device-user-code"
+  local token_file="$DEVICE_LOGIN_HOME/.acr/token" mode
+  [[ "$WEB_CHECK" == 'on' || "$WEB_CHECK" == 'auto' ]] || fs_die 'device login lifecycle requires the isolated web service'
+  prepare_device_login_environment
+  compose up -d bugsink web-fullstack >/dev/null
+  wait_web_ready
+  bootstrap_web_user
+  assert_acr_entitlement
+  : > "$output"
+  chmod 600 "$output"
+  device_login_env "$STATE/acr-mcp" login --repo "$FULLSTACK_REPO_SLUG" >"$output" 2>&1 &
+  DEVICE_LOGIN_PID=$!
+  wait_for_device_login_prompt
+  sed -nE 's/^Open [^[:space:]]+ and enter code ([A-Z0-9]{8})$/\1/p' "$output" > "$code_file"
+  chmod 600 "$code_file"
+  [[ "$(wc -l < "$code_file" | tr -d '[:space:]')" == '1' ]] || fs_die 'device login did not produce exactly one user code'
+  if ! env \
+    DEVICE_LOGIN_WEB_URL="http://127.0.0.1:${WEB_PORT}" \
+    DEVICE_LOGIN_WEB_EMAIL="$WEB_EMAIL" \
+    DEVICE_LOGIN_WEB_PASSWORD="$WEB_PASSWORD" \
+    DEVICE_LOGIN_CODE_FILE="$code_file" \
+    DEVICE_LOGIN_REPOSITORY="$FULLSTACK_REPO_SLUG" \
+    DEVICE_LOGIN_ARTIFACTS="$ARTIFACTS/playwright" \
+    DEVICE_LOGIN_PLAYWRIGHT_MODULE="$WEB_ROOT/node_modules/@playwright/test/index.js" \
+    node "$SCRIPT_DIR/device-login-browser.mjs" > "$ARTIFACTS/logs/device-login-browser.log" 2>&1; then
+    redact_log < "$ARTIFACTS/logs/device-login-browser.log" > "$ARTIFACTS/logs/device-login-browser.redacted.log"
+    mv "$ARTIFACTS/logs/device-login-browser.redacted.log" "$ARTIFACTS/logs/device-login-browser.log"
+    record_web_browser_failure
+    cat "$ARTIFACTS/logs/device-login-browser.log" >&2
+    fs_die 'web device approval browser flow failed'
+  fi
+  if ! wait "$DEVICE_LOGIN_PID"; then
+    redact_device_login_log < "$output" >&2 || true
+    fs_die 'acr-mcp login did not complete after web approval'
+  fi
+  DEVICE_LOGIN_PID=""
+  grep -Eq 'fcacr_|svc_acr_' "$output" && fs_die 'acr-mcp login output leaked a credential'
+  detect_stat_flavour
+  if [[ "$STAT_FLAVOUR" == gnu ]]; then mode="$(stat -c '%a' "$token_file")"; else mode="$(stat -f '%Lp' "$token_file")"; fi
+  [[ "$mode" == '600' ]] || fs_die "credential file must be mode 0600, found ${mode}"
+  device_login_env "$STATE/acr-mcp" doctor --live > "$ARTIFACTS/device-login-doctor.json"
+  grep -Fq '"credential_source":"file"' "$ARTIFACTS/device-login-doctor.json" || fs_die 'bare doctor did not discover the fallback credential file'
+  device_login_env "$STATE/acr-mcp" login --refresh > "$ARTIFACTS/device-login-refresh.log"
+  grep -Eq 'fcacr_|svc_acr_' "$ARTIFACTS/device-login-refresh.log" && fs_die 'credential refresh output leaked a credential'
+  device_login_env "$STATE/acr-mcp" doctor --live > "$ARTIFACTS/device-login-doctor-refreshed.json"
+  device_login_env "$STATE/acr-mcp" logout > "$ARTIFACTS/device-login-logout.log"
+  grep -Eq 'fcacr_|svc_acr_' "$ARTIFACTS/device-login-logout.log" && fs_die 'logout output leaked a credential'
+  if device_login_env "$STATE/acr-mcp" doctor --live > "$ARTIFACTS/device-login-doctor-post-logout.log" 2>&1; then
+    fs_die 'doctor unexpectedly succeeded after logout'
+  fi
+  redact_device_login_log < "$ARTIFACTS/device-login-doctor-post-logout.log" > "$ARTIFACTS/device-login-doctor-post-logout.redacted.log"
+  mv "$ARTIFACTS/device-login-doctor-post-logout.redacted.log" "$ARTIFACTS/device-login-doctor-post-logout.log"
+  rm -f "$code_file" "$output"
+}
+
 wait_web_ready() {
-  local attempts=0
+  local attempts=0 started_at
+  started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   until curl --fail --silent --show-error --noproxy '*' "http://127.0.0.1:${WEB_PORT}/health" >/dev/null; do
     attempts=$((attempts + 1))
-    [[ "$attempts" -lt 90 ]] || fs_die 'web readiness timed out'
+    if [[ "$attempts" -ge 90 ]]; then
+      record_web_readiness_failure "$started_at" "$attempts"
+      fs_die 'web readiness timed out'
+    fi
     sleep 2
   done
+}
+
+record_web_readiness_failure() {
+  local started_at="$1" attempts="$2" service
+  local receipt="$ARTIFACTS/logs/web-readiness.json"
+  local service_log="$ARTIFACTS/logs/web-fullstack.log"
+  service="$(compose ps --format json web-fullstack 2>/dev/null || printf 'null')"
+  [[ -n "$service" ]] || service='null'
+  compose logs --no-color web-fullstack 2>&1 | redact_log > "$service_log" || true
+  jq -n --arg started_at "$started_at" --argjson attempts "$attempts" --argjson service "$service" \
+    '{started_at:$started_at,attempts:$attempts,service:$service}' > "$receipt"
+  fs_note "web readiness failed after ${attempts} attempts from ${started_at}; sanitized diagnostics: logs/web-readiness.json and logs/web-fullstack.log"
+}
+
+record_web_browser_failure() {
+  local service_log="$ARTIFACTS/logs/web-fullstack.log"
+  compose logs --no-color web-fullstack 2>&1 | redact_log > "$service_log" || true
+  fs_note 'web device approval failed; sanitized diagnostics: logs/device-login-browser.log and logs/web-fullstack.log'
 }
 
 bootstrap_web_user() {
@@ -1217,11 +1343,12 @@ record_host_config_digest
 assert_pinned_opencode
 prepare_state
 ensure_image
-render_override
 if web_check_enabled; then
   write_web_assertion_material
   render_web_override
+  export ACR_E2E_DEVICE_VERIFICATION_URL="http://127.0.0.1:${WEB_PORT}/acr/device"
 fi
+render_override
 assert_safe_render
 prepare_stack
 rotate_acr_credential
@@ -1253,6 +1380,7 @@ if [[ "$SCENARIO" == 'self-test' ]]; then
 fi
 
 if web_check_enabled; then
+  run_device_login_lifecycle
   run_web_agreement_check
 fi
 

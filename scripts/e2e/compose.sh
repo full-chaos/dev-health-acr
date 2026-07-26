@@ -105,7 +105,7 @@ cleanup() {
   fi
   note "cleanup receipt before: $(owned_receipt)"
   if [[ "$status" -ne 0 ]]; then
-    compose logs --no-color acr-pki-init clickhouse migrate acr-ops-tls acr-migrate acr-api 2>&1 | redact_log || true
+    compose logs --no-color acr-pki-init clickhouse migrate acr-ops-tls acr-migrate acr-api acr-tls-proxy 2>&1 | redact_log || true
     for service in clickhouse api; do
       health_container="$(compose ps -q "$service" 2>/dev/null || true)"
       if [[ -n "$health_container" ]]; then
@@ -255,6 +255,7 @@ services:
       ACR_DEV_HEALTH_ENTITLEMENT_URL: https://acr-ops-tls:8443
       ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /run/secrets/acr_ops_token
       ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE: /run/secrets/acr_ca
+      ACR_DEVICE_VERIFICATION_URL: "${ACR_E2E_DEVICE_VERIFICATION_URL:-https://device.invalid/acr/device}"
       ACR_EVIDENCE_ID_ACTIVE_KID_FILE: /run/secrets/acr_evidence_active_kid
       ACR_EVIDENCE_ID_KEYS_FILE: /run/secrets/acr_evidence_keys
       # Defaults to the service's own default (60/min), so existing consumers are unchanged.
@@ -464,9 +465,9 @@ rotate_acr_credential() {
 
 record_acl_probe() {
   local runtime owner_defaults
-  runtime="$(compose exec -T -e "PGPASSWORD=$(<"$STATE/secrets/runtime-password")" postgres psql -h postgres -U "$ACR_RUNTIME_DB_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c "SELECT current_user, current_database(), has_schema_privilege(current_user, 'acr', 'USAGE'), has_schema_privilege(current_user, 'acr', 'CREATE'), has_table_privilege(current_user, 'acr.schema_migrations', 'SELECT'), has_table_privilege(current_user, 'acr.client_credentials', 'SELECT'), has_table_privilege(current_user, 'acr.client_credentials', 'INSERT'), has_table_privilege(current_user, 'acr.client_credentials', 'UPDATE'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'SELECT'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'INSERT'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'UPDATE'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'DELETE'), has_table_privilege(current_user, 'acr.audit_events', 'INSERT'), (SELECT count(*) FROM acr.schema_migrations)")"
+  runtime="$(compose exec -T -e "PGPASSWORD=$(<"$STATE/secrets/runtime-password")" postgres psql -h postgres -U "$ACR_RUNTIME_DB_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c "SELECT current_user, current_database(), has_schema_privilege(current_user, 'acr', 'USAGE'), has_schema_privilege(current_user, 'acr', 'CREATE'), has_table_privilege(current_user, 'acr.schema_migrations', 'SELECT'), has_table_privilege(current_user, 'acr.client_credentials', 'SELECT'), has_table_privilege(current_user, 'acr.client_credentials', 'INSERT'), has_table_privilege(current_user, 'acr.client_credentials', 'UPDATE'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'SELECT'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'INSERT'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'UPDATE'), has_table_privilege(current_user, 'acr.context_packet_snapshots', 'DELETE'), has_table_privilege(current_user, 'acr.audit_events', 'INSERT'), has_table_privilege(current_user, 'acr.device_authorizations', 'SELECT'), has_table_privilege(current_user, 'acr.device_authorizations', 'INSERT'), has_table_privilege(current_user, 'acr.device_authorizations', 'UPDATE'), (SELECT count(*) FROM acr.schema_migrations)")"
   owner_defaults="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c "SELECT (SELECT bool_and(pg_get_userbyid(relowner) = 'acr_migration') FROM pg_class WHERE relnamespace = 'acr'::regnamespace AND relkind = 'r'), EXISTS (SELECT 1 FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace CROSS JOIN LATERAL aclexplode(d.defaclacl) acl JOIN pg_roles grantee ON grantee.oid = acl.grantee WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = 'acr_migration') AND n.nspname = 'acr' AND grantee.rolname = 'acr_runtime' AND acl.privilege_type = 'SELECT'), (SELECT pg_get_userbyid(datdba) = 'acr_migration' FROM pg_database WHERE datname = current_database()), (SELECT pg_get_userbyid(nspowner) = 'acr_migration' FROM pg_namespace WHERE nspname = 'acr'), (SELECT NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls AND NOT rolinherit FROM pg_roles WHERE rolname = 'acr_runtime')")"
-  [[ "$runtime" =~ ^acr_runtime\|acr_.*\|t\|f\|t\|t\|t\|t\|t\|t\|t\|t\|t\|[0-9]+$ ]] || die 'runtime ACL probe did not satisfy the required contract'
+  [[ "$runtime" =~ ^acr_runtime\|acr_.*\|t\|f\|t\|t\|t\|t\|t\|t\|t\|t\|t\|t\|t\|t\|[0-9]+$ ]] || die 'runtime ACL probe did not satisfy the required contract'
   [[ "$owner_defaults" == 't|f|t|t|t' ]] || die 'migration ownership/default ACL probe did not satisfy the required contract'
   note "ACL_PROBE runtime=${runtime} owners_and_defaults=${owner_defaults}"
 }
