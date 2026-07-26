@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"net/url"
 	"strings"
 	"time"
 
@@ -71,6 +72,10 @@ func validateHostedRuntime(cfg Config) error {
 		return errors.New("ACR_DEV_HEALTH_ENTITLEMENT_URL is required when backing stores are required")
 	case strings.TrimSpace(cfg.DevHealthEntitlementTokenFile) == "":
 		return errors.New("ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE is required when backing stores are required")
+	case strings.TrimSpace(cfg.DeviceVerificationURL) == "":
+		return errors.New("ACR_DEVICE_VERIFICATION_URL is required when backing stores are required")
+	case !isAbsoluteDeviceVerificationURL(cfg.DeviceVerificationURL):
+		return errors.New("ACR_DEVICE_VERIFICATION_URL must be an absolute URL")
 	case cfg.PostgresMaxOpenConns < 0 || cfg.PostgresMaxIdleConns < 0:
 		return errors.New("ACR PostgreSQL pool bounds must not be negative")
 	case cfg.PostgresMaxOpenConns > 0 && cfg.PostgresMaxIdleConns > cfg.PostgresMaxOpenConns:
@@ -82,6 +87,11 @@ func validateHostedRuntime(cfg Config) error {
 	default:
 		return nil
 	}
+}
+
+func isAbsoluteDeviceVerificationURL(value string) bool {
+	parsed, err := url.ParseRequestURI(value)
+	return err == nil && parsed.IsAbs() && parsed.Host != ""
 }
 
 // validatePostgresConnectionKind requires an explicit ACR_POSTGRES_CONNECTION_KIND
@@ -124,5 +134,6 @@ func (c Config) SafeAttributes() []any {
 		"dev_health_entitlement_configured", c.DevHealthEntitlementURL != "",
 		"dev_health_entitlement_token_file_configured", c.DevHealthEntitlementTokenFile != "",
 		"web_assertions_configured", c.WebAssertionJWKSFile != "",
+		"device_verification_configured", c.DeviceVerificationURL != "",
 	}
 }

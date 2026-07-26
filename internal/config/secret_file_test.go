@@ -102,6 +102,7 @@ func TestLoad_readsHostedSecretsFromFileSources(t *testing.T) {
 		"ACR_EVIDENCE_ID_KEYS_FILE":             filepath.Join(directory, "keys"),
 		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "https://ops.example",
 		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": filepath.Join(directory, "token"),
+		"ACR_DEVICE_VERIFICATION_URL":           "https://verify.example.test/device",
 	})
 
 	// When

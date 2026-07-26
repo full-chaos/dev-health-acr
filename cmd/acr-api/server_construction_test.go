@@ -53,6 +53,7 @@ func validServeConfig(t *testing.T) config.Config {
 		"ACR_EVIDENCE_ID_KEYS":                  "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
 		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "https://ops.example.test",
 		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
+		"ACR_DEVICE_VERIFICATION_URL":           "https://verify.example.test/device",
 		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
 	} {
 		t.Setenv(key, value)

@@ -163,6 +163,7 @@ func hostedProcessEnvironment(input hostedEnvironmentInput) map[string]string {
 		"ACR_POSTGRES_DSN":            input.postgres.dsn, "ACR_CLICKHOUSE_DSN": input.clickhouse.dsn,
 		"ACR_EVIDENCE_ID_ACTIVE_KID": "current", "ACR_EVIDENCE_ID_KEYS": "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
 		"ACR_DEV_HEALTH_ENTITLEMENT_URL": input.entitlement.baseURL, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": input.entitlement.tokenPath,
+		"ACR_DEVICE_VERIFICATION_URL":          "https://verify.example.test/device",
 		"ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE": input.entitlement.caPath, "ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT": "2s",
 		"ACR_CLICKHOUSE_CA_BUNDLE": input.clickhouse.caPath, "ACR_ENABLE_EPISODE_WRITEBACK": "false",
 		"ACR_POSTGRES_CONNECTION_KIND": "direct",
@@ -173,7 +174,7 @@ func assertMissingRuntimeConfigDoesNotListen(t *testing.T, ctx context.Context, 
 	t.Helper()
 	for _, missing := range []string{
 		"ACR_POSTGRES_DSN", "ACR_CLICKHOUSE_DSN", "ACR_EVIDENCE_ID_ACTIVE_KID", "ACR_EVIDENCE_ID_KEYS",
-		"ACR_DEV_HEALTH_ENTITLEMENT_URL", "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE",
+		"ACR_DEV_HEALTH_ENTITLEMENT_URL", "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE", "ACR_DEVICE_VERIFICATION_URL",
 	} {
 		t.Run("missing_"+missing, func(t *testing.T) {
 			address := reserveAddress(t)
@@ -182,6 +183,7 @@ func assertMissingRuntimeConfigDoesNotListen(t *testing.T, ctx context.Context, 
 				"ACR_POSTGRES_DSN": "postgres://configured", "ACR_CLICKHOUSE_DSN": "clickhouse://configured",
 				"ACR_EVIDENCE_ID_ACTIVE_KID": "current", "ACR_EVIDENCE_ID_KEYS": "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
 				"ACR_DEV_HEALTH_ENTITLEMENT_URL": "https://ops.example.test", "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
+				"ACR_DEVICE_VERIFICATION_URL":  "https://verify.example.test/device",
 				"ACR_POSTGRES_CONNECTION_KIND": "direct",
 			}
 			environment[missing] = ""

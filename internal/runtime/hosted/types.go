@@ -71,6 +71,7 @@ func (r *Runtime) closeIndependentLocked() error {
 
 type postgresComponents struct {
 	credentials storage.CredentialStore
+	devices     storage.DeviceAuthorizationStore
 	audit       storage.AuditStore
 	packets     storage.PacketStore
 	episodes    storage.EpisodeStore

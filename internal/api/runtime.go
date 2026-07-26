@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -38,18 +39,25 @@ type EpisodeCreator interface {
 }
 
 type RuntimeDependencies struct {
-	Credentials     storage.CredentialStore
-	Audit           storage.AuditStore
-	Entitlements    EntitlementProvider
-	Assembler       ContextPacketAssembler
-	Evidence        storage.EvidenceStore
-	Episodes        EpisodeCreator
-	ReadinessChecks []ReadinessCheck
+	Credentials                storage.CredentialStore
+	DeviceAuthorizations       storage.DeviceAuthorizationStore
+	DeviceVerificationURL      string
+	DeviceAuthorizationLimiter DeviceAuthorizationLimiter
+	Audit                      storage.AuditStore
+	Entitlements               EntitlementProvider
+	Assembler                  ContextPacketAssembler
+	Evidence                   storage.EvidenceStore
+	Episodes                   EpisodeCreator
+	ReadinessChecks            []ReadinessCheck
 }
 
 func (r *RuntimeDependencies) validate() error {
-	if r == nil || storage.IsNil(r.Credentials) || storage.IsNil(r.Audit) || storage.IsNil(r.Entitlements) || storage.IsNil(r.Assembler) || storage.IsNil(r.Evidence) {
+	if r == nil || storage.IsNil(r.Credentials) || storage.IsNil(r.DeviceAuthorizations) || storage.IsNil(r.Audit) || storage.IsNil(r.Entitlements) || storage.IsNil(r.Assembler) || storage.IsNil(r.Evidence) || storage.IsNil(r.DeviceAuthorizationLimiter) {
 		return errors.New("hosted read runtime dependencies must be configured together")
+	}
+	verificationURL, err := url.ParseRequestURI(r.DeviceVerificationURL)
+	if err != nil || !verificationURL.IsAbs() || verificationURL.Host == "" {
+		return errors.New("hosted device authorization runtime requires an absolute verification URL")
 	}
 	if r.Episodes != nil && storage.IsNil(r.Episodes) {
 		return errors.New("hosted episode runtime must not be typed nil")
@@ -93,6 +101,13 @@ func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, e
 	handler = LimitMiddleware(a.limits, class, handler)
 	handler = a.authenticator.RequireScope(scope, handler)
 	return a.authenticator.MiddlewareFor(allowWebAssertions, handler)
+}
+
+func (a *App) unauthenticatedRuntimeHandler(next http.Handler) http.Handler {
+	if a.runtime == nil {
+		return http.HandlerFunc(a.handleRuntimeUnavailable)
+	}
+	return next
 }
 
 func (a *App) requireClientVersion(next http.Handler) http.Handler {
