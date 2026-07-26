@@ -256,6 +256,9 @@ func TestLoginPurgesPersistedCredential_afterWrongSourceVerificationFailure(t *t
 	originalWait := lifecycleWait
 	lifecycleWait = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() { lifecycleWait = originalWait })
+	originalBrowserOpen := lifecycleBrowserOpen
+	lifecycleBrowserOpen = func(string) error { return nil }
+	t.Cleanup(func() { lifecycleBrowserOpen = originalBrowserOpen })
 
 	// When
 	code := runCLI([]string{"login"})
