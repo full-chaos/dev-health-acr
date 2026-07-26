@@ -140,6 +140,12 @@ grep -Fq -- '--pure' "$script" || fail 'OpenCode must run without external plugi
 grep -Fq 'OPENCODE_DISABLE_PROJECT_CONFIG=true' "$script" || fail 'project config discovery must be disabled'
 grep -Fq 'OPENCODE_DISABLE_MODELS_FETCH=true' "$script" || fail 'model catalogue fetching must be disabled'
 grep -Fq 'assert_pinned_opencode' "$script" || fail 'the pinned OpenCode version is not enforced'
+! grep -Fq '$OPENCODE_BIN --version' "$script" \
+  || fail 'the full-stack driver must not probe OpenCode outside the throwaway sandbox'
+grep -Fq 'OPENCODE_OBSERVED_VERSION' "$script" \
+  || fail 'the full-stack driver must retain the sandboxed OpenCode version for its manifest'
+grep -Fq -- '--arg opencode_version "$OPENCODE_OBSERVED_VERSION"' "$script" \
+  || fail 'the full-stack run manifest must use the sandboxed OpenCode version'
 # OpenCode does not self-terminate on a refused upstream or a retry loop; without an external
 # deadline a CI job hangs until the runner's own 6-hour limit.
 grep -Fq 'timeout --preserve-status' "$script" || fail 'opencode run must be wrapped in an external timeout'
@@ -266,6 +272,8 @@ grep -Fq 'device-login-browser.mjs' "$script" \
   || fail 'the live gate must drive the real approval page with Playwright'
 grep -Fq 'ACR_API_TOKEN_KEYRING_SERVICE' "$script" \
   || fail 'the device login subprocess must explicitly isolate keyring selectors'
+grep -Fq 'ACR_API_TOKEN_KEYRING_DISABLED=true' "$script" \
+  || fail 'the device login subprocess must disable OS keyring access explicitly'
 grep -Fq 'credential file must be mode 0600' "$script" \
   || fail 'the device login lifecycle must assert fallback-file permissions'
 grep -Fq 'device-login-prompt.log' "$script" \

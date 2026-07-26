@@ -51,6 +51,7 @@ ACR_WEB_FEATURE_KEY="agent_context_runtime"
 OPS_POSTGRES_DB="${OPS_POSTGRES_DB:-devhealth}"
 OPENCODE_BIN="${OPENCODE_BIN:-opencode}"
 OPENCODE_PINNED_VERSION="${OPENCODE_PINNED_VERSION:-1.18.4}"
+OPENCODE_OBSERVED_VERSION=""
 # The scripted model speaks the OpenAI chat/completions wire format. OpenCode's built-in
 # openai provider drives the Responses API instead, so the acceptance client uses the pinned
 # openai-compatible provider package. CI pre-warms it into the npm cache; see
@@ -441,7 +442,7 @@ write_run_manifest() {
     --arg scenario "$SCENARIO" \
     --arg model "$MODEL_BACKEND" \
     --arg web "$WEB_CHECK" \
-    --arg opencode_version "$($OPENCODE_BIN --version 2>/dev/null | tr -d '\n')" \
+    --arg opencode_version "$OPENCODE_OBSERVED_VERSION" \
     --arg opencode_pinned "$OPENCODE_PINNED_VERSION" \
     --arg acr_image "$IMAGE" \
     --arg repo_sha "$(git -C "$REPO_ROOT" rev-parse HEAD)" \
@@ -468,10 +469,9 @@ opencode_sandboxed() {
 }
 
 assert_pinned_opencode() {
-  local observed
-  observed="$(opencode_sandboxed --version 2>/dev/null | tr -d '\n')"
-  [[ "$observed" == "$OPENCODE_PINNED_VERSION" ]] \
-    || fs_die "OpenCode ${OPENCODE_PINNED_VERSION} is the release-test contract; found ${observed:-none}"
+  OPENCODE_OBSERVED_VERSION="$(opencode_sandboxed --version 2>/dev/null | tr -d '\n')"
+  [[ "$OPENCODE_OBSERVED_VERSION" == "$OPENCODE_PINNED_VERSION" ]] \
+    || fs_die "OpenCode ${OPENCODE_PINNED_VERSION} is the release-test contract; found ${OPENCODE_OBSERVED_VERSION:-none}"
 }
 
 # ---------------------------------------------------------------------------
@@ -1122,6 +1122,7 @@ device_login_env() {
     ACR_API_TOKEN_FILE= \
     ACR_API_TOKEN_KEYRING_SERVICE= \
     ACR_API_TOKEN_KEYRING_ACCOUNT= \
+    ACR_API_TOKEN_KEYRING_DISABLED=true \
     "$@"
 }
 

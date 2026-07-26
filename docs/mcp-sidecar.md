@@ -35,6 +35,7 @@ The base URL of the hosted ACR API. Example: `https://api.dev-health.example.com
 Your API credential. The sidecar resolves it with a fixed precedence: the process environment always wins, then an explicit or default OS keyring entry, then an explicit or default token file.
 - `ACR_API_TOKEN`: Token string in the environment (agent-friendly, less secure for long-running processes).
 - OS keyring (`ACR_API_TOKEN_KEYRING_SERVICE` / `ACR_API_TOKEN_KEYRING_ACCOUNT`): see [Credential Management](#credential-management). Without overrides, the service is `dev-health-acr` and the account is the normalized `ACR_API_URL` origin.
+- `ACR_API_TOKEN_KEYRING_DISABLED=true`: Bypasses OS-keyring lookup, persistence, and deletion so the token-file source is the only persistent credential source. Use it for hermetic test or agent sandboxes that must not touch an operator keychain.
 - `ACR_API_TOKEN_FILE`: Optional path override. Without it, the sidecar discovers `~/.acr/token`. Supported only on macOS and Linux: the file must deny group and world access (mode `0600`, i.e. `info.Mode().Perm()&0o077 == 0`); the sidecar refuses to load it otherwise. **On every other platform, including Windows, the sidecar fails closed and refuses to load a token file at all** -- use `ACR_API_TOKEN` instead; the OS keyring source above is macOS/Linux only too. Preferred for persistent processes on macOS/Linux.
 
 ### Optional
@@ -128,6 +129,10 @@ acr-mcp serve
 ### OS Keyring (ACR_API_TOKEN_KEYRING_SERVICE)
 
 Optional convenience source consulted between the environment and the token file. It defaults to service `dev-health-acr` and account equal to the normalized `ACR_API_URL` origin. `ACR_API_TOKEN_KEYRING_SERVICE` and `ACR_API_TOKEN_KEYRING_ACCOUNT` explicitly override those defaults.
+
+Set `ACR_API_TOKEN_KEYRING_DISABLED=true` to skip this source entirely, including login
+persistence and logout deletion. This explicit setting is required for hermetic environments;
+clearing the service/account selectors alone still permits the default service/account lookup.
 
 ```bash
 export ACR_API_TOKEN_KEYRING_SERVICE="acr-mcp"

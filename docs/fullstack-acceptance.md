@@ -181,6 +181,8 @@ Two implementation notes worth keeping:
 The client environment itself: `HOME` and `XDG_{CONFIG,DATA,CACHE,STATE}_HOME` all point
 inside `.tmp/fullstack/<run-id>/`, and the client starts from a cleared environment (`env -i`)
 with `--pure`.
+* Its recorded OpenCode version is read only through that same throwaway environment; the
+  harness never probes the operator's OpenCode installation after recording the host baseline.
 * Exactly one provider (the scripted local model) and exactly one MCP server
   (`acr-mcp serve`, the locally built or released binary) are registered.
 * No writeback, no automatic pre-plan, no external plugins.
@@ -328,7 +330,8 @@ driver would have surfaced as that opaque timeout rather than as a named failure
 
 When the web profile is enabled, the same isolated stack also proves the self-service
 `acr-mcp login` path. The CLI runs from a fresh `HOME` and all XDG roots with token and
-keyring selectors cleared; only its private `0600` fallback credential file is permitted.
+keyring selectors cleared and `ACR_API_TOKEN_KEYRING_DISABLED=true`; only its private `0600`
+fallback credential file is permitted.
 The browser signs in to the seeded admin account, previews one code, confirms the single
 repository scope, then exercises `doctor --live`, refresh, doctor, logout, and the expected
 post-logout failure. The consumed code is replayed through the browser and must return a
