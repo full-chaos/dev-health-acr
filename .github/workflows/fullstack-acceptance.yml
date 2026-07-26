@@ -25,6 +25,11 @@ name: fullstack-acceptance
         description: smoke or full
         required: false
         default: full
+      web_ref:
+        description: optional full-chaos/dev-health ref to prove; empty uses its default branch
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -88,8 +93,13 @@ jobs:
         with:
           repository: full-chaos/dev-health
           path: dev-health
+          ref: ${{ inputs.web_ref }}
           token: ${{ secrets.DEV_HEALTH_REPO_TOKEN }}
           persist-credentials: false
+      - name: Record the checked-out Dev Health ref
+        run: |
+          web_ref="$(git -C dev-health rev-parse HEAD)"
+          echo "E2E_WEB_REF=$web_ref" >> "$GITHUB_ENV"
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
@@ -116,7 +126,7 @@ jobs:
           npm cache add "$PROVIDER_NPM_SPEC"
           warm="$RUNNER_TEMP/opencode-warm"
           mkdir -p "$warm"/{config,data,cache,state}
-          printf '%s' '{"$schema":"https://opencode.ai/config.json"}' \
+          printf '%s' "{\"\$schema\":\"https://opencode.ai/config.json\"}" \
             > "$warm/config/opencode.json"
           export HOME="$warm"
           export XDG_CONFIG_HOME="$warm/config" XDG_DATA_HOME="$warm/data"

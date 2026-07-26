@@ -352,6 +352,20 @@ make fullstack-opencode-e2e E2E_SCENARIO=self-test            # prove the assert
 make fullstack-opencode-e2e E2E_MODEL=ollama E2E_SCENARIO=smoke   # optional, non-gating
 ```
 
+To prove an unmerged web revision in the canonical GitHub Actions gate, dispatch the ACR
+workflow from the reviewed ACR branch and pass the reviewed sibling ref explicitly:
+
+```bash
+gh workflow run fullstack-acceptance.yml --repo full-chaos/dev-health-acr \
+  --ref feat/chaos-3096-acr-mcp-login \
+  -f scenario=full \
+  -f web_ref=feat/chaos-3096-device-approval
+```
+
+Leaving `web_ref` empty preserves the sibling repository's default-branch checkout. The run
+manifest records the resolved Dev Health commit SHA in `web_ref` so the uploaded evidence names
+the revision the browser agreement actually exercised.
+
 `make fullstack-contract` runs the offline contract checks alone; they are also part of
 `make verify`, so a change that weakens an invariant fails an ordinary PR without needing
 Docker, a network, or OpenCode.

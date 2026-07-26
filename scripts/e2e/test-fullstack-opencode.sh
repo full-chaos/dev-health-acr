@@ -7,6 +7,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 script="$root/scripts/e2e/fullstack-opencode.sh"
+workflow="$root/.github/workflows/fullstack-acceptance.yml"
 driver="$root/scripts/e2e/compose.sh"
 compose_overlay="$root/deploy/compose/acr.compose.yml"
 fixtures="$root/testdata/fullstack/v1"
@@ -146,6 +147,10 @@ grep -Fq 'OPENCODE_OBSERVED_VERSION' "$script" \
   || fail 'the full-stack driver must retain the sandboxed OpenCode version for its manifest'
 grep -Fq -- '--arg opencode_version "$OPENCODE_OBSERVED_VERSION"' "$script" \
   || fail 'the full-stack run manifest must use the sandboxed OpenCode version'
+grep -Fq -- '--arg web_ref "$web_ref"' "$script" \
+  || fail 'the full-stack run manifest must record the selected web ref'
+grep -Fq 'web_ref:$web_ref' "$script" \
+  || fail 'the full-stack run manifest must publish the selected web ref'
 # OpenCode does not self-terminate on a refused upstream or a retry loop; without an external
 # deadline a CI job hangs until the runner's own 6-hour limit.
 grep -Fq 'timeout --preserve-status' "$script" || fail 'opencode run must be wrapped in an external timeout'
@@ -206,6 +211,16 @@ jq -e '.["$schema"] and .properties.schema_version.const == "context_fabric_agen
 grep -Fq 'fullstack-opencode-e2e' "$root/docs/fullstack-acceptance.md" || fail 'the documented command is missing'
 grep -Fq 'None of the existing suites may be relabelled as this gate' "$root/docs/fullstack-acceptance.md" \
   || fail 'the documentation must distinguish this gate from the existing suites'
+grep -Fq -- '-f web_ref=feat/chaos-3096-device-approval' "$root/docs/fullstack-acceptance.md" \
+  || fail 'the documented workflow dispatch must name the reviewed web ref'
+
+grep -Fq 'web_ref:' "$workflow" || fail 'workflow dispatch must accept a web_ref input'
+grep -Fq 'default: ""' "$workflow" || fail 'web_ref must preserve the sibling default ref when omitted'
+workflow_ref='ref: $'
+workflow_ref+='{{ inputs.web_ref }}'
+grep -Fq "$workflow_ref" "$workflow" \
+  || fail 'the sibling checkout must use the requested web_ref'
+grep -Fq 'E2E_WEB_REF=' "$workflow" || fail 'the workflow must record the checked-out web ref'
 
 # --- seed vs. effective ClickHouse schema (offline, no Docker/ClickHouse required) ----------
 # This ACR checkout has no sibling ops checkout by default; the full-stack CI job does. Skip

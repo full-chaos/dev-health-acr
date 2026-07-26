@@ -436,19 +436,21 @@ record_service_readiness() {
 # ---------------------------------------------------------------------------
 
 write_run_manifest() {
+  local web_ref="${E2E_WEB_REF:-}"
   jq -n \
     --arg run_id "$RUN_ID" \
     --arg project "$PROJECT" \
     --arg scenario "$SCENARIO" \
     --arg model "$MODEL_BACKEND" \
     --arg web "$WEB_CHECK" \
+    --arg web_ref "$web_ref" \
     --arg opencode_version "$OPENCODE_OBSERVED_VERSION" \
     --arg opencode_pinned "$OPENCODE_PINNED_VERSION" \
     --arg acr_image "$IMAGE" \
     --arg repo_sha "$(git -C "$REPO_ROOT" rev-parse HEAD)" \
     --arg fixture_version "$(jq -r '.fixture_version' "$FIXTURE_ROOT/fixture-manifest.json")" \
     --arg repository "$FULLSTACK_REPO_SLUG" \
-    '{schema_version:"fullstack_run_manifest.v1",run_id:$run_id,project:$project,scenario:$scenario,model_backend:$model,web_check:$web,opencode:{observed_version:$opencode_version,pinned_version:$opencode_pinned},acr_image:$acr_image,repository_sha:$repo_sha,fixture_version:$fixture_version,repository:$repository,writeback:"disabled"}' \
+    '{schema_version:"fullstack_run_manifest.v1",run_id:$run_id,project:$project,scenario:$scenario,model_backend:$model,web_check:$web,web_ref:$web_ref,opencode:{observed_version:$opencode_version,pinned_version:$opencode_pinned},acr_image:$acr_image,repository_sha:$repo_sha,fixture_version:$fixture_version,repository:$repository,writeback:"disabled"}' \
     > "$ARTIFACTS/run.json"
 }
 
