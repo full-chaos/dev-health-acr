@@ -45,6 +45,23 @@ func TestDeviceAuthorizationRequestDecode_rejectsUnknownFieldsAndTrailingJSON(t 
 	}
 }
 
+func TestDeviceApprovalPreviewRequestDecode_rejectsRepositoryScopes(t *testing.T) {
+	for _, body := range []string{
+		`{"schema_version":"device_approval_preview_request.v1","user_code":"ABCDEFGH","repository_scopes":null}`,
+		`{"schema_version":"device_approval_preview_request.v1","user_code":"ABCDEFGH","repository_scopes":["example-org/widget-service"]}`,
+	} {
+		var request DeviceApprovalRequest
+		if err := json.Unmarshal([]byte(body), &request); err == nil {
+			t.Fatalf("decoder accepted preview-only request with repository scopes %s", body)
+		}
+	}
+
+	var preview DeviceApprovalRequest
+	if err := json.Unmarshal([]byte(`{"schema_version":"device_approval_preview_request.v1","user_code":"ABCDEFGH"}`), &preview); err != nil {
+		t.Fatalf("decoder rejected valid preview request: %v", err)
+	}
+}
+
 func TestDeviceAuthorizationRequestValidate_rejectsTypedNilRepositoryHints(t *testing.T) {
 	var nilHints []string
 	request := DeviceAuthorizationRequest{

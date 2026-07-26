@@ -3,6 +3,7 @@ package v1
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"time"
 )
@@ -92,6 +93,35 @@ type DeviceApprovalRequest struct {
 	SchemaVersion    string   `json:"schema_version"`
 	UserCode         string   `json:"user_code"`
 	RepositoryScopes []string `json:"repository_scopes"`
+}
+
+func (r *DeviceApprovalRequest) UnmarshalJSON(data []byte) error {
+	type wire struct {
+		SchemaVersion    string   `json:"schema_version"`
+		UserCode         string   `json:"user_code"`
+		RepositoryScopes []string `json:"repository_scopes"`
+	}
+	var decoded wire
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return io.ErrUnexpectedEOF
+		}
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if decoded.SchemaVersion == DeviceApprovalPreviewRequestSchema && fields["repository_scopes"] != nil {
+		return fmt.Errorf("device approval preview request forbids repository_scopes")
+	}
+	*r = DeviceApprovalRequest{SchemaVersion: decoded.SchemaVersion, UserCode: decoded.UserCode, RepositoryScopes: decoded.RepositoryScopes}
+	return nil
 }
 
 type DeviceApprovalResponse struct {
