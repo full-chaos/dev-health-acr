@@ -30,6 +30,9 @@ func (e *CredentialPurgeError) Unwrap() []error {
 // PurgeCredentialMaterial removes every configured or resolved removable
 // credential location, continuing after individual cleanup failures.
 func PurgeCredentialMaterial(current CredentialResult) error {
+	if current.Source == "environment" {
+		return &CredentialCleanupError{Location: TokenEnvironment, cause: ErrCredentialPersistenceSourceUnsupported}
+	}
 	targets := credentialPurgeTargets(current)
 	failures := make([]*CredentialCleanupError, 0)
 	for _, target := range targets {

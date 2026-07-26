@@ -84,7 +84,8 @@ func (s *Service) RollbackSelfRotation(
 	}
 	if strings.TrimSpace(receipt.SourceCredentialID) == "" ||
 		strings.TrimSpace(receipt.SuccessorCredentialID) != principal.CredentialID ||
-		receipt.SourceCredentialID == principal.CredentialID {
+		receipt.SourceCredentialID == principal.CredentialID ||
+		!receipt.RollbackUntil.After(s.now().UTC()) {
 		return SelfRevocation{}, ErrInvalidCredential
 	}
 	source, err := s.store.GetByID(ctx, principal.OrgID, receipt.SourceCredentialID)

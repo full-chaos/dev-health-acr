@@ -194,7 +194,7 @@ func runLogoutCommand(args []string) int {
 		return lifecycleExitFailure
 	}
 	if err := sidecar.PurgeCredentialMaterial(credential); err != nil {
-		fmt.Fprintln(os.Stderr, "logout: remote credential was revoked, but local cleanup failed; "+err.Error())
+		fmt.Fprintln(os.Stderr, "logout: remote credential was revoked, but local cleanup requires operator action")
 		return lifecycleExitFailure
 	}
 	fmt.Fprintln(os.Stdout, "logout successful")
