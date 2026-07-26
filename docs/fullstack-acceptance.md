@@ -330,8 +330,9 @@ driver would have surfaced as that opaque timeout rather than as a named failure
 
 When the web profile is enabled, the same isolated stack also proves the self-service
 `acr-mcp login` path. The CLI runs from a fresh `HOME` and all XDG roots with token and
-keyring selectors cleared and `ACR_API_TOKEN_KEYRING_DISABLED=true`; only its private `0600`
-fallback credential file is permitted.
+keyring selectors cleared and `ACR_API_TOKEN_KEYRING_DISABLED=true`; the driver requires this
+exact value because any other nonempty setting fails closed before a keyring seam is touched.
+Only its private `0600` fallback credential file is permitted.
 The browser signs in to the seeded admin account, previews one code, confirms the single
 repository scope, then exercises `doctor --live`, refresh, doctor, logout, and the expected
 post-logout failure. The consumed code is replayed through the browser and must return a

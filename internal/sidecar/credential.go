@@ -62,13 +62,21 @@ type CredentialResult struct {
 // no CLI-argument or plaintext-config-file source: both would make secrets
 // visible in shell history, process listings, or unencrypted files by default.
 func LoadCredential() (CredentialResult, error) {
+	keyringAllowed, err := keyringEnabled()
+	if err != nil {
+		return CredentialResult{}, err
+	}
+	return loadCredential(keyringAllowed)
+}
+
+func loadCredential(keyringAllowed bool) (CredentialResult, error) {
 	if token := strings.TrimSpace(os.Getenv(TokenEnvironment)); token != "" {
 		if !auth.IsTokenShapeValid(token) {
 			return CredentialResult{}, fmt.Errorf("%s: %w", TokenEnvironment, ErrCredentialShapeInvalid)
 		}
 		return CredentialResult{Token: token, Source: "environment"}, nil
 	}
-	if !keyringDisabled() {
+	if keyringAllowed {
 		if result, ok := loadFromKeyring(); ok {
 			return result, nil
 		}
@@ -178,6 +186,10 @@ func CredentialPersistenceSupported() error {
 // default keyring when the platform can write it safely. Unavailable or failed
 // keyring writes atomically fall back to the configured or default token file.
 func PersistCredential(token string) (CredentialResult, error) {
+	keyringAllowed, err := keyringEnabled()
+	if err != nil {
+		return CredentialResult{}, err
+	}
 	if err := CredentialPersistenceSupported(); err != nil {
 		return CredentialResult{}, err
 	}
@@ -185,7 +197,7 @@ func PersistCredential(token string) (CredentialResult, error) {
 	if !auth.IsTokenShapeValid(token) {
 		return CredentialResult{}, ErrCredentialShapeInvalid
 	}
-	if !keyringDisabled() {
+	if keyringAllowed {
 		service, account, keyringConfigured := credentialKeyringAddress()
 		if keyringConfigured && currentKeyringWriter != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), keyringLookupTimeout)
@@ -206,17 +218,21 @@ func PersistCredential(token string) (CredentialResult, error) {
 }
 
 func DeleteCredential() error {
+	keyringAllowed, err := keyringEnabled()
+	if err != nil {
+		return err
+	}
 	if err := CredentialPersistenceSupported(); err != nil {
 		return err
 	}
-	credential, err := LoadCredential()
+	credential, err := loadCredential(keyringAllowed)
 	if errors.Is(err, ErrCredentialMissing) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("load ACR credential for deletion: %w", err)
 	}
-	if credential.Source == "keyring" && !keyringDisabled() {
+	if credential.Source == "keyring" && keyringAllowed {
 		service, account, keyringConfigured := credentialKeyringAddress()
 		if !keyringConfigured || currentKeyringDeleter == nil {
 			return errors.New("delete ACR keyring credential: keyring unavailable")
@@ -262,8 +278,12 @@ func credentialKeyringAddress() (string, string, bool) {
 	return service, account, account != ""
 }
 
-func keyringDisabled() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv(TokenKeyringDisabledEnvironment)), "true")
+func keyringEnabled() (bool, error) {
+	disabled, err := strictBoolOrDefault(os.LookupEnv, TokenKeyringDisabledEnvironment, false)
+	if err != nil {
+		return false, err
+	}
+	return !disabled, nil
 }
 
 func configuredTokenFilePath() string {
