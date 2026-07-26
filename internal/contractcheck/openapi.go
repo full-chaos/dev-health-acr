@@ -35,7 +35,7 @@ func (c *repositoryCheck) validateOpenAPI(write bool) error {
 	}
 	operationIDs := map[string]string{}
 	for _, pathName := range sortedKeys(paths) {
-		if pathName != "/healthz" && pathName != "/readyz" && !strings.HasPrefix(pathName, "/api/v1/agent-context/") {
+		if !validOpenAPIPath(pathName) {
 			return fmt.Errorf("OpenAPI path outside ACR namespace: %s", pathName)
 		}
 		pathItem, ok := paths[pathName].(map[string]any)
@@ -86,6 +86,22 @@ func (c *repositoryCheck) validateOpenAPI(write bool) error {
 	}
 	c.ok("contracts/openapi/acr-v1.json + generated acr-v1.yaml")
 	return nil
+}
+
+func validOpenAPIPath(path string) bool {
+	if path == "/healthz" || path == "/readyz" || strings.HasPrefix(path, "/api/v1/agent-context/") {
+		return true
+	}
+	switch path {
+	case "/api/v1/oauth/device_authorization",
+		"/api/v1/oauth/token",
+		"/api/v1/oauth/device_approval",
+		"/api/v1/auth/credentials/self/rotate",
+		"/api/v1/auth/credentials/self/revoke":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateDocumentRefs(root, documentPath string, value any) error {

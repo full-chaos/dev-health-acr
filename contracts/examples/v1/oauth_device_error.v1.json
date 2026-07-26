@@ -1,0 +1,4 @@
+{
+  "schema_version": "oauth_device_error.v1",
+  "error": "authorization_pending"
+}

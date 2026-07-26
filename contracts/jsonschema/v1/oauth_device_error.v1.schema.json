@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/oauth_device_error.v1.schema.json",
+  "title": "OAuth Device Grant Error v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "error"],
+  "properties": {
+    "schema_version": { "const": "oauth_device_error.v1" },
+    "error": { "enum": ["authorization_pending", "slow_down", "access_denied", "expired_token", "invalid_grant"] }
+  }
+}

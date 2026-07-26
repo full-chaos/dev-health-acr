@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/device_approval_response.v1.schema.json",
+  "title": "Device Approval Response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status"],
+  "properties": {
+    "schema_version": { "const": "device_approval_response.v1" },
+    "status": { "const": "approved" }
+  }
+}
