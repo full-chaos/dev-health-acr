@@ -124,6 +124,27 @@ func TestLoginRefusesNewCredential_when_validCredentialAlreadyExists(t *testing.
 	}
 }
 
+func TestLoginStopsBeforeDeviceAuthorization_whenLocalCredentialCannotBeVerified(t *testing.T) {
+	// Given
+	server := newLifecycleServer(t, validDoctorToken(93), []string{"success"})
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
+	if err := os.WriteFile(os.Getenv(sidecar.TokenFileEnvironment), []byte("not-an-acr-credential\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	code := runCLI([]string{"login"})
+
+	// Then
+	if code != lifecycleExitFailure {
+		t.Fatalf("login exit code = %d, want %d", code, lifecycleExitFailure)
+	}
+}
+
 func TestLoginFails_when_deviceAuthorizationIsDeniedOrExpired(t *testing.T) {
 	for _, outcome := range []string{"access_denied", "expired_token"} {
 		t.Run(outcome, func(t *testing.T) {

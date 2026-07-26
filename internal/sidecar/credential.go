@@ -90,24 +90,28 @@ func loadCredential(keyringAllowed bool) (CredentialResult, error) {
 		return CredentialResult{Token: token, Source: "environment"}, nil
 	}
 	if keyringAllowed {
-		if result, ok := loadFromKeyring(); ok {
+		result, ok, err := loadFromKeyring()
+		if err != nil {
+			return CredentialResult{}, fmt.Errorf("load ACR keyring credential: %w", err)
+		}
+		if ok {
 			return result, nil
 		}
 	}
 	return loadFromFile()
 }
 
-// loadFromKeyring consults the explicit or default OS keyring seam. A miss or
-// an unexpected lookup error reports ok=false so the caller falls through to
-// the token file; the keyring is a convenience source, not a required one.
-func loadFromKeyring() (CredentialResult, bool) {
+// loadFromKeyring consults the explicit or default OS keyring seam. Only an
+// exact entry miss or unavailable trusted executable permits file fallback;
+// all other lookup failures are returned so the caller fails closed.
+func loadFromKeyring() (CredentialResult, bool, error) {
 	service := strings.TrimSpace(os.Getenv(TokenKeyringServiceEnvironment))
 	explicitService := service != ""
 	if service == "" {
 		service = defaultKeyringService
 	}
 	if currentKeyringLookup == nil {
-		return CredentialResult{}, false
+		return CredentialResult{}, false, ErrExecutableUnavailable
 	}
 	account := strings.TrimSpace(os.Getenv(TokenKeyringAccountEnvironment))
 	if account == "" {
@@ -117,23 +121,22 @@ func loadFromKeyring() (CredentialResult, bool) {
 		}
 	}
 	if account == "" {
-		return CredentialResult{}, false
+		return CredentialResult{}, false, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), keyringLookupTimeout)
 	defer cancel()
 	token, ok, err := currentKeyringLookup(ctx, service, account)
-	if err != nil || !ok {
-		return CredentialResult{}, false
+	if errors.Is(err, ErrExecutableUnavailable) || !ok && err == nil {
+		return CredentialResult{}, false, nil
+	}
+	if err != nil {
+		return CredentialResult{}, false, err
 	}
 	token = strings.TrimSpace(token)
 	if token == "" || !auth.IsTokenShapeValid(token) {
-		// A blank entry or one that does not match the ACR token shape is
-		// treated as unusable rather than a hard failure: the keyring is a
-		// convenience source, so callers fall through to the token file
-		// instead of being blocked by a stray/garbage keyring entry.
-		return CredentialResult{}, false
+		return CredentialResult{}, false, ErrCredentialShapeInvalid
 	}
-	return CredentialResult{Token: token, Source: "keyring"}, true
+	return CredentialResult{Token: token, Source: "keyring"}, true, nil
 }
 
 // maxTokenFileBytes bounds how many bytes of a configured token file
@@ -171,6 +174,9 @@ func loadFromFile() (CredentialResult, error) {
 	}
 	contents, info, err := readBoundedRegularFile(path, maxTokenFileBytes)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return CredentialResult{}, fmt.Errorf("read ACR credential file: %w", ErrCredentialMissing)
+		}
 		return CredentialResult{}, fmt.Errorf("read ACR credential file: %w", err)
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
@@ -217,12 +223,8 @@ func PersistCredential(token string) (CredentialResult, error) {
 			defer cancel()
 			if err := currentKeyringWriter(ctx, service, account, token); err == nil {
 				return CredentialResult{Token: token, Source: "keyring"}, nil
-			}
-			if currentKeyringDeleter == nil {
-				return CredentialResult{}, errors.New("clear ACR keyring credential before file fallback: keyring unavailable")
-			}
-			if err := currentKeyringDeleter(ctx, service, account); err != nil {
-				return CredentialResult{}, fmt.Errorf("clear ACR keyring credential before file fallback: %w", err)
+			} else if !errors.Is(err, errKeyringWriteUnavailable) {
+				return CredentialResult{}, fmt.Errorf("persist ACR keyring credential: %w", err)
 			}
 		}
 	}

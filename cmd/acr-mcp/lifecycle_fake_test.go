@@ -74,15 +74,22 @@ func newLifecycleServerWithAuthorizationExpectation(t *testing.T, token string, 
 func newCredentialLifecycleServer(t *testing.T, original, successor string, revocations *int, revokeFails bool) *httptest.Server {
 	t.Helper()
 	createdAt := time.Now().UTC().Truncate(time.Second)
+	state := credentialLifecycleState{
+		originalToken:      original,
+		replacementToken:   successor,
+		originalID:         "credential-original",
+		replacementID:      "credential-replacement",
+		rotationReceiptTTL: createdAt.Add(15 * time.Minute),
+	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/auth/credentials/self/rotate":
-			if r.Header.Get("Authorization") != "Bearer "+original {
+			if r.Header.Get("Authorization") != "Bearer "+state.originalToken || state.replacementIssued || state.originalRevoked {
 				t.Fatal("refresh did not use the original credential")
 			}
-			rollbackUntil := createdAt.Add(15 * time.Minute)
-			writeLifecycleJSON(t, w, contractsv1.CredentialRotateResponse{SchemaVersion: contractsv1.CredentialRotateResponseSchema, AccessToken: successor, Credential: lifecycleCredential(createdAt, nil), Receipt: contractsv1.CredentialRotationReceipt{SourceCredentialID: "credential-1", ReplacementCredentialID: "credential-2", RollbackUntil: rollbackUntil}})
+			state.replacementIssued = true
+			writeLifecycleJSON(t, w, contractsv1.CredentialRotateResponse{SchemaVersion: contractsv1.CredentialRotateResponseSchema, AccessToken: state.replacementToken, Credential: lifecycleCredential(createdAt, state.replacementID, nil), Receipt: contractsv1.CredentialRotationReceipt{SourceCredentialID: state.originalID, ReplacementCredentialID: state.replacementID, RollbackUntil: state.rotationReceiptTTL}})
 		case "/api/v1/auth/credentials/self/revoke":
 			(*revocations)++
 			var request contractsv1.CredentialRevokeRequest
@@ -94,25 +101,42 @@ func newCredentialLifecycleServer(t *testing.T, original, successor string, revo
 				writeLifecycleError(t, w, http.StatusUnauthorized)
 				return
 			}
-			if r.Header.Get("Authorization") != "Bearer "+successor && r.Header.Get("Authorization") != "Bearer "+original {
-				t.Fatal("revoke did not use an expected credential")
-			}
-			if r.Header.Get("Authorization") == "Bearer "+successor && request.RollbackReceipt == nil {
-				t.Fatal("refresh rollback did not provide its rotation receipt")
-			}
-			if r.Header.Get("Authorization") == "Bearer "+original && request.RollbackReceipt != nil {
-				t.Fatal("ordinary logout unexpectedly provided a rotation receipt")
-			}
 			revokedAt := createdAt.Add(time.Minute)
-			writeLifecycleJSON(t, w, contractsv1.CredentialRevokeResponse{SchemaVersion: contractsv1.CredentialRevokeResponseSchema, Credential: lifecycleCredential(createdAt, &revokedAt)})
+			if request.RollbackReceipt != nil {
+				if r.Header.Get("Authorization") != "Bearer "+state.replacementToken || !state.replacementIssued || state.replacementRevoked {
+					t.Fatal("refresh rollback did not use the replacement credential exactly once")
+				}
+				if request.RollbackReceipt.SourceCredentialID != state.originalID || request.RollbackReceipt.ReplacementCredentialID != state.replacementID || !request.RollbackReceipt.RollbackUntil.Equal(state.rotationReceiptTTL) {
+					t.Fatal("refresh rollback did not provide the issued rotation receipt")
+				}
+				state.replacementRevoked = true
+				writeLifecycleJSON(t, w, contractsv1.CredentialRevokeResponse{SchemaVersion: contractsv1.CredentialRevokeResponseSchema, Credential: lifecycleCredential(createdAt, state.replacementID, &revokedAt)})
+				return
+			}
+			if r.Header.Get("Authorization") != "Bearer "+state.originalToken || state.originalRevoked {
+				t.Fatal("ordinary logout did not use the original credential exactly once")
+			}
+			state.originalRevoked = true
+			writeLifecycleJSON(t, w, contractsv1.CredentialRevokeResponse{SchemaVersion: contractsv1.CredentialRevokeResponseSchema, Credential: lifecycleCredential(createdAt, state.originalID, &revokedAt)})
 		default:
 			t.Fatalf("unexpected credential lifecycle request path %q", r.URL.Path)
 		}
 	}))
 }
 
-func lifecycleCredential(createdAt time.Time, revokedAt *time.Time) contractsv1.ClientCredential {
-	return contractsv1.ClientCredential{SchemaVersion: contractsv1.ClientCredentialSchema, CredentialID: "credential-1", Name: "MCP sidecar", TokenPrefix: "fcacr_abcd1234", OrgID: "org-1", RepositoryScopes: []string{"owner/repo"}, Scopes: []string{"context:read", "evidence:read"}, CreatedAt: createdAt, RevokedAt: revokedAt}
+type credentialLifecycleState struct {
+	originalToken      string
+	replacementToken   string
+	originalID         string
+	replacementID      string
+	rotationReceiptTTL time.Time
+	replacementIssued  bool
+	replacementRevoked bool
+	originalRevoked    bool
+}
+
+func lifecycleCredential(createdAt time.Time, credentialID string, revokedAt *time.Time) contractsv1.ClientCredential {
+	return contractsv1.ClientCredential{SchemaVersion: contractsv1.ClientCredentialSchema, CredentialID: credentialID, Name: "MCP sidecar", TokenPrefix: "fcacr_abcd1234", OrgID: "org-1", RepositoryScopes: []string{"owner/repo"}, Scopes: []string{"context:read", "evidence:read"}, CreatedAt: createdAt, RevokedAt: revokedAt}
 }
 
 func writeLifecycleError(t *testing.T, w http.ResponseWriter, status int) {

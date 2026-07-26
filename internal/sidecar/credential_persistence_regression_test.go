@@ -8,11 +8,10 @@ import (
 	"testing"
 )
 
-func TestPersistCredentialRemovesStaleKeyringCredentialBeforeFileFallback(t *testing.T) {
+func TestPersistCredentialFallsBackToFileWhenKeyringIsUnavailable(t *testing.T) {
 	// Given
 	home := t.TempDir()
 	successor := validTestToken(41)
-	keyringPresent := true
 	deleteCalls := 0
 	t.Setenv(TokenEnvironment, "")
 	t.Setenv(TokenKeyringDisabledEnvironment, "false")
@@ -22,14 +21,13 @@ func TestPersistCredentialRemovesStaleKeyringCredentialBeforeFileFallback(t *tes
 	t.Setenv(APIURLEnvironment, "https://api.dev-health.example.com")
 	t.Setenv("HOME", home)
 	stubKeyringWriter(t, func(context.Context, string, string, string) error {
-		return errors.New("keyring write failed")
+		return errKeyringWriteUnavailable
 	})
 	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
-		return keyringToken, keyringPresent, nil
+		return "", false, nil
 	})
 	stubKeyringDeleter(t, func(context.Context, string, string) error {
 		deleteCalls++
-		keyringPresent = false
 		return nil
 	})
 
@@ -44,11 +42,74 @@ func TestPersistCredentialRemovesStaleKeyringCredentialBeforeFileFallback(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deleteCalls != 1 {
-		t.Fatalf("keyring deletion calls = %d, want 1", deleteCalls)
+	if deleteCalls != 0 {
+		t.Fatalf("keyring deletion calls = %d, want 0", deleteCalls)
 	}
 	if credential.Token != successor || credential.Source != "file" {
 		t.Fatalf("loaded credential = %#v, want successor file credential", credential)
+	}
+}
+
+func TestPersistCredentialRejectsOperationalKeyringFailure(t *testing.T) {
+	// Given
+	path := filepath.Join(t.TempDir(), "token")
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenKeyringDisabledEnvironment, "false")
+	t.Setenv(TokenFileEnvironment, path)
+	t.Setenv(APIURLEnvironment, "https://api.dev-health.example.com")
+	stubKeyringWriter(t, func(context.Context, string, string, string) error { return errKeyringWriteFailed })
+
+	// When
+	_, err := PersistCredential(validTestToken(42))
+
+	// Then
+	if err == nil {
+		t.Fatal("operational keyring failure fell back to the credential file")
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("credential file exists after operational keyring failure: %v", statErr)
+	}
+}
+
+func TestPersistCredentialRejectsUntrustedKeyringWriter_whenFallbackExists(t *testing.T) {
+	// Given
+	path := filepath.Join(t.TempDir(), "token")
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenKeyringDisabledEnvironment, "false")
+	t.Setenv(TokenFileEnvironment, path)
+	t.Setenv(APIURLEnvironment, "https://api.dev-health.example.com")
+	stubKeyringWriter(t, func(context.Context, string, string, string) error { return ErrUntrustedExecutable })
+
+	// When
+	_, err := PersistCredential(validTestToken(43))
+
+	// Then
+	if !errors.Is(err, ErrUntrustedExecutable) {
+		t.Fatalf("persist error = %v, want ErrUntrustedExecutable", err)
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("credential file exists after untrusted keyring writer: %v", statErr)
+	}
+}
+
+func TestPersistCredentialRejectsTimedOutKeyringWriter_whenFallbackExists(t *testing.T) {
+	// Given
+	path := filepath.Join(t.TempDir(), "token")
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenKeyringDisabledEnvironment, "false")
+	t.Setenv(TokenFileEnvironment, path)
+	t.Setenv(APIURLEnvironment, "https://api.dev-health.example.com")
+	stubKeyringWriter(t, func(context.Context, string, string, string) error { return context.DeadlineExceeded })
+
+	// When
+	_, err := PersistCredential(validTestToken(44))
+
+	// Then
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("persist error = %v, want context deadline exceeded", err)
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("credential file exists after timed-out keyring writer: %v", statErr)
 	}
 }
 
@@ -86,7 +147,7 @@ func TestReplaceCredential_updatesOnlyExistingFileSource(t *testing.T) {
 	}
 }
 
-func TestDeleteCredential_returnsExactFileCleanupLocation(t *testing.T) {
+func TestDeleteCredentialIsIdempotent_whenCredentialFileIsMissing(t *testing.T) {
 	// Given
 	path := filepath.Join(t.TempDir(), "missing", "token")
 	t.Setenv(TokenEnvironment, "")
@@ -97,12 +158,8 @@ func TestDeleteCredential_returnsExactFileCleanupLocation(t *testing.T) {
 	err := DeleteCredential()
 
 	// Then
-	var cleanupErr *CredentialCleanupError
-	if !errors.As(err, &cleanupErr) {
-		t.Fatalf("cleanup error = %v, want typed cleanup error", err)
-	}
-	if cleanupErr.Location != path {
-		t.Fatalf("cleanup location = %q, want %q", cleanupErr.Location, path)
+	if err != nil {
+		t.Fatalf("delete missing credential = %v, want nil", err)
 	}
 }
 

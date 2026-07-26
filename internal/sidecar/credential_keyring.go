@@ -13,13 +13,9 @@ import (
 )
 
 // KeyringLookup resolves a credential from an OS-native secret store. It
-// returns ok=false without an error when the platform has no reachable
-// keyring backend or the entry does not exist, so LoadCredential can fall
-// through to the next precedence source. A non-nil error indicates the
-// lookup itself failed unexpectedly (for example the backend refused the
-// query); LoadCredential still falls through rather than failing hard,
-// since the keyring is an optional convenience seam, not a required
-// credential source.
+// returns ok=false without an error only when the requested entry does not
+// exist. A non-nil error indicates lookup failure and must be propagated so a
+// stale fallback file cannot mask a locked, untrusted, or failed keyring.
 type KeyringLookup func(ctx context.Context, service, account string) (token string, ok bool, err error)
 
 // currentKeyringLookup is the active keyring implementation. It is a
@@ -85,11 +81,10 @@ const keyringCancelWaitDelay = 1 * time.Second
 var errKeyringOutputTooLarge = errors.New("keyring lookup output exceeded the maximum size")
 
 // runKeyringCommand executes a bounded external secret-store lookup.
-// Binary absence and "not found" exits are reported as unavailable, not
-// errors; any other failure (permission denial, locked keychain,
-// malformed output) is surfaced as an error so LoadCredential can still
-// fall through while leaving room for callers that want to distinguish
-// the cases.
+// Only trusted-binary absence and an exact no-entry result are reported as
+// unavailable. Any other failure (permission denial, locked keychain,
+// timeout, malformed output, or an untrusted executable) is surfaced so the
+// caller fails closed rather than selecting a stale fallback file.
 //
 // stdout is read through cmd.StdoutPipe() wrapped in
 // io.LimitReader(stdout, maxKeyringOutputBytes+1): once that many bytes
@@ -126,7 +121,10 @@ var errKeyringOutputTooLarge = errors.New("keyring lookup output exceeded the ma
 func runKeyringCommand(ctx context.Context, name string, args ...string) (string, bool, error) {
 	path, err := currentExecutableResolver(name)
 	if err != nil {
-		return "", false, nil
+		if errors.Is(err, ErrExecutableUnavailable) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("resolve trusted keyring executable: %w", err)
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Env = credentialSafeEnviron()
@@ -143,6 +141,9 @@ func runKeyringCommand(ctx context.Context, name string, args ...string) (string
 	cmd.Stderr = stderr
 
 	if err := cmd.Start(); err != nil {
+		if ctx.Err() != nil {
+			return "", false, ctx.Err()
+		}
 		return "", false, err
 	}
 
@@ -164,15 +165,18 @@ func runKeyringCommand(ctx context.Context, name string, args ...string) (string
 		if oversize {
 			return "", false, errKeyringOutputTooLarge
 		}
+		if ctx.Err() != nil {
+			return "", false, ctx.Err()
+		}
 		return "", false, fmt.Errorf("read keyring lookup output: %w", readErr)
 	}
 
 	if err := cmd.Wait(); err != nil {
+		if ctx.Err() != nil {
+			return "", false, ctx.Err()
+		}
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			// Nonzero exit from a present binary conventionally means "not
-			// found" for both `security` and `secret-tool`; treat it as an
-			// unavailable entry rather than a hard failure.
+		if errors.As(err, &exitErr) && keyringExitMeansEntryMissing(name, exitErr.ExitCode()) {
 			return "", false, nil
 		}
 		// err here (a process-management failure such as a wait error
@@ -180,13 +184,21 @@ func runKeyringCommand(ctx context.Context, name string, args ...string) (string
 		// never secret content: the secret only ever travels over stdout,
 		// which is discarded on every non-success path. diag is capped,
 		// backend-diagnostic stderr text, not the looked-up credential.
-		if diag := stderr.String(); diag != "" {
-			return "", false, fmt.Errorf("%w: %s", err, diag)
-		}
-		return "", false, err
+		return "", false, fmt.Errorf("wait for keyring lookup: %w", err)
 	}
 
 	return string(output), true, nil
+}
+
+func keyringExitMeansEntryMissing(name string, exitCode int) bool {
+	switch name {
+	case "security":
+		return exitCode == 44
+	case "secret-tool":
+		return exitCode == 1
+	default:
+		return false
+	}
 }
 
 // boundedBuffer is an io.Writer that retains at most limit bytes, silently

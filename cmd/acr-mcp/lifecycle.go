@@ -45,11 +45,17 @@ func runDeviceLogin(parsed loginArgs) int {
 		fmt.Fprintln(os.Stderr, "login: secure credential persistence is unavailable on this platform")
 		return lifecycleExitFailure
 	}
-	if credential, err := sidecar.LoadCredential(); err == nil && credential.Token != "" {
+	credential, err := sidecar.LoadCredential()
+	if err == nil && credential.Token != "" {
 		fmt.Fprintln(os.Stderr, "login: a valid local credential already exists; use login --refresh or logout")
 		return lifecycleExitFailure
-	} else if errors.Is(err, sidecar.ErrCredentialShapeInvalid) && os.Getenv(sidecar.TokenEnvironment) != "" {
-		fmt.Fprintln(os.Stderr, "login: the environment credential is malformed; correct it before logging in")
+	}
+	if err != nil && !errors.Is(err, sidecar.ErrCredentialMissing) {
+		if errors.Is(err, sidecar.ErrCredentialShapeInvalid) && os.Getenv(sidecar.TokenEnvironment) != "" {
+			fmt.Fprintln(os.Stderr, "login: the environment credential is malformed; correct it before logging in")
+		} else {
+			fmt.Fprintln(os.Stderr, "login: existing local credential could not be verified; correct it before logging in")
+		}
 		return lifecycleExitFailure
 	}
 	cfg, err := sidecar.LoadConfig()

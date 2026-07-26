@@ -16,6 +16,12 @@ import (
 // or environment-controlled text on an operator-facing error.
 var ErrUntrustedExecutable = errors.New("sidecar: executable could not be resolved to a trusted absolute path")
 
+// ErrExecutableUnavailable is returned only when a trusted executable is not
+// installed in any trusted search directory. Callers may use this exact
+// condition to select a documented fallback; trust, permission, and runtime
+// failures must remain fail-closed.
+var ErrExecutableUnavailable = errors.New("sidecar: trusted executable is unavailable")
+
 // executableResolver resolves the name of an external tool to a trusted
 // absolute path, or returns ErrUntrustedExecutable when it cannot.
 type executableResolver func(name string) (string, error)
@@ -93,28 +99,41 @@ func resolveTrustedExecutable(name string) (string, error) {
 		return "", fmt.Errorf("%w: %s", ErrUntrustedExecutable, name)
 	}
 	for _, dir := range trustedExecutableSearchDirs() {
-		if resolved, ok := resolveTrustedCandidate(dir, name); ok {
+		resolved, err := resolveTrustedCandidate(dir, name)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("resolve trusted executable %s: %w", name, err)
+		}
+		if resolved != "" {
 			return resolved, nil
 		}
 	}
-	return "", fmt.Errorf("%w: %s", ErrUntrustedExecutable, name)
+	return "", fmt.Errorf("%w: %s", ErrExecutableUnavailable, name)
 }
 
 // resolveTrustedCandidate applies every check documented on
 // resolveTrustedExecutable to the single candidate dir/name.
-func resolveTrustedCandidate(dir, name string) (string, bool) {
+func resolveTrustedCandidate(dir, name string) (string, error) {
 	resolved, err := filepath.EvalSymlinks(filepath.Join(dir, name))
-	if err != nil || !isUnderTrustedPrefix(resolved) {
-		return "", false
+	if err != nil {
+		return "", err
+	}
+	if !isUnderTrustedPrefix(resolved) {
+		return "", ErrUntrustedExecutable
 	}
 	info, err := os.Lstat(resolved)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
-		return "", false
+	if err != nil {
+		return "", err
 	}
-	if verifyTrustedExecutableOwnership(info) != nil {
-		return "", false
+	if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+		return "", ErrUntrustedExecutable
 	}
-	return resolved, true
+	if err := verifyTrustedExecutableOwnership(info); err != nil {
+		return "", err
+	}
+	return resolved, nil
 }
 
 func isUnderTrustedPrefix(resolved string) bool {

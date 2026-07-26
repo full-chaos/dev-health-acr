@@ -43,8 +43,8 @@ func TestResolveTrustedExecutableAcceptsRealAbsoluteBinary(t *testing.T) {
 }
 
 func TestResolveTrustedExecutableRejectsMissingBinary(t *testing.T) {
-	if _, err := resolveTrustedExecutable("acr-test-definitely-not-a-real-binary-xyz"); !errors.Is(err, ErrUntrustedExecutable) {
-		t.Fatalf("expected ErrUntrustedExecutable, got %v", err)
+	if _, err := resolveTrustedExecutable("acr-test-definitely-not-a-real-binary-xyz"); !errors.Is(err, ErrExecutableUnavailable) {
+		t.Fatalf("expected ErrExecutableUnavailable, got %v", err)
 	}
 }
 

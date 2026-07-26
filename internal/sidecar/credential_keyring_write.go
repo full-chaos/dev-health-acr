@@ -3,6 +3,7 @@ package sidecar
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"runtime"
@@ -10,6 +11,7 @@ import (
 )
 
 var errKeyringWriteUnavailable = errors.New("acr: keyring write unavailable")
+var errKeyringWriteFailed = errors.New("acr: keyring write failed")
 
 // KeyringWriter stores a token without exposing it in argv or the child
 // environment. Tests replace this seam instead of touching OS secret stores.
@@ -46,7 +48,10 @@ func defaultKeyringDeleter(ctx context.Context, service, account string) error {
 func runKeyringMutation(ctx context.Context, stdin io.Reader, name string, args ...string) error {
 	path, err := currentExecutableResolver(name)
 	if err != nil {
-		return errKeyringWriteUnavailable
+		if errors.Is(err, ErrExecutableUnavailable) {
+			return errKeyringWriteUnavailable
+		}
+		return fmt.Errorf("resolve trusted keyring executable: %w", err)
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Env = credentialSafeEnviron()
@@ -57,7 +62,10 @@ func runKeyringMutation(ctx context.Context, stdin io.Reader, name string, args 
 	cmd.Cancel = func() error { return killKeyringProcessGroup(cmd) }
 	cmd.WaitDelay = keyringCancelWaitDelay
 	if err := cmd.Run(); err != nil {
-		return errKeyringWriteUnavailable
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("%w: %w", errKeyringWriteFailed, err)
 	}
 	return nil
 }
