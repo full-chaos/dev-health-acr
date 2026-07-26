@@ -90,7 +90,6 @@ try {
     await page.getByRole("button", { name: "Sign In" }).click();
     if (!(await signIn).ok()) throw new Error("isolated web fixture authentication failed");
     await page.waitForURL((url) => !url.pathname.startsWith("/auth/signin"));
-    await page.waitForLoadState("domcontentloaded");
 
     await page.goto(`${baseUrl}/acr/device`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "Approve device access" }).waitFor();

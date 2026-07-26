@@ -284,8 +284,8 @@ grep -Fq 'device-login-network.json' "$root/scripts/e2e/device-login-browser.mjs
   || fail 'the live approval flow must retain sanitized browser network evidence'
 grep -Fq 'await page.waitForURL((url) => !url.pathname.startsWith("/auth/signin"));' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'the device driver must settle the sign-in redirect before opening the protected approval page'
-grep -Fq 'await page.waitForLoadState("domcontentloaded");' "$root/scripts/e2e/device-login-browser.mjs" \
-  || fail 'the device driver must not wait for background traffic to become idle after sign-in'
+! grep -Fq 'waitForLoadState(' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the device driver must not add a redundant load-state wait after its URL wait'
 grep -Fq '^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'the browser driver must accept every server-issued eight-character alphanumeric device code'
 grep -Fq '[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}' "$script" \
