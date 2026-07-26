@@ -67,8 +67,16 @@ func runDeviceLogin(parsed loginArgs) int {
 	}
 }
 
-func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient, _ loginArgs) int {
-	authorization, err := client.StartDeviceAuthorization(ctx)
+func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient, parsed loginArgs) int {
+	var organizationIDHint *string
+	if parsed.org != "" {
+		organizationIDHint = &parsed.org
+	}
+	var repositoryHints *[]string
+	if len(parsed.repos) != 0 {
+		repositoryHints = &parsed.repos
+	}
+	authorization, err := client.StartDeviceAuthorization(ctx, organizationIDHint, repositoryHints)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "login: could not start device authorization")
 		return lifecycleExitFailure

@@ -73,11 +73,18 @@ func NewLifecycleClient(cfg Config) (*LifecycleClient, error) {
 	}, nil
 }
 
-// StartDeviceAuthorization creates a server-side device grant. The v1
-// contract intentionally has no client-authoritative organization or
-// repository hints; authorization selection remains server-owned.
-func (c *LifecycleClient) StartDeviceAuthorization(ctx context.Context) (contractsv1.DeviceAuthorizationResponse, error) {
-	request := contractsv1.DeviceAuthorizationRequest{SchemaVersion: contractsv1.DeviceAuthorizationRequestSchema}
+// StartDeviceAuthorization creates a server-side device grant. Hints are
+// optional client preferences; server-side authorization remains authoritative.
+func (c *LifecycleClient) StartDeviceAuthorization(
+	ctx context.Context,
+	organizationIDHint *string,
+	repositoryHints *[]string,
+) (contractsv1.DeviceAuthorizationResponse, error) {
+	request := contractsv1.DeviceAuthorizationRequest{
+		SchemaVersion:      contractsv1.DeviceAuthorizationRequestSchema,
+		OrganizationIDHint: organizationIDHint,
+		RepositoryHints:    repositoryHints,
+	}
 	response := contractsv1.DeviceAuthorizationResponse{}
 	if err := c.callPublic(ctx, deviceAuthorizationPath, request, &response, false); err != nil {
 		return contractsv1.DeviceAuthorizationResponse{}, fmt.Errorf("start device authorization: %w", err)

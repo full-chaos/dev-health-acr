@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,15 @@ import (
 )
 
 func newLifecycleServer(t *testing.T, token string, polls []string) *httptest.Server {
+	return newLifecycleServerWithAuthorizationExpectation(t, token, polls, nil)
+}
+
+type deviceAuthorizationExpectation struct {
+	organizationIDHint *string
+	repositoryHints    *[]string
+}
+
+func newLifecycleServerWithAuthorizationExpectation(t *testing.T, token string, polls []string, want *deviceAuthorizationExpectation) *httptest.Server {
 	t.Helper()
 	createdAt := time.Now().UTC().Truncate(time.Second)
 	poll := 0
@@ -21,6 +31,18 @@ func newLifecycleServer(t *testing.T, token string, polls []string) *httptest.Se
 		case "/api/v1/oauth/device_authorization":
 			if r.Header.Get("Authorization") != "" {
 				t.Fatal("device authorization request unexpectedly had bearer authorization")
+			}
+			if want != nil {
+				var request contractsv1.DeviceAuthorizationRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatalf("decode device authorization request: %v", err)
+				}
+				if err := request.Validate(); err != nil {
+					t.Fatalf("validate device authorization request: %v", err)
+				}
+				if !reflect.DeepEqual(request.OrganizationIDHint, want.organizationIDHint) || !reflect.DeepEqual(request.RepositoryHints, want.repositoryHints) {
+					t.Fatalf("device authorization hints = org=%#v repos=%#v, want org=%#v repos=%#v", request.OrganizationIDHint, request.RepositoryHints, want.organizationIDHint, want.repositoryHints)
+				}
 			}
 			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: "http://" + r.Host + "/acr/device", ExpiresIn: 600, Interval: 5})
 		case "/api/v1/oauth/token":

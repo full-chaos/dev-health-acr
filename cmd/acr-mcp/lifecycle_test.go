@@ -15,7 +15,7 @@ import (
 func TestLoginPersistsCredentialAndDoctorDiscoversIt_when_deviceGrantRedeems(t *testing.T) {
 	// Given
 	token := validDoctorToken(81)
-	server := newLifecycleServer(t, token, []string{"success"})
+	server := newLifecycleServerWithAuthorizationExpectation(t, token, []string{"success"}, &deviceAuthorizationExpectation{})
 	t.Setenv(sidecar.APIURLEnvironment, server.URL)
 	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
 	t.Setenv(sidecar.TokenEnvironment, "")
@@ -44,6 +44,35 @@ func TestLoginPersistsCredentialAndDoctorDiscoversIt_when_deviceGrantRedeems(t *
 	}
 	if strings.TrimSpace(string(contents)) != token {
 		t.Fatal("persisted credential did not match the redeemed token")
+	}
+}
+
+func TestLoginSendsExactOrganizationAndRepositoryHints_whenProvided(t *testing.T) {
+	// Given
+	token := validDoctorToken(92)
+	organizationIDHint := "org_fullchaos"
+	repositoryHints := []string{"full-chaos/dev-health-acr", "full-chaos/dev-health"}
+	server := newLifecycleServerWithAuthorizationExpectation(t, token, []string{"success"}, &deviceAuthorizationExpectation{
+		organizationIDHint: &organizationIDHint,
+		repositoryHints:    &repositoryHints,
+	})
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
+	originalBrowserOpen := lifecycleBrowserOpen
+	lifecycleBrowserOpen = func(string) error { return errors.New("browser unavailable") }
+	t.Cleanup(func() { lifecycleBrowserOpen = originalBrowserOpen })
+	originalWait := lifecycleWait
+	lifecycleWait = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { lifecycleWait = originalWait })
+
+	// When
+	code := runCLI([]string{"login", "--org", organizationIDHint, "--repo", repositoryHints[0], "--repo=" + repositoryHints[1]})
+
+	// Then
+	if code != 0 {
+		t.Fatalf("login exit code = %d, want 0", code)
 	}
 }
 
