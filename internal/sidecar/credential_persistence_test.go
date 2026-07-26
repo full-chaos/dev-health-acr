@@ -83,6 +83,36 @@ func TestLoadCredentialUsesDefaultTokenFileWhenKeyringMisses(t *testing.T) {
 	}
 }
 
+func TestLoadCredentialSkipsKeyringWhenDisabled(t *testing.T) {
+	// Given
+	home := t.TempDir()
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(TokenFileEnvironment, "")
+	t.Setenv("HOME", home)
+	if err := os.Mkdir(filepath.Join(home, ".acr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".acr", "token"), []byte(fileToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
+		t.Fatal("disabled keyring lookup was called")
+		return "", false, nil
+	})
+
+	// When
+	credential, err := LoadCredential()
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credential.Token != fileToken || credential.Source != "file" {
+		t.Fatalf("unexpected credential result: %#v", credential)
+	}
+}
+
 func TestPersistCredentialFallsBackToRestrictedDefaultFileWhenKeyringWriteFails(t *testing.T) {
 	// Given
 	home := t.TempDir()
@@ -118,6 +148,29 @@ func TestPersistCredentialFallsBackToRestrictedDefaultFileWhenKeyringWriteFails(
 	}
 	if fileInfo.Mode().Perm() != 0o600 {
 		t.Fatalf("unexpected token mode: %o", fileInfo.Mode().Perm())
+	}
+}
+
+func TestPersistCredentialSkipsKeyringWhenDisabled(t *testing.T) {
+	// Given
+	home := t.TempDir()
+	t.Setenv(TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(TokenFileEnvironment, "")
+	t.Setenv("HOME", home)
+	stubKeyringWriter(t, func(context.Context, string, string, string) error {
+		t.Fatal("disabled keyring writer was called")
+		return nil
+	})
+
+	// When
+	credential, err := PersistCredential(fileToken)
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credential.Token != fileToken || credential.Source != "file" {
+		t.Fatalf("unexpected persistence result: %#v", credential)
 	}
 }
 
@@ -222,6 +275,41 @@ func TestDeleteCredentialRemovesDefaultFallbackFileWhenKeyringIsUnavailable(t *t
 	}
 	stubKeyringDeleter(t, func(context.Context, string, string) error {
 		return errors.New("keyring unavailable")
+	})
+
+	// When
+	err := DeleteCredential()
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fallback credential file remains after deletion: %v", err)
+	}
+}
+
+func TestDeleteCredentialSkipsKeyringWhenDisabled(t *testing.T) {
+	// Given
+	home := t.TempDir()
+	path := filepath.Join(home, ".acr", "token")
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(TokenFileEnvironment, "")
+	t.Setenv("HOME", home)
+	if err := os.Mkdir(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(fileToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
+		t.Fatal("disabled keyring lookup was called")
+		return "", false, nil
+	})
+	stubKeyringDeleter(t, func(context.Context, string, string) error {
+		t.Fatal("disabled keyring deleter was called")
+		return nil
 	})
 
 	// When

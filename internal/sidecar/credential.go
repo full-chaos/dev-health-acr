@@ -15,11 +15,12 @@ import (
 )
 
 const (
-	TokenEnvironment               = "ACR_API_TOKEN"
-	TokenFileEnvironment           = "ACR_API_TOKEN_FILE"
-	TokenKeyringServiceEnvironment = "ACR_API_TOKEN_KEYRING_SERVICE"
-	TokenKeyringAccountEnvironment = "ACR_API_TOKEN_KEYRING_ACCOUNT"
-	defaultKeyringService          = "dev-health-acr"
+	TokenEnvironment                = "ACR_API_TOKEN"
+	TokenFileEnvironment            = "ACR_API_TOKEN_FILE"
+	TokenKeyringDisabledEnvironment = "ACR_API_TOKEN_KEYRING_DISABLED"
+	TokenKeyringServiceEnvironment  = "ACR_API_TOKEN_KEYRING_SERVICE"
+	TokenKeyringAccountEnvironment  = "ACR_API_TOKEN_KEYRING_ACCOUNT"
+	defaultKeyringService           = "dev-health-acr"
 
 	// keyringLookupTimeout bounds the optional OS keyring seam so a locked,
 	// hung, or misbehaving secret-store backend cannot stall credential
@@ -61,14 +62,24 @@ type CredentialResult struct {
 // no CLI-argument or plaintext-config-file source: both would make secrets
 // visible in shell history, process listings, or unencrypted files by default.
 func LoadCredential() (CredentialResult, error) {
+	keyringAllowed, err := keyringEnabled()
+	if err != nil {
+		return CredentialResult{}, err
+	}
+	return loadCredential(keyringAllowed)
+}
+
+func loadCredential(keyringAllowed bool) (CredentialResult, error) {
 	if token := strings.TrimSpace(os.Getenv(TokenEnvironment)); token != "" {
 		if !auth.IsTokenShapeValid(token) {
 			return CredentialResult{}, fmt.Errorf("%s: %w", TokenEnvironment, ErrCredentialShapeInvalid)
 		}
 		return CredentialResult{Token: token, Source: "environment"}, nil
 	}
-	if result, ok := loadFromKeyring(); ok {
-		return result, nil
+	if keyringAllowed {
+		if result, ok := loadFromKeyring(); ok {
+			return result, nil
+		}
 	}
 	return loadFromFile()
 }
@@ -175,6 +186,10 @@ func CredentialPersistenceSupported() error {
 // default keyring when the platform can write it safely. Unavailable or failed
 // keyring writes atomically fall back to the configured or default token file.
 func PersistCredential(token string) (CredentialResult, error) {
+	keyringAllowed, err := keyringEnabled()
+	if err != nil {
+		return CredentialResult{}, err
+	}
 	if err := CredentialPersistenceSupported(); err != nil {
 		return CredentialResult{}, err
 	}
@@ -182,12 +197,14 @@ func PersistCredential(token string) (CredentialResult, error) {
 	if !auth.IsTokenShapeValid(token) {
 		return CredentialResult{}, ErrCredentialShapeInvalid
 	}
-	service, account, keyringConfigured := credentialKeyringAddress()
-	if keyringConfigured && currentKeyringWriter != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), keyringLookupTimeout)
-		defer cancel()
-		if err := currentKeyringWriter(ctx, service, account, token); err == nil {
-			return CredentialResult{Token: token, Source: "keyring"}, nil
+	if keyringAllowed {
+		service, account, keyringConfigured := credentialKeyringAddress()
+		if keyringConfigured && currentKeyringWriter != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), keyringLookupTimeout)
+			defer cancel()
+			if err := currentKeyringWriter(ctx, service, account, token); err == nil {
+				return CredentialResult{Token: token, Source: "keyring"}, nil
+			}
 		}
 	}
 	path := configuredTokenFilePath()
@@ -201,17 +218,21 @@ func PersistCredential(token string) (CredentialResult, error) {
 }
 
 func DeleteCredential() error {
+	keyringAllowed, err := keyringEnabled()
+	if err != nil {
+		return err
+	}
 	if err := CredentialPersistenceSupported(); err != nil {
 		return err
 	}
-	credential, err := LoadCredential()
+	credential, err := loadCredential(keyringAllowed)
 	if errors.Is(err, ErrCredentialMissing) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("load ACR credential for deletion: %w", err)
 	}
-	if credential.Source == "keyring" {
+	if credential.Source == "keyring" && keyringAllowed {
 		service, account, keyringConfigured := credentialKeyringAddress()
 		if !keyringConfigured || currentKeyringDeleter == nil {
 			return errors.New("delete ACR keyring credential: keyring unavailable")
@@ -232,6 +253,15 @@ func DeleteCredential() error {
 	return nil
 }
 
+func CredentialCleanupLocation(credential CredentialResult) string {
+	if credential.Source == "file" {
+		if path := configuredTokenFilePath(); path != "" {
+			return path
+		}
+	}
+	return "the configured ACR keyring entry"
+}
+
 func credentialKeyringAddress() (string, string, bool) {
 	service := strings.TrimSpace(os.Getenv(TokenKeyringServiceEnvironment))
 	explicitService := service != ""
@@ -246,6 +276,14 @@ func credentialKeyringAddress() (string, string, bool) {
 		}
 	}
 	return service, account, account != ""
+}
+
+func keyringEnabled() (bool, error) {
+	disabled, err := strictBoolOrDefault(os.LookupEnv, TokenKeyringDisabledEnvironment, false)
+	if err != nil {
+		return false, err
+	}
+	return !disabled, nil
 }
 
 func configuredTokenFilePath() string {

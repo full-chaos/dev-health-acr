@@ -7,6 +7,8 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 script="$root/scripts/e2e/fullstack-opencode.sh"
+runtime_fixture_helper="$root/scripts/e2e/opencode-runtime-fixture.sh"
+workflow="$root/.github/workflows/fullstack-acceptance.yml"
 driver="$root/scripts/e2e/compose.sh"
 compose_overlay="$root/deploy/compose/acr.compose.yml"
 fixtures="$root/testdata/fullstack/v1"
@@ -15,7 +17,7 @@ prompt="$root/tests/fullstack/opencode/task-prompt.md"
 
 fail() { printf '[fullstack-contract] FAIL: %s\n' "$*" >&2; exit 1; }
 
-bash -n "$script"
+bash -n "$script" "$runtime_fixture_helper"
 command -v jq >/dev/null || fail 'jq is required'
 
 # --- the shared driver still exposes the seam this suite depends on -----------------------
@@ -123,7 +125,7 @@ grep -Fq 'npm_config_offline' "$script" || fail 'the client run must prefer the 
 # provider the config does not define fails inside OpenCode's own server with an opaque
 # "Unexpected server error" and zero model requests, so the driver must derive the id from
 # the rendered config instead of repeating it.
-grep -Fq -- '--model "$OPENCODE_MODEL_ID"' "$script" \
+grep -Fq 'opencode_task_argv "$task_id" "$CLIENT_HOME/workspace" "$OPENCODE_MODEL_ID"' "$script" \
   || fail 'the client model id must be derived from the rendered config, not hardcoded'
 jq -e '
   (.model | split("/")) as $parts
@@ -136,14 +138,42 @@ for variable in HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME
   grep -Fq "${variable}=\"\$CLIENT_HOME" "$script" || fail "client sandbox does not redirect ${variable}"
 done
 grep -Fq 'env -i' "$script" || fail 'the OpenCode process must start from a cleared environment'
-grep -Fq -- '--pure' "$script" || fail 'OpenCode must run without external plugins'
+grep -Fq -- '--pure' "$runtime_fixture_helper" || fail 'OpenCode must run without external plugins'
 grep -Fq 'OPENCODE_DISABLE_PROJECT_CONFIG=true' "$script" || fail 'project config discovery must be disabled'
 grep -Fq 'OPENCODE_DISABLE_MODELS_FETCH=true' "$script" || fail 'model catalogue fetching must be disabled'
 grep -Fq 'assert_pinned_opencode' "$script" || fail 'the pinned OpenCode version is not enforced'
+! grep -Fq '$OPENCODE_BIN --version' "$script" \
+  || fail 'the full-stack driver must not probe OpenCode outside the throwaway sandbox'
+grep -Fq 'OPENCODE_OBSERVED_VERSION' "$script" \
+  || fail 'the full-stack driver must retain the sandboxed OpenCode version for its manifest'
+grep -Fq -- '--arg opencode_version "$OPENCODE_OBSERVED_VERSION"' "$script" \
+  || fail 'the full-stack run manifest must use the sandboxed OpenCode version'
+grep -Fq -- '--arg web_ref "$web_ref"' "$script" \
+  || fail 'the full-stack run manifest must record the selected web ref'
+grep -Fq 'web_ref:$web_ref' "$script" \
+  || fail 'the full-stack run manifest must publish the selected web ref'
 # OpenCode does not self-terminate on a refused upstream or a retry loop; without an external
 # deadline a CI job hangs until the runner's own 6-hour limit.
 grep -Fq 'timeout --preserve-status' "$script" || fail 'opencode run must be wrapped in an external timeout'
 grep -Fq 'hung rather than failing' "$script" || fail 'a hung client must be its own failure class'
+grep -Fq 'OPENCODE_RUNTIME_FIXTURE' "$script" || fail 'runtime fixture input is missing'
+grep -Fq 'stage_opencode_runtime_fixture' "$script" || fail 'runtime fixture staging is not wired into the driver'
+fixture_stage_line="$(grep -n "OPENCODE_RUNTIME_FIXTURE_SHA256=\"\$(stage_opencode_runtime_fixture" "$script" | cut -d: -f1)"
+run_manifest_line="$(grep -n '^write_run_manifest$' "$script" | cut -d: -f1)"
+[[ -n "$fixture_stage_line" && -n "$run_manifest_line" && "$fixture_stage_line" -lt "$run_manifest_line" ]] \
+  || fail 'runtime fixture must stage before its provenance receipt is written'
+grep -Fq 'must be an absolute readable directory' "$runtime_fixture_helper" || fail 'runtime fixture must fail closed for relative or unreadable paths'
+grep -Fq 'tree hash verification failed' "$runtime_fixture_helper" || fail 'runtime fixture integrity verification is missing'
+grep -Fq 'contains a symlink' "$runtime_fixture_helper" || fail 'runtime fixture symlink guard is missing'
+grep -Fq 'contains an unsupported entry' "$runtime_fixture_helper" || fail 'runtime fixture special-file guard is missing'
+grep -Fq 'manifest does not exactly cover the runtime tree' "$runtime_fixture_helper" || fail 'runtime fixture manifest coverage must be exact'
+grep -Fq 'python3 -c' "$runtime_fixture_helper" || fail 'runtime fixture canonicalization must not depend on realpath'
+grep -Fq 'cp -R "$runtime/."' "$runtime_fixture_helper" || fail 'runtime fixture must stage node_modules before OpenCode runs'
+grep -Fq 'validate_opencode_runtime_fixture_tree "$stage"' "$runtime_fixture_helper" || fail 'private runtime stage must be verified before publish'
+grep -Fq 'opencode_runtime_fixture_sha256' "$script" || fail 'run evidence must record fixture provenance without its path'
+grep -Fq -- '--argjson runtime_fixture_sha256' "$script" || fail 'no-fixture provenance must be JSON null rather than an empty string'
+grep -Fq -- '--title "acr-fullstack-${task_id}"' "$runtime_fixture_helper" || fail 'every proof run must use an explicit deterministic title'
+grep -Fq 'cleanup_opencode_runtime_fixture "$CLIENT_HOME"' "$script" || fail 'staged runtime payload must be scrubbed even in debug retention'
 # The service ceiling (internal/config defaultMaxItems=30) is stricter than the contract's
 # 1..50 bound, so a request the JSON Schema accepts can still be rejected as invalid_request.
 grep -Eq 'max_items:(30|[12][0-9]|[1-9])\b' "$script" \
@@ -200,6 +230,16 @@ jq -e '.["$schema"] and .properties.schema_version.const == "context_fabric_agen
 grep -Fq 'fullstack-opencode-e2e' "$root/docs/fullstack-acceptance.md" || fail 'the documented command is missing'
 grep -Fq 'None of the existing suites may be relabelled as this gate' "$root/docs/fullstack-acceptance.md" \
   || fail 'the documentation must distinguish this gate from the existing suites'
+grep -Fq -- '-f web_ref=feat/chaos-3096-device-approval' "$root/docs/fullstack-acceptance.md" \
+  || fail 'the documented workflow dispatch must name the reviewed web ref'
+
+grep -Fq 'web_ref:' "$workflow" || fail 'workflow dispatch must accept a web_ref input'
+grep -Fq 'default: ""' "$workflow" || fail 'web_ref must preserve the sibling default ref when omitted'
+workflow_ref='ref: $'
+workflow_ref+='{{ inputs.web_ref }}'
+grep -Fq "$workflow_ref" "$workflow" \
+  || fail 'the sibling checkout must use the requested web_ref'
+grep -Fq 'E2E_WEB_REF=' "$workflow" || fail 'the workflow must record the checked-out web ref'
 
 # --- seed vs. effective ClickHouse schema (offline, no Docker/ClickHouse required) ----------
 # This ACR checkout has no sibling ops checkout by default; the full-stack CI job does. Skip
@@ -253,5 +293,52 @@ grep -Fq 'CLICKHOUSE_DB="$db"' "$driver" \
   || fail 'compose.sh no longer points the ops services at the isolated ClickHouse database'
 grep -Fq 'the ops api service reads ClickHouse database' "$script" \
   || fail 'the suite no longer asserts the application reads the database it seeds'
+
+grep -Fq 'ACR_DEVICE_VERIFICATION_URL' "$driver" \
+  || fail 'the isolated ACR runtime must receive the concrete web device verification URL'
+grep -Fq 'compose logs --no-color acr-pki-init clickhouse migrate acr-ops-tls acr-migrate acr-api acr-tls-proxy' "$driver" \
+  || fail 'failed isolated runs must retain the TLS proxy diagnostics for device-login transport failures'
+grep -Fq 'run_device_login_lifecycle' "$script" \
+  || fail 'the live gate must exercise CLI login through web approval and lifecycle commands'
+grep -Fq 'record_web_readiness_failure' "$script" \
+  || fail 'web readiness failures must retain sanitized timestamped diagnostics'
+grep -Fq 'device-login-browser.mjs' "$script" \
+  || fail 'the live gate must drive the real approval page with Playwright'
+grep -Fq 'ACR_API_TOKEN_KEYRING_SERVICE' "$script" \
+  || fail 'the device login subprocess must explicitly isolate keyring selectors'
+grep -Fq 'ACR_API_TOKEN_KEYRING_DISABLED=true' "$script" \
+  || fail 'the device login subprocess must disable OS keyring access explicitly'
+grep -Fq 'credential file must be mode 0600' "$script" \
+  || fail 'the device login lifecycle must assert fallback-file permissions'
+grep -Fq 'device-login-prompt.log' "$script" \
+  || fail 'device-login prompt failures must retain a redacted diagnostic'
+grep -Fq 'record_web_browser_failure' "$script" \
+  || fail 'browser approval failures must retain the isolated web service diagnostics'
+grep -Fq 'for (const width of [375, 768, 1280])' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must retain all three connected screenshot widths'
+grep -Fq 'await captureState("pending");' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must retain pending connected screenshots'
+grep -Fq 'await captureState("review");' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must retain review connected screenshots'
+grep -Fq 'await captureState("success");' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must retain success connected screenshots'
+grep -Fq 'device-login-network.json' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must retain sanitized browser network evidence'
+grep -Fq 'await page.waitForURL((url) => !url.pathname.startsWith("/auth/signin"));' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the device driver must settle the sign-in redirect before opening the protected approval page'
+! grep -Fq 'waitForLoadState(' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the device driver must not add a redundant load-state wait after its URL wait'
+grep -Fq '^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the browser driver must accept every server-issued eight-character alphanumeric device code'
+grep -Fq '[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}' "$script" \
+  || fail 'the shell prompt parser must use the exact device-code alphabet'
+grep -Fq 'stop_device_login_service' "$script" \
+  || fail 'the full-stack cleanup must stop a pending device-login process'
+grep -Fq 'User with email ${WEB_EMAIL} already exists' "$script" \
+  || fail 'the browser bootstrap must tolerate only the expected duplicate fixture user'
+grep -Fq 'device approval ${operation} failed:' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'browser preview failures must retain their observed status and safe body'
+[[ -f "$root/scripts/e2e/device-login-browser.mjs" ]] \
+  || fail 'the device login Playwright driver is missing'
 
 printf 'fullstack opencode contract checks passed\n'

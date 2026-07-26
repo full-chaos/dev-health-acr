@@ -14,6 +14,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/compose.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/opencode-runtime-fixture.sh"
 
 # allow: SIZE_OK — one trap owns the stack, the client sandbox, and the artifact lifecycle.
 
@@ -39,6 +41,9 @@ WEB_PORT=""
 WEB_EMAIL=""
 WEB_PASSWORD=""
 WEB_AUTH_SECRET=""
+DEVICE_LOGIN_HOME=""
+DEVICE_LOGIN_BIN=""
+DEVICE_LOGIN_PID=""
 FULLSTACK_REPO_SLUG="example-org/widget-service"
 FULLSTACK_FOREIGN_SLUG="example-org/other-service"
 # The Explorer's licensing entitlement. Named once because the grant and the read-back
@@ -48,11 +53,14 @@ ACR_WEB_FEATURE_KEY="agent_context_runtime"
 OPS_POSTGRES_DB="${OPS_POSTGRES_DB:-devhealth}"
 OPENCODE_BIN="${OPENCODE_BIN:-opencode}"
 OPENCODE_PINNED_VERSION="${OPENCODE_PINNED_VERSION:-1.18.4}"
+OPENCODE_OBSERVED_VERSION=""
 # The scripted model speaks the OpenAI chat/completions wire format. OpenCode's built-in
 # openai provider drives the Responses API instead, so the acceptance client uses the pinned
 # openai-compatible provider package. CI pre-warms it into the npm cache; see
 # docs/fullstack-acceptance.md.
 PROVIDER_NPM_SPEC="${PROVIDER_NPM_SPEC:-@ai-sdk/openai-compatible@3.0.14}"
+OPENCODE_RUNTIME_FIXTURE="${OPENCODE_RUNTIME_FIXTURE:-}"
+OPENCODE_RUNTIME_FIXTURE_SHA256=""
 # OpenCode installs the provider adapter, and its own ~83MB @opencode-ai/{plugin,sdk}
 # bootstrap, on first use. CI pre-warms both and then sets PROVIDER_NPM_OFFLINE=true so the
 # graded run cannot reach the registry; locally the default stays false so a cold cache works.
@@ -129,14 +137,25 @@ stop_model_service() {
   MODEL_PID=""
 }
 
+stop_device_login_service() {
+  [[ -n "$DEVICE_LOGIN_PID" ]] || return 0
+  if kill -0 "$DEVICE_LOGIN_PID" 2>/dev/null; then
+    kill -TERM "$DEVICE_LOGIN_PID" 2>/dev/null || true
+    wait "$DEVICE_LOGIN_PID" 2>/dev/null || true
+  fi
+  DEVICE_LOGIN_PID=""
+}
+
 # fullstack_cleanup owns everything this run created: the scripted model process, the
 # throwaway client HOME, and — through the shared driver — the Compose project. Artifacts
 # are deliberately outside $STATE so they survive teardown.
 fullstack_cleanup() {
   local status=$?
   trap '' INT TERM HUP
+  stop_device_login_service
   stop_model_service
   assert_host_config_untouched || status=1
+  cleanup_opencode_runtime_fixture "$CLIENT_HOME" || status=1
   if [[ -n "$CLIENT_HOME" && -d "$CLIENT_HOME" && "${E2E_DEBUG:-0}" != '1' ]]; then
     rm -rf "$CLIENT_HOME" || status=1
   fi
@@ -161,8 +180,10 @@ prepare_artifacts() {
   ARTIFACTS="$REPO_ROOT/.tmp/fullstack/$RUN_ID"
   mkdir -p "$ARTIFACTS/expanded-evidence" "$ARTIFACTS/logs" "$ARTIFACTS/playwright"
   CLIENT_HOME="$ARTIFACTS/client-home"
-  mkdir -p "$CLIENT_HOME"
+  mkdir -p "$CLIENT_HOME/config/opencode"
   chmod 700 "$CLIENT_HOME"
+  OPENCODE_RUNTIME_FIXTURE_SHA256="$(stage_opencode_runtime_fixture "$OPENCODE_RUNTIME_FIXTURE" "$CLIENT_HOME/config/opencode")" \
+    || fs_die 'OPENCODE_RUNTIME_FIXTURE staging failed'
 }
 
 # ---------------------------------------------------------------------------
@@ -422,19 +443,24 @@ record_service_readiness() {
 # ---------------------------------------------------------------------------
 
 write_run_manifest() {
+  local web_ref="${E2E_WEB_REF:-}" runtime_fixture_receipt
+  runtime_fixture_receipt="$(opencode_runtime_fixture_receipt_json "$OPENCODE_RUNTIME_FIXTURE_SHA256")" \
+    || fs_die 'OPENCODE_RUNTIME_FIXTURE receipt is invalid'
   jq -n \
     --arg run_id "$RUN_ID" \
     --arg project "$PROJECT" \
     --arg scenario "$SCENARIO" \
     --arg model "$MODEL_BACKEND" \
     --arg web "$WEB_CHECK" \
-    --arg opencode_version "$($OPENCODE_BIN --version 2>/dev/null | tr -d '\n')" \
+    --arg web_ref "$web_ref" \
+    --argjson runtime_fixture_sha256 "$runtime_fixture_receipt" \
+    --arg opencode_version "$OPENCODE_OBSERVED_VERSION" \
     --arg opencode_pinned "$OPENCODE_PINNED_VERSION" \
     --arg acr_image "$IMAGE" \
     --arg repo_sha "$(git -C "$REPO_ROOT" rev-parse HEAD)" \
     --arg fixture_version "$(jq -r '.fixture_version' "$FIXTURE_ROOT/fixture-manifest.json")" \
     --arg repository "$FULLSTACK_REPO_SLUG" \
-    '{schema_version:"fullstack_run_manifest.v1",run_id:$run_id,project:$project,scenario:$scenario,model_backend:$model,web_check:$web,opencode:{observed_version:$opencode_version,pinned_version:$opencode_pinned},acr_image:$acr_image,repository_sha:$repo_sha,fixture_version:$fixture_version,repository:$repository,writeback:"disabled"}' \
+    '{schema_version:"fullstack_run_manifest.v1",run_id:$run_id,project:$project,scenario:$scenario,model_backend:$model,web_check:$web,web_ref:$web_ref,opencode_runtime_fixture_sha256:$runtime_fixture_sha256,opencode:{observed_version:$opencode_version,pinned_version:$opencode_pinned},acr_image:$acr_image,repository_sha:$repo_sha,fixture_version:$fixture_version,repository:$repository,writeback:"disabled"}' \
     > "$ARTIFACTS/run.json"
 }
 
@@ -455,10 +481,9 @@ opencode_sandboxed() {
 }
 
 assert_pinned_opencode() {
-  local observed
-  observed="$(opencode_sandboxed --version 2>/dev/null | tr -d '\n')"
-  [[ "$observed" == "$OPENCODE_PINNED_VERSION" ]] \
-    || fs_die "OpenCode ${OPENCODE_PINNED_VERSION} is the release-test contract; found ${observed:-none}"
+  OPENCODE_OBSERVED_VERSION="$(opencode_sandboxed --version 2>/dev/null | tr -d '\n')"
+  [[ "$OPENCODE_OBSERVED_VERSION" == "$OPENCODE_PINNED_VERSION" ]] \
+    || fs_die "OpenCode ${OPENCODE_PINNED_VERSION} is the release-test contract; found ${OPENCODE_OBSERVED_VERSION:-none}"
 }
 
 # ---------------------------------------------------------------------------
@@ -473,7 +498,6 @@ render_client_sandbox() {
   [[ -f "$template" ]] || fs_die 'OpenCode config template is missing'
   mkdir -p "$CLIENT_HOME/config/opencode" "$CLIENT_HOME/data" "$CLIENT_HOME/cache" "$CLIENT_HOME/state" "$CLIENT_HOME/workspace"
   chmod 700 "$CLIENT_HOME/config" "$CLIENT_HOME/data" "$CLIENT_HOME/cache" "$CLIENT_HOME/state"
-
   # A coherent Git workspace keeps the sidecar's auto-discovery from disagreeing with the
   # explicit scope every task sends.
   # Re-rendered before every task (the model port changes), so this must be idempotent:
@@ -595,6 +619,7 @@ start_model_service() {
 
 run_opencode_task() {
   local task_id="$1" prompt_file="$2" status=0
+  local opencode_args=()
   # Declared separately, not on the `local` line above: `local` expands all of its arguments
   # before assigning any of them, so `${task_id}` there resolves to the CALLER's variable of
   # the same name. Every honest task called this with the caller's own task_id, so the paths
@@ -602,6 +627,9 @@ run_opencode_task() {
   # silently overwrote the honest task's event stream, which the assertions then graded.
   local events="$ARTIFACTS/opencode-events-${task_id}.jsonl"
   set +e
+  while IFS= read -r -d '' argument; do opencode_args+=("$argument"); done < <(
+    opencode_task_argv "$task_id" "$CLIENT_HOME/workspace" "$OPENCODE_MODEL_ID" "${OPENCODE_LOG_LEVEL:-INFO}" "$(<"$prompt_file")"
+  )
   timeout --preserve-status --signal=TERM --kill-after=15s "${OPENCODE_TIMEOUT:-300}" \
   env -i \
     PATH="$PATH" \
@@ -623,14 +651,7 @@ run_opencode_task() {
     npm_config_offline="${PROVIDER_NPM_OFFLINE:-false}" \
     npm_config_fund=false \
     npm_config_audit=false \
-    "$OPENCODE_BIN" run \
-      --pure \
-      --format json \
-      --print-logs \
-      --log-level "${OPENCODE_LOG_LEVEL:-INFO}" \
-      --dir "$CLIENT_HOME/workspace" \
-      --model "$OPENCODE_MODEL_ID" \
-      "$(<"$prompt_file")" \
+    "$OPENCODE_BIN" "${opencode_args[@]}" \
       >"$events" 2>"$ARTIFACTS/logs/opencode-${task_id}.stderr"
   status=$?
   set -e
@@ -1095,17 +1116,149 @@ services:
 EOF
 }
 
+device_login_env() {
+  env -i \
+    HOME="$DEVICE_LOGIN_HOME" \
+    XDG_CONFIG_HOME="$DEVICE_LOGIN_HOME/config" \
+    XDG_DATA_HOME="$DEVICE_LOGIN_HOME/data" \
+    XDG_CACHE_HOME="$DEVICE_LOGIN_HOME/cache" \
+    XDG_STATE_HOME="$DEVICE_LOGIN_HOME/state" \
+    PATH="$DEVICE_LOGIN_BIN" \
+    ACR_API_URL="https://localhost:${PORT}" \
+    ACR_API_CA_BUNDLE="$STATE/pki/ca.crt" \
+    ACR_API_TOKEN= \
+    ACR_API_TOKEN_FILE= \
+    ACR_API_TOKEN_KEYRING_SERVICE= \
+    ACR_API_TOKEN_KEYRING_ACCOUNT= \
+    ACR_API_TOKEN_KEYRING_DISABLED=true \
+    "$@"
+}
+
+prepare_device_login_environment() {
+  DEVICE_LOGIN_HOME="$ARTIFACTS/device-login-home"
+  DEVICE_LOGIN_BIN="$ARTIFACTS/device-login-bin"
+  mkdir -p "$DEVICE_LOGIN_HOME" "$DEVICE_LOGIN_BIN"
+  chmod 700 "$DEVICE_LOGIN_HOME" "$DEVICE_LOGIN_BIN"
+}
+
+redact_device_login_log() {
+  sed -E \
+    -e 's/[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}/REDACTED_DEVICE_CODE/g' \
+    -e 's/(fcacr|svc_acr)_[[:alnum:]_-]+/REDACTED/g' \
+    -e 's#(postgresql?|clickhouse)://[^[:space:]]+#REDACTED_DSN#g'
+}
+
+wait_for_device_login_prompt() {
+  local output="$STATE/secrets/device-login-output" attempts=0
+  until grep -Eq '^Open https?://[^[:space:]]+ and enter code [ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$' "$output"; do
+    attempts=$((attempts + 1))
+    if [[ "$attempts" -ge 60 ]] || ! kill -0 "$DEVICE_LOGIN_PID" 2>/dev/null; then
+      redact_device_login_log < "$output" > "$ARTIFACTS/logs/device-login-prompt.log" || true
+      redact_device_login_log < "$output" >&2 || true
+      fs_note "device login prompt diagnostics retained at logs/device-login-prompt.log"
+      fs_die 'acr-mcp login did not emit a device verification prompt'
+    fi
+    sleep 0.5
+  done
+}
+
+run_device_login_lifecycle() {
+  local output="$STATE/secrets/device-login-output" code_file="$STATE/secrets/device-user-code"
+  local token_file="$DEVICE_LOGIN_HOME/.acr/token" mode
+  [[ "$WEB_CHECK" == 'on' || "$WEB_CHECK" == 'auto' ]] || fs_die 'device login lifecycle requires the isolated web service'
+  prepare_device_login_environment
+  compose up -d bugsink web-fullstack >/dev/null
+  wait_web_ready
+  bootstrap_web_user
+  assert_acr_entitlement
+  : > "$output"
+  chmod 600 "$output"
+  device_login_env "$STATE/acr-mcp" login --repo "$FULLSTACK_REPO_SLUG" >"$output" 2>&1 &
+  DEVICE_LOGIN_PID=$!
+  wait_for_device_login_prompt
+  sed -nE 's/^Open [^[:space:]]+ and enter code ([ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8})$/\1/p' "$output" > "$code_file"
+  chmod 600 "$code_file"
+  [[ "$(wc -l < "$code_file" | tr -d '[:space:]')" == '1' ]] || fs_die 'device login did not produce exactly one user code'
+  if ! env \
+    DEVICE_LOGIN_WEB_URL="http://127.0.0.1:${WEB_PORT}" \
+    DEVICE_LOGIN_WEB_EMAIL="$WEB_EMAIL" \
+    DEVICE_LOGIN_WEB_PASSWORD="$WEB_PASSWORD" \
+    DEVICE_LOGIN_CODE_FILE="$code_file" \
+    DEVICE_LOGIN_REPOSITORY="$FULLSTACK_REPO_SLUG" \
+    DEVICE_LOGIN_ARTIFACTS="$ARTIFACTS/playwright" \
+    DEVICE_LOGIN_PLAYWRIGHT_MODULE="$WEB_ROOT/node_modules/@playwright/test/index.js" \
+    node "$SCRIPT_DIR/device-login-browser.mjs" > "$ARTIFACTS/logs/device-login-browser.log" 2>&1; then
+    redact_log < "$ARTIFACTS/logs/device-login-browser.log" > "$ARTIFACTS/logs/device-login-browser.redacted.log"
+    mv "$ARTIFACTS/logs/device-login-browser.redacted.log" "$ARTIFACTS/logs/device-login-browser.log"
+    record_web_browser_failure
+    cat "$ARTIFACTS/logs/device-login-browser.log" >&2
+    fs_die 'web device approval browser flow failed'
+  fi
+  if ! wait "$DEVICE_LOGIN_PID"; then
+    redact_device_login_log < "$output" >&2 || true
+    fs_die 'acr-mcp login did not complete after web approval'
+  fi
+  DEVICE_LOGIN_PID=""
+  grep -Eq 'fcacr_|svc_acr_' "$output" && fs_die 'acr-mcp login output leaked a credential'
+  detect_stat_flavour
+  if [[ "$STAT_FLAVOUR" == gnu ]]; then mode="$(stat -c '%a' "$token_file")"; else mode="$(stat -f '%Lp' "$token_file")"; fi
+  [[ "$mode" == '600' ]] || fs_die "credential file must be mode 0600, found ${mode}"
+  device_login_env "$STATE/acr-mcp" doctor --live > "$ARTIFACTS/device-login-doctor.json"
+  grep -Fq '"credential_source":"file"' "$ARTIFACTS/device-login-doctor.json" || fs_die 'bare doctor did not discover the fallback credential file'
+  device_login_env "$STATE/acr-mcp" login --refresh > "$ARTIFACTS/device-login-refresh.log"
+  grep -Eq 'fcacr_|svc_acr_' "$ARTIFACTS/device-login-refresh.log" && fs_die 'credential refresh output leaked a credential'
+  device_login_env "$STATE/acr-mcp" doctor --live > "$ARTIFACTS/device-login-doctor-refreshed.json"
+  device_login_env "$STATE/acr-mcp" logout > "$ARTIFACTS/device-login-logout.log"
+  grep -Eq 'fcacr_|svc_acr_' "$ARTIFACTS/device-login-logout.log" && fs_die 'logout output leaked a credential'
+  if device_login_env "$STATE/acr-mcp" doctor --live > "$ARTIFACTS/device-login-doctor-post-logout.log" 2>&1; then
+    fs_die 'doctor unexpectedly succeeded after logout'
+  fi
+  redact_device_login_log < "$ARTIFACTS/device-login-doctor-post-logout.log" > "$ARTIFACTS/device-login-doctor-post-logout.redacted.log"
+  mv "$ARTIFACTS/device-login-doctor-post-logout.redacted.log" "$ARTIFACTS/device-login-doctor-post-logout.log"
+  rm -f "$code_file" "$output"
+}
+
 wait_web_ready() {
-  local attempts=0
+  local attempts=0 started_at
+  started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   until curl --fail --silent --show-error --noproxy '*' "http://127.0.0.1:${WEB_PORT}/health" >/dev/null; do
     attempts=$((attempts + 1))
-    [[ "$attempts" -lt 90 ]] || fs_die 'web readiness timed out'
+    if [[ "$attempts" -ge 90 ]]; then
+      record_web_readiness_failure "$started_at" "$attempts"
+      fs_die 'web readiness timed out'
+    fi
     sleep 2
   done
 }
 
+record_web_readiness_failure() {
+  local started_at="$1" attempts="$2" service
+  local receipt="$ARTIFACTS/logs/web-readiness.json"
+  local service_log="$ARTIFACTS/logs/web-fullstack.log"
+  service="$(compose ps --format json web-fullstack 2>/dev/null || printf 'null')"
+  [[ -n "$service" ]] || service='null'
+  compose logs --no-color web-fullstack 2>&1 | redact_log > "$service_log" || true
+  jq -n --arg started_at "$started_at" --argjson attempts "$attempts" --argjson service "$service" \
+    '{started_at:$started_at,attempts:$attempts,service:$service}' > "$receipt"
+  fs_note "web readiness failed after ${attempts} attempts from ${started_at}; sanitized diagnostics: logs/web-readiness.json and logs/web-fullstack.log"
+}
+
+record_web_browser_failure() {
+  local service_log="$ARTIFACTS/logs/web-fullstack.log"
+  compose logs --no-color web-fullstack 2>&1 | redact_log > "$service_log" || true
+  fs_note 'web device approval failed; sanitized diagnostics: logs/device-login-browser.log and logs/web-fullstack.log'
+}
+
 bootstrap_web_user() {
-  compose exec -T api dev-hops admin users create --email "$WEB_EMAIL" --password "$WEB_PASSWORD" --full-name 'ACR Full-stack Account' >/dev/null
+  local create_output create_status
+  set +e
+  create_output="$(compose exec -T api dev-hops admin users create --email "$WEB_EMAIL" --password "$WEB_PASSWORD" --full-name 'ACR Full-stack Account' 2>&1)"
+  create_status=$?
+  set -e
+  if [[ "$create_status" -ne 0 ]] && ! grep -Fq "User with email ${WEB_EMAIL} already exists" <<<"$create_output"; then
+    printf '%s\n' "$create_output" | redact_log >&2
+    fs_die "could not create the isolated web user (dev-hops exited ${create_status})"
+  fi
   compose exec -T api dev-hops admin users update --email "$WEB_EMAIL" --verified --org "$(<"$STATE/org-id")" --role owner >/dev/null
   assert_acr_entitlement
 }
@@ -1217,11 +1370,12 @@ record_host_config_digest
 assert_pinned_opencode
 prepare_state
 ensure_image
-render_override
 if web_check_enabled; then
   write_web_assertion_material
   render_web_override
+  export ACR_E2E_DEVICE_VERIFICATION_URL="http://127.0.0.1:${WEB_PORT}/acr/device"
 fi
+render_override
 assert_safe_render
 prepare_stack
 rotate_acr_credential
@@ -1253,6 +1407,7 @@ if [[ "$SCENARIO" == 'self-test' ]]; then
 fi
 
 if web_check_enabled; then
+  run_device_login_lifecycle
   run_web_agreement_check
 fi
 
