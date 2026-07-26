@@ -234,6 +234,41 @@ func TestLoginRevokesIssuedCredential_whenPersistenceFails(t *testing.T) {
 	}
 }
 
+func TestLoginPurgesPersistedCredential_afterWrongSourceVerificationFailure(t *testing.T) {
+	// Given
+	token := validDoctorToken(98)
+	server := newLifecycleServer(t, token, []string{"success"})
+	path := filepath.Join(t.TempDir(), "token")
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+	originalPersist := lifecyclePersist
+	lifecyclePersist = func(value string) (sidecar.CredentialResult, error) {
+		credential, err := originalPersist(value)
+		if err == nil {
+			t.Setenv(sidecar.TokenEnvironment, value)
+		}
+		return credential, err
+	}
+	t.Cleanup(func() { lifecyclePersist = originalPersist })
+	originalWait := lifecycleWait
+	lifecycleWait = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { lifecycleWait = originalWait })
+
+	// When
+	code := runCLI([]string{"login"})
+
+	// Then
+	if code != lifecycleExitFailure {
+		t.Fatalf("login exit code = %d, want %d", code, lifecycleExitFailure)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("persisted issued credential remains after successful self-revocation: %v", err)
+	}
+}
+
 func TestRevokeIssuedCredentialReturnsFalse_whenServerRejectsRevocation(t *testing.T) {
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

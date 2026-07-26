@@ -63,6 +63,12 @@ func newLifecycleServerWithAuthorizationExpectation(t *testing.T, token string, 
 				t.Fatal("live doctor did not use the persisted credential")
 			}
 			writeLifecycleCapabilities(t, w)
+		case "/api/v1/auth/credentials/self/revoke":
+			if r.Header.Get("Authorization") != "Bearer "+token {
+				t.Fatal("issued credential was not used for self-revocation")
+			}
+			revokedAt := createdAt.Add(time.Minute)
+			writeLifecycleJSON(t, w, contractsv1.CredentialRevokeResponse{SchemaVersion: contractsv1.CredentialRevokeResponseSchema, Credential: lifecycleCredential(createdAt, "credential-issued", &revokedAt)})
 		case "/acr/device":
 			w.WriteHeader(http.StatusNoContent)
 		default:
