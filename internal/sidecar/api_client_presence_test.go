@@ -210,3 +210,24 @@ func TestClientAcceptsResponsesWithLegitimateZeroValuesPresent(t *testing.T) {
 		t.Fatalf("evidence with a present-but-zero confidence was rejected: %v", err)
 	}
 }
+
+func TestRequiredFieldsPresentAcceptsNullPointerFieldButRejectsItsAbsence(t *testing.T) {
+	type fixture struct {
+		Value *string `json:"value"`
+	}
+
+	// Given
+	value := fixture{}
+
+	// When
+	nullErr := requiredFieldsPresent([]byte(`{"value":null}`), &value)
+	missingErr := requiredFieldsPresent([]byte(`{}`), &value)
+
+	// Then
+	if nullErr != nil {
+		t.Fatalf("required nullable pointer was rejected: %v", nullErr)
+	}
+	if missingErr == nil {
+		t.Fatal("missing required nullable pointer was accepted")
+	}
+}

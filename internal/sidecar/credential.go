@@ -232,6 +232,15 @@ func DeleteCredential() error {
 	return nil
 }
 
+func CredentialCleanupLocation(credential CredentialResult) string {
+	if credential.Source == "file" {
+		if path := configuredTokenFilePath(); path != "" {
+			return path
+		}
+	}
+	return "the configured ACR keyring entry"
+}
+
 func credentialKeyringAddress() (string, string, bool) {
 	service := strings.TrimSpace(os.Getenv(TokenKeyringServiceEnvironment))
 	explicitService := service != ""
