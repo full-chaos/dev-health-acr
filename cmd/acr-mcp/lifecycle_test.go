@@ -234,6 +234,30 @@ func TestLoginRevokesIssuedCredential_whenPersistenceFails(t *testing.T) {
 	}
 }
 
+func TestRevokeIssuedCredentialReturnsFalse_whenServerRejectsRevocation(t *testing.T) {
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		writeLifecycleError(t, w, http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	cfg, err := sidecar.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	ok := revokeIssuedCredential(context.Background(), cfg, validDoctorToken(97))
+
+	// Then
+	if ok {
+		t.Fatal("rejected issued credential revocation reported success")
+	}
+}
+
 func TestLifecycleCommandsPrintHelpAndRejectUnknownFlags(t *testing.T) {
 	// Given
 	cases := []struct {
