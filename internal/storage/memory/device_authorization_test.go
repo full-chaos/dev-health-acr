@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -176,35 +177,56 @@ func TestDeviceAuthorizationStore_ConcurrentRedeem_createsExactlyOneCredentialAn
 	require.NoError(t, err)
 	prepared := fixture.prepareCredential(t, grant)
 	start := make(chan struct{})
-	errorsByWorker := make(chan error, 2)
+	type redemptionResult struct {
+		token string
+		err   error
+	}
+	results := make(chan redemptionResult, 2)
 	var workers sync.WaitGroup
 
 	// When
 	for range 2 {
 		workers.Go(func() {
 			<-start
-			_, redeemErr := fixture.store.Redeem(context.Background(), pending.DeviceCodeHash, prepared.StorageInput())
-			errorsByWorker <- redeemErr
+			credential, redeemErr := fixture.store.Redeem(context.Background(), pending.DeviceCodeHash, prepared.StorageInput())
+			if redeemErr != nil {
+				results <- redemptionResult{err: redeemErr}
+				return
+			}
+			issued, completeErr := prepared.Complete(credential)
+			results <- redemptionResult{token: issued.Token, err: completeErr}
 		})
 	}
 	close(start)
 	workers.Wait()
-	close(errorsByWorker)
+	close(results)
 
 	// Then
 	var successes, conflicts int
-	for redeemErr := range errorsByWorker {
+	var issuedToken string
+	var conflictErr error
+	for result := range results {
 		switch {
-		case redeemErr == nil:
+		case result.err == nil:
 			successes++
-		case errors.Is(redeemErr, storage.ErrDeviceAuthorizationConflict):
+			issuedToken = result.token
+		case errors.Is(result.err, storage.ErrDeviceAuthorizationConflict):
 			conflicts++
+			conflictErr = result.err
 		default:
-			t.Fatalf("Redeem() error = %v", redeemErr)
+			t.Fatalf("Redeem() error = %v", result.err)
 		}
 	}
 	require.Equal(t, 1, successes)
 	require.Equal(t, 1, conflicts)
+	require.NotEmpty(t, issuedToken)
+	inputValue, err := json.Marshal(prepared.StorageInput())
+	require.NoError(t, err)
+	auditValue, err := json.Marshal(fixture.audit.Events())
+	require.NoError(t, err)
+	require.NotContains(t, conflictErr.Error(), issuedToken)
+	require.NotContains(t, string(inputValue), issuedToken)
+	require.NotContains(t, string(auditValue), issuedToken)
 	credentials, err := fixture.credentials.List(context.Background(), grant.OrgID)
 	require.NoError(t, err)
 	require.Len(t, credentials, 1)

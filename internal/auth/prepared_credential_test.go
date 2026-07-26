@@ -48,6 +48,9 @@ func TestService_PrepareCreate_reusesCreateInvariants_withoutPersistingPlaintext
 
 	stored, err := credentials.CreateCredential(ctx, input)
 	require.NoError(t, err)
+	auditValue, err := json.Marshal(audit.Events())
+	require.NoError(t, err)
+	require.NotContains(t, string(auditValue), expectedToken)
 	issued, err := prepared.Complete(stored)
 	require.NoError(t, err)
 	require.Equal(t, expectedToken, issued.Token)
@@ -66,19 +69,28 @@ func TestPreparedCredential_reflectionAndSerializationCannotExposePlaintext(t *t
 	})
 	require.NoError(t, err)
 	expectedToken := deterministicPreparedToken()
+	input := prepared.StorageInput()
 
 	// When
 	jsonValue, err := json.Marshal(prepared)
+	require.NoError(t, err)
+	inputJSON, err := json.Marshal(input)
 	require.NoError(t, err)
 	var logOutput bytes.Buffer
 	slog.New(slog.NewJSONHandler(&logOutput, nil)).Info("prepared credential", slog.Any("credential", prepared))
 	reflectedValues := make([]string, 0)
 	collectReflectedStrings(reflect.ValueOf(prepared), &reflectedValues)
+	collectReflectedStrings(reflect.ValueOf(input), &reflectedValues)
+	wrapped := fmt.Errorf("prepared credential: %v", prepared)
 	representations := append(reflectedValues,
 		string(jsonValue),
+		string(inputJSON),
 		fmt.Sprint(prepared),
 		fmt.Sprintf("%+v", prepared),
 		fmt.Sprintf("%#v", prepared),
+		fmt.Sprintf("%s", prepared),
+		fmt.Sprintf("%+v", input),
+		wrapped.Error(),
 		logOutput.String(),
 	)
 
@@ -90,7 +102,11 @@ func TestPreparedCredential_reflectionAndSerializationCannotExposePlaintext(t *t
 	require.Equal(t, preparedCredentialRedacted, fmt.Sprint(prepared))
 	require.Equal(t, preparedCredentialRedacted, fmt.Sprintf("%+v", prepared))
 	require.Equal(t, preparedCredentialRedacted, fmt.Sprintf("%#v", prepared))
+	require.Equal(t, preparedCredentialRedacted, fmt.Sprintf("%s", prepared))
+	require.Equal(t, "prepared credential: "+preparedCredentialRedacted, wrapped.Error())
 	require.Contains(t, logOutput.String(), preparedCredentialRedacted)
+	require.NotContains(t, string(inputJSON), expectedToken)
+	require.NotContains(t, completionErr.Error(), expectedToken)
 	for _, representation := range representations {
 		require.NotContains(t, representation, expectedToken)
 	}
