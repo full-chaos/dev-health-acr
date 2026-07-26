@@ -16,8 +16,8 @@ func TestDeviceFlow_Start_repeatedRandomnessInterruptionsCreateNoCredential(t *t
 	fixture := newDeviceFlowFixture(t, random)
 
 	// When
-	first, firstErr := fixture.flow.Start(context.Background())
-	second, secondErr := fixture.flow.Start(context.Background())
+	first, firstErr := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{})
+	second, secondErr := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{})
 
 	// Then
 	require.Error(t, firstErr)
@@ -39,8 +39,8 @@ func TestDeviceFlow_cancelledOperationsDoNotConsumeOrMutateState(t *testing.T) {
 	cancel()
 
 	// When
-	_, cancelledStartErr := fixture.flow.Start(cancelled)
-	started, startErr := fixture.flow.Start(context.Background())
+	_, cancelledStartErr := fixture.flow.Start(cancelled, DeviceAuthorizationHints{})
+	started, startErr := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{})
 
 	// Then
 	require.ErrorIs(t, cancelledStartErr, context.Canceled)

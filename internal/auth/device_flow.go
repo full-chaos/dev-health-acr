@@ -47,10 +47,25 @@ type DeviceAuthorizationStart struct {
 	Interval   time.Duration
 }
 
+type DeviceAuthorizationHints struct {
+	OrganizationIDHint string
+	RepositoryHints    []string
+}
+
 type DeviceApprovalRequest struct {
 	Principal        storage.Principal
 	UserCode         string
 	RepositoryScopes []string
+}
+
+type DeviceApprovalPreviewRequest struct {
+	Principal storage.Principal
+	UserCode  string
+}
+
+type DeviceApprovalPreview struct {
+	OrganizationIDHint string
+	RepositoryHints    []string
 }
 
 type DeviceDenialRequest struct {
@@ -71,9 +86,13 @@ func NewDeviceFlowService(store storage.DeviceAuthorizationStore, credentials *S
 	return &DeviceFlowService{store: store, credentials: credentials, now: options.Now, random: options.Random}, nil
 }
 
-func (s *DeviceFlowService) Start(ctx context.Context) (DeviceAuthorizationStart, error) {
+func (s *DeviceFlowService) Start(ctx context.Context, hints DeviceAuthorizationHints) (DeviceAuthorizationStart, error) {
 	if err := s.ready(ctx); err != nil {
 		return DeviceAuthorizationStart{}, err
+	}
+	normalizedHints, err := normalizeDeviceAuthorizationHints(hints)
+	if err != nil {
+		return DeviceAuthorizationStart{}, ErrInvalidDeviceFlow
 	}
 	for range maxDeviceCodeAttempts {
 		deviceCode, userCode, err := s.nextCodes()
@@ -81,8 +100,10 @@ func (s *DeviceFlowService) Start(ctx context.Context) (DeviceAuthorizationStart
 			return DeviceAuthorizationStart{}, ErrDeviceCodeGeneration
 		}
 		_, err = s.store.Create(ctx, storage.DeviceAuthorizationCreateInput{
-			DeviceCodeHash: storage.HashDeviceCode(deviceCode),
-			UserCodeHash:   storage.HashUserCode(userCode),
+			DeviceCodeHash:     storage.HashDeviceCode(deviceCode),
+			UserCodeHash:       storage.HashUserCode(userCode),
+			OrganizationIDHint: normalizedHints.OrganizationIDHint,
+			RepositoryHints:    normalizedHints.RepositoryHints,
 		})
 		if err == nil {
 			return DeviceAuthorizationStart{
@@ -97,6 +118,24 @@ func (s *DeviceFlowService) Start(ctx context.Context) (DeviceAuthorizationStart
 		}
 	}
 	return DeviceAuthorizationStart{}, ErrDeviceCodeCollision
+}
+
+func (s *DeviceFlowService) Preview(ctx context.Context, request DeviceApprovalPreviewRequest) (DeviceApprovalPreview, error) {
+	if err := s.ready(ctx); err != nil {
+		return DeviceApprovalPreview{}, err
+	}
+	userCode, ok := normalizeUserCode(request.UserCode)
+	if !ok || !validDeviceApprovalPrincipal(request.Principal) {
+		return DeviceApprovalPreview{}, ErrInvalidDeviceFlow
+	}
+	record, err := s.store.Preview(ctx, storage.HashUserCode(userCode))
+	if err != nil {
+		return DeviceApprovalPreview{}, fmt.Errorf("preview device authorization: %w", err)
+	}
+	return DeviceApprovalPreview{
+		OrganizationIDHint: record.OrganizationIDHint,
+		RepositoryHints:    append([]string(nil), record.RepositoryHints...),
+	}, nil
 }
 
 func (s *DeviceFlowService) Approve(ctx context.Context, request DeviceApprovalRequest) (storage.DeviceAuthorization, error) {
@@ -180,6 +219,20 @@ func repositoriesWithinGrant(grant, selected []string) bool {
 		}
 	}
 	return true
+}
+
+func normalizeDeviceAuthorizationHints(hints DeviceAuthorizationHints) (DeviceAuthorizationHints, error) {
+	if strings.TrimSpace(hints.OrganizationIDHint) != hints.OrganizationIDHint || len(hints.OrganizationIDHint) > 128 {
+		return DeviceAuthorizationHints{}, ErrInvalidDeviceFlow
+	}
+	if hints.RepositoryHints == nil {
+		return hints, nil
+	}
+	repositories, err := NormalizeRepositoryScopes(hints.RepositoryHints)
+	if err != nil || hasRepositoryWildcard(repositories) {
+		return DeviceAuthorizationHints{}, ErrInvalidDeviceFlow
+	}
+	return DeviceAuthorizationHints{OrganizationIDHint: hints.OrganizationIDHint, RepositoryHints: repositories}, nil
 }
 
 func (DeviceAuthorizationStart) String() string { return deviceAuthorizationStartRedacted }

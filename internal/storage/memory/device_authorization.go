@@ -40,7 +40,7 @@ func (s *DeviceAuthorizationStore) Create(ctx context.Context, input storage.Dev
 	if err := s.ready(ctx); err != nil {
 		return storage.DeviceAuthorization{}, err
 	}
-	if input.DeviceCodeHash.IsZero() || input.UserCodeHash.IsZero() {
+	if input.DeviceCodeHash.IsZero() || input.UserCodeHash.IsZero() || storage.ValidateDeviceAuthorizationHints(input) != nil {
 		return storage.DeviceAuthorization{}, storage.ErrInvalidDeviceAuthorization
 	}
 	s.mu.Lock()
@@ -58,6 +58,8 @@ func (s *DeviceAuthorizationStore) Create(ctx context.Context, input storage.Dev
 	record := storage.DeviceAuthorization{
 		DeviceCodeHash:     input.DeviceCodeHash,
 		UserCodeHash:       input.UserCodeHash,
+		OrganizationIDHint: input.OrganizationIDHint,
+		RepositoryHints:    append([]string(nil), input.RepositoryHints...),
 		State:              storage.DeviceAuthorizationStatePending,
 		ExpiresAt:          now.Add(storage.DeviceAuthorizationTTL),
 		PollInterval:       storage.DeviceAuthorizationPollInterval,
@@ -89,6 +91,26 @@ func (s *DeviceAuthorizationStore) GetByUserCodeHash(ctx context.Context, hash s
 		return storage.DeviceAuthorization{}, storage.ErrDeviceAuthorizationNotFound
 	}
 	return s.deviceLocked(deviceHash)
+}
+
+func (s *DeviceAuthorizationStore) Preview(ctx context.Context, hash storage.UserCodeHash) (storage.DeviceAuthorization, error) {
+	if err := s.ready(ctx); err != nil {
+		return storage.DeviceAuthorization{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	deviceHash, exists := s.byUser[hash]
+	if !exists {
+		return storage.DeviceAuthorization{}, storage.ErrDeviceAuthorizationNotFound
+	}
+	record, exists := s.byDevice[deviceHash]
+	if !exists {
+		return storage.DeviceAuthorization{}, storage.ErrDeviceAuthorizationNotFound
+	}
+	if !s.now().UTC().Before(record.ExpiresAt) && (record.State == storage.DeviceAuthorizationStatePending || record.State == storage.DeviceAuthorizationStateApproved || record.State == storage.DeviceAuthorizationStateExpired) {
+		return storage.DeviceAuthorization{}, storage.NewDeviceAuthorizationError(storage.DeviceAuthorizationErrorExpired, storage.DeviceAuthorizationStateExpired, 0)
+	}
+	return cloneDeviceAuthorization(record), nil
 }
 
 func (s *DeviceAuthorizationStore) Poll(ctx context.Context, hash storage.DeviceCodeHash) (storage.DeviceAuthorization, error) {
@@ -200,6 +222,7 @@ func (s *DeviceAuthorizationStore) ready(ctx context.Context) error {
 }
 
 func cloneDeviceAuthorization(record storage.DeviceAuthorization) storage.DeviceAuthorization {
+	record.RepositoryHints = append([]string(nil), record.RepositoryHints...)
 	record.AuthorizedRepositoryScopes = append([]string(nil), record.AuthorizedRepositoryScopes...)
 	record.AuthorizedScopes = append([]string(nil), record.AuthorizedScopes...)
 	record.LastPollAt = cloneTime(record.LastPollAt)

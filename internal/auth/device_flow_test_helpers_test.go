@@ -49,7 +49,7 @@ func newDeviceFlowFixture(t *testing.T, random io.Reader) *deviceFlowFixture {
 
 func (f *deviceFlowFixture) start(t *testing.T) DeviceAuthorizationStart {
 	t.Helper()
-	started, err := f.flow.Start(context.Background())
+	started, err := f.flow.Start(context.Background(), DeviceAuthorizationHints{})
 	require.NoError(t, err)
 	return started
 }

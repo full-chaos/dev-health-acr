@@ -82,11 +82,13 @@ func TestDeviceContractValidators_match_schema(t *testing.T) {
 		schema string
 		value  interface{ Validate() error }
 	}{
-		{schema: "device_authorization_request.v1.schema.json", value: DeviceAuthorizationRequest{SchemaVersion: DeviceAuthorizationRequestSchema}},
+		{schema: "device_authorization_request.v1.schema.json", value: DeviceAuthorizationRequest{SchemaVersion: DeviceAuthorizationRequestSchema, OrganizationIDHint: "org_fullchaos", RepositoryHints: []string{"full-chaos/dev-health-acr"}}},
 		{schema: "device_authorization_response.v1.schema.json", value: DeviceAuthorizationResponse{SchemaVersion: DeviceAuthorizationResponseSchema, DeviceCode: "0123456789abcdefghijklmnopqrstuv", UserCode: "ABCDEFGH", VerificationURI: "https://web.fullchaos.dev/acr/device", ExpiresIn: 600, Interval: 5}},
 		{schema: "device_token_request.v1.schema.json", value: DeviceTokenRequest{SchemaVersion: DeviceTokenRequestSchema, GrantType: DeviceCodeGrantType, DeviceCode: "0123456789abcdefghijklmnopqrstuv"}},
 		{schema: "device_approval_request.v1.schema.json", value: DeviceApprovalRequest{SchemaVersion: DeviceApprovalRequestSchema, UserCode: "ABCDEFGH", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}},
 		{schema: "device_approval_response.v1.schema.json", value: DeviceApprovalResponse{SchemaVersion: DeviceApprovalResponseSchema, Status: "approved"}},
+		{schema: "device_approval_preview_request.v1.schema.json", value: DeviceApprovalPreviewRequest{SchemaVersion: DeviceApprovalPreviewRequestSchema, UserCode: "ABCDEFGH"}},
+		{schema: "device_approval_preview_response.v1.schema.json", value: DeviceApprovalPreviewResponse{SchemaVersion: DeviceApprovalPreviewResponseSchema, OrganizationIDHint: "org_fullchaos", RepositoryHints: []string{"full-chaos/dev-health-acr"}}},
 		{schema: "credential_rotate_request.v1.schema.json", value: CredentialRotateRequest{SchemaVersion: CredentialRotateRequestSchema}},
 		{schema: "credential_rotate_response.v1.schema.json", value: CredentialRotateResponse{SchemaVersion: CredentialRotateResponseSchema, AccessToken: "[REDACTED]", Credential: credential, Receipt: CredentialRotationReceipt{SourceCredentialID: "credential-0001", ReplacementCredentialID: "credential-0002", RollbackUntil: createdAt.Add(15 * time.Minute)}}},
 		{schema: "credential_revoke_request.v1.schema.json", value: CredentialRevokeRequest{SchemaVersion: CredentialRevokeRequestSchema}},
@@ -119,6 +121,8 @@ func TestDeviceContractFixtures_validate(t *testing.T) {
 		{name: "device token response", value: loadFixture[DeviceTokenResponse](t, "device_token_response.v1.json")},
 		{name: "device approval request", value: loadFixture[DeviceApprovalRequest](t, "device_approval_request.v1.json")},
 		{name: "device approval response", value: loadFixture[DeviceApprovalResponse](t, "device_approval_response.v1.json")},
+		{name: "device approval preview request", value: loadFixture[DeviceApprovalPreviewRequest](t, "device_approval_preview_request.v1.json")},
+		{name: "device approval preview response", value: loadFixture[DeviceApprovalPreviewResponse](t, "device_approval_preview_response.v1.json")},
 		{name: "credential rotate request", value: loadFixture[CredentialRotateRequest](t, "credential_rotate_request.v1.json")},
 		{name: "credential rotate response", value: loadFixture[CredentialRotateResponse](t, "credential_rotate_response.v1.json")},
 		{name: "credential revoke request", value: loadFixture[CredentialRevokeRequest](t, "credential_revoke_request.v1.json")},

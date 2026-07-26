@@ -11,23 +11,23 @@ import (
 )
 
 const deviceAuthorizationColumns = `device_code_hash, user_code_hash, state,
-       authorized_org_id, authorized_repository_scopes, authorized_scopes,
+	       organization_id_hint, repository_hints, authorized_org_id, authorized_repository_scopes, authorized_scopes,
        approving_subject, approving_authentication_method, created_at, expires_at,
        poll_interval_seconds, last_poll_at, approved_at, redeemed_at,
        redeemed_credential_id, issuance_provenance`
 
 func scanDeviceAuthorization(row scanner) (storage.DeviceAuthorization, error) {
 	var (
-		deviceHashText, userHashText, stateText, provenanceText string
-		orgID, subject, authenticationMethod, credentialID      sql.NullString
-		repositoryJSON, scopeJSON                               []byte
-		createdAt, expiresAt                                    time.Time
-		intervalSeconds                                         int64
-		lastPollAt, approvedAt, redeemedAt                      sql.NullTime
+		deviceHashText, userHashText, stateText, provenanceText                string
+		organizationIDHint, orgID, subject, authenticationMethod, credentialID sql.NullString
+		repositoryHintsJSON, repositoryJSON, scopeJSON                         []byte
+		createdAt, expiresAt                                                   time.Time
+		intervalSeconds                                                        int64
+		lastPollAt, approvedAt, redeemedAt                                     sql.NullTime
 	)
 	if err := row.Scan(
 		&deviceHashText, &userHashText, &stateText,
-		&orgID, &repositoryJSON, &scopeJSON,
+		&organizationIDHint, &repositoryHintsJSON, &orgID, &repositoryJSON, &scopeJSON,
 		&subject, &authenticationMethod, &createdAt, &expiresAt,
 		&intervalSeconds, &lastPollAt, &approvedAt, &redeemedAt,
 		&credentialID, &provenanceText,
@@ -46,7 +46,10 @@ func scanDeviceAuthorization(row scanner) (storage.DeviceAuthorization, error) {
 	if err != nil {
 		return storage.DeviceAuthorization{}, fmt.Errorf("parse stored device authorization state: %w", err)
 	}
-	var repositories, scopes []string
+	var hints, repositories, scopes []string
+	if err := json.Unmarshal(repositoryHintsJSON, &hints); err != nil {
+		return storage.DeviceAuthorization{}, fmt.Errorf("decode stored repository hints: %w", err)
+	}
 	if err := json.Unmarshal(repositoryJSON, &repositories); err != nil {
 		return storage.DeviceAuthorization{}, fmt.Errorf("decode stored authorized repositories: %w", err)
 	}
@@ -60,6 +63,8 @@ func scanDeviceAuthorization(row scanner) (storage.DeviceAuthorization, error) {
 	record := storage.DeviceAuthorization{
 		DeviceCodeHash:                deviceHash,
 		UserCodeHash:                  userHash,
+		OrganizationIDHint:            organizationIDHint.String,
+		RepositoryHints:               hints,
 		State:                         state,
 		AuthorizedOrgID:               orgID.String,
 		AuthorizedRepositoryScopes:    repositories,

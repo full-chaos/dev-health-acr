@@ -3,22 +3,26 @@ package v1
 import "time"
 
 const (
-	DeviceAuthorizationRequestSchema  = "device_authorization_request.v1"
-	DeviceAuthorizationResponseSchema = "device_authorization_response.v1"
-	DeviceTokenRequestSchema          = "device_token_request.v1"
-	DeviceTokenResponseSchema         = "device_token_response.v1"
-	DeviceApprovalRequestSchema       = "device_approval_request.v1"
-	DeviceApprovalResponseSchema      = "device_approval_response.v1"
-	CredentialRotateRequestSchema     = "credential_rotate_request.v1"
-	CredentialRotateResponseSchema    = "credential_rotate_response.v1"
-	CredentialRevokeRequestSchema     = "credential_revoke_request.v1"
-	CredentialRevokeResponseSchema    = "credential_revoke_response.v1"
-	OAuthDeviceErrorSchema            = "oauth_device_error.v1"
-	DeviceCodeGrantType               = "urn:ietf:params:oauth:grant-type:device_code"
+	DeviceAuthorizationRequestSchema    = "device_authorization_request.v1"
+	DeviceAuthorizationResponseSchema   = "device_authorization_response.v1"
+	DeviceTokenRequestSchema            = "device_token_request.v1"
+	DeviceTokenResponseSchema           = "device_token_response.v1"
+	DeviceApprovalRequestSchema         = "device_approval_request.v1"
+	DeviceApprovalResponseSchema        = "device_approval_response.v1"
+	DeviceApprovalPreviewRequestSchema  = "device_approval_preview_request.v1"
+	DeviceApprovalPreviewResponseSchema = "device_approval_preview_response.v1"
+	CredentialRotateRequestSchema       = "credential_rotate_request.v1"
+	CredentialRotateResponseSchema      = "credential_rotate_response.v1"
+	CredentialRevokeRequestSchema       = "credential_revoke_request.v1"
+	CredentialRevokeResponseSchema      = "credential_revoke_response.v1"
+	OAuthDeviceErrorSchema              = "oauth_device_error.v1"
+	DeviceCodeGrantType                 = "urn:ietf:params:oauth:grant-type:device_code"
 )
 
 type DeviceAuthorizationRequest struct {
-	SchemaVersion string `json:"schema_version"`
+	SchemaVersion      string   `json:"schema_version"`
+	OrganizationIDHint string   `json:"organization_id_hint,omitempty"`
+	RepositoryHints    []string `json:"repository_hints,omitempty"`
 }
 
 type DeviceAuthorizationResponse struct {
@@ -53,6 +57,17 @@ type DeviceApprovalRequest struct {
 type DeviceApprovalResponse struct {
 	SchemaVersion string `json:"schema_version"`
 	Status        string `json:"status"`
+}
+
+type DeviceApprovalPreviewRequest struct {
+	SchemaVersion string `json:"schema_version"`
+	UserCode      string `json:"user_code"`
+}
+
+type DeviceApprovalPreviewResponse struct {
+	SchemaVersion      string   `json:"schema_version"`
+	OrganizationIDHint string   `json:"organization_id_hint,omitempty"`
+	RepositoryHints    []string `json:"repository_hints,omitempty"`
 }
 
 type CredentialRotateRequest struct {

@@ -121,6 +121,38 @@ func TestWebAssertionVerifier_authenticatesCredentialIssueOnlyForBoundApprovalRe
 	}
 }
 
+func TestWebAssertionVerifier_bindsFreshCredentialIssueAssertionToPreviewBody(t *testing.T) {
+	// Given
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := NewWebAssertionVerifier(WebAssertionOptions{
+		Issuer: "https://web.example.test", Audience: "acr-api", JWKSPath: writeTestJWKS(t, "current", public), Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"schema_version":"device_approval_preview_request.v1","user_code":"ABCDEFGH"}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/oauth/device_approval", bytes.NewReader(body))
+	claims := webAssertionClaims(now, request, body)
+	claims["permissions"] = []string{WebAssertionPermissionCredentialIssue}
+	token := signTestWebAssertion(t, private, "current", claims)
+	request.Header.Set(WebAssertionHeader, token)
+
+	// When / Then
+	_, err = verifier.Verify(request)
+	if err != nil {
+		t.Fatalf("fresh preview assertion was rejected: %v", err)
+	}
+	changed := httptest.NewRequest(http.MethodPost, "/api/v1/oauth/device_approval", bytes.NewReader([]byte(`{"schema_version":"device_approval_preview_request.v1","user_code":"BCDEFGHJ"}`)))
+	changed.Header.Set(WebAssertionHeader, token)
+	if _, err := verifier.Verify(changed); err == nil {
+		t.Fatal("credential issue assertion was accepted for a changed preview body")
+	}
+}
+
 func TestKnownScopes_rejectsCredentialIssueWebAssertionPermission(t *testing.T) {
 	// Given
 	permissions := []string{WebAssertionPermissionCredentialIssue}

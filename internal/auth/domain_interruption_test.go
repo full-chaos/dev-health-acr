@@ -21,7 +21,7 @@ func TestDeviceFlow_repeatedCanceledOperationsLeavePendingState(t *testing.T) {
 
 	// When
 	for range 3 {
-		_, startErr := fixture.flow.Start(ctx)
+		_, startErr := fixture.flow.Start(ctx, DeviceAuthorizationHints{})
 		_, pollErr := fixture.flow.Poll(ctx, started.DeviceCode)
 		_, approveErr := fixture.flow.Approve(ctx, DeviceApprovalRequest{
 			Principal: principal, UserCode: started.UserCode, RepositoryScopes: principal.RepositoryScopes,

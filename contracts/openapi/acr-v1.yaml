@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 7a2a6964366d14f11ad4cc2c314bb0ce915509021ac35a554d4127c0c364ff28
+# canonical-content-sha256: 8ae20a60060c30d284be9517d071304e5a6226b80ea43ce632fb376807f632c4
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -302,15 +302,23 @@ paths:
         content:
           application/json:
             schema:
-              "$ref": "../jsonschema/v1/device_approval_request.v1.schema.json"
+              oneOf:
+                -
+                  "$ref": "../jsonschema/v1/device_approval_request.v1.schema.json"
+                -
+                  "$ref": "../jsonschema/v1/device_approval_preview_request.v1.schema.json"
         required: true
       responses:
         "200":
           content:
             application/json:
               schema:
-                "$ref": "../jsonschema/v1/device_approval_response.v1.schema.json"
-          description: "Bounded device grant approved"
+                oneOf:
+                  -
+                    "$ref": "../jsonschema/v1/device_approval_response.v1.schema.json"
+                  -
+                    "$ref": "../jsonschema/v1/device_approval_preview_response.v1.schema.json"
+          description: "Bounded device grant approved or advisory hints previewed"
         "400":
           "$ref": "#/components/responses/Error"
         "401":

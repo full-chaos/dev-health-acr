@@ -19,7 +19,7 @@ func TestRunner_VerifyCurrentRejectsMigrationHistoryDrift(t *testing.T) {
 			return err
 		}},
 		{name: "missing required migration", mutate: func(ctx context.Context, db *sql.DB) error {
-			_, err := db.ExecContext(ctx, "DELETE FROM acr.schema_migrations WHERE version = 4")
+			_, err := db.ExecContext(ctx, "DELETE FROM acr.schema_migrations WHERE version = 5")
 			return err
 		}},
 		{name: "required migration name drift", mutate: func(ctx context.Context, db *sql.DB) error {

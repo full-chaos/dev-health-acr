@@ -40,6 +40,52 @@ func TestDeviceFlow_Start_generatesBoundedCodesAndPersistsOnlyHashes(t *testing.
 	require.Equal(t, deviceAuthorizationStartRedacted, fmt.Sprint(started))
 }
 
+func TestDeviceFlow_Start_persistsOptionalUntrustedHintsWithoutGrantingThem(t *testing.T) {
+	// Given
+	fixture := newDeviceFlowFixture(t, deviceFlowRandom(2))
+	hints := DeviceAuthorizationHints{
+		OrganizationIDHint: "11111111-1111-1111-1111-111111111111",
+		RepositoryHints:    []string{"Full-Chaos/Dev-Health-Web", "full-chaos/dev-health-acr"},
+	}
+
+	// When
+	started, err := fixture.flow.Start(context.Background(), hints)
+
+	// Then
+	require.NoError(t, err)
+	record, err := fixture.store.GetByDeviceCodeHash(context.Background(), storage.HashDeviceCode(started.DeviceCode))
+	require.NoError(t, err)
+	require.Equal(t, hints.OrganizationIDHint, record.OrganizationIDHint)
+	require.Equal(t, []string{"full-chaos/dev-health-acr", "full-chaos/dev-health-web"}, record.RepositoryHints)
+	require.Empty(t, record.AuthorizedOrgID)
+	require.Empty(t, record.AuthorizedRepositoryScopes)
+}
+
+func TestDeviceFlow_Preview_returnsHintsWithoutChangingPendingStateOrGrant(t *testing.T) {
+	// Given
+	fixture := newDeviceFlowFixture(t, deviceFlowRandom(3))
+	started, err := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{
+		OrganizationIDHint: "11111111-1111-1111-1111-111111111111",
+		RepositoryHints:    []string{"full-chaos/dev-health-acr"},
+	})
+	require.NoError(t, err)
+
+	// When
+	preview, err := fixture.flow.Preview(context.Background(), DeviceApprovalPreviewRequest{
+		Principal: deviceApprovalPrincipal("full-chaos/dev-health-acr"), UserCode: started.UserCode,
+	})
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, "11111111-1111-1111-1111-111111111111", preview.OrganizationIDHint)
+	require.Equal(t, []string{"full-chaos/dev-health-acr"}, preview.RepositoryHints)
+	record, err := fixture.store.GetByDeviceCodeHash(context.Background(), storage.HashDeviceCode(started.DeviceCode))
+	require.NoError(t, err)
+	require.Equal(t, storage.DeviceAuthorizationStatePending, record.State)
+	require.Empty(t, record.AuthorizedOrgID)
+	require.Empty(t, record.AuthorizedRepositoryScopes)
+}
+
 func TestDeviceFlow_Start_retriesHashCollisionsAndFailsBoundedlyWithoutLeakingCodes(t *testing.T) {
 	// Given
 	seeds := []byte{1, 1, 2}
@@ -47,7 +93,7 @@ func TestDeviceFlow_Start_retriesHashCollisionsAndFailsBoundedlyWithoutLeakingCo
 	first := fixture.start(t)
 
 	// When
-	second, retryErr := fixture.flow.Start(context.Background())
+	second, retryErr := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{})
 
 	// Then
 	require.NoError(t, retryErr)
@@ -59,7 +105,7 @@ func TestDeviceFlow_Start_retriesHashCollisionsAndFailsBoundedlyWithoutLeakingCo
 	colliding := constant.start(t)
 
 	// When
-	_, collisionErr := constant.flow.Start(context.Background())
+	_, collisionErr := constant.flow.Start(context.Background(), DeviceAuthorizationHints{})
 
 	// Then
 	require.ErrorIs(t, collisionErr, ErrDeviceCodeCollision)
@@ -73,7 +119,7 @@ func TestDeviceFlow_Start_redactsRandomSourceFailures(t *testing.T) {
 	fixture := newDeviceFlowFixture(t, readerError{message: secret})
 
 	// When
-	started, err := fixture.flow.Start(context.Background())
+	started, err := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{})
 
 	// Then
 	require.Error(t, err)

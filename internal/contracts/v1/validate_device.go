@@ -12,7 +12,7 @@ func (r DeviceAuthorizationRequest) Validate() error {
 	if r.SchemaVersion != DeviceAuthorizationRequestSchema {
 		return fmt.Errorf("device authorization request violates v1 bounds")
 	}
-	return nil
+	return validateDeviceAuthorizationHints(r.OrganizationIDHint, r.RepositoryHints)
 }
 
 func (r DeviceAuthorizationResponse) Validate() error {
@@ -48,6 +48,20 @@ func (r DeviceApprovalResponse) Validate() error {
 		return fmt.Errorf("device approval response violates v1 bounds")
 	}
 	return nil
+}
+
+func (r DeviceApprovalPreviewRequest) Validate() error {
+	if r.SchemaVersion != DeviceApprovalPreviewRequestSchema || !validDeviceUserCode(r.UserCode) {
+		return fmt.Errorf("device approval preview request violates v1 bounds")
+	}
+	return nil
+}
+
+func (r DeviceApprovalPreviewResponse) Validate() error {
+	if r.SchemaVersion != DeviceApprovalPreviewResponseSchema {
+		return fmt.Errorf("device approval preview response violates v1 bounds")
+	}
+	return validateDeviceAuthorizationHints(r.OrganizationIDHint, r.RepositoryHints)
 }
 
 func (r CredentialRotateRequest) Validate() error {
@@ -127,6 +141,16 @@ func validateBoundedRepositoryScopes(repositories []string) error {
 		}
 	}
 	return nil
+}
+
+func validateDeviceAuthorizationHints(organizationIDHint string, repositoryHints []string) error {
+	if organizationIDHint != "" && !stringLengthBetween(organizationIDHint, 1, 128) {
+		return fmt.Errorf("device authorization hints violate v1 bounds")
+	}
+	if repositoryHints == nil {
+		return nil
+	}
+	return validateBoundedRepositoryScopes(repositoryHints)
 }
 
 func validDeviceUserCode(value string) bool {

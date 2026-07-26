@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/device_approval_preview_request.v1.schema.json",
+  "title": "Device Approval Preview Request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "user_code"],
+  "properties": {
+    "schema_version": { "const": "device_approval_preview_request.v1" },
+    "user_code": { "type": "string", "pattern": "^[ABCDEFGHJKMNPQRSTVWXYZ23456789]{8}$" }
+  }
+}

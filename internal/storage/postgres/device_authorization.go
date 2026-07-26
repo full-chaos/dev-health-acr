@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -35,26 +36,36 @@ func (s *DeviceAuthorizationStore) Create(ctx context.Context, input storage.Dev
 	if err := s.readyDeviceAuthorization(ctx); err != nil {
 		return storage.DeviceAuthorization{}, err
 	}
-	if input.DeviceCodeHash.IsZero() || input.UserCodeHash.IsZero() {
+	if input.DeviceCodeHash.IsZero() || input.UserCodeHash.IsZero() || storage.ValidateDeviceAuthorizationHints(input) != nil {
 		return storage.DeviceAuthorization{}, storage.ErrInvalidDeviceAuthorization
 	}
 	now := s.now().UTC()
 	record := storage.DeviceAuthorization{
 		DeviceCodeHash:     input.DeviceCodeHash,
 		UserCodeHash:       input.UserCodeHash,
+		OrganizationIDHint: input.OrganizationIDHint,
+		RepositoryHints:    append([]string(nil), input.RepositoryHints...),
 		State:              storage.DeviceAuthorizationStatePending,
 		CreatedAt:          now,
 		ExpiresAt:          now.Add(storage.DeviceAuthorizationTTL),
 		PollInterval:       storage.DeviceAuthorizationPollInterval,
 		IssuanceProvenance: storage.CredentialIssuanceProvenanceDeviceAuthorization,
 	}
-	_, err := s.DB.ExecContext(ctx, `
+	if record.RepositoryHints == nil {
+		record.RepositoryHints = []string{}
+	}
+	repositoryHints, err := json.Marshal(record.RepositoryHints)
+	if err != nil {
+		return storage.DeviceAuthorization{}, fmt.Errorf("encode repository hints: %w", err)
+	}
+	_, err = s.DB.ExecContext(ctx, `
 INSERT INTO acr.device_authorizations (
-    device_code_hash, user_code_hash, state, created_at, expires_at,
-    poll_interval_seconds, issuance_provenance
-) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+	device_code_hash, user_code_hash, state, created_at, expires_at,
+	poll_interval_seconds, issuance_provenance, organization_id_hint, repository_hints
+) VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), $9::jsonb)`,
 		record.DeviceCodeHash.String(), record.UserCodeHash.String(), record.State,
 		record.CreatedAt, record.ExpiresAt, int(record.PollInterval.Seconds()), record.IssuanceProvenance,
+		record.OrganizationIDHint, string(repositoryHints),
 	)
 	if err != nil {
 		sanitized := sanitizeDatabaseError(err)
@@ -92,6 +103,22 @@ func (s *DeviceAuthorizationStore) GetByUserCodeHash(ctx context.Context, hash s
 FROM acr.device_authorizations WHERE user_code_hash = $1`, hash.String())
 	record, err := scanDeviceAuthorization(row)
 	return mapDeviceAuthorizationLookup("get device authorization by user code", record, err)
+}
+
+func (s *DeviceAuthorizationStore) Preview(ctx context.Context, hash storage.UserCodeHash) (storage.DeviceAuthorization, error) {
+	if err := s.readyDeviceAuthorization(ctx); err != nil {
+		return storage.DeviceAuthorization{}, err
+	}
+	row := s.DB.QueryRowContext(ctx, `SELECT `+deviceAuthorizationColumns+`
+FROM acr.device_authorizations WHERE user_code_hash = $1`, hash.String())
+	record, err := scanDeviceAuthorization(row)
+	if err != nil {
+		return mapDeviceAuthorizationLookup("preview device authorization", record, err)
+	}
+	if !s.now().UTC().Before(record.ExpiresAt) && (record.State == storage.DeviceAuthorizationStatePending || record.State == storage.DeviceAuthorizationStateApproved) {
+		return storage.DeviceAuthorization{}, storage.NewDeviceAuthorizationError(storage.DeviceAuthorizationErrorExpired, storage.DeviceAuthorizationStateExpired, 0)
+	}
+	return mapDeviceAuthorizationLookup("preview device authorization", record, nil)
 }
 
 func (s *DeviceAuthorizationStore) Poll(ctx context.Context, hash storage.DeviceCodeHash) (storage.DeviceAuthorization, error) {

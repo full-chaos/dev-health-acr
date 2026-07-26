@@ -106,6 +106,8 @@ func (s DeviceAuthorizationState) Terminal() bool {
 type DeviceAuthorization struct {
 	DeviceCodeHash                DeviceCodeHash
 	UserCodeHash                  UserCodeHash
+	OrganizationIDHint            string
+	RepositoryHints               []string
 	State                         DeviceAuthorizationState
 	ExpiresAt                     time.Time
 	PollInterval                  time.Duration
@@ -123,8 +125,10 @@ type DeviceAuthorization struct {
 }
 
 type DeviceAuthorizationCreateInput struct {
-	DeviceCodeHash DeviceCodeHash
-	UserCodeHash   UserCodeHash
+	DeviceCodeHash     DeviceCodeHash
+	UserCodeHash       UserCodeHash
+	OrganizationIDHint string
+	RepositoryHints    []string
 }
 
 type DeviceAuthorizationGrant struct {
@@ -139,6 +143,7 @@ type DeviceAuthorizationStore interface {
 	Create(context.Context, DeviceAuthorizationCreateInput) (DeviceAuthorization, error)
 	GetByDeviceCodeHash(context.Context, DeviceCodeHash) (DeviceAuthorization, error)
 	GetByUserCodeHash(context.Context, UserCodeHash) (DeviceAuthorization, error)
+	Preview(context.Context, UserCodeHash) (DeviceAuthorization, error)
 	Poll(context.Context, DeviceCodeHash) (DeviceAuthorization, error)
 	Approve(context.Context, UserCodeHash, DeviceAuthorizationGrant) (DeviceAuthorization, error)
 	Deny(context.Context, UserCodeHash) (DeviceAuthorization, error)
@@ -217,6 +222,23 @@ func ValidateDeviceAuthorizationGrant(grant DeviceAuthorizationGrant) error {
 		if scope != "context:read" && scope != "evidence:read" {
 			return ErrInvalidDeviceAuthorization
 		}
+	}
+	return nil
+}
+
+func ValidateDeviceAuthorizationHints(hints DeviceAuthorizationCreateInput) error {
+	if strings.TrimSpace(hints.OrganizationIDHint) != hints.OrganizationIDHint || len(hints.OrganizationIDHint) > 128 || len(hints.RepositoryHints) > 100 {
+		return ErrInvalidDeviceAuthorization
+	}
+	seen := make(map[string]struct{}, len(hints.RepositoryHints))
+	for _, repository := range hints.RepositoryHints {
+		if strings.TrimSpace(repository) != repository || repository == "" || len(repository) > 512 || strings.ContainsRune(repository, '*') {
+			return ErrInvalidDeviceAuthorization
+		}
+		if _, duplicate := seen[repository]; duplicate {
+			return ErrInvalidDeviceAuthorization
+		}
+		seen[repository] = struct{}{}
 	}
 	return nil
 }

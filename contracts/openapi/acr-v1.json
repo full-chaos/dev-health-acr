@@ -434,8 +434,8 @@
         "security": [{ "webAssertionAuth": [] }],
         "operationId": "approveDeviceAuthorization",
         "x-required-permission": "credential:issue",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "../jsonschema/v1/device_approval_request.v1.schema.json" } } } },
-        "responses": { "200": { "description": "Bounded device grant approved", "content": { "application/json": { "schema": { "$ref": "../jsonschema/v1/device_approval_response.v1.schema.json" } } } }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "429": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } }
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "oneOf": [{ "$ref": "../jsonschema/v1/device_approval_request.v1.schema.json" }, { "$ref": "../jsonschema/v1/device_approval_preview_request.v1.schema.json" }] } } } },
+        "responses": { "200": { "description": "Bounded device grant approved or advisory hints previewed", "content": { "application/json": { "schema": { "oneOf": [{ "$ref": "../jsonschema/v1/device_approval_response.v1.schema.json" }, { "$ref": "../jsonschema/v1/device_approval_preview_response.v1.schema.json" }] } } } }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "429": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } }
       }
     },
     "/api/v1/auth/credentials/self/rotate": {

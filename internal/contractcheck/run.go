@@ -34,6 +34,8 @@ var exampleSchemaPairs = map[string]string{
 	"device_token_response.v1.json":               "device_token_response.v1.schema.json",
 	"device_approval_request.v1.json":             "device_approval_request.v1.schema.json",
 	"device_approval_response.v1.json":            "device_approval_response.v1.schema.json",
+	"device_approval_preview_request.v1.json":     "device_approval_preview_request.v1.schema.json",
+	"device_approval_preview_response.v1.json":    "device_approval_preview_response.v1.schema.json",
 	"credential_revoke_request.v1.json":           "credential_revoke_request.v1.schema.json",
 	"credential_revoke_response.v1.json":          "credential_revoke_response.v1.schema.json",
 	"oauth_device_error.v1.json":                  "oauth_device_error.v1.schema.json",

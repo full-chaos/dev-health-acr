@@ -63,6 +63,7 @@ func TestDeviceContractSchemas_reject_malformed_payloads(t *testing.T) {
 		body   []byte
 	}{
 		{name: "wrong grant", schema: "device_token_request.v1.schema.json", body: []byte(`{"schema_version":"device_token_request.v1","grant_type":"authorization_code","device_code":"0123456789abcdefghijklmnopqrstuv"}`)},
+		{name: "wildcard hint", schema: "device_authorization_request.v1.schema.json", body: []byte(`{"schema_version":"device_authorization_request.v1","repository_hints":["full-chaos/*"]}`)},
 		{name: "wildcard approval", schema: "device_approval_request.v1.schema.json", body: []byte(`{"schema_version":"device_approval_request.v1","user_code":"ABCDEFGH","repository_scopes":["full-chaos/*"]}`)},
 		{name: "client supplied organization", schema: "device_approval_request.v1.schema.json", body: []byte(`{"schema_version":"device_approval_request.v1","user_code":"ABCDEFGH","org_id":"org_fullchaos","repository_scopes":["full-chaos/dev-health-acr"]}`)},
 		{name: "unrecognized error", schema: "oauth_device_error.v1.schema.json", body: []byte(`{"schema_version":"oauth_device_error.v1","error":"invalid_request"}`)},

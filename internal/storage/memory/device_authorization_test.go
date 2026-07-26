@@ -45,6 +45,30 @@ func TestDeviceAuthorizationStore_Create_usesFixedLifetimeAndHashedValues(t *tes
 	require.NotEqual(t, userCode, record.UserCodeHash.String())
 }
 
+func TestDeviceAuthorizationStore_Preview_doesNotMutateOrExposeMutableHints(t *testing.T) {
+	// Given
+	fixture := newDeviceAuthorizationFixture(t)
+	record, err := fixture.store.Create(context.Background(), storage.DeviceAuthorizationCreateInput{
+		DeviceCodeHash:     storage.HashDeviceCode("preview-device-code"),
+		UserCodeHash:       storage.HashUserCode("PREVIEW1"),
+		OrganizationIDHint: "11111111-1111-1111-1111-111111111111",
+		RepositoryHints:    []string{"full-chaos/dev-health-acr"},
+	})
+	require.NoError(t, err)
+
+	// When
+	previewed, err := fixture.store.Preview(context.Background(), record.UserCodeHash)
+	previewed.RepositoryHints[0] = "full-chaos/changed"
+
+	// Then
+	require.NoError(t, err)
+	stored, err := fixture.store.GetByDeviceCodeHash(context.Background(), record.DeviceCodeHash)
+	require.NoError(t, err)
+	require.Equal(t, storage.DeviceAuthorizationStatePending, stored.State)
+	require.Nil(t, stored.LastPollAt)
+	require.Equal(t, []string{"full-chaos/dev-health-acr"}, stored.RepositoryHints)
+}
+
 func TestDeviceAuthorizationStore_Redeem_transitionsApprovedAndCreatesOneCredential(t *testing.T) {
 	// Given
 	fixture := newDeviceAuthorizationFixture(t)

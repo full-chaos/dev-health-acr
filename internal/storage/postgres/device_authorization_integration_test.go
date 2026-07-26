@@ -29,9 +29,21 @@ func TestDeviceAuthorizationStore_persistsOnlyHashesAndRedeemsExactlyOnce(t *tes
 	deviceCode := "a-secure-32-byte-device-code-value"
 	userCode := "BCDFGHJK"
 	created, err := store.Create(ctx, storage.DeviceAuthorizationCreateInput{
-		DeviceCodeHash: storage.HashDeviceCode(deviceCode), UserCodeHash: storage.HashUserCode(userCode),
+		DeviceCodeHash:     storage.HashDeviceCode(deviceCode),
+		UserCodeHash:       storage.HashUserCode(userCode),
+		OrganizationIDHint: "11111111-1111-1111-1111-111111111111",
+		RepositoryHints:    []string{"full-chaos/dev-health-acr"},
 	})
 	require.NoError(t, err)
+	previewed, err := store.Preview(ctx, created.UserCodeHash)
+	require.NoError(t, err)
+	require.Equal(t, created.OrganizationIDHint, previewed.OrganizationIDHint)
+	require.Equal(t, created.RepositoryHints, previewed.RepositoryHints)
+	var previewState string
+	var lastPollAt *time.Time
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT state, last_poll_at FROM acr.device_authorizations WHERE device_code_hash = $1", created.DeviceCodeHash.String()).Scan(&previewState, &lastPollAt))
+	require.Equal(t, string(storage.DeviceAuthorizationStatePending), previewState)
+	require.Nil(t, lastPollAt)
 	grant := postgresDeviceAuthorizationGrant()
 	_, err = store.Approve(ctx, created.UserCodeHash, grant)
 	require.NoError(t, err)

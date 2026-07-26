@@ -216,6 +216,9 @@ func (*typedNilDeviceAuthorizationStore) GetByDeviceCodeHash(context.Context, st
 func (*typedNilDeviceAuthorizationStore) GetByUserCodeHash(context.Context, storage.UserCodeHash) (storage.DeviceAuthorization, error) {
 	return storage.DeviceAuthorization{}, nil
 }
+func (*typedNilDeviceAuthorizationStore) Preview(context.Context, storage.UserCodeHash) (storage.DeviceAuthorization, error) {
+	return storage.DeviceAuthorization{}, nil
+}
 func (*typedNilDeviceAuthorizationStore) Poll(context.Context, storage.DeviceCodeHash) (storage.DeviceAuthorization, error) {
 	return storage.DeviceAuthorization{}, nil
 }
