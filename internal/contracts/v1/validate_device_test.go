@@ -39,7 +39,7 @@ func TestDeviceTokenResponseValidate_accepts_fixed_30_day_credential(t *testing.
 }
 
 func TestDeviceApprovalRequestValidate_rejects_wildcard_scope(t *testing.T) {
-	request := DeviceApprovalRequest{SchemaVersion: DeviceApprovalRequestSchema, UserCode: "ABCDEFGH", OrgID: "org_fullchaos", RepositoryScopes: []string{"full-chaos/*"}}
+	request := DeviceApprovalRequest{SchemaVersion: DeviceApprovalRequestSchema, UserCode: "ABCDEFGH", RepositoryScopes: []string{"full-chaos/*"}}
 	if err := request.Validate(); err == nil {
 		t.Fatal("device approval validator accepted a wildcard repository grant")
 	}
@@ -74,7 +74,7 @@ func TestDeviceContractValidators_match_schema(t *testing.T) {
 		{schema: "device_authorization_request.v1.schema.json", value: DeviceAuthorizationRequest{SchemaVersion: DeviceAuthorizationRequestSchema}},
 		{schema: "device_authorization_response.v1.schema.json", value: DeviceAuthorizationResponse{SchemaVersion: DeviceAuthorizationResponseSchema, DeviceCode: "0123456789abcdefghijklmnopqrstuv", UserCode: "ABCDEFGH", VerificationURI: "https://web.fullchaos.dev/acr/device", ExpiresIn: 600, Interval: 5}},
 		{schema: "device_token_request.v1.schema.json", value: DeviceTokenRequest{SchemaVersion: DeviceTokenRequestSchema, GrantType: DeviceCodeGrantType, DeviceCode: "0123456789abcdefghijklmnopqrstuv"}},
-		{schema: "device_approval_request.v1.schema.json", value: DeviceApprovalRequest{SchemaVersion: DeviceApprovalRequestSchema, UserCode: "ABCDEFGH", OrgID: "org_fullchaos", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}},
+		{schema: "device_approval_request.v1.schema.json", value: DeviceApprovalRequest{SchemaVersion: DeviceApprovalRequestSchema, UserCode: "ABCDEFGH", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}},
 		{schema: "device_approval_response.v1.schema.json", value: DeviceApprovalResponse{SchemaVersion: DeviceApprovalResponseSchema, Status: "approved"}},
 		{schema: "credential_rotate_request.v1.schema.json", value: CredentialRotateRequest{SchemaVersion: CredentialRotateRequestSchema}},
 		{schema: "credential_rotate_response.v1.schema.json", value: CredentialRotateResponse{SchemaVersion: CredentialRotateResponseSchema, AccessToken: "[REDACTED]", Credential: credential, Receipt: CredentialRotationReceipt{SourceCredentialID: "credential-0001", ReplacementCredentialID: "credential-0002", RollbackUntil: createdAt.Add(15 * time.Minute)}}},

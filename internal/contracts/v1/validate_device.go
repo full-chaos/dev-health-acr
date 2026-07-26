@@ -9,10 +9,10 @@ import (
 const deviceCredentialLifetime = 30 * 24 * time.Hour
 
 func (r DeviceAuthorizationRequest) Validate() error {
-	if r.SchemaVersion != DeviceAuthorizationRequestSchema || !stringLengthBetween(r.OrgHint, 0, 128) || !stringLengthBetween(r.CredentialName, 0, 200) {
+	if r.SchemaVersion != DeviceAuthorizationRequestSchema {
 		return fmt.Errorf("device authorization request violates v1 bounds")
 	}
-	return validateRepositoryHints(r.RepositoryHints, true)
+	return nil
 }
 
 func (r DeviceAuthorizationResponse) Validate() error {
@@ -37,10 +37,10 @@ func (r DeviceTokenResponse) Validate() error {
 }
 
 func (r DeviceApprovalRequest) Validate() error {
-	if r.SchemaVersion != DeviceApprovalRequestSchema || !validDeviceUserCode(r.UserCode) || !stringLengthBetween(r.OrgID, 1, 128) {
+	if r.SchemaVersion != DeviceApprovalRequestSchema || !validDeviceUserCode(r.UserCode) {
 		return fmt.Errorf("device approval request violates v1 bounds")
 	}
-	return validateRepositoryHints(r.RepositoryScopes, false)
+	return validateBoundedRepositoryScopes(r.RepositoryScopes)
 }
 
 func (r DeviceApprovalResponse) Validate() error {
@@ -92,7 +92,7 @@ func validateDeviceIssuedCredential(credential ClientCredential) error {
 	if credential.ExpiresAt == nil || credential.ExpiresAt.Sub(credential.CreatedAt) != deviceCredentialLifetime || credential.RevokedAt != nil || credential.LastUsedAt != nil || len(credential.Scopes) != 2 || credential.Scopes[0] != "context:read" || credential.Scopes[1] != "evidence:read" {
 		return fmt.Errorf("device credential does not satisfy fixed issuance policy")
 	}
-	return validateRepositoryHints(credential.RepositoryScopes, false)
+	return validateBoundedRepositoryScopes(credential.RepositoryScopes)
 }
 
 func validateCredentialMetadata(credential ClientCredential) error {
@@ -114,14 +114,11 @@ func validCredentialRepositoryScopes(repositories []string) bool {
 	return true
 }
 
-func validateRepositoryHints(repositories []string, allowEmpty bool) error {
+func validateBoundedRepositoryScopes(repositories []string) error {
 	if repositories == nil {
-		if allowEmpty {
-			return nil
-		}
 		return fmt.Errorf("repository scopes are required")
 	}
-	if (!allowEmpty && len(repositories) == 0) || len(repositories) > 100 || !uniqueStrings(repositories) {
+	if len(repositories) == 0 || len(repositories) > 100 || !uniqueStrings(repositories) {
 		return fmt.Errorf("repository scopes violate v1 bounds")
 	}
 	for _, repository := range repositories {

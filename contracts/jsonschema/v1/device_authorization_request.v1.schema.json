@@ -6,14 +6,6 @@
   "additionalProperties": false,
   "required": ["schema_version"],
   "properties": {
-    "schema_version": { "const": "device_authorization_request.v1" },
-    "org_hint": { "type": "string", "minLength": 1, "maxLength": 128 },
-    "repository_hints": {
-      "type": "array",
-      "maxItems": 100,
-      "uniqueItems": true,
-      "items": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$", "maxLength": 512 }
-    },
-    "credential_name": { "type": "string", "minLength": 1, "maxLength": 200 }
+    "schema_version": { "const": "device_authorization_request.v1" }
   }
 }

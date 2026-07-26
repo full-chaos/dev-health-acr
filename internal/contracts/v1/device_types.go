@@ -18,10 +18,7 @@ const (
 )
 
 type DeviceAuthorizationRequest struct {
-	SchemaVersion   string   `json:"schema_version"`
-	OrgHint         string   `json:"org_hint,omitempty"`
-	RepositoryHints []string `json:"repository_hints,omitempty"`
-	CredentialName  string   `json:"credential_name,omitempty"`
+	SchemaVersion string `json:"schema_version"`
 }
 
 type DeviceAuthorizationResponse struct {
@@ -50,7 +47,6 @@ type DeviceTokenResponse struct {
 type DeviceApprovalRequest struct {
 	SchemaVersion    string   `json:"schema_version"`
 	UserCode         string   `json:"user_code"`
-	OrgID            string   `json:"org_id"`
 	RepositoryScopes []string `json:"repository_scopes"`
 }
 
