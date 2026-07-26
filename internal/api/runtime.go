@@ -39,7 +39,7 @@ type EpisodeCreator interface {
 }
 
 type RuntimeDependencies struct {
-	Credentials                storage.CredentialStore
+	Credentials                *storage.CredentialLifecycle
 	DeviceAuthorizations       storage.DeviceAuthorizationStore
 	DeviceVerificationURL      string
 	DeviceAuthorizationLimiter DeviceAuthorizationLimiter
@@ -52,7 +52,7 @@ type RuntimeDependencies struct {
 }
 
 func (r *RuntimeDependencies) validate() error {
-	if r == nil || storage.IsNil(r.Credentials) || storage.IsNil(r.DeviceAuthorizations) || storage.IsNil(r.Audit) || storage.IsNil(r.Entitlements) || storage.IsNil(r.Assembler) || storage.IsNil(r.Evidence) || storage.IsNil(r.DeviceAuthorizationLimiter) {
+	if r == nil || r.Credentials == nil || storage.IsNil(r.DeviceAuthorizations) || storage.IsNil(r.Audit) || storage.IsNil(r.Entitlements) || storage.IsNil(r.Assembler) || storage.IsNil(r.Evidence) || storage.IsNil(r.DeviceAuthorizationLimiter) {
 		return errors.New("hosted read runtime dependencies must be configured together")
 	}
 	verificationURL, err := url.ParseRequestURI(r.DeviceVerificationURL)

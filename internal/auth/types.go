@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -58,6 +59,14 @@ type IssuedCredential struct {
 	Credential contractsv1.ClientCredential `json:"credential"`
 	Token      string                       `json:"token"`
 }
+
+const issuedCredentialRedacted = "auth.IssuedCredential{redacted}"
+
+func (IssuedCredential) String() string { return issuedCredentialRedacted }
+
+func (IssuedCredential) GoString() string { return issuedCredentialRedacted }
+
+func (IssuedCredential) LogValue() slog.Value { return slog.StringValue(issuedCredentialRedacted) }
 
 func normalizeCreateRequest(request CreateCredentialRequest) (CreateCredentialRequest, error) {
 	request.OrgID = strings.TrimSpace(request.OrgID)

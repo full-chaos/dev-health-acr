@@ -54,6 +54,8 @@ type App struct {
 	evidenceStoreFactory contextpacket.EvidenceStoreFactory
 	runtime              *RuntimeDependencies
 	authenticator        *auth.Authenticator
+	credentialService    *auth.Service
+	deviceFlow           *auth.DeviceFlowService
 	clientIP             auth.ClientIPResolver
 	usageTelemetry       *auth.UsageTelemetry
 	closers              appClosers
@@ -107,6 +109,8 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		deps.AuthAttempts = auth.NoopLimiter{}
 	}
 	var authenticator *auth.Authenticator
+	var credentialService *auth.Service
+	var deviceFlow *auth.DeviceFlowService
 	if deps.Runtime != nil {
 		if err := deps.Runtime.validate(); err != nil {
 			return nil, err
@@ -121,6 +125,14 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		}
 		if deps.UsageTelemetry == nil {
 			deps.UsageTelemetry = authenticator.UsageTelemetry()
+		}
+		credentialService, err = auth.NewService(deps.Runtime.Credentials, auth.ServiceOptions{Now: deps.Now})
+		if err != nil {
+			return nil, err
+		}
+		deviceFlow, err = auth.NewDeviceFlowService(deps.Runtime.DeviceAuthorizations, credentialService, auth.DeviceFlowOptions{Now: deps.Now})
+		if err != nil {
+			return nil, err
 		}
 		deps.ReadinessChecks = append(deps.ReadinessChecks, deps.Runtime.ReadinessChecks...)
 	}
@@ -144,6 +156,11 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		authenticator:        authenticator,
 		clientIP:             deps.ClientIP,
 		usageTelemetry:       deps.UsageTelemetry,
+		credentialService:    credentialService,
+		deviceFlow:           deviceFlow,
+	}
+	if app.clientIP == nil {
+		app.clientIP = auth.RemoteAddressClientIP
 	}
 	app.trackAuthenticator(authenticator)
 	return app, nil
