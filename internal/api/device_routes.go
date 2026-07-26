@@ -21,7 +21,14 @@ func (a *App) handleDeviceAuthorization(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device authorization request is invalid", false, nil)
 		return
 	}
-	started, err := a.deviceFlow.Start(r.Context())
+	hints := auth.DeviceAuthorizationHints{}
+	if request.OrganizationIDHint != nil {
+		hints.OrganizationIDHint = *request.OrganizationIDHint
+	}
+	if request.RepositoryHints != nil {
+		hints.RepositoryHints = *request.RepositoryHints
+	}
+	started, err := a.deviceFlow.Start(r.Context(), hints)
 	if err != nil {
 		a.writeDeviceDependencyError(w, r)
 		return
@@ -62,7 +69,7 @@ func (a *App) handleDeviceToken(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 	var request contractsv1.DeviceApprovalRequest
-	if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil || request.Validate() != nil {
+	if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
 		return
 	}
@@ -74,21 +81,51 @@ func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 		return
 	}
-	if _, err := a.deviceFlow.Approve(r.Context(), auth.DeviceApprovalRequest{
-		Principal: principal, UserCode: request.UserCode, RepositoryScopes: request.RepositoryScopes,
-	}); err != nil {
-		if errors.Is(err, storage.ErrDeviceAuthorizationConflict) {
-			writeError(w, r, http.StatusConflict, "device_authorization_conflict", "Device authorization is no longer pending", false, nil)
-			return
-		}
-		if errors.Is(err, auth.ErrInvalidDeviceFlow) || errors.Is(err, storage.ErrDeviceAuthorizationNotFound) || errors.Is(err, storage.ErrDeviceAuthorizationExpired) {
+	if request.SchemaVersion == contractsv1.DeviceApprovalPreviewRequestSchema {
+		if request.RepositoryScopes != nil {
 			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
 			return
 		}
-		a.writeDeviceDependencyError(w, r)
+		previewRequest := contractsv1.DeviceApprovalPreviewRequest{SchemaVersion: request.SchemaVersion, UserCode: request.UserCode}
+		if err := previewRequest.Validate(); err != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
+			return
+		}
+		preview, err := a.deviceFlow.Preview(r.Context(), auth.DeviceApprovalPreviewRequest{Principal: principal, UserCode: previewRequest.UserCode})
+		if err != nil {
+			a.writeDeviceApprovalError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, contractsv1.DeviceApprovalPreviewResponse{
+			SchemaVersion:      contractsv1.DeviceApprovalPreviewResponseSchema,
+			OrganizationIDHint: preview.OrganizationIDHint,
+			RepositoryHints:    preview.RepositoryHints,
+		})
+		return
+	}
+	if err := request.Validate(); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
+		return
+	}
+	if _, err := a.deviceFlow.Approve(r.Context(), auth.DeviceApprovalRequest{
+		Principal: principal, UserCode: request.UserCode, RepositoryScopes: request.RepositoryScopes,
+	}); err != nil {
+		a.writeDeviceApprovalError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, contractsv1.DeviceApprovalResponse{SchemaVersion: contractsv1.DeviceApprovalResponseSchema, Status: "approved"})
+}
+
+func (a *App) writeDeviceApprovalError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, storage.ErrDeviceAuthorizationConflict) {
+		writeError(w, r, http.StatusConflict, "device_authorization_conflict", "Device authorization is no longer pending", false, nil)
+		return
+	}
+	if errors.Is(err, auth.ErrInvalidDeviceFlow) || errors.Is(err, storage.ErrDeviceAuthorizationNotFound) || errors.Is(err, storage.ErrDeviceAuthorizationExpired) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
+		return
+	}
+	a.writeDeviceDependencyError(w, r)
 }
 
 func (a *App) handleRotateSelfCredential(w http.ResponseWriter, r *http.Request) {

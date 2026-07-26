@@ -86,6 +86,57 @@ func TestDeviceRoutes_HTTPFlowApprovesAndRedeemsOnlyOnce(t *testing.T) {
 	assertOAuthDeviceError(t, pendingPoll, contractsv1.OAuthDeviceErrorAuthorizationPending)
 }
 
+func TestDeviceApprovalPreview_returnsBoundedAuthorizationHints(t *testing.T) {
+	// Given
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := auth.NewWebAssertionVerifier(auth.WebAssertionOptions{
+		Issuer: "https://web.example.test", Audience: "acr-api", JWKSPath: writeAPIJWKS(t, public), Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, _ := newHostedTestAppWithWebAssertions(t, nil, nil, nil, nil, nil, verifier)
+	organizationIDHint := "org_1"
+	repositoryHints := []string{hostedTestRepository}
+	created := deviceRequest(t, http.MethodPost, "/api/v1/oauth/device_authorization", contractsv1.DeviceAuthorizationRequest{
+		SchemaVersion: contractsv1.DeviceAuthorizationRequestSchema, OrganizationIDHint: &organizationIDHint, RepositoryHints: &repositoryHints,
+	})
+	createdResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(createdResponse, created)
+	if createdResponse.Code != http.StatusOK {
+		t.Fatalf("create status = %d body=%s", createdResponse.Code, createdResponse.Body.String())
+	}
+	var authorization contractsv1.DeviceAuthorizationResponse
+	if err := json.NewDecoder(createdResponse.Body).Decode(&authorization); err != nil {
+		t.Fatal(err)
+	}
+	preview := contractsv1.DeviceApprovalPreviewRequest{SchemaVersion: contractsv1.DeviceApprovalPreviewRequestSchema, UserCode: authorization.UserCode}
+	previewRequest := deviceApprovalRequest(t, now, private, preview, "approval_preview")
+	previewResponse := httptest.NewRecorder()
+
+	// When
+	app.Handler().ServeHTTP(previewResponse, previewRequest)
+
+	// Then
+	if previewResponse.Code != http.StatusOK {
+		t.Fatalf("preview status = %d body=%s", previewResponse.Code, previewResponse.Body.String())
+	}
+	var response contractsv1.DeviceApprovalPreviewResponse
+	if err := json.NewDecoder(previewResponse.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("preview response invalid: %v", err)
+	}
+	if response.OrganizationIDHint != organizationIDHint || len(response.RepositoryHints) != 1 || response.RepositoryHints[0] != hostedTestRepository {
+		t.Fatalf("preview response = %#v", response)
+	}
+}
+
 func TestDeviceApproval_requiresOnlyBoundCredentialIssueAssertion(t *testing.T) {
 	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
 	public, private, err := ed25519.GenerateKey(rand.Reader)
@@ -233,7 +284,7 @@ func deviceTokenRequest(t *testing.T, deviceCode string) *http.Request {
 	})
 }
 
-func deviceApprovalRequest(t *testing.T, now time.Time, private ed25519.PrivateKey, approval contractsv1.DeviceApprovalRequest, jti string) *http.Request {
+func deviceApprovalRequest[T contractsv1.DeviceApprovalRequest | contractsv1.DeviceApprovalPreviewRequest](t *testing.T, now time.Time, private ed25519.PrivateKey, approval T, jti string) *http.Request {
 	t.Helper()
 	request := deviceRequest(t, http.MethodPost, "/api/v1/oauth/device_approval", approval)
 	body, err := json.Marshal(approval)
