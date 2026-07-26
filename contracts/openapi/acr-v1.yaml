@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 8ae20a60060c30d284be9517d071304e5a6226b80ea43ce632fb376807f632c4
+# canonical-content-sha256: f2629334a310bc29de85ba118e6aeaf3b89040baf316c3e9eb1f63b17607f648
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -261,7 +261,11 @@ paths:
           "$ref": "#/components/responses/Error"
         "401":
           "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
         "429":
+          "$ref": "#/components/responses/Error"
+        "500":
           "$ref": "#/components/responses/Error"
         "503":
           "$ref": "#/components/responses/Error"
@@ -288,7 +292,11 @@ paths:
           "$ref": "#/components/responses/Error"
         "401":
           "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
         "429":
+          "$ref": "#/components/responses/Error"
+        "500":
           "$ref": "#/components/responses/Error"
         "503":
           "$ref": "#/components/responses/Error"
@@ -329,6 +337,8 @@ paths:
           "$ref": "#/components/responses/Error"
         "429":
           "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
         "503":
           "$ref": "#/components/responses/Error"
       security:
@@ -354,6 +364,8 @@ paths:
         "400":
           "$ref": "#/components/responses/Error"
         "429":
+          "$ref": "#/components/responses/Error"
+        "500":
           "$ref": "#/components/responses/Error"
         "503":
           "$ref": "#/components/responses/Error"
@@ -381,6 +393,8 @@ paths:
                 "$ref": "../jsonschema/v1/oauth_device_error.v1.schema.json"
           description: "Pinned RFC device grant error"
         "429":
+          "$ref": "#/components/responses/Error"
+        "500":
           "$ref": "#/components/responses/Error"
         "503":
           "$ref": "#/components/responses/Error"

@@ -82,6 +82,13 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return a.MiddlewareFor(false, next)
 }
 
+func (a *Authenticator) WebAssertions() *WebAssertionVerifier {
+	if a == nil {
+		return nil
+	}
+	return a.webAssertions
+}
+
 func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		now := a.now().UTC()
@@ -246,6 +253,9 @@ func (a *Authenticator) writeError(w http.ResponseWriter, r *http.Request, statu
 }
 
 func extractBearer(r *http.Request) string {
+	if len(r.Header.Values("Authorization")) != 1 {
+		return ""
+	}
 	header := strings.TrimSpace(r.Header.Get("Authorization"))
 	if len(header) < 7 || !strings.EqualFold(header[:7], "Bearer ") {
 		return ""

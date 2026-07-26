@@ -110,7 +110,7 @@ func (a *App) handleRotateSelfCredential(w http.ResponseWriter, r *http.Request)
 	}
 	writeJSON(w, http.StatusOK, contractsv1.CredentialRotateResponse{
 		SchemaVersion: contractsv1.CredentialRotateResponseSchema, AccessToken: rotation.Issued.Token, Credential: rotation.Issued.Credential,
-		Receipt: contractsv1.CredentialRotationReceipt{SourceCredentialID: rotation.Receipt.SourceCredentialID, ReplacementCredentialID: rotation.Receipt.SuccessorCredentialID, RollbackUntil: a.now().UTC().Add(storage.MaximumCredentialOverlap)},
+		Receipt: contractsv1.CredentialRotationReceipt{SourceCredentialID: rotation.Receipt.SourceCredentialID, ReplacementCredentialID: rotation.Receipt.SuccessorCredentialID, RollbackUntil: rotation.Receipt.RollbackUntil},
 	})
 }
 
@@ -155,6 +155,13 @@ func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {
 	return a.authenticator.Middleware(a.ProtectedHandler(limits.RequestClassAuth, next))
 }
 
+func (a *App) deviceRuntimeHandler(next http.Handler) http.Handler {
+	if a.runtime == nil || a.authenticator == nil || a.authenticator.WebAssertions() == nil {
+		return http.HandlerFunc(a.handleRuntimeUnavailable)
+	}
+	return next
+}
+
 func (a *App) allowDeviceRequest(w http.ResponseWriter, r *http.Request, allow func(string) DeviceAuthorizationLimitDecision) bool {
 	decision := allow(a.clientIP(r))
 	if decision.Allowed {
@@ -193,6 +200,10 @@ func (a *App) writeDeviceDependencyError(w http.ResponseWriter, r *http.Request)
 func (a *App) writeSelfLifecycleError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, auth.ErrInvalidCredential) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "Credential lifecycle request is invalid", false, nil)
+		return
+	}
+	if errors.Is(err, storage.ErrConflict) {
+		writeError(w, r, http.StatusConflict, "credential_lifecycle_conflict", "Credential lifecycle operation conflicts with current state", false, nil)
 		return
 	}
 	writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Credential lifecycle service is temporarily unavailable", true, nil)

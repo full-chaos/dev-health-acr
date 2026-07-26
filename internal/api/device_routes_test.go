@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 func TestDeviceRoutes_HTTPFlowApprovesAndRedeemsOnlyOnce(t *testing.T) {
@@ -103,6 +104,46 @@ func TestDeviceApproval_requiresOnlyBoundCredentialIssueAssertion(t *testing.T) 
 	app.Handler().ServeHTTP(response, request)
 
 	assertErrorResponse(t, response, http.StatusUnauthorized, "invalid_token")
+}
+
+func TestDeviceRoutes_returnUnavailableWithoutWebAssertions(t *testing.T) {
+	// Given
+	app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)
+	request := deviceRequest(t, http.MethodPost, "/api/v1/oauth/device_authorization", contractsv1.DeviceAuthorizationRequest{SchemaVersion: contractsv1.DeviceAuthorizationRequestSchema})
+	response := httptest.NewRecorder()
+
+	// When
+	app.Handler().ServeHTTP(response, request)
+
+	// Then
+	assertErrorResponse(t, response, http.StatusServiceUnavailable, "upstream_unavailable")
+}
+
+func TestSelfLifecycleRoutes_rejectDuplicateAuthorizationHeaders(t *testing.T) {
+	// Given
+	app, token := newHostedTestApp(t, nil, nil, []string{auth.ScopeContextRead, auth.ScopeEvidenceRead}, nil, nil)
+	request := deviceRequest(t, http.MethodPost, "/api/v1/auth/credentials/self/revoke", contractsv1.CredentialRevokeRequest{SchemaVersion: contractsv1.CredentialRevokeRequestSchema})
+	request.Header["Authorization"] = []string{"Bearer " + token, "Bearer fcacr_abcdefghijklmnopqrstuvwxyz0123456789"}
+	response := httptest.NewRecorder()
+
+	// When
+	app.Handler().ServeHTTP(response, request)
+
+	// Then
+	assertErrorResponse(t, response, http.StatusUnauthorized, "invalid_token")
+}
+
+func TestSelfLifecycleError_returnsNonRetryableConflictForStaleMutation(t *testing.T) {
+	// Given
+	app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/credentials/self/rotate", nil)
+	response := httptest.NewRecorder()
+
+	// When
+	app.writeSelfLifecycleError(response, request, storage.ErrConflict)
+
+	// Then
+	assertErrorResponse(t, response, http.StatusConflict, "credential_lifecycle_conflict")
 }
 
 func TestSelfLifecycleRoutes_rotateThenRevokeCurrentBearer(t *testing.T) {

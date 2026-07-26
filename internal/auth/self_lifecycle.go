@@ -16,6 +16,7 @@ const selfRotationRedacted = "auth.SelfRotation{redacted}"
 type SelfRotationReceipt struct {
 	SourceCredentialID    string
 	SuccessorCredentialID string
+	RollbackUntil         time.Time
 }
 
 type SelfRotation struct {
@@ -37,7 +38,8 @@ type credentialSnapshot struct {
 }
 
 func (s *Service) RotateSelf(ctx context.Context, principal storage.Principal) (SelfRotation, error) {
-	if _, err := s.authenticatedCredential(ctx, principal); err != nil {
+	source, err := s.authenticatedCredential(ctx, principal)
+	if err != nil {
 		return SelfRotation{}, err
 	}
 	expiresAt := s.now().UTC().Add(DeviceCredentialLifetime)
@@ -51,11 +53,16 @@ func (s *Service) RotateSelf(ctx context.Context, principal storage.Principal) (
 	if err != nil {
 		return SelfRotation{}, err
 	}
+	rollbackUntil := s.now().UTC().Add(storage.MaximumCredentialOverlap)
+	if source.ExpiresAt != nil && source.ExpiresAt.Before(rollbackUntil) {
+		rollbackUntil = *source.ExpiresAt
+	}
 	return SelfRotation{
 		Issued: issued,
 		Receipt: SelfRotationReceipt{
 			SourceCredentialID:    principal.CredentialID,
 			SuccessorCredentialID: issued.Credential.CredentialID,
+			RollbackUntil:         rollbackUntil,
 		},
 	}, nil
 }

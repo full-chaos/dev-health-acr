@@ -57,7 +57,7 @@ type RotateCredentialRequest struct {
 
 type IssuedCredential struct {
 	Credential contractsv1.ClientCredential `json:"credential"`
-	Token      string                       `json:"token"`
+	Token      string                       `json:"-"`
 }
 
 const issuedCredentialRedacted = "auth.IssuedCredential{redacted}"

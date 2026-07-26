@@ -32,11 +32,32 @@ func TestService_RotateSelf_preservesStoredGrantAndUsesFixedLifecycle(t *testing
 	require.Equal(t, now.Add(DeviceCredentialLifetime), *rotation.Issued.Credential.ExpiresAt)
 	require.Equal(t, source.Credential.CredentialID, rotation.Receipt.SourceCredentialID)
 	require.Equal(t, rotation.Issued.Credential.CredentialID, rotation.Receipt.SuccessorCredentialID)
+	require.Equal(t, now.Add(storage.MaximumCredentialOverlap), rotation.Receipt.RollbackUntil)
 	previous, err := store.GetByID(context.Background(), principal.OrgID, principal.CredentialID)
 	require.NoError(t, err)
 	require.Nil(t, previous.RevokedAt)
 	require.NotNil(t, previous.ExpiresAt)
 	require.Equal(t, now.Add(storage.MaximumCredentialOverlap), *previous.ExpiresAt)
+}
+
+func TestService_RotateSelf_clampsRollbackUntilToSourceExpiry(t *testing.T) {
+	// Given
+	now := time.Date(2026, 7, 25, 14, 0, 0, 0, time.UTC)
+	audit := memory.NewAuditStore()
+	store := newMemoryCredentialStoreAt(t, now, audit)
+	service := newTestService(t, store, audit, now)
+	expiresAt := now.Add(5 * time.Minute)
+	source, err := service.Create(context.Background(), CreateCredentialRequest{
+		OrgID: deviceFlowTestOrgID, Name: "short-lived self credential", RepositoryScopes: []string{"owner/repo"}, CreatedBy: "actor_1", ExpiresAt: &expiresAt,
+	})
+	require.NoError(t, err)
+
+	// When
+	rotation, err := service.RotateSelf(context.Background(), selfPrincipal(source.Credential))
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, expiresAt, rotation.Receipt.RollbackUntil)
 }
 
 func TestService_RotateSelf_rejectsUntrustedPrincipalWithoutMutation(t *testing.T) {

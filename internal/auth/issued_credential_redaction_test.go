@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -17,5 +18,21 @@ func TestIssuedCredential_redactsPlaintextTokenInStringGoStringAndSlog(t *testin
 	}
 	if got := issued.LogValue(); got.Kind() != slog.KindString || got.String() != issuedCredentialRedacted || strings.Contains(got.String(), issued.Token) {
 		t.Fatalf("LogValue() = %#v", got)
+	}
+}
+
+func TestIssuedCredential_JSONSerialization_redactsPlaintextToken(t *testing.T) {
+	// Given
+	issued := IssuedCredential{Token: "fcacr_abcdefghijklmnopqrstuvwxyz0123456789"}
+
+	// When
+	encoded, err := json.Marshal(issued)
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), issued.Token) {
+		t.Fatalf("JSON serialization exposed token: %s", encoded)
 	}
 }
