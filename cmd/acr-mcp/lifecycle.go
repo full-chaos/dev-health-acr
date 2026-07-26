@@ -19,7 +19,6 @@ var (
 	lifecycleWait        = waitForDevicePoll
 	lifecyclePersist     = sidecar.PersistCredential
 	lifecycleReplace     = sidecar.ReplaceCredential
-	lifecycleDelete      = sidecar.DeleteCredential
 )
 
 func runLoginCommand(args []string) int {

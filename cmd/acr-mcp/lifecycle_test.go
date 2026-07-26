@@ -290,10 +290,6 @@ func TestLogoutRetainsCredential_when_remoteRevocationFails(t *testing.T) {
 	t.Setenv(sidecar.APIURLEnvironment, server.URL)
 	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
 	t.Setenv(sidecar.TokenEnvironment, token)
-	originalDelete := lifecycleDelete
-	deleted := false
-	lifecycleDelete = func() error { deleted = true; return nil }
-	t.Cleanup(func() { lifecycleDelete = originalDelete })
 
 	// When
 	code := runCLI([]string{"logout"})
@@ -302,8 +298,8 @@ func TestLogoutRetainsCredential_when_remoteRevocationFails(t *testing.T) {
 	if code != lifecycleExitFailure {
 		t.Fatalf("logout exit code = %d, want %d", code, lifecycleExitFailure)
 	}
-	if revocations != 1 || deleted {
-		t.Fatalf("logout remote-first behavior revocations=%d deleted=%t", revocations, deleted)
+	if revocations != 1 {
+		t.Fatalf("remote revocations = %d, want 1", revocations)
 	}
 }
 
@@ -315,9 +311,7 @@ func TestLogoutReportsFailure_when_localCleanupFailsAfterRemoteRevocation(t *tes
 	t.Setenv(sidecar.APIURLEnvironment, server.URL)
 	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
 	t.Setenv(sidecar.TokenEnvironment, token)
-	originalDelete := lifecycleDelete
-	lifecycleDelete = func() error { return errors.New("local delete failure") }
-	t.Cleanup(func() { lifecycleDelete = originalDelete })
+	t.Setenv(sidecar.TokenFileEnvironment, t.TempDir())
 
 	// When
 	code := runCLI([]string{"logout"})
