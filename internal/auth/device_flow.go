@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -132,9 +131,20 @@ func (s *DeviceFlowService) Preview(ctx context.Context, request DeviceApprovalP
 	if err != nil {
 		return DeviceApprovalPreview{}, fmt.Errorf("preview device authorization: %w", err)
 	}
+	principalRepositories, err := normalizedPrincipalRepositories(request.Principal)
+	if err != nil {
+		return DeviceApprovalPreview{}, ErrInvalidDeviceFlow
+	}
+	if record.OrganizationIDHint != "" && record.OrganizationIDHint != request.Principal.OrgID {
+		return DeviceApprovalPreview{}, ErrInvalidDeviceFlow
+	}
+	repositoryHints := intersectRepositoryHints(record.RepositoryHints, principalRepositories)
+	if len(record.RepositoryHints) > 0 && len(repositoryHints) == 0 {
+		return DeviceApprovalPreview{}, ErrInvalidDeviceFlow
+	}
 	return DeviceApprovalPreview{
 		OrganizationIDHint: record.OrganizationIDHint,
-		RepositoryHints:    append([]string(nil), record.RepositoryHints...),
+		RepositoryHints:    repositoryHints,
 	}, nil
 }
 
@@ -150,12 +160,20 @@ func (s *DeviceFlowService) Approve(ctx context.Context, request DeviceApprovalR
 	if err != nil || hasRepositoryWildcard(repositories) {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
-	principalRepositories, err := NormalizeRepositoryScopes(request.Principal.RepositoryScopes)
-	if err != nil || !slices.Equal(principalRepositories, request.Principal.RepositoryScopes) ||
+	principalRepositories, err := normalizedPrincipalRepositories(request.Principal)
+	if err != nil ||
 		!repositoriesWithinGrant(principalRepositories, repositories) {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
-	record, err := s.store.Approve(ctx, storage.HashUserCode(userCode), storage.DeviceAuthorizationGrant{
+	record, err := s.store.Preview(ctx, storage.HashUserCode(userCode))
+	if err != nil {
+		return storage.DeviceAuthorization{}, fmt.Errorf("preview device authorization for approval: %w", err)
+	}
+	if (record.OrganizationIDHint != "" && record.OrganizationIDHint != request.Principal.OrgID) ||
+		(len(record.RepositoryHints) > 0 && !repositoriesWithinGrant(record.RepositoryHints, repositories)) {
+		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
+	}
+	record, err = s.store.Approve(ctx, storage.HashUserCode(userCode), storage.DeviceAuthorizationGrant{
 		OrgID:                         request.Principal.OrgID,
 		RepositoryScopes:              repositories,
 		Scopes:                        []string{ScopeContextRead, ScopeEvidenceRead},
@@ -219,20 +237,6 @@ func repositoriesWithinGrant(grant, selected []string) bool {
 		}
 	}
 	return true
-}
-
-func normalizeDeviceAuthorizationHints(hints DeviceAuthorizationHints) (DeviceAuthorizationHints, error) {
-	if strings.TrimSpace(hints.OrganizationIDHint) != hints.OrganizationIDHint || len(hints.OrganizationIDHint) > 128 {
-		return DeviceAuthorizationHints{}, ErrInvalidDeviceFlow
-	}
-	if hints.RepositoryHints == nil {
-		return hints, nil
-	}
-	repositories, err := NormalizeRepositoryScopes(hints.RepositoryHints)
-	if err != nil || hasRepositoryWildcard(repositories) {
-		return DeviceAuthorizationHints{}, ErrInvalidDeviceFlow
-	}
-	return DeviceAuthorizationHints{OrganizationIDHint: hints.OrganizationIDHint, RepositoryHints: repositories}, nil
 }
 
 func (DeviceAuthorizationStart) String() string { return deviceAuthorizationStartRedacted }

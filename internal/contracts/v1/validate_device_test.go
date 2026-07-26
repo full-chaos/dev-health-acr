@@ -1,6 +1,8 @@
 package v1
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +13,43 @@ func TestDeviceTokenRequestValidate_rejects_non_RFC_grant_type(t *testing.T) {
 	request := DeviceTokenRequest{SchemaVersion: DeviceTokenRequestSchema, GrantType: "authorization_code", DeviceCode: "0123456789abcdefghijklmnopqrstuv"}
 	if err := request.Validate(); err == nil {
 		t.Fatal("device token validator accepted a non-device grant")
+	}
+}
+
+func TestDeviceAuthorizationRequestValidate_rejectsPresentNullOrEmptyHints(t *testing.T) {
+	for _, body := range []string{
+		`{"schema_version":"device_authorization_request.v1","organization_id_hint":null}`,
+		`{"schema_version":"device_authorization_request.v1","organization_id_hint":""}`,
+		`{"schema_version":"device_authorization_request.v1","repository_hints":null}`,
+		`{"schema_version":"device_authorization_request.v1","repository_hints":[]}`,
+	} {
+		var request DeviceAuthorizationRequest
+		if err := json.Unmarshal([]byte(body), &request); err != nil {
+			t.Fatal(err)
+		}
+		if err := request.Validate(); err == nil {
+			t.Fatalf("validator accepted malformed present hint %s", body)
+		}
+	}
+}
+
+func TestDeviceAuthorizationRequestValidate_countsHintRunesLikeSchema(t *testing.T) {
+	valid := strings.Repeat("界", 128)
+	invalid := strings.Repeat("界", 129)
+	for _, organizationIDHint := range []string{valid, invalid} {
+		body, err := json.Marshal(map[string]any{
+			"schema_version": "device_authorization_request.v1", "organization_id_hint": organizationIDHint,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var request DeviceAuthorizationRequest
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Fatal(err)
+		}
+		if got := request.Validate() == nil; got != (organizationIDHint == valid) {
+			t.Fatalf("hint of %d runes accepted = %t", len([]rune(organizationIDHint)), got)
+		}
 	}
 }
 
@@ -82,7 +121,7 @@ func TestDeviceContractValidators_match_schema(t *testing.T) {
 		schema string
 		value  interface{ Validate() error }
 	}{
-		{schema: "device_authorization_request.v1.schema.json", value: DeviceAuthorizationRequest{SchemaVersion: DeviceAuthorizationRequestSchema, OrganizationIDHint: "org_fullchaos", RepositoryHints: []string{"full-chaos/dev-health-acr"}}},
+		{schema: "device_authorization_request.v1.schema.json", value: deviceAuthorizationRequestWithHints("org_fullchaos", []string{"full-chaos/dev-health-acr"})},
 		{schema: "device_authorization_response.v1.schema.json", value: DeviceAuthorizationResponse{SchemaVersion: DeviceAuthorizationResponseSchema, DeviceCode: "0123456789abcdefghijklmnopqrstuv", UserCode: "ABCDEFGH", VerificationURI: "https://web.fullchaos.dev/acr/device", ExpiresIn: 600, Interval: 5}},
 		{schema: "device_token_request.v1.schema.json", value: DeviceTokenRequest{SchemaVersion: DeviceTokenRequestSchema, GrantType: DeviceCodeGrantType, DeviceCode: "0123456789abcdefghijklmnopqrstuv"}},
 		{schema: "device_approval_request.v1.schema.json", value: DeviceApprovalRequest{SchemaVersion: DeviceApprovalRequestSchema, UserCode: "ABCDEFGH", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}},
@@ -108,6 +147,12 @@ func TestDeviceContractValidators_match_schema(t *testing.T) {
 		t.Fatalf("revocation validator rejected schema-valid value: %v", err)
 	}
 	assertSchemaParity(t, "credential_revoke_response.v1.schema.json", revocation)
+}
+
+func deviceAuthorizationRequestWithHints(organizationIDHint string, repositoryHints []string) DeviceAuthorizationRequest {
+	return DeviceAuthorizationRequest{
+		SchemaVersion: DeviceAuthorizationRequestSchema, OrganizationIDHint: &organizationIDHint, RepositoryHints: &repositoryHints,
+	}
 }
 
 func TestDeviceContractFixtures_validate(t *testing.T) {

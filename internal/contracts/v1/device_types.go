@@ -1,6 +1,9 @@
 package v1
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const (
 	DeviceAuthorizationRequestSchema    = "device_authorization_request.v1"
@@ -20,9 +23,36 @@ const (
 )
 
 type DeviceAuthorizationRequest struct {
-	SchemaVersion      string   `json:"schema_version"`
-	OrganizationIDHint string   `json:"organization_id_hint,omitempty"`
-	RepositoryHints    []string `json:"repository_hints,omitempty"`
+	SchemaVersion      string    `json:"schema_version"`
+	OrganizationIDHint *string   `json:"organization_id_hint,omitempty"`
+	RepositoryHints    *[]string `json:"repository_hints,omitempty"`
+
+	organizationIDHintPresent bool
+	repositoryHintsPresent    bool
+}
+
+func (r *DeviceAuthorizationRequest) UnmarshalJSON(data []byte) error {
+	type wire struct {
+		SchemaVersion      string    `json:"schema_version"`
+		OrganizationIDHint *string   `json:"organization_id_hint"`
+		RepositoryHints    *[]string `json:"repository_hints"`
+	}
+	var decoded wire
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*r = DeviceAuthorizationRequest{
+		SchemaVersion:             decoded.SchemaVersion,
+		OrganizationIDHint:        decoded.OrganizationIDHint,
+		RepositoryHints:           decoded.RepositoryHints,
+		organizationIDHintPresent: fields["organization_id_hint"] != nil,
+		repositoryHintsPresent:    fields["repository_hints"] != nil,
+	}
+	return nil
 }
 
 type DeviceAuthorizationResponse struct {

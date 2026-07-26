@@ -13,6 +13,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDeviceFlow_Start_countsHintRunesLikeContract(t *testing.T) {
+	fixture := newDeviceFlowFixture(t, deviceFlowRandom(1))
+	valid := strings.Repeat("界", 128)
+	invalid := strings.Repeat("界", 129)
+	_, err := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{OrganizationIDHint: valid})
+	require.NoError(t, err)
+	_, err = fixture.flow.Start(context.Background(), DeviceAuthorizationHints{OrganizationIDHint: invalid})
+	require.ErrorIs(t, err, ErrInvalidDeviceFlow)
+}
+
 func TestDeviceFlow_Start_generatesBoundedCodesAndPersistsOnlyHashes(t *testing.T) {
 	// Given
 	fixture := newDeviceFlowFixture(t, deviceFlowRandom(1))
@@ -84,6 +94,63 @@ func TestDeviceFlow_Preview_returnsHintsWithoutChangingPendingStateOrGrant(t *te
 	require.Equal(t, storage.DeviceAuthorizationStatePending, record.State)
 	require.Empty(t, record.AuthorizedOrgID)
 	require.Empty(t, record.AuthorizedRepositoryScopes)
+}
+
+func TestDeviceFlow_Preview_andApprove_narrowToStoredHints(t *testing.T) {
+	fixture := newDeviceFlowFixture(t, deviceFlowRandom(6))
+	started, err := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{
+		OrganizationIDHint: deviceFlowTestOrgID,
+		RepositoryHints:    []string{"full-chaos/dev-health-acr", "full-chaos/dev-health-web"},
+	})
+	require.NoError(t, err)
+	principal := deviceApprovalPrincipal("full-chaos/dev-health-acr")
+	preview, err := fixture.flow.Preview(context.Background(), DeviceApprovalPreviewRequest{Principal: principal, UserCode: started.UserCode})
+	require.NoError(t, err)
+	require.Equal(t, []string{"full-chaos/dev-health-acr"}, preview.RepositoryHints)
+
+	_, err = fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
+		Principal: deviceApprovalPrincipal("full-chaos/dev-health-acr", "full-chaos/other"),
+		UserCode:  started.UserCode, RepositoryScopes: []string{"full-chaos/other"},
+	})
+	require.ErrorIs(t, err, ErrInvalidDeviceFlow)
+	approved, err := fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
+		Principal: deviceApprovalPrincipal("full-chaos/dev-health-acr", "full-chaos/other"),
+		UserCode:  started.UserCode, RepositoryScopes: []string{"full-chaos/dev-health-acr"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"full-chaos/dev-health-acr"}, approved.AuthorizedRepositoryScopes)
+}
+
+func TestDeviceFlow_Preview_failsClosedWhenHintOrganizationOrRepositoryIntersectionIsEmpty(t *testing.T) {
+	for _, hints := range []DeviceAuthorizationHints{
+		{OrganizationIDHint: "22222222-2222-2222-2222-222222222222"},
+		{RepositoryHints: []string{"full-chaos/dev-health-web"}},
+	} {
+		fixture := newDeviceFlowFixture(t, deviceFlowRandom(7))
+		started, err := fixture.flow.Start(context.Background(), hints)
+		require.NoError(t, err)
+		_, err = fixture.flow.Preview(context.Background(), DeviceApprovalPreviewRequest{
+			Principal: deviceApprovalPrincipal("full-chaos/dev-health-acr"), UserCode: started.UserCode,
+		})
+		require.ErrorIs(t, err, ErrInvalidDeviceFlow)
+	}
+}
+
+func TestDeviceFlow_Approve_failsClosedForMismatchedOrganizationHint(t *testing.T) {
+	fixture := newDeviceFlowFixture(t, deviceFlowRandom(8))
+	started, err := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{
+		OrganizationIDHint: "22222222-2222-2222-2222-222222222222",
+		RepositoryHints:    []string{"full-chaos/dev-health-acr"},
+	})
+	require.NoError(t, err)
+	_, err = fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
+		Principal: deviceApprovalPrincipal("full-chaos/dev-health-acr"),
+		UserCode:  started.UserCode, RepositoryScopes: []string{"full-chaos/dev-health-acr"},
+	})
+	require.ErrorIs(t, err, ErrInvalidDeviceFlow)
+	record, err := fixture.store.GetByDeviceCodeHash(context.Background(), storage.HashDeviceCode(started.DeviceCode))
+	require.NoError(t, err)
+	require.Equal(t, storage.DeviceAuthorizationStatePending, record.State)
 }
 
 func TestDeviceFlow_Start_retriesHashCollisionsAndFailsBoundedlyWithoutLeakingCodes(t *testing.T) {

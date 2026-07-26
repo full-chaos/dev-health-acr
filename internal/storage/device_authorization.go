@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage/internal/credentiallifecycle"
@@ -227,12 +228,12 @@ func ValidateDeviceAuthorizationGrant(grant DeviceAuthorizationGrant) error {
 }
 
 func ValidateDeviceAuthorizationHints(hints DeviceAuthorizationCreateInput) error {
-	if strings.TrimSpace(hints.OrganizationIDHint) != hints.OrganizationIDHint || len(hints.OrganizationIDHint) > 128 || len(hints.RepositoryHints) > 100 {
+	if strings.TrimSpace(hints.OrganizationIDHint) != hints.OrganizationIDHint || utf8.RuneCountInString(hints.OrganizationIDHint) > 128 || len(hints.RepositoryHints) > 100 {
 		return ErrInvalidDeviceAuthorization
 	}
 	seen := make(map[string]struct{}, len(hints.RepositoryHints))
 	for _, repository := range hints.RepositoryHints {
-		if strings.TrimSpace(repository) != repository || repository == "" || len(repository) > 512 || strings.ContainsRune(repository, '*') {
+		if strings.TrimSpace(repository) != repository || repository == "" || utf8.RuneCountInString(repository) > 512 || strings.ContainsRune(repository, '*') {
 			return ErrInvalidDeviceAuthorization
 		}
 		if _, duplicate := seen[repository]; duplicate {

@@ -12,7 +12,19 @@ func (r DeviceAuthorizationRequest) Validate() error {
 	if r.SchemaVersion != DeviceAuthorizationRequestSchema {
 		return fmt.Errorf("device authorization request violates v1 bounds")
 	}
-	return validateDeviceAuthorizationHints(r.OrganizationIDHint, r.RepositoryHints)
+	if (r.organizationIDHintPresent && r.OrganizationIDHint == nil) || (r.repositoryHintsPresent && r.RepositoryHints == nil) ||
+		(r.OrganizationIDHint != nil && *r.OrganizationIDHint == "") {
+		return fmt.Errorf("device authorization request violates v1 bounds")
+	}
+	var organizationIDHint string
+	if r.OrganizationIDHint != nil {
+		organizationIDHint = *r.OrganizationIDHint
+	}
+	var repositoryHints []string
+	if r.RepositoryHints != nil {
+		repositoryHints = *r.RepositoryHints
+	}
+	return validateDeviceAuthorizationHints(organizationIDHint, repositoryHints)
 }
 
 func (r DeviceAuthorizationResponse) Validate() error {

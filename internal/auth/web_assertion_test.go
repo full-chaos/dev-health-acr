@@ -147,7 +147,10 @@ func TestWebAssertionVerifier_bindsFreshCredentialIssueAssertionToPreviewBody(t 
 		t.Fatalf("fresh preview assertion was rejected: %v", err)
 	}
 	changed := httptest.NewRequest(http.MethodPost, "/api/v1/oauth/device_approval", bytes.NewReader([]byte(`{"schema_version":"device_approval_preview_request.v1","user_code":"BCDEFGHJ"}`)))
-	changed.Header.Set(WebAssertionHeader, token)
+	changedClaims := webAssertionClaims(now, request, body)
+	changedClaims["permissions"] = []string{WebAssertionPermissionCredentialIssue}
+	changedClaims["jti"] = "assertion_456"
+	changed.Header.Set(WebAssertionHeader, signTestWebAssertion(t, private, "current", changedClaims))
 	if _, err := verifier.Verify(changed); err == nil {
 		t.Fatal("credential issue assertion was accepted for a changed preview body")
 	}
