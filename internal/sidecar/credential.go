@@ -50,10 +50,23 @@ var ErrCredentialMissing = errors.New("ACR API credential is not configured")
 // persistence mechanism.
 var ErrCredentialPersistenceUnsupported = errors.New("acr: credential persistence is unsupported on Windows")
 
+var ErrCredentialPersistenceSourceUnsupported = errors.New("acr: credential source cannot be replaced securely")
+
 type CredentialResult struct {
 	Token  string
 	Source string
 }
+
+type CredentialCleanupError struct {
+	Location string
+	cause    error
+}
+
+func (e *CredentialCleanupError) Error() string {
+	return "remove ACR credential from " + e.Location
+}
+
+func (e *CredentialCleanupError) Unwrap() error { return e.cause }
 
 // LoadCredential resolves the ACR API bearer credential with a fixed
 // precedence: the process environment always wins (agent-client
@@ -205,6 +218,12 @@ func PersistCredential(token string) (CredentialResult, error) {
 			if err := currentKeyringWriter(ctx, service, account, token); err == nil {
 				return CredentialResult{Token: token, Source: "keyring"}, nil
 			}
+			if currentKeyringDeleter == nil {
+				return CredentialResult{}, errors.New("clear ACR keyring credential before file fallback: keyring unavailable")
+			}
+			if err := currentKeyringDeleter(ctx, service, account); err != nil {
+				return CredentialResult{}, fmt.Errorf("clear ACR keyring credential before file fallback: %w", err)
+			}
 		}
 	}
 	path := configuredTokenFilePath()
@@ -215,6 +234,54 @@ func PersistCredential(token string) (CredentialResult, error) {
 		return CredentialResult{}, fmt.Errorf("persist ACR credential fallback file: %w", err)
 	}
 	return CredentialResult{Token: token, Source: "file"}, nil
+}
+
+// ReplaceCredential updates the credential source already selected by the
+// sidecar. Refresh must never silently change sources: doing so can leave an
+// older higher-precedence token active.
+func ReplaceCredential(current CredentialResult, token string) error {
+	if err := CredentialPersistenceSupported(); err != nil {
+		return err
+	}
+	token = strings.TrimSpace(token)
+	if !auth.IsTokenShapeValid(token) {
+		return ErrCredentialShapeInvalid
+	}
+	switch current.Source {
+	case "keyring":
+		keyringAllowed, err := keyringEnabled()
+		if err != nil {
+			return err
+		}
+		if !keyringAllowed {
+			return ErrCredentialPersistenceSourceUnsupported
+		}
+		service, account, configured := credentialKeyringAddress()
+		if !configured || currentKeyringWriter == nil {
+			return ErrCredentialPersistenceSourceUnsupported
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), keyringLookupTimeout)
+		defer cancel()
+		if err := currentKeyringWriter(ctx, service, account, token); err != nil {
+			return fmt.Errorf("replace ACR keyring credential: %w", err)
+		}
+		return nil
+	case "file":
+		path := configuredTokenFilePath()
+		if path == "" {
+			return ErrCredentialPersistenceSourceUnsupported
+		}
+		if err := writeCredentialFile(path, token); err != nil {
+			return fmt.Errorf("replace ACR credential file: %w", err)
+		}
+		return nil
+	default:
+		return ErrCredentialPersistenceSourceUnsupported
+	}
+}
+
+func RestoreCredential(current CredentialResult) error {
+	return ReplaceCredential(current, current.Token)
 }
 
 func DeleteCredential() error {
@@ -230,27 +297,37 @@ func DeleteCredential() error {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("load ACR credential for deletion: %w", err)
+		return &CredentialCleanupError{Location: configuredTokenFilePath(), cause: fmt.Errorf("load ACR credential for deletion: %w", err)}
 	}
-	if credential.Source == "keyring" && keyringAllowed {
+	switch credential.Source {
+	case "environment":
+		return &CredentialCleanupError{Location: TokenEnvironment, cause: ErrCredentialPersistenceSourceUnsupported}
+	case "keyring":
+		if !keyringAllowed {
+			return &CredentialCleanupError{Location: "ACR keyring", cause: ErrCredentialPersistenceSourceUnsupported}
+		}
 		service, account, keyringConfigured := credentialKeyringAddress()
 		if !keyringConfigured || currentKeyringDeleter == nil {
-			return errors.New("delete ACR keyring credential: keyring unavailable")
+			return &CredentialCleanupError{Location: credentialKeyringLocation(service, account), cause: errors.New("delete ACR keyring credential: keyring unavailable")}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), keyringLookupTimeout)
 		defer cancel()
 		if err := currentKeyringDeleter(ctx, service, account); err != nil {
-			return fmt.Errorf("delete ACR keyring credential: %w", err)
+			return &CredentialCleanupError{Location: credentialKeyringLocation(service, account), cause: fmt.Errorf("delete ACR keyring credential: %w", err)}
 		}
-	}
-	path := configuredTokenFilePath()
-	if path == "" {
 		return nil
+	case "file":
+		path := configuredTokenFilePath()
+		if path == "" {
+			return &CredentialCleanupError{Location: TokenFileEnvironment, cause: ErrCredentialPersistenceSourceUnsupported}
+		}
+		if err := removeCredentialFile(path); err != nil {
+			return &CredentialCleanupError{Location: path, cause: fmt.Errorf("remove ACR credential fallback file: %w", err)}
+		}
+		return nil
+	default:
+		return &CredentialCleanupError{Location: "ACR credential", cause: ErrCredentialPersistenceSourceUnsupported}
 	}
-	if err := removeCredentialFile(path); err != nil {
-		return fmt.Errorf("remove ACR credential fallback file: %w", err)
-	}
-	return nil
 }
 
 func CredentialCleanupLocation(credential CredentialResult) string {
@@ -260,6 +337,10 @@ func CredentialCleanupLocation(credential CredentialResult) string {
 		}
 	}
 	return "the configured ACR keyring entry"
+}
+
+func credentialKeyringLocation(service, account string) string {
+	return "keyring service " + service + " account " + account
 }
 
 func credentialKeyringAddress() (string, string, bool) {

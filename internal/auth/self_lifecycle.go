@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -27,6 +28,7 @@ type SelfRotation struct {
 
 type SelfRevocation struct {
 	CredentialID string
+	Credential   contractsv1.ClientCredential
 }
 
 type credentialSnapshot struct {
@@ -109,7 +111,7 @@ func (s *Service) RevokeSelf(ctx context.Context, principal storage.Principal) (
 		}
 		return SelfRevocation{}, err
 	}
-	return SelfRevocation{CredentialID: credential.CredentialID}, nil
+	return SelfRevocation{CredentialID: credential.CredentialID, Credential: credential}, nil
 }
 
 func (s *Service) authenticatedCredential(ctx context.Context, principal storage.Principal) (credentialSnapshot, error) {

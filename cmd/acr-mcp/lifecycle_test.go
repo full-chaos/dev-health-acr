@@ -19,6 +19,7 @@ func TestLoginPersistsCredentialAndDoctorDiscoversIt_when_deviceGrantRedeems(t *
 	t.Setenv(sidecar.APIURLEnvironment, server.URL)
 	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
 	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
 	t.Setenv(sidecar.TokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
 	originalBrowserOpen := lifecycleBrowserOpen
 	lifecycleBrowserOpen = func(string) error { return errors.New("browser unavailable") }
@@ -59,6 +60,7 @@ func TestLoginSendsExactOrganizationAndRepositoryHints_whenProvided(t *testing.T
 	t.Setenv(sidecar.APIURLEnvironment, server.URL)
 	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
 	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
 	t.Setenv(sidecar.TokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
 	originalBrowserOpen := lifecycleBrowserOpen
 	lifecycleBrowserOpen = func(string) error { return errors.New("browser unavailable") }
@@ -83,6 +85,7 @@ func TestLoginAddsFiveSecondsAfterSlowDown_when_pollingDeviceGrant(t *testing.T)
 	t.Setenv(sidecar.APIURLEnvironment, server.URL)
 	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
 	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
 	t.Setenv(sidecar.TokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
 	originalWait := lifecycleWait
 	var waits []time.Duration
@@ -129,6 +132,7 @@ func TestLoginFails_when_deviceAuthorizationIsDeniedOrExpired(t *testing.T) {
 			t.Setenv(sidecar.APIURLEnvironment, server.URL)
 			t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
 			t.Setenv(sidecar.TokenEnvironment, "")
+			t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
 			t.Setenv(sidecar.TokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
 			originalWait := lifecycleWait
 			lifecycleWait = func(context.Context, time.Duration) error { return nil }
@@ -181,12 +185,20 @@ func TestRefreshRevokesSuccessor_when_localPersistenceFails(t *testing.T) {
 	server := newCredentialLifecycleServer(t, original, successor, &revocations, false)
 	t.Setenv(sidecar.APIURLEnvironment, server.URL)
 	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
-	t.Setenv(sidecar.TokenEnvironment, original)
-	originalPersist := lifecyclePersist
-	lifecyclePersist = func(string) (sidecar.CredentialResult, error) {
-		return sidecar.CredentialResult{}, errors.New("persistence failure")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
+	if err := os.WriteFile(os.Getenv(sidecar.TokenFileEnvironment), []byte(original+"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { lifecyclePersist = originalPersist })
+	originalReplace := lifecycleReplace
+	lifecycleReplace = func(sidecar.CredentialResult, string) error {
+		return errors.New("persistence failure")
+	}
+	t.Cleanup(func() { lifecycleReplace = originalReplace })
+	originalRestore := lifecycleRestore
+	lifecycleRestore = func(sidecar.CredentialResult) error { return nil }
+	t.Cleanup(func() { lifecycleRestore = originalRestore })
 
 	// When
 	code := runCLI([]string{"login", "--refresh"})

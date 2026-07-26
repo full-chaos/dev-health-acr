@@ -13,6 +13,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+var credentialDirectorySync = unix.Fsync
+
 func writeCredentialFile(path, token string) error {
 	parent := filepath.Dir(path)
 	if err := ensureCredentialParent(parent); err != nil {
@@ -52,7 +54,7 @@ func writeCredentialFile(path, token string) error {
 	if err := unix.Renameat(directory, temporary, directory, name); err != nil {
 		return fmt.Errorf("replace credential file: %w", err)
 	}
-	if err := unix.Fsync(directory); err != nil {
+	if err := credentialDirectorySync(directory); err != nil {
 		return fmt.Errorf("sync credential directory: %w", err)
 	}
 	return nil
@@ -81,7 +83,7 @@ func removeCredentialFile(path string) error {
 		}
 		return fmt.Errorf("remove credential file: %w", err)
 	}
-	if err := unix.Fsync(directory); err != nil {
+	if err := credentialDirectorySync(directory); err != nil {
 		return fmt.Errorf("sync credential directory: %w", err)
 	}
 	return nil

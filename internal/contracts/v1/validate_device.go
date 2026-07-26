@@ -94,7 +94,17 @@ func (r CredentialRevokeRequest) Validate() error {
 	if r.SchemaVersion != CredentialRevokeRequestSchema {
 		return fmt.Errorf("credential revocation request violates v1 bounds")
 	}
+	if r.RollbackReceipt != nil && !validCredentialRotationReceipt(*r.RollbackReceipt) {
+		return fmt.Errorf("credential revocation request violates v1 bounds")
+	}
 	return nil
+}
+
+func validCredentialRotationReceipt(receipt CredentialRotationReceipt) bool {
+	return receipt.SourceCredentialID != receipt.ReplacementCredentialID &&
+		stringLengthBetween(receipt.SourceCredentialID, 8, 256) &&
+		stringLengthBetween(receipt.ReplacementCredentialID, 8, 256) &&
+		!receipt.RollbackUntil.IsZero()
 }
 
 func (r CredentialRevokeResponse) Validate() error {

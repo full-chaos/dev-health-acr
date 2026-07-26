@@ -20,7 +20,7 @@ func TestCompiledLoginThenBareDoctorDiscoversPersistedCredential(t *testing.T) {
 		t.Fatalf("compile acr-mcp: %v\n%s", err, output)
 	}
 	home := t.TempDir()
-	env := append(os.Environ(), "HOME="+home, sidecar.APIURLEnvironment+"="+server.URL, sidecar.AllowInsecureLoopbackEnvironment+"=true", sidecar.TokenEnvironment+"=", sidecar.TokenFileEnvironment+"="+filepath.Join(home, ".acr", "token"))
+	env := append(os.Environ(), "HOME="+home, sidecar.APIURLEnvironment+"="+server.URL, sidecar.AllowInsecureLoopbackEnvironment+"=true", sidecar.TokenEnvironment+"=", sidecar.TokenKeyringDisabledEnvironment+"=true", sidecar.TokenFileEnvironment+"="+filepath.Join(home, ".acr", "token"))
 
 	// When
 	login := exec.Command(binPath, "login")

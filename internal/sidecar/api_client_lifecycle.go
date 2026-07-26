@@ -140,7 +140,15 @@ func (c *Client) RotateOwnCredential(ctx context.Context) (contractsv1.Credentia
 // credential source. Callers construct a short-lived client for rollback of a
 // newly issued successor credential.
 func (c *Client) RevokeOwnCredential(ctx context.Context) (contractsv1.CredentialRevokeResponse, error) {
-	request := contractsv1.CredentialRevokeRequest{SchemaVersion: contractsv1.CredentialRevokeRequestSchema}
+	return c.revokeOwnCredential(ctx, nil)
+}
+
+func (c *Client) RollbackOwnCredential(ctx context.Context, receipt contractsv1.CredentialRotationReceipt) (contractsv1.CredentialRevokeResponse, error) {
+	return c.revokeOwnCredential(ctx, &receipt)
+}
+
+func (c *Client) revokeOwnCredential(ctx context.Context, receipt *contractsv1.CredentialRotationReceipt) (contractsv1.CredentialRevokeResponse, error) {
+	request := contractsv1.CredentialRevokeRequest{SchemaVersion: contractsv1.CredentialRevokeRequestSchema, RollbackReceipt: receipt}
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return contractsv1.CredentialRevokeResponse{}, fmt.Errorf("encode credential revocation request: %w", err)

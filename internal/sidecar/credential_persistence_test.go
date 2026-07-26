@@ -124,6 +124,7 @@ func TestPersistCredentialFallsBackToRestrictedDefaultFileWhenKeyringWriteFails(
 	stubKeyringWriter(t, func(context.Context, string, string, string) error {
 		return errors.New("keyring unavailable")
 	})
+	stubKeyringDeleter(t, func(context.Context, string, string) error { return nil })
 
 	// When
 	result, err := PersistCredential(fileToken)
@@ -196,6 +197,7 @@ func TestPersistCredentialRejectsSymlinkAtDefaultTokenPath(t *testing.T) {
 	stubKeyringWriter(t, func(context.Context, string, string, string) error {
 		return errors.New("keyring unavailable")
 	})
+	stubKeyringDeleter(t, func(context.Context, string, string) error { return nil })
 
 	// When
 	_, err := PersistCredential(fileToken)
@@ -232,6 +234,7 @@ func TestPersistCredentialAtomicallyReplacesDefaultFallbackFile(t *testing.T) {
 	stubKeyringWriter(t, func(context.Context, string, string, string) error {
 		return errors.New("keyring unavailable")
 	})
+	stubKeyringDeleter(t, func(context.Context, string, string) error { return nil })
 	newToken := validTestToken(7)
 
 	// When

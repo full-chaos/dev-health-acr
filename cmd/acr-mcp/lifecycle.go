@@ -18,6 +18,8 @@ var (
 	lifecycleBrowserOpen = openVerificationURI
 	lifecycleWait        = waitForDevicePoll
 	lifecyclePersist     = sidecar.PersistCredential
+	lifecycleReplace     = sidecar.ReplaceCredential
+	lifecycleRestore     = sidecar.RestoreCredential
 	lifecycleDelete      = sidecar.DeleteCredential
 )
 
@@ -129,23 +131,33 @@ func runCredentialRefresh() int {
 	if code != 0 {
 		return code
 	}
+	if credential.Source == "environment" {
+		fmt.Fprintln(os.Stderr, "login: an environment credential cannot be refreshed persistently; remove ACR_API_TOKEN and use a secure local credential")
+		return lifecycleExitFailure
+	}
 	response, err := client.RotateOwnCredential(context.Background())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "login: credential refresh failed")
 		return lifecycleExitFailure
 	}
-	if _, err := lifecyclePersist(response.AccessToken); err == nil {
-		fmt.Fprintln(os.Stdout, "credential refreshed successfully")
-		return 0
+	replacementErr := lifecycleReplace(credential, response.AccessToken)
+	if replacementErr == nil {
+		persisted, loadErr := sidecar.LoadCredential()
+		if loadErr == nil && persisted.Token == response.AccessToken {
+			fmt.Fprintln(os.Stdout, "credential refreshed successfully")
+			return 0
+		}
 	}
 	rollbackClient, err := sidecar.NewClient(cfg, func() (sidecar.CredentialResult, error) {
 		return sidecar.CredentialResult{Token: response.AccessToken, Source: credential.Source}, nil
 	})
+	rollbackErr := err
 	if err == nil {
-		_, err = rollbackClient.RevokeOwnCredential(context.Background())
+		_, rollbackErr = rollbackClient.RollbackOwnCredential(context.Background(), response.Receipt)
 	}
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "login: refreshed credential could not be stored and automatic rollback failed; use a secure recovery session to revoke the successor")
+	restoreErr := lifecycleRestore(credential)
+	if rollbackErr != nil || restoreErr != nil {
+		fmt.Fprintln(os.Stderr, "login: refreshed credential could not be stored safely; use a secure recovery session to review the credential lifecycle")
 		return lifecycleExitFailure
 	}
 	fmt.Fprintln(os.Stderr, "login: refreshed credential could not be stored; the successor was revoked and the original credential remains active")
@@ -162,7 +174,7 @@ func runLogoutCommand(args []string) int {
 		fmt.Fprintln(os.Stderr, logoutUsageLine)
 		return 2
 	}
-	_, credential, client, code := loadCredentialClient("logout")
+	_, _, client, code := loadCredentialClient("logout")
 	if code != 0 {
 		return code
 	}
@@ -171,7 +183,12 @@ func runLogoutCommand(args []string) int {
 		return lifecycleExitFailure
 	}
 	if err := lifecycleDelete(); err != nil {
-		fmt.Fprintln(os.Stderr, "logout: remote credential was revoked, but local cleanup failed; remove the credential at "+sidecar.CredentialCleanupLocation(credential))
+		var cleanupErr *sidecar.CredentialCleanupError
+		if errors.As(err, &cleanupErr) {
+			fmt.Fprintln(os.Stderr, "logout: remote credential was revoked, but local cleanup failed; remove the credential at "+cleanupErr.Location)
+		} else {
+			fmt.Fprintln(os.Stderr, "logout: remote credential was revoked, but local cleanup failed")
+		}
 		return lifecycleExitFailure
 	}
 	fmt.Fprintln(os.Stdout, "logout successful")

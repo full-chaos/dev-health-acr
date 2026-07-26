@@ -158,7 +158,8 @@ type CredentialRotateResponse struct {
 }
 
 type CredentialRevokeRequest struct {
-	SchemaVersion string `json:"schema_version"`
+	SchemaVersion   string                     `json:"schema_version"`
+	RollbackReceipt *CredentialRotationReceipt `json:"rollback_receipt,omitempty"`
 }
 
 type CredentialRevokeResponse struct {
