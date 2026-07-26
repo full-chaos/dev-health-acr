@@ -23,7 +23,9 @@ var ErrUntrustedExecutable = errors.New("sidecar: executable could not be resolv
 var ErrExecutableUnavailable = errors.New("sidecar: trusted executable is unavailable")
 
 // executableResolver resolves the name of an external tool to a trusted
-// absolute path, or returns ErrUntrustedExecutable when it cannot.
+// absolute path, or returns ErrUntrustedExecutable (a tampered or
+// misconfigured candidate) or ErrExecutableUnavailable (genuinely absent)
+// when it cannot.
 type executableResolver func(name string) (string, error)
 
 // currentExecutableResolver is the active resolver seam every external-tool
@@ -91,9 +93,12 @@ func trustedExecutablePrefixes() []string {
 // access (verifyTrustedExecutableOwnership -- unix-only, see its own doc
 // comment and the non-unix stub for why a platform without that check can
 // never reach it, since trustedExecutableSearchDirs is empty there); and
-// have at least one executable bit set. The first candidate satisfying
-// every check wins; a candidate failing one is skipped, not treated as a
-// hard error, so a later trusted directory still gets a chance.
+// have at least one executable bit set. A missing candidate (no file at
+// dir/name) is skipped so a later trusted directory still gets a chance;
+// a candidate that exists but fails any other check (untrusted target,
+// wrong type, ownership/permission) aborts resolution immediately with a
+// hard error instead of silently trying the next directory, since that
+// shape indicates tampering or misconfiguration, not mere absence.
 func resolveTrustedExecutable(name string) (string, error) {
 	if name == "" || strings.ContainsRune(name, filepath.Separator) {
 		return "", fmt.Errorf("%w: %s", ErrUntrustedExecutable, name)
