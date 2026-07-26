@@ -187,6 +187,53 @@ func TestVerifyCredentialRejectsWrongSource_whenTokensMatch(t *testing.T) {
 	}
 }
 
+func TestPurgeCredentialMaterialAttemptsAllConfiguredLocations_whenOneFails(t *testing.T) {
+	// Given
+	resolvedPath := filepath.Join(t.TempDir(), "resolved-token")
+	otherPath := filepath.Join(t.TempDir(), "other-token")
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(TokenFileEnvironment, resolvedPath)
+	if err := os.WriteFile(resolvedPath, []byte(fileToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current, err := LoadCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(otherPath, []byte(keyringToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(TokenFileEnvironment, otherPath)
+	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
+	t.Setenv(TokenKeyringAccountEnvironment, "agent-a")
+	deleteCalls := 0
+	stubKeyringDeleter(t, func(context.Context, string, string) error {
+		deleteCalls++
+		return errors.New("keyring delete failed")
+	})
+
+	// When
+	err = PurgeCredentialMaterial(current)
+
+	// Then
+	var purgeErr *CredentialPurgeError
+	if !errors.As(err, &purgeErr) || len(purgeErr.Failures) != 1 {
+		t.Fatalf("purge error = %v, want one typed keyring failure", err)
+	}
+	if purgeErr.Failures[0].Location != credentialKeyringLocation("acr-sidecar-test", "agent-a") {
+		t.Fatalf("cleanup location = %q", purgeErr.Failures[0].Location)
+	}
+	if deleteCalls != 1 {
+		t.Fatalf("keyring delete calls = %d, want 1", deleteCalls)
+	}
+	for _, path := range []string{resolvedPath, otherPath} {
+		if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("credential file remains after independent cleanup: %v", statErr)
+		}
+	}
+}
+
 func TestReplaceCredential_updatesOnlyExistingFileSource(t *testing.T) {
 	// Given
 	home := t.TempDir()

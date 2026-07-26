@@ -186,7 +186,7 @@ func runLogoutCommand(args []string) int {
 		fmt.Fprintln(os.Stderr, logoutUsageLine)
 		return 2
 	}
-	_, _, client, code := loadCredentialClient("logout")
+	_, credential, client, code := loadCredentialClient("logout")
 	if code != 0 {
 		return code
 	}
@@ -194,13 +194,8 @@ func runLogoutCommand(args []string) int {
 		fmt.Fprintln(os.Stderr, "logout: remote credential revocation failed; local credential was retained")
 		return lifecycleExitFailure
 	}
-	if err := lifecycleDelete(); err != nil {
-		var cleanupErr *sidecar.CredentialCleanupError
-		if errors.As(err, &cleanupErr) {
-			fmt.Fprintln(os.Stderr, "logout: remote credential was revoked, but local cleanup failed; remove the credential at "+cleanupErr.Location)
-		} else {
-			fmt.Fprintln(os.Stderr, "logout: remote credential was revoked, but local cleanup failed")
-		}
+	if err := sidecar.PurgeCredentialMaterial(credential); err != nil {
+		fmt.Fprintln(os.Stderr, "logout: remote credential was revoked, but local cleanup failed; "+err.Error())
 		return lifecycleExitFailure
 	}
 	fmt.Fprintln(os.Stdout, "logout successful")
