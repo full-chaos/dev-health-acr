@@ -67,13 +67,13 @@ func runDeviceLogin(parsed loginArgs) int {
 		return lifecycleExitFailure
 	}
 	for {
-		if code := runDeviceLoginAttempt(context.Background(), client, parsed); code != 2 {
+		if code := runDeviceLoginAttempt(context.Background(), client, cfg, parsed); code != 2 {
 			return code
 		}
 	}
 }
 
-func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient, parsed loginArgs) int {
+func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient, cfg sidecar.Config, parsed loginArgs) int {
 	var organizationIDHint *string
 	if parsed.org != "" {
 		organizationIDHint = &parsed.org
@@ -97,7 +97,18 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 		}
 		response, err := client.PollDeviceToken(ctx, authorization.DeviceCode)
 		if err == nil {
-			if _, err := lifecyclePersist(response.AccessToken); err != nil {
+			persisted, persistErr := lifecyclePersist(response.AccessToken)
+			if persistErr == nil {
+				persistErr = sidecar.VerifyCredential(persisted, response.AccessToken)
+			}
+			if persistErr != nil {
+				if !revokeIssuedCredential(ctx, cfg, response.AccessToken) {
+					fmt.Fprintln(os.Stderr, "login: issued credential could not be stored safely and revocation requires operator action")
+					return lifecycleExitFailure
+				}
+				if persisted.Token != "" {
+					_ = sidecar.PurgeCredentialMaterial(persisted)
+				}
 				fmt.Fprintln(os.Stderr, "login: credential was issued but could not be stored securely")
 				return lifecycleExitFailure
 			}
@@ -128,6 +139,17 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 		fmt.Fprintln(os.Stderr, "login: device authorization could not be completed")
 		return lifecycleExitFailure
 	}
+}
+
+func revokeIssuedCredential(ctx context.Context, cfg sidecar.Config, token string) bool {
+	client, err := sidecar.NewClient(cfg, func() (sidecar.CredentialResult, error) {
+		return sidecar.CredentialResult{Token: token, Source: "issued"}, nil
+	})
+	if err != nil {
+		return false
+	}
+	_, err = client.RevokeOwnCredential(ctx)
+	return err == nil
 }
 
 func runCredentialRefresh() int {
