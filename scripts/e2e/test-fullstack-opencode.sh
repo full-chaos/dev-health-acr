@@ -7,6 +7,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 script="$root/scripts/e2e/fullstack-opencode.sh"
+runtime_fixture_helper="$root/scripts/e2e/opencode-runtime-fixture.sh"
 workflow="$root/.github/workflows/fullstack-acceptance.yml"
 driver="$root/scripts/e2e/compose.sh"
 compose_overlay="$root/deploy/compose/acr.compose.yml"
@@ -16,7 +17,7 @@ prompt="$root/tests/fullstack/opencode/task-prompt.md"
 
 fail() { printf '[fullstack-contract] FAIL: %s\n' "$*" >&2; exit 1; }
 
-bash -n "$script"
+bash -n "$script" "$runtime_fixture_helper"
 command -v jq >/dev/null || fail 'jq is required'
 
 # --- the shared driver still exposes the seam this suite depends on -----------------------
@@ -124,7 +125,7 @@ grep -Fq 'npm_config_offline' "$script" || fail 'the client run must prefer the 
 # provider the config does not define fails inside OpenCode's own server with an opaque
 # "Unexpected server error" and zero model requests, so the driver must derive the id from
 # the rendered config instead of repeating it.
-grep -Fq -- '--model "$OPENCODE_MODEL_ID"' "$script" \
+grep -Fq 'opencode_task_argv "$task_id" "$CLIENT_HOME/workspace" "$OPENCODE_MODEL_ID"' "$script" \
   || fail 'the client model id must be derived from the rendered config, not hardcoded'
 jq -e '
   (.model | split("/")) as $parts
@@ -137,7 +138,7 @@ for variable in HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME
   grep -Fq "${variable}=\"\$CLIENT_HOME" "$script" || fail "client sandbox does not redirect ${variable}"
 done
 grep -Fq 'env -i' "$script" || fail 'the OpenCode process must start from a cleared environment'
-grep -Fq -- '--pure' "$script" || fail 'OpenCode must run without external plugins'
+grep -Fq -- '--pure' "$runtime_fixture_helper" || fail 'OpenCode must run without external plugins'
 grep -Fq 'OPENCODE_DISABLE_PROJECT_CONFIG=true' "$script" || fail 'project config discovery must be disabled'
 grep -Fq 'OPENCODE_DISABLE_MODELS_FETCH=true' "$script" || fail 'model catalogue fetching must be disabled'
 grep -Fq 'assert_pinned_opencode' "$script" || fail 'the pinned OpenCode version is not enforced'
@@ -155,6 +156,24 @@ grep -Fq 'web_ref:$web_ref' "$script" \
 # deadline a CI job hangs until the runner's own 6-hour limit.
 grep -Fq 'timeout --preserve-status' "$script" || fail 'opencode run must be wrapped in an external timeout'
 grep -Fq 'hung rather than failing' "$script" || fail 'a hung client must be its own failure class'
+grep -Fq 'OPENCODE_RUNTIME_FIXTURE' "$script" || fail 'runtime fixture input is missing'
+grep -Fq 'stage_opencode_runtime_fixture' "$script" || fail 'runtime fixture staging is not wired into the driver'
+fixture_stage_line="$(grep -n "OPENCODE_RUNTIME_FIXTURE_SHA256=\"\$(stage_opencode_runtime_fixture" "$script" | cut -d: -f1)"
+run_manifest_line="$(grep -n '^write_run_manifest$' "$script" | cut -d: -f1)"
+[[ -n "$fixture_stage_line" && -n "$run_manifest_line" && "$fixture_stage_line" -lt "$run_manifest_line" ]] \
+  || fail 'runtime fixture must stage before its provenance receipt is written'
+grep -Fq 'must be an absolute readable directory' "$runtime_fixture_helper" || fail 'runtime fixture must fail closed for relative or unreadable paths'
+grep -Fq 'tree hash verification failed' "$runtime_fixture_helper" || fail 'runtime fixture integrity verification is missing'
+grep -Fq 'contains a symlink' "$runtime_fixture_helper" || fail 'runtime fixture symlink guard is missing'
+grep -Fq 'contains an unsupported entry' "$runtime_fixture_helper" || fail 'runtime fixture special-file guard is missing'
+grep -Fq 'manifest does not exactly cover the runtime tree' "$runtime_fixture_helper" || fail 'runtime fixture manifest coverage must be exact'
+grep -Fq 'python3 -c' "$runtime_fixture_helper" || fail 'runtime fixture canonicalization must not depend on realpath'
+grep -Fq 'cp -R "$runtime/."' "$runtime_fixture_helper" || fail 'runtime fixture must stage node_modules before OpenCode runs'
+grep -Fq 'validate_opencode_runtime_fixture_tree "$stage"' "$runtime_fixture_helper" || fail 'private runtime stage must be verified before publish'
+grep -Fq 'opencode_runtime_fixture_sha256' "$script" || fail 'run evidence must record fixture provenance without its path'
+grep -Fq -- '--argjson runtime_fixture_sha256' "$script" || fail 'no-fixture provenance must be JSON null rather than an empty string'
+grep -Fq -- '--title "acr-fullstack-${task_id}"' "$runtime_fixture_helper" || fail 'every proof run must use an explicit deterministic title'
+grep -Fq 'cleanup_opencode_runtime_fixture "$CLIENT_HOME"' "$script" || fail 'staged runtime payload must be scrubbed even in debug retention'
 # The service ceiling (internal/config defaultMaxItems=30) is stricter than the contract's
 # 1..50 bound, so a request the JSON Schema accepts can still be rejected as invalid_request.
 grep -Eq 'max_items:(30|[12][0-9]|[1-9])\b' "$script" \

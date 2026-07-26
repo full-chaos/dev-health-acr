@@ -52,6 +52,7 @@ canonical-receipts:
 
 fullstack-contract:
 	bash scripts/e2e/test-fullstack-opencode.sh
+	bash scripts/e2e/test-opencode-runtime-fixture.sh
 
 fullstack-opencode-e2e:
 	bash scripts/e2e/fullstack-opencode.sh \

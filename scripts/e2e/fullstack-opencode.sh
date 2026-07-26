@@ -14,6 +14,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/compose.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/opencode-runtime-fixture.sh"
 
 # allow: SIZE_OK — one trap owns the stack, the client sandbox, and the artifact lifecycle.
 
@@ -57,6 +59,8 @@ OPENCODE_OBSERVED_VERSION=""
 # openai-compatible provider package. CI pre-warms it into the npm cache; see
 # docs/fullstack-acceptance.md.
 PROVIDER_NPM_SPEC="${PROVIDER_NPM_SPEC:-@ai-sdk/openai-compatible@3.0.14}"
+OPENCODE_RUNTIME_FIXTURE="${OPENCODE_RUNTIME_FIXTURE:-}"
+OPENCODE_RUNTIME_FIXTURE_SHA256=""
 # OpenCode installs the provider adapter, and its own ~83MB @opencode-ai/{plugin,sdk}
 # bootstrap, on first use. CI pre-warms both and then sets PROVIDER_NPM_OFFLINE=true so the
 # graded run cannot reach the registry; locally the default stays false so a cold cache works.
@@ -151,6 +155,7 @@ fullstack_cleanup() {
   stop_device_login_service
   stop_model_service
   assert_host_config_untouched || status=1
+  cleanup_opencode_runtime_fixture "$CLIENT_HOME" || status=1
   if [[ -n "$CLIENT_HOME" && -d "$CLIENT_HOME" && "${E2E_DEBUG:-0}" != '1' ]]; then
     rm -rf "$CLIENT_HOME" || status=1
   fi
@@ -175,8 +180,10 @@ prepare_artifacts() {
   ARTIFACTS="$REPO_ROOT/.tmp/fullstack/$RUN_ID"
   mkdir -p "$ARTIFACTS/expanded-evidence" "$ARTIFACTS/logs" "$ARTIFACTS/playwright"
   CLIENT_HOME="$ARTIFACTS/client-home"
-  mkdir -p "$CLIENT_HOME"
+  mkdir -p "$CLIENT_HOME/config/opencode"
   chmod 700 "$CLIENT_HOME"
+  OPENCODE_RUNTIME_FIXTURE_SHA256="$(stage_opencode_runtime_fixture "$OPENCODE_RUNTIME_FIXTURE" "$CLIENT_HOME/config/opencode")" \
+    || fs_die 'OPENCODE_RUNTIME_FIXTURE staging failed'
 }
 
 # ---------------------------------------------------------------------------
@@ -436,7 +443,9 @@ record_service_readiness() {
 # ---------------------------------------------------------------------------
 
 write_run_manifest() {
-  local web_ref="${E2E_WEB_REF:-}"
+  local web_ref="${E2E_WEB_REF:-}" runtime_fixture_receipt
+  runtime_fixture_receipt="$(opencode_runtime_fixture_receipt_json "$OPENCODE_RUNTIME_FIXTURE_SHA256")" \
+    || fs_die 'OPENCODE_RUNTIME_FIXTURE receipt is invalid'
   jq -n \
     --arg run_id "$RUN_ID" \
     --arg project "$PROJECT" \
@@ -444,13 +453,14 @@ write_run_manifest() {
     --arg model "$MODEL_BACKEND" \
     --arg web "$WEB_CHECK" \
     --arg web_ref "$web_ref" \
+    --argjson runtime_fixture_sha256 "$runtime_fixture_receipt" \
     --arg opencode_version "$OPENCODE_OBSERVED_VERSION" \
     --arg opencode_pinned "$OPENCODE_PINNED_VERSION" \
     --arg acr_image "$IMAGE" \
     --arg repo_sha "$(git -C "$REPO_ROOT" rev-parse HEAD)" \
     --arg fixture_version "$(jq -r '.fixture_version' "$FIXTURE_ROOT/fixture-manifest.json")" \
     --arg repository "$FULLSTACK_REPO_SLUG" \
-    '{schema_version:"fullstack_run_manifest.v1",run_id:$run_id,project:$project,scenario:$scenario,model_backend:$model,web_check:$web,web_ref:$web_ref,opencode:{observed_version:$opencode_version,pinned_version:$opencode_pinned},acr_image:$acr_image,repository_sha:$repo_sha,fixture_version:$fixture_version,repository:$repository,writeback:"disabled"}' \
+    '{schema_version:"fullstack_run_manifest.v1",run_id:$run_id,project:$project,scenario:$scenario,model_backend:$model,web_check:$web,web_ref:$web_ref,opencode_runtime_fixture_sha256:$runtime_fixture_sha256,opencode:{observed_version:$opencode_version,pinned_version:$opencode_pinned},acr_image:$acr_image,repository_sha:$repo_sha,fixture_version:$fixture_version,repository:$repository,writeback:"disabled"}' \
     > "$ARTIFACTS/run.json"
 }
 
@@ -488,7 +498,6 @@ render_client_sandbox() {
   [[ -f "$template" ]] || fs_die 'OpenCode config template is missing'
   mkdir -p "$CLIENT_HOME/config/opencode" "$CLIENT_HOME/data" "$CLIENT_HOME/cache" "$CLIENT_HOME/state" "$CLIENT_HOME/workspace"
   chmod 700 "$CLIENT_HOME/config" "$CLIENT_HOME/data" "$CLIENT_HOME/cache" "$CLIENT_HOME/state"
-
   # A coherent Git workspace keeps the sidecar's auto-discovery from disagreeing with the
   # explicit scope every task sends.
   # Re-rendered before every task (the model port changes), so this must be idempotent:
@@ -610,6 +619,7 @@ start_model_service() {
 
 run_opencode_task() {
   local task_id="$1" prompt_file="$2" status=0
+  local opencode_args=()
   # Declared separately, not on the `local` line above: `local` expands all of its arguments
   # before assigning any of them, so `${task_id}` there resolves to the CALLER's variable of
   # the same name. Every honest task called this with the caller's own task_id, so the paths
@@ -617,6 +627,9 @@ run_opencode_task() {
   # silently overwrote the honest task's event stream, which the assertions then graded.
   local events="$ARTIFACTS/opencode-events-${task_id}.jsonl"
   set +e
+  while IFS= read -r -d '' argument; do opencode_args+=("$argument"); done < <(
+    opencode_task_argv "$task_id" "$CLIENT_HOME/workspace" "$OPENCODE_MODEL_ID" "${OPENCODE_LOG_LEVEL:-INFO}" "$(<"$prompt_file")"
+  )
   timeout --preserve-status --signal=TERM --kill-after=15s "${OPENCODE_TIMEOUT:-300}" \
   env -i \
     PATH="$PATH" \
@@ -638,14 +651,7 @@ run_opencode_task() {
     npm_config_offline="${PROVIDER_NPM_OFFLINE:-false}" \
     npm_config_fund=false \
     npm_config_audit=false \
-    "$OPENCODE_BIN" run \
-      --pure \
-      --format json \
-      --print-logs \
-      --log-level "${OPENCODE_LOG_LEVEL:-INFO}" \
-      --dir "$CLIENT_HOME/workspace" \
-      --model "$OPENCODE_MODEL_ID" \
-      "$(<"$prompt_file")" \
+    "$OPENCODE_BIN" "${opencode_args[@]}" \
       >"$events" 2>"$ARTIFACTS/logs/opencode-${task_id}.stderr"
   status=$?
   set -e

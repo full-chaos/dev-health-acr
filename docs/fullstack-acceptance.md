@@ -370,6 +370,13 @@ the revision the browser agreement actually exercised.
 `make verify`, so a change that weakens an invariant fails an ordinary PR without needing
 Docker, a network, or OpenCode.
 
+For a hermetic local proof, `OPENCODE_RUNTIME_FIXTURE` may name an absolute, readable
+declared runtime fixture containing `config/opencode/{package.json,package-lock.json,node_modules}`
+and `tree-hashes.sha256`. The driver requires normalized manifest entries that exactly cover every
+regular runtime file, verifies source bytes, copies into a private stage, then verifies staged bytes
+before publishing only that runtime into its fresh client root. It rejects special nodes and all
+symlinks; evidence records only the fixture manifest hash, never its host path or package payload.
+
 ### 8.1 The self-test
 
 A suite that only ever sees a well-behaved scripted model proves nothing about its own
