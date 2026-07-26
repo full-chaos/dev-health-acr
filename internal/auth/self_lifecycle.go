@@ -57,19 +57,16 @@ func (s *Service) RotateSelf(ctx context.Context, principal storage.Principal) (
 		}
 		return SelfRotation{}, err
 	}
-	persistedSource, err := s.store.GetByID(ctx, principal.OrgID, source.CredentialID)
-	if err != nil {
-		return SelfRotation{}, fmt.Errorf("load persisted self-rotation source: %w", err)
-	}
-	if persistedSource.ExpiresAt == nil {
-		return SelfRotation{}, ErrInvalidCredential
+	rollbackUntil := issued.Credential.CreatedAt.Add(storage.MaximumCredentialOverlap)
+	if source.ExpiresAt != nil && source.ExpiresAt.Before(rollbackUntil) {
+		rollbackUntil = *source.ExpiresAt
 	}
 	return SelfRotation{
 		Issued: issued,
 		Receipt: SelfRotationReceipt{
 			SourceCredentialID:    principal.CredentialID,
 			SuccessorCredentialID: issued.Credential.CredentialID,
-			RollbackUntil:         *persistedSource.ExpiresAt,
+			RollbackUntil:         rollbackUntil,
 		},
 	}, nil
 }

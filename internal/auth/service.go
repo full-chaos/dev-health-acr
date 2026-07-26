@@ -20,11 +20,20 @@ type ServiceOptions struct {
 }
 
 type Service struct {
-	store                *storage.CredentialLifecycle
+	store                credentialLifecycle
 	now                  func() time.Time
 	generateToken        func() (string, error)
 	generateCredentialID func() (string, error)
 	maximumOverlap       time.Duration
+}
+
+type credentialLifecycle interface {
+	Validate() error
+	CreateCredential(context.Context, storage.CredentialCreateInput) (contractsv1.ClientCredential, error)
+	RotateCredential(context.Context, storage.CredentialRotationInput) (contractsv1.ClientCredential, error)
+	RevokeCredential(context.Context, storage.CredentialRevocationInput) (contractsv1.ClientCredential, error)
+	List(context.Context, string) ([]contractsv1.ClientCredential, error)
+	GetByID(context.Context, string, string) (contractsv1.ClientCredential, error)
 }
 
 type PreparedCredential struct {
@@ -35,6 +44,10 @@ type PreparedCredential struct {
 const preparedCredentialRedacted = "auth.PreparedCredential{redacted}"
 
 func NewService(store *storage.CredentialLifecycle, options ServiceOptions) (*Service, error) {
+	return newService(store, options)
+}
+
+func newService(store credentialLifecycle, options ServiceOptions) (*Service, error) {
 	if store == nil {
 		return nil, storage.ErrInvalidCredentialLifecycle
 	}

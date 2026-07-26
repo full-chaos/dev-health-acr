@@ -85,6 +85,26 @@ func TestService_RotateSelf_returnsPersistedSourceExpiryWhenClockAdvances(t *tes
 	require.Equal(t, persistedNow.Add(storage.MaximumCredentialOverlap), rotation.Receipt.RollbackUntil)
 }
 
+func TestService_RotateSelf_returnsReceiptWhenPostRotationLookupWouldFail(t *testing.T) {
+	// Given
+	now := time.Date(2026, 7, 25, 14, 0, 0, 0, time.UTC)
+	audit := memory.NewAuditStore()
+	base := newMemoryCredentialStoreAt(t, now, audit)
+	sourceService := newTestService(t, base, audit, now)
+	source := createSelfCredential(t, sourceService, []string{"owner/repo"})
+	failingStore := &postRotateLookupFailureStore{CredentialLifecycle: base}
+	service, err := newService(failingStore, ServiceOptions{Now: func() time.Time { return now }})
+	require.NoError(t, err)
+
+	// When
+	rotation, err := service.RotateSelf(context.Background(), selfPrincipal(source.Credential))
+
+	// Then
+	require.NoError(t, err)
+	require.True(t, IsTokenShapeValid(rotation.Issued.Token))
+	require.Equal(t, now.Add(storage.MaximumCredentialOverlap), rotation.Receipt.RollbackUntil)
+}
+
 func TestService_RotateSelf_rejectsUntrustedPrincipalWithoutMutation(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -254,4 +274,17 @@ func selfPrincipal(credential contractsv1.ClientCredential) storage.Principal {
 		RepositoryScopes: append([]string(nil), credential.RepositoryScopes...),
 		Permissions:      append([]string(nil), credential.Scopes...),
 	}
+}
+
+type postRotateLookupFailureStore struct {
+	*storage.CredentialLifecycle
+	getByIDCalls int
+}
+
+func (s *postRotateLookupFailureStore) GetByID(ctx context.Context, orgID, credentialID string) (contractsv1.ClientCredential, error) {
+	s.getByIDCalls++
+	if s.getByIDCalls > 2 {
+		return contractsv1.ClientCredential{}, storage.ErrUnavailable
+	}
+	return s.CredentialLifecycle.GetByID(ctx, orgID, credentialID)
 }
