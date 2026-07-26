@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: d39847189520fa54152bc48be66f69dde8a2301984b1765ada8affbae62e5f66
+# canonical-content-sha256: 7a2a6964366d14f11ad4cc2c314bb0ce915509021ac35a554d4127c0c364ff28
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -265,6 +265,9 @@ paths:
           "$ref": "#/components/responses/Error"
         "503":
           "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
   "/api/v1/auth/credentials/self/rotate":
     post:
       operationId: "rotateOwnCredential"
@@ -289,6 +292,9 @@ paths:
           "$ref": "#/components/responses/Error"
         "503":
           "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
   "/api/v1/oauth/device_approval":
     post:
       operationId: "approveDeviceAuthorization"

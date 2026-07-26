@@ -29,11 +29,16 @@ var exampleSchemaPairs = map[string]string{
 	"mcp_record_episode_response.v1.json":         "mcp_record_episode_response.v1.schema.json",
 	"evaluation_demo.v1.json":                     "evaluation_demo.v1.schema.json",
 	"device_authorization_request.v1.json":        "device_authorization_request.v1.schema.json",
+	"device_authorization_response.v1.json":       "device_authorization_response.v1.schema.json",
+	"device_token_request.v1.json":                "device_token_request.v1.schema.json",
+	"device_token_response.v1.json":               "device_token_response.v1.schema.json",
+	"device_approval_request.v1.json":             "device_approval_request.v1.schema.json",
 	"device_approval_response.v1.json":            "device_approval_response.v1.schema.json",
 	"credential_revoke_request.v1.json":           "credential_revoke_request.v1.schema.json",
 	"credential_revoke_response.v1.json":          "credential_revoke_response.v1.schema.json",
 	"oauth_device_error.v1.json":                  "oauth_device_error.v1.schema.json",
 	"credential_rotate_request.v1.json":           "credential_rotate_request.v1.schema.json",
+	"credential_rotate_response.v1.json":          "credential_rotate_response.v1.schema.json",
 }
 
 // Options configures repository contract validation.

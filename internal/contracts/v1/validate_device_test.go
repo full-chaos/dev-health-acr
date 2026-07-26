@@ -3,6 +3,8 @@ package v1
 import (
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 )
 
 func TestDeviceTokenRequestValidate_rejects_non_RFC_grant_type(t *testing.T) {
@@ -39,9 +41,18 @@ func TestDeviceTokenResponseValidate_accepts_fixed_30_day_credential(t *testing.
 }
 
 func TestDeviceApprovalRequestValidate_rejects_wildcard_scope(t *testing.T) {
-	request := DeviceApprovalRequest{SchemaVersion: DeviceApprovalRequestSchema, UserCode: "ABCDEFGH", RepositoryScopes: []string{"full-chaos/*"}}
-	if err := request.Validate(); err == nil {
-		t.Fatal("device approval validator accepted a wildcard repository grant")
+	tests := []string{"*/repo", "*/dev-health", "org/re*po", "o*rg/repo", "full-chaos/*"}
+	for _, scope := range tests {
+		t.Run(scope, func(t *testing.T) {
+			request := DeviceApprovalRequest{SchemaVersion: DeviceApprovalRequestSchema, UserCode: "ABCDEFGH", RepositoryScopes: []string{scope}}
+			if err := request.Validate(); err == nil {
+				t.Fatal("device approval validator accepted a wildcard repository grant")
+			}
+			encoded := []byte(`{"schema_version":"device_approval_request.v1","user_code":"ABCDEFGH","repository_scopes":["` + scope + `"]}`)
+			if err := contractcheck.ValidateSerialized("", "device_approval_request.v1.schema.json", encoded); err == nil {
+				t.Fatal("schema accepted a wildcard repository grant")
+			}
+		})
 	}
 }
 
@@ -95,4 +106,30 @@ func TestDeviceContractValidators_match_schema(t *testing.T) {
 		t.Fatalf("revocation validator rejected schema-valid value: %v", err)
 	}
 	assertSchemaParity(t, "credential_revoke_response.v1.schema.json", revocation)
+}
+
+func TestDeviceContractFixtures_validate(t *testing.T) {
+	tests := []struct {
+		name  string
+		value interface{ Validate() error }
+	}{
+		{name: "device authorization request", value: loadFixture[DeviceAuthorizationRequest](t, "device_authorization_request.v1.json")},
+		{name: "device authorization response", value: loadFixture[DeviceAuthorizationResponse](t, "device_authorization_response.v1.json")},
+		{name: "device token request", value: loadFixture[DeviceTokenRequest](t, "device_token_request.v1.json")},
+		{name: "device token response", value: loadFixture[DeviceTokenResponse](t, "device_token_response.v1.json")},
+		{name: "device approval request", value: loadFixture[DeviceApprovalRequest](t, "device_approval_request.v1.json")},
+		{name: "device approval response", value: loadFixture[DeviceApprovalResponse](t, "device_approval_response.v1.json")},
+		{name: "credential rotate request", value: loadFixture[CredentialRotateRequest](t, "credential_rotate_request.v1.json")},
+		{name: "credential rotate response", value: loadFixture[CredentialRotateResponse](t, "credential_rotate_response.v1.json")},
+		{name: "credential revoke request", value: loadFixture[CredentialRevokeRequest](t, "credential_revoke_request.v1.json")},
+		{name: "credential revoke response", value: loadFixture[CredentialRevokeResponse](t, "credential_revoke_response.v1.json")},
+		{name: "OAuth device error", value: loadFixture[OAuthDeviceErrorResponse](t, "oauth_device_error.v1.json")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.value.Validate(); err != nil {
+				t.Fatalf("fixture violates semantic contract: %v", err)
+			}
+		})
+	}
 }

@@ -1,0 +1,5 @@
+{
+  "schema_version": "device_token_request.v1",
+  "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+  "device_code": "[REDACTED_DEVICE_CODE_PLACEHOLDER]"
+}
