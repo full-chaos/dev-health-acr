@@ -19,7 +19,6 @@ var (
 	lifecycleWait        = waitForDevicePoll
 	lifecyclePersist     = sidecar.PersistCredential
 	lifecycleReplace     = sidecar.ReplaceCredential
-	lifecycleRestore     = sidecar.RestoreCredential
 	lifecycleDelete      = sidecar.DeleteCredential
 )
 
@@ -148,8 +147,8 @@ func runCredentialRefresh() int {
 	}
 	replacementErr := lifecycleReplace(credential, response.AccessToken)
 	if replacementErr == nil {
-		persisted, loadErr := sidecar.LoadCredential()
-		if loadErr == nil && persisted.Token == response.AccessToken {
+		replacementErr = sidecar.VerifyCredential(credential, response.AccessToken)
+		if replacementErr == nil {
 			fmt.Fprintln(os.Stdout, "credential refreshed successfully")
 			return 0
 		}
@@ -161,8 +160,15 @@ func runCredentialRefresh() int {
 	if err == nil {
 		_, rollbackErr = rollbackClient.RollbackOwnCredential(context.Background(), response.Receipt)
 	}
-	restoreErr := lifecycleRestore(credential)
-	if rollbackErr != nil || restoreErr != nil {
+	if rollbackErr != nil {
+		fmt.Fprintln(os.Stderr, "login: refreshed credential could not be stored safely; use a secure recovery session to review the credential lifecycle")
+		return lifecycleExitFailure
+	}
+	if err := sidecar.RestoreCredential(credential); err != nil {
+		fmt.Fprintln(os.Stderr, "login: refreshed credential could not be stored safely; use a secure recovery session to review the credential lifecycle")
+		return lifecycleExitFailure
+	}
+	if err := sidecar.VerifyCredential(credential, credential.Token); err != nil {
 		fmt.Fprintln(os.Stderr, "login: refreshed credential could not be stored safely; use a secure recovery session to review the credential lifecycle")
 		return lifecycleExitFailure
 	}

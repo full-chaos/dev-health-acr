@@ -198,7 +198,7 @@ func TestLifecycleCommandsPrintHelpAndRejectUnknownFlags(t *testing.T) {
 	}
 }
 
-func TestRefreshRevokesSuccessor_when_localPersistenceFails(t *testing.T) {
+func TestRefreshRestoresOriginalCredential_afterSuccessfulRollback(t *testing.T) {
 	// Given
 	original := validDoctorToken(84)
 	successor := validDoctorToken(85)
@@ -213,13 +213,13 @@ func TestRefreshRevokesSuccessor_when_localPersistenceFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	originalReplace := lifecycleReplace
-	lifecycleReplace = func(sidecar.CredentialResult, string) error {
-		return errors.New("persistence failure")
+	lifecycleReplace = func(current sidecar.CredentialResult, token string) error {
+		if err := sidecar.ReplaceCredential(current, token); err != nil {
+			return err
+		}
+		return errors.New("persistence failed after local replacement")
 	}
 	t.Cleanup(func() { lifecycleReplace = originalReplace })
-	originalRestore := lifecycleRestore
-	lifecycleRestore = func(sidecar.CredentialResult) error { return nil }
-	t.Cleanup(func() { lifecycleRestore = originalRestore })
 
 	// When
 	code := runCLI([]string{"login", "--refresh"})
@@ -230,6 +230,55 @@ func TestRefreshRevokesSuccessor_when_localPersistenceFails(t *testing.T) {
 	}
 	if revocations != 1 {
 		t.Fatalf("successor revocations = %d, want 1", revocations)
+	}
+	contents, err := os.ReadFile(os.Getenv(sidecar.TokenFileEnvironment))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != original+"\n" {
+		t.Fatalf("restored credential = %q, want original", contents)
+	}
+}
+
+func TestRefreshRetainsSuccessor_whenRollbackFails(t *testing.T) {
+	// Given
+	original := validDoctorToken(94)
+	successor := validDoctorToken(95)
+	revocations := 0
+	server := newCredentialLifecycleServer(t, original, successor, &revocations, true)
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
+	if err := os.WriteFile(os.Getenv(sidecar.TokenFileEnvironment), []byte(original+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalReplace := lifecycleReplace
+	lifecycleReplace = func(current sidecar.CredentialResult, token string) error {
+		if err := sidecar.ReplaceCredential(current, token); err != nil {
+			return err
+		}
+		return errors.New("persistence failed after local replacement")
+	}
+	t.Cleanup(func() { lifecycleReplace = originalReplace })
+
+	// When
+	code := runCLI([]string{"login", "--refresh"})
+
+	// Then
+	if code != lifecycleExitFailure {
+		t.Fatalf("refresh exit code = %d, want %d", code, lifecycleExitFailure)
+	}
+	if revocations != 1 {
+		t.Fatalf("successor revocations = %d, want 1", revocations)
+	}
+	contents, err := os.ReadFile(os.Getenv(sidecar.TokenFileEnvironment))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != successor+"\n" {
+		t.Fatalf("credential after failed rollback = %q, want successor", contents)
 	}
 }
 

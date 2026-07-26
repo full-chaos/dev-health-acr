@@ -113,6 +113,80 @@ func TestPersistCredentialRejectsTimedOutKeyringWriter_whenFallbackExists(t *tes
 	}
 }
 
+func TestReplaceCredentialUsesCapturedFileLocator_whenConfigurationChanges(t *testing.T) {
+	// Given
+	originalPath := filepath.Join(t.TempDir(), "original-token")
+	otherPath := filepath.Join(t.TempDir(), "other-token")
+	original := validTestToken(45)
+	successor := validTestToken(46)
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(TokenFileEnvironment, originalPath)
+	if err := os.WriteFile(originalPath, []byte(original+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(otherPath, []byte(fileToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current, err := LoadCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(TokenFileEnvironment, otherPath)
+
+	// When
+	err = ReplaceCredential(current, successor)
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(originalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != successor+"\n" {
+		t.Fatalf("captured credential file = %q, want successor", contents)
+	}
+	otherContents, err := os.ReadFile(otherPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(otherContents) != fileToken+"\n" {
+		t.Fatalf("reconfigured credential file = %q, want unchanged", otherContents)
+	}
+}
+
+func TestVerifyCredentialRejectsWrongSource_whenTokensMatch(t *testing.T) {
+	// Given
+	path := filepath.Join(t.TempDir(), "token")
+	successor := validTestToken(47)
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(TokenFileEnvironment, path)
+	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
+	t.Setenv(TokenKeyringAccountEnvironment, "agent-a")
+	if err := os.WriteFile(path, []byte(successor+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current, err := LoadCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(TokenKeyringDisabledEnvironment, "false")
+	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
+		return successor, true, nil
+	})
+
+	// When
+	err = VerifyCredential(current, successor)
+
+	// Then
+	if err == nil {
+		t.Fatal("same-token keyring result masked the selected file source")
+	}
+}
+
 func TestReplaceCredential_updatesOnlyExistingFileSource(t *testing.T) {
 	// Given
 	home := t.TempDir()
@@ -132,7 +206,11 @@ func TestReplaceCredential_updatesOnlyExistingFileSource(t *testing.T) {
 	})
 
 	// When
-	err := ReplaceCredential(CredentialResult{Token: original, Source: "file"}, successor)
+	current, err := LoadCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = ReplaceCredential(current, successor)
 
 	// Then
 	if err != nil {
@@ -167,11 +245,15 @@ func TestRestoreCredential_restoresOriginalFileAfterPostRenameSyncFailure(t *tes
 	// Given
 	home := t.TempDir()
 	path := filepath.Join(home, "token")
-	original := CredentialResult{Token: fileToken, Source: "file"}
+	originalToken := fileToken
 	successor := validTestToken(43)
 	t.Setenv(TokenEnvironment, "")
 	t.Setenv(TokenFileEnvironment, path)
-	if err := os.WriteFile(path, []byte(original.Token+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(originalToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	original, err := LoadCredential()
+	if err != nil {
 		t.Fatal(err)
 	}
 	originalSync := credentialDirectorySync
@@ -186,7 +268,7 @@ func TestRestoreCredential_restoresOriginalFileAfterPostRenameSyncFailure(t *tes
 	t.Cleanup(func() { credentialDirectorySync = originalSync })
 
 	// When
-	err := ReplaceCredential(original, successor)
+	err = ReplaceCredential(original, successor)
 	if err == nil {
 		t.Fatal("replacement unexpectedly succeeded after post-rename sync failure")
 	}

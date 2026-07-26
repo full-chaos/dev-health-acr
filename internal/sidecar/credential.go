@@ -53,8 +53,11 @@ var ErrCredentialPersistenceUnsupported = errors.New("acr: credential persistenc
 var ErrCredentialPersistenceSourceUnsupported = errors.New("acr: credential source cannot be replaced securely")
 
 type CredentialResult struct {
-	Token  string
-	Source string
+	Token          string
+	Source         string
+	keyringService string
+	keyringAccount string
+	filePath       string
 }
 
 type CredentialCleanupError struct {
@@ -136,7 +139,7 @@ func loadFromKeyring() (CredentialResult, bool, error) {
 	if token == "" || !auth.IsTokenShapeValid(token) {
 		return CredentialResult{}, false, ErrCredentialShapeInvalid
 	}
-	return CredentialResult{Token: token, Source: "keyring"}, true, nil
+	return CredentialResult{Token: token, Source: "keyring", keyringService: service, keyringAccount: account}, true, nil
 }
 
 // maxTokenFileBytes bounds how many bytes of a configured token file
@@ -172,6 +175,10 @@ func loadFromFile() (CredentialResult, error) {
 			return CredentialResult{}, ErrCredentialMissing
 		}
 	}
+	return loadCredentialFile(path)
+}
+
+func loadCredentialFile(path string) (CredentialResult, error) {
 	contents, info, err := readBoundedRegularFile(path, maxTokenFileBytes)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -189,7 +196,7 @@ func loadFromFile() (CredentialResult, error) {
 	if !auth.IsTokenShapeValid(token) {
 		return CredentialResult{}, fmt.Errorf("%s: %w", TokenFileEnvironment, ErrCredentialShapeInvalid)
 	}
-	return CredentialResult{Token: token, Source: "file"}, nil
+	return CredentialResult{Token: token, Source: "file", filePath: path}, nil
 }
 
 // CredentialPersistenceSupported exposes the stable, preflightable platform
@@ -222,7 +229,7 @@ func PersistCredential(token string) (CredentialResult, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), keyringLookupTimeout)
 			defer cancel()
 			if err := currentKeyringWriter(ctx, service, account, token); err == nil {
-				return CredentialResult{Token: token, Source: "keyring"}, nil
+				return CredentialResult{Token: token, Source: "keyring", keyringService: service, keyringAccount: account}, nil
 			} else if !errors.Is(err, errKeyringWriteUnavailable) {
 				return CredentialResult{}, fmt.Errorf("persist ACR keyring credential: %w", err)
 			}
@@ -235,7 +242,7 @@ func PersistCredential(token string) (CredentialResult, error) {
 	if err := writeCredentialFile(path, token); err != nil {
 		return CredentialResult{}, fmt.Errorf("persist ACR credential fallback file: %w", err)
 	}
-	return CredentialResult{Token: token, Source: "file"}, nil
+	return CredentialResult{Token: token, Source: "file", filePath: path}, nil
 }
 
 // ReplaceCredential updates the credential source already selected by the
@@ -258,22 +265,20 @@ func ReplaceCredential(current CredentialResult, token string) error {
 		if !keyringAllowed {
 			return ErrCredentialPersistenceSourceUnsupported
 		}
-		service, account, configured := credentialKeyringAddress()
-		if !configured || currentKeyringWriter == nil {
+		if current.keyringService == "" || current.keyringAccount == "" || currentKeyringWriter == nil {
 			return ErrCredentialPersistenceSourceUnsupported
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), keyringLookupTimeout)
 		defer cancel()
-		if err := currentKeyringWriter(ctx, service, account, token); err != nil {
+		if err := currentKeyringWriter(ctx, current.keyringService, current.keyringAccount, token); err != nil {
 			return fmt.Errorf("replace ACR keyring credential: %w", err)
 		}
 		return nil
 	case "file":
-		path := configuredTokenFilePath()
-		if path == "" {
+		if current.filePath == "" {
 			return ErrCredentialPersistenceSourceUnsupported
 		}
-		if err := writeCredentialFile(path, token); err != nil {
+		if err := writeCredentialFile(current.filePath, token); err != nil {
 			return fmt.Errorf("replace ACR credential file: %w", err)
 		}
 		return nil
