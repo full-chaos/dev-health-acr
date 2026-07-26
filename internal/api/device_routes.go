@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
@@ -140,7 +139,7 @@ func (a *App) deviceApprovalHandler(next http.Handler) http.Handler {
 	protected := a.authenticator.RequireScope(auth.WebAssertionPermissionCredentialIssue, next)
 	protected = a.authenticator.MiddlewareFor(true, protected)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if len(r.Header.Values(auth.WebAssertionHeader)) != 1 || strings.TrimSpace(r.Header.Get("Authorization")) != "" {
+		if len(r.Header.Values(auth.WebAssertionHeader)) != 1 || len(r.Header.Values("Authorization")) != 0 {
 			writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 			return
 		}
@@ -202,7 +201,7 @@ func (a *App) writeSelfLifecycleError(w http.ResponseWriter, r *http.Request, er
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "Credential lifecycle request is invalid", false, nil)
 		return
 	}
-	if errors.Is(err, storage.ErrConflict) {
+	if errors.Is(err, auth.ErrStaleSelfCredential) || errors.Is(err, storage.ErrConflict) {
 		writeError(w, r, http.StatusConflict, "credential_lifecycle_conflict", "Credential lifecycle operation conflicts with current state", false, nil)
 		return
 	}

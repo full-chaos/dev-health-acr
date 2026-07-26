@@ -27,6 +27,7 @@ var (
 	ErrRepositoryForbidden = errors.New("repository forbidden")
 	ErrRateLimited         = errors.New("authentication rate limited")
 	ErrInvalidCredential   = errors.New("invalid credential request")
+	ErrStaleSelfCredential = errors.New("stale self credential")
 )
 
 var knownScopes = map[string]struct{}{

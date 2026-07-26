@@ -106,6 +106,30 @@ func TestDeviceApproval_requiresOnlyBoundCredentialIssueAssertion(t *testing.T) 
 	assertErrorResponse(t, response, http.StatusUnauthorized, "invalid_token")
 }
 
+func TestDeviceApproval_rejectsMixedBlankAndBearerAuthorizationHeaders(t *testing.T) {
+	// Given
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := auth.NewWebAssertionVerifier(auth.WebAssertionOptions{Issuer: "https://web.example.test", Audience: "acr-api", JWKSPath: writeAPIJWKS(t, public), Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, _ := newHostedTestAppWithWebAssertions(t, nil, nil, nil, nil, nil, verifier)
+	approval := contractsv1.DeviceApprovalRequest{SchemaVersion: contractsv1.DeviceApprovalRequestSchema, UserCode: "ABCDEFGH", RepositoryScopes: []string{hostedTestRepository}}
+	request := deviceApprovalRequest(t, now, private, approval, "approval_mixed_authorization")
+	request.Header["Authorization"] = []string{"", "Bearer fcacr_abcdefghijklmnopqrstuvwxyz0123456789"}
+	response := httptest.NewRecorder()
+
+	// When
+	app.Handler().ServeHTTP(response, request)
+
+	// Then
+	assertErrorResponse(t, response, http.StatusUnauthorized, "invalid_token")
+}
+
 func TestDeviceRoutes_returnUnavailableWithoutWebAssertions(t *testing.T) {
 	// Given
 	app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)
@@ -141,6 +165,19 @@ func TestSelfLifecycleError_returnsNonRetryableConflictForStaleMutation(t *testi
 
 	// When
 	app.writeSelfLifecycleError(response, request, storage.ErrConflict)
+
+	// Then
+	assertErrorResponse(t, response, http.StatusConflict, "credential_lifecycle_conflict")
+}
+
+func TestSelfLifecycleError_returnsNonRetryableConflictForStaleNotFound(t *testing.T) {
+	// Given
+	app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/credentials/self/rotate", nil)
+	response := httptest.NewRecorder()
+
+	// When
+	app.writeSelfLifecycleError(response, request, auth.ErrStaleSelfCredential)
 
 	// Then
 	assertErrorResponse(t, response, http.StatusConflict, "credential_lifecycle_conflict")

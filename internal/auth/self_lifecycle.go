@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -51,18 +52,24 @@ func (s *Service) RotateSelf(ctx context.Context, principal storage.Principal) (
 		Overlap:      storage.MaximumCredentialOverlap,
 	})
 	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return SelfRotation{}, ErrStaleSelfCredential
+		}
 		return SelfRotation{}, err
 	}
-	rollbackUntil := s.now().UTC().Add(storage.MaximumCredentialOverlap)
-	if source.ExpiresAt != nil && source.ExpiresAt.Before(rollbackUntil) {
-		rollbackUntil = *source.ExpiresAt
+	persistedSource, err := s.store.GetByID(ctx, principal.OrgID, source.CredentialID)
+	if err != nil {
+		return SelfRotation{}, fmt.Errorf("load persisted self-rotation source: %w", err)
+	}
+	if persistedSource.ExpiresAt == nil {
+		return SelfRotation{}, ErrInvalidCredential
 	}
 	return SelfRotation{
 		Issued: issued,
 		Receipt: SelfRotationReceipt{
 			SourceCredentialID:    principal.CredentialID,
 			SuccessorCredentialID: issued.Credential.CredentialID,
-			RollbackUntil:         rollbackUntil,
+			RollbackUntil:         *persistedSource.ExpiresAt,
 		},
 	}, nil
 }
@@ -100,6 +107,9 @@ func (s *Service) RevokeSelf(ctx context.Context, principal storage.Principal) (
 	}
 	credential, err := s.Revoke(ctx, principal.OrgID, principal.CredentialID, principal.Subject)
 	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return SelfRevocation{}, ErrStaleSelfCredential
+		}
 		return SelfRevocation{}, err
 	}
 	return SelfRevocation{CredentialID: credential.CredentialID}, nil

@@ -60,6 +60,31 @@ func TestService_RotateSelf_clampsRollbackUntilToSourceExpiry(t *testing.T) {
 	require.Equal(t, expiresAt, rotation.Receipt.RollbackUntil)
 }
 
+func TestService_RotateSelf_returnsPersistedSourceExpiryWhenClockAdvances(t *testing.T) {
+	// Given
+	persistedNow := time.Date(2026, 7, 25, 14, 0, 0, 0, time.UTC)
+	audit := memory.NewAuditStore()
+	store := newMemoryCredentialStoreAt(t, persistedNow, audit)
+	sourceService := newTestService(t, store, audit, persistedNow)
+	source := createSelfCredential(t, sourceService, []string{"owner/repo"})
+	reads := 0
+	service, err := NewService(store, ServiceOptions{Now: func() time.Time {
+		reads++
+		if reads == 1 {
+			return persistedNow
+		}
+		return persistedNow.Add(10 * time.Minute)
+	}})
+	require.NoError(t, err)
+
+	// When
+	rotation, err := service.RotateSelf(context.Background(), selfPrincipal(source.Credential))
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, persistedNow.Add(storage.MaximumCredentialOverlap), rotation.Receipt.RollbackUntil)
+}
+
 func TestService_RotateSelf_rejectsUntrustedPrincipalWithoutMutation(t *testing.T) {
 	tests := []struct {
 		name   string
