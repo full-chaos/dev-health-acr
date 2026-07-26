@@ -19,7 +19,7 @@ func TestRunner_VerifyCurrentRejectsMigrationHistoryDrift(t *testing.T) {
 			return err
 		}},
 		{name: "missing required migration", mutate: func(ctx context.Context, db *sql.DB) error {
-			_, err := db.ExecContext(ctx, "DELETE FROM acr.schema_migrations WHERE version = 3")
+			_, err := db.ExecContext(ctx, "DELETE FROM acr.schema_migrations WHERE version = 4")
 			return err
 		}},
 		{name: "required migration name drift", mutate: func(ctx context.Context, db *sql.DB) error {
@@ -72,9 +72,9 @@ func TestRunner_VerifyCurrentRejectsReorderedRequiredMigrationHistory(t *testing
 }
 
 func TestRunner_VerifyCurrentAllowsAdditionalLaterAppliedMigrations(t *testing.T) {
-	// Given: an older binary (embedding only migrations 1 and 2) checks
+	// Given: an older binary (embedding migrations 1 through 3) checks
 	// readiness against a schema a newer binary already advanced to include
-	// migration 3.
+	// migration 4.
 	ctx := context.Background()
 	db := newTestDatabase(t, ctx)
 	latest, err := Embedded()
@@ -84,25 +84,27 @@ func TestRunner_VerifyCurrentAllowsAdditionalLaterAppliedMigrations(t *testing.T
 	older, err := NewRunner(fstest.MapFS{
 		"0001_acr_core.sql": {Data: mustReadFile(t, "0001_acr_core.sql")},
 		"0002_episode_repository_scoped_idempotency.sql": {Data: mustReadFile(t, "0002_episode_repository_scoped_idempotency.sql")},
+		"0003_credential_rotation_marker.sql":            {Data: mustReadFile(t, "0003_credential_rotation_marker.sql")},
 	})
 	require.NoError(t, err)
 
 	// When
 	err = older.VerifyCurrent(ctx, db)
 
-	// Then: the required prefix (1, 2) matches in order with correct
-	// checksums, so the additional migration 3 does not fail readiness.
+	// Then: the required prefix (1 through 3) matches in order with correct
+	// checksums, so the additional migration 4 does not fail readiness.
 	require.NoError(t, err)
 }
 
 func TestRunner_VerifyCurrentRejectsMissingRequiredMigration_whenSchemaIsBehind(t *testing.T) {
-	// Given: a newer binary (embedding migrations 1, 2, and 3) checks
-	// readiness against a schema that has only applied migrations 1 and 2.
+	// Given: a newer binary (embedding migrations 1 through 4) checks
+	// readiness against a schema that has only applied migrations 1 through 3.
 	ctx := context.Background()
 	db := newTestDatabase(t, ctx)
 	older, err := NewRunner(fstest.MapFS{
 		"0001_acr_core.sql": {Data: mustReadFile(t, "0001_acr_core.sql")},
 		"0002_episode_repository_scoped_idempotency.sql": {Data: mustReadFile(t, "0002_episode_repository_scoped_idempotency.sql")},
+		"0003_credential_rotation_marker.sql":            {Data: mustReadFile(t, "0003_credential_rotation_marker.sql")},
 	})
 	require.NoError(t, err)
 	_, err = older.Apply(ctx, db)
@@ -113,6 +115,6 @@ func TestRunner_VerifyCurrentRejectsMissingRequiredMigration_whenSchemaIsBehind(
 	// When
 	err = latest.VerifyCurrent(ctx, db)
 
-	// Then: required migration 3 is missing from the applied history.
+	// Then: required migration 4 is missing from the applied history.
 	require.ErrorIs(t, err, ErrInvalidMigration)
 }

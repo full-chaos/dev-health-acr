@@ -27,7 +27,10 @@ func (s *credentialStore) createCredential(ctx context.Context, input storage.Cr
 		return contractsv1.ClientCredential{}, storage.ErrInvalidCredentialInput
 	}
 	credential := credentialFromCreate(input, now)
-	record := storage.CredentialRecord{Metadata: credential, TokenHash: input.TokenHash, CreatedBy: input.ActorID}
+	record := storage.CredentialRecord{
+		Metadata: credential, TokenHash: input.TokenHash, CreatedBy: input.ActorID,
+		IssuanceProvenance: input.IssuanceProvenance,
+	}
 	if err := s.recordAudit(ctx, credentialCreatedEvent(record)); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}

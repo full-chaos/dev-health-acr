@@ -4,16 +4,21 @@ import "time"
 
 const MaximumOverlap = 15 * time.Minute
 
+type IssuanceProvenance string
+
+const IssuanceProvenanceDeviceAuthorization IssuanceProvenance = "device_authorization"
+
 type CreateInput struct {
-	CredentialID     string
-	OrgID            string
-	Name             string
-	TokenPrefix      string
-	TokenHash        string
-	RepositoryScopes []string
-	Scopes           []string
-	ActorID          string
-	ExpiresAt        *time.Time
+	CredentialID       string
+	OrgID              string
+	Name               string
+	TokenPrefix        string
+	TokenHash          string
+	RepositoryScopes   []string
+	Scopes             []string
+	ActorID            string
+	ExpiresAt          *time.Time
+	IssuanceProvenance IssuanceProvenance
 }
 
 type RotationReplacement struct {

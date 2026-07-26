@@ -24,6 +24,11 @@ var knownScopes = map[string]struct{}{
 	"episode:write": {},
 }
 
+func ValidateCreateInput(input CreateInput) error {
+	_, err := normalizeCreate(input)
+	return err
+}
+
 func normalizeCreate(input CreateInput) (CreateInput, error) {
 	var err error
 	input.CredentialID, err = normalizeCredentialID(input.CredentialID)
@@ -61,6 +66,9 @@ func normalizeCreate(input CreateInput) (CreateInput, error) {
 	input.ExpiresAt, err = normalizeExpiry(input.ExpiresAt)
 	if err != nil {
 		return CreateInput{}, err
+	}
+	if input.IssuanceProvenance != "" && input.IssuanceProvenance != IssuanceProvenanceDeviceAuthorization {
+		return CreateInput{}, invalid("issuance provenance")
 	}
 	return input, nil
 }

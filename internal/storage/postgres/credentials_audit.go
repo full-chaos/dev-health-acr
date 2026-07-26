@@ -174,17 +174,21 @@ WHERE org_id = $1 AND credential_id = $2
 
 func credentialCreatedEvent(record storage.CredentialRecord) storage.AuditEvent {
 	credential := record.Metadata
+	metadata := map[string]any{
+		"name":              credential.Name,
+		"token_prefix":      credential.TokenPrefix,
+		"repository_scopes": append([]string(nil), credential.RepositoryScopes...),
+		"scopes":            append([]string(nil), credential.Scopes...),
+		"expires_at":        credential.ExpiresAt,
+	}
+	if record.IssuanceProvenance != "" {
+		metadata["issuance_provenance"] = string(record.IssuanceProvenance)
+	}
 	return storage.AuditEvent{
 		OrgID: credential.OrgID, ActorType: "user", ActorID: record.CreatedBy,
 		Action: storage.AuditActionCredentialCreated, ResourceType: "acr_credential", ResourceID: credential.CredentialID,
 		Status: "success", CreatedAt: credential.CreatedAt,
-		Metadata: map[string]any{
-			"name":              credential.Name,
-			"token_prefix":      credential.TokenPrefix,
-			"repository_scopes": append([]string(nil), credential.RepositoryScopes...),
-			"scopes":            append([]string(nil), credential.Scopes...),
-			"expires_at":        credential.ExpiresAt,
-		},
+		Metadata: metadata,
 	}
 }
 

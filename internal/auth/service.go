@@ -26,6 +26,11 @@ type Service struct {
 	maximumOverlap       time.Duration
 }
 
+type PreparedCredential struct {
+	token string
+	input storage.CredentialCreateInput
+}
+
 func NewService(store *storage.CredentialLifecycle, options ServiceOptions) (*Service, error) {
 	if store == nil {
 		return nil, storage.ErrInvalidCredentialLifecycle
@@ -55,23 +60,43 @@ func NewService(store *storage.CredentialLifecycle, options ServiceOptions) (*Se
 }
 
 func (s *Service) Create(ctx context.Context, request CreateCredentialRequest) (IssuedCredential, error) {
-	normalized, err := normalizeCreateRequest(request)
+	prepared, err := s.PrepareCreate(request)
 	if err != nil {
 		return IssuedCredential{}, err
 	}
-	now := s.now().UTC()
-	if normalized.ExpiresAt != nil && !normalized.ExpiresAt.After(now) {
-		return IssuedCredential{}, fmt.Errorf("%w: expires_at must be in the future", ErrInvalidCredential)
-	}
-	token, input, err := s.issueCreateInput(normalized)
-	if err != nil {
-		return IssuedCredential{}, err
-	}
-	credential, err := s.store.CreateCredential(ctx, input)
+	credential, err := s.store.CreateCredential(ctx, prepared.StorageInput())
 	if err != nil {
 		return IssuedCredential{}, fmt.Errorf("create credential: %w", err)
 	}
-	return IssuedCredential{Credential: credential, Token: token}, nil
+	return prepared.Issued(credential), nil
+}
+
+func (s *Service) PrepareCreate(request CreateCredentialRequest) (PreparedCredential, error) {
+	normalized, err := normalizeCreateRequest(request)
+	if err != nil {
+		return PreparedCredential{}, err
+	}
+	now := s.now().UTC()
+	if normalized.ExpiresAt != nil && !normalized.ExpiresAt.After(now) {
+		return PreparedCredential{}, fmt.Errorf("%w: expires_at must be in the future", ErrInvalidCredential)
+	}
+	token, input, err := s.issueCreateInput(normalized)
+	if err != nil {
+		return PreparedCredential{}, err
+	}
+	return PreparedCredential{token: token, input: input}, nil
+}
+
+func (p PreparedCredential) StorageInput() storage.CredentialCreateInput {
+	input := p.input
+	input.RepositoryScopes = append([]string(nil), p.input.RepositoryScopes...)
+	input.Scopes = append([]string(nil), p.input.Scopes...)
+	input.ExpiresAt = cloneTime(p.input.ExpiresAt)
+	return input
+}
+
+func (p PreparedCredential) Issued(credential contractsv1.ClientCredential) IssuedCredential {
+	return IssuedCredential{Credential: credential, Token: p.token}
 }
 
 func (s *Service) List(ctx context.Context, orgID string) ([]contractsv1.ClientCredential, error) {
