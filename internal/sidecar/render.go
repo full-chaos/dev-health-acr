@@ -334,6 +334,20 @@ var wwwAutolinkTrigger = regexp.MustCompile(`(?i)(^|[^a-z0-9])(www)(\.)`)
 // autolinks a bare "user@localhost" with no dot either).
 var bareEmailTrigger = regexp.MustCompile(`(?i)([a-z0-9._%+-]+)(@[a-z0-9_-]+(?:\.[a-z0-9_-]+)+)`)
 
+type autolinkMatchers struct {
+	bareHTTP func(string, int) [][]int
+	www      func(string, int) [][]int
+	email    func(string, int) [][]int
+}
+
+func newAutolinkMatchers() autolinkMatchers {
+	return autolinkMatchers{
+		bareHTTP: bareHTTPAutolinkTrigger.FindAllStringSubmatchIndex,
+		www:      wwwAutolinkTrigger.FindAllStringSubmatchIndex,
+		email:    bareEmailTrigger.FindAllStringSubmatchIndex,
+	}
+}
+
 // textUnit is one indivisible span of a value string for the purpose of
 // entity-decode-aware autolink-trigger detection in neutralizeAutolinks: it
 // is either exactly one literal rune (isEntity false, contributing that
@@ -409,10 +423,8 @@ func decodedTextAndOffsets(units []textUnit) (string, []int) {
 // decoded contribution is non-empty, since an entity either decodes to at
 // least one rune or (when ineligible) contributes its own non-empty raw
 // "&...;" text, and a literal unit always contributes exactly one rune -
-// so sort.Search finds the answer in logarithmic time regardless of how
-// many trigger matches call this in one neutralizeAutolinks invocation,
-// keeping the function's overall cost linear (matches * log(units), not
-// matches * units) even on adversarial input packed with many triggers.
+// so sort.Search finds the answer in logarithmic time, avoiding a full unit
+// scan for every trigger match.
 // Every caller only ever passes a target strictly less than the decoded
 // text's total length: the three autolink trigger regexes each require a
 // non-empty capture group immediately after the offset neutralizeAutolinks
@@ -485,12 +497,11 @@ func unitIndexForDecodedOffset(offsets []int, target int) int {
 //
 // Every original byte still survives (in a literal unit, in an untouched
 // entity, or in a defanged-but-still-fully-readable "& xxx;" entity); only
-// ASCII space bytes are ever added. All regex work here remains RE2-based
-// and therefore linear-time regardless of pattern complexity or input size
-// (see TestSafeInlineDefangingRemainsLinearTimeOnAdversarialInput); the
-// unit-partitioning and decoded-view construction this function performs is
-// itself a single linear pass over preTransformByteCap-bounded input, so
-// the function's overall cost remains linear.
+// ASCII space bytes are ever added. The RE2 matcher passes are linear in the
+// decoded input; mapping each match back to its original unit costs a
+// logarithmic search. safeInline bounds that input to preTransformByteCap,
+// which TestSafeInlineWithMatchersBoundsMatcherInput_whenRawValueExceedsPreTransformCap
+// locks directly.
 //
 // It intentionally runs on the RAW value BEFORE escapeMarkdownInline (see
 // safeInline), not after: escapeMarkdownInline backslash-escapes a
@@ -503,7 +514,7 @@ func unitIndexForDecodedOffset(offsets []int, target int) int {
 // parser before its own autolink extensions ever run, so a backslash
 // safeInline itself inserted is not a defense against them - only the
 // space this function inserts is).
-func neutralizeAutolinks(value string) string {
+func neutralizeAutolinksWithMatchers(value string, matchers autolinkMatchers) string {
 	units := buildTextUnits(value)
 	if len(units) == 0 {
 		return value
@@ -528,13 +539,13 @@ func neutralizeAutolinks(value string) string {
 			insertBefore[i] = true
 		}
 	}
-	for _, loc := range bareHTTPAutolinkTrigger.FindAllStringSubmatchIndex(decodedText, -1) {
+	for _, loc := range matchers.bareHTTP(decodedText, -1) {
 		mark(loc[5]) // end of the scheme-word capture group
 	}
-	for _, loc := range wwwAutolinkTrigger.FindAllStringSubmatchIndex(decodedText, -1) {
+	for _, loc := range matchers.www(decodedText, -1) {
 		mark(loc[5]) // end of the "www" capture group
 	}
-	for _, loc := range bareEmailTrigger.FindAllStringSubmatchIndex(decodedText, -1) {
+	for _, loc := range matchers.email(decodedText, -1) {
 		mark(loc[3]) // end of the local-part capture group
 	}
 
@@ -631,9 +642,9 @@ func neutralizeEntityReferences(value string) string {
 // byte ceiling on the final, fully-transformed output is still enforced by
 // enforceInlineByteBudget below. Go's regexp package is RE2-based and
 // therefore already immune to exponential blowup regardless of pattern
-// complexity or input size (see
-// TestSafeInlineDefangingRemainsLinearTimeOnAdversarialInput), so this cap
-// is a work-bounding courtesy, not a correctness requirement.
+// complexity or input size. This cap is a work-bounding courtesy, not a
+// correctness requirement; its exact matcher-input boundary is locked by
+// TestSafeInlineWithMatchersBoundsMatcherInput_whenRawValueExceedsPreTransformCap.
 const preTransformByteCap = maxSanitizedMessageLength * 4
 
 // enforceInlineByteBudget truncates already fully-transformed (entity-
@@ -707,8 +718,12 @@ func enforceInlineByteBudget(s string, maxBytes int) string {
 //     defanging can inflate past it (each escaped character adds a
 //     backslash byte; each defanged trigger adds a space byte).
 func safeInline(value string) string {
+	return safeInlineWithMatchers(value, newAutolinkMatchers())
+}
+
+func safeInlineWithMatchers(value string, matchers autolinkMatchers) string {
 	sanitized := truncateToValidUTF8(sanitizeInlineContent(value), preTransformByteCap)
-	transformed := escapeMarkdownInline(neutralizeAutolinks(neutralizeEntityReferences(sanitized)))
+	transformed := escapeMarkdownInline(neutralizeAutolinksWithMatchers(neutralizeEntityReferences(sanitized), matchers))
 	return enforceInlineByteBudget(transformed, maxSanitizedMessageLength)
 }
 

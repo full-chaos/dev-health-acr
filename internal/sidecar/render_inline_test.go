@@ -3,7 +3,6 @@ package sidecar
 import (
 	"strings"
 	"testing"
-	"time"
 	"unicode/utf8"
 )
 
@@ -300,37 +299,85 @@ func TestSafeInlineHandlesMultipleMixedAutolinkTriggersInOneValue(t *testing.T) 
 	}
 }
 
-// TestSafeInlineDefangingRemainsLinearTimeOnAdversarialInput guards
-// against a future regex change reintroducing catastrophic backtracking.
-// Go's regexp package is RE2-based and therefore already immune to
-// exponential blowup regardless of pattern complexity, but this test pins
-// the *empirical* linear-time property so a future contributor who swaps
-// in a backtracking-capable matcher (e.g. a third-party regexp2
-// dependency) fails this test immediately rather than shipping a ReDoS.
-// It exercises neutralizeAutolinks directly (bypassing safeInline's own
-// maxSanitizedMessageLength truncation, which already bounds every
-// production call site to 500 bytes) with an adversarially-shaped input:
-// a long run of scheme/domain-class characters that never resolves into
-// an actual "://" or "@domain." match, maximizing partial-trigger
-// scanning.
-func TestSafeInlineDefangingRemainsLinearTimeOnAdversarialInput(t *testing.T) {
-	small := strings.Repeat("a", 2_000)
-	large := strings.Repeat("a", 20_000) // 10x larger input
-	timeIt := func(s string) time.Duration {
-		start := time.Now()
-		neutralizeAutolinks(s)
-		return time.Since(start)
+func TestSafeInlineBoundsOutput_whenRawValueExceedsPreTransformCap(t *testing.T) {
+	// Given
+	input := strings.Repeat("a", preTransformByteCap*10)
+
+	// When
+	got := safeInline(input)
+
+	// Then
+	want := strings.Repeat("a", maxSanitizedMessageLength)
+	if got != want {
+		t.Fatalf("safeInline output = %q, want %q", got, want)
 	}
-	timeIt(small) // warm up regexp internals before measuring.
-	smallElapsed := timeIt(small)
-	largeElapsed := timeIt(large)
-	// A quadratic-or-worse implementation would take >=100x as long for a
-	// 10x-larger input; a linear one takes roughly 10x. Allow generous
-	// headroom for scheduler/GC noise on a shared CI runner while still
-	// failing hard on genuine polynomial blowup.
-	const maxLinearSlopFactor = 50
-	if largeElapsed > smallElapsed*maxLinearSlopFactor {
-		t.Fatalf("safeInline scaling looks super-linear: %d bytes took %v, %d bytes took %v",
-			len(small), smallElapsed, len(large), largeElapsed)
+	if len(got) > maxSanitizedMessageLength {
+		t.Fatalf("safeInline output = %d bytes, budget is %d", len(got), maxSanitizedMessageLength)
 	}
+}
+
+func TestSafeInlineWithMatchersBoundsMatcherInput_whenRawValueExceedsPreTransformCap(t *testing.T) {
+	// Given
+	input := strings.Repeat("a", preTransformByteCap*10)
+	matchers, calls := recordingAutolinkMatchers()
+
+	// When
+	got := safeInlineWithMatchers(input, matchers)
+
+	// Then
+	for name, call := range calls {
+		if call.count != 1 {
+			t.Errorf("%s matcher call count = %d, want 1", name, call.count)
+		}
+		if call.inputLength != preTransformByteCap {
+			t.Errorf("%s matcher received %d bytes, want %d", name, call.inputLength, preTransformByteCap)
+		}
+	}
+	if len(got) > maxSanitizedMessageLength {
+		t.Fatalf("safeInline output = %d bytes, budget is %d", len(got), maxSanitizedMessageLength)
+	}
+}
+
+func TestNeutralizeAutolinksRunsEachMatcherOnce_whenInputIsLarge(t *testing.T) {
+	// Given
+	input := strings.Repeat("a", 20_000)
+	matchers, calls := recordingAutolinkMatchers()
+
+	// When
+	neutralizeAutolinksWithMatchers(input, matchers)
+
+	// Then
+	for name, call := range calls {
+		if call.count != 1 {
+			t.Errorf("%s matcher call count = %d, want 1", name, call.count)
+		}
+		if call.inputLength != len(input) {
+			t.Errorf("%s matcher received %d bytes, want %d", name, call.inputLength, len(input))
+		}
+	}
+}
+
+type matcherCall struct {
+	count       int
+	inputLength int
+}
+
+func recordingAutolinkMatchers() (autolinkMatchers, map[string]*matcherCall) {
+	calls := map[string]*matcherCall{
+		"http":  {},
+		"www":   {},
+		"email": {},
+	}
+	record := func(name string, finder func(string, int) [][]int) func(string, int) [][]int {
+		return func(value string, limit int) [][]int {
+			calls[name].count++
+			calls[name].inputLength = len(value)
+			return finder(value, limit)
+		}
+	}
+	return autolinkMatchers{
+		bareHTTP: record("http", bareHTTPAutolinkTrigger.FindAllStringSubmatchIndex),
+		www:      record("www", wwwAutolinkTrigger.FindAllStringSubmatchIndex),
+		email:    record("email", bareEmailTrigger.FindAllStringSubmatchIndex),
+	}, calls
 }
