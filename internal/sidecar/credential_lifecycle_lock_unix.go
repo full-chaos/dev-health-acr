@@ -13,8 +13,11 @@ import (
 var errCredentialLifecycleLockUnsafe = errors.New("acr: credential lifecycle lock is unsafe")
 
 func acquireCredentialLifecycleLock() (func() error, error) {
-	path := filepath.Join("/var/tmp", fmt.Sprintf("acr-credential-lifecycle-%d.lock", os.Geteuid()))
-	return acquireCredentialLifecycleLockAt(path)
+	return acquireCredentialLifecycleLockAt(credentialLifecycleLockPath())
+}
+
+func credentialLifecycleLockPath() string {
+	return filepath.Join("/var/tmp", fmt.Sprintf("acr-credential-lifecycle-%d.lock", os.Geteuid()))
 }
 
 func acquireCredentialLifecycleLockAt(path string) (func() error, error) {

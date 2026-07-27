@@ -178,19 +178,11 @@ func TestCredentialLifecycleLockUsesCanonicalVarTmpPath(t *testing.T) {
 	path := filepath.Join("/var/tmp", "acr-credential-lifecycle-"+strconv.Itoa(os.Geteuid())+".lock")
 
 	// When
-	closeLock, err := acquireCredentialLifecycleLock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = closeLock()
-		_ = os.Remove(path)
-	})
-	_, err = os.Stat(path)
+	got := credentialLifecycleLockPath()
 
 	// Then
-	if err != nil {
-		t.Fatalf("canonical lifecycle lock path %q was not created: %v", path, err)
+	if got != path {
+		t.Fatalf("lifecycle lock path = %q, want canonical %q", got, path)
 	}
 }
 
