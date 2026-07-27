@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -133,5 +135,91 @@ func TestRefreshWarnsAboutManualRevocation_whenRotateReturnsInvalidSuccessWithou
 	}
 	if string(contents) != original+"\n" {
 		t.Fatalf("credential after invalid successful rotation = %q, want original", contents)
+	}
+}
+
+func TestRefreshRevokesShapeValidSuccessor_whenRotateReturnsInvalidSemanticSuccess(t *testing.T) {
+	original := validDoctorToken(122)
+	successor := validDoctorToken(123)
+	createdAt := time.Now().UTC().Truncate(time.Second)
+	var mu sync.Mutex
+	successorActive := false
+	revocations := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/auth/credentials/self/rotate":
+			if r.Header.Get("Authorization") != "Bearer "+original {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			mu.Lock()
+			successorActive = true
+			mu.Unlock()
+			response := struct {
+				SchemaVersion string                       `json:"schema_version"`
+				AccessToken   string                       `json:"access_token"`
+				Credential    contractsv1.ClientCredential `json:"credential"`
+			}{
+				SchemaVersion: contractsv1.CredentialRotateResponseSchema,
+				AccessToken:   successor,
+				Credential:    lifecycleCredential(createdAt, "credential-successor", nil),
+			}
+			if err := json.NewEncoder(w).Encode(response); err != nil {
+				t.Errorf("encode invalid rotation response: %v", err)
+			}
+		case "/api/v1/auth/credentials/self/revoke":
+			if r.Header.Get("Authorization") != "Bearer "+successor {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			mu.Lock()
+			revocations++
+			successorActive = false
+			mu.Unlock()
+			revokedAt := createdAt.Add(time.Minute)
+			writeLifecycleJSON(t, w, contractsv1.CredentialRevokeResponse{
+				SchemaVersion: contractsv1.CredentialRevokeResponseSchema,
+				Credential:    lifecycleCredential(createdAt, "credential-successor", &revokedAt),
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte(original+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+
+	code, stderr := captureStderr(t, func() int { return runCLI([]string{"login", "--refresh"}) })
+
+	if code != lifecycleExitFailure {
+		t.Fatalf("refresh exit code = %d, want failure", code)
+	}
+	mu.Lock()
+	active, revokeCount := successorActive, revocations
+	mu.Unlock()
+	if active {
+		t.Fatal("shape-valid successor remained active after invalid semantic rotation response")
+	}
+	if revokeCount != 1 {
+		t.Fatalf("self-revocations = %d, want 1 for the recoverable successor", revokeCount)
+	}
+	if !strings.Contains(stderr, "invalid refreshed credential response was revoked") {
+		t.Fatalf("refresh stderr = %q, want confirmed successor revocation", stderr)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read original credential: %v", err)
+	}
+	if string(contents) != original+"\n" {
+		t.Fatalf("credential after invalid semantic rotation = %q, want original", contents)
 	}
 }

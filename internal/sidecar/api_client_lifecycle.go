@@ -125,7 +125,7 @@ func (c *Client) RotateOwnCredential(ctx context.Context) (contractsv1.Credentia
 	}
 	response := contractsv1.CredentialRotateResponse{}
 	if err := c.call(ctx, http.MethodPost, credentialRotatePath, payload, &response); err != nil {
-		return contractsv1.CredentialRotateResponse{}, fmt.Errorf("rotate current credential: %w", err)
+		return response, fmt.Errorf("rotate current credential: %w", err)
 	}
 	if err := response.Validate(); err != nil {
 		return response, fmt.Errorf("%w: credential rotation response: %w", ErrInvalidResponse, err)
