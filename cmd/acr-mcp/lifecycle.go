@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 
@@ -29,7 +27,7 @@ const (
 )
 
 var (
-	lifecycleBrowserOpen = openVerificationURI
+	lifecycleBrowserOpen = sidecar.OpenVerificationURI
 	lifecycleWait        = waitForDevicePoll
 	lifecyclePersist     = sidecar.PersistCredential
 	lifecycleReplace     = sidecar.ReplaceCredential
@@ -125,14 +123,27 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 		return deviceLoginFailed
 	}
 	fmt.Fprintf(os.Stdout, "Open %s and enter code %s\n", authorization.VerificationURI, authorization.UserCode)
+	// Opening the browser is a convenience on top of the line above, so any
+	// failure -- an unlaunchable URI, no trusted opener on this host -- is
+	// deliberately nonfatal.
 	_ = lifecycleBrowserOpen(authorization.VerificationURI)
+	// The validated grant carries its own lifetime. Polling past it burns
+	// requests against a code the server has already expired, and an
+	// unresponsive server previously kept the loop running indefinitely
+	// because nothing but the operator bounded it.
+	pollCtx, cancelPoll := deviceAuthorizationContext(ctx, authorization.ExpiresIn)
+	defer cancelPoll()
 	interval := time.Duration(authorization.Interval) * time.Second
 	for {
-		if err := lifecycleWait(ctx, interval); err != nil {
-			fmt.Fprintln(os.Stderr, "login: device authorization was cancelled")
+		if err := lifecycleWait(pollCtx, interval); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				fmt.Fprintln(os.Stderr, "login: device authorization expired")
+			} else {
+				fmt.Fprintln(os.Stderr, "login: device authorization was cancelled")
+			}
 			return deviceLoginFailed
 		}
-		response, err := client.PollDeviceToken(ctx, authorization.DeviceCode)
+		response, err := client.PollDeviceToken(pollCtx, authorization.DeviceCode)
 		if err == nil {
 			persisted, persistErr := lifecyclePersist(response.AccessToken)
 			if persistErr == nil {
@@ -170,12 +181,31 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 				return deviceLoginRestartInvalidGrant
 			}
 		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			// The grant's own lifetime ran out mid-poll. Restarting here would
+			// spend the restart budget on an authorization the server already
+			// expired, so this is terminal like any other expiry.
+			fmt.Fprintln(os.Stderr, "login: device authorization expired")
+			return deviceLoginFailed
+		}
 		if errors.Is(err, sidecar.ErrTransportUnavailable) {
 			return deviceLoginRestartTransportUnavailable
 		}
 		fmt.Fprintln(os.Stderr, "login: device authorization could not be completed")
 		return deviceLoginFailed
 	}
+}
+
+// deviceAuthorizationContext bounds polling by the validated grant lifetime.
+// expiresIn comes from a response the contract already validated, so a
+// nonpositive value cannot occur in production; it is handled here so a
+// defensive caller can never turn the deadline into an immediately expired
+// context that would look like a server expiry.
+func deviceAuthorizationContext(ctx context.Context, expiresIn int) (context.Context, context.CancelFunc) {
+	if expiresIn <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, time.Duration(expiresIn)*time.Second)
 }
 
 func revokeIssuedCredential(ctx context.Context, cfg sidecar.Config, token string) bool {
@@ -302,12 +332,4 @@ func waitForDevicePoll(ctx context.Context, delay time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
-}
-
-func openVerificationURI(uri string) error {
-	command := "xdg-open"
-	if runtime.GOOS == "darwin" {
-		command = "open"
-	}
-	return exec.Command(command, uri).Start()
 }

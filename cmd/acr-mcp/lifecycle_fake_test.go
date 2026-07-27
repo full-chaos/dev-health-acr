@@ -13,6 +13,13 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
+// nonLaunchableVerificationURI is a non-loopback http address, which
+// sidecar.OpenVerificationURI refuses before it resolves or executes any
+// binary. Compiled lifecycle tests run the real hardened opener in a real
+// process, so the fixture must hand it an address it declines: a loopback
+// http URI is launchable and would open a browser on the developer's host.
+const nonLaunchableVerificationURI = "http://device.acr.invalid/acr/device"
+
 func newLifecycleServer(t *testing.T, token string, polls []string) *httptest.Server {
 	return newLifecycleServerWithAuthorizationExpectation(t, token, polls, nil)
 }
@@ -45,7 +52,7 @@ func newLifecycleServerWithAuthorizationExpectation(t *testing.T, token string, 
 					t.Fatalf("device authorization hints = org=%#v repos=%#v, want org=%#v repos=%#v", request.OrganizationIDHint, request.RepositoryHints, want.organizationIDHint, want.repositoryHints)
 				}
 			}
-			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: "http://" + r.Host + "/acr/device", ExpiresIn: 600, Interval: 5})
+			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: nonLaunchableVerificationURI, ExpiresIn: 600, Interval: 5})
 		case "/api/v1/oauth/token":
 			if r.Header.Get("Authorization") != "" {
 				t.Fatal("device token request unexpectedly had bearer authorization")
@@ -117,7 +124,7 @@ func newLifecycleRetryServer(t *testing.T, token string, polls []string, trace *
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/oauth/device_authorization":
-			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: trace.issue(), UserCode: "ABCDEFGH", VerificationURI: "http://" + r.Host + "/acr/device", ExpiresIn: 600, Interval: 5})
+			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: trace.issue(), UserCode: "ABCDEFGH", VerificationURI: nonLaunchableVerificationURI, ExpiresIn: 600, Interval: 5})
 		case "/api/v1/oauth/token":
 			var request contractsv1.DeviceTokenRequest
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {

@@ -299,7 +299,7 @@ func TestLoginRevokesIssuedCredential_whenPersistenceFails(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/oauth/device_authorization":
-			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: "http://" + r.Host + "/acr/device", ExpiresIn: 600, Interval: 5})
+			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: nonLaunchableVerificationURI, ExpiresIn: 600, Interval: 5})
 		case "/api/v1/oauth/token":
 			expiresAt := createdAt.Add(30 * 24 * time.Hour)
 			credential := lifecycleCredential(createdAt, "credential-issued", nil)
@@ -364,7 +364,7 @@ func TestLoginRevokesThenPurgesIssuedCredential_whenPersistenceFailsAfterWriting
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/oauth/device_authorization":
-			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: "http://" + r.Host + "/acr/device", ExpiresIn: 600, Interval: 5})
+			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: nonLaunchableVerificationURI, ExpiresIn: 600, Interval: 5})
 		case "/api/v1/oauth/token":
 			expiresAt := createdAt.Add(30 * 24 * time.Hour)
 			credential := lifecycleCredential(createdAt, "credential-issued", nil)
@@ -737,4 +737,97 @@ func captureStderr(t *testing.T, fn func() int) (int, string) {
 		t.Fatal(err)
 	}
 	return code, string(output)
+}
+
+// The validated grant carries its own lifetime, and polling must be bounded by
+// it. Without a deadline the loop only ended when the server said so, so an
+// unresponsive or endlessly pending server kept login running against a code
+// the server had already expired.
+func TestLoginBoundsDevicePollingByTheValidatedAuthorizationLifetime(t *testing.T) {
+	// Given
+	token := validDoctorToken(93)
+	server := newLifecycleServer(t, token, []string{"authorization_pending", "success"})
+	defer server.Close()
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
+	originalWait := lifecycleWait
+	var deadlines []time.Duration
+	lifecycleWait = func(ctx context.Context, _ time.Duration) error {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			deadlines = append(deadlines, 0)
+			return nil
+		}
+		deadlines = append(deadlines, time.Until(deadline))
+		return nil
+	}
+	t.Cleanup(func() { lifecycleWait = originalWait })
+	originalBrowserOpen := lifecycleBrowserOpen
+	lifecycleBrowserOpen = func(string) error { return nil }
+	t.Cleanup(func() { lifecycleBrowserOpen = originalBrowserOpen })
+
+	// When
+	code := runCLI([]string{"login"})
+
+	// Then
+	if code != 0 {
+		t.Fatalf("login exit code = %d, want 0", code)
+	}
+	if len(deadlines) != 2 {
+		t.Fatalf("poll waits = %d, want one pending poll and one success", len(deadlines))
+	}
+	for index, remaining := range deadlines {
+		if remaining <= 0 {
+			t.Fatalf("poll %d ran without an authorization deadline", index)
+		}
+		if remaining > 600*time.Second || remaining < 590*time.Second {
+			t.Fatalf("poll %d deadline = %v, want the validated 600s grant lifetime", index, remaining)
+		}
+	}
+}
+
+// An expired lifetime is terminal: restarting would spend the bounded restart
+// budget on an authorization the server has already expired.
+func TestLoginStopsWithoutRestarting_whenTheAuthorizationLifetimeExpires(t *testing.T) {
+	// Given
+	token := validDoctorToken(94)
+	var trace deviceAuthorizationTrace
+	path := filepath.Join(t.TempDir(), "token")
+	server := newLifecycleRetryServer(t, token, nil, &trace)
+	defer server.Close()
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+	originalWait := lifecycleWait
+	lifecycleWait = func(context.Context, time.Duration) error { return context.DeadlineExceeded }
+	t.Cleanup(func() { lifecycleWait = originalWait })
+	originalBrowserOpen := lifecycleBrowserOpen
+	lifecycleBrowserOpen = func(string) error { return nil }
+	t.Cleanup(func() { lifecycleBrowserOpen = originalBrowserOpen })
+
+	// When
+	code, stderr := captureStderr(t, func() int { return runCLI([]string{"login"}) })
+
+	// Then
+	if code != lifecycleExitFailure {
+		t.Fatalf("login exit code = %d, want %d; stderr=%s", code, lifecycleExitFailure, stderr)
+	}
+	if !strings.Contains(stderr, "device authorization expired") {
+		t.Fatalf("logout stderr = %q, want the expiry to be named rather than reported as a cancellation", stderr)
+	}
+	authorizations, _, polled := trace.snapshot()
+	if authorizations != 1 {
+		t.Fatalf("authorizations = %d, want exactly one: an expired grant must not spend the restart budget", authorizations)
+	}
+	if len(polled) != 0 {
+		t.Fatalf("device codes polled = %v, want none after the lifetime expired", polled)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("credential persisted after an expired authorization: %v", err)
+	}
 }

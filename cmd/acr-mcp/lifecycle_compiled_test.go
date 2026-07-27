@@ -49,14 +49,10 @@ func TestCompiledLoginThenBareDoctorDiscoversPersistedCredential(t *testing.T) {
 	if !strings.Contains(string(doctorOutput), `"credential_source":"file"`) || !strings.Contains(string(doctorOutput), `"reachable":true`) {
 		t.Fatalf("bare doctor did not discover the login credential:\n%s", doctorOutput)
 	}
-	calls := compiledBrowserCalls(t, browserLog)
-	if len(calls) != 1 {
-		t.Fatalf("browser opener calls = %v, want one", calls)
+	if !strings.Contains(string(loginOutput), "Open "+nonLaunchableVerificationURI+" and enter code") {
+		t.Fatalf("compiled login did not print the verification address:\n%s", loginOutput)
 	}
-	fields := strings.Fields(calls[0])
-	if len(fields) != 2 || (filepath.Base(fields[0]) != "open" && filepath.Base(fields[0]) != "xdg-open") || fields[1] != server.URL+"/acr/device" {
-		t.Fatalf("unexpected browser opener invocation: %q", calls[0])
-	}
+	assertNoBrowserLaunch(t, browserLog)
 }
 
 func TestCompiledLogoutRemovesDisabledKeyringFileCredential(t *testing.T) {
@@ -116,20 +112,17 @@ func TestCompiledLoginBoundsInvalidGrantAuthorizationRestarts(t *testing.T) {
 	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != lifecycleExitFailure {
 		t.Fatalf("compiled invalid-grant exit = %v, want %d", err, lifecycleExitFailure)
 	}
-	calls := compiledBrowserCalls(t, browserLog)
 	authorizations, issued, _ := trace.snapshot()
-	if authorizations != 2 || len(calls) != 2 {
-		t.Fatalf("authorizations=%d browser calls=%v, want exactly two", authorizations, calls)
+	if authorizations != 2 {
+		t.Fatalf("authorizations = %d, want exactly two", authorizations)
 	}
 	if len(issued) != 2 || issued[0] == issued[1] {
 		t.Fatalf("issued device codes = %v, want two distinct codes", issued)
 	}
-	for _, call := range calls {
-		fields := strings.Fields(call)
-		if len(fields) != 2 || fields[1] != server.URL+"/acr/device" {
-			t.Fatalf("unexpected browser invocation: %q", call)
-		}
+	if printed := strings.Count(string(output), "Open "+nonLaunchableVerificationURI+" and enter code"); printed != 2 {
+		t.Fatalf("verification address printed %d times, want once per authorization:\n%s", printed, output)
 	}
+	assertNoBrowserLaunch(t, browserLog)
 	if _, err := os.Stat(tokenPath); !os.IsNotExist(err) {
 		t.Fatalf("credential persisted after terminal invalid-grant failure: %v", err)
 	}
@@ -145,6 +138,12 @@ func compileLifecycleBinary(t *testing.T) string {
 	return binPath
 }
 
+// compiledBrowserFixture plants PATH-resolvable "open"/"xdg-open" tripwires.
+// The hardened opener resolves its binary from a fixed system directory
+// allowlist and never from PATH, so an entry recorded here means production
+// consulted PATH; an empty log means it did not. The compiled fixtures also
+// hand out nonLaunchableVerificationURI, so nothing legitimate is launched
+// either and no host browser can be started by these tests.
 func compiledBrowserFixture(t *testing.T) (string, string) {
 	t.Helper()
 	browserBin := t.TempDir()
@@ -159,11 +158,15 @@ func compiledBrowserFixture(t *testing.T) (string, string) {
 	return browserBin, browserLog
 }
 
-func compiledBrowserCalls(t *testing.T, logPath string) []string {
+// assertNoBrowserLaunch proves the tripwire never ran: neither through a
+// PATH substitution, nor as a real desktop opener on the host.
+func assertNoBrowserLaunch(t *testing.T, logPath string) {
 	t.Helper()
 	contents, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatalf("browser opener tripwire was not invoked: %v", err)
+	if err == nil {
+		t.Fatalf("browser opener ran from PATH: %q", contents)
 	}
-	return strings.FieldsFunc(strings.TrimSpace(string(contents)), func(r rune) bool { return r == '\n' })
+	if !os.IsNotExist(err) {
+		t.Fatalf("read browser opener tripwire log: %v", err)
+	}
 }
