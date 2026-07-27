@@ -187,7 +187,7 @@ func TestVerifyCredentialRejectsWrongSource_whenTokensMatch(t *testing.T) {
 	}
 }
 
-func TestPurgeCredentialMaterialAttemptsAllConfiguredLocations_whenOneFails(t *testing.T) {
+func TestPurgeCredentialMaterialTouchesOnlyTheCapturedLocator_whenConfigurationChanges(t *testing.T) {
 	// Given
 	resolvedPath := filepath.Join(t.TempDir(), "resolved-token")
 	otherPath := filepath.Join(t.TempDir(), "other-token")
@@ -218,20 +218,17 @@ func TestPurgeCredentialMaterialAttemptsAllConfiguredLocations_whenOneFails(t *t
 	err = PurgeCredentialMaterial(current)
 
 	// Then
-	var purgeErr *CredentialPurgeError
-	if !errors.As(err, &purgeErr) || len(purgeErr.Failures) != 1 {
-		t.Fatalf("purge error = %v, want one typed keyring failure", err)
+	if err != nil {
+		t.Fatalf("purge captured credential: %v", err)
 	}
-	if purgeErr.Failures[0].Location != credentialKeyringLocation("acr-sidecar-test", "agent-a") {
-		t.Fatalf("cleanup location = %q", purgeErr.Failures[0].Location)
+	if deleteCalls != 0 {
+		t.Fatalf("keyring delete calls = %d, want 0", deleteCalls)
 	}
-	if deleteCalls != 1 {
-		t.Fatalf("keyring delete calls = %d, want 1", deleteCalls)
+	if _, statErr := os.Stat(resolvedPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("captured credential file remains: %v", statErr)
 	}
-	for _, path := range []string{resolvedPath, otherPath} {
-		if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
-			t.Fatalf("credential file remains after independent cleanup: %v", statErr)
-		}
+	if _, statErr := os.Stat(otherPath); statErr != nil {
+		t.Fatalf("new configured credential was touched: %v", statErr)
 	}
 }
 

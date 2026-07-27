@@ -12,6 +12,15 @@ import (
 // VerifyCredential proves that expectedToken is stored at current's captured
 // source and remains the globally selected credential.
 func VerifyCredential(current CredentialResult, expectedToken string) error {
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	return session.VerifyCredential(current, expectedToken)
+}
+
+func (s *CredentialLifecycleSession) VerifyCredential(current CredentialResult, expectedToken string) error {
 	expectedToken = strings.TrimSpace(expectedToken)
 	if !auth.IsTokenShapeValid(expectedToken) {
 		return ErrCredentialShapeInvalid

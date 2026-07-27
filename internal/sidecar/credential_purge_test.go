@@ -108,7 +108,7 @@ func TestCredentialCleanupLocationsReportsEveryFailedLocation(t *testing.T) {
 	}
 
 	// When
-	locations := CredentialCleanupLocations(PurgeCredentialMaterial(current))
+	locations := credentialCleanupLocations(PurgeCredentialMaterial(current))
 
 	// Then
 	want := []string{TokenEnvironment, credentialKeyringLocation(service, account)}
@@ -125,11 +125,33 @@ func TestCredentialCleanupLocationsReportsEveryFailedLocation(t *testing.T) {
 }
 
 func TestCredentialCleanupLocationsReturnsNothingForAnUnreportedError(t *testing.T) {
-	if locations := CredentialCleanupLocations(errors.New("unrelated")); locations != nil {
+	if locations := credentialCleanupLocations(errors.New("unrelated")); locations != nil {
 		t.Fatalf("locations = %v, want none for an error that reported no location", locations)
 	}
-	if locations := CredentialCleanupLocations(nil); locations != nil {
+	if locations := credentialCleanupLocations(nil); locations != nil {
 		t.Fatalf("locations = %v, want none for a nil error", locations)
+	}
+}
+
+func TestPurgeAllCredentialMaterialRetainsConflictingCapturedFileLocator(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	first := validTestToken(81)
+	second := validTestToken(82)
+	if err := os.WriteFile(path, []byte(first+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := PurgeAllCredentialMaterial([]CredentialResult{
+		{Token: first, Source: "file", filePath: path},
+		{Token: second, Source: "file", filePath: path},
+	})
+
+	if !errors.Is(err, errCredentialPurgeDuplicateLocator) {
+		t.Fatalf("purge error = %v, want duplicate locator failure", err)
+	}
+	contents, readErr := os.ReadFile(path)
+	if readErr != nil || string(contents) != first+"\n" {
+		t.Fatalf("conflicted locator was modified: contents=%q err=%v", contents, readErr)
 	}
 }
 
@@ -167,7 +189,7 @@ func TestPurgeCredentialMaterialLeavesFileThatIsNotAnACRCredentialTarget(t *test
 			}
 
 			// When
-			locations := CredentialCleanupLocations(PurgeCredentialMaterial(current))
+			locations := credentialCleanupLocations(PurgeCredentialMaterial(current))
 
 			// Then
 			contents, readErr := os.ReadFile(path)

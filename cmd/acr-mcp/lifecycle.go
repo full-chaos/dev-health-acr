@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 )
 
@@ -58,11 +59,17 @@ func runLoginCommand(args []string) int {
 }
 
 func runDeviceLogin(parsed loginArgs) int {
+	session, err := sidecar.BeginCredentialLifecycleSession()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "login: credential lifecycle is already active")
+		return lifecycleExitFailure
+	}
+	defer session.Close()
 	if err := sidecar.CredentialPersistenceSupported(); err != nil {
 		fmt.Fprintln(os.Stderr, "login: secure credential persistence is unavailable on this platform")
 		return lifecycleExitFailure
 	}
-	credential, err := sidecar.LoadCredential()
+	credential, err := session.LoadCredential()
 	if err == nil && credential.Token != "" {
 		fmt.Fprintln(os.Stderr, "login: a valid local credential already exists; use login --refresh or logout")
 		return lifecycleExitFailure
@@ -90,7 +97,7 @@ func runDeviceLogin(parsed loginArgs) int {
 	// bounds it, and the budget is shared across every restart cause so that
 	// alternating causes cannot buy additional authorizations.
 	for authorization := 1; authorization <= maxDeviceAuthorizations; authorization++ {
-		outcome := runDeviceLoginAttempt(context.Background(), client, cfg, parsed)
+		outcome := runDeviceLoginAttempt(context.Background(), session, client, cfg, parsed)
 		if outcome == deviceLoginSucceeded {
 			return 0
 		}
@@ -112,7 +119,7 @@ func deviceLoginExhaustedMessage() string {
 	return "login: device authorization was invalidated twice; start login again"
 }
 
-func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient, cfg sidecar.Config, parsed loginArgs) deviceLoginAttemptOutcome {
+func runDeviceLoginAttempt(ctx context.Context, session *sidecar.CredentialLifecycleSession, client *sidecar.LifecycleClient, cfg sidecar.Config, parsed loginArgs) deviceLoginAttemptOutcome {
 	var organizationIDHint *string
 	if parsed.org != "" {
 		organizationIDHint = &parsed.org
@@ -179,9 +186,9 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 		}
 		response, err := client.PollDeviceToken(pollCtx, authorization.DeviceCode)
 		if err == nil {
-			persisted, persistErr := lifecyclePersist(response.AccessToken)
+			persisted, persistErr := session.PersistCredential(response.AccessToken)
 			if persistErr == nil {
-				persistErr = sidecar.VerifyCredential(persisted, response.AccessToken)
+				persistErr = session.VerifyCredential(persisted, response.AccessToken)
 			}
 			if persistErr != nil {
 				if !revokeIssuedCredential(ctx, cfg, response.AccessToken) {
@@ -195,7 +202,7 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 				// a revoked-but-readable secret sat in a file or keyring entry
 				// nobody had been told about.
 				if persisted.Token != "" {
-					if purgeErr := sidecar.PurgeCredentialMaterial(persisted); purgeErr != nil {
+					if purgeErr := session.PurgeCredentialMaterial(persisted); purgeErr != nil {
 						fmt.Fprintln(os.Stderr, "login: credential was issued and revoked, but local cleanup requires operator action at "+describeCleanupLocations(purgeErr))
 						return deviceLoginFailed
 					}
@@ -325,9 +332,26 @@ func revokeToken(ctx context.Context, cfg sidecar.Config, token string) error {
 }
 
 func runCredentialRefresh() int {
-	cfg, credential, client, code := loadCredentialClient("login")
-	if code != 0 {
-		return code
+	session, err := sidecar.BeginCredentialLifecycleSession()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "login: credential lifecycle is already active")
+		return lifecycleExitFailure
+	}
+	defer session.Close()
+	cfg, err := sidecar.LoadConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "login: configuration is invalid: "+sidecar.DescribeConfigError(err))
+		return lifecycleExitFailure
+	}
+	credential, err := session.LoadCredential()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "login: a valid local credential is required")
+		return lifecycleExitFailure
+	}
+	client, err := sidecar.NewClient(cfg, func() (sidecar.CredentialResult, error) { return credential, nil })
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "login: could not initialize secure API transport")
+		return lifecycleExitFailure
 	}
 	if credential.Source == "environment" {
 		fmt.Fprintln(os.Stderr, "login: an environment credential cannot be refreshed persistently; remove ACR_API_TOKEN and use a secure local credential")
@@ -335,12 +359,18 @@ func runCredentialRefresh() int {
 	}
 	response, err := client.RotateOwnCredential(context.Background())
 	if err != nil {
+		if auth.IsTokenShapeValid(response.AccessToken) {
+			if revokeErr := revokeToken(context.Background(), cfg, response.AccessToken); revokeErr != nil {
+				fmt.Fprintln(os.Stderr, "login: malformed refreshed credential could not be revoked; the original credential remains active")
+				return lifecycleExitFailure
+			}
+		}
 		fmt.Fprintln(os.Stderr, "login: credential refresh failed")
 		return lifecycleExitFailure
 	}
-	replacementErr := lifecycleReplace(credential, response.AccessToken)
+	replacementErr := session.ReplaceCredential(credential, response.AccessToken)
 	if replacementErr == nil {
-		replacementErr = sidecar.VerifyCredential(credential, response.AccessToken)
+		replacementErr = session.VerifyCredential(credential, response.AccessToken)
 		if replacementErr == nil {
 			fmt.Fprintln(os.Stdout, "credential refreshed successfully")
 			return 0
@@ -357,11 +387,11 @@ func runCredentialRefresh() int {
 		fmt.Fprintln(os.Stderr, "login: refreshed credential could not be stored safely; use a secure recovery session to review the credential lifecycle")
 		return lifecycleExitFailure
 	}
-	if err := sidecar.RestoreCredential(credential); err != nil {
+	if err := session.RestoreCredential(credential); err != nil {
 		fmt.Fprintln(os.Stderr, "login: refreshed credential could not be stored safely; use a secure recovery session to review the credential lifecycle")
 		return lifecycleExitFailure
 	}
-	if err := sidecar.VerifyCredential(credential, credential.Token); err != nil {
+	if err := session.VerifyCredential(credential, credential.Token); err != nil {
 		fmt.Fprintln(os.Stderr, "login: refreshed credential could not be stored safely; use a secure recovery session to review the credential lifecycle")
 		return lifecycleExitFailure
 	}
@@ -392,12 +422,18 @@ func runLogoutCommand(args []string) int {
 		fmt.Fprintln(os.Stderr, logoutUsageLine)
 		return 2
 	}
+	session, err := sidecar.BeginCredentialLifecycleSession()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "logout: credential lifecycle is already active")
+		return lifecycleExitFailure
+	}
+	defer session.Close()
 	cfg, err := sidecar.LoadConfig()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "logout: configuration is invalid: "+sidecar.DescribeConfigError(err))
 		return lifecycleExitFailure
 	}
-	material, err := sidecar.CollectCredentialMaterial()
+	material, err := session.CollectCredentialMaterial()
 	if err != nil {
 		// Enumeration fails closed, so this means at least one location could
 		// not be read conclusively. Deleting around it would strand whatever
@@ -415,7 +451,7 @@ func runLogoutCommand(args []string) int {
 			return lifecycleExitFailure
 		}
 	}
-	if err := sidecar.PurgeAllCredentialMaterial(material); err != nil {
+	if err := session.PurgeAllCredentialMaterial(material); err != nil {
 		// Report every location the purge actually failed at. Deriving one
 		// location from the credential's own source named a place the purge
 		// may never have touched and hid the rest.

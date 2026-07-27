@@ -77,7 +77,7 @@ type CredentialCleanupError struct {
 }
 
 func (e *CredentialCleanupError) Error() string {
-	return "remove ACR credential from " + e.Location
+	return "ACR credential cleanup failed"
 }
 
 func (e *CredentialCleanupError) Unwrap() error { return e.cause }
@@ -95,6 +95,15 @@ func (e *CredentialCleanupError) Unwrap() error { return e.cause }
 // malformed disable flag rejected a perfectly valid ACR_API_TOKEN, taking
 // down a source the flag does not govern.
 func LoadCredential() (CredentialResult, error) {
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		return CredentialResult{}, err
+	}
+	defer session.Close()
+	return session.LoadCredential()
+}
+
+func (s *CredentialLifecycleSession) LoadCredential() (CredentialResult, error) {
 	if result, configured, err := loadFromEnvironment(); configured {
 		return result, err
 	}
@@ -253,6 +262,15 @@ func credentialPersistenceSupportedFor(goos string) error {
 // default keyring when the platform can write it safely. Unavailable or failed
 // keyring writes atomically fall back to the configured or default token file.
 func PersistCredential(token string) (CredentialResult, error) {
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		return CredentialResult{}, err
+	}
+	defer session.Close()
+	return session.PersistCredential(token)
+}
+
+func (s *CredentialLifecycleSession) PersistCredential(token string) (CredentialResult, error) {
 	keyringAllowed, err := keyringEnabled()
 	if err != nil {
 		return CredentialResult{}, err
@@ -308,6 +326,15 @@ func PersistCredential(token string) (CredentialResult, error) {
 // sidecar. Refresh must never silently change sources: doing so can leave an
 // older higher-precedence token active.
 func ReplaceCredential(current CredentialResult, token string) error {
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	return session.ReplaceCredential(current, token)
+}
+
+func (s *CredentialLifecycleSession) ReplaceCredential(current CredentialResult, token string) error {
 	if err := CredentialPersistenceSupported(); err != nil {
 		return err
 	}
@@ -347,10 +374,28 @@ func ReplaceCredential(current CredentialResult, token string) error {
 }
 
 func RestoreCredential(current CredentialResult) error {
-	return ReplaceCredential(current, current.Token)
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	return session.RestoreCredential(current)
+}
+
+func (s *CredentialLifecycleSession) RestoreCredential(current CredentialResult) error {
+	return s.ReplaceCredential(current, current.Token)
 }
 
 func DeleteCredential() error {
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	return session.DeleteCredential()
+}
+
+func (s *CredentialLifecycleSession) DeleteCredential() error {
 	keyringAllowed, err := keyringEnabled()
 	if err != nil {
 		return err

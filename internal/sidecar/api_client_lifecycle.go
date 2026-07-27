@@ -128,10 +128,13 @@ func (c *Client) RotateOwnCredential(ctx context.Context) (contractsv1.Credentia
 		return contractsv1.CredentialRotateResponse{}, fmt.Errorf("rotate current credential: %w", err)
 	}
 	if err := response.Validate(); err != nil {
-		return contractsv1.CredentialRotateResponse{}, fmt.Errorf("%w: credential rotation response: %w", ErrInvalidResponse, err)
+		return response, fmt.Errorf("%w: credential rotation response: %w", ErrInvalidResponse, err)
+	}
+	if response.Receipt.ReplacementCredentialID != response.Credential.CredentialID || !response.Receipt.RollbackUntil.After(response.Credential.CreatedAt) {
+		return response, fmt.Errorf("%w: credential rotation receipt does not bind the replacement", ErrInvalidResponse)
 	}
 	if !auth.IsTokenShapeValid(response.AccessToken) {
-		return contractsv1.CredentialRotateResponse{}, ErrCredentialShapeInvalid
+		return response, ErrCredentialShapeInvalid
 	}
 	return response, nil
 }

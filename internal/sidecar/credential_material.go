@@ -25,6 +25,15 @@ import (
 // to delete local material, and doing that around a location it could not read
 // is how a live credential is stranded with nothing left pointing at it.
 func CollectCredentialMaterial() ([]CredentialResult, error) {
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+	return session.CollectCredentialMaterial()
+}
+
+func (s *CredentialLifecycleSession) CollectCredentialMaterial() ([]CredentialResult, error) {
 	material := make([]CredentialResult, 0, 3)
 	if result, configured, err := loadFromEnvironment(); configured {
 		if err != nil {

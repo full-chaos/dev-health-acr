@@ -16,11 +16,7 @@ type CredentialPurgeError struct {
 }
 
 func (e *CredentialPurgeError) Error() string {
-	locations := make([]string, 0, len(e.Failures))
-	for _, failure := range e.Failures {
-		locations = append(locations, failure.Location)
-	}
-	return "remove ACR credential material from " + strings.Join(locations, ", ")
+	return "ACR credential cleanup failed"
 }
 
 func (e *CredentialPurgeError) Unwrap() []error {
@@ -43,10 +39,7 @@ func (e *CredentialPurgeError) Locations() []string {
 	return locations
 }
 
-// CredentialCleanupLocations extracts every location a purge failed to clean
-// from err. It returns nil for a nil or unrecognized error so an operator
-// message never invents a location that was not actually reported.
-func CredentialCleanupLocations(err error) []string {
+func credentialCleanupLocations(err error) []string {
 	var purgeErr *CredentialPurgeError
 	if errors.As(err, &purgeErr) {
 		return purgeErr.Locations()
@@ -87,7 +80,7 @@ const (
 // unambiguous), and the list itself is bounded with an explicit count of what
 // was omitted rather than silently truncated.
 func SafeCredentialCleanupLocations(err error) []string {
-	locations := CredentialCleanupLocations(err)
+	locations := credentialCleanupLocations(err)
 	if len(locations) == 0 {
 		return nil
 	}
@@ -205,11 +198,20 @@ func isTokenSecretByte(b byte) bool {
 // keyring entry underneath it, and returning here would leave both behind
 // while logout reported that cleanup had failed.
 func PurgeCredentialMaterial(current CredentialResult) error {
-	return PurgeAllCredentialMaterial([]CredentialResult{current})
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	return session.PurgeCredentialMaterial(current)
 }
 
-// PurgeAllCredentialMaterial removes the removable locations of every supplied
-// credential, plus the configured ones, as a single deduplicated pass.
+func (s *CredentialLifecycleSession) PurgeCredentialMaterial(current CredentialResult) error {
+	return s.PurgeAllCredentialMaterial([]CredentialResult{current})
+}
+
+// PurgeAllCredentialMaterial removes only locations captured with the supplied
+// credential material, as a single deduplicated pass.
 //
 // Purging one credential at a time reported the same configured location as a
 // separate failure once per credential, and, worse, could remove a location
@@ -217,6 +219,15 @@ func PurgeCredentialMaterial(current CredentialResult) error {
 // revocation had been attempted. Callers therefore hand the whole set here,
 // after every remote revocation has succeeded.
 func PurgeAllCredentialMaterial(material []CredentialResult) error {
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	return session.PurgeAllCredentialMaterial(material)
+}
+
+func (s *CredentialLifecycleSession) PurgeAllCredentialMaterial(material []CredentialResult) error {
 	failures := make([]*CredentialCleanupError, 0)
 	for _, current := range material {
 		if current.Source == "environment" {
@@ -247,19 +258,24 @@ func PurgeAllCredentialMaterial(material []CredentialResult) error {
 	expectedPurgeTokens := map[credentialPurgeKey]string{}
 	for _, current := range material {
 		if current.filePath != "" {
-			expectedPurgeTokens[credentialPurgeKey{primary: current.filePath}] = current.Token
+			key := credentialPurgeKey{primary: current.filePath}
+			if prior, ok := expectedPurgeTokens[key]; ok && prior != current.Token {
+				return &CredentialPurgeError{Failures: []*CredentialCleanupError{{Location: current.filePath, cause: errCredentialPurgeDuplicateLocator}}}
+			}
+			expectedPurgeTokens[key] = current.Token
 		}
 		if current.keyringService != "" && current.keyringAccount != "" {
-			expectedPurgeTokens[credentialPurgeKey{keyring: true, primary: current.keyringService, secondary: current.keyringAccount}] = current.Token
+			key := credentialPurgeKey{keyring: true, primary: current.keyringService, secondary: current.keyringAccount}
+			if prior, ok := expectedPurgeTokens[key]; ok && prior != current.Token {
+				return &CredentialPurgeError{Failures: []*CredentialCleanupError{{Location: credentialKeyringLocation(current.keyringService, current.keyringAccount), cause: errCredentialPurgeDuplicateLocator}}}
+			}
+			expectedPurgeTokens[key] = current.Token
 		}
 	}
 	seen := map[credentialPurgeKey]bool{}
 	targets := make([]credentialPurgeTarget, 0, 4)
 	for _, current := range material {
 		appendCredentialPurgeTargets(&targets, seen, expectedPurgeTokens, current, keyringAllowed)
-	}
-	if len(material) == 0 {
-		appendCredentialPurgeTargets(&targets, seen, expectedPurgeTokens, CredentialResult{}, keyringAllowed)
 	}
 	for _, target := range targets {
 		if err := target.remove(); err != nil {
@@ -293,24 +309,10 @@ type credentialPurgeKey struct {
 	secondary string
 }
 
-// appendCredentialPurgeTargets adds the locations one credential can be
-// removed from -- the address it was actually captured at, then the currently
-// configured address -- skipping anything already queued under seen.
-// expected supplies each target's compare-and-remove value, keyed identically
-// to seen; a location with no entry in expected has no known prior value and
-// is purged on shape alone, exactly as before this package tracked expected
-// tokens.
 func appendCredentialPurgeTargets(targets *[]credentialPurgeTarget, seen map[credentialPurgeKey]bool, expected map[credentialPurgeKey]string, current CredentialResult, keyringAllowed bool) {
 	addFilePurgeTarget(targets, seen, expected, current.filePath)
 	if keyringAllowed {
 		addKeyringPurgeTarget(targets, seen, expected, current.keyringService, current.keyringAccount)
-	}
-	addFilePurgeTarget(targets, seen, expected, configuredTokenFilePath())
-	if keyringAllowed {
-		service, account, configured := credentialKeyringAddress()
-		if configured {
-			addKeyringPurgeTarget(targets, seen, expected, service, account)
-		}
 	}
 }
 
@@ -322,6 +324,8 @@ func appendCredentialPurgeTargets(targets *[]credentialPurgeTarget, seen map[cre
 // about, and is therefore not something this purge has any business
 // removing, whether or not it happens to look like a valid ACR credential.
 var errCredentialPurgeTargetChanged = errors.New("acr: credential at this location changed since it was enumerated for removal; it was left in place")
+
+var errCredentialPurgeDuplicateLocator = errors.New("acr: conflicting credentials were captured at one cleanup location; it was left in place")
 
 func addFilePurgeTarget(targets *[]credentialPurgeTarget, seen map[credentialPurgeKey]bool, expected map[credentialPurgeKey]string, path string) {
 	key := credentialPurgeKey{primary: path}
