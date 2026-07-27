@@ -207,6 +207,7 @@ func TestPurgeCredentialMaterialAttemptsAllConfiguredLocations_whenOneFails(t *t
 	t.Setenv(TokenFileEnvironment, otherPath)
 	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
 	t.Setenv(TokenKeyringAccountEnvironment, "agent-a")
+	t.Setenv(TokenKeyringDisabledEnvironment, "false")
 	deleteCalls := 0
 	stubKeyringDeleter(t, func(context.Context, string, string) error {
 		deleteCalls++
@@ -231,6 +232,37 @@ func TestPurgeCredentialMaterialAttemptsAllConfiguredLocations_whenOneFails(t *t
 		if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
 			t.Fatalf("credential file remains after independent cleanup: %v", statErr)
 		}
+	}
+}
+
+func TestPurgeCredentialMaterialRemovesFileWithoutTouchingKeyringWhenDisabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(TokenFileEnvironment, path)
+	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
+	t.Setenv(TokenKeyringAccountEnvironment, "agent-a")
+	if err := os.WriteFile(path, []byte(fileToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current, err := LoadCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteCalls := 0
+	stubKeyringDeleter(t, func(context.Context, string, string) error {
+		deleteCalls++
+		return errors.New("keyring deleter must not run while disabled")
+	})
+
+	if err := PurgeCredentialMaterial(current); err != nil {
+		t.Fatalf("purge file credential with disabled keyring: %v", err)
+	}
+	if deleteCalls != 0 {
+		t.Fatalf("keyring delete calls = %d, want 0", deleteCalls)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("credential file remains after purge: %v", err)
 	}
 }
 

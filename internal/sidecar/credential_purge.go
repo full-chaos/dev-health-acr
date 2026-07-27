@@ -30,10 +30,14 @@ func (e *CredentialPurgeError) Unwrap() []error {
 // PurgeCredentialMaterial removes every configured or resolved removable
 // credential location, continuing after individual cleanup failures.
 func PurgeCredentialMaterial(current CredentialResult) error {
+	keyringAllowed, err := keyringEnabled()
+	if err != nil {
+		return err
+	}
 	if current.Source == "environment" {
 		return &CredentialCleanupError{Location: TokenEnvironment, cause: ErrCredentialPersistenceSourceUnsupported}
 	}
-	targets := credentialPurgeTargets(current)
+	targets := credentialPurgeTargets(current, keyringAllowed)
 	failures := make([]*CredentialCleanupError, 0)
 	for _, target := range targets {
 		if err := target.remove(); err != nil {
@@ -51,15 +55,19 @@ type credentialPurgeTarget struct {
 	remove   func() error
 }
 
-func credentialPurgeTargets(current CredentialResult) []credentialPurgeTarget {
+func credentialPurgeTargets(current CredentialResult, keyringAllowed bool) []credentialPurgeTarget {
 	targets := make([]credentialPurgeTarget, 0, 4)
 	seen := map[string]bool{}
 	addFilePurgeTarget(&targets, seen, current.filePath)
-	addKeyringPurgeTarget(&targets, seen, current.keyringService, current.keyringAccount)
+	if keyringAllowed {
+		addKeyringPurgeTarget(&targets, seen, current.keyringService, current.keyringAccount)
+	}
 	addFilePurgeTarget(&targets, seen, configuredTokenFilePath())
-	service, account, configured := credentialKeyringAddress()
-	if configured {
-		addKeyringPurgeTarget(&targets, seen, service, account)
+	if keyringAllowed {
+		service, account, configured := credentialKeyringAddress()
+		if configured {
+			addKeyringPurgeTarget(&targets, seen, service, account)
+		}
 	}
 	return targets
 }
