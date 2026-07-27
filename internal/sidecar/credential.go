@@ -204,6 +204,23 @@ func loadCredentialFile(path string) (CredentialResult, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return CredentialResult{}, fmt.Errorf("read ACR credential file: %w", ErrCredentialMissing)
 		}
+		// A platform where bounded local file reads are structurally
+		// unsupported (see boundedfile_unsupported.go) can never have had a
+		// credential file written to it by this sidecar either --
+		// writeCredentialFile and removeCredentialFile refuse there
+		// unconditionally too -- so this is not the ambiguous "something may be
+		// there that this process cannot read" a locked keyring is. Treating it
+		// as ErrCredentialMissing lets CollectCredentialMaterial, and therefore
+		// logout, continue enumerating and cleaning up whatever this platform
+		// DOES support -- the environment credential, and the keyring where it
+		// functions -- instead of aborting the whole enumeration over a file
+		// location this sidecar could never have populated. An operator-supplied
+		// path that happens to hold an unrelated file this sidecar simply cannot
+		// read on this platform is, on this platform, already indistinguishable
+		// from nothing being there at all.
+		if errors.Is(err, ErrBoundedFileReadsUnsupported) {
+			return CredentialResult{}, fmt.Errorf("read ACR credential file: %w: %w", ErrCredentialMissing, err)
+		}
 		return CredentialResult{}, fmt.Errorf("read ACR credential file: %w", err)
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
@@ -366,7 +383,7 @@ func DeleteCredential() error {
 		if path == "" {
 			return &CredentialCleanupError{Location: TokenFileEnvironment, cause: ErrCredentialPersistenceSourceUnsupported}
 		}
-		if err := removeACRCredentialFile(path); err != nil {
+		if err := removeACRCredentialFile(path, credential.Token, true); err != nil {
 			return &CredentialCleanupError{Location: path, cause: err}
 		}
 		return nil
