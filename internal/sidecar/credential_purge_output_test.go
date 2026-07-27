@@ -15,9 +15,19 @@ import (
 // appendCredentialPurgeTargets. It lives here rather than in the package under
 // test because production always purges a whole set at once
 // (PurgeAllCredentialMaterial), so a production-side wrapper would be dead code.
+// The expected-token map is built the same way PurgeAllCredentialMaterial
+// builds it for a one-element material slice, so these tests exercise the
+// same target set a real single-credential purge would.
 func credentialPurgeTargets(current CredentialResult, keyringAllowed bool) []credentialPurgeTarget {
+	expected := map[credentialPurgeKey]string{}
+	if current.filePath != "" {
+		expected[credentialPurgeKey{primary: current.filePath}] = current.Token
+	}
+	if current.keyringService != "" && current.keyringAccount != "" {
+		expected[credentialPurgeKey{keyring: true, primary: current.keyringService, secondary: current.keyringAccount}] = current.Token
+	}
 	targets := make([]credentialPurgeTarget, 0, 4)
-	appendCredentialPurgeTargets(&targets, map[credentialPurgeKey]bool{}, current, keyringAllowed)
+	appendCredentialPurgeTargets(&targets, map[credentialPurgeKey]bool{}, expected, current, keyringAllowed)
 	return targets
 }
 
@@ -113,6 +123,22 @@ func TestSafeCredentialCleanupLocationsRedactsBoundsAndQuotesEveryLocation(t *te
 			location:    "keyring service " + token + " account agent-a",
 			wantAbsent:  []string{token, token[len(auth.TokenPrefix):]},
 			wantPresent: []string{redactedTokenMarker, "account agent-a"},
+		},
+		{
+			// strings.ToLower(value) can shrink a string's byte length: unicode.ToLower
+			// on U+0130 (LATIN CAPITAL LETTER I WITH DOT ABOVE, 2 UTF-8 bytes) yields
+			// plain "i" (1 byte). redactTokenText used to fold the whole location
+			// into a separate lowercase string and then index it with offsets it
+			// walked over the ORIGINAL, longer string; enough of these runes made the
+			// lowered copy shorter than the offset being read, and the redaction
+			// helper itself panicked with "slice bounds out of range" on operator- or
+			// attacker-supplied Unicode in a credential location. This case is well
+			// past where the earlier implementation panicked; it merely completing
+			// (rather than crashing) is the assertion that matters most here.
+			name:        "unicode case folding that shrinks byte length",
+			location:    "/home/agent/" + strings.Repeat("\u0130", 40) + "/" + token + "/tail",
+			wantAbsent:  []string{token, token[len(auth.TokenPrefix):]},
+			wantPresent: []string{redactedTokenMarker, "/home/agent/", "/tail"},
 		},
 		{
 			name:        "oversized path",

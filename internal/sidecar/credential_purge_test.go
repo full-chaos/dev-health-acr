@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -230,5 +231,96 @@ func TestPurgeCredentialMaterialClearsBothTheKeyringEntryAndTheFileUnderneathIt(
 	}
 	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("token file underneath the keyring credential remains: %v", statErr)
+	}
+}
+
+// A purge target's proof used to stop at "the file/keyring entry currently
+// holds a shape-valid ACR token", which cannot distinguish the token this
+// logout enumerated and already revoked from a DIFFERENT, still-live token a
+// concurrent login or refresh wrote to the same location afterward. Deleting
+// on shape alone in that window strands a credential the server still
+// honours while logout reports success. These two tests simulate exactly
+// that race directly (write the replacement before calling purge) rather than
+// with real goroutines, because the assertion is about what purge does when
+// handed a stale expectation, not about timing.
+func TestPurgeAllCredentialMaterialRetainsAFileWhoseTokenChangedSinceEnumeration(t *testing.T) {
+	// Given
+	path := filepath.Join(t.TempDir(), "token")
+	tokenA := validTestToken(90)
+	tokenB := validTestToken(91)
+	if err := os.WriteFile(path, []byte(tokenA+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// current simulates what CollectCredentialMaterial captured before this
+	// logout revoked tokenA server-side.
+	current := CredentialResult{Token: tokenA, Source: "file", filePath: path}
+	t.Setenv(TokenKeyringDisabledEnvironment, "true")
+	// A concurrent login or refresh replaces the file's contents with a
+	// different, still-live credential in the window between enumeration and
+	// purge -- exactly the race PurgeAllCredentialMaterial must not delete
+	// through.
+	if err := os.WriteFile(path, []byte(tokenB+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	err := PurgeAllCredentialMaterial([]CredentialResult{current})
+
+	// Then
+	var purgeErr *CredentialPurgeError
+	if !errors.As(err, &purgeErr) {
+		t.Fatalf("purge error = %v, want a typed aggregate purge error", err)
+	}
+	if !errors.Is(err, errCredentialPurgeTargetChanged) {
+		t.Fatalf("purge error = %v, want errCredentialPurgeTargetChanged", err)
+	}
+	contents, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read token file after purge: %v", readErr)
+	}
+	if got := strings.TrimSpace(string(contents)); got != tokenB {
+		t.Fatalf("token file after purge = %q, want the untouched replacement token %q; a changed-target purge must never delete", got, tokenB)
+	}
+}
+
+func TestPurgeAllCredentialMaterialRetainsAKeyringEntryWhoseTokenChangedSinceEnumeration(t *testing.T) {
+	// Given
+	service := "acr-sidecar-test"
+	account := "agent-a"
+	tokenA := validTestToken(92)
+	tokenB := validTestToken(93)
+	t.Setenv(TokenKeyringDisabledEnvironment, "false")
+	t.Setenv(TokenKeyringServiceEnvironment, service)
+	t.Setenv(TokenKeyringAccountEnvironment, account)
+	t.Setenv(TokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
+	address := KeyringAddress{Service: service, Account: account}
+	keyring, restore, err := InstallMemoryKeyringForTesting(map[KeyringAddress]string{address: tokenA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+	// current simulates what CollectCredentialMaterial captured before this
+	// logout revoked tokenA server-side.
+	current := CredentialResult{Token: tokenA, Source: "keyring", keyringService: service, keyringAccount: account}
+	// A concurrent login or refresh replaces the keyring entry with a
+	// different, still-live credential in the window between enumeration and
+	// purge. Same package as MemoryKeyring, so this reaches its unexported
+	// store directly rather than through a seam meant to model a real backend
+	// call -- the point here is the state the target observes, not a second
+	// realistic write path.
+	keyring.entries[address] = tokenB
+
+	// When
+	purgeErr := PurgeAllCredentialMaterial([]CredentialResult{current})
+
+	// Then
+	if !errors.Is(purgeErr, errCredentialPurgeTargetChanged) {
+		t.Fatalf("purge error = %v, want errCredentialPurgeTargetChanged", purgeErr)
+	}
+	if got := keyring.entries[address]; got != tokenB {
+		t.Fatalf("keyring entry after purge = %q, want the untouched replacement token %q; a changed-target purge must never delete", got, tokenB)
+	}
+	if len(keyring.deletes) != 0 {
+		t.Fatalf("keyring deletes = %v, want none: a changed target must never reach the deleter", keyring.deletes)
 	}
 }
