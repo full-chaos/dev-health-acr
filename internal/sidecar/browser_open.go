@@ -9,7 +9,9 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
+	"unicode"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 )
@@ -41,6 +43,40 @@ var browserOpenerDeadline = 20 * time.Second
 // rather than infer it from elapsed time, which would pass whether or not the
 // child was ever collected.
 var browserOpenerReaped func()
+
+// browserOpenerWaited, when non-nil, is invoked immediately after this
+// package's single command.Wait() call on the launched opener returns. It is
+// distinct from browserOpenerReaped: reaped fires once after the whole reap
+// sequence completes regardless of how many times Wait was actually called,
+// so a mutation that added a second Wait call would still satisfy a test that
+// only hooks reaped. Hooking the Wait call itself is the only way to pin
+// "waited for exactly once" as a property of the call site, not of the
+// sequence around it.
+var browserOpenerWaited func(error)
+
+// activeBrowserOpener tracks the most recently launched opener that has not
+// yet finished reaping, so CloseVerificationBrowserOpener can synchronously
+// tear it down. OpenVerificationURI hands off and reaps in a background
+// goroutine bounded by browserOpenerDeadline; that goroutine, like every other
+// goroutine in this process, is killed the instant the process exits. A login
+// that succeeds (or is cancelled) before a slow or hung opener returns would
+// otherwise orphan both the opener and any process it forked, unreaped, for
+// however long they keep running after this process is gone -- silently,
+// since process exit reports nothing about what it left behind.
+var (
+	activeBrowserOpenerMu sync.Mutex
+	activeBrowserOpener   *browserOpenerHandle
+)
+
+// browserOpenerHandle lets the launching goroutine and the reaping goroutine
+// coordinate a forced, synchronous teardown without either one guessing at
+// the other's state.
+type browserOpenerHandle struct {
+	processGroup int
+	done         chan struct{}
+	forceKill    chan struct{}
+	forceOnce    sync.Once
+}
 
 // browserLaunchEnvironment is the complete set of variables a desktop opener
 // is allowed to inherit. This is an allowlist rather than credentialSafeEnviron's
@@ -83,6 +119,11 @@ var browserLaunchEnvironment = []string{
 // process group and reaped under a fixed deadline, so an opener that hangs
 // takes neither this process's login session nor an orphaned process tree with
 // it.
+//
+// The launch hands off immediately; the caller must call
+// CloseVerificationBrowserOpener before the process may exit, so a fast
+// success does not orphan a still-running opener that the background deadline
+// has not yet caught up with.
 func OpenVerificationURI(uri string) error {
 	if err := validateVerificationURI(uri); err != nil {
 		return err
@@ -109,35 +150,81 @@ func OpenVerificationURI(uri string) error {
 	if err := command.Start(); err != nil {
 		return fmt.Errorf("start browser opener: %w", err)
 	}
-	// The deadline and the reap hook are captured here, at launch, not read at
+	// The process group is captured here, at launch, so a synchronous
+	// CloseVerificationBrowserOpener call racing the reaper goroutine's own
+	// startup always has a real target to kill rather than an empty one.
+	processGroup := captureKeyringProcessGroup(command)
+	handle := &browserOpenerHandle{processGroup: processGroup, done: make(chan struct{}), forceKill: make(chan struct{})}
+	activeBrowserOpenerMu.Lock()
+	activeBrowserOpener = handle
+	activeBrowserOpenerMu.Unlock()
+	// The deadline and the reap hooks are captured here, at launch, not read at
 	// reap time: an opener launched before a test installed its own values must
 	// not be able to signal that test's reap -- both a false pass and a data
 	// race on the seams.
-	go reapBrowserOpener(command, browserOpenerDeadline, browserOpenerReaped)
+	go reapBrowserOpener(command, processGroup, handle, browserOpenerDeadline, browserOpenerReaped, browserOpenerWaited)
 	return nil
 }
 
+// CloseVerificationBrowserOpener synchronously tears down the most recently
+// launched browser opener, if one has not already finished on its own. Login
+// calls this once it no longer needs the opener -- on every return path from
+// the attempt that launched it, success or failure alike -- so the process
+// never exits while a reap is still only bounded by the 20-second background
+// deadline: that deadline exists to bound an unattended login, not to be the
+// only thing standing between a fast, successful login and an orphaned
+// browser process (and everything it may have forked) left running after this
+// process is gone.
+//
+// A second call, or a call with no opener outstanding, is a safe no-op:
+// forceOnce and the done channel together make teardown idempotent regardless
+// of how many return paths converge on it.
+func CloseVerificationBrowserOpener() {
+	activeBrowserOpenerMu.Lock()
+	handle := activeBrowserOpener
+	activeBrowserOpenerMu.Unlock()
+	if handle == nil {
+		return
+	}
+	handle.forceOnce.Do(func() { close(handle.forceKill) })
+	<-handle.done
+}
+
 // reapBrowserOpener waits for the opener exactly once and bounds how long it
-// may run.
+// may run, or tears it down immediately if handle.forceKill fires first --
+// CloseVerificationBrowserOpener's synchronous teardown path.
 //
 // Wait is called from exactly one goroutine, and the process group is killed
-// only on the branch where the deadline actually won -- while the child is
-// still un-reaped. Arming a timer that kills after Wait may already have
-// returned would signal a process group whose leader PID the kernel is free to
-// have reused, turning a hung-opener guard into a stray SIGKILL at an
-// unrelated process tree.
-func reapBrowserOpener(command *exec.Cmd, deadline time.Duration, reaped func()) {
-	processGroup := captureKeyringProcessGroup(command)
+// only on a branch where the child is confirmed still un-reaped (the deadline
+// firing, or a forced close): arming a timer that kills after Wait may
+// already have returned would signal a process group whose leader PID the
+// kernel is free to have reused, turning a hung-opener guard into a stray
+// SIGKILL at an unrelated process tree.
+func reapBrowserOpener(command *exec.Cmd, processGroup int, handle *browserOpenerHandle, deadline time.Duration, reaped func(), waited func(error)) {
+	defer func() {
+		activeBrowserOpenerMu.Lock()
+		if activeBrowserOpener == handle {
+			activeBrowserOpener = nil
+		}
+		activeBrowserOpenerMu.Unlock()
+		close(handle.done)
+	}()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = command.Wait()
+		err := command.Wait()
+		if waited != nil {
+			waited(err)
+		}
 	}()
 	bound := time.NewTimer(deadline)
 	defer bound.Stop()
 	select {
 	case <-done:
 	case <-bound.C:
+		_ = killKeyringProcessGroupID(processGroup)
+		<-done
+	case <-handle.forceKill:
 		_ = killKeyringProcessGroupID(processGroup)
 		<-done
 	}
@@ -159,7 +246,20 @@ func validateVerificationURI(raw string) error {
 		return ErrVerificationURIUnsupported
 	}
 	for _, r := range raw {
-		if r <= ' ' || r == 0x7f {
+		// r <= ' ' catches every ASCII control character and the space itself;
+		// 0x7f is DEL, the one ASCII control point above the printable range.
+		// Neither test reaches the much larger set of Unicode characters that
+		// read as invisible or as whitespace to a terminal or a browser's
+		// address handling without being ASCII: C1 controls (0x80-0x9F),
+		// Unicode space separators (Zs: NBSP, the en/em spaces, the ideographic
+		// space...), and the format category (Cf: zero-width space/joiner,
+		// left-to-right and right-to-left marks, the BOM) that a renderer
+		// treats as zero-width rather than printing. A verification address
+		// carrying one of these could visually hide or rearrange itself for an
+		// operator asked to copy it, so unicode.IsControl and unicode.IsSpace
+		// plus the Cf format category are rejected alongside the ASCII check
+		// rather than instead of it.
+		if r <= ' ' || r == 0x7f || unicode.IsControl(r) || unicode.IsSpace(r) || unicode.In(r, unicode.Cf) {
 			return ErrVerificationURIUnsupported
 		}
 	}

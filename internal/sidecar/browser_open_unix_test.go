@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -157,14 +159,17 @@ func TestOpenVerificationURIReapsAHangingOpenerUnderAFixedDeadline(t *testing.T)
 	browserOpenerDeadline = 2 * time.Second
 	t.Cleanup(func() { browserOpenerDeadline = restoreDeadline })
 	reaped := make(chan struct{})
-	reapCount := 0
-	browserOpenerReaped = func() {
-		reapCount++
-		if reapCount == 1 {
-			close(reaped)
-		}
-	}
-	t.Cleanup(func() { browserOpenerReaped = nil })
+	var reapedOnce sync.Once
+	var waitCount atomic.Int64
+	// waitCount is hooked to browserOpenerWaited, not browserOpenerReaped:
+	// reaped fires once after the whole sequence completes regardless of how
+	// many times Wait was actually called, so it cannot by itself distinguish
+	// one Wait call from a mutation that added a second. Hooking the Wait call
+	// site directly is what makes "reaped exactly once" a pinned property
+	// rather than an assumption.
+	browserOpenerWaited = func(error) { waitCount.Add(1) }
+	browserOpenerReaped = func() { reapedOnce.Do(func() { close(reaped) }) }
+	t.Cleanup(func() { browserOpenerReaped = nil; browserOpenerWaited = nil })
 
 	// When
 	started := time.Now()
@@ -201,10 +206,12 @@ func TestOpenVerificationURIReapsAHangingOpenerUnderAFixedDeadline(t *testing.T)
 	// Wait must run exactly once. A second Wait on the same command returns an
 	// error rather than corrupting anything, so the defect it would signal --
 	// two goroutines racing to reap one child -- has no visible symptom except
-	// this count.
+	// this count. Asserting waitCount rather than a reapCount derived from
+	// browserOpenerReaped is what makes this fail against a mutation that adds
+	// a second command.Wait() call: reaped fires once regardless.
 	time.Sleep(200 * time.Millisecond)
-	if reapCount != 1 {
-		t.Fatalf("opener reaped %d times, want exactly once", reapCount)
+	if got := waitCount.Load(); got != 1 {
+		t.Fatalf("opener waited %d times, want exactly once", got)
 	}
 }
 
@@ -264,7 +271,14 @@ func TestOpenVerificationURIReturnsImmediatelyWhenTheOpenerHangsBeforeWritingAny
 	browserOpenerDeadline = 2 * time.Second
 	t.Cleanup(func() { browserOpenerDeadline = restoreDeadline })
 	reaped := make(chan struct{})
-	browserOpenerReaped = func() { close(reaped) }
+	var reapedOnce sync.Once
+	// A guarded close matters here specifically: this fixture's opener never
+	// writes anything before it is reaped, unlike the sibling test above, so
+	// there is nothing else serializing how many times this hook could fire
+	// under a future change to the reap path. An unguarded close(reaped) would
+	// panic the reaper goroutine on a second call instead of failing the test
+	// that actually exercises the property.
+	browserOpenerReaped = func() { reapedOnce.Do(func() { close(reaped) }) }
 	t.Cleanup(func() { browserOpenerReaped = nil })
 
 	// When
@@ -286,5 +300,75 @@ func TestOpenVerificationURIReturnsImmediatelyWhenTheOpenerHangsBeforeWritingAny
 	case <-reaped:
 	case <-time.After(10 * time.Second):
 		t.Fatal("the hung opener was never reaped, so it outlives the operation that started it")
+	}
+}
+
+// A login that succeeds while the opener is still hung must not leave that
+// opener (or anything it forked) running past the process. OpenVerificationURI
+// alone cannot guarantee that: it hands off to a goroutine bounded only by
+// browserOpenerDeadline, and that goroutine is killed along with every other
+// goroutine the instant this process exits, before a slow deadline ever fires.
+//
+// This sets the deadline far longer than the test could tolerate waiting on,
+// so the only way the opener and its forked descendant can be gone by the
+// time this test asserts it is CloseVerificationBrowserOpener tearing them
+// down synchronously and immediately, exactly as login teardown must.
+func TestCloseVerificationBrowserOpenerKillsAHungOpenerImmediatelyWithoutWaitingForTheDeadline(t *testing.T) {
+	// Given
+	requireSh(t)
+	home := t.TempDir()
+	descendantFile := filepath.Join(home, "descendant.pid")
+	trustedDirectory := t.TempDir()
+	opener := filepath.Join(trustedDirectory, browserOpenerName())
+	script := "#!/bin/sh\nsleep 300 &\nprintf '%s\\n' \"$!\" > \"$HOME/descendant.tmp\"\nmv \"$HOME/descendant.tmp\" \"$HOME/descendant.pid\"\nwait\n"
+	if err := os.WriteFile(opener, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	injectExecutableResolver(t, browserOpenerName(), opener)
+	restoreDeadline := browserOpenerDeadline
+	// An hour is far longer than this test's own bound below, so a pass can
+	// only mean the forced close fired -- the background deadline is not a
+	// plausible explanation for the opener being gone.
+	browserOpenerDeadline = time.Hour
+	t.Cleanup(func() { browserOpenerDeadline = restoreDeadline })
+
+	// When
+	if err := OpenVerificationURI("https://acr.example.com/device"); err != nil {
+		t.Fatalf("OpenVerificationURI: %v", err)
+	}
+	descendant := waitForOpenerDescendantPID(t, descendantFile)
+	t.Cleanup(func() { _ = syscall.Kill(descendant, syscall.SIGKILL) })
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		CloseVerificationBrowserOpener()
+	}()
+
+	// Then
+	// Ten seconds is far below the hour-long deadline and far below the
+	// opener's own 300-second sleep, so this can only pass if the forced kill
+	// path actually ran rather than falling through to either background
+	// timer.
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("CloseVerificationBrowserOpener did not return; login teardown would block indefinitely on a hung opener")
+	}
+	if !waitForProcessGone(descendant) {
+		t.Fatalf("the descendant the opener forked (pid %d) survived CloseVerificationBrowserOpener; a fast login exit would have orphaned it", descendant)
+	}
+	// A second call must be a safe no-op: every return path in login calls
+	// this, and only one of them actually launched an opener that needs
+	// tearing down.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		CloseVerificationBrowserOpener()
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a second CloseVerificationBrowserOpener call blocked; it must be a safe no-op once the opener is already reaped")
 	}
 }
