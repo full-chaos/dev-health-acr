@@ -95,26 +95,9 @@ func (r *CatalogClickHouseRows) ResolveEvidenceReference(ctx context.Context, or
 		return nil, storage.ErrNotFound
 	}
 	plan := ReadPlan{OrgID: orgID, RepoID: scope.RepoID, RepoSlug: scope.RepoSlug}
-	rows, err := r.client.Query(ctx, `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, confidence, citation, observed_at FROM (`+query.Statement+`) LIMIT 501`, plan.Bindings())
+	result, err := r.executor.QueryEvidence(ctx, *query, plan.Bindings())
 	if err != nil {
 		return nil, fmt.Errorf("resolve evidence locator: %w", err)
-	}
-	defer rows.Close()
-	scanned := 0
-	var result []contractsv1.EvidenceRef
-	for rows.Next() {
-		scanned++
-		evidence, scanErr := scanEvidenceRow(rows)
-		if scanErr != nil {
-			return nil, fmt.Errorf("scan evidence locator: %w", scanErr)
-		}
-		result = append(result, evidence)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate evidence locator: %w", err)
-	}
-	if scanned == 501 {
-		return nil, storage.ErrNotFound
 	}
 	references := make([]EvidenceReference, 0, len(result))
 	for _, evidence := range result {
