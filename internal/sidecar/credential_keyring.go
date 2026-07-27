@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -240,13 +239,15 @@ func (b *boundedBuffer) String() string {
 	return b.buf.String()
 }
 
-// defaultKeyringAccount derives a stable per-user account name for keyring
-// lookups when ACR_API_TOKEN_KEYRING_ACCOUNT is not explicitly configured.
-func defaultKeyringAccount() string {
-	if user := os.Getenv("USER"); user != "" {
+// defaultKeyringAccountFrom derives a stable per-user account name for keyring
+// lookups when ACR_API_TOKEN_KEYRING_ACCOUNT is not explicitly configured. It
+// takes its lookup function so the derivation can be exercised as a pure
+// function against a fixed environment.
+func defaultKeyringAccountFrom(getenv func(string) string) string {
+	if user := getenv("USER"); user != "" {
 		return user
 	}
-	if user := os.Getenv("USERNAME"); user != "" {
+	if user := getenv("USERNAME"); user != "" {
 		return user
 	}
 	return "acr-agent"

@@ -139,22 +139,11 @@ func loadCredential(keyringAllowed bool) (CredentialResult, error) {
 // exact entry miss or unavailable trusted executable permits file fallback;
 // all other lookup failures are returned so the caller fails closed.
 func loadFromKeyring() (CredentialResult, bool, error) {
-	service := strings.TrimSpace(os.Getenv(TokenKeyringServiceEnvironment))
-	explicitService := service != ""
-	if service == "" {
-		service = defaultKeyringService
-	}
 	if currentKeyringLookup == nil {
 		return CredentialResult{}, false, ErrExecutableUnavailable
 	}
-	account := strings.TrimSpace(os.Getenv(TokenKeyringAccountEnvironment))
-	if account == "" {
-		account = defaultKeyringAccountForAPIURL()
-		if account == "" && explicitService {
-			account = defaultKeyringAccount()
-		}
-	}
-	if account == "" {
+	service, account, configured := credentialKeyringAddress()
+	if !configured {
 		return CredentialResult{}, false, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), keyringLookupTimeout)
@@ -390,17 +379,35 @@ func credentialKeyringLocation(service, account string) string {
 	return "keyring service " + service + " account " + account
 }
 
+// credentialKeyringAddress derives the keyring service and account, and
+// reports whether the pair addresses anything at all.
+//
+// This is the single derivation for every keyring operation -- lookup,
+// verification, persistence, deletion, and purge. It used to be duplicated
+// inside loadFromKeyring, which is a latent divergence with no symptom until
+// the two disagree: a read that resolves one account while a delete resolves
+// another leaves a live credential in the store that logout reported as
+// removed, and neither copy's own tests would notice.
+//
+// The account falls back to defaultKeyringAccount (the OS user) only when the
+// service was set explicitly. Without an explicit service, an unset
+// ACR_API_URL leaves no address at all, rather than pointing every ACR install
+// on the host at one shared per-user entry under the default service.
 func credentialKeyringAddress() (string, string, bool) {
-	service := strings.TrimSpace(os.Getenv(TokenKeyringServiceEnvironment))
+	return deriveCredentialKeyringAddress(os.Getenv)
+}
+
+func deriveCredentialKeyringAddress(getenv func(string) string) (string, string, bool) {
+	service := strings.TrimSpace(getenv(TokenKeyringServiceEnvironment))
 	explicitService := service != ""
 	if service == "" {
 		service = defaultKeyringService
 	}
-	account := strings.TrimSpace(os.Getenv(TokenKeyringAccountEnvironment))
+	account := strings.TrimSpace(getenv(TokenKeyringAccountEnvironment))
 	if account == "" {
-		account = defaultKeyringAccountForAPIURL()
+		account = normalizedKeyringAccountForAPIURL(strings.TrimSpace(getenv(APIURLEnvironment)))
 		if account == "" && explicitService {
-			account = defaultKeyringAccount()
+			account = defaultKeyringAccountFrom(getenv)
 		}
 	}
 	return service, account, account != ""
@@ -429,8 +436,12 @@ func defaultTokenFilePath() string {
 	return filepath.Join(home, ".acr", "token")
 }
 
-func defaultKeyringAccountForAPIURL() string {
-	raw := strings.TrimSpace(os.Getenv(APIURLEnvironment))
+// normalizedKeyringAccountForAPIURL renders the configured API origin as a
+// keyring account: scheme and host only, lowercased, with no path, query, port
+// stripping, or userinfo. A malformed or non-absolute value yields no account
+// rather than a partial one, so a broken ACR_API_URL cannot address a keyring
+// entry belonging to some other origin.
+func normalizedKeyringAccountForAPIURL(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return ""
