@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
@@ -252,11 +253,25 @@ func runLogoutCommand(args []string) int {
 		return lifecycleExitFailure
 	}
 	if err := sidecar.PurgeCredentialMaterial(credential); err != nil {
-		fmt.Fprintln(os.Stderr, "logout: remote credential was revoked, but local cleanup requires operator action at "+sidecar.CredentialCleanupLocation(credential))
+		// Report every location the purge actually failed at. Deriving one
+		// location from the credential's own source named a place the purge
+		// may never have touched and hid the rest.
+		fmt.Fprintln(os.Stderr, "logout: remote credential was revoked, but local cleanup requires operator action at "+describeCleanupLocations(err))
 		return lifecycleExitFailure
 	}
 	fmt.Fprintln(os.Stdout, "logout successful")
 	return 0
+}
+
+// describeCleanupLocations renders the exact failed cleanup locations for an
+// operator. Locations are variable names, file paths, and keyring
+// service/account identifiers -- never credential material.
+func describeCleanupLocations(err error) string {
+	locations := sidecar.CredentialCleanupLocations(err)
+	if len(locations) == 0 {
+		return "the configured ACR credential locations"
+	}
+	return strings.Join(locations, ", ")
 }
 
 func loadCredentialClient(command string) (sidecar.Config, sidecar.CredentialResult, *sidecar.Client, int) {

@@ -617,6 +617,51 @@ func TestLogoutRetainsCredential_when_remoteRevocationFails(t *testing.T) {
 	}
 }
 
+// An exported ACR_API_TOKEN used to end the purge before it started, so a
+// stale token file underneath it survived logout while the operator was told
+// cleanup had failed at "the configured ACR keyring entry" -- a location the
+// purge never touched. Cleanup must continue past the environment source and
+// the message must name exactly what actually failed.
+func TestLogoutPurgesFileMaterialAndNamesEnvironment_whenEnvironmentCredentialIsSelected(t *testing.T) {
+	// Given
+	token := validDoctorToken(90)
+	revocations := 0
+	server := newCredentialLifecycleServer(t, token, validDoctorToken(91), &revocations, false)
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte(validDoctorToken(92)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, token)
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+
+	// When
+	code, stderr := captureStderr(t, func() int { return runCLI([]string{"logout"}) })
+
+	// Then
+	if code != lifecycleExitFailure {
+		t.Fatalf("logout exit code = %d, want %d; stderr=%s", code, lifecycleExitFailure, stderr)
+	}
+	if revocations != 1 {
+		t.Fatalf("remote revocations = %d, want 1", revocations)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("token file survived logout behind an environment credential: %v", err)
+	}
+	if !strings.Contains(stderr, sidecar.TokenEnvironment) {
+		t.Fatalf("logout stderr = %q, want the exact unremovable location %q", stderr, sidecar.TokenEnvironment)
+	}
+	if strings.Contains(stderr, "keyring") {
+		t.Fatalf("logout stderr = %q, want no derived keyring location", stderr)
+	}
+	if strings.Contains(stderr, token) || strings.Contains(stderr, "fcacr_") {
+		t.Fatal("logout stderr leaked credential material")
+	}
+}
+
 // The previous version of this test pointed ACR_API_TOKEN at the credential,
 // so LoadCredential resolved source "environment" and PurgeCredentialMaterial
 // short-circuited before reaching any cleanup path: it passed even with the

@@ -1,0 +1,132 @@
+package sidecar
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"sort"
+	"testing"
+)
+
+// memoryKeyring is an in-memory stand-in for the OS secret store so a purge
+// test can assert the entry is actually gone rather than that a deleter was
+// merely called. Nothing here touches a host keychain.
+type memoryKeyring struct {
+	entries map[string]string
+	deletes []string
+}
+
+func newMemoryKeyring(t *testing.T, seeded map[string]string) *memoryKeyring {
+	t.Helper()
+	keyring := &memoryKeyring{entries: map[string]string{}}
+	for address, token := range seeded {
+		keyring.entries[address] = token
+	}
+	stubKeyringDeleter(t, func(_ context.Context, service, account string) error {
+		address := service + "\x00" + account
+		keyring.deletes = append(keyring.deletes, address)
+		if _, ok := keyring.entries[address]; !ok {
+			return errors.New("keyring entry not found")
+		}
+		delete(keyring.entries, address)
+		return nil
+	})
+	return keyring
+}
+
+func memoryKeyringAddress(service, account string) string { return service + "\x00" + account }
+
+// An environment credential cannot be unset in the parent shell, but a process
+// that exports ACR_API_TOKEN can still have a stale token file and keyring
+// entry underneath it. Returning early on the environment source left both
+// behind while logout reported that cleanup had failed.
+func TestPurgeCredentialMaterialCleansFileAndKeyring_whenEnvironmentSourceCannotBeRemoved(t *testing.T) {
+	// Given
+	path := filepath.Join(t.TempDir(), "token")
+	service := "acr-sidecar-test"
+	account := "agent-a"
+	t.Setenv(TokenEnvironment, validTestToken(52))
+	t.Setenv(TokenKeyringDisabledEnvironment, "false")
+	t.Setenv(TokenFileEnvironment, path)
+	t.Setenv(TokenKeyringServiceEnvironment, service)
+	t.Setenv(TokenKeyringAccountEnvironment, account)
+	if err := os.WriteFile(path, []byte(fileToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keyring := newMemoryKeyring(t, map[string]string{memoryKeyringAddress(service, account): keyringToken})
+	current, err := LoadCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Source != "environment" {
+		t.Fatalf("credential source = %q, want environment", current.Source)
+	}
+
+	// When
+	err = PurgeCredentialMaterial(current)
+
+	// Then
+	var purgeErr *CredentialPurgeError
+	if !errors.As(err, &purgeErr) {
+		t.Fatalf("purge error = %v, want a typed aggregate purge error", err)
+	}
+	if got := purgeErr.Locations(); len(got) != 1 || got[0] != TokenEnvironment {
+		t.Fatalf("failed locations = %v, want exactly [%s]", got, TokenEnvironment)
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("configured credential file remains after purge: %v", statErr)
+	}
+	if _, ok := keyring.entries[memoryKeyringAddress(service, account)]; ok {
+		t.Fatal("configured keyring entry remains after purge")
+	}
+	if len(keyring.deletes) != 1 {
+		t.Fatalf("keyring deletions = %v, want exactly one", keyring.deletes)
+	}
+}
+
+// The aggregate must name every failure, not the first one: an operator who
+// is told about one stranded location stops looking for the others.
+func TestCredentialCleanupLocationsReportsEveryFailedLocation(t *testing.T) {
+	// Given
+	path := filepath.Join(t.TempDir(), "missing-directory", "token")
+	service := "acr-sidecar-test"
+	account := "agent-a"
+	t.Setenv(TokenEnvironment, validTestToken(53))
+	t.Setenv(TokenKeyringDisabledEnvironment, "false")
+	t.Setenv(TokenFileEnvironment, path)
+	t.Setenv(TokenKeyringServiceEnvironment, service)
+	t.Setenv(TokenKeyringAccountEnvironment, account)
+	stubKeyringDeleter(t, func(context.Context, string, string) error {
+		return errors.New("keyring delete failed")
+	})
+	current, err := LoadCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	locations := CredentialCleanupLocations(PurgeCredentialMaterial(current))
+
+	// Then
+	want := []string{TokenEnvironment, credentialKeyringLocation(service, account)}
+	sort.Strings(locations)
+	sort.Strings(want)
+	if len(locations) != len(want) {
+		t.Fatalf("failed locations = %v, want %v", locations, want)
+	}
+	for index := range want {
+		if locations[index] != want[index] {
+			t.Fatalf("failed locations = %v, want %v", locations, want)
+		}
+	}
+}
+
+func TestCredentialCleanupLocationsReturnsNothingForAnUnreportedError(t *testing.T) {
+	if locations := CredentialCleanupLocations(errors.New("unrelated")); locations != nil {
+		t.Fatalf("locations = %v, want none for an error that reported no location", locations)
+	}
+	if locations := CredentialCleanupLocations(nil); locations != nil {
+		t.Fatalf("locations = %v, want none for a nil error", locations)
+	}
+}

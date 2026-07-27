@@ -27,6 +27,33 @@ func (e *CredentialPurgeError) Unwrap() []error {
 	return errs
 }
 
+// Locations returns the exact location of every cleanup that failed, in the
+// order the purge attempted them. Callers report these verbatim: deriving a
+// single location from the credential's own source instead names a place the
+// purge may never have touched, and hides every other failure.
+func (e *CredentialPurgeError) Locations() []string {
+	locations := make([]string, 0, len(e.Failures))
+	for _, failure := range e.Failures {
+		locations = append(locations, failure.Location)
+	}
+	return locations
+}
+
+// CredentialCleanupLocations extracts every location a purge failed to clean
+// from err. It returns nil for a nil or unrecognized error so an operator
+// message never invents a location that was not actually reported.
+func CredentialCleanupLocations(err error) []string {
+	var purgeErr *CredentialPurgeError
+	if errors.As(err, &purgeErr) {
+		return purgeErr.Locations()
+	}
+	var cleanupErr *CredentialCleanupError
+	if errors.As(err, &cleanupErr) {
+		return []string{cleanupErr.Location}
+	}
+	return nil
+}
+
 // PurgeCredentialMaterial removes every configured or resolved removable
 // credential location, continuing after individual cleanup failures.
 //
@@ -36,13 +63,20 @@ func (e *CredentialPurgeError) Unwrap() []error {
 // alongside the file locations rather than as an early return, because
 // aborting here would leave a readable token file on disk while logout
 // reported that cleanup had failed.
+//
+// An environment credential is the same shape of problem. ACR_API_TOKEN
+// cannot be unset in the parent shell from here, so it is recorded as a
+// typed failure at that exact location -- but it is never an early return:
+// a process that exports ACR_API_TOKEN can still have a stale token file or
+// keyring entry underneath it, and returning here would leave both behind
+// while logout reported that cleanup had failed.
 func PurgeCredentialMaterial(current CredentialResult) error {
+	failures := make([]*CredentialCleanupError, 0)
 	if current.Source == "environment" {
-		return &CredentialCleanupError{Location: TokenEnvironment, cause: ErrCredentialPersistenceSourceUnsupported}
+		failures = append(failures, &CredentialCleanupError{Location: TokenEnvironment, cause: ErrCredentialPersistenceSourceUnsupported})
 	}
 	keyringAllowed, keyringSettingErr := keyringEnabled()
 	targets := credentialPurgeTargets(current, keyringAllowed)
-	failures := make([]*CredentialCleanupError, 0)
 	if keyringSettingErr != nil {
 		failures = append(failures, &CredentialCleanupError{Location: TokenKeyringDisabledEnvironment, cause: keyringSettingErr})
 	}

@@ -356,15 +356,6 @@ func DeleteCredential() error {
 	}
 }
 
-func CredentialCleanupLocation(credential CredentialResult) string {
-	if credential.Source == "file" {
-		if path := configuredTokenFilePath(); path != "" {
-			return path
-		}
-	}
-	return "the configured ACR keyring entry"
-}
-
 func credentialKeyringLocation(service, account string) string {
 	return "keyring service " + service + " account " + account
 }
