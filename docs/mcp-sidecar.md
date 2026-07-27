@@ -115,7 +115,6 @@ The `acr-mcp` binary builds and runs on macOS, Linux, and Windows. Credential an
 - OS keyring (`ACR_API_TOKEN_KEYRING_SERVICE`): macOS and Linux only (see below).
 - `ACR_API_TOKEN_FILE` and `ACR_API_CA_BUNDLE` (local file reads): macOS and Linux only. These reads use an atomic, symlink- and FIFO-resistant open implementation verified only on macOS and Linux; on every other platform, including Windows, the sidecar fails closed and refuses to load the file rather than falling back to an unverified or less-safe read path. `acr-mcp doctor` and `LoadCredential`/`LoadConfig` report this as a load error, not a silent skip.
 
-**Credential persistence is macOS and Linux only, and `login` refuses before it asks the server for anything.** The preflight is an allowlist of the two platforms that have a credential writer, not a Windows-specific denial: on Windows, a BSD, js/wasm, plan9, solaris, or any other platform, `login` exits with "secure credential persistence is unavailable on this platform" *before* starting a device authorization. The ordering matters -- passing preflight and failing afterwards would leave a one-time credential minted on the server with nothing local to prove it existed.
 
 If you need a persistent, non-environment credential on Windows today, there is no supported option; track platform support before relying on `ACR_API_TOKEN_FILE` there.
 

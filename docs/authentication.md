@@ -68,9 +68,9 @@ inactive and does not block cleanup; on a credential this client just had issued
 it stays a failure, because a token the server minted seconds ago and now refuses
 is evidence the client cannot tell.
 
-Credential persistence is supported only on macOS and Linux, and `login` checks
-that before starting a device authorization, so an unsupported platform never
-causes the server to mint a one-time credential that has nowhere to live.
+`login` preflights `CredentialPersistenceSupported` before starting a device
+authorization, so a platform without secure persistence never causes the server
+to mint a one-time credential that has nowhere to live.
 
 ## Rate limiting
 
