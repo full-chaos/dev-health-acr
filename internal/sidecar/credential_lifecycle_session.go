@@ -10,7 +10,9 @@ var errCredentialLifecycleBusy = errors.New("acr: credential lifecycle is alread
 var credentialLifecycleGate sync.Mutex
 
 type CredentialLifecycleSession struct {
-	close func() error
+	close     func() error
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func BeginCredentialLifecycleSession() (*CredentialLifecycleSession, error) {
@@ -29,10 +31,13 @@ func BeginCredentialLifecycleSession() (*CredentialLifecycleSession, error) {
 }
 
 func (s *CredentialLifecycleSession) Close() error {
-	if s == nil || s.close == nil {
+	if s == nil {
 		return nil
 	}
-	close := s.close
-	s.close = nil
-	return close()
+	s.closeOnce.Do(func() {
+		if s.close != nil {
+			s.closeErr = s.close()
+		}
+	})
+	return s.closeErr
 }

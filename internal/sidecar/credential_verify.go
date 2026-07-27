@@ -32,7 +32,7 @@ func (s *CredentialLifecycleSession) VerifyCredential(current CredentialResult, 
 	if exact.Token != expectedToken || exact.Source != current.Source {
 		return errors.New("captured ACR credential source does not contain the expected credential")
 	}
-	resolved, err := LoadCredential()
+	resolved, err := s.LoadCredential()
 	if err != nil {
 		return fmt.Errorf("resolve ACR credential after persistence: %w", err)
 	}
