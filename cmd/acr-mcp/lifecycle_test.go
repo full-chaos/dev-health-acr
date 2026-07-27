@@ -54,6 +54,66 @@ func TestLoginPersistsCredentialAndDoctorDiscoversIt_when_deviceGrantRedeems(t *
 	}
 }
 
+func TestLifecyclePersistUsesTheActiveSession_whenCredentialIsIssued(t *testing.T) {
+	// Given
+	token := validDoctorToken(101)
+	path := filepath.Join(t.TempDir(), "token")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+	session, err := sidecar.BeginCredentialLifecycleSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	// When
+	persisted, err := lifecyclePersist(session, token)
+
+	// Then
+	if err != nil {
+		t.Fatalf("persist through active lifecycle session: %v", err)
+	}
+	if persisted.Token != token || persisted.Source != "file" {
+		t.Fatalf("persisted credential = %#v, want file credential for issued token", persisted)
+	}
+}
+
+func TestLifecycleReplaceUsesTheActiveSession_whenRefreshingCredential(t *testing.T) {
+	// Given
+	original := validDoctorToken(102)
+	successor := validDoctorToken(103)
+	path := filepath.Join(t.TempDir(), "token")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+	if err := os.WriteFile(path, []byte(original+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	session, err := sidecar.BeginCredentialLifecycleSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	current, err := session.LoadCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	err = lifecycleReplace(session, current, successor)
+
+	// Then
+	if err != nil {
+		t.Fatalf("replace through active lifecycle session: %v", err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != successor+"\n" {
+		t.Fatalf("replaced credential = %q, want successor", contents)
+	}
+}
+
 func TestLoginSendsExactOrganizationAndRepositoryHints_whenProvided(t *testing.T) {
 	// Given
 	token := validDoctorToken(92)
@@ -349,6 +409,62 @@ func TestLoginRevokesIssuedCredential_whenPersistenceFails(t *testing.T) {
 	// Then
 	if code != lifecycleExitFailure || revocations != 1 {
 		t.Fatalf("login code=%d revocations=%d, want failure and one revoke", code, revocations)
+	}
+}
+
+func TestLoginRevokesIssuedCredential_whenTokenEndpointReturnsMalformedSuccess(t *testing.T) {
+	// Given
+	token := validDoctorToken(104)
+	createdAt := time.Now().UTC().Truncate(time.Second)
+	revocations := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/oauth/device_authorization":
+			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: deviceVerificationURI, ExpiresIn: 600, Interval: 5})
+		case "/api/v1/oauth/token":
+			_, _ = w.Write([]byte(`{"schema_version":"unsupported.v2","access_token":"` + token + `"}`))
+		case "/api/v1/auth/credentials/self/revoke":
+			if r.Header.Get("Authorization") != "Bearer "+token {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			revocations++
+			revokedAt := createdAt.Add(time.Minute)
+			writeLifecycleJSON(t, w, contractsv1.CredentialRevokeResponse{SchemaVersion: contractsv1.CredentialRevokeResponseSchema, Credential: lifecycleCredential(createdAt, "credential-issued", &revokedAt)})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	cfg, err := sidecar.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := sidecar.NewLifecycleClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := sidecar.BeginCredentialLifecycleSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	originalWait := lifecycleWait
+	lifecycleWait = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { lifecycleWait = originalWait })
+
+	// When
+	outcome := runDeviceLoginAttempt(context.Background(), session, client, cfg, loginArgs{noBrowser: true})
+
+	// Then
+	if outcome != deviceLoginFailed {
+		t.Fatalf("malformed issued-token response outcome = %v, want failure", outcome)
+	}
+	if revocations != 1 {
+		t.Fatalf("issued token revocations = %d, want 1", revocations)
 	}
 }
 
@@ -683,6 +799,49 @@ func TestLogoutRetainsCredential_when_remoteRevocationFails(t *testing.T) {
 	}
 	if strings.TrimSpace(string(contents)) != token {
 		t.Fatalf("retained credential = %q, want the original token", contents)
+	}
+}
+
+func TestLogoutRetainsCredential_whenSelfRevokeReturnsMalformedSuccess(t *testing.T) {
+	// Given
+	token := validDoctorToken(105)
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/auth/credentials/self/revoke" || r.Header.Get("Authorization") != "Bearer "+token {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"schema_version":"unsupported.v2"}`))
+	}))
+	defer server.Close()
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+
+	// When
+	code := runCLI([]string{"logout"})
+
+	// Then
+	if code != lifecycleExitFailure {
+		t.Fatalf("logout exit code = %d, want failure", code)
+	}
+	if requests != 1 {
+		t.Fatalf("self-revoke requests = %d, want 1", requests)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("credential removed after malformed self-revoke response: %v", err)
+	}
+	if string(contents) != token+"\n" {
+		t.Fatalf("retained credential = %q, want original", contents)
 	}
 }
 

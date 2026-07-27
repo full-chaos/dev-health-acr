@@ -33,7 +33,7 @@ func acquireCredentialLifecycleLockFile(path string) (func() error, error) {
 		return nil, fmt.Errorf("acquire credential lifecycle lock: %w", err)
 	}
 	var stat syscall.Stat_t
-	if err := syscall.Fstat(fd, &stat); err != nil || stat.Mode&syscall.S_IFMT != syscall.S_IFREG || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o077 != 0 || stat.Nlink != 1 {
+	if err := syscall.Fstat(fd, &stat); err != nil || !credentialLifecycleLockFileMetadataIsSafe(stat) {
 		_ = syscall.Close(fd)
 		return nil, errCredentialLifecycleLockUnsafe
 	}
@@ -49,6 +49,13 @@ func acquireCredentialLifecycleLockFile(path string) (func() error, error) {
 		}
 		return closeErr
 	}, nil
+}
+
+func credentialLifecycleLockFileMetadataIsSafe(stat syscall.Stat_t) bool {
+	return stat.Mode&syscall.S_IFMT == syscall.S_IFREG &&
+		stat.Uid == uint32(os.Geteuid()) &&
+		stat.Mode&0o077 == 0 &&
+		stat.Nlink == 1
 }
 
 func validateCredentialLifecycleLockParent(path string) error {

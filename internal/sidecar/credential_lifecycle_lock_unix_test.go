@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"syscall"
 	"testing"
 )
 
@@ -53,6 +55,18 @@ func TestCredentialLifecycleLockRejectsUnsafeObjects(t *testing.T) {
 			},
 		},
 		{
+			name: "world writable file",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, 0o602); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
 			name: "directory",
 			setup: func(t *testing.T, path string) {
 				t.Helper()
@@ -83,6 +97,33 @@ func TestCredentialLifecycleLockRejectsUnsafeObjects(t *testing.T) {
 	}
 }
 
+func TestCredentialLifecycleLockFileMetadataRequiresRegularOwnedPrivateUnlinkedFile(t *testing.T) {
+	// Given
+	safe := syscall.Stat_t{Mode: syscall.S_IFREG | 0o600, Uid: uint32(os.Geteuid()), Nlink: 1}
+	cases := []struct {
+		name string
+		stat syscall.Stat_t
+	}{
+		{name: "regular file", stat: safe},
+		{name: "foreign owner", stat: func() syscall.Stat_t { stat := safe; stat.Uid++; return stat }()},
+		{name: "directory", stat: func() syscall.Stat_t { stat := safe; stat.Mode = syscall.S_IFDIR | 0o700; return stat }()},
+		{name: "world readable", stat: func() syscall.Stat_t { stat := safe; stat.Mode |= 0o004; return stat }()},
+		{name: "multiple links", stat: func() syscall.Stat_t { stat := safe; stat.Nlink = 2; return stat }()},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			// When
+			safe := credentialLifecycleLockFileMetadataIsSafe(testCase.stat)
+
+			// Then
+			if safe != (testCase.name == "regular file") {
+				t.Fatalf("metadata safety = %t for %s", safe, testCase.name)
+			}
+		})
+	}
+}
+
 func TestCredentialLifecycleLockParentValidation(t *testing.T) {
 	// Given
 	tests := []struct {
@@ -108,6 +149,48 @@ func TestCredentialLifecycleLockParentValidation(t *testing.T) {
 				t.Fatalf("validation error = %v, want %v", err, testCase.want)
 			}
 		})
+	}
+}
+
+func TestCredentialLifecycleLockRejectsSymlinkedParent(t *testing.T) {
+	// Given
+	parent := filepath.Join(t.TempDir(), "parent")
+	if err := os.Symlink("/var/tmp", parent); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	closeLock, err := acquireCredentialLifecycleLockAt(filepath.Join(parent, "credential.lock"))
+
+	// Then
+	if closeLock != nil {
+		t.Cleanup(func() { _ = closeLock() })
+		t.Fatal("lock acquired through symlinked parent")
+	}
+	if !errors.Is(err, errCredentialLifecycleLockUnsafe) {
+		t.Fatalf("acquire error = %v, want errCredentialLifecycleLockUnsafe", err)
+	}
+}
+
+func TestCredentialLifecycleLockUsesCanonicalVarTmpPath(t *testing.T) {
+	// Given
+	t.Setenv("TMPDIR", t.TempDir())
+	path := filepath.Join("/var/tmp", "acr-credential-lifecycle-"+strconv.Itoa(os.Geteuid())+".lock")
+
+	// When
+	closeLock, err := acquireCredentialLifecycleLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = closeLock()
+		_ = os.Remove(path)
+	})
+	_, err = os.Stat(path)
+
+	// Then
+	if err != nil {
+		t.Fatalf("canonical lifecycle lock path %q was not created: %v", path, err)
 	}
 }
 
