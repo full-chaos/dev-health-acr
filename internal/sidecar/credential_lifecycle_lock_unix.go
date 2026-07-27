@@ -11,7 +11,7 @@ import (
 )
 
 func acquireCredentialLifecycleLock() (func() error, error) {
-	path := filepath.Join(os.TempDir(), fmt.Sprintf("acr-credential-lifecycle-%d.lock", os.Geteuid()))
+	path := filepath.Join("/var/tmp", fmt.Sprintf("acr-credential-lifecycle-%d.lock", os.Geteuid()))
 	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("acquire credential lifecycle lock: %w", err)

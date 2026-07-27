@@ -252,7 +252,7 @@ func CredentialPersistenceSupported() error {
 }
 
 func credentialPersistenceSupportedFor(goos string) error {
-	if goos == "windows" {
+	if goos != "darwin" && goos != "linux" {
 		return ErrCredentialPersistenceUnsupported
 	}
 	return nil

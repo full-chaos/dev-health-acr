@@ -13,10 +13,10 @@ func TestCredentialPersistenceSupportedForPlatform(t *testing.T) {
 		{goos: "darwin"},
 		{goos: "linux"},
 		{goos: "windows", wantErr: ErrCredentialPersistenceUnsupported},
-		{goos: "freebsd"},
-		{goos: "openbsd"},
-		{goos: "js"},
-		{goos: "plan9"},
+		{goos: "freebsd", wantErr: ErrCredentialPersistenceUnsupported},
+		{goos: "openbsd", wantErr: ErrCredentialPersistenceUnsupported},
+		{goos: "js", wantErr: ErrCredentialPersistenceUnsupported},
+		{goos: "plan9", wantErr: ErrCredentialPersistenceUnsupported},
 	} {
 		t.Run(testCase.goos, func(t *testing.T) {
 			if err := credentialPersistenceSupportedFor(testCase.goos); !errors.Is(err, testCase.wantErr) {
