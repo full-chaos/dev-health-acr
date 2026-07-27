@@ -46,9 +46,9 @@ var ErrCredentialShapeInvalid = errors.New("acr: credential does not match the A
 var ErrCredentialMissing = errors.New("ACR API credential is not configured")
 
 // ErrCredentialPersistenceUnsupported is returned before any login flow can
-// issue a credential on Windows, where this sidecar has no supported secure
-// persistence mechanism.
-var ErrCredentialPersistenceUnsupported = errors.New("acr: credential persistence is unsupported on Windows")
+// issue a credential on a platform where this sidecar has no supported
+// secure persistence mechanism.
+var ErrCredentialPersistenceUnsupported = errors.New("acr: credential persistence is unsupported on this platform")
 
 var ErrCredentialPersistenceSourceUnsupported = errors.New("acr: credential source cannot be replaced securely")
 
@@ -233,10 +233,28 @@ func loadCredentialFile(path string) (CredentialResult, error) {
 // CredentialPersistenceSupported exposes the stable, preflightable platform
 // boundary for login before it asks the server to issue a one-time secret.
 func CredentialPersistenceSupported() error {
-	if runtime.GOOS == "windows" {
+	return credentialPersistenceSupportedFor(runtime.GOOS)
+}
+
+// credentialPersistenceSupportedFor is the pure platform decision behind
+// CredentialPersistenceSupported, kept separate so every GOOS can be checked
+// in one table-driven test on any host.
+//
+// This is an allowlist, not a Windows denylist. writeCredentialFile and
+// removeCredentialFile only exist for darwin and linux
+// (credential_persistence_unix.go); every other platform compiles the
+// unsupported stubs in credential_persistence_other.go. Naming Windows alone
+// meant login on any third platform -- js/wasm, a BSD, plan9, solaris --
+// passed preflight, asked the server to mint a one-time credential, and only
+// then discovered it had nowhere to put it, leaving an issued secret behind
+// with nothing local to prove it existed.
+func credentialPersistenceSupportedFor(goos string) error {
+	switch goos {
+	case "darwin", "linux":
+		return nil
+	default:
 		return ErrCredentialPersistenceUnsupported
 	}
-	return nil
 }
 
 // PersistCredential stores a shape-valid credential in the configured or
