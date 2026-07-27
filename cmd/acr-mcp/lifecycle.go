@@ -122,11 +122,28 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 		fmt.Fprintln(os.Stderr, "login: could not start device authorization")
 		return deviceLoginFailed
 	}
+	// The verification address is server-supplied data that this command is
+	// about to render into an operator's terminal and hand to a desktop opener.
+	// Validating it only inside the opener left the first of those unguarded:
+	// a hostile or malformed address was printed regardless, ready to be copied
+	// into a browser by hand, and --no-browser would have skipped the check
+	// entirely. The refusal names no part of the address, which is untrusted.
+	//
+	// The check stays client-side. The hosted contract validates
+	// verification_uri through contracts/v1's shared optionalURI helper, and
+	// tightening that helper would change validation for every other URI field
+	// in v1 -- a wire-visible requiredness change -- not just this one.
+	if err := sidecar.ValidateVerificationURI(authorization.VerificationURI); err != nil {
+		fmt.Fprintln(os.Stderr, "login: the server returned a verification address this client will not display or open")
+		return deviceLoginFailed
+	}
 	fmt.Fprintf(os.Stdout, "Open %s and enter code %s\n", authorization.VerificationURI, authorization.UserCode)
 	// Opening the browser is a convenience on top of the line above, so any
-	// failure -- an unlaunchable URI, no trusted opener on this host -- is
-	// deliberately nonfatal.
-	_ = lifecycleBrowserOpen(authorization.VerificationURI)
+	// failure -- no trusted opener on this host -- is deliberately nonfatal, and
+	// --no-browser skips the launch entirely without changing anything else.
+	if !parsed.noBrowser {
+		_ = lifecycleBrowserOpen(authorization.VerificationURI)
+	}
 	// The validated grant carries its own lifetime. Polling past it burns
 	// requests against a code the server has already expired, and an
 	// unresponsive server previously kept the loop running indefinitely

@@ -29,7 +29,7 @@ func TestCompiledLoginThenBareDoctorDiscoversPersistedCredential(t *testing.T) {
 	env := append(os.Environ(), "HOME="+home, sidecar.APIURLEnvironment+"="+server.URL, sidecar.AllowInsecureLoopbackEnvironment+"=true", sidecar.TokenEnvironment+"=", sidecar.TokenKeyringDisabledEnvironment+"=true", sidecar.TokenFileEnvironment+"="+filepath.Join(home, ".acr", "token"), "ACR_TEST_BROWSER_OPEN_LOG="+browserLog, "PATH="+browserBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	// When
-	login := exec.Command(binPath, "login")
+	login := exec.Command(binPath, "login", "--no-browser")
 	login.Env = env
 	loginOutput, loginErr := login.CombinedOutput()
 	doctor := exec.Command(binPath, "doctor")
@@ -49,7 +49,7 @@ func TestCompiledLoginThenBareDoctorDiscoversPersistedCredential(t *testing.T) {
 	if !strings.Contains(string(doctorOutput), `"credential_source":"file"`) || !strings.Contains(string(doctorOutput), `"reachable":true`) {
 		t.Fatalf("bare doctor did not discover the login credential:\n%s", doctorOutput)
 	}
-	if !strings.Contains(string(loginOutput), "Open "+nonLaunchableVerificationURI+" and enter code") {
+	if !strings.Contains(string(loginOutput), "Open "+deviceVerificationURI+" and enter code") {
 		t.Fatalf("compiled login did not print the verification address:\n%s", loginOutput)
 	}
 	assertNoBrowserLaunch(t, browserLog)
@@ -103,7 +103,7 @@ func TestCompiledLoginBoundsInvalidGrantAuthorizationRestarts(t *testing.T) {
 	browserBin, browserLog := compiledBrowserFixture(t)
 	tokenPath := filepath.Join(home, ".acr", "token")
 	env := append(os.Environ(), "HOME="+home, sidecar.APIURLEnvironment+"="+server.URL, sidecar.AllowInsecureLoopbackEnvironment+"=true", sidecar.TokenEnvironment+"=", sidecar.TokenKeyringDisabledEnvironment+"=true", sidecar.TokenFileEnvironment+"="+tokenPath, "ACR_TEST_BROWSER_OPEN_LOG="+browserLog, "PATH="+browserBin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	login := exec.Command(binPath, "login")
+	login := exec.Command(binPath, "login", "--no-browser")
 	login.Env = env
 	output, err := login.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "device authorization was invalidated twice") {
@@ -119,7 +119,7 @@ func TestCompiledLoginBoundsInvalidGrantAuthorizationRestarts(t *testing.T) {
 	if len(issued) != 2 || issued[0] == issued[1] {
 		t.Fatalf("issued device codes = %v, want two distinct codes", issued)
 	}
-	if printed := strings.Count(string(output), "Open "+nonLaunchableVerificationURI+" and enter code"); printed != 2 {
+	if printed := strings.Count(string(output), "Open "+deviceVerificationURI+" and enter code"); printed != 2 {
 		t.Fatalf("verification address printed %d times, want once per authorization:\n%s", printed, output)
 	}
 	assertNoBrowserLaunch(t, browserLog)
@@ -141,9 +141,9 @@ func compileLifecycleBinary(t *testing.T) string {
 // compiledBrowserFixture plants PATH-resolvable "open"/"xdg-open" tripwires.
 // The hardened opener resolves its binary from a fixed system directory
 // allowlist and never from PATH, so an entry recorded here means production
-// consulted PATH; an empty log means it did not. The compiled fixtures also
-// hand out nonLaunchableVerificationURI, so nothing legitimate is launched
-// either and no host browser can be started by these tests.
+// consulted PATH; an empty log means it did not. The compiled login fixtures
+// also pass --no-browser, so no opener is resolved or executed at all and no
+// host browser can be started by these tests.
 func compiledBrowserFixture(t *testing.T) (string, string) {
 	t.Helper()
 	browserBin := t.TempDir()

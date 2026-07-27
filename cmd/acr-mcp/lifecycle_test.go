@@ -300,7 +300,7 @@ func TestLoginRevokesIssuedCredential_whenPersistenceFails(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/oauth/device_authorization":
-			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: nonLaunchableVerificationURI, ExpiresIn: 600, Interval: 5})
+			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: deviceVerificationURI, ExpiresIn: 600, Interval: 5})
 		case "/api/v1/oauth/token":
 			expiresAt := createdAt.Add(30 * 24 * time.Hour)
 			credential := lifecycleCredential(createdAt, "credential-issued", nil)
@@ -370,7 +370,7 @@ func TestLoginRevokesThenPurgesIssuedCredential_whenPersistenceFailsAfterWriting
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/oauth/device_authorization":
-			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: nonLaunchableVerificationURI, ExpiresIn: 600, Interval: 5})
+			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: deviceVerificationURI, ExpiresIn: 600, Interval: 5})
 		case "/api/v1/oauth/token":
 			expiresAt := createdAt.Add(30 * 24 * time.Hour)
 			credential := lifecycleCredential(createdAt, "credential-issued", nil)

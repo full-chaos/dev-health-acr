@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 )
 
 // The verification URI is server-supplied data. Handing an unvalidated one to
@@ -40,6 +42,12 @@ func TestOpenVerificationURIRefusesEverythingButHTTPSAndLoopbackHTTP(t *testing.
 		"https://acr.example.com/dev ice",
 		"https://acr.example.com/device\x00",
 		"https://acr.example.com/" + strings.Repeat("a", maxVerificationURIBytes),
+		// The address is printed into the operator's terminal and passed as an
+		// argv element to a user-configured browser, so ACR bearer text in it is
+		// a credential disclosure on two channels at once.
+		"https://acr.example.com/device?hint=" + validTestToken(62),
+		"https://acr.example.com/device#" + auth.TokenPrefix + "truncated",
+		"https://acr.example.com/" + strings.ToUpper(auth.TokenPrefix) + "AAAA",
 	}
 
 	for _, uri := range launchable {

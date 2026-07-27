@@ -3,10 +3,13 @@
 package sidecar
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -88,4 +91,100 @@ func waitForOpenerRecord(t *testing.T, path string) string {
 	}
 	t.Fatalf("browser opener fixture never recorded an invocation at %s", path)
 	return ""
+}
+
+// A desktop opener is supposed to hand the address to an already-running
+// browser and exit. One that instead blocks -- a handler waiting on a lock, an
+// xdg-open that falls through to a foreground text browser, a hostile
+// substitute -- used to live for the whole login session, because the only
+// thing waiting on it was an unbounded background Wait that could never
+// return. Nothing bounded it and nothing reaped its forked descendants.
+//
+// This test injects an opener that hangs and forks, and requires two things:
+// the reap completes under a fixed deadline, and the descendant the opener
+// forked is gone afterwards -- which only a process-group kill achieves,
+// since signalling the immediate child alone leaves the fork running.
+//
+// No host browser is involved: the resolver seam points at a shell script.
+func TestOpenVerificationURIReapsAHangingOpenerUnderAFixedDeadline(t *testing.T) {
+	// Given
+	requireSh(t)
+	home := t.TempDir()
+	descendantFile := filepath.Join(home, "descendant.pid")
+	trustedDirectory := t.TempDir()
+	opener := filepath.Join(trustedDirectory, browserOpenerName())
+	// The opener forks a long-lived descendant and then blocks forever itself,
+	// so a guard that only kills the immediate child leaves the fork behind.
+	// The pid is published by rename, so the reader can never observe a
+	// half-written record and mistake it for the fixture's completed output.
+	script := "#!/bin/sh\nsleep 300 &\nprintf '%s\\n' \"$!\" > \"$HOME/descendant.tmp\"\nmv \"$HOME/descendant.tmp\" \"$HOME/descendant.pid\"\nwait\n"
+	if err := os.WriteFile(opener, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	injectExecutableResolver(t, browserOpenerName(), opener)
+	restoreDeadline := browserOpenerDeadline
+	// Two seconds is orders of magnitude above the milliseconds a shell needs
+	// to fork and publish its pid, and orders of magnitude below both the
+	// opener's 300-second sleep and the assertion bound below, so neither the
+	// fixture's startup nor a loaded machine decides this test's outcome.
+	browserOpenerDeadline = 2 * time.Second
+	t.Cleanup(func() { browserOpenerDeadline = restoreDeadline })
+	reaped := make(chan struct{})
+	browserOpenerReaped = func() { close(reaped) }
+	t.Cleanup(func() { browserOpenerReaped = nil })
+
+	// When
+	if err := OpenVerificationURI("https://acr.example.com/device"); err != nil {
+		t.Fatalf("OpenVerificationURI: %v", err)
+	}
+
+	// Then
+	// Ten seconds is far below the opener's 300-second sleep and far above the
+	// two-second deadline, so this can only pass if the bound actually fired: it is
+	// the assertion, not a convenience timeout.
+	select {
+	case <-reaped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a hanging browser opener was never reaped; the launch deadline did not bound it")
+	}
+	descendant := waitForOpenerDescendantPID(t, descendantFile)
+	t.Cleanup(func() { _ = syscall.Kill(descendant, syscall.SIGKILL) })
+	if !waitForProcessGone(descendant) {
+		t.Fatalf("the descendant the opener forked (pid %d) survived the reap; only the immediate child was signalled", descendant)
+	}
+}
+
+// waitForOpenerDescendantPID reads the PID the fixture recorded, waiting for a
+// complete line so a partially flushed write is never parsed as a PID.
+func waitForOpenerDescendantPID(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		contents, err := os.ReadFile(path)
+		if err == nil && strings.Contains(string(contents), "\n") {
+			pid, convErr := strconv.Atoi(strings.TrimSpace(string(contents)))
+			if convErr != nil {
+				t.Fatalf("opener fixture recorded an unparsable descendant pid %q: %v", contents, convErr)
+			}
+			return pid
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("opener fixture never recorded a forked descendant at %s", path)
+	return 0
+}
+
+// waitForProcessGone polls signal 0 until the process no longer exists. A
+// kill is asynchronous, so a single immediate check would report a survivor
+// that is merely still being torn down.
+func waitForProcessGone(pid int) bool {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
 }

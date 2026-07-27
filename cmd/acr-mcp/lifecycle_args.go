@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	loginUsageLine  = "Usage: acr-mcp login [--refresh] [--org <org>] [--repo <owner/repo>]"
+	loginUsageLine  = "Usage: acr-mcp login [--refresh] [--no-browser] [--org <org>] [--repo <owner/repo>]"
 	logoutUsageLine = "Usage: acr-mcp logout"
 )
 
@@ -14,8 +14,14 @@ var errLifecycleArgsInvalid = errors.New("lifecycle arguments are invalid")
 
 type loginArgs struct {
 	refresh bool
-	org     string
-	repos   []string
+	// noBrowser suppresses the convenience launch only. The verification
+	// address and user code are still printed, and the address is still
+	// validated, so a headless host, a locked-down QA run, or an operator on a
+	// remote shell gets the same flow without a desktop opener ever being
+	// resolved or executed.
+	noBrowser bool
+	org       string
+	repos     []string
 }
 
 func parseLoginArgs(args []string) (loginArgs, error) {
@@ -27,6 +33,11 @@ func parseLoginArgs(args []string) (loginArgs, error) {
 				return loginArgs{}, errLifecycleArgsInvalid
 			}
 			parsed.refresh = true
+		case arg == "--no-browser":
+			if parsed.noBrowser {
+				return loginArgs{}, errLifecycleArgsInvalid
+			}
+			parsed.noBrowser = true
 		case arg == "--org":
 			if parsed.org != "" || index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") {
 				return loginArgs{}, errLifecycleArgsInvalid
@@ -63,7 +74,7 @@ func parseLoginArgs(args []string) (loginArgs, error) {
 			return loginArgs{}, errLifecycleArgsInvalid
 		}
 	}
-	if parsed.refresh && (parsed.org != "" || len(parsed.repos) != 0) {
+	if parsed.refresh && (parsed.org != "" || len(parsed.repos) != 0 || parsed.noBrowser) {
 		return loginArgs{}, errLifecycleArgsInvalid
 	}
 	return parsed, nil

@@ -14,12 +14,15 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// nonLaunchableVerificationURI is a non-loopback http address, which
-// sidecar.OpenVerificationURI refuses before it resolves or executes any
-// binary. Compiled lifecycle tests run the real hardened opener in a real
-// process, so the fixture must hand it an address it declines: a loopback
-// http URI is launchable and would open a browser on the developer's host.
-const nonLaunchableVerificationURI = "http://device.acr.invalid/acr/device"
+// deviceVerificationURI is the address every lifecycle fixture issues. It is a
+// real, safe, launchable https address, because login now validates the
+// verification address before printing it and a deliberately unlaunchable one
+// would be refused there rather than at the opener.
+//
+// Nothing launches it. In-process tests run with lifecycleBrowserOpen stubbed
+// by TestMain; compiled tests pass --no-browser, which skips opener resolution
+// entirely while still printing and validating the address.
+const deviceVerificationURI = "https://web.fullchaos.dev/acr/device"
 
 // lifecycleFixtureState records what a fake lifecycle server observed.
 //
@@ -161,7 +164,7 @@ func newLifecycleServerWithState(t *testing.T, token string, polls []string, wan
 					return
 				}
 			}
-			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: nonLaunchableVerificationURI, ExpiresIn: 600, Interval: 5})
+			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: deviceVerificationURI, ExpiresIn: 600, Interval: 5})
 		case "/api/v1/oauth/token":
 			if r.Header.Get("Authorization") != "" {
 				state.recordProblem("device token request unexpectedly had bearer authorization")
@@ -253,7 +256,7 @@ func newLifecycleRetryServerWithState(t *testing.T, token string, polls []string
 		switch r.URL.Path {
 		case "/api/v1/oauth/device_authorization":
 			state.countAuthorization()
-			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: trace.issue(), UserCode: "ABCDEFGH", VerificationURI: nonLaunchableVerificationURI, ExpiresIn: 600, Interval: 5})
+			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: trace.issue(), UserCode: "ABCDEFGH", VerificationURI: deviceVerificationURI, ExpiresIn: 600, Interval: 5})
 		case "/api/v1/oauth/token":
 			var request contractsv1.DeviceTokenRequest
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
