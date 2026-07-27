@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
@@ -61,6 +63,21 @@ func withRecordedBrowserOpen(t *testing.T) *[]string {
 	return &opened
 }
 
+// withImmediateDevicePoll removes the fixture's five-second poll interval from
+// the wall clock while leaving the grant context untouched, so a test's own
+// duration never approaches a real timeout constant and cannot be mistaken for
+// one. It replaces only the sleep: every context deadline the command builds
+// is still the one production builds, and a cancelled context is still
+// reported as cancelled.
+func withImmediateDevicePoll(t *testing.T) {
+	t.Helper()
+	original := lifecycleWait
+	lifecycleWait = func(ctx context.Context, _ time.Duration) error {
+		return ctx.Err()
+	}
+	t.Cleanup(func() { lifecycleWait = original })
+}
+
 // captureLifecycleOutput redirects both standard streams for one command and
 // returns accessors that read what was written. Both are needed together: the
 // verification address is printed on stdout and every refusal is reported on
@@ -101,6 +118,7 @@ func captureStream(t *testing.T, stream **os.File) func() string {
 
 func loginTestEnvironment(t *testing.T, serverURL string) {
 	t.Helper()
+	withImmediateDevicePoll(t)
 	t.Setenv(sidecar.APIURLEnvironment, serverURL)
 	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
 	t.Setenv(sidecar.TokenEnvironment, "")

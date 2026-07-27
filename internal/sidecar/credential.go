@@ -280,7 +280,17 @@ func PersistCredential(token string) (CredentialResult, error) {
 			if err := currentKeyringWriter(ctx, service, account, token); err == nil {
 				return CredentialResult{Token: token, Source: "keyring", keyringService: service, keyringAccount: account}, nil
 			} else if !errors.Is(err, errKeyringWriteUnavailable) {
-				return CredentialResult{}, fmt.Errorf("persist ACR keyring credential: %w", err)
+				// Anything past the attempt itself is ambiguous. A secret-store
+				// backend can commit the entry and still fail afterwards -- the
+				// mutation succeeds and the collection write-out, the D-Bus
+				// reply, or the process exit does not -- so returning a bare
+				// error told the caller "nothing was stored" while a readable
+				// credential sat in the keyring with no locator to purge it by.
+				// Hand back the candidate address alongside the failure, exactly
+				// as the ambiguous file write below does, so login can revoke
+				// the server-side credential and then purge precisely this entry.
+				return CredentialResult{Token: token, Source: "keyring", keyringService: service, keyringAccount: account},
+					fmt.Errorf("persist ACR keyring credential: %w", err)
 			}
 		}
 	}

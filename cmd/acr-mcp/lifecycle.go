@@ -171,8 +171,17 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 					fmt.Fprintln(os.Stderr, "login: issued credential could not be stored safely and revocation requires operator action")
 					return deviceLoginFailed
 				}
+				// The credential is dead server-side, but a persistence attempt
+				// that failed ambiguously may still have left it readable at the
+				// candidate locator PersistCredential handed back. Discarding
+				// the purge result reported "could not be stored securely" while
+				// a revoked-but-readable secret sat in a file or keyring entry
+				// nobody had been told about.
 				if persisted.Token != "" {
-					_ = sidecar.PurgeCredentialMaterial(persisted)
+					if purgeErr := sidecar.PurgeCredentialMaterial(persisted); purgeErr != nil {
+						fmt.Fprintln(os.Stderr, "login: credential was issued and revoked, but local cleanup requires operator action at "+describeCleanupLocations(purgeErr))
+						return deviceLoginFailed
+					}
 				}
 				fmt.Fprintln(os.Stderr, "login: credential was issued but could not be stored securely")
 				return deviceLoginFailed
