@@ -278,9 +278,16 @@ func TestPurgeCredentialMaterialRemovesFileAndReportsTypedFailure_whenKeyringFla
 	t.Setenv(TokenFileEnvironment, path)
 	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
 	t.Setenv(TokenKeyringAccountEnvironment, "agent-a")
+	t.Setenv("HOME", t.TempDir())
 	if err := os.WriteFile(path, []byte(fileToken+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The enabled keyring below must resolve through an injected fake, never
+	// the host secret store: an unstubbed lookup here reached the developer's
+	// real login keychain.
+	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
+		return "", false, nil
+	})
 	current, err := LoadCredential()
 	if err != nil {
 		t.Fatal(err)
