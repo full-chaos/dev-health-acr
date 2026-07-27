@@ -596,14 +596,25 @@ func TestRefreshRetainsSuccessor_whenRollbackFails(t *testing.T) {
 	}
 }
 
+// Retention was previously asserted against an ACR_API_TOKEN credential, which
+// has nothing removable behind it: the test passed whether or not logout would
+// have deleted anything. This drives real removable material -- a token file on
+// disk -- and asserts the file, the served HTTP activity, and the keyring seam
+// all show that nothing local was touched after the remote revocation failed.
 func TestLogoutRetainsCredential_when_remoteRevocationFails(t *testing.T) {
 	// Given
 	token := validDoctorToken(86)
 	revocations := 0
-	server := newCredentialLifecycleServer(t, token, validDoctorToken(87), &revocations, true)
+	server, fixture := newCredentialLifecycleServerWithState(t, token, validDoctorToken(87), &revocations, true)
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv(sidecar.APIURLEnvironment, server.URL)
 	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
-	t.Setenv(sidecar.TokenEnvironment, token)
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
 
 	// When
 	code := runCLI([]string{"logout"})
@@ -614,6 +625,16 @@ func TestLogoutRetainsCredential_when_remoteRevocationFails(t *testing.T) {
 	}
 	if revocations != 1 {
 		t.Fatalf("remote revocations = %d, want 1", revocations)
+	}
+	if _, _, served, _ := fixture.counts(); served != 1 {
+		t.Fatalf("revocation requests served = %d, want exactly one attempt", served)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("local credential was removed after a failed remote revocation: %v", err)
+	}
+	if strings.TrimSpace(string(contents)) != token {
+		t.Fatalf("retained credential = %q, want the original token", contents)
 	}
 }
 

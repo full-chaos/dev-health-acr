@@ -188,3 +188,47 @@ func TestPurgeCredentialMaterialLeavesFileThatIsNotAnACRCredentialTarget(t *test
 		})
 	}
 }
+
+// A keyring-sourced logout must clear both the secret-store entry and any
+// token file sitting underneath it. Asserting only that a deleter was called
+// leaves the second half untested, and an entry that survives the call reads
+// as a successful logout.
+func TestPurgeCredentialMaterialClearsBothTheKeyringEntryAndTheFileUnderneathIt(t *testing.T) {
+	// Given
+	path := filepath.Join(t.TempDir(), "token")
+	service := "acr-sidecar-test"
+	account := "agent-a"
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenKeyringDisabledEnvironment, "false")
+	t.Setenv(TokenFileEnvironment, path)
+	t.Setenv(TokenKeyringServiceEnvironment, service)
+	t.Setenv(TokenKeyringAccountEnvironment, account)
+	if err := os.WriteFile(path, []byte(fileToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keyring := newMemoryKeyring(t, map[string]string{memoryKeyringAddress(service, account): keyringToken})
+	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
+		return keyringToken, true, nil
+	})
+	current, err := LoadCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Source != "keyring" {
+		t.Fatalf("credential source = %q, want keyring", current.Source)
+	}
+
+	// When
+	err = PurgeCredentialMaterial(current)
+
+	// Then
+	if err != nil {
+		t.Fatalf("purge of a keyring credential failed: %v", err)
+	}
+	if len(keyring.entries) != 0 {
+		t.Fatalf("keyring entries remain after purge: %v", keyring.deletes)
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("token file underneath the keyring credential remains: %v", statErr)
+	}
+}

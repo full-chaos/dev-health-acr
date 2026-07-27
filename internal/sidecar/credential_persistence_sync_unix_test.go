@@ -70,3 +70,40 @@ func TestPersistCredentialReturnsPurgeableLocator_whenDirectorySyncFailsAfterRen
 		t.Fatalf("credential file remains after purging the returned locator: %v", statErr)
 	}
 }
+
+func TestRestoreCredential_restoresOriginalFileAfterPostRenameSyncFailure(t *testing.T) {
+	// Given
+	home := t.TempDir()
+	path := filepath.Join(home, "token")
+	originalToken := fileToken
+	successor := validTestToken(43)
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenFileEnvironment, path)
+	if err := os.WriteFile(path, []byte(originalToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	original, err := LoadCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	failFirstCredentialDirectorySync(t)
+
+	// When
+	err = ReplaceCredential(original, successor)
+	if err == nil {
+		t.Fatal("replacement unexpectedly succeeded after post-rename sync failure")
+	}
+	restoreErr := RestoreCredential(original)
+
+	// Then
+	if restoreErr != nil {
+		t.Fatal(restoreErr)
+	}
+	contents, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(contents) != original.Token+"\n" {
+		t.Fatalf("restored file = %q, want original credential", contents)
+	}
+}
