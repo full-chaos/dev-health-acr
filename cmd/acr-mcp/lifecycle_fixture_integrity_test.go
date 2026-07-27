@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -78,6 +79,36 @@ func TestRecordFixturePanicIsInertWithoutAPanic(t *testing.T) {
 func TestPackageDefaultsKeepEveryTestAwayFromTheHostKeychain(t *testing.T) {
 	if os.Getenv(sidecar.TokenKeyringDisabledEnvironment) != "true" {
 		t.Fatalf("%s = %q at test start, want \"true\": compiled subprocess tests inherit this and would otherwise query the host keychain", sidecar.TokenKeyringDisabledEnvironment, os.Getenv(sidecar.TokenKeyringDisabledEnvironment))
+	}
+	// The flag alone is a per-test choice any test can reverse. The seam is the
+	// real guarantee, and it must not be a silent one: an in-memory store would
+	// answer "no entry" and let an unintended keyring access read as a pass.
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal("the default keyring seam answered instead of panicking; an unintended keyring access would pass silently")
+		}
+		if !strings.Contains(fmt.Sprint(recovered), "without installing a stub") {
+			t.Fatalf("keyring seam panic = %v, want the opt-in instruction", recovered)
+		}
+	}()
+	_ = sidecar.ProbeKeyringSeamForTesting()
+}
+
+// No ACR_ variable exported by whoever runs the suite may reach a test. An
+// exported ACR_API_URL alone gives the keyring lookup a non-empty default
+// account, which turns a doctor or diagnostics test that never mentions the
+// keyring into a real query against that developer's login keychain.
+func TestPackageDefaultsClearAmbientACRConfiguration(t *testing.T) {
+	for _, entry := range os.Environ() {
+		name, _, found := strings.Cut(entry, "=")
+		if !found || !strings.HasPrefix(name, "ACR_") {
+			continue
+		}
+		if isSubprocessEntryPointMarker(name) || name == "ACR_LOCAL_INDEX_PROVIDER" || name == sidecar.TokenKeyringDisabledEnvironment {
+			continue
+		}
+		t.Fatalf("ambient %s survived into the test process; the host's configuration would decide this suite's outcome", name)
 	}
 }
 

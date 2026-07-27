@@ -1,43 +1,71 @@
 package sidecar
 
 import (
+	"context"
 	"os"
+	"strings"
 	"testing"
 )
 
-// TestMain makes the host's real OS keychain unreachable for every test in this
-// package, whether or not the individual test remembered to say so.
+// TestMain makes the host unable to influence, or be touched by, any test in
+// this package. Two hazards, both of which are ordinarily invisible at the call
+// site that depends on them.
 //
-// Credential resolution consults the keyring whenever ACR_API_TOKEN is unset or
-// empty and the disable flag is not set, and several tests do exactly that
-// while pointing at a token file -- the restore-after-sync-failure test among
-// them. On a developer's machine that is a real `security` or `secret-tool`
-// lookup against the login keychain: a prompt at best, a host-dependent result
-// at worst, and either way a test outcome decided by something outside the
-// repository.
+// Ambient configuration: a developer who exports ACR_API_URL, ACR_API_TOKEN, or
+// any other ACR_ variable in their shell changes what these tests resolve. An
+// exported ACR_API_URL alone is enough to give the keyring lookup a non-empty
+// default account, which turns a test that never mentions the keyring into a
+// real `security` or `secret-tool` query against that developer's login
+// keychain. Every ACR_ variable is therefore removed before the first test runs.
 //
-// The three keyring seams are the only path from credential resolution,
-// persistence, deletion, and purge to an OS secret store, so replacing them
-// with an empty in-memory store closes that path for the whole package. Tests
-// that need keyring contents install their own store over this one; tests that
-// need the keyring to appear absent get an empty store rather than the host's.
+// The keyring seams: these three are the only path from credential resolution,
+// persistence, deletion, and purge to an OS secret store. They are replaced with
+// stubs that PANIC rather than with an empty in-memory store. An empty store is
+// a silent answer -- a test that reaches the seam without meaning to gets
+// "no entry" and passes, and the fact that it consulted a secret store at all is
+// never reported. A panic makes reaching the seam a loud, unmissable failure, so
+// keyring access in this package is opt-in per test (stubKeyringLookup,
+// stubKeyringWriter, stubKeyringDeleter, newMemoryKeyring, or
+// InstallMemoryKeyringForTesting) and never ambient.
 //
-// The disable flag is deliberately NOT forced here. Several tests in this
-// package assert what happens when the keyring is enabled and do not set the
-// flag themselves, so defaulting it to true would silently retarget them at a
-// path they are not testing. Closing the seam is the guarantee; the flag stays
-// a per-test choice.
+// The disable flag is deliberately not forced: several tests assert
+// enabled-keyring behavior without setting it, and forcing it would silently
+// retarget them at a path they are not testing. The panicking seam is the
+// guarantee; the flag stays a per-test choice.
 //
 // This does not weaken the tests that exercise the real backend command path:
 // they call runKeyringCommand directly with an injected executable resolver, so
 // they never resolve a real `security` or `secret-tool` either.
 func TestMain(m *testing.M) {
+	clearAmbientACREnvironment()
+	installPanickingKeyringSeams()
+	os.Exit(m.Run())
+}
 
-	_, restore, err := InstallMemoryKeyringForTesting(nil)
-	if err != nil {
-		panic("install the package-wide in-memory keyring: " + err.Error())
+// clearAmbientACREnvironment removes every ACR_-prefixed variable inherited from
+// the shell that started `go test`.
+func clearAmbientACREnvironment() {
+	for _, entry := range os.Environ() {
+		name, _, found := strings.Cut(entry, "=")
+		if found && strings.HasPrefix(name, "ACR_") {
+			_ = os.Unsetenv(name)
+		}
 	}
-	code := m.Run()
-	restore()
-	os.Exit(code)
+}
+
+const keyringSeamPanic = "acr test reached the OS keyring seam without installing a stub: " +
+	"this would query the host's real secret store. Install one explicitly " +
+	"(stubKeyringLookup/stubKeyringWriter/stubKeyringDeleter, newMemoryKeyring, " +
+	"or InstallMemoryKeyringForTesting), or set ACR_API_TOKEN_KEYRING_DISABLED=true."
+
+func installPanickingKeyringSeams() {
+	currentKeyringLookup = func(context.Context, string, string) (string, bool, error) {
+		panic(keyringSeamPanic + " [lookup]")
+	}
+	currentKeyringWriter = func(context.Context, string, string, string) error {
+		panic(keyringSeamPanic + " [write]")
+	}
+	currentKeyringDeleter = func(context.Context, string, string) error {
+		panic(keyringSeamPanic + " [delete]")
+	}
 }

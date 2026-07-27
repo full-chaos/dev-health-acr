@@ -42,6 +42,42 @@ type MemoryKeyring struct {
 	deletes        []KeyringAddress
 }
 
+// ProbeKeyringSeamForTesting calls the installed lookup seam with a fixed
+// address, so a test package outside this one can assert what its own default
+// seam does -- in particular that it panics rather than quietly answering.
+//
+// A guarantee that lives only in a TestMain is invisible at every call site
+// that depends on it, so it has to be assertable from a test.
+func ProbeKeyringSeamForTesting() error {
+	if !testing.Testing() {
+		return ErrKeyringTestSeamUnavailable
+	}
+	_, _, err := currentKeyringLookup(context.Background(), "acr-keyring-seam-probe", "acr-keyring-seam-probe")
+	return err
+}
+
+// SetKeyringSeamsForTesting replaces the three OS keyring seams outright and
+// returns a restore function.
+//
+// It exists so a test package outside this one can install a seam that is not a
+// working store at all -- most usefully one that panics, which makes any
+// unintended keyring access a loud failure rather than a silent "no entry" that
+// reads as a pass. InstallMemoryKeyringForTesting below is the opt-in
+// counterpart, for tests that genuinely need keyring contents.
+//
+// Refused outside a test binary, so a production process can never replace its
+// secret store.
+func SetKeyringSeamsForTesting(lookup KeyringLookup, writer KeyringWriter, deleter KeyringDeleter) (func(), error) {
+	if !testing.Testing() {
+		return nil, ErrKeyringTestSeamUnavailable
+	}
+	originalLookup, originalWriter, originalDeleter := currentKeyringLookup, currentKeyringWriter, currentKeyringDeleter
+	currentKeyringLookup, currentKeyringWriter, currentKeyringDeleter = lookup, writer, deleter
+	return func() {
+		currentKeyringLookup, currentKeyringWriter, currentKeyringDeleter = originalLookup, originalWriter, originalDeleter
+	}, nil
+}
+
 // InstallMemoryKeyringForTesting replaces the OS keyring seam with an
 // in-memory store seeded with entries, and returns the store together with a
 // restore function the caller must defer.
