@@ -312,9 +312,12 @@ func runLogoutCommand(args []string) int {
 
 // describeCleanupLocations renders the exact failed cleanup locations for an
 // operator. Locations are variable names, file paths, and keyring
-// service/account identifiers -- never credential material.
+// service/account identifiers -- never credential material -- but they are
+// built from operator-supplied configuration, so they are rendered through
+// sidecar.SafeCredentialCleanupLocations, which token-redacts, bounds, and
+// quotes each one before it can reach a terminal or a log.
 func describeCleanupLocations(err error) string {
-	locations := sidecar.CredentialCleanupLocations(err)
+	locations := sidecar.SafeCredentialCleanupLocations(err)
 	if len(locations) == 0 {
 		return "the configured ACR credential locations"
 	}

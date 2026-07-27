@@ -93,6 +93,33 @@ func removeCredentialFile(path string) error {
 	return nil
 }
 
+// rejectSharedWritableCredentialParent refuses to treat a credential file as
+// removable when its parent directory grants write access to group or world.
+//
+// Removal proves the target is an ACR credential (no-follow open, regular-file
+// fstat, restrictive mode, ACR token shape) and then unlinks it by name. On a
+// shared-writable parent any local user can swap the entry between those two
+// steps, so the unlink lands on whatever they put there -- the same
+// arbitrary-file delete the content proof exists to prevent, reached through
+// the directory instead of the path.
+//
+// A parent that does not exist is not a failure: there is nothing to remove,
+// and removeCredentialFile already treats that as the goal state.
+func rejectSharedWritableCredentialParent(path string) error {
+	parent := filepath.Dir(path)
+	info, err := os.Lstat(parent)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect credential directory before removal: %w", err)
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return errors.New("credential directory grants group or world write access; another local user could replace the credential during removal")
+	}
+	return nil
+}
+
 // ensureCredentialParent guarantees the credential file's parent directory is
 // a real, non-symlinked directory that no other local user can write into.
 //
