@@ -12,13 +12,13 @@ import (
 )
 
 func TestCompiledLoginThenBareDoctorDiscoversPersistedCredential(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("browser opener tripwire is a POSIX executable fixture")
+	if runtime.GOOS != "darwin" {
+		t.Skip("default file persistence without a keyring is a macOS platform contract")
 	}
 
 	// Given
 	token := validDoctorToken(91)
-	server := newLifecycleServer(t, token, []string{"success"})
+	server, fixture := newLifecycleServerWithState(t, token, []string{"success"}, nil)
 	binPath := filepath.Join(t.TempDir(), "acr-mcp")
 	build := exec.Command("go", "build", "-o", binPath, ".")
 	if output, err := build.CombinedOutput(); err != nil {
@@ -26,7 +26,15 @@ func TestCompiledLoginThenBareDoctorDiscoversPersistedCredential(t *testing.T) {
 	}
 	home := t.TempDir()
 	browserBin, browserLog := compiledBrowserFixture(t)
-	env := append(os.Environ(), "HOME="+home, sidecar.APIURLEnvironment+"="+server.URL, sidecar.AllowInsecureLoopbackEnvironment+"=true", sidecar.TokenEnvironment+"=", sidecar.TokenKeyringDisabledEnvironment+"=true", sidecar.TokenFileEnvironment+"="+filepath.Join(home, ".acr", "token"), "ACR_TEST_BROWSER_OPEN_LOG="+browserLog, "PATH="+browserBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	keyringBin, keyringLog := compiledKeyringFixture(t)
+	env := compiledEnvironmentWithoutTokenVariables(
+		"HOME="+home,
+		sidecar.APIURLEnvironment+"="+server.URL,
+		sidecar.AllowInsecureLoopbackEnvironment+"=true",
+		"ACR_TEST_BROWSER_OPEN_LOG="+browserLog,
+		"ACR_TEST_KEYRING_OPEN_LOG="+keyringLog,
+		"PATH="+keyringBin+string(os.PathListSeparator)+browserBin,
+	)
 
 	// When
 	login := exec.Command(binPath, "login", "--no-browser")
@@ -49,10 +57,16 @@ func TestCompiledLoginThenBareDoctorDiscoversPersistedCredential(t *testing.T) {
 	if !strings.Contains(string(doctorOutput), `"credential_source":"file"`) || !strings.Contains(string(doctorOutput), `"reachable":true`) {
 		t.Fatalf("bare doctor did not discover the login credential:\n%s", doctorOutput)
 	}
+	if _, _, _, capabilities := fixture.counts(); capabilities != 1 {
+		t.Fatalf("doctor capability requests = %d, want exactly one bearer-authenticated request", capabilities)
+	}
 	if !strings.Contains(string(loginOutput), "Open "+deviceVerificationURI+" and enter code") {
 		t.Fatalf("compiled login did not print the verification address:\n%s", loginOutput)
 	}
 	assertNoBrowserLaunch(t, browserLog)
+	assertNoKeyringLaunch(t, keyringLog)
+	tokenPath := filepath.Join(home, ".acr", "token")
+	assertCredentialFileModes(t, tokenPath)
 }
 
 func TestCompiledLogoutRemovesDisabledKeyringFileCredential(t *testing.T) {
@@ -168,5 +182,59 @@ func assertNoBrowserLaunch(t *testing.T, logPath string) {
 	}
 	if !os.IsNotExist(err) {
 		t.Fatalf("read browser opener tripwire log: %v", err)
+	}
+}
+
+func compiledEnvironmentWithoutTokenVariables(additions ...string) []string {
+	env := make([]string, 0, len(os.Environ())+len(additions))
+	for _, entry := range os.Environ() {
+		name, _, found := strings.Cut(entry, "=")
+		if found && !strings.HasPrefix(name, "ACR_API_TOKEN") {
+			env = append(env, entry)
+		}
+	}
+	return append(env, additions...)
+}
+
+func compiledKeyringFixture(t *testing.T) (string, string) {
+	t.Helper()
+	directory := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "keyring.log")
+	for _, name := range []string{"security", "secret-tool"} {
+		path := filepath.Join(directory, name)
+		contents := "#!/bin/sh\nprintf '%s\\n' \"$0\" >> \"$ACR_TEST_KEYRING_OPEN_LOG\"\nexit 97\n"
+		if err := os.WriteFile(path, []byte(contents), 0o700); err != nil {
+			t.Fatalf("write %s keyring tripwire: %v", name, err)
+		}
+	}
+	return directory, logPath
+}
+
+func assertNoKeyringLaunch(t *testing.T, logPath string) {
+	t.Helper()
+	contents, err := os.ReadFile(logPath)
+	if err == nil {
+		t.Fatalf("compiled process reached a keyring executable: %q", contents)
+	}
+	if !os.IsNotExist(err) {
+		t.Fatalf("read keyring tripwire log: %v", err)
+	}
+}
+
+func assertCredentialFileModes(t *testing.T, path string) {
+	t.Helper()
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat persisted credential: %v", err)
+	}
+	if fileInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("credential file mode = %#o, want 0600", fileInfo.Mode().Perm())
+	}
+	parentInfo, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("stat credential parent: %v", err)
+	}
+	if parentInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("credential parent mode = %#o, want 0700", parentInfo.Mode().Perm())
 	}
 }
