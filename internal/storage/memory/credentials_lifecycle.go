@@ -57,7 +57,7 @@ func (s *credentialStore) rollbackCredentialRotation(ctx context.Context, input 
 	source, sourceOK := s.byID[input.SourceCredentialID]
 	successor, successorOK := s.byID[input.SuccessorCredentialID]
 	if !sourceOK || !successorOK || source.Metadata.OrgID != input.OrgID || successor.Metadata.OrgID != input.OrgID ||
-		source.Metadata.RevokedAt != nil || successor.Metadata.RevokedAt != nil ||
+		source.Metadata.RevokedAt != nil || successor.Metadata.RevokedAt != nil || successor.RotatedAt != nil ||
 		source.Metadata.ExpiresAt == nil || !source.Metadata.ExpiresAt.After(now) ||
 		!slices.Equal(source.Metadata.RepositoryScopes, successor.Metadata.RepositoryScopes) || !slices.Equal(source.Metadata.Scopes, successor.Metadata.Scopes) ||
 		!s.rotationRelates(source.Metadata.CredentialID, successor.Metadata.CredentialID) {

@@ -262,6 +262,30 @@ func TestService_RollbackSelfRotationRejectsAReceiptBoundToAnotherRotationWithou
 	require.Nil(t, stored.RevokedAt)
 }
 
+func TestService_RollbackSelfRotationRejectsSuccessorThatWasRotatedAgain(t *testing.T) {
+	// Given
+	now := time.Date(2026, 7, 25, 14, 0, 0, 0, time.UTC)
+	audit := memory.NewAuditStore()
+	store := newMemoryCredentialStoreAt(t, now, audit)
+	service := newTestService(t, store, audit, now)
+	source := createSelfCredential(t, service, []string{"owner/repo"})
+	first, err := service.RotateSelf(context.Background(), selfPrincipal(source.Credential))
+	require.NoError(t, err)
+	_, err = service.RotateSelf(context.Background(), selfPrincipal(first.Issued.Credential))
+	require.NoError(t, err)
+	beforeAudits := len(audit.Events())
+
+	// When
+	_, err = service.RollbackSelfRotation(context.Background(), selfPrincipal(first.Issued.Credential), first.Receipt)
+
+	// Then
+	require.ErrorIs(t, err, storage.ErrConflict)
+	stored, getErr := store.GetByID(context.Background(), source.Credential.OrgID, first.Issued.Credential.CredentialID)
+	require.NoError(t, getErr)
+	require.Nil(t, stored.RevokedAt)
+	require.Equal(t, beforeAudits, len(audit.Events()))
+}
+
 func TestService_SelfLifecycle_staleOperationsFailWithoutSecondSecret(t *testing.T) {
 	// Given
 	now := time.Date(2026, 7, 25, 14, 0, 0, 0, time.UTC)

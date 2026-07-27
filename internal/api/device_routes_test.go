@@ -266,6 +266,38 @@ func TestSelfLifecycleRoutes_rotateThenRevokeCurrentBearer(t *testing.T) {
 	}
 }
 
+func TestSelfLifecycleRoutes_rejectRollbackWhenSuccessorWasRotatedAgain(t *testing.T) {
+	// Given
+	app, token := newHostedTestApp(t, nil, nil, []string{auth.ScopeContextRead, auth.ScopeEvidenceRead}, nil, nil)
+	firstRequest := deviceRequest(t, http.MethodPost, "/api/v1/auth/credentials/self/rotate", contractsv1.CredentialRotateRequest{SchemaVersion: contractsv1.CredentialRotateRequestSchema})
+	firstRequest.Header.Set("Authorization", "Bearer "+token)
+	firstResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(firstResponse, firstRequest)
+	if firstResponse.Code != http.StatusOK {
+		t.Fatalf("first rotation status = %d body=%s", firstResponse.Code, firstResponse.Body.String())
+	}
+	var first contractsv1.CredentialRotateResponse
+	if err := json.NewDecoder(firstResponse.Body).Decode(&first); err != nil {
+		t.Fatal(err)
+	}
+	secondRequest := deviceRequest(t, http.MethodPost, "/api/v1/auth/credentials/self/rotate", contractsv1.CredentialRotateRequest{SchemaVersion: contractsv1.CredentialRotateRequestSchema})
+	secondRequest.Header.Set("Authorization", "Bearer "+first.AccessToken)
+	secondResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(secondResponse, secondRequest)
+	if secondResponse.Code != http.StatusOK {
+		t.Fatalf("second rotation status = %d body=%s", secondResponse.Code, secondResponse.Body.String())
+	}
+	revokeRequest := deviceRequest(t, http.MethodPost, "/api/v1/auth/credentials/self/revoke", contractsv1.CredentialRevokeRequest{SchemaVersion: contractsv1.CredentialRevokeRequestSchema, RollbackReceipt: &first.Receipt})
+	revokeRequest.Header.Set("Authorization", "Bearer "+first.AccessToken)
+	revokeResponse := httptest.NewRecorder()
+
+	// When
+	app.Handler().ServeHTTP(revokeResponse, revokeRequest)
+
+	// Then
+	assertErrorResponse(t, revokeResponse, http.StatusConflict, "credential_lifecycle_conflict")
+}
+
 func deviceRequest(t *testing.T, method, path string, value any) *http.Request {
 	t.Helper()
 	body, err := json.Marshal(value)

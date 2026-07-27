@@ -247,3 +247,36 @@ func TestCredentialStoreRollbackKeepsSuccessorActiveWhenAuditWriteFails(t *testi
 	require.NoError(t, getErr)
 	require.Nil(t, stored.RevokedAt)
 }
+
+func TestCredentialStoreRollbackRejectsSuccessorThatWasRotatedAgainWithoutAuditMutation(t *testing.T) {
+	ctx := context.Background()
+	db := newCredentialStoreDatabase(t, ctx)
+	audit, err := NewAuditStore(db)
+	require.NoError(t, err)
+	lifecycle, err := NewCredentialStore(db, audit)
+	require.NoError(t, err)
+	service, err := auth.NewService(lifecycle, auth.ServiceOptions{})
+	require.NoError(t, err)
+	source, err := service.Create(ctx, credentialCreateRequest("source"))
+	require.NoError(t, err)
+	first, err := service.Rotate(ctx, auth.RotateCredentialRequest{OrgID: credentialTestOrgID, CredentialID: source.Credential.CredentialID, CreatedBy: credentialTestActorID, Overlap: time.Minute})
+	require.NoError(t, err)
+	_, err = service.Rotate(ctx, auth.RotateCredentialRequest{OrgID: credentialTestOrgID, CredentialID: first.Credential.CredentialID, CreatedBy: credentialTestActorID, Overlap: time.Minute})
+	require.NoError(t, err)
+	var auditsBefore int
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM acr.audit_events WHERE org_id = $1", credentialTestOrgID).Scan(&auditsBefore))
+
+	_, err = lifecycle.RollbackCredentialRotation(ctx, storage.CredentialRotationRollbackInput{
+		OrgID: credentialTestOrgID, SourceCredentialID: source.Credential.CredentialID,
+		SuccessorCredentialID: first.Credential.CredentialID, ActorID: credentialTestActorID,
+		RollbackUntil: time.Now().UTC().Add(time.Minute),
+	})
+
+	require.ErrorIs(t, err, storage.ErrConflict)
+	stored, getErr := lifecycle.GetByID(ctx, credentialTestOrgID, first.Credential.CredentialID)
+	require.NoError(t, getErr)
+	require.Nil(t, stored.RevokedAt)
+	var auditsAfter int
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM acr.audit_events WHERE org_id = $1", credentialTestOrgID).Scan(&auditsAfter))
+	require.Equal(t, auditsBefore, auditsAfter)
+}

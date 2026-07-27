@@ -44,6 +44,18 @@ func (s *credentialStore) rollbackCredentialRotation(ctx context.Context, input 
 		!slices.Equal(source.RepositoryScopes, successor.RepositoryScopes) || !slices.Equal(source.Scopes, successor.Scopes) {
 		return contractsv1.ClientCredential{}, storage.ErrConflict
 	}
+	var successorRotated bool
+	err = tx.QueryRowContext(ctx, `
+SELECT EXISTS(
+    SELECT 1 FROM acr.audit_events
+    WHERE org_id = $1 AND action = 'credential_rotated' AND resource_id = $2
+)`, input.OrgID, input.SuccessorCredentialID).Scan(&successorRotated)
+	if err != nil {
+		return contractsv1.ClientCredential{}, fmt.Errorf("verify successor rotation state: %w", sanitizeDatabaseError(err))
+	}
+	if successorRotated {
+		return contractsv1.ClientCredential{}, storage.ErrConflict
+	}
 	var relation int
 	err = tx.QueryRowContext(ctx, `
 SELECT 1 FROM acr.audit_events
