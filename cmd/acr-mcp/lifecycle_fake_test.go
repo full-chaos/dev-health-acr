@@ -77,6 +77,44 @@ func newLifecycleServerWithAuthorizationExpectation(t *testing.T, token string, 
 	}))
 }
 
+func newLifecycleRetryServer(t *testing.T, token string, polls []string, authorizations *int) *httptest.Server {
+	t.Helper()
+	createdAt := time.Now().UTC().Truncate(time.Second)
+	poll := 0
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/oauth/device_authorization":
+			(*authorizations)++
+			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: "http://" + r.Host + "/acr/device", ExpiresIn: 600, Interval: 5})
+		case "/api/v1/oauth/token":
+			if poll >= len(polls) {
+				t.Fatalf("unexpected poll %d", poll+1)
+			}
+			result := polls[poll]
+			poll++
+			if result == "transport" {
+				connection, _, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Fatalf("hijack transport fixture connection: %v", err)
+				}
+				_ = connection.Close()
+				return
+			}
+			if result != "success" {
+				w.WriteHeader(http.StatusBadRequest)
+				writeLifecycleJSON(t, w, contractsv1.OAuthDeviceErrorResponse{SchemaVersion: contractsv1.OAuthDeviceErrorSchema, Error: contractsv1.OAuthDeviceErrorCode(result)})
+				return
+			}
+			expiresAt := createdAt.Add(30 * 24 * time.Hour)
+			credential := lifecycleCredential(createdAt, "credential-1", nil)
+			credential.ExpiresAt = &expiresAt
+			writeLifecycleJSON(t, w, contractsv1.DeviceTokenResponse{SchemaVersion: contractsv1.DeviceTokenResponseSchema, AccessToken: token, TokenType: "Bearer", ExpiresIn: 30 * 24 * 60 * 60, Credential: credential})
+		default:
+			t.Fatalf("unexpected retry fixture request path %q", r.URL.Path)
+		}
+	}))
+}
+
 func newCredentialLifecycleServer(t *testing.T, original, successor string, revocations *int, revokeFails bool) *httptest.Server {
 	t.Helper()
 	createdAt := time.Now().UTC().Truncate(time.Second)

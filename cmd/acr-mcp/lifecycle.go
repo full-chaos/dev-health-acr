@@ -14,6 +14,15 @@ import (
 
 const lifecycleExitFailure = 1
 
+type deviceLoginAttemptOutcome uint8
+
+const (
+	deviceLoginSucceeded deviceLoginAttemptOutcome = iota
+	deviceLoginFailed
+	deviceLoginRestartInvalidGrant
+	deviceLoginRestartTransportUnavailable
+)
+
 var (
 	lifecycleBrowserOpen = openVerificationURI
 	lifecycleWait        = waitForDevicePoll
@@ -66,14 +75,29 @@ func runDeviceLogin(parsed loginArgs) int {
 		fmt.Fprintln(os.Stderr, "login: could not initialize secure API transport")
 		return lifecycleExitFailure
 	}
-	for {
-		if code := runDeviceLoginAttempt(context.Background(), client, cfg, parsed); code != 2 {
-			return code
+	for attempt := range 2 {
+		outcome := runDeviceLoginAttempt(context.Background(), client, cfg, parsed)
+		switch outcome {
+		case deviceLoginSucceeded:
+			return 0
+		case deviceLoginFailed:
+			return lifecycleExitFailure
+		case deviceLoginRestartInvalidGrant:
+			if attempt == 1 {
+				fmt.Fprintln(os.Stderr, "login: device authorization was invalidated twice; start login again")
+				return lifecycleExitFailure
+			}
+		case deviceLoginRestartTransportUnavailable:
+			if attempt == 1 {
+				fmt.Fprintln(os.Stderr, "login: device authorization could not reach the server twice; check the connection and start login again")
+				return lifecycleExitFailure
+			}
 		}
 	}
+	return lifecycleExitFailure
 }
 
-func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient, cfg sidecar.Config, parsed loginArgs) int {
+func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient, cfg sidecar.Config, parsed loginArgs) deviceLoginAttemptOutcome {
 	var organizationIDHint *string
 	if parsed.org != "" {
 		organizationIDHint = &parsed.org
@@ -85,7 +109,7 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 	authorization, err := client.StartDeviceAuthorization(ctx, organizationIDHint, repositoryHints)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "login: could not start device authorization")
-		return lifecycleExitFailure
+		return deviceLoginFailed
 	}
 	fmt.Fprintf(os.Stdout, "Open %s and enter code %s\n", authorization.VerificationURI, authorization.UserCode)
 	_ = lifecycleBrowserOpen(authorization.VerificationURI)
@@ -93,7 +117,7 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 	for {
 		if err := lifecycleWait(ctx, interval); err != nil {
 			fmt.Fprintln(os.Stderr, "login: device authorization was cancelled")
-			return lifecycleExitFailure
+			return deviceLoginFailed
 		}
 		response, err := client.PollDeviceToken(ctx, authorization.DeviceCode)
 		if err == nil {
@@ -104,16 +128,16 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 			if persistErr != nil {
 				if !revokeIssuedCredential(ctx, cfg, response.AccessToken) {
 					fmt.Fprintln(os.Stderr, "login: issued credential could not be stored safely and revocation requires operator action")
-					return lifecycleExitFailure
+					return deviceLoginFailed
 				}
 				if persisted.Token != "" {
 					_ = sidecar.PurgeCredentialMaterial(persisted)
 				}
 				fmt.Fprintln(os.Stderr, "login: credential was issued but could not be stored securely")
-				return lifecycleExitFailure
+				return deviceLoginFailed
 			}
 			fmt.Fprintln(os.Stdout, "login successful")
-			return 0
+			return deviceLoginSucceeded
 		}
 		var deviceErr *sidecar.DevicePollingError
 		if errors.As(err, &deviceErr) {
@@ -125,19 +149,19 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 				continue
 			case "access_denied":
 				fmt.Fprintln(os.Stderr, "login: device authorization was denied")
-				return lifecycleExitFailure
+				return deviceLoginFailed
 			case "expired_token":
 				fmt.Fprintln(os.Stderr, "login: device authorization expired")
-				return lifecycleExitFailure
+				return deviceLoginFailed
 			case "invalid_grant":
-				return 2
+				return deviceLoginRestartInvalidGrant
 			}
 		}
 		if errors.Is(err, sidecar.ErrTransportUnavailable) {
-			return 2
+			return deviceLoginRestartTransportUnavailable
 		}
 		fmt.Fprintln(os.Stderr, "login: device authorization could not be completed")
-		return lifecycleExitFailure
+		return deviceLoginFailed
 	}
 }
 

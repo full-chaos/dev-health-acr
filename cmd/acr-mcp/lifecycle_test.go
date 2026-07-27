@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -174,6 +175,96 @@ func TestLoginFails_when_deviceAuthorizationIsDeniedOrExpired(t *testing.T) {
 				t.Fatalf("login exit code = %d, want %d", code, lifecycleExitFailure)
 			}
 		})
+	}
+}
+
+func TestLoginRestartsDeviceAuthorizationAtMostOnceForAmbiguousPollFailures(t *testing.T) {
+	tests := []struct {
+		name         string
+		polls        []string
+		wantCode     int
+		wantTerminal string
+		wantStored   bool
+	}{
+		{name: "invalid_then_success", polls: []string{"invalid_grant", "success"}, wantCode: 0, wantStored: true},
+		{name: "invalid_then_invalid", polls: []string{"invalid_grant", "invalid_grant"}, wantCode: lifecycleExitFailure, wantTerminal: "device authorization was invalidated twice"},
+		{name: "transport_then_success", polls: []string{"transport", "success"}, wantCode: 0, wantStored: true},
+		{name: "transport_then_transport", polls: []string{"transport", "transport"}, wantCode: lifecycleExitFailure, wantTerminal: "could not reach the server twice"},
+		{name: "mixed_invalid_then_transport", polls: []string{"invalid_grant", "transport"}, wantCode: lifecycleExitFailure, wantTerminal: "could not reach the server twice"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			token := validDoctorToken(71)
+			authorizations := 0
+			server := newLifecycleRetryServer(t, token, tc.polls, &authorizations)
+			defer server.Close()
+			path := filepath.Join(t.TempDir(), "token")
+			t.Setenv(sidecar.APIURLEnvironment, server.URL)
+			t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+			t.Setenv(sidecar.TokenEnvironment, "")
+			t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+			t.Setenv(sidecar.TokenFileEnvironment, path)
+			originalWait := lifecycleWait
+			lifecycleWait = func(context.Context, time.Duration) error { return nil }
+			t.Cleanup(func() { lifecycleWait = originalWait })
+			originalBrowserOpen := lifecycleBrowserOpen
+			opens := 0
+			lifecycleBrowserOpen = func(uri string) error {
+				opens++
+				if uri == "" {
+					t.Fatal("empty verification URI")
+				}
+				return nil
+			}
+			t.Cleanup(func() { lifecycleBrowserOpen = originalBrowserOpen })
+
+			code, stderr := captureStderr(t, func() int { return runCLI([]string{"login"}) })
+
+			if code != tc.wantCode {
+				t.Fatalf("login exit code = %d, want %d; stderr=%s", code, tc.wantCode, stderr)
+			}
+			if tc.wantTerminal != "" && !strings.Contains(stderr, tc.wantTerminal) {
+				t.Fatalf("terminal stderr = %q, want %q", stderr, tc.wantTerminal)
+			}
+			if authorizations > 2 || opens > 2 || authorizations != opens {
+				t.Fatalf("authorizations=%d opener calls=%d, want matching counts no greater than 2", authorizations, opens)
+			}
+			_, statErr := os.Stat(path)
+			if tc.wantStored && statErr != nil {
+				t.Fatalf("persisted credential missing after success: %v", statErr)
+			}
+			if !tc.wantStored && !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("credential persisted after terminal failure: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestLogoutRemovesFileCredentialWithoutKeyringWhenDisabled(t *testing.T) {
+	token := validDoctorToken(70)
+	revocations := 0
+	server := newCredentialLifecycleServer(t, token, validDoctorToken(72), &revocations, false)
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "token")
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenKeyringServiceEnvironment, "acr-sidecar-test")
+	t.Setenv(sidecar.TokenKeyringAccountEnvironment, "agent-a")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := runCLI([]string{"logout"}); code != 0 {
+		t.Fatalf("logout exit code = %d, want 0", code)
+	}
+	if revocations != 1 {
+		t.Fatalf("remote revocations = %d, want 1", revocations)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("file credential remains after logout: %v", err)
 	}
 }
 
@@ -446,4 +537,27 @@ func TestLogoutReportsFailure_when_localCleanupFailsAfterRemoteRevocation(t *tes
 	if revocations != 1 {
 		t.Fatalf("remote revocations = %d, want 1", revocations)
 	}
+}
+
+func captureStderr(t *testing.T, fn func() int) (int, string) {
+	t.Helper()
+	original := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = writer
+	t.Cleanup(func() { os.Stderr = original })
+	code := fn()
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return code, string(output)
 }
