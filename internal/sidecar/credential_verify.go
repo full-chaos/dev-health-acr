@@ -21,6 +21,11 @@ func VerifyCredential(current CredentialResult, expectedToken string) error {
 }
 
 func (s *CredentialLifecycleSession) VerifyCredential(current CredentialResult, expectedToken string) error {
+	finish, err := s.beginOperation()
+	if err != nil {
+		return err
+	}
+	defer finish()
 	expectedToken = strings.TrimSpace(expectedToken)
 	if !auth.IsTokenShapeValid(expectedToken) {
 		return ErrCredentialShapeInvalid
@@ -32,7 +37,7 @@ func (s *CredentialLifecycleSession) VerifyCredential(current CredentialResult, 
 	if exact.Token != expectedToken || exact.Source != current.Source {
 		return errors.New("captured ACR credential source does not contain the expected credential")
 	}
-	resolved, err := s.LoadCredential()
+	resolved, err := loadCredentialForLifecycleSession()
 	if err != nil {
 		return fmt.Errorf("resolve ACR credential after persistence: %w", err)
 	}

@@ -7,12 +7,26 @@ import (
 
 var errCredentialLifecycleBusy = errors.New("acr: credential lifecycle is already active")
 
+var ErrCredentialLifecycleSessionInvalid = errors.New("acr: credential lifecycle session is invalid")
+
+var ErrCredentialLifecycleSessionClosed = errors.New("acr: credential lifecycle session is closed")
+
 var credentialLifecycleGate sync.Mutex
 
 type CredentialLifecycleSession struct {
-	close     func() error
-	closeOnce sync.Once
-	closeErr  error
+	state *credentialLifecycleSessionState
+}
+
+type credentialLifecycleSessionState struct {
+	mu           sync.Mutex
+	ready        *sync.Cond
+	close        func() error
+	closeErr     error
+	active       bool
+	closing      bool
+	inFlight     int
+	closed       chan struct{}
+	closeStarted chan struct{}
 }
 
 func BeginCredentialLifecycleSession() (*CredentialLifecycleSession, error) {
@@ -24,20 +38,66 @@ func BeginCredentialLifecycleSession() (*CredentialLifecycleSession, error) {
 		credentialLifecycleGate.Unlock()
 		return nil, err
 	}
-	return &CredentialLifecycleSession{close: func() error {
+	state := &credentialLifecycleSessionState{active: true, closed: make(chan struct{}), closeStarted: make(chan struct{})}
+	state.ready = sync.NewCond(&state.mu)
+	state.close = func() error {
 		defer credentialLifecycleGate.Unlock()
 		return close()
-	}}, nil
+	}
+	return &CredentialLifecycleSession{state: state}, nil
 }
 
 func (s *CredentialLifecycleSession) Close() error {
-	if s == nil {
-		return nil
+	if s == nil || s.state == nil {
+		return ErrCredentialLifecycleSessionInvalid
 	}
-	s.closeOnce.Do(func() {
-		if s.close != nil {
-			s.closeErr = s.close()
+	state := s.state
+	state.mu.Lock()
+	if state.closing {
+		closed := state.closed
+		state.mu.Unlock()
+		<-closed
+		state.mu.Lock()
+		err := state.closeErr
+		state.mu.Unlock()
+		return err
+	}
+	state.closing = true
+	state.active = false
+	close(state.closeStarted)
+	for state.inFlight != 0 {
+		state.ready.Wait()
+	}
+	release := state.close
+	state.mu.Unlock()
+
+	err := release()
+
+	state.mu.Lock()
+	state.closeErr = err
+	close(state.closed)
+	state.mu.Unlock()
+	return err
+}
+
+func (s *CredentialLifecycleSession) beginOperation() (func(), error) {
+	if s == nil || s.state == nil {
+		return nil, ErrCredentialLifecycleSessionInvalid
+	}
+	state := s.state
+	state.mu.Lock()
+	if !state.active {
+		state.mu.Unlock()
+		return nil, ErrCredentialLifecycleSessionClosed
+	}
+	state.inFlight++
+	state.mu.Unlock()
+	return func() {
+		state.mu.Lock()
+		state.inFlight--
+		if state.inFlight == 0 {
+			state.ready.Broadcast()
 		}
-	})
-	return s.closeErr
+		state.mu.Unlock()
+	}, nil
 }

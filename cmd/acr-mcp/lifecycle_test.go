@@ -492,6 +492,49 @@ func TestRevokeIssuedCredentialReturnsFalse_whenServerRejectsRevocation(t *testi
 	}
 }
 
+func TestRevokeIssuedCredentialReturnsFalse_whenServerReturnsInvalidSemanticSuccess(t *testing.T) {
+	// Given
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"schema_version":"unsupported.v2",
+			"credential":{
+				"schema_version":"acr_client_credential.v1",
+				"credential_id":"cred_01J0ACR001",
+				"name":"Chris local sidecar",
+				"token_prefix":"fcacr_abcd1234",
+				"org_id":"org_fullchaos",
+				"repository_scopes":["full-chaos/dev-health-acr"],
+				"scopes":["context:read","evidence:read"],
+				"created_at":"2026-07-10T14:00:00Z",
+				"expires_at":"2026-10-08T14:00:00Z",
+				"revoked_at":"2026-07-11T14:00:00Z",
+				"last_used_at":null
+			}
+		}`))
+	}))
+	defer server.Close()
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	cfg, err := sidecar.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	ok := revokeIssuedCredential(context.Background(), cfg, validDoctorToken(98))
+
+	// Then
+	if ok {
+		t.Fatal("invalid semantic self-revocation response reported success")
+	}
+	if calls != 1 {
+		t.Fatalf("revocation requests = %d, want 1", calls)
+	}
+}
+
 func TestLifecycleCommandsPrintHelpAndRejectUnknownFlags(t *testing.T) {
 	// Given
 	cases := []struct {

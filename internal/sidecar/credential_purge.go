@@ -207,7 +207,12 @@ func PurgeCredentialMaterial(current CredentialResult) error {
 }
 
 func (s *CredentialLifecycleSession) PurgeCredentialMaterial(current CredentialResult) error {
-	return s.PurgeAllCredentialMaterial([]CredentialResult{current})
+	finish, err := s.beginOperation()
+	if err != nil {
+		return err
+	}
+	defer finish()
+	return purgeAllCredentialMaterial([]CredentialResult{current})
 }
 
 // PurgeAllCredentialMaterial removes only locations captured with the supplied
@@ -228,6 +233,15 @@ func PurgeAllCredentialMaterial(material []CredentialResult) error {
 }
 
 func (s *CredentialLifecycleSession) PurgeAllCredentialMaterial(material []CredentialResult) error {
+	finish, err := s.beginOperation()
+	if err != nil {
+		return err
+	}
+	defer finish()
+	return purgeAllCredentialMaterial(material)
+}
+
+func purgeAllCredentialMaterial(material []CredentialResult) error {
 	failures := make([]*CredentialCleanupError, 0)
 	for _, current := range material {
 		if current.Source == "environment" {

@@ -104,6 +104,15 @@ func LoadCredential() (CredentialResult, error) {
 }
 
 func (s *CredentialLifecycleSession) LoadCredential() (CredentialResult, error) {
+	finish, err := s.beginOperation()
+	if err != nil {
+		return CredentialResult{}, err
+	}
+	defer finish()
+	return loadCredentialForLifecycleSession()
+}
+
+func loadCredentialForLifecycleSession() (CredentialResult, error) {
 	if result, configured, err := loadFromEnvironment(); configured {
 		return result, err
 	}
@@ -271,6 +280,15 @@ func PersistCredential(token string) (CredentialResult, error) {
 }
 
 func (s *CredentialLifecycleSession) PersistCredential(token string) (CredentialResult, error) {
+	finish, err := s.beginOperation()
+	if err != nil {
+		return CredentialResult{}, err
+	}
+	defer finish()
+	return persistCredential(token)
+}
+
+func persistCredential(token string) (CredentialResult, error) {
 	keyringAllowed, err := keyringEnabled()
 	if err != nil {
 		return CredentialResult{}, err
@@ -335,6 +353,15 @@ func ReplaceCredential(current CredentialResult, token string) error {
 }
 
 func (s *CredentialLifecycleSession) ReplaceCredential(current CredentialResult, token string) error {
+	finish, err := s.beginOperation()
+	if err != nil {
+		return err
+	}
+	defer finish()
+	return replaceCredential(current, token)
+}
+
+func replaceCredential(current CredentialResult, token string) error {
 	if err := CredentialPersistenceSupported(); err != nil {
 		return err
 	}
@@ -383,7 +410,12 @@ func RestoreCredential(current CredentialResult) error {
 }
 
 func (s *CredentialLifecycleSession) RestoreCredential(current CredentialResult) error {
-	return s.ReplaceCredential(current, current.Token)
+	finish, err := s.beginOperation()
+	if err != nil {
+		return err
+	}
+	defer finish()
+	return replaceCredential(current, current.Token)
 }
 
 func DeleteCredential() error {
@@ -396,6 +428,11 @@ func DeleteCredential() error {
 }
 
 func (s *CredentialLifecycleSession) DeleteCredential() error {
+	finish, err := s.beginOperation()
+	if err != nil {
+		return err
+	}
+	defer finish()
 	keyringAllowed, err := keyringEnabled()
 	if err != nil {
 		return err

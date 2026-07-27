@@ -34,6 +34,11 @@ func CollectCredentialMaterial() ([]CredentialResult, error) {
 }
 
 func (s *CredentialLifecycleSession) CollectCredentialMaterial() ([]CredentialResult, error) {
+	finish, err := s.beginOperation()
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
 	material := make([]CredentialResult, 0, 3)
 	if result, configured, err := loadFromEnvironment(); configured {
 		if err != nil {

@@ -1,0 +1,145 @@
+//go:build darwin || linux
+
+package sidecar
+
+import (
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+)
+
+const credentialLifecycleLockSubprocessEnvironment = "TEST_CREDENTIAL_LIFECYCLE_LOCK_SUBPROCESS"
+
+func TestCredentialLifecycleLockRejectsUnsafeObjects(t *testing.T) {
+	// Given
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, path string)
+	}{
+		{
+			name: "symlink",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.Symlink(path+".target", path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "hardlink",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				source := path + ".source"
+				if err := os.WriteFile(source, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Link(source, path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "group readable file",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, 0o640); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "directory",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "credential.lock")
+			testCase.setup(t, path)
+
+			// When
+			closeLock, err := acquireCredentialLifecycleLockFile(path)
+
+			// Then
+			if closeLock != nil {
+				t.Cleanup(func() { _ = closeLock() })
+				t.Fatal("unsafe lock object acquired")
+			}
+			if !errors.Is(err, errCredentialLifecycleLockUnsafe) {
+				t.Fatalf("acquire error = %v, want errCredentialLifecycleLockUnsafe", err)
+			}
+		})
+	}
+}
+
+func TestCredentialLifecycleLockParentValidation(t *testing.T) {
+	// Given
+	tests := []struct {
+		name  string
+		mode  os.FileMode
+		owner uint32
+		want  error
+	}{
+		{"safe sticky root directory", os.ModeDir | os.ModeSticky | 0o777, 0, nil},
+		{"root owned nonsticky directory", os.ModeDir | 0o755, 0, errCredentialLifecycleLockUnsafe},
+		{"nonroot sticky directory", os.ModeDir | os.ModeSticky | 0o777, 1, errCredentialLifecycleLockUnsafe},
+		{"symlink", os.ModeSymlink | os.ModeSticky | 0o777, 0, errCredentialLifecycleLockUnsafe},
+		{"regular file", 0o600, 0, errCredentialLifecycleLockUnsafe},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			// When
+			err := validateCredentialLifecycleLockParentMetadata(testCase.mode, testCase.owner)
+
+			// Then
+			if !errors.Is(err, testCase.want) {
+				t.Fatalf("validation error = %v, want %v", err, testCase.want)
+			}
+		})
+	}
+}
+
+func TestCredentialLifecycleLockContendsAcrossProcessesWithDifferentTMPDIR(t *testing.T) {
+	if os.Getenv(credentialLifecycleLockSubprocessEnvironment) == "1" {
+		// Given
+
+		// When
+		session, err := BeginCredentialLifecycleSession()
+
+		// Then
+		if session != nil || !errors.Is(err, errCredentialLifecycleBusy) {
+			t.Fatalf("subprocess session = %v, %v; want busy", session, err)
+		}
+		return
+	}
+
+	// Given
+	t.Setenv("TMPDIR", t.TempDir())
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	command := exec.Command(os.Args[0], "-test.run=^TestCredentialLifecycleLockContendsAcrossProcessesWithDifferentTMPDIR$")
+	command.Env = append(os.Environ(), credentialLifecycleLockSubprocessEnvironment+"=1", "TMPDIR="+t.TempDir())
+
+	// When
+	output, err := command.CombinedOutput()
+
+	// Then
+	if err != nil {
+		t.Fatalf("subprocess contention test failed: %v\n%s", err, output)
+	}
+}

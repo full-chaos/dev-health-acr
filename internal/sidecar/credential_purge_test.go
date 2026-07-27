@@ -342,3 +342,32 @@ func TestPurgeAllCredentialMaterialRetainsAKeyringEntryWhoseTokenChangedSinceEnu
 		t.Fatalf("keyring deletes = %v, want none: a changed target must never reach the deleter", keyring.deletes)
 	}
 }
+
+func TestPurgeAllCredentialMaterialDeletesKeyringEntryWhenOnlyNewlineDiffers(t *testing.T) {
+	// Given
+	service := "acr-sidecar-test"
+	account := "agent-a"
+	token := validTestToken(94)
+	t.Setenv(TokenKeyringDisabledEnvironment, "false")
+	t.Setenv(TokenKeyringServiceEnvironment, service)
+	t.Setenv(TokenKeyringAccountEnvironment, account)
+	t.Setenv(TokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
+	address := KeyringAddress{Service: service, Account: account}
+	keyring, restore, err := InstallMemoryKeyringForTesting(map[KeyringAddress]string{address: token + "\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+	current := CredentialResult{Token: token, Source: "keyring", keyringService: service, keyringAccount: account}
+
+	// When
+	err = PurgeAllCredentialMaterial([]CredentialResult{current})
+
+	// Then
+	if err != nil {
+		t.Fatalf("purge error = %v", err)
+	}
+	if _, ok := keyring.entries[address]; ok {
+		t.Fatalf("keyring entry %v remains after purge", address)
+	}
+}
