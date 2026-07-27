@@ -266,6 +266,55 @@ func TestPurgeCredentialMaterialRemovesFileWithoutTouchingKeyringWhenDisabled(t 
 	}
 }
 
+// An unparseable keyring disable flag must fail closed at the keyring seam
+// without stranding a readable token file: aborting the whole purge on the
+// setting error would report cleanup failure while leaving the credential on
+// disk, which is strictly worse than the failure it reports.
+func TestPurgeCredentialMaterialRemovesFileAndReportsTypedFailure_whenKeyringFlagIsMalformed(t *testing.T) {
+	// Given
+	path := filepath.Join(t.TempDir(), "token")
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenKeyringDisabledEnvironment, "false")
+	t.Setenv(TokenFileEnvironment, path)
+	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
+	t.Setenv(TokenKeyringAccountEnvironment, "agent-a")
+	if err := os.WriteFile(path, []byte(fileToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current, err := LoadCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(TokenKeyringDisabledEnvironment, "1")
+	deleteCalls := 0
+	stubKeyringDeleter(t, func(context.Context, string, string) error {
+		deleteCalls++
+		return nil
+	})
+
+	// When
+	err = PurgeCredentialMaterial(current)
+
+	// Then
+	var purgeErr *CredentialPurgeError
+	if !errors.As(err, &purgeErr) || len(purgeErr.Failures) != 1 {
+		t.Fatalf("purge error = %v, want one typed keyring setting failure", err)
+	}
+	if purgeErr.Failures[0].Location != TokenKeyringDisabledEnvironment {
+		t.Fatalf("cleanup location = %q, want %q", purgeErr.Failures[0].Location, TokenKeyringDisabledEnvironment)
+	}
+	var configErr *ConfigError
+	if !errors.As(err, &configErr) || configErr.Field != TokenKeyringDisabledEnvironment {
+		t.Fatalf("purge error did not carry the typed config error: %v", err)
+	}
+	if deleteCalls != 0 {
+		t.Fatalf("keyring delete calls = %d, want 0 for an unreadable keyring setting", deleteCalls)
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("credential file remains after purge continued past the setting failure: %v", statErr)
+	}
+}
+
 func TestReplaceCredential_updatesOnlyExistingFileSource(t *testing.T) {
 	// Given
 	home := t.TempDir()

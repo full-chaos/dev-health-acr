@@ -29,16 +29,23 @@ func (e *CredentialPurgeError) Unwrap() []error {
 
 // PurgeCredentialMaterial removes every configured or resolved removable
 // credential location, continuing after individual cleanup failures.
+//
+// A keyring that is disabled, or whose disable flag cannot be parsed, never
+// reaches the OS keyring seam: an unreadable setting must not authorize a
+// keyring subprocess. Such a setting is reported as one more typed failure
+// alongside the file locations rather than as an early return, because
+// aborting here would leave a readable token file on disk while logout
+// reported that cleanup had failed.
 func PurgeCredentialMaterial(current CredentialResult) error {
-	keyringAllowed, err := keyringEnabled()
-	if err != nil {
-		return err
-	}
 	if current.Source == "environment" {
 		return &CredentialCleanupError{Location: TokenEnvironment, cause: ErrCredentialPersistenceSourceUnsupported}
 	}
+	keyringAllowed, keyringSettingErr := keyringEnabled()
 	targets := credentialPurgeTargets(current, keyringAllowed)
 	failures := make([]*CredentialCleanupError, 0)
+	if keyringSettingErr != nil {
+		failures = append(failures, &CredentialCleanupError{Location: TokenKeyringDisabledEnvironment, cause: keyringSettingErr})
+	}
 	for _, target := range targets {
 		if err := target.remove(); err != nil {
 			failures = append(failures, &CredentialCleanupError{Location: target.location, cause: err})
