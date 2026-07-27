@@ -30,8 +30,12 @@ var (
 	lifecycleBrowserOpen  = sidecar.OpenVerificationURI
 	lifecycleBrowserClose = sidecar.CloseVerificationBrowserOpener
 	lifecycleWait         = waitForDevicePoll
-	lifecyclePersist      = sidecar.PersistCredential
-	lifecycleReplace      = sidecar.ReplaceCredential
+	lifecyclePersist      = func(session *sidecar.CredentialLifecycleSession, token string) (sidecar.CredentialResult, error) {
+		return session.PersistCredential(token)
+	}
+	lifecycleReplace = func(session *sidecar.CredentialLifecycleSession, current sidecar.CredentialResult, token string) error {
+		return session.ReplaceCredential(current, token)
+	}
 	// lifecycleGrantContext is a seam only because a validated device
 	// authorization always carries a 600-second lifetime -- the contract pins
 	// the value -- so no fixture can produce a grant that expires inside a
@@ -186,7 +190,7 @@ func runDeviceLoginAttempt(ctx context.Context, session *sidecar.CredentialLifec
 		}
 		response, err := client.PollDeviceToken(pollCtx, authorization.DeviceCode)
 		if err == nil {
-			persisted, persistErr := session.PersistCredential(response.AccessToken)
+			persisted, persistErr := lifecyclePersist(session, response.AccessToken)
 			if persistErr == nil {
 				persistErr = session.VerifyCredential(persisted, response.AccessToken)
 			}
@@ -212,6 +216,14 @@ func runDeviceLoginAttempt(ctx context.Context, session *sidecar.CredentialLifec
 			}
 			fmt.Fprintln(os.Stdout, "login successful")
 			return deviceLoginSucceeded
+		}
+		if auth.IsTokenShapeValid(response.AccessToken) {
+			if !revokeIssuedCredential(ctx, cfg, response.AccessToken) {
+				fmt.Fprintln(os.Stderr, "login: invalid issued credential response could not be revoked; revoke it in the dashboard")
+				return deviceLoginFailed
+			}
+			fmt.Fprintln(os.Stderr, "login: issued credential response was invalid and the credential was revoked")
+			return deviceLoginFailed
 		}
 		var deviceErr *sidecar.DevicePollingError
 		if errors.As(err, &deviceErr) {
@@ -368,7 +380,7 @@ func runCredentialRefresh() int {
 		fmt.Fprintln(os.Stderr, "login: credential refresh failed")
 		return lifecycleExitFailure
 	}
-	replacementErr := session.ReplaceCredential(credential, response.AccessToken)
+	replacementErr := lifecycleReplace(session, credential, response.AccessToken)
 	if replacementErr == nil {
 		replacementErr = session.VerifyCredential(credential, response.AccessToken)
 		if replacementErr == nil {

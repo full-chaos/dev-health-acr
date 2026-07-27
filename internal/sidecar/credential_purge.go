@@ -417,7 +417,7 @@ func addKeyringPurgeTarget(targets *[]credentialPurgeTarget, seen map[credential
 				// Already gone; deletion is idempotent.
 				return nil
 			}
-			if actual != expectedToken {
+			if strings.TrimSpace(actual) != expectedToken {
 				return errCredentialPurgeTargetChanged
 			}
 		}

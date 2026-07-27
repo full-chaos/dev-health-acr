@@ -332,7 +332,7 @@ func TestLoginRevokesIssuedCredential_whenPersistenceFails(t *testing.T) {
 	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
 	t.Setenv(sidecar.TokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
 	originalPersist := lifecyclePersist
-	lifecyclePersist = func(string) (sidecar.CredentialResult, error) {
+	lifecyclePersist = func(*sidecar.CredentialLifecycleSession, string) (sidecar.CredentialResult, error) {
 		return sidecar.CredentialResult{}, errors.New("persistence failed")
 	}
 	t.Cleanup(func() { lifecyclePersist = originalPersist })
@@ -397,8 +397,8 @@ func TestLoginRevokesThenPurgesIssuedCredential_whenPersistenceFailsAfterWriting
 	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
 	t.Setenv(sidecar.TokenFileEnvironment, path)
 	originalPersist := lifecyclePersist
-	lifecyclePersist = func(value string) (sidecar.CredentialResult, error) {
-		persisted, err := originalPersist(value)
+	lifecyclePersist = func(session *sidecar.CredentialLifecycleSession, value string) (sidecar.CredentialResult, error) {
+		persisted, err := originalPersist(session, value)
 		if err != nil {
 			return persisted, err
 		}
@@ -441,8 +441,8 @@ func TestLoginPurgesPersistedCredential_afterWrongSourceVerificationFailure(t *t
 	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
 	t.Setenv(sidecar.TokenFileEnvironment, path)
 	originalPersist := lifecyclePersist
-	lifecyclePersist = func(value string) (sidecar.CredentialResult, error) {
-		credential, err := originalPersist(value)
+	lifecyclePersist = func(session *sidecar.CredentialLifecycleSession, value string) (sidecar.CredentialResult, error) {
+		credential, err := originalPersist(session, value)
 		if err == nil {
 			t.Setenv(sidecar.TokenEnvironment, value)
 		}
@@ -532,8 +532,8 @@ func TestRefreshRestoresOriginalCredential_afterSuccessfulRollback(t *testing.T)
 		t.Fatal(err)
 	}
 	originalReplace := lifecycleReplace
-	lifecycleReplace = func(current sidecar.CredentialResult, token string) error {
-		if err := sidecar.ReplaceCredential(current, token); err != nil {
+	lifecycleReplace = func(session *sidecar.CredentialLifecycleSession, current sidecar.CredentialResult, token string) error {
+		if err := session.ReplaceCredential(current, token); err != nil {
 			return err
 		}
 		return errors.New("persistence failed after local replacement")
@@ -574,8 +574,8 @@ func TestRefreshRetainsSuccessor_whenRollbackFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	originalReplace := lifecycleReplace
-	lifecycleReplace = func(current sidecar.CredentialResult, token string) error {
-		if err := sidecar.ReplaceCredential(current, token); err != nil {
+	lifecycleReplace = func(session *sidecar.CredentialLifecycleSession, current sidecar.CredentialResult, token string) error {
+		if err := session.ReplaceCredential(current, token); err != nil {
 			return err
 		}
 		return errors.New("persistence failed after local replacement")

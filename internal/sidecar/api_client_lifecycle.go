@@ -104,13 +104,13 @@ func (c *LifecycleClient) PollDeviceToken(ctx context.Context, deviceCode string
 	}
 	response := contractsv1.DeviceTokenResponse{}
 	if err := c.callPublic(ctx, deviceTokenPath, request, &response, true); err != nil {
-		return contractsv1.DeviceTokenResponse{}, fmt.Errorf("poll device token: %w", err)
+		return response, fmt.Errorf("poll device token: %w", err)
 	}
 	if err := response.Validate(); err != nil {
-		return contractsv1.DeviceTokenResponse{}, fmt.Errorf("%w: device token response: %w", ErrInvalidResponse, err)
+		return response, fmt.Errorf("%w: device token response: %w", ErrInvalidResponse, err)
 	}
 	if !auth.IsTokenShapeValid(response.AccessToken) {
-		return contractsv1.DeviceTokenResponse{}, ErrCredentialShapeInvalid
+		return response, ErrCredentialShapeInvalid
 	}
 	return response, nil
 }
