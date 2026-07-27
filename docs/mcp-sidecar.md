@@ -165,7 +165,8 @@ acr-mcp serve
 
 **Permission Requirements:**
 - macOS/Linux: File must have mode `0600` (read/write for owner only). The sidecar checks this at load time (`info.Mode().Perm()&0o077 != 0` is rejected) and refuses to load the token if group or world bits are set.
-- **The parent directory must not grant group or world write access, for removal as well as for writing.** Removal proves the target is an ACR credential and then unlinks it by name; on a shared-writable parent any local user can replace the entry between those two steps, so the unlink would land on whatever they substituted. `logout` refuses to remove under such a parent and reports the path instead of deleting it. Fix the directory (`chmod go-w`) and run `logout` again.
+- **The parent directory must not grant group or world write access, for removal as well as for writing.** Removal proves the target is an ACR credential and then unlinks it by name, so a window exists between the two no matter what. Refusing a shared-writable parent narrows who can act in that window to principals who can already write the directory -- the owner, and root -- rather than any local user; it does not make the sequence atomic. `logout` refuses to remove under such a parent and reports the path instead of deleting it. Fix the directory (`chmod go-w`) and run `logout` again.
+- **A parent `login` creates is `0700`; a parent that already exists is inspected, not rewritten.** `ACR_API_TOKEN_FILE` is operator-supplied, and unconditionally chmod-ing its parent once reduced an entire home directory to `0700`. Group- or world-writable is refused outright; every other mode bit is left exactly as found.
 - Windows and all other platforms: **The token file source is unavailable, full stop.** The sidecar fails closed before it ever inspects permissions and refuses to load any file -- there is no unenforced pass-through. Use `ACR_API_TOKEN`; the OS keyring source is also macOS/Linux only.
 
 If permissions are too loose (macOS/Linux) or the platform doesn't support bounded file loading at all (Windows and others), the sidecar refuses to load the token and exits with an error. It never loads a token file silently or without a permission check.
@@ -212,6 +213,14 @@ starts only after every revocation has succeeded. Any revocation failure retains
 **all** local material, since a local copy may be the last thing pointing at a
 credential that is still live. An established credential the server answers
 `invalid_token` for is already inactive and does not block cleanup.
+
+The purge that follows is a single deduplicated pass over the whole set, not one
+purge per credential. Purging one at a time reported the same configured
+location once per credential and, worse, could remove a location belonging to a
+credential whose own remote revocation had not been attempted yet. With
+`ACR_API_TOKEN_KEYRING_DISABLED=true` the keyring is skipped for enumeration,
+revocation, and removal alike -- a disabled keyring is not consulted even to ask
+whether something is there.
 
 **`logout` reports every location it could not clean, and exits nonzero.**
 `ACR_API_TOKEN` cannot be unset in your parent shell from inside the process, so

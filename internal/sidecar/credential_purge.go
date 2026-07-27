@@ -267,12 +267,14 @@ func addFilePurgeTarget(targets *[]credentialPurgeTarget, seen map[credentialPur
 // exactly as it is; a missing one reports success so cleanup stays
 // idempotent.
 //
-// The parent directory is checked too. Every property proven about the file
-// is proven before the unlink, and on a group- or world-writable parent any
-// local user can replace the target in that window, so a verified ACR
-// credential is not enough on its own: the removal would be of whatever was
-// swapped in. Such a parent is refused and reported rather than removed,
-// because the safe action there is for an operator to fix the directory.
+// The parent directory is checked too, but note what that does and does not
+// buy. Every property is proven about the file and the unlink then happens by
+// name, so a window exists between them regardless. Refusing a group- or
+// world-writable parent narrows who can act in that window to principals who
+// can already write the directory -- the owner, and root. It does not make the
+// sequence atomic, and this comment does not claim it does. Such a parent is
+// refused and reported rather than removed, because the safe action there is
+// for an operator to fix the directory.
 func removeACRCredentialFile(path string) error {
 	if err := rejectSharedWritableCredentialParent(path); err != nil {
 		return err

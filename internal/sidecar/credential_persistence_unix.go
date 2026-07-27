@@ -97,11 +97,18 @@ func removeCredentialFile(path string) error {
 // removable when its parent directory grants write access to group or world.
 //
 // Removal proves the target is an ACR credential (no-follow open, regular-file
-// fstat, restrictive mode, ACR token shape) and then unlinks it by name. On a
-// shared-writable parent any local user can swap the entry between those two
-// steps, so the unlink lands on whatever they put there -- the same
-// arbitrary-file delete the content proof exists to prevent, reached through
-// the directory instead of the path.
+// fstat, restrictive mode, ACR token shape) and then unlinks it by name. Those
+// are two operations on a path, so a window exists between them no matter what
+// this function does.
+//
+// What this narrows is who can act in that window. On a group- or
+// world-writable parent, any local user can replace the entry between the proof
+// and the unlink, which turns removal into the arbitrary-file delete the
+// content proof exists to prevent, reached through the directory instead of the
+// path. Refusing such a parent leaves only principals who can already write the
+// directory -- the owner, and root. It does NOT make the unlink atomic with
+// respect to the check, and nothing here should be read as claiming it does:
+// this is a reduction of the attacker set, not the elimination of a race.
 //
 // A parent that does not exist is not a failure: there is nothing to remove,
 // and removeCredentialFile already treats that as the goal state.
@@ -115,7 +122,7 @@ func rejectSharedWritableCredentialParent(path string) error {
 		return fmt.Errorf("inspect credential directory before removal: %w", err)
 	}
 	if info.Mode().Perm()&0o022 != 0 {
-		return errors.New("credential directory grants group or world write access; another local user could replace the credential during removal")
+		return errors.New("credential directory grants group or world write access; another local user could replace the credential between the pre-removal check and the unlink")
 	}
 	return nil
 }

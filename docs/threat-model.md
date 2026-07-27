@@ -114,7 +114,8 @@ CHAOS-2904 and CHAOS-2917 implement these rules without changing v1 wire semanti
 
 - The repository fixes storage roles, not geographic regions: ClickHouse holds read-only engineering evidence, including service-to-repository associations used to scope incidents, and ACR Postgres holds operational state.
 - The actual region, subprocessors, backups, replicas, and cross-region transfer behavior are deployment facts. Production deployment documentation must disclose them before customer use; this document does not invent a region.
-- `acr-mcp` reads a credential from `ACR_API_TOKEN` (works on every supported platform) or from the caller-selected `ACR_API_TOKEN_FILE`. Token-file (and CA-bundle) loading is supported only on macOS and Linux, where it checks restrictive file permissions; on every other platform, including Windows, it fails closed and refuses to load the file at all. It does not create or manage a home-directory credential file.
+- `acr-mcp` reads a credential from `ACR_API_TOKEN` (works on every supported platform), from an OS keyring entry, or from `ACR_API_TOKEN_FILE`. Token-file (and CA-bundle) loading is supported only on macOS and Linux, where it checks restrictive file permissions; on every other platform, including Windows, it fails closed and refuses to load the file at all.
+- `acr-mcp login` **does** create and manage a home-directory credential file: when the keyring is unavailable it writes `~/.acr/token`, creating that parent at mode `0700` if it does not exist. A parent that already exists is inspected, not rewritten -- group- or world-writable is refused outright and every other mode bit is left as found, because `ACR_API_TOKEN_FILE` is operator-supplied and unconditionally chmod-ing its parent once reduced an entire home directory to `0700`. `acr-mcp logout` removes that file. Only `login`, `login --refresh`, and `logout` write or delete local credential material; `serve` never does.
 - The sidecar must not persist packets, episode payloads, or raw transcripts locally.
 
 ## Evidence content, markup, and URIs
@@ -156,9 +157,12 @@ or destroy credential material, and they hold to four rules.
   told about.
 - **Removal is gated on the same boundaries as reading, plus the parent
   directory.** A file is unlinked only after a no-follow open, a regular-file
-  fstat, a group/world permission check, and an ACR token-shape check, and only if
-  its parent denies group and world write -- otherwise another local user could
-  swap the entry between the proof and the unlink.
+  fstat, a group/world permission check, and an ACR token-shape check, and only
+  if its parent denies group and world write. The proof and the unlink are two
+  operations on a path, so a window exists between them; refusing a
+  shared-writable parent narrows who can act in that window to principals who
+  can already write the directory, rather than any local user. That is a
+  reduction of the attacker set, not the elimination of a race.
 - **Server-supplied text never becomes local execution or terminal output.** The
   device verification address is validated (https, or http to a validated loopback
   address; no userinfo, control characters, whitespace, or `fcacr_` text) *before*
