@@ -43,7 +43,7 @@ func memoryKeyringAddress(service, account string) string { return service + "\x
 // that exports ACR_API_TOKEN can still have a stale token file and keyring
 // entry underneath it. Returning early on the environment source left both
 // behind while logout reported that cleanup had failed.
-func TestPurgeCredentialMaterialCleansFileAndKeyring_whenEnvironmentSourceCannotBeRemoved(t *testing.T) {
+func TestPurgeCredentialMaterialLeavesUnobservedFileAndKeyring_whenEnvironmentCannotBeRemoved(t *testing.T) {
 	// Given
 	path := filepath.Join(t.TempDir(), "token")
 	service := "acr-sidecar-test"
@@ -76,14 +76,14 @@ func TestPurgeCredentialMaterialCleansFileAndKeyring_whenEnvironmentSourceCannot
 	if got := purgeErr.Locations(); len(got) != 1 || got[0] != TokenEnvironment {
 		t.Fatalf("failed locations = %v, want exactly [%s]", got, TokenEnvironment)
 	}
-	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("configured credential file remains after purge: %v", statErr)
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("unobserved credential file was modified: %v", statErr)
 	}
-	if _, ok := keyring.entries[memoryKeyringAddress(service, account)]; ok {
-		t.Fatal("configured keyring entry remains after purge")
+	if _, ok := keyring.entries[memoryKeyringAddress(service, account)]; !ok {
+		t.Fatal("unobserved keyring entry was modified")
 	}
-	if len(keyring.deletes) != 1 {
-		t.Fatalf("keyring deletions = %v, want exactly one", keyring.deletes)
+	if len(keyring.deletes) != 0 {
+		t.Fatalf("keyring deletions = %v, want none", keyring.deletes)
 	}
 }
 
@@ -111,7 +111,7 @@ func TestCredentialCleanupLocationsReportsEveryFailedLocation(t *testing.T) {
 	locations := credentialCleanupLocations(PurgeCredentialMaterial(current))
 
 	// Then
-	want := []string{TokenEnvironment, credentialKeyringLocation(service, account)}
+	want := []string{TokenEnvironment}
 	sort.Strings(locations)
 	sort.Strings(want)
 	if len(locations) != len(want) {
@@ -199,14 +199,10 @@ func TestPurgeCredentialMaterialLeavesFileThatIsNotAnACRCredentialTarget(t *test
 			if string(contents) != testCase.contents {
 				t.Fatalf("unrelated file contents = %q, want unchanged", contents)
 			}
-			found := false
 			for _, location := range locations {
 				if location == path {
-					found = true
+					t.Fatalf("unobserved target was reported: %v", locations)
 				}
-			}
-			if !found {
-				t.Fatalf("failed locations = %v, want the refused target %q reported", locations, path)
 			}
 		})
 	}
@@ -216,7 +212,7 @@ func TestPurgeCredentialMaterialLeavesFileThatIsNotAnACRCredentialTarget(t *test
 // token file sitting underneath it. Asserting only that a deleter was called
 // leaves the second half untested, and an entry that survives the call reads
 // as a successful logout.
-func TestPurgeCredentialMaterialClearsBothTheKeyringEntryAndTheFileUnderneathIt(t *testing.T) {
+func TestPurgeCredentialMaterialLeavesUnobservedFileUnderneathKeyringCredential(t *testing.T) {
 	// Given
 	path := filepath.Join(t.TempDir(), "token")
 	service := "acr-sidecar-test"
@@ -251,8 +247,8 @@ func TestPurgeCredentialMaterialClearsBothTheKeyringEntryAndTheFileUnderneathIt(
 	if len(keyring.entries) != 0 {
 		t.Fatalf("keyring entries remain after purge: %v", keyring.deletes)
 	}
-	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("token file underneath the keyring credential remains: %v", statErr)
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("unobserved token file was modified: %v", statErr)
 	}
 }
 
