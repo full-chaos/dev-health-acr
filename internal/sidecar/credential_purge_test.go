@@ -3,6 +3,7 @@ package sidecar
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,9 +23,7 @@ type memoryKeyring struct {
 func newMemoryKeyring(t *testing.T, seeded map[string]string) *memoryKeyring {
 	t.Helper()
 	keyring := &memoryKeyring{entries: map[string]string{}}
-	for address, token := range seeded {
-		keyring.entries[address] = token
-	}
+	maps.Copy(keyring.entries, seeded)
 	stubKeyringDeleter(t, func(_ context.Context, service, account string) error {
 		address := service + "\x00" + account
 		keyring.deletes = append(keyring.deletes, address)
