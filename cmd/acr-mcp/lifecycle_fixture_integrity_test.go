@@ -123,3 +123,44 @@ func TestPackageDefaultsKeepEveryTestFromLaunchingABrowser(t *testing.T) {
 	// and cannot launch, which is exactly the property being pinned: this call
 	// would otherwise attempt a desktop launch right here.
 }
+
+// TestPackageDefaultsClearAmbientACRConfiguration above inspects the process
+// state, which means it can only fail on a machine that actually exports an ACR_
+// variable -- a clean CI runner has nothing for it to catch. A mutation removing
+// the clear from TestMain therefore survived it.
+//
+// This asserts the mechanism instead, so the guard holds regardless of the
+// environment the suite happens to run in: a configuration variable is removed,
+// and a subprocess entry-point marker is not, because clearing the marker made
+// every subprocess test run the Go harness and compare its output to "PASS".
+func TestClearAmbientACREnvironmentRemovesConfigurationAndKeepsEntryPointMarkers(t *testing.T) {
+	// Given
+	// clearAmbientACREnvironment unsets ACR_ variables process-wide, including the
+	// two TestMain set for the whole package. Naming them in t.Setenv first is
+	// what makes the cleanup put them back: without this the clear leaks past this
+	// test, the keyring becomes enabled for whatever runs next, and under
+	// -shuffle=on an unrelated doctor test panics on the seam guard. Found exactly
+	// that way.
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, os.Getenv(sidecar.TokenKeyringDisabledEnvironment))
+	t.Setenv("ACR_LOCAL_INDEX_PROVIDER", os.Getenv("ACR_LOCAL_INDEX_PROVIDER"))
+	t.Setenv(sidecar.APIURLEnvironment, "https://ambient.example.invalid")
+	t.Setenv(sidecar.TokenEnvironment, validDoctorToken(99))
+	t.Setenv("ACR_MCP_FIXTURE_PROCESS", "1")
+	t.Setenv("PATH", os.Getenv("PATH"))
+
+	// When
+	clearAmbientACREnvironment()
+
+	// Then
+	for _, name := range []string{sidecar.APIURLEnvironment, sidecar.TokenEnvironment} {
+		if value, present := os.LookupEnv(name); present {
+			t.Fatalf("%s survived as %q; ambient configuration would decide this suite's outcome", name, value)
+		}
+	}
+	if os.Getenv("ACR_MCP_FIXTURE_PROCESS") != "1" {
+		t.Fatal("a subprocess entry-point marker was cleared; every subprocess test would run the Go harness instead of the command")
+	}
+	if os.Getenv("PATH") == "" {
+		t.Fatal("clearing removed a non-ACR variable")
+	}
+}
