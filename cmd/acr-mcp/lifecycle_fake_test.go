@@ -345,7 +345,13 @@ func newCredentialLifecycleServerWithState(t *testing.T, original, successor str
 				return
 			}
 			if revokeFails {
-				writeLifecycleFixtureRefusal(t, w, http.StatusUnauthorized)
+				// A genuine operational failure, not a rejected bearer: an
+				// established credential the server answers invalid_token for is
+				// already inactive, which is the goal state rather than a
+				// failure. Modelling "revocation failed" as invalid_token made
+				// the retention tests assert the opposite of what they claim.
+				w.WriteHeader(http.StatusServiceUnavailable)
+				writeLifecycleJSON(t, w, contractsv1.ErrorEnvelope{SchemaVersion: contractsv1.ErrorSchema, RequestID: "request-1", Error: contractsv1.ErrorDetail{Code: "upstream_unavailable", Message: "revocation is temporarily unavailable", HTTPStatus: http.StatusServiceUnavailable, Retryable: true}})
 				return
 			}
 			revokedAt := createdAt.Add(time.Minute)

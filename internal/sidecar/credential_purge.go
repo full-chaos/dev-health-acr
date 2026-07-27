@@ -166,14 +166,36 @@ func isTokenSecretByte(b byte) bool {
 // keyring entry underneath it, and returning here would leave both behind
 // while logout reported that cleanup had failed.
 func PurgeCredentialMaterial(current CredentialResult) error {
+	return PurgeAllCredentialMaterial([]CredentialResult{current})
+}
+
+// PurgeAllCredentialMaterial removes the removable locations of every supplied
+// credential, plus the configured ones, as a single deduplicated pass.
+//
+// Purging one credential at a time reported the same configured location as a
+// separate failure once per credential, and, worse, could remove a location
+// belonging to a later credential before that credential's own remote
+// revocation had been attempted. Callers therefore hand the whole set here,
+// after every remote revocation has succeeded.
+func PurgeAllCredentialMaterial(material []CredentialResult) error {
 	failures := make([]*CredentialCleanupError, 0)
-	if current.Source == "environment" {
-		failures = append(failures, &CredentialCleanupError{Location: TokenEnvironment, cause: ErrCredentialPersistenceSourceUnsupported})
+	for _, current := range material {
+		if current.Source == "environment" {
+			failures = append(failures, &CredentialCleanupError{Location: TokenEnvironment, cause: ErrCredentialPersistenceSourceUnsupported})
+			break
+		}
 	}
 	keyringAllowed, keyringSettingErr := keyringEnabled()
-	targets := credentialPurgeTargets(current, keyringAllowed)
 	if keyringSettingErr != nil {
 		failures = append(failures, &CredentialCleanupError{Location: TokenKeyringDisabledEnvironment, cause: keyringSettingErr})
+	}
+	seen := map[credentialPurgeKey]bool{}
+	targets := make([]credentialPurgeTarget, 0, 4)
+	for _, current := range material {
+		appendCredentialPurgeTargets(&targets, seen, current, keyringAllowed)
+	}
+	if len(material) == 0 {
+		appendCredentialPurgeTargets(&targets, seen, CredentialResult{}, keyringAllowed)
 	}
 	for _, target := range targets {
 		if err := target.remove(); err != nil {
@@ -209,19 +231,25 @@ type credentialPurgeKey struct {
 
 func credentialPurgeTargets(current CredentialResult, keyringAllowed bool) []credentialPurgeTarget {
 	targets := make([]credentialPurgeTarget, 0, 4)
-	seen := map[credentialPurgeKey]bool{}
-	addFilePurgeTarget(&targets, seen, current.filePath)
+	appendCredentialPurgeTargets(&targets, map[credentialPurgeKey]bool{}, current, keyringAllowed)
+	return targets
+}
+
+// appendCredentialPurgeTargets adds the locations one credential can be
+// removed from -- the address it was actually captured at, then the currently
+// configured address -- skipping anything already queued under seen.
+func appendCredentialPurgeTargets(targets *[]credentialPurgeTarget, seen map[credentialPurgeKey]bool, current CredentialResult, keyringAllowed bool) {
+	addFilePurgeTarget(targets, seen, current.filePath)
 	if keyringAllowed {
-		addKeyringPurgeTarget(&targets, seen, current.keyringService, current.keyringAccount)
+		addKeyringPurgeTarget(targets, seen, current.keyringService, current.keyringAccount)
 	}
-	addFilePurgeTarget(&targets, seen, configuredTokenFilePath())
+	addFilePurgeTarget(targets, seen, configuredTokenFilePath())
 	if keyringAllowed {
 		service, account, configured := credentialKeyringAddress()
 		if configured {
-			addKeyringPurgeTarget(&targets, seen, service, account)
+			addKeyringPurgeTarget(targets, seen, service, account)
 		}
 	}
-	return targets
 }
 
 func addFilePurgeTarget(targets *[]credentialPurgeTarget, seen map[credentialPurgeKey]bool, path string) {

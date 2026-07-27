@@ -649,6 +649,11 @@ func TestLogoutRetainsCredential_when_remoteRevocationFails(t *testing.T) {
 // cleanup had failed at "the configured ACR keyring entry" -- a location the
 // purge never touched. Cleanup must continue past the environment source and
 // the message must name exactly what actually failed.
+//
+// The environment and the file hold the same credential here, which is the
+// ordinary case after a login. Distinct values are covered by the combined
+// multi-token logout test; the deduplication that keeps this case a single
+// revocation is asserted below.
 func TestLogoutPurgesFileMaterialAndNamesEnvironment_whenEnvironmentCredentialIsSelected(t *testing.T) {
 	// Given
 	token := validDoctorToken(90)
@@ -656,7 +661,7 @@ func TestLogoutPurgesFileMaterialAndNamesEnvironment_whenEnvironmentCredentialIs
 	server := newCredentialLifecycleServer(t, token, validDoctorToken(91), &revocations, false)
 	defer server.Close()
 	path := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(path, []byte(validDoctorToken(92)+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(sidecar.APIURLEnvironment, server.URL)

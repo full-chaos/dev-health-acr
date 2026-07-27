@@ -234,15 +234,39 @@ func deviceAuthorizationContext(ctx context.Context, expiresIn int) (context.Con
 	return context.WithTimeout(ctx, time.Duration(expiresIn)*time.Second)
 }
 
+// revokeIssuedCredential ends a credential this login just minted. Every
+// failure is a failure here, including a typed invalid_token: a credential the
+// server issued seconds ago and now refuses to authenticate is not evidence
+// that it is inactive, it is evidence that this client cannot tell, and the
+// caller must escalate to an operator rather than quietly drop it.
 func revokeIssuedCredential(ctx context.Context, cfg sidecar.Config, token string) bool {
+	return revokeToken(ctx, cfg, token) == nil
+}
+
+// revokeCredentialToken revokes one already-established credential value,
+// whichever local location it came from.
+//
+// Unlike a freshly issued credential, an established one the server no longer
+// recognizes is already in the goal state: revoking it again is neither
+// possible nor needed, so a typed invalid_token is success. Every other
+// failure means the credential may still be live, and the caller must keep
+// local material rather than delete the last thing pointing at it.
+func revokeCredentialToken(ctx context.Context, cfg sidecar.Config, token string) error {
+	if err := revokeToken(ctx, cfg, token); err != nil && !errors.Is(err, sidecar.ErrInvalidToken) {
+		return err
+	}
+	return nil
+}
+
+func revokeToken(ctx context.Context, cfg sidecar.Config, token string) error {
 	client, err := sidecar.NewClient(cfg, func() (sidecar.CredentialResult, error) {
 		return sidecar.CredentialResult{Token: token, Source: "issued"}, nil
 	})
 	if err != nil {
-		return false
+		return err
 	}
 	_, err = client.RevokeOwnCredential(ctx)
-	return err == nil
+	return err
 }
 
 func runCredentialRefresh() int {
@@ -290,6 +314,19 @@ func runCredentialRefresh() int {
 	return lifecycleExitFailure
 }
 
+// runLogoutCommand ends every locally configured credential, not just the one
+// that currently wins precedence.
+//
+// Logout used to resolve a single credential through LoadCredential, revoke
+// that one, and then delete every local location. On a host with an exported
+// ACR_API_TOKEN over a token file -- or a keyring entry over a file an earlier
+// login left behind -- the lower-precedence credentials were deleted locally
+// while they stayed live on the server, so anyone holding a copy of one kept a
+// working credential the operator believed logout had ended.
+//
+// The order is the contract: enumerate, revoke every distinct value, and only
+// then delete anything. A revocation failure retains all local material,
+// because the local copy may be the last thing pointing at a live credential.
 func runLogoutCommand(args []string) int {
 	if logoutHelpRequested(args) {
 		fmt.Fprintln(os.Stdout, logoutUsageLine)
@@ -300,19 +337,34 @@ func runLogoutCommand(args []string) int {
 		fmt.Fprintln(os.Stderr, logoutUsageLine)
 		return 2
 	}
-	_, credential, client, code := loadCredentialClient("logout")
-	if code != 0 {
-		return code
-	}
-	if _, err := client.RevokeOwnCredential(context.Background()); err != nil {
-		fmt.Fprintln(os.Stderr, "logout: remote credential revocation failed; local credential was retained")
+	cfg, err := sidecar.LoadConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "logout: configuration is invalid: "+sidecar.DescribeConfigError(err))
 		return lifecycleExitFailure
 	}
-	if err := sidecar.PurgeCredentialMaterial(credential); err != nil {
+	material, err := sidecar.CollectCredentialMaterial()
+	if err != nil {
+		// Enumeration fails closed, so this means at least one location could
+		// not be read conclusively. Deleting around it would strand whatever
+		// live credential it holds.
+		fmt.Fprintln(os.Stderr, "logout: local credential material could not be enumerated safely; nothing was removed")
+		return lifecycleExitFailure
+	}
+	if len(material) == 0 {
+		fmt.Fprintln(os.Stderr, "logout: a valid local credential is required")
+		return lifecycleExitFailure
+	}
+	for _, token := range sidecar.DistinctCredentialTokens(material) {
+		if err := revokeCredentialToken(context.Background(), cfg, token); err != nil {
+			fmt.Fprintln(os.Stderr, "logout: remote credential revocation failed; local credential material was retained")
+			return lifecycleExitFailure
+		}
+	}
+	if err := sidecar.PurgeAllCredentialMaterial(material); err != nil {
 		// Report every location the purge actually failed at. Deriving one
 		// location from the credential's own source named a place the purge
 		// may never have touched and hid the rest.
-		fmt.Fprintln(os.Stderr, "logout: remote credential was revoked, but local cleanup requires operator action at "+describeCleanupLocations(err))
+		fmt.Fprintln(os.Stderr, "logout: remote credentials were revoked, but local cleanup requires operator action at "+describeCleanupLocations(err))
 		return lifecycleExitFailure
 	}
 	fmt.Fprintln(os.Stdout, "logout successful")
