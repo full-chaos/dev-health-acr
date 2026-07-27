@@ -138,6 +138,31 @@ func normalizeRevocation(input RevocationInput) (RevocationInput, error) {
 	return input, nil
 }
 
+func normalizeRotationRollback(input RotationRollbackInput) (RotationRollbackInput, error) {
+	var err error
+	input.OrgID, err = normalizeIdentifier("organization", input.OrgID)
+	if err != nil {
+		return RotationRollbackInput{}, err
+	}
+	input.SourceCredentialID, err = normalizeCredentialID(input.SourceCredentialID)
+	if err != nil {
+		return RotationRollbackInput{}, err
+	}
+	input.SuccessorCredentialID, err = normalizeCredentialID(input.SuccessorCredentialID)
+	if err != nil || input.SourceCredentialID == input.SuccessorCredentialID {
+		return RotationRollbackInput{}, invalid("rotation successor credential id")
+	}
+	input.ActorID, err = normalizeText("actor", input.ActorID, 200)
+	if err != nil {
+		return RotationRollbackInput{}, err
+	}
+	if input.RollbackUntil.IsZero() {
+		return RotationRollbackInput{}, invalid("rotation rollback deadline")
+	}
+	input.RollbackUntil = input.RollbackUntil.UTC()
+	return input, nil
+}
+
 func normalizeCredentialID(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if !credentialIDPattern.MatchString(value) {

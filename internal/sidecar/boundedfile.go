@@ -8,6 +8,17 @@ import (
 	"os"
 )
 
+// ErrBoundedFileReadsUnsupported is returned by openNoFollowNonBlocking on any
+// platform other than darwin and linux (see boundedfile_unsupported.go). It is
+// a structural, platform-wide refusal -- every call on such a platform returns
+// it, for every path, whether or not anything is actually there -- not an
+// ambiguous per-file condition like a permission error or a locked keyring.
+// Callers for whom that distinction matters (credential.go's loadCredentialFile
+// in particular: a platform that can never write or delete a credential file
+// either has nothing there this sidecar could have put) check for it
+// specifically rather than treating it as an unexplained read failure.
+var ErrBoundedFileReadsUnsupported = errors.New("bounded local file reads are not supported on this platform")
+
 // readBoundedRegularFile opens path and returns at most maxBytes+1 bytes
 // from it, having verified that it names a regular file: never a
 // directory, FIFO, device, socket, or symlink -- even one that would

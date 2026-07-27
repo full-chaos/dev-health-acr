@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+
 	"testing"
 	"time"
 
@@ -29,11 +30,6 @@ func (p doctorLocalProvider) ContextForTask(_ context.Context, request sidecar.L
 }
 func (doctorLocalProvider) ResolveEvidence(context.Context, string) (sidecar.LocalExpandedEvidence, error) {
 	return sidecar.LocalExpandedEvidence{}, sidecar.ErrLocalEvidenceNotFound
-}
-
-func TestMain(m *testing.M) {
-	_ = os.Setenv("ACR_LOCAL_INDEX_PROVIDER", "disabled")
-	os.Exit(m.Run())
 }
 
 func TestDoctorLocalIndexReportsBoundedHealthyResult(t *testing.T) {

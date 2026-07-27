@@ -32,6 +32,7 @@ type credentialLifecycle interface {
 	CreateCredential(context.Context, storage.CredentialCreateInput) (contractsv1.ClientCredential, error)
 	RotateCredential(context.Context, storage.CredentialRotationInput) (contractsv1.ClientCredential, error)
 	RevokeCredential(context.Context, storage.CredentialRevocationInput) (contractsv1.ClientCredential, error)
+	RollbackCredentialRotation(context.Context, storage.CredentialRotationRollbackInput) (contractsv1.ClientCredential, error)
 	List(context.Context, string) ([]contractsv1.ClientCredential, error)
 	GetByID(context.Context, string, string) (contractsv1.ClientCredential, error)
 }

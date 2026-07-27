@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"slices"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -38,6 +39,53 @@ func (s *credentialStore) createCredential(ctx context.Context, input storage.Cr
 	s.byID[record.Metadata.CredentialID] = record
 	s.byHash[record.TokenHash] = record.Metadata.CredentialID
 	return cloneCredential(credential), nil
+}
+
+func (s *credentialStore) rollbackCredentialRotation(ctx context.Context, input storage.CredentialRotationRollbackInput) (contractsv1.ClientCredential, error) {
+	if err := s.ready(ctx); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
+	now := s.now().UTC()
+	if !input.RollbackUntil.After(now) {
+		return contractsv1.ClientCredential{}, storage.ErrConflict
+	}
+	source, sourceOK := s.byID[input.SourceCredentialID]
+	successor, successorOK := s.byID[input.SuccessorCredentialID]
+	if !sourceOK || !successorOK || source.Metadata.OrgID != input.OrgID || successor.Metadata.OrgID != input.OrgID ||
+		source.Metadata.RevokedAt != nil || successor.Metadata.RevokedAt != nil || successor.RotatedAt != nil ||
+		source.Metadata.ExpiresAt == nil || !source.Metadata.ExpiresAt.After(now) ||
+		!slices.Equal(source.Metadata.RepositoryScopes, successor.Metadata.RepositoryScopes) || !slices.Equal(source.Metadata.Scopes, successor.Metadata.Scopes) ||
+		!s.rotationRelates(source.Metadata.CredentialID, successor.Metadata.CredentialID) {
+		return contractsv1.ClientCredential{}, storage.ErrConflict
+	}
+	if err := s.recordAudit(ctx, credentialRevokedEvent(successor.Metadata, input.ActorID, now)); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
+	successor.Metadata.RevokedAt = ptrTime(now)
+	s.byID[successor.Metadata.CredentialID] = cloneRecord(successor)
+	return cloneCredential(successor.Metadata), nil
+}
+
+func (s *credentialStore) rotationRelates(sourceID, successorID string) bool {
+	if s.audit == nil {
+		return false
+	}
+	s.audit.mu.RLock()
+	defer s.audit.mu.RUnlock()
+	for _, event := range s.audit.events {
+		if event.Action != storage.AuditActionCredentialRotated || event.ResourceID != sourceID {
+			continue
+		}
+		if replacement, ok := event.Metadata["replacement_credential_id"].(string); ok && replacement == successorID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *credentialStore) rotateCredential(ctx context.Context, input storage.CredentialRotationInput) (contractsv1.ClientCredential, error) {

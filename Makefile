@@ -1,7 +1,9 @@
-.PHONY: fmt fmt-check test hosted-integration clients-real vet contract-write contract-test codegraph-contract canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
+.PHONY: fmt fmt-check test test-race test-shuffle-random crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
+GOTEST_SHUFFLE_SEED ?= 20260727
+GOTEST_TIMEOUT ?= 300s
 
 # Full-stack Context Fabric acceptance (CHAOS-3065). See docs/fullstack-acceptance.md.
 # The product repo is the parent of this checkout for a plain clone, but a git worktree lives
@@ -24,7 +26,29 @@ fmt-check:
 	if [ -n "$$files" ]; then echo "Go files need formatting:"; echo "$$files"; exit 1; fi
 
 test:
-	go test ./...
+	go test -count=1 ./...
+
+# test-race runs the same suite with the race detector and randomized test
+# order. -count=1 defeats the build cache so a warm-cache result cannot stand
+# in for a fresh run, and the pinned shuffle seed catches order-coupled state
+# that only passes because an earlier test happened to leave a seam in the
+# right position) that a fixed run order can hide indefinitely. This is
+# intentionally separate from `test` rather than folded into it: the race
+# detector and shuffled order both add real wall-clock time, and the two
+# variants catch different classes of defect -- a cold non-race run still
+# matters on its own for the timing-sensitive opener/reap tests.
+test-race:
+	go test -count=1 -race -shuffle=$(GOTEST_SHUFFLE_SEED) -timeout $(GOTEST_TIMEOUT) ./...
+
+# Keep randomized order discovery out of the deterministic verification gate.
+test-shuffle-random:
+	go test -count=1 -race -shuffle=on -timeout $(GOTEST_TIMEOUT) ./...
+
+crosscompile:
+	GOOS=windows GOARCH=amd64 go build ./...
+	GOOS=windows GOARCH=amd64 go vet ./...
+	GOOS=darwin GOARCH=arm64 go vet ./...
+	GOOS=linux GOARCH=amd64 go vet ./...
 
 hosted-integration:
 	ACR_HOSTED_INTEGRATION=1 go test ./cmd/acr-api -run '^TestHostedRuntime_real_binary_serves_and_fails_readiness_safely$$' -count=1 -v
@@ -70,7 +94,7 @@ build:
 	go build -o .tmp/contractcheck ./cmd/contractcheck
 	go build -o .tmp/acr-migrate ./cmd/acr-migrate
 
-verify: fmt-check vet test contract-test codegraph-contract canonical-receipts fullstack-contract build
+verify: fmt-check vet test test-race crosscompile contract-test codegraph-contract canonical-receipts fullstack-contract build
 
 container-contract:
 	bash scripts/container/test-contract.sh

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -27,6 +28,7 @@ type SelfRotation struct {
 
 type SelfRevocation struct {
 	CredentialID string
+	Credential   contractsv1.ClientCredential
 }
 
 type credentialSnapshot struct {
@@ -76,26 +78,48 @@ func (s *Service) RollbackSelfRotation(
 	principal storage.Principal,
 	receipt SelfRotationReceipt,
 ) (SelfRevocation, error) {
-	successor, err := s.authenticatedCredential(ctx, principal)
+	if err := validateSelfLifecyclePrincipal(principal); err != nil {
+		return SelfRevocation{}, err
+	}
+	credential, err := s.store.GetByID(ctx, principal.OrgID, principal.CredentialID)
 	if err != nil {
 		return SelfRevocation{}, err
 	}
+	if !slices.Equal(credential.RepositoryScopes, principal.RepositoryScopes) || !slices.Equal(credential.Scopes, principal.Permissions) {
+		return SelfRevocation{}, ErrInvalidCredential
+	}
 	if strings.TrimSpace(receipt.SourceCredentialID) == "" ||
 		strings.TrimSpace(receipt.SuccessorCredentialID) != principal.CredentialID ||
-		receipt.SourceCredentialID == principal.CredentialID {
+		receipt.SourceCredentialID == principal.CredentialID ||
+		!receipt.RollbackUntil.After(s.now().UTC()) {
 		return SelfRevocation{}, ErrInvalidCredential
 	}
-	source, err := s.store.GetByID(ctx, principal.OrgID, receipt.SourceCredentialID)
+	revoked, err := s.store.RollbackCredentialRotation(ctx, storage.CredentialRotationRollbackInput{
+		OrgID: principal.OrgID, SourceCredentialID: receipt.SourceCredentialID,
+		SuccessorCredentialID: receipt.SuccessorCredentialID, ActorID: principal.Subject,
+		RollbackUntil: receipt.RollbackUntil,
+	})
 	if err != nil {
-		return SelfRevocation{}, fmt.Errorf("load self-rotation source: %w", err)
+		return SelfRevocation{}, err
 	}
-	if source.RevokedAt != nil || source.ExpiresAt == nil || !source.ExpiresAt.After(s.now().UTC()) ||
-		successor.CreatedAt.Before(source.CreatedAt) ||
-		source.ExpiresAt.Before(successor.CreatedAt) || source.ExpiresAt.After(successor.CreatedAt.Add(storage.MaximumCredentialOverlap)) ||
-		!slices.Equal(successor.RepositoryScopes, source.RepositoryScopes) || !slices.Equal(successor.Scopes, source.Scopes) {
-		return SelfRevocation{}, ErrInvalidCredential
+	return SelfRevocation{CredentialID: revoked.CredentialID, Credential: revoked}, nil
+}
+
+func validateSelfLifecyclePrincipal(principal storage.Principal) error {
+	if principal.AuthenticationMethod != storage.AuthenticationMethodCredential ||
+		strings.TrimSpace(principal.Subject) == "" || principal.Subject != principal.CredentialID ||
+		strings.TrimSpace(principal.OrgID) == "" {
+		return ErrInvalidCredential
 	}
-	return s.RevokeSelf(ctx, principal)
+	repositories, err := NormalizeRepositoryScopes(principal.RepositoryScopes)
+	if err != nil || !slices.Equal(repositories, principal.RepositoryScopes) {
+		return ErrInvalidCredential
+	}
+	permissions, err := normalizeScopes(principal.Permissions)
+	if err != nil || !slices.Equal(permissions, principal.Permissions) {
+		return ErrInvalidCredential
+	}
+	return nil
 }
 
 func (s *Service) RevokeSelf(ctx context.Context, principal storage.Principal) (SelfRevocation, error) {
@@ -109,7 +133,7 @@ func (s *Service) RevokeSelf(ctx context.Context, principal storage.Principal) (
 		}
 		return SelfRevocation{}, err
 	}
-	return SelfRevocation{CredentialID: credential.CredentialID}, nil
+	return SelfRevocation{CredentialID: credential.CredentialID, Credential: credential}, nil
 }
 
 func (s *Service) authenticatedCredential(ctx context.Context, principal storage.Principal) (credentialSnapshot, error) {

@@ -19,5 +19,5 @@ import (
 // refuses every bounded local file read (the CA bundle and the credential
 // token file) outright, with a clear, path-free error.
 func openNoFollowNonBlocking(_ string) (*os.File, error) {
-	return nil, fmt.Errorf("bounded local file reads are not supported on this platform (%s)", runtime.GOOS)
+	return nil, fmt.Errorf("%w (%s)", ErrBoundedFileReadsUnsupported, runtime.GOOS)
 }

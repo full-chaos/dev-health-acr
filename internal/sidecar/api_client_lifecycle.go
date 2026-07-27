@@ -90,7 +90,7 @@ func (c *LifecycleClient) StartDeviceAuthorization(
 		return contractsv1.DeviceAuthorizationResponse{}, fmt.Errorf("start device authorization: %w", err)
 	}
 	if err := response.Validate(); err != nil {
-		return contractsv1.DeviceAuthorizationResponse{}, fmt.Errorf("validate device authorization response: %w", err)
+		return contractsv1.DeviceAuthorizationResponse{}, fmt.Errorf("%w: device authorization response: %w", ErrInvalidResponse, err)
 	}
 	return response, nil
 }
@@ -104,13 +104,13 @@ func (c *LifecycleClient) PollDeviceToken(ctx context.Context, deviceCode string
 	}
 	response := contractsv1.DeviceTokenResponse{}
 	if err := c.callPublic(ctx, deviceTokenPath, request, &response, true); err != nil {
-		return contractsv1.DeviceTokenResponse{}, fmt.Errorf("poll device token: %w", err)
+		return response, fmt.Errorf("poll device token: %w", err)
 	}
 	if err := response.Validate(); err != nil {
-		return contractsv1.DeviceTokenResponse{}, fmt.Errorf("validate device token response: %w", err)
+		return response, fmt.Errorf("%w: device token response: %w", ErrInvalidResponse, err)
 	}
 	if !auth.IsTokenShapeValid(response.AccessToken) {
-		return contractsv1.DeviceTokenResponse{}, ErrCredentialShapeInvalid
+		return response, ErrCredentialShapeInvalid
 	}
 	return response, nil
 }
@@ -125,13 +125,16 @@ func (c *Client) RotateOwnCredential(ctx context.Context) (contractsv1.Credentia
 	}
 	response := contractsv1.CredentialRotateResponse{}
 	if err := c.call(ctx, http.MethodPost, credentialRotatePath, payload, &response); err != nil {
-		return contractsv1.CredentialRotateResponse{}, fmt.Errorf("rotate current credential: %w", err)
+		return response, fmt.Errorf("rotate current credential: %w", err)
 	}
 	if err := response.Validate(); err != nil {
-		return contractsv1.CredentialRotateResponse{}, fmt.Errorf("validate credential rotation response: %w", err)
+		return response, fmt.Errorf("%w: credential rotation response: %w", ErrInvalidResponse, err)
+	}
+	if response.Receipt.ReplacementCredentialID != response.Credential.CredentialID || !response.Receipt.RollbackUntil.After(response.Credential.CreatedAt) {
+		return response, fmt.Errorf("%w: credential rotation receipt does not bind the replacement", ErrInvalidResponse)
 	}
 	if !auth.IsTokenShapeValid(response.AccessToken) {
-		return contractsv1.CredentialRotateResponse{}, ErrCredentialShapeInvalid
+		return response, ErrCredentialShapeInvalid
 	}
 	return response, nil
 }
@@ -140,7 +143,15 @@ func (c *Client) RotateOwnCredential(ctx context.Context) (contractsv1.Credentia
 // credential source. Callers construct a short-lived client for rollback of a
 // newly issued successor credential.
 func (c *Client) RevokeOwnCredential(ctx context.Context) (contractsv1.CredentialRevokeResponse, error) {
-	request := contractsv1.CredentialRevokeRequest{SchemaVersion: contractsv1.CredentialRevokeRequestSchema}
+	return c.revokeOwnCredential(ctx, nil)
+}
+
+func (c *Client) RollbackOwnCredential(ctx context.Context, receipt contractsv1.CredentialRotationReceipt) (contractsv1.CredentialRevokeResponse, error) {
+	return c.revokeOwnCredential(ctx, &receipt)
+}
+
+func (c *Client) revokeOwnCredential(ctx context.Context, receipt *contractsv1.CredentialRotationReceipt) (contractsv1.CredentialRevokeResponse, error) {
+	request := contractsv1.CredentialRevokeRequest{SchemaVersion: contractsv1.CredentialRevokeRequestSchema, RollbackReceipt: receipt}
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return contractsv1.CredentialRevokeResponse{}, fmt.Errorf("encode credential revocation request: %w", err)
@@ -150,7 +161,7 @@ func (c *Client) RevokeOwnCredential(ctx context.Context) (contractsv1.Credentia
 		return contractsv1.CredentialRevokeResponse{}, fmt.Errorf("revoke current credential: %w", err)
 	}
 	if err := response.Validate(); err != nil {
-		return contractsv1.CredentialRevokeResponse{}, fmt.Errorf("validate credential revocation response: %w", err)
+		return contractsv1.CredentialRevokeResponse{}, fmt.Errorf("%w: credential revocation response: %w", ErrInvalidResponse, err)
 	}
 	return response, nil
 }
@@ -210,7 +221,7 @@ func (c *LifecycleClient) callPublic(ctx context.Context, path string, request a
 		return decodeAPIError(httpResponse.StatusCode, httpResponse.Header.Get("X-Request-ID"), httpResponse.Header.Get("Retry-After"), data)
 	}
 	if err := decodeExact(data, response); err != nil {
-		return fmt.Errorf("decode hosted API response: %w", err)
+		return fmt.Errorf("%w: decode hosted API response: %w", ErrInvalidResponse, err)
 	}
 	if err := requiredFieldsPresent(data, response); err != nil {
 		return fmt.Errorf("%w: %s", ErrInvalidResponse, err)

@@ -93,6 +93,69 @@ func TestLoadCredentialKeyringDisabledSettingControlsLookup(t *testing.T) {
 	}
 }
 
+// ACR_API_TOKEN_KEYRING_DISABLED governs only the keyring seam, which sits
+// strictly below the environment in the documented precedence. Reading that
+// flag before resolving ACR_API_TOKEN inverted the precedence for its own
+// failure mode: a malformed flag rejected a perfectly valid environment
+// credential and took down every agent client that supplies one.
+func TestLoadCredentialPrefersEnvironmentToken_whenKeyringDisableFlagIsMalformed(t *testing.T) {
+	// Given
+	home := t.TempDir()
+	environmentToken := validTestToken(59)
+	t.Setenv(TokenEnvironment, environmentToken)
+	t.Setenv(TokenKeyringDisabledEnvironment, "1")
+	t.Setenv(TokenKeyringServiceEnvironment, "")
+	t.Setenv(TokenKeyringAccountEnvironment, "")
+	t.Setenv(TokenFileEnvironment, "")
+	t.Setenv(APIURLEnvironment, "https://api.dev-health.example.com")
+	t.Setenv("HOME", home)
+	writeDefaultCredentialFile(t, home)
+	lookupCalled := false
+	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
+		lookupCalled = true
+		return keyringToken, true, nil
+	})
+
+	// When
+	credential, err := LoadCredential()
+
+	// Then
+	if err != nil {
+		t.Fatalf("a malformed keyring flag rejected a valid environment credential: %v", err)
+	}
+	if credential.Source != "environment" || credential.Token != environmentToken {
+		t.Fatalf("credential = %+v, want the environment token", credential)
+	}
+	if lookupCalled {
+		t.Fatal("an unreadable keyring flag still authorized a keyring lookup")
+	}
+}
+
+// The environment keeps its precedence, not its validation: a malformed
+// ACR_API_TOKEN is still an error rather than a silent fall-through to a
+// lower-precedence source, whatever the keyring flag says.
+func TestLoadCredentialRejectsMalformedEnvironmentToken_beforeReadingTheKeyringFlag(t *testing.T) {
+	// Given
+	home := t.TempDir()
+	t.Setenv(TokenEnvironment, "not-an-acr-token")
+	t.Setenv(TokenKeyringDisabledEnvironment, "1")
+	t.Setenv(TokenFileEnvironment, "")
+	t.Setenv("HOME", home)
+	writeDefaultCredentialFile(t, home)
+	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
+		t.Error("an unreadable keyring flag still authorized a keyring lookup")
+		return "", false, nil
+	})
+
+	// When
+	_, err := LoadCredential()
+
+	// Then
+	if !errors.Is(err, ErrCredentialShapeInvalid) {
+		t.Fatalf("load error = %v, want ErrCredentialShapeInvalid", err)
+	}
+}
+
 func TestPersistCredentialKeyringDisabledSettingControlsWriter(t *testing.T) {
 	cases := []struct {
 		name             string

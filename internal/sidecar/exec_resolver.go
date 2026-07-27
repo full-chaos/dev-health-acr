@@ -16,8 +16,16 @@ import (
 // or environment-controlled text on an operator-facing error.
 var ErrUntrustedExecutable = errors.New("sidecar: executable could not be resolved to a trusted absolute path")
 
+// ErrExecutableUnavailable is returned only when a trusted executable is not
+// installed in any trusted search directory. Callers may use this exact
+// condition to select a documented fallback; trust, permission, and runtime
+// failures must remain fail-closed.
+var ErrExecutableUnavailable = errors.New("sidecar: trusted executable is unavailable")
+
 // executableResolver resolves the name of an external tool to a trusted
-// absolute path, or returns ErrUntrustedExecutable when it cannot.
+// absolute path, or returns ErrUntrustedExecutable (a tampered or
+// misconfigured candidate) or ErrExecutableUnavailable (genuinely absent)
+// when it cannot.
 type executableResolver func(name string) (string, error)
 
 // currentExecutableResolver is the active resolver seam every external-tool
@@ -85,36 +93,52 @@ func trustedExecutablePrefixes() []string {
 // access (verifyTrustedExecutableOwnership -- unix-only, see its own doc
 // comment and the non-unix stub for why a platform without that check can
 // never reach it, since trustedExecutableSearchDirs is empty there); and
-// have at least one executable bit set. The first candidate satisfying
-// every check wins; a candidate failing one is skipped, not treated as a
-// hard error, so a later trusted directory still gets a chance.
+// have at least one executable bit set. A missing candidate (no file at
+// dir/name) is skipped so a later trusted directory still gets a chance;
+// a candidate that exists but fails any other check (untrusted target,
+// wrong type, ownership/permission) aborts resolution immediately with a
+// hard error instead of silently trying the next directory, since that
+// shape indicates tampering or misconfiguration, not mere absence.
 func resolveTrustedExecutable(name string) (string, error) {
 	if name == "" || strings.ContainsRune(name, filepath.Separator) {
 		return "", fmt.Errorf("%w: %s", ErrUntrustedExecutable, name)
 	}
 	for _, dir := range trustedExecutableSearchDirs() {
-		if resolved, ok := resolveTrustedCandidate(dir, name); ok {
+		resolved, err := resolveTrustedCandidate(dir, name)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("resolve trusted executable %s: %w", name, err)
+		}
+		if resolved != "" {
 			return resolved, nil
 		}
 	}
-	return "", fmt.Errorf("%w: %s", ErrUntrustedExecutable, name)
+	return "", fmt.Errorf("%w: %s", ErrExecutableUnavailable, name)
 }
 
 // resolveTrustedCandidate applies every check documented on
 // resolveTrustedExecutable to the single candidate dir/name.
-func resolveTrustedCandidate(dir, name string) (string, bool) {
+func resolveTrustedCandidate(dir, name string) (string, error) {
 	resolved, err := filepath.EvalSymlinks(filepath.Join(dir, name))
-	if err != nil || !isUnderTrustedPrefix(resolved) {
-		return "", false
+	if err != nil {
+		return "", err
+	}
+	if !isUnderTrustedPrefix(resolved) {
+		return "", ErrUntrustedExecutable
 	}
 	info, err := os.Lstat(resolved)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
-		return "", false
+	if err != nil {
+		return "", err
 	}
-	if verifyTrustedExecutableOwnership(info) != nil {
-		return "", false
+	if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+		return "", ErrUntrustedExecutable
 	}
-	return resolved, true
+	if err := verifyTrustedExecutableOwnership(info); err != nil {
+		return "", err
+	}
+	return resolved, nil
 }
 
 func isUnderTrustedPrefix(resolved string) bool {

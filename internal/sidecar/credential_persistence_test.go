@@ -122,8 +122,9 @@ func TestPersistCredentialFallsBackToRestrictedDefaultFileWhenKeyringWriteFails(
 	t.Setenv(APIURLEnvironment, "https://api.dev-health.example.com")
 	t.Setenv("HOME", home)
 	stubKeyringWriter(t, func(context.Context, string, string, string) error {
-		return errors.New("keyring unavailable")
+		return errKeyringWriteUnavailable
 	})
+	stubKeyringDeleter(t, func(context.Context, string, string) error { return nil })
 
 	// When
 	result, err := PersistCredential(fileToken)
@@ -194,8 +195,9 @@ func TestPersistCredentialRejectsSymlinkAtDefaultTokenPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubKeyringWriter(t, func(context.Context, string, string, string) error {
-		return errors.New("keyring unavailable")
+		return errKeyringWriteUnavailable
 	})
+	stubKeyringDeleter(t, func(context.Context, string, string) error { return nil })
 
 	// When
 	_, err := PersistCredential(fileToken)
@@ -230,8 +232,9 @@ func TestPersistCredentialAtomicallyReplacesDefaultFallbackFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubKeyringWriter(t, func(context.Context, string, string, string) error {
-		return errors.New("keyring unavailable")
+		return errKeyringWriteUnavailable
 	})
+	stubKeyringDeleter(t, func(context.Context, string, string) error { return nil })
 	newToken := validTestToken(7)
 
 	// When
@@ -273,8 +276,11 @@ func TestDeleteCredentialRemovesDefaultFallbackFileWhenKeyringIsUnavailable(t *t
 	if err := os.WriteFile(path, []byte(fileToken+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
+		return "", false, ErrExecutableUnavailable
+	})
 	stubKeyringDeleter(t, func(context.Context, string, string) error {
-		return errors.New("keyring unavailable")
+		return errKeyringWriteUnavailable
 	})
 
 	// When

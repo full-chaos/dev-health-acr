@@ -161,12 +161,23 @@ func (a *App) handleRevokeSelfCredential(w http.ResponseWriter, r *http.Request)
 		writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 		return
 	}
-	credential, err := a.credentialService.Revoke(r.Context(), principal.OrgID, principal.CredentialID, principal.Subject)
+	var revoked auth.SelfRevocation
+	var err error
+	if request.RollbackReceipt == nil {
+		revoked, err = a.credentialService.RevokeSelf(r.Context(), principal)
+	} else {
+		receipt := auth.SelfRotationReceipt{
+			SourceCredentialID:    request.RollbackReceipt.SourceCredentialID,
+			SuccessorCredentialID: request.RollbackReceipt.ReplacementCredentialID,
+			RollbackUntil:         request.RollbackReceipt.RollbackUntil,
+		}
+		revoked, err = a.credentialService.RollbackSelfRotation(r.Context(), principal, receipt)
+	}
 	if err != nil {
 		a.writeSelfLifecycleError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, contractsv1.CredentialRevokeResponse{SchemaVersion: contractsv1.CredentialRevokeResponseSchema, Credential: credential})
+	writeJSON(w, http.StatusOK, contractsv1.CredentialRevokeResponse{SchemaVersion: contractsv1.CredentialRevokeResponseSchema, Credential: revoked.Credential})
 }
 
 func (a *App) deviceApprovalHandler(next http.Handler) http.Handler {

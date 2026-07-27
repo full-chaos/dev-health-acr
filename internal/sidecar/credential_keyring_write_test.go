@@ -18,7 +18,7 @@ func TestRunKeyringMutationSuppliesSecretOnlyThroughStdin(t *testing.T) {
 	script := `cat > "$1"; printf '%s\n' "$@" > "$2"`
 
 	// When
-	err := runKeyringMutation(context.Background(), strings.NewReader(token), "sh", "-c", script, "sh", stdinPath, argumentsPath, "store", "service", defaultKeyringService)
+	err := runKeyringMutation(context.Background(), strings.NewReader(token), false, "sh", "-c", script, "sh", stdinPath, argumentsPath, "store", "service", defaultKeyringService)
 
 	// Then
 	if err != nil {

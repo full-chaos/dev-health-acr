@@ -15,15 +15,29 @@ import (
 // live in credential_test.go; validTestToken, fileToken, and
 // writeTokenFile are defined there and shared across both files.
 
+// The file source is only reached when nothing higher in the precedence order
+// answers, so this asserts the resolved Source as well as the token: the right
+// value from the wrong source is not the same result. It also names its
+// dependency on an empty keyring address -- with an ambient ACR_API_URL
+// exported, the default keyring account is non-empty and this test queries a
+// secret store on its way to the file. TestMain clears the ambient value, and
+// the seam panics if it is ever reached without a stub.
 func TestLoadCredentialFromRestrictedFile(t *testing.T) {
 	t.Setenv(TokenEnvironment, "")
+	t.Setenv(APIURLEnvironment, "")
 	t.Setenv(TokenFileEnvironment, writeTokenFile(t, fileToken+"\n"))
 	result, err := LoadCredential()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Token != fileToken || result.Source != "file" {
-		t.Fatalf("unexpected result: %#v", result)
+	if result.Token != fileToken {
+		t.Fatalf("credential token = %q, want the token file's contents", result.Token)
+	}
+	if result.Source != "file" {
+		t.Fatalf("credential source = %q, want file", result.Source)
+	}
+	if result.filePath == "" {
+		t.Fatal("file credential carries no path, so nothing downstream can verify or remove it")
 	}
 }
 

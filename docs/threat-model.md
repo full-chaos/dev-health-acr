@@ -114,7 +114,8 @@ CHAOS-2904 and CHAOS-2917 implement these rules without changing v1 wire semanti
 
 - The repository fixes storage roles, not geographic regions: ClickHouse holds read-only engineering evidence, including service-to-repository associations used to scope incidents, and ACR Postgres holds operational state.
 - The actual region, subprocessors, backups, replicas, and cross-region transfer behavior are deployment facts. Production deployment documentation must disclose them before customer use; this document does not invent a region.
-- `acr-mcp` reads a credential from `ACR_API_TOKEN` (works on every supported platform) or from the caller-selected `ACR_API_TOKEN_FILE`. Token-file (and CA-bundle) loading is supported only on macOS and Linux, where it checks restrictive file permissions; on every other platform, including Windows, it fails closed and refuses to load the file at all. It does not create or manage a home-directory credential file.
+- `acr-mcp` reads a credential from `ACR_API_TOKEN` (works on every supported platform), from an OS keyring entry, or from `ACR_API_TOKEN_FILE`. Token-file (and CA-bundle) loading is supported only on macOS and Linux, where it checks restrictive file permissions; on every other platform, including Windows, it fails closed and refuses to load the file at all.
+- `acr-mcp login` **does** create and manage a home-directory credential file: when the keyring is unavailable it writes `~/.acr/token`, creating that parent at mode `0700` if it does not exist. A parent that already exists is inspected, not rewritten -- group- or world-writable is refused outright and every other mode bit is left as found, because `ACR_API_TOKEN_FILE` is operator-supplied and unconditionally chmod-ing its parent once reduced an entire home directory to `0700`. `acr-mcp logout` removes that file. Only `login`, `login --refresh`, and `logout` write or delete local credential material; `serve` never does.
 - The sidecar must not persist packets, episode payloads, or raw transcripts locally.
 
 ## Evidence content, markup, and URIs
@@ -135,6 +136,57 @@ served from the bounded local cache and unknown/expired IDs do not fall through
 to hosted expansion. The Task 8 capture harness exercises these negative upload
 sentinels; its receipt is evidence of fixture coverage, not a claim that an
 operator has run a live CodeGraph environment.
+
+## Local credential lifecycle boundary
+
+`acr-mcp login` and `acr-mcp logout` are the only local operations that create
+or destroy credential material, and they hold to four rules.
+
+- **Nothing local is deleted while a credential may still be live.** Logout
+  enumerates every configured location -- environment, OS keyring, token file --
+  and revokes each distinct value before removing any of them. Resolving the
+  single highest-precedence credential instead left lower-precedence ones live on
+  the server with their local copies gone. Enumeration fails closed: an
+  unreadable keyring, an unparseable disable flag, or an unreadable token file
+  removes nothing at all. Removal also binds each target to the exact value
+  enumerated there and compares before deleting: a file or keyring entry whose
+  value no longer matches -- a concurrent login or refresh wrote a different,
+  still-live credential to the same location after enumeration -- is retained
+  and reported rather than deleted. This narrows, but does not eliminate, the
+  window between proving a value and deleting it by address; see the parent-
+  directory rule below for the same caveat applied to the unlink itself.
+- **An ambiguous write is treated as a write.** A credential store that commits
+  and then fails -- a keyring mutation whose write-out or reply fails, a token file
+  renamed into place whose directory fsync fails -- returns the candidate locator
+  alongside the error, so login revokes server-side and purges exactly that
+  location instead of leaving a revoked-but-readable secret somewhere nobody was
+  told about.
+- **Removal is gated on the same boundaries as reading, plus the parent
+  directory.** A file is unlinked only after a no-follow open, a regular-file
+  fstat, a group/world permission check, and an ACR token-shape check, and only
+  if its parent denies group and world write. The proof and the unlink are two
+  operations on a path, so a window exists between them; refusing a
+  shared-writable parent narrows who can act in that window to principals who
+  can already write the directory, rather than any local user. That is a
+  reduction of the attacker set, not the elimination of a race.
+- **Server-supplied text never becomes local execution or terminal output.** The
+  device verification address is validated (https, or http to a validated loopback
+  address; no userinfo, ASCII or Unicode control/whitespace/format characters,
+  or `fcacr_` text) *before* it is printed or handed to an opener, and
+  `login --no-browser` skips the launch entirely. A launched opener receives an
+  allowlisted environment carrying no `ACR_` variable, runs in its own process
+  group, and is reaped under a fixed deadline if it blocks -- but that deadline
+  alone only bounds an unattended login, since launching hands off immediately
+  and reaps in a background goroutine that a fast-concluding login would
+  otherwise outlive. Login therefore also synchronously tears the opener down
+  on every return path from the attempt that launched it, so the opener's
+  process group never outlives the attempt regardless of how quickly it
+  concludes. Operator-facing cleanup locations are token-redacted, bounded, and
+  quoted, so a configured path or keyring address cannot forge log lines.
+
+The MCP surface itself is local STDIO with no network listener; credential
+lifecycle traffic is outbound HTTPS to the hosted API only, so no lifecycle
+operation is reachable from another host.
 
 ## Limits: current contract versus downstream enforcement
 
