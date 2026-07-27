@@ -347,6 +347,84 @@ func TestLoginRevokesIssuedCredential_whenPersistenceFails(t *testing.T) {
 	}
 }
 
+// A persistence failure whose file write already landed is the case that
+// used to strand an issued credential: sidecar.PersistCredential reported the
+// failure with an empty result, so login revoked the server-side credential
+// and then had nothing to purge. The persisted locator returned alongside the
+// error (see credential_persistence_sync_unix_test.go, which drives the real
+// post-rename directory fsync failure) is what closes that gap; this test
+// drives the same contract end to end through the login command.
+func TestLoginRevokesThenPurgesIssuedCredential_whenPersistenceFailsAfterWritingTheFile(t *testing.T) {
+	// Given
+	token := validDoctorToken(99)
+	createdAt := time.Now().UTC().Truncate(time.Second)
+	revocations := 0
+	path := filepath.Join(t.TempDir(), "token")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/oauth/device_authorization":
+			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: "http://" + r.Host + "/acr/device", ExpiresIn: 600, Interval: 5})
+		case "/api/v1/oauth/token":
+			expiresAt := createdAt.Add(30 * 24 * time.Hour)
+			credential := lifecycleCredential(createdAt, "credential-issued", nil)
+			credential.ExpiresAt = &expiresAt
+			writeLifecycleJSON(t, w, contractsv1.DeviceTokenResponse{SchemaVersion: contractsv1.DeviceTokenResponseSchema, AccessToken: token, TokenType: "Bearer", ExpiresIn: 30 * 24 * 60 * 60, Credential: credential})
+		case "/api/v1/auth/credentials/self/revoke":
+			if r.Header.Get("Authorization") != "Bearer "+token {
+				t.Errorf("issued credential was not used for self-revocation")
+				w.WriteHeader(http.StatusUnauthorized)
+				writeLifecycleError(t, w, http.StatusUnauthorized)
+				return
+			}
+			revocations++
+			revokedAt := createdAt.Add(time.Minute)
+			writeLifecycleJSON(t, w, contractsv1.CredentialRevokeResponse{SchemaVersion: contractsv1.CredentialRevokeResponseSchema, Credential: lifecycleCredential(createdAt, "credential-issued", &revokedAt)})
+		default:
+			t.Errorf("unexpected request path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+	originalPersist := lifecyclePersist
+	lifecyclePersist = func(value string) (sidecar.CredentialResult, error) {
+		persisted, err := originalPersist(value)
+		if err != nil {
+			return persisted, err
+		}
+		// Same shape sidecar.PersistCredential returns when the rename
+		// landed but the directory fsync did not: a real locator plus a
+		// failure.
+		return persisted, errors.New("credential file replacement could not be confirmed durable")
+	}
+	t.Cleanup(func() { lifecyclePersist = originalPersist })
+	originalWait := lifecycleWait
+	lifecycleWait = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { lifecycleWait = originalWait })
+	originalBrowserOpen := lifecycleBrowserOpen
+	lifecycleBrowserOpen = func(string) error { return nil }
+	t.Cleanup(func() { lifecycleBrowserOpen = originalBrowserOpen })
+
+	// When
+	code := runCLI([]string{"login"})
+
+	// Then
+	if code != lifecycleExitFailure {
+		t.Fatalf("login exit code = %d, want %d", code, lifecycleExitFailure)
+	}
+	if revocations != 1 {
+		t.Fatalf("remote revocations = %d, want exactly one", revocations)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("issued credential remains on disk after revocation: %v", err)
+	}
+}
+
 func TestLoginPurgesPersistedCredential_afterWrongSourceVerificationFailure(t *testing.T) {
 	// Given
 	token := validDoctorToken(98)

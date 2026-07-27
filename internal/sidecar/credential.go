@@ -52,6 +52,17 @@ var ErrCredentialPersistenceUnsupported = errors.New("acr: credential persistenc
 
 var ErrCredentialPersistenceSourceUnsupported = errors.New("acr: credential source cannot be replaced securely")
 
+// errCredentialWriteAmbiguous marks the one credential-file write failure
+// whose on-disk outcome is genuinely unknown: the same-directory temporary
+// file was already renamed over the target, so the new credential is
+// visible at the configured path, but the directory fsync that would make
+// that replacement durable failed. Returning a bare error here would tell
+// a caller "nothing was written" while a readable credential sits on disk.
+// PersistCredential therefore pairs this sentinel with the actual candidate
+// locator so login can revoke the server-side credential and then purge the
+// exact file it may have just written.
+var errCredentialWriteAmbiguous = errors.New("acr: credential file replacement could not be confirmed durable")
+
 type CredentialResult struct {
 	Token          string
 	Source         string
@@ -240,7 +251,15 @@ func PersistCredential(token string) (CredentialResult, error) {
 		return CredentialResult{}, ErrCredentialMissing
 	}
 	if err := writeCredentialFile(path, token); err != nil {
-		return CredentialResult{}, fmt.Errorf("persist ACR credential fallback file: %w", err)
+		failure := fmt.Errorf("persist ACR credential fallback file: %w", err)
+		if errors.Is(err, errCredentialWriteAmbiguous) {
+			// The credential may already be readable at path. Report the
+			// failure, but hand back the candidate locator so the caller can
+			// revoke the server-side credential and purge exactly this file
+			// instead of guessing at a source it was never told about.
+			return CredentialResult{Token: token, Source: "file", filePath: path}, failure
+		}
+		return CredentialResult{}, failure
 	}
 	return CredentialResult{Token: token, Source: "file", filePath: path}, nil
 }

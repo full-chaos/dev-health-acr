@@ -55,7 +55,11 @@ func writeCredentialFile(path, token string) error {
 		return fmt.Errorf("replace credential file: %w", err)
 	}
 	if err := credentialDirectorySync(directory); err != nil {
-		return fmt.Errorf("sync credential directory: %w", err)
+		// The rename above already published the new credential at the
+		// target name, so this failure leaves a readable credential file
+		// behind even though the write is reported as failed. Tag it so
+		// PersistCredential can hand its caller the exact locator to purge.
+		return fmt.Errorf("%w: sync credential directory: %w", errCredentialWriteAmbiguous, err)
 	}
 	return nil
 }
