@@ -172,3 +172,51 @@ func TestWaitForDevicePollReportsTheContextStateRatherThanCompleting(t *testing.
 		}
 	})
 }
+
+// context.Canceled and context.DeadlineExceeded arrive on the same branch, and
+// the pre-fix code collapsed both into "device authorization expired". They are
+// not the same event and must not report the same cause: a cancelled grant is
+// an interrupted session, an expired one is a spent grant, and an operator told
+// the wrong one looks in the wrong place.
+//
+// The grant context is cancelled for real rather than simulated with an error
+// value, because the error value is exactly what cannot distinguish the two.
+func TestLoginReportsCancellationRatherThanExpiry_whenTheGrantContextIsCancelled(t *testing.T) {
+	// Given
+	server, authorizations := newSlowPollServer(t, 3*time.Second)
+	path := filepath.Join(t.TempDir(), "token")
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+	originalGrant := lifecycleGrantContext
+	lifecycleGrantContext = func(ctx context.Context, _ int) (context.Context, context.CancelFunc) {
+		grantCtx, cancel := context.WithCancel(ctx)
+		cancel()
+		return grantCtx, cancel
+	}
+	t.Cleanup(func() { lifecycleGrantContext = originalGrant })
+
+	// When
+	code, stderr := captureStderr(t, func() int { return runCLI([]string{"login", "--no-browser"}) })
+
+	// Then
+	if code != lifecycleExitFailure {
+		t.Fatalf("login exit code = %d, want %d for a cancelled grant", code, lifecycleExitFailure)
+	}
+	if !strings.Contains(stderr, "device authorization was cancelled") {
+		t.Fatalf("login stderr = %q, want the cancellation named", stderr)
+	}
+	if strings.Contains(stderr, "device authorization expired") {
+		t.Fatalf("login stderr = %q, want a cancelled grant distinguished from a spent one", stderr)
+	}
+	// Cancellation is terminal like expiry: the grant is over, so restarting
+	// would spend the bounded budget on an authorization that cannot complete.
+	if got := authorizations(); got != 1 {
+		t.Fatalf("device authorizations = %d, want exactly one; a cancelled grant must not spend the restart budget", got)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("credential persisted after a cancelled authorization: %v", err)
+	}
+}

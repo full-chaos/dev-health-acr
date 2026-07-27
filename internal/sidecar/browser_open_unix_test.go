@@ -157,12 +157,31 @@ func TestOpenVerificationURIReapsAHangingOpenerUnderAFixedDeadline(t *testing.T)
 	browserOpenerDeadline = 2 * time.Second
 	t.Cleanup(func() { browserOpenerDeadline = restoreDeadline })
 	reaped := make(chan struct{})
-	browserOpenerReaped = func() { close(reaped) }
+	reapCount := 0
+	browserOpenerReaped = func() {
+		reapCount++
+		if reapCount == 1 {
+			close(reaped)
+		}
+	}
 	t.Cleanup(func() { browserOpenerReaped = nil })
 
 	// When
-	if err := OpenVerificationURI("https://acr.example.com/device"); err != nil {
-		t.Fatalf("OpenVerificationURI: %v", err)
+	started := time.Now()
+	launchErr := OpenVerificationURI("https://acr.example.com/device")
+	launchElapsed := time.Since(started)
+
+	// Then
+	if launchErr != nil {
+		t.Fatalf("OpenVerificationURI: %v", launchErr)
+	}
+	// The call itself must not wait for the opener. This is pinned separately
+	// from the reap below, and against the opener's own 300-second sleep rather
+	// than the deadline: a launch that blocked until the deadline fired would
+	// still satisfy the reap assertion, while having stalled the login flow for
+	// two seconds -- and, without a deadline at all, forever.
+	if launchElapsed >= browserOpenerDeadline {
+		t.Fatalf("OpenVerificationURI blocked for %v; the launch must return without waiting for the opener", launchElapsed)
 	}
 
 	// Then
@@ -178,6 +197,14 @@ func TestOpenVerificationURIReapsAHangingOpenerUnderAFixedDeadline(t *testing.T)
 	t.Cleanup(func() { _ = syscall.Kill(descendant, syscall.SIGKILL) })
 	if !waitForProcessGone(descendant) {
 		t.Fatalf("the descendant the opener forked (pid %d) survived the reap; only the immediate child was signalled", descendant)
+	}
+	// Wait must run exactly once. A second Wait on the same command returns an
+	// error rather than corrupting anything, so the defect it would signal --
+	// two goroutines racing to reap one child -- has no visible symptom except
+	// this count.
+	time.Sleep(200 * time.Millisecond)
+	if reapCount != 1 {
+		t.Fatalf("opener reaped %d times, want exactly once", reapCount)
 	}
 }
 
@@ -213,4 +240,51 @@ func waitForProcessGone(pid int) bool {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return false
+}
+
+// The reap test above waits on a record the opener writes before it blocks, so
+// on its own it cannot distinguish "the launch returned immediately" from "the
+// launch blocked until the record appeared". This one removes the record
+// entirely: the opener hangs before producing any output at all, so the only
+// observable is the launch call itself.
+//
+// It pins the property the record-based test cannot: OpenVerificationURI hands
+// off and returns, and the hung child is still reaped afterwards.
+func TestOpenVerificationURIReturnsImmediatelyWhenTheOpenerHangsBeforeWritingAnything(t *testing.T) {
+	// Given
+	requireSh(t)
+	trustedDirectory := t.TempDir()
+	opener := filepath.Join(trustedDirectory, browserOpenerName())
+	if err := os.WriteFile(opener, []byte("#!/bin/sh\nexec sleep 300\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", t.TempDir())
+	injectExecutableResolver(t, browserOpenerName(), opener)
+	restoreDeadline := browserOpenerDeadline
+	browserOpenerDeadline = 2 * time.Second
+	t.Cleanup(func() { browserOpenerDeadline = restoreDeadline })
+	reaped := make(chan struct{})
+	browserOpenerReaped = func() { close(reaped) }
+	t.Cleanup(func() { browserOpenerReaped = nil })
+
+	// When
+	started := time.Now()
+	err := OpenVerificationURI("https://acr.example.com/device")
+	elapsed := time.Since(started)
+
+	// Then
+	if err != nil {
+		t.Fatalf("OpenVerificationURI: %v", err)
+	}
+	// One second is well under the deadline and vastly under the opener's
+	// 300-second sleep, so this fails for any implementation that waits on the
+	// child -- whether it waits forever or only until the bound fires.
+	if elapsed >= time.Second {
+		t.Fatalf("OpenVerificationURI blocked for %v on an opener that never writes anything; the launch must hand off and return", elapsed)
+	}
+	select {
+	case <-reaped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the hung opener was never reaped, so it outlives the operation that started it")
+	}
 }

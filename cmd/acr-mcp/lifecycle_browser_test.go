@@ -192,6 +192,13 @@ func TestLoginRefusesAnUnsafeVerificationAddressBeforePrintingIt(t *testing.T) {
 		// survives contract validation and still must not be printed or opened.
 		{name: "embedded whitespace", uri: "https://acr.example.com/dev ice"},
 		{name: "token shaped", uri: "https://acr.example.com/device?hint=" + validDoctorToken(96)},
+		// The schemes a hostile server would actually choose. Each has a
+		// registered local handler on some desktop, so handing one to an opener
+		// is arbitrary local execution rather than a browser navigation.
+		{name: "javascript scheme", uri: "javascript://acr.example.com/#alert(1)"},
+		{name: "file scheme", uri: "file://localhost/etc/passwd"},
+		{name: "data scheme", uri: "data://acr.example.com/text/html,<script>alert(1)</script>"},
+		{name: "custom handler scheme", uri: "vscode://acr.example.com/extension/install?id=evil"},
 	}
 	for _, testCase := range cases {
 		for _, flags := range [][]string{{"login"}, {"login", "--no-browser"}} {
