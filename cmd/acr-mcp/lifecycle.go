@@ -347,12 +347,12 @@ func revokeToken(ctx context.Context, cfg sidecar.Config, token string) error {
 	return err
 }
 
-// receivedInvalidLifecycleSuccess identifies a 2xx response that was received
-// but failed client-side semantic validation. It must not be treated like a
-// transport ambiguity: the server had a chance to mint a credential, while no
-// usable token was returned for this client to revoke.
+// receivedInvalidLifecycleSuccess identifies a successful response the client
+// could not safely consume. It must not be treated like an ordinary failure:
+// the server had a chance to mint a credential, while no usable token was
+// returned for this client to revoke.
 func receivedInvalidLifecycleSuccess(err error) bool {
-	return errors.Is(err, sidecar.ErrInvalidResponse) || errors.Is(err, sidecar.ErrCredentialShapeInvalid)
+	return errors.Is(err, sidecar.ErrInvalidResponse) || errors.Is(err, sidecar.ErrCredentialShapeInvalid) || errors.Is(err, sidecar.ErrResponseTooLarge)
 }
 
 func runCredentialRefresh() int {
