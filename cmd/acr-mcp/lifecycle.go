@@ -225,6 +225,10 @@ func runDeviceLoginAttempt(ctx context.Context, session *sidecar.CredentialLifec
 			fmt.Fprintln(os.Stderr, "login: issued credential response was invalid and the credential was revoked")
 			return deviceLoginFailed
 		}
+		if receivedInvalidLifecycleSuccess(err) {
+			fmt.Fprintln(os.Stderr, "login: device token response was invalid; a credential may have been issued that this client cannot revoke — revoke it in the dashboard")
+			return deviceLoginFailed
+		}
 		var deviceErr *sidecar.DevicePollingError
 		if errors.As(err, &deviceErr) {
 			switch deviceErr.Code {
@@ -343,6 +347,14 @@ func revokeToken(ctx context.Context, cfg sidecar.Config, token string) error {
 	return err
 }
 
+// receivedInvalidLifecycleSuccess identifies a 2xx response that was received
+// but failed client-side semantic validation. It must not be treated like a
+// transport ambiguity: the server had a chance to mint a credential, while no
+// usable token was returned for this client to revoke.
+func receivedInvalidLifecycleSuccess(err error) bool {
+	return errors.Is(err, sidecar.ErrInvalidResponse) || errors.Is(err, sidecar.ErrCredentialShapeInvalid)
+}
+
 func runCredentialRefresh() int {
 	session, err := sidecar.BeginCredentialLifecycleSession()
 	if err != nil {
@@ -373,9 +385,15 @@ func runCredentialRefresh() int {
 	if err != nil {
 		if auth.IsTokenShapeValid(response.AccessToken) {
 			if revokeErr := revokeToken(context.Background(), cfg, response.AccessToken); revokeErr != nil {
-				fmt.Fprintln(os.Stderr, "login: malformed refreshed credential could not be revoked; the original credential remains active")
+				fmt.Fprintln(os.Stderr, "login: invalid refreshed credential response could not be revoked; revoke it in the dashboard")
 				return lifecycleExitFailure
 			}
+			fmt.Fprintln(os.Stderr, "login: invalid refreshed credential response was revoked; the original local credential remains unchanged")
+			return lifecycleExitFailure
+		}
+		if receivedInvalidLifecycleSuccess(err) {
+			fmt.Fprintln(os.Stderr, "login: credential refresh response was invalid; a successor credential may have been issued that this client cannot revoke — revoke it in the dashboard")
+			return lifecycleExitFailure
 		}
 		fmt.Fprintln(os.Stderr, "login: credential refresh failed")
 		return lifecycleExitFailure
