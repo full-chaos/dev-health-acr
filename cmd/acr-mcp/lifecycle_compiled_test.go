@@ -19,22 +19,18 @@ func TestCompiledLoginThenBareDoctorDiscoversPersistedCredential(t *testing.T) {
 	// Given
 	token := validDoctorToken(91)
 	server, fixture := newLifecycleServerWithState(t, token, []string{"success"}, nil)
-	binPath := filepath.Join(t.TempDir(), "acr-mcp")
-	build := exec.Command("go", "build", "-o", binPath, ".")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("compile acr-mcp: %v\n%s", err, output)
-	}
+	binPath := compileLifecycleBinary(t)
 	home := t.TempDir()
-	browserBin, browserLog := compiledBrowserFixture(t)
-	keyringBin, keyringLog := compiledKeyringFixture(t)
+	browserMarker := compiledLifecycleEventMarker(t, "browser-events")
+	keyringMarker := compiledLifecycleEventMarker(t, "keyring-events")
 	env := compiledEnvironmentWithoutTokenVariables(
 		"HOME="+home,
 		sidecar.APIURLEnvironment+"="+server.URL,
 		sidecar.AllowInsecureLoopbackEnvironment+"=true",
-		"ACR_TEST_BROWSER_OPEN_LOG="+browserLog,
-		"ACR_TEST_KEYRING_OPEN_LOG="+keyringLog,
-		"PATH="+keyringBin+string(os.PathListSeparator)+browserBin,
+		"ACR_TEST_BROWSER_EVENT_MARKER="+browserMarker,
+		"ACR_TEST_KEYRING_EVENT_MARKER="+keyringMarker,
 	)
+	assertNoTokenVariablesInChildEnvironment(t, env)
 
 	// When
 	login := exec.Command(binPath, "login", "--no-browser")
@@ -63,13 +59,13 @@ func TestCompiledLoginThenBareDoctorDiscoversPersistedCredential(t *testing.T) {
 	if !strings.Contains(string(loginOutput), "Open "+deviceVerificationURI+" and enter code") {
 		t.Fatalf("compiled login did not print the verification address:\n%s", loginOutput)
 	}
-	assertNoBrowserLaunch(t, browserLog)
-	assertNoKeyringLaunch(t, keyringLog)
+	assertCompiledLifecycleEvents(t, keyringMarker, []string{"keyring.lookup", "keyring.write", "keyring.lookup", "keyring.lookup", "keyring.lookup"}, token)
+	assertCompiledLifecycleEvents(t, browserMarker, nil, token)
 	tokenPath := filepath.Join(home, ".acr", "token")
 	assertCredentialFileModes(t, tokenPath)
 }
 
-func TestCompiledLogoutRemovesDisabledKeyringFileCredential(t *testing.T) {
+func TestCompiledLogoutRemovesDefaultFileCredential(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("compiled lifecycle fixture is POSIX-only")
 	}
@@ -79,7 +75,8 @@ func TestCompiledLogoutRemovesDisabledKeyringFileCredential(t *testing.T) {
 	defer server.Close()
 	binPath := compileLifecycleBinary(t)
 	home := t.TempDir()
-	browserBin, browserLog := compiledBrowserFixture(t)
+	browserMarker := compiledLifecycleEventMarker(t, "browser-events")
+	keyringMarker := compiledLifecycleEventMarker(t, "keyring-events")
 	tokenPath := filepath.Join(home, ".acr", "token")
 	if err := os.MkdirAll(filepath.Dir(tokenPath), 0o700); err != nil {
 		t.Fatal(err)
@@ -87,7 +84,8 @@ func TestCompiledLogoutRemovesDisabledKeyringFileCredential(t *testing.T) {
 	if err := os.WriteFile(tokenPath, []byte(token+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := append(os.Environ(), "HOME="+home, sidecar.APIURLEnvironment+"="+server.URL, sidecar.AllowInsecureLoopbackEnvironment+"=true", sidecar.TokenEnvironment+"=", sidecar.TokenKeyringDisabledEnvironment+"=true", sidecar.TokenKeyringServiceEnvironment+"=acr-sidecar-test", sidecar.TokenKeyringAccountEnvironment+"=agent-a", sidecar.TokenFileEnvironment+"="+tokenPath, "ACR_TEST_BROWSER_OPEN_LOG="+browserLog, "PATH="+browserBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	env := compiledEnvironmentWithoutTokenVariables("HOME="+home, sidecar.APIURLEnvironment+"="+server.URL, sidecar.AllowInsecureLoopbackEnvironment+"=true", "ACR_TEST_BROWSER_EVENT_MARKER="+browserMarker, "ACR_TEST_KEYRING_EVENT_MARKER="+keyringMarker)
+	assertNoTokenVariablesInChildEnvironment(t, env)
 	logout := exec.Command(binPath, "logout")
 	logout.Env = env
 	if output, err := logout.CombinedOutput(); err != nil {
@@ -99,9 +97,8 @@ func TestCompiledLogoutRemovesDisabledKeyringFileCredential(t *testing.T) {
 	if _, err := os.Stat(tokenPath); !os.IsNotExist(err) {
 		t.Fatalf("credential file remains after compiled logout: %v", err)
 	}
-	if _, err := os.Stat(browserLog); !os.IsNotExist(err) {
-		t.Fatalf("logout unexpectedly invoked browser fixture: %v", err)
-	}
+	assertCompiledLifecycleEvents(t, browserMarker, nil, token)
+	assertCompiledLifecycleEvents(t, keyringMarker, []string{"keyring.lookup"}, token)
 }
 
 func TestCompiledLoginBoundsInvalidGrantAuthorizationRestarts(t *testing.T) {
@@ -114,9 +111,11 @@ func TestCompiledLoginBoundsInvalidGrantAuthorizationRestarts(t *testing.T) {
 	defer server.Close()
 	binPath := compileLifecycleBinary(t)
 	home := t.TempDir()
-	browserBin, browserLog := compiledBrowserFixture(t)
+	browserMarker := compiledLifecycleEventMarker(t, "browser-events")
+	keyringMarker := compiledLifecycleEventMarker(t, "keyring-events")
 	tokenPath := filepath.Join(home, ".acr", "token")
-	env := append(os.Environ(), "HOME="+home, sidecar.APIURLEnvironment+"="+server.URL, sidecar.AllowInsecureLoopbackEnvironment+"=true", sidecar.TokenEnvironment+"=", sidecar.TokenKeyringDisabledEnvironment+"=true", sidecar.TokenFileEnvironment+"="+tokenPath, "ACR_TEST_BROWSER_OPEN_LOG="+browserLog, "PATH="+browserBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	env := compiledEnvironmentWithoutTokenVariables("HOME="+home, sidecar.APIURLEnvironment+"="+server.URL, sidecar.AllowInsecureLoopbackEnvironment+"=true", "ACR_TEST_BROWSER_EVENT_MARKER="+browserMarker, "ACR_TEST_KEYRING_EVENT_MARKER="+keyringMarker)
+	assertNoTokenVariablesInChildEnvironment(t, env)
 	login := exec.Command(binPath, "login", "--no-browser")
 	login.Env = env
 	output, err := login.CombinedOutput()
@@ -136,7 +135,8 @@ func TestCompiledLoginBoundsInvalidGrantAuthorizationRestarts(t *testing.T) {
 	if printed := strings.Count(string(output), "Open "+deviceVerificationURI+" and enter code"); printed != 2 {
 		t.Fatalf("verification address printed %d times, want once per authorization:\n%s", printed, output)
 	}
-	assertNoBrowserLaunch(t, browserLog)
+	assertCompiledLifecycleEvents(t, browserMarker, nil, token)
+	assertCompiledLifecycleEvents(t, keyringMarker, []string{"keyring.lookup"}, token)
 	if _, err := os.Stat(tokenPath); !os.IsNotExist(err) {
 		t.Fatalf("credential persisted after terminal invalid-grant failure: %v", err)
 	}
@@ -145,44 +145,11 @@ func TestCompiledLoginBoundsInvalidGrantAuthorizationRestarts(t *testing.T) {
 func compileLifecycleBinary(t *testing.T) string {
 	t.Helper()
 	binPath := filepath.Join(t.TempDir(), "acr-mcp")
-	build := exec.Command("go", "build", "-o", binPath, ".")
+	build := exec.Command("go", "build", "-tags", "acr_compiled_lifecycle_fixture", "-o", binPath, ".")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("compile acr-mcp: %v\n%s", err, output)
 	}
 	return binPath
-}
-
-// compiledBrowserFixture plants PATH-resolvable "open"/"xdg-open" tripwires.
-// The hardened opener resolves its binary from a fixed system directory
-// allowlist and never from PATH, so an entry recorded here means production
-// consulted PATH; an empty log means it did not. The compiled login fixtures
-// also pass --no-browser, so no opener is resolved or executed at all and no
-// host browser can be started by these tests.
-func compiledBrowserFixture(t *testing.T) (string, string) {
-	t.Helper()
-	browserBin := t.TempDir()
-	browserLog := filepath.Join(t.TempDir(), "browser-opener.log")
-	for _, name := range []string{"open", "xdg-open"} {
-		path := filepath.Join(browserBin, name)
-		contents := "#!/bin/sh\nprintf '%s' \"$0\" >> \"$ACR_TEST_BROWSER_OPEN_LOG\"\nfor arg do printf ' %s' \"$arg\" >> \"$ACR_TEST_BROWSER_OPEN_LOG\"; done\nprintf '\\n' >> \"$ACR_TEST_BROWSER_OPEN_LOG\"\n"
-		if err := os.WriteFile(path, []byte(contents), 0o700); err != nil {
-			t.Fatalf("write %s browser tripwire: %v", name, err)
-		}
-	}
-	return browserBin, browserLog
-}
-
-// assertNoBrowserLaunch proves production did not consult PATH. The
-// --no-browser guarantee is exercised in-process by lifecycle_browser_test.go.
-func assertNoBrowserLaunch(t *testing.T, logPath string) {
-	t.Helper()
-	contents, err := os.ReadFile(logPath)
-	if err == nil {
-		t.Fatalf("browser opener ran from PATH: %q", contents)
-	}
-	if !os.IsNotExist(err) {
-		t.Fatalf("read browser opener tripwire log: %v", err)
-	}
 }
 
 func compiledEnvironmentWithoutTokenVariables(additions ...string) []string {
@@ -196,28 +163,39 @@ func compiledEnvironmentWithoutTokenVariables(additions ...string) []string {
 	return append(env, additions...)
 }
 
-func compiledKeyringFixture(t *testing.T) (string, string) {
+func assertNoTokenVariablesInChildEnvironment(t *testing.T, env []string) {
 	t.Helper()
-	directory := t.TempDir()
-	logPath := filepath.Join(t.TempDir(), "keyring.log")
-	for _, name := range []string{"security", "secret-tool"} {
-		path := filepath.Join(directory, name)
-		contents := "#!/bin/sh\nprintf '%s\\n' \"$0\" >> \"$ACR_TEST_KEYRING_OPEN_LOG\"\nexit 97\n"
-		if err := os.WriteFile(path, []byte(contents), 0o700); err != nil {
-			t.Fatalf("write %s keyring tripwire: %v", name, err)
+	for _, entry := range env {
+		name, _, found := strings.Cut(entry, "=")
+		if found && strings.HasPrefix(name, "ACR_API_TOKEN") {
+			t.Fatalf("child environment contains credential variable %s", name)
 		}
 	}
-	return directory, logPath
 }
 
-func assertNoKeyringLaunch(t *testing.T, logPath string) {
+func compiledLifecycleEventMarker(t *testing.T, name string) string {
 	t.Helper()
-	contents, err := os.ReadFile(logPath)
-	if err == nil {
-		t.Fatalf("compiled process reached a keyring executable: %q", contents)
+	return filepath.Join(t.TempDir(), name)
+}
+
+func assertCompiledLifecycleEvents(t *testing.T, marker string, want []string, token string) {
+	t.Helper()
+	contents, err := os.ReadFile(marker)
+	if os.IsNotExist(err) {
+		if len(want) == 0 {
+			return
+		}
+		t.Fatalf("compiled lifecycle marker %q was not written", marker)
 	}
-	if !os.IsNotExist(err) {
-		t.Fatalf("read keyring tripwire log: %v", err)
+	if err != nil {
+		t.Fatalf("read compiled lifecycle marker: %v", err)
+	}
+	if strings.Contains(string(contents), token) {
+		t.Fatal("compiled lifecycle marker leaked the credential")
+	}
+	got := strings.Fields(string(contents))
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("compiled lifecycle events = %v, want %v", got, want)
 	}
 }
 
