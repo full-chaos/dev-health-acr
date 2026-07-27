@@ -26,12 +26,10 @@ func TestService_RollbackSelfRotationAllowsExactlyOneConcurrentRollback(t *testi
 	var group sync.WaitGroup
 	results := make(chan error, 2)
 	for range 2 {
-		group.Add(1)
-		go func() {
-			defer group.Done()
+		group.Go(func() {
 			_, rollbackErr := service.RollbackSelfRotation(context.Background(), principal, rotation.Receipt)
 			results <- rollbackErr
-		}()
+		})
 	}
 	group.Wait()
 	close(results)
