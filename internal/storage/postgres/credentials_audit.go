@@ -39,7 +39,7 @@ func (s *credentialStore) rollbackCredentialRotation(ctx context.Context, input 
 		source, successor = successor, source
 	}
 	now := s.now().UTC()
-	if !input.RollbackUntil.After(now) || source.RevokedAt != nil || successor.RevokedAt != nil ||
+	if !input.RollbackUntil.After(now) || source.RevokedAt != nil ||
 		source.ExpiresAt == nil || !source.ExpiresAt.After(now) ||
 		!slices.Equal(source.RepositoryScopes, successor.RepositoryScopes) || !slices.Equal(source.Scopes, successor.Scopes) {
 		return contractsv1.ClientCredential{}, storage.ErrConflict

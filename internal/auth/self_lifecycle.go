@@ -81,6 +81,13 @@ func (s *Service) RollbackSelfRotation(
 	if err := validateSelfLifecyclePrincipal(principal); err != nil {
 		return SelfRevocation{}, err
 	}
+	credential, err := s.store.GetByID(ctx, principal.OrgID, principal.CredentialID)
+	if err != nil {
+		return SelfRevocation{}, err
+	}
+	if !slices.Equal(credential.RepositoryScopes, principal.RepositoryScopes) || !slices.Equal(credential.Scopes, principal.Permissions) {
+		return SelfRevocation{}, ErrInvalidCredential
+	}
 	if strings.TrimSpace(receipt.SourceCredentialID) == "" ||
 		strings.TrimSpace(receipt.SuccessorCredentialID) != principal.CredentialID ||
 		receipt.SourceCredentialID == principal.CredentialID ||
