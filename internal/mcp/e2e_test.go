@@ -26,7 +26,7 @@ func buildACRMCPBinary(t *testing.T) string {
 	t.Helper()
 	root := findRepoRoot(t)
 	binPath := filepath.Join(t.TempDir(), "acr-mcp")
-	cmd := exec.Command("go", "build", "-o", binPath, "./cmd/acr-mcp")
+	cmd := exec.Command("go", "build", "-tags", "acr_compiled_lifecycle_lock_fixture", "-o", binPath, "./cmd/acr-mcp")
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build acr-mcp: %v\n%s", err, out)

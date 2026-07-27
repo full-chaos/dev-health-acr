@@ -39,7 +39,13 @@ import (
 func TestMain(m *testing.M) {
 	clearAmbientACREnvironment()
 	installPanickingKeyringSeams()
-	os.Exit(m.Run())
+	restoreLock, err := InstallIsolatedCredentialLifecycleLockForTesting()
+	if err != nil {
+		panic("install the package-wide lifecycle lock guard: " + err.Error())
+	}
+	code := m.Run()
+	restoreLock()
+	os.Exit(code)
 }
 
 // clearAmbientACREnvironment removes every ACR_-prefixed variable inherited from

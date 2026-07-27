@@ -65,8 +65,13 @@ func TestMain(m *testing.M) {
 	_ = os.Setenv("ACR_LOCAL_INDEX_PROVIDER", "disabled")
 	_ = os.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
 	restoreKeyring := installPanickingKeyringSeams()
+	restoreLock, err := sidecar.InstallIsolatedCredentialLifecycleLockForTesting()
+	if err != nil {
+		panic("install the package-wide lifecycle lock guard: " + err.Error())
+	}
 	lifecycleBrowserOpen = func(string) error { return errLifecycleBrowserStub }
 	code := m.Run()
+	restoreLock()
 	restoreKeyring()
 	os.Exit(code)
 }

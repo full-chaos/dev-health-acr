@@ -145,7 +145,7 @@ func TestCompiledLoginBoundsInvalidGrantAuthorizationRestarts(t *testing.T) {
 func compileLifecycleBinary(t *testing.T) string {
 	t.Helper()
 	binPath := filepath.Join(t.TempDir(), "acr-mcp")
-	build := exec.Command("go", "build", "-tags", "acr_compiled_lifecycle_fixture", "-o", binPath, ".")
+	build := exec.Command("go", "build", "-tags", "acr_compiled_lifecycle_fixture,acr_compiled_lifecycle_lock_fixture", "-o", binPath, ".")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("compile acr-mcp: %v\n%s", err, output)
 	}

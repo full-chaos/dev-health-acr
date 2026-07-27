@@ -13,6 +13,8 @@ var ErrCredentialLifecycleSessionClosed = errors.New("acr: credential lifecycle 
 
 var credentialLifecycleGate sync.Mutex
 
+var credentialLifecycleLockAcquire = acquireCredentialLifecycleLock
+
 type CredentialLifecycleSession struct {
 	state *credentialLifecycleSessionState
 }
@@ -33,7 +35,7 @@ func BeginCredentialLifecycleSession() (*CredentialLifecycleSession, error) {
 	if !credentialLifecycleGate.TryLock() {
 		return nil, errCredentialLifecycleBusy
 	}
-	close, err := acquireCredentialLifecycleLock()
+	close, err := credentialLifecycleLockAcquire()
 	if err != nil {
 		credentialLifecycleGate.Unlock()
 		return nil, err

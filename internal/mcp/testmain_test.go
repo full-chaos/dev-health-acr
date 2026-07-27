@@ -49,7 +49,12 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("install the package-wide keyring guard: " + err.Error())
 	}
+	restoreLock, err := sidecar.InstallIsolatedCredentialLifecycleLockForTesting()
+	if err != nil {
+		panic("install the package-wide lifecycle lock guard: " + err.Error())
+	}
 	code := m.Run()
+	restoreLock()
 	restore()
 	os.Exit(code)
 }

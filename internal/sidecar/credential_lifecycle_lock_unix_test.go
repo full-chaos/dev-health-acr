@@ -191,22 +191,22 @@ func TestCredentialLifecycleLockContendsAcrossProcessesWithDifferentTMPDIR(t *te
 		// Given
 
 		// When
-		session, err := BeginCredentialLifecycleSession()
+		closeLock, err := acquireCredentialLifecycleLockAt(credentialLifecycleLockPath())
 
 		// Then
-		if session != nil || !errors.Is(err, errCredentialLifecycleBusy) {
-			t.Fatalf("subprocess session = %v, %v; want busy", session, err)
+		if closeLock != nil || !errors.Is(err, errCredentialLifecycleBusy) {
+			t.Fatalf("subprocess lock acquired = %t, err = %v; want busy", closeLock != nil, err)
 		}
 		return
 	}
 
 	// Given
 	t.Setenv("TMPDIR", t.TempDir())
-	session, err := BeginCredentialLifecycleSession()
+	closeLock, err := acquireCredentialLifecycleLockAt(credentialLifecycleLockPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.Close()
+	defer closeLock()
 	command := exec.Command(os.Args[0], "-test.run=^TestCredentialLifecycleLockContendsAcrossProcessesWithDifferentTMPDIR$")
 	command.Env = append(os.Environ(), credentialLifecycleLockSubprocessEnvironment+"=1", "TMPDIR="+t.TempDir())
 
@@ -217,4 +217,32 @@ func TestCredentialLifecycleLockContendsAcrossProcessesWithDifferentTMPDIR(t *te
 	if err != nil {
 		t.Fatalf("subprocess contention test failed: %v\n%s", err, output)
 	}
+}
+
+func TestInstallIsolatedCredentialLifecycleLockForTestingUsesIndependentRealLockNamespaces(t *testing.T) {
+	// Given
+	restoreFirst, err := InstallIsolatedCredentialLifecycleLockForTesting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restoreFirst()
+	firstClose, err := credentialLifecycleLockAcquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer firstClose()
+
+	// When
+	restoreSecond, err := InstallIsolatedCredentialLifecycleLockForTesting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restoreSecond()
+	secondClose, err := credentialLifecycleLockAcquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondClose()
+
+	// Then
 }
