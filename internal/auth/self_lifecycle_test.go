@@ -201,6 +201,31 @@ func TestService_RollbackSelfRotation_requiresSuccessorAndRetainsSourceOverlap(t
 	require.Equal(t, now.Add(storage.MaximumCredentialOverlap), *retained.ExpiresAt)
 }
 
+func TestService_RollbackSelfRotationRejectsAReceiptBoundToAnotherRotationWithoutMutation(t *testing.T) {
+	// Given
+	now := time.Date(2026, 7, 25, 14, 0, 0, 0, time.UTC)
+	audit := memory.NewAuditStore()
+	store := newMemoryCredentialStoreAt(t, now, audit)
+	service := newTestService(t, store, audit, now)
+	first := createSelfCredential(t, service, []string{"owner/one"})
+	second := createSelfCredential(t, service, []string{"owner/two"})
+	firstRotation, err := service.RotateSelf(context.Background(), selfPrincipal(first.Credential))
+	require.NoError(t, err)
+	secondRotation, err := service.RotateSelf(context.Background(), selfPrincipal(second.Credential))
+	require.NoError(t, err)
+	forged := secondRotation.Receipt
+	forged.SourceCredentialID = firstRotation.Receipt.SourceCredentialID
+
+	// When
+	_, err = service.RollbackSelfRotation(context.Background(), selfPrincipal(secondRotation.Issued.Credential), forged)
+
+	// Then
+	require.ErrorIs(t, err, storage.ErrConflict)
+	stored, getErr := store.GetByID(context.Background(), second.Credential.OrgID, secondRotation.Issued.Credential.CredentialID)
+	require.NoError(t, getErr)
+	require.Nil(t, stored.RevokedAt)
+}
+
 func TestService_SelfLifecycle_staleOperationsFailWithoutSecondSecret(t *testing.T) {
 	// Given
 	now := time.Date(2026, 7, 25, 14, 0, 0, 0, time.UTC)

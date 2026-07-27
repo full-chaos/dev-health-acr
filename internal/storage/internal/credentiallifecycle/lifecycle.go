@@ -22,10 +22,11 @@ type Store interface {
 }
 
 type Backend struct {
-	Store  Store
-	Create func(context.Context, CreateInput) (contractsv1.ClientCredential, error)
-	Rotate func(context.Context, RotationInput) (contractsv1.ClientCredential, error)
-	Revoke func(context.Context, RevocationInput) (contractsv1.ClientCredential, error)
+	Store    Store
+	Create   func(context.Context, CreateInput) (contractsv1.ClientCredential, error)
+	Rotate   func(context.Context, RotationInput) (contractsv1.ClientCredential, error)
+	Revoke   func(context.Context, RevocationInput) (contractsv1.ClientCredential, error)
+	Rollback func(context.Context, RotationRollbackInput) (contractsv1.ClientCredential, error)
 }
 
 type Lifecycle struct {
@@ -41,10 +42,21 @@ func New(backend Backend) (*Lifecycle, error) {
 }
 
 func (l *Lifecycle) Validate() error {
-	if l == nil || isNil(l.backend.Store) || l.backend.Create == nil || l.backend.Rotate == nil || l.backend.Revoke == nil {
+	if l == nil || isNil(l.backend.Store) || l.backend.Create == nil || l.backend.Rotate == nil || l.backend.Revoke == nil || l.backend.Rollback == nil {
 		return ErrInvalidLifecycle
 	}
 	return nil
+}
+
+func (l *Lifecycle) RollbackCredentialRotation(ctx context.Context, input RotationRollbackInput) (contractsv1.ClientCredential, error) {
+	if err := l.operationContext(ctx); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
+	normalized, err := normalizeRotationRollback(input)
+	if err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
+	return l.backend.Rollback(ctx, normalized)
 }
 
 func (l *Lifecycle) CreateCredential(ctx context.Context, input CreateInput) (contractsv1.ClientCredential, error) {

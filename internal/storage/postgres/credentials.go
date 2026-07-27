@@ -40,7 +40,7 @@ func newCredentialStore(db *sql.DB, audit *AuditStore, now func() time.Time) (*c
 		return nil, nil, err
 	}
 	lifecycle, err := credentiallifecycle.New(credentiallifecycle.Backend{
-		Store: store, Create: store.createCredential, Rotate: store.rotateCredential, Revoke: store.revokeCredential,
+		Store: store, Create: store.createCredential, Rotate: store.rotateCredential, Revoke: store.revokeCredential, Rollback: store.rollbackCredentialRotation,
 	})
 	if err != nil {
 		return nil, nil, err

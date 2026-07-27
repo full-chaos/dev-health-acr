@@ -78,8 +78,7 @@ func (s *Service) RollbackSelfRotation(
 	principal storage.Principal,
 	receipt SelfRotationReceipt,
 ) (SelfRevocation, error) {
-	successor, err := s.authenticatedCredential(ctx, principal)
-	if err != nil {
+	if err := validateSelfLifecyclePrincipal(principal); err != nil {
 		return SelfRevocation{}, err
 	}
 	if strings.TrimSpace(receipt.SourceCredentialID) == "" ||
@@ -88,17 +87,32 @@ func (s *Service) RollbackSelfRotation(
 		!receipt.RollbackUntil.After(s.now().UTC()) {
 		return SelfRevocation{}, ErrInvalidCredential
 	}
-	source, err := s.store.GetByID(ctx, principal.OrgID, receipt.SourceCredentialID)
+	revoked, err := s.store.RollbackCredentialRotation(ctx, storage.CredentialRotationRollbackInput{
+		OrgID: principal.OrgID, SourceCredentialID: receipt.SourceCredentialID,
+		SuccessorCredentialID: receipt.SuccessorCredentialID, ActorID: principal.Subject,
+		RollbackUntil: receipt.RollbackUntil,
+	})
 	if err != nil {
-		return SelfRevocation{}, fmt.Errorf("load self-rotation source: %w", err)
+		return SelfRevocation{}, err
 	}
-	if source.RevokedAt != nil || source.ExpiresAt == nil || !source.ExpiresAt.After(s.now().UTC()) ||
-		successor.CreatedAt.Before(source.CreatedAt) ||
-		source.ExpiresAt.Before(successor.CreatedAt) || source.ExpiresAt.After(successor.CreatedAt.Add(storage.MaximumCredentialOverlap)) ||
-		!slices.Equal(successor.RepositoryScopes, source.RepositoryScopes) || !slices.Equal(successor.Scopes, source.Scopes) {
-		return SelfRevocation{}, ErrInvalidCredential
+	return SelfRevocation{CredentialID: revoked.CredentialID, Credential: revoked}, nil
+}
+
+func validateSelfLifecyclePrincipal(principal storage.Principal) error {
+	if principal.AuthenticationMethod != storage.AuthenticationMethodCredential ||
+		strings.TrimSpace(principal.Subject) == "" || principal.Subject != principal.CredentialID ||
+		strings.TrimSpace(principal.OrgID) == "" {
+		return ErrInvalidCredential
 	}
-	return s.RevokeSelf(ctx, principal)
+	repositories, err := NormalizeRepositoryScopes(principal.RepositoryScopes)
+	if err != nil || !slices.Equal(repositories, principal.RepositoryScopes) {
+		return ErrInvalidCredential
+	}
+	permissions, err := normalizeScopes(principal.Permissions)
+	if err != nil || !slices.Equal(permissions, principal.Permissions) {
+		return ErrInvalidCredential
+	}
+	return nil
 }
 
 func (s *Service) RevokeSelf(ctx context.Context, principal storage.Principal) (SelfRevocation, error) {

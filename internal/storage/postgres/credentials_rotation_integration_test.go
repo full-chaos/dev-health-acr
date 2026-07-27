@@ -186,3 +186,36 @@ func TestCredentialStoreRotateAllowsExpiredUnrevokedSourceWithBoundedOverlap(t *
 	require.Nil(t, stored.RevokedAt)
 	require.True(t, expiresAt.Equal(*stored.ExpiresAt))
 }
+
+func TestCredentialStoreRollbackRejectsSuccessorFromAnotherRotationWithoutPartialMutation(t *testing.T) {
+	ctx := context.Background()
+	db := newCredentialStoreDatabase(t, ctx)
+	audit, err := NewAuditStore(db)
+	require.NoError(t, err)
+	lifecycle, err := NewCredentialStore(db, audit)
+	require.NoError(t, err)
+	service, err := auth.NewService(lifecycle, auth.ServiceOptions{})
+	require.NoError(t, err)
+	first, err := service.Create(ctx, credentialCreateRequest("first"))
+	require.NoError(t, err)
+	second, err := service.Create(ctx, credentialCreateRequest("second"))
+	require.NoError(t, err)
+	firstReplacement, err := service.Rotate(ctx, auth.RotateCredentialRequest{OrgID: credentialTestOrgID, CredentialID: first.Credential.CredentialID, CreatedBy: credentialTestActorID, Overlap: time.Minute})
+	require.NoError(t, err)
+	secondReplacement, err := service.Rotate(ctx, auth.RotateCredentialRequest{OrgID: credentialTestOrgID, CredentialID: second.Credential.CredentialID, CreatedBy: credentialTestActorID, Overlap: time.Minute})
+	require.NoError(t, err)
+
+	_, err = lifecycle.RollbackCredentialRotation(ctx, storage.CredentialRotationRollbackInput{
+		OrgID: credentialTestOrgID, SourceCredentialID: first.Credential.CredentialID,
+		SuccessorCredentialID: secondReplacement.Credential.CredentialID, ActorID: credentialTestActorID,
+		RollbackUntil: time.Now().UTC().Add(time.Minute),
+	})
+
+	require.ErrorIs(t, err, storage.ErrConflict)
+	stored, err := lifecycle.GetByID(ctx, credentialTestOrgID, secondReplacement.Credential.CredentialID)
+	require.NoError(t, err)
+	require.Nil(t, stored.RevokedAt)
+	firstStored, err := lifecycle.GetByID(ctx, credentialTestOrgID, firstReplacement.Credential.CredentialID)
+	require.NoError(t, err)
+	require.Nil(t, firstStored.RevokedAt)
+}

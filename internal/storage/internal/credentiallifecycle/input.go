@@ -45,3 +45,14 @@ type RevocationInput struct {
 	CredentialID string
 	ActorID      string
 }
+
+// RotationRollbackInput identifies the exact rotation that may be undone. The
+// storage adapter validates this input and atomically revokes only the recorded
+// successor; callers must not compose separate reads and revocation calls.
+type RotationRollbackInput struct {
+	OrgID                 string
+	SourceCredentialID    string
+	SuccessorCredentialID string
+	ActorID               string
+	RollbackUntil         time.Time
+}

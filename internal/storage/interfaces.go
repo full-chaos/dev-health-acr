@@ -125,6 +125,7 @@ type CredentialLifecycle = credentiallifecycle.Lifecycle
 type CredentialCreateInput = credentiallifecycle.CreateInput
 type CredentialRotationInput = credentiallifecycle.RotationInput
 type CredentialRotationReplacement = credentiallifecycle.RotationReplacement
+type CredentialRotationRollbackInput = credentiallifecycle.RotationRollbackInput
 type CredentialRevocationInput = credentiallifecycle.RevocationInput
 
 func ValidateCredentialCreateInput(input CredentialCreateInput) error {

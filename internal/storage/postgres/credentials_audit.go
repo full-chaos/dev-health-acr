@@ -3,12 +3,82 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
+
+func (s *credentialStore) rollbackCredentialRotation(ctx context.Context, input storage.CredentialRotationRollbackInput) (contractsv1.ClientCredential, error) {
+	if err := s.ready(ctx); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
+	if !uuidPattern.MatchString(input.OrgID) {
+		return contractsv1.ClientCredential{}, storage.ErrInvalidCredentialInput
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return contractsv1.ClientCredential{}, fmt.Errorf("begin credential rotation rollback: %w", sanitizeDatabaseError(err))
+	}
+	defer func() { _ = tx.Rollback() }()
+	ids := []string{input.SourceCredentialID, input.SuccessorCredentialID}
+	slices.Sort(ids)
+	first, err := lockedCredential(ctx, tx, input.OrgID, ids[0])
+	if err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
+	second, err := lockedCredential(ctx, tx, input.OrgID, ids[1])
+	if err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
+	source, successor := first, second
+	if source.CredentialID != input.SourceCredentialID {
+		source, successor = successor, source
+	}
+	now := s.now().UTC()
+	if !input.RollbackUntil.After(now) || source.RevokedAt != nil || successor.RevokedAt != nil ||
+		source.ExpiresAt == nil || !source.ExpiresAt.After(now) ||
+		!slices.Equal(source.RepositoryScopes, successor.RepositoryScopes) || !slices.Equal(source.Scopes, successor.Scopes) {
+		return contractsv1.ClientCredential{}, storage.ErrConflict
+	}
+	var relation int
+	err = tx.QueryRowContext(ctx, `
+SELECT 1 FROM acr.audit_events
+WHERE org_id = $1 AND action = 'credential_rotated' AND resource_id = $2
+  AND metadata->>'replacement_credential_id' = $3
+LIMIT 1`, input.OrgID, input.SourceCredentialID, input.SuccessorCredentialID).Scan(&relation)
+	if errors.Is(err, sql.ErrNoRows) {
+		return contractsv1.ClientCredential{}, storage.ErrConflict
+	}
+	if err != nil {
+		return contractsv1.ClientCredential{}, fmt.Errorf("verify credential rotation relation: %w", sanitizeDatabaseError(err))
+	}
+	result, err := tx.ExecContext(ctx, `
+UPDATE acr.client_credentials
+SET revoked_at = $3
+WHERE org_id = $1 AND credential_id = $2 AND revoked_at IS NULL`, input.OrgID, input.SuccessorCredentialID, now)
+	if err != nil {
+		return contractsv1.ClientCredential{}, fmt.Errorf("revoke rotation successor: %w", sanitizeDatabaseError(err))
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return contractsv1.ClientCredential{}, fmt.Errorf("rotation rollback rows affected: %w", sanitizeDatabaseError(err))
+	}
+	if rows != 1 {
+		return contractsv1.ClientCredential{}, storage.ErrConflict
+	}
+	successor.RevokedAt = cloneTime(&now)
+	if err := s.audit.record(ctx, tx, credentialRevokedEvent(successor, input.ActorID, now)); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return contractsv1.ClientCredential{}, fmt.Errorf("commit credential rotation rollback: %w", sanitizeDatabaseError(err))
+	}
+	return successor, nil
+}
 
 func (s *credentialStore) createCredential(ctx context.Context, input storage.CredentialCreateInput) (contractsv1.ClientCredential, error) {
 	if err := s.ready(ctx); err != nil {
