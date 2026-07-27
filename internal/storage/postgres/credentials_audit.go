@@ -72,7 +72,7 @@ WHERE org_id = $1 AND credential_id = $2 AND revoked_at IS NULL`, input.OrgID, i
 	}
 	successor.RevokedAt = cloneTime(&now)
 	if err := s.audit.record(ctx, tx, credentialRevokedEvent(successor, input.ActorID, now)); err != nil {
-		return contractsv1.ClientCredential{}, err
+		return contractsv1.ClientCredential{}, fmt.Errorf("record credential rotation rollback audit: %w", sanitizeDatabaseError(err))
 	}
 	if err := tx.Commit(); err != nil {
 		return contractsv1.ClientCredential{}, fmt.Errorf("commit credential rotation rollback: %w", sanitizeDatabaseError(err))

@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +12,42 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
 	"github.com/stretchr/testify/require"
 )
+
+func TestService_RollbackSelfRotationAllowsExactlyOneConcurrentRollback(t *testing.T) {
+	now := time.Date(2026, 7, 25, 14, 0, 0, 0, time.UTC)
+	audit := memory.NewAuditStore()
+	store := newMemoryCredentialStoreAt(t, now, audit)
+	service := newTestService(t, store, audit, now)
+	source := createSelfCredential(t, service, []string{"owner/repo"})
+	rotation, err := service.RotateSelf(context.Background(), selfPrincipal(source.Credential))
+	require.NoError(t, err)
+	principal := selfPrincipal(rotation.Issued.Credential)
+
+	var group sync.WaitGroup
+	results := make(chan error, 2)
+	for range 2 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			_, rollbackErr := service.RollbackSelfRotation(context.Background(), principal, rotation.Receipt)
+			results <- rollbackErr
+		}()
+	}
+	group.Wait()
+	close(results)
+	var successes, conflicts int
+	for rollbackErr := range results {
+		if rollbackErr == nil {
+			successes++
+		} else if errors.Is(rollbackErr, storage.ErrConflict) {
+			conflicts++
+		} else {
+			t.Fatalf("rollback error = %v, want conflict", rollbackErr)
+		}
+	}
+	require.Equal(t, 1, successes)
+	require.Equal(t, 1, conflicts)
+}
 
 func TestService_RotateSelf_preservesStoredGrantAndUsesFixedLifecycle(t *testing.T) {
 	// Given

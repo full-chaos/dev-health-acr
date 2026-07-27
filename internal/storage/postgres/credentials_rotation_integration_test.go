@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -218,4 +219,31 @@ func TestCredentialStoreRollbackRejectsSuccessorFromAnotherRotationWithoutPartia
 	firstStored, err := lifecycle.GetByID(ctx, credentialTestOrgID, firstReplacement.Credential.CredentialID)
 	require.NoError(t, err)
 	require.Nil(t, firstStored.RevokedAt)
+}
+
+func TestCredentialStoreRollbackKeepsSuccessorActiveWhenAuditWriteFails(t *testing.T) {
+	ctx := context.Background()
+	db := newCredentialStoreDatabase(t, ctx)
+	audit, err := NewAuditStore(db)
+	require.NoError(t, err)
+	lifecycle, err := NewCredentialStore(db, audit)
+	require.NoError(t, err)
+	service, err := auth.NewService(lifecycle, auth.ServiceOptions{})
+	require.NoError(t, err)
+	source, err := service.Create(ctx, credentialCreateRequest("source"))
+	require.NoError(t, err)
+	successor, err := service.Rotate(ctx, auth.RotateCredentialRequest{OrgID: credentialTestOrgID, CredentialID: source.Credential.CredentialID, CreatedBy: credentialTestActorID, Overlap: time.Minute})
+	require.NoError(t, err)
+	audit.GenerateID = func() (string, error) { return "", errors.New("audit unavailable") }
+
+	_, err = lifecycle.RollbackCredentialRotation(ctx, storage.CredentialRotationRollbackInput{
+		OrgID: credentialTestOrgID, SourceCredentialID: source.Credential.CredentialID,
+		SuccessorCredentialID: successor.Credential.CredentialID, ActorID: credentialTestActorID,
+		RollbackUntil: time.Now().UTC().Add(time.Minute),
+	})
+
+	require.ErrorIs(t, err, storage.ErrUnavailable)
+	stored, getErr := lifecycle.GetByID(ctx, credentialTestOrgID, successor.Credential.CredentialID)
+	require.NoError(t, getErr)
+	require.Nil(t, stored.RevokedAt)
 }
