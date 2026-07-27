@@ -11,6 +11,16 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 )
 
+// credentialPurgeTargets is the single-credential view of
+// appendCredentialPurgeTargets. It lives here rather than in the package under
+// test because production always purges a whole set at once
+// (PurgeAllCredentialMaterial), so a production-side wrapper would be dead code.
+func credentialPurgeTargets(current CredentialResult, keyringAllowed bool) []credentialPurgeTarget {
+	targets := make([]credentialPurgeTarget, 0, 4)
+	appendCredentialPurgeTargets(&targets, map[credentialPurgeKey]bool{}, current, keyringAllowed)
+	return targets
+}
+
 // Both halves of a keyring address come from operator-supplied environment
 // variables, so a dedup key built by joining them on a separator collides
 // whenever that separator appears inside either half. These two addresses are

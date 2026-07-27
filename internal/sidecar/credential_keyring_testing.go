@@ -3,6 +3,7 @@ package sidecar
 import (
 	"context"
 	"errors"
+	"maps"
 	"sync"
 	"testing"
 )
@@ -54,9 +55,7 @@ func InstallMemoryKeyringForTesting(entries map[KeyringAddress]string) (*MemoryK
 		lookupErr:      map[KeyringAddress]error{},
 		deleteErr:      map[KeyringAddress]error{},
 	}
-	for address, token := range entries {
-		keyring.entries[address] = token
-	}
+	maps.Copy(keyring.entries, entries)
 	originalLookup, originalWriter, originalDeleter := currentKeyringLookup, currentKeyringWriter, currentKeyringDeleter
 	currentKeyringLookup = keyring.lookup
 	currentKeyringWriter = keyring.store
@@ -97,11 +96,7 @@ func (k *MemoryKeyring) FailDelete(address KeyringAddress, cause error) {
 func (k *MemoryKeyring) Entries() map[KeyringAddress]string {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	snapshot := make(map[KeyringAddress]string, len(k.entries))
-	for address, token := range k.entries {
-		snapshot[address] = token
-	}
-	return snapshot
+	return maps.Clone(k.entries)
 }
 
 // Deletes returns every address a delete was attempted at, in order.

@@ -229,12 +229,6 @@ type credentialPurgeKey struct {
 	secondary string
 }
 
-func credentialPurgeTargets(current CredentialResult, keyringAllowed bool) []credentialPurgeTarget {
-	targets := make([]credentialPurgeTarget, 0, 4)
-	appendCredentialPurgeTargets(&targets, map[credentialPurgeKey]bool{}, current, keyringAllowed)
-	return targets
-}
-
 // appendCredentialPurgeTargets adds the locations one credential can be
 // removed from -- the address it was actually captured at, then the currently
 // configured address -- skipping anything already queued under seen.
