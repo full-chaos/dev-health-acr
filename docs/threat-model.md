@@ -148,7 +148,13 @@ or destroy credential material, and they hold to four rules.
   single highest-precedence credential instead left lower-precedence ones live on
   the server with their local copies gone. Enumeration fails closed: an
   unreadable keyring, an unparseable disable flag, or an unreadable token file
-  removes nothing at all.
+  removes nothing at all. Removal also binds each target to the exact value
+  enumerated there and compares before deleting: a file or keyring entry whose
+  value no longer matches -- a concurrent login or refresh wrote a different,
+  still-live credential to the same location after enumeration -- is retained
+  and reported rather than deleted. This narrows, but does not eliminate, the
+  window between proving a value and deleting it by address; see the parent-
+  directory rule below for the same caveat applied to the unlink itself.
 - **An ambiguous write is treated as a write.** A credential store that commits
   and then fails -- a keyring mutation whose write-out or reply fails, a token file
   renamed into place whose directory fsync fails -- returns the candidate locator
@@ -165,11 +171,17 @@ or destroy credential material, and they hold to four rules.
   reduction of the attacker set, not the elimination of a race.
 - **Server-supplied text never becomes local execution or terminal output.** The
   device verification address is validated (https, or http to a validated loopback
-  address; no userinfo, control characters, whitespace, or `fcacr_` text) *before*
-  it is printed or handed to an opener, and `login --no-browser` skips the launch
-  entirely. A launched opener receives an allowlisted environment carrying no
-  `ACR_` variable, runs in its own process group, and is reaped under a fixed
-  deadline. Operator-facing cleanup locations are token-redacted, bounded, and
+  address; no userinfo, ASCII or Unicode control/whitespace/format characters,
+  or `fcacr_` text) *before* it is printed or handed to an opener, and
+  `login --no-browser` skips the launch entirely. A launched opener receives an
+  allowlisted environment carrying no `ACR_` variable, runs in its own process
+  group, and is reaped under a fixed deadline if it blocks -- but that deadline
+  alone only bounds an unattended login, since launching hands off immediately
+  and reaps in a background goroutine that a fast-concluding login would
+  otherwise outlive. Login therefore also synchronously tears the opener down
+  on every return path from the attempt that launched it, so the opener's
+  process group never outlives the attempt regardless of how quickly it
+  concludes. Operator-facing cleanup locations are token-redacted, bounded, and
   quoted, so a configured path or keyring address cannot forge log lines.
 
 The MCP surface itself is local STDIO with no network listener; credential

@@ -73,6 +73,6 @@ Hardened local STDIO MCP client: HTTPS-only API boundary, credential precedence 
 - **Bounded file**: `boundedfile_*_test.go` — O_NOFOLLOW enforcement, size bounds, type checks, ownership (Unix).
 - **Exec resolver**: `exec_resolver_test.go` — PATH resolution, ownership checks (Unix).
 
-`testmain_test.go` replaces the three keyring seams with an empty in-memory store for the whole package, so no test can reach the host's real keychain. Tests needing keyring contents install their own store via `InstallMemoryKeyringForTesting`, which is refused outside `go test`. The keyring disable flag is deliberately not forced package-wide: several tests assert enabled-keyring behavior without setting it.
+`testmain_test.go` replaces the three keyring seams with stubs that PANIC (not an empty in-memory store -- an empty store answers "no entry" and lets an unintended keyring access read as a pass) for the whole package, so no test can reach the host's real keychain. Tests needing keyring contents install their own store via `InstallMemoryKeyringForTesting`, which is refused outside `go test`. The keyring disable flag is deliberately not forced package-wide: several tests assert enabled-keyring behavior without setting it.
 
 Real-binary MCP tests live in `internal/mcp/e2e_test.go` and exercise the full sidecar boundary through `cmd/acr-mcp`.

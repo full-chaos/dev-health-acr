@@ -200,8 +200,16 @@ executed. Without the flag, the launch is attempted and any failure is
 deliberately nonfatal -- an absent or untrusted opener costs only the
 convenience. The launched opener runs in its own process group with an
 allowlisted environment (no `ACR_` variables reach the browser) and is reaped
-under a fixed deadline, so an opener that blocks cannot outlive the login
-session or leave a forked handler behind.
+under a fixed deadline if it blocks. That deadline alone bounded only an
+unattended login: launching the opener hands off immediately and reaps in a
+background goroutine, and a login that succeeds (or fails, or restarts) before
+a slow or hung opener returns would otherwise exit while the deadline was
+still pending, orphaning the opener process and anything it forked for
+however long they kept running afterward. Login therefore also synchronously
+tears the opener down on every return path from the attempt that launched
+it -- success, failure, or restart alike -- so the opener's process group
+never outlives the attempt regardless of how quickly it concludes, not only
+when it happens to run past the deadline.
 
 **`logout` revokes every configured credential before it deletes any of them.**
 It enumerates all three sources rather than resolving the single winner by
