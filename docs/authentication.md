@@ -46,12 +46,31 @@ Successful use updates last-used metadata outside downstream business transactio
 
 ## Sidecar loading
 
-The local sidecar checks:
+The local sidecar resolves a credential with a fixed precedence:
 
 1. `ACR_API_TOKEN`
-2. `ACR_API_TOKEN_FILE`
+2. The explicit or default OS keyring entry (macOS/Linux)
+3. `ACR_API_TOKEN_FILE`, defaulting to `~/.acr/token` (macOS/Linux)
 
-Token files must be owner-only on POSIX systems. The `doctor` command reports source and shape validity without revealing the token. OS keychain adapters can be added behind the same credential-source contract later.
+Token files must be owner-only on POSIX systems, and their parent directory must
+deny group and world write access for removal as well as for writing. The
+`doctor` command reports source and shape validity without revealing the token.
+
+Precedence answers "which credential wins", which is the wrong question for
+`logout`. Logout enumerates **every** configured location and revokes each
+distinct value before removing anything, because an exported `ACR_API_TOKEN` over
+a keyring entry over a token file is three separate credentials: revoking only
+the winner leaves the others live on the server while their local copies are
+deleted. Enumeration fails closed -- an unreadable keyring or token file stops the
+whole operation rather than deleting around a location that may hold a live
+credential. `invalid_token` on an established credential means it is already
+inactive and does not block cleanup; on a credential this client just had issued
+it stays a failure, because a token the server minted seconds ago and now refuses
+is evidence the client cannot tell.
+
+Credential persistence is supported only on macOS and Linux, and `login` checks
+that before starting a device authorization, so an unsupported platform never
+causes the server to mint a one-time credential that has nowhere to live.
 
 ## Rate limiting
 

@@ -136,6 +136,42 @@ to hosted expansion. The Task 8 capture harness exercises these negative upload
 sentinels; its receipt is evidence of fixture coverage, not a claim that an
 operator has run a live CodeGraph environment.
 
+## Local credential lifecycle boundary
+
+`acr-mcp login` and `acr-mcp logout` are the only local operations that create
+or destroy credential material, and they hold to four rules.
+
+- **Nothing local is deleted while a credential may still be live.** Logout
+  enumerates every configured location -- environment, OS keyring, token file --
+  and revokes each distinct value before removing any of them. Resolving the
+  single highest-precedence credential instead left lower-precedence ones live on
+  the server with their local copies gone. Enumeration fails closed: an
+  unreadable keyring, an unparseable disable flag, or an unreadable token file
+  removes nothing at all.
+- **An ambiguous write is treated as a write.** A credential store that commits
+  and then fails -- a keyring mutation whose write-out or reply fails, a token file
+  renamed into place whose directory fsync fails -- returns the candidate locator
+  alongside the error, so login revokes server-side and purges exactly that
+  location instead of leaving a revoked-but-readable secret somewhere nobody was
+  told about.
+- **Removal is gated on the same boundaries as reading, plus the parent
+  directory.** A file is unlinked only after a no-follow open, a regular-file
+  fstat, a group/world permission check, and an ACR token-shape check, and only if
+  its parent denies group and world write -- otherwise another local user could
+  swap the entry between the proof and the unlink.
+- **Server-supplied text never becomes local execution or terminal output.** The
+  device verification address is validated (https, or http to a validated loopback
+  address; no userinfo, control characters, whitespace, or `fcacr_` text) *before*
+  it is printed or handed to an opener, and `login --no-browser` skips the launch
+  entirely. A launched opener receives an allowlisted environment carrying no
+  `ACR_` variable, runs in its own process group, and is reaped under a fixed
+  deadline. Operator-facing cleanup locations are token-redacted, bounded, and
+  quoted, so a configured path or keyring address cannot forge log lines.
+
+The MCP surface itself is local STDIO with no network listener; credential
+lifecycle traffic is outbound HTTPS to the hosted API only, so no lifecycle
+operation is reachable from another host.
+
 ## Limits: current contract versus downstream enforcement
 
 **Current contract/config validation**:

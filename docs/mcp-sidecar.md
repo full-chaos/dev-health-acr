@@ -115,6 +115,8 @@ The `acr-mcp` binary builds and runs on macOS, Linux, and Windows. Credential an
 - OS keyring (`ACR_API_TOKEN_KEYRING_SERVICE`): macOS and Linux only (see below).
 - `ACR_API_TOKEN_FILE` and `ACR_API_CA_BUNDLE` (local file reads): macOS and Linux only. These reads use an atomic, symlink- and FIFO-resistant open implementation verified only on macOS and Linux; on every other platform, including Windows, the sidecar fails closed and refuses to load the file rather than falling back to an unverified or less-safe read path. `acr-mcp doctor` and `LoadCredential`/`LoadConfig` report this as a load error, not a silent skip.
 
+**Credential persistence is macOS and Linux only, and `login` refuses before it asks the server for anything.** The preflight is an allowlist of the two platforms that have a credential writer, not a Windows-specific denial: on Windows, a BSD, js/wasm, plan9, solaris, or any other platform, `login` exits with "secure credential persistence is unavailable on this platform" *before* starting a device authorization. The ordering matters -- passing preflight and failing afterwards would leave a one-time credential minted on the server with nothing local to prove it existed.
+
 If you need a persistent, non-environment credential on Windows today, there is no supported option; track platform support before relying on `ACR_API_TOKEN_FILE` there.
 
 ### Environment Variable (ACR_API_TOKEN)
@@ -143,8 +145,10 @@ acr-mcp serve
 
 - macOS: reads via the `security` CLI (`find-generic-password`).
 - Linux: reads via the `secret-tool` CLI (libsecret).
-- A locked, missing, or unreachable keyring backend falls through to the token file after a bounded 2-second lookup; it never blocks startup or fails hard.
+- An **exact entry miss** or an unavailable trusted backend binary falls through to the token file after a bounded 2-second lookup; it never blocks startup.
+- **Every other keyring outcome fails closed.** A locked collection, a permission denial, a timeout, malformed output, an untrusted executable, or an unreadable `ACR_API_TOKEN_KEYRING_DISABLED` value is an error, not a fall-through. A stale token file must never silently stand in for a keyring the sidecar could not read, and `logout` must never delete local material while a location it could not read may still hold a live credential -- it reports "local credential material could not be enumerated safely; nothing was removed" and removes nothing.
 - Linux persistence writes to `secret-tool` only through stdin; the token never appears in command arguments. macOS intentionally has no keyring writer because its `security` write interface would expose the secret in process arguments; persistence falls back to the token file instead.
+- A store that **commits and then fails** (the mutation lands, the collection write-out or reply does not) is ambiguous on disk. `login` receives the candidate service/account back alongside the failure, revokes the issued credential server-side, and purges exactly that entry. If that purge also fails, the exact keyring service and account are reported for operator action.
 
 ### Token File (ACR_API_TOKEN_FILE, macOS/Linux only)
 
@@ -162,9 +166,73 @@ acr-mcp serve
 
 **Permission Requirements:**
 - macOS/Linux: File must have mode `0600` (read/write for owner only). The sidecar checks this at load time (`info.Mode().Perm()&0o077 != 0` is rejected) and refuses to load the token if group or world bits are set.
+- **The parent directory must not grant group or world write access, for removal as well as for writing.** Removal proves the target is an ACR credential and then unlinks it by name; on a shared-writable parent any local user can replace the entry between those two steps, so the unlink would land on whatever they substituted. `logout` refuses to remove under such a parent and reports the path instead of deleting it. Fix the directory (`chmod go-w`) and run `logout` again.
 - Windows and all other platforms: **The token file source is unavailable, full stop.** The sidecar fails closed before it ever inspects permissions and refuses to load any file -- there is no unenforced pass-through. Use `ACR_API_TOKEN`; the OS keyring source is also macOS/Linux only.
 
 If permissions are too loose (macOS/Linux) or the platform doesn't support bounded file loading at all (Windows and others), the sidecar refuses to load the token and exits with an error. It never loads a token file silently or without a permission check.
+
+### Login and Logout
+
+```text
+Usage: acr-mcp login [--refresh] [--no-browser] [--org <org>] [--repo <owner/repo>]
+Usage: acr-mcp logout
+```
+
+`login` runs the device authorization flow, prints the verification address and
+user code, and persists the issued credential through the sources above.
+`login --refresh` rotates the credential already in use and never starts a
+device flow. `logout` revokes remotely and then removes local material.
+
+**The verification address is validated before it is printed.** It is
+server-supplied data that this command renders into your terminal and hands to a
+desktop opener, so it must be `https`, or `http` to a validated loopback address
+for local development, and must carry no userinfo, control characters,
+whitespace, or `fcacr_` bearer text. An address that fails any of these is
+refused without being displayed and without an opener being resolved; the
+refusal deliberately quotes no part of it. Validation is client-side: the hosted
+contract checks `verification_uri` through a helper shared with every other v1
+URI field, and tightening that would change requiredness across the contract.
+
+**`--no-browser` suppresses only the launch.** The address and code are still
+printed and still validated, so a headless host, a remote shell, or an automated
+QA run completes the flow without a desktop opener ever being resolved or
+executed. Without the flag, the launch is attempted and any failure is
+deliberately nonfatal -- an absent or untrusted opener costs only the
+convenience. The launched opener runs in its own process group with an
+allowlisted environment (no `ACR_` variables reach the browser) and is reaped
+under a fixed deadline, so an opener that blocks cannot outlive the login
+session or leave a forked handler behind.
+
+**`logout` revokes every configured credential before it deletes any of them.**
+It enumerates all three sources rather than resolving the single winner by
+precedence: an exported `ACR_API_TOKEN` over a keyring entry over a token file is
+three credentials, and revoking only the winner left the other two live on the
+server while their local copies were deleted. Distinct values are revoked once
+each -- the same credential in several locations is deduplicated -- and removal
+starts only after every revocation has succeeded. Any revocation failure retains
+**all** local material, since a local copy may be the last thing pointing at a
+credential that is still live. An established credential the server answers
+`invalid_token` for is already inactive and does not block cleanup.
+
+**`logout` reports every location it could not clean, and exits nonzero.**
+`ACR_API_TOKEN` cannot be unset in your parent shell from inside the process, so
+an exported credential is always reported as an unremovable location -- but it is
+never an early exit: the keyring entry and token file underneath it are still
+revoked and removed first. Unset the variable in your shell to finish:
+
+```bash
+acr-mcp logout        # revokes everything, clears the keyring entry and token file
+unset ACR_API_TOKEN   # the one location logout cannot reach
+```
+
+Reported locations are exact so they are actionable, but they are built from
+operator-supplied configuration, so each is token-redacted, length-bounded, and
+quoted before printing, and the list itself is capped with the omitted count
+stated rather than silently truncated.
+
+**MCP itself stays local.** `login` and `logout` talk to the hosted API over
+HTTPS; the MCP surface (`serve`) is local STDIO only and exposes no network
+listener, so no credential lifecycle operation is reachable from another host.
 
 ### Token Format
 
