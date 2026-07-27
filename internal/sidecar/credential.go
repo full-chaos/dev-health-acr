@@ -239,7 +239,11 @@ func loadCredentialFile(path string) (CredentialResult, error) {
 // CredentialPersistenceSupported exposes the stable, preflightable platform
 // boundary for login before it asks the server to issue a one-time secret.
 func CredentialPersistenceSupported() error {
-	if runtime.GOOS == "windows" {
+	return credentialPersistenceSupportedFor(runtime.GOOS)
+}
+
+func credentialPersistenceSupportedFor(goos string) error {
+	if goos == "windows" {
 		return ErrCredentialPersistenceUnsupported
 	}
 	return nil

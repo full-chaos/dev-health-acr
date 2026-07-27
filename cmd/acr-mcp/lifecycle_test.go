@@ -179,7 +179,7 @@ func TestLoginFails_when_deviceAuthorizationIsDeniedOrExpired(t *testing.T) {
 	}
 }
 
-func TestLoginRestartsDeviceAuthorizationAtMostOnceForAmbiguousPollFailures(t *testing.T) {
+func TestLoginRestartsDeviceAuthorizationOnlyForInvalidGrants(t *testing.T) {
 	tests := []struct {
 		name         string
 		polls        []string
@@ -189,9 +189,8 @@ func TestLoginRestartsDeviceAuthorizationAtMostOnceForAmbiguousPollFailures(t *t
 	}{
 		{name: "invalid_then_success", polls: []string{"invalid_grant", "success"}, wantCode: 0, wantStored: true},
 		{name: "invalid_then_invalid", polls: []string{"invalid_grant", "invalid_grant"}, wantCode: lifecycleExitFailure, wantTerminal: "device authorization was invalidated twice"},
-		{name: "transport_then_success", polls: []string{"transport", "success"}, wantCode: 0, wantStored: true},
-		{name: "transport_then_transport", polls: []string{"transport", "transport"}, wantCode: lifecycleExitFailure, wantTerminal: "could not reach the server twice"},
-		{name: "mixed_invalid_then_transport", polls: []string{"invalid_grant", "transport"}, wantCode: lifecycleExitFailure, wantTerminal: "could not reach the server twice"},
+		{name: "transport_fails_without_restart", polls: []string{"transport"}, wantCode: lifecycleExitFailure, wantTerminal: "may have been redeemed but its result was lost"},
+		{name: "invalid_then_transport_fails_without_another_restart", polls: []string{"invalid_grant", "transport"}, wantCode: lifecycleExitFailure, wantTerminal: "may have been redeemed but its result was lost"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

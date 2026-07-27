@@ -23,7 +23,6 @@ const (
 	deviceLoginSucceeded deviceLoginAttemptOutcome = iota
 	deviceLoginFailed
 	deviceLoginRestartInvalidGrant
-	deviceLoginRestartTransportUnavailable
 )
 
 var (
@@ -99,7 +98,7 @@ func runDeviceLogin(parsed loginArgs) int {
 			return lifecycleExitFailure
 		}
 		if authorization == maxDeviceAuthorizations {
-			fmt.Fprintln(os.Stderr, deviceLoginExhaustedMessage(outcome))
+			fmt.Fprintln(os.Stderr, deviceLoginExhaustedMessage())
 			return lifecycleExitFailure
 		}
 	}
@@ -109,10 +108,7 @@ func runDeviceLogin(parsed loginArgs) int {
 // deviceLoginExhaustedMessage names the cause that consumed the final
 // authorization so an operator can tell an invalidated grant apart from an
 // unreachable server without the exit code changing.
-func deviceLoginExhaustedMessage(outcome deviceLoginAttemptOutcome) string {
-	if outcome == deviceLoginRestartTransportUnavailable {
-		return "login: device authorization could not reach the server twice; check the connection and start login again"
-	}
+func deviceLoginExhaustedMessage() string {
 	return "login: device authorization was invalidated twice; start login again"
 }
 
@@ -241,17 +237,23 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 			if outcome, terminal := reportGrantInterruption(pollCtx); terminal {
 				return outcome
 			}
-			// The grant is still live, so this was the per-request bound or a
-			// transport-level cancellation. Both are the same class of problem
-			// as an unreachable server and share its one restart.
-			return deviceLoginRestartTransportUnavailable
+			return reportAmbiguousDevicePoll()
 		}
 		if errors.Is(err, sidecar.ErrTransportUnavailable) {
-			return deviceLoginRestartTransportUnavailable
+			return reportAmbiguousDevicePoll()
 		}
 		fmt.Fprintln(os.Stderr, "login: device authorization could not be completed")
 		return deviceLoginFailed
 	}
+}
+
+// reportAmbiguousDevicePoll refuses to restart a device flow after a poll
+// request's result was lost. The server may have committed redemption before
+// the response was interrupted; a new authorization would orphan a live
+// credential that this client can neither persist nor revoke.
+func reportAmbiguousDevicePoll() deviceLoginAttemptOutcome {
+	fmt.Fprintln(os.Stderr, "login: a device authorization may have been redeemed but its result was lost; a credential may exist that this client cannot revoke — revoke it in the dashboard")
+	return deviceLoginFailed
 }
 
 // deviceAuthorizationContext bounds polling by the validated grant lifetime.

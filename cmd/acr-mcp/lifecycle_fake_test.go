@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -158,8 +160,13 @@ func decodeStrictLifecycleFixtureRequest[T lifecycleFixtureRequest](t *testing.T
 		writeLifecycleFixtureRefusal(t, w, http.StatusBadRequest)
 		return false
 	}
-	if decoder.More() {
-		state.recordProblem("request body carried more than one JSON value")
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err != nil {
+			state.recordProblem("request body carried trailing content: %v", err)
+		} else {
+			state.recordProblem("request body carried more than one JSON value")
+		}
 		writeLifecycleFixtureRefusal(t, w, http.StatusBadRequest)
 		return false
 	}

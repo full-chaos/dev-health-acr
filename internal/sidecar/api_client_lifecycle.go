@@ -90,7 +90,7 @@ func (c *LifecycleClient) StartDeviceAuthorization(
 		return contractsv1.DeviceAuthorizationResponse{}, fmt.Errorf("start device authorization: %w", err)
 	}
 	if err := response.Validate(); err != nil {
-		return contractsv1.DeviceAuthorizationResponse{}, fmt.Errorf("validate device authorization response: %w", err)
+		return contractsv1.DeviceAuthorizationResponse{}, fmt.Errorf("%w: device authorization response: %w", ErrInvalidResponse, err)
 	}
 	return response, nil
 }
@@ -107,7 +107,7 @@ func (c *LifecycleClient) PollDeviceToken(ctx context.Context, deviceCode string
 		return contractsv1.DeviceTokenResponse{}, fmt.Errorf("poll device token: %w", err)
 	}
 	if err := response.Validate(); err != nil {
-		return contractsv1.DeviceTokenResponse{}, fmt.Errorf("validate device token response: %w", err)
+		return contractsv1.DeviceTokenResponse{}, fmt.Errorf("%w: device token response: %w", ErrInvalidResponse, err)
 	}
 	if !auth.IsTokenShapeValid(response.AccessToken) {
 		return contractsv1.DeviceTokenResponse{}, ErrCredentialShapeInvalid
@@ -128,7 +128,7 @@ func (c *Client) RotateOwnCredential(ctx context.Context) (contractsv1.Credentia
 		return contractsv1.CredentialRotateResponse{}, fmt.Errorf("rotate current credential: %w", err)
 	}
 	if err := response.Validate(); err != nil {
-		return contractsv1.CredentialRotateResponse{}, fmt.Errorf("validate credential rotation response: %w", err)
+		return contractsv1.CredentialRotateResponse{}, fmt.Errorf("%w: credential rotation response: %w", ErrInvalidResponse, err)
 	}
 	if !auth.IsTokenShapeValid(response.AccessToken) {
 		return contractsv1.CredentialRotateResponse{}, ErrCredentialShapeInvalid
@@ -158,7 +158,7 @@ func (c *Client) revokeOwnCredential(ctx context.Context, receipt *contractsv1.C
 		return contractsv1.CredentialRevokeResponse{}, fmt.Errorf("revoke current credential: %w", err)
 	}
 	if err := response.Validate(); err != nil {
-		return contractsv1.CredentialRevokeResponse{}, fmt.Errorf("validate credential revocation response: %w", err)
+		return contractsv1.CredentialRevokeResponse{}, fmt.Errorf("%w: credential revocation response: %w", ErrInvalidResponse, err)
 	}
 	return response, nil
 }

@@ -20,7 +20,7 @@ import (
 // every token poll open past the client's per-request timeout, so the poll
 // fails with a DeadlineExceeded while the grant itself still has its full
 // validated lifetime left.
-func newSlowPollServer(t *testing.T, delay time.Duration) (*httptest.Server, func() int) {
+func newSlowPollServer(t *testing.T) (*httptest.Server, func() int) {
 	t.Helper()
 	fixture := registerLifecycleFixture(t)
 	var mu sync.Mutex
@@ -54,13 +54,9 @@ func newSlowPollServer(t *testing.T, delay time.Duration) (*httptest.Server, fun
 			if !decodeStrictLifecycleFixtureRequest(t, fixture, w, r, &pollRequest) {
 				return
 			}
-			// Hold past the client's per-request bound, then answer. The
-			// client has already given up; the point is that the failure it
-			// sees is a request timeout, not the grant running out.
-			select {
-			case <-time.After(delay):
-			case <-r.Context().Done():
-			}
+			// Wait for the client to abandon this request. This proves the
+			// per-request bound fired without depending on wall-clock scheduling.
+			<-r.Context().Done()
 			w.WriteHeader(http.StatusBadRequest)
 			writeLifecycleJSON(t, w, contractsv1.OAuthDeviceErrorResponse{SchemaVersion: contractsv1.OAuthDeviceErrorSchema, Error: contractsv1.OAuthDeviceErrorAuthorizationPending})
 		default:
@@ -84,12 +80,9 @@ func newSlowPollServer(t *testing.T, delay time.Duration) (*httptest.Server, fun
 //
 // The grant here is the full validated 600 seconds and never expires; only the
 // client's own one-second request bound does.
-func TestLoginRestartsRatherThanReportingExpiry_whenOnlyThePerRequestTimeoutElapses(t *testing.T) {
+func TestLoginFailsWithoutRestart_whenOnlyThePerRequestTimeoutElapses(t *testing.T) {
 	// Given
-	// Three times the client's one-second request bound: long enough that the
-	// bound is unambiguously what fires, short enough that the fixture is torn
-	// down promptly if a handler outlives the client that gave up on it.
-	server, authorizations := newSlowPollServer(t, 3*time.Second)
+	server, authorizations := newSlowPollServer(t)
 	path := filepath.Join(t.TempDir(), "token")
 	t.Setenv(sidecar.APIURLEnvironment, server.URL)
 	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
@@ -109,11 +102,11 @@ func TestLoginRestartsRatherThanReportingExpiry_whenOnlyThePerRequestTimeoutElap
 	if strings.Contains(stderr, "device authorization expired") {
 		t.Fatalf("login stderr = %q, want a slow request reported as unreachable rather than as a spent grant", stderr)
 	}
-	if !strings.Contains(stderr, "could not reach the server twice") {
-		t.Fatalf("login stderr = %q, want the transport exhaustion message", stderr)
+	if !strings.Contains(stderr, "may have been redeemed but its result was lost") {
+		t.Fatalf("login stderr = %q, want the ambiguous-redemption warning", stderr)
 	}
-	if got := authorizations(); got != maxDeviceAuthorizations {
-		t.Fatalf("device authorizations = %d, want %d: a per-request timeout must spend the shared restart", got, maxDeviceAuthorizations)
+	if got := authorizations(); got != 1 {
+		t.Fatalf("device authorizations = %d, want 1: an ambiguous poll must not restart", got)
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("credential persisted after a failed login: %v", err)
@@ -201,7 +194,7 @@ func TestWaitForDevicePollReportsTheContextStateRatherThanCompleting(t *testing.
 // value, because the error value is exactly what cannot distinguish the two.
 func TestLoginReportsCancellationRatherThanExpiry_whenTheGrantContextIsCancelled(t *testing.T) {
 	// Given
-	server, authorizations := newSlowPollServer(t, 3*time.Second)
+	server, authorizations := newSlowPollServer(t)
 	path := filepath.Join(t.TempDir(), "token")
 	t.Setenv(sidecar.APIURLEnvironment, server.URL)
 	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")

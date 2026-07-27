@@ -222,6 +222,8 @@ func TestDecodeStrictLifecycleFixtureRequestRejectsAMalformedDeviceTokenRequest(
 		{name: "unknown field", method: http.MethodPost, contentType: "application/json", body: `{"schema_version":"device_token_request.v1","grant_type":"urn:ietf:params:oauth:grant-type:device_code","device_code":"` + validDeviceCode + `","unexpected_field":true}`, wantStatus: http.StatusBadRequest},
 		{name: "missing device_code fails Validate", method: http.MethodPost, contentType: "application/json", body: `{"schema_version":"device_token_request.v1","grant_type":"urn:ietf:params:oauth:grant-type:device_code"}`, wantStatus: http.StatusBadRequest},
 		{name: "trailing JSON value", method: http.MethodPost, contentType: "application/json", body: `{"schema_version":"device_token_request.v1","grant_type":"urn:ietf:params:oauth:grant-type:device_code","device_code":"` + validDeviceCode + `"}{}`, wantStatus: http.StatusBadRequest},
+		{name: "trailing object terminator", method: http.MethodPost, contentType: "application/json", body: `{"schema_version":"device_token_request.v1","grant_type":"urn:ietf:params:oauth:grant-type:device_code","device_code":"` + validDeviceCode + `"}}`, wantStatus: http.StatusBadRequest},
+		{name: "trailing array terminator", method: http.MethodPost, contentType: "application/json", body: `{"schema_version":"device_token_request.v1","grant_type":"urn:ietf:params:oauth:grant-type:device_code","device_code":"` + validDeviceCode + `"}]`, wantStatus: http.StatusBadRequest},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
