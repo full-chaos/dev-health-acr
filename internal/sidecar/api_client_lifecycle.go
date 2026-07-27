@@ -221,7 +221,7 @@ func (c *LifecycleClient) callPublic(ctx context.Context, path string, request a
 		return decodeAPIError(httpResponse.StatusCode, httpResponse.Header.Get("X-Request-ID"), httpResponse.Header.Get("Retry-After"), data)
 	}
 	if err := decodeExact(data, response); err != nil {
-		return fmt.Errorf("decode hosted API response: %w", err)
+		return fmt.Errorf("%w: decode hosted API response: %w", ErrInvalidResponse, err)
 	}
 	if err := requiredFieldsPresent(data, response); err != nil {
 		return fmt.Errorf("%w: %s", ErrInvalidResponse, err)
