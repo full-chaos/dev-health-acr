@@ -835,12 +835,18 @@ func TestLoginStopsWithoutRestarting_whenTheAuthorizationLifetimeExpires(t *test
 	t.Setenv(sidecar.TokenEnvironment, "")
 	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
 	t.Setenv(sidecar.TokenFileEnvironment, path)
-	originalWait := lifecycleWait
-	lifecycleWait = func(context.Context, time.Duration) error { return context.DeadlineExceeded }
-	t.Cleanup(func() { lifecycleWait = originalWait })
-	originalBrowserOpen := lifecycleBrowserOpen
-	lifecycleBrowserOpen = func(string) error { return nil }
-	t.Cleanup(func() { lifecycleBrowserOpen = originalBrowserOpen })
+	// The grant context is made to expire for real, and the real
+	// waitForDevicePoll runs against it. Faking the expiry by returning a
+	// DeadlineExceeded from the wait seam tested nothing: that is exactly the
+	// error value that cannot distinguish a spent grant from a slow request, so
+	// the assertion below passed whichever of the two the code concluded.
+	originalGrant := lifecycleGrantContext
+	lifecycleGrantContext = func(ctx context.Context, _ int) (context.Context, context.CancelFunc) {
+		grantCtx, cancel := context.WithCancel(ctx)
+		deadlineCtx, deadlineCancel := context.WithTimeout(grantCtx, time.Millisecond)
+		return deadlineCtx, func() { deadlineCancel(); cancel() }
+	}
+	t.Cleanup(func() { lifecycleGrantContext = originalGrant })
 
 	// When
 	code, stderr := captureStderr(t, func() int { return runCLI([]string{"login"}) })

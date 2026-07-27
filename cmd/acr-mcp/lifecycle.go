@@ -31,6 +31,13 @@ var (
 	lifecycleWait        = waitForDevicePoll
 	lifecyclePersist     = sidecar.PersistCredential
 	lifecycleReplace     = sidecar.ReplaceCredential
+	// lifecycleGrantContext is a seam only because a validated device
+	// authorization always carries a 600-second lifetime -- the contract pins
+	// the value -- so no fixture can produce a grant that expires inside a
+	// test. Faking the expiry by returning a DeadlineExceeded from the wait
+	// seam instead tested nothing: it is precisely the error value that cannot
+	// distinguish a spent grant from a slow request.
+	lifecycleGrantContext = deviceAuthorizationContext
 )
 
 func runLoginCommand(args []string) int {
@@ -148,16 +155,18 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 	// requests against a code the server has already expired, and an
 	// unresponsive server previously kept the loop running indefinitely
 	// because nothing but the operator bounded it.
-	pollCtx, cancelPoll := deviceAuthorizationContext(ctx, authorization.ExpiresIn)
+	pollCtx, cancelPoll := lifecycleGrantContext(ctx, authorization.ExpiresIn)
 	defer cancelPoll()
 	interval := time.Duration(authorization.Interval) * time.Second
 	for {
 		if err := lifecycleWait(pollCtx, interval); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				fmt.Fprintln(os.Stderr, "login: device authorization expired")
-			} else {
-				fmt.Fprintln(os.Stderr, "login: device authorization was cancelled")
+			if outcome, terminal := reportGrantInterruption(pollCtx); terminal {
+				return outcome
 			}
+			// The grant is still live, so nothing about its lifetime explains
+			// this. There is no request to retry either -- the wait is local --
+			// so this is terminal rather than a restart.
+			fmt.Fprintln(os.Stderr, "login: device authorization was cancelled")
 			return deviceLoginFailed
 		}
 		response, err := client.PollDeviceToken(pollCtx, authorization.DeviceCode)
@@ -208,11 +217,22 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 			}
 		}
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			// The grant's own lifetime ran out mid-poll. Restarting here would
-			// spend the restart budget on an authorization the server already
-			// expired, so this is terminal like any other expiry.
-			fmt.Fprintln(os.Stderr, "login: device authorization expired")
-			return deviceLoginFailed
+			// Provenance comes from the context's actual state, not from the
+			// error class. Both the grant context built above and the
+			// per-request timeout the client applies to every call
+			// (Config.Timeout, api_client_lifecycle.go's callPublic) produce a
+			// DeadlineExceeded, and this branch treated either as the grant
+			// having expired: a single slow response ended login as "device
+			// authorization expired" against a grant with minutes of life left,
+			// and spent none of the restart budget that exists for exactly that
+			// case.
+			if outcome, terminal := reportGrantInterruption(pollCtx); terminal {
+				return outcome
+			}
+			// The grant is still live, so this was the per-request bound or a
+			// transport-level cancellation. Both are the same class of problem
+			// as an unreachable server and share its one restart.
+			return deviceLoginRestartTransportUnavailable
 		}
 		if errors.Is(err, sidecar.ErrTransportUnavailable) {
 			return deviceLoginRestartTransportUnavailable
@@ -232,6 +252,27 @@ func deviceAuthorizationContext(ctx context.Context, expiresIn int) (context.Con
 		return context.WithCancel(ctx)
 	}
 	return context.WithTimeout(ctx, time.Duration(expiresIn)*time.Second)
+}
+
+// reportGrantInterruption reports whether the grant context itself is finished
+// and, if so, names why on stderr.
+//
+// The grant context is the only thing whose state proves the authorization is
+// over. An error value cannot: the client applies its own per-request timeout
+// to every call, so a DeadlineExceeded reaching the poll loop is as likely to
+// mean "this one request was slow" as "the grant ran out", and the two have
+// opposite consequences -- terminal versus one shared restart.
+func reportGrantInterruption(pollCtx context.Context) (deviceLoginAttemptOutcome, bool) {
+	switch {
+	case errors.Is(pollCtx.Err(), context.DeadlineExceeded):
+		fmt.Fprintln(os.Stderr, "login: device authorization expired")
+		return deviceLoginFailed, true
+	case pollCtx.Err() != nil:
+		fmt.Fprintln(os.Stderr, "login: device authorization was cancelled")
+		return deviceLoginFailed, true
+	default:
+		return deviceLoginFailed, false
+	}
 }
 
 // revokeIssuedCredential ends a credential this login just minted. Every
