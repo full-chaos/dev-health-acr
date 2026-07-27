@@ -48,7 +48,7 @@ func TestPurgeCredentialMaterialRefusesToRemoveUnderASharedWritableParent(t *tes
 			if purgeErr == nil {
 				t.Fatal("a refused removal must surface as an error, not as a silent success")
 			}
-	locations := credentialCleanupLocations(purgeErr)
+			locations := credentialCleanupLocations(purgeErr)
 			if len(locations) != 1 || locations[0] != path {
 				t.Fatalf("failed locations = %v, want exactly the refused credential path %q", locations, path)
 			}
