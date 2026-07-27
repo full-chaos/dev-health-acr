@@ -30,12 +30,30 @@ func newSlowPollServer(t *testing.T, delay time.Duration) (*httptest.Server, fun
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/oauth/device_authorization":
+			if r.Header.Get("Authorization") != "" {
+				fixture.recordProblem("device authorization request unexpectedly had bearer authorization")
+				writeLifecycleFixtureRefusal(t, w, http.StatusUnauthorized)
+				return
+			}
+			var request contractsv1.DeviceAuthorizationRequest
+			if !decodeStrictLifecycleFixtureRequest(t, fixture, w, r, &request) {
+				return
+			}
 			mu.Lock()
 			authorizations++
 			code := strings.Repeat(string(rune('a'+authorizations-1)), 32)
 			mu.Unlock()
 			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: code, UserCode: "ABCDEFGH", VerificationURI: deviceVerificationURI, ExpiresIn: 600, Interval: 5})
 		case "/api/v1/oauth/token":
+			if r.Header.Get("Authorization") != "" {
+				fixture.recordProblem("device token request unexpectedly had bearer authorization")
+				writeLifecycleFixtureRefusal(t, w, http.StatusUnauthorized)
+				return
+			}
+			var pollRequest contractsv1.DeviceTokenRequest
+			if !decodeStrictLifecycleFixtureRequest(t, fixture, w, r, &pollRequest) {
+				return
+			}
 			// Hold past the client's per-request bound, then answer. The
 			// client has already given up; the point is that the failure it
 			// sees is a request timeout, not the grant running out.

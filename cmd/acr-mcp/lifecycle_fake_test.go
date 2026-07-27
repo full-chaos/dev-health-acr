@@ -117,6 +117,60 @@ func writeLifecycleFixtureRefusal(t *testing.T, w http.ResponseWriter, status in
 	writeLifecycleError(t, w, status)
 }
 
+// lifecycleFixtureRequest is what decodeStrictLifecycleFixtureRequest requires
+// of every lifecycle request DTO: the same Validate contract production's own
+// api_client_lifecycle.go response handling already trusts.
+type lifecycleFixtureRequest interface {
+	Validate() error
+}
+
+// decodeStrictLifecycleFixtureRequest enforces, on the request a fixture
+// handler actually received, the same wire discipline every endpoint here
+// claims to require: POST, application/json, exactly one JSON value with no
+// field the DTO does not itself declare, and every value-level bound the
+// production DTO enforces via its own Validate.
+//
+// Before this, most handlers below either skipped decoding the body
+// entirely (the retry-server rotate case) or decoded without ever calling
+// Validate (the ordinary revoke case) -- both leave a fixture unable to tell
+// a client that got the wire contract wrong (wrong method, an extra field, a
+// missing schema_version, a second concatenated JSON value) apart from one
+// that got it right; a production regression in request construction would
+// pass every test that exercises this endpoint. On failure this writes a
+// refusal and records the specific reason so the failure names itself rather
+// than surfacing as a decode error deep inside the client.
+func decodeStrictLifecycleFixtureRequest[T lifecycleFixtureRequest](t *testing.T, state *lifecycleFixtureState, w http.ResponseWriter, r *http.Request, into T) bool {
+	t.Helper()
+	if r.Method != http.MethodPost {
+		state.recordProblem("request used method %s, want POST", r.Method)
+		writeLifecycleFixtureRefusal(t, w, http.StatusMethodNotAllowed)
+		return false
+	}
+	if contentType := r.Header.Get("Content-Type"); contentType != "application/json" {
+		state.recordProblem("request Content-Type = %q, want application/json", contentType)
+		writeLifecycleFixtureRefusal(t, w, http.StatusUnsupportedMediaType)
+		return false
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(into); err != nil {
+		state.recordProblem("decode request: %v", err)
+		writeLifecycleFixtureRefusal(t, w, http.StatusBadRequest)
+		return false
+	}
+	if decoder.More() {
+		state.recordProblem("request body carried more than one JSON value")
+		writeLifecycleFixtureRefusal(t, w, http.StatusBadRequest)
+		return false
+	}
+	if err := into.Validate(); err != nil {
+		state.recordProblem("validate request: %v", err)
+		writeLifecycleFixtureRefusal(t, w, http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
 // writeLifecycleUnavailable is the fixture's scripted operational failure. It
 // is deliberately not invalid_token: an established credential the server
 // answers invalid_token for is already inactive, which logout treats as the
@@ -174,18 +228,11 @@ func newLifecycleServerWithState(t *testing.T, token string, polls []string, wan
 				writeLifecycleFixtureRefusal(t, w, http.StatusUnauthorized)
 				return
 			}
+			var request contractsv1.DeviceAuthorizationRequest
+			if !decodeStrictLifecycleFixtureRequest(t, state, w, r, &request) {
+				return
+			}
 			if want != nil {
-				var request contractsv1.DeviceAuthorizationRequest
-				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-					state.recordProblem("decode device authorization request: %v", err)
-					writeLifecycleFixtureRefusal(t, w, http.StatusBadRequest)
-					return
-				}
-				if err := request.Validate(); err != nil {
-					state.recordProblem("validate device authorization request: %v", err)
-					writeLifecycleFixtureRefusal(t, w, http.StatusBadRequest)
-					return
-				}
 				if !reflect.DeepEqual(request.OrganizationIDHint, want.organizationIDHint) || !reflect.DeepEqual(request.RepositoryHints, want.repositoryHints) {
 					state.recordProblem("device authorization hints = org=%#v repos=%#v, want org=%#v repos=%#v", request.OrganizationIDHint, request.RepositoryHints, want.organizationIDHint, want.repositoryHints)
 					writeLifecycleFixtureRefusal(t, w, http.StatusBadRequest)
@@ -197,6 +244,10 @@ func newLifecycleServerWithState(t *testing.T, token string, polls []string, wan
 			if r.Header.Get("Authorization") != "" {
 				state.recordProblem("device token request unexpectedly had bearer authorization")
 				writeLifecycleFixtureRefusal(t, w, http.StatusUnauthorized)
+				return
+			}
+			var pollRequest contractsv1.DeviceTokenRequest
+			if !decodeStrictLifecycleFixtureRequest(t, state, w, r, &pollRequest) {
 				return
 			}
 			index, scripted := state.nextPoll(len(polls))
@@ -298,9 +349,7 @@ func newLifecycleRetryServerWithState(t *testing.T, token string, polls []string
 				return
 			}
 			var request contractsv1.DeviceTokenRequest
-			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-				state.recordProblem("decode device token request: %v", err)
-				w.WriteHeader(http.StatusBadRequest)
+			if !decodeStrictLifecycleFixtureRequest(t, state, w, r, &request) {
 				return
 			}
 			trace.redeem(request.DeviceCode)
@@ -373,15 +422,17 @@ func newCredentialLifecycleServerWithState(t *testing.T, original, successor str
 				writeLifecycleFixtureRefusal(t, w, http.StatusUnauthorized)
 				return
 			}
+			var rotateRequest contractsv1.CredentialRotateRequest
+			if !decodeStrictLifecycleFixtureRequest(t, fixture, w, r, &rotateRequest) {
+				return
+			}
 			state.replacementIssued = true
 			writeLifecycleJSON(t, w, contractsv1.CredentialRotateResponse{SchemaVersion: contractsv1.CredentialRotateResponseSchema, AccessToken: state.replacementToken, Credential: lifecycleCredential(createdAt, state.replacementID, nil), Receipt: contractsv1.CredentialRotationReceipt{SourceCredentialID: state.originalID, ReplacementCredentialID: state.replacementID, RollbackUntil: state.rotationReceiptTTL}})
 		case "/api/v1/auth/credentials/self/revoke":
 			fixture.countRevocation()
 			(*revocations)++
 			var request contractsv1.CredentialRevokeRequest
-			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-				fixture.recordProblem("decode credential revoke request: %v", err)
-				writeLifecycleFixtureRefusal(t, w, http.StatusBadRequest)
+			if !decodeStrictLifecycleFixtureRequest(t, fixture, w, r, &request) {
 				return
 			}
 			// The scripted failure is applied only after the request has been

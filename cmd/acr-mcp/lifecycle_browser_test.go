@@ -33,11 +33,19 @@ func newVerificationAddressServer(t *testing.T, uri string) *httptest.Server {
 				writeLifecycleFixtureRefusal(t, w, http.StatusUnauthorized)
 				return
 			}
+			var request contractsv1.DeviceAuthorizationRequest
+			if !decodeStrictLifecycleFixtureRequest(t, state, w, r, &request) {
+				return
+			}
 			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: uri, ExpiresIn: 600, Interval: 5})
 		case "/api/v1/oauth/token":
 			if r.Header.Get("Authorization") != "" {
 				state.recordProblem("device token request unexpectedly had bearer authorization")
 				writeLifecycleFixtureRefusal(t, w, http.StatusUnauthorized)
+				return
+			}
+			var pollRequest contractsv1.DeviceTokenRequest
+			if !decodeStrictLifecycleFixtureRequest(t, state, w, r, &pollRequest) {
 				return
 			}
 			// Every poll is answered with a denial, so the flow ends on the first
