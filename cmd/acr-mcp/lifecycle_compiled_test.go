@@ -158,8 +158,8 @@ func compiledBrowserFixture(t *testing.T) (string, string) {
 	return browserBin, browserLog
 }
 
-// assertNoBrowserLaunch proves the tripwire never ran: neither through a
-// PATH substitution, nor as a real desktop opener on the host.
+// assertNoBrowserLaunch proves production did not consult PATH. The
+// --no-browser guarantee is exercised in-process by lifecycle_browser_test.go.
 func assertNoBrowserLaunch(t *testing.T, logPath string) {
 	t.Helper()
 	contents, err := os.ReadFile(logPath)
