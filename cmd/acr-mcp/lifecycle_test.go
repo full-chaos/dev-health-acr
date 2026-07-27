@@ -295,6 +295,7 @@ func TestLoginRevokesIssuedCredential_whenPersistenceFails(t *testing.T) {
 	token := validDoctorToken(96)
 	createdAt := time.Now().UTC().Truncate(time.Second)
 	revocations := 0
+	fixture := registerLifecycleFixture(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -307,17 +308,22 @@ func TestLoginRevokesIssuedCredential_whenPersistenceFails(t *testing.T) {
 			writeLifecycleJSON(t, w, contractsv1.DeviceTokenResponse{SchemaVersion: contractsv1.DeviceTokenResponseSchema, AccessToken: token, TokenType: "Bearer", ExpiresIn: 30 * 24 * 60 * 60, Credential: credential})
 		case "/api/v1/auth/credentials/self/revoke":
 			if r.Header.Get("Authorization") != "Bearer "+token {
-				t.Fatal("issued credential was not used for self-revocation")
+				fixture.recordProblem("issued credential was not used for self-revocation")
+				writeLifecycleFixtureRefusal(t, w, http.StatusUnauthorized)
+				return
 			}
 			var request contractsv1.CredentialRevokeRequest
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-				t.Fatal(err)
+				fixture.recordProblem("decode credential revoke request: %v", err)
+				writeLifecycleFixtureRefusal(t, w, http.StatusBadRequest)
+				return
 			}
 			revocations++
 			revokedAt := createdAt.Add(time.Minute)
 			writeLifecycleJSON(t, w, contractsv1.CredentialRevokeResponse{SchemaVersion: contractsv1.CredentialRevokeResponseSchema, Credential: lifecycleCredential(createdAt, "credential-issued", &revokedAt)})
 		default:
-			t.Fatalf("unexpected request path %q", r.URL.Path)
+			fixture.recordProblem("unexpected request path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	defer server.Close()
