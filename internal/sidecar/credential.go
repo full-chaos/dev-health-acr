@@ -88,7 +88,16 @@ func (e *CredentialCleanupError) Unwrap() error { return e.cause }
 // explicit or default permission-restricted token file. There is intentionally
 // no CLI-argument or plaintext-config-file source: both would make secrets
 // visible in shell history, process listings, or unencrypted files by default.
+//
+// Precedence is evaluated in that order, which means the environment is
+// resolved before ACR_API_TOKEN_KEYRING_DISABLED is even read. Reading the
+// keyring flag first inverted the precedence for its own failure mode: a
+// malformed disable flag rejected a perfectly valid ACR_API_TOKEN, taking
+// down a source the flag does not govern.
 func LoadCredential() (CredentialResult, error) {
+	if result, configured, err := loadFromEnvironment(); configured {
+		return result, err
+	}
 	keyringAllowed, err := keyringEnabled()
 	if err != nil {
 		return CredentialResult{}, err
@@ -96,12 +105,23 @@ func LoadCredential() (CredentialResult, error) {
 	return loadCredential(keyringAllowed)
 }
 
+// loadFromEnvironment reports whether ACR_API_TOKEN is set at all as its
+// second result, so a configured-but-malformed environment credential stays
+// an error instead of silently falling through to a lower-precedence source.
+func loadFromEnvironment() (CredentialResult, bool, error) {
+	token := strings.TrimSpace(os.Getenv(TokenEnvironment))
+	if token == "" {
+		return CredentialResult{}, false, nil
+	}
+	if !auth.IsTokenShapeValid(token) {
+		return CredentialResult{}, true, fmt.Errorf("%s: %w", TokenEnvironment, ErrCredentialShapeInvalid)
+	}
+	return CredentialResult{Token: token, Source: "environment"}, true, nil
+}
+
 func loadCredential(keyringAllowed bool) (CredentialResult, error) {
-	if token := strings.TrimSpace(os.Getenv(TokenEnvironment)); token != "" {
-		if !auth.IsTokenShapeValid(token) {
-			return CredentialResult{}, fmt.Errorf("%s: %w", TokenEnvironment, ErrCredentialShapeInvalid)
-		}
-		return CredentialResult{Token: token, Source: "environment"}, nil
+	if result, configured, err := loadFromEnvironment(); configured {
+		return result, err
 	}
 	if keyringAllowed {
 		result, ok, err := loadFromKeyring()

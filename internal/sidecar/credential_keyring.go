@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -176,7 +177,7 @@ func runKeyringCommand(ctx context.Context, name string, args ...string) (string
 			return "", false, ctx.Err()
 		}
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && keyringExitMeansEntryMissing(name, exitErr.ExitCode()) {
+		if errors.As(err, &exitErr) && keyringExitMeansEntryMissing(name, exitErr.ExitCode(), stderr.String()) {
 			return "", false, nil
 		}
 		// err here (a process-management failure such as a wait error
@@ -190,12 +191,22 @@ func runKeyringCommand(ctx context.Context, name string, args ...string) (string
 	return string(output), true, nil
 }
 
-func keyringExitMeansEntryMissing(name string, exitCode int) bool {
+// keyringExitMeansEntryMissing reports whether a backend's nonzero exit means
+// "no such entry" rather than "the lookup could not be performed". Only the
+// former may fall through to the token file; everything else must fail closed
+// so a stale fallback cannot mask a locked or broken secret store.
+//
+// macOS `security` has a dedicated exit code for a missing item. `secret-tool`
+// does not: it exits 1 both for a genuine miss and for operational failures
+// such as an unreachable D-Bus session, and the two are only distinguishable
+// by whether it printed a diagnostic. Treating every exit 1 as absence made an
+// unusable keyring look like an empty one.
+func keyringExitMeansEntryMissing(name string, exitCode int, stderr string) bool {
 	switch name {
 	case "security":
 		return exitCode == 44
 	case "secret-tool":
-		return exitCode == 1
+		return exitCode == 1 && strings.TrimSpace(stderr) == ""
 	default:
 		return false
 	}
