@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -77,18 +78,60 @@ func newLifecycleServerWithAuthorizationExpectation(t *testing.T, token string, 
 	}))
 }
 
-func newLifecycleRetryServer(t *testing.T, token string, polls []string, authorizations *int) *httptest.Server {
+// deviceAuthorizationTrace records what the device fixture actually issued and
+// what the client actually redeemed. Counting authorizations is what bounds the
+// restart budget; recording a distinct device code per authorization is what
+// proves a restarted flow burned the previous code instead of replaying it.
+type deviceAuthorizationTrace struct {
+	mu             sync.Mutex
+	authorizations int
+	issuedCodes    []string
+	polledCodes    []string
+}
+
+func (trace *deviceAuthorizationTrace) issue() string {
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+	trace.authorizations++
+	code := strings.Repeat(string(rune('a'+trace.authorizations-1)), 32)
+	trace.issuedCodes = append(trace.issuedCodes, code)
+	return code
+}
+
+func (trace *deviceAuthorizationTrace) redeem(code string) {
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+	trace.polledCodes = append(trace.polledCodes, code)
+}
+
+func (trace *deviceAuthorizationTrace) snapshot() (int, []string, []string) {
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+	return trace.authorizations, append([]string(nil), trace.issuedCodes...), append([]string(nil), trace.polledCodes...)
+}
+
+func newLifecycleRetryServer(t *testing.T, token string, polls []string, trace *deviceAuthorizationTrace) *httptest.Server {
 	t.Helper()
 	createdAt := time.Now().UTC().Truncate(time.Second)
 	poll := 0
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/oauth/device_authorization":
-			(*authorizations)++
-			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: "http://" + r.Host + "/acr/device", ExpiresIn: 600, Interval: 5})
+			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: trace.issue(), UserCode: "ABCDEFGH", VerificationURI: "http://" + r.Host + "/acr/device", ExpiresIn: 600, Interval: 5})
 		case "/api/v1/oauth/token":
+			var request contractsv1.DeviceTokenRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Errorf("decode device token request: %v", err)
+				return
+			}
+			trace.redeem(request.DeviceCode)
 			if poll >= len(polls) {
-				t.Fatalf("unexpected poll %d", poll+1)
+				// A budget regression must surface as a named assertion failure,
+				// never as an index panic or a hang that reads like a timeout.
+				t.Errorf("device token polled %d times, want at most %d", poll+1, len(polls))
+				w.WriteHeader(http.StatusBadRequest)
+				writeLifecycleJSON(t, w, contractsv1.OAuthDeviceErrorResponse{SchemaVersion: contractsv1.OAuthDeviceErrorSchema, Error: contractsv1.OAuthDeviceErrorCode("access_denied")})
+				return
 			}
 			result := polls[poll]
 			poll++

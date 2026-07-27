@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -195,8 +196,8 @@ func TestLoginRestartsDeviceAuthorizationAtMostOnceForAmbiguousPollFailures(t *t
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			token := validDoctorToken(71)
-			authorizations := 0
-			server := newLifecycleRetryServer(t, token, tc.polls, &authorizations)
+			var trace deviceAuthorizationTrace
+			server := newLifecycleRetryServer(t, token, tc.polls, &trace)
 			defer server.Close()
 			path := filepath.Join(t.TempDir(), "token")
 			t.Setenv(sidecar.APIURLEnvironment, server.URL)
@@ -226,8 +227,29 @@ func TestLoginRestartsDeviceAuthorizationAtMostOnceForAmbiguousPollFailures(t *t
 			if tc.wantTerminal != "" && !strings.Contains(stderr, tc.wantTerminal) {
 				t.Fatalf("terminal stderr = %q, want %q", stderr, tc.wantTerminal)
 			}
+			authorizations, issued, polled := trace.snapshot()
 			if authorizations > 2 || opens > 2 || authorizations != opens {
 				t.Fatalf("authorizations=%d opener calls=%d, want matching counts no greater than 2", authorizations, opens)
+			}
+			// A restart must burn the previous device code: every authorization
+			// issues a distinct code, and every poll redeems the newest one.
+			if len(issued) != authorizations {
+				t.Fatalf("issued device codes = %v, want one per authorization (%d)", issued, authorizations)
+			}
+			distinct := map[string]bool{}
+			for _, code := range issued {
+				if distinct[code] {
+					t.Fatalf("authorization reused device code %q", code)
+				}
+				distinct[code] = true
+			}
+			if len(polled) != len(tc.polls) {
+				t.Fatalf("redeemed device codes = %v, want one per scripted poll (%d)", polled, len(tc.polls))
+			}
+			for index, code := range polled {
+				if code != issued[index] {
+					t.Fatalf("poll %d redeemed %q, want the code issued by authorization %d (%q)", index+1, code, index+1, issued[index])
+				}
 			}
 			_, statErr := os.Stat(path)
 			if tc.wantStored && statErr != nil {
@@ -517,25 +539,57 @@ func TestLogoutRetainsCredential_when_remoteRevocationFails(t *testing.T) {
 	}
 }
 
-func TestLogoutReportsFailure_when_localCleanupFailsAfterRemoteRevocation(t *testing.T) {
+// The previous version of this test pointed ACR_API_TOKEN at the credential,
+// so LoadCredential resolved source "environment" and PurgeCredentialMaterial
+// short-circuited before reaching any cleanup path: it passed even with the
+// purge targets deleted outright. This drives a real removable file credential
+// whose parent directory denies the unlink instead.
+func TestLogoutNamesCleanupLocation_whenFileRemovalFailsAfterRemoteRevocation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("credential file permission fixture is POSIX-only")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory write permissions")
+	}
+
 	// Given
 	token := validDoctorToken(88)
 	revocations := 0
 	server := newCredentialLifecycleServer(t, token, validDoctorToken(89), &revocations, false)
+	defer server.Close()
+	directory := t.TempDir()
+	path := filepath.Join(directory, "token")
 	t.Setenv(sidecar.APIURLEnvironment, server.URL)
 	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
-	t.Setenv(sidecar.TokenEnvironment, token)
-	t.Setenv(sidecar.TokenFileEnvironment, t.TempDir())
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(directory, 0o700) })
 
 	// When
-	code := runCLI([]string{"logout"})
+	code, stderr := captureStderr(t, func() int { return runCLI([]string{"logout"}) })
 
 	// Then
 	if code != lifecycleExitFailure {
-		t.Fatalf("logout exit code = %d, want %d", code, lifecycleExitFailure)
+		t.Fatalf("logout exit code = %d, want %d; stderr=%s", code, lifecycleExitFailure, stderr)
 	}
 	if revocations != 1 {
 		t.Fatalf("remote revocations = %d, want 1", revocations)
+	}
+	if !strings.Contains(stderr, path) {
+		t.Fatalf("logout stderr = %q, want the exact cleanup location %q", stderr, path)
+	}
+	if strings.Contains(stderr, token) || strings.Contains(stderr, "fcacr_") {
+		t.Fatal("logout stderr leaked credential material")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("credential must be retained when local cleanup fails: %v", err)
 	}
 }
 

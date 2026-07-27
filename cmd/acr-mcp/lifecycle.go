@@ -14,6 +14,10 @@ import (
 
 const lifecycleExitFailure = 1
 
+// maxDeviceAuthorizations bounds how many device authorizations a single
+// login may start. Todo-5 permits exactly one restart after a burned grant.
+const maxDeviceAuthorizations = 2
+
 type deviceLoginAttemptOutcome uint8
 
 const (
@@ -75,26 +79,34 @@ func runDeviceLogin(parsed loginArgs) int {
 		fmt.Fprintln(os.Stderr, "login: could not initialize secure API transport")
 		return lifecycleExitFailure
 	}
-	for attempt := range 2 {
+	// Todo-5 requires a lost or invalidated device grant to burn its code and
+	// restart the whole flow. maxDeviceAuthorizations is the single place that
+	// bounds it, and the budget is shared across every restart cause so that
+	// alternating causes cannot buy additional authorizations.
+	for authorization := 1; authorization <= maxDeviceAuthorizations; authorization++ {
 		outcome := runDeviceLoginAttempt(context.Background(), client, cfg, parsed)
-		switch outcome {
-		case deviceLoginSucceeded:
+		if outcome == deviceLoginSucceeded {
 			return 0
-		case deviceLoginFailed:
+		}
+		if outcome == deviceLoginFailed {
 			return lifecycleExitFailure
-		case deviceLoginRestartInvalidGrant:
-			if attempt == 1 {
-				fmt.Fprintln(os.Stderr, "login: device authorization was invalidated twice; start login again")
-				return lifecycleExitFailure
-			}
-		case deviceLoginRestartTransportUnavailable:
-			if attempt == 1 {
-				fmt.Fprintln(os.Stderr, "login: device authorization could not reach the server twice; check the connection and start login again")
-				return lifecycleExitFailure
-			}
+		}
+		if authorization == maxDeviceAuthorizations {
+			fmt.Fprintln(os.Stderr, deviceLoginExhaustedMessage(outcome))
+			return lifecycleExitFailure
 		}
 	}
 	return lifecycleExitFailure
+}
+
+// deviceLoginExhaustedMessage names the cause that consumed the final
+// authorization so an operator can tell an invalidated grant apart from an
+// unreachable server without the exit code changing.
+func deviceLoginExhaustedMessage(outcome deviceLoginAttemptOutcome) string {
+	if outcome == deviceLoginRestartTransportUnavailable {
+		return "login: device authorization could not reach the server twice; check the connection and start login again"
+	}
+	return "login: device authorization was invalidated twice; start login again"
 }
 
 func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient, cfg sidecar.Config, parsed loginArgs) deviceLoginAttemptOutcome {
@@ -240,7 +252,7 @@ func runLogoutCommand(args []string) int {
 		return lifecycleExitFailure
 	}
 	if err := sidecar.PurgeCredentialMaterial(credential); err != nil {
-		fmt.Fprintln(os.Stderr, "logout: remote credential was revoked, but local cleanup requires operator action")
+		fmt.Fprintln(os.Stderr, "logout: remote credential was revoked, but local cleanup requires operator action at "+sidecar.CredentialCleanupLocation(credential))
 		return lifecycleExitFailure
 	}
 	fmt.Fprintln(os.Stdout, "logout successful")

@@ -99,8 +99,8 @@ func TestCompiledLoginBoundsInvalidGrantAuthorizationRestarts(t *testing.T) {
 		t.Skip("browser opener tripwire is a POSIX executable fixture")
 	}
 	token := validDoctorToken(75)
-	authorizations := 0
-	server := newLifecycleRetryServer(t, token, []string{"invalid_grant", "invalid_grant"}, &authorizations)
+	var trace deviceAuthorizationTrace
+	server := newLifecycleRetryServer(t, token, []string{"invalid_grant", "invalid_grant"}, &trace)
 	defer server.Close()
 	binPath := compileLifecycleBinary(t)
 	home := t.TempDir()
@@ -117,8 +117,12 @@ func TestCompiledLoginBoundsInvalidGrantAuthorizationRestarts(t *testing.T) {
 		t.Fatalf("compiled invalid-grant exit = %v, want %d", err, lifecycleExitFailure)
 	}
 	calls := compiledBrowserCalls(t, browserLog)
+	authorizations, issued, _ := trace.snapshot()
 	if authorizations != 2 || len(calls) != 2 {
 		t.Fatalf("authorizations=%d browser calls=%v, want exactly two", authorizations, calls)
+	}
+	if len(issued) != 2 || issued[0] == issued[1] {
+		t.Fatalf("issued device codes = %v, want two distinct codes", issued)
 	}
 	for _, call := range calls {
 		fields := strings.Fields(call)
