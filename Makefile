@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test hosted-integration clients-real vet contract-write contract-test codegraph-contract canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
+.PHONY: fmt fmt-check test test-race hosted-integration clients-real vet contract-write contract-test codegraph-contract canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -24,7 +24,19 @@ fmt-check:
 	if [ -n "$$files" ]; then echo "Go files need formatting:"; echo "$$files"; exit 1; fi
 
 test:
-	go test ./...
+	go test -count=1 ./...
+
+# test-race runs the same suite with the race detector and randomized test
+# order. -count=1 defeats the build cache so a warm-cache result cannot stand
+# in for a fresh run, and -shuffle=on catches order-coupled state (a test
+# that only passes because an earlier test happened to leave a seam in the
+# right position) that a fixed run order can hide indefinitely. This is
+# intentionally separate from `test` rather than folded into it: the race
+# detector and shuffled order both add real wall-clock time, and the two
+# variants catch different classes of defect -- a cold non-race run still
+# matters on its own for the timing-sensitive opener/reap tests.
+test-race:
+	go test -count=1 -race -shuffle=on ./...
 
 hosted-integration:
 	ACR_HOSTED_INTEGRATION=1 go test ./cmd/acr-api -run '^TestHostedRuntime_real_binary_serves_and_fails_readiness_safely$$' -count=1 -v
@@ -70,7 +82,7 @@ build:
 	go build -o .tmp/contractcheck ./cmd/contractcheck
 	go build -o .tmp/acr-migrate ./cmd/acr-migrate
 
-verify: fmt-check vet test contract-test codegraph-contract canonical-receipts fullstack-contract build
+verify: fmt-check vet test test-race contract-test codegraph-contract canonical-receipts fullstack-contract build
 
 container-contract:
 	bash scripts/container/test-contract.sh
