@@ -27,10 +27,11 @@ const (
 )
 
 var (
-	lifecycleBrowserOpen = sidecar.OpenVerificationURI
-	lifecycleWait        = waitForDevicePoll
-	lifecyclePersist     = sidecar.PersistCredential
-	lifecycleReplace     = sidecar.ReplaceCredential
+	lifecycleBrowserOpen  = sidecar.OpenVerificationURI
+	lifecycleBrowserClose = sidecar.CloseVerificationBrowserOpener
+	lifecycleWait         = waitForDevicePoll
+	lifecyclePersist      = sidecar.PersistCredential
+	lifecycleReplace      = sidecar.ReplaceCredential
 	// lifecycleGrantContext is a seam only because a validated device
 	// authorization always carries a 600-second lifetime -- the contract pins
 	// the value -- so no fixture can produce a grant that expires inside a
@@ -148,8 +149,19 @@ func runDeviceLoginAttempt(ctx context.Context, client *sidecar.LifecycleClient,
 	// Opening the browser is a convenience on top of the line above, so any
 	// failure -- no trusted opener on this host -- is deliberately nonfatal, and
 	// --no-browser skips the launch entirely without changing anything else.
+	//
+	// The opener hands off immediately and reaps in a background goroutine
+	// bounded by a 20-second deadline; that goroutine is killed along with
+	// every other goroutine the instant this process exits. Without the
+	// deferred close below, a login that succeeds (or fails, or restarts) in
+	// under 20 seconds -- the overwhelmingly common case -- would return to
+	// main's os.Exit before a slow or hung opener has been reaped, orphaning it
+	// and anything it forked. The defer runs on every return path out of this
+	// attempt, so the opener's lifetime never outlives the attempt that started
+	// it, regardless of which branch below returns.
 	if !parsed.noBrowser {
 		_ = lifecycleBrowserOpen(authorization.VerificationURI)
+		defer lifecycleBrowserClose()
 	}
 	// The validated grant carries its own lifetime. Polling past it burns
 	// requests against a code the server has already expired, and an

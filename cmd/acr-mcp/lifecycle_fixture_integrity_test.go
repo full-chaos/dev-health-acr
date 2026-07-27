@@ -1,13 +1,16 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 )
 
@@ -115,13 +118,37 @@ func TestPackageDefaultsClearAmbientACRConfiguration(t *testing.T) {
 // The browser guarantee is the same shape of invisible default: without it an
 // in-process login test that reaches the launch starts a real browser on
 // whoever runs the suite.
+//
+// The stub is asserted by its named sentinel error, not by a bare nil return:
+// TestMain used to install `func(string) error { return nil }`, which reads
+// identically whether the stub ran or a real opener launched and happened to
+// succeed. Deleting the stub line entirely left this test passing on macOS --
+// `open` resolves, launches Safari, and returns nil -- so a nil check alone is
+// not a guard against the stub being absent.
 func TestPackageDefaultsKeepEveryTestFromLaunchingABrowser(t *testing.T) {
-	if err := lifecycleBrowserOpen("https://acr.example.com/device"); err != nil {
-		t.Fatalf("the default in-process opener seam returned %v; it must be an inert stub", err)
+	err := lifecycleBrowserOpen("https://acr.example.com/device")
+	if !errors.Is(err, errLifecycleBrowserStub) {
+		t.Fatalf("lifecycleBrowserOpen returned %v, want the inert stub's sentinel error; a nil or different error means this call did not reach the test stub", err)
 	}
 	// A real opener would have had to resolve a binary. The stub cannot fail
-	// and cannot launch, which is exactly the property being pinned: this call
-	// would otherwise attempt a desktop launch right here.
+	// with anything but its own sentinel and cannot launch, which is exactly the
+	// property being pinned: this call would otherwise attempt a desktop launch
+	// right here.
+}
+
+// TestMain's stub replaces the package variable before the first test runs, so
+// every `original := lifecycleBrowserOpen` a test saves to restore later only
+// ever captures that stub -- it cannot by itself prove production still wires
+// a real opener. This asserts the wiring lifecycle.go actually ships:
+// `lifecycleBrowserOpen = sidecar.OpenVerificationURI` at package init, before
+// TestMain's replacement runs, captured into productionLifecycleBrowserOpen
+// specifically so this test has something real to compare against.
+func TestPackageDefaultsWireTheRealBrowserOpenerInProduction(t *testing.T) {
+	want := reflect.ValueOf(sidecar.OpenVerificationURI).Pointer()
+	got := reflect.ValueOf(productionLifecycleBrowserOpen).Pointer()
+	if got != want {
+		t.Fatal("lifecycleBrowserOpen's production value is not sidecar.OpenVerificationURI; login would never launch a real browser")
+	}
 }
 
 // TestPackageDefaultsClearAmbientACRConfiguration above inspects the process
@@ -162,5 +189,59 @@ func TestClearAmbientACREnvironmentRemovesConfigurationAndKeepsEntryPointMarkers
 	}
 	if os.Getenv("PATH") == "" {
 		t.Fatal("clearing removed a non-ACR variable")
+	}
+}
+
+// decodeStrictLifecycleFixtureRequest is what stands between every lifecycle
+// fixture and silently accepting a client that got the wire contract wrong.
+// This exercises it directly against httptest.NewRecorder with a fresh,
+// unregistered *lifecycleFixtureState -- not one wired through
+// registerLifecycleFixture, whose t.Cleanup would otherwise turn every
+// recorded problem below (which this test deliberately provokes) into a
+// spurious test failure of its own -- so only the HTTP status this function
+// actually wrote is asserted.
+//
+// contractsv1.DeviceTokenRequest is used rather than DeviceAuthorizationRequest
+// because the latter has its own custom UnmarshalJSON that already calls
+// DisallowUnknownFields internally (device_types.go), which would make the
+// unknown-field case below pass even if this helper's own check were
+// deleted. DeviceTokenRequest has no such method, so it is decoded purely by
+// this helper -- exactly the case a mutation to this helper needs to be able
+// to break.
+func TestDecodeStrictLifecycleFixtureRequestRejectsAMalformedDeviceTokenRequest(t *testing.T) {
+	validDeviceCode := strings.Repeat("d", 32)
+	cases := []struct {
+		name        string
+		method      string
+		contentType string
+		body        string
+		wantStatus  int
+	}{
+		{name: "wrong method", method: http.MethodGet, contentType: "application/json", body: `{"schema_version":"device_token_request.v1","grant_type":"urn:ietf:params:oauth:grant-type:device_code","device_code":"` + validDeviceCode + `"}`, wantStatus: http.StatusMethodNotAllowed},
+		{name: "wrong content type", method: http.MethodPost, contentType: "text/plain", body: `{"schema_version":"device_token_request.v1","grant_type":"urn:ietf:params:oauth:grant-type:device_code","device_code":"` + validDeviceCode + `"}`, wantStatus: http.StatusUnsupportedMediaType},
+		{name: "unknown field", method: http.MethodPost, contentType: "application/json", body: `{"schema_version":"device_token_request.v1","grant_type":"urn:ietf:params:oauth:grant-type:device_code","device_code":"` + validDeviceCode + `","unexpected_field":true}`, wantStatus: http.StatusBadRequest},
+		{name: "missing device_code fails Validate", method: http.MethodPost, contentType: "application/json", body: `{"schema_version":"device_token_request.v1","grant_type":"urn:ietf:params:oauth:grant-type:device_code"}`, wantStatus: http.StatusBadRequest},
+		{name: "trailing JSON value", method: http.MethodPost, contentType: "application/json", body: `{"schema_version":"device_token_request.v1","grant_type":"urn:ietf:params:oauth:grant-type:device_code","device_code":"` + validDeviceCode + `"}{}`, wantStatus: http.StatusBadRequest},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			// Given
+			state := &lifecycleFixtureState{}
+			request := httptest.NewRequest(testCase.method, "/api/v1/oauth/token", strings.NewReader(testCase.body))
+			request.Header.Set("Content-Type", testCase.contentType)
+			recorder := httptest.NewRecorder()
+			var decoded contractsv1.DeviceTokenRequest
+
+			// When
+			ok := decodeStrictLifecycleFixtureRequest(t, state, recorder, request, &decoded)
+
+			// Then
+			if ok {
+				t.Fatalf("decodeStrictLifecycleFixtureRequest accepted a %s request, want a refusal", testCase.name)
+			}
+			if recorder.Code != testCase.wantStatus {
+				t.Fatalf("status = %d, want %d for %s", recorder.Code, testCase.wantStatus, testCase.name)
+			}
+		})
 	}
 }
