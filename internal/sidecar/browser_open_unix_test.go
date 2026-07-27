@@ -39,7 +39,12 @@ func TestOpenVerificationURIUsesTrustedResolutionAndAMinimalEnvironment(t *testi
 	trustedDirectory := t.TempDir()
 	pathDirectory := t.TempDir()
 	opener := filepath.Join(trustedDirectory, browserOpenerName())
-	if err := os.WriteFile(opener, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/opener.record\"\nenv >> \"$HOME/opener.record\"\n"), 0o700); err != nil {
+	// argv and the environment are written to a temporary file and published by
+	// rename, so a reader can never observe a half-written record. Reading as
+	// soon as any newline appeared could return the argv line alone, and the
+	// environment assertions below would then scan an empty list and pass
+	// without having examined anything.
+	if err := os.WriteFile(opener, []byte("#!/bin/sh\n{ printf '%s\\n' \"$@\"; env; } > \"$HOME/opener.tmp\"\nmv \"$HOME/opener.tmp\" \"$HOME/opener.record\"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"open", "xdg-open"} {
@@ -66,17 +71,35 @@ func TestOpenVerificationURIUsesTrustedResolutionAndAMinimalEnvironment(t *testi
 	if len(lines) == 0 || lines[0] != uri {
 		t.Fatalf("opener argv = %q, want exactly the verification address", lines)
 	}
+	if len(lines) < 2 {
+		t.Fatalf("opener record has %d line(s), want argv plus the child's environment; an empty environment scan proves nothing", len(lines))
+	}
+	sawHome := false
 	for _, line := range lines[1:] {
 		if strings.HasPrefix(line, "ACR_") {
 			t.Fatalf("opener environment carried an ACR variable: %q", strings.SplitN(line, "=", 2)[0])
 		}
+		if strings.HasPrefix(line, "HOME=") {
+			sawHome = true
+		}
+	}
+	if !sawHome {
+		t.Fatal("opener record contains no HOME entry, so the environment it captured is not the child's")
 	}
 	if _, err := os.Stat(tripwire); !os.IsNotExist(err) {
 		t.Fatalf("a PATH-resolved opener was launched: %v", err)
 	}
 }
 
-// waitForOpenerRecord blocks until the recording script has written its output.
+// waitForOpenerRecord blocks until the recording script has published its
+// output by rename.
+//
+// Existence is the completion signal precisely because the fixture publishes
+// atomically: the path either does not exist or holds the whole record. The
+// previous version returned as soon as the file contained any newline, which
+// could hand back the argv line before the environment had been appended --
+// and the caller's environment assertions then examined nothing at all.
+//
 // A timeout here is a failure, never a silently accepted empty result: an
 // unobserved launch would read as coverage while proving nothing.
 func waitForOpenerRecord(t *testing.T, path string) string {
@@ -84,8 +107,11 @@ func waitForOpenerRecord(t *testing.T, path string) string {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		contents, err := os.ReadFile(path)
-		if err == nil && strings.Contains(string(contents), "\n") {
+		if err == nil {
 			return string(contents)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("read browser opener record: %v", err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

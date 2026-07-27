@@ -78,6 +78,10 @@ func TestRestoreCredential_restoresOriginalFileAfterPostRenameSyncFailure(t *tes
 	originalToken := fileToken
 	successor := validTestToken(43)
 	t.Setenv(TokenEnvironment, "")
+	// Without this, LoadCredential below consults the keyring before the file
+	// this test is about. The package TestMain keeps that away from the host's
+	// keychain, but the intent belongs in the test that depends on it.
+	t.Setenv(TokenKeyringDisabledEnvironment, "true")
 	t.Setenv(TokenFileEnvironment, path)
 	if err := os.WriteFile(path, []byte(originalToken+"\n"), 0o600); err != nil {
 		t.Fatal(err)

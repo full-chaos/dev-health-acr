@@ -117,6 +117,33 @@ func writeLifecycleFixtureRefusal(t *testing.T, w http.ResponseWriter, status in
 	writeLifecycleError(t, w, status)
 }
 
+// writeLifecycleUnavailable is the fixture's scripted operational failure. It
+// is deliberately not invalid_token: an established credential the server
+// answers invalid_token for is already inactive, which logout treats as the
+// goal state rather than as a failure.
+func writeLifecycleUnavailable(t *testing.T, w http.ResponseWriter) {
+	t.Helper()
+	w.WriteHeader(http.StatusServiceUnavailable)
+	writeLifecycleJSON(t, w, contractsv1.ErrorEnvelope{SchemaVersion: contractsv1.ErrorSchema, RequestID: "request-1", Error: contractsv1.ErrorDetail{Code: "upstream_unavailable", Message: "revocation is temporarily unavailable", HTTPStatus: http.StatusServiceUnavailable, Retryable: true}})
+}
+
+// recordFixturePanic converts a panic inside a fixture handler into a named
+// fixture problem and an explicit server error.
+//
+// net/http recovers a handler panic at the connection boundary and drops the
+// connection, so without this the test observes only whatever the client makes
+// of a severed request -- a transport error, a timeout, or, on a best-effort
+// path, nothing at all. The assertion that actually failed is lost, and the
+// fixture's own bug reads as a product failure or as a pass.
+func recordFixturePanic(state *lifecycleFixtureState, w http.ResponseWriter) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+	state.recordProblem("handler panicked: %v", recovered)
+	w.WriteHeader(http.StatusInternalServerError)
+}
+
 func newLifecycleServer(t *testing.T, token string, polls []string) *httptest.Server {
 	server, _ := newLifecycleServerWithState(t, token, polls, nil)
 	return server
@@ -137,6 +164,7 @@ func newLifecycleServerWithState(t *testing.T, token string, polls []string, wan
 	createdAt := time.Now().UTC().Truncate(time.Second)
 	state := registerLifecycleFixture(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer recordFixturePanic(state, w)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/oauth/device_authorization":
@@ -253,11 +281,22 @@ func newLifecycleRetryServerWithState(t *testing.T, token string, polls []string
 	createdAt := time.Now().UTC().Truncate(time.Second)
 	state := registerLifecycleFixture(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer recordFixturePanic(state, w)
 		switch r.URL.Path {
 		case "/api/v1/oauth/device_authorization":
 			state.countAuthorization()
+			if r.Header.Get("Authorization") != "" {
+				state.recordProblem("device authorization request unexpectedly had bearer authorization")
+				writeLifecycleFixtureRefusal(t, w, http.StatusUnauthorized)
+				return
+			}
 			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: trace.issue(), UserCode: "ABCDEFGH", VerificationURI: deviceVerificationURI, ExpiresIn: 600, Interval: 5})
 		case "/api/v1/oauth/token":
+			if r.Header.Get("Authorization") != "" {
+				state.recordProblem("device token request unexpectedly had bearer authorization")
+				writeLifecycleFixtureRefusal(t, w, http.StatusUnauthorized)
+				return
+			}
 			var request contractsv1.DeviceTokenRequest
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 				state.recordProblem("decode device token request: %v", err)
@@ -325,6 +364,7 @@ func newCredentialLifecycleServerWithState(t *testing.T, original, successor str
 		rotationReceiptTTL: createdAt.Add(15 * time.Minute),
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer recordFixturePanic(fixture, w)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/auth/credentials/self/rotate":
@@ -344,16 +384,11 @@ func newCredentialLifecycleServerWithState(t *testing.T, original, successor str
 				writeLifecycleFixtureRefusal(t, w, http.StatusBadRequest)
 				return
 			}
-			if revokeFails {
-				// A genuine operational failure, not a rejected bearer: an
-				// established credential the server answers invalid_token for is
-				// already inactive, which is the goal state rather than a
-				// failure. Modelling "revocation failed" as invalid_token made
-				// the retention tests assert the opposite of what they claim.
-				w.WriteHeader(http.StatusServiceUnavailable)
-				writeLifecycleJSON(t, w, contractsv1.ErrorEnvelope{SchemaVersion: contractsv1.ErrorSchema, RequestID: "request-1", Error: contractsv1.ErrorDetail{Code: "upstream_unavailable", Message: "revocation is temporarily unavailable", HTTPStatus: http.StatusServiceUnavailable, Retryable: true}})
-				return
-			}
+			// The scripted failure is applied only after the request has been
+			// validated. Returning it first meant a client that revoked with the
+			// wrong bearer, or with a forged or missing rollback receipt, got the
+			// same answer as one that did everything right -- so every test using
+			// the failing fixture stopped checking the request at all.
 			revokedAt := createdAt.Add(time.Minute)
 			if request.RollbackReceipt != nil {
 				if r.Header.Get("Authorization") != "Bearer "+state.replacementToken || !state.replacementIssued || state.replacementRevoked {
@@ -366,6 +401,10 @@ func newCredentialLifecycleServerWithState(t *testing.T, original, successor str
 					writeLifecycleFixtureRefusal(t, w, http.StatusBadRequest)
 					return
 				}
+				if revokeFails {
+					writeLifecycleUnavailable(t, w)
+					return
+				}
 				state.replacementRevoked = true
 				writeLifecycleJSON(t, w, contractsv1.CredentialRevokeResponse{SchemaVersion: contractsv1.CredentialRevokeResponseSchema, Credential: lifecycleCredential(createdAt, state.replacementID, &revokedAt)})
 				return
@@ -375,8 +414,18 @@ func newCredentialLifecycleServerWithState(t *testing.T, original, successor str
 				writeLifecycleFixtureRefusal(t, w, http.StatusUnauthorized)
 				return
 			}
+			if revokeFails {
+				// A genuine operational failure, not a rejected bearer: an
+				// established credential the server answers invalid_token for is
+				// already inactive, which is the goal state rather than a
+				// failure. Modelling "revocation failed" as invalid_token made
+				// the retention tests assert the opposite of what they claim.
+				writeLifecycleUnavailable(t, w)
+				return
+			}
 			state.originalRevoked = true
 			writeLifecycleJSON(t, w, contractsv1.CredentialRevokeResponse{SchemaVersion: contractsv1.CredentialRevokeResponseSchema, Credential: lifecycleCredential(createdAt, state.originalID, &revokedAt)})
+
 		default:
 			fixture.recordProblem("unexpected credential lifecycle request path %q", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)

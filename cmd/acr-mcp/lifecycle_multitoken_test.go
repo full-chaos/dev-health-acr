@@ -41,6 +41,7 @@ func newMultiCredentialServer(t *testing.T, tokens []string) (*httptest.Server, 
 		state.active[token] = true
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer recordFixturePanic(fixture, w)
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path != "/api/v1/auth/credentials/self/revoke" {
 			fixture.recordProblem("unexpected multi-credential request path %q", r.URL.Path)

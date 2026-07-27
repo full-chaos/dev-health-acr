@@ -26,6 +26,7 @@ func newSlowPollServer(t *testing.T, delay time.Duration) (*httptest.Server, fun
 	var mu sync.Mutex
 	authorizations := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer recordFixturePanic(fixture, w)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/oauth/device_authorization":

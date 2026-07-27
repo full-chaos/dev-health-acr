@@ -23,6 +23,7 @@ func newVerificationAddressServer(t *testing.T, uri string) *httptest.Server {
 	t.Helper()
 	state := registerLifecycleFixture(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer recordFixturePanic(state, w)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/oauth/device_authorization":
