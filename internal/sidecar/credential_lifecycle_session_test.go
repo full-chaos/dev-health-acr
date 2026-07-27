@@ -31,3 +31,14 @@ func TestCredentialLifecycleSessionMethodsDoNotReenterTheLock(t *testing.T) {
 		t.Fatalf("session load = %v, want missing credential", err)
 	}
 }
+
+func TestCredentialLifecyclePublicReaderReportsBusyDuringSession(t *testing.T) {
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if _, err := LoadCredential(); !errors.Is(err, errCredentialLifecycleBusy) {
+		t.Fatalf("public load = %v, want busy", err)
+	}
+}

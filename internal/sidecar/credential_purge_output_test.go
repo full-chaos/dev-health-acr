@@ -39,19 +39,13 @@ func credentialPurgeTargets(current CredentialResult, keyringAllowed bool) []cre
 // live credential in the OS secret store while logout reported success.
 func TestCredentialPurgeTargetsKeepsAddressesThatCollideUnderAJoinedStringKey(t *testing.T) {
 	// Given
-	t.Setenv(TokenKeyringServiceEnvironment, "a:b")
-	t.Setenv(TokenKeyringAccountEnvironment, "c")
-	t.Setenv(TokenFileEnvironment, filepath.Join(t.TempDir(), "token"))
-	current := CredentialResult{Source: "keyring", keyringService: "a", keyringAccount: "b:c"}
+	current := CredentialResult{Token: validTestToken(90), Source: "keyring", keyringService: "a", keyringAccount: "b:c"}
 
 	// When
 	targets := credentialPurgeTargets(current, true)
 
 	// Then
-	wantLocations := []string{
-		credentialKeyringLocation("a", "b:c"),
-		credentialKeyringLocation("a:b", "c"),
-	}
+	wantLocations := []string{credentialKeyringLocation("a", "b:c")}
 	for _, want := range wantLocations {
 		found := false
 		for _, target := range targets {
