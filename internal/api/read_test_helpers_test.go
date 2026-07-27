@@ -30,6 +30,10 @@ func newHostedTestAppWithUsageTelemetry(t *testing.T, provider CapabilitiesProvi
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
 	credentials := newMemoryCredentialLifecycle(t, audit, now)
+	devices, err := memory.NewDeviceAuthorizationStore(memory.DeviceAuthorizationStoreOptions{Credentials: credentials, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
 	token := issueScopedCredential(t, credentials, audit, now, scopes, []string{hostedTestRepository})
 	if hooks == nil {
 		value := observability.NewHooks(nil, nil)
@@ -60,6 +64,7 @@ func newHostedTestAppWithUsageTelemetry(t *testing.T, provider CapabilitiesProvi
 		Capabilities: provider, Observability: hooks, Limits: manager, Now: func() time.Time { return now }, WebAssertions: webAssertions, UsageTelemetry: usageTelemetry,
 		Runtime: &RuntimeDependencies{
 			Credentials: credentials, Audit: audit, Entitlements: entitlements, Assembler: assembler, Evidence: store,
+			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device", DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(func() time.Time { return now })),
 			ReadinessChecks: exactRuntimeChecks(),
 		},
 	}, testLogger(&bytes.Buffer{}))

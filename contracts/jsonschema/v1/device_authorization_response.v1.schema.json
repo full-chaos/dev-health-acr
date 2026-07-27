@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/device_authorization_response.v1.schema.json",
+  "title": "Device Authorization Response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "device_code", "user_code", "verification_uri", "expires_in", "interval"],
+  "properties": {
+    "schema_version": { "const": "device_authorization_response.v1" },
+    "device_code": { "type": "string", "minLength": 32, "maxLength": 256 },
+    "user_code": { "type": "string", "pattern": "^[ABCDEFGHJKMNPQRSTVWXYZ23456789]{8}$" },
+    "verification_uri": { "type": "string", "format": "uri", "minLength": 1, "maxLength": 2048 },
+    "expires_in": { "const": 600 },
+    "interval": { "const": 5 }
+  }
+}

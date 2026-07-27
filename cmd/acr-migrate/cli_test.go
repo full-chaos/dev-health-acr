@@ -61,6 +61,8 @@ func TestRun_reportsStatusFromEnvironmentConfiguredDSN(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, stdout.String(), "0001")
 	require.Contains(t, stdout.String(), "0002")
+	require.Contains(t, stdout.String(), "0003")
+	require.Contains(t, stdout.String(), "0004")
 }
 
 func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
@@ -76,7 +78,7 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 
 	// Then
 	require.NoError(t, firstErr)
-	require.Equal(t, "applied 3 migrations\n", first.String())
+	require.Equal(t, "applied 5 migrations\n", first.String())
 	require.NoError(t, secondErr)
 	require.Equal(t, "no migrations applied\n", second.String())
 }

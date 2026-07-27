@@ -75,6 +75,7 @@ type Config struct {
 	WebAssertionIssuer                        string
 	WebAssertionAudience                      string
 	WebAssertionJWKSFile                      string
+	DeviceVerificationURL                     string
 }
 
 type lookupEnv func(string) (string, bool)
@@ -113,6 +114,7 @@ func load(lookup lookupEnv) (Config, error) {
 		WebAssertionIssuer:             stringValue(lookup, "ACR_WEB_ASSERTION_ISSUER", ""),
 		WebAssertionAudience:           stringValue(lookup, "ACR_WEB_ASSERTION_AUDIENCE", ""),
 		WebAssertionJWKSFile:           stringValue(lookup, "ACR_WEB_ASSERTION_JWKS_FILE", ""),
+		DeviceVerificationURL:          stringValue(lookup, "ACR_DEVICE_VERIFICATION_URL", ""),
 	}
 	if err := loadHostedRuntimeValues(lookup, &cfg, requireStoresDefault); err != nil {
 		return Config{}, err

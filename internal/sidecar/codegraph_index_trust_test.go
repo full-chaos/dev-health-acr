@@ -3,7 +3,6 @@
 package sidecar
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -219,15 +218,4 @@ func TestManagedCodeGraphFixtureRootCreatesMissingDirectory(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, info.IsDir())
 	require.Equal(t, os.FileMode(0o700), info.Mode().Perm())
-}
-
-func managedCodeGraphFixtureRoot(t *testing.T, home string) string {
-	t.Helper()
-	managedRoot := filepath.Join(home, ".omo", "codegraph", "projects")
-	if _, err := os.Stat(managedRoot); errors.Is(err, os.ErrNotExist) {
-		require.NoError(t, os.MkdirAll(managedRoot, 0o700))
-	} else {
-		require.NoError(t, err)
-	}
-	return managedRoot
 }

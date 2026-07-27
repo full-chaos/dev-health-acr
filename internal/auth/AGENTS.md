@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Owns ACR token lifecycle, repository-scope normalization, authentication middleware, client IP handling, and failed-attempt limiting. It constructs `storage.Principal` only from a validated credential.
+Owns ACR token lifecycle, repository-scope normalization, authentication middleware, trusted web assertions, client IP handling, and failed-attempt limiting. It constructs `storage.Principal` only from validated credential metadata or a validated trusted web assertion.
 
 ## WHERE TO LOOK
 
@@ -24,6 +24,7 @@ Owns ACR token lifecycle, repository-scope normalization, authentication middlew
 - Authentication failures for missing, malformed, unknown, revoked, and expired credentials share a safe external response.
 - Store only token hashes. Return plaintext only at creation/rotation and never place it in logs or audit metadata.
 - Scope denial and repository denial remain separate authorization decisions and audit actions.
+- Trusted web assertions use a separate permission vocabulary. `credential:issue` authorizes only an exact, request-bound device approval after the web service has derived the bounded grant; it is never a machine credential scope and never carries or returns an `fcacr_` secret. Device-record compare-and-set is the approval idempotency authority; the bounded per-process assertion replay cache remains request-replay mitigation.
 - Successful-read usage telemetry is lifecycle-owned, bounded, coalesced, and asynchronous; queue saturation, crash, forced termination, and an unjoined shutdown timeout can lose best-effort records. A nil close result proves only worker quiescence, not durable persistence. Known authorization denials make one synchronous detached bounded audit attempt and remain denied if it fails. Credential lifecycle audit in `service.go` stays atomic with its mutation.
 
 ## TESTING

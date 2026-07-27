@@ -103,12 +103,13 @@ const (
 // CredentialRecord is the server-side credential representation. TokenHash is
 // never included in public DTOs, logs, audit metadata, or API responses.
 type CredentialRecord struct {
-	Metadata          contractsv1.ClientCredential
-	TokenHash         string
-	CreatedBy         string
-	RotatedAt         *time.Time
-	LastUsedIP        string
-	LastUsedUserAgent string
+	Metadata           contractsv1.ClientCredential
+	TokenHash          string
+	CreatedBy          string
+	RotatedAt          *time.Time
+	LastUsedIP         string
+	LastUsedUserAgent  string
+	IssuanceProvenance CredentialIssuanceProvenance
 }
 
 // CredentialStore is the read and authentication data plane. It deliberately
@@ -124,7 +125,12 @@ type CredentialLifecycle = credentiallifecycle.Lifecycle
 type CredentialCreateInput = credentiallifecycle.CreateInput
 type CredentialRotationInput = credentiallifecycle.RotationInput
 type CredentialRotationReplacement = credentiallifecycle.RotationReplacement
+type CredentialRotationRollbackInput = credentiallifecycle.RotationRollbackInput
 type CredentialRevocationInput = credentiallifecycle.RevocationInput
+
+func ValidateCredentialCreateInput(input CredentialCreateInput) error {
+	return credentiallifecycle.ValidateCreateInput(input)
+}
 
 type AuditEvent struct {
 	OrgID        string

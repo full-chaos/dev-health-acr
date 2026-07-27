@@ -152,7 +152,7 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 		return resp.StatusCode, nil
 	}
 	if err := decodeExact(data, decodeInto); err != nil {
-		return resp.StatusCode, fmt.Errorf("decode hosted API response: %w", err)
+		return resp.StatusCode, fmt.Errorf("%w: decode hosted API response: %w", ErrInvalidResponse, err)
 	}
 	// decodeExact alone cannot require any particular field to be present:
 	// it only rejects unknown fields and trailing content, and once a

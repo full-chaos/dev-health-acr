@@ -17,6 +17,7 @@ func TestLoad_requires_complete_runtime_when_backing_stores_are_explicit(t *test
 		{name: "evidence keys", missing: "ACR_EVIDENCE_ID_KEYS"},
 		{name: "entitlement URL", missing: "ACR_DEV_HEALTH_ENTITLEMENT_URL"},
 		{name: "entitlement token", missing: "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE"},
+		{name: "device verification URL", missing: "ACR_DEVICE_VERIFICATION_URL"},
 		{name: "postgres connection kind", missing: "ACR_POSTGRES_CONNECTION_KIND"},
 	}
 	for _, test := range tests {
@@ -235,6 +236,25 @@ func completeRuntimeEnvironment() map[string]string {
 		"ACR_EVIDENCE_ID_KEYS":                  "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
 		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "https://ops.example.test",
 		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
+		"ACR_DEVICE_VERIFICATION_URL":           "https://verify.example.test/device",
 		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
+	}
+}
+
+func TestLoad_rejectsNonAbsoluteDeviceVerificationURL(t *testing.T) {
+	for _, value := range []string{"/device", "verify.example.test/device", "https:///device", "//verify.example.test/device", "https://%zz"} {
+		t.Run(value, func(t *testing.T) {
+			// Given
+			values := completeRuntimeEnvironment()
+			values["ACR_DEVICE_VERIFICATION_URL"] = value
+
+			// When
+			_, err := load(mapLookup(values))
+
+			// Then
+			if err == nil || !strings.Contains(err.Error(), "ACR_DEVICE_VERIFICATION_URL") {
+				t.Fatalf("load() error = %v, want device verification URL rejection", err)
+			}
+		})
 	}
 }

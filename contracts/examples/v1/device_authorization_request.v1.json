@@ -1,0 +1,5 @@
+{
+  "schema_version": "device_authorization_request.v1",
+  "organization_id_hint": "org_fullchaos",
+  "repository_hints": ["full-chaos/dev-health-acr"]
+}

@@ -75,6 +75,7 @@ func TestCredentialStore_validatesEveryCreateInputAtBoundary(t *testing.T) {
 		{name: "token hash", mutate: func(input *storage.CredentialCreateInput) { input.TokenHash = "not-a-hash" }},
 		{name: "repository scope", mutate: func(input *storage.CredentialCreateInput) { input.RepositoryScopes = []string{"../repo"} }},
 		{name: "scope", mutate: func(input *storage.CredentialCreateInput) { input.Scopes = []string{"root"} }},
+		{name: "web assertion permission", mutate: func(input *storage.CredentialCreateInput) { input.Scopes = []string{"credential:issue"} }},
 		{name: "actor", mutate: func(input *storage.CredentialCreateInput) { input.ActorID = " \n" }},
 		{name: "expiry", mutate: func(input *storage.CredentialCreateInput) { input.ExpiresAt = &past }},
 	}

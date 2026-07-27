@@ -63,6 +63,7 @@ CREATE TABLE acr.client_credentials (credential_id TEXT PRIMARY KEY);
 CREATE TABLE acr.context_packet_snapshots (context_packet_id TEXT PRIMARY KEY);
 CREATE TABLE acr.audit_events (audit_event_id UUID PRIMARY KEY);
 CREATE TABLE acr.agent_episodes (episode_id TEXT PRIMARY KEY);
+CREATE TABLE acr.device_authorizations (device_code_hash TEXT PRIMARY KEY);
 SQL
 
 run_init runtime-acl
@@ -74,6 +75,7 @@ expect 't|t|t|f' "SELECT has_table_privilege('acr_runtime', 'acr.client_credenti
 expect 't|t|t|t' "SELECT has_table_privilege('acr_runtime', 'acr.context_packet_snapshots', 'SELECT'), has_table_privilege('acr_runtime', 'acr.context_packet_snapshots', 'INSERT'), has_table_privilege('acr_runtime', 'acr.context_packet_snapshots', 'UPDATE'), has_table_privilege('acr_runtime', 'acr.context_packet_snapshots', 'DELETE')"
 expect 'f|t|f|f' "SELECT has_table_privilege('acr_runtime', 'acr.audit_events', 'SELECT'), has_table_privilege('acr_runtime', 'acr.audit_events', 'INSERT'), has_table_privilege('acr_runtime', 'acr.audit_events', 'UPDATE'), has_table_privilege('acr_runtime', 'acr.audit_events', 'DELETE')"
 expect 'f|f|f' "SELECT has_table_privilege('acr_runtime', 'acr.agent_episodes', 'SELECT'), has_table_privilege('acr_runtime', 'acr.agent_episodes', 'INSERT'), has_table_privilege('acr_runtime', 'acr.agent_episodes', 'UPDATE')"
+expect 't|t|t|f' "SELECT has_table_privilege('acr_runtime', 'acr.device_authorizations', 'SELECT'), has_table_privilege('acr_runtime', 'acr.device_authorizations', 'INSERT'), has_table_privilege('acr_runtime', 'acr.device_authorizations', 'UPDATE'), has_table_privilege('acr_runtime', 'acr.device_authorizations', 'DELETE')"
 
 docker exec -e PGPASSWORD=migration-password "$container" \
   psql -h 127.0.0.1 -U acr_migration -d "$database" -v ON_ERROR_STOP=1 \

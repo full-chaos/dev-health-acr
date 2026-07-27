@@ -105,6 +105,8 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		Runtime: &api.RuntimeDependencies{
 			Credentials: postgres.credentials, Audit: postgres.audit, Entitlements: entitlement, Assembler: assembler,
 			Evidence: clickhouse.evidence, Episodes: episodeCreator, ReadinessChecks: checks,
+			DeviceAuthorizations: postgres.devices, DeviceVerificationURL: request.config.DeviceVerificationURL,
+			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(request.options.Now)),
 		},
 	}
 	return runtime, nil

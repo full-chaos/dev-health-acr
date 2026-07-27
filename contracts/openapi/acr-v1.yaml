@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 2650839a984e5be015208ea29a237be88933d7f4d9d696960f92f2baadb14a93
+# canonical-content-sha256: f2629334a310bc29de85ba118e6aeaf3b89040baf316c3e9eb1f63b17607f648
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -241,6 +241,164 @@ paths:
           webAssertionAuth: []
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "evidence:read"
+  "/api/v1/auth/credentials/self/revoke":
+    post:
+      operationId: "revokeOwnCredential"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "../jsonschema/v1/credential_revoke_request.v1.schema.json"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/credential_revoke_response.v1.schema.json"
+          description: "Current credential revoked"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+  "/api/v1/auth/credentials/self/rotate":
+    post:
+      operationId: "rotateOwnCredential"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "../jsonschema/v1/credential_rotate_request.v1.schema.json"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/credential_rotate_response.v1.schema.json"
+          description: "Current credential rotated with rollback receipt"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+  "/api/v1/oauth/device_approval":
+    post:
+      operationId: "approveDeviceAuthorization"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+                -
+                  "$ref": "../jsonschema/v1/device_approval_request.v1.schema.json"
+                -
+                  "$ref": "../jsonschema/v1/device_approval_preview_request.v1.schema.json"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  -
+                    "$ref": "../jsonschema/v1/device_approval_response.v1.schema.json"
+                  -
+                    "$ref": "../jsonschema/v1/device_approval_preview_response.v1.schema.json"
+          description: "Bounded device grant approved or advisory hints previewed"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          webAssertionAuth: []
+      x-required-permission: "credential:issue"
+  "/api/v1/oauth/device_authorization":
+    post:
+      operationId: "createDeviceAuthorization"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "../jsonschema/v1/device_authorization_request.v1.schema.json"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/device_authorization_response.v1.schema.json"
+          description: "Device authorization created"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security: []
+  "/api/v1/oauth/token":
+    post:
+      operationId: "exchangeDeviceToken"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "../jsonschema/v1/device_token_request.v1.schema.json"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/device_token_response.v1.schema.json"
+          description: "Device grant redeemed once"
+        "400":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/oauth_device_error.v1.schema.json"
+          description: "Pinned RFC device grant error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security: []
   "/healthz":
     get:
       operationId: "getHealth"

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/device_token_response.v1.schema.json",
+  "title": "Device Token Response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "access_token", "token_type", "expires_in", "credential"],
+  "properties": {
+    "schema_version": { "const": "device_token_response.v1" },
+    "access_token": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "token_type": { "const": "Bearer" },
+    "expires_in": { "const": 2592000 },
+    "credential": { "$ref": "acr_client_credential.v1.schema.json" }
+  }
+}

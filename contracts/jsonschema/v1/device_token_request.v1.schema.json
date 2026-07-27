@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/device_token_request.v1.schema.json",
+  "title": "Device Token Request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "grant_type", "device_code"],
+  "properties": {
+    "schema_version": { "const": "device_token_request.v1" },
+    "grant_type": { "const": "urn:ietf:params:oauth:grant-type:device_code" },
+    "device_code": { "type": "string", "minLength": 32, "maxLength": 256 }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "schema_version": "device_authorization_response.v1",
+  "device_code": "[REDACTED_DEVICE_CODE_PLACEHOLDER]",
+  "user_code": "REDACTED",
+  "verification_uri": "https://web.fullchaos.dev/acr/device",
+  "expires_in": 600,
+  "interval": 5
+}

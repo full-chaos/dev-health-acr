@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ var (
 	ErrRepositoryForbidden = errors.New("repository forbidden")
 	ErrRateLimited         = errors.New("authentication rate limited")
 	ErrInvalidCredential   = errors.New("invalid credential request")
+	ErrStaleSelfCredential = errors.New("stale self credential")
 )
 
 var knownScopes = map[string]struct{}{
@@ -56,8 +58,16 @@ type RotateCredentialRequest struct {
 
 type IssuedCredential struct {
 	Credential contractsv1.ClientCredential `json:"credential"`
-	Token      string                       `json:"token"`
+	Token      string                       `json:"-"`
 }
+
+const issuedCredentialRedacted = "auth.IssuedCredential{redacted}"
+
+func (IssuedCredential) String() string { return issuedCredentialRedacted }
+
+func (IssuedCredential) GoString() string { return issuedCredentialRedacted }
+
+func (IssuedCredential) LogValue() slog.Value { return slog.StringValue(issuedCredentialRedacted) }
 
 func normalizeCreateRequest(request CreateCredentialRequest) (CreateCredentialRequest, error) {
 	request.OrgID = strings.TrimSpace(request.OrgID)

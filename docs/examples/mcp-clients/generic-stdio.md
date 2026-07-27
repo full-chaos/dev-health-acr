@@ -152,7 +152,7 @@ Your MCP client should:
 1. Launch the sidecar as a subprocess with the command: `/path/to/acr-mcp serve`
 2. Set environment variables:
    - `ACR_API_URL`: Base URL of the ACR API.
-   - `ACR_API_TOKEN_FILE` (or `ACR_API_TOKEN` / `ACR_API_TOKEN_KEYRING_SERVICE`): Credential source, checked in that precedence order.
+   - `ACR_API_TOKEN`, an OS keyring entry (`ACR_API_TOKEN_KEYRING_SERVICE` / `ACR_API_TOKEN_KEYRING_ACCOUNT`), or `ACR_API_TOKEN_FILE`: credential source. Precedence is environment first, then the explicit or default keyring entry, then the explicit or default token file -- not the order these names happen to be listed in. Pointing `ACR_API_TOKEN_FILE` at a new credential does not override an exported `ACR_API_TOKEN`.
    - (Optional) `ACR_API_TIMEOUT`: Request timeout as a Go duration string (e.g. `20s`). Default: `20s`.
    - (Optional) `ACR_API_PROXY_URL`: HTTP proxy URL.
    - (Optional) `ACR_API_CA_BUNDLE`: Path to a PEM-encoded CA bundle file.

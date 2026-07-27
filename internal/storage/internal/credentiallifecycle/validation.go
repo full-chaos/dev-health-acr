@@ -24,6 +24,11 @@ var knownScopes = map[string]struct{}{
 	"episode:write": {},
 }
 
+func ValidateCreateInput(input CreateInput) error {
+	_, err := normalizeCreate(input)
+	return err
+}
+
 func normalizeCreate(input CreateInput) (CreateInput, error) {
 	var err error
 	input.CredentialID, err = normalizeCredentialID(input.CredentialID)
@@ -61,6 +66,9 @@ func normalizeCreate(input CreateInput) (CreateInput, error) {
 	input.ExpiresAt, err = normalizeExpiry(input.ExpiresAt)
 	if err != nil {
 		return CreateInput{}, err
+	}
+	if input.IssuanceProvenance != "" && input.IssuanceProvenance != IssuanceProvenanceDeviceAuthorization {
+		return CreateInput{}, invalid("issuance provenance")
 	}
 	return input, nil
 }
@@ -127,6 +135,31 @@ func normalizeRevocation(input RevocationInput) (RevocationInput, error) {
 	if err != nil {
 		return RevocationInput{}, err
 	}
+	return input, nil
+}
+
+func normalizeRotationRollback(input RotationRollbackInput) (RotationRollbackInput, error) {
+	var err error
+	input.OrgID, err = normalizeIdentifier("organization", input.OrgID)
+	if err != nil {
+		return RotationRollbackInput{}, err
+	}
+	input.SourceCredentialID, err = normalizeCredentialID(input.SourceCredentialID)
+	if err != nil {
+		return RotationRollbackInput{}, err
+	}
+	input.SuccessorCredentialID, err = normalizeCredentialID(input.SuccessorCredentialID)
+	if err != nil || input.SourceCredentialID == input.SuccessorCredentialID {
+		return RotationRollbackInput{}, invalid("rotation successor credential id")
+	}
+	input.ActorID, err = normalizeText("actor", input.ActorID, 200)
+	if err != nil {
+		return RotationRollbackInput{}, err
+	}
+	if input.RollbackUntil.IsZero() {
+		return RotationRollbackInput{}, invalid("rotation rollback deadline")
+	}
+	input.RollbackUntil = input.RollbackUntil.UTC()
 	return input, nil
 }
 

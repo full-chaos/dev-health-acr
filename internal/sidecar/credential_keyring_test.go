@@ -91,12 +91,7 @@ func TestRunKeyringCommandUsesInjectedResolverForRealLookup(t *testing.T) {
 	}
 }
 
-// TestRunKeyringCommandTreatsUntrustedResolvedPathAsUnavailable proves a
-// resolver that refuses to resolve a name (mirroring
-// resolveTrustedExecutable rejecting a relative or missing path) is
-// treated identically to a genuinely missing binary: ok=false, err=nil,
-// never a hard failure.
-func TestRunKeyringCommandTreatsUntrustedResolvedPathAsUnavailable(t *testing.T) {
+func TestRunKeyringCommandRejectsUntrustedResolvedPath(t *testing.T) {
 	const fakeName = "acr-test-keyring-tool-untrusted"
 	prev := currentExecutableResolver
 	currentExecutableResolver = func(n string) (string, error) {
@@ -107,19 +102,19 @@ func TestRunKeyringCommandTreatsUntrustedResolvedPathAsUnavailable(t *testing.T)
 	}
 	t.Cleanup(func() { currentExecutableResolver = prev })
 	_, ok, err := runKeyringCommand(context.Background(), fakeName)
-	if err != nil {
-		t.Fatalf("expected nil error for an untrusted-resolution name, got %v", err)
+	if !errors.Is(err, ErrUntrustedExecutable) {
+		t.Fatalf("keyring lookup error = %v, want ErrUntrustedExecutable", err)
 	}
 	if ok {
 		t.Fatal("an untrusted-resolution name was reported as available")
 	}
 }
 
-func TestRunKeyringCommandTreatsNonzeroExitAsUnavailable(t *testing.T) {
+func TestRunKeyringCommandRejectsNonzeroExit(t *testing.T) {
 	requireSh(t)
 	_, ok, err := runKeyringCommand(context.Background(), "sh", "-c", "exit 1")
-	if err != nil {
-		t.Fatalf("expected nil error for a nonzero exit, got %v", err)
+	if err == nil {
+		t.Fatal("nonzero keyring command exit was accepted as unavailable")
 	}
 	if ok {
 		t.Fatal("a nonzero exit was reported as available")
@@ -226,12 +221,9 @@ func TestRunKeyringCommandRespectsContextTimeout(t *testing.T) {
 	if ok {
 		t.Fatal("a context-timed-out lookup was reported as available")
 	}
-	// A context-deadline kill surfaces through the same *exec.ExitError
-	// classification as any other killed/nonzero-exit process (see
-	// runKeyringCommand's doc comment): ok=false, err=nil. What matters
-	// here is that it returned promptly, not which of the two
-	// unavailable-reporting shapes it took.
-	_ = err
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("keyring lookup error = %v, want context deadline exceeded", err)
+	}
 }
 
 // waitForMarker polls for path to exist, failing the test if it does not

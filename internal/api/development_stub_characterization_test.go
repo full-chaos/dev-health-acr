@@ -59,3 +59,39 @@ func TestDevelopmentStub_readiness_reports_configuration_and_runtime_dependency(
 		t.Fatalf("checks = %#v, want configuration and runtime_dependencies", body.Checks)
 	}
 }
+
+func TestUnauthenticatedRuntimeHandler_failsClosedWithoutRuntimeAndLeavesHealthRoutesIndependent(t *testing.T) {
+	// Given
+	app := testApp(t)
+	called := false
+	handler := app.unauthenticatedRuntimeHandler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+
+	// When
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/unregistered-device-route", nil))
+	health := httptest.NewRecorder()
+	app.Handler().ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	// Then
+	if response.Code != http.StatusServiceUnavailable || called {
+		t.Fatalf("runtime handler status = %d called = %t", response.Code, called)
+	}
+	if health.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want %d", health.Code, http.StatusOK)
+	}
+}
+
+func TestUnauthenticatedRuntimeHandler_runsNextWhenRuntimeIsConfigured(t *testing.T) {
+	// Given
+	app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)
+	handler := app.unauthenticatedRuntimeHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+
+	// When
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/unregistered-device-route", nil))
+
+	// Then
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("runtime handler status = %d, want %d", response.Code, http.StatusNoContent)
+	}
+}

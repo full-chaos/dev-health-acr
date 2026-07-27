@@ -64,6 +64,8 @@ func TestLoadCredentialPrefersEnvironment(t *testing.T) {
 func TestLoadCredentialRequiresConfiguration(t *testing.T) {
 	t.Setenv(TokenEnvironment, "")
 	t.Setenv(TokenFileEnvironment, "")
+	t.Setenv(APIURLEnvironment, "")
+	t.Setenv("HOME", t.TempDir())
 	if _, err := LoadCredential(); err == nil {
 		t.Fatal("missing credential configuration was accepted")
 	}
@@ -122,14 +124,32 @@ func TestLoadCredentialFallsThroughToFileWhenKeyringMisses(t *testing.T) {
 	}
 }
 
-func TestLoadCredentialFallsThroughToFileWhenKeyringErrors(t *testing.T) {
+func TestLoadCredentialRejectsOperationalKeyringFailure_whenFallbackExists(t *testing.T) {
 	t.Setenv(TokenEnvironment, "")
 	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
 	t.Setenv(TokenFileEnvironment, writeTokenFile(t, fileToken+"\n"))
 	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
 		return "", false, errors.New("keyring backend unreachable")
 	})
+	_, err := LoadCredential()
+	if err == nil {
+		t.Fatal("operational keyring failure fell through to the credential file")
+	}
+}
+
+func TestLoadCredentialFallsBackToFile_whenKeyringExecutableIsUnavailable(t *testing.T) {
+	// Given
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
+	t.Setenv(TokenFileEnvironment, writeTokenFile(t, fileToken+"\n"))
+	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
+		return "", false, ErrExecutableUnavailable
+	})
+
+	// When
 	result, err := LoadCredential()
+
+	// Then
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,10 +158,47 @@ func TestLoadCredentialFallsThroughToFileWhenKeyringErrors(t *testing.T) {
 	}
 }
 
+func TestLoadCredentialRejectsUntrustedKeyringExecutable_whenFallbackExists(t *testing.T) {
+	// Given
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
+	t.Setenv(TokenFileEnvironment, writeTokenFile(t, fileToken+"\n"))
+	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
+		return "", false, ErrUntrustedExecutable
+	})
+
+	// When
+	_, err := LoadCredential()
+
+	// Then
+	if !errors.Is(err, ErrUntrustedExecutable) {
+		t.Fatalf("credential error = %v, want ErrUntrustedExecutable", err)
+	}
+}
+
+func TestLoadCredentialRejectsTimedOutKeyringLookup_whenFallbackExists(t *testing.T) {
+	// Given
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
+	t.Setenv(TokenFileEnvironment, writeTokenFile(t, fileToken+"\n"))
+	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
+		return "", false, context.DeadlineExceeded
+	})
+
+	// When
+	_, err := LoadCredential()
+
+	// Then
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("credential error = %v, want context deadline exceeded", err)
+	}
+}
+
 func TestLoadCredentialKeyringLookupContextIsBounded(t *testing.T) {
 	t.Setenv(TokenEnvironment, "")
 	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
 	t.Setenv(TokenFileEnvironment, "")
+	t.Setenv("HOME", t.TempDir())
 	stubKeyringLookup(t, func(ctx context.Context, _, _ string) (string, bool, error) {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Fatal("keyring lookup context must carry a bounded deadline")
@@ -153,19 +210,32 @@ func TestLoadCredentialKeyringLookupContextIsBounded(t *testing.T) {
 	}
 }
 
-func TestLoadCredentialRejectsBlankKeyringToken(t *testing.T) {
+func TestLoadCredentialReturnsMissing_whenDefaultTokenFileIsAbsent(t *testing.T) {
+	// Given
+	t.Setenv(TokenEnvironment, "")
+	t.Setenv(TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(TokenFileEnvironment, "")
+	t.Setenv("HOME", t.TempDir())
+
+	// When
+	_, err := LoadCredential()
+
+	// Then
+	if !errors.Is(err, ErrCredentialMissing) {
+		t.Fatalf("credential error = %v, want ErrCredentialMissing", err)
+	}
+}
+
+func TestLoadCredentialRejectsBlankKeyringToken_whenFallbackExists(t *testing.T) {
 	t.Setenv(TokenEnvironment, "")
 	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
 	t.Setenv(TokenFileEnvironment, writeTokenFile(t, fileToken+"\n"))
 	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
 		return "   ", true, nil
 	})
-	result, err := LoadCredential()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Token != fileToken || result.Source != "file" {
-		t.Fatalf("blank keyring token must fall through to file, got: %#v", result)
+	_, err := LoadCredential()
+	if !errors.Is(err, ErrCredentialShapeInvalid) {
+		t.Fatalf("credential error = %v, want ErrCredentialShapeInvalid", err)
 	}
 }
 
@@ -204,19 +274,16 @@ func TestLoadCredentialRejectsShapeInvalidFileToken(t *testing.T) {
 	}
 }
 
-func TestLoadCredentialFallsThroughToFileWhenKeyringTokenIsShapeInvalid(t *testing.T) {
+func TestLoadCredentialRejectsShapeInvalidKeyringToken_whenFallbackExists(t *testing.T) {
 	t.Setenv(TokenEnvironment, "")
 	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
 	t.Setenv(TokenFileEnvironment, writeTokenFile(t, fileToken+"\n"))
 	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
 		return licenseShapedToken, true, nil
 	})
-	result, err := LoadCredential()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Token != fileToken || result.Source != "file" {
-		t.Fatalf("a license-shaped keyring entry was not rejected in favor of the file credential: %#v", result)
+	_, err := LoadCredential()
+	if !errors.Is(err, ErrCredentialShapeInvalid) {
+		t.Fatalf("credential error = %v, want ErrCredentialShapeInvalid", err)
 	}
 }
 
@@ -224,6 +291,7 @@ func TestLoadCredentialRejectsShapeInvalidTokenEvenWhenNoFallbackExists(t *testi
 	t.Setenv(TokenEnvironment, "")
 	t.Setenv(TokenKeyringServiceEnvironment, "acr-sidecar-test")
 	t.Setenv(TokenFileEnvironment, "")
+	t.Setenv("HOME", t.TempDir())
 	stubKeyringLookup(t, func(context.Context, string, string) (string, bool, error) {
 		return licenseShapedToken, true, nil
 	})

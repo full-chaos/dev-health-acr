@@ -71,8 +71,11 @@ func requiredStructFieldsPresent(t reflect.Type, raw json.RawMessage, path strin
 		}
 		fieldPath := joinPath(path, name)
 		rawValue, present := obj[name]
-		if !omitempty && (!present || isJSONNull(rawValue)) {
-			return fmt.Errorf("%s: required field is missing or null", fieldPath)
+		if !omitempty && !present {
+			return fmt.Errorf("%s: required field is missing", fieldPath)
+		}
+		if !omitempty && isJSONNull(rawValue) && field.Type.Kind() != reflect.Pointer {
+			return fmt.Errorf("%s: required field is null", fieldPath)
 		}
 		if !present || isJSONNull(rawValue) {
 			continue

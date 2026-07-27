@@ -181,6 +181,8 @@ Two implementation notes worth keeping:
 The client environment itself: `HOME` and `XDG_{CONFIG,DATA,CACHE,STATE}_HOME` all point
 inside `.tmp/fullstack/<run-id>/`, and the client starts from a cleared environment (`env -i`)
 with `--pure`.
+* Its recorded OpenCode version is read only through that same throwaway environment; the
+  harness never probes the operator's OpenCode installation after recording the host baseline.
 * Exactly one provider (the scripted local model) and exactly one MCP server
   (`acr-mcp serve`, the locally built or released binary) are registered.
 * No writeback, no automatic pre-plan, no external plugins.
@@ -324,6 +326,23 @@ verifies, reading back the override row that `decide_feature()` itself consults.
 exists because nothing previously confirmed the grant was in effect, so a regression in the
 driver would have surfaced as that opaque timeout rather than as a named failure.
 
+### 7.1 Device-login approval lifecycle
+
+When the web profile is enabled, the same isolated stack also proves the self-service
+`acr-mcp login` path. The CLI runs from a fresh `HOME` and all XDG roots with token and
+keyring selectors cleared and `ACR_API_TOKEN_KEYRING_DISABLED=true`; the driver requires this
+exact value because any other nonempty setting fails closed before a keyring seam is touched.
+Only its private `0600` fallback credential file is permitted.
+The browser signs in to the seeded admin account, previews one code, confirms the single
+repository scope, then exercises `doctor --live`, refresh, doctor, logout, and the expected
+post-logout failure. The consumed code is replayed through the browser and must return a
+conflict.
+
+The browser retains connected screenshots for the pending, review, and success states at
+375px, 768px, and 1280px. Its network receipt fails on a bearer header, a query string, a
+wildcard or unbounded repository scope, any console/request failure, or a device-route 5xx.
+The driver redacts device codes, credentials, and DSNs before failure artifacts are retained.
+
 ## 8. Commands
 
 ```bash
@@ -333,9 +352,30 @@ make fullstack-opencode-e2e E2E_SCENARIO=self-test            # prove the assert
 make fullstack-opencode-e2e E2E_MODEL=ollama E2E_SCENARIO=smoke   # optional, non-gating
 ```
 
+To prove an unmerged web revision in the canonical GitHub Actions gate, dispatch the ACR
+workflow from the reviewed ACR branch and pass the reviewed sibling ref explicitly:
+
+```bash
+gh workflow run fullstack-acceptance.yml --repo full-chaos/dev-health-acr \
+  --ref feat/chaos-3096-acr-mcp-login \
+  -f scenario=full \
+  -f web_ref=feat/chaos-3096-device-approval
+```
+
+Leaving `web_ref` empty preserves the sibling repository's default-branch checkout. The run
+manifest records the resolved Dev Health commit SHA in `web_ref` so the uploaded evidence names
+the revision the browser agreement actually exercised.
+
 `make fullstack-contract` runs the offline contract checks alone; they are also part of
 `make verify`, so a change that weakens an invariant fails an ordinary PR without needing
 Docker, a network, or OpenCode.
+
+For a hermetic local proof, `OPENCODE_RUNTIME_FIXTURE` may name an absolute, readable
+declared runtime fixture containing `config/opencode/{package.json,package-lock.json,node_modules}`
+and `tree-hashes.sha256`. The driver requires normalized manifest entries that exactly cover every
+regular runtime file, verifies source bytes, copies into a private stage, then verifies staged bytes
+before publishing only that runtime into its fresh client root. It rejects special nodes and all
+symlinks; evidence records only the fixture manifest hash, never its host path or package payload.
 
 ### 8.1 The self-test
 

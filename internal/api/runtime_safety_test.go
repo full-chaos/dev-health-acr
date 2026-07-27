@@ -20,6 +20,8 @@ func TestRuntimeDependencies_rejects_typed_nil_required_dependencies(t *testing.
 	var nilEntitlement *typedNilEntitlement
 	var nilAssembler *contextpacket.Assembler
 	var nilEvidence *typedNilEvidence
+	var nilDevices *typedNilDeviceAuthorizationStore
+	var nilLimiter *typedNilDeviceAuthorizationLimiter
 	tests := []struct {
 		name   string
 		mutate func(*RuntimeDependencies)
@@ -29,6 +31,8 @@ func TestRuntimeDependencies_rejects_typed_nil_required_dependencies(t *testing.
 		{name: "entitlement", mutate: func(runtime *RuntimeDependencies) { runtime.Entitlements = nilEntitlement }},
 		{name: "assembler", mutate: func(runtime *RuntimeDependencies) { runtime.Assembler = nilAssembler }},
 		{name: "evidence", mutate: func(runtime *RuntimeDependencies) { runtime.Evidence = nilEvidence }},
+		{name: "device authorizations", mutate: func(runtime *RuntimeDependencies) { runtime.DeviceAuthorizations = nilDevices }},
+		{name: "device authorization limiter", mutate: func(runtime *RuntimeDependencies) { runtime.DeviceAuthorizationLimiter = nilLimiter }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -137,6 +141,33 @@ func TestRuntimeDependencies_rejects_typed_nil_optional_episode_creator(t *testi
 	}
 }
 
+func TestRuntimeDependencies_rejectsMissingDeviceAuthorizationControls(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*RuntimeDependencies)
+	}{
+		{name: "verification URL", mutate: func(runtime *RuntimeDependencies) { runtime.DeviceVerificationURL = "" }},
+		{name: "malformed verification URL", mutate: func(runtime *RuntimeDependencies) { runtime.DeviceVerificationURL = "/verify" }},
+		{name: "limiter", mutate: func(runtime *RuntimeDependencies) { runtime.DeviceAuthorizationLimiter = nil }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)
+			runtime := *app.runtime
+			test.mutate(&runtime)
+
+			// When
+			err := runtime.validate()
+
+			// Then
+			if err == nil {
+				t.Fatalf("runtime accepted missing %s", test.name)
+			}
+		})
+	}
+}
+
 func exactRuntimeChecks() []ReadinessCheck {
 	return []ReadinessCheck{
 		CheckFunc{CheckName: "postgres"},
@@ -172,4 +203,43 @@ type typedNilEpisodeCreator struct{}
 
 func (*typedNilEpisodeCreator) Create(context.Context, storage.Principal, contractsv1.AgentEpisodeCreate) (contractsv1.AgentEpisode, bool, error) {
 	return contractsv1.AgentEpisode{}, false, nil
+}
+
+type typedNilDeviceAuthorizationStore struct{}
+
+func (*typedNilDeviceAuthorizationStore) Create(context.Context, storage.DeviceAuthorizationCreateInput) (storage.DeviceAuthorization, error) {
+	return storage.DeviceAuthorization{}, nil
+}
+func (*typedNilDeviceAuthorizationStore) GetByDeviceCodeHash(context.Context, storage.DeviceCodeHash) (storage.DeviceAuthorization, error) {
+	return storage.DeviceAuthorization{}, nil
+}
+func (*typedNilDeviceAuthorizationStore) GetByUserCodeHash(context.Context, storage.UserCodeHash) (storage.DeviceAuthorization, error) {
+	return storage.DeviceAuthorization{}, nil
+}
+func (*typedNilDeviceAuthorizationStore) Preview(context.Context, storage.UserCodeHash) (storage.DeviceAuthorization, error) {
+	return storage.DeviceAuthorization{}, nil
+}
+func (*typedNilDeviceAuthorizationStore) Poll(context.Context, storage.DeviceCodeHash) (storage.DeviceAuthorization, error) {
+	return storage.DeviceAuthorization{}, nil
+}
+func (*typedNilDeviceAuthorizationStore) Approve(context.Context, storage.UserCodeHash, storage.DeviceAuthorizationGrant) (storage.DeviceAuthorization, error) {
+	return storage.DeviceAuthorization{}, nil
+}
+func (*typedNilDeviceAuthorizationStore) Deny(context.Context, storage.UserCodeHash) (storage.DeviceAuthorization, error) {
+	return storage.DeviceAuthorization{}, nil
+}
+func (*typedNilDeviceAuthorizationStore) Redeem(context.Context, storage.DeviceCodeHash, storage.CredentialCreateInput) (contractsv1.ClientCredential, error) {
+	return contractsv1.ClientCredential{}, nil
+}
+
+type typedNilDeviceAuthorizationLimiter struct{}
+
+func (*typedNilDeviceAuthorizationLimiter) AllowDeviceCreation(string) DeviceAuthorizationLimitDecision {
+	return DeviceAuthorizationLimitDecision{}
+}
+func (*typedNilDeviceAuthorizationLimiter) AllowTokenRequest(string) DeviceAuthorizationLimitDecision {
+	return DeviceAuthorizationLimitDecision{}
+}
+func (*typedNilDeviceAuthorizationLimiter) AllowApprovalAttempt(string, storage.UserCodeHash) DeviceAuthorizationLimitDecision {
+	return DeviceAuthorizationLimitDecision{}
 }

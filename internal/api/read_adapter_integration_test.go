@@ -31,6 +31,10 @@ func TestHostedReadRoutesUsePostgresAndClickHouseAdapters(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	devices, err := postgresstore.NewDeviceAuthorizationStoreWithOptions(database, audit, postgresstore.DeviceAuthorizationStoreOptions{Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
 	credentialService, err := auth.NewService(credentials, auth.ServiceOptions{Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +70,7 @@ func TestHostedReadRoutesUsePostgresAndClickHouseAdapters(t *testing.T) {
 		Capabilities: StaticCapabilitiesProvider{Value: hostedCapabilities()}, Limits: manager,
 		Runtime: &RuntimeDependencies{
 			Credentials: credentials, Audit: audit, Entitlements: entitlements, Assembler: assembler, Evidence: evidence,
+			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device", DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(func() time.Time { return now })),
 			ReadinessChecks: []ReadinessCheck{
 				CheckFunc{CheckName: "postgres", Fn: database.PingContext},
 				CheckFunc{CheckName: "clickhouse", Fn: fixtureClickHouseReadiness(clickHouse)},

@@ -74,6 +74,7 @@ func TestProductionAcceptsConfiguredBackingStores(t *testing.T) {
 		"ACR_EVIDENCE_ID_KEYS":                  "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
 		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "https://ops.example.test",
 		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
+		"ACR_DEVICE_VERIFICATION_URL":           "https://verify.example.test/device",
 		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
 	}))
 	if err != nil {
@@ -128,6 +129,7 @@ func TestProductionRejectsInsecureDevHealthEntitlementURL(t *testing.T) {
 		"ACR_EVIDENCE_ID_ACTIVE_KID": "current", "ACR_EVIDENCE_ID_KEYS": "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
 		"ACR_DEV_HEALTH_ENTITLEMENT_URL":                     "http://127.0.0.1:8080",
 		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE":              "/run/secrets/ops-token",
+		"ACR_DEVICE_VERIFICATION_URL":                        "https://verify.example.test/device",
 		"ACR_DEV_HEALTH_ENTITLEMENT_ALLOW_INSECURE_LOOPBACK": "true",
 		"ACR_POSTGRES_CONNECTION_KIND":                       "direct",
 	}

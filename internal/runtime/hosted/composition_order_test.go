@@ -131,6 +131,11 @@ func testBuildRequest(t *testing.T, events *[]string, failAt string) buildReques
 		check:       stageFunction(events, failAt, "postgres.check"),
 		close:       stageCloseFunction(events, failAt, "postgres.close"),
 	}
+	devices, err := memory.NewDeviceAuthorizationStore(memory.DeviceAuthorizationStoreOptions{Credentials: credentials, Now: nowTime(now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	postgres.devices = devices
 	clickhouse := clickHouseComponents{
 		evidence: fakeEvidenceStore{},
 		check:    stageFunction(events, failAt, "clickhouse.check"),
@@ -179,8 +184,9 @@ func testRuntimeConfig(t *testing.T) config.Config {
 	return config.Config{
 		Environment: "test", RequireBackingStores: true, ClickHouseDSN: "clickhouse://configured", PostgresDSN: "postgres://configured",
 		DevHealthEntitlementURL: "https://ops.example.test", DevHealthEntitlementTokenFile: "token", EvidenceIDActiveKID: "current",
-		EvidenceIDKeys: map[string][]byte{"current": []byte("01234567890123456789012345678901")},
-		MaxItems:       30, MaxOutputTokens: 4000, MaxSerializedBytes: 262144, RequestsPerMinute: 60,
+		DeviceVerificationURL: "https://verify.example.test/device",
+		EvidenceIDKeys:        map[string][]byte{"current": []byte("01234567890123456789012345678901")},
+		MaxItems:              30, MaxOutputTokens: 4000, MaxSerializedBytes: 262144, RequestsPerMinute: 60,
 		RequestControls: config.RequestControlsConfig{
 			Auth: class, Context: class, Evidence: class, Snapshot: class, Episode: class,
 			AuthFailures: 20, AuthTrackedKeys: 128, PerOrgConcurrency: 8, MaxTrackedOrganizations: 128, MaxCredentialsPerOrg: 128,

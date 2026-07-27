@@ -37,7 +37,11 @@ func ptrTime(value time.Time) *time.Time {
 
 func credentialCreatedEvent(record storage.CredentialRecord) storage.AuditEvent {
 	credential := record.Metadata
-	return storage.AuditEvent{OrgID: credential.OrgID, ActorType: "user", ActorID: record.CreatedBy, Action: storage.AuditActionCredentialCreated, ResourceType: "acr_credential", ResourceID: credential.CredentialID, Status: "success", CreatedAt: credential.CreatedAt, Metadata: map[string]any{"name": credential.Name, "token_prefix": credential.TokenPrefix, "repository_scopes": append([]string(nil), credential.RepositoryScopes...), "scopes": append([]string(nil), credential.Scopes...), "expires_at": cloneTime(credential.ExpiresAt)}}
+	metadata := map[string]any{"name": credential.Name, "token_prefix": credential.TokenPrefix, "repository_scopes": append([]string(nil), credential.RepositoryScopes...), "scopes": append([]string(nil), credential.Scopes...), "expires_at": cloneTime(credential.ExpiresAt)}
+	if record.IssuanceProvenance != "" {
+		metadata["issuance_provenance"] = string(record.IssuanceProvenance)
+	}
+	return storage.AuditEvent{OrgID: credential.OrgID, ActorType: "user", ActorID: record.CreatedBy, Action: storage.AuditActionCredentialCreated, ResourceType: "acr_credential", ResourceID: credential.CredentialID, Status: "success", CreatedAt: credential.CreatedAt, Metadata: metadata}
 }
 
 func credentialRotatedEvent(source, replacement contractsv1.ClientCredential, actorID string, overlap time.Duration, occurredAt time.Time) storage.AuditEvent {

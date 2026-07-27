@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -13,10 +15,12 @@ import (
 )
 
 const (
-	TokenEnvironment               = "ACR_API_TOKEN"
-	TokenFileEnvironment           = "ACR_API_TOKEN_FILE"
-	TokenKeyringServiceEnvironment = "ACR_API_TOKEN_KEYRING_SERVICE"
-	TokenKeyringAccountEnvironment = "ACR_API_TOKEN_KEYRING_ACCOUNT"
+	TokenEnvironment                = "ACR_API_TOKEN"
+	TokenFileEnvironment            = "ACR_API_TOKEN_FILE"
+	TokenKeyringDisabledEnvironment = "ACR_API_TOKEN_KEYRING_DISABLED"
+	TokenKeyringServiceEnvironment  = "ACR_API_TOKEN_KEYRING_SERVICE"
+	TokenKeyringAccountEnvironment  = "ACR_API_TOKEN_KEYRING_ACCOUNT"
+	defaultKeyringService           = "dev-health-acr"
 
 	// keyringLookupTimeout bounds the optional OS keyring seam so a locked,
 	// hung, or misbehaving secret-store backend cannot stall credential
@@ -41,59 +45,139 @@ var ErrCredentialShapeInvalid = errors.New("acr: credential does not match the A
 // configured" apart from "something configured, but wrong".
 var ErrCredentialMissing = errors.New("ACR API credential is not configured")
 
+// ErrCredentialPersistenceUnsupported is returned before any login flow can
+// issue a credential on Windows, where this sidecar has no supported secure
+// persistence mechanism.
+var ErrCredentialPersistenceUnsupported = errors.New("acr: credential persistence is unsupported on Windows")
+
+var ErrCredentialPersistenceSourceUnsupported = errors.New("acr: credential source cannot be replaced securely")
+
+// errCredentialWriteAmbiguous marks the one credential-file write failure
+// whose on-disk outcome is genuinely unknown: the same-directory temporary
+// file was already renamed over the target, so the new credential is
+// visible at the configured path, but the directory fsync that would make
+// that replacement durable failed. Returning a bare error here would tell
+// a caller "nothing was written" while a readable credential sits on disk.
+// PersistCredential therefore pairs this sentinel with the actual candidate
+// locator so login can revoke the server-side credential and then purge the
+// exact file it may have just written.
+var errCredentialWriteAmbiguous = errors.New("acr: credential file replacement could not be confirmed durable")
+
 type CredentialResult struct {
-	Token  string
-	Source string
+	Token          string
+	Source         string
+	keyringService string
+	keyringAccount string
+	filePath       string
 }
+
+type CredentialCleanupError struct {
+	Location string
+	cause    error
+}
+
+func (e *CredentialCleanupError) Error() string {
+	return "ACR credential cleanup failed"
+}
+
+func (e *CredentialCleanupError) Unwrap() error { return e.cause }
 
 // LoadCredential resolves the ACR API bearer credential with a fixed
 // precedence: the process environment always wins (agent-client
-// compatibility), then an optional OS keyring entry, then a
-// permission-restricted token file. There is intentionally no CLI-argument
-// or plaintext-config-file source: both would make secrets visible in shell
-// history, process listings, or unencrypted files by default.
+// compatibility), then the explicit or default OS keyring entry, then the
+// explicit or default permission-restricted token file. There is intentionally
+// no CLI-argument or plaintext-config-file source: both would make secrets
+// visible in shell history, process listings, or unencrypted files by default.
+//
+// Precedence is evaluated in that order, which means the environment is
+// resolved before ACR_API_TOKEN_KEYRING_DISABLED is even read. Reading the
+// keyring flag first inverted the precedence for its own failure mode: a
+// malformed disable flag rejected a perfectly valid ACR_API_TOKEN, taking
+// down a source the flag does not govern.
 func LoadCredential() (CredentialResult, error) {
-	if token := strings.TrimSpace(os.Getenv(TokenEnvironment)); token != "" {
-		if !auth.IsTokenShapeValid(token) {
-			return CredentialResult{}, fmt.Errorf("%s: %w", TokenEnvironment, ErrCredentialShapeInvalid)
-		}
-		return CredentialResult{Token: token, Source: "environment"}, nil
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		return CredentialResult{}, err
 	}
-	if result, ok := loadFromKeyring(); ok {
-		return result, nil
+	defer session.Close()
+	return session.LoadCredential()
+}
+
+func (s *CredentialLifecycleSession) LoadCredential() (CredentialResult, error) {
+	finish, err := s.beginOperation()
+	if err != nil {
+		return CredentialResult{}, err
+	}
+	defer finish()
+	return loadCredentialForLifecycleSession()
+}
+
+func loadCredentialForLifecycleSession() (CredentialResult, error) {
+	if result, configured, err := loadFromEnvironment(); configured {
+		return result, err
+	}
+	keyringAllowed, err := keyringEnabled()
+	if err != nil {
+		return CredentialResult{}, err
+	}
+	return loadCredential(keyringAllowed)
+}
+
+// loadFromEnvironment reports whether ACR_API_TOKEN is set at all as its
+// second result, so a configured-but-malformed environment credential stays
+// an error instead of silently falling through to a lower-precedence source.
+func loadFromEnvironment() (CredentialResult, bool, error) {
+	token := strings.TrimSpace(os.Getenv(TokenEnvironment))
+	if token == "" {
+		return CredentialResult{}, false, nil
+	}
+	if !auth.IsTokenShapeValid(token) {
+		return CredentialResult{}, true, fmt.Errorf("%s: %w", TokenEnvironment, ErrCredentialShapeInvalid)
+	}
+	return CredentialResult{Token: token, Source: "environment"}, true, nil
+}
+
+func loadCredential(keyringAllowed bool) (CredentialResult, error) {
+	if result, configured, err := loadFromEnvironment(); configured {
+		return result, err
+	}
+	if keyringAllowed {
+		result, ok, err := loadFromKeyring()
+		if err != nil {
+			return CredentialResult{}, fmt.Errorf("load ACR keyring credential: %w", err)
+		}
+		if ok {
+			return result, nil
+		}
 	}
 	return loadFromFile()
 }
 
-// loadFromKeyring consults the optional OS keyring seam when
-// ACR_API_TOKEN_KEYRING_SERVICE is configured. A miss, an unconfigured
-// service, or an unexpected lookup error all report ok=false so the caller
-// falls through to the token file; the keyring is a convenience source, not
-// a required one.
-func loadFromKeyring() (CredentialResult, bool) {
-	service := strings.TrimSpace(os.Getenv(TokenKeyringServiceEnvironment))
-	if service == "" || currentKeyringLookup == nil {
-		return CredentialResult{}, false
+// loadFromKeyring consults the explicit or default OS keyring seam. Only an
+// exact entry miss or unavailable trusted executable permits file fallback;
+// all other lookup failures are returned so the caller fails closed.
+func loadFromKeyring() (CredentialResult, bool, error) {
+	if currentKeyringLookup == nil {
+		return CredentialResult{}, false, ErrExecutableUnavailable
 	}
-	account := strings.TrimSpace(os.Getenv(TokenKeyringAccountEnvironment))
-	if account == "" {
-		account = defaultKeyringAccount()
+	service, account, configured := credentialKeyringAddress()
+	if !configured {
+		return CredentialResult{}, false, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), keyringLookupTimeout)
 	defer cancel()
 	token, ok, err := currentKeyringLookup(ctx, service, account)
-	if err != nil || !ok {
-		return CredentialResult{}, false
+	if errors.Is(err, ErrExecutableUnavailable) || !ok && err == nil {
+		return CredentialResult{}, false, nil
+	}
+	if err != nil {
+		return CredentialResult{}, false, err
 	}
 	token = strings.TrimSpace(token)
 	if token == "" || !auth.IsTokenShapeValid(token) {
-		// A blank entry or one that does not match the ACR token shape is
-		// treated as unusable rather than a hard failure: the keyring is a
-		// convenience source, so callers fall through to the token file
-		// instead of being blocked by a stray/garbage keyring entry.
-		return CredentialResult{}, false
+		return CredentialResult{}, false, ErrCredentialShapeInvalid
 	}
-	return CredentialResult{Token: token, Source: "keyring"}, true
+	return CredentialResult{Token: token, Source: "keyring", keyringService: service, keyringAccount: account}, true, nil
 }
 
 // maxTokenFileBytes bounds how many bytes of a configured token file
@@ -124,10 +208,37 @@ const maxTokenFileBytes = 4096 // 4 KiB
 func loadFromFile() (CredentialResult, error) {
 	path := strings.TrimSpace(os.Getenv(TokenFileEnvironment))
 	if path == "" {
-		return CredentialResult{}, ErrCredentialMissing
+		path = defaultTokenFilePath()
+		if path == "" {
+			return CredentialResult{}, ErrCredentialMissing
+		}
 	}
+	return loadCredentialFile(path)
+}
+
+func loadCredentialFile(path string) (CredentialResult, error) {
 	contents, info, err := readBoundedRegularFile(path, maxTokenFileBytes)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return CredentialResult{}, fmt.Errorf("read ACR credential file: %w", ErrCredentialMissing)
+		}
+		// A platform where bounded local file reads are structurally
+		// unsupported (see boundedfile_unsupported.go) can never have had a
+		// credential file written to it by this sidecar either --
+		// writeCredentialFile and removeCredentialFile refuse there
+		// unconditionally too -- so this is not the ambiguous "something may be
+		// there that this process cannot read" a locked keyring is. Treating it
+		// as ErrCredentialMissing lets CollectCredentialMaterial, and therefore
+		// logout, continue enumerating and cleaning up whatever this platform
+		// DOES support -- the environment credential, and the keyring where it
+		// functions -- instead of aborting the whole enumeration over a file
+		// location this sidecar could never have populated. An operator-supplied
+		// path that happens to hold an unrelated file this sidecar simply cannot
+		// read on this platform is, on this platform, already indistinguishable
+		// from nothing being there at all.
+		if errors.Is(err, ErrBoundedFileReadsUnsupported) {
+			return CredentialResult{}, fmt.Errorf("read ACR credential file: %w: %w", ErrCredentialMissing, err)
+		}
 		return CredentialResult{}, fmt.Errorf("read ACR credential file: %w", err)
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
@@ -140,5 +251,303 @@ func loadFromFile() (CredentialResult, error) {
 	if !auth.IsTokenShapeValid(token) {
 		return CredentialResult{}, fmt.Errorf("%s: %w", TokenFileEnvironment, ErrCredentialShapeInvalid)
 	}
-	return CredentialResult{Token: token, Source: "file"}, nil
+	return CredentialResult{Token: token, Source: "file", filePath: path}, nil
+}
+
+// CredentialPersistenceSupported exposes the stable, preflightable platform
+// boundary for login before it asks the server to issue a one-time secret.
+func CredentialPersistenceSupported() error {
+	return credentialPersistenceSupportedFor(runtime.GOOS)
+}
+
+func credentialPersistenceSupportedFor(goos string) error {
+	if goos != "darwin" && goos != "linux" {
+		return ErrCredentialPersistenceUnsupported
+	}
+	return nil
+}
+
+// PersistCredential stores a shape-valid credential in the configured or
+// default keyring when the platform can write it safely. Unavailable or failed
+// keyring writes atomically fall back to the configured or default token file.
+func PersistCredential(token string) (CredentialResult, error) {
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		return CredentialResult{}, err
+	}
+	defer session.Close()
+	return session.PersistCredential(token)
+}
+
+func (s *CredentialLifecycleSession) PersistCredential(token string) (CredentialResult, error) {
+	finish, err := s.beginOperation()
+	if err != nil {
+		return CredentialResult{}, err
+	}
+	defer finish()
+	return persistCredential(token)
+}
+
+func persistCredential(token string) (CredentialResult, error) {
+	keyringAllowed, err := keyringEnabled()
+	if err != nil {
+		return CredentialResult{}, err
+	}
+	if err := CredentialPersistenceSupported(); err != nil {
+		return CredentialResult{}, err
+	}
+	token = strings.TrimSpace(token)
+	if !auth.IsTokenShapeValid(token) {
+		return CredentialResult{}, ErrCredentialShapeInvalid
+	}
+	if keyringAllowed {
+		service, account, keyringConfigured := credentialKeyringAddress()
+		if keyringConfigured && currentKeyringWriter != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), keyringLookupTimeout)
+			defer cancel()
+			if err := currentKeyringWriter(ctx, service, account, token); err == nil {
+				return CredentialResult{Token: token, Source: "keyring", keyringService: service, keyringAccount: account}, nil
+			} else if !errors.Is(err, errKeyringWriteUnavailable) {
+				// Anything past the attempt itself is ambiguous. A secret-store
+				// backend can commit the entry and still fail afterwards -- the
+				// mutation succeeds and the collection write-out, the D-Bus
+				// reply, or the process exit does not -- so returning a bare
+				// error told the caller "nothing was stored" while a readable
+				// credential sat in the keyring with no locator to purge it by.
+				// Hand back the candidate address alongside the failure, exactly
+				// as the ambiguous file write below does, so login can revoke
+				// the server-side credential and then purge precisely this entry.
+				return CredentialResult{Token: token, Source: "keyring", keyringService: service, keyringAccount: account},
+					fmt.Errorf("persist ACR keyring credential: %w", err)
+			}
+		}
+	}
+	path := configuredTokenFilePath()
+	if path == "" {
+		return CredentialResult{}, ErrCredentialMissing
+	}
+	if err := writeCredentialFile(path, token); err != nil {
+		failure := fmt.Errorf("persist ACR credential fallback file: %w", err)
+		if errors.Is(err, errCredentialWriteAmbiguous) {
+			// The credential may already be readable at path. Report the
+			// failure, but hand back the candidate locator so the caller can
+			// revoke the server-side credential and purge exactly this file
+			// instead of guessing at a source it was never told about.
+			return CredentialResult{Token: token, Source: "file", filePath: path}, failure
+		}
+		return CredentialResult{}, failure
+	}
+	return CredentialResult{Token: token, Source: "file", filePath: path}, nil
+}
+
+// ReplaceCredential updates the credential source already selected by the
+// sidecar. Refresh must never silently change sources: doing so can leave an
+// older higher-precedence token active.
+func ReplaceCredential(current CredentialResult, token string) error {
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	return session.ReplaceCredential(current, token)
+}
+
+func (s *CredentialLifecycleSession) ReplaceCredential(current CredentialResult, token string) error {
+	finish, err := s.beginOperation()
+	if err != nil {
+		return err
+	}
+	defer finish()
+	return replaceCredential(current, token)
+}
+
+func replaceCredential(current CredentialResult, token string) error {
+	if err := CredentialPersistenceSupported(); err != nil {
+		return err
+	}
+	token = strings.TrimSpace(token)
+	if !auth.IsTokenShapeValid(token) {
+		return ErrCredentialShapeInvalid
+	}
+	switch current.Source {
+	case "keyring":
+		keyringAllowed, err := keyringEnabled()
+		if err != nil {
+			return err
+		}
+		if !keyringAllowed {
+			return ErrCredentialPersistenceSourceUnsupported
+		}
+		if current.keyringService == "" || current.keyringAccount == "" || currentKeyringWriter == nil {
+			return ErrCredentialPersistenceSourceUnsupported
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), keyringLookupTimeout)
+		defer cancel()
+		if err := currentKeyringWriter(ctx, current.keyringService, current.keyringAccount, token); err != nil {
+			return fmt.Errorf("replace ACR keyring credential: %w", err)
+		}
+		return nil
+	case "file":
+		if current.filePath == "" {
+			return ErrCredentialPersistenceSourceUnsupported
+		}
+		if err := writeCredentialFile(current.filePath, token); err != nil {
+			return fmt.Errorf("replace ACR credential file: %w", err)
+		}
+		return nil
+	default:
+		return ErrCredentialPersistenceSourceUnsupported
+	}
+}
+
+func RestoreCredential(current CredentialResult) error {
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	return session.RestoreCredential(current)
+}
+
+func (s *CredentialLifecycleSession) RestoreCredential(current CredentialResult) error {
+	finish, err := s.beginOperation()
+	if err != nil {
+		return err
+	}
+	defer finish()
+	return replaceCredential(current, current.Token)
+}
+
+func DeleteCredential() error {
+	session, err := BeginCredentialLifecycleSession()
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	return session.DeleteCredential()
+}
+
+func (s *CredentialLifecycleSession) DeleteCredential() error {
+	finish, err := s.beginOperation()
+	if err != nil {
+		return err
+	}
+	defer finish()
+	keyringAllowed, err := keyringEnabled()
+	if err != nil {
+		return err
+	}
+	if err := CredentialPersistenceSupported(); err != nil {
+		return err
+	}
+	credential, err := loadCredential(keyringAllowed)
+	if errors.Is(err, ErrCredentialMissing) {
+		return nil
+	}
+	if err != nil {
+		return &CredentialCleanupError{Location: configuredTokenFilePath(), cause: fmt.Errorf("load ACR credential for deletion: %w", err)}
+	}
+	switch credential.Source {
+	case "environment":
+		return &CredentialCleanupError{Location: TokenEnvironment, cause: ErrCredentialPersistenceSourceUnsupported}
+	case "keyring":
+		if !keyringAllowed {
+			return &CredentialCleanupError{Location: "ACR keyring", cause: ErrCredentialPersistenceSourceUnsupported}
+		}
+		service, account, keyringConfigured := credentialKeyringAddress()
+		if !keyringConfigured || currentKeyringDeleter == nil {
+			return &CredentialCleanupError{Location: credentialKeyringLocation(service, account), cause: errors.New("delete ACR keyring credential: keyring unavailable")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), keyringLookupTimeout)
+		defer cancel()
+		if err := currentKeyringDeleter(ctx, service, account); err != nil {
+			return &CredentialCleanupError{Location: credentialKeyringLocation(service, account), cause: fmt.Errorf("delete ACR keyring credential: %w", err)}
+		}
+		return nil
+	case "file":
+		path := configuredTokenFilePath()
+		if path == "" {
+			return &CredentialCleanupError{Location: TokenFileEnvironment, cause: ErrCredentialPersistenceSourceUnsupported}
+		}
+		if err := removeACRCredentialFile(path, credential.Token, true); err != nil {
+			return &CredentialCleanupError{Location: path, cause: err}
+		}
+		return nil
+	default:
+		return &CredentialCleanupError{Location: "ACR credential", cause: ErrCredentialPersistenceSourceUnsupported}
+	}
+}
+
+func credentialKeyringLocation(service, account string) string {
+	return "keyring service " + service + " account " + account
+}
+
+// credentialKeyringAddress derives the keyring service and account, and
+// reports whether the pair addresses anything at all.
+//
+// This is the single derivation for every keyring operation -- lookup,
+// verification, persistence, deletion, and purge. It used to be duplicated
+// inside loadFromKeyring, which is a latent divergence with no symptom until
+// the two disagree: a read that resolves one account while a delete resolves
+// another leaves a live credential in the store that logout reported as
+// removed, and neither copy's own tests would notice.
+//
+// The account falls back to defaultKeyringAccount (the OS user) only when the
+// service was set explicitly. Without an explicit service, an unset
+// ACR_API_URL leaves no address at all, rather than pointing every ACR install
+// on the host at one shared per-user entry under the default service.
+func credentialKeyringAddress() (string, string, bool) {
+	return deriveCredentialKeyringAddress(os.Getenv)
+}
+
+func deriveCredentialKeyringAddress(getenv func(string) string) (string, string, bool) {
+	service := strings.TrimSpace(getenv(TokenKeyringServiceEnvironment))
+	explicitService := service != ""
+	if service == "" {
+		service = defaultKeyringService
+	}
+	account := strings.TrimSpace(getenv(TokenKeyringAccountEnvironment))
+	if account == "" {
+		account = normalizedKeyringAccountForAPIURL(strings.TrimSpace(getenv(APIURLEnvironment)))
+		if account == "" && explicitService {
+			account = defaultKeyringAccountFrom(getenv)
+		}
+	}
+	return service, account, account != ""
+}
+
+func keyringEnabled() (bool, error) {
+	disabled, err := strictBoolOrDefault(os.LookupEnv, TokenKeyringDisabledEnvironment, false)
+	if err != nil {
+		return false, err
+	}
+	return !disabled, nil
+}
+
+func configuredTokenFilePath() string {
+	if path := strings.TrimSpace(os.Getenv(TokenFileEnvironment)); path != "" {
+		return path
+	}
+	return defaultTokenFilePath()
+}
+
+func defaultTokenFilePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ""
+	}
+	return filepath.Join(home, ".acr", "token")
+}
+
+// normalizedKeyringAccountForAPIURL renders the configured API origin as a
+// keyring account: scheme and host only, lowercased, with no path, query, port
+// stripping, or userinfo. A malformed or non-absolute value yields no account
+// rather than a partial one, so a broken ACR_API_URL cannot address a keyring
+// entry belonging to some other origin.
+func normalizedKeyringAccountForAPIURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host)
 }

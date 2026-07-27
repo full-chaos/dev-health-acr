@@ -70,7 +70,8 @@ func (r *Runtime) closeIndependentLocked() error {
 }
 
 type postgresComponents struct {
-	credentials storage.CredentialStore
+	credentials *storage.CredentialLifecycle
+	devices     storage.DeviceAuthorizationStore
 	audit       storage.AuditStore
 	packets     storage.PacketStore
 	episodes    storage.EpisodeStore
