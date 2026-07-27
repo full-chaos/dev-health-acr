@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"testing"
 )
@@ -128,5 +129,62 @@ func TestCredentialCleanupLocationsReturnsNothingForAnUnreportedError(t *testing
 	}
 	if locations := CredentialCleanupLocations(nil); locations != nil {
 		t.Fatalf("locations = %v, want none for a nil error", locations)
+	}
+}
+
+// ACR_API_TOKEN_FILE is an operator-supplied path and cleanup used to unlink
+// whatever regular file sat at it, so a mistyped or hostile value turned
+// logout into an arbitrary-file delete. Every boundary that admits a file as
+// an ACR credential for reading must also gate its removal.
+func TestPurgeCredentialMaterialLeavesFileThatIsNotAnACRCredentialTarget(t *testing.T) {
+	cases := []struct {
+		name     string
+		contents string
+		mode     os.FileMode
+		skip     bool
+	}{
+		{name: "wrong token shape", contents: "-----BEGIN OPENSSH PRIVATE KEY-----\n", mode: 0o600},
+		{name: "acr shape but group readable", contents: validTestToken(54) + "\n", mode: 0o640, skip: runtime.GOOS == "windows"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if testCase.skip {
+				t.Skip("POSIX permission boundary")
+			}
+
+			// Given
+			path := filepath.Join(t.TempDir(), "unrelated")
+			if err := os.WriteFile(path, []byte(testCase.contents), testCase.mode); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(TokenEnvironment, validTestToken(55))
+			t.Setenv(TokenKeyringDisabledEnvironment, "true")
+			t.Setenv(TokenFileEnvironment, path)
+			current, err := LoadCredential()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// When
+			locations := CredentialCleanupLocations(PurgeCredentialMaterial(current))
+
+			// Then
+			contents, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatalf("cleanup deleted a file that is not an ACR credential target: %v", readErr)
+			}
+			if string(contents) != testCase.contents {
+				t.Fatalf("unrelated file contents = %q, want unchanged", contents)
+			}
+			found := false
+			for _, location := range locations {
+				if location == path {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("failed locations = %v, want the refused target %q reported", locations, path)
+			}
+		})
 	}
 }

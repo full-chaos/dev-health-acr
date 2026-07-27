@@ -347,8 +347,8 @@ func DeleteCredential() error {
 		if path == "" {
 			return &CredentialCleanupError{Location: TokenFileEnvironment, cause: ErrCredentialPersistenceSourceUnsupported}
 		}
-		if err := removeCredentialFile(path); err != nil {
-			return &CredentialCleanupError{Location: path, cause: fmt.Errorf("remove ACR credential fallback file: %w", err)}
+		if err := removeACRCredentialFile(path); err != nil {
+			return &CredentialCleanupError{Location: path, cause: err}
 		}
 		return nil
 	default:

@@ -119,11 +119,30 @@ func addFilePurgeTarget(targets *[]credentialPurgeTarget, seen map[string]bool, 
 	}
 	seen["file:"+path] = true
 	*targets = append(*targets, credentialPurgeTarget{location: path, remove: func() error {
-		if err := removeCredentialFile(path); err != nil {
-			return fmt.Errorf("remove ACR credential fallback file: %w", err)
-		}
-		return nil
+		return removeACRCredentialFile(path)
 	}})
+}
+
+// removeACRCredentialFile deletes path only after proving it is an ACR
+// credential target through the same boundaries that admit one for reading:
+// no-follow open, regular-file fstat, group/world permission denial, and the
+// ACR API bearer token shape (loadCredentialFile). ACR_API_TOKEN_FILE is an
+// operator-supplied path, and cleanup used to unlink whatever regular file
+// was sitting at it, so a mistyped or hostile value turned logout into an
+// arbitrary-file delete. An absent, unreadable, or non-ACR file is left
+// exactly as it is; a missing one reports success so cleanup stays
+// idempotent.
+func removeACRCredentialFile(path string) error {
+	if _, err := loadCredentialFile(path); err != nil {
+		if errors.Is(err, ErrCredentialMissing) {
+			return nil
+		}
+		return fmt.Errorf("verify ACR credential file before removal: %w", err)
+	}
+	if err := removeCredentialFile(path); err != nil {
+		return fmt.Errorf("remove ACR credential fallback file: %w", err)
+	}
+	return nil
 }
 
 func addKeyringPurgeTarget(targets *[]credentialPurgeTarget, seen map[string]bool, service, account string) {

@@ -93,11 +93,24 @@ func removeCredentialFile(path string) error {
 	return nil
 }
 
+// ensureCredentialParent guarantees the credential file's parent directory is
+// a real, non-symlinked directory that no other local user can write into.
+//
+// Only a directory this function created is chmod-ed. The parent is an
+// operator-supplied location -- ACR_API_TOKEN_FILE can point anywhere -- and
+// unconditionally rewriting its mode changed a directory ACR does not own:
+// pointing the token file at $HOME/token silently reduced the entire home
+// directory to 0700. A pre-existing parent is inspected instead: group- or
+// world-writable is refused outright, since any local user could then swap
+// the credential file, while every other mode bit is left exactly as found.
 func ensureCredentialParent(parent string) error {
 	info, err := os.Lstat(parent)
 	if errors.Is(err, os.ErrNotExist) {
 		if err := os.Mkdir(parent, 0o700); err != nil {
 			return fmt.Errorf("create credential directory: %w", err)
+		}
+		if err := os.Chmod(parent, 0o700); err != nil {
+			return fmt.Errorf("restrict credential directory: %w", err)
 		}
 		info, err = os.Lstat(parent)
 	}
@@ -107,8 +120,8 @@ func ensureCredentialParent(parent string) error {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("credential directory must be a real directory")
 	}
-	if err := os.Chmod(parent, 0o700); err != nil {
-		return fmt.Errorf("restrict credential directory: %w", err)
+	if info.Mode().Perm()&0o022 != 0 {
+		return errors.New("credential directory must not grant group or world write access")
 	}
 	return nil
 }
