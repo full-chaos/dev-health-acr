@@ -71,8 +71,29 @@ jobs:
         run: make fmt-check
       - name: Vet Go packages
         run: make vet
-      - name: Run Go tests
-        run: make test
+      - name: Analyze Go tests
+        id: go-tests
+        run: |
+          set +e
+          go test -count=1 -json ./... >"$RUNNER_TEMP/go-test.json"
+          status=$?
+          set -e
+          failure="$(jq -r '
+            select(.Action == "fail") |
+            if .Test then (.Package + "/" + .Test) else .Package end
+          ' "$RUNNER_TEMP/go-test.json" | head -n 1)"
+          test -n "$failure" || failure=unknown
+          failure="$(printf '%s' "$failure" | tr '\r\n' '  ' | cut -c1-180)"
+          printf 'status=%s\nfailure=%s\n' "$status" "$failure" >>"$GITHUB_OUTPUT"
+      - name: Enforce Go tests (${{ steps.go-tests.outputs.failure }})
+        if: steps.go-tests.outputs.status != '0'
+        run: |
+          jq -r '
+            select(.Action == "output") |
+            select(.Output | test("^(--- FAIL:|FAIL[[:space:]]|panic:|fatal error:|[[:space:]]+.*_test\\.go:[0-9]+:|[[:space:]]+Error Trace:|[[:space:]]+Error:|[[:space:]]+Messages:|[[:space:]]+expected|[[:space:]]+actual)")) |
+            .Output
+          ' "$RUNNER_TEMP/go-test.json"
+          exit 1
       - name: Run race and deterministic shuffle tests
         run: make test-race
       - name: Cross-compile supported targets
