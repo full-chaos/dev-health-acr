@@ -22,6 +22,8 @@ jobs:
     env:
       HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
       START_SHA: ${{ github.event.pull_request.head.sha }}
+      PATCH_GZIP_SHA256: 686c66496be204e8eafffe60e703787a79048a6c3974658bc704bf7499e32e04
+      PATCH_SHA256: 94e7e9cff46861d2cf62699ee9271b0d4ee196dc2de1aef0e18dc4d39faa1719
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -32,10 +34,7 @@ jobs:
         with:
           go-version: '1.26.5'
           cache: false
-      - name: Apply keyless consumer contract, verify, and commit
-        env:
-          PATCH_GZIP_SHA256: 686c66496be204e8eafffe60e703787a79048a6c3974658bc704bf7499e32e04
-          PATCH_SHA256: 94e7e9cff46861d2cf62699ee9271b0d4ee196dc2de1aef0e18dc4d39faa1719
+      - name: Reconstruct and apply verified patch
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$START_SHA"
@@ -54,9 +53,15 @@ jobs:
             internal/mcpclientfixtures/install_snippets.go \
             internal/mcpclientfixtures/windows_snippet_parity_test.go
           git diff --check
-          bash scripts/docs/verify.sh
-          go test ./internal/mcpclientfixtures -count=1
-          make verify
+      - name: Verify documentation contract
+        run: bash scripts/docs/verify.sh
+      - name: Verify MCP client fixture contract
+        run: go test ./internal/mcpclientfixtures -count=1
+      - name: Verify complete repository
+        run: make verify
+      - name: Remove staging files and publish verified fix
+        run: |
+          set -euo pipefail
           git rm .github/workflows/source-snapshot.yml
           git rm .github/patches/keyless-consumer.patch.gz.b64.*
           git add -A
