@@ -1,0 +1,110 @@
+---
+name: Promote main image aliases
+
+"on":
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: promote-main-image-aliases
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: >-
+      github.repository == 'full-chaos/dev-health-acr' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Resolve main publication aliases
+        id: aliases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          short_sha="${SOURCE_SHA:0:7}"
+          current_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          [[ "$current_main" =~ ^[0-9a-f]{40}$ ]]
+          {
+            printf 'source_sha=%s\n' "$SOURCE_SHA"
+            printf 'short_sha=%s\n' "$short_sha"
+          } >>"$GITHUB_OUTPUT"
+          if [[ "$current_main" == "$SOURCE_SHA" ]]; then
+            printf 'promote_tip=true\n' >>"$GITHUB_OUTPUT"
+          else
+            printf 'promote_tip=false\n' >>"$GITHUB_OUTPUT"
+            printf '::notice::main advanced to %s; publishing only the immutable sha-%s alias for %s.\n' \
+              "$current_main" "$short_sha" "$SOURCE_SHA"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish immutable short-SHA aliases
+        env:
+          SOURCE_SHA: ${{ steps.aliases.outputs.source_sha }}
+          SHORT_SHA: ${{ steps.aliases.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          manifest_digest() {
+            docker buildx imagetools inspect "$1" \
+              | awk '$1 == "Digest:" { print $2; exit }'
+          }
+          for product in acr-api acr-mcp; do
+            image="ghcr.io/$GITHUB_REPOSITORY/$product"
+            source_ref="$image:$SOURCE_SHA"
+            sha_ref="$image:sha-$SHORT_SHA"
+            source_digest="$(manifest_digest "$source_ref")"
+            [[ "$source_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker buildx imagetools create --tag "$sha_ref" "$source_ref"
+            test "$(manifest_digest "$sha_ref")" = "$source_digest"
+          done
+
+      - name: Promote current main tip to main and latest
+        if: steps.aliases.outputs.promote_tip == 'true'
+        env:
+          SOURCE_SHA: ${{ steps.aliases.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          manifest_digest() {
+            docker buildx imagetools inspect "$1" \
+              | awk '$1 == "Digest:" { print $2; exit }'
+          }
+          current_main="$(GH_TOKEN="$GITHUB_TOKEN" gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          test "$current_main" = "$SOURCE_SHA"
+          for product in acr-api acr-mcp; do
+            image="ghcr.io/$GITHUB_REPOSITORY/$product"
+            source_ref="$image:$SOURCE_SHA"
+            main_ref="$image:main"
+            latest_ref="$image:latest"
+            source_digest="$(manifest_digest "$source_ref")"
+            [[ "$source_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker buildx imagetools create \
+              --tag "$main_ref" \
+              --tag "$latest_ref" \
+              "$source_ref"
+            test "$(manifest_digest "$main_ref")" = "$source_digest"
+            test "$(manifest_digest "$latest_ref")" = "$source_digest"
+          done
+          {
+            printf '### Main image aliases\n\n'
+            printf -- '- `main`, `latest`, and `sha-%s` resolve to `%s`.\n' \
+              "${SOURCE_SHA:0:7}" "$SOURCE_SHA"
+          } >>"$GITHUB_STEP_SUMMARY"
