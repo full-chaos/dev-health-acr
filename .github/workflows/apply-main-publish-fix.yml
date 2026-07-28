@@ -4,6 +4,8 @@ name: apply-main-publish-fix
 "on":
   push:
     branches: [agent/publish-main-latest-sha]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
@@ -14,7 +16,10 @@ concurrency:
 
 jobs:
   apply-and-verify:
-    if: github.repository == 'full-chaos/dev-health-acr'
+    if: >-
+      github.repository == 'full-chaos/dev-health-acr' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
