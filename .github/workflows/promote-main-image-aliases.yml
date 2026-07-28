@@ -1,110 +1,303 @@
 ---
-name: Promote main image aliases
+name: apply-main-image-aliases
 
 "on":
-  workflow_run:
-    workflows: [Release]
-    types: [completed]
+  push:
+    branches: [agent/align-main-image-tags]
 
 permissions:
-  contents: read
-  packages: write
+  contents: write
 
 concurrency:
-  group: promote-main-image-aliases
-  cancel-in-progress: false
+  group: apply-main-image-aliases
+  cancel-in-progress: true
 
 jobs:
-  promote:
+  apply-and-verify:
     if: >-
       github.repository == 'full-chaos/dev-health-acr' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main'
+      github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
-      - name: Resolve main publication aliases
-        id: aliases
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: agent/align-main-image-tags
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.26.5'
+          cache: false
+      - name: Apply canonical publisher alignment
         run: |
           set -euo pipefail
-          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          short_sha="${SOURCE_SHA:0:7}"
-          current_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
-          [[ "$current_main" =~ ^[0-9a-f]{40}$ ]]
-          {
-            printf 'source_sha=%s\n' "$SOURCE_SHA"
-            printf 'short_sha=%s\n' "$short_sha"
-          } >>"$GITHUB_OUTPUT"
-          if [[ "$current_main" == "$SOURCE_SHA" ]]; then
-            printf 'promote_tip=true\n' >>"$GITHUB_OUTPUT"
-          else
-            printf 'promote_tip=false\n' >>"$GITHUB_OUTPUT"
-            printf '::notice::main advanced to %s; publishing only the immutable sha-%s alias for %s.\n' \
-              "$current_main" "$short_sha" "$SOURCE_SHA"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              data = target.read_text()
+              count = data.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement target, found {count}")
+              target.write_text(data.replace(old, new))
+
+          publisher = "scripts/release/publish-ci-release.sh"
+
+          replace_once(
+              publisher,
+              """    if [[ \"$channel\" == main ]]; then
+              printf 'Immutable main-commit container images:\\n\\n'
+            else
+              printf 'Versioned container images:\\n\\n'
+            fi
+            jq -r --arg tag \"$tag\" '.images[] | \"- `\" + .repository + \":\" + $tag + \"` (`\" + .repository + \"@\" + .digest + \"`)\"' \\
+              \"$release_dir/container-release-manifest.json\"
+            if [[ \"$channel\" == main ]]; then
+              printf '\\nIf this commit is still the tip of `main` when publication completes, the same image digests and this GitHub Release are promoted to `latest`.\\n'
+            fi
+          """,
+              """    if [[ \"$channel\" == main ]]; then
+              printf 'Main-commit container images:\\n\\n'
+            else
+              printf 'Versioned container images:\\n\\n'
+            fi
+            jq -r --arg tag \"$tag\" '.images[] | \"- `\" + .repository + \":\" + $tag + \"` (`\" + .repository + \"@\" + .digest + \"`)\"' \\
+              \"$release_dir/container-release-manifest.json\"
+            if [[ \"$channel\" == main ]]; then
+              printf '\\nThe same digest is also published as `sha-%s`; if this commit is still the tip of `main`, it is promoted to both `main` and `latest`.\\n' \"${commit:0:7}\"
+            fi
+          """,
+          )
+
+          insert_marker = """if \"$publish_latest\"; then
+            while IFS=$'\\t' read -r product repository archive image_digest archive_sha256; do
+          """
+          short_alias_block = """if [[ \"$channel\" == main ]]; then
+            short_tag=\"sha-${commit:0:7}\"
+            while IFS=$'\\t' read -r product repository archive image_digest archive_sha256; do
+              test -f \"$release_dir/$archive\" || fail \"container archive is missing: $archive\"
+              test \"$(checksum_file \"$release_dir/$archive\")\" = \"$archive_sha256\" \\
+                || fail \"container archive checksum mismatch: $archive\"
+              short_reference=\"${repository}:${short_tag}\"
+              existing_raw=\"$tmp/$product-short-existing-manifest.json\"
+              existing_error=\"$tmp/$product-short-existing-manifest.err\"
+              if skopeo inspect --raw --authfile \"$authfile\" \"docker://$short_reference\" \\
+                >\"$existing_raw\" 2>\"$existing_error\"; then
+                existing_digest=\"sha256:$(checksum_file \"$existing_raw\")\"
+                test \"$existing_digest\" = \"$image_digest\" \\
+                  || fail \"immutable GHCR short-SHA tag conflict: $short_reference points to $existing_digest, expected $image_digest\"
+              else
+                if ! grep -Eqi '(manifest unknown|name unknown|HTTP[^0-9]*404|status[^0-9]*404)' \"$existing_error\"; then
+                  cat \"$existing_error\" >&2
+                  fail \"cannot determine whether GHCR short-SHA tag exists: $short_reference\"
+                fi
+                skopeo copy --all --preserve-digests \\
+                  --authfile \"$authfile\" \\
+                  --digestfile \"$tmp/$product-short.digest\" \\
+                  \"oci-archive:$release_dir/$archive\" \\
+                  \"docker://$short_reference\"
+                test \"$(tr -d '\\n' <\"$tmp/$product-short.digest\")\" = \"$image_digest\" \\
+                  || fail \"GHCR reported the wrong digest for $short_reference\"
+              fi
+              test \"$(manifest_digest \"$short_reference\")\" = \"$image_digest\" \\
+                || fail \"short-SHA GHCR tag does not resolve to the verified main image: $short_reference\"
+            done < <(
+              jq -r '.images[] | [.product, .repository, .archive, .digest, .archive_sha256] | @tsv' \\
+                \"$release_dir/container-release-manifest.json\"
+            )
           fi
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+          if \"$publish_latest\"; then
+            while IFS=$'\\t' read -r product repository archive image_digest archive_sha256; do
+          """
+          replace_once(publisher, insert_marker, short_alias_block)
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          replace_once(
+              publisher,
+              """    latest_reference=\"${repository}:latest\"
+              skopeo copy --all --preserve-digests \\
+                --authfile \"$authfile\" \\
+                --digestfile \"$tmp/$product-latest.digest\" \\
+                \"oci-archive:$release_dir/$archive\" \\
+                \"docker://$latest_reference\"
+              test \"$(tr -d '\\n' <\"$tmp/$product-latest.digest\")\" = \"$image_digest\" \\
+                || fail \"GHCR reported the wrong digest for $latest_reference\"
+              test \"$(manifest_digest \"$latest_reference\")\" = \"$image_digest\" \\
+                || fail \"latest GHCR tag does not resolve to the verified main image: $latest_reference\"
+          """,
+              """    for moving_tag in main latest; do
+                moving_reference=\"${repository}:${moving_tag}\"
+                skopeo copy --all --preserve-digests \\
+                  --authfile \"$authfile\" \\
+                  --digestfile \"$tmp/$product-$moving_tag.digest\" \\
+                  \"oci-archive:$release_dir/$archive\" \\
+                  \"docker://$moving_reference\"
+                test \"$(tr -d '\\n' <\"$tmp/$product-$moving_tag.digest\")\" = \"$image_digest\" \\
+                  || fail \"GHCR reported the wrong digest for $moving_reference\"
+                test \"$(manifest_digest \"$moving_reference\")\" = \"$image_digest\" \\
+                  || fail \"moving GHCR tag does not resolve to the verified main image: $moving_reference\"
+              done
+          """,
+          )
 
-      - name: Publish immutable short-SHA aliases
-        env:
-          SOURCE_SHA: ${{ steps.aliases.outputs.source_sha }}
-          SHORT_SHA: ${{ steps.aliases.outputs.short_sha }}
+          replace_once(
+              publisher,
+              "preserving %s as an immutable SHA release without moving latest.",
+              "preserving %s as an immutable SHA release without moving main or latest.",
+          )
+          replace_once(
+              publisher,
+              "published immutable SHA assets and promoted main to latest: %s\\n",
+              "published immutable SHA assets and promoted main and latest: %s\\n",
+          )
+
+          tests = "scripts/release/test_release_scripts.sh"
+          replace_once(
+              tests,
+              """grep -F 'latest_reference=\"${repository}:latest\"' \"$root/scripts/release/publish-ci-release.sh\" >/dev/null
+          grep -F 'git/ref/heads/main' \"$root/scripts/release/publish-ci-release.sh\" >/dev/null
+          """,
+              """grep -F 'short_tag=\"sha-${commit:0:7}\"' \"$root/scripts/release/publish-ci-release.sh\" >/dev/null
+          grep -F 'short_reference=\"${repository}:${short_tag}\"' \"$root/scripts/release/publish-ci-release.sh\" >/dev/null
+          grep -F 'for moving_tag in main latest' \"$root/scripts/release/publish-ci-release.sh\" >/dev/null
+          grep -F 'moving_reference=\"${repository}:${moving_tag}\"' \"$root/scripts/release/publish-ci-release.sh\" >/dev/null
+          grep -F 'git/ref/heads/main' \"$root/scripts/release/publish-ci-release.sh\" >/dev/null
+          """,
+          )
+          replace_once(
+              tests,
+              "grep -F 'full commit SHA and `latest`' \"$root/docs/container-images.md\" >/dev/null",
+              "grep -F 'full commit SHA, `sha-<short-sha>`, `main`, and `latest`' \"$root/docs/container-images.md\" >/dev/null",
+          )
+
+          replace_once(
+              "docs/container-images.md",
+              """successful current-tip `main` build publishes both the full commit SHA and
+          `latest` for `acr-api` and `acr-mcp`; canonical version tags publish their own
+          immutable `vX.Y.Z[-dev.N|-beta.N]` references. The workflow verifies every
+          """,
+              """successful `main` build publishes the full commit SHA and immutable
+          `sha-<short-sha>` alias for `acr-api` and `acr-mcp`. The current tip also owns
+          the moving `main` and `latest` aliases; canonical version tags publish their
+          own immutable `vX.Y.Z[-dev.N|-beta.N]` references. The workflow verifies every
+          """,
+          )
+          replace_once(
+              "docs/container-images.md",
+              """Before moving `latest`, it rechecks the current GitHub `main` ref so an older
+          run finishing out of order cannot roll the channel backward. The full commit SHA and `latest` therefore identify the same image only for the current tip of
+          `main`.
+          """,
+              """Before moving `main` or `latest`, it rechecks the current GitHub `main` ref so
+          an older run finishing out of order cannot roll the channel backward. The full
+          commit SHA, `sha-<short-sha>`, `main`, and `latest` therefore identify the same
+          image for the current tip of `main`.
+          """,
+          )
+
+          policy = "docs/release-policy.md"
+          replace_once(
+              policy,
+              """- every successful push to `main` publishes an immutable commit-SHA release and
+            promotes that exact build to the moving `latest` aliases when the commit is
+            still the current tip of `main`;
+          """,
+              """- every successful push to `main` publishes immutable full-SHA and
+            `sha-<short-sha>` references, then promotes that exact build to the moving
+            `main` and `latest` aliases when the commit is still the current branch tip;
+          """,
+          )
+          replace_once(
+              policy,
+              """   authorization boundary. The workflow publishes the full 40-character commit
+             SHA and, after rechecking the branch tip, the `latest` aliases.
+          """,
+              """   authorization boundary. The workflow publishes the full 40-character commit
+             SHA and `sha-<short-sha>`, then, after rechecking the branch tip, the `main`
+             and `latest` aliases.
+          """,
+          )
+          replace_once(
+              policy,
+              """Before changing either moving `latest` alias, the final publication job reads
+          the current `refs/heads/main` value from GitHub. A superseded run still publishes
+          and verifies its immutable SHA release, but it cannot move `latest`. This closes
+          """,
+              """Before changing the moving `main` or `latest` aliases, the final publication
+          job reads the current `refs/heads/main` value from GitHub. A superseded run still
+          publishes and verifies its immutable full-SHA and short-SHA references, but it
+          cannot move `main` or `latest`. This closes
+          """,
+          )
+          replace_once(
+              policy,
+              """For the current tip of `main`, the exact verified OCI archives are published
+          without rebuilding to both the immutable SHA and mutable convenience alias:
+
+          ```text
+          ghcr.io/full-chaos/dev-health-acr/acr-api:<40-character-commit-SHA>
+          ghcr.io/full-chaos/dev-health-acr/acr-api:latest
+          ghcr.io/full-chaos/dev-health-acr/acr-mcp:<40-character-commit-SHA>
+          ghcr.io/full-chaos/dev-health-acr/acr-mcp:latest
+          ```
+          """,
+              """The exact verified OCI archives are published without rebuilding under the
+          immutable full-SHA and Dev Health standard short-SHA references. For the current
+          tip of `main`, the same digest also owns the moving `main` and `latest` aliases:
+
+          ```text
+          ghcr.io/full-chaos/dev-health-acr/acr-api:<40-character-commit-SHA>
+          ghcr.io/full-chaos/dev-health-acr/acr-api:sha-<7-character-commit-SHA>
+          ghcr.io/full-chaos/dev-health-acr/acr-api:main
+          ghcr.io/full-chaos/dev-health-acr/acr-api:latest
+          ghcr.io/full-chaos/dev-health-acr/acr-mcp:<40-character-commit-SHA>
+          ghcr.io/full-chaos/dev-health-acr/acr-mcp:sha-<7-character-commit-SHA>
+          ghcr.io/full-chaos/dev-health-acr/acr-mcp:main
+          ghcr.io/full-chaos/dev-health-acr/acr-mcp:latest
+          ```
+          """,
+          )
+          replace_once(
+              policy,
+              """`latest` is intentionally mutable and is suitable for following `main` in
+          development environments. Production and rollback controls remain
+          digest-oriented.
+          """,
+              """`main` and `latest` are intentionally mutable and are suitable for following
+          the branch in development environments. Production and rollback controls remain
+          digest-oriented.
+          """,
+          )
+          replace_once(
+              policy,
+              """- `latest` is updated only from a `main` run whose commit still equals the
+            current branch tip; its resulting digest is verified after the copy.
+          """,
+              """- `main` and `latest` are updated only from a `main` run whose commit still
+            equals the current branch tip; each resulting digest is verified after copy.
+          """,
+          )
+          PY
+          git diff --check
+      - name: Verify canonical publication contract
         run: |
           set -euo pipefail
-          manifest_digest() {
-            docker buildx imagetools inspect "$1" \
-              | awk '$1 == "Digest:" { print $2; exit }'
-          }
-          for product in acr-api acr-mcp; do
-            image="ghcr.io/$GITHUB_REPOSITORY/$product"
-            source_ref="$image:$SOURCE_SHA"
-            sha_ref="$image:sha-$SHORT_SHA"
-            source_digest="$(manifest_digest "$source_ref")"
-            [[ "$source_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-            docker buildx imagetools create --tag "$sha_ref" "$source_ref"
-            test "$(manifest_digest "$sha_ref")" = "$source_digest"
-          done
-
-      - name: Promote current main tip to main and latest
-        if: steps.aliases.outputs.promote_tip == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ steps.aliases.outputs.source_sha }}
+          bash -n scripts/release/publish-ci-release.sh scripts/release/test_release_scripts.sh
+          shellcheck -x -e SC2016 scripts/release/publish-ci-release.sh scripts/release/test_release_scripts.sh
+          scripts/release/test_release_scripts.sh
+          bash scripts/docs/verify.sh
+          make verify
+      - name: Commit and push verified alignment
         run: |
           set -euo pipefail
-          manifest_digest() {
-            docker buildx imagetools inspect "$1" \
-              | awk '$1 == "Digest:" { print $2; exit }'
-          }
-          current_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
-          test "$current_main" = "$SOURCE_SHA"
-          for product in acr-api acr-mcp; do
-            image="ghcr.io/$GITHUB_REPOSITORY/$product"
-            source_ref="$image:$SOURCE_SHA"
-            main_ref="$image:main"
-            latest_ref="$image:latest"
-            source_digest="$(manifest_digest "$source_ref")"
-            [[ "$source_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-            docker buildx imagetools create \
-              --tag "$main_ref" \
-              --tag "$latest_ref" \
-              "$source_ref"
-            test "$(manifest_digest "$main_ref")" = "$source_digest"
-            test "$(manifest_digest "$latest_ref")" = "$source_digest"
-          done
-          {
-            printf '### Main image aliases\n\n'
-            printf -- '- `main`, `latest`, and `sha-%s` resolve to `%s`.\n' \
-              "${SOURCE_SHA:0:7}" "$SOURCE_SHA"
-          } >>"$GITHUB_STEP_SUMMARY"
+          git add \
+            scripts/release/publish-ci-release.sh \
+            scripts/release/test_release_scripts.sh \
+            docs/container-images.md \
+            docs/release-policy.md
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(release): publish main and SHA image aliases'
+          git push origin HEAD:agent/align-main-image-tags
