@@ -67,6 +67,43 @@ jobs:
             internal/mcpclientfixtures/windows_snippet_failclosed_test.go \
             internal/mcpclientfixtures/windows_snippet_parity_test.go
           git diff --check
+      - name: Prepare final clean commit
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/source-snapshot.yml
+          git rm .github/patches/keyless-consumer.patch.gz.b64.*
+          git rm .github/patches/keyless-followup.patch.gz.b64
+          git add -A
+          cat >"$RUNNER_TEMP/expected-files" <<'EXPECTED_FILES'
+          .github/patches/keyless-consumer.patch.gz.b64.00
+          .github/patches/keyless-consumer.patch.gz.b64.01
+          .github/patches/keyless-consumer.patch.gz.b64.02
+          .github/patches/keyless-consumer.patch.gz.b64.03
+          .github/patches/keyless-followup.patch.gz.b64
+          .github/workflows/source-snapshot.yml
+          docs/examples/mcp-clients/README.md
+          docs/examples/mcp-clients/claude-code.md
+          docs/examples/mcp-clients/codex.md
+          docs/examples/mcp-clients/cursor.md
+          docs/examples/mcp-clients/generic-stdio.md
+          docs/examples/mcp-clients/opencode.md
+          docs/implementation-backlog.md
+          docs/operations.md
+          docs/release-notes-template.md
+          docs/release-policy.md
+          internal/mcpclientfixtures/doc_parity_test.go
+          internal/mcpclientfixtures/install_snippet_targeted_verify_test.go
+          internal/mcpclientfixtures/install_snippets.go
+          internal/mcpclientfixtures/windows_snippet_failclosed_test.go
+          internal/mcpclientfixtures/windows_snippet_parity_test.go
+          EXPECTED_FILES
+          git diff --cached --name-only | LC_ALL=C sort >"$RUNNER_TEMP/actual-files"
+          LC_ALL=C sort -o "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/expected-files"
+          diff -u "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/actual-files"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(docs): align release verification with sigstore bundle'
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - name: Verify documentation contract
         run: bash scripts/docs/verify.sh
       - name: Run MCP client fixture contract
@@ -112,40 +149,8 @@ jobs:
         run: |
           cat "$RUNNER_TEMP/make-verify.log"
           exit "${{ steps.repository-verify.outputs.status }}"
-      - name: Remove staging files and publish verified fix
+      - name: Push verified fix
         run: |
           set -euo pipefail
-          git rm .github/workflows/source-snapshot.yml
-          git rm .github/patches/keyless-consumer.patch.gz.b64.*
-          git rm .github/patches/keyless-followup.patch.gz.b64
-          git add -A
-          cat >"$RUNNER_TEMP/expected-files" <<'EXPECTED_FILES'
-          .github/patches/keyless-consumer.patch.gz.b64.00
-          .github/patches/keyless-consumer.patch.gz.b64.01
-          .github/patches/keyless-consumer.patch.gz.b64.02
-          .github/patches/keyless-consumer.patch.gz.b64.03
-          .github/patches/keyless-followup.patch.gz.b64
-          .github/workflows/source-snapshot.yml
-          docs/examples/mcp-clients/README.md
-          docs/examples/mcp-clients/claude-code.md
-          docs/examples/mcp-clients/codex.md
-          docs/examples/mcp-clients/cursor.md
-          docs/examples/mcp-clients/generic-stdio.md
-          docs/examples/mcp-clients/opencode.md
-          docs/implementation-backlog.md
-          docs/operations.md
-          docs/release-notes-template.md
-          docs/release-policy.md
-          internal/mcpclientfixtures/doc_parity_test.go
-          internal/mcpclientfixtures/install_snippet_targeted_verify_test.go
-          internal/mcpclientfixtures/install_snippets.go
-          internal/mcpclientfixtures/windows_snippet_failclosed_test.go
-          internal/mcpclientfixtures/windows_snippet_parity_test.go
-          EXPECTED_FILES
-          git diff --cached --name-only | LC_ALL=C sort >"$RUNNER_TEMP/actual-files"
-          LC_ALL=C sort -o "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/expected-files"
-          diff -u "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/actual-files"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'fix(docs): align release verification with sigstore bundle'
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
           git push origin "HEAD:$HEAD_BRANCH"
