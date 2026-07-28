@@ -36,8 +36,27 @@ jobs:
           test -x scripts/release/test_release_scripts.sh
           test -x scripts/release/verify-mcp-binary-approval.sh
           test -x scripts/release/write-container-release-manifest.sh
-      - name: Shellcheck release scripts
-        run: shellcheck -x scripts/release/*.sh
+      - name: Analyze CI release publisher with ShellCheck
+        id: shellcheck-publisher
+        run: |
+          set +e
+          shellcheck -f json -x scripts/release/publish-ci-release.sh \
+            >"$RUNNER_TEMP/shellcheck-publisher.json"
+          status=$?
+          set -e
+          first="$(jq -r 'if length == 0 then "none" else "SC\(.[0].code)-L\(.[0].line)" end' "$RUNNER_TEMP/shellcheck-publisher.json")"
+          printf 'status=%s\nfirst=%s\n' "$status" "$first" >> "$GITHUB_OUTPUT"
+      - name: Enforce CI release publisher ShellCheck (${{ steps.shellcheck-publisher.outputs.first }})
+        if: steps.shellcheck-publisher.outputs.status != '0'
+        run: |
+          jq -r '.[] | "\(.file):\(.line):\(.column): SC\(.code): \(.message)"' \
+            "$RUNNER_TEMP/shellcheck-publisher.json"
+          exit 1
+      - name: Shellcheck existing release scripts
+        run: |
+          find scripts/release -maxdepth 1 -type f -name '*.sh' \
+            ! -name 'publish-ci-release.sh' -print0 \
+            | xargs -0 shellcheck -x
       - name: Test release asset assembly
         run: scripts/release/test-assemble-release-assets.sh
       - name: Test container release manifest
