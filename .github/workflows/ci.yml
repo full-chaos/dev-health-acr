@@ -36,13 +36,16 @@ jobs:
           test -x scripts/release/test_release_scripts.sh
           test -x scripts/release/verify-mcp-binary-approval.sh
           test -x scripts/release/write-container-release-manifest.sh
-      - name: Check release scripts
-        run: |
-          shellcheck -x scripts/release/*.sh
-          scripts/release/test-assemble-release-assets.sh
-          scripts/release/test-container-release-manifest.sh
-          scripts/release/test-publish-private-image.sh
-          scripts/release/test_release_scripts.sh
+      - name: Shellcheck release scripts
+        run: shellcheck -x scripts/release/*.sh
+      - name: Test release asset assembly
+        run: scripts/release/test-assemble-release-assets.sh
+      - name: Test container release manifest
+        run: scripts/release/test-container-release-manifest.sh
+      - name: Test private image publisher
+        run: scripts/release/test-publish-private-image.sh
+      - name: Test release policy contracts
+        run: scripts/release/test_release_scripts.sh
       - name: Test optional MCP binary approval gate
         run: |
           approval_gates=scripts/release/test-remote-gates.sh
