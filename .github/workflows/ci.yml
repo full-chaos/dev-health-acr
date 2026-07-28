@@ -27,6 +27,7 @@ jobs:
           test -x scripts/release/export-tag-signing-key.sh
           test -x scripts/release/publish-private-release.sh
           test -x scripts/release/publish-private-image.sh
+          test -x scripts/release/publish-ci-release.sh
           test -x scripts/release/revoke-private-release.sh
           test -x scripts/release/assemble-release-assets.sh
           test -x scripts/release/test-assemble-release-assets.sh

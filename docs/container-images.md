@@ -139,7 +139,7 @@ Release workflow renames the verified outputs to
 `acr-api_VERSION_linux_multiarch.oci.tar` and
 `acr-mcp_VERSION_linux_multiarch.oci.tar`, records their archive and OCI index
 digests in `container-release-manifest.json`, and includes them in the final
-private Actions artifact.
+Actions artifact and GitHub Release.
 
 `scripts/container/build.sh` writes each OCI export to a unique temporary path
 and renames it into place only after `validate-oci.sh` confirms every
@@ -215,12 +215,13 @@ args are both suffixed `-dirty` so the image is never confused for one
 built from the labeled commit alone.
 
 Ordinary `.tmp/container-*` archives, reports, images, and temporary containers
-remain disposable. Release builds are the exception: an owner-approved operator
-copies the exact verified OCI archives, without rebuilding, to the private GHCR
-packages `ghcr.io/full-chaos/dev-health-acr/acr-api` and
-`ghcr.io/full-chaos/dev-health-acr/acr-mcp`. Images are published and signed by
-immutable digest only; no mutable GHCR tag is created. The signed release
-manifest maps versions to digests, and deployment references use the approved
-`@sha256:` digest. The same OCI archives and container SBOMs are attached to the
-private GitHub Release for offline verification. See
+remain disposable. Release builds are the exception: the release workflow
+copies the exact verified OCI archives, without rebuilding, to the versioned
+GHCR packages `ghcr.io/full-chaos/dev-health-acr/acr-api:<tag>` and
+`ghcr.io/full-chaos/dev-health-acr/acr-mcp:<tag>`. It verifies that each
+published tag and digest reference resolves to the OCI index digest recorded in
+`container-release-manifest.json`, then keylessly signs that immutable digest.
+It does not publish a mutable GHCR `latest` tag; deployment references use the
+approved `@sha256:` digest. The same OCI archives and container SBOMs are
+attached to the GitHub Release for offline verification. See
 [`release-policy.md`](release-policy.md).

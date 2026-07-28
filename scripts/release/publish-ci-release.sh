@@ -31,10 +31,14 @@ fail() {
 for command in cosign gh jq skopeo; do
   command -v "$command" >/dev/null 2>&1 || fail "required command is unavailable: $command"
 done
-skopeo --version | grep -F '1.23.0' >/dev/null \
-  || fail "Skopeo 1.23.0 is required"
 cosign version | grep -F 'GitVersion:' | grep -F 'v3.0.6' >/dev/null \
   || fail "Cosign v3.0.6 is required"
+skopeo copy --help | grep -F -- '--all' >/dev/null \
+  || fail "Skopeo does not support multi-platform copies"
+skopeo copy --help | grep -F -- '--digestfile' >/dev/null \
+  || fail "Skopeo does not support digest verification"
+skopeo copy --help | grep -F -- '--preserve-digests' >/dev/null \
+  || fail "Skopeo does not support digest-preserving copies"
 
 release_dir="$(cd "$release_dir" && pwd -P)"
 version="${tag#v}"
@@ -44,15 +48,18 @@ bundle_name="SHA256SUMS.sigstore.json"
 bundle="$release_dir/$bundle_name"
 tmp="$(mktemp -d)"
 draft_created=false
+draft_release_id=""
 
 cleanup() {
-  local release_state
+  local release_json release_id release_state
   if "$draft_created"; then
-    release_state="$(gh release view "$tag" --repo "$expected_repo" --json isDraft --jq .isDraft 2>/dev/null || true)"
-    if [[ "$release_state" == true ]]; then
+    release_json="$(gh release view "$tag" --repo "$expected_repo" --json databaseId,isDraft 2>/dev/null || true)"
+    release_id="$(jq -r '.databaseId // empty' <<<"$release_json" 2>/dev/null || true)"
+    release_state="$(jq -r '.isDraft // empty' <<<"$release_json" 2>/dev/null || true)"
+    if [[ -n "$draft_release_id" && "$release_id" == "$draft_release_id" && "$release_state" == true ]]; then
       gh release delete "$tag" --repo "$expected_repo" --yes >/dev/null 2>&1 || true
-    elif [[ "$release_state" != false ]]; then
-      printf 'leaving Release untouched because its draft state could not be verified: %s\n' "$tag" >&2
+    else
+      printf 'leaving Release untouched because its identity and draft state could not be verified: %s\n' "$tag" >&2
     fi
   fi
   rm -rf "$tmp"
@@ -167,7 +174,7 @@ while IFS=$'\t' read -r product repository archive image_digest archive_sha256; 
     test "$existing_digest" = "$image_digest" \
       || fail "immutable GHCR tag conflict: $tag_reference points to $existing_digest, expected $image_digest"
   else
-    if ! grep -Eqi '(manifest unknown|name unknown|not found|HTTP[^0-9]*404|status[^0-9]*404)' "$existing_error"; then
+    if ! grep -Eqi '(manifest unknown|name unknown|HTTP[^0-9]*404|status[^0-9]*404)' "$existing_error"; then
       cat "$existing_error" >&2
       fail "cannot determine whether GHCR tag exists: $tag_reference"
     fi
@@ -215,7 +222,7 @@ if release_json="$(gh api "repos/$expected_repo/releases/tags/$tag" 2>"$release_
   cp "$tmp/existing-release/$bundle_name" "$bundle"
   printf 'release already published and verified: %s\n' "$tag"
   exit 0
-elif ! grep -Eqi '(Not Found|HTTP 404)' "$release_lookup_error"; then
+elif ! grep -Eq 'HTTP[^0-9]*404' "$release_lookup_error"; then
   cat "$release_lookup_error" >&2
   fail "cannot determine whether GitHub Release exists: $tag"
 fi
@@ -250,7 +257,6 @@ release_args=(
   --verify-tag
   --draft
   --title "ACR $tag"
-  --generate-notes
   --notes-file "$notes"
 )
 if [[ "$tag" == *-dev.* || "$tag" == *-beta.* ]]; then
@@ -258,6 +264,9 @@ if [[ "$tag" == *-dev.* || "$tag" == *-beta.* ]]; then
 fi
 gh "${release_args[@]}"
 draft_created=true
+draft_release_id="$(gh release view "$tag" --repo "$expected_repo" --json databaseId --jq .databaseId)"
+[[ "$draft_release_id" =~ ^[1-9][0-9]*$ ]] \
+  || fail "created draft Release did not return a stable database ID"
 gh release upload "$tag" --repo "$expected_repo" "${assets[@]}"
 
 mkdir "$tmp/draft-release"

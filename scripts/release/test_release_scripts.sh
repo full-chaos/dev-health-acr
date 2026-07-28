@@ -168,7 +168,9 @@ grep -F 'contents: write' "$release_workflow" >/dev/null
 grep -F 'id-token: write' "$release_workflow" >/dev/null
 grep -F 'packages: write' "$release_workflow" >/dev/null
 grep -F 'sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6' "$release_workflow" >/dev/null
-grep -F '15696e068c02a163e20013fab79f40cdc6c8022d99e1aee8676f6d540404691a' "$release_workflow" >/dev/null
+grep -F 'sudo apt-get install --no-install-recommends -y skopeo' "$release_workflow" >/dev/null
+grep -F "skopeo copy --help | grep -F -- '--preserve-digests'" "$release_workflow" >/dev/null
+if grep -F 'lework/skopeo-binary' "$release_workflow"; then exit 1; fi
 test "$(grep -c 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' "$release_workflow")" -eq 4
 
 grep -F 'skopeo copy --all --preserve-digests' "$root/scripts/release/publish-ci-release.sh" >/dev/null
@@ -177,6 +179,9 @@ grep -F 'cosign sign-blob' "$root/scripts/release/publish-ci-release.sh" | grep 
 grep -F 'release create "$tag"' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F 'gh release download' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F 'immutable GHCR tag conflict' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F 'cannot determine whether GHCR tag exists' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F 'databaseId,isDraft' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+if grep -Eqi '\(manifest unknown\|name unknown\|not found\|' "$root/scripts/release/publish-ci-release.sh"; then exit 1; fi
 
 grep -F 'skopeo copy --all --preserve-digests' "$root/scripts/release/publish-private-image.sh" >/dev/null
 grep -F 'gh run download' "$root/scripts/release/publish-private-image.sh" | grep -F -- '--name release' >/dev/null
@@ -190,3 +195,6 @@ for script in publish-private-image.sh publish-private-release.sh revoke-private
   if grep -F 'approval-receipt.sh' "$root/scripts/release/$script"; then exit 1; fi
 done
 grep -F 'approval-receipt.sh' "$root/scripts/release/verify-mcp-binary-approval.sh" >/dev/null
+
+grep -F 'versioned GHCR packages' "$root/docs/container-images.md" >/dev/null
+grep -F 'does not publish a mutable GHCR `latest` tag' "$root/docs/container-images.md" >/dev/null
