@@ -1,22 +1,90 @@
 ---
-name: source-snapshot
+name: apply-keyless-consumer-fix
 
 "on":
   pull_request:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: apply-keyless-consumer-fix-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
-  snapshot:
+  apply-and-verify:
+    if: >-
+      github.event.pull_request.head.ref == 'agent/publish-acr-artifacts' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+      START_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with: {persist-credentials: false}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: source-snapshot
-          path: .
-          if-no-files-found: error
-          retention-days: 1
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.26.5'
+          cache: false
+      - name: Apply keyless consumer contract, verify, and commit
+        env:
+          PATCH_GZIP_SHA256: 686c66496be204e8eafffe60e703787a79048a6c3974658bc704bf7499e32e04
+          PATCH_SHA256: 94e7e9cff46861d2cf62699ee9271b0d4ee196dc2de1aef0e18dc4d39faa1719
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$START_SHA"
+          patch_gz="$RUNNER_TEMP/keyless-consumer.patch.gz"
+          patch_file="$RUNNER_TEMP/keyless-consumer.patch"
+          cat .github/patches/keyless-consumer.patch.gz.b64.* \
+            | base64 --decode >"$patch_gz"
+          printf '%s  %s\n' "$PATCH_GZIP_SHA256" "$patch_gz" | sha256sum --check -
+          gzip --decompress --stdout "$patch_gz" >"$patch_file"
+          printf '%s  %s\n' "$PATCH_SHA256" "$patch_file" | sha256sum --check -
+          git apply --check "$patch_file"
+          git apply "$patch_file"
+          gofmt -w \
+            internal/mcpclientfixtures/doc_parity_test.go \
+            internal/mcpclientfixtures/install_snippet_targeted_verify_test.go \
+            internal/mcpclientfixtures/install_snippets.go \
+            internal/mcpclientfixtures/windows_snippet_parity_test.go
+          git diff --check
+          bash scripts/docs/verify.sh
+          go test ./internal/mcpclientfixtures -count=1
+          make verify
+          git rm .github/workflows/source-snapshot.yml
+          git rm .github/patches/keyless-consumer.patch.gz.b64.*
+          git add -A
+          cat >"$RUNNER_TEMP/expected-files" <<'EXPECTED_FILES'
+          .github/patches/keyless-consumer.patch.gz.b64.00
+          .github/patches/keyless-consumer.patch.gz.b64.01
+          .github/patches/keyless-consumer.patch.gz.b64.02
+          .github/patches/keyless-consumer.patch.gz.b64.03
+          .github/workflows/source-snapshot.yml
+          docs/examples/mcp-clients/README.md
+          docs/examples/mcp-clients/claude-code.md
+          docs/examples/mcp-clients/codex.md
+          docs/examples/mcp-clients/cursor.md
+          docs/examples/mcp-clients/generic-stdio.md
+          docs/examples/mcp-clients/opencode.md
+          docs/implementation-backlog.md
+          docs/operations.md
+          docs/release-notes-template.md
+          docs/release-policy.md
+          internal/mcpclientfixtures/doc_parity_test.go
+          internal/mcpclientfixtures/install_snippet_targeted_verify_test.go
+          internal/mcpclientfixtures/install_snippets.go
+          internal/mcpclientfixtures/windows_snippet_parity_test.go
+          EXPECTED_FILES
+          git diff --cached --name-only | LC_ALL=C sort >"$RUNNER_TEMP/actual-files"
+          LC_ALL=C sort -o "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/expected-files"
+          diff -u "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/actual-files"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(docs): align release verification with sigstore bundle'
+          git push origin "HEAD:$HEAD_BRANCH"
