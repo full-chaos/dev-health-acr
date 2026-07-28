@@ -1,6 +1,6 @@
 # ACR release notes template
 
-Copy this template into the private GitHub Release description. Do not include
+Copy this template into the GitHub Release description. Do not include
 credentials, evidence bodies, customer data, or local filesystem paths.
 
 ## ACR `vX.Y.Z`
@@ -22,12 +22,18 @@ credentials, evidence bodies, customer data, or local filesystem paths.
 
 ### Verification
 
-- Obtain `signing/cosign.pub` only from a reviewed repository commit, then
-  download binary and OCI archives, SPDX JSON, authoritative `SHA256SUMS`, and
-  `SHA256SUMS.sig`; the public key is not a Release asset.
-- Run `cosign verify-blob --key signing/cosign.pub --signature SHA256SUMS.sig --insecure-ignore-tlog SHA256SUMS`.
-- Set `archive='<downloaded filename>'`, select `awk -v name="$archive" '$2 == name' SHA256SUMS`, require exactly one line, then verify that line with `sha256sum --check -` or `shasum -a 256 --check -` on macOS.
-- Do not extract or execute an archive until tag, Cosign, and targeted checksum verification succeed.
+- Download binary and OCI archives, SPDX JSON, authoritative `SHA256SUMS`, and
+  `SHA256SUMS.sigstore.json` from the GitHub Release.
+- Verify `SHA256SUMS` with `cosign verify-blob SHA256SUMS --bundle
+  SHA256SUMS.sigstore.json`, restricting the certificate identity to this
+  repository's `release.yml` workflow and the issuer to
+  `https://token.actions.githubusercontent.com` as documented in
+  `docs/release-policy.md`.
+- Set `archive='<downloaded filename>'`, select `awk -v name="$archive"
+  '$2 == name' SHA256SUMS`, require exactly one line, then verify that line
+  with `sha256sum --check -` or `shasum -a 256 --check -` on macOS.
+- Do not extract or execute an archive until Sigstore workflow-identity and
+  targeted checksum verification succeed.
 - Verify the `acr-api` and `acr-mcp` GHCR references from
   `container-release-manifest.json` by immutable digest and Cosign signature;
   never deploy a mutable tag.
