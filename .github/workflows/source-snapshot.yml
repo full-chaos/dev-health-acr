@@ -55,8 +55,28 @@ jobs:
           git diff --check
       - name: Verify documentation contract
         run: bash scripts/docs/verify.sh
-      - name: Verify MCP client fixture contract
-        run: go test ./internal/mcpclientfixtures -count=1
+      - name: Run MCP client fixture contract
+        id: fixture-test
+        run: |
+          set +e
+          go test ./internal/mcpclientfixtures -count=1 -v \
+            >"$RUNNER_TEMP/mcpclientfixtures.log" 2>&1
+          status=$?
+          set -e
+          printf 'status=%s\n' "$status" >>"$GITHUB_OUTPUT"
+      - name: Upload MCP client fixture diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mcpclientfixtures-diagnostics
+          path: ${{ runner.temp }}/mcpclientfixtures.log
+          if-no-files-found: error
+          retention-days: 1
+      - name: Enforce MCP client fixture contract
+        if: steps.fixture-test.outputs.status != '0'
+        run: |
+          cat "$RUNNER_TEMP/mcpclientfixtures.log"
+          exit "${{ steps.fixture-test.outputs.status }}"
       - name: Verify complete repository
         run: make verify
       - name: Remove staging files and publish verified fix
