@@ -76,6 +76,25 @@ make hosted-integration
 go build ./cmd/acr-api ./cmd/acr-mcp ./cmd/contractcheck
 ```
 
+## Releases
+
+A canonical `vMAJOR.MINOR.PATCH` tag, optionally followed by `-dev.N` or
+`-beta.N`, runs the complete release matrix. The workflow publishes:
+
+- `acr-api` and `acr-mcp` archives for Linux AMD64/ARM64, macOS AMD64/ARM64,
+  and Windows AMD64;
+- multi-platform Linux container images at
+  `ghcr.io/full-chaos/dev-health-acr/acr-api:<tag>` and
+  `ghcr.io/full-chaos/dev-health-acr/acr-mcp:<tag>`;
+- OCI archives, SPDX SBOMs, manifests, checksums, and a Sigstore verification
+  bundle as GitHub Release assets.
+
+Container images and `SHA256SUMS` are signed keylessly by the release workflow.
+The workflow refuses to replace a version tag that already points at different
+image bytes. A failed tag run can be recovered without moving the tag by running
+the **Release** workflow from `main` and supplying the existing tag. See
+[`docs/release-policy.md`](docs/release-policy.md).
+
 ## Optional local CodeGraph evidence
 
 `acr-mcp` can supplement, but never replace, an authoritative hosted context
@@ -114,10 +133,9 @@ Reproducible, hardened container images for `acr-api` (plus the separate
 [`docs/container-images.md`](docs/container-images.md): pinned build inputs,
 non-root numeric UID/GID `65532:65532`, read-only root filesystem, the
 reviewed local build allowlist, hardened release-context wrapper, and SBOM/scan
-gates. Local targets keep outputs under `.tmp/`; a signed tagged release adds the
-verified OCI archives to the
-private GitHub Release and publishes their approved digests to private GHCR
-packages through the authenticated operator command.
+gates. Local targets keep outputs under `.tmp/`; the release workflow publishes
+the exact verified OCI archives to GHCR without rebuilding them and attaches the
+same archives to the GitHub Release.
 
 ```bash
 make container-contract
