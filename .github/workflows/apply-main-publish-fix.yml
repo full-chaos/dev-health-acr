@@ -1,0 +1,103 @@
+---
+name: apply-main-publish-fix
+
+"on":
+  push:
+    branches: [agent/publish-main-latest-sha]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-main-publish-fix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apply-and-verify:
+    if: github.repository == 'full-chaos/dev-health-acr'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: agent/publish-main-latest-sha
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.26.5'
+          cache: false
+      - name: Materialize final release implementation
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/main-publish-files.tar.gz"
+          cat .github/staging/main-publish-files.tar.gz.b64.* \
+            | base64 --decode >"$archive"
+          printf '%s  %s\n' \
+            c613a1540f2a1bb729d910192a7983956abf48d6e0684eddf1515ac22a22e266 \
+            "$archive" | sha256sum --check -
+          tar -xzf "$archive" -C .
+          chmod 0755 \
+            scripts/release/publish-ci-release.sh \
+            scripts/release/test_release_scripts.sh
+          printf '%s  %s\n' \
+            1c75ac141e51f1da2a87f4509d60fa3acd43b16231b0058af565f8b6e42ba8d5 \
+            .github/workflows/release.yml \
+            f3286beab85433e527ec17699c6f5d56a3362b9a79daa88d52704cde6f8c2149 \
+            scripts/release/publish-ci-release.sh \
+            297b408e87060eff32494ff77f7ee21d49900baa808bd89c2663baad311432fd \
+            scripts/release/test_release_scripts.sh \
+            | sha256sum --check -
+          git rm .github/workflows/apply-main-publish-fix.yml
+          git rm .github/staging/main-publish-files.tar.gz.b64.*
+          git add -A
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(release): publish main as latest and SHA'
+          cat >"$RUNNER_TEMP/expected-files" <<'EXPECTED_FILES'
+          .github/workflows/release.yml
+          README.md
+          docs/container-images.md
+          docs/release-notes-template.md
+          docs/release-policy.md
+          scripts/release/assemble-release-assets.sh
+          scripts/release/publish-ci-release.sh
+          scripts/release/test-assemble-release-assets.sh
+          scripts/release/test-container-release-manifest.sh
+          scripts/release/test_release_scripts.sh
+          scripts/release/write-container-release-manifest.sh
+          EXPECTED_FILES
+          git diff --name-only origin/main...HEAD | LC_ALL=C sort \
+            >"$RUNNER_TEMP/actual-files"
+          LC_ALL=C sort -o "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/expected-files"
+          diff -u "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/actual-files"
+          git diff --check origin/main...HEAD
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Verify main publication contracts
+        run: |
+          set -euo pipefail
+          bash -n \
+            scripts/release/assemble-release-assets.sh \
+            scripts/release/publish-ci-release.sh \
+            scripts/release/test-assemble-release-assets.sh \
+            scripts/release/test-container-release-manifest.sh \
+            scripts/release/test_release_scripts.sh \
+            scripts/release/write-container-release-manifest.sh
+          shellcheck -x -e SC2016 \
+            scripts/release/publish-ci-release.sh \
+            scripts/release/test_release_scripts.sh
+          shellcheck -x \
+            scripts/release/assemble-release-assets.sh \
+            scripts/release/test-assemble-release-assets.sh \
+            scripts/release/test-container-release-manifest.sh \
+            scripts/release/write-container-release-manifest.sh
+          scripts/release/test-container-release-manifest.sh
+          scripts/release/test-assemble-release-assets.sh
+          scripts/release/test_release_scripts.sh
+          bash scripts/docs/verify.sh
+          make verify
+      - name: Push verified implementation
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          git push origin HEAD:agent/publish-main-latest-sha

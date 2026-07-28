@@ -78,22 +78,31 @@ go build ./cmd/acr-api ./cmd/acr-mcp ./cmd/contractcheck
 
 ## Releases
 
-A canonical `vMAJOR.MINOR.PATCH` tag, optionally followed by `-dev.N` or
-`-beta.N`, runs the complete release matrix. The workflow publishes:
+Every successful push to `main` runs the complete release matrix. The workflow
+publishes:
 
 - `acr-api` and `acr-mcp` archives for Linux AMD64/ARM64, macOS AMD64/ARM64,
-  and Windows AMD64;
-- multi-platform Linux container images at
-  `ghcr.io/full-chaos/dev-health-acr/acr-api:<tag>` and
-  `ghcr.io/full-chaos/dev-health-acr/acr-mcp:<tag>`;
+  and Windows AMD64 in a GitHub Release tagged with the full commit SHA;
+- multi-platform Linux container images at both
+  `ghcr.io/full-chaos/dev-health-acr/acr-api:<full-sha>` and
+  `ghcr.io/full-chaos/dev-health-acr/acr-api:latest`, with equivalent tags for
+  `acr-mcp`;
 - OCI archives, SPDX SBOMs, manifests, checksums, and a Sigstore verification
   bundle as GitHub Release assets.
 
-Container images and `SHA256SUMS` are signed keylessly by the release workflow.
-The workflow refuses to replace a version tag that already points at different
-image bytes. A failed tag run can be recovered without moving the tag by running
-the **Release** workflow from `main` and supplying the existing tag. See
-[`docs/release-policy.md`](docs/release-policy.md).
+The SHA-tagged GitHub Release is marked **Latest** only after the publisher
+rechecks that the commit is still the current tip of `main`. An older run that
+finishes late keeps its immutable SHA assets but cannot move either `latest`
+alias.
+
+A canonical `vMAJOR.MINOR.PATCH` tag, optionally followed by `-dev.N` or
+`-beta.N`, publishes the same verified matrix under immutable version tags. A
+versioned release never replaces the main channel's Latest marker. Container
+images and `SHA256SUMS` are signed keylessly by the release workflow, and
+production deployments should continue to use the manifest-recorded
+`@sha256:` digest. A failed version-tag run can be recovered without moving the
+tag by running the **Release** workflow from `main` and supplying the existing
+tag. See [`docs/release-policy.md`](docs/release-policy.md).
 
 ## Optional local CodeGraph evidence
 

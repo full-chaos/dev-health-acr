@@ -1,31 +1,64 @@
 # Release and publication policy
 
 The `Release` workflow is the canonical build-and-publish path for
-`dev-health-acr`. A successful run produces a GitHub Release, versioned GHCR
-images, deterministic binary archives, OCI archives, SPDX SBOMs, manifests,
-checksums, and Sigstore verification material.
+`dev-health-acr`. It serves two publication channels from the same verified
+build pipeline:
+
+- every successful push to `main` publishes an immutable commit-SHA release and
+  promotes that exact build to the moving `latest` aliases when the commit is
+  still the current tip of `main`;
+- a canonical version tag publishes an immutable versioned release without
+  moving `latest`.
+
+Both channels produce deterministic binary archives, multi-platform OCI
+archives, SPDX SBOMs, manifests, checksums, and Sigstore verification material.
 
 ## Trigger and authorization
 
-The workflow supports two entry points:
+The workflow supports three entry points:
 
-1. Pushing a canonical tag:
+1. Pushing to `main`. The protected branch and merge permissions are the
+   authorization boundary. The workflow publishes the full 40-character commit
+   SHA and, after rechecking the branch tip, the `latest` aliases.
+2. Pushing a canonical tag:
    `vMAJOR.MINOR.PATCH`, `vMAJOR.MINOR.PATCH-dev.N`, or
    `vMAJOR.MINOR.PATCH-beta.N`.
-2. Running **Actions → Release → Run workflow** from `main` and supplying an
+3. Running **Actions → Release → Run workflow** from `main` and supplying an
    existing canonical tag. This is the recovery path for a tag whose earlier
    run failed before publication.
 
-The tag must exist and resolve to a commit that is an ancestor of `main`. If
-the repository variable `ACR_RELEASE_OPERATORS` is configured, the triggering
-actor must be an exact comma-delimited member. When the variable is unset,
-repository and tag permissions are the authorization boundary. Annotated tag
-signatures are reported when locally verifiable, but a lightweight tag or an
-annotated tag without a locally available signer key does not silently block
-publication.
+A version tag must exist and resolve to a commit that is an ancestor of `main`.
+If the repository variable `ACR_RELEASE_OPERATORS` is configured, the actor for
+a version-tag or manual recovery run must be an exact comma-delimited member.
+When the variable is unset, repository and tag permissions are the authorization
+boundary. Annotated tag signatures are reported when locally verifiable, but a
+lightweight tag or an annotated tag without a locally available signer key does
+not silently block publication.
 
-Do not move or reuse a release tag. Recovery always runs the current workflow
-against the existing tag and original source commit.
+Do not move or reuse an immutable version tag or commit-SHA tag. Versioned
+recovery always runs the current workflow against the existing tag and original
+source commit.
+
+## Main publication identity
+
+A `main` build uses the full lowercase commit SHA as its immutable publication
+tag. The binary's embedded version remains canonical SemVer: the workflow finds
+the highest canonical release core reachable from that commit, increments its
+patch component, and emits:
+
+```text
+MAJOR.MINOR.NEXT_PATCH-main.<40-character-commit-SHA>
+```
+
+If no canonical release tag exists in the commit's ancestry, the base is
+`1.0.0`, producing `1.0.1-main.<SHA>`. The derived version is used in archive
+filenames and manifests; the GitHub Release tag and immutable GHCR tag remain
+the full commit SHA.
+
+Before changing either moving `latest` alias, the final publication job reads
+the current `refs/heads/main` value from GitHub. A superseded run still publishes
+and verifies its immutable SHA release, but it cannot move `latest`. This closes
+the race where two main builds finish out of order.
 
 ## Permission boundary
 
@@ -41,14 +74,14 @@ permissions:
   packages: write
 ```
 
-`contents: write` creates the GitHub Release, `packages: write` publishes the
-two GHCR packages, and `id-token: write` enables keyless Sigstore signing. No
-long-lived registry password, GitHub personal access token, GPG private key, or
-Cosign private key is stored in Actions.
+`contents: write` creates and updates GitHub Releases, `packages: write`
+publishes the two GHCR packages, and `id-token: write` enables keyless Sigstore
+signing. No long-lived registry password, GitHub personal access token, GPG
+private key, or Cosign private key is stored in Actions.
 
 ## Build and verification stages
 
-The release must pass all of the following before publication:
+Every publication must pass all of the following before the final publish step:
 
 1. Source, contract, race, cross-compilation, full-stack contract, dependency,
    and vulnerability checks.
@@ -71,9 +104,9 @@ The release matrix contains five archives per binary:
 Windows ARM64 remains deferred until builder, native-runner, and compatibility
 coverage are added together.
 
-## Published artifacts
+## Published artifacts and references
 
-The final GitHub Release contains:
+Every GitHub Release contains:
 
 - ten `acr-api` and `acr-mcp` binary archives;
 - one multi-platform OCI archive for each image;
@@ -84,10 +117,24 @@ The final GitHub Release contains:
 - `SHA256SUMS.sigstore.json`.
 
 The workflow also retains the same assembled set as the Actions artifact named
-`release` for seven days, including when the publication step fails after
-assembly.
+`release` for seven days, including when publication fails after assembly.
 
-The container images are published without rebuilding:
+For the current tip of `main`, the exact verified OCI archives are published
+without rebuilding to both the immutable SHA and mutable convenience alias:
+
+```text
+ghcr.io/full-chaos/dev-health-acr/acr-api:<40-character-commit-SHA>
+ghcr.io/full-chaos/dev-health-acr/acr-api:latest
+ghcr.io/full-chaos/dev-health-acr/acr-mcp:<40-character-commit-SHA>
+ghcr.io/full-chaos/dev-health-acr/acr-mcp:latest
+```
+
+The GitHub Release tagged with that same full commit SHA is marked as the
+repository's **Latest** release. GitHub's Latest marker is a moving pointer; the
+SHA-tagged Release and its assets remain immutable and directly addressable.
+
+Canonical version tags publish these immutable references and do not replace the
+main channel's Latest marker:
 
 ```text
 ghcr.io/full-chaos/dev-health-acr/acr-api:vX.Y.Z
@@ -95,35 +142,40 @@ ghcr.io/full-chaos/dev-health-acr/acr-mcp:vX.Y.Z
 ```
 
 Pre-release tags retain their full `-dev.N` or `-beta.N` suffix. Deployment
-automation should use the digest recorded in
-`container-release-manifest.json`:
+automation should use the digest recorded in `container-release-manifest.json`:
 
 ```text
 ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:<digest>
 ghcr.io/full-chaos/dev-health-acr/acr-mcp@sha256:<digest>
 ```
 
-The workflow does not publish a mutable GHCR `latest` tag. GitHub may mark the
-newest stable GitHub Release as latest, but container deployment remains
+`latest` is intentionally mutable and is suitable for following `main` in
+development environments. Production and rollback controls remain
 digest-oriented.
 
 ## Idempotency and conflict handling
 
 Publication is retry-safe:
 
-- If a GHCR version tag does not exist, the verified OCI archive is copied with
-  all platforms and preserved digests.
-- If the tag already resolves to the expected digest, publication continues.
-- If the tag resolves to different bytes, the workflow fails rather than
-  replacing it.
+- If an immutable version or commit-SHA GHCR tag does not exist, the verified
+  OCI archive is copied with all platforms and preserved digests.
+- If an immutable tag already resolves to the expected digest, publication
+  continues.
+- If an immutable tag resolves to different bytes, the workflow fails rather
+  than replacing it.
+- `latest` is updated only from a `main` run whose commit still equals the
+  current branch tip; its resulting digest is verified after the copy.
 - If the GitHub Release already exists, the workflow downloads it, verifies the
   Sigstore bundle and all checksums, and succeeds only when its asset manifest
   exactly matches the rebuilt release.
 - An unrelated or incomplete draft Release is never overwritten automatically.
+- Stable, beta, and development version releases are explicitly marked
+  `latest=false`; the main channel owns the Latest marker.
 
-A failure after image upload but before GitHub Release publication can therefore
-be retried with the same tag. A failure caused by an old workflow should be
-recovered with `workflow_dispatch` from `main`, not by moving the tag.
+A failure after image upload but before GitHub Release publication can be
+retried with the same immutable tag. A versioned failure caused by an old
+workflow should be recovered with `workflow_dispatch` from `main`, not by moving
+the tag.
 
 ## Signing and consumer verification
 
@@ -188,7 +240,7 @@ The `publish-private-image.sh` and `publish-private-release.sh` scripts remain
 available as an emergency operator path for previously assembled private
 artifacts. They are not the normal release mechanism and retain their separate
 local-key, package-privacy, and exact-tool-version requirements. Do not run both
-the automated and local publishers concurrently for the same tag.
+the automated and local publishers concurrently for the same immutable tag.
 
 The optional MCP binary approval receipt remains available only for a future
 policy that requires a separate owner approval. It is not part of the automated
@@ -198,7 +250,8 @@ release path.
 
 Rollback selects a previously verified immutable digest, verifies its Cosign
 signature and matching release manifest, and deploys that digest through the
-normal deployment control. Never move a tag or rebuild an old version.
+normal deployment control. Never move an immutable tag or rebuild an old
+version.
 
 If a release must be revoked:
 

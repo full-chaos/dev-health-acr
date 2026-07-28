@@ -216,12 +216,15 @@ built from the labeled commit alone.
 
 Ordinary `.tmp/container-*` archives, reports, images, and temporary containers
 remain disposable. Release builds are the exception: the release workflow
-copies the exact verified OCI archives, without rebuilding, to the versioned
-GHCR packages `ghcr.io/full-chaos/dev-health-acr/acr-api:<tag>` and
-`ghcr.io/full-chaos/dev-health-acr/acr-mcp:<tag>`. It verifies that each
-published tag and digest reference resolves to the OCI index digest recorded in
+copies the exact verified OCI archives, without rebuilding, to GHCR. Every
+successful current-tip `main` build publishes both the full commit SHA and
+`latest` for `acr-api` and `acr-mcp`; canonical version tags publish their own
+immutable `vX.Y.Z[-dev.N|-beta.N]` references. The workflow verifies every
+published tag and digest against the OCI index digest recorded in
 `container-release-manifest.json`, then keylessly signs that immutable digest.
-It does not publish a mutable GHCR `latest` tag; deployment references use the
-approved `@sha256:` digest. The same OCI archives and container SBOMs are
-attached to the GitHub Release for offline verification. See
+Before moving `latest`, it rechecks the current GitHub `main` ref so an older
+run finishing out of order cannot roll the channel backward. The full commit SHA and `latest` therefore identify the same image only for the current tip of
+`main`. Deployment and rollback references should still use the approved
+`@sha256:` digest. The same OCI archives and container SBOMs are attached to
+the SHA- or version-tagged GitHub Release for offline verification. See
 [`release-policy.md`](release-policy.md).
