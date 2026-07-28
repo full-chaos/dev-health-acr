@@ -27,6 +27,7 @@ jobs:
           test -x scripts/release/export-tag-signing-key.sh
           test -x scripts/release/publish-private-release.sh
           test -x scripts/release/publish-private-image.sh
+          test -x scripts/release/publish-ci-release.sh
           test -x scripts/release/revoke-private-release.sh
           test -x scripts/release/assemble-release-assets.sh
           test -x scripts/release/test-assemble-release-assets.sh
@@ -35,13 +36,30 @@ jobs:
           test -x scripts/release/test_release_scripts.sh
           test -x scripts/release/verify-mcp-binary-approval.sh
           test -x scripts/release/write-container-release-manifest.sh
-      - name: Check release scripts
+      - name: Shellcheck CI release publisher
         run: |
-          shellcheck -x scripts/release/*.sh
-          scripts/release/test-assemble-release-assets.sh
-          scripts/release/test-container-release-manifest.sh
-          scripts/release/test-publish-private-image.sh
-          scripts/release/test_release_scripts.sh
+          # SC2016: jq receives named arguments whose $names must remain literal
+          # inside single-quoted jq programs rather than expand in the shell.
+          shellcheck -x -e SC2016 scripts/release/publish-ci-release.sh
+      - name: Shellcheck release policy contract tests
+        run: |
+          # SC2016: this test intentionally searches source files for literal
+          # shell and jq variables such as $tag, $name, and $release_digest.
+          shellcheck -x -e SC2016 scripts/release/test_release_scripts.sh
+      - name: Shellcheck existing release scripts
+        run: |
+          find scripts/release -maxdepth 1 -type f -name '*.sh' \
+            ! -name 'publish-ci-release.sh' \
+            ! -name 'test_release_scripts.sh' -print0 \
+            | xargs -0 shellcheck -x
+      - name: Test release asset assembly
+        run: scripts/release/test-assemble-release-assets.sh
+      - name: Test container release manifest
+        run: scripts/release/test-container-release-manifest.sh
+      - name: Test private image publisher
+        run: scripts/release/test-publish-private-image.sh
+      - name: Test release policy contracts
+        run: scripts/release/test_release_scripts.sh
       - name: Test optional MCP binary approval gate
         run: |
           approval_gates=scripts/release/test-remote-gates.sh
@@ -49,7 +67,47 @@ jobs:
             --fixtures testdata/release-approvals
           "$approval_gates" --mode reject-invalid \
             --fixtures testdata/release-approvals
-      - run: make verify
+      - name: Verify Go formatting
+        run: make fmt-check
+      - name: Vet Go packages
+        run: make vet
+      - name: Analyze Go tests
+        id: go-tests
+        run: |
+          set +e
+          go test -count=1 -json ./... >"$RUNNER_TEMP/go-test.json"
+          status=$?
+          set -e
+          failure="$(jq -r '
+            select(.Action == "fail") |
+            if .Test then (.Package + "/" + .Test) else .Package end
+          ' "$RUNNER_TEMP/go-test.json" | head -n 1)"
+          test -n "$failure" || failure=unknown
+          failure="$(printf '%s' "$failure" | tr '\r\n' '  ' | cut -c1-180)"
+          printf 'status=%s\nfailure=%s\n' "$status" "$failure" >>"$GITHUB_OUTPUT"
+      - name: Enforce Go tests (${{ steps.go-tests.outputs.failure }})
+        if: steps.go-tests.outputs.status != '0'
+        run: |
+          jq -r '
+            select(.Action == "output") |
+            select(.Output | test("^(--- FAIL:|FAIL[[:space:]]|panic:|fatal error:|[[:space:]]+.*_test\\.go:[0-9]+:|[[:space:]]+Error Trace:|[[:space:]]+Error:|[[:space:]]+Messages:|[[:space:]]+expected|[[:space:]]+actual)")) |
+            .Output
+          ' "$RUNNER_TEMP/go-test.json"
+          exit 1
+      - name: Run race and deterministic shuffle tests
+        run: make test-race
+      - name: Cross-compile supported targets
+        run: make crosscompile
+      - name: Verify wire contracts
+        run: make contract-test
+      - name: Verify CodeGraph contract
+        run: make codegraph-contract
+      - name: Verify canonical receipts
+        run: make canonical-receipts
+      - name: Verify full-stack offline contract
+        run: make fullstack-contract
+      - name: Build all shipped commands
+        run: make build
       - name: Test deterministic native-client harness
         run: make clients-real
       - name: Test hosted runtime with disposable dependencies

@@ -14,8 +14,8 @@ remains valid and is tracked here rather than re-executed.
   [`container-images.md`](container-images.md) and
   `.omo/evidence/task-8-acr-developer-deployment.txt`. CHAOS-3066 restores the
   release requirement omitted from that implementation: tagged builds attach
-  the verified OCI archives to the private GitHub Release and publish their
-  exact approved digests to private GHCR packages.
+  the verified OCI archives to the GitHub Release and publish their
+  exact approved digests to versioned GHCR packages.
 - **Todo 9** (root local Compose integration with isolated ACR persistence and
   migrations) is **pending**. It is not yet implemented or tested here; the
   equivalent work continues under `.omo/plans/acr-project-completion.md` Todo 7

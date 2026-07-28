@@ -13,42 +13,36 @@ import (
 
 // TestInstallSidecarWindowsSnippetHasFailClosedErrorHandling is the
 // direct, non-executed regression lock proving the canonical Windows
-// snippet's own text enables fail-closed error handling for every step
-// that can fail: `$ErrorActionPreference = 'Stop'` converts a PowerShell
-// cmdlet's (e.g. Expand-Archive's) non-terminating error into a script-
-// halting one, but PowerShell does NOT automatically treat a native
-// executable's (git.exe, cosign.exe) non-zero exit code as an error at
-// all -- $ErrorActionPreference has no effect on external commands -- so
-// each of those two native calls must be followed by an explicit
-// `$LASTEXITCODE` check that throws before the checksum/extraction steps
-// below it ever run.
+// snippet fails closed around both PowerShell cmdlets and the one native
+// executable in the keyless release-verification path. PowerShell does not
+// turn a non-zero cosign.exe exit into a terminating error, so the snippet
+// must check $LASTEXITCODE immediately after verification and before any
+// checksum selection or archive extraction. The obsolete local-key flow and
+// its git show command must not reappear.
 func TestInstallSidecarWindowsSnippetHasFailClosedErrorHandling(t *testing.T) {
 	snippet := InstallSidecarWindowsSnippet
 
 	if !strings.Contains(snippet, "$ErrorActionPreference = 'Stop'") {
 		t.Fatal("expected the Windows snippet to set $ErrorActionPreference = 'Stop' so a failing cmdlet (e.g. Expand-Archive) halts the script")
 	}
-	if got := strings.Count(snippet, "if ($LASTEXITCODE -ne 0)"); got < 2 {
-		t.Fatalf("expected at least 2 explicit $LASTEXITCODE checks (one after `git show`, one after `cosign.exe verify-blob`), got %d", got)
+	if got := strings.Count(snippet, "if ($LASTEXITCODE -ne 0)"); got != 1 {
+		t.Fatalf("expected exactly one explicit $LASTEXITCODE check after cosign.exe verify-blob, got %d", got)
+	}
+	if strings.Contains(snippet, "git show") {
+		t.Fatal("keyless release verification must not restore the obsolete git show public-key flow")
 	}
 
 	eapIdx := strings.Index(snippet, "$ErrorActionPreference = 'Stop'")
-	gitIdx := strings.Index(snippet, "git show")
 	cosignIdx := strings.Index(snippet, "cosign.exe verify-blob")
-	firstCheckIdx := strings.Index(snippet, "if ($LASTEXITCODE -ne 0)")
-	secondCheckIdx := strings.Index(snippet[cosignIdx:], "if ($LASTEXITCODE -ne 0)")
+	checkIdx := strings.Index(snippet[cosignIdx:], "if ($LASTEXITCODE -ne 0)")
 	expandIdx := strings.Index(snippet, "Expand-Archive")
 
-	if eapIdx < 0 || gitIdx < 0 || cosignIdx < 0 || firstCheckIdx < 0 || secondCheckIdx < 0 || expandIdx < 0 {
-		t.Fatalf("expected to find $ErrorActionPreference, git show, cosign.exe verify-blob, two $LASTEXITCODE checks, and Expand-Archive, got indices eap=%d git=%d cosign=%d check1=%d check2(relative)=%d expand=%d", eapIdx, gitIdx, cosignIdx, firstCheckIdx, secondCheckIdx, expandIdx)
+	if eapIdx < 0 || cosignIdx < 0 || checkIdx < 0 || expandIdx < 0 {
+		t.Fatalf("expected to find $ErrorActionPreference, cosign.exe verify-blob, its $LASTEXITCODE check, and Expand-Archive, got indices eap=%d cosign=%d check(relative)=%d expand=%d", eapIdx, cosignIdx, checkIdx, expandIdx)
 	}
-	secondCheckIdx += cosignIdx // convert back to an absolute index
-
-	if !(eapIdx < gitIdx && gitIdx < firstCheckIdx && firstCheckIdx < cosignIdx) {
-		t.Fatalf("expected $ErrorActionPreference, then git show, then its $LASTEXITCODE check, then cosign.exe verify-blob, got eap=%d git=%d check1=%d cosign=%d", eapIdx, gitIdx, firstCheckIdx, cosignIdx)
-	}
-	if !(cosignIdx < secondCheckIdx && secondCheckIdx < expandIdx) {
-		t.Fatalf("expected cosign.exe verify-blob, then its own $LASTEXITCODE check, before Expand-Archive, got cosign=%d check2=%d expand=%d", cosignIdx, secondCheckIdx, expandIdx)
+	checkIdx += cosignIdx
+	if !(eapIdx < cosignIdx && cosignIdx < checkIdx && checkIdx < expandIdx) {
+		t.Fatalf("expected $ErrorActionPreference, then cosign.exe verify-blob, then its $LASTEXITCODE check, before Expand-Archive, got eap=%d cosign=%d check=%d expand=%d", eapIdx, cosignIdx, checkIdx, expandIdx)
 	}
 }
 
@@ -84,8 +78,8 @@ func buildTestZipArchive(t *testing.T, name, content string) []byte {
 
 // TestInstallSidecarWindowsSnippetAdversarial executes the real,
 // unmodified InstallSidecarWindowsSnippet PowerShell block (only the
-// <version>/<os>/<arch> and <trusted-ref> placeholders substituted) under
-// a real pwsh, with fake git/cosign.exe stand-ins on PATH, proving the
+// <version>/<os>/<arch> placeholder substituted) under a real pwsh, with
+// a fake cosign.exe stand-in on PATH, proving the
 // same fail-closed contract the POSIX adversarial test proves: a failing
 // cosign.exe verification must never let Expand-Archive run, and a
 // succeeding one must still extract normally -- verified both by an
@@ -104,19 +98,14 @@ func TestInstallSidecarWindowsSnippetAdversarial(t *testing.T) {
 	const extractedFileContent = "this file must be extracted only after cosign.exe verification succeeds"
 	script := findFencedBlockContaining(t, []byte(InstallSidecarWindowsSnippet), "powershell", "cosign.exe verify-blob")
 	script = strings.ReplaceAll(script, "acr-mcp_<version>_windows_amd64.zip", archive)
-	script = strings.ReplaceAll(script, "<trusted-ref>", "test-ref")
 	archiveContent := buildTestZipArchive(t, extractedFileName, extractedFileContent)
 
 	fakeBin := t.TempDir()
-	writeFakeExecutable(t, fakeBin, "git", "exit 0")
 	tarMarkerDir := t.TempDir()
 	marker := filepath.Join(tarMarkerDir, "expand-archive-was-invoked")
 
 	runAdversarialCase := func(t *testing.T, cosignExitCode int, wantSuccess bool) {
 		workDir := t.TempDir()
-		if err := os.Mkdir(filepath.Join(workDir, "signing"), 0o700); err != nil {
-			t.Fatal(err)
-		}
 		writeTestFile(t, workDir, archive, archiveContent)
 		writeTestFile(t, workDir, "SHA256SUMS", []byte(sha256Hex(archiveContent)+"  "+archive+"\n"))
 

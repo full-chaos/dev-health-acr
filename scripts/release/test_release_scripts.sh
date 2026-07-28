@@ -67,6 +67,14 @@ if PATH="$tmp/bin:$PATH" MOCK_LOG="$tmp/standard-publish.log" MOCK_ROOT="$root" 
 fi
 grep -F 'repo view full-chaos/dev-health-acr' "$tmp/standard-publish.log" >/dev/null
 
+if GITHUB_REPOSITORY=full-chaos/dev-health-acr GITHUB_ACTOR=chrisgeo GH_TOKEN=test \
+  "$root/scripts/release/publish-ci-release.sh" \
+  --dir "$tmp/missing-release" \
+  --tag v1.2.3 \
+  --commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; then
+  exit 1
+fi
+
 tag_remote="$tmp/tag-remote.git"
 tag_source="$tmp/tag-source"
 tag_name="v1.2.3-dev.1"
@@ -145,6 +153,8 @@ if assert_go_version_pins "$tmp/ci-missing-go-version.yml" "$release_workflow"; 
 sed 's/^\([[:space:]]*go-version:\).*/\1 "1.26.4"/' "$ci_workflow" > "$tmp/ci-mismatched-go-version.yml"
 if assert_go_version_pins "$tmp/ci-mismatched-go-version.yml" "$release_workflow"; then exit 1; fi
 
+grep -F 'workflow_dispatch:' "$release_workflow" >/dev/null
+grep -F 'group: release-' "$release_workflow" >/dev/null
 grep -F 'name: binary-release' "$release_workflow" >/dev/null
 grep -F 'name: container-release' "$release_workflow" >/dev/null
 grep -F 'name: release' "$release_workflow" >/dev/null
@@ -153,7 +163,26 @@ grep -F 'CONTAINER_SCAN_OCI_ROOT: .tmp/container-oci' "$ci_workflow" >/dev/null
 grep -F 'CONTAINER_SCAN_OCI_ROOT: .tmp/container-oci' "$release_workflow" >/dev/null
 grep -F 'write-container-release-manifest.sh' "$release_workflow" >/dev/null
 grep -F 'assemble-release-assets.sh' "$release_workflow" >/dev/null
-if grep -F 'packages: write' "$release_workflow"; then exit 1; fi
+grep -F 'publish-ci-release.sh' "$release_workflow" >/dev/null
+grep -F 'contents: write' "$release_workflow" >/dev/null
+grep -F 'id-token: write' "$release_workflow" >/dev/null
+grep -F 'packages: write' "$release_workflow" >/dev/null
+grep -F 'sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6' "$release_workflow" >/dev/null
+grep -F 'sudo apt-get install --no-install-recommends -y skopeo' "$release_workflow" >/dev/null
+grep -F "skopeo copy --help | grep -F -- '--preserve-digests'" "$release_workflow" >/dev/null
+if grep -F 'lework/skopeo-binary' "$release_workflow"; then exit 1; fi
+test "$(grep -c 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' "$release_workflow")" -eq 4
+
+grep -F 'skopeo copy --all --preserve-digests' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F 'cosign sign --yes' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F 'cosign sign-blob' "$root/scripts/release/publish-ci-release.sh" | grep -F -- '--bundle' >/dev/null
+grep -F 'release create "$tag"' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F 'gh release download' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F 'immutable GHCR tag conflict' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F 'cannot determine whether GHCR tag exists' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F 'databaseId,isDraft' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+if grep -Eqi '\(manifest unknown\|name unknown\|not found\|' "$root/scripts/release/publish-ci-release.sh"; then exit 1; fi
+
 grep -F 'skopeo copy --all --preserve-digests' "$root/scripts/release/publish-private-image.sh" >/dev/null
 grep -F 'gh run download' "$root/scripts/release/publish-private-image.sh" | grep -F -- '--name release' >/dev/null
 grep -F 'container-release-manifest.json' "$root/scripts/release/publish-private-release.sh" >/dev/null
@@ -166,3 +195,6 @@ for script in publish-private-image.sh publish-private-release.sh revoke-private
   if grep -F 'approval-receipt.sh' "$root/scripts/release/$script"; then exit 1; fi
 done
 grep -F 'approval-receipt.sh' "$root/scripts/release/verify-mcp-binary-approval.sh" >/dev/null
+
+grep -F 'ghcr.io/full-chaos/dev-health-acr/acr-api:<tag>' "$root/docs/container-images.md" >/dev/null
+grep -F 'does not publish a mutable GHCR `latest` tag' "$root/docs/container-images.md" >/dev/null

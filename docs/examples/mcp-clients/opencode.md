@@ -8,20 +8,20 @@ server registration is the local STDIO process `acr-mcp serve`.
 
 <!-- FIXTURE:install-sidecar -->
 1. **Install the sidecar binary.** The normal install path is a signed
-   private release download, not a local build. macOS/Linux:
+   GitHub Release download, not a local build. macOS/Linux:
 
    ```bash
    # Download the release archive for your OS/arch (e.g. acr-mcp_<version>_darwin_arm64.tar.gz)
-   # plus SHA256SUMS and SHA256SUMS.sig from the private GitHub Releases page for
-   # full-chaos/dev-health-acr. Do NOT trust a cosign.pub bundled alongside the
-   # release assets -- obtain signing/cosign.pub from a reviewed commit in this
-   # repository instead, then verify. set -euo pipefail so a failed git,
-   # cosign, or checksum step halts here rather than falling through to
-   # extract an unverified archive:
+   # plus SHA256SUMS and SHA256SUMS.sigstore.json from the GitHub Releases page for
+   # full-chaos/dev-health-acr. Verify the keyless Sigstore bundle against this
+   # repository's release workflow identity before checking or extracting the archive:
    set -euo pipefail
-   git show <trusted-ref>:signing/cosign.pub > signing/cosign.pub
-   cosign verify-blob --key signing/cosign.pub --signature SHA256SUMS.sig \
-     --insecure-ignore-tlog SHA256SUMS
+   identity='^https://github\.com/full-chaos/dev-health-acr/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+(-(dev|beta)\.[0-9]+)?)$'
+   issuer='https://token.actions.githubusercontent.com'
+   cosign verify-blob SHA256SUMS \
+     --bundle SHA256SUMS.sigstore.json \
+     --certificate-identity-regexp "$identity" \
+     --certificate-oidc-issuer "$issuer"
    archive="acr-mcp_<version>_<os>_<arch>.tar.gz"
    checksum_line="$(awk -v name="$archive" '$2 == name' SHA256SUMS)"
    test "$(printf '%s\n' "$checksum_line" | wc -l | tr -d ' ')" = 1
@@ -59,8 +59,8 @@ server registration is the local STDIO process `acr-mcp serve`.
 
 Windows has a signed `.zip` asset, but Cursor's Windows/NTFS lifecycle remains
 deferred to CHAOS-3058 and is not a Task19 blocker. The current exercised
-clean-room path is Unix/Linux/macOS. The release policy is private and signed;
-Task19 does not create or claim a production release.
+clean-room path is Unix/Linux/macOS. The release workflow signs the published artifacts;
+Task19 did not itself create or claim a production release.
 
 ## Install and register the package
 
@@ -115,4 +115,4 @@ unrelated OpenCode files remain. Reinstall from the next verified `acr-mcp`
 archive rather than replacing an archive in place.
 
 See [the shared client index](README.md), [the sidecar guide](../../mcp-sidecar.md),
-and [the private release policy](../../release-policy.md).
+and [the release policy](../../release-policy.md).

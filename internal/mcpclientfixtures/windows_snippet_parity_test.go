@@ -75,17 +75,29 @@ func TestInstallSidecarSnippetChecksumIsPortable(t *testing.T) {
 	}
 }
 
-// TestInstallSidecarWindowsSnippetUsesReviewedCosignKey proves the
-// Windows snippet follows the same "do not trust a bundled cosign.pub"
-// guidance as the POSIX snippet (see docs/release-policy.md's "Local
-// publish contract" section: "Do not trust a public key downloaded
-// beside assets; obtain signing/cosign.pub from a reviewed repository
-// commit").
-func TestInstallSidecarWindowsSnippetUsesReviewedCosignKey(t *testing.T) {
-	if !strings.Contains(InstallSidecarWindowsSnippet, "signing/cosign.pub") {
-		t.Fatal("expected the Windows snippet to reference signing/cosign.pub, not a bare cosign.pub")
+// TestInstallSidecarWindowsSnippetUsesKeylessReleaseBundle proves the Windows
+// snippet verifies the same keyless Sigstore bundle and constrained GitHub
+// Actions identity as the authoritative release policy.
+func TestInstallSidecarWindowsSnippetUsesKeylessReleaseBundle(t *testing.T) {
+	for _, required := range []string{
+		"SHA256SUMS.sigstore.json",
+		"cosign.exe verify-blob SHA256SUMS",
+		"--certificate-identity-regexp",
+		"--certificate-oidc-issuer",
+		"$LASTEXITCODE -ne 0",
+	} {
+		if !strings.Contains(InstallSidecarWindowsSnippet, required) {
+			t.Fatalf("expected the Windows snippet to contain %q", required)
+		}
 	}
-	if !strings.Contains(InstallSidecarWindowsSnippet, "Do NOT trust a cosign.pub bundled alongside") {
-		t.Fatal("expected the Windows snippet to warn against trusting a bundled public key copy")
+	for _, obsolete := range []string{
+		"--key signing/cosign.pub",
+		"--signature SHA256SUMS.sig",
+		"--insecure-ignore-tlog",
+		"git show <trusted-ref>:signing/cosign.pub",
+	} {
+		if strings.Contains(InstallSidecarWindowsSnippet, obsolete) {
+			t.Fatalf("Windows snippet still contains obsolete local-key verification token %q", obsolete)
+		}
 	}
 }

@@ -173,7 +173,7 @@ bash deploy/kubernetes/acr/scripts/rollback.sh --overlay staging \
   --apply
 ```
 
-Promotion and private release revocation are described in
+Promotion, publication, and release revocation are described in
 [release policy](release-policy.md). Test the promoted digest, preserve its
 provenance, and rehearse an application rollback before a production upgrade.
 

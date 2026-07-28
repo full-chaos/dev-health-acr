@@ -313,50 +313,25 @@ func TestDoctorGateNoteIsCanonicalEverywhere(t *testing.T) {
 }
 
 // TestInstallSnippetChecksumContractMatchesReleasePolicy proves both
-// canonical install snippets' consumer verification mechanism -- verify
-// the signature over the *entire* SHA256SUMS manifest first, then select
-// and verify only the single line matching the one archive actually
-// downloaded, asserting exactly one such line exists -- has not drifted
-// from docs/release-policy.md's own "Local publish contract" section,
-// the authoritative source for this exact contract (see its "Consumers
-// obtain signing/cosign.pub..." paragraph and the bash/powershell blocks
-// immediately below it).
-//
-// The comparison is semantic (a shared checklist of structural tokens
-// each side must contain), not a literal byte/line match, because the
-// two documents legitimately differ in surface details that carry no
-// contract meaning: release-policy.md illustrates with a concrete
-// "acr-api_1.2.3_linux_amd64.tar.gz"-style example and single-quoted
-// variable assignment, while the mcp-clients guides use an
-// "acr-mcp_<version>_<os>_<arch>.tar.gz" placeholder and this package's
-// existing double-quote convention. If docs/release-policy.md's own
-// contract changes (a dropped assertion, a different flag, a switched
-// tool), the elements list below stops matching release-policy.md
-// itself, which fails this test just as loudly as a drifted snippet
-// would.
-//
-// The POSIX line-selection element is deliberately NOT compared: this
-// package's own InstallSidecarSnippet uses `awk -v name="$archive"
-// '$2 == name'` (an exact-field match), while docs/release-policy.md's
-// example still uses `grep -F "  $archive"` (a fixed-string, but not
-// end-anchored, match) -- see
-// TestInstallSidecarSnippetChecksumSelectionIsExactAgainstRealSBOMManifest
-// for why `grep -F` alone matches a real archive's own
-// "<archive>.spdx.json" SBOM sibling too and fails the "exactly one"
-// assertion for every real release. This is a known, flagged-for-
-// coordination gap in docs/release-policy.md's own example, not a drift
-// in this package's snippet, so it is intentionally excluded from the
-// shared-element checklist rather than forcing InstallSidecarSnippet
-// back to the less precise `grep -F` selector to satisfy this test.
+// canonical install snippets match docs/release-policy.md's keyless consumer
+// contract: verify the Sigstore bundle over the complete SHA256SUMS manifest
+// against the release workflow identity, then select and verify exactly the
+// one archive the consumer downloaded. The comparison is semantic rather than
+// byte-for-byte because the policy uses concrete acr-api filenames while the
+// client guides use acr-mcp placeholders.
 func TestInstallSnippetChecksumContractMatchesReleasePolicy(t *testing.T) {
 	root := findRepoRoot(t)
 	policyData := readDoc(t, root, "docs/release-policy.md")
-	posixBlock := findFencedBlockContaining(t, policyData, "bash", "cosign verify-blob")
-	psBlock := findFencedBlockContaining(t, policyData, "powershell", "verify-blob --key signing/cosign.pub")
+	posixVerifyBlock := findFencedBlockContaining(t, policyData, "bash", "cosign verify-blob SHA256SUMS")
+	posixChecksumBlock := findFencedBlockContaining(t, policyData, "bash", "checksum_line=")
+	posixBlock := posixVerifyBlock + "\n" + posixChecksumBlock
+	psBlock := findFencedBlockContaining(t, policyData, "powershell", "cosign.exe verify-blob SHA256SUMS")
 
 	posixElements := []string{
-		"cosign verify-blob",
-		"--insecure-ignore-tlog SHA256SUMS",
+		"cosign verify-blob SHA256SUMS",
+		"--bundle SHA256SUMS.sigstore.json",
+		"--certificate-identity-regexp",
+		"--certificate-oidc-issuer",
 		"= 1",
 		"sha256sum --check -",
 		"shasum -a 256 --check -",
@@ -364,8 +339,11 @@ func TestInstallSnippetChecksumContractMatchesReleasePolicy(t *testing.T) {
 	assertSharedElements(t, "POSIX", posixBlock, InstallSidecarSnippet, posixElements)
 
 	psElements := []string{
-		"verify-blob --key signing/cosign.pub",
-		"--insecure-ignore-tlog SHA256SUMS",
+		"cosign.exe verify-blob SHA256SUMS",
+		"--bundle SHA256SUMS.sigstore.json",
+		"--certificate-identity-regexp",
+		"--certificate-oidc-issuer",
+		"$LASTEXITCODE -ne 0",
 		"EndsWith",
 		".Count -ne 1",
 		"Get-FileHash",
