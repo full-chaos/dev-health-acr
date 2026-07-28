@@ -12,6 +12,7 @@ require() {
 }
 
 require Dockerfile
+require Dockerfile.dockerignore
 require .dockerignore
 require docs/container-images.md
 require scripts/container/build.sh
@@ -33,9 +34,24 @@ grep -q 'acr-mcp' "${repo_root}/Dockerfile"
 grep -q '@sha256:' "${repo_root}/Dockerfile"
 grep -qxF '*' "${repo_root}/.dockerignore"
 grep -qxF '!Dockerfile' "${repo_root}/.dockerignore"
+grep -qxF '*' "${repo_root}/Dockerfile.dockerignore"
 allow_count="$(grep -cE '^!' "${repo_root}/.dockerignore")"
 test "$allow_count" -eq 1 || {
   printf '.dockerignore allowlist has %s entries, expected exactly 1\n' "$allow_count" >&2
+  exit 1
+}
+for allowed_source in \
+  '!Dockerfile' '!go.mod' '!go.sum' \
+  '!cmd/**/*.go' \
+  '!internal/**/*.go' '!internal/**/*.json' \
+  '!migrations/**/*.go' '!migrations/**/*.sql'; do
+  grep -qxF "$allowed_source" "${repo_root}/Dockerfile.dockerignore" || {
+    printf 'Dockerfile.dockerignore is missing reviewed source rule: %s\n' "$allowed_source" >&2
+    exit 1
+  }
+done
+test "$(grep -cE '^!' "${repo_root}/Dockerfile.dockerignore")" -eq 8 || {
+  printf 'Dockerfile.dockerignore contains an unreviewed allow rule\n' >&2
   exit 1
 }
 grep -q "find .*cmd.*-name '\*.go'" "${repo_root}/scripts/container/create-context.sh"

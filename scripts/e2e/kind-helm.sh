@@ -475,7 +475,7 @@ source_tree_hash() {
   (
     cd "${REPO_ROOT}"
     {
-      printf '%s\0' Dockerfile .dockerignore go.mod go.sum scripts/e2e/kind-helm.sh scripts/e2e/kind-fixture.sh scripts/e2e/pins.env
+      printf '%s\0' Dockerfile Dockerfile.dockerignore .dockerignore go.mod go.sum scripts/e2e/kind-helm.sh scripts/e2e/kind-fixture.sh scripts/e2e/pins.env
       find cmd -type f -name '*.go' -print0
       find internal -type f \( -name '*.go' -o -name '*.json' \) -print0
       find migrations -type f \( -name '*.go' -o -name '*.sql' \) -print0

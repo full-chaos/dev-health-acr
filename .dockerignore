@@ -1,5 +1,5 @@
-# Raw repository builds fail closed. scripts/container/build.sh constructs a
-# fresh context containing only reviewed source extensions.
+# Non-canonical Dockerfiles fail closed. The canonical Dockerfile uses its
+# reviewed Dockerfile.dockerignore allowlist; release builds use build.sh.
 *
 !Dockerfile
 **/.playwright**

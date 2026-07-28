@@ -12,6 +12,9 @@ api_image="acr-api:smoke-${invocation_id}"
 mcp_image="acr-mcp:smoke-${invocation_id}"
 prepared_context="${tmp_dir}/context"
 raw_build_log="${tmp_dir}/raw-build.log"
+raw_context_image="acr-build-context:smoke-${invocation_id}"
+raw_context_container=""
+raw_context_export="${tmp_dir}/raw-context.tar"
 ignored_build_log="${tmp_dir}/ignored-build.log"
 
 fail() {
@@ -20,8 +23,11 @@ fail() {
 }
 
 cleanup() {
+  if [[ -n "$raw_context_container" ]]; then
+    docker rm -f "$raw_context_container" >/dev/null 2>&1 || true
+  fi
   rm -rf "$tmp_dir"
-  docker image rm -f "$api_image" "$mcp_image" >/dev/null 2>&1 || true
+  docker image rm -f "$api_image" "$mcp_image" "$raw_context_image" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -55,12 +61,20 @@ if grep -aFRq "$sentinel" "$prepared_context"; then
   fail 'sentinel reached prepared BuildKit context content'
 fi
 
-set +e
-docker buildx build --target build --load "$snapshot" >"$raw_build_log" 2>&1
-raw_build_status=$?
-set -e
-[[ "$raw_build_status" -ne 0 ]] || fail 'raw repository build unexpectedly received product sources'
-grep -Fq "$sentinel" "$raw_build_log" && fail 'sentinel reached raw BuildKit context'
+if ! docker buildx build --target build --tag "$raw_context_image" --load \
+  --provenance=false --sbom=false "$snapshot" >"$raw_build_log" 2>&1; then
+  cat "$raw_build_log" >&2
+  fail 'Dockerfile-specific BuildKit context failed to build'
+fi
+raw_context_container="$(docker create "$raw_context_image")"
+docker export "$raw_context_container" >"$raw_context_export"
+docker run --rm --entrypoint sh "$raw_context_image" -c \
+  'test -f /src/cmd/acr-api/main.go && test -f /src/internal/mcp/schemas/tools.v1.json && test -f /src/migrations/postgres/0001_acr_core.sql'
+if grep -aFq "$sentinel" "$raw_context_export"; then
+  docker run --rm --entrypoint sh "$raw_context_image" -c \
+    "grep -aFRl '$sentinel' /src 2>/dev/null || true" >&2
+  fail 'sentinel reached Dockerfile-specific BuildKit context'
+fi
 
 set +e
 CONTAINER_SOURCE_ROOT="$snapshot" CONTAINER_CONTEXT="$snapshot" CONTAINER_ALLOW_DIRTY=1 \

@@ -1,0 +1,12 @@
+# Local Docker/Compose builds use the canonical Dockerfile with this exact
+# reviewed source allowlist. Release builds still use scripts/container/build.sh,
+# which constructs its own context and enforces clean-tree provenance.
+*
+!Dockerfile
+!go.mod
+!go.sum
+!cmd/**/*.go
+!internal/**/*.go
+!internal/**/*.json
+!migrations/**/*.go
+!migrations/**/*.sql
