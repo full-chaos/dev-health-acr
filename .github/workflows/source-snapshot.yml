@@ -2,8 +2,8 @@
 name: source-snapshot
 
 "on":
-  push:
-    branches: [agent/publish-acr-artifacts]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
