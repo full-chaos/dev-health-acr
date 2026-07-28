@@ -21,7 +21,7 @@ type EvidenceReference struct {
 
 type EvidenceReferenceRows interface {
 	AuthorizedRepositories(context.Context, string, []string) ([]contractsv1.ResolvedScope, error)
-	ResolveEvidenceReference(context.Context, string, contractsv1.ResolvedScope, string) ([]EvidenceReference, error)
+	ResolveEvidenceReference(context.Context, string, contractsv1.ResolvedScope, string, string) ([]EvidenceReference, error)
 }
 
 type CatalogClickHouseRows struct {
@@ -83,7 +83,7 @@ func (r *CatalogClickHouseRows) AuthorizedRepositories(ctx context.Context, orgI
 	return result, nil
 }
 
-func (r *CatalogClickHouseRows) ResolveEvidenceReference(ctx context.Context, orgID string, scope contractsv1.ResolvedScope, queryID string) (_ []EvidenceReference, err error) {
+func (r *CatalogClickHouseRows) ResolveEvidenceReference(ctx context.Context, orgID string, scope contractsv1.ResolvedScope, queryID, locatorHash string) (_ []EvidenceReference, err error) {
 	var observer AssemblyObserver
 	if r != nil {
 		observer = r.observer
@@ -95,14 +95,37 @@ func (r *CatalogClickHouseRows) ResolveEvidenceReference(ctx context.Context, or
 		return nil, storage.ErrNotFound
 	}
 	plan := ReadPlan{OrgID: orgID, RepoID: scope.RepoID, RepoSlug: scope.RepoSlug}
-	result, err := r.executor.QueryEvidence(ctx, *query, plan.Bindings())
+	if locatorHash == "" {
+		return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, confidence, citation, observed_at FROM (`+query.Statement+`) LIMIT 501`, plan.Bindings(), 501)
+	}
+	if len(locatorHash) != 64 {
+		return nil, storage.ErrNotFound
+	}
+	bindings := append(plan.Bindings(), ClickHouseBinding{Name: "evidence_locator_hash", Value: locatorHash})
+	statement := `SELECT * FROM (` + query.Statement + `) WHERE lower(hex(SHA256(evidence_ref_id))) = {evidence_locator_hash:String} LIMIT 2`
+	return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, statement, bindings, 2)
+}
+
+func (r *CatalogClickHouseRows) queryEvidenceReferences(ctx context.Context, repoSlug, queryID, statement string, bindings []ClickHouseBinding, saturationLimit int) ([]EvidenceReference, error) {
+	rows, err := r.client.Query(ctx, statement, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("resolve evidence locator: %w", err)
 	}
-	references := make([]EvidenceReference, 0, len(result))
-	for _, evidence := range result {
-		evidence.SourceVersion = query.ID
-		references = append(references, EvidenceReference{RepoSlug: scope.RepoSlug, Evidence: evidence, Excerpt: evidence.Citation})
+	defer rows.Close()
+	references := make([]EvidenceReference, 0, min(saturationLimit-1, 16))
+	for rows.Next() {
+		evidence, scanErr := scanEvidenceRow(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan evidence locator: %w", scanErr)
+		}
+		if len(references)+1 == saturationLimit {
+			return nil, storage.ErrNotFound
+		}
+		evidence.SourceVersion = queryID
+		references = append(references, EvidenceReference{RepoSlug: repoSlug, Evidence: evidence, Excerpt: evidence.Citation})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate evidence locator: %w", err)
 	}
 	return references, nil
 }
@@ -175,7 +198,8 @@ func (s *ClickHouseEvidenceStore) ContextForTask(ctx context.Context, p storage.
 		return storage.EvidenceBundle{}, err
 	}
 	for index := range evidence {
-		handle, encodeErr := s.codec.Encode(p.OrgID, scope.RepoID, evidence[index].SourceVersion, evidence[index].EvidenceRefID)
+		repositoryWide, _ := evidence[index].Metadata["scope_breadth"].(string)
+		handle, encodeErr := s.codec.Encode(p.OrgID, scope.RepoID, evidence[index].SourceVersion, evidence[index].EvidenceRefID, repositoryWide == "repository-wide")
 		if encodeErr != nil {
 			return storage.EvidenceBundle{}, fmt.Errorf("encode evidence handle: %w", encodeErr)
 		}

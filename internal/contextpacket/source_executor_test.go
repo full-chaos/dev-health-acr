@@ -84,7 +84,7 @@ func TestObservedCatalogRowsReportsEveryDirectQueryTimeout(t *testing.T) {
 
 	_, _ = rows.ResolveEvidenceScope(context.Background(), plan)
 	_, _ = rows.AuthorizedRepositories(context.Background(), plan.OrgID, []string{plan.RepoSlug})
-	_, _ = rows.ResolveEvidenceReference(context.Background(), plan.OrgID, contractsv1.ResolvedScope{RepoID: "repo_1", RepoSlug: plan.RepoSlug}, contextpacket.SourceQueryCatalogV1[0].ID)
+	_, _ = rows.ResolveEvidenceReference(context.Background(), plan.OrgID, contractsv1.ResolvedScope{RepoID: "repo_1", RepoSlug: plan.RepoSlug}, contextpacket.SourceQueryCatalogV1[0].ID, "")
 
 	if len(observer.store) != 3 {
 		t.Fatalf("observations = %#v", observer.store)

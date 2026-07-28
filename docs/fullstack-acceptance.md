@@ -247,7 +247,7 @@ consequences, all load-bearing:
 * The scripted model reads the rendering, because that is the surface under test. It still
   accepts the JSON shape, for clients that do forward structured content.
 * Evidence reference IDs are base64url tokens full of underscores, and the renderer escapes
-  markdown-active characters — `ev1_kid_code` arrives as `ev1\_kid\_code`. The reader
+  markdown-active characters — `ev2_kid_code` arrives as `ev2\_kid\_code`. The reader
   unescapes before using one, since passing the escaped form back to `source_evidence` would
   be a reference the service never issued.
 * The rendered packet lists an item's evidence IDs but *not* the entity behind them, so the
