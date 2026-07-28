@@ -43,7 +43,7 @@ func (s *ClickHouseEvidenceStore) ResolveEvidence(ctx context.Context, principal
 	if !ok {
 		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
 	}
-	references, err := rows.ResolveEvidenceReference(ctx, principal.OrgID, routed, handle.QueryID, handle.LocatorHash())
+	references, err := rows.ResolveEvidenceReference(ctx, principal.OrgID, routed, EvidenceReferenceLookup{QueryID: handle.QueryID, LookupHash: handle.LookupHash(), BranchHash: handle.BranchHash(), AsOf: handle.AsOf, RepositoryWide: handle.RepositoryWide})
 	if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return contractsv1.ExpandedEvidence{}, fmt.Errorf("resolve evidence reference: %w", err)
 	}
@@ -52,7 +52,7 @@ func (s *ClickHouseEvidenceStore) ResolveEvidence(ctx context.Context, principal
 		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
 	}
 	if handle.RepositoryWide {
-		matched.Evidence.Source.DisplayLabel += repositoryWideSourceLabelSuffix
+		matched.Evidence.Source.DisplayLabel = repositoryWideDisplayLabel(matched.Evidence.Source.DisplayLabel)
 		matched.Evidence.Metadata = withRepositoryWideScope(matched.Evidence.Metadata)
 	}
 	matched.Evidence.EvidenceRefID = evidenceRefID
@@ -75,7 +75,7 @@ func (s *ClickHouseEvidenceStore) matchEvidenceHandle(principal storage.Principa
 	var matched EvidenceReference
 	matches := 0
 	for _, reference := range references {
-		if reference.RepoSlug == scope.RepoSlug && reference.Evidence.SourceVersion == handle.QueryID && s.codec.Matches(handle, principal.OrgID, scope.RepoID, reference.Evidence.EvidenceRefID) {
+		if reference.RepoSlug == scope.RepoSlug && reference.Evidence.SourceVersion == handle.QueryID && s.codec.Matches(handle, principal.OrgID, scope.RepoID, reference.Evidence) {
 			matches++
 			matched = reference
 		}

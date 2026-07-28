@@ -5,9 +5,9 @@ const standardColumns = `SELECT evidence_ref_id, system, entity_type, entity_id,
 const SourceQueryCatalogVersionV1 = "dev-health-source-catalog.v1"
 
 // Each run is a replacement slice, so files from an earlier run must not be merged into the latest one.
-const fileHotspotLatestSnapshotFilter = ` AND (day, computed_at) = (SELECT day, computed_at FROM file_hotspot_daily WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND ({as_of:Nullable(DateTime64(3, 'UTC'))} IS NULL OR toDateTime(day) <= {as_of:Nullable(DateTime64(3, 'UTC'))}) GROUP BY org_id, repo_id, day, computed_at ORDER BY day DESC, computed_at DESC LIMIT 1 SETTINGS force_optimize_projection_name='prj_acr_file_hotspot_runs')`
+const fileHotspotLatestSnapshotFilter = ` AND (day, computed_at) = (SELECT day, computed_at FROM file_hotspot_daily WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND ({as_of:Nullable(DateTime64(3, 'UTC'))} IS NULL OR toDateTime(day) <= {as_of:Nullable(DateTime64(3, 'UTC'))}) GROUP BY org_id, repo_id, day, computed_at ORDER BY day DESC, computed_at DESC LIMIT 1)`
 
-const fileComplexityLatestSnapshotFilter = ` AND (ref, as_of_day, computed_at) = (SELECT ref, as_of_day, computed_at FROM file_complexity_snapshots WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND ({branch:String} = '' OR ref = {branch:String}) AND ({as_of:Nullable(DateTime64(3, 'UTC'))} IS NULL OR toDateTime(as_of_day) <= {as_of:Nullable(DateTime64(3, 'UTC'))}) GROUP BY org_id, repo_id, ref, as_of_day, computed_at ORDER BY as_of_day DESC, computed_at DESC, ref ASC LIMIT 1 SETTINGS force_optimize_projection_name='prj_acr_file_complexity_runs')`
+const fileComplexityLatestSnapshotFilter = ` AND (ref, as_of_day, computed_at) = (SELECT ref, as_of_day, computed_at FROM file_complexity_snapshots WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND ({branch:String} = '' OR ref = {branch:String}) AND ({as_of:Nullable(DateTime64(3, 'UTC'))} IS NULL OR toDateTime(as_of_day) <= {as_of:Nullable(DateTime64(3, 'UTC'))}) GROUP BY org_id, repo_id, ref, as_of_day, computed_at ORDER BY as_of_day DESC, computed_at DESC, ref ASC LIMIT 1)`
 
 // Provenance is the first evidence-ranking key, so these adapters map only raw
 // values whose meaning has been reviewed for that source. Every final empty

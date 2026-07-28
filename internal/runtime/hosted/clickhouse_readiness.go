@@ -7,13 +7,13 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
+const clickHouseReadinessSchemaProbe = `SELECT r.ref_sha256, p.head_branch_sha256, p.base_branch_sha256, c.branch_sha256, f.ref_sha256 FROM repos AS r CROSS JOIN git_pull_requests AS p CROSS JOIN ci_pipeline_runs AS c CROSS JOIN file_complexity_snapshots AS f LIMIT 0`
+
 func checkClickHouseRuntime(ctx context.Context, ping func(context.Context) error, client contextpacket.ClickHouseQueryClient) (resultErr error) {
 	if err := ping(ctx); err != nil {
 		return errors.New("ClickHouse runtime is unavailable")
 	}
-	rows, err := client.Query(ctx, `SELECT toString(id), repo, ifNull(ref, '') FROM repos FINAL WHERE org_id = {org_id:String} AND repo = {repo_slug:String} LIMIT 1`, []contextpacket.ClickHouseBinding{
-		{Name: "org_id", Value: "acr-readiness-probe"}, {Name: "repo_slug", Value: "acr/readiness-probe"},
-	})
+	rows, err := client.Query(ctx, clickHouseReadinessSchemaProbe, nil)
 	if err != nil {
 		return errors.New("ClickHouse runtime catalog is unavailable")
 	}
@@ -22,12 +22,6 @@ func checkClickHouseRuntime(ctx context.Context, ping func(context.Context) erro
 			resultErr = errors.Join(resultErr, errors.New("ClickHouse runtime catalog is unavailable"))
 		}
 	}()
-	for rows.Next() {
-		var repositoryID, repository, branch string
-		if err := rows.Scan(&repositoryID, &repository, &branch); err != nil {
-			return errors.New("ClickHouse runtime catalog is unavailable")
-		}
-	}
 	if err := rows.Err(); err != nil {
 		return errors.New("ClickHouse runtime catalog is unavailable")
 	}

@@ -3,6 +3,7 @@ package contextpacket
 import (
 	"context"
 	"fmt"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -19,9 +20,17 @@ type EvidenceReference struct {
 	Excerpt  string
 }
 
+type EvidenceReferenceLookup struct {
+	QueryID        string
+	LookupHash     string
+	BranchHash     string
+	AsOf           *time.Time
+	RepositoryWide bool
+}
+
 type EvidenceReferenceRows interface {
 	AuthorizedRepositories(context.Context, string, []string) ([]contractsv1.ResolvedScope, error)
-	ResolveEvidenceReference(context.Context, string, contractsv1.ResolvedScope, string, string) ([]EvidenceReference, error)
+	ResolveEvidenceReference(context.Context, string, contractsv1.ResolvedScope, EvidenceReferenceLookup) ([]EvidenceReference, error)
 }
 
 type CatalogClickHouseRows struct {
@@ -83,26 +92,34 @@ func (r *CatalogClickHouseRows) AuthorizedRepositories(ctx context.Context, orgI
 	return result, nil
 }
 
-func (r *CatalogClickHouseRows) ResolveEvidenceReference(ctx context.Context, orgID string, scope contractsv1.ResolvedScope, queryID, locatorHash string) (_ []EvidenceReference, err error) {
+func (r *CatalogClickHouseRows) ResolveEvidenceReference(ctx context.Context, orgID string, scope contractsv1.ResolvedScope, lookup EvidenceReferenceLookup) (_ []EvidenceReference, err error) {
 	var observer AssemblyObserver
 	if r != nil {
 		observer = r.observer
 	}
 	completeObservation := beginStoreQueryObservation(ctx, observer, StoreOperationEvidence)
 	defer func() { completeObservation(err) }()
-	query := catalogSourceQuery(queryID)
+	query := catalogSourceQuery(lookup.QueryID)
 	if r == nil || r.client == nil || query == nil {
 		return nil, storage.ErrNotFound
 	}
-	plan := ReadPlan{OrgID: orgID, RepoID: scope.RepoID, RepoSlug: scope.RepoSlug}
-	if locatorHash == "" {
+	branchHash := lookup.BranchHash
+	if lookup.RepositoryWide {
+		branchHash = ""
+	}
+	plan := ReadPlan{OrgID: orgID, RepoID: scope.RepoID, RepoSlug: scope.RepoSlug, BranchHash: branchHash, AsOf: lookup.AsOf}
+	if lookup.LookupHash == "" {
 		return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, confidence, citation, observed_at FROM (`+query.Statement+`) LIMIT 501`, plan.Bindings(), 501)
 	}
-	if len(locatorHash) != 64 {
+	if len(lookup.LookupHash) != 64 {
 		return nil, storage.ErrNotFound
 	}
-	bindings := append(plan.Bindings(), ClickHouseBinding{Name: "evidence_locator_hash", Value: locatorHash})
-	statement := `SELECT * FROM (` + query.Statement + `) WHERE lower(hex(SHA256(evidence_ref_id))) = {evidence_locator_hash:String} LIMIT 2`
+	replayStatement, ok := evidenceReplayStatement(query, branchHash, lookup.RepositoryWide)
+	if !ok {
+		return nil, storage.ErrNotFound
+	}
+	bindings := append(plan.Bindings(), ClickHouseBinding{Name: "evidence_lookup_hash", Value: lookup.LookupHash})
+	statement := `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, confidence, citation, observed_at FROM (` + replayStatement + `) WHERE ` + evidenceLookupHashSQL() + ` = {evidence_lookup_hash:String} LIMIT 2`
 	return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, statement, bindings, 2)
 }
 
@@ -199,7 +216,7 @@ func (s *ClickHouseEvidenceStore) ContextForTask(ctx context.Context, p storage.
 	}
 	for index := range evidence {
 		repositoryWide, _ := evidence[index].Metadata["scope_breadth"].(string)
-		handle, encodeErr := s.codec.Encode(p.OrgID, scope.RepoID, evidence[index].SourceVersion, evidence[index].EvidenceRefID, repositoryWide == "repository-wide")
+		handle, encodeErr := s.codec.EncodeEvidence(p.OrgID, scope.RepoID, evidence[index], EvidenceIDContext{Branch: plan.Branch, AsOf: plan.AsOf, RepositoryWide: repositoryWide == "repository-wide"})
 		if encodeErr != nil {
 			return storage.EvidenceBundle{}, fmt.Errorf("encode evidence handle: %w", encodeErr)
 		}

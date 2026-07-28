@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"sort"
+	"strings"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -85,7 +86,7 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 			readsRepositoryWide := query.Scope == EvidenceScopeRepo ||
 				(query.Scope == EvidenceScopeCommit && plan.CommitSHA == "" && querySupportsRepoWideRead(query.ID))
 			if plan.Branch != "" && readsRepositoryWide {
-				rows[index].Source.DisplayLabel += repositoryWideSourceLabelSuffix
+				rows[index].Source.DisplayLabel = repositoryWideDisplayLabel(rows[index].Source.DisplayLabel)
 				rows[index].Metadata = withRepositoryWideScope(rows[index].Metadata)
 			}
 		}
@@ -117,6 +118,13 @@ func withRepositoryWideScope(metadata map[string]any) map[string]any {
 	maps.Copy(result, metadata)
 	result["scope_breadth"] = "repository-wide"
 	return result
+}
+
+func repositoryWideDisplayLabel(label string) string {
+	if strings.HasSuffix(label, repositoryWideSourceLabelSuffix) {
+		return label
+	}
+	return label + repositoryWideSourceLabelSuffix
 }
 
 func appendMissingCatalogSources(unavailable []contractsv1.UnavailableSource, evidence []contractsv1.EvidenceRef) []contractsv1.UnavailableSource {

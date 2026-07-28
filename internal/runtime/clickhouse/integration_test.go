@@ -2,8 +2,6 @@ package clickhouse
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
@@ -15,21 +13,60 @@ import (
 
 func TestIntegrationClient_matches_exact_evidence_digest(t *testing.T) {
 	client, _ := integrationClient(t)
-	digest := sha256.Sum256([]byte("acr:v1:ci:fixture"))
-	rows, err := client.Query(context.Background(), `SELECT evidence_ref_id FROM (SELECT 'acr:v1:ci:fixture' evidence_ref_id) WHERE lower(hex(SHA256(evidence_ref_id))) = {evidence_locator_hash:String} LIMIT 2`, []contextpacket.ClickHouseBinding{{Name: "evidence_locator_hash", Value: hex.EncodeToString(digest[:])}})
+	observedAt := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	evidence := contractsv1.EvidenceRef{EvidenceRefID: "acr:v1:ci:fixture", SourceVersion: "ci_pipeline_runs.v1", Source: contractsv1.EvidenceSource{System: "dev_health", EntityType: "ci_pipeline_run", EntityID: "fixture", DisplayLabel: "CI fixture"}, Provenance: "native", Confidence: 1, Citation: "passed", ObservedAt: observedAt}
+	codec, err := contextpacket.NewEvidenceIDCodec(contextpacket.EvidenceIDKeyring{ActiveKID: "integration", Keys: map[string][]byte{"integration": []byte("01234567890123456789012345678901")}})
 	if err != nil {
-		t.Fatalf("query exact evidence digest: %v", err)
+		t.Fatalf("create evidence codec: %v", err)
 	}
-	defer rows.Close()
-	if !rows.Next() {
-		t.Fatalf("exact evidence digest returned no rows: %v", rows.Err())
+	handle, err := codec.EncodeEvidence("org-fixture", "repo-server-derived", evidence, contextpacket.EvidenceIDContext{})
+	if err != nil {
+		t.Fatalf("encode evidence: %v", err)
 	}
-	var locator string
-	if err := rows.Scan(&locator); err != nil || locator != "acr:v1:ci:fixture" {
-		t.Fatalf("exact evidence digest locator = %q, error = %v", locator, err)
+	parsed, err := codec.Parse(handle)
+	if err != nil {
+		t.Fatalf("parse evidence: %v", err)
 	}
-	if rows.Next() || rows.Err() != nil {
-		t.Fatalf("exact evidence digest returned multiple rows: %v", rows.Err())
+	original := append([]contextpacket.SourceQuery(nil), contextpacket.SourceQueryCatalogV1...)
+	t.Cleanup(func() { contextpacket.SourceQueryCatalogV1 = original })
+	contextpacket.SourceQueryCatalogV1 = []contextpacket.SourceQuery{{ID: "ci_pipeline_runs.v1", Source: "ci", Scope: contextpacket.EvidenceScopeBranch, Statement: `SELECT 'acr:v1:ci:fixture' evidence_ref_id, 'dev_health' system, 'ci_pipeline_run' entity_type, 'fixture' entity_id, 'CI fixture' display_label, '' safe_uri, 'native' provenance, toFloat64(1) confidence, 'passed' citation, toDateTime64('2026-01-15 12:00:00', 3, 'UTC') observed_at`}}
+	rows := contextpacket.NewCatalogClickHouseRows(client)
+	references, err := rows.ResolveEvidenceReference(context.Background(), "org-fixture", contractsv1.ResolvedScope{RepoID: "repo-server-derived", RepoSlug: "example-org/widget-service"}, contextpacket.EvidenceReferenceLookup{QueryID: parsed.QueryID, LookupHash: parsed.LookupHash()})
+	if err != nil || len(references) != 1 || references[0].Evidence.EvidenceRefID != evidence.EvidenceRefID {
+		t.Fatalf("exact evidence lookup = %#v, error = %v", references, err)
+	}
+}
+
+func TestIntegrationClient_resolves_indexed_branch_digest_replay(t *testing.T) {
+	_, options := integrationClient(t)
+	options.MaxBytesToRead = 32 << 10
+	client, err := NewClickHouseQueryClientWithOptions(options)
+	if err != nil {
+		t.Fatalf("create read-limited client: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	asOf := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+	plan := contextpacket.ReadPlan{OrgID: "acr-integration-org", RepoID: "00000000-3065-4000-8000-000000000001", RepoSlug: "example-org/widget-service", Branch: "main", AsOf: &asOf}
+	evidence, err := contextpacket.NewClickHouseSourceExecutor(client).QueryEvidence(context.Background(), integrationSourceQuery(t, "file_complexity.v1"), plan.Bindings())
+	if err != nil || len(evidence) != 1 {
+		t.Fatalf("query branch evidence = %#v, error = %v", evidence, err)
+	}
+	evidence[0].SourceVersion = "file_complexity.v1"
+	codec, err := contextpacket.NewEvidenceIDCodec(contextpacket.EvidenceIDKeyring{ActiveKID: "integration", Keys: map[string][]byte{"integration": []byte("01234567890123456789012345678901")}})
+	if err != nil {
+		t.Fatalf("create evidence codec: %v", err)
+	}
+	handle, err := codec.EncodeEvidence(plan.OrgID, plan.RepoID, evidence[0], contextpacket.EvidenceIDContext{Branch: plan.Branch, AsOf: plan.AsOf})
+	if err != nil {
+		t.Fatalf("encode branch evidence: %v", err)
+	}
+	parsed, err := codec.Parse(handle)
+	if err != nil {
+		t.Fatalf("parse branch evidence: %v", err)
+	}
+	references, err := contextpacket.NewCatalogClickHouseRows(client).ResolveEvidenceReference(context.Background(), plan.OrgID, contractsv1.ResolvedScope{RepoID: plan.RepoID, RepoSlug: plan.RepoSlug}, contextpacket.EvidenceReferenceLookup{QueryID: parsed.QueryID, LookupHash: parsed.LookupHash(), BranchHash: parsed.BranchHash(), AsOf: parsed.AsOf})
+	if err != nil || len(references) != 1 || references[0].Evidence.Source.EntityID != evidence[0].Source.EntityID {
+		t.Fatalf("resolve indexed branch digest = %#v, error = %v", references, err)
 	}
 }
 

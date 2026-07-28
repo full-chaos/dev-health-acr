@@ -42,7 +42,7 @@ func (r *referenceRows) AuthorizedRepositories(_ context.Context, orgID string, 
 	return []contractsv1.ResolvedScope{{RepoID: "repo-server-derived", RepoSlug: r.record.RepoSlug, Resolution: contractsv1.ScopeRepoFallback, FallbackReasons: []string{}}}, nil
 }
 
-func (r *referenceRows) ResolveEvidenceReference(_ context.Context, orgID string, _ contractsv1.ResolvedScope, _, _ string) ([]contextpacket.EvidenceReference, error) {
+func (r *referenceRows) ResolveEvidenceReference(_ context.Context, orgID string, _ contractsv1.ResolvedScope, _ contextpacket.EvidenceReferenceLookup) ([]contextpacket.EvidenceReference, error) {
 	r.orgID = orgID
 	r.referenceCalls++
 	return []contextpacket.EvidenceReference{r.record}, nil
@@ -64,7 +64,7 @@ func TestClickHouseEvidenceStore_expands_authenticated_handle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create evidence store: %v", err)
 	}
-	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID, true)
+	handle, err := codec.EncodeEvidence("org-fixture", "repo-server-derived", evidence, contextpacket.EvidenceIDContext{RepositoryWide: true})
 	if err != nil {
 		t.Fatalf("encode handle: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestClickHouseEvidenceStore_hides_unknown_boundaries_and_candidate_overflow
 	evidence := testEvidence("acr:v1:ci:opaque-reference", "ci", time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	evidence.Source.EntityType, evidence.SourceVersion = "ci_pipeline_run", "ci_pipeline_runs.v1"
 	codec := fixtureEvidenceCodec(t)
-	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID, false)
+	handle, err := codec.EncodeEvidence("org-fixture", "repo-server-derived", evidence, contextpacket.EvidenceIDContext{})
 	if err != nil {
 		t.Fatalf("encode handle: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestClickHouseEvidenceStore_accepts_exactly_64_candidates(t *testing.T) {
 	evidence := testEvidence("acr:v1:ci:opaque-reference", "ci", time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	evidence.Source.EntityType, evidence.SourceVersion = "ci_pipeline_run", "ci_pipeline_runs.v1"
 	codec := fixtureEvidenceCodec(t)
-	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID, false)
+	handle, err := codec.EncodeEvidence("org-fixture", "repo-server-derived", evidence, contextpacket.EvidenceIDContext{})
 	if err != nil {
 		t.Fatalf("encode handle: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestClickHouseEvidenceStoreRejectsUnroutableHandleWithoutReferenceQueries(t
 	evidence := testEvidence("acr:v1:ci:opaque-reference", "ci", time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	evidence.Source.EntityType, evidence.SourceVersion = "ci_pipeline_run", "ci_pipeline_runs.v1"
 	codec := fixtureEvidenceCodec(t)
-	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID, false)
+	handle, err := codec.EncodeEvidence("org-fixture", "repo-server-derived", evidence, contextpacket.EvidenceIDContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestObservedEvidenceStoreFactoryInjectsExpansionObserver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID, false)
+	handle, err := codec.EncodeEvidence("org-fixture", "repo-server-derived", evidence, contextpacket.EvidenceIDContext{})
 	if err != nil {
 		t.Fatal(err)
 	}

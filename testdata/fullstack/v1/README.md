@@ -140,16 +140,16 @@ actually returns to clients.** `internal/contextpacket/clickhouse.go`'s `Context
 immediately overwrites it:
 
 ```go
-handle, encodeErr := s.codec.Encode(p.OrgID, scope.RepoID, evidence[index].SourceVersion, evidence[index].EvidenceRefID)
+handle, encodeErr := s.codec.EncodeEvidence(p.OrgID, scope.RepoID, evidence[index], EvidenceIDContext{Branch: plan.Branch, AsOf: plan.AsOf})
 evidence[index].EvidenceRefID = handle
 ```
 
 `EvidenceIDCodec.Encode` (`internal/contextpacket/evidence_id.go`) produces an opaque,
 deterministic token of the form
 `ev2_<kid>_<code>_<base64(repository_tag)>.<base64(nonce)>.<base64(sealed_lookup_metadata)>`.
-The deployment key authenticates the repository route and encrypts the locator digest and scope
-metadata used for an exact bounded lookup; legacy `ev1` HMAC handles remain accepted during key
-rotation. Because
+The deployment key authenticates the repository route and encrypts the evidence lookup digest
+and scope metadata used for an exact bounded lookup; legacy `ev1` HMAC handles remain accepted
+during key rotation. Because
 `org_id` is only minted at provisioning time (it is the
 `__ORG_ID__` substitution target), **no oracle authored ahead of a run can ever contain the
 literal wire-format `evidence_ref_id` string** -- this is by design (evidence refs are

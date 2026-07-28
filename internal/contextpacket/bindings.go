@@ -15,6 +15,7 @@ func (p ReadPlan) Bindings() []ClickHouseBinding {
 		{"repo_id", p.RepoID},
 		{"repo_slug", p.RepoSlug},
 		{"branch", p.Branch},
+		{"branch_hash", p.BranchHash},
 		{"commit_sha", p.CommitSHA},
 		{"task_ref", p.TaskRef},
 		{"files", append([]string(nil), p.Files...)},

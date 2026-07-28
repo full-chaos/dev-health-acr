@@ -28,6 +28,7 @@ type ReadPlan struct {
 	RepoID         string
 	RepoSlug       string
 	Branch         string
+	BranchHash     string
 	CommitSHA      string
 	TaskRef        string
 	Files          []string

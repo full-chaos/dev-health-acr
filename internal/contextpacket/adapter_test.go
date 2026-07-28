@@ -50,7 +50,7 @@ func TestClickHouseAdapter_scopes_query_to_authenticated_repository(t *testing.T
 		t.Fatalf("unexpected plan: %#v", rows.plan)
 	}
 	bindings := rows.plan.Bindings()
-	if len(bindings) != 9 || bindings[0].Name != "org_id" || bindings[0].Value != "org-fixture" || bindings[1].Name != "repo_id" || bindings[1].Value != "repo-server-derived" || bindings[4].Value != "abc123" {
+	if len(bindings) != 10 || bindings[0].Name != "org_id" || bindings[0].Value != "org-fixture" || bindings[1].Name != "repo_id" || bindings[1].Value != "repo-server-derived" || bindings[4].Name != "branch_hash" || bindings[4].Value != "" || bindings[5].Value != "abc123" {
 		t.Fatalf("unexpected named bindings: %#v", bindings)
 	}
 }
