@@ -132,7 +132,7 @@ func TestHostedRuntime_real_binary_serves_and_fails_readiness_safely(t *testing.
 
 func assertNativeClickHouseFixtureIntegration(t *testing.T, ctx context.Context, fixture *clickHouseFixture) {
 	t.Helper()
-	command := exec.CommandContext(ctx, "go", "test", "../../internal/runtime/clickhouse", "-run", "^TestIntegrationClient_native_readonly_fixture_is_not_skipped$", "-count=1", "-v")
+	command := exec.CommandContext(ctx, "go", "test", "../../internal/runtime/clickhouse", "-run", "^(TestIntegrationClient_native_readonly_fixture_is_not_skipped|TestIntegrationSourceExecutor_(filters_and_deduplicates_before_read_cap|preserves_ranked_provenance_before_read_cap))$", "-count=1", "-v")
 	command.Env = mergedEnvironment(map[string]string{
 		"ACR_CLICKHOUSE_INTEGRATION_DSN":             fixture.dsn,
 		"ACR_CLICKHOUSE_INTEGRATION_CA_FILE":         fixture.caPath,

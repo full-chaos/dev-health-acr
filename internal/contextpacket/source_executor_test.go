@@ -111,7 +111,7 @@ func TestObservedEvidenceStoreFactoryInjectsScopeQueryObserver(t *testing.T) {
 	}
 }
 
-func TestClickHouseSourceExecutor_bounds_source_rows_before_ranking(t *testing.T) {
+func TestClickHouseSourceExecutor_bounds_usable_unique_rows_before_ranking(t *testing.T) {
 	// Given
 	rows := make([][]any, 101)
 	for index := range rows {
@@ -121,7 +121,7 @@ func TestClickHouseSourceExecutor_bounds_source_rows_before_ranking(t *testing.T
 	executor := contextpacket.NewClickHouseSourceExecutor(client)
 
 	// When
-	evidence, err := executor.QueryEvidence(context.Background(), contextpacket.SourceQueryCatalogV1[0], nil)
+	evidence, err := executor.QueryEvidence(context.Background(), contextpacket.SourceQueryCatalogV1[0], []contextpacket.ClickHouseBinding{{Name: "include_low_confidence", Value: uint8(0)}})
 
 	// Then
 	if err != nil {
@@ -133,10 +133,17 @@ func TestClickHouseSourceExecutor_bounds_source_rows_before_ranking(t *testing.T
 	if evidence[0].Confidence != 0.9000000000000001 {
 		t.Fatalf("confidence = %.17g, want Float64 precision", evidence[0].Confidence)
 	}
-	if !strings.Contains(client.statement, "ORDER BY observed_at DESC, evidence_ref_id ASC LIMIT {source_row_limit:UInt32}") {
-		t.Fatalf("query is not deterministically bounded: %s", client.statement)
+	for _, clause := range []string{
+		"WHERE ({include_low_confidence:UInt8} = 1 OR confidence >= 0.5)",
+		"ORDER BY multiIf(provenance = 'native', 0, provenance = 'explicit_text', 1, provenance = 'derived', 2, provenance = 'heuristic', 3, 4) ASC, observed_at DESC, evidence_ref_id ASC",
+		"LIMIT 1 BY system, entity_type, entity_id LIMIT {source_row_limit:UInt32}",
+		"LIMIT {source_row_limit:UInt32}",
+	} {
+		if !strings.Contains(client.statement, clause) {
+			t.Fatalf("query does not apply quality and deduplication before its bound: %s", client.statement)
+		}
 	}
-	if len(client.bindings) != 1 || client.bindings[0].Name != "source_row_limit" || client.bindings[0].Value != uint32(100) {
+	if len(client.bindings) != 2 || client.bindings[0].Name != "include_low_confidence" || client.bindings[0].Value != uint8(0) || client.bindings[1].Name != "source_row_limit" || client.bindings[1].Value != uint32(100) {
 		t.Fatalf("row limit binding = %#v", client.bindings)
 	}
 }

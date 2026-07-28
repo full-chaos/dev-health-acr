@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -137,6 +138,100 @@ func TestIntegrationFileComplexity_empty_branch_chooses_one_ref_for_tied_run_tim
 	}
 	if len(evidence) != 1 || evidence[0].Source.EntityID != "src/checkout/cart_drawer.ts" {
 		t.Fatalf("evidence = %#v, want only the deterministic main-ref row", evidence)
+	}
+}
+
+func TestIntegrationSourceExecutor_filters_and_deduplicates_before_read_cap(t *testing.T) {
+	// Given
+	client, _ := integrationClient(t)
+	executor := contextpacket.NewClickHouseSourceExecutor(client)
+	query := contextpacket.SourceQuery{
+		ID:    "quality-boundary.v1",
+		Scope: contextpacket.EvidenceScopeRepo,
+		Statement: `SELECT
+			concat('acr:v1:test:', toString(number)) evidence_ref_id,
+			'dev_health' system,
+			'signal' entity_type,
+			if(number < 100, concat('low-', toString(number)), if(number < 200, 'duplicate', 'target')) entity_id,
+			if(number < 100, concat('low ', toString(number)), if(number < 200, 'duplicate', 'target')) display_label,
+			'' safe_uri,
+			'native' provenance,
+			if(number < 100, 0.1, 0.9) confidence,
+			if(number < 100, 'low quality', if(number < 200, 'duplicate', 'target')) citation,
+			toDateTime(toUInt32(1700000000 + (201 - number))) observed_at
+		FROM numbers(201)`,
+	}
+
+	// When
+	evidence, err := executor.QueryEvidence(
+		context.Background(),
+		query,
+		[]contextpacket.ClickHouseBinding{{Name: "include_low_confidence", Value: uint8(0)}},
+	)
+
+	// Then
+	if err != nil {
+		cause := err
+		for errors.Unwrap(cause) != nil {
+			cause = errors.Unwrap(cause)
+		}
+		t.Fatalf("query quality boundary: %v: %v", err, cause)
+	}
+	if len(evidence) != 2 || evidence[0].Source.EntityID != "duplicate" || evidence[1].Source.EntityID != "target" {
+		t.Fatalf("evidence = %#v, want one duplicate representative plus target", evidence)
+	}
+}
+
+func TestIntegrationSourceExecutor_preserves_ranked_provenance_before_read_cap(t *testing.T) {
+	// Given
+	client, _ := integrationClient(t)
+	executor := contextpacket.NewClickHouseSourceExecutor(client)
+	query := contextpacket.SourceQuery{
+		ID:    "provenance-boundary.v1",
+		Scope: contextpacket.EvidenceScopeRepo,
+		Statement: `SELECT
+			concat('acr:v1:test:', toString(number)) evidence_ref_id,
+			'dev_health' system,
+			'signal' entity_type,
+			multiIf(number = 0, 'duplicate', number <= 100, concat('distractor-', toString(number)), number = 101, 'duplicate', 'target') entity_id,
+			multiIf(number = 0, 'duplicate', number <= 100, concat('distractor ', toString(number)), number = 101, 'duplicate', 'target') display_label,
+			'' safe_uri,
+			if(number >= 101, 'native', 'heuristic') provenance,
+			0.9 confidence,
+			multiIf(number = 0 OR number = 101, 'duplicate', number <= 100, 'distractor', 'target') citation,
+			toDateTime(toUInt32(1700000000 + (103 - number))) observed_at
+		FROM numbers(103)`,
+	}
+
+	// When
+	evidence, err := executor.QueryEvidence(
+		context.Background(),
+		query,
+		[]contextpacket.ClickHouseBinding{{Name: "include_low_confidence", Value: uint8(0)}},
+	)
+
+	// Then
+	if err != nil {
+		cause := err
+		for errors.Unwrap(cause) != nil {
+			cause = errors.Unwrap(cause)
+		}
+		t.Fatalf("query provenance boundary: %v: %v", err, cause)
+	}
+	targetFound, duplicateCount := false, 0
+	for _, ref := range evidence {
+		switch ref.Source.EntityID {
+		case "target":
+			targetFound = true
+		case "duplicate":
+			duplicateCount++
+			if ref.Provenance != "native" {
+				t.Fatalf("duplicate provenance = %q, want native", ref.Provenance)
+			}
+		}
+	}
+	if len(evidence) != 100 || !targetFound || duplicateCount != 1 {
+		t.Fatalf("evidence count=%d target=%t duplicate_count=%d, want 100 rows including target and one native duplicate", len(evidence), targetFound, duplicateCount)
 	}
 }
 

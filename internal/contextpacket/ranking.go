@@ -9,12 +9,15 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-const RankingVersionV1 = "ranker.v2"
+const (
+	RankingVersionV1          = "ranker.v2"
+	minimumEvidenceConfidence = 0.5
+)
 
 func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.ResolvedScope, goal string, includeLowConfidence bool, requested []contractsv1.PacketCategory, maxItems int) ([]contractsv1.ContextPacketItem, bool) {
 	refs := make([]contractsv1.EvidenceRef, 0, len(evidence))
 	for _, ref := range evidence {
-		if !includeLowConfidence && ref.Confidence < 0.5 {
+		if !includeLowConfidence && ref.Confidence < minimumEvidenceConfidence {
 			continue
 		}
 		refs = append(refs, ref)
@@ -162,7 +165,7 @@ func evidenceItem(ref contractsv1.EvidenceRef, scope contractsv1.ResolvedScope) 
 		Category: rule.category, ClaimKind: rule.claim, Title: truncateRunes(ref.Source.DisplayLabel, 500), Summary: ref.Citation,
 		WhyIncluded: "Untrusted retrieved evidence matched the resolved scope.", RuleID: rule.id, Confidence: ref.Confidence,
 		Severity: rule.severity, ValidityScope: contractsv1.ValidityScope{Branch: scope.Branch, CommitSHA: scope.CommitSHA},
-		Flags:           contractsv1.ItemFlags{Stale: ref.Availability == contractsv1.EvidenceStale, Uncertain: ref.Confidence < 0.5, UntrustedContent: true},
+		Flags:           contractsv1.ItemFlags{Stale: ref.Availability == contractsv1.EvidenceStale, Uncertain: ref.Confidence < minimumEvidenceConfidence, UntrustedContent: true},
 		RelatedEntities: []contractsv1.RelatedEntity{{Type: ref.Source.EntityType, ID: ref.Source.EntityID, Label: ref.Source.DisplayLabel, URL: ref.Source.SafeURI}}, EvidenceRefIDs: []string{ref.EvidenceRefID}}
 }
 
