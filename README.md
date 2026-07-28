@@ -114,8 +114,8 @@ Reproducible, hardened container images for `acr-api` (plus the separate
 [`docs/container-images.md`](docs/container-images.md): pinned build inputs,
 non-root numeric UID/GID `65532:65532`, read-only root filesystem, the
 reviewed local build allowlist, hardened release-context wrapper, and SBOM/scan
-gates. Local targets keep outputs
-under `.tmp/`; a signed tagged release adds the verified OCI archives to the
+gates. Local targets keep outputs under `.tmp/`; a signed tagged release adds the
+verified OCI archives to the
 private GitHub Release and publishes their approved digests to private GHCR
 packages through the authenticated operator command.
 

@@ -93,8 +93,10 @@ Local builds that select the canonical `Dockerfile` use
 `go.mod`, `go.sum`, Go sources under `cmd/**`, Go and embedded JSON under
 `internal/**`, and Go plus SQL migration files under `migrations/**`. This makes
 `docker build .` and Docker Compose useful for local development without sending
-unrelated fixtures, ignored `.env*` files, or other repository content to
-BuildKit.
+files outside those reviewed paths and extensions to BuildKit. Local builds may
+include ignored files whose paths and extensions match the allowlist; keep local
+credentials outside source directories. Builders without Dockerfile-specific
+ignore support fall back to `.dockerignore` and fail closed.
 
 Release-capable builds use the stricter wrapper path. The wrapper invokes
 `create-context.sh` to construct a fresh context containing exactly
@@ -109,11 +111,12 @@ inspected or an ignored file exists below one of those source roots.
 The smoke test creates an invocation-owned Git snapshot that includes the
 current tracked and untracked source state, then creates arbitrary top-level
 files and an ignored nested `.env*` file inside that disposable snapshot. It
-directly inspects the generated release context, proves a local Dockerfile build
-receives approved sources without receiving the sentinel files, verifies ignored
-source files stop the wrapper before BuildKit runs, and finally checks the
-sentinel is absent from both runtime filesystems. Concurrent smoke invocations
-therefore never mutate or race on the shared worktree.
+directly inspects the generated release context, verifies required Go, embedded
+JSON, and migration sources are present in the local build while the sentinel
+files are absent, verifies ignored source files stop the wrapper before BuildKit
+runs, and finally checks the sentinel is absent from both runtime filesystems.
+Concurrent smoke invocations therefore never mutate or race on the shared
+worktree.
 
 Runtime verification starts the digest-pinned Postgres fixture on a unique
 Docker network with tmpfs-backed storage and generated per-run credentials. It
