@@ -41,10 +41,16 @@ jobs:
           # SC2016: jq receives named arguments whose $names must remain literal
           # inside single-quoted jq programs rather than expand in the shell.
           shellcheck -x -e SC2016 scripts/release/publish-ci-release.sh
+      - name: Shellcheck release policy contract tests
+        run: |
+          # SC2016: this test intentionally searches source files for literal
+          # shell and jq variables such as $tag, $name, and $release_digest.
+          shellcheck -x -e SC2016 scripts/release/test_release_scripts.sh
       - name: Shellcheck existing release scripts
         run: |
           find scripts/release -maxdepth 1 -type f -name '*.sh' \
-            ! -name 'publish-ci-release.sh' -print0 \
+            ! -name 'publish-ci-release.sh' \
+            ! -name 'test_release_scripts.sh' -print0 \
             | xargs -0 shellcheck -x
       - name: Test release asset assembly
         run: scripts/release/test-assemble-release-assets.sh
