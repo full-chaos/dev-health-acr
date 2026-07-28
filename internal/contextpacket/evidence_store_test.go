@@ -42,7 +42,7 @@ func (r *referenceRows) AuthorizedRepositories(_ context.Context, orgID string, 
 	return []contractsv1.ResolvedScope{{RepoID: "repo-server-derived", RepoSlug: r.record.RepoSlug, Resolution: contractsv1.ScopeRepoFallback, FallbackReasons: []string{}}}, nil
 }
 
-func (r *referenceRows) ResolveEvidenceReference(_ context.Context, orgID string, _ contractsv1.ResolvedScope, _ string) ([]contextpacket.EvidenceReference, error) {
+func (r *referenceRows) ResolveEvidenceReference(_ context.Context, orgID string, _ contractsv1.ResolvedScope, _, _ string) ([]contextpacket.EvidenceReference, error) {
 	r.orgID = orgID
 	r.referenceCalls++
 	return []contextpacket.EvidenceReference{r.record}, nil
@@ -64,12 +64,12 @@ func TestClickHouseEvidenceStore_expands_authenticated_handle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create evidence store: %v", err)
 	}
-	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID)
+	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID, true)
 	if err != nil {
 		t.Fatalf("encode handle: %v", err)
 	}
 	expanded, err := store.ResolveEvidence(context.Background(), fixturePrincipal(), handle)
-	if err != nil || expanded.Structured["pipeline_run_id"] != evidence.Source.EntityID || expanded.Evidence.EvidenceRefID != handle {
+	if err != nil || expanded.Structured["pipeline_run_id"] != evidence.Source.EntityID || expanded.Evidence.EvidenceRefID != handle || expanded.Evidence.Metadata["scope_breadth"] != "repository-wide" || !strings.HasSuffix(expanded.Evidence.Source.DisplayLabel, " (repository-wide)") {
 		t.Fatalf("expanded = %#v, error = %v", expanded, err)
 	}
 }
@@ -77,13 +77,18 @@ func TestClickHouseEvidenceStore_expands_authenticated_handle(t *testing.T) {
 func TestClickHouseEvidenceStore_emits_signed_handles(t *testing.T) {
 	evidence := testEvidence("acr:v1:ci:raw-id", "ci", time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	evidence.SourceVersion = "ci_pipeline_runs.v1"
+	evidence.Metadata = map[string]any{"scope_breadth": "repository-wide"}
 	store, err := contextpacket.NewClickHouseEvidenceStoreWithOptions(&bundleRows{evidence: []contractsv1.EvidenceRef{evidence}}, contextpacket.EvidenceStoreOptions{Codec: fixtureEvidenceCodec(t)})
 	if err != nil {
 		t.Fatalf("create evidence store: %v", err)
 	}
 	bundle, err := store.ContextForTask(context.Background(), fixturePrincipal(), fixtureRequest("req-opaque", "", ""))
-	if err != nil || len(bundle.Evidence) != 1 || !strings.HasPrefix(bundle.Evidence[0].EvidenceRefID, "ev1_") || strings.Contains(bundle.Evidence[0].EvidenceRefID, evidence.EvidenceRefID) {
+	if err != nil || len(bundle.Evidence) != 1 || !strings.HasPrefix(bundle.Evidence[0].EvidenceRefID, "ev2_") || strings.Contains(bundle.Evidence[0].EvidenceRefID, evidence.EvidenceRefID) {
 		t.Fatalf("bundle = %#v, error = %v", bundle, err)
+	}
+	parsed, err := fixtureEvidenceCodec(t).Parse(bundle.Evidence[0].EvidenceRefID)
+	if err != nil || !parsed.RepositoryWide {
+		t.Fatalf("emitted handle = %#v, error = %v", parsed, err)
 	}
 }
 
@@ -91,7 +96,7 @@ func TestClickHouseEvidenceStore_hides_unknown_boundaries_and_candidate_overflow
 	evidence := testEvidence("acr:v1:ci:opaque-reference", "ci", time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	evidence.Source.EntityType, evidence.SourceVersion = "ci_pipeline_run", "ci_pipeline_runs.v1"
 	codec := fixtureEvidenceCodec(t)
-	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID)
+	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID, false)
 	if err != nil {
 		t.Fatalf("encode handle: %v", err)
 	}
@@ -120,7 +125,7 @@ func TestClickHouseEvidenceStore_accepts_exactly_64_candidates(t *testing.T) {
 	evidence := testEvidence("acr:v1:ci:opaque-reference", "ci", time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	evidence.Source.EntityType, evidence.SourceVersion = "ci_pipeline_run", "ci_pipeline_runs.v1"
 	codec := fixtureEvidenceCodec(t)
-	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID)
+	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID, false)
 	if err != nil {
 		t.Fatalf("encode handle: %v", err)
 	}
@@ -146,7 +151,7 @@ func TestClickHouseEvidenceStoreRejectsUnroutableHandleWithoutReferenceQueries(t
 	evidence := testEvidence("acr:v1:ci:opaque-reference", "ci", time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	evidence.Source.EntityType, evidence.SourceVersion = "ci_pipeline_run", "ci_pipeline_runs.v1"
 	codec := fixtureEvidenceCodec(t)
-	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID)
+	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +194,7 @@ func TestEvidenceStoreFactory_injects_codec_into_clickhouse_store(t *testing.T) 
 		t.Fatalf("create store: %v", err)
 	}
 	bundle, err := store.ContextForTask(context.Background(), fixturePrincipal(), fixtureRequest("req-factory", "", ""))
-	if err != nil || len(bundle.Evidence) != 1 || !strings.HasPrefix(bundle.Evidence[0].EvidenceRefID, "ev1_") {
+	if err != nil || len(bundle.Evidence) != 1 || !strings.HasPrefix(bundle.Evidence[0].EvidenceRefID, "ev2_") {
 		t.Fatalf("factory bundle = %#v, error = %v", bundle, err)
 	}
 }
@@ -203,7 +208,7 @@ func TestObservedEvidenceStoreFactoryInjectsExpansionObserver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID)
+	handle, err := codec.Encode("org-fixture", "repo-server-derived", evidence.SourceVersion, evidence.EvidenceRefID, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,8 @@ package clickhouse
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
@@ -10,6 +12,26 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
+
+func TestIntegrationClient_matches_exact_evidence_digest(t *testing.T) {
+	client, _ := integrationClient(t)
+	digest := sha256.Sum256([]byte("acr:v1:ci:fixture"))
+	rows, err := client.Query(context.Background(), `SELECT evidence_ref_id FROM (SELECT 'acr:v1:ci:fixture' evidence_ref_id) WHERE lower(hex(SHA256(evidence_ref_id))) = {evidence_locator_hash:String} LIMIT 2`, []contextpacket.ClickHouseBinding{{Name: "evidence_locator_hash", Value: hex.EncodeToString(digest[:])}})
+	if err != nil {
+		t.Fatalf("query exact evidence digest: %v", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatalf("exact evidence digest returned no rows: %v", rows.Err())
+	}
+	var locator string
+	if err := rows.Scan(&locator); err != nil || locator != "acr:v1:ci:fixture" {
+		t.Fatalf("exact evidence digest locator = %q, error = %v", locator, err)
+	}
+	if rows.Next() || rows.Err() != nil {
+		t.Fatalf("exact evidence digest returned multiple rows: %v", rows.Err())
+	}
+}
 
 func TestIntegrationClient_queries_read_only_ClickHouse(t *testing.T) {
 	// Given
@@ -189,7 +211,7 @@ func assertIntegrationEvidenceLookup(t *testing.T, client *Client) {
 	if scope.RepoID != repoID || scope.RepoSlug != repoSlug || scope.Resolution != contractsv1.ScopeBranchFiltered {
 		t.Fatalf("resolved scope = %#v", scope)
 	}
-	if ciEvidence.EvidenceRefID[:4] != "ev1_" {
+	if ciEvidence.EvidenceRefID[:4] != "ev2_" {
 		t.Fatalf("seeded evidence = %#v", ciEvidence)
 	}
 	if err != nil || expanded.Evidence.SourceVersion != "ci_pipeline_runs.v1" {

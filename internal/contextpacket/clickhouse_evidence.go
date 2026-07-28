@@ -43,13 +43,17 @@ func (s *ClickHouseEvidenceStore) ResolveEvidence(ctx context.Context, principal
 	if !ok {
 		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
 	}
-	references, err := rows.ResolveEvidenceReference(ctx, principal.OrgID, routed, handle.QueryID)
+	references, err := rows.ResolveEvidenceReference(ctx, principal.OrgID, routed, handle.QueryID, handle.LocatorHash())
 	if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return contractsv1.ExpandedEvidence{}, fmt.Errorf("resolve evidence reference: %w", err)
 	}
 	matched, ok := s.matchEvidenceHandle(principal, handle, routed, references)
 	if err != nil || !ok {
 		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
+	}
+	if handle.RepositoryWide {
+		matched.Evidence.Source.DisplayLabel += repositoryWideSourceLabelSuffix
+		matched.Evidence.Metadata = withRepositoryWideScope(matched.Evidence.Metadata)
 	}
 	matched.Evidence.EvidenceRefID = evidenceRefID
 	return s.resolver.Expand(ctx, EvidenceExpansionInput{Evidence: matched.Evidence, Excerpt: matched.Excerpt})

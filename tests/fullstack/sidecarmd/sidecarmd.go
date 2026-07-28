@@ -158,7 +158,7 @@ func parseSourceFields(line string) map[string]string {
 // UnescapeInline reverses the sidecar's safeInline escaping, which backslash-prefixes each of
 // the markdown-active ASCII punctuation characters. Evidence reference IDs are the reason this
 // matters: they are base64url tokens full of underscores, so the rendered form of
-// "ev1_kid_code" is "ev1\_kid\_code", and passing that back to source_evidence would be a
+// "ev2_kid_code" is "ev2\_kid\_code", and passing that back to source_evidence would be a
 // reference the service has never issued.
 func UnescapeInline(value string) string {
 	if !strings.Contains(value, `\`) {

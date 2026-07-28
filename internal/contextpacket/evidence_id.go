@@ -1,9 +1,12 @@
 package contextpacket
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,6 +15,8 @@ import (
 const (
 	maxEvidenceCandidateRepos   = 64
 	evidenceRepositoryTagLength = 16
+	evidenceIDVersionV1         = "ev1"
+	evidenceIDVersionV2         = "ev2"
 )
 
 var ErrInvalidEvidenceID = errors.New("contextpacket: invalid evidence id")
@@ -24,10 +29,13 @@ type EvidenceIDKeyring struct {
 type EvidenceIDCodec struct{ keyring EvidenceIDKeyring }
 
 type EvidenceHandle struct {
-	KID           string
-	QueryID       string
-	RepositoryTag []byte
-	MAC           []byte
+	Version        string
+	KID            string
+	QueryID        string
+	RepositoryTag  []byte
+	MAC            []byte
+	LocatorDigest  []byte
+	RepositoryWide bool
 }
 
 func NewEvidenceIDCodec(keyring EvidenceIDKeyring) (*EvidenceIDCodec, error) {
@@ -44,35 +52,69 @@ func NewEvidenceIDCodec(keyring EvidenceIDKeyring) (*EvidenceIDCodec, error) {
 	return &EvidenceIDCodec{keyring: EvidenceIDKeyring{ActiveKID: keyring.ActiveKID, Keys: keys}}, nil
 }
 
-func (c *EvidenceIDCodec) Encode(orgID, repoID, queryID, locator string) (string, error) {
+func (c *EvidenceIDCodec) Encode(orgID, repoID, queryID, locator string, repositoryWide bool) (string, error) {
 	code, ok := evidenceSourceCode(queryID)
 	key := c.keyring.Keys[c.keyring.ActiveKID]
 	if !ok || len(key) < 32 || orgID == "" || repoID == "" || locator == "" {
 		return "", ErrInvalidEvidenceID
 	}
 	repositoryTag := evidenceMAC(key, "repository", orgID, repoID)[:evidenceRepositoryTagLength]
-	payload := base64.RawURLEncoding.EncodeToString(repositoryTag) + "." + base64.RawURLEncoding.EncodeToString(evidenceMAC(key, orgID, repoID, queryID, locator))
-	return "ev1_" + c.keyring.ActiveKID + "_" + code + "_" + payload, nil
+	digest := sha256.Sum256([]byte(locator))
+	plaintext := make([]byte, sha256.Size+1)
+	if repositoryWide {
+		plaintext[0] = 1
+	}
+	copy(plaintext[1:], digest[:])
+	nonce := evidenceMAC(key, "locator-nonce", orgID, repoID, queryID, string(plaintext))[:12]
+	aead, err := evidenceAEAD(key)
+	if err != nil {
+		return "", ErrInvalidEvidenceID
+	}
+	tagText := base64.RawURLEncoding.EncodeToString(repositoryTag)
+	nonceText := base64.RawURLEncoding.EncodeToString(nonce)
+	aad := evidenceAAD(evidenceIDVersionV2, c.keyring.ActiveKID, code, tagText, nonceText)
+	sealed := aead.Seal(nil, nonce, plaintext, aad)
+	payload := tagText + "." + nonceText + "." + base64.RawURLEncoding.EncodeToString(sealed)
+	return evidenceIDVersionV2 + "_" + c.keyring.ActiveKID + "_" + code + "_" + payload, nil
 }
 
 func (c *EvidenceIDCodec) Parse(handle string) (EvidenceHandle, error) {
 	parts := strings.SplitN(handle, "_", 4)
-	if len(parts) != 4 || parts[0] != "ev1" || parts[1] == "" {
+	if len(parts) != 4 || parts[1] == "" {
 		return EvidenceHandle{}, ErrInvalidEvidenceID
 	}
 	queryID, ok := evidenceQueryID(parts[2])
-	tagText, macText, found := strings.Cut(parts[3], ".")
-	repositoryTag, tagErr := base64.RawURLEncoding.DecodeString(tagText)
-	mac, macErr := base64.RawURLEncoding.DecodeString(macText)
-	if !ok || !found || strings.Contains(macText, ".") || tagErr != nil || macErr != nil || len(c.keyring.Keys[parts[1]]) < 32 || len(repositoryTag) != evidenceRepositoryTagLength || len(mac) != sha256.Size {
+	key := c.keyring.Keys[parts[1]]
+	if !ok || len(key) < 32 {
 		return EvidenceHandle{}, ErrInvalidEvidenceID
 	}
-	return EvidenceHandle{KID: parts[1], QueryID: queryID, RepositoryTag: repositoryTag, MAC: mac}, nil
+	switch parts[0] {
+	case evidenceIDVersionV1:
+		return parseEvidenceHandleV1(parts, queryID)
+	case evidenceIDVersionV2:
+		return parseEvidenceHandleV2(parts, queryID, key)
+	default:
+		return EvidenceHandle{}, ErrInvalidEvidenceID
+	}
 }
 
 func (c *EvidenceIDCodec) Matches(handle EvidenceHandle, orgID, repoID, locator string) bool {
 	key := c.keyring.Keys[handle.KID]
-	return len(key) >= 32 && c.RoutesTo(handle, orgID, repoID) && hmac.Equal(handle.MAC, evidenceMAC(key, orgID, repoID, handle.QueryID, locator))
+	if len(key) < 32 || !c.RoutesTo(handle, orgID, repoID) {
+		return false
+	}
+	if handle.Version == evidenceIDVersionV2 {
+		digest := sha256.Sum256([]byte(locator))
+		return len(handle.LocatorDigest) == sha256.Size && hmac.Equal(handle.LocatorDigest, digest[:])
+	}
+	return handle.Version == evidenceIDVersionV1 && hmac.Equal(handle.MAC, evidenceMAC(key, orgID, repoID, handle.QueryID, locator))
+}
+
+func (h EvidenceHandle) LocatorHash() string {
+	if h.Version != evidenceIDVersionV2 || len(h.LocatorDigest) != sha256.Size {
+		return ""
+	}
+	return hex.EncodeToString(h.LocatorDigest)
 }
 
 func (c *EvidenceIDCodec) RoutesTo(handle EvidenceHandle, orgID, repoID string) bool {
@@ -90,6 +132,47 @@ func evidenceMAC(key []byte, values ...string) []byte {
 		_, _ = fmt.Fprintf(mac, "%d:%s", len(value), value)
 	}
 	return mac.Sum(nil)
+}
+
+func evidenceAEAD(key []byte) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(evidenceMAC(key, "locator-encryption"))
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+func evidenceAAD(version, kid, code, tag, nonce string) []byte {
+	return []byte(version + "_" + kid + "_" + code + "_" + tag + "." + nonce)
+}
+
+func parseEvidenceHandleV1(parts []string, queryID string) (EvidenceHandle, error) {
+	tagText, macText, found := strings.Cut(parts[3], ".")
+	repositoryTag, tagErr := base64.RawURLEncoding.DecodeString(tagText)
+	mac, macErr := base64.RawURLEncoding.DecodeString(macText)
+	if !found || strings.Contains(macText, ".") || tagErr != nil || macErr != nil || len(repositoryTag) != evidenceRepositoryTagLength || len(mac) != sha256.Size {
+		return EvidenceHandle{}, ErrInvalidEvidenceID
+	}
+	return EvidenceHandle{Version: evidenceIDVersionV1, KID: parts[1], QueryID: queryID, RepositoryTag: repositoryTag, MAC: mac}, nil
+}
+
+func parseEvidenceHandleV2(parts []string, queryID string, key []byte) (EvidenceHandle, error) {
+	payload := strings.Split(parts[3], ".")
+	if len(payload) != 3 {
+		return EvidenceHandle{}, ErrInvalidEvidenceID
+	}
+	repositoryTag, tagErr := base64.RawURLEncoding.DecodeString(payload[0])
+	nonce, nonceErr := base64.RawURLEncoding.DecodeString(payload[1])
+	sealed, sealedErr := base64.RawURLEncoding.DecodeString(payload[2])
+	aead, aeadErr := evidenceAEAD(key)
+	if tagErr != nil || nonceErr != nil || sealedErr != nil || aeadErr != nil || len(repositoryTag) != evidenceRepositoryTagLength || len(nonce) != aead.NonceSize() || len(sealed) != sha256.Size+1+aead.Overhead() {
+		return EvidenceHandle{}, ErrInvalidEvidenceID
+	}
+	plaintext, err := aead.Open(nil, nonce, sealed, evidenceAAD(parts[0], parts[1], parts[2], payload[0], payload[1]))
+	if err != nil || len(plaintext) != sha256.Size+1 || plaintext[0] > 1 {
+		return EvidenceHandle{}, ErrInvalidEvidenceID
+	}
+	return EvidenceHandle{Version: evidenceIDVersionV2, KID: parts[1], QueryID: queryID, RepositoryTag: repositoryTag, LocatorDigest: plaintext[1:], RepositoryWide: plaintext[0] == 1}, nil
 }
 
 func evidenceSourceCode(queryID string) (string, bool) {

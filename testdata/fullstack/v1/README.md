@@ -145,9 +145,12 @@ evidence[index].EvidenceRefID = handle
 ```
 
 `EvidenceIDCodec.Encode` (`internal/contextpacket/evidence_id.go`) produces an opaque,
-per-request token of the form `ev1_<kid>_<code>_<base64(repository_tag)>.<base64(hmac)>`,
-where the HMAC is keyed by a deployment-specific signing key and covers `(org_id, repo_id,
-query_id, locator)`. Because `org_id` is only minted at provisioning time (it is the
+deterministic token of the form
+`ev2_<kid>_<code>_<base64(repository_tag)>.<base64(nonce)>.<base64(sealed_lookup_metadata)>`.
+The deployment key authenticates the repository route and encrypts the locator digest and scope
+metadata used for an exact bounded lookup; legacy `ev1` HMAC handles remain accepted during key
+rotation. Because
+`org_id` is only minted at provisioning time (it is the
 `__ORG_ID__` substitution target), **no oracle authored ahead of a run can ever contain the
 literal wire-format `evidence_ref_id` string** -- this is by design (evidence refs are
 intentionally unguessable and non-portable across orgs/repos), not a fixture gap.
