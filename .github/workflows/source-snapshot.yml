@@ -47,6 +47,25 @@ jobs:
           printf '%s  %s\n' "$PATCH_SHA256" "$patch_file" | sha256sum --check -
           git apply --check "$patch_file"
           git apply "$patch_file"
+          python3 - <<'PYFIX'
+          from pathlib import Path
+
+          path = Path("internal/mcpclientfixtures/doc_parity_test.go")
+          source = path.read_text()
+          old = (
+              '\tposixBlock := findFencedBlockContaining(t, policyData, "bash", "cosign verify-blob SHA256SUMS")\n'
+              '\tpsBlock := findFencedBlockContaining(t, policyData, "powershell", "cosign.exe verify-blob SHA256SUMS")\n'
+          )
+          new = (
+              '\tposixVerifyBlock := findFencedBlockContaining(t, policyData, "bash", "cosign verify-blob SHA256SUMS")\n'
+              '\tposixChecksumBlock := findFencedBlockContaining(t, policyData, "bash", "checksum_line=")\n'
+              '\tposixBlock := posixVerifyBlock + "\\n" + posixChecksumBlock\n'
+              '\tpsBlock := findFencedBlockContaining(t, policyData, "powershell", "cosign.exe verify-blob SHA256SUMS")\n'
+          )
+          if old not in source:
+              raise SystemExit("expected POSIX parity block was not found")
+          path.write_text(source.replace(old, new))
+          PYFIX
           gofmt -w \
             internal/mcpclientfixtures/doc_parity_test.go \
             internal/mcpclientfixtures/install_snippet_targeted_verify_test.go \
