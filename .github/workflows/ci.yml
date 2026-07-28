@@ -67,7 +67,26 @@ jobs:
             --fixtures testdata/release-approvals
           "$approval_gates" --mode reject-invalid \
             --fixtures testdata/release-approvals
-      - run: make verify
+      - name: Verify Go formatting
+        run: make fmt-check
+      - name: Vet Go packages
+        run: make vet
+      - name: Run Go tests
+        run: make test
+      - name: Run race and deterministic shuffle tests
+        run: make test-race
+      - name: Cross-compile supported targets
+        run: make crosscompile
+      - name: Verify wire contracts
+        run: make contract-test
+      - name: Verify CodeGraph contract
+        run: make codegraph-contract
+      - name: Verify canonical receipts
+        run: make canonical-receipts
+      - name: Verify full-stack offline contract
+        run: make fullstack-contract
+      - name: Build all shipped commands
+        run: make build
       - name: Test deterministic native-client harness
         run: make clients-real
       - name: Test hosted runtime with disposable dependencies
