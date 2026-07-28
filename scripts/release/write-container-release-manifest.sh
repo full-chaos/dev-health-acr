@@ -21,9 +21,18 @@ while (($#)); do
 done
 
 [[ -d "$source_dir" && -n "$output_dir" ]]
-[[ "$tag" == "v$version" ]]
-[[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(dev|beta)\.(1|[1-9][0-9]*))?$ ]]
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+if [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(dev|beta)\.(1|[1-9][0-9]*))?$ ]] \
+  && [[ "$tag" == "v$version" ]]; then
+  :
+elif [[ "$tag" == "$commit" ]] \
+  && [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-main\.[0-9a-f]{40}$ ]] \
+  && [[ "$version" == *"-main.$commit" ]]; then
+  :
+else
+  printf 'tag/version must identify a canonical version release or matching main commit\n' >&2
+  exit 1
+fi
 [[ "$date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
 
 mkdir -p "$output_dir"

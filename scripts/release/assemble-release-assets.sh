@@ -21,8 +21,18 @@ while (($#)); do
 done
 
 [[ -d "$binary_dir" && -d "$container_dir" && -n "$output_dir" ]]
-[[ "$tag" == "v$version" ]]
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+if [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(dev|beta)\.(1|[1-9][0-9]*))?$ ]] \
+  && [[ "$tag" == "v$version" ]]; then
+  :
+elif [[ "$tag" == "$commit" ]] \
+  && [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-main\.[0-9a-f]{40}$ ]] \
+  && [[ "$version" == *"-main.$commit" ]]; then
+  :
+else
+  printf 'tag/version must identify a canonical version release or matching main commit\n' >&2
+  exit 1
+fi
 mkdir -p "$output_dir"
 test -z "$(find "$output_dir" -mindepth 1 -maxdepth 1 -print -quit)" || {
   printf 'release output directory must be empty\n' >&2
