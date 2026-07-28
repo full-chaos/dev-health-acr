@@ -129,7 +129,8 @@ recovered with `workflow_dispatch` from `main`, not by moving the tag.
 
 Cosign v3 signs both image digests and `SHA256SUMS` with the GitHub Actions OIDC
 identity for this workflow. The accepted identity is restricted to the release
-workflow on `main` or a canonical release tag:
+workflow on `main` or a canonical release tag. Verify a container by immutable
+digest:
 
 ```bash
 identity='^https://github\.com/full-chaos/dev-health-acr/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+(-(dev|beta)\.[0-9]+)?)$'
@@ -139,18 +140,20 @@ cosign verify \
   --certificate-identity-regexp "$identity" \
   --certificate-oidc-issuer "$issuer" \
   ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:<digest>
+```
 
+For downloaded Release assets, verify the Sigstore bundle over the complete
+`SHA256SUMS` manifest first. Then select and verify only the archive you intend
+to extract:
+
+```bash
+set -euo pipefail
+identity='^https://github\.com/full-chaos/dev-health-acr/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+(-(dev|beta)\.[0-9]+)?)$'
+issuer='https://token.actions.githubusercontent.com'
 cosign verify-blob SHA256SUMS \
   --bundle SHA256SUMS.sigstore.json \
   --certificate-identity-regexp "$identity" \
   --certificate-oidc-issuer "$issuer"
-```
-
-After verifying the bundle over the complete manifest, verify only the archive
-you intend to use:
-
-```bash
-set -euo pipefail
 archive='acr-api_1.2.3_linux_amd64.tar.gz'
 checksum_line="$(awk -v name="$archive" '$2 == name' SHA256SUMS)"
 test "$(printf '%s\n' "$checksum_line" | wc -l | tr -d ' ')" = 1
@@ -161,10 +164,18 @@ else
 fi
 ```
 
-On Windows PowerShell:
+On Windows PowerShell, enforce the same workflow identity before checking the
+single downloaded archive:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
+$identity = '^https://github\.com/full-chaos/dev-health-acr/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+(-(dev|beta)\.[0-9]+)?)$'
+$issuer = 'https://token.actions.githubusercontent.com'
+cosign.exe verify-blob SHA256SUMS `
+  --bundle SHA256SUMS.sigstore.json `
+  --certificate-identity-regexp $identity `
+  --certificate-oidc-issuer $issuer
+if ($LASTEXITCODE -ne 0) { throw 'Sigstore bundle verification failed' }
 $archive = 'acr-api_1.2.3_windows_amd64.zip'
 $line = @(Get-Content SHA256SUMS | Where-Object { $_.EndsWith("  $archive") })
 if ($line.Count -ne 1) { throw "expected one checksum for $archive" }
