@@ -23,17 +23,18 @@ var ErrPrincipalOrganization = errors.New("contextpacket: principal organization
 // ReadPlan is the typed, scoped input to a versioned evidence read adapter.
 // Values always derive from authenticated principal and request scope.
 type ReadPlan struct {
-	Version        string
-	OrgID          string
-	RepoID         string
-	RepoSlug       string
-	Branch         string
-	CommitSHA      string
-	TaskRef        string
-	Files          []string
-	AsOf           *time.Time
-	TimeWindowDays int
-	Statement      string
+	Version              string
+	OrgID                string
+	RepoID               string
+	RepoSlug             string
+	Branch               string
+	CommitSHA            string
+	TaskRef              string
+	Files                []string
+	AsOf                 *time.Time
+	TimeWindowDays       int
+	IncludeLowConfidence bool
+	Statement            string
 }
 
 // BuildReadPlanV1 creates the only ClickHouse read shape used by this package.
@@ -53,16 +54,17 @@ func BuildReadPlanV1(principal storage.Principal, request contractsv1.ContextPac
 		return ReadPlan{}, fmt.Errorf("authorize repository: %w", err)
 	}
 	return ReadPlan{
-		Version:        QueryVersionV1,
-		OrgID:          principal.OrgID,
-		RepoSlug:       slug,
-		Branch:         strings.TrimSpace(request.Scope.Branch),
-		CommitSHA:      strings.TrimSpace(request.Scope.CommitSHA),
-		TaskRef:        strings.TrimSpace(request.Scope.TaskRef),
-		Files:          append([]string(nil), request.Scope.Files...),
-		AsOf:           request.Scope.AsOf,
-		TimeWindowDays: request.Scope.TimeWindowDays,
-		Statement:      clickHouseEvidenceQueryV1,
+		Version:              QueryVersionV1,
+		OrgID:                principal.OrgID,
+		RepoSlug:             slug,
+		Branch:               strings.TrimSpace(request.Scope.Branch),
+		CommitSHA:            strings.TrimSpace(request.Scope.CommitSHA),
+		TaskRef:              strings.TrimSpace(request.Scope.TaskRef),
+		Files:                append([]string(nil), request.Scope.Files...),
+		AsOf:                 request.Scope.AsOf,
+		TimeWindowDays:       request.Scope.TimeWindowDays,
+		IncludeLowConfidence: request.Options.IncludeLowConfidence,
+		Statement:            clickHouseEvidenceQueryV1,
 	}, nil
 }
 
