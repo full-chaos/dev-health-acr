@@ -83,17 +83,25 @@ publishes:
 
 - `acr-api` and `acr-mcp` archives for Linux AMD64/ARM64, macOS AMD64/ARM64,
   and Windows AMD64 in a GitHub Release tagged with the full commit SHA;
-- multi-platform Linux container images at both
-  `ghcr.io/full-chaos/dev-health-acr/acr-api:<full-sha>` and
-  `ghcr.io/full-chaos/dev-health-acr/acr-api:latest`, with equivalent tags for
-  `acr-mcp`;
+- multi-platform Linux container images for both products under the immutable
+  full commit SHA and the Dev Health standard `sha-<7-character-sha>` alias;
+- the current tip of `main` under both the `main` and `latest` GHCR aliases;
 - OCI archives, SPDX SBOMs, manifests, checksums, and a Sigstore verification
   bundle as GitHub Release assets.
 
-The SHA-tagged GitHub Release is marked **Latest** only after the publisher
-rechecks that the commit is still the current tip of `main`. An older run that
-finishes late keeps its immutable SHA assets but cannot move either `latest`
-alias.
+For example, the current API image is available as:
+
+```text
+ghcr.io/full-chaos/dev-health-acr/acr-api:<full-sha>
+ghcr.io/full-chaos/dev-health-acr/acr-api:sha-<7-character-sha>
+ghcr.io/full-chaos/dev-health-acr/acr-api:main
+ghcr.io/full-chaos/dev-health-acr/acr-api:latest
+```
+
+The same aliases are published for `acr-mcp`. The SHA-tagged GitHub Release is
+marked **Latest** only after the publisher rechecks that the commit is still the
+current tip of `main`. A completed older build keeps its immutable full-SHA and
+short-SHA references, but cannot move either `main` or `latest` backward.
 
 A canonical `vMAJOR.MINOR.PATCH` tag, optionally followed by `-dev.N` or
 `-beta.N`, publishes the same verified matrix under immutable version tags. A
