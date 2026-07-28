@@ -255,6 +255,7 @@ assert_helm_harness_behaviors() {
     trap "rm -rf \"${root}\"" EXIT
     mkdir -p "${root}/cmd" "${root}/internal" "${root}/migrations" "${root}/deploy/helm" "${root}/scripts/container" "${root}/scripts/e2e"
     printf x >"${root}/Dockerfile"
+    printf x >"${root}/Dockerfile.dockerignore"
     printf x >"${root}/go.mod"
     printf x >"${root}/go.sum"
     printf x >"${root}/.dockerignore"
