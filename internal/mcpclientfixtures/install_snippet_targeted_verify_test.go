@@ -92,3 +92,33 @@ func TestInstallSidecarWindowsSnippetVerifiesOnlyTheDownloadedArchive(t *testing
 		t.Fatal("expected an explicit exactly-one-line assertion before trusting the filtered checksum line")
 	}
 }
+
+func TestInstallSidecarSnippetsUsePublishedSigstoreBundle(t *testing.T) {
+	for name, snippet := range map[string]string{
+		"POSIX":   mcpclientfixtures.InstallSidecarSnippet,
+		"Windows": mcpclientfixtures.InstallSidecarWindowsSnippet,
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, required := range []string{
+				"SHA256SUMS.sigstore.json",
+				"--bundle SHA256SUMS.sigstore.json",
+				"--certificate-identity-regexp",
+				"--certificate-oidc-issuer",
+			} {
+				if !strings.Contains(snippet, required) {
+					t.Fatalf("expected install snippet to contain %q", required)
+				}
+			}
+			for _, obsolete := range []string{
+				"--key signing/cosign.pub",
+				"--signature SHA256SUMS.sig",
+				"--insecure-ignore-tlog",
+				"git show <trusted-ref>:signing/cosign.pub",
+			} {
+				if strings.Contains(snippet, obsolete) {
+					t.Fatalf("install snippet still contains obsolete local-key verification token %q", obsolete)
+				}
+			}
+		})
+	}
+}

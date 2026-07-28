@@ -57,20 +57,20 @@ On Windows, `~/.claude.json` resolves to `%USERPROFILE%\.claude.json`.
 
 <!-- FIXTURE:install-sidecar -->
 1. **Install the sidecar binary.** The normal install path is a signed
-   private release download, not a local build. macOS/Linux:
+   GitHub Release download, not a local build. macOS/Linux:
 
    ```bash
    # Download the release archive for your OS/arch (e.g. acr-mcp_<version>_darwin_arm64.tar.gz)
-   # plus SHA256SUMS and SHA256SUMS.sig from the private GitHub Releases page for
-   # full-chaos/dev-health-acr. Do NOT trust a cosign.pub bundled alongside the
-   # release assets -- obtain signing/cosign.pub from a reviewed commit in this
-   # repository instead, then verify. set -euo pipefail so a failed git,
-   # cosign, or checksum step halts here rather than falling through to
-   # extract an unverified archive:
+   # plus SHA256SUMS and SHA256SUMS.sigstore.json from the GitHub Releases page for
+   # full-chaos/dev-health-acr. Verify the keyless Sigstore bundle against this
+   # repository's release workflow identity before checking or extracting the archive:
    set -euo pipefail
-   git show <trusted-ref>:signing/cosign.pub > signing/cosign.pub
-   cosign verify-blob --key signing/cosign.pub --signature SHA256SUMS.sig \
-     --insecure-ignore-tlog SHA256SUMS
+   identity='^https://github\.com/full-chaos/dev-health-acr/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+(-(dev|beta)\.[0-9]+)?)$'
+   issuer='https://token.actions.githubusercontent.com'
+   cosign verify-blob SHA256SUMS \
+     --bundle SHA256SUMS.sigstore.json \
+     --certificate-identity-regexp "$identity" \
+     --certificate-oidc-issuer "$issuer"
    archive="acr-mcp_<version>_<os>_<arch>.tar.gz"
    checksum_line="$(awk -v name="$archive" '$2 == name' SHA256SUMS)"
    test "$(printf '%s\n' "$checksum_line" | wc -l | tr -d ' ')" = 1
@@ -110,21 +110,22 @@ On Windows, `~/.claude.json` resolves to `%USERPROFILE%\.claude.json`.
 
 <!-- FIXTURE:install-sidecar-windows -->
 1. **Install the sidecar binary (Windows).** The normal install path is a
-   signed private release download, not a local build:
+   signed GitHub Release download, not a local build:
 
    ```powershell
    # Download the release archive for your Windows build (e.g. acr-mcp_<version>_windows_amd64.zip)
-   # plus SHA256SUMS and SHA256SUMS.sig from the private GitHub Releases page for
-   # full-chaos/dev-health-acr. Do NOT trust a cosign.pub bundled alongside the
-   # release assets -- obtain signing/cosign.pub from a reviewed commit in this
-   # repository instead, then verify. $ErrorActionPreference = 'Stop' covers
-   # any later failing cmdlet; git.exe and cosign.exe are native
-   # executables, so $LASTEXITCODE is checked explicitly right after each:
+   # plus SHA256SUMS and SHA256SUMS.sigstore.json from the GitHub Releases page for
+   # full-chaos/dev-health-acr. Verify the keyless Sigstore bundle against this
+   # repository's release workflow identity before checking or extracting the archive.
+   # $ErrorActionPreference covers cmdlet failures; cosign.exe is a native executable,
+   # so its exit code is checked explicitly before continuing:
    $ErrorActionPreference = 'Stop'
-   git show <trusted-ref>:signing/cosign.pub > signing/cosign.pub
-   if ($LASTEXITCODE -ne 0) { throw "git show failed with exit code $LASTEXITCODE" }
-   cosign.exe verify-blob --key signing/cosign.pub --signature SHA256SUMS.sig `
-     --insecure-ignore-tlog SHA256SUMS
+   $identity = '^https://github\.com/full-chaos/dev-health-acr/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+(-(dev|beta)\.[0-9]+)?)$'
+   $issuer = 'https://token.actions.githubusercontent.com'
+   cosign.exe verify-blob SHA256SUMS `
+     --bundle SHA256SUMS.sigstore.json `
+     --certificate-identity-regexp $identity `
+     --certificate-oidc-issuer $issuer
    if ($LASTEXITCODE -ne 0) { throw "cosign verify-blob failed with exit code $LASTEXITCODE" }
 
    $archive = "acr-mcp_<version>_windows_amd64.zip"

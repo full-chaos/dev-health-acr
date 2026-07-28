@@ -165,6 +165,14 @@ On Windows PowerShell:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
+$identity = '^https://github\.com/full-chaos/dev-health-acr/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+(-(dev|beta)\.[0-9]+)?)$'
+$issuer = 'https://token.actions.githubusercontent.com'
+cosign.exe verify-blob SHA256SUMS `
+  --bundle SHA256SUMS.sigstore.json `
+  --certificate-identity-regexp $identity `
+  --certificate-oidc-issuer $issuer
+if ($LASTEXITCODE -ne 0) { throw "cosign verify-blob failed with exit code $LASTEXITCODE" }
+
 $archive = 'acr-api_1.2.3_windows_amd64.zip'
 $line = @(Get-Content SHA256SUMS | Where-Object { $_.EndsWith("  $archive") })
 if ($line.Count -ne 1) { throw "expected one checksum for $archive" }
