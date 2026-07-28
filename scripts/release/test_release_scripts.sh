@@ -196,5 +196,5 @@ for script in publish-private-image.sh publish-private-release.sh revoke-private
 done
 grep -F 'approval-receipt.sh' "$root/scripts/release/verify-mcp-binary-approval.sh" >/dev/null
 
-grep -F 'versioned GHCR packages' "$root/docs/container-images.md" >/dev/null
+grep -F 'ghcr.io/full-chaos/dev-health-acr/acr-api:<tag>' "$root/docs/container-images.md" >/dev/null
 grep -F 'does not publish a mutable GHCR `latest` tag' "$root/docs/container-images.md" >/dev/null
