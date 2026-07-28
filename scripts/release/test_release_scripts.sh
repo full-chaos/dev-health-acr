@@ -71,7 +71,34 @@ if GITHUB_REPOSITORY=full-chaos/dev-health-acr GITHUB_ACTOR=chrisgeo GH_TOKEN=te
   "$root/scripts/release/publish-ci-release.sh" \
   --dir "$tmp/missing-release" \
   --tag v1.2.3 \
+  --version 1.2.3 \
   --commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; then
+  exit 1
+fi
+
+main_version_repo="$tmp/main-version"
+git init "$main_version_repo" >/dev/null
+git -C "$main_version_repo" config user.name release-test
+git -C "$main_version_repo" config user.email release-test@example.invalid
+git -C "$main_version_repo" commit --allow-empty -m base >/dev/null
+base_commit="$(git -C "$main_version_repo" rev-parse HEAD)"
+test "$(cd "$main_version_repo" && "$root/scripts/release/publish-ci-release.sh" --derive-main-version "$base_commit")" = "1.0.1-main.$base_commit"
+git -C "$main_version_repo" tag v1.2.3
+git -C "$main_version_repo" tag v2.0.0-beta.2
+git -C "$main_version_repo" tag v02.0.0
+git -C "$main_version_repo" commit --allow-empty -m next >/dev/null
+main_commit="$(git -C "$main_version_repo" rev-parse HEAD)"
+test "$(cd "$main_version_repo" && "$root/scripts/release/publish-ci-release.sh" --derive-main-version "$main_commit")" = "2.0.1-main.$main_commit"
+if (cd "$main_version_repo" && "$root/scripts/release/publish-ci-release.sh" --derive-main-version bad); then exit 1; fi
+if (cd "$main_version_repo" && "$root/scripts/release/publish-ci-release.sh" --derive-main-version bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb); then exit 1; fi
+
+mkdir -p "$tmp/main-identity-mismatch"
+if GITHUB_REPOSITORY=full-chaos/dev-health-acr GITHUB_ACTOR=chrisgeo GH_TOKEN=test \
+  "$root/scripts/release/publish-ci-release.sh" \
+  --dir "$tmp/main-identity-mismatch" \
+  --tag "$main_commit" \
+  --version "2.0.1-main.$base_commit" \
+  --commit "$main_commit"; then
   exit 1
 fi
 
@@ -154,6 +181,11 @@ sed 's/^\([[:space:]]*go-version:\).*/\1 "1.26.4"/' "$ci_workflow" > "$tmp/ci-mi
 if assert_go_version_pins "$tmp/ci-mismatched-go-version.yml" "$release_workflow"; then exit 1; fi
 
 grep -F 'workflow_dispatch:' "$release_workflow" >/dev/null
+grep -F 'branches: [main]' "$release_workflow" >/dev/null
+grep -F 'channel=main' "$release_workflow" >/dev/null
+grep -F 'tag="$commit"' "$release_workflow" >/dev/null
+grep -F -- '--derive-main-version "$commit"' "$release_workflow" >/dev/null
+grep -F -- '--version "$VERSION"' "$release_workflow" >/dev/null
 grep -F 'group: release-' "$release_workflow" >/dev/null
 grep -F 'name: binary-release' "$release_workflow" >/dev/null
 grep -F 'name: container-release' "$release_workflow" >/dev/null
@@ -181,6 +213,10 @@ grep -F 'gh release download' "$root/scripts/release/publish-ci-release.sh" >/de
 grep -F 'immutable GHCR tag conflict' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F 'cannot determine whether GHCR tag exists' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F 'databaseId,isDraft' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F 'latest_reference="${repository}:latest"' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F 'git/ref/heads/main' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F -- '--target "$commit"' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F -- '--latest=false' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 if grep -Eqi '\(manifest unknown\|name unknown\|not found\|' "$root/scripts/release/publish-ci-release.sh"; then exit 1; fi
 
 grep -F 'skopeo copy --all --preserve-digests' "$root/scripts/release/publish-private-image.sh" >/dev/null
@@ -196,5 +232,5 @@ for script in publish-private-image.sh publish-private-release.sh revoke-private
 done
 grep -F 'approval-receipt.sh' "$root/scripts/release/verify-mcp-binary-approval.sh" >/dev/null
 
-grep -F 'ghcr.io/full-chaos/dev-health-acr/acr-api:<tag>' "$root/docs/container-images.md" >/dev/null
-grep -F 'does not publish a mutable GHCR `latest` tag' "$root/docs/container-images.md" >/dev/null
+grep -F 'full commit SHA and `latest`' "$root/docs/container-images.md" >/dev/null
+grep -F 'current tip of `main`' "$root/docs/release-policy.md" >/dev/null

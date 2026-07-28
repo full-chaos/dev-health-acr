@@ -4,6 +4,7 @@ name: Release
 
 "on":
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -24,6 +25,7 @@ jobs:
     if: github.repository == 'full-chaos/dev-health-acr'
     runs-on: ubuntu-24.04
     outputs:
+      channel: ${{ steps.release.outputs.channel }}
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
       commit: ${{ steps.release.outputs.commit }}
@@ -35,7 +37,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
-      - name: Validate release tag and source commit
+      - name: Resolve release channel and source commit
         id: release
         env:
           ACR_RELEASE_OPERATORS: ${{ vars.ACR_RELEASE_OPERATORS }}
@@ -47,49 +49,80 @@ jobs:
             exit 1
           }
 
+          channel=""
+          tag=""
+          version=""
+          commit=""
+
           case "$GITHUB_EVENT_NAME" in
-            push) tag="$GITHUB_REF_NAME" ;;
+            push)
+              case "$GITHUB_REF" in
+                refs/heads/main)
+                  channel=main
+                  commit="$GITHUB_SHA"
+                  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] \
+                    || fail "main push did not provide a full commit SHA"
+                  test "$(git rev-parse HEAD)" = "$commit" \
+                    || fail "checked-out source does not match the main push commit"
+                  tag="$commit"
+                  version="$(scripts/release/publish-ci-release.sh --derive-main-version "$commit")"
+                  printf '::notice::main publication uses immutable SHA %s and promotes it to latest only if it remains the main tip.\n' "$commit"
+                  ;;
+                refs/tags/*)
+                  channel=versioned
+                  tag="$GITHUB_REF_NAME"
+                  ;;
+                *) fail "unsupported push ref: $GITHUB_REF" ;;
+              esac
+              ;;
             workflow_dispatch)
-              [[ "$GITHUB_REF" == refs/heads/main ]] || fail "manual releases must run from main"
+              [[ "$GITHUB_REF" == refs/heads/main ]] \
+                || fail "manual releases must run from main"
+              channel=versioned
               tag="$INPUT_TAG"
               ;;
             *) fail "unsupported event: $GITHUB_EVENT_NAME" ;;
           esac
 
-          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(dev|beta)\.(1|[1-9][0-9]*))?$ ]] \
-            || fail "tag must be vMAJOR.MINOR.PATCH, optionally followed by -dev.N or -beta.N"
+          if [[ "$channel" == versioned ]]; then
+            [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(dev|beta)\.(1|[1-9][0-9]*))?$ ]] \
+              || fail "tag must be vMAJOR.MINOR.PATCH, optionally followed by -dev.N or -beta.N"
 
-          operators="${ACR_RELEASE_OPERATORS:-}"
-          if [[ -n "$operators" && ",$operators," != *",$GITHUB_ACTOR,"* ]]; then
-            fail "actor $GITHUB_ACTOR is not listed in ACR_RELEASE_OPERATORS"
-          fi
-          if [[ -z "$operators" ]]; then
-            printf '::notice::ACR_RELEASE_OPERATORS is unset; repository tag permissions authorize this release.\n'
-          fi
-
-          git show-ref --verify --quiet "refs/tags/$tag" \
-            || fail "tag does not exist in the repository: $tag"
-          commit="$(git rev-list -n 1 "$tag")"
-          [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fail "tag did not resolve to a commit"
-          git show-ref --verify --quiet refs/remotes/origin/main \
-            || fail "origin/main was not fetched"
-          git merge-base --is-ancestor "$commit" refs/remotes/origin/main \
-            || fail "tag commit is not an ancestor of main"
-
-          tag_type="$(git cat-file -t "refs/tags/$tag")"
-          if [[ "$tag_type" == tag ]]; then
-            if git verify-tag "$tag" >/tmp/acr-tag-verify.log 2>&1; then
-              printf '::notice::Verified annotated tag signature for %s.\n' "$tag"
-            else
-              printf '::warning::Annotated tag %s has no locally verifiable signature; GitHub tag permissions and the optional operator allowlist remain enforced.\n' "$tag"
+            operators="${ACR_RELEASE_OPERATORS:-}"
+            if [[ -n "$operators" && ",$operators," != *",$GITHUB_ACTOR,"* ]]; then
+              fail "actor $GITHUB_ACTOR is not listed in ACR_RELEASE_OPERATORS"
             fi
-          else
-            printf '::notice::Using lightweight tag %s; GitHub tag permissions and the optional operator allowlist authorize publication.\n' "$tag"
+            if [[ -z "$operators" ]]; then
+              printf '::notice::ACR_RELEASE_OPERATORS is unset; repository tag permissions authorize this release.\n'
+            fi
+
+            git show-ref --verify --quiet "refs/tags/$tag" \
+              || fail "tag does not exist in the repository: $tag"
+            commit="$(git rev-list -n 1 "$tag")"
+            [[ "$commit" =~ ^[0-9a-f]{40}$ ]] \
+              || fail "tag did not resolve to a commit"
+            git show-ref --verify --quiet refs/remotes/origin/main \
+              || fail "origin/main was not fetched"
+            git merge-base --is-ancestor "$commit" refs/remotes/origin/main \
+              || fail "tag commit is not an ancestor of main"
+            version="${tag#v}"
+
+            tag_type="$(git cat-file -t "refs/tags/$tag")"
+            if [[ "$tag_type" == tag ]]; then
+              if git verify-tag "$tag" >/tmp/acr-tag-verify.log 2>&1; then
+                printf '::notice::Verified annotated tag signature for %s.\n' "$tag"
+              else
+                printf '::warning::Annotated tag %s has no locally verifiable signature; GitHub tag permissions and the optional operator allowlist remain enforced.\n' "$tag"
+              fi
+            else
+              printf '::notice::Using lightweight tag %s; GitHub tag permissions and the optional operator allowlist authorize publication.\n' "$tag"
+            fi
           fi
 
           {
+            printf 'channel=%s\n' "$channel"
             printf 'tag=%s\n' "$tag"
-            printf 'version=%s\n' "${tag#v}"
+            printf 'version=%s\n' "$version"
             printf 'commit=%s\n' "$commit"
             printf 'date=%s\n' "$(date -u -d "$(git show -s --format=%cI "$commit")" +'%Y-%m-%dT%H:%M:%SZ')"
           } >> "$GITHUB_OUTPUT"
@@ -337,15 +370,17 @@ jobs:
           skopeo copy --help | grep -F -- '--all'
           skopeo copy --help | grep -F -- '--digestfile'
           skopeo copy --help | grep -F -- '--preserve-digests'
-      - name: Publish versioned GHCR images and GitHub Release
+      - name: Publish GHCR images and GitHub Release assets
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.preflight.outputs.tag }}
+          VERSION: ${{ needs.preflight.outputs.version }}
           COMMIT: ${{ needs.preflight.outputs.commit }}
         run: |
           scripts/release/publish-ci-release.sh \
             --dir release \
             --tag "$TAG" \
+            --version "$VERSION" \
             --commit "$COMMIT"
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
