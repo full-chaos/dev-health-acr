@@ -7,7 +7,7 @@
   "required": ["schema_version", "user_code", "repository_scopes"],
   "properties": {
     "schema_version": { "const": "device_approval_request.v1" },
-    "user_code": { "type": "string", "pattern": "^[ABCDEFGHJKMNPQRSTVWXYZ23456789]{8}$" },
+    "user_code": { "type": "string", "pattern": "^[2-9A-HJ-NP-Z]{8}$" },
     "repository_scopes": {
       "type": "array",
       "minItems": 1,

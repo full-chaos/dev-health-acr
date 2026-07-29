@@ -5,17 +5,17 @@ import (
 	"encoding/base64"
 	"io"
 	"strings"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 const (
 	deviceCodeBytes       = 32
 	userCodeRandomBytes   = 5
-	userCodeLength        = 8
 	maxDeviceCodeAttempts = 8
-	userCodeAlphabet      = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 )
 
-var userCodeEncoding = base32.NewEncoding(userCodeAlphabet).WithPadding(base32.NoPadding)
+var userCodeEncoding = base32.NewEncoding(contractsv1.DeviceUserCodeAlphabet).WithPadding(base32.NoPadding)
 
 func generateDeviceCodes(random io.Reader) (string, string, error) {
 	deviceBytes := make([]byte, deviceCodeBytes)
@@ -40,11 +40,11 @@ func normalizeDeviceCode(value string) (string, bool) {
 
 func normalizeUserCode(value string) (string, bool) {
 	value = strings.ToUpper(strings.TrimSpace(value))
-	if len(value) != userCodeLength {
+	if len(value) != contractsv1.DeviceUserCodeLength {
 		return "", false
 	}
 	for _, character := range value {
-		if !strings.ContainsRune(userCodeAlphabet, character) {
+		if !strings.ContainsRune(contractsv1.DeviceUserCodeAlphabet, character) {
 			return "", false
 		}
 	}

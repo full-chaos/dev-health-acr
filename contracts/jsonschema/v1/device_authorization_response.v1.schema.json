@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": { "const": "device_authorization_response.v1" },
     "device_code": { "type": "string", "minLength": 32, "maxLength": 256 },
-    "user_code": { "type": "string", "pattern": "^[ABCDEFGHJKMNPQRSTVWXYZ23456789]{8}$" },
+    "user_code": { "type": "string", "pattern": "^[2-9A-HJ-NP-Z]{8}$" },
     "verification_uri": { "type": "string", "format": "uri", "minLength": 1, "maxLength": 2048 },
     "expires_in": { "const": 600 },
     "interval": { "const": 5 }

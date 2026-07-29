@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -34,9 +35,9 @@ func TestDeviceFlow_Start_generatesBoundedCodesAndPersistsOnlyHashes(t *testing.
 	decoded, err := base64.RawURLEncoding.DecodeString(started.DeviceCode)
 	require.NoError(t, err)
 	require.Len(t, decoded, deviceCodeBytes)
-	require.Len(t, started.UserCode, userCodeLength)
+	require.Len(t, started.UserCode, contractsv1.DeviceUserCodeLength)
 	for _, character := range started.UserCode {
-		require.Contains(t, userCodeAlphabet, string(character))
+		require.Contains(t, contractsv1.DeviceUserCodeAlphabet, string(character))
 	}
 	require.Equal(t, storage.DeviceAuthorizationTTL, started.ExpiresIn)
 	require.Equal(t, storage.DeviceAuthorizationPollInterval, started.Interval)
@@ -205,7 +206,7 @@ func TestDeviceFlow_UserCodeAlphabet_rejectsConfusableGlyphs(t *testing.T) {
 		require.False(t, ok, "user code %q was accepted", value)
 	}
 	for _, character := range []string{"0", "1", "I", "O"} {
-		require.NotContains(t, userCodeAlphabet, character)
+		require.NotContains(t, contractsv1.DeviceUserCodeAlphabet, character)
 	}
 }
 

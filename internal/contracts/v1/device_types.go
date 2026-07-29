@@ -23,6 +23,8 @@ const (
 	CredentialRevokeResponseSchema      = "credential_revoke_response.v1"
 	OAuthDeviceErrorSchema              = "oauth_device_error.v1"
 	DeviceCodeGrantType                 = "urn:ietf:params:oauth:grant-type:device_code"
+	DeviceUserCodeAlphabet              = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+	DeviceUserCodeLength                = 8
 )
 
 type DeviceAuthorizationRequest struct {
