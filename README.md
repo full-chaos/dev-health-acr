@@ -82,7 +82,7 @@ Every successful push to `main` runs the complete release matrix. The workflow
 publishes:
 
 - `acr-api` and `acr-mcp` archives for Linux AMD64/ARM64, macOS AMD64/ARM64,
-  and Windows AMD64 in a GitHub Release tagged with the full commit SHA;
+  and Windows AMD64 in a GitHub Release tagged `main-<full-sha>` and targeted at the exact commit;
 - multi-platform Linux container images for both products under the immutable
   full commit SHA and the Dev Health standard `sha-<7-character-sha>` alias;
 - the current tip of `main` under both the `main` and `latest` GHCR aliases;
@@ -98,7 +98,7 @@ ghcr.io/full-chaos/dev-health-acr/acr-api:main
 ghcr.io/full-chaos/dev-health-acr/acr-api:latest
 ```
 
-The same aliases are published for `acr-mcp`. The SHA-tagged GitHub Release is
+The same aliases are published for `acr-mcp`. The `main-<full-sha>` GitHub Release is
 marked **Latest** only after the publisher rechecks that the commit is still the
 current tip of `main`. A completed older build keeps its immutable full-SHA and
 short-SHA references, but cannot move either `main` or `latest` backward.

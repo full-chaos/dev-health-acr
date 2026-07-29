@@ -3,7 +3,7 @@
 Use this template for a GitHub Release description. Do not include credentials,
 evidence bodies, customer data, or local filesystem paths.
 
-## ACR `<version tag or full main commit SHA>`
+## ACR `<version tag or main-<full-sha>>`
 
 **Channel:** main | stable | beta | development
 
@@ -13,10 +13,11 @@ evidence bodies, customer data, or local filesystem paths.
 
 **Compatibility:** `<minimum sidecar/server compatibility and migration notes>`
 
-For the `main` channel, the GitHub Release tag is the full commit SHA. The
-Release is marked Latest, and its container digests are also reachable through
-the mutable `latest` alias, only when the commit remains the current tip of
-`main` at publication time.
+For the `main` channel, the GitHub Release tag is `main-<full-sha>` and
+targets the exact commit. The immutable GHCR image tag remains the bare full
+SHA. The Release is marked Latest, and its container digests are also reachable
+through the mutable `latest` alias, only when the commit remains the current
+tip of `main` at publication time.
 
 ### Changes
 

@@ -226,5 +226,5 @@ Before moving `latest`, it rechecks the current GitHub `main` ref so an older
 run finishing out of order cannot roll the channel backward. The full commit SHA and `latest` therefore identify the same image only for the current tip of
 `main`. Deployment and rollback references should still use the approved
 `@sha256:` digest. The same OCI archives and container SBOMs are attached to
-the SHA- or version-tagged GitHub Release for offline verification. See
+the `main-<full-sha>` or version-tagged GitHub Release for offline verification. See
 [`release-policy.md`](release-policy.md).

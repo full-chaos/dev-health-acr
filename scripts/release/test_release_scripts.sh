@@ -208,7 +208,11 @@ test "$(grep -c 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' "$re
 grep -F 'skopeo copy --all --preserve-digests' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F 'cosign sign --yes' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F 'cosign sign-blob' "$root/scripts/release/publish-ci-release.sh" | grep -F -- '--bundle' >/dev/null
-grep -F 'release create "$tag"' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F 'release_tag="main-$commit"' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F 'release create "$release_tag"' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F 'releases/tags/$release_tag' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+grep -F 'GitHub rejects branch or tag names that consist of exactly 40 or 64' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+if grep -F 'release create "$tag"' "$root/scripts/release/publish-ci-release.sh"; then exit 1; fi
 grep -F 'gh release download' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F 'immutable GHCR tag conflict' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F 'cannot determine whether GHCR tag exists' "$root/scripts/release/publish-ci-release.sh" >/dev/null
