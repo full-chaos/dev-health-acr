@@ -39,7 +39,8 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               shared-runtime-migration-dsn, injected-mcp, entitlement-path,
               pgbouncer-missing-pooler, extra-container, direct-with-pooler,
               http-url, userinfo-url, query-url, fragment-url, unknown-root-key,
-              unknown-config-key, alternate-port, mutable-token-copy-image.
+              unknown-config-key, alternate-port, mutable-token-copy-image,
+              missing-device-verification-url, invalid-device-verification-url.
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -199,6 +200,16 @@ case "$scenario" in
   mutable-token-copy-image)
     negative mutable-token-copy-image "mutable-image: security.tokenCopyImage" \
       --set-string "security.tokenCopyImage=registry.internal/dev-health-acr/token-copy:latest"
+    exit 0 ;;
+  missing-device-verification-url)
+    negative missing-device-verification-url "device-verification-url" \
+      --set "config.requireBackingStores=true" \
+      --set-string "config.deviceVerificationUrl="
+    exit 0 ;;
+  invalid-device-verification-url)
+    negative invalid-device-verification-url "device-verification-url" \
+      --set "config.requireBackingStores=true" \
+      --set-string "config.deviceVerificationUrl=/acr/device"
     exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;
@@ -396,7 +407,13 @@ if ! { grep -q 'ACR_EVIDENCE_ID_KEYS' "$rendered" && grep -A3 'ACR_EVIDENCE_ID_K
 fi
 pass "evidence-keys: ACR_EVIDENCE_ID_ACTIVE_KID + ACR_EVIDENCE_ID_KEYS sourced from existing Secret"
 
-# Gate 13: entitlement URL is an origin (no path).
+# Gate 13: the hosted runtime's device authorization browser URL is rendered.
+device_verification_url="$(grep 'ACR_DEVICE_VERIFICATION_URL' "$rendered" | head -1 | grep -oE 'https?://[^"]+')"
+[[ "$device_verification_url" == "https://dev-health.internal/acr/device" ]] \
+  || fail_gate "device-verification-url: rendered URL '$device_verification_url' does not match the configured approval page"
+pass "device-verification-url: hosted runtime approval URL is rendered ($device_verification_url)"
+
+# Gate 14: entitlement URL is an origin (no path).
 ent_url="$(grep 'ACR_DEV_HEALTH_ENTITLEMENT_URL' "$rendered" | head -1 | grep -oE 'https?://[^"]+')"
 if [[ -n "$ent_url" ]]; then
   grep -Eq '^https?://[^/]+/?$' <<<"$ent_url" || fail_gate "entitlement-origin: rendered URL '$ent_url' has a path; runtime requires an origin"
@@ -405,7 +422,7 @@ else
   printf '  note entitlement URL empty in these values\n'
 fi
 
-# Gate 14: Secret rotation rolls pods (checksum/credentials present and reactive).
+# Gate 15: Secret rotation rolls pods (checksum/credentials present and reactive).
 cc=$(grep -c 'checksum/credentials' "$rendered")
 [[ "$cc" -ge 2 ]] || fail_gate "secret-rotation: checksum/credentials must annotate both Deployment and migration Job (found $cc)"
 sum_a=$(render | grep -m1 'checksum/credentials' | awk '{print $2}')
@@ -413,7 +430,7 @@ sum_b=$(render --set-string credentials.rotationRevision=rotated-2 | grep -m1 'c
 [[ -n "$sum_a" && "$sum_a" != "$sum_b" ]] || fail_gate "secret-rotation: bumping credentials.rotationRevision must change checksum/credentials (a=$sum_a b=$sum_b)"
 pass "secret-rotation: checksum/credentials present on both workloads and changes with rotationRevision"
 
-# Gate 15: migration workload is covered by a NetworkPolicy.
+# Gate 16: migration workload is covered by a NetworkPolicy.
 python3 - "$rendered" <<'PY' || exit 1
 import sys
 docs = open(sys.argv[1]).read().split('\n---\n')
@@ -423,7 +440,7 @@ if not ok:
 print('  ok   migration-netpol: a NetworkPolicy applies to the migration workload')
 PY
 
-# Gate 16: PgBouncer mode fully wires both pooler admin DSNs.
+# Gate 17: PgBouncer mode fully wires both pooler admin DSNs.
 pgb=$(render --set-string config.postgresConnectionKind=pgbouncer \
   --set-string credentials.runtime.poolerAdminDsnKey=ACR_POSTGRES_POOLER_ADMIN_DSN \
   --set-string credentials.migration.poolerAdminDsnKey=ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN 2>&1)

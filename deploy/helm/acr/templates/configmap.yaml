@@ -25,6 +25,7 @@ data:
   ACR_MAX_SERIALIZED_BYTES: {{ .Values.config.maxSerializedBytes | quote }}
   ACR_REQUESTS_PER_MINUTE: {{ .Values.config.requestsPerMinute | quote }}
   ACR_ENABLE_EPISODE_WRITEBACK: {{ .Values.config.enableEpisodeWriteback | quote }}
+  ACR_DEVICE_VERIFICATION_URL: {{ .Values.config.deviceVerificationUrl | quote }}
   {{- if eq .Values.config.environment "test" }}
   ACR_ALLOW_INSECURE_POSTGRES: "true"
   {{- end }}

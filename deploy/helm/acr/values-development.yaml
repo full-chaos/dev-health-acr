@@ -21,6 +21,7 @@ config:
   logLevel: debug
   requireBackingStores: false
   postgresConnectionKind: direct
+  deviceVerificationUrl: https://dev-health.internal/acr/device
   entitlement:
     # Origin only (scheme://host[:port]); the runtime rejects a path component.
     url: https://ops.dev-health.internal
