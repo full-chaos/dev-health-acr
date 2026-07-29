@@ -2,20 +2,23 @@
 name: apply-main-release-tag-fix
 
 "on":
-  push:
-    branches: [agent/fix-main-release-tag]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 concurrency:
-  group: apply-main-release-tag-fix
+  group: apply-main-release-tag-fix-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   apply-and-verify:
     if: >-
       github.repository == 'full-chaos/dev-health-acr' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/fix-main-release-tag' &&
       github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
