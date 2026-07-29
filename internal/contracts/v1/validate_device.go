@@ -186,11 +186,11 @@ func validateDeviceAuthorizationHints(organizationIDHint string, repositoryHints
 }
 
 func validDeviceUserCode(value string) bool {
-	if len(value) != 8 {
+	if len(value) != DeviceUserCodeLength {
 		return false
 	}
 	for _, character := range value {
-		if !((character >= 'A' && character <= 'H') || (character >= 'J' && character <= 'N') || (character >= 'P' && character <= 'Z') || (character >= '2' && character <= '9')) {
+		if !strings.ContainsRune(DeviceUserCodeAlphabet, character) {
 			return false
 		}
 	}

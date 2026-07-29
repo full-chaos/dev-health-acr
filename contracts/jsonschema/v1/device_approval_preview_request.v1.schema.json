@@ -7,6 +7,6 @@
   "required": ["schema_version", "user_code"],
   "properties": {
     "schema_version": { "const": "device_approval_preview_request.v1" },
-    "user_code": { "type": "string", "pattern": "^[ABCDEFGHJKMNPQRSTVWXYZ23456789]{8}$" }
+    "user_code": { "type": "string", "pattern": "^[2-9A-HJ-NP-Z]{8}$" }
   }
 }

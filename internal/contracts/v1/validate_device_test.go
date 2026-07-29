@@ -16,6 +16,51 @@ func TestDeviceTokenRequestValidate_rejects_non_RFC_grant_type(t *testing.T) {
 	}
 }
 
+func TestDeviceUserCodeAlphabet_matchesEveryWireSchema(t *testing.T) {
+	for _, character := range DeviceUserCodeAlphabet {
+		code := strings.Repeat(string(character), DeviceUserCodeLength)
+		t.Run(string(character), func(t *testing.T) {
+			values := []struct {
+				schema string
+				value  interface{ Validate() error }
+			}{
+				{
+					schema: "device_authorization_response.v1.schema.json",
+					value: DeviceAuthorizationResponse{
+						SchemaVersion:   DeviceAuthorizationResponseSchema,
+						DeviceCode:      "0123456789abcdefghijklmnopqrstuv",
+						UserCode:        code,
+						VerificationURI: "https://web.fullchaos.dev/acr/device",
+						ExpiresIn:       600,
+						Interval:        5,
+					},
+				},
+				{
+					schema: "device_approval_request.v1.schema.json",
+					value: DeviceApprovalRequest{
+						SchemaVersion:    DeviceApprovalRequestSchema,
+						UserCode:         code,
+						RepositoryScopes: []string{"full-chaos/dev-health-acr"},
+					},
+				},
+				{
+					schema: "device_approval_preview_request.v1.schema.json",
+					value: DeviceApprovalPreviewRequest{
+						SchemaVersion: DeviceApprovalPreviewRequestSchema,
+						UserCode:      code,
+					},
+				},
+			}
+			for _, test := range values {
+				if err := test.value.Validate(); err != nil {
+					t.Fatalf("Go validator rejected generator alphabet character %q: %v", character, err)
+				}
+				assertSchemaParity(t, test.schema, test.value)
+			}
+		})
+	}
+}
+
 func TestDeviceAuthorizationRequestValidate_rejectsPresentNullOrEmptyHints(t *testing.T) {
 	for _, body := range []string{
 		`{"schema_version":"device_authorization_request.v1","organization_id_hint":null}`,
