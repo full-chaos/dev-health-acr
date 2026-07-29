@@ -3,7 +3,9 @@
 package sidecar
 
 import (
+	"bufio"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,8 @@ import (
 )
 
 const credentialLifecycleLockSubprocessEnvironment = "TEST_CREDENTIAL_LIFECYCLE_LOCK_SUBPROCESS"
+const credentialLifecycleReleaseSubprocessEnvironment = "TEST_CREDENTIAL_LIFECYCLE_RELEASE_SUBPROCESS"
+const credentialLifecycleReleasePathEnvironment = "TEST_CREDENTIAL_LIFECYCLE_RELEASE_PATH"
 
 func TestCredentialLifecycleLockRejectsUnsafeObjects(t *testing.T) {
 	// Given
@@ -194,7 +198,7 @@ func TestCredentialLifecycleLockContendsAcrossProcessesWithDifferentTMPDIR(t *te
 		closeLock, err := acquireCredentialLifecycleLockAt(credentialLifecycleLockPath())
 
 		// Then
-		if closeLock != nil || !errors.Is(err, errCredentialLifecycleBusy) {
+		if closeLock != nil || !errors.Is(err, ErrCredentialLifecycleBusy) {
 			t.Fatalf("subprocess lock acquired = %t, err = %v; want busy", closeLock != nil, err)
 		}
 		return
@@ -217,6 +221,68 @@ func TestCredentialLifecycleLockContendsAcrossProcessesWithDifferentTMPDIR(t *te
 	if err != nil {
 		t.Fatalf("subprocess contention test failed: %v\n%s", err, output)
 	}
+}
+
+func TestCredentialLifecycleLockReleasesWhenOwnerProcessTerminates(t *testing.T) {
+	if os.Getenv(credentialLifecycleReleaseSubprocessEnvironment) == "1" {
+		closeLock, err := acquireCredentialLifecycleLockAt(os.Getenv(credentialLifecycleReleasePathEnvironment))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closeLock()
+		if _, err := fmt.Fprintln(os.Stdout, "ready"); err != nil {
+			t.Fatal(err)
+		}
+		select {}
+	}
+
+	// Given
+	path := filepath.Join("/var/tmp", fmt.Sprintf("acr-credential-lifecycle-release-%d-%d.lock", os.Geteuid(), os.Getpid()))
+	t.Cleanup(func() { _ = os.Remove(path) })
+	command := exec.Command(os.Args[0], "-test.run=^TestCredentialLifecycleLockReleasesWhenOwnerProcessTerminates$")
+	command.Env = append(
+		os.Environ(),
+		credentialLifecycleReleaseSubprocessEnvironment+"=1",
+		credentialLifecycleReleasePathEnvironment+"="+path,
+	)
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	processFinished := false
+	t.Cleanup(func() {
+		if !processFinished {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+	})
+	ready, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil || ready != "ready\n" {
+		t.Fatalf("owner readiness = %q, %v", ready, err)
+	}
+	contendedClose, contendedErr := acquireCredentialLifecycleLockAt(path)
+	if contendedClose != nil || !errors.Is(contendedErr, ErrCredentialLifecycleBusy) {
+		t.Fatalf("lock acquired while owner is live = %t, err = %v; want busy", contendedClose != nil, contendedErr)
+	}
+
+	// When
+	if err := command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Wait(); err == nil {
+		t.Fatal("terminated owner exited successfully, want signal exit")
+	}
+	processFinished = true
+	closeLock, err := acquireCredentialLifecycleLockAt(path)
+
+	// Then
+	if err != nil {
+		t.Fatalf("lock after owner termination = %v, want immediate acquisition", err)
+	}
+	defer closeLock()
 }
 
 func TestInstallIsolatedCredentialLifecycleLockForTestingUsesIndependentRealLockNamespaces(t *testing.T) {

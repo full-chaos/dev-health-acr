@@ -17,7 +17,7 @@ func TestCredentialLifecycleSessionRejectsConcurrentSessions(t *testing.T) {
 	defer first.Close()
 
 	second, err := BeginCredentialLifecycleSession()
-	if second != nil || !errors.Is(err, errCredentialLifecycleBusy) {
+	if second != nil || !errors.Is(err, ErrCredentialLifecycleBusy) {
 		t.Fatalf("second session = %v, %v; want busy", second, err)
 	}
 }
@@ -42,7 +42,7 @@ func TestCredentialLifecyclePublicReaderReportsBusyDuringSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Close()
-	if _, err := LoadCredential(); !errors.Is(err, errCredentialLifecycleBusy) {
+	if _, err := LoadCredential(); !errors.Is(err, ErrCredentialLifecycleBusy) {
 		t.Fatalf("public load = %v, want busy", err)
 	}
 }
@@ -254,7 +254,7 @@ func TestCredentialLifecyclePublicWrappersReportBusyAcrossMutationSurfaces(t *te
 			err := wrapper.call()
 
 			// Then
-			if !errors.Is(err, errCredentialLifecycleBusy) {
+			if !errors.Is(err, ErrCredentialLifecycleBusy) {
 				t.Fatalf("public %s error = %v, want busy", wrapper.name, err)
 			}
 		})

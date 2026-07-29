@@ -65,7 +65,7 @@ func runLoginCommand(args []string) int {
 func runDeviceLogin(parsed loginArgs) int {
 	session, err := sidecar.BeginCredentialLifecycleSession()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "login: credential lifecycle is already active")
+		fmt.Fprintln(os.Stderr, credentialLifecycleStartError("login", err))
 		return lifecycleExitFailure
 	}
 	defer session.Close()
@@ -358,7 +358,7 @@ func receivedInvalidLifecycleSuccess(err error) bool {
 func runCredentialRefresh() int {
 	session, err := sidecar.BeginCredentialLifecycleSession()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "login: credential lifecycle is already active")
+		fmt.Fprintln(os.Stderr, credentialLifecycleStartError("login", err))
 		return lifecycleExitFailure
 	}
 	defer session.Close()
@@ -454,7 +454,7 @@ func runLogoutCommand(args []string) int {
 	}
 	session, err := sidecar.BeginCredentialLifecycleSession()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "logout: credential lifecycle is already active")
+		fmt.Fprintln(os.Stderr, credentialLifecycleStartError("logout", err))
 		return lifecycleExitFailure
 	}
 	defer session.Close()
@@ -490,6 +490,13 @@ func runLogoutCommand(args []string) int {
 	}
 	fmt.Fprintln(os.Stdout, "logout successful")
 	return 0
+}
+
+func credentialLifecycleStartError(command string, err error) string {
+	if errors.Is(err, sidecar.ErrCredentialLifecycleBusy) {
+		return command + ": another acr-mcp login, login --refresh, or logout process is still running; stop that process or wait for it to finish, then retry"
+	}
+	return command + ": credential lifecycle lock could not be acquired safely; no credential changes were made"
 }
 
 // describeCleanupLocations renders the exact failed cleanup locations for an
