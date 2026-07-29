@@ -127,6 +127,10 @@ bash scripts/docs/clean-room.sh --mode helm --cluster "$ACR_KIND_CLUSTER"
 
 Helm's migration Job runs before install and upgrade. It uses a separate
 migration credential and fails closed: do not deploy the API when it fails.
+When `config.requireBackingStores=true`, set `config.deviceVerificationUrl` to
+the absolute Dev Health Web approval page (for example,
+`https://health.example.com/acr/device`). The chart rejects a backed release
+that omits this runtime-required value.
 
 ### Kustomize
 

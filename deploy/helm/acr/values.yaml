@@ -53,6 +53,9 @@ config:
   maxSerializedBytes: 262144
   requestsPerMinute: 60
   enableEpisodeWriteback: false
+  # Absolute browser URL shown by the device authorization flow. This normally
+  # points at the Dev Health Web approval page, not at acr-api itself.
+  deviceVerificationUrl: ""
   # External Dev Health Ops entitlement endpoint (HTTPS required outside
   # loopback). The service is consumed, never deployed, by this chart.
   entitlement:

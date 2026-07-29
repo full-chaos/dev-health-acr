@@ -6,6 +6,7 @@ Deployment rolls out. Credential and no-MCP guards run here first.
 {{- include "acr.validateCredentials" . -}}
 {{- include "acr.validateConnectionKind" . -}}
 {{- include "acr.validateNoMcp" . -}}
+{{- include "acr.validateDeviceVerificationURL" . -}}
 {{- include "acr.validateEntitlementOrigin" . -}}
 {{- $image := include "acr.image" . -}}
 apiVersion: batch/v1

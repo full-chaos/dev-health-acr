@@ -200,6 +200,17 @@ runtime-equivalence violation and fails closed here.
 {{- end -}}
 
 {{/*
+Device-verification URL guard. The hosted runtime requires an absolute browser
+URL whenever backing stores are enabled.
+*/}}
+{{- define "acr.validateDeviceVerificationURL" -}}
+{{- $url := .Values.config.deviceVerificationUrl | default "" -}}
+{{- if and .Values.config.requireBackingStores (not (regexMatch "^https?://[^[:space:]/?#]+(:[0-9]+)?([/?#][^[:space:]]*)?$" $url)) -}}
+{{- fail (printf "device-verification-url: config.deviceVerificationUrl %q must be an absolute HTTP(S) URL when config.requireBackingStores=true" $url) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Entitlement-origin guard. The runtime requires an HTTPS origin only: scheme
 must be https, and the URL must carry no userinfo, path, query, or fragment
 (scheme://host[:port] only). This mirrors the sidecar's origin contract.

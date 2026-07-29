@@ -5,6 +5,7 @@ least-privilege runtime credentials and never runs acr-mcp.
 {{- include "acr.validateCredentials" . -}}
 {{- include "acr.validateConnectionKind" . -}}
 {{- include "acr.validateNoMcp" . -}}
+{{- include "acr.validateDeviceVerificationURL" . -}}
 {{- include "acr.validateEntitlementOrigin" . -}}
 {{- $image := include "acr.image" . -}}
 apiVersion: apps/v1
