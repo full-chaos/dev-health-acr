@@ -99,10 +99,36 @@ func TestDeviceAuthorizationRequestValidate_countsHintRunesLikeSchema(t *testing
 	}
 }
 
-func TestDeviceTokenResponseValidate_accepts_fixed_30_day_credential(t *testing.T) {
+func TestDeviceTokenResponseValidate_allowsBoundedIssuanceClockSkew(t *testing.T) {
 	createdAt := time.Date(2026, time.July, 25, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name     string
+		lifetime time.Duration
+		valid    bool
+	}{
+		{name: "exact lifetime", lifetime: deviceCredentialLifetime, valid: true},
+		{name: "postgres issuance clock skew", lifetime: deviceCredentialLifetime - 85*time.Microsecond, valid: true},
+		{name: "tolerance boundary", lifetime: deviceCredentialLifetime - deviceCredentialIssuanceTolerance, valid: true},
+		{name: "materially shorter lifetime", lifetime: deviceCredentialLifetime - deviceCredentialIssuanceTolerance - time.Nanosecond, valid: false},
+		{name: "longer lifetime", lifetime: deviceCredentialLifetime + time.Nanosecond, valid: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expiresAt := createdAt.Add(tt.lifetime)
+			response := validDeviceTokenResponse(createdAt, expiresAt)
+			if got := response.Validate() == nil; got != tt.valid {
+				t.Fatalf("device token validity = %t, want %t", got, tt.valid)
+			}
+		})
+	}
+
 	expiresAt := createdAt.Add(deviceCredentialLifetime)
-	response := DeviceTokenResponse{
+	response := validDeviceTokenResponse(createdAt, expiresAt)
+	assertSchemaParity(t, "device_token_response.v1.schema.json", response)
+}
+
+func validDeviceTokenResponse(createdAt, expiresAt time.Time) DeviceTokenResponse {
+	return DeviceTokenResponse{
 		SchemaVersion: DeviceTokenResponseSchema,
 		AccessToken:   "[REDACTED]",
 		TokenType:     "Bearer",
@@ -119,10 +145,6 @@ func TestDeviceTokenResponseValidate_accepts_fixed_30_day_credential(t *testing.
 			ExpiresAt:        &expiresAt,
 		},
 	}
-	if err := response.Validate(); err != nil {
-		t.Fatalf("device token validator rejected fixed device credential: %v", err)
-	}
-	assertSchemaParity(t, "device_token_response.v1.schema.json", response)
 }
 
 func TestDeviceApprovalRequestValidate_rejects_wildcard_scope(t *testing.T) {
