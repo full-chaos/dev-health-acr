@@ -1,0 +1,264 @@
+---
+name: apply-main-release-tag-fix
+
+"on":
+  push:
+    branches: [agent/fix-main-release-tag]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-main-release-tag-fix
+  cancel-in-progress: true
+
+jobs:
+  apply-and-verify:
+    if: >-
+      github.repository == 'full-chaos/dev-health-acr' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: agent/fix-main-release-tag
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.26.5'
+          cache: false
+      - name: Apply valid main GitHub Release tag
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              data = target.read_text()
+              count = data.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement for {old!r}, found {count}")
+              target.write_text(data.replace(old, new))
+
+          def replace_all(path: str, old: str, new: str, expected: int) -> None:
+              target = Path(path)
+              data = target.read_text()
+              count = data.count(old)
+              if count != expected:
+                  raise SystemExit(f"{path}: expected {expected} replacements for {old!r}, found {count}")
+              target.write_text(data.replace(old, new))
+
+          publisher = "scripts/release/publish-ci-release.sh"
+          replace_once(
+              publisher,
+              '''else
+            fail "--tag/--version must identify either a canonical version release or the matching main commit"
+          fi
+
+          [[ "${GITHUB_REPOSITORY:-}" == "$expected_repo" ]] \\
+          ''',
+              '''else
+            fail "--tag/--version must identify either a canonical version release or the matching main commit"
+          fi
+
+          if [[ "$channel" == main ]]; then
+            # GitHub rejects branch or tag names that consist of exactly 40 or 64
+            # hexadecimal characters. Keep the immutable GHCR image tag as the full
+            # SHA, but prefix the GitHub Release tag so it is a valid Git ref.
+            release_tag="main-$commit"
+          else
+            release_tag="$tag"
+          fi
+
+          [[ "${GITHUB_REPOSITORY:-}" == "$expected_repo" ]] \\
+          ''',
+          )
+          replace_all(publisher, 'gh release view "$tag"', 'gh release view "$release_tag"', 3)
+          replace_all(publisher, 'gh release delete "$tag"', 'gh release delete "$release_tag"', 1)
+          replace_all(publisher, 'gh release download "$tag"', 'gh release download "$release_tag"', 2)
+          replace_all(publisher, 'gh release upload "$tag"', 'gh release upload "$release_tag"', 1)
+          replace_all(publisher, 'gh release edit "$tag"', 'gh release edit "$release_tag"', 4)
+          replace_all(publisher, 'release create "$tag"', 'release create "$release_tag"', 1)
+          replace_all(
+              publisher,
+              'gh api "repos/$expected_repo/releases/tags/$tag"',
+              'gh api "repos/$expected_repo/releases/tags/$release_tag"',
+              1,
+          )
+          replace_all(
+              publisher,
+              'test "$(jq -r .tag_name <<<"$release_json")" = "$tag"',
+              'test "$(jq -r .tag_name <<<"$release_json")" = "$release_tag"',
+              1,
+          )
+          replace_once(
+              publisher,
+              'printf \'leaving Release untouched because its identity and draft state could not be verified: %s\\n\' "$tag" >&2',
+              'printf \'leaving Release untouched because its identity and draft state could not be verified: %s\\n\' "$release_tag" >&2',
+          )
+          replace_once(
+              publisher,
+              '|| fail "an existing draft GitHub Release requires manual review: $tag"',
+              '|| fail "an existing draft GitHub Release requires manual review: $release_tag"',
+          )
+          replace_once(
+              publisher,
+              'printf \'release already published and verified: %s\\n\' "$tag"',
+              'printf \'release already published and verified: %s\\n\' "$release_tag"',
+          )
+          replace_once(
+              publisher,
+              'printf \'published immutable SHA assets and promoted main to latest: %s\\n\' "$tag"',
+              'printf \'published GitHub Release %s and promoted immutable image %s to latest\\n\' "$release_tag" "$tag"',
+          )
+          replace_once(
+              publisher,
+              'printf \'published GitHub Release and immutable GHCR images: %s\\n\' "$tag"',
+              'printf \'published GitHub Release %s and immutable GHCR image tag %s\\n\' "$release_tag" "$tag"',
+          )
+
+          tests = "scripts/release/test_release_scripts.sh"
+          replace_once(
+              tests,
+              'grep -F \'release create "$tag"\' "$root/scripts/release/publish-ci-release.sh" >/dev/null',
+              '''grep -F 'release_tag="main-$commit"' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+          grep -F 'release create "$release_tag"' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+          grep -F 'releases/tags/$release_tag' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+          grep -F 'GitHub rejects branch or tag names that consist of exactly 40 or 64' "$root/scripts/release/publish-ci-release.sh" >/dev/null
+          if grep -F 'release create "$tag"' "$root/scripts/release/publish-ci-release.sh"; then exit 1; fi''',
+          )
+
+          replace_once(
+              "README.md",
+              '  and Windows AMD64 in a GitHub Release tagged with the full commit SHA;',
+              '  and Windows AMD64 in a GitHub Release tagged `main-<full-sha>` and targeted at the exact commit;',
+          )
+          replace_once(
+              "README.md",
+              'The same aliases are published for `acr-mcp`. The SHA-tagged GitHub Release is',
+              'The same aliases are published for `acr-mcp`. The `main-<full-sha>` GitHub Release is',
+          )
+
+          replace_once(
+              "docs/release-notes-template.md",
+              '## ACR `<version tag or full main commit SHA>`',
+              '## ACR `<version tag or main-<full-sha>>`',
+          )
+          replace_once(
+              "docs/release-notes-template.md",
+              '''For the `main` channel, the GitHub Release tag is the full commit SHA. The
+          Release is marked Latest, and its container digests are also reachable through
+          the mutable `latest` alias, only when the commit remains the current tip of
+          `main` at publication time.''',
+              '''For the `main` channel, the GitHub Release tag is `main-<full-sha>` and
+          targets the exact commit. The immutable GHCR image tag remains the bare full
+          SHA. The Release is marked Latest, and its container digests are also reachable
+          through the mutable `latest` alias, only when the commit remains the current
+          tip of `main` at publication time.''',
+          )
+
+          replace_once(
+              "docs/container-images.md",
+              'the SHA- or version-tagged GitHub Release for offline verification.',
+              'the `main-<full-sha>` or version-tagged GitHub Release for offline verification.',
+          )
+
+          policy = "docs/release-policy.md"
+          replace_once(
+              policy,
+              '''- every successful push to `main` publishes an immutable commit-SHA release and
+            promotes that exact build to the moving `latest` aliases when the commit is
+            still the current tip of `main`;''',
+              '''- every successful push to `main` publishes an immutable full-SHA image and a
+            `main-<full-sha>` GitHub Release, then promotes that exact build to the moving
+            `latest` aliases when the commit is still the current tip of `main`;''',
+          )
+          replace_once(
+              policy,
+              '''1. Pushing to `main`. The protected branch and merge permissions are the
+             authorization boundary. The workflow publishes the full 40-character commit
+             SHA and, after rechecking the branch tip, the `latest` aliases.''',
+              '''1. Pushing to `main`. The protected branch and merge permissions are the
+             authorization boundary. The workflow publishes the full 40-character commit
+             SHA as the immutable GHCR image tag, creates a `main-<full-sha>` GitHub
+             Release, and, after rechecking the branch tip, moves the `latest` aliases.''',
+          )
+          replace_once(
+              policy,
+              '''Do not move or reuse an immutable version tag or commit-SHA tag. Versioned
+          recovery always runs the current workflow against the existing tag and original
+          source commit.''',
+              '''Do not move or reuse an immutable version tag, `main-<full-sha>` GitHub
+          Release tag, or full-SHA GHCR image tag. Versioned recovery always runs the
+          current workflow against the existing tag and original source commit.''',
+          )
+          replace_once(
+              policy,
+              '''A `main` build uses the full lowercase commit SHA as its immutable publication
+          tag. The binary's embedded version remains canonical SemVer: the workflow finds
+          the highest canonical release core reachable from that commit, increments its
+          patch component, and emits:''',
+              '''A `main` build uses the full lowercase commit SHA as its immutable source
+          identity and GHCR image tag. GitHub does not allow a branch or tag name that is
+          exactly 40 or 64 hexadecimal characters, so the corresponding GitHub Release
+          uses the valid immutable tag `main-<full-sha>`. The binary's embedded version
+          remains canonical SemVer: the workflow finds the highest canonical release core
+          reachable from that commit, increments its patch component, and emits:''',
+          )
+          replace_once(
+              policy,
+              '''`1.0.0`, producing `1.0.1-main.<SHA>`. The derived version is used in archive
+          filenames and manifests; the GitHub Release tag and immutable GHCR tag remain
+          the full commit SHA.''',
+              '''`1.0.0`, producing `1.0.1-main.<SHA>`. The derived version is used in archive
+          filenames and manifests; the GitHub Release tag is `main-<full-sha>`, while the
+          immutable GHCR image tag remains the bare full commit SHA.''',
+          )
+          replace_once(
+              policy,
+              '''The GitHub Release tagged with that same full commit SHA is marked as the
+          repository's **Latest** release. GitHub's Latest marker is a moving pointer; the
+          SHA-tagged Release and its assets remain immutable and directly addressable.''',
+              '''The GitHub Release tagged `main-<full-sha>` and targeted at that exact commit
+          is marked as the repository's **Latest** release. GitHub's Latest marker is a
+          moving pointer; the prefixed Release tag and its assets remain immutable and
+          directly addressable.''',
+          )
+          PY
+          git diff --check
+          cat >"$RUNNER_TEMP/expected-files" <<'EXPECTED_FILES'
+          .github/workflows/apply-main-release-tag-fix.yml
+          README.md
+          docs/container-images.md
+          docs/release-notes-template.md
+          docs/release-policy.md
+          scripts/release/publish-ci-release.sh
+          scripts/release/test_release_scripts.sh
+          EXPECTED_FILES
+          git diff --name-only origin/main...HEAD | LC_ALL=C sort >"$RUNNER_TEMP/actual-files"
+          git diff --name-only | LC_ALL=C sort >>"$RUNNER_TEMP/actual-files"
+          LC_ALL=C sort -u -o "$RUNNER_TEMP/actual-files" "$RUNNER_TEMP/actual-files"
+          LC_ALL=C sort -o "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/expected-files"
+          diff -u "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/actual-files"
+          git add README.md docs scripts/release
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(release): prefix main GitHub Release tags'
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Verify release correction
+        run: |
+          set -euo pipefail
+          shellcheck -x -e SC2016 \
+            scripts/release/publish-ci-release.sh \
+            scripts/release/test_release_scripts.sh
+          scripts/release/test_release_scripts.sh
+          bash scripts/docs/verify.sh
+          make verify
+      - name: Push verified correction
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          git push origin HEAD:agent/fix-main-release-tag
