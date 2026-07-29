@@ -73,16 +73,21 @@ func TestAuthenticator_successfulRead_performs_no_synchronous_usage_or_audit_wri
 
 	// When
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
+	requestDone := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(response, request)
+		close(requestDone)
+	}()
 
 	// Then
+	select {
+	case <-requestDone:
+	case <-time.After(2 * time.Second):
+		close(store.release)
+		t.Fatal("successful request waited for credential usage persistence")
+	}
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("response status = %d", response.Code)
-	}
-	select {
-	case <-store.started:
-		t.Fatal("successful request synchronously wrote credential usage")
-	default:
 	}
 	if len(audit.Events()) != 0 {
 		t.Fatalf("successful request synchronously wrote audit events: %#v", audit.Events())
