@@ -1,0 +1,223 @@
+---
+name: verify-published-main-release
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+
+jobs:
+  verify:
+    if: >-
+      github.repository == 'full-chaos/dev-health-acr' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/verify-main-release-3193ccb'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_SHA: 3193ccbff29a91de929cb1103b84bc6ee86fcc4d
+      RELEASE_TAG: main-3193ccbff29a91de929cb1103b84bc6ee86fcc4d
+    steps:
+      - name: Wait for the main Release workflow
+        id: release-run
+        run: |
+          set -euo pipefail
+          run=''
+          for _ in $(seq 1 120); do
+            runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$TARGET_SHA&per_page=100")"
+            run="$(jq -c '
+              [.workflow_runs[] | select(.name == "Release" and .event == "push")] |
+              sort_by(.run_number) | last // empty
+            ' <<<"$runs")"
+            if [[ -n "$run" ]]; then
+              status="$(jq -r .status <<<"$run")"
+              run_id="$(jq -r .id <<<"$run")"
+              printf 'Release run %s status: %s\n' "$run_id" "$status"
+              if [[ "$status" == completed ]]; then
+                break
+              fi
+            else
+              printf 'Release run has not been registered yet.\n'
+            fi
+            sleep 10
+          done
+          [[ -n "$run" ]] || { printf 'No Release run found for %s\n' "$TARGET_SHA" >&2; exit 1; }
+          test "$(jq -r .status <<<"$run")" = completed || {
+            printf 'Release run did not complete within the verification window.\n' >&2
+            exit 1
+          }
+          run_id="$(jq -r .id <<<"$run")"
+          conclusion="$(jq -r .conclusion <<<"$run")"
+          printf 'run_id=%s\n' "$run_id" >>"$GITHUB_OUTPUT"
+          if [[ "$conclusion" != success ]]; then
+            printf 'Release run %s concluded %s. Jobs:\n' "$run_id" "$conclusion" >&2
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" \
+              --jq '.jobs[] | [.id,.name,.status,.conclusion] | @tsv' >&2
+            exit 1
+          fi
+
+      - name: Wait for main image alias promotion
+        id: promotion-run
+        run: |
+          set -euo pipefail
+          run=''
+          for _ in $(seq 1 90); do
+            runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$TARGET_SHA&per_page=100")"
+            run="$(jq -c '
+              [.workflow_runs[] | select(.name == "Promote main image aliases" and .event == "workflow_run")] |
+              sort_by(.run_number) | last // empty
+            ' <<<"$runs")"
+            if [[ -n "$run" ]]; then
+              status="$(jq -r .status <<<"$run")"
+              run_id="$(jq -r .id <<<"$run")"
+              printf 'Alias promotion run %s status: %s\n' "$run_id" "$status"
+              if [[ "$status" == completed ]]; then
+                break
+              fi
+            else
+              printf 'Alias promotion run has not been registered yet.\n'
+            fi
+            sleep 10
+          done
+          [[ -n "$run" ]] || { printf 'No alias promotion run found for %s\n' "$TARGET_SHA" >&2; exit 1; }
+          test "$(jq -r .status <<<"$run")" = completed || {
+            printf 'Alias promotion did not complete within the verification window.\n' >&2
+            exit 1
+          }
+          run_id="$(jq -r .id <<<"$run")"
+          conclusion="$(jq -r .conclusion <<<"$run")"
+          printf 'run_id=%s\n' "$run_id" >>"$GITHUB_OUTPUT"
+          if [[ "$conclusion" != success ]]; then
+            printf 'Alias promotion run %s concluded %s. Jobs:\n' "$run_id" "$conclusion" >&2
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" \
+              --jq '.jobs[] | [.id,.name,.status,.conclusion] | @tsv' >&2
+            exit 1
+          fi
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v3.0.6
+        with:
+          cosign-release: v3.0.6
+
+      - name: Validate GitHub Release and every asset
+        id: release-assets
+        run: |
+          set -euo pipefail
+          release_json="$RUNNER_TEMP/release.json"
+          latest_json="$RUNNER_TEMP/latest.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" >"$release_json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" >"$latest_json"
+          jq -e --arg tag "$RELEASE_TAG" --arg sha "$TARGET_SHA" '
+            .tag_name == $tag and
+            .target_commitish == $sha and
+            .draft == false and
+            .prerelease == false
+          ' "$release_json" >/dev/null
+          test "$(jq -r .tag_name "$latest_json")" = "$RELEASE_TAG"
+
+          release_dir="$RUNNER_TEMP/release"
+          mkdir -p "$release_dir"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$release_dir"
+          test -f "$release_dir/SHA256SUMS"
+          test -f "$release_dir/SHA256SUMS.sigstore.json"
+          test -f "$release_dir/release-manifest.json"
+          test -f "$release_dir/container-release-manifest.json"
+
+          identity='^https://github\.com/full-chaos/dev-health-acr/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+(-(dev|beta)\.[0-9]+)?)$'
+          issuer='https://token.actions.githubusercontent.com'
+          cosign verify-blob "$release_dir/SHA256SUMS" \
+            --bundle "$release_dir/SHA256SUMS.sigstore.json" \
+            --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer "$issuer" >/dev/null
+          (cd "$release_dir" && sha256sum --check SHA256SUMS)
+
+          {
+            printf '%s\n' SHA256SUMS SHA256SUMS.sigstore.json
+            awk '{print $2}' "$release_dir/SHA256SUMS"
+          } | LC_ALL=C sort -u >"$RUNNER_TEMP/expected-assets"
+          find "$release_dir" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort \
+            >"$RUNNER_TEMP/actual-assets"
+          cmp "$RUNNER_TEMP/expected-assets" "$RUNNER_TEMP/actual-assets"
+
+          jq -e --arg commit "$TARGET_SHA" '
+            .schema_version == "release_manifest.v1" and
+            .commit == $commit and
+            (.artifacts | length == 10) and
+            ([.artifacts[].product] | group_by(.) | map({key: .[0], value: length}) | from_entries) == {"acr-api":5,"acr-mcp":5} and
+            ([.artifacts[] | (.goos + "/" + .goarch)] | sort) == ([
+              "darwin/amd64","darwin/amd64","darwin/arm64","darwin/arm64",
+              "linux/amd64","linux/amd64","linux/arm64","linux/arm64",
+              "windows/amd64","windows/amd64"
+            ] | sort) and
+            all(.artifacts[]; (.sha256 | test("^[0-9a-f]{64}$")))
+          ' "$release_dir/release-manifest.json" >/dev/null
+
+          jq -e --arg tag "$TARGET_SHA" --arg commit "$TARGET_SHA" '
+            .schema_version == "container_release_manifest.v1" and
+            .tag == $tag and
+            .commit == $commit and
+            ([.images[].product] | sort) == ["acr-api","acr-mcp"] and
+            all(.images[];
+              .repository == ("ghcr.io/full-chaos/dev-health-acr/" + .product) and
+              .platforms == ["linux/amd64","linux/arm64"] and
+              (.digest | test("^sha256:[0-9a-f]{64}$")) and
+              (.archive_sha256 | test("^[0-9a-f]{64}$")))
+          ' "$release_dir/container-release-manifest.json" >/dev/null
+
+          asset_count="$(find "$release_dir" -maxdepth 1 -type f | wc -l | tr -d ' ')"
+          printf 'asset_count=%s\n' "$asset_count" >>"$GITHUB_OUTPUT"
+          printf 'release_dir=%s\n' "$release_dir" >>"$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify every GHCR alias resolves to the release digest
+        env:
+          RELEASE_DIR: ${{ steps.release-assets.outputs.release_dir }}
+        run: |
+          set -euo pipefail
+          manifest_digest() {
+            docker buildx imagetools inspect "$1" \
+              | awk '$1 == "Digest:" { print $2; exit }'
+          }
+          short_sha="${TARGET_SHA:0:7}"
+          for product in acr-api acr-mcp; do
+            repository="ghcr.io/$GITHUB_REPOSITORY/$product"
+            expected="$(jq -er --arg product "$product" '.images[] | select(.product == $product) | .digest' \
+              "$RELEASE_DIR/container-release-manifest.json")"
+            for tag in "$TARGET_SHA" "sha-$short_sha" main latest; do
+              reference="$repository:$tag"
+              actual="$(manifest_digest "$reference")"
+              test "$actual" = "$expected" || {
+                printf '%s resolved to %s, expected %s\n' "$reference" "$actual" "$expected" >&2
+                exit 1
+              }
+              printf 'verified %s -> %s\n' "$reference" "$actual"
+            done
+          done
+
+      - name: Publish verification summary
+        run: |
+          {
+            printf '## Published main release verified\n\n'
+            printf -- '- Commit: `%s`\n' "$TARGET_SHA"
+            printf -- '- GitHub Release: `%s` (Latest)\n' "$RELEASE_TAG"
+            printf -- '- Release workflow run: `%s`\n' '${{ steps.release-run.outputs.run_id }}'
+            printf -- '- Alias promotion run: `%s`\n' '${{ steps.promotion-run.outputs.run_id }}'
+            printf -- '- Downloaded and verified assets: `%s`\n' '${{ steps.release-assets.outputs.asset_count }}'
+            printf -- '- Images: `acr-api` and `acr-mcp`\n'
+            printf -- '- Verified tags per image: full SHA, `sha-%s`, `main`, `latest`\n' "${TARGET_SHA:0:7}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
