@@ -3,11 +3,11 @@ set -euo pipefail
 
 command -v docker >/dev/null || { printf 'docker is required\n' >&2; exit 1; }
 
-# cgr.dev/chainguard/git:latest is deliberately absent. Chainguard rebuilds continuously, so
-# that tag moves as a matter of routine and this drift check failed on a schedule unrelated to
-# any change here. The Dockerfile still pins it by digest, so what gets built is unaffected —
-# only the "upstream has moved" signal is dropped, and for a tag whose whole purpose is to move
-# that signal carried no information.
+# This command intentionally remains an on-demand review tool rather than a CI
+# gate. Several reviewed tags, including cgr.dev/chainguard/git:latest, move as
+# part of their normal upstream release cadence. The Dockerfile and deployment
+# inputs remain digest-pinned; run this command when explicitly refreshing those
+# immutable pins, not on every unrelated change.
 pins=(
   'docker.io/docker/dockerfile:1.20|sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d'
   'docker.io/library/golang:1.26.5-alpine3.23|sha256:622e56dbc11a8cfe87cafa2331e9a201877271cbff918af53d3be315f3da88cc'
