@@ -183,6 +183,13 @@ user code, and persists the issued credential through the sources above.
 `login --refresh` rotates the credential already in use and never starts a
 device flow. `logout` revokes remotely and then removes local material.
 
+Only one `login`, `login --refresh`, or `logout` may run for the same local user
+at a time. If another lifecycle process is still running, the CLI identifies
+that live local contention and tells you to stop the other process or wait for
+it to finish before retrying. A process that has actually terminated releases
+the operating-system lock immediately; an abandoned browser approval does not
+require deleting a lock file or bypassing the concurrency guard.
+
 **The verification address is validated before it is printed.** It is
 server-supplied data that this command renders into your terminal and hands to a
 desktop opener, so it must be `https`, or `http` to a validated loopback address

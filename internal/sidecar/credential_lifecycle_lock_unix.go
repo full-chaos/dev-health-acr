@@ -42,7 +42,7 @@ func acquireCredentialLifecycleLockFile(path string) (func() error, error) {
 	}
 	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = syscall.Close(fd)
-		return nil, errCredentialLifecycleBusy
+		return nil, ErrCredentialLifecycleBusy
 	}
 	return func() error {
 		unlockErr := syscall.Flock(fd, syscall.LOCK_UN)

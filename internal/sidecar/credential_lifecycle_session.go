@@ -5,7 +5,11 @@ import (
 	"sync"
 )
 
-var errCredentialLifecycleBusy = errors.New("acr: credential lifecycle is already active")
+// ErrCredentialLifecycleBusy means another local credential lifecycle session
+// still owns the process-wide or cross-process lock. Callers may render
+// actionable recovery guidance for this sentinel, while treating every other
+// acquisition failure as an unsafe or unavailable lock boundary.
+var ErrCredentialLifecycleBusy = errors.New("acr: credential lifecycle is already active")
 
 var ErrCredentialLifecycleSessionInvalid = errors.New("acr: credential lifecycle session is invalid")
 
@@ -33,7 +37,7 @@ type credentialLifecycleSessionState struct {
 
 func BeginCredentialLifecycleSession() (*CredentialLifecycleSession, error) {
 	if !credentialLifecycleGate.TryLock() {
-		return nil, errCredentialLifecycleBusy
+		return nil, ErrCredentialLifecycleBusy
 	}
 	close, err := credentialLifecycleLockAcquire()
 	if err != nil {

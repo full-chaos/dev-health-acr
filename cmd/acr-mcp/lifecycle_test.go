@@ -114,6 +114,51 @@ func TestLifecycleReplaceUsesTheActiveSession_whenRefreshingCredential(t *testin
 	}
 }
 
+func TestCredentialLifecycleContentionExplainsLiveOwnerAndRecovery(t *testing.T) {
+	// Given
+	session, err := sidecar.BeginCredentialLifecycleSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	for _, command := range []string{"login", "logout"} {
+		t.Run(command, func(t *testing.T) {
+			// When
+			code, stderr := captureStderr(t, func() int { return runCLI([]string{command}) })
+
+			// Then
+			if code != lifecycleExitFailure {
+				t.Fatalf("%s exit code = %d, want %d", command, code, lifecycleExitFailure)
+			}
+			for _, required := range []string{
+				"another acr-mcp login, login --refresh, or logout process is still running",
+				"stop that process or wait for it to finish, then retry",
+			} {
+				if !strings.Contains(stderr, required) {
+					t.Fatalf("%s stderr = %q, want %q", command, stderr, required)
+				}
+			}
+		})
+	}
+}
+
+func TestCredentialLifecycleStartErrorDoesNotMislabelUnsafeLockFailure(t *testing.T) {
+	// Given
+	unsafeFailure := errors.New("unsafe lock fixture")
+
+	// When
+	message := credentialLifecycleStartError("login", unsafeFailure)
+
+	// Then
+	if !strings.Contains(message, "credential lifecycle lock could not be acquired safely") {
+		t.Fatalf("message = %q, want safe lock-acquisition failure", message)
+	}
+	if strings.Contains(message, "another acr-mcp") || strings.Contains(message, unsafeFailure.Error()) {
+		t.Fatalf("message = %q, mislabeled or leaked the underlying failure", message)
+	}
+}
+
 func TestLoginSendsExactOrganizationAndRepositoryHints_whenProvided(t *testing.T) {
 	// Given
 	token := validDoctorToken(92)
