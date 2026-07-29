@@ -31,9 +31,13 @@ func assertionBodyDigest(body []byte) string {
 	return base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
-func validWebRepositories(scopes []string) bool {
+func validWebRepositories(scopes, permissions []string, method, path string) bool {
 	if len(scopes) == 0 {
 		return false
+	}
+	if len(scopes) == 1 && scopes[0] == "*" {
+		return len(permissions) == 1 && permissions[0] == WebAssertionPermissionCredentialIssue &&
+			method == http.MethodPost && path == "/api/v1/oauth/device_approval"
 	}
 	seen := make(map[string]struct{}, len(scopes))
 	for _, scope := range scopes {

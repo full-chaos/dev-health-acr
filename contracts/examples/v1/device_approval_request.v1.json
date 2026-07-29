@@ -1,5 +1,5 @@
 {
   "schema_version": "device_approval_request.v1",
   "user_code": "REDACTED",
-  "repository_scopes": ["full-chaos/dev-health-acr"]
+  "repository_scopes": ["*"]
 }

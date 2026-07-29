@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -157,20 +158,26 @@ func (s *DeviceFlowService) Approve(ctx context.Context, request DeviceApprovalR
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
 	repositories, err := NormalizeRepositoryScopes(request.RepositoryScopes)
-	if err != nil || hasRepositoryWildcard(repositories) {
+	if err != nil {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
 	principalRepositories, err := normalizedPrincipalRepositories(request.Principal)
-	if err != nil ||
-		!repositoriesWithinGrant(principalRepositories, repositories) {
+	if err != nil {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
 	record, err := s.store.Preview(ctx, storage.HashUserCode(userCode))
 	if err != nil {
 		return storage.DeviceAuthorization{}, fmt.Errorf("preview device authorization for approval: %w", err)
 	}
-	if (record.OrganizationIDHint != "" && record.OrganizationIDHint != request.Principal.OrgID) ||
-		(len(record.RepositoryHints) > 0 && !repositoriesWithinGrant(record.RepositoryHints, repositories)) {
+	if record.OrganizationIDHint != "" && record.OrganizationIDHint != request.Principal.OrgID {
+		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
+	}
+	organizationWide := slices.Equal(repositories, []string{"*"})
+	if organizationWide {
+		if !slices.Equal(principalRepositories, []string{"*"}) {
+			return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
+		}
+	} else if hasRepositoryWildcard(repositories) || !repositoriesWithinGrant(principalRepositories, repositories) {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
 	record, err = s.store.Approve(ctx, storage.HashUserCode(userCode), storage.DeviceAuthorizationGrant{

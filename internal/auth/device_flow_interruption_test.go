@@ -47,7 +47,7 @@ func TestDeviceFlow_cancelledOperationsDoNotConsumeOrMutateState(t *testing.T) {
 	require.NoError(t, startErr)
 
 	// Given
-	principal := deviceApprovalPrincipal("full-chaos/dev-health-acr")
+	principal := deviceApprovalPrincipal("*")
 	_, err := fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
 		Principal: principal, UserCode: started.UserCode, RepositoryScopes: principal.RepositoryScopes,
 	})

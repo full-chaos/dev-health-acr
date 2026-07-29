@@ -146,7 +146,7 @@ func (v *WebAssertionVerifier) validClaims(claims parsedWebAssertionClaims, r *h
 		issuedAt > now.Add(webAssertionClockSkew).Unix() || notBefore > now.Add(webAssertionClockSkew).Unix() ||
 		expiresAt < now.Add(-webAssertionClockSkew).Unix() || expiresAt < issuedAt || expiresAt-issuedAt > int64(maxWebAssertionLifetime/time.Second) ||
 		claims.Method != r.Method || claims.Path != r.URL.EscapedPath() || r.URL.RawQuery != "" ||
-		!validWebRepositories(claims.RepositoryScopes) || !validWebPermissions(claims.Permissions) {
+		!validWebRepositories(claims.RepositoryScopes, claims.Permissions, claims.Method, claims.Path) || !validWebPermissions(claims.Permissions) {
 		return false
 	}
 	body, err := readAssertionBody(r, v.maxBodyBytes)

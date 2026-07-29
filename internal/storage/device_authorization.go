@@ -214,8 +214,11 @@ func ValidateDeviceAuthorizationGrant(grant DeviceAuthorizationGrant) error {
 	if grant.ApprovingAuthenticationMethod != AuthenticationMethodWebAssertion || len(grant.RepositoryScopes) == 0 || len(grant.Scopes) == 0 {
 		return ErrInvalidDeviceAuthorization
 	}
+	if slices.Contains(grant.RepositoryScopes, "*") && !slices.Equal(grant.RepositoryScopes, []string{"*"}) {
+		return ErrInvalidDeviceAuthorization
+	}
 	for _, repository := range grant.RepositoryScopes {
-		if repository == "*" || strings.HasSuffix(repository, "/*") || strings.TrimSpace(repository) == "" {
+		if strings.HasSuffix(repository, "/*") || strings.TrimSpace(repository) == "" {
 			return ErrInvalidDeviceAuthorization
 		}
 	}

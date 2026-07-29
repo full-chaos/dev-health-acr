@@ -333,14 +333,20 @@ When the web profile is enabled, the same isolated stack also proves the self-se
 keyring selectors cleared and `ACR_API_TOKEN_KEYRING_DISABLED=true`; the driver requires this
 exact value because any other nonempty setting fails closed before a keyring seam is touched.
 Only its private `0600` fallback credential file is permitted.
-The browser signs in to the seeded admin account, previews one code, confirms the single
-repository scope, then exercises `doctor --live`, refresh, doctor, logout, and the expected
-post-logout failure. The consumed code is replayed through the browser and must return a
-conflict.
+The browser signs in to the seeded admin account, previews one code, and approves the default
+organization-wide repository scope. Before refresh or logout, the exact credential written by
+that login drives the real stdio MCP server from a non-Git directory: `context_for_task` and
+`source_evidence` must succeed for the seeded repository when it is supplied explicitly. The
+same credential must pass authorization for a same-organization future repository that is
+absent from the analytics catalog, while a separately seeded foreign-OrgID canary must return
+no evidence. The lifecycle then exercises `doctor --live`, scope-preserving refresh, doctor,
+logout, and the expected post-logout failure. The consumed code is replayed through the
+browser and must return a conflict.
 
 The browser retains connected screenshots for the pending, review, and success states at
 375px, 768px, and 1280px. Its network receipt fails on a bearer header, a query string, a
-wildcard or unbounded repository scope, any console/request failure, or a device-route 5xx.
+mixed or owner-wildcard repository scope, any console/request failure, or a device-route 5xx;
+the singleton `*` is the expected default approval.
 The driver redacts device codes, credentials, and DSNs before failure artifacts are retained.
 
 ## 8. Commands

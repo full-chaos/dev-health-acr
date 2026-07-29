@@ -192,17 +192,35 @@ func validDeviceTokenResponse(createdAt, expiresAt time.Time) DeviceTokenRespons
 	}
 }
 
-func TestDeviceApprovalRequestValidate_rejects_wildcard_scope(t *testing.T) {
-	tests := []string{"*/repo", "*/dev-health", "org/re*po", "o*rg/repo", "full-chaos/*"}
+func TestDeviceApprovalRequestValidate_acceptsOnlyGlobalWildcardOrExactRepositories(t *testing.T) {
+	global := DeviceApprovalRequest{SchemaVersion: DeviceApprovalRequestSchema, UserCode: "ABCDEFGH", RepositoryScopes: []string{"*"}}
+	if err := global.Validate(); err != nil {
+		t.Fatalf("device approval validator rejected the organization-wide grant: %v", err)
+	}
+	if err := contractcheck.ValidateSerialized("", "device_approval_request.v1.schema.json", []byte(`{"schema_version":"device_approval_request.v1","user_code":"ABCDEFGH","repository_scopes":["*"]}`)); err != nil {
+		t.Fatalf("schema rejected the organization-wide grant: %v", err)
+	}
+
+	tests := [][]string{
+		{"*/repo"},
+		{"*/dev-health"},
+		{"org/re*po"},
+		{"o*rg/repo"},
+		{"full-chaos/*"},
+		{"*", "full-chaos/dev-health"},
+	}
 	for _, scope := range tests {
-		t.Run(scope, func(t *testing.T) {
-			request := DeviceApprovalRequest{SchemaVersion: DeviceApprovalRequestSchema, UserCode: "ABCDEFGH", RepositoryScopes: []string{scope}}
+		t.Run(strings.Join(scope, ","), func(t *testing.T) {
+			request := DeviceApprovalRequest{SchemaVersion: DeviceApprovalRequestSchema, UserCode: "ABCDEFGH", RepositoryScopes: scope}
 			if err := request.Validate(); err == nil {
-				t.Fatal("device approval validator accepted a wildcard repository grant")
+				t.Fatal("device approval validator accepted an invalid repository grant")
 			}
-			encoded := []byte(`{"schema_version":"device_approval_request.v1","user_code":"ABCDEFGH","repository_scopes":["` + scope + `"]}`)
+			encoded, err := json.Marshal(request)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := contractcheck.ValidateSerialized("", "device_approval_request.v1.schema.json", encoded); err == nil {
-				t.Fatal("schema accepted a wildcard repository grant")
+				t.Fatal("schema accepted an invalid repository grant")
 			}
 		})
 	}

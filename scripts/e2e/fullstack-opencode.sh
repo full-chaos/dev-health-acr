@@ -46,6 +46,9 @@ DEVICE_LOGIN_BIN=""
 DEVICE_LOGIN_PID=""
 FULLSTACK_REPO_SLUG="example-org/widget-service"
 FULLSTACK_FOREIGN_SLUG="example-org/other-service"
+FULLSTACK_FUTURE_SLUG="example-org/future-service"
+FULLSTACK_CROSS_ORG_SLUG="foreign-org/secret-service"
+FULLSTACK_CROSS_ORG_ID="00000000-0000-4000-8000-000000003239"
 # The Explorer's licensing entitlement. Named once because the grant and the read-back
 # assertion must never drift apart; see assert_acr_entitlement.
 ACR_WEB_FEATURE_KEY="agent_context_runtime"
@@ -1098,6 +1101,7 @@ services:
       AUTH_SECRET: ${WEB_AUTH_SECRET}
       AUTH_URL: http://127.0.0.1:${WEB_PORT}
       BACKEND_URL: http://api:8000
+      REDIS_URL: redis://valkey:6379/0
       ACR_API_ORIGIN: https://acr-tls-proxy:8443
       ACR_WEB_ASSERTION_AUDIENCE: dev-health-acr
       ACR_WEB_ASSERTION_ISSUER: dev-health-web
@@ -1162,6 +1166,103 @@ wait_for_device_login_prompt() {
   done
 }
 
+# device_login_mcp_roundtrip drives the installed stdio MCP server with the
+# credential written by `acr-mcp login`. It always runs from a throwaway,
+# non-Git directory and always supplies the repository explicitly, proving
+# local checkout discovery and analytics inventory are not authorization
+# inputs. When expand_evidence=yes, it also expands a reference returned by
+# that exact context_for_task response.
+device_login_mcp_roundtrip() {
+  local slug="$1" artifact="$2" expand_evidence="${3:-no}"
+  local non_git="$ARTIFACTS/device-login-non-git" response evidence_id
+  local mcp_pid mcp_input mcp_output
+  mkdir -p "$non_git"
+  coproc DEVICE_SCOPE_MCP {
+    cd "$non_git"
+    device_login_env "$STATE/acr-mcp" serve 2>"$ARTIFACTS/logs/device-login-mcp.log"
+  }
+  mcp_pid="$DEVICE_SCOPE_MCP_PID"
+  mcp_input="${DEVICE_SCOPE_MCP[1]}"
+  mcp_output="${DEVICE_SCOPE_MCP[0]}"
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"device-login-acceptance","version":"1.0.0"}}}' >&"$mcp_input"
+  if ! IFS= read -r -t 30 response <&"$mcp_output" || ! printf '%s\n' "$response" | jq -e '(.result.protocolVersion | type) == "string"' >/dev/null; then
+    mcp_shutdown "$mcp_pid" "$mcp_input" "$mcp_output"
+    fs_die "device-login MCP initialize failed for ${slug}"
+  fi
+  printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' \
+    "$(jq -cn --arg slug "$slug" '{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:"context_for_task",arguments:{goal:"verify organization-wide device login",repository:{slug:$slug}}}}')" >&"$mcp_input"
+  if ! IFS= read -r -t 30 response <&"$mcp_output"; then
+    mcp_shutdown "$mcp_pid" "$mcp_input" "$mcp_output"
+    fs_die "device-login context_for_task timed out for ${slug}"
+  fi
+  printf '%s\n' "$response" > "$artifact"
+
+  if [[ "$expand_evidence" == yes ]]; then
+    printf '%s\n' "$response" | jq -e --arg slug "$slug" '(.result.isError // false) == false and .result.structuredContent.schema_version == "mcp_context_for_task_response.v1" and .result.structuredContent.structured.repository.slug == $slug' >/dev/null || {
+      mcp_shutdown "$mcp_pid" "$mcp_input" "$mcp_output"
+      fs_die 'the actual device-login credential could not run context_for_task'
+    }
+    evidence_id="$(printf '%s\n' "$response" | jq -r '[.result.structuredContent | .. | objects | .evidence_ref_ids? | arrays | .[] | select(type == "string")][0] // empty')"
+    [[ -n "$evidence_id" ]] || {
+      mcp_shutdown "$mcp_pid" "$mcp_input" "$mcp_output"
+      fs_die 'the actual device-login context packet returned no evidence reference'
+    }
+    printf '%s\n' "$(jq -cn --arg id "$evidence_id" '{jsonrpc:"2.0",id:3,method:"tools/call",params:{name:"source_evidence",arguments:{evidence_ref_id:$id}}}')" >&"$mcp_input"
+    if ! IFS= read -r -t 30 response <&"$mcp_output"; then
+      mcp_shutdown "$mcp_pid" "$mcp_input" "$mcp_output"
+      fs_die 'device-login source_evidence timed out'
+    fi
+    printf '%s\n' "$response" > "${artifact%.json}-evidence.json"
+    printf '%s\n' "$response" | jq -e --arg id "$evidence_id" '(.result.isError // false) == false and .result.structuredContent.schema_version == "mcp_source_evidence_response.v1" and .result.structuredContent.structured.evidence.evidence_ref_id == $id' >/dev/null || {
+      mcp_shutdown "$mcp_pid" "$mcp_input" "$mcp_output"
+      fs_die 'the actual device-login credential could not run source_evidence'
+    }
+  fi
+  mcp_shutdown "$mcp_pid" "$mcp_input" "$mcp_output"
+}
+
+run_device_login_read_acceptance() {
+  local db org_id future_count own_cross_count foreign_cross_count
+  db="$(ops_clickhouse_database)"
+  org_id="$(<"$STATE/org-id")"
+
+  device_login_mcp_roundtrip "$FULLSTACK_REPO_SLUG" "$ARTIFACTS/device-login-context.json" yes
+
+  future_count="$(clickhouse_query "SELECT count() FROM ${db}.repos FINAL WHERE org_id = '${org_id}' AND repo = '${FULLSTACK_FUTURE_SLUG}'")"
+  [[ "$future_count" == 0 ]] || fs_die 'the future-repository acceptance fixture unexpectedly exists in the analytics catalog'
+  device_login_mcp_roundtrip "$FULLSTACK_FUTURE_SLUG" "$ARTIFACTS/device-login-future-context.json"
+  jq -e '
+    .id == 2 and .result != null
+    and (if (.result.isError // false)
+         then (.result.content | tostring | test("no_data"; "i"))
+         else .result.structuredContent.schema_version == "mcp_context_for_task_response.v1"
+           and .result.structuredContent.structured.resolved_scope.resolution == "unresolved"
+           and (.result.structuredContent.structured.resolved_scope.fallback_reasons | index("authorized_repository_not_found")) != null
+         end)
+    and ((.result | tostring) | test("repo_forbidden|credential scope|category: auth"; "i") | not)
+  ' "$ARTIFACTS/device-login-future-context.json" >/dev/null \
+    || fs_die 'the organization-wide device credential rejected an uncataloged same-organization repository at authorization'
+
+  # A foreign-organization canary exists in storage under a different OrgID.
+  # The wildcard grant may name its slug, but every read must remain bound to
+  # the authenticated principal's OrgID and return none of the canary row.
+  clickhouse_query "INSERT INTO ${db}.repos (id, repo, ref, created_at, settings, tags, last_synced, org_id, provider) VALUES (generateUUIDv4(), '${FULLSTACK_CROSS_ORG_SLUG}', 'main', now64(3), NULL, NULL, now64(3), '${FULLSTACK_CROSS_ORG_ID}', 'cross-org-canary')" >/dev/null
+  own_cross_count="$(clickhouse_query "SELECT count() FROM ${db}.repos FINAL WHERE org_id = '${org_id}' AND repo = '${FULLSTACK_CROSS_ORG_SLUG}'")"
+  foreign_cross_count="$(clickhouse_query "SELECT count() FROM ${db}.repos FINAL WHERE org_id = '${FULLSTACK_CROSS_ORG_ID}' AND repo = '${FULLSTACK_CROSS_ORG_SLUG}'")"
+  [[ "$own_cross_count" == 0 && "$foreign_cross_count" == 1 ]] || fs_die 'the cross-organization isolation canary was not provisioned deterministically'
+  device_login_mcp_roundtrip "$FULLSTACK_CROSS_ORG_SLUG" "$ARTIFACTS/device-login-cross-org-context.json"
+  jq -e '
+    .id == 2 and .result != null
+    and ((tostring | test("cross-org-canary"; "i")) | not)
+    and (if (.result.isError // false) then (.result.content | tostring | test("no_data|auth"; "i"))
+         else .result.structuredContent.structured.resolved_scope.resolution == "unresolved"
+           and (.result.structuredContent.structured.resolved_scope.fallback_reasons | index("authorized_repository_not_found")) != null
+           and ([.result.structuredContent.structured.items[]?.evidence_ref_ids[]?] | length) == 0
+         end)
+  ' "$ARTIFACTS/device-login-cross-org-context.json" >/dev/null \
+    || fs_die 'the organization-wide device credential leaked cross-organization repository evidence'
+}
+
 run_device_login_lifecycle() {
   local output="$STATE/secrets/device-login-output" code_file="$STATE/secrets/device-user-code"
   local token_file="$DEVICE_LOGIN_HOME/.acr/token" mode
@@ -1184,7 +1285,6 @@ run_device_login_lifecycle() {
     DEVICE_LOGIN_WEB_EMAIL="$WEB_EMAIL" \
     DEVICE_LOGIN_WEB_PASSWORD="$WEB_PASSWORD" \
     DEVICE_LOGIN_CODE_FILE="$code_file" \
-    DEVICE_LOGIN_REPOSITORY="$FULLSTACK_REPO_SLUG" \
     DEVICE_LOGIN_ARTIFACTS="$ARTIFACTS/playwright" \
     DEVICE_LOGIN_PLAYWRIGHT_MODULE="$WEB_ROOT/node_modules/@playwright/test/index.js" \
     node "$SCRIPT_DIR/device-login-browser.mjs" > "$ARTIFACTS/logs/device-login-browser.log" 2>&1; then
@@ -1205,6 +1305,7 @@ run_device_login_lifecycle() {
   [[ "$mode" == '600' ]] || fs_die "credential file must be mode 0600, found ${mode}"
   device_login_env "$STATE/acr-mcp" doctor --live > "$ARTIFACTS/device-login-doctor.json"
   grep -Fq '"credential_source":"file"' "$ARTIFACTS/device-login-doctor.json" || fs_die 'bare doctor did not discover the fallback credential file'
+  run_device_login_read_acceptance
   device_login_env "$STATE/acr-mcp" login --refresh > "$ARTIFACTS/device-login-refresh.log"
   grep -Eq 'fcacr_|svc_acr_' "$ARTIFACTS/device-login-refresh.log" && fs_die 'credential refresh output leaked a credential'
   device_login_env "$STATE/acr-mcp" doctor --live > "$ARTIFACTS/device-login-doctor-refreshed.json"
@@ -1385,6 +1486,10 @@ write_run_manifest
 capture_capabilities
 capture_mcp_tools
 
+if web_check_enabled; then
+  run_device_login_lifecycle
+fi
+
 TASKS=()
 while IFS= read -r selected_task; do
   [[ -n "$selected_task" ]] && TASKS+=("$selected_task")
@@ -1407,7 +1512,6 @@ if [[ "$SCENARIO" == 'self-test' ]]; then
 fi
 
 if web_check_enabled; then
-  run_device_login_lifecycle
   run_web_agreement_check
 fi
 

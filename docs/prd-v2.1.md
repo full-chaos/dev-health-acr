@@ -120,7 +120,7 @@ agent_context_runtime
 
 The capability handshake reports the product entitlement separately from the credential permissions granted to the current principal.
 
-Credentials are organization-scoped, optionally repository-scoped, expiring, revocable, rotatable, and audited. The web uses its existing Dev Health session through a server-side proxy or trusted assertion; browser code never receives the ACR service credential.
+Credentials are organization-scoped, optionally repository-scoped, expiring, revocable, rotatable, and audited. Current interactive web approval always grants all current and future repositories in the authenticated organization (`repository_scopes: ["*"]`). Exact repository grants remain protocol and service support for explicit clients and a future opt-down UX; they are not a current web approval choice. Repository hints, local checkout state, and analytics inventory never participate in authorization. The web uses its existing Dev Health session through a server-side proxy or trusted assertion; browser code never receives the ACR service credential.
 
 No standalone auth service is introduced in SVS.
 
@@ -198,6 +198,7 @@ The service has explicit item, byte, token, query-time, and source limits. Timeo
 - Retrieved content is untrusted data, never instructions.
 - Evidence URLs are references only; the service does not fetch arbitrary URLs.
 - Organization and repository scope is derived from authenticated server context.
+- The all-repositories selector never weakens the authenticated organization boundary.
 - Evidence reference lookup independently enforces scope.
 - Credentials are never logged or accepted via query parameters.
 - Web output sanitizes markdown and links.

@@ -300,6 +300,20 @@ grep -Fq 'compose logs --no-color acr-pki-init clickhouse migrate acr-ops-tls ac
   || fail 'failed isolated runs must retain the TLS proxy diagnostics for device-login transport failures'
 grep -Fq 'run_device_login_lifecycle' "$script" \
   || fail 'the live gate must exercise CLI login through web approval and lifecycle commands'
+grep -Fq 'REDIS_URL: redis://valkey:6379/0' "$script" \
+  || fail 'the isolated web fixture must use the isolated Valkey rate-limit backend'
+# Device login is an acceptance precondition, not a postscript after the
+# OpenCode task reports have already been graded. Keep the browser agreement
+# check after the task loop because it consumes task-002's packet artifacts.
+device_login_line="$(grep -n '^  run_device_login_lifecycle$' "$script" | cut -d: -f1)"
+task_loop_line="$(grep -n '^for task in "${TASKS\[@\]}"; do$' "$script" | cut -d: -f1)"
+web_agreement_line="$(grep -n '^  run_web_agreement_check$' "$script" | cut -d: -f1)"
+[[ -n "$device_login_line" && -n "$task_loop_line" && -n "$web_agreement_line" ]] \
+  || fail 'device-login, task-loop, or web-agreement main-flow call is missing'
+[[ "$device_login_line" -lt "$task_loop_line" ]] \
+  || fail 'real device-login MCP acceptance must run before task grading begins'
+[[ "$task_loop_line" -lt "$web_agreement_line" ]] \
+  || fail 'web agreement must remain after the task loop it compares against'
 grep -Fq 'record_web_readiness_failure' "$script" \
   || fail 'web readiness failures must retain sanitized timestamped diagnostics'
 grep -Fq 'device-login-browser.mjs' "$script" \
@@ -322,6 +336,26 @@ grep -Fq 'await captureState("review");' "$root/scripts/e2e/device-login-browser
   || fail 'the live approval flow must retain review connected screenshots'
 grep -Fq 'await captureState("success");' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'the live approval flow must retain success connected screenshots'
+grep -Fq 'getByRole("heading", { name: "All organization repositories" })' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must assert the organization-wide review surface'
+grep -Fq 'all current and future repositories in your organization' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must assert current-and-future organization repository copy'
+grep -Fq 'deviceRequests[1].scopes[0] !== "*"' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must assert the submitted organization-wide scope'
+grep -Fq 'await requireDeviceSuccess(await replayPreview, "replay preview");' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'replay protection must not be asserted on the intentionally repeatable preview operation'
+grep -Fq 'if (replayApprovalResponse.status() !== 409)' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must assert replay conflict on the second approval transition'
+grep -Fq 'isDeviceResponseForAction(response, "approve")' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'device approval response waits must distinguish approval from preview responses'
+grep -Fq 'preview,approve,preview,approve' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the live approval flow must retain the complete approval replay request sequence'
+if grep -Fq 'if ((await replay).status() !== 409)' "$root/scripts/e2e/device-login-browser.mjs"; then
+  fail 'preview is repeatable by contract; replay protection belongs to the approval transition'
+fi
+if grep -Eq 'getByLabel\(repository\)|getByRole\("checkbox"\)|\.isChecked\(\)|bounded repository was not selected' "$root/scripts/e2e/device-login-browser.mjs"; then
+  fail 'the live approval flow must not restore the retired exact-repository checkbox expectation'
+fi
 grep -Fq 'device-login-network.json' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'the live approval flow must retain sanitized browser network evidence'
 grep -Fq 'await page.waitForURL((url) => !url.pathname.startsWith("/auth/signin"));' "$root/scripts/e2e/device-login-browser.mjs" \
