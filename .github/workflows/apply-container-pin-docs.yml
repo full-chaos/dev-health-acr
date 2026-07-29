@@ -1,0 +1,53 @@
+---
+name: apply-container-pin-docs
+
+"on":
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: >-
+      github.repository == 'full-chaos/dev-health-acr' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/fix-main-release-tag' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: agent/fix-main-release-tag
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Update documented immutable snapshots
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('docs/container-images.md')
+          data = path.read_text()
+          replacements = {
+              '7e0cf19de437467abd96f7ba86cf107d8872d0de85c9956dc2a69ad34eeff73b':
+                  '0690687448b0beca8c84f52a26ddc3b088623f617def56348194fde48f8573cd',
+              'ada5860f7d7b96affdd0ba2cd27f5fdfc8a366f1999539f4fc0cac6402a27c1f':
+                  '7d5d30fa0e218e69d7f530f9ac32ccceeab48fb73245ae850b19e83186c66e6f',
+          }
+          for old, new in replacements.items():
+              count = data.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one documented occurrence of {old}, found {count}')
+              data = data.replace(old, new)
+          path.write_text(data)
+          PY
+          git diff --check
+          git diff -- docs/container-images.md
+          git add docs/container-images.md
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'docs(containers): record refreshed immutable snapshots'
+          git push origin HEAD:agent/fix-main-release-tag
