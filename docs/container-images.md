@@ -43,12 +43,12 @@ GitHub action commit SHA):
 | Dockerfile frontend | `docker/dockerfile:1.20@sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d` |
 | Go builder | `golang:1.26.5-alpine3.23@sha256:622e56dbc11a8cfe87cafa2331e9a201877271cbff918af53d3be315f3da88cc` |
 | API runtime | `gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35` |
-| MCP runtime | `cgr.dev/chainguard/git:latest@sha256:7e0cf19de437467abd96f7ba86cf107d8872d0de85c9956dc2a69ad34eeff73b` |
+| MCP runtime | `cgr.dev/chainguard/git:latest@sha256:0690687448b0beca8c84f52a26ddc3b088623f617def56348194fde48f8573cd` |
 | QEMU binfmt | `docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0` |
 | Buildx CLI | `v0.35.0` linux-amd64 asset, SHA-256 `d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda` |
 | BuildKit driver | `moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1` |
 | Scanner | `aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c` |
-| Scanner DB snapshot | `ghcr.io/aquasecurity/trivy-db@sha256:ada5860f7d7b96affdd0ba2cd27f5fdfc8a366f1999539f4fc0cac6402a27c1f` |
+| Scanner DB snapshot | `ghcr.io/aquasecurity/trivy-db@sha256:7d5d30fa0e218e69d7f530f9ac32ccceeab48fb73245ae850b19e83186c66e6f` |
 | SBOM generator | `anchore/syft:v1.46.0@sha256:473a60e3a58e29aca3aedb3e99e787bb4ef273917e44d10fcbea4330a07320bb` |
 | Migration smoke database | `postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193` |
 | Compose E2E PostgreSQL helper | `postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15` |
@@ -226,5 +226,5 @@ Before moving `latest`, it rechecks the current GitHub `main` ref so an older
 run finishing out of order cannot roll the channel backward. The full commit SHA and `latest` therefore identify the same image only for the current tip of
 `main`. Deployment and rollback references should still use the approved
 `@sha256:` digest. The same OCI archives and container SBOMs are attached to
-the SHA- or version-tagged GitHub Release for offline verification. See
+the `main-<full-sha>` or version-tagged GitHub Release for offline verification. See
 [`release-policy.md`](release-policy.md).

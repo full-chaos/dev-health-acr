@@ -4,9 +4,9 @@ The `Release` workflow is the canonical build-and-publish path for
 `dev-health-acr`. It serves two publication channels from the same verified
 build pipeline:
 
-- every successful push to `main` publishes an immutable commit-SHA release and
-  promotes that exact build to the moving `latest` aliases when the commit is
-  still the current tip of `main`;
+- every successful push to `main` publishes an immutable full-SHA image and a
+  `main-<full-sha>` GitHub Release, then promotes that exact build to the moving
+  `latest` aliases when the commit is still the current tip of `main`;
 - a canonical version tag publishes an immutable versioned release without
   moving `latest`.
 
@@ -19,7 +19,8 @@ The workflow supports three entry points:
 
 1. Pushing to `main`. The protected branch and merge permissions are the
    authorization boundary. The workflow publishes the full 40-character commit
-   SHA and, after rechecking the branch tip, the `latest` aliases.
+   SHA as the immutable GHCR image tag, creates a `main-<full-sha>` GitHub
+   Release, and, after rechecking the branch tip, moves the `latest` aliases.
 2. Pushing a canonical tag:
    `vMAJOR.MINOR.PATCH`, `vMAJOR.MINOR.PATCH-dev.N`, or
    `vMAJOR.MINOR.PATCH-beta.N`.
@@ -35,16 +36,18 @@ boundary. Annotated tag signatures are reported when locally verifiable, but a
 lightweight tag or an annotated tag without a locally available signer key does
 not silently block publication.
 
-Do not move or reuse an immutable version tag or commit-SHA tag. Versioned
-recovery always runs the current workflow against the existing tag and original
-source commit.
+Do not move or reuse an immutable version tag, `main-<full-sha>` GitHub
+Release tag, or full-SHA GHCR image tag. Versioned recovery always runs the
+current workflow against the existing tag and original source commit.
 
 ## Main publication identity
 
-A `main` build uses the full lowercase commit SHA as its immutable publication
-tag. The binary's embedded version remains canonical SemVer: the workflow finds
-the highest canonical release core reachable from that commit, increments its
-patch component, and emits:
+A `main` build uses the full lowercase commit SHA as its immutable source
+identity and GHCR image tag. GitHub does not allow a branch or tag name that is
+exactly 40 or 64 hexadecimal characters, so the corresponding GitHub Release
+uses the valid immutable tag `main-<full-sha>`. The binary's embedded version
+remains canonical SemVer: the workflow finds the highest canonical release core
+reachable from that commit, increments its patch component, and emits:
 
 ```text
 MAJOR.MINOR.NEXT_PATCH-main.<40-character-commit-SHA>
@@ -52,8 +55,8 @@ MAJOR.MINOR.NEXT_PATCH-main.<40-character-commit-SHA>
 
 If no canonical release tag exists in the commit's ancestry, the base is
 `1.0.0`, producing `1.0.1-main.<SHA>`. The derived version is used in archive
-filenames and manifests; the GitHub Release tag and immutable GHCR tag remain
-the full commit SHA.
+filenames and manifests; the GitHub Release tag is `main-<full-sha>`, while the
+immutable GHCR image tag remains the bare full commit SHA.
 
 Before changing either moving `latest` alias, the final publication job reads
 the current `refs/heads/main` value from GitHub. A superseded run still publishes
@@ -129,9 +132,10 @@ ghcr.io/full-chaos/dev-health-acr/acr-mcp:<40-character-commit-SHA>
 ghcr.io/full-chaos/dev-health-acr/acr-mcp:latest
 ```
 
-The GitHub Release tagged with that same full commit SHA is marked as the
-repository's **Latest** release. GitHub's Latest marker is a moving pointer; the
-SHA-tagged Release and its assets remain immutable and directly addressable.
+The GitHub Release tagged `main-<full-sha>` and targeted at that exact commit
+is marked as the repository's **Latest** release. GitHub's Latest marker is a
+moving pointer; the prefixed Release tag and its assets remain immutable and
+directly addressable.
 
 Canonical version tags publish these immutable references and do not replace the
 main channel's Latest marker:

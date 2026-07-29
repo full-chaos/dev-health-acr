@@ -72,6 +72,15 @@ else
   fail "--tag/--version must identify either a canonical version release or the matching main commit"
 fi
 
+if [[ "$channel" == main ]]; then
+  # GitHub rejects branch or tag names that consist of exactly 40 or 64
+  # hexadecimal characters. Keep the immutable GHCR image tag as the full
+  # SHA, but prefix the GitHub Release tag so it is a valid Git ref.
+  release_tag="main-$commit"
+else
+  release_tag="$tag"
+fi
+
 [[ "${GITHUB_REPOSITORY:-}" == "$expected_repo" ]] \
   || fail "unexpected repository: ${GITHUB_REPOSITORY:-unset}"
 [[ -n "${GITHUB_ACTOR:-}" ]] || fail "GITHUB_ACTOR is required"
@@ -101,13 +110,13 @@ draft_release_id=""
 cleanup() {
   local release_json release_id release_state
   if "$draft_created"; then
-    release_json="$(gh release view "$tag" --repo "$expected_repo" --json databaseId,isDraft 2>/dev/null || true)"
+    release_json="$(gh release view "$release_tag" --repo "$expected_repo" --json databaseId,isDraft 2>/dev/null || true)"
     release_id="$(jq -r '.databaseId // empty' <<<"$release_json" 2>/dev/null || true)"
     release_state="$(jq -r '.isDraft // empty' <<<"$release_json" 2>/dev/null || true)"
     if [[ -n "$draft_release_id" && "$release_id" == "$draft_release_id" && "$release_state" == true ]]; then
-      gh release delete "$tag" --repo "$expected_repo" --yes >/dev/null 2>&1 || true
+      gh release delete "$release_tag" --repo "$expected_repo" --yes >/dev/null 2>&1 || true
     else
-      printf 'leaving Release untouched because its identity and draft state could not be verified: %s\n' "$tag" >&2
+      printf 'leaving Release untouched because its identity and draft state could not be verified: %s\n' "$release_tag" >&2
     fi
   fi
   rm -rf "$tmp"
@@ -257,20 +266,20 @@ done < <(
 
 release_exists=false
 release_lookup_error="$tmp/release-lookup.err"
-if release_json="$(gh api "repos/$expected_repo/releases/tags/$tag" 2>"$release_lookup_error")"; then
-  test "$(jq -r .tag_name <<<"$release_json")" = "$tag" \
+if release_json="$(gh api "repos/$expected_repo/releases/tags/$release_tag" 2>"$release_lookup_error")"; then
+  test "$(jq -r .tag_name <<<"$release_json")" = "$release_tag" \
     || fail "existing GitHub Release has the wrong tag"
   test "$(jq -r .draft <<<"$release_json")" = false \
-    || fail "an existing draft GitHub Release requires manual review: $tag"
+    || fail "an existing draft GitHub Release requires manual review: $release_tag"
 
   mkdir "$tmp/existing-release"
-  gh release download "$tag" --repo "$expected_repo" --dir "$tmp/existing-release"
+  gh release download "$release_tag" --repo "$expected_repo" --dir "$tmp/existing-release"
   verify_downloaded_release "$tmp/existing-release" existing-release
   cmp "$release_dir/SHA256SUMS" "$tmp/existing-release/SHA256SUMS" >/dev/null \
     || fail "existing GitHub Release assets differ from the verified build"
   cp "$tmp/existing-release/$bundle_name" "$bundle"
   release_exists=true
-  printf 'release already published and verified: %s\n' "$tag"
+  printf 'release already published and verified: %s\n' "$release_tag"
 elif ! grep -Eq 'HTTP[^0-9]*404' "$release_lookup_error"; then
   cat "$release_lookup_error" >&2
   fail "cannot determine whether GitHub Release exists: $tag"
@@ -309,7 +318,7 @@ if ! "$release_exists"; then
   } >"$notes"
 
   release_args=(
-    release create "$tag"
+    release create "$release_tag"
     --repo "$expected_repo"
     --draft
     --notes-file "$notes"
@@ -324,13 +333,13 @@ if ! "$release_exists"; then
   fi
   gh "${release_args[@]}"
   draft_created=true
-  draft_release_id="$(gh release view "$tag" --repo "$expected_repo" --json databaseId --jq .databaseId)"
+  draft_release_id="$(gh release view "$release_tag" --repo "$expected_repo" --json databaseId --jq .databaseId)"
   [[ "$draft_release_id" =~ ^[1-9][0-9]*$ ]] \
     || fail "created draft Release did not return a stable database ID"
-  gh release upload "$tag" --repo "$expected_repo" "${assets[@]}"
+  gh release upload "$release_tag" --repo "$expected_repo" "${assets[@]}"
 
   mkdir "$tmp/draft-release"
-  gh release download "$tag" --repo "$expected_repo" --dir "$tmp/draft-release"
+  gh release download "$release_tag" --repo "$expected_repo" --dir "$tmp/draft-release"
   verify_downloaded_release "$tmp/draft-release" draft-release
   cmp "$release_dir/SHA256SUMS" "$tmp/draft-release/SHA256SUMS" >/dev/null \
     || fail "downloaded draft assets differ from the verified build"
@@ -376,22 +385,22 @@ fi
 
 if [[ "$channel" == main ]]; then
   if "$publish_latest"; then
-    gh release edit "$tag" --repo "$expected_repo" --draft=false --prerelease=false --latest
+    gh release edit "$release_tag" --repo "$expected_repo" --draft=false --prerelease=false --latest
   else
-    gh release edit "$tag" --repo "$expected_repo" --draft=false --prerelease=false --latest=false
+    gh release edit "$release_tag" --repo "$expected_repo" --draft=false --prerelease=false --latest=false
   fi
 elif [[ "$tag" == *-dev.* || "$tag" == *-beta.* ]]; then
-  gh release edit "$tag" --repo "$expected_repo" --draft=false --prerelease --latest=false
+  gh release edit "$release_tag" --repo "$expected_repo" --draft=false --prerelease --latest=false
 else
-  gh release edit "$tag" --repo "$expected_repo" --draft=false --prerelease=false --latest=false
+  gh release edit "$release_tag" --repo "$expected_repo" --draft=false --prerelease=false --latest=false
 fi
 
-test "$(gh release view "$tag" --repo "$expected_repo" --json isDraft --jq .isDraft)" = false \
+test "$(gh release view "$release_tag" --repo "$expected_repo" --json isDraft --jq .isDraft)" = false \
   || fail "GitHub Release did not reach the published state"
 draft_created=false
 
 if "$publish_latest"; then
-  printf 'published immutable SHA assets and promoted main to latest: %s\n' "$tag"
+  printf 'published GitHub Release %s and promoted immutable image %s to latest\n' "$release_tag" "$tag"
 else
-  printf 'published GitHub Release and immutable GHCR images: %s\n' "$tag"
+  printf 'published GitHub Release %s and immutable GHCR image tag %s\n' "$release_tag" "$tag"
 fi
