@@ -183,10 +183,23 @@ for name in acr-api-amd64 acr-api-arm64 acr-mcp-amd64 acr-mcp-arm64; do
 done
 
 for name in acr-api-amd64 acr-api-arm64 acr-mcp-amd64 acr-mcp-arm64; do
-  jq -e '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH" or .Severity == "CRITICAL")] | length == 0' \
-    "${report_root}/${name}-trivy.json" >/dev/null || failures=1
-  jq -e '.spdxVersion == "SPDX-2.3" and (.packages | length > 0)' \
-    "${report_root}/${name}.spdx.json" >/dev/null || failures=1
+  vulnerabilities=""
+  if ! vulnerabilities="$(jq -r '
+    [.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH" or .Severity == "CRITICAL")] |
+    .[] |
+    "\(.VulnerabilityID)\t\(.PkgName)\tinstalled=\(.InstalledVersion)\tfixed=\(.FixedVersion // "none")\tseverity=\(.Severity)"
+  ' "${report_root}/${name}-trivy.json")"; then
+    printf 'invalid or missing Trivy report: %s\n' "$name" >&2
+    failures=1
+  elif [[ -n "$vulnerabilities" ]]; then
+    printf 'HIGH/CRITICAL vulnerabilities in %s:\n%s\n' "$name" "$vulnerabilities" >&2
+    failures=1
+  fi
+  if ! jq -e '.spdxVersion == "SPDX-2.3" and (.packages | length > 0)' \
+    "${report_root}/${name}.spdx.json" >/dev/null; then
+    printf 'invalid or missing SPDX SBOM: %s\n' "$name" >&2
+    failures=1
+  fi
 done
 
 test "$failures" -eq 0 || { printf 'one or more image scan or SBOM gates failed\n' >&2; exit 1; }
