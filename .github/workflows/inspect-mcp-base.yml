@@ -53,23 +53,24 @@ jobs:
 
           for label in pinned current; do
             if [[ "$label" == pinned ]]; then image="$PINNED_IMAGE"; else image="$current_image"; fi
+            image_archive="$reports/$label-image.tar"
             docker pull --platform linux/amd64 "$image" >/dev/null
+            docker save "$image" --output "$image_archive"
             docker run --rm --pull=never --network none \
               --user "$(id -u):$(id -g)" \
               --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777 \
               --cap-drop ALL --security-opt no-new-privileges \
               -e HOME=/tmp \
-              -v /var/run/docker.sock:/var/run/docker.sock:ro \
               -v "$cache:/tmp/trivy-cache" \
               -v "$reports:/reports" \
               "$TRIVY_IMAGE" image \
               --cache-dir /tmp/trivy-cache \
               --skip-db-update \
               --skip-version-check \
+              --input "/reports/$label-image.tar" \
               --severity HIGH,CRITICAL \
               --format json \
-              --output "/reports/$label.json" \
-              "$image"
+              --output "/reports/$label.json"
             printf '%s findings:\n' "$label"
             jq -r '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH" or .Severity == "CRITICAL")] | if length == 0 then "none" else .[] | "\(.VulnerabilityID)\t\(.PkgName)\tinstalled=\(.InstalledVersion)\tfixed=\(.FixedVersion // "none")\tseverity=\(.Severity)" end' \
               "$reports/$label.json"
