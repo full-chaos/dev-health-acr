@@ -6,7 +6,10 @@ import (
 	"time"
 )
 
-const deviceCredentialLifetime = 30 * 24 * time.Hour
+const (
+	deviceCredentialLifetime          = 30 * 24 * time.Hour
+	deviceCredentialIssuanceTolerance = time.Second
+)
 
 func (r DeviceAuthorizationRequest) Validate() error {
 	if r.SchemaVersion != DeviceAuthorizationRequestSchema {
@@ -125,10 +128,17 @@ func validateDeviceIssuedCredential(credential ClientCredential) error {
 	if err := validateCredentialMetadata(credential); err != nil {
 		return err
 	}
-	if credential.ExpiresAt == nil || credential.ExpiresAt.Sub(credential.CreatedAt) != deviceCredentialLifetime || credential.RevokedAt != nil || credential.LastUsedAt != nil || len(credential.Scopes) != 2 || credential.Scopes[0] != "context:read" || credential.Scopes[1] != "evidence:read" {
+	if credential.ExpiresAt == nil || !validDeviceCredentialLifetime(credential.CreatedAt, *credential.ExpiresAt) || credential.RevokedAt != nil || credential.LastUsedAt != nil || len(credential.Scopes) != 2 || credential.Scopes[0] != "context:read" || credential.Scopes[1] != "evidence:read" {
 		return fmt.Errorf("device credential does not satisfy fixed issuance policy")
 	}
 	return validateBoundedRepositoryScopes(credential.RepositoryScopes)
+}
+
+func validDeviceCredentialLifetime(createdAt, expiresAt time.Time) bool {
+	// The API calculates expiry before the persistence layer records created_at.
+	// Preserve the 30-day ceiling while allowing sub-second issuance latency.
+	lifetime := expiresAt.Sub(createdAt)
+	return lifetime <= deviceCredentialLifetime && lifetime >= deviceCredentialLifetime-deviceCredentialIssuanceTolerance
 }
 
 func validateCredentialMetadata(credential ClientCredential) error {
