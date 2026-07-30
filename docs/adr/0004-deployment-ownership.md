@@ -1,4 +1,4 @@
-# ADR-0004: Private ACR deployment ownership stays out of Ops
+# ADR-0004: ACR deployment ownership stays out of Ops
 
 **Status:** Accepted
 **Date:** 2026-07-14
@@ -8,7 +8,7 @@
 Deployment packaging is split by repository ownership, not by infrastructure
 technology:
 
-- `dev-health-acr` (this private repository) owns 100% of ACR
+- `dev-health-acr` owns 100% of ACR
   Helm/Kubernetes/Compose deployment artifacts.
 - `dev-health-ops` owns provider hardening only and ships zero ACR workload,
   image reference, database-init script, or deployment manifest.
@@ -56,10 +56,10 @@ Offline validation asserts every credential, DSN, and token field is a
 non-empty reference to an existing Secret (`existingSecret`/`secretName`
 style keys), never an inline value.
 
-## Immutable private images
+## Immutable images
 
 Every ACR container reference in a deployment manifest is an immutable,
-fully qualified private image tag or digest, consistent with the immutable
+fully qualified image tag or digest, consistent with the immutable
 input discipline already required for build inputs in
 [`docs/container-images.md`](../container-images.md). The Helm chart and raw
 Kubernetes manifests both reject a mutable (for example `latest`) image
@@ -81,7 +81,7 @@ workload.
 This ADR supersedes the Ops-owned packaging direction recorded in the
 superseded `acr-developer-deployment` plan, Todos 9-11, which proposed
 `../ops/deploy/helm/acr/` and `../ops/deploy/kubernetes/acr/` inside
-`dev-health-ops`. That direction is no longer valid: private ACR packaging
+`dev-health-ops`. That direction is no longer valid: ACR packaging
 must never live inside `dev-health-ops`. The replacement paths are the
 `dev-health-acr`-owned paths in the ownership table above, tracked as
 `acr-project-completion` plan Todos 5 (this ADR), 7 (Compose overlay), 8

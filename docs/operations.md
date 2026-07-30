@@ -1,6 +1,6 @@
-# Private ACR developer and operator guide
+# ACR developer and operator guide
 
-This guide is for the private ACR service owners and the developers who run its
+This guide is for ACR service owners and the developers who run its
 local MCP sidecar. ACR is a separate private hosted Go API (`acr-api`) plus a
 host-local STDIO MCP binary (`acr-mcp`). It is not packaged or distributed by
 `dev-health-ops`; Ops remains the evidence and entitlement source, and
@@ -64,7 +64,7 @@ an environment file or command line. Compose routes the local API through its
 TLS fixture; the `http://localhost` readiness probe is container-internal and
 is not a production endpoint.
 
-## Private deployment configuration
+## Hosted deployment configuration
 
 ### TLS, origins, and web assertions
 

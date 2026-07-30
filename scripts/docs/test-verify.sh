@@ -14,7 +14,8 @@ for fixture_and_label in \
   'codegraph-init:CodeGraph initialization or reindex claim' \
   'direct-api:direct hosted or CodeGraph call claim' \
   'automatic-preplan:automatic pre-plan claim' \
-  'public-release:public release claim'; do
+  'public-release:public release claim' \
+  'compose-pending:stale Compose pending claim'; do
   fixture="${fixture_and_label%%:*}"
   label="${fixture_and_label#*:}"
   set +e

@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Offline documentation verifier for private ACR deployment claims.
+# Offline documentation verifier for ACR deployment claims.
 #
 # Validates, without Docker or network access:
 #   - README.md links docs/container-images.md and lists the exact
 #     container verification commands.
 #   - docs/implementation-backlog.md records the superseded
-#     acr-developer-deployment plan's container Todo 8 as complete and
-#     its local Compose Todo 9 as pending.
+#     historical handoff's container Todo 8 and local Compose Todo 9 as
+#     complete.
 #   - every local (non-URL) Markdown link in README.md and docs/*.md
 #     resolves to a real file.
 #   - every `make <target>` snippet referenced in README.md or
 #     docs/container-images.md names a target that exists in Makefile.
-#   - docs/container-images.md never claims local Compose behavior is
-#     merged, verified, or complete (Compose remains pending elsewhere).
+#   - docs/implementation-backlog.md links the implemented Compose overlay and
+#     acceptance driver rather than preserving a stale pending claim.
 #   - new developer/operator documentation references real commands, paths,
 #     and environment variables without requiring Docker or a network.
 #   - Helm schema and trusted-web JWKS terminology stays aligned with the
@@ -156,6 +156,7 @@ unsafe_claim 'CodeGraph initialization or reindex claim' 'initialize CodeGraph|i
 unsafe_claim 'direct hosted or CodeGraph call claim' 'call(s)? (the )?(hosted )?API directly|directly call(s)? CodeGraph|direct CodeGraph call'
 unsafe_claim 'automatic pre-plan claim' 'automatic(ally)?[[:space:]]+pre-plan|pre-plan.{0,40}(automatic|enabled by default)'
 unsafe_claim 'public release claim' 'public(ly)?[[:space:]]+(release|published)|production release has been created or published'
+unsafe_claim 'stale Compose pending claim' 'Todo 9.{0,200}pending|pending.{0,200}Todo 9'
 
 if [ "$fixture_mode" = true ]; then
   if [ "$fail_count" -ne 0 ]; then
@@ -188,6 +189,8 @@ client_docs=(
   "$root/docs/examples/mcp-clients/cursor.md"
 )
 require_doc_text "$readme" "CodeGraph \`>=1.2.0,<2.0.0\`" "README pins the supported CodeGraph range"
+require_doc_text "$readme" 'publicly visible to support unrestricted CI execution' "README records public visibility as a CI choice"
+require_doc_text "$root/LICENSE-POLICY.md" 'Visibility is not an open-source license grant' "license policy separates visibility from licensing"
 require_doc_text "$readme" "it never runs \`init\`, \`index\`, or" "README documents the read-only direct/managed guard"
 require_doc_text "$mcp_doc" "\`ACR_LOCAL_INDEX_PROVIDER\`" "sidecar documents local provider configuration"
 require_doc_text "$mcp_doc" "\`indexed_commit_unknown\`" "sidecar documents unknown indexed commits"
@@ -255,18 +258,9 @@ if [ ! -f "$container_doc" ]; then
 else
   ok "docs/container-images.md exists"
 
-  # Compose must never be documented as merged/verified/complete here;
-  # Compose acceptance is a separate, still-pending todo (acr-project-
-  # completion Todo 7 / superseded acr-developer-deployment Todo 9).
-  if grep -inE 'compose[^.]{0,40}(complete|merged|verified|tested|passing)' "$container_doc" \
-      || grep -inE '(complete|merged|verified|tested|passing)[^.]{0,40}compose' "$container_doc"; then
-    fail "docs/container-images.md appears to claim local Compose behavior is done"
-  else
-    ok "docs/container-images.md does not claim Compose completion"
-  fi
 fi
 
-# --- 5. Backlog records Todo 8 complete / Todo 9 pending -----------------
+# --- 5. Handoff records Todo 8 and Todo 9 complete ------------------------
 if [ ! -f "$backlog" ]; then
   fail "docs/implementation-backlog.md missing at $root"
 else
@@ -281,11 +275,27 @@ else
     fail "docs/implementation-backlog.md does not record superseded deployment plan Todo 8 as complete"
   fi
 
-  if printf '%s' "$backlog_flat" | grep -qE 'Todo 9.{0,200}\bpending\b' \
-      || printf '%s' "$backlog_flat" | grep -qiE 'pending.{0,200}Todo 9'; then
-    ok "docs/implementation-backlog.md records Todo 9 pending"
+  if printf '%s' "$backlog_flat" | grep -qE 'Todo 9.{0,200}\bcomplete\b' \
+      || printf '%s' "$backlog_flat" | grep -qiE 'complete.{0,200}Todo 9'; then
+    ok "docs/implementation-backlog.md records Todo 9 complete"
   else
-    fail "docs/implementation-backlog.md does not record superseded deployment plan Todo 9 as pending"
+    fail "docs/implementation-backlog.md does not record local Compose Todo 9 as complete"
+  fi
+  if printf '%s' "$backlog_flat" | grep -qiE 'Todo 9.{0,200}\bpending\b|pending.{0,200}Todo 9'; then
+    fail "docs/implementation-backlog.md still records local Compose Todo 9 as pending"
+  else
+    ok "docs/implementation-backlog.md has no stale Todo 9 pending claim"
+  fi
+
+  if grep -Fq '../deploy/compose/acr.compose.yml' "$backlog"; then
+    ok "docs/implementation-backlog.md links the Compose overlay"
+  else
+    fail "docs/implementation-backlog.md does not link the Compose overlay"
+  fi
+  if grep -Fq '../scripts/e2e/compose.sh' "$backlog"; then
+    ok "docs/implementation-backlog.md links the Compose acceptance driver"
+  else
+    fail "docs/implementation-backlog.md does not link the Compose acceptance driver"
   fi
 fi
 

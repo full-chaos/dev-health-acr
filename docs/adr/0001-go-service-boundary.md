@@ -1,11 +1,11 @@
-# ADR-0001: ACR is a private Go service and Go MCP sidecar
+# ADR-0001: ACR is a Go service and Go MCP sidecar
 
 **Status:** Accepted  
 **Date:** 2026-07-10
 
 ## Decision
 
-ACR is implemented in a new private repository as two Go binaries:
+ACR is implemented in a separate repository as two Go binaries:
 
 - `acr-api`: focused hosted service.
 - `acr-mcp`: local STDIO MCP sidecar.
@@ -19,6 +19,12 @@ The Context Packet Explorer remains in `dev-health-web` and is the only non-Go A
 - Lower runtime overhead than adding more Python async workers.
 - A clean commercial boundary: the ACR service is not shipped in the default self-hosted distribution.
 - Shared Go contract types reduce API/sidecar drift.
+
+## Visibility amendment (2026-07-30)
+
+The repository became publicly visible to support unrestricted CI execution.
+That operational change does not grant an open-source license and does not
+change the hosted service, entitlement, authorization, or commercial boundary.
 
 ## Boundaries
 
