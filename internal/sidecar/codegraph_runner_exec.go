@@ -76,6 +76,12 @@ func runCodeGraphJSON(ctx context.Context, path, gitRoot string, command codeGra
 func waitCodeGraphProcessGroup(cmd *exec.Cmd, processGroup int) error {
 	waitErr := cmd.Wait()
 	_ = killKeyringProcessGroupID(processGroup)
+	if errors.Is(waitErr, exec.ErrWaitDelay) {
+		// ErrWaitDelay means the command itself exited successfully and only
+		// pipe-copy cleanup exceeded WaitDelay. Preserve the command status;
+		// callers classify any independent decode error separately.
+		return nil
+	}
 	return waitErr
 }
 
