@@ -60,10 +60,19 @@ function isDeviceResponseForAction(response, action) {
 }
 
 page.on("console", (message) => {
-    if (message.type() === "error") browserErrors.push(message.text());
+    if (message.type() === "error") {
+        browserErrors.push({ text: message.text(), url: message.location().url });
+    }
 });
-page.on("pageerror", (error) => browserErrors.push(error.message));
-page.on("requestfailed", (request) => failedRequests.push(request.url()));
+page.on("pageerror", (error) => browserErrors.push({ text: error.message, url: "" }));
+page.on("requestfailed", (request) =>
+    failedRequests.push({
+        errorText: request.failure()?.errorText ?? "unknown",
+        method: request.method(),
+        resourceType: request.resourceType(),
+        url: request.url(),
+    }),
+);
 page.on("request", (request) => {
     const url = new URL(request.url());
     if (url.pathname !== "/api/acr/device") return;
@@ -97,11 +106,17 @@ try {
             new URL(response.url()).pathname === "/api/auth/callback/credentials" &&
             response.request().method() === "POST",
     );
+    const postSignInNavigation = page.waitForResponse(
+        (response) =>
+            new URL(response.url()).pathname === "/dashboard" && response.request().method() === "POST",
+    );
     await page.getByRole("button", { name: "Sign In" }).click();
     if (!(await signIn).ok()) throw new Error("isolated web fixture authentication failed");
     await page.waitForURL((url) => !url.pathname.startsWith("/auth/signin"));
+    if (!(await postSignInNavigation).ok()) throw new Error("post-login navigation failed");
 
     await page.goto(`${baseUrl}/acr/device`, { waitUntil: "networkidle" });
+    const deviceSurfaceFailureStart = failedRequests.length;
     await page.getByRole("heading", { name: "Approve device access" }).waitFor();
     await captureState("pending");
 
@@ -127,6 +142,7 @@ try {
     await page.getByRole("button", { name: "Preview request" }).click();
     await requireDeviceSuccess(await replayPreview, "replay preview");
     await page.getByRole("heading", { name: "Review device access" }).waitFor();
+    const replayBrowserErrorStart = browserErrors.length;
     const replayApproval = page.waitForResponse((response) => isDeviceResponseForAction(response, "approve"));
     await page.getByRole("button", { name: "Confirm" }).click();
     const replayApprovalResponse = await replayApproval;
@@ -135,9 +151,29 @@ try {
     }
     await page.getByRole("heading", { name: "Request not approved" }).waitFor();
 
-    if (browserErrors.length !== 0 || failedRequests.length !== 0) {
-        throw new Error("browser emitted console errors or failed requests");
-    }
+    const replayBrowserErrors = browserErrors.slice(replayBrowserErrorStart);
+    const expectedReplayErrors = replayBrowserErrors.filter((error) =>
+        error.text.includes("the server responded with a status of 409"),
+    );
+    const unexpectedBrowserErrors = [
+        ...browserErrors.slice(0, replayBrowserErrorStart),
+        ...replayBrowserErrors.filter((error) => !expectedReplayErrors.includes(error)),
+    ];
+    const preDeviceFailedRequests = failedRequests.slice(0, deviceSurfaceFailureStart);
+    const deviceSurfaceFailedRequests = failedRequests.slice(deviceSurfaceFailureStart);
+    const expectedFrameworkCancellations = deviceSurfaceFailedRequests.filter((request) => {
+        const url = new URL(request.url);
+        return (
+            url.origin === new URL(baseUrl).origin &&
+            url.searchParams.has("_rsc") &&
+            request.method === "GET" &&
+            request.resourceType === "fetch" &&
+            request.errorText === "net::ERR_ABORTED"
+        );
+    });
+    const unexpectedFailedRequests = deviceSurfaceFailedRequests.filter(
+        (request) => !expectedFrameworkCancellations.includes(request),
+    );
     if (responses.some((response) => response.status >= 500)) throw new Error("device route returned 5xx");
     const actions = deviceRequests.map((request) => request.action);
     if (actions.join(",") !== "preview,approve,preview,approve") {
@@ -153,9 +189,16 @@ try {
     }
     await writeFile(
         resolve(artifacts, "device-login-network.json"),
-        `${JSON.stringify({ browserErrors, deviceRequests, failedRequests, responses }, null, 2)}\n`,
+        `${JSON.stringify({ browserErrors, deviceRequests, deviceSurfaceFailedRequests, expectedFrameworkCancellations, expectedReplayErrors, failedRequests, preDeviceFailedRequests, responses, unexpectedBrowserErrors, unexpectedFailedRequests }, null, 2)}\n`,
         { mode: 0o600 },
     );
+    if (
+        expectedReplayErrors.length > 1 ||
+        unexpectedBrowserErrors.length !== 0 ||
+        unexpectedFailedRequests.length !== 0
+    ) {
+        throw new Error("browser emitted console errors or failed requests");
+    }
 } finally {
     await browser.close();
 }

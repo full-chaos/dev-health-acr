@@ -1135,6 +1135,8 @@ device_login_env() {
     ACR_API_TOKEN_KEYRING_SERVICE= \
     ACR_API_TOKEN_KEYRING_ACCOUNT= \
     ACR_API_TOKEN_KEYRING_DISABLED=true \
+    ACR_SIDECAR_VERSION=1.0.0 \
+    ACR_SIDECAR_CLIENT_VERSION=1.0.0 \
     "$@"
 }
 
@@ -1265,9 +1267,10 @@ run_device_login_read_acceptance() {
 
 run_device_login_lifecycle() {
   local output="$STATE/secrets/device-login-output" code_file="$STATE/secrets/device-user-code"
-  local token_file="$DEVICE_LOGIN_HOME/.acr/token" mode
+  local token_file mode
   [[ "$WEB_CHECK" == 'on' || "$WEB_CHECK" == 'auto' ]] || fs_die 'device login lifecycle requires the isolated web service'
   prepare_device_login_environment
+  token_file="$DEVICE_LOGIN_HOME/.acr/token"
   compose up -d bugsink web-fullstack >/dev/null
   wait_web_ready
   bootstrap_web_user
@@ -1311,9 +1314,10 @@ run_device_login_lifecycle() {
   device_login_env "$STATE/acr-mcp" doctor --live > "$ARTIFACTS/device-login-doctor-refreshed.json"
   device_login_env "$STATE/acr-mcp" logout > "$ARTIFACTS/device-login-logout.log"
   grep -Eq 'fcacr_|svc_acr_' "$ARTIFACTS/device-login-logout.log" && fs_die 'logout output leaked a credential'
-  if device_login_env "$STATE/acr-mcp" doctor --live > "$ARTIFACTS/device-login-doctor-post-logout.log" 2>&1; then
-    fs_die 'doctor unexpectedly succeeded after logout'
-  fi
+  device_login_env "$STATE/acr-mcp" doctor --live > "$ARTIFACTS/device-login-doctor-post-logout.log" 2>&1
+  jq -e '.status == "incomplete_configuration" and .credential_set == false and .live_check.reachable == false' \
+    "$ARTIFACTS/device-login-doctor-post-logout.log" >/dev/null \
+    || fs_die 'doctor did not report the expected missing credential after logout'
   redact_device_login_log < "$ARTIFACTS/device-login-doctor-post-logout.log" > "$ARTIFACTS/device-login-doctor-post-logout.redacted.log"
   mv "$ARTIFACTS/device-login-doctor-post-logout.redacted.log" "$ARTIFACTS/device-login-doctor-post-logout.log"
   rm -f "$code_file" "$output"

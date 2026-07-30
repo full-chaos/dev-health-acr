@@ -348,6 +348,22 @@ grep -Fq 'if (replayApprovalResponse.status() !== 409)' "$root/scripts/e2e/devic
   || fail 'the live approval flow must assert replay conflict on the second approval transition'
 grep -Fq 'isDeviceResponseForAction(response, "approve")' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'device approval response waits must distinguish approval from preview responses'
+grep -Fq 'const replayBrowserErrorStart = browserErrors.length;' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the browser must scope its expected conflict console error to the approval replay window'
+grep -Fq 'error.text.includes("the server responded with a status of 409")' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the browser must bind its console-error exemption to the expected replay status'
+grep -Fq 'expectedReplayErrors.length > 1' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the browser must reject duplicate replay-conflict console errors'
+grep -Fq 'request.errorText === "net::ERR_ABORTED"' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the browser may exempt only explicitly aborted framework navigation requests'
+grep -Fq 'url.searchParams.has("_rsc")' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the browser must bind navigation cancellation exemptions to framework RSC requests'
+grep -Fq 'unexpectedFailedRequests.length !== 0' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the browser must fail on non-framework request failures'
+grep -Fq 'const deviceSurfaceFailureStart = failedRequests.length;' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the browser must separate dashboard teardown from protected device-surface failures'
+grep -Fq 'const deviceSurfaceFailedRequests = failedRequests.slice(deviceSurfaceFailureStart);' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the browser must enforce request failures on the protected device surface'
 grep -Fq 'preview,approve,preview,approve' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'the live approval flow must retain the complete approval replay request sequence'
 if grep -Fq 'if ((await replay).status() !== 409)' "$root/scripts/e2e/device-login-browser.mjs"; then
@@ -358,8 +374,18 @@ if grep -Eq 'getByLabel\(repository\)|getByRole\("checkbox"\)|\.isChecked\(\)|bo
 fi
 grep -Fq 'device-login-network.json' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'the live approval flow must retain sanitized browser network evidence'
+grep -A5 -F 'run_device_login_lifecycle() {' "$script" \
+  | grep -Fq 'token_file="$DEVICE_LOGIN_HOME/.acr/token"' \
+  || fail 'the device login lifecycle must resolve its token path after preparing the isolated home'
+grep -A20 -F 'device_login_env() {' "$script" \
+  | grep -Fq 'ACR_SIDECAR_CLIENT_VERSION=1.0.0' \
+  || fail 'the isolated device-login client must advertise a supported sidecar version'
+grep -Fq '.status == "incomplete_configuration" and .credential_set == false and .live_check.reachable == false' "$script" \
+  || fail 'the device login lifecycle must assert the structured post-logout doctor state'
 grep -Fq 'await page.waitForURL((url) => !url.pathname.startsWith("/auth/signin"));' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'the device driver must settle the sign-in redirect before opening the protected approval page'
+grep -Fq 'if (!(await postSignInNavigation).ok())' "$root/scripts/e2e/device-login-browser.mjs" \
+  || fail 'the device driver must wait for the concrete post-login navigation response'
 ! grep -Fq 'waitForLoadState(' "$root/scripts/e2e/device-login-browser.mjs" \
   || fail 'the device driver must not add a redundant load-state wait after its URL wait'
 grep -Fq '^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$' "$root/scripts/e2e/device-login-browser.mjs" \
