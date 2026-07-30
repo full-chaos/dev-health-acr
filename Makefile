@@ -4,6 +4,11 @@ RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
 GOTEST_SHUFFLE_SEED ?= 20260727
 GOTEST_TIMEOUT ?= 300s
+VERSION_PKG := github.com/full-chaos/dev-health-acr/internal/version
+LOCAL_BUILD_VERSION := $(shell awk -F'"' '/^const localBuildVersion = / { print $$2; exit }' internal/version/version.go)
+LOCAL_BUILD_COMMIT := $(shell git rev-parse HEAD)
+LOCAL_BUILD_DATE := $(shell TZ=UTC0 git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)
+LOCAL_BUILD_LDFLAGS := -buildid= -X $(VERSION_PKG).Version=$(LOCAL_BUILD_VERSION) -X $(VERSION_PKG).Commit=$(LOCAL_BUILD_COMMIT) -X $(VERSION_PKG).Date=$(LOCAL_BUILD_DATE)
 
 # Full-stack Context Fabric acceptance (CHAOS-3065). See docs/fullstack-acceptance.md.
 # The product repo is the parent of this checkout for a plain clone, but a git worktree lives
@@ -89,8 +94,8 @@ fullstack-opencode-e2e:
 		--web "$(E2E_WEB)"
 
 build:
-	go build -o .tmp/acr-api ./cmd/acr-api
-	go build -o .tmp/acr-mcp ./cmd/acr-mcp
+	go build -ldflags "$(LOCAL_BUILD_LDFLAGS)" -o .tmp/acr-api ./cmd/acr-api
+	go build -ldflags "$(LOCAL_BUILD_LDFLAGS)" -o .tmp/acr-mcp ./cmd/acr-mcp
 	go build -o .tmp/contractcheck ./cmd/contractcheck
 	go build -o .tmp/acr-migrate ./cmd/acr-migrate
 

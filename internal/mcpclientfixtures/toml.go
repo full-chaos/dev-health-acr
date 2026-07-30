@@ -31,10 +31,10 @@ type CodexServerEntry struct {
 // or table outside that subset is rejected outright, any key redefined
 // within the same table is rejected as a TOML spec violation, and the
 // parsed result is checked for the fields this fixture family requires
-// (command, args, and the env.ACR_API_URL/ACR_API_TOKEN_FILE pair) before
-// being returned. A future template change that outgrows this subset, or
-// a hand-edit that drops a required field, fails the parity test loudly
-// rather than being silently misparsed or silently accepted incomplete.
+// (command, args, and env.ACR_API_URL) before being returned. A future
+// template change that outgrows this subset, or a hand-edit that drops a
+// required field, fails the parity test loudly rather than being silently
+// misparsed or silently accepted incomplete.
 func ParseCodexTOML(data []byte) (CodexServerEntry, error) {
 	entry := CodexServerEntry{Env: map[string]string{}}
 	var section string
@@ -106,9 +106,6 @@ func (e CodexServerEntry) validateRequiredFields() error {
 	}
 	if e.Env["ACR_API_URL"] == "" {
 		return fmt.Errorf("missing required key \"ACR_API_URL\" in [mcp_servers.acr.env]")
-	}
-	if e.Env["ACR_API_TOKEN_FILE"] == "" {
-		return fmt.Errorf("missing required key \"ACR_API_TOKEN_FILE\" in [mcp_servers.acr.env]")
 	}
 	return nil
 }

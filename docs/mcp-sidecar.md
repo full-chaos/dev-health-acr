@@ -8,9 +8,15 @@ The sidecar launches via `acr-mcp serve` with configuration through environment 
 
 ```bash
 export ACR_API_URL="https://api.dev-health.example.com"
-export ACR_API_TOKEN="fcacr_..."  # or use ACR_API_TOKEN_FILE
+acr-mcp login
 acr-mcp serve
 ```
+
+On macOS/Linux, login persists the credential in the default keyring or
+restricted fallback file and later MCP processes discover it automatically.
+Keep credentials and credential-file paths out of MCP registration. Windows is
+the platform exception: secure login persistence is unavailable there, so the
+client must inherit `ACR_API_TOKEN` from its launching shell.
 
 See `docs/examples/mcp-clients/` for IDE-specific setup recipes.
 
@@ -32,8 +38,8 @@ opt-in. Client registrations must use exactly `acr-mcp serve`.
 The base URL of the hosted ACR API. Example: `https://api.dev-health.example.com`
 
 **ACR_API_TOKEN**, an OS keyring entry, or a token file
-Your API credential. The sidecar resolves it with a fixed precedence: the process environment always wins, then an explicit or default OS keyring entry, then an explicit or default token file.
-- `ACR_API_TOKEN`: Token string in the environment (agent-friendly, less secure for long-running processes).
+Your API credential. Ordinary macOS/Linux setup obtains and persists it with `acr-mcp login`; the sidecar then discovers the default source automatically, so MCP registration needs none of these settings. The underlying resolution precedence remains process environment first, then an explicit or default OS keyring entry, then an explicit or default token file.
+- `ACR_API_TOKEN`: Advanced environment override, and the required Windows platform exception because secure login persistence is unavailable there. Less secure for long-running processes; never embed it in MCP configuration.
 - OS keyring (`ACR_API_TOKEN_KEYRING_SERVICE` / `ACR_API_TOKEN_KEYRING_ACCOUNT`): see [Credential Management](#credential-management). Without overrides, the service is `dev-health-acr` and the account is the normalized `ACR_API_URL` origin.
 - `ACR_API_TOKEN_KEYRING_DISABLED`: Exact `true` bypasses OS-keyring lookup, persistence, and deletion so the token-file source is the only persistent credential source; exact `false` or an empty value permits the normal keyring behavior. Any other nonempty value fails credential resolution before the sidecar touches a keyring seam. Use `true` for hermetic test or agent sandboxes that must not touch an operator keychain.
 - `ACR_API_TOKEN_FILE`: Optional path override. Without it, the sidecar discovers `~/.acr/token`. Supported only on macOS and Linux: the file must deny group and world access (mode `0600`, i.e. `info.Mode().Perm()&0o077 == 0`); the sidecar refuses to load it otherwise. **On every other platform, including Windows, the sidecar fails closed and refuses to load a token file at all** -- use `ACR_API_TOKEN` instead; the OS keyring source above is macOS/Linux only too. Preferred for persistent processes on macOS/Linux.
@@ -58,8 +64,11 @@ Path to an additional PEM-encoded CA bundle file, layered on top of the system t
 **ACR_API_ALLOW_INSECURE_LOOPBACK**
 Boolean (`true`/`false`). Opts into plain HTTP instead of HTTPS, and only when `ACR_API_URL` resolves to a loopback host (`127.0.0.1`, `::1`, or `localhost`). Default: `false`. For local fixture/test drivers only; never set this against a non-loopback host.
 
-**ACR_SIDECAR_CLIENT_NAME**, **ACR_SIDECAR_CLIENT_VERSION**, **ACR_SIDECAR_VERSION**
-Identify this sidecar instance to the hosted API (client info payload, `X-ACR-Client-Version` header). Defaults: `dev-health-acr-mcp`, `dev`, `dev`. In a release binary built with `-ldflags` version injection (see [CHAOS-2926](https://linear.app/fullchaos/issue/CHAOS-2926)), `serve` and plain `doctor` use the compiled release identity before constructing the hosted API client, so environment values cannot spoof a released binary. An unreleased local fixture may set an explicit valid SemVer value for compatibility testing; a literal `dev` sentinel is rejected by a real hosted API.
+**ACR_SIDECAR_CLIENT_NAME**
+Identifies the sidecar client in the hosted API client-info payload. Default: `dev-health-acr-mcp`.
+
+**ACR_SIDECAR_CLIENT_VERSION**, **ACR_SIDECAR_VERSION**
+Advanced test/fixture overrides for the client-info version and `X-ACR-Client-Version` header. Ordinary setup must not set them. Signed release binaries carry their injected release identity, and `make build` stamps a non-release SemVer plus the current commit and build date, so both normal paths provide usable hosted compatibility identity without overrides. A direct `go build` remains the unversioned `dev` fixture path; it may use explicit valid SemVer overrides only when exercising a non-release compatibility fixture. `serve`, `login`, and plain `doctor` prefer compiled identity when constructing the hosted API client, so environment values cannot spoof a release binary. A literal `dev` sentinel is rejected by a real hosted API.
 
 **ACR_LOG_LEVEL**
 `acr-mcp serve`'s structured diagnostic verbosity, written to stderr as JSON. One of `debug`, `info`, `warn`/`warning`, or `error` (case-insensitive). Default: `info`. An unrecognized value is rejected at startup (fails closed, same as every other sidecar-config invariant) rather than silently falling back to the default. This level only controls how much non-secret operational detail (startup version/service identity/enabled-tools/entitlement summary) is emitted; it never gates redaction -- credentials and response bodies are never logged regardless of level.
@@ -151,7 +160,7 @@ acr-mcp serve
 
 ### Token File (ACR_API_TOKEN_FILE, macOS/Linux only)
 
-Recommended fallback for production and long-running sidecars on macOS and Linux. The default path is `~/.acr/token`; `ACR_API_TOKEN_FILE` is an explicit override. The persistence writer creates its default parent with mode `0700`, creates a same-directory no-follow temporary file at `0600`, fsyncs it, atomically renames it, and fsyncs the directory. The sidecar reads the file at startup and validates permissions. **Not supported on Windows or any other platform** -- see Platform Support below.
+Automatic fallback used by `acr-mcp login` when keyring persistence is unavailable on macOS or Linux. The default path is `~/.acr/token`; ordinary setup does not set it, and `ACR_API_TOKEN_FILE` is an advanced explicit location override. The persistence writer creates its default parent with mode `0700`, creates a same-directory no-follow temporary file at `0600`, fsyncs it, atomically renames it, and fsyncs the directory. The sidecar reads the file at startup and validates permissions. **Not supported on Windows or any other platform** -- see Platform Support below.
 
 ```bash
 # Create a restricted file
@@ -193,6 +202,25 @@ device flow. Rotation preserves the existing repository scopes; it never widens
 an exact credential. To adopt the organization-wide default from an older exact
 credential, run `acr-mcp logout`, then complete a fresh `acr-mcp login` approval.
 `logout` revokes remotely and then removes local material.
+
+Plain `login` is idempotent. When a shape-valid local credential already exists,
+it verifies that exact credential with the hosted capabilities endpoint while
+holding the lifecycle lock. A credential the server still accepts produces an
+"already logged in" success and no device flow. A typed `invalid_token` response
+is definitive proof that the saved credential is inactive: `login` removes the
+captured local material and automatically continues into a fresh device flow.
+If that cleanup requires operator action, it reports the affected location and
+does not start another flow.
+
+Every ambiguous verification failure retains the saved credential and stops.
+Transport or TLS failure, an untyped authorization response, a server 426 or
+feature error, or any other API/validation error that is not the typed
+`invalid_token` contract is not proof that the credential is dead. A
+syntactically valid capabilities response proves authentication acceptance even
+if later MCP compatibility gates would reject tools. `login` therefore never
+deletes material or starts a replacement authorization for those later
+compatibility decisions; fix the reported availability or compatibility problem
+and retry.
 
 Only one `login`, `login --refresh`, or `logout` may run for the same local user
 at a time. If another lifecycle process is still running, the CLI identifies
@@ -281,7 +309,7 @@ acr-mcp version
 # dev commit=unknown built=unknown
 ```
 
-Prints the full build identity as a single line: `<version> commit=<commit> built=<build_date>`. For an unreleased local build this is exactly `dev commit=unknown built=unknown`; a release binary prints its injected SemVer, full commit SHA, and RFC3339 build date. `--version` and `-version` are compatible aliases with identical output. `metadata` and `doctor` expose the same identity as separate `version`, `commit`, and `build_date` JSON fields.
+Prints the full build identity as a single line: `<version> commit=<commit> built=<build_date>`. A direct `go build` fixture is exactly `dev commit=unknown built=unknown`; `make build` stamps a non-release SemVer, full current commit SHA, and RFC3339 commit date, while a release binary prints its injected release SemVer, commit, and build date. `--version` and `-version` are compatible aliases with identical output. `metadata` and `doctor` expose the same identity as separate `version`, `commit`, and `build_date` JSON fields.
 
 ### Doctor
 
@@ -348,6 +376,12 @@ Status values:
 - `ok`: All checks passed. The sidecar is ready to serve.
 - `incomplete_configuration`: ACR_API_URL or credential is missing.
 - `invalid_configuration`: ACR_API_URL is set but fails validation (wrong scheme, embedded userinfo, a path/query/fragment, or another sidecar-config invariant), and/or the credential is set but malformed.
+- `credential_unavailable`: doctor could not safely determine whether a
+  credential is present because another credential lifecycle operation owns
+  the lock or a credential source failed to load. This is an operational error,
+  not a missing-credential result; the credential check uses a fixed,
+  secret-free detail rather than echoing paths, configured values, or the
+  underlying error.
 - `live_check_unreachable`: static checks passed and the hosted API handshake
   attempted by plain `doctor` or `doctor --live` failed before a valid
   capabilities response was available (for example, network, TLS, or auth).
@@ -453,7 +487,7 @@ Defined in the MCP tool contract (`contracts/mcp/tools.v1.json`) as `disabled_by
 - Tokens are never logged, printed, or included in error messages.
 - The sidecar redacts credentials in diagnostic output.
 - Do not pass tokens as command-line arguments or in config files.
-- Use environment variables or restricted token files only.
+- Run `acr-mcp login` on macOS/Linux and let the sidecar discover its persisted credential; use explicit environment or token-file sources only for the documented Windows exception or an advanced override.
 
 ### Scope Enforcement
 
@@ -471,26 +505,25 @@ Evidence URLs are references only. The sidecar does not fetch them. If you need 
 
 ### "ACR API credential is not configured"
 
-Set `ACR_API_TOKEN` or `ACR_API_TOKEN_FILE`:
+Configure the API and log in:
 
 ```bash
-export ACR_API_TOKEN="fcacr_..."
-acr-mcp serve
+export ACR_API_URL="https://api.dev-health.example.com"
+# Optional: export ACR_API_CA_BUNDLE="/path/to/ca-bundle.pem"
+acr-mcp login
+acr-mcp doctor --offline
 ```
 
-Or:
-
-```bash
-export ACR_API_TOKEN_FILE="$HOME/.acr/token"
-acr-mcp serve
-```
+The persisted default credential is discovered automatically. Only an operator
+who deliberately needs a nondefault file location should set
+`ACR_API_TOKEN_FILE`.
 
 ### "ACR API credential is configured but malformed"
 
-Tokens must be the `fcacr_` prefix followed by exactly 43 base64url characters decoding to a 32-byte secret (see [Token Format](#token-format)); a truncated, corrupted, or non-ACR credential (including a Dev Health license key) fails this check. Check the token's length and prefix without printing the whole value:
+Tokens must be the `fcacr_` prefix followed by exactly 43 base64url characters decoding to a 32-byte secret (see [Token Format](#token-format)); a truncated, corrupted, or non-ACR credential (including a Dev Health license key) fails this check. Do not print any part of the rejected value. Remove or correct the explicitly configured environment/file/keyring source, then run:
 
 ```bash
-echo "$ACR_API_TOKEN" | head -c 10
+acr-mcp login
 ```
 
 ### "ACR credential file permissions must not grant group or world access" (POSIX only)

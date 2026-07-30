@@ -37,25 +37,36 @@ server registration is the local STDIO process `acr-mcp serve`.
    See `docs/release-policy.md` for the full verification runbook.
    Windows users: see [Installing on Windows](README.md#installing-on-windows).
 
-   **Development only:** `go build` produces an unversioned `dev` binary. A
-   production ACR API rejects a `dev`-identified sidecar outright (426 Upgrade
-   Required, before any tool call is accepted) -- only use this against a
-   non-production/test fixture API, never a real hosted ACR API:
+   **Local source build:** `make build` stamps a non-release SemVer, the current
+   commit, and its build date into `.tmp/acr-mcp`, so that binary carries usable
+   identity for hosted compatibility negotiation:
 
    ```bash
    cd /path/to/acr
-   go build -o acr-mcp ./cmd/acr-mcp
+   make build
    ```
 
-   To test a locally built binary against a hosted API that enforces a
-   minimum sidecar version, set an explicit valid version override instead
-   of relying on the compiled-in `dev` identity:
-
-   ```bash
-   export ACR_SIDECAR_VERSION="1.0.0"        # must satisfy the target API's minimum_sidecar_version
-   export ACR_SIDECAR_CLIENT_VERSION="1.0.0"
-   ```
+   Direct `go build` remains an unversioned `dev` fixture build and is rejected
+   by a production ACR API. Version environment overrides are advanced
+   test/fixture controls, not ordinary installation settings.
 <!-- /FIXTURE:install-sidecar -->
+
+## Log in
+
+```bash
+export ACR_API_URL="https://api.dev-health.example.com"
+# Optional for a private CA:
+# export ACR_API_CA_BUNDLE="/path/to/ca-bundle.pem"
+acr-mcp login
+```
+
+Approve the request in the browser. Login persists the credential in the
+default keyring or restricted fallback file, and the OpenCode-launched sidecar
+discovers it automatically. The package registration remains exactly
+`acr-mcp serve`; never add a token or token-file path to package/project
+configuration. `ACR_API_TOKEN_FILE` is only an advanced explicit location
+override. Start OpenCode from an environment that supplies the same
+`ACR_API_URL` (and optional CA bundle); only the credential is persisted.
 
 Windows has a signed `.zip` asset, but Cursor's Windows/NTFS lifecycle remains
 deferred to CHAOS-3058 and is not a Task19 blocker. The current exercised

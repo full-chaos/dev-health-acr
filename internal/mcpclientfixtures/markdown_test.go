@@ -49,9 +49,11 @@ func TestExtractACRMCPInvocationsFindsRealInvocationsOnly(t *testing.T) {
 		"go build -o acr-mcp ./cmd/acr-mcp\n" +
 		"/path/to/acr-mcp serve\n" +
 		"acr-mcp doctor\n" +
-		"acr-mcp diagnostics --output ./x.tar --live\n"
+		"acr-mcp diagnostics --output ./x.tar --live\n" +
+		"acr-mcp login\n" +
+		"acr-mcp logout\n"
 	got := ExtractACRMCPInvocations(text)
-	want := []string{"serve", "doctor", "diagnostics"}
+	want := []string{"serve", "doctor", "diagnostics", "login", "logout"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v, want %#v -- a false match here would mean the regex crossed a newline or matched a build-output path", got, want)
 	}

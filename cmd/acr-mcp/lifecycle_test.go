@@ -54,6 +54,181 @@ func TestLoginPersistsCredentialAndDoctorDiscoversIt_when_deviceGrantRedeems(t *
 	}
 }
 
+func TestLoginIsIdempotentWhenPersistedCredentialIsAccepted(t *testing.T) {
+	// Given a credential that is both locally well-formed and accepted by the
+	// hosted API. A local shape check alone is not evidence of that second
+	// property; this fixture makes the command prove it over the real
+	// capabilities boundary.
+	token := validDoctorToken(111)
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := registerLifecycleFixture(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/agent-context/capabilities":
+			state.countCapabilities()
+			if r.Header.Get("Authorization") != "Bearer "+token {
+				state.recordProblem("credential validation did not use the persisted credential")
+				writeLifecycleFixtureRefusal(t, w, http.StatusUnauthorized)
+				return
+			}
+			writeLifecycleCapabilities(t, w)
+		case "/api/v1/oauth/device_authorization":
+			state.countAuthorization()
+			state.recordProblem("idempotent login started a new device authorization")
+			writeLifecycleFixtureRefusal(t, w, http.StatusConflict)
+		default:
+			state.recordProblem("unexpected idempotent-login request path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+	t.Setenv(sidecar.ClientVersionEnvironment, "1.0.0")
+
+	// When
+	code := runCLI([]string{"login", "--no-browser"})
+
+	// Then the command succeeds without mutating the credential or starting a
+	// second login flow.
+	if code != 0 {
+		t.Fatalf("login exit code = %d, want 0", code)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != token+"\n" {
+		t.Fatal("idempotent login mutated the accepted credential")
+	}
+	authorizations, polls, revocations, capabilities := state.counts()
+	if authorizations != 0 || polls != 0 || revocations != 0 || capabilities != 1 {
+		t.Fatalf("HTTP counts = auth %d poll %d revoke %d capabilities %d, want 0 0 0 1", authorizations, polls, revocations, capabilities)
+	}
+}
+
+func TestLoginReplacesPersistedCredentialInOneRunWhenHostedAPIRejectsIt(t *testing.T) {
+	// Given a locally well-formed token that the API definitively identifies as
+	// inactive, plus a device flow that can issue its replacement.
+	staleToken := validDoctorToken(112)
+	replacementToken := validDoctorToken(113)
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte(staleToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	createdAt := time.Now().UTC().Truncate(time.Second)
+	state := registerLifecycleFixture(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/agent-context/capabilities":
+			state.countCapabilities()
+			if r.Header.Get("Authorization") != "Bearer "+staleToken {
+				state.recordProblem("stale credential validation used the wrong bearer")
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			writeLifecycleError(t, w, http.StatusUnauthorized)
+		case "/api/v1/oauth/device_authorization":
+			state.countAuthorization()
+			var request contractsv1.DeviceAuthorizationRequest
+			if !decodeStrictLifecycleFixtureRequest(t, state, w, r, &request) {
+				return
+			}
+			writeLifecycleJSON(t, w, contractsv1.DeviceAuthorizationResponse{SchemaVersion: contractsv1.DeviceAuthorizationResponseSchema, DeviceCode: strings.Repeat("d", 32), UserCode: "ABCDEFGH", VerificationURI: deviceVerificationURI, ExpiresIn: 600, Interval: 5})
+		case "/api/v1/oauth/token":
+			var request contractsv1.DeviceTokenRequest
+			if !decodeStrictLifecycleFixtureRequest(t, state, w, r, &request) {
+				return
+			}
+			if _, scripted := state.nextPoll(1); !scripted {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			expiresAt := createdAt.Add(30 * 24 * time.Hour)
+			writeLifecycleJSON(t, w, contractsv1.DeviceTokenResponse{SchemaVersion: contractsv1.DeviceTokenResponseSchema, AccessToken: replacementToken, TokenType: "Bearer", ExpiresIn: 30 * 24 * 60 * 60, Credential: deviceLoginCredential(createdAt, "credential-replacement", &expiresAt)})
+		default:
+			state.recordProblem("unexpected stale-login request path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv(sidecar.APIURLEnvironment, server.URL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+	t.Setenv(sidecar.ClientVersionEnvironment, "1.0.0")
+	originalWait := lifecycleWait
+	lifecycleWait = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { lifecycleWait = originalWait })
+
+	// When
+	code := runCLI([]string{"login", "--no-browser"})
+
+	// Then the same invocation removes only the rejected material and completes
+	// a fresh device login.
+	if code != 0 {
+		t.Fatalf("login exit code = %d, want 0", code)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != replacementToken+"\n" {
+		t.Fatal("login did not replace the rejected persisted credential")
+	}
+	authorizations, polls, revocations, capabilities := state.counts()
+	if authorizations != 1 || polls != 1 || revocations != 0 || capabilities != 1 {
+		t.Fatalf("HTTP counts = auth %d poll %d revoke %d capabilities %d, want 1 1 0 1", authorizations, polls, revocations, capabilities)
+	}
+}
+
+func TestLoginRetainsPersistedCredentialWhenHostedValidityIsAmbiguous(t *testing.T) {
+	// Given a locally well-formed token and a configured API origin whose
+	// listener is unavailable. A network failure proves nothing about whether
+	// the credential is still live, so recovery must fail closed.
+	token := validDoctorToken(114)
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	apiURL := server.URL
+	server.Close()
+	t.Setenv(sidecar.APIURLEnvironment, apiURL)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+	t.Setenv(sidecar.ClientVersionEnvironment, "1.0.0")
+
+	// When
+	code, stderr := captureStderr(t, func() int { return runCLI([]string{"login", "--no-browser"}) })
+
+	// Then the command refuses to destroy an active credential on ambiguous
+	// evidence and explains that it retained the local material.
+	if code != lifecycleExitFailure {
+		t.Fatalf("login exit code = %d, want %d", code, lifecycleExitFailure)
+	}
+	if !strings.Contains(stderr, "could not be verified") || !strings.Contains(stderr, "was retained") {
+		t.Fatalf("stderr = %q, want safe ambiguous-validation guidance", stderr)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != token+"\n" {
+		t.Fatal("ambiguous validation failure mutated the persisted credential")
+	}
+}
+
 func TestLifecyclePersistUsesTheActiveSession_whenCredentialIsIssued(t *testing.T) {
 	// Given
 	token := validDoctorToken(101)

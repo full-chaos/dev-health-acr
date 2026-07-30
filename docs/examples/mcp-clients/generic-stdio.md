@@ -7,8 +7,8 @@ The ACR MCP sidecar uses STDIO transport, which is compatible with any MCP clien
 To integrate the ACR sidecar with a generic MCP client, you need to:
 
 1. Install the sidecar binary.
-2. Create a token file.
-3. Configure your MCP client to launch the sidecar with the correct environment variables.
+2. Set `ACR_API_URL` (and an optional CA bundle), then run `acr-mcp login`.
+3. Configure your MCP client to launch the sidecar with the API environment only.
 
 ## Installing the Sidecar
 
@@ -43,24 +43,18 @@ To integrate the ACR sidecar with a generic MCP client, you need to:
    See `docs/release-policy.md` for the full verification runbook.
    Windows users: see [Installing on Windows](README.md#installing-on-windows).
 
-   **Development only:** `go build` produces an unversioned `dev` binary. A
-   production ACR API rejects a `dev`-identified sidecar outright (426 Upgrade
-   Required, before any tool call is accepted) -- only use this against a
-   non-production/test fixture API, never a real hosted ACR API:
+   **Local source build:** `make build` stamps a non-release SemVer, the current
+   commit, and its build date into `.tmp/acr-mcp`, so that binary carries usable
+   identity for hosted compatibility negotiation:
 
    ```bash
    cd /path/to/acr
-   go build -o acr-mcp ./cmd/acr-mcp
+   make build
    ```
 
-   To test a locally built binary against a hosted API that enforces a
-   minimum sidecar version, set an explicit valid version override instead
-   of relying on the compiled-in `dev` identity:
-
-   ```bash
-   export ACR_SIDECAR_VERSION="1.0.0"        # must satisfy the target API's minimum_sidecar_version
-   export ACR_SIDECAR_CLIENT_VERSION="1.0.0"
-   ```
+   Direct `go build` remains an unversioned `dev` fixture build and is rejected
+   by a production ACR API. Version environment overrides are advanced
+   test/fixture controls, not ordinary installation settings.
 <!-- /FIXTURE:install-sidecar -->
 
 ### Installing on Windows
@@ -99,35 +93,36 @@ To integrate the ACR sidecar with a generic MCP client, you need to:
    There is no `chmod` equivalent on Windows: an extracted `.exe` is directly
    runnable.
 
-   **Development only:** `go build` produces an unversioned `dev` binary. A
-   production ACR API rejects a `dev`-identified sidecar outright (426 Upgrade
-   Required, before any tool call is accepted) -- only use this against a
-   non-production/test fixture API, never a real hosted ACR API:
+   **Local source build:** `make build` stamps a non-release SemVer, the current
+   commit, and its build date into `.tmp/acr-mcp`, so that binary carries usable
+   identity for hosted compatibility negotiation. Run it from a build
+   environment with GNU Make:
 
    ```powershell
    cd C:\path\to\acr
-   go build -o acr-mcp.exe .\cmd\acr-mcp
+   make build
    ```
 
-   To test a locally built binary against a hosted API that enforces a
-   minimum sidecar version, set an explicit valid version override instead
-   of relying on the compiled-in `dev` identity:
-
-   ```powershell
-   $env:ACR_SIDECAR_VERSION = "1.0.0"        # must satisfy the target API's minimum_sidecar_version
-   $env:ACR_SIDECAR_CLIENT_VERSION = "1.0.0"
-   ```
+   Direct `go build` remains an unversioned `dev` fixture build and is rejected
+   by a production ACR API. Version environment overrides are advanced
+   test/fixture controls, not ordinary installation settings.
 <!-- /FIXTURE:install-sidecar-windows -->
 
-## Creating a Token File
+## Log In
 
 ```bash
-mkdir -p ~/.acr
-echo "fcacr_your_token_here" > ~/.acr/token
-chmod 600 ~/.acr/token
+export ACR_API_URL="https://api.dev-health.example.com"
+# Optional for a private CA:
+# export ACR_API_CA_BUNDLE="/path/to/ca-bundle.pem"
+acr-mcp login
 ```
 
-`fcacr_your_token_here` is a placeholder, not a real token shape -- a real token is `fcacr_` followed by 43 base64url characters (see `docs/mcp-sidecar.md#token-format`). On Unix/Linux/macOS the sidecar rejects a group- or world-readable token file. **`ACR_API_TOKEN_FILE` is not supported on Windows**: the sidecar fails closed and refuses to load any token file there; use `ACR_API_TOKEN` instead -- the OS keyring source is also macOS/Linux only.
+Approve the request in the browser. On macOS/Linux, login persists the
+credential in the default keyring or restricted fallback file and later
+`serve` processes discover it automatically. Do not put a token or token-file
+path in MCP registration. `ACR_API_TOKEN_FILE` is only an advanced explicit
+location override. Windows cannot persist login credentials yet and must use
+the documented `ACR_API_TOKEN` platform exception from the launching shell.
 
 ## Launching the Sidecar
 
@@ -135,12 +130,11 @@ The sidecar is launched with the `serve` command:
 
 ```bash
 export ACR_API_URL="https://api.dev-health.example.com"
-export ACR_API_TOKEN_FILE="$HOME/.acr/token"
 /path/to/acr-mcp serve
 ```
 
 The sidecar will:
-1. Load the credential from the token file.
+1. Discover the credential persisted by `acr-mcp login`.
 2. Validate the API URL.
 3. Listen on STDIN for MCP requests.
 4. Write MCP responses to STDOUT.
@@ -153,7 +147,7 @@ Your MCP client should:
 1. Launch the sidecar as a subprocess with the command: `/path/to/acr-mcp serve`
 2. Set environment variables:
    - `ACR_API_URL`: Base URL of the ACR API.
-   - `ACR_API_TOKEN`, an OS keyring entry (`ACR_API_TOKEN_KEYRING_SERVICE` / `ACR_API_TOKEN_KEYRING_ACCOUNT`), or `ACR_API_TOKEN_FILE`: credential source. Precedence is environment first, then the explicit or default keyring entry, then the explicit or default token file -- not the order these names happen to be listed in. Pointing `ACR_API_TOKEN_FILE` at a new credential does not override an exported `ACR_API_TOKEN`.
+   - Credential: do not configure one in the registration. Run `acr-mcp login`; the sidecar discovers its persisted default source automatically. `ACR_API_TOKEN_FILE` is an advanced explicit location override only. Windows inherits `ACR_API_TOKEN` from the launching shell as the platform exception.
    - (Optional) `ACR_API_TIMEOUT`: Request timeout as a Go duration string (e.g. `20s`). Default: `20s`.
    - (Optional) `ACR_API_PROXY_URL`: HTTP proxy URL.
    - (Optional) `ACR_API_CA_BUNDLE`: Path to a PEM-encoded CA bundle file.
@@ -173,7 +167,6 @@ import os
 # Set up environment
 env = os.environ.copy()
 env["ACR_API_URL"] = "https://api.dev-health.example.com"
-env["ACR_API_TOKEN_FILE"] = os.path.expanduser("~/.acr/token")
 
 # Launch the sidecar
 process = subprocess.Popen(
@@ -222,7 +215,6 @@ const readline = require("readline");
 const env = {
   ...process.env,
   ACR_API_URL: "https://api.dev-health.example.com",
-  ACR_API_TOKEN_FILE: `${process.env.HOME}/.acr/token`,
 };
 
 // Launch the sidecar
@@ -264,7 +256,6 @@ Before integrating with your MCP client, verify the sidecar is working:
 
 ```bash
 export ACR_API_URL="https://api.dev-health.example.com"
-export ACR_API_TOKEN_FILE="$HOME/.acr/token"
 /path/to/acr-mcp doctor --offline
 ```
 
@@ -274,14 +265,14 @@ This should output a JSON report with status `ok` if everything is configured co
 
 ### Sidecar Exits Immediately
 
-- Check that `ACR_API_URL` and `ACR_API_TOKEN_FILE` are set.
+- Check that `ACR_API_URL` is set and run `acr-mcp login`.
 - Run `acr-mcp doctor` to see what's missing.
 
 ### "ACR API credential is not configured"
 
-- Verify the token file exists and is readable.
-- Check that `ACR_API_TOKEN_FILE` points to the correct path.
-- Ensure the token file is not empty.
+- Set `ACR_API_URL` (and `ACR_API_CA_BUNDLE` when required), then run `acr-mcp login`.
+- Run `acr-mcp doctor --offline` to distinguish a missing credential from an unavailable credential source.
+- If using the advanced `ACR_API_TOKEN_FILE` override, verify that explicit path and its permissions.
 
 ### "ACR_API_URL is not configured"
 
@@ -295,7 +286,7 @@ This should output a JSON report with status `ok` if everything is configured co
 ### Permission Denied
 
 - Ensure the sidecar binary is executable: `chmod +x /path/to/acr-mcp`
-- Ensure the token file has correct permissions: `chmod 600 ~/.acr/token`
+- For an advanced token-file override, ensure the file has mode `0600`.
 
 ## MCP Protocol Reference
 

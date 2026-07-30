@@ -12,6 +12,12 @@ var (
 	Date    = "unknown"
 )
 
+// localBuildVersion is the semver stamped into the supported `make build`
+// output. The leading v keeps it valid for compatibility checks while
+// remaining non-canonical, so the binary keeps the non-release override
+// path available.
+const localBuildVersion = "v0.1.0"
+
 type Info struct {
 	Version string `json:"version"`
 	Commit  string `json:"commit"`

@@ -18,7 +18,6 @@ Create `.mcp.json` in your project root:
       "args": ["serve"],
       "env": {
         "ACR_API_URL": "https://api.dev-health.example.com",
-        "ACR_API_TOKEN_FILE": "${HOME}/.acr/token",
         "ACR_API_TIMEOUT": "30s"
       }
     }
@@ -27,7 +26,7 @@ Create `.mcp.json` in your project root:
 <!-- /FIXTURE:claude-code-project-json -->
 ```
 
-`.mcp.json` is meant to be committed so the whole team gets the same server definitions; keep the actual token out of it (use `ACR_API_TOKEN_FILE`, not `ACR_API_TOKEN`, for anything checked into git-adjacent config).
+`.mcp.json` is meant to be committed so the whole team gets the same server definitions. Keep every credential setting out of it: run `acr-mcp login` once and the sidecar discovers the persisted credential automatically.
 
 ### User scope (all projects): `~/.claude.json`
 
@@ -42,8 +41,7 @@ For a server available in every project, add the same `mcpServers` entry under t
       "command": "acr-mcp",
       "args": ["serve"],
       "env": {
-        "ACR_API_URL": "https://api.dev-health.example.com",
-        "ACR_API_TOKEN_FILE": "${HOME}/.acr/token"
+        "ACR_API_URL": "https://api.dev-health.example.com"
       }
     }
   }
@@ -86,25 +84,31 @@ On Windows, `~/.claude.json` resolves to `%USERPROFILE%\.claude.json`.
    See `docs/release-policy.md` for the full verification runbook.
    Windows users: see [Installing on Windows](README.md#installing-on-windows).
 
-   **Development only:** `go build` produces an unversioned `dev` binary. A
-   production ACR API rejects a `dev`-identified sidecar outright (426 Upgrade
-   Required, before any tool call is accepted) -- only use this against a
-   non-production/test fixture API, never a real hosted ACR API:
+   **Local source build:** `make build` stamps a non-release SemVer, the current
+   commit, and its build date into `.tmp/acr-mcp`, so that binary carries usable
+   identity for hosted compatibility negotiation:
 
    ```bash
    cd /path/to/acr
-   go build -o acr-mcp ./cmd/acr-mcp
+   make build
    ```
 
-   To test a locally built binary against a hosted API that enforces a
-   minimum sidecar version, set an explicit valid version override instead
-   of relying on the compiled-in `dev` identity:
-
-   ```bash
-   export ACR_SIDECAR_VERSION="1.0.0"        # must satisfy the target API's minimum_sidecar_version
-   export ACR_SIDECAR_CLIENT_VERSION="1.0.0"
-   ```
+   Direct `go build` remains an unversioned `dev` fixture build and is rejected
+   by a production ACR API. Version environment overrides are advanced
+   test/fixture controls, not ordinary installation settings.
 <!-- /FIXTURE:install-sidecar -->
+
+2. **Configure the API and log in (macOS/Linux):**
+   ```bash
+   export ACR_API_URL="https://api.dev-health.example.com"
+   # Optional for a private CA:
+   # export ACR_API_CA_BUNDLE="/path/to/ca-bundle.pem"
+   acr-mcp login
+   ```
+   Approve the request in the browser. Login persists the credential in the
+   default keyring or restricted fallback file; Claude Code discovers it
+   automatically, so the MCP registration must not contain a token or token-file
+   path. `ACR_API_TOKEN_FILE` is only an advanced location override.
 
 ### Installing on Windows
 
@@ -142,24 +146,19 @@ On Windows, `~/.claude.json` resolves to `%USERPROFILE%\.claude.json`.
    There is no `chmod` equivalent on Windows: an extracted `.exe` is directly
    runnable.
 
-   **Development only:** `go build` produces an unversioned `dev` binary. A
-   production ACR API rejects a `dev`-identified sidecar outright (426 Upgrade
-   Required, before any tool call is accepted) -- only use this against a
-   non-production/test fixture API, never a real hosted ACR API:
+   **Local source build:** `make build` stamps a non-release SemVer, the current
+   commit, and its build date into `.tmp/acr-mcp`, so that binary carries usable
+   identity for hosted compatibility negotiation. Run it from a build
+   environment with GNU Make:
 
    ```powershell
    cd C:\path\to\acr
-   go build -o acr-mcp.exe .\cmd\acr-mcp
+   make build
    ```
 
-   To test a locally built binary against a hosted API that enforces a
-   minimum sidecar version, set an explicit valid version override instead
-   of relying on the compiled-in `dev` identity:
-
-   ```powershell
-   $env:ACR_SIDECAR_VERSION = "1.0.0"        # must satisfy the target API's minimum_sidecar_version
-   $env:ACR_SIDECAR_CLIENT_VERSION = "1.0.0"
-   ```
+   Direct `go build` remains an unversioned `dev` fixture build and is rejected
+   by a production ACR API. Version environment overrides are advanced
+   test/fixture controls, not ordinary installation settings.
 <!-- /FIXTURE:install-sidecar-windows -->
 
 2. **Set the API token in the Windows environment:**
@@ -167,6 +166,8 @@ On Windows, `~/.claude.json` resolves to `%USERPROFILE%\.claude.json`.
    $env:ACR_API_TOKEN = "fcacr_your_token_here"
    ```
    `fcacr_your_token_here` is a placeholder, not a real token shape -- see [Token Format](../../mcp-sidecar.md#token-format) in the main sidecar doc for the exact `fcacr_` + 43-character shape. Replace it with your actual credential. Do not set `ACR_API_TOKEN_FILE` on Windows.
+   This is a Windows-only platform exception: secure login persistence is not
+   supported there yet. macOS/Linux users should run `acr-mcp login` instead.
 
 3. **Add the server**, either by hand-editing `.mcp.json` / `~/.claude.json` as shown above, or with the CLI:
    ```powershell
@@ -204,7 +205,7 @@ claude mcp add-json acr '{"type":"stdio","command":"acr-mcp","args":["serve"],"e
 The sidecar reads these from the `env` block:
 
 - `ACR_API_URL` (required): Base URL of the ACR API.
-- `ACR_API_TOKEN_FILE` (required, or `ACR_API_TOKEN`/`ACR_API_TOKEN_KEYRING_SERVICE`): Path to the token file. Use `${HOME}` for the home directory -- Claude Code expands `${VAR}` / `${VAR:-default}` inside `command`, `args`, `env`, `url`, and `headers`.
+- Credential: run `acr-mcp login`; the persisted default keyring/file location is discovered automatically and should not appear in the `env` block. `ACR_API_TOKEN_FILE` is an advanced explicit location override only. On Windows, where login persistence is unavailable, inherit `ACR_API_TOKEN` from the launching shell as the documented platform exception.
 - `ACR_API_TIMEOUT` (optional): Request timeout as a Go duration string (e.g. `20s`). Default: `20s`.
 - `ACR_API_PROXY_URL` (optional): HTTP proxy URL.
 - `ACR_API_CA_BUNDLE` (optional): Path to a PEM-encoded CA bundle file.
@@ -212,9 +213,9 @@ The sidecar reads these from the `env` block:
 See [Proxy and Custom CA Configuration](proxy-and-custom-ca.md) for validation rules and bounds for both settings.
 - `ACR_ENABLE_WRITEBACK` (optional): Boolean (`true`/`false`). When `true`, enables the `record_episode` tool if all four gates pass: (1) this flag is `true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Default: `false`. <!-- FIXTURE:doctor-gate-note -->Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; `doctor` diagnoses the hosted gates automatically once local configuration is valid (network-free otherwise), `doctor --offline` forces a network-free check regardless of configuration validity, and `doctor --live` is an explicit, equivalent alias for that automatic behavior.<!-- /FIXTURE:doctor-gate-note -->
 
-## Token File Permissions
+## Advanced Token-File Override
 
-- Unix/Linux/macOS: the sidecar rejects a token file with group- or world-readable permissions; restrict it yourself first:
+- Ordinary macOS/Linux setup does not need this variable. If an operator explicitly overrides the login persistence location with `ACR_API_TOKEN_FILE`, the sidecar rejects a file with group- or world-readable permissions; restrict it first:
   ```bash
   chmod 600 ~/.acr/token
   ```
@@ -230,9 +231,9 @@ See [Proxy and Custom CA Configuration](proxy-and-custom-ca.md) for validation r
 
 ### "ACR API credential is not configured"
 
-- Verify the token file exists and is readable.
-- Check that `ACR_API_TOKEN_FILE` points to the correct path.
-- Ensure the token file is not empty.
+- Set `ACR_API_URL` (and `ACR_API_CA_BUNDLE` when required), then run `acr-mcp login`.
+- Run `acr-mcp doctor --offline` to distinguish a missing credential from an unavailable credential source.
+- If using the advanced `ACR_API_TOKEN_FILE` override, verify that explicit path and its permissions.
 
 ### "ACR_API_URL is not configured"
 
@@ -246,7 +247,7 @@ See [Proxy and Custom CA Configuration](proxy-and-custom-ca.md) for validation r
 
 ## Example: Full Configuration (binary on PATH)
 
-This example uses `"command": "acr-mcp"` and relies on the binary being on `PATH` (for example via `go install ./cmd/acr-mcp` or a symlink into a directory already on `PATH`). If it is not on `PATH`, use the absolute path to your built binary instead.
+This example uses `"command": "acr-mcp"` and relies on a signed release binary or the identity-stamped `.tmp/acr-mcp` from `make build` being on `PATH`. If it is not on `PATH`, use that binary's absolute path instead; do not substitute an unversioned `go install` build for hosted use.
 
 ```json
 <!-- FIXTURE:claude-code-fullexample-json -->
@@ -258,7 +259,6 @@ This example uses `"command": "acr-mcp"` and relies on the binary being on `PATH
       "args": ["serve"],
       "env": {
         "ACR_API_URL": "https://api.dev-health.example.com",
-        "ACR_API_TOKEN_FILE": "${HOME}/.acr/token",
         "ACR_API_TIMEOUT": "60s"
       }
     }

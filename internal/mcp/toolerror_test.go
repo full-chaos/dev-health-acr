@@ -28,8 +28,8 @@ func TestClassifyWorkspaceErrorsAreValidation(t *testing.T) {
 
 func TestClassifyCredentialShapeIsAuth(t *testing.T) {
 	ce := classify(sidecar.ErrCredentialShapeInvalid)
-	if ce.category != "auth" {
-		t.Fatalf("expected auth, got %q", ce.category)
+	if ce.category != "auth" || ce.message != "the configured ACR API credential is malformed; correct or remove that credential, then run acr-mcp login" {
+		t.Fatalf("unexpected malformed-credential classification: %#v", ce)
 	}
 }
 
@@ -41,8 +41,8 @@ func TestClassifyCredentialShapeIsAuth(t *testing.T) {
 // generic internal fallback.
 func TestClassifyCredentialMissingIsAuth(t *testing.T) {
 	ce := classify(sidecar.ErrCredentialMissing)
-	if ce.category != "auth" {
-		t.Fatalf("expected auth, got %q", ce.category)
+	if ce.category != "auth" || ce.message != "the ACR API credential is missing; run acr-mcp login" {
+		t.Fatalf("unexpected missing-credential classification: %#v", ce)
 	}
 }
 

@@ -46,6 +46,7 @@ func readmeText(input Input) string {
 	b.WriteString("- `ok`: static local configuration is present and valid.\n")
 	b.WriteString("- `incomplete_configuration`: the API URL or credential is not configured at all.\n")
 	b.WriteString("- `invalid_configuration`: something is configured but malformed (see the `checks` list in the static report for which one).\n")
+	b.WriteString("- `credential_unavailable`: the credential source could not be checked safely, for example because another lifecycle operation holds the lock or a secure store is unavailable.\n")
 	b.WriteString("- `live_check_unreachable`: the static configuration is valid, but the optional live hosted-API check in this bundle could not reach or was rejected by the hosted API.\n")
 
 	return b.String()

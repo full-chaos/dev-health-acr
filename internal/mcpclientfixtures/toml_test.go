@@ -105,14 +105,6 @@ enabled = true
 [mcp_servers.acr.env]
 ACR_API_TOKEN_FILE = "/home/you/.acr/token"
 `},
-		{"ACR_API_TOKEN_FILE", `[mcp_servers.acr]
-command = "/path/to/acr-mcp"
-args = ["serve"]
-enabled = true
-
-[mcp_servers.acr.env]
-ACR_API_URL = "https://api.dev-health.example.com"
-`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,6 +140,19 @@ ACR_API_TOKEN_FILE = "C:\\Users\\you\\.acr\\token"
 	}
 	if want := "quote:\" tab:\t newline:\n bell:\u0007 smiley:\U0001F600"; entry.Env["ACR_API_TIMEOUT"] != want {
 		t.Fatalf("expected decoded escape string %q, got %q", want, entry.Env["ACR_API_TIMEOUT"])
+	}
+}
+
+func TestParseCodexTOMLAcceptsDefaultCredentialDiscovery(t *testing.T) {
+	entry, err := ParseCodexTOML([]byte(RenderCodexTOMLFullExample()))
+	if err != nil {
+		t.Fatalf("ParseCodexTOML(RenderCodexTOMLFullExample()): %v", err)
+	}
+	if entry.Env["ACR_API_URL"] != ExampleAPIURL {
+		t.Fatalf("expected ACR_API_URL %q, got %q", ExampleAPIURL, entry.Env["ACR_API_URL"])
+	}
+	if _, ok := entry.Env["ACR_API_TOKEN_FILE"]; ok {
+		t.Fatalf("expected no ACR_API_TOKEN_FILE in the full-example TOML variant, got %q", entry.Env["ACR_API_TOKEN_FILE"])
 	}
 }
 

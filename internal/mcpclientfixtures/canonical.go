@@ -24,23 +24,20 @@ const (
 )
 
 // RenderClaudeCodeJSON renders the Claude Code project-scoped `.mcp.json`
-// STDIO server entry template: Claude Code's `${VAR}` expansion syntax for
-// the token file path.
+// STDIO server entry template.
 func RenderClaudeCodeJSON() string {
-	return renderStdioJSON("${HOME}/.acr/token")
+	return renderStdioJSON()
 }
 
 // RenderCursorJSON renders the Cursor `.cursor/mcp.json` STDIO server
-// entry template: Cursor's `${env:VAR}` expansion syntax for the token
-// file path (Cursor does not support the bare `${VAR}` shorthand).
+// entry template.
 func RenderCursorJSON() string {
-	return renderStdioJSON("${env:HOME}/.acr/token")
+	return renderStdioJSON()
 }
 
 // renderStdioJSON is the shared template for both JSON-shaped client
-// configs above: they differ only in how the token file path expands the
-// home directory, everything else is identical.
-func renderStdioJSON(tokenFileValue string) string {
+// configs above.
+func renderStdioJSON() string {
 	return fmt.Sprintf(`{
   "mcpServers": {
     "acr": {
@@ -49,13 +46,12 @@ func renderStdioJSON(tokenFileValue string) string {
       "args": [%q],
       "env": {
         "ACR_API_URL": %q,
-        "ACR_API_TOKEN_FILE": %q,
         "ACR_API_TIMEOUT": %q
       }
     }
   }
 }
-`, ExampleCommand, ServeArg, ExampleAPIURL, tokenFileValue, ExampleTimeout)
+`, ExampleCommand, ServeArg, ExampleAPIURL, ExampleTimeout)
 }
 
 // codexHeaderComment is the fixed explanatory header codex-config.toml
@@ -70,9 +66,7 @@ const codexHeaderComment = `# Example ACR MCP server entry for Codex CLI.
 `
 
 // RenderCodexTOML renders the Codex CLI `config.toml` STDIO server entry
-// template: TOML has no environment-variable expansion, so the token file
-// path is written out in full rather than using a home-directory
-// placeholder.
+// template.
 func RenderCodexTOML() string {
 	return fmt.Sprintf(`%s
 [mcp_servers.acr]
@@ -82,7 +76,6 @@ enabled = true
 
 [mcp_servers.acr.env]
 ACR_API_URL = %q
-ACR_API_TOKEN_FILE = %q
 ACR_API_TIMEOUT = %q
-`, codexHeaderComment, ExampleCommand, ServeArg, ExampleAPIURL, "/home/you/.acr/token", ExampleTimeout)
+`, codexHeaderComment, ExampleCommand, ServeArg, ExampleAPIURL, ExampleTimeout)
 }

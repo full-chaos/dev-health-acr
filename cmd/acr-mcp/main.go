@@ -131,32 +131,45 @@ func runDoctor() doctorReport {
 	}
 
 	credential, credentialErr := sidecar.LoadCredential()
-	// A credential that failed LoadCredential's own shape check (rather
-	// than simply being unconfigured) is still "set" from the operator's
-	// point of view -- they configured something, it is just malformed --
-	// so doctor keeps reporting it as configured-but-invalid instead of
-	// collapsing it into "not configured". credential is the zero value in
-	// this case, so nothing about the rejected value is ever echoed.
+	// A credential that failed LoadCredential's own shape check is still
+	// "set" from the operator's point of view -- they configured something,
+	// it is just malformed. Lifecycle contention and every other operational
+	// load failure are neither missing nor malformed: doctor cannot safely
+	// determine whether a credential is present while the load boundary is
+	// unavailable. Keep those states distinct, and render only fixed detail
+	// strings so paths, configured values, and underlying error text can
+	// never reach the report.
+	credentialMissing := errors.Is(credentialErr, sidecar.ErrCredentialMissing)
 	credentialShapeInvalid := errors.Is(credentialErr, sidecar.ErrCredentialShapeInvalid)
+	credentialLifecycleBusy := errors.Is(credentialErr, sidecar.ErrCredentialLifecycleBusy)
+	credentialUnavailable := credentialErr != nil && !credentialMissing && !credentialShapeInvalid
 	credentialSet := credentialErr == nil || credentialShapeInvalid
 	credentialShapeValid := credentialErr == nil && auth.IsTokenShapeValid(credential.Token)
-	if !credentialSet {
+	switch {
+	case credentialMissing:
 		checks = append(checks, diagnostic{Name: "credential", Status: "warning", Detail: "ACR API credential is not configured"})
-	} else if !credentialShapeValid {
+	case credentialShapeInvalid:
 		checks = append(checks, diagnostic{Name: "credential", Status: "error", Detail: "ACR API credential is configured but malformed"})
-	} else {
+	case credentialLifecycleBusy:
+		checks = append(checks, diagnostic{Name: "credential", Status: "error", Detail: "ACR API credential could not be checked because another credential lifecycle operation is active"})
+	case credentialUnavailable:
+		checks = append(checks, diagnostic{Name: "credential", Status: "error", Detail: "ACR API credential could not be checked safely"})
+	default:
 		checks = append(checks, diagnostic{Name: "credential", Status: "ok", Detail: "ACR API credential is configured and redacted via " + credential.Source})
 	}
 
 	status := "ok"
-	if !apiURLSet || !credentialSet {
+	if !apiURLSet || credentialMissing {
 		status = "incomplete_configuration"
 	}
 	if apiURLSet && !apiURLValid {
 		status = "invalid_configuration"
 	}
-	if credentialSet && !credentialShapeValid {
+	if credentialShapeInvalid {
 		status = "invalid_configuration"
+	}
+	if credentialUnavailable {
+		status = "credential_unavailable"
 	}
 	localIndex := probeLocalIndex()
 	switch {

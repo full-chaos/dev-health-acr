@@ -5,7 +5,8 @@ import "strings"
 // This file holds the canonical "install the sidecar binary" setup step
 // every guide under docs/examples/mcp-clients/ embeds verbatim, one generator
 // per platform. The normal path is a signed GitHub Release download; local
-// go build output is explicitly development-only against production ACR.
+// source builds use the supported Make target so they carry a usable local
+// identity; direct go build output remains an unversioned fixture build.
 //
 // Both snippets verify the keyless Sigstore bundle over the complete
 // SHA256SUMS manifest against the exact GitHub Actions release-workflow
@@ -47,24 +48,18 @@ const installSidecarSnippetRaw = `1. **Install the sidecar binary.** The normal 
    See @BT@docs/release-policy.md@BT@ for the full verification runbook.
    Windows users: see [Installing on Windows](README.md#installing-on-windows).
 
-   **Development only:** @BT@go build@BT@ produces an unversioned @BT@dev@BT@ binary. A
-   production ACR API rejects a @BT@dev@BT@-identified sidecar outright (426 Upgrade
-   Required, before any tool call is accepted) -- only use this against a
-   non-production/test fixture API, never a real hosted ACR API:
+   **Local source build:** @BT@make build@BT@ stamps a non-release SemVer, the current
+   commit, and its build date into @BT@.tmp/acr-mcp@BT@, so that binary carries usable
+   identity for hosted compatibility negotiation:
 
    @BT@@BT@@BT@bash
    cd /path/to/acr
-   go build -o acr-mcp ./cmd/acr-mcp
+   make build
    @BT@@BT@@BT@
 
-   To test a locally built binary against a hosted API that enforces a
-   minimum sidecar version, set an explicit valid version override instead
-   of relying on the compiled-in @BT@dev@BT@ identity:
-
-   @BT@@BT@@BT@bash
-   export ACR_SIDECAR_VERSION="1.0.0"        # must satisfy the target API's minimum_sidecar_version
-   export ACR_SIDECAR_CLIENT_VERSION="1.0.0"
-   @BT@@BT@@BT@
+   Direct @BT@go build@BT@ remains an unversioned @BT@dev@BT@ fixture build and is rejected
+   by a production ACR API. Version environment overrides are advanced
+   test/fixture controls, not ordinary installation settings.
 `
 
 // InstallSidecarSnippet is the single canonical macOS/Linux source every
@@ -105,24 +100,19 @@ const installSidecarWindowsSnippetRaw = `1. **Install the sidecar binary (Window
    There is no @BT@chmod@BT@ equivalent on Windows: an extracted @BT@.exe@BT@ is directly
    runnable.
 
-   **Development only:** @BT@go build@BT@ produces an unversioned @BT@dev@BT@ binary. A
-   production ACR API rejects a @BT@dev@BT@-identified sidecar outright (426 Upgrade
-   Required, before any tool call is accepted) -- only use this against a
-   non-production/test fixture API, never a real hosted ACR API:
+   **Local source build:** @BT@make build@BT@ stamps a non-release SemVer, the current
+   commit, and its build date into @BT@.tmp/acr-mcp@BT@, so that binary carries usable
+   identity for hosted compatibility negotiation. Run it from a build
+   environment with GNU Make:
 
    @BT@@BT@@BT@powershell
    cd C:\path\to\acr
-   go build -o acr-mcp.exe .\cmd\acr-mcp
+   make build
    @BT@@BT@@BT@
 
-   To test a locally built binary against a hosted API that enforces a
-   minimum sidecar version, set an explicit valid version override instead
-   of relying on the compiled-in @BT@dev@BT@ identity:
-
-   @BT@@BT@@BT@powershell
-   $env:ACR_SIDECAR_VERSION = "1.0.0"        # must satisfy the target API's minimum_sidecar_version
-   $env:ACR_SIDECAR_CLIENT_VERSION = "1.0.0"
-   @BT@@BT@@BT@
+   Direct @BT@go build@BT@ remains an unversioned @BT@dev@BT@ fixture build and is rejected
+   by a production ACR API. Version environment overrides are advanced
+   test/fixture controls, not ordinary installation settings.
 `
 
 // InstallSidecarWindowsSnippet is the single canonical Windows source every
