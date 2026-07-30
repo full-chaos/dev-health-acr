@@ -92,9 +92,10 @@ func TestWebAssertionVerifier_authenticatesCredentialIssueOnlyForBoundApprovalRe
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := []byte(`{"device_code":"pending-device-code","repository_scopes":["example-org/widget-service"]}`)
+	body := []byte(`{"schema_version":"device_approval_request.v1","user_code":"ABCDEFGH","repository_scopes":["*"]}`)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/oauth/device_approval", bytes.NewReader(body))
 	claims := webAssertionClaims(now, request, body)
+	claims["repository_scopes"] = []string{"*"}
 	claims["permissions"] = []string{"credential:issue"}
 	token := signTestWebAssertion(t, private, "current", claims)
 	request.Header.Set(WebAssertionHeader, token)
@@ -108,6 +109,9 @@ func TestWebAssertionVerifier_authenticatesCredentialIssueOnlyForBoundApprovalRe
 	}
 	if got, want := principal.Permissions, []string{"credential:issue"}; !slices.Equal(got, want) {
 		t.Fatalf("permissions = %v, want %v", got, want)
+	}
+	if got, want := principal.RepositoryScopes, []string{"*"}; !slices.Equal(got, want) {
+		t.Fatalf("repository scopes = %v, want %v", got, want)
 	}
 
 	for _, changedRequest := range []*http.Request{
@@ -200,7 +204,11 @@ func TestWebAssertionVerifier_rejectsInvalidClaims(t *testing.T) {
 		{name: "method", mutate: func(claims, _ map[string]any) { claims["method"] = http.MethodGet }},
 		{name: "path", mutate: func(claims, _ map[string]any) { claims["path"] = "/other" }},
 		{name: "body", mutate: func(claims, _ map[string]any) { claims["body_sha256"] = "00" }},
-		{name: "wildcard repository", mutate: func(claims, _ map[string]any) { claims["repository_scopes"] = []string{"example-org/*"} }},
+		{name: "global wildcard read", mutate: func(claims, _ map[string]any) { claims["repository_scopes"] = []string{"*"} }},
+		{name: "owner wildcard repository", mutate: func(claims, _ map[string]any) { claims["repository_scopes"] = []string{"example-org/*"} }},
+		{name: "mixed global wildcard repository", mutate: func(claims, _ map[string]any) {
+			claims["repository_scopes"] = []string{"*", "example-org/widget-service"}
+		}},
 		{name: "write permission", mutate: func(claims, _ map[string]any) { claims["permissions"] = []string{ScopeEpisodeWrite} }},
 	}
 	for _, test := range tests {

@@ -34,7 +34,7 @@ func TestDeviceAndSelfLifecycle_logsAndErrorsRedactSecrets(t *testing.T) {
 	// Given
 	fixture := newDeviceFlowFixture(t, deviceFlowRandom(41))
 	started := fixture.start(t)
-	principal := deviceApprovalPrincipal("full-chaos/dev-health-acr")
+	principal := deviceApprovalPrincipal("*")
 	_, err := fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
 		Principal: principal, UserCode: started.UserCode, RepositoryScopes: principal.RepositoryScopes,
 	})

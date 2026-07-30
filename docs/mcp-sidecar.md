@@ -179,9 +179,20 @@ Usage: acr-mcp logout
 ```
 
 `login` runs the device authorization flow, prints the verification address and
-user code, and persists the issued credential through the sources above.
+user code, and persists the issued credential through the sources above. The
+default web approval grants all current and future repositories in the
+authenticated organization (`repository_scopes: ["*"]`). `--repo` supplies a
+display/request hint; it does not silently narrow the grant. The current web UI
+does not offer a limited-grant selector and always approves `["*"]`. Exact
+repository scopes remain protocol and service support for explicit clients and
+a future limited-grant UX. Local Git discovery, the current working directory,
+and analytics repository inventory do not authorize or deauthorize a
+repository.
 `login --refresh` rotates the credential already in use and never starts a
-device flow. `logout` revokes remotely and then removes local material.
+device flow. Rotation preserves the existing repository scopes; it never widens
+an exact credential. To adopt the organization-wide default from an older exact
+credential, run `acr-mcp logout`, then complete a fresh `acr-mcp login` approval.
+`logout` revokes remotely and then removes local material.
 
 Only one `login`, `login --refresh`, or `logout` may run for the same local user
 at a time. If another lifecycle process is still running, the CLI identifies
@@ -446,7 +457,7 @@ Defined in the MCP tool contract (`contracts/mcp/tools.v1.json`) as `disabled_by
 
 ### Scope Enforcement
 
-The API enforces organization and repository scope independently of client-supplied fields. The sidecar does not validate scope; the API does.
+The API enforces organization and repository scope independently of client-supplied fields. The sidecar does not validate scope; the API does. The singleton `*` means every repository visible within the credential's authenticated organization, never every organization.
 
 ### Evidence URLs
 

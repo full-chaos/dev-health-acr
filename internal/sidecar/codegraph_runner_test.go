@@ -60,6 +60,21 @@ func TestCodeGraphRunner_KillsOversizedOutput(t *testing.T) {
 	require.ErrorIs(t, err, ErrCodeGraphOutputTooLarge)
 }
 
+func TestCodeGraphRunner_IgnoresWaitDelayAfterSuccessfulJSONDecode(t *testing.T) {
+	// Given: the command emits valid JSON, then leaves a descendant running in
+	// the same process group with stderr still attached so os/exec must wait
+	// out cleanup and may return ErrWaitDelay even though the payload itself is
+	// complete.
+	runner := newTestCodeGraphRunner(t, `printf '{}'; sh -c 'exec sleep 30' >/dev/null &`)
+
+	// When
+	result, err := runner.Status(context.Background(), directGuardFixture(t))
+
+	// Then
+	require.NoError(t, err)
+	require.JSONEq(t, `{}`, string(result))
+}
+
 func TestCodeGraphRunner_RejectsMalformedJSON(t *testing.T) {
 	// Given
 	runner := newTestCodeGraphRunner(t, `printf '{not-json}'`)

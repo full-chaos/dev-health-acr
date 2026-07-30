@@ -97,7 +97,7 @@ func TestDeviceFlow_Preview_returnsHintsWithoutChangingPendingStateOrGrant(t *te
 	require.Empty(t, record.AuthorizedRepositoryScopes)
 }
 
-func TestDeviceFlow_Preview_andApprove_narrowToStoredHints(t *testing.T) {
+func TestDeviceFlow_PreviewFiltersHintsWithoutUsingThemAsAuthorization(t *testing.T) {
 	fixture := newDeviceFlowFixture(t, deviceFlowRandom(6))
 	started, err := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{
 		OrganizationIDHint: deviceFlowTestOrgID,
@@ -109,17 +109,12 @@ func TestDeviceFlow_Preview_andApprove_narrowToStoredHints(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"full-chaos/dev-health-acr"}, preview.RepositoryHints)
 
-	_, err = fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
+	approved, err := fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
 		Principal: deviceApprovalPrincipal("full-chaos/dev-health-acr", "full-chaos/other"),
 		UserCode:  started.UserCode, RepositoryScopes: []string{"full-chaos/other"},
 	})
-	require.ErrorIs(t, err, ErrInvalidDeviceFlow)
-	approved, err := fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
-		Principal: deviceApprovalPrincipal("full-chaos/dev-health-acr", "full-chaos/other"),
-		UserCode:  started.UserCode, RepositoryScopes: []string{"full-chaos/dev-health-acr"},
-	})
 	require.NoError(t, err)
-	require.Equal(t, []string{"full-chaos/dev-health-acr"}, approved.AuthorizedRepositoryScopes)
+	require.Equal(t, []string{"full-chaos/other"}, approved.AuthorizedRepositoryScopes)
 }
 
 func TestDeviceFlow_Preview_failsClosedWhenHintOrganizationOrRepositoryIntersectionIsEmpty(t *testing.T) {
@@ -145,8 +140,8 @@ func TestDeviceFlow_Approve_failsClosedForMismatchedOrganizationHint(t *testing.
 	})
 	require.NoError(t, err)
 	_, err = fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
-		Principal: deviceApprovalPrincipal("full-chaos/dev-health-acr"),
-		UserCode:  started.UserCode, RepositoryScopes: []string{"full-chaos/dev-health-acr"},
+		Principal: deviceApprovalPrincipal("*"),
+		UserCode:  started.UserCode, RepositoryScopes: []string{"*"},
 	})
 	require.ErrorIs(t, err, ErrInvalidDeviceFlow)
 	record, err := fixture.store.GetByDeviceCodeHash(context.Background(), storage.HashDeviceCode(started.DeviceCode))
@@ -210,11 +205,14 @@ func TestDeviceFlow_UserCodeAlphabet_rejectsConfusableGlyphs(t *testing.T) {
 	}
 }
 
-func TestDeviceFlow_Approve_persistsOnlyExactAssertionBoundReadGrant(t *testing.T) {
+func TestDeviceFlow_Approve_persistsOrganizationWideGrantEvenWithRepositoryHints(t *testing.T) {
 	// Given
 	fixture := newDeviceFlowFixture(t, deviceFlowRandom(4))
-	started := fixture.start(t)
-	principal := deviceApprovalPrincipal("full-chaos/dev-health-acr")
+	started, err := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{
+		RepositoryHints: []string{"full-chaos/dev-health-acr"},
+	})
+	require.NoError(t, err)
+	principal := deviceApprovalPrincipal("*")
 
 	// When
 	approved, err := fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
@@ -229,6 +227,7 @@ func TestDeviceFlow_Approve_persistsOnlyExactAssertionBoundReadGrant(t *testing.
 	require.Equal(t, []string{ScopeContextRead, ScopeEvidenceRead}, approved.AuthorizedScopes)
 	require.Equal(t, storage.AuthenticationMethodWebAssertion, approved.ApprovingAuthenticationMethod)
 	require.Equal(t, storage.CredentialIssuanceProvenanceDeviceAuthorization, approved.IssuanceProvenance)
+	require.Equal(t, []string{"*"}, approved.AuthorizedRepositoryScopes)
 	_, duplicateErr := fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
 		Principal: principal, UserCode: started.UserCode, RepositoryScopes: principal.RepositoryScopes,
 	})
@@ -238,7 +237,10 @@ func TestDeviceFlow_Approve_persistsOnlyExactAssertionBoundReadGrant(t *testing.
 func TestDeviceFlow_Approve_acceptsExactRepositorySubsetBoundedByPrincipal(t *testing.T) {
 	// Given
 	fixture := newDeviceFlowFixture(t, deviceFlowRandom(5))
-	started := fixture.start(t)
+	started, err := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{
+		RepositoryHints: []string{"full-chaos/dev-health-acr", "full-chaos/dev-health-web"},
+	})
+	require.NoError(t, err)
 	principal := deviceApprovalPrincipal("full-chaos/dev-health-acr", "full-chaos/dev-health-web")
 	selected := []string{"full-chaos/dev-health-acr"}
 
@@ -267,7 +269,11 @@ func TestDeviceFlow_Approve_rejectsMalformedOrWidenedGrantAndLeavesPending(t *te
 			RepositoryScopes: []string{"full-chaos/dev-health-acr"}, Permissions: []string{WebAssertionPermissionCredentialIssue, ScopeContextRead},
 		}, repositories: []string{"full-chaos/dev-health-acr"}},
 		{name: "wider repositories", principal: deviceApprovalPrincipal("full-chaos/dev-health-acr"), repositories: []string{"full-chaos/other"}},
-		{name: "wildcard repository", principal: deviceApprovalPrincipal("full-chaos/*"), repositories: []string{"full-chaos/*"}},
+		{name: "owner wildcard repository", principal: deviceApprovalPrincipal("full-chaos/*"), repositories: []string{"full-chaos/*"}},
+		{name: "organization wildcard without credential issue", principal: storage.Principal{
+			AuthenticationMethod: storage.AuthenticationMethodWebAssertion, Subject: "user_1", OrgID: deviceFlowTestOrgID,
+			RepositoryScopes: []string{"*"}, Permissions: []string{ScopeContextRead},
+		}, repositories: []string{"*"}},
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -305,7 +311,7 @@ func TestDeviceFlow_Poll_returnsTypedProtocolStatesAndOneThirtyDayCredential(t *
 	require.Equal(t, storage.DeviceAuthorizationPollInterval, slowDown.RetryAfter)
 
 	// Given
-	principal := deviceApprovalPrincipal("full-chaos/dev-health-acr")
+	principal := deviceApprovalPrincipal("*")
 	fixture.now = fixture.now.Add(storage.DeviceAuthorizationPollInterval)
 	_, err := fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
 		Principal: principal, UserCode: pending.UserCode, RepositoryScopes: principal.RepositoryScopes,

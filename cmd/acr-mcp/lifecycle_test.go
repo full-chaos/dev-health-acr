@@ -159,7 +159,7 @@ func TestCredentialLifecycleStartErrorDoesNotMislabelUnsafeLockFailure(t *testin
 	}
 }
 
-func TestLoginSendsExactOrganizationAndRepositoryHints_whenProvided(t *testing.T) {
+func TestLoginSendsExactOrganizationAndRepositoryHintsFromDirectoryWithoutGit(t *testing.T) {
 	// Given
 	token := validDoctorToken(92)
 	organizationIDHint := "org_fullchaos"
@@ -179,6 +179,18 @@ func TestLoginSendsExactOrganizationAndRepositoryHints_whenProvided(t *testing.T
 	originalWait := lifecycleWait
 	lifecycleWait = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() { lifecycleWait = originalWait })
+	originalDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalDirectory); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
 
 	// When
 	code := runCLI([]string{"login", "--org", organizationIDHint, "--repo", repositoryHints[0], "--repo=" + repositoryHints[1]})
@@ -186,6 +198,51 @@ func TestLoginSendsExactOrganizationAndRepositoryHints_whenProvided(t *testing.T
 	// Then
 	if code != 0 {
 		t.Fatalf("login exit code = %d, want 0", code)
+	}
+}
+
+func TestLogoutThenFreshLoginReauthorizesExactSnapshotCredential(t *testing.T) {
+	oldToken := validDoctorToken(118)
+	newToken := validDoctorToken(119)
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte(oldToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+	t.Setenv(sidecar.AllowInsecureLoopbackEnvironment, "true")
+
+	revocations := 0
+	logoutServer := newCredentialLifecycleServer(t, oldToken, validDoctorToken(120), &revocations, false)
+	t.Setenv(sidecar.APIURLEnvironment, logoutServer.URL)
+	if code := runCLI([]string{"logout"}); code != 0 {
+		t.Fatalf("logout exit code = %d, want 0", code)
+	}
+	if revocations != 1 {
+		t.Fatalf("old exact-snapshot credential revocations = %d, want 1", revocations)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old exact-snapshot credential remains after logout: %v", err)
+	}
+
+	loginServer := newLifecycleServerWithAuthorizationExpectation(t, newToken, []string{"success"}, &deviceAuthorizationExpectation{})
+	t.Setenv(sidecar.APIURLEnvironment, loginServer.URL)
+	originalBrowserOpen := lifecycleBrowserOpen
+	lifecycleBrowserOpen = func(string) error { return nil }
+	t.Cleanup(func() { lifecycleBrowserOpen = originalBrowserOpen })
+	originalWait := lifecycleWait
+	lifecycleWait = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { lifecycleWait = originalWait })
+	if code := runCLI([]string{"login"}); code != 0 {
+		t.Fatalf("fresh login exit code = %d, want 0", code)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read reauthorized credential: %v", err)
+	}
+	if strings.TrimSpace(string(contents)) != newToken {
+		t.Fatal("fresh organization-wide credential was not persisted")
 	}
 }
 

@@ -270,7 +270,7 @@ func newLifecycleServerWithState(t *testing.T, token string, polls []string, wan
 				return
 			}
 			expiresAt := createdAt.Add(30 * 24 * time.Hour)
-			writeLifecycleJSON(t, w, contractsv1.DeviceTokenResponse{SchemaVersion: contractsv1.DeviceTokenResponseSchema, AccessToken: token, TokenType: "Bearer", ExpiresIn: 30 * 24 * 60 * 60, Credential: contractsv1.ClientCredential{SchemaVersion: contractsv1.ClientCredentialSchema, CredentialID: "credential-1", Name: "device credential", TokenPrefix: "fcacr_abcd1234", OrgID: "org-1", RepositoryScopes: []string{"owner/repo"}, Scopes: []string{"context:read", "evidence:read"}, CreatedAt: createdAt, ExpiresAt: &expiresAt}})
+			writeLifecycleJSON(t, w, contractsv1.DeviceTokenResponse{SchemaVersion: contractsv1.DeviceTokenResponseSchema, AccessToken: token, TokenType: "Bearer", ExpiresIn: 30 * 24 * 60 * 60, Credential: deviceLoginCredential(createdAt, "credential-1", &expiresAt)})
 		case "/api/v1/agent-context/capabilities":
 			state.countCapabilities()
 			if r.Header.Get("Authorization") != "Bearer "+token {
@@ -391,7 +391,7 @@ func newLifecycleRetryServerWithState(t *testing.T, token string, polls []string
 				return
 			}
 			expiresAt := createdAt.Add(30 * 24 * time.Hour)
-			credential := lifecycleCredential(createdAt, "credential-1", nil)
+			credential := deviceLoginCredential(createdAt, "credential-1", nil)
 			credential.ExpiresAt = &expiresAt
 			writeLifecycleJSON(t, w, contractsv1.DeviceTokenResponse{SchemaVersion: contractsv1.DeviceTokenResponseSchema, AccessToken: token, TokenType: "Bearer", ExpiresIn: 30 * 24 * 60 * 60, Credential: credential})
 		default:
@@ -506,6 +506,13 @@ type credentialLifecycleState struct {
 
 func lifecycleCredential(createdAt time.Time, credentialID string, revokedAt *time.Time) contractsv1.ClientCredential {
 	return contractsv1.ClientCredential{SchemaVersion: contractsv1.ClientCredentialSchema, CredentialID: credentialID, Name: "MCP sidecar", TokenPrefix: "fcacr_abcd1234", OrgID: "org-1", RepositoryScopes: []string{"owner/repo"}, Scopes: []string{"context:read", "evidence:read"}, CreatedAt: createdAt, RevokedAt: revokedAt}
+}
+
+func deviceLoginCredential(createdAt time.Time, credentialID string, expiresAt *time.Time) contractsv1.ClientCredential {
+	credential := lifecycleCredential(createdAt, credentialID, nil)
+	credential.RepositoryScopes = []string{"*"}
+	credential.ExpiresAt = expiresAt
+	return credential
 }
 
 func writeLifecycleError(t *testing.T, w http.ResponseWriter, status int) {

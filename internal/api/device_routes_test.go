@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -44,7 +45,7 @@ func TestDeviceRoutes_HTTPFlowApprovesAndRedeemsOnlyOnce(t *testing.T) {
 		t.Fatalf("authorization response invalid: %v", err)
 	}
 
-	approval := contractsv1.DeviceApprovalRequest{SchemaVersion: contractsv1.DeviceApprovalRequestSchema, UserCode: authorization.UserCode, RepositoryScopes: []string{hostedTestRepository}}
+	approval := contractsv1.DeviceApprovalRequest{SchemaVersion: contractsv1.DeviceApprovalRequestSchema, UserCode: authorization.UserCode, RepositoryScopes: []string{"*"}}
 	approvalRequest := deviceApprovalRequest(t, now, private, approval, "approval_1")
 	approvalResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(approvalResponse, approvalRequest)
@@ -67,6 +68,16 @@ func TestDeviceRoutes_HTTPFlowApprovesAndRedeemsOnlyOnce(t *testing.T) {
 	if !auth.IsTokenShapeValid(issued.AccessToken) {
 		t.Fatal("device flow did not return an ACR credential")
 	}
+	if len(issued.Credential.RepositoryScopes) != 1 || issued.Credential.RepositoryScopes[0] != "*" {
+		t.Fatalf("default device credential repository scopes = %v, want organization-wide grant", issued.Credential.RepositoryScopes)
+	}
+
+	duplicateApprovalResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(duplicateApprovalResponse, deviceApprovalRequest(t, now, private, approval, "approval_duplicate"))
+	assertErrorResponse(t, duplicateApprovalResponse, http.StatusConflict, "device_authorization_conflict")
+	if err := contractcheck.ValidateSerialized("", "error.v1.schema.json", duplicateApprovalResponse.Body.Bytes()); err != nil {
+		t.Fatalf("duplicate approval conflict violates error.v1: %v\nbody=%s", err, duplicateApprovalResponse.Body.String())
+	}
 
 	againResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(againResponse, deviceTokenRequest(t, authorization.DeviceCode))
@@ -84,6 +95,54 @@ func TestDeviceRoutes_HTTPFlowApprovesAndRedeemsOnlyOnce(t *testing.T) {
 	pendingPoll := httptest.NewRecorder()
 	app.Handler().ServeHTTP(pendingPoll, deviceTokenRequest(t, pending.DeviceCode))
 	assertOAuthDeviceError(t, pendingPoll, contractsv1.OAuthDeviceErrorAuthorizationPending)
+}
+
+func TestDeviceRoutes_explicitRepositoryHintCanIssueLimitedCredential(t *testing.T) {
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := auth.NewWebAssertionVerifier(auth.WebAssertionOptions{
+		Issuer: "https://web.example.test", Audience: "acr-api", JWKSPath: writeAPIJWKS(t, public), Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, _ := newHostedTestAppWithWebAssertions(t, nil, nil, nil, nil, nil, verifier)
+	repositoryHints := []string{hostedTestRepository}
+	createdResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(createdResponse, deviceRequest(t, http.MethodPost, "/api/v1/oauth/device_authorization", contractsv1.DeviceAuthorizationRequest{
+		SchemaVersion: contractsv1.DeviceAuthorizationRequestSchema, RepositoryHints: &repositoryHints,
+	}))
+	if createdResponse.Code != http.StatusOK {
+		t.Fatalf("create status = %d body=%s", createdResponse.Code, createdResponse.Body.String())
+	}
+	var authorization contractsv1.DeviceAuthorizationResponse
+	if err := json.NewDecoder(createdResponse.Body).Decode(&authorization); err != nil {
+		t.Fatal(err)
+	}
+	approval := contractsv1.DeviceApprovalRequest{
+		SchemaVersion: contractsv1.DeviceApprovalRequestSchema, UserCode: authorization.UserCode,
+		RepositoryScopes: []string{hostedTestRepository},
+	}
+	approvalResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(approvalResponse, deviceApprovalRequest(t, now, private, approval, "approval_limited"))
+	if approvalResponse.Code != http.StatusOK {
+		t.Fatalf("approval status = %d body=%s", approvalResponse.Code, approvalResponse.Body.String())
+	}
+	redeemedResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(redeemedResponse, deviceTokenRequest(t, authorization.DeviceCode))
+	if redeemedResponse.Code != http.StatusOK {
+		t.Fatalf("redemption status = %d body=%s", redeemedResponse.Code, redeemedResponse.Body.String())
+	}
+	var issued contractsv1.DeviceTokenResponse
+	if err := json.NewDecoder(redeemedResponse.Body).Decode(&issued); err != nil {
+		t.Fatal(err)
+	}
+	if len(issued.Credential.RepositoryScopes) != 1 || issued.Credential.RepositoryScopes[0] != hostedTestRepository {
+		t.Fatalf("limited credential repository scopes = %v, want exact repository", issued.Credential.RepositoryScopes)
+	}
 }
 
 func TestDeviceApprovalPreview_returnsBoundedAuthorizationHints(t *testing.T) {
@@ -324,9 +383,19 @@ func deviceApprovalRequest[T contractsv1.DeviceApprovalRequest | contractsv1.Dev
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(body)
+	repositoryScopes := []string{hostedTestRepository}
+	if exact, ok := any(approval).(contractsv1.DeviceApprovalRequest); ok {
+		// A few validation-path fixtures deliberately send a malformed approval
+		// body (for example repository_scopes:null). Keep the signed principal
+		// valid so those tests reach body validation instead of failing earlier
+		// in web-assertion authentication.
+		if len(exact.RepositoryScopes) > 0 {
+			repositoryScopes = exact.RepositoryScopes
+		}
+	}
 	claims := map[string]any{
 		"iss": "https://web.example.test", "aud": "acr-api", "sub": "user_123", "org_id": "org_1",
-		"repository_scopes": []string{hostedTestRepository}, "permissions": []string{auth.WebAssertionPermissionCredentialIssue},
+		"repository_scopes": repositoryScopes, "permissions": []string{auth.WebAssertionPermissionCredentialIssue},
 		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(30 * time.Second).Unix(), "jti": jti,
 		"method": request.Method, "path": request.URL.EscapedPath(), "body_sha256": base64.RawURLEncoding.EncodeToString(digest[:]),
 	}

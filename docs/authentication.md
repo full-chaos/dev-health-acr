@@ -36,6 +36,18 @@ full-chaos/*               # all repositories under one owner
 
 The service rechecks repository authorization on every packet, evidence, snapshot, and episode operation. An opaque packet or evidence ID never bypasses this check.
 
+Interactive device login defaults to the singleton `*` selector. This means
+"all repositories belonging to the authenticated organization," not a
+cross-organization grant: the credential remains bound to its server-derived
+`OrgID`, and every store query remains independently organization-scoped. A
+current interactive web approval always issues `repository_scopes: ["*"]`.
+Exact repository lists remain supported by the protocol and service for
+explicit clients and a future limited-grant UX; the current web UI does not
+offer that selection. Device authorization repository hints, the MCP process
+working directory, local Git discovery, and the current analytics repository
+catalog are display or request context only; none narrows or expands
+authorization.
+
 ## Lifecycle
 
 Credential services support create, list, rotate, and revoke operations. Rotation defaults to immediate cutover and may request a bounded overlap of no more than 15 minutes. Expired or revoked credentials return the generic `invalid_token` contract response so callers cannot enumerate credential state.
@@ -71,6 +83,12 @@ is evidence the client cannot tell.
 `login` preflights `CredentialPersistenceSupported` before starting a device
 authorization, so a platform without secure persistence never causes the server
 to mint a one-time credential that has nowhere to live.
+
+`login --refresh` preserves the current credential's repository scopes. It does
+not silently widen an older exact-snapshot credential to the new interactive
+default. To replace an exact credential with an organization-wide credential,
+run `acr-mcp logout` (which revokes remotely before removing local material),
+then run `acr-mcp login` and approve the new request in the web UI.
 
 ## Rate limiting
 

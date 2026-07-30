@@ -55,7 +55,7 @@ func (r DeviceApprovalRequest) Validate() error {
 	if r.SchemaVersion != DeviceApprovalRequestSchema || !validDeviceUserCode(r.UserCode) {
 		return fmt.Errorf("device approval request violates v1 bounds")
 	}
-	return validateBoundedRepositoryScopes(r.RepositoryScopes)
+	return validateDeviceApprovalRepositoryScopes(r.RepositoryScopes)
 }
 
 func (r DeviceApprovalResponse) Validate() error {
@@ -131,7 +131,7 @@ func validateDeviceIssuedCredential(credential ClientCredential) error {
 	if credential.ExpiresAt == nil || !validDeviceCredentialLifetime(credential.CreatedAt, *credential.ExpiresAt) || credential.RevokedAt != nil || credential.LastUsedAt != nil || len(credential.Scopes) != 2 || credential.Scopes[0] != "context:read" || credential.Scopes[1] != "evidence:read" {
 		return fmt.Errorf("device credential does not satisfy fixed issuance policy")
 	}
-	return validateBoundedRepositoryScopes(credential.RepositoryScopes)
+	return validateDeviceApprovalRepositoryScopes(credential.RepositoryScopes)
 }
 
 func validDeviceCredentialLifetime(createdAt, expiresAt time.Time) bool {
@@ -173,6 +173,13 @@ func validateBoundedRepositoryScopes(repositories []string) error {
 		}
 	}
 	return nil
+}
+
+func validateDeviceApprovalRepositoryScopes(repositories []string) error {
+	if len(repositories) == 1 && repositories[0] == "*" {
+		return nil
+	}
+	return validateBoundedRepositoryScopes(repositories)
 }
 
 func validateDeviceAuthorizationHints(organizationIDHint string, repositoryHints []string) error {

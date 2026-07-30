@@ -14,7 +14,7 @@ func TestDeviceFlow_Poll_concurrentRedemptionReturnsPlaintextOnce(t *testing.T) 
 	// Given
 	fixture := newDeviceFlowFixture(t, deviceFlowRandom(30))
 	started := fixture.start(t)
-	principal := deviceApprovalPrincipal("full-chaos/dev-health-acr")
+	principal := deviceApprovalPrincipal("*")
 	_, err := fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
 		Principal: principal, UserCode: started.UserCode, RepositoryScopes: principal.RepositoryScopes,
 	})
