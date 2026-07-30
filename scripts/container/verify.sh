@@ -215,7 +215,15 @@ curl --fail --silent --show-error --retry 20 --retry-connrefused \
 docker run --rm "${readonly_probe_flags[@]}" "$mcp_image" version >/dev/null
 docker run --rm "${readonly_probe_flags[@]}" "$mcp_image" metadata | jq -e \
   '.transport == "stdio" and .status == "read-only"' >/dev/null
-docker run --rm "${readonly_probe_flags[@]}" "$mcp_image" doctor --offline | jq -e \
+# Credential reads participate in the lifecycle lock even when no credential is
+# present. Keep the root filesystem read-only while providing only the lock's
+# canonical directory as an ephemeral tmpfs, then pin this probe to a known-
+# absent file so it proves the missing-credential classification rather than an
+# ambient keyring/default-home outcome.
+docker run --rm "${readonly_probe_flags[@]}" \
+  --tmpfs /var/tmp:rw,noexec,nosuid,nodev,size=1m,mode=1777 \
+  -e ACR_API_TOKEN_FILE=/var/tmp/acr-container-verify-missing-token \
+  "$mcp_image" doctor --offline | jq -e \
   '.status == "incomplete_configuration" and .api_url_set == false and .credential_set == false' >/dev/null
 docker run --rm "${readonly_probe_flags[@]}" --entrypoint /usr/bin/git "$mcp_image" --version >/dev/null
 

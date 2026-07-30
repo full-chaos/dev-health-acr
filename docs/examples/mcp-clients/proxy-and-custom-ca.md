@@ -39,7 +39,6 @@ sidecar variables:
 ```json
 "env": {
   "ACR_API_URL": "https://api.dev-health.example.com",
-  "ACR_API_TOKEN_FILE": "${HOME}/.acr/token",
   "ACR_API_PROXY_URL": "http://proxy.corp.example.com:8080"
 }
 ```
@@ -59,7 +58,7 @@ export ACR_API_CA_BUNDLE="/path/to/corp-ca-bundle.pem"
 - Must point to a regular file, not a directory, a symlink, a FIFO, or any
   other special file type -- the sidecar's bounded file reader rejects
   every other type outright, the same way it rejects a non-regular token
-  file (see [Token File Permissions](claude-code.md#token-file-permissions)
+  file (see [Advanced Token-File Override](claude-code.md#advanced-token-file-override)
   in each client guide).
 - The file must contain valid PEM certificate data; an empty, truncated,
   or non-PEM file is rejected by `acr-mcp doctor` and at `serve` startup
@@ -77,7 +76,6 @@ In an MCP client config:
 ```json
 "env": {
   "ACR_API_URL": "https://api.dev-health.example.com",
-  "ACR_API_TOKEN_FILE": "${HOME}/.acr/token",
   "ACR_API_CA_BUNDLE": "/path/to/corp-ca-bundle.pem"
 }
 ```
@@ -93,11 +91,16 @@ network connection is attempted:
 
 ```bash
 export ACR_API_URL="https://api.dev-health.example.com"
-export ACR_API_TOKEN_FILE="$HOME/.acr/token"
 export ACR_API_PROXY_URL="http://proxy.corp.example.com:8080"
 export ACR_API_CA_BUNDLE="/path/to/corp-ca-bundle.pem"
 acr-mcp doctor --offline
+acr-mcp login
 ```
+
+The first command can validate the API/proxy/CA settings before a credential
+exists (the credential check will still report incomplete). Login then persists
+the credential in its default source; MCP registration does not need a token or
+token-file path.
 
 Once those static checks report a valid, complete configuration, plain
 `acr-mcp doctor` (no flags) automatically attempts a real, bounded live

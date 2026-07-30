@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
+	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
 const lifecycleExitFailure = 1
@@ -74,10 +75,6 @@ func runDeviceLogin(parsed loginArgs) int {
 		return lifecycleExitFailure
 	}
 	credential, err := session.LoadCredential()
-	if err == nil && credential.Token != "" {
-		fmt.Fprintln(os.Stderr, "login: a valid local credential already exists; use login --refresh or logout")
-		return lifecycleExitFailure
-	}
 	if err != nil && !errors.Is(err, sidecar.ErrCredentialMissing) {
 		if errors.Is(err, sidecar.ErrCredentialShapeInvalid) && os.Getenv(sidecar.TokenEnvironment) != "" {
 			fmt.Fprintln(os.Stderr, "login: the environment credential is malformed; correct it before logging in")
@@ -90,6 +87,28 @@ func runDeviceLogin(parsed loginArgs) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "login: configuration is invalid: "+sidecar.DescribeConfigError(err))
 		return lifecycleExitFailure
+	}
+	if credential.Token != "" {
+		validationErr := validateExistingCredential(context.Background(), cfg, credential)
+		switch {
+		case validationErr == nil:
+			fmt.Fprintln(os.Stdout, "login: already logged in; the current credential is valid")
+			return 0
+		case errors.Is(validationErr, sidecar.ErrInvalidToken):
+			// A typed invalid_token response is definitive server-side proof that
+			// this exact credential is inactive. Purge only the material captured
+			// while this lifecycle session holds the cross-process lock, then
+			// continue directly into a fresh device flow. Every ambiguous error
+			// below retains the material instead.
+			if purgeErr := session.PurgeCredentialMaterial(credential); purgeErr != nil {
+				fmt.Fprintln(os.Stderr, "login: the rejected credential is inactive, but local cleanup requires operator action at "+describeCleanupLocations(purgeErr))
+				return lifecycleExitFailure
+			}
+			fmt.Fprintln(os.Stdout, "login: the saved credential is no longer active; starting a new login")
+		default:
+			fmt.Fprintln(os.Stderr, "login: the saved credential could not be verified; it was retained and no new login was started")
+			return lifecycleExitFailure
+		}
 	}
 	client, err := sidecar.NewLifecycleClient(cfg)
 	if err != nil {
@@ -114,6 +133,26 @@ func runDeviceLogin(parsed loginArgs) int {
 		}
 	}
 	return lifecycleExitFailure
+}
+
+// validateExistingCredential distinguishes a locally shape-valid credential
+// from one the hosted API still accepts. It binds the request to the exact
+// material captured under the active lifecycle lock instead of resolving the
+// mutable environment/file/keyring precedence again inside the HTTP client.
+// The compiled identity is applied at the same boundary as MCP bootstrap so a
+// normal versioned build sends the version the hosted API actually evaluates.
+func validateExistingCredential(ctx context.Context, cfg sidecar.Config, credential sidecar.CredentialResult) error {
+	identity := version.Current()
+	cfg.ClientVersion = version.EffectiveVersion(identity, cfg.ClientVersion)
+	cfg.SidecarVersion = version.EffectiveVersion(identity, cfg.SidecarVersion)
+	client, err := sidecar.NewClient(cfg, func() (sidecar.CredentialResult, error) {
+		return credential, nil
+	})
+	if err != nil {
+		return err
+	}
+	_, err = client.Capabilities(ctx)
+	return err
 }
 
 // deviceLoginExhaustedMessage names the cause that consumed the final

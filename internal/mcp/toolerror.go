@@ -70,8 +70,11 @@ func classify(err error) *classifiedError {
 		return &classifiedError{category: "validation", message: err.Error()}
 	}
 
-	if errors.Is(err, sidecar.ErrCredentialShapeInvalid) || errors.Is(err, sidecar.ErrCredentialMissing) {
-		return &classifiedError{category: "auth", message: "the ACR API credential is missing or does not match the expected shape"}
+	if errors.Is(err, sidecar.ErrCredentialMissing) {
+		return &classifiedError{category: "auth", message: "the ACR API credential is missing; run acr-mcp login"}
+	}
+	if errors.Is(err, sidecar.ErrCredentialShapeInvalid) {
+		return &classifiedError{category: "auth", message: "the configured ACR API credential is malformed; correct or remove that credential, then run acr-mcp login"}
 	}
 
 	return &classifiedError{category: "internal", message: "the request could not be completed"}

@@ -19,3 +19,16 @@ func TestReadmeText_limits_sharing_to_private_support_channels(t *testing.T) {
 		}
 	}
 }
+
+func TestReadmeTextExplainsCredentialUnavailableStatus(t *testing.T) {
+	input := Input{
+		Identity: Identity{Service: "acr-mcp", Version: "1.2.3", Commit: "commit", BuildDate: "date", GOOS: "linux", GOARCH: "amd64"},
+		Static:   StaticReport{Status: "credential_unavailable"},
+	}
+
+	readme := readmeText(input)
+
+	if !strings.Contains(readme, "`credential_unavailable`") || !strings.Contains(readme, "could not be checked safely") {
+		t.Fatalf("diagnostic README did not explain credential_unavailable: %q", readme)
+	}
+}

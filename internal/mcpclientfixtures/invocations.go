@@ -7,7 +7,7 @@ import "regexp"
 // referencing a subcommand the real binary does not implement.
 var KnownACRMCPSubcommands = map[string]bool{
 	"version": true, "--version": true, "-version": true,
-	"doctor": true, "diagnostics": true, "metadata": true, "serve": true,
+	"doctor": true, "diagnostics": true, "login": true, "logout": true, "metadata": true, "serve": true, "workspace": true,
 }
 
 // acrMCPInvocation matches a literal "acr-mcp" token followed by a

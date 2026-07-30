@@ -15,9 +15,8 @@ import "fmt"
 // timeout at all) is one call with a different set of fields, rather than
 // a hand-duplicated literal per variant.
 type stdioJSONOptions struct {
-	Command        string
-	TokenFileValue string
-	Timeout        string // empty omits the ACR_API_TIMEOUT line entirely
+	Command string
+	Timeout string // empty omits the ACR_API_TIMEOUT line entirely
 }
 
 func renderStdioJSONWith(opts stdioJSONOptions) string {
@@ -29,13 +28,12 @@ func renderStdioJSONWith(opts stdioJSONOptions) string {
       "command": %q,
       "args": [%q],
       "env": {
-        "ACR_API_URL": %q,
-        "ACR_API_TOKEN_FILE": %q
+        "ACR_API_URL": %q
       }
     }
   }
 }
-`, opts.Command, ServeArg, ExampleAPIURL, opts.TokenFileValue)
+`, opts.Command, ServeArg, ExampleAPIURL)
 	}
 	return fmt.Sprintf(`{
   "mcpServers": {
@@ -45,27 +43,26 @@ func renderStdioJSONWith(opts stdioJSONOptions) string {
       "args": [%q],
       "env": {
         "ACR_API_URL": %q,
-        "ACR_API_TOKEN_FILE": %q,
         "ACR_API_TIMEOUT": %q
       }
     }
   }
 }
-`, opts.Command, ServeArg, ExampleAPIURL, opts.TokenFileValue, opts.Timeout)
+`, opts.Command, ServeArg, ExampleAPIURL, opts.Timeout)
 }
 
 // RenderClaudeCodeUserScopeJSON renders claude-code.md's user-scope
 // (~/.claude.json) variant: a bare "acr-mcp" command relying on PATH,
 // no ACR_API_TIMEOUT line.
 func RenderClaudeCodeUserScopeJSON() string {
-	return renderStdioJSONWith(stdioJSONOptions{Command: "acr-mcp", TokenFileValue: "${HOME}/.acr/token"})
+	return renderStdioJSONWith(stdioJSONOptions{Command: "acr-mcp"})
 }
 
 // RenderClaudeCodeFullExampleJSON renders claude-code.md's "Example: Full
 // Configuration (binary on PATH)" variant: a bare "acr-mcp" command and an
 // explicit 60s timeout override.
 func RenderClaudeCodeFullExampleJSON() string {
-	return renderStdioJSONWith(stdioJSONOptions{Command: "acr-mcp", TokenFileValue: "${HOME}/.acr/token", Timeout: "60s"})
+	return renderStdioJSONWith(stdioJSONOptions{Command: "acr-mcp", Timeout: "60s"})
 }
 
 // RenderCursorSetupStepJSON renders cursor.md's "Create the config
@@ -92,7 +89,7 @@ func RenderCursorSetupStepJSON() string {
 // Configuration (binary on PATH)" variant: a bare "acr-mcp" command and an
 // explicit 60s timeout override.
 func RenderCursorFullExampleJSON() string {
-	return renderStdioJSONWith(stdioJSONOptions{Command: "acr-mcp", TokenFileValue: "${env:HOME}/.acr/token", Timeout: "60s"})
+	return renderStdioJSONWith(stdioJSONOptions{Command: "acr-mcp", Timeout: "60s"})
 }
 
 // RenderCodexTOMLDocSnippet renders codex.md's top "Configuration File"
@@ -106,8 +103,7 @@ enabled = true
 
 [mcp_servers.acr.env]
 ACR_API_URL = %q
-ACR_API_TOKEN_FILE = %q
-`, ExampleCommand, ServeArg, ExampleAPIURL, "/home/you/.acr/token")
+`, ExampleCommand, ServeArg, ExampleAPIURL)
 }
 
 // RenderCodexTOMLFullExample renders codex.md's "Example: Full
@@ -123,7 +119,6 @@ startup_timeout_sec = 10.0
 
 [mcp_servers.acr.env]
 ACR_API_URL = %q
-ACR_API_TOKEN_FILE = %q
 ACR_API_TIMEOUT = %q
-`, "acr-mcp", ServeArg, ExampleAPIURL, "/home/you/.acr/token", "60s")
+`, "acr-mcp", ServeArg, ExampleAPIURL, "60s")
 }

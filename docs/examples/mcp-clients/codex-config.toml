@@ -11,5 +11,4 @@ enabled = true
 
 [mcp_servers.acr.env]
 ACR_API_URL = "https://api.dev-health.example.com"
-ACR_API_TOKEN_FILE = "/home/you/.acr/token"
 ACR_API_TIMEOUT = "30s"

@@ -18,11 +18,10 @@ func TestParseStdioJSONMatchesCanonicalModel(t *testing.T) {
 	root := findRepoRoot(t)
 
 	cases := []struct {
-		relPath       string
-		tokenFileWant string
+		relPath string
 	}{
-		{"docs/examples/mcp-clients/claude-code-mcp.json", "${HOME}/.acr/token"},
-		{"docs/examples/mcp-clients/cursor-mcp-config.json", "${env:HOME}/.acr/token"},
+		{"docs/examples/mcp-clients/claude-code-mcp.json"},
+		{"docs/examples/mcp-clients/cursor-mcp-config.json"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.relPath, func(t *testing.T) {
@@ -46,8 +45,8 @@ func TestParseStdioJSONMatchesCanonicalModel(t *testing.T) {
 			if entry.Env["ACR_API_URL"] != ExampleAPIURL {
 				t.Fatalf("expected ACR_API_URL %q, got %q", ExampleAPIURL, entry.Env["ACR_API_URL"])
 			}
-			if entry.Env["ACR_API_TOKEN_FILE"] != tc.tokenFileWant {
-				t.Fatalf("expected ACR_API_TOKEN_FILE %q, got %q", tc.tokenFileWant, entry.Env["ACR_API_TOKEN_FILE"])
+			if _, ok := entry.Env["ACR_API_TOKEN_FILE"]; ok {
+				t.Fatalf("expected no ACR_API_TOKEN_FILE in canonical JSON fixture, got %q", entry.Env["ACR_API_TOKEN_FILE"])
 			}
 			if entry.Env["ACR_API_TIMEOUT"] != ExampleTimeout {
 				t.Fatalf("expected ACR_API_TIMEOUT %q, got %q", ExampleTimeout, entry.Env["ACR_API_TIMEOUT"])
@@ -187,8 +186,8 @@ func TestParseCodexTOMLMatchesCanonicalModel(t *testing.T) {
 	if entry.Env["ACR_API_URL"] != ExampleAPIURL {
 		t.Fatalf("expected ACR_API_URL %q, got %q", ExampleAPIURL, entry.Env["ACR_API_URL"])
 	}
-	if entry.Env["ACR_API_TOKEN_FILE"] != "/home/you/.acr/token" {
-		t.Fatalf("expected an absolute ACR_API_TOKEN_FILE, got %q", entry.Env["ACR_API_TOKEN_FILE"])
+	if _, ok := entry.Env["ACR_API_TOKEN_FILE"]; ok {
+		t.Fatalf("expected canonical Codex config to discover the persisted credential automatically, got token-file override %q", entry.Env["ACR_API_TOKEN_FILE"])
 	}
 	if entry.Env["ACR_API_TIMEOUT"] != ExampleTimeout {
 		t.Fatalf("expected ACR_API_TIMEOUT %q, got %q", ExampleTimeout, entry.Env["ACR_API_TIMEOUT"])

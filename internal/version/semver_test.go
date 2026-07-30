@@ -14,6 +14,7 @@ func TestAtLeast_usesSemVerPrecedence(t *testing.T) {
 		{name: "prerelease precedes release", have: "1.0.0-rc.1", want: "1.0.0", wantOK: false},
 		{name: "release follows prerelease", have: "1.0.0", want: "1.0.0-rc.1", wantOK: true},
 		{name: "leading v remains accepted for legacy callers", have: "v2.0.0", want: "1.9.9", wantOK: true},
+		{name: "supported local build clears the default floor", have: localBuildVersion, want: "0.1.0", wantOK: true},
 		{name: "malformed client fails closed", have: "latest", want: "1.0.0", wantOK: false},
 		{name: "development sentinel fails closed", have: "dev", want: "1.0.0", wantOK: false},
 		{name: "malformed minimum fails closed", have: "1.0.0", want: "1.0.x", wantOK: false},
@@ -39,6 +40,7 @@ func TestInfoIsRelease_requiresCompleteInjectedIdentity(t *testing.T) {
 	}{
 		{name: "release identity", info: Info{Version: "1.2.3-rc.1+build.7", Commit: "0123456789abcdef0123456789abcdef01234567", Date: "2026-07-12T15:04:05Z"}, want: true},
 		{name: "development identity", info: Info{Version: "dev", Commit: "unknown", Date: "unknown"}},
+		{name: "supported local build identity", info: Info{Version: localBuildVersion, Commit: "0123456789abcdef0123456789abcdef01234567", Date: "2026-07-12T15:04:05Z"}},
 		{name: "short commit", info: Info{Version: "1.2.3", Commit: "0123456", Date: "2026-07-12T15:04:05Z"}},
 		{name: "non UTC date", info: Info{Version: "1.2.3", Commit: "0123456789abcdef0123456789abcdef01234567", Date: "2026-07-12T15:04:05+01:00"}},
 		{name: "leading v version", info: Info{Version: "v1.2.3", Commit: "0123456789abcdef0123456789abcdef01234567", Date: "2026-07-12T15:04:05Z"}},
@@ -64,5 +66,13 @@ func TestEffectiveVersion_keepsReleaseIdentityAuthoritative(t *testing.T) {
 	}
 	if got := EffectiveVersion(development, "latest"); got != "dev" {
 		t.Fatalf("invalid development override = %q, want dev", got)
+	}
+
+	localBuild := Info{Version: localBuildVersion, Commit: "0123456789abcdef0123456789abcdef01234567", Date: "2026-07-12T15:04:05Z"}
+	if got := EffectiveVersion(localBuild, "2.0.0"); got != "2.0.0" {
+		t.Fatalf("local build override = %q, want explicit override", got)
+	}
+	if got := EffectiveVersion(localBuild, "latest"); got != localBuildVersion {
+		t.Fatalf("invalid local build override = %q, want %q", got, localBuildVersion)
 	}
 }

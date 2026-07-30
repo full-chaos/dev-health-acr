@@ -64,6 +64,14 @@ The local sidecar resolves a credential with a fixed precedence:
 2. The explicit or default OS keyring entry (macOS/Linux)
 3. `ACR_API_TOKEN_FILE`, defaulting to `~/.acr/token` (macOS/Linux)
 
+Ordinary macOS/Linux setup sets `ACR_API_URL` (and an optional CA bundle), then
+runs `acr-mcp login`. Login persists to the default keyring or restricted
+fallback file, and later MCP processes discover that source automatically.
+MCP registration should contain neither a credential nor a credential-file
+path; `ACR_API_TOKEN_FILE` is an advanced location override. Windows is the
+documented exception because secure login persistence is unavailable there:
+the client must inherit `ACR_API_TOKEN` from its launching shell.
+
 Token files must be owner-only on POSIX systems, and their parent directory must
 deny group and world write access for removal as well as for writing. The
 `doctor` command reports source and shape validity without revealing the token.
@@ -83,6 +91,24 @@ is evidence the client cannot tell.
 `login` preflights `CredentialPersistenceSupported` before starting a device
 authorization, so a platform without secure persistence never causes the server
 to mint a one-time credential that has nowhere to live.
+
+Plain `login` is idempotent. If a shape-valid credential already exists, the
+sidecar verifies that exact captured credential against the hosted capabilities
+endpoint while holding the lifecycle lock. A valid credential returns success
+without starting another device authorization. A typed `invalid_token` response
+proves that credential is inactive, so the sidecar removes its captured local
+material and automatically starts a fresh device flow. If local cleanup fails,
+the sidecar retains the unresolved location, reports the required operator
+action, and does not start a replacement flow.
+
+Every ambiguous verification result retains the existing credential and stops:
+network or TLS failure, an untyped authorization response, a server 426 or
+feature error, or any other API/validation error besides typed `invalid_token`
+is not proof that the server invalidated the credential. A syntactically valid
+capabilities response proves authentication acceptance even if later MCP
+compatibility gates would reject tools. This prevents a transient outage or
+protocol problem from destroying the only local copy or issuing an unnecessary
+replacement.
 
 `login --refresh` preserves the current credential's repository scopes. It does
 not silently widen an older exact-snapshot credential to the new interactive
