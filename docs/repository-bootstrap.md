@@ -1,4 +1,8 @@
-# Private repository bootstrap
+# Repository bootstrap record
+
+**Status:** Historical bootstrap complete. The repository is now publicly
+visible to support unrestricted CI execution. That visibility is not an
+open-source license grant; see [`../LICENSE-POLICY.md`](../LICENSE-POLICY.md).
 
 Target repository:
 
@@ -6,9 +10,9 @@ Target repository:
 full-chaos/dev-health-acr
 ```
 
-Visibility for SVS: **private**.
+Original SVS visibility: **private**. Current visibility: **public for CI**.
 
-## Preferred import
+## Historical import
 
 From an unpacked source archive or the prepared local checkout:
 
@@ -39,14 +43,14 @@ git push -u origin main
 
 ## Repository settings
 
-After creation:
+Current repository settings should:
 
 1. Require pull requests for `main`.
 2. Require the `verify` CI job.
 3. Disable force pushes and branch deletion on `main`.
 4. Enable secret scanning and dependency alerts.
-5. Restrict repository access to the ACR implementation team and approved agents.
-6. Do not publish packages or releases until the private distribution/signing policy lands.
+5. Keep write access restricted while allowing public read and CI execution.
+6. Publish packages and releases only through the reviewed signing and release policy.
 
 ## First verification
 
@@ -56,7 +60,9 @@ make verify
 go build ./cmd/acr-api ./cmd/acr-mcp ./cmd/contractcheck
 ```
 
-The contract gate is Go-only and requires no Python setup. The repository is a contract bootstrap, not a production service. `acr-mcp serve` remains intentionally unwired until the Phase 1 MCP issue is implemented.
+The contract gate is Go-only and requires no Python setup. The bootstrap is
+complete; `acr-api`, `acr-mcp serve`, release publication, and deployment
+artifacts are implemented and verified by their current repository gates.
 
 ## Go-only contract tooling
 

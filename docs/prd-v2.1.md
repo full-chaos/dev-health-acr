@@ -14,16 +14,19 @@ It is not a generic memory product, a separate customer-facing brand, or a conte
 
 ## 2. Product and repository shape
 
-ACR is a private spin-off service for SVS:
+ACR is a spin-off service for SVS:
 
-- `dev-health-acr` private repository.
+- `dev-health-acr` source repository, publicly visible for unrestricted CI.
 - Go hosted API (`acr-api`).
 - Go local STDIO MCP sidecar (`acr-mcp`).
 - Shared Go types, JSON Schema, OpenAPI, and golden fixtures.
 - Context Packet Explorer remains in `dev-health-web` as the only non-Go ACR component.
 - `dev-health-ops` remains the engineering evidence ingestion, work graph, billing, and entitlement system.
 
-The intended future public license for the sidecar, if published, is Apache 2.0. During SVS the repository remains private. The commercial boundary is the hosted ACR service and organization entitlement, not hidden client-side enforcement.
+Public repository visibility is an operational CI choice, not an open-source
+license grant. The intended future license for the sidecar, if approved, is
+Apache 2.0. The commercial boundary is the hosted ACR service and organization
+entitlement, not hidden client-side enforcement.
 
 ## 3. Smallest viable slice
 
@@ -80,7 +83,9 @@ Claude Code / Cursor / Codex / generic MCP client
 - ACR does not write final Dev Health metrics.
 - ACR does not use External Push as transport.
 - ACR does not ship in the default self-hosted Dev Health distribution.
-- The public OSS repositories may contain entitlement keys and integration hooks, but the private Go service implementation remains outside them.
+- Public repositories may contain entitlement keys and integration hooks. The
+  hosted service and entitlement remain the commercial boundary regardless of
+  source visibility.
 
 ## 5. External API
 
@@ -242,7 +247,7 @@ It must support:
 
 ## 14. Release and operations
 
-The private Go repository owns:
+The Go repository owns:
 
 - Cross-platform macOS/Linux/Windows builds for arm64/amd64.
 - Checksums and signed artifacts.

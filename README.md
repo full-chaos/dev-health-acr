@@ -1,6 +1,9 @@
 # Dev Health Agent Context Runtime
 
-Private SVS repository for the Dev Health Agent Context Runtime (ACR).
+Source repository for the Dev Health Agent Context Runtime (ACR). The
+repository is publicly visible to support unrestricted CI execution; that
+visibility is not an open-source license grant and does not change the hosted,
+licensed ACR product boundary.
 
 ACR exposes Dev Health's evidence-backed diagnosis loop to coding, review, docs, and CI agents:
 
@@ -20,7 +23,7 @@ The contract-first Go service includes scoped credentials, deterministic context
 ## Product boundary
 
 - `dev-health-ops` remains the source of engineering evidence, work graph data, billing, and organization entitlements.
-- `dev-health-acr` is a separate private hosted Go service and local Go MCP binary.
+- `dev-health-acr` is a separate hosted Go service and local Go MCP binary.
 - `dev-health-web` remains the Next.js human inspection surface.
 - External Push remains a separate source-fact ingestion API.
 - ACR is not included in the default self-hosted Dev Health distribution.
@@ -133,8 +136,8 @@ limits.
 
 ## Deployment and operations
 
-The private ACR developer and operator lifecycle, including ownership,
-TLS-local Compose, private Helm/Kustomize, migration/rollback boundaries,
+The ACR developer and operator lifecycle, including ownership,
+TLS-local Compose, Helm/Kustomize, migration/rollback boundaries,
 credential rotation, backup/restore responsibilities, observability,
 troubleshooting, and sidecar setup is in
 [`docs/operations.md`](docs/operations.md). The offline documentation gate is:
@@ -163,7 +166,8 @@ make container-scan
 make container-reproducible
 ```
 
-Private GitHub import instructions are in [`docs/repository-bootstrap.md`](docs/repository-bootstrap.md).
+The historical repository bootstrap and current visibility posture are recorded
+in [`docs/repository-bootstrap.md`](docs/repository-bootstrap.md).
 
 Run the hosted API locally:
 
@@ -201,4 +205,9 @@ Read APIs require the `agent_context_runtime` product entitlement and the releva
 
 ## Licensing posture
 
-This repository is private during SVS. No public source license is granted by the repository at this stage. The intended license if the sidecar is later published as an ecosystem adapter is Apache 2.0. Commercial enforcement belongs to the hosted ACR API entitlement boundary, not hidden client-side logic.
+The repository is publicly visible to support unrestricted CI execution. No
+open-source license is granted by repository visibility alone; see
+[`LICENSE-POLICY.md`](LICENSE-POLICY.md). The intended license if the sidecar is
+later released as an ecosystem adapter is Apache 2.0. Commercial enforcement
+belongs to the hosted ACR API entitlement boundary, not hidden client-side
+logic.
