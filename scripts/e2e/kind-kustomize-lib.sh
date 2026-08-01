@@ -153,7 +153,7 @@ patches:
     patch: |-
       - op: replace
         path: /data/ACR_DEV_HEALTH_ENTITLEMENT_URL
-        value: https://${KUSTOMIZE_E2E_OPS_HOST}:${KUSTOMIZE_E2E_OPS_PORT}
+        value: http://${KUSTOMIZE_E2E_OPS_HOST}:8000
   - target:
       group: networking.k8s.io
       version: v1
@@ -166,15 +166,6 @@ patches:
           - namespaceSelector:
               matchLabels:
                 kubernetes.io/metadata.name: envoy-gateway-system
-  - target:
-      group: networking.k8s.io
-      version: v1
-      kind: NetworkPolicy
-      name: acr-api
-    patch: |-
-      - op: replace
-        path: /spec/egress/3/ports/0/port
-        value: ${KUSTOMIZE_E2E_OPS_PORT}
 EOF
   if [[ "$deny_egress" == true ]]; then
     cat >>"${directory}/kustomization.yaml" <<'EOF'
@@ -237,13 +228,10 @@ e2e_apply_kinds() {
 
 e2e_create_secrets() {
 	local rotation_content="${1:-initial}" migration_dsn runtime_dsn clickhouse_dsn keyring
-  migration_dsn="postgres://postgres:acr-e2e-pass@${KUSTOMIZE_E2E_POSTGRES_HOST}:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
-  runtime_dsn="postgres://acr_runtime:acr-e2e-runtime-pass@${KUSTOMIZE_E2E_POSTGRES_HOST}:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
-  clickhouse_dsn="clickhouse://default:@${KUSTOMIZE_E2E_CLICKHOUSE_HOST}:${KUSTOMIZE_E2E_CLICKHOUSE_NATIVE_PORT}/default?secure=true&skip_verify=false&tls_server_name=${KUSTOMIZE_E2E_CLICKHOUSE_HOST}"
+  migration_dsn="postgres://postgres:acr-e2e-pass@${KUSTOMIZE_E2E_POSTGRES_HOST}:5432/acr?sslmode=disable"
+  runtime_dsn="postgres://acr_runtime:acr-e2e-runtime-pass@${KUSTOMIZE_E2E_POSTGRES_HOST}:5432/acr?sslmode=disable"
+  clickhouse_dsn="clickhouse://default:@${KUSTOMIZE_E2E_CLICKHOUSE_HOST}:9000/default"
   keyring='current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE='
-  for name in acr-postgres-ca acr-clickhouse-ca acr-entitlement-ca; do
-    e2e_kube create secret generic "$name" --from-file=ca.crt="$KUSTOMIZE_E2E_CA" --dry-run=client -o yaml | e2e_kube apply -f - >/dev/null
-  done
   e2e_kube create secret generic acr-runtime-credentials \
     --from-literal=ACR_POSTGRES_DSN="$runtime_dsn" --from-literal=ACR_CLICKHOUSE_DSN="$clickhouse_dsn" \
     --from-literal=ACR_EVIDENCE_ID_ACTIVE_KID=current --from-literal=ACR_EVIDENCE_ID_KEYS="$keyring" \
@@ -257,6 +245,7 @@ e2e_set_ops_entitlement_token() {
   local token="$1" config
   config="$(cat <<EOF
 server {
+  listen 8000;
   listen 8443 ssl;
   ssl_certificate /tls/tls.crt;
   ssl_certificate_key /tls/tls.key;

@@ -10,11 +10,11 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 )
 
-func TestNewClickHouseQueryClientWithOptions_allows_plaintext_DSN_in_local_environments(t *testing.T) {
-	for _, environment := range []string{"development", "test"} {
+func TestNewClickHouseQueryClientWithOptions_allows_plaintext_DSN_in_all_environments(t *testing.T) {
+	for _, environment := range []string{"", "staging", "production"} {
 		t.Run(environment, func(t *testing.T) {
 			// Given
-			options := Options{DSN: "clickhouse://readonly@example.invalid:9000/default", Environment: environment}
+			options := Options{DSN: "clickhouse://readonly@example.invalid:9000/default"}
 
 			// When
 			client, err := NewClickHouseQueryClientWithOptions(options)
@@ -30,28 +30,10 @@ func TestNewClickHouseQueryClientWithOptions_allows_plaintext_DSN_in_local_envir
 	}
 }
 
-func TestNewClickHouseQueryClientWithOptions_requires_TLS_outside_local_environments(t *testing.T) {
-	for _, environment := range []string{"", "staging", "production"} {
-		t.Run(environment, func(t *testing.T) {
-			// Given
-			options := Options{DSN: "clickhouse://readonly@example.invalid:9000/default", Environment: environment}
-
-			// When
-			_, err := NewClickHouseQueryClientWithOptions(options)
-
-			// Then
-			if !errors.Is(err, ErrInvalidConfiguration) {
-				t.Fatalf("NewClickHouseQueryClientWithOptions() error = %v, want ErrInvalidConfiguration", err)
-			}
-		})
-	}
-}
-
 func TestNewClickHouseQueryClientWithOptions_allows_verified_TLS_in_production(t *testing.T) {
 	// Given
 	options := Options{
-		DSN:         "https://readonly@example.invalid:8443/default?secure=true",
-		Environment: "production",
+		DSN: "https://readonly@example.invalid:8443/default?secure=true",
 	}
 
 	// When
@@ -69,9 +51,8 @@ func TestNewClickHouseQueryClientWithOptions_allows_verified_TLS_in_production(t
 func TestNewClickHouseQueryClientWithOptions_rejects_plain_HTTP_with_TLS_config(t *testing.T) {
 	// Given
 	options := Options{
-		DSN:         "http://readonly@example.invalid:8123/default",
-		Environment: "production",
-		TLS:         &tls.Config{MinVersion: tls.VersionTLS12},
+		DSN: "http://readonly@example.invalid:8123/default",
+		TLS: &tls.Config{MinVersion: tls.VersionTLS12},
 	}
 
 	// When

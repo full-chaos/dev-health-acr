@@ -19,8 +19,6 @@ const (
 	postgresDSNEnvironment            = "ACR_POSTGRES_DSN"
 	postgresDSNFileEnvironment        = "ACR_POSTGRES_DSN_FILE"
 	postgresPoolerAdminDSNEnvironment = "ACR_POSTGRES_POOLER_ADMIN_DSN"
-	postgresEnvironment               = "ACR_ENVIRONMENT"
-	postgresInsecureEnvironment       = "ACR_ALLOW_INSECURE_POSTGRES"
 	postgresConnectionKindEnvironment = "ACR_POSTGRES_CONNECTION_KIND"
 	maximumCredentialLifetime         = 365 * 24 * time.Hour
 	maximumCredentialOverlap          = 15 * time.Minute
@@ -58,16 +56,10 @@ func runCredentialCLI(ctx context.Context, arguments []string, lookup lookupEnv,
 		return err
 	}
 	poolerAdminDSN, _ := lookup(postgresPoolerAdminDSNEnvironment)
-	environment, _ := lookup(postgresEnvironment)
-	insecureRaw, _ := lookup(postgresInsecureEnvironment)
-	allowInsecure, err := runtimepostgres.InsecureTestTransportOverride(strings.TrimSpace(environment), strings.TrimSpace(insecureRaw))
-	if err != nil {
-		return err
-	}
 	if err := validateDeclaredConnectionKind(lookup, poolerAdminDSN); err != nil {
 		return err
 	}
-	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn, PoolerAdminDSN: poolerAdminDSN, AllowInsecure: allowInsecure})
+	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn, PoolerAdminDSN: poolerAdminDSN})
 	if err != nil {
 		return fmt.Errorf("open PostgreSQL for credential command: %w", err)
 	}

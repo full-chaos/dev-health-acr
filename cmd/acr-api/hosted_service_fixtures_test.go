@@ -48,7 +48,7 @@ func newPostgresFixture(t *testing.T, ctx context.Context) *postgresFixture {
 func newPostgresFixtureWithAccess(t *testing.T, ctx context.Context, access postgresRuntimeAccess) *postgresFixture {
 	t.Helper()
 	fixture := newUnmigratedPostgresFixture(t, ctx)
-	database, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: fixture.dsn, AllowInsecure: true})
+	database, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: fixture.dsn})
 	if err != nil {
 		t.Fatal(err)
 	}

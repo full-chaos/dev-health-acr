@@ -35,8 +35,6 @@ func TestRun_usesMigrationDSNFromSecretFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("  "+dsn+"\n"), 0o600))
 	lookup := environment(map[string]string{
 		migrationDSNEnvironment + "_FILE": path,
-		migrationEnvironment:              "test",
-		migrationInsecureEnvironment:      "true",
 	})
 
 	// When
@@ -124,7 +122,7 @@ func TestRun_requiresMigrationDSNEnvironment(t *testing.T) {
 	require.Contains(t, err.Error(), migrationDSNEnvironment)
 }
 
-func TestRun_rejectsInsecureMigrationDSNOutsideTestEnvironment(t *testing.T) {
+func TestRun_acceptsPlaintextMigrationDSNOutsideTestEnvironment(t *testing.T) {
 	// Given
 	lookup := environment(map[string]string{migrationDSNEnvironment: "postgres://user:sentinel-secret@db.example/acr?sslmode=disable"})
 
@@ -132,8 +130,9 @@ func TestRun_rejectsInsecureMigrationDSNOutsideTestEnvironment(t *testing.T) {
 	err := run(context.Background(), []string{"status"}, lookup, &bytes.Buffer{})
 
 	// Then
-	require.ErrorContains(t, err, "verified TLS")
+	require.ErrorContains(t, err, "PostgreSQL is unavailable")
 	require.NotContains(t, err.Error(), "sentinel-secret")
+	require.NotContains(t, err.Error(), "verified TLS")
 }
 
 func TestRun_rejectsDeclaredConnectionKindContradictions(t *testing.T) {
@@ -175,7 +174,6 @@ func environment(values map[string]string) lookupEnv {
 func testMigrationEnvironment(dsn string) lookupEnv {
 	return environment(map[string]string{
 		migrationDSNEnvironment: dsn,
-		migrationEnvironment:    "test", migrationInsecureEnvironment: "true",
 	})
 }
 

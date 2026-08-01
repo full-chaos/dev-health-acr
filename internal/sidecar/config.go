@@ -239,7 +239,7 @@ func (c Config) Validate() error {
 	if c.ProxyURL != nil && c.ProxyURL.Host == "" {
 		return &ConfigError{Field: ProxyURLEnvironment, Detail: proxyURLInvalidDetail}
 	}
-	if c.ProxyURL != nil && c.APIBaseURL.Scheme == "http" && c.AllowInsecureLoopback && isLoopbackHost(c.APIBaseURL.Hostname()) {
+	if c.ProxyURL != nil && c.APIBaseURL.Scheme == "http" && isLoopbackHost(c.APIBaseURL.Hostname()) {
 		return &ConfigError{Field: ProxyURLEnvironment, Detail: "must not be configured for an insecure loopback API URL"}
 	}
 	if strings.TrimSpace(c.CACertPath) != "" {

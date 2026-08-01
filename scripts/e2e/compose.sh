@@ -105,7 +105,7 @@ cleanup() {
   fi
   note "cleanup receipt before: $(owned_receipt)"
   if [[ "$status" -ne 0 ]]; then
-    compose logs --no-color acr-pki-init clickhouse migrate acr-ops-tls acr-migrate acr-api acr-tls-proxy 2>&1 | redact_log || true
+    compose logs --no-color clickhouse migrate api acr-migrate acr-api acr-tls-proxy 2>&1 | redact_log || true
     for service in clickhouse api; do
       health_container="$(compose ps -q "$service" 2>/dev/null || true)"
       if [[ -n "$health_container" ]]; then
@@ -146,7 +146,7 @@ write_clickhouse_readonly_client_config() {
   password="$(<"$STATE/secrets/clickhouse-password")"
   escaped="$(printf '%s' "$password" | xml_escape)"
   (umask 077; cat > "$STATE/clickhouse/client-readonly.xml" <<EOF
-<clickhouse><password>${escaped}</password><openSSL><client><loadDefaultCAFile>false</loadDefaultCAFile><caConfig>/run/acr-tls/ca.crt</caConfig><verificationMode>strict</verificationMode><invalidCertificateHandler><name>RejectCertificateHandler</name></invalidCertificateHandler></client></openSSL></clickhouse>
+<clickhouse><password>${escaped}</password></clickhouse>
 EOF
 )
 }
@@ -160,7 +160,7 @@ prepare_state() {
   ln -s "$(cd "$(dirname "$COMPOSE_FILE")" && pwd)/ops" "$STATE/stage/ops"
   ln -s "$(cd "$(dirname "$COMPOSE_FILE")" && pwd)/web" "$STATE/stage/web"
   ln -s "$REPO_ROOT/deploy" "$STATE/stage/deploy"
-  "$REPO_ROOT/scripts/deploy/local-pki.sh" --out "$STATE/pki" --dns 'localhost,acr-api,acr-tls-proxy,acr-ops-tls,clickhouse,postgres,127.0.0.1'
+  "$REPO_ROOT/scripts/deploy/local-pki.sh" --out "$STATE/pki" --dns 'localhost,acr-api,acr-tls-proxy,127.0.0.1'
   PORT="$(free_port)"
   write_secret "$STATE/secrets/postgres-password" "$(random_secret)"
   write_secret "$STATE/secrets/runtime-password" "$(random_secret)"
@@ -169,20 +169,13 @@ prepare_state() {
   write_secret "$STATE/secrets/evidence-kid" 'acr-e2e-kid'
   write_secret "$STATE/secrets/evidence-keys" "acr-e2e-kid=$(random_base64)"
   : > "$STATE/secrets/ops-token"; chmod 600 "$STATE/secrets/ops-token"
-  cat > "$STATE/clickhouse/tls.xml" <<EOF
-<clickhouse><tcp_port_secure>9440</tcp_port_secure><openSSL><server><certificateFile>/run/acr-tls/acr.crt</certificateFile><privateKeyFile>/run/acr-tls/acr.key</privateKeyFile><caConfig>/run/acr-tls/ca.crt</caConfig><verificationMode>relaxed</verificationMode></server></openSSL></clickhouse>
-EOF
-  cat > "$STATE/clickhouse/client-tls.xml" <<EOF
-<clickhouse><openSSL><client><loadDefaultCAFile>false</loadDefaultCAFile><caConfig>/run/acr-tls/ca.crt</caConfig><verificationMode>strict</verificationMode><invalidCertificateHandler><name>RejectCertificateHandler</name></invalidCertificateHandler></client></openSSL></clickhouse>
-EOF
   write_clickhouse_readonly_client_config
   cat > "$STATE/nginx-api.conf" <<'EOF'
 events {}
-http { server { listen 8443 ssl; ssl_certificate /run/pki/acr.crt; ssl_certificate_key /run/pki/acr.key; location / { proxy_pass http://acr-api:8080; } } }
-EOF
-  cat > "$STATE/nginx-ops.conf" <<'EOF'
-events {}
-http { server { listen 8443 ssl; ssl_certificate /run/pki/acr.crt; ssl_certificate_key /run/pki/acr.key; location / { proxy_pass http://api:8000; } } }
+http {
+  server { listen 8080; location / { proxy_pass http://acr-api:8080; } }
+  server { listen 8443 ssl; ssl_certificate /run/pki/acr.crt; ssl_certificate_key /run/pki/acr.key; location / { proxy_pass http://acr-api:8080; } }
+}
 EOF
 }
 
@@ -200,9 +193,9 @@ render_override() {
   pg="$(<"$STATE/secrets/postgres-password")"; runtime="$(<"$STATE/secrets/runtime-password")"; migration="$(<"$STATE/secrets/migration-password")"; ch="$(<"$STATE/secrets/clickhouse-password")"
   jwt="$(random_secret)"
   db="acr_${PROJECT//-/}_e2e"
-  write_secret "$STATE/secrets/runtime-dsn" "postgres://acr_runtime:${runtime}@postgres:5432/${db}?sslmode=verify-full&sslrootcert=/run/secrets/acr_ca"
-  write_secret "$STATE/secrets/migration-dsn" "postgres://acr_migration:${migration}@postgres:5432/${db}?sslmode=verify-full&sslrootcert=/run/secrets/acr_ca"
-  write_secret "$STATE/secrets/clickhouse-dsn" "clickhouse://acr_reader:${ch}@clickhouse:9440/${db}?secure=true&skip_verify=false"
+  write_secret "$STATE/secrets/runtime-dsn" "postgres://acr_runtime:${runtime}@postgres:5432/${db}?sslmode=disable"
+  write_secret "$STATE/secrets/migration-dsn" "postgres://acr_migration:${migration}@postgres:5432/${db}?sslmode=disable"
+  write_secret "$STATE/secrets/clickhouse-dsn" "clickhouse://acr_reader:${ch}@clickhouse:9000/${db}"
   postgres_port="$(free_port)"
   clickhouse_http_port="$(free_port)"
   clickhouse_native_port="$(free_port)"
@@ -213,16 +206,13 @@ services:
     image: "${POSTGRES_IMAGE}"
     ports: !override []
     environment: { POSTGRES_USER: devhealth, POSTGRES_PASSWORD: "${pg}", POSTGRES_DB: devhealth }
-    command: ["postgres", "-c", "ssl=on", "-c", "ssl_cert_file=/run/acr-tls/acr.crt", "-c", "ssl_key_file=/run/acr-tls/acr.key", "-c", "ssl_ca_file=/run/acr-tls/ca.crt"]
-    volumes: ["postgres_data:/var/lib/postgresql/data", "${STATE}/stage/ops/docker/init-extra-dbs.sh:/docker-entrypoint-initdb.d/init-extra-dbs.sh:ro", "acr_e2e_postgres_tls:/run/acr-tls:ro"]
-    depends_on: { acr-pki-init: { condition: service_completed_successfully } }
+    volumes: ["postgres_data:/var/lib/postgresql/data", "${STATE}/stage/ops/docker/init-extra-dbs.sh:/docker-entrypoint-initdb.d/init-extra-dbs.sh:ro"]
   clickhouse:
     image: "${CLICKHOUSE_IMAGE}"
     ports: !override []
     environment: { CLICKHOUSE_USER: default, CLICKHOUSE_PASSWORD: ch, CLICKHOUSE_DB: default, CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1" }
-    volumes: ["clickhouse_data:/var/lib/clickhouse", "acr_e2e_clickhouse_tls:/run/acr-tls:ro", "${STATE}/clickhouse/tls.xml:/etc/clickhouse-server/config.d/acr-e2e-tls.xml:ro", "${STATE}/clickhouse/client-tls.xml:/etc/clickhouse-client/config.d/acr-e2e-tls.xml:ro", "${STATE}/clickhouse/client-readonly.xml:/run/acr-e2e/clickhouse-client-readonly.xml:ro"]
-    healthcheck: { test: ["CMD-SHELL", "clickhouse-client --config-file=/etc/clickhouse-client/config.d/acr-e2e-tls.xml --secure --host clickhouse --port 9440 --user default --password ch --query 'SELECT 1'"], interval: 5s, timeout: 5s, retries: 12, start_period: 10s }
-    depends_on: { acr-pki-init: { condition: service_completed_successfully } }
+    volumes: ["clickhouse_data:/var/lib/clickhouse", "${STATE}/clickhouse/client-readonly.xml:/run/acr-e2e/clickhouse-client-readonly.xml:ro"]
+    healthcheck: { test: ["CMD-SHELL", "clickhouse-client --host clickhouse --port 9000 --user default --password ch --query 'SELECT 1'"], interval: 5s, timeout: 5s, retries: 12, start_period: 10s }
   pgbouncer: { image: "${PGBOUNCER_IMAGE}" }
   valkey:
     image: "${VALKEY_IMAGE}"
@@ -232,12 +222,6 @@ services:
     environment: { SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0", JWT_SECRET_KEY: "${jwt}" }
     healthcheck: { test: ["CMD", "wget", "--spider", "http://localhost:8000/ready"], interval: 5s, timeout: 5s, retries: 36, start_period: 120s }
   traefik: { ports: [] }
-  acr-pki-init:
-    image: "${POSTGRES_IMAGE}"
-    user: "0:0"
-    entrypoint: ["/bin/sh", "-ec"]
-    command: ["cp /input/acr.crt /input/acr.key /input/ca.crt /postgres-tls/; chown -R 70:70 /postgres-tls; chmod 600 /postgres-tls/acr.key; cp /input/acr.crt /input/acr.key /input/ca.crt /clickhouse-tls/; chown -R 101:101 /clickhouse-tls; chmod 600 /clickhouse-tls/acr.key"]
-    volumes: ["${STATE}/pki:/input:ro", "acr_e2e_postgres_tls:/postgres-tls", "acr_e2e_clickhouse_tls:/clickhouse-tls"]
   acr-api:
     image: "${IMAGE}"
     ports: !override []
@@ -251,10 +235,8 @@ services:
       ACR_REQUIRE_BACKING_STORES: "true"
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
-      ACR_CLICKHOUSE_CA_BUNDLE: /run/secrets/acr_ca
-      ACR_DEV_HEALTH_ENTITLEMENT_URL: https://acr-ops-tls:8443
+      ACR_DEV_HEALTH_ENTITLEMENT_URL: http://api:8000
       ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /run/secrets/acr_ops_token
-      ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE: /run/secrets/acr_ca
       ACR_DEVICE_VERIFICATION_URL: "${ACR_E2E_DEVICE_VERIFICATION_URL:-https://device.invalid/acr/device}"
       ACR_EVIDENCE_ID_ACTIVE_KID_FILE: /run/secrets/acr_evidence_active_kid
       ACR_EVIDENCE_ID_KEYS_FILE: /run/secrets/acr_evidence_keys
@@ -263,18 +245,18 @@ services:
       # explicitly rather than being throttled into an unrelated-looking failure.
       ACR_REQUESTS_PER_MINUTE: "${ACR_E2E_REQUESTS_PER_MINUTE:-60}"
     volumes: !override []
+    secrets: !override [acr_runtime_dsn, acr_clickhouse_dsn, acr_ops_token, acr_evidence_active_kid, acr_evidence_keys]
     depends_on: !override
       postgres: { condition: service_healthy }
       clickhouse: { condition: service_healthy }
       api: { condition: service_healthy }
       acr-db-acl: { condition: service_completed_successfully }
-      acr-ops-tls: { condition: service_started }
   acr-credentials:
     image: "${IMAGE}"
     environment:
       ACR_ENVIRONMENT: development
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
-    secrets: [acr_runtime_dsn, acr_ca]
+    secrets: [acr_runtime_dsn]
     networks: [dev-health]
   acr-migrate:
     image: "${IMAGE}"
@@ -282,20 +264,15 @@ services:
       ACR_ENVIRONMENT: development
       ACR_POSTGRES_CONNECTION_KIND: direct
       ACR_POSTGRES_MIGRATION_DSN_FILE: /run/secrets/acr_migration_dsn
+    secrets: !override [acr_migration_dsn]
   acr-tls-proxy:
     image: "${NGINX_IMAGE}"
     ports: ["127.0.0.1:${PORT}:8443"]
     volumes: ["${STATE}/pki:/run/pki:ro", "${STATE}/nginx-api.conf:/etc/nginx/nginx.conf:ro"]
     depends_on: { acr-api: { condition: service_started } }
     networks: [dev-health]
-  acr-ops-tls:
-    image: "${NGINX_IMAGE}"
-    volumes: ["${STATE}/pki:/run/pki:ro", "${STATE}/nginx-ops.conf:/etc/nginx/nginx.conf:ro"]
-    depends_on: { api: { condition: service_healthy } }
-    networks: [dev-health]
-volumes:
-  acr_e2e_postgres_tls: {}
-  acr_e2e_clickhouse_tls: {}
+secrets:
+  acr_ops_token: { file: "${STATE}/secrets/ops-token" }
 EOF
   # CLICKHOUSE_DB is load-bearing and was missing: every ops service's CLICKHOUSE_URI in the
   # product compose file resolves ${CLICKHOUSE_DB:-default}, so without it the long-running
@@ -317,7 +294,7 @@ assert_safe_render() {
   if ! grep -q 'host_ip: 127.0.0.1' "$STATE/rendered.yml" || ! grep -q 'target: 8443' "$STATE/rendered.yml" || ! grep -q "published: \"${PORT}\"" "$STATE/rendered.yml"; then
     die 'direct localhost TLS endpoint missing'
   fi
-  jq -e '.services["acr-api"].depends_on | keys == ["acr-db-acl","acr-ops-tls","api","clickhouse","postgres"]' "$STATE/rendered.json" >/dev/null \
+  jq -e '.services["acr-api"].depends_on | keys == ["acr-db-acl","api","clickhouse","postgres"]' "$STATE/rendered.json" >/dev/null \
     || die 'ACR API inherited an unexpected local-dev dependency'
   jq -e '(.services["acr-api"].volumes // []) | all(.[]; ((.source // "") | contains("/.acr-dev/") | not))' "$STATE/rendered.json" >/dev/null \
     || die 'ACR API inherited a local-dev bind mount'
@@ -369,7 +346,7 @@ provision_ops_control_plane() {
   # than a later one.
   compose up -d --wait clickhouse >/dev/null
   clickhouse_query "CREATE DATABASE IF NOT EXISTS $(ops_clickhouse_database)" >/dev/null
-  compose up -d postgres valkey pgbouncer mailpit migrate api acr-ops-tls >/dev/null
+  compose up -d postgres valkey pgbouncer mailpit migrate api >/dev/null
   if ! output="$(compose exec -T api dev-hops admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community)"; then
     printf '%s\n' "$output" >&2
     die 'Ops organization provisioning failed'
@@ -576,7 +553,7 @@ expect_failure() {
 }
 
 expect_clickhouse_readonly_denial() {
-  expect_failure 164 'Code: 164.*readonly' compose exec -T clickhouse clickhouse-client --config-file=/run/acr-e2e/clickhouse-client-readonly.xml --secure --host clickhouse --port 9440 --user acr_reader --query "INSERT INTO acr_${PROJECT//-/}_e2e.acr_e2e_readonly_probe (probe_id) VALUES (generateUUIDv4())"
+  expect_failure 164 'Code: 164.*readonly' compose exec -T clickhouse clickhouse-client --config-file=/run/acr-e2e/clickhouse-client-readonly.xml --host clickhouse --port 9000 --user acr_reader --query "INSERT INTO acr_${PROJECT//-/}_e2e.acr_e2e_readonly_probe (probe_id) VALUES (generateUUIDv4())"
 }
 
 expect_typed_http_error() {
@@ -637,7 +614,7 @@ main() {
     start_happy
     inject_existing_volume_drift
     compose down --remove-orphans >/dev/null
-    compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-ops-tls acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
+    compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
     wait_https_ready
     record_acl_probe
     run_mcp "$(<"$STATE/secrets/acr-rotated-token")"

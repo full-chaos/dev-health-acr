@@ -97,16 +97,14 @@ services:
       AUTH_SECRET: ${WEB_AUTH_SECRET}
       AUTH_URL: http://127.0.0.1:${WEB_PORT}
       BACKEND_URL: http://api:8000
-      ACR_API_ORIGIN: https://acr-tls-proxy:8443
+      ACR_API_ORIGIN: http://acr-tls-proxy:8080
       ACR_WEB_ASSERTION_AUDIENCE: dev-health-acr
       ACR_WEB_ASSERTION_ISSUER: dev-health-web
       ACR_WEB_ASSERTION_KEY_FILE: /run/acr-e2e/web-assertion.key
       ACR_WEB_ASSERTION_KID: acr-svs-web
-      NODE_EXTRA_CA_CERTS: /run/acr-e2e/ca.crt
       NEXT_PUBLIC_DEV_HEALTH_TEST_MODE: "false"
     volumes:
       - ${STATE}/web/web-assertion.key:/run/acr-e2e/web-assertion.key:ro
-      - ${STATE}/pki/ca.crt:/run/acr-e2e/ca.crt:ro
     depends_on:
       api: { condition: service_healthy }
       bugsink: { condition: service_started }
@@ -125,6 +123,16 @@ enable_cross_surface_request_id() {
   cat > "$STATE/nginx-api.conf" <<'EOF'
 events {}
 http {
+  server {
+    listen 8080;
+    location = /api/v1/agent-context/context-packets {
+      proxy_set_header X-Request-ID req_00000000000000000000000000002914;
+      proxy_pass http://acr-api:8080;
+    }
+    location / {
+      proxy_pass http://acr-api:8080;
+    }
+  }
   server {
     listen 8443 ssl;
     ssl_certificate /run/pki/acr.crt;
@@ -321,7 +329,7 @@ remove_runtime_entitlement() {
 
 bootstrap_failure_ops() {
   local output org_id token db
-  compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-ops-tls >/dev/null
+  compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api >/dev/null
   if ! output="$(compose exec -T api dev-hops admin orgs create --name "${PROJECT} SVS" --slug "$PROJECT" --description 'isolated SVS control plane' --tier community)"; then
     printf '%s\n' "$output" >&2
     svs_die 'Ops organization provisioning failed'
@@ -464,7 +472,7 @@ if [[ "$SCENARIO" == 'happy' ]]; then
   capture_browser_surface
   assert_cross_surface_agreement
   preserve_evidence
-  SAFE_BOUNDARY='real TLS API, host-local MCP, and authenticated browser BFF agreed on packet and evidence IDs; writeback remained disabled'
+  SAFE_BOUNDARY='edge-TLS API, host-local MCP, and authenticated browser BFF over private HTTP agreed on packet and evidence IDs; writeback remained disabled'
 else
   run_failure_scenario
 fi

@@ -45,7 +45,6 @@ func validServeConfig(t *testing.T) config.Config {
 	t.Helper()
 	for key, value := range map[string]string{
 		"ACR_ENVIRONMENT":                       "test",
-		"ACR_ALLOW_INSECURE_POSTGRES":           "true",
 		"ACR_REQUIRE_BACKING_STORES":            "true",
 		"ACR_CLICKHOUSE_DSN":                    "clickhouse://configured",
 		"ACR_POSTGRES_DSN":                      "postgres://configured",

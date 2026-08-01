@@ -31,51 +31,49 @@ const (
 // Config contains only process-level configuration. Credentials and request
 // identity are resolved by dedicated services and must never be stored here.
 type Config struct {
-	Environment                               string
-	ListenAddress                             string
-	LogLevel                                  slog.Level
-	RequestTimeout                            time.Duration
-	ReadHeaderTimeout                         time.Duration
-	ReadTimeout                               time.Duration
-	WriteTimeout                              time.Duration
-	IdleTimeout                               time.Duration
-	ShutdownTimeout                           time.Duration
-	ClickHouseDSN                             string
-	ClickHouseCACertPath                      string
-	PostgresDSN                               string
-	PostgresPoolerAdminDSN                    string
-	PostgresConnectionKind                    string
-	PostgresMaxOpenConns                      int
-	PostgresMaxIdleConns                      int
-	PostgresMaxIdleConnsConfigured            bool
-	PostgresConnMaxLifetime                   time.Duration
-	PostgresConnMaxIdleTime                   time.Duration
-	PostgresPingTimeout                       time.Duration
-	AllowInsecurePostgres                     bool
-	RequireBackingStores                      bool
-	EnableEpisodeWriteback                    bool
-	MinimumSidecarVersion                     string
-	RevokedClientVersions                     []string
-	EntitlementKey                            string
-	EvidenceIDActiveKID                       string
-	EvidenceIDKeys                            map[string][]byte
-	MaxItems                                  int
-	MaxOutputTokens                           int
-	MaxSerializedBytes                        int
-	RequestsPerMinute                         int
-	RequestControls                           RequestControlsConfig
-	TrustedProxyCIDRs                         []string
-	DevHealthEntitlementURL                   string
-	DevHealthEntitlementTokenFile             string
-	DevHealthEntitlementTimeout               time.Duration
-	DevHealthEntitlementMaxResponseBytes      int64
-	DevHealthEntitlementProxyURL              string
-	DevHealthEntitlementCACertPath            string
-	DevHealthEntitlementAllowInsecureLoopback bool
-	WebAssertionIssuer                        string
-	WebAssertionAudience                      string
-	WebAssertionJWKSFile                      string
-	DeviceVerificationURL                     string
+	Environment                          string
+	ListenAddress                        string
+	LogLevel                             slog.Level
+	RequestTimeout                       time.Duration
+	ReadHeaderTimeout                    time.Duration
+	ReadTimeout                          time.Duration
+	WriteTimeout                         time.Duration
+	IdleTimeout                          time.Duration
+	ShutdownTimeout                      time.Duration
+	ClickHouseDSN                        string
+	ClickHouseCACertPath                 string
+	PostgresDSN                          string
+	PostgresPoolerAdminDSN               string
+	PostgresConnectionKind               string
+	PostgresMaxOpenConns                 int
+	PostgresMaxIdleConns                 int
+	PostgresMaxIdleConnsConfigured       bool
+	PostgresConnMaxLifetime              time.Duration
+	PostgresConnMaxIdleTime              time.Duration
+	PostgresPingTimeout                  time.Duration
+	RequireBackingStores                 bool
+	EnableEpisodeWriteback               bool
+	MinimumSidecarVersion                string
+	RevokedClientVersions                []string
+	EntitlementKey                       string
+	EvidenceIDActiveKID                  string
+	EvidenceIDKeys                       map[string][]byte
+	MaxItems                             int
+	MaxOutputTokens                      int
+	MaxSerializedBytes                   int
+	RequestsPerMinute                    int
+	RequestControls                      RequestControlsConfig
+	TrustedProxyCIDRs                    []string
+	DevHealthEntitlementURL              string
+	DevHealthEntitlementTokenFile        string
+	DevHealthEntitlementTimeout          time.Duration
+	DevHealthEntitlementMaxResponseBytes int64
+	DevHealthEntitlementProxyURL         string
+	DevHealthEntitlementCACertPath       string
+	WebAssertionIssuer                   string
+	WebAssertionAudience                 string
+	WebAssertionJWKSFile                 string
+	DeviceVerificationURL                string
 }
 
 type lookupEnv func(string) (string, bool)
@@ -161,9 +159,6 @@ func load(lookup lookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	cfg.DevHealthEntitlementMaxResponseBytes = int64(devHealthEntitlementMaxResponseBytes)
-	if cfg.DevHealthEntitlementAllowInsecureLoopback, err = boolValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_ALLOW_INSECURE_LOOPBACK", false); err != nil {
-		return Config{}, err
-	}
 	if cfg.RequestControls, err = requestControlsValue(lookup, cfg.RequestsPerMinute); err != nil {
 		return Config{}, err
 	}
@@ -226,9 +221,6 @@ func (c Config) Validate() error {
 	}
 	if err := validateTrustedProxyCIDRs(c.TrustedProxyCIDRs); err != nil {
 		return err
-	}
-	if c.AllowInsecurePostgres && c.Environment != "test" {
-		return errors.New("ACR_ALLOW_INSECURE_POSTGRES is restricted to the test environment")
 	}
 	if err := validateEntitlementConfiguration(c); err != nil {
 		return err

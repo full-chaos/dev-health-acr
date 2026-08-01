@@ -185,17 +185,17 @@ migration_dsn="postgres://acr:${migration_password}@postgres:5432/acr?sslmode=di
 migration_files=("${repo_root}"/migrations/postgres/[0-9][0-9][0-9][0-9]_*.sql)
 expected_migration_count="${#migration_files[@]}"
 docker run --rm --network "$migration_network" "${readonly_probe_flags[@]}" \
-  -e ACR_ENVIRONMENT=test -e ACR_ALLOW_INSECURE_POSTGRES=true \
+  -e ACR_ENVIRONMENT=test \
   -e "ACR_POSTGRES_MIGRATION_DSN=${migration_dsn}" \
   --entrypoint /usr/local/bin/acr-migrate "$api_image" up >"${tmp_dir}/migration-first"
 grep -qxF "applied ${expected_migration_count} migrations" "${tmp_dir}/migration-first"
 docker run --rm --network "$migration_network" "${readonly_probe_flags[@]}" \
-  -e ACR_ENVIRONMENT=test -e ACR_ALLOW_INSECURE_POSTGRES=true \
+  -e ACR_ENVIRONMENT=test \
   -e "ACR_POSTGRES_MIGRATION_DSN=${migration_dsn}" \
   --entrypoint /usr/local/bin/acr-migrate "$api_image" up >"${tmp_dir}/migration-second"
 grep -qxF 'no migrations applied' "${tmp_dir}/migration-second"
 docker run --rm --network "$migration_network" "${readonly_probe_flags[@]}" \
-  -e ACR_ENVIRONMENT=test -e ACR_ALLOW_INSECURE_POSTGRES=true \
+  -e ACR_ENVIRONMENT=test \
   -e "ACR_POSTGRES_MIGRATION_DSN=${migration_dsn}" \
   --entrypoint /usr/local/bin/acr-migrate "$api_image" status >"${tmp_dir}/migration-status"
 for migration_file in "${migration_files[@]}"; do

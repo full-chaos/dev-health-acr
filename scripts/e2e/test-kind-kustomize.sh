@@ -57,17 +57,14 @@ test_parity_keeps_dependency_port_meanings_separate() {
   parity_tokens="$(grep 'for token in .*acr-migrate' "${HARNESS}")"
   api_policy="${ROOT}/deploy/kubernetes/acr/base/networkpolicy-api.yaml"
   [[ "${parity_tokens}" != *"port:"* ]] || fail 'port parity is coupled to untyped shared tokens'
-  grep -Fq "verify_semantic_port_parity 'ClickHouse native TLS' 9440 acr-api" "${HARNESS}" || fail 'parity does not require ClickHouse native TLS port 9440 from the API policy'
-  grep -Fq "verify_semantic_port_parity 'entitlement HTTPS' \"\${KUSTOMIZE_E2E_OPS_PORT}\" acr-api" "${HARNESS}" || fail 'parity does not derive entitlement HTTPS port from the fixture export'
+  grep -Fq "verify_semantic_port_parity 'ClickHouse native plaintext' 9000 acr-api" "${HARNESS}" || fail 'parity does not require ClickHouse native port 9000 from the API policy'
+  grep -Fq "verify_semantic_port_parity 'entitlement HTTP' 8000 acr-api" "${HARNESS}" || fail 'parity does not require entitlement HTTP port 8000'
   grep -Fq 'network_policy_tcp_ports' "${HARNESS}" || fail 'parity does not scope dependency ports to NetworkPolicy documents'
   grep -Fq "KUSTOMIZE_E2E_OPS_PORT=\"${literal_dollar}(e2e_fixture_value \"${literal_dollar}file\" ACR_E2E_OPS_ENTITLEMENT_PORT)\"" "${LIBRARY}" || fail 'Kustomize does not load the entitlement port from the fixture export'
-  grep -Fq "https://${literal_dollar}{KUSTOMIZE_E2E_OPS_HOST}:${literal_dollar}{KUSTOMIZE_E2E_OPS_PORT}" "${LIBRARY}" || fail 'Kustomize entitlement URL does not use its semantic fixture port'
-  grep -Fq 'port: 443' "${api_policy}" || fail 'API policy does not allow the base entitlement HTTPS port'
-  grep -Fq 'path: /spec/egress/3/ports/0/port' "${LIBRARY}" || fail 'fixture does not patch the API entitlement policy port'
-  fixture_policy_port="value: ${literal_dollar}{KUSTOMIZE_E2E_OPS_PORT}"
-  helm_policy_port="entitlementPort: ${literal_dollar}{KUSTOMIZE_E2E_OPS_PORT}"
-  grep -Fq "${fixture_policy_port}" "${LIBRARY}" || fail 'fixture policy does not source the entitlement port export'
-  grep -Fq "${helm_policy_port}" "${HARNESS}" || fail 'Helm values do not source the entitlement port export'
+  grep -Fq "http://${literal_dollar}{KUSTOMIZE_E2E_OPS_HOST}:8000" "${LIBRARY}" || fail 'Kustomize entitlement URL does not use the internal HTTP service port'
+  grep -Fq 'port: 8000' "${api_policy}" || fail 'API policy does not allow the base entitlement HTTP port'
+  helm_policy_port='entitlementPort: 8000'
+  grep -Fq "${helm_policy_port}" "${HARNESS}" || fail 'Helm values do not use the entitlement HTTP port'
 }
 
 test_base_and_fixture_entitlement_ports_render() {
@@ -82,9 +79,9 @@ test_base_and_fixture_entitlement_ports_render() {
   fi
   base_url="$(yq -r 'select(.kind == "ConfigMap" and .metadata.name == "acr-config") | .data.ACR_DEV_HEALTH_ENTITLEMENT_URL' "${base_render}")"
   base_ports="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "acr-api") | .spec.egress[]?.ports[]? | select(.protocol == "TCP") | .port' "${base_render}")"
-  [[ "${base_url}" == 'https://ops.dev-health.internal:443' ]] || fail "base entitlement URL = ${base_url}"
-  require_output "${base_ports}" 443
-  require_output "${base_ports}" 9440
+  [[ "${base_url}" == 'http://ops.dev-health.internal:8000' ]] || fail "base entitlement URL = ${base_url}"
+  require_output "${base_ports}" 8000
+  require_output "${base_ports}" 9000
   if grep -Fqx 8443 <<<"${base_ports}"; then rm -rf "${state_root}"; fail 'base policy retains fixture entitlement port'; fi
 
   # shellcheck source=kind-kustomize-lib.sh
@@ -100,10 +97,9 @@ test_base_and_fixture_entitlement_ports_render() {
   cp "${KUSTOMIZE_E2E_WORK}/rendered.yaml" "${fixture_render}"
   fixture_url="$(yq -r 'select(.kind == "ConfigMap" and .metadata.name == "acr-config") | .data.ACR_DEV_HEALTH_ENTITLEMENT_URL' "${fixture_render}")"
   fixture_ports="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "acr-api") | .spec.egress[]?.ports[]? | select(.protocol == "TCP") | .port' "${fixture_render}")"
-  [[ "${fixture_url}" == 'https://ops.example.test:8443' ]] || fail "fixture entitlement URL = ${fixture_url}"
-  require_output "${fixture_ports}" 8443
-  require_output "${fixture_ports}" 9440
-  if grep -Fqx 443 <<<"${fixture_ports}"; then rm -rf "${state_root}"; fail 'fixture policy retains base entitlement port'; fi
+  [[ "${fixture_url}" == 'http://ops.example.test:8000' ]] || fail "fixture entitlement URL = ${fixture_url}"
+  require_output "${fixture_ports}" 8000
+  require_output "${fixture_ports}" 9000
   rm -rf "${state_root}"
 }
 
@@ -237,8 +233,8 @@ EOF
 
   PATH="${fake_bin}:${PATH}" KUBECTL_LOG="${log}" ACR_E2E_STATE_ROOT="${state_root}" \
     ACR_E2E_LIB_ONLY=1 bash -c 'source "$1"; KUSTOMIZE_E2E_NAMESPACE=acr-test; e2e_load_fixture fixture; e2e_create_secrets' -- "${LIBRARY}"
-  grep -Fq 'clickhouse://default:@clickhouse.example.test:9440/default?secure=true&skip_verify=false&tls_server_name=clickhouse.example.test' "${log}" \
-    || fail 'ClickHouse DSN does not use the fixture native TLS port'
+  grep -Fq 'clickhouse://default:@clickhouse.example.test:9000/default' "${log}" \
+    || fail 'ClickHouse DSN does not use the native plaintext port'
   if grep -Fq 'clickhouse.example.test:8443' "${log}"; then
     rm -rf "${state_root}"
     fail 'ClickHouse DSN incorrectly uses the Ops entitlement port'

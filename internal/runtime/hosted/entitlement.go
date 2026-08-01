@@ -43,7 +43,6 @@ func newEntitlement(cfg config.Config) (entitlementChecker, error) {
 	client, err := entitlements.New(entitlements.Config{
 		BaseURL: baseURL, TokenFile: cfg.DevHealthEntitlementTokenFile, Timeout: cfg.DevHealthEntitlementTimeout,
 		MaxResponseBytes: cfg.DevHealthEntitlementMaxResponseBytes, ProxyURL: proxyURL, CACertPath: cfg.DevHealthEntitlementCACertPath,
-		AllowInsecureLoopback: cfg.DevHealthEntitlementAllowInsecureLoopback,
 	})
 	if err != nil {
 		return nil, err

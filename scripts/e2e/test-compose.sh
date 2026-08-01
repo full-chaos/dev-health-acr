@@ -13,7 +13,7 @@ for scenario in happy existing-volume missing-ops-token invalid-ca revoked-acr-t
 done
 grep -Fq 'refusing the operator default Compose project' "$script"
 grep -Fq 'down --volumes --remove-orphans' "$script"
-grep -Fq 'skip_verify=false' "$script"
+grep -Fq 'sslmode=disable' "$script"
 grep -Fq 'curl --fail --silent --show-error --cacert' "$script"
 grep -Fq 'MCP must remain host-local' "$script"
 grep -Fq 'zero owned containers, volumes, and networks' "$script"
@@ -25,8 +25,10 @@ grep -Fq "ACR_IMAGE=\"\$IMAGE\"" "$script"
 grep -Fq 'host_ip: 127.0.0.1' "$script"
 grep -Fq "REDIS_PORT=\"\$redis_port\"" "$script"
 grep -Fq "REPO_ROOT/.tmp/e2e/compose-\${PROJECT}" "$script"
-grep -Fq 'command: ["cp /input/acr.crt' "$script"
-grep -Fq 'chown -R 70:70 /postgres-tls' "$script"
+if grep -Eq 'acr-ops-tls|acr-pki-init|acr_e2e_(postgres|clickhouse)_tls|sslmode=verify-full|clickhouse:9440|ACR_CLICKHOUSE_CA_BUNDLE|ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE' "$script"; then
+  printf 'Compose E2E must not recreate internal TLS proxies or dependency PKI\n' >&2
+  exit 1
+fi
 grep -Fq 'Ops organization provisioning failed' "$script"
 grep -Fq 'actual_status="$?"' "$script"
 grep -Fq 'expected failure diagnostics' "$script"
@@ -79,6 +81,10 @@ if grep -Eq 'ACR_DEV_HEALTH_ENTITLEMENT_(URL|TOKEN_FILE|CA_BUNDLE)|acr_ops_token
   printf 'root-local Compose must use the offline development entitlement provider\n' >&2
   exit 1
 fi
+if grep -Eq 'ACR_ALLOW_INSECURE_POSTGRES|ACR_CLICKHOUSE_CA_BUNDLE|acr_ca|ACR_CA_FILE' "$root/deploy/compose/acr.compose.yml"; then
+  printf 'root-local Compose must not require an internal transport override or CA bundle\n' >&2
+  exit 1
+fi
 grep -Fq 'random_base64()' "$script"
 grep -Fq 'record_acl_probe()' "$script"
 grep -Fq 'rotate_acr_credential()' "$script"
@@ -89,7 +95,7 @@ grep -Fq 'X-ACR-Client-Version: 1.0.0' "$script"
 grep -Fq "\"\$ACR_CLIENT_VERSION_HEADER\"" "$script"
 grep -Fq 'rotated ACR credential did not authenticate against the direct localhost endpoint' "$script"
 grep -Fq 'previous ACR credential remained valid after immediate rotation' "$script"
-grep -F -A 3 'compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-ops-tls acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null' "$script" | grep -Fq "run_mcp \"\$(<\"\$STATE/secrets/acr-rotated-token\")\""
+grep -F -A 3 'compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null' "$script" | grep -Fq "run_mcp \"\$(<\"\$STATE/secrets/acr-rotated-token\")\""
 grep -Fq 'inject_existing_volume_drift' "$script"
 grep -Fq 'reconciled role, password, ownership, and ACL drift' "$script"
 grep -Fq "'\"status\":\"ok\"'" "$script"
@@ -97,14 +103,9 @@ grep -Fq '"method":"notifications/initialized","params":{}' "$script"
 grep -Fq 'coproc ACR_MCP' "$script"
 grep -Fq '.evidence_ref_ids? | arrays | .[]' "$script"
 grep -Fq 'HTTPS readiness timed out' "$script"
-grep -Fq 'acr_e2e_postgres_tls' "$script"
-grep -Fq 'acr_e2e_clickhouse_tls' "$script"
-grep -Fq 'chown -R 101:101 /clickhouse-tls' "$script"
 if grep -Fq -- '--accept-invalid-certificate' "$script"; then exit 1; fi
 if grep -Fq -- '--insecure' "$script"; then exit 1; fi
-grep -Fq '<verificationMode>strict</verificationMode>' "$script"
-grep -Fq '<name>RejectCertificateHandler</name>' "$script"
-grep -Fq 'clickhouse-client --config-file=/run/acr-e2e/clickhouse-client-readonly.xml --secure --host clickhouse --port 9440 --user acr_reader' "$script"
+grep -Fq 'clickhouse-client --config-file=/run/acr-e2e/clickhouse-client-readonly.xml --host clickhouse --port 9000 --user acr_reader' "$script"
 dollar='$'
 password_argument="--password=\"${dollar}(<\"${dollar}STATE/secrets/clickhouse-password\")\""
 if grep -Fq -- "$password_argument" "$script"; then exit 1; fi
@@ -116,7 +117,7 @@ expected_cleanup_guard="[[ ! -f \"\$${state_variable}/override.yml\" ]]"
 grep -Fq "$expected_cleanup_guard" "$script"
 if grep -Fq 'acr-secret-entrypoint' "$root/deploy/compose/acr.compose.yml"; then exit 1; fi
 grep -Fq 'entrypoint: ["/usr/local/bin/acr-migrate"]' "$root/deploy/compose/acr.compose.yml"
-grep -Fq 'secrets: [acr_migration_dsn, acr_ca]' "$root/deploy/compose/acr.compose.yml"
+grep -Fq 'secrets: [acr_migration_dsn]' "$root/deploy/compose/acr.compose.yml"
 grep -Fq 'acr-db-acl:' "$root/deploy/compose/acr.compose.yml"
 [[ "$(grep -Fc 'entrypoint: ["/usr/local/bin/acr-db-init"]' "$root/deploy/compose/acr.compose.yml")" -eq 2 ]]
 grep -Fq 'command: ["roles"]' "$root/deploy/compose/acr.compose.yml"
@@ -202,9 +203,9 @@ done
 if "$receipt_validator" 401 invalid_token 500 "$valid_receipt"; then
   exit 1
 fi
-"$pki" --out "$tmp" --dns 'localhost,acr-ops-tls,127.0.0.1'
+"$pki" --out "$tmp" --dns 'localhost,acr-tls-proxy,127.0.0.1'
 openssl verify -CAfile "$tmp/ca.crt" "$tmp/acr.crt" >/dev/null
-openssl x509 -in "$tmp/acr.crt" -noout -ext subjectAltName | grep -q 'DNS:acr-ops-tls'
+openssl x509 -in "$tmp/acr.crt" -noout -ext subjectAltName | grep -q 'DNS:acr-tls-proxy'
 
 compose_library="$tmp/compose-library.sh"
 sed '/^assert_project_unused$/,$d' "$script" > "$compose_library"

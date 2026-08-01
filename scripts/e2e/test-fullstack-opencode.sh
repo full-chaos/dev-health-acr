@@ -7,6 +7,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 script="$root/scripts/e2e/fullstack-opencode.sh"
+svs="$root/scripts/e2e/svs.sh"
 runtime_fixture_helper="$root/scripts/e2e/opencode-runtime-fixture.sh"
 workflow="$root/.github/workflows/fullstack-acceptance.yml"
 driver="$root/scripts/e2e/compose.sh"
@@ -17,7 +18,7 @@ prompt="$root/tests/fullstack/opencode/task-prompt.md"
 
 fail() { printf '[fullstack-contract] FAIL: %s\n' "$*" >&2; exit 1; }
 
-bash -n "$script" "$runtime_fixture_helper"
+bash -n "$script" "$svs" "$runtime_fixture_helper"
 command -v jq >/dev/null || fail 'jq is required'
 
 # --- the shared driver still exposes the seam this suite depends on -----------------------
@@ -98,6 +99,18 @@ if grep -Eq -- '--insecure|--accept-invalid-certificate|NODE_TLS_REJECT_UNAUTHOR
   fail 'TLS verification must never be weakened'
 fi
 grep -Fq -- '--cacert "$STATE/pki/ca.crt"' "$script" || fail 'API calls must pin the run CA'
+if grep -Eq 'ACR_API_ORIGIN: https://|NODE_EXTRA_CA_CERTS|/run/acr-e2e/ca\.crt' "$script"; then
+  fail 'the Web full-stack service must use private HTTP without an internal CA mount'
+fi
+grep -Fq 'ACR_API_ORIGIN: http://acr-api:8080' "$script" \
+  || fail 'the Web full-stack service must call ACR over private HTTP'
+if grep -Eq 'compose up .*acr-ops-tls|ACR_API_ORIGIN: https://|NODE_EXTRA_CA_CERTS|/run/acr-e2e/ca\.crt' "$svs"; then
+  fail 'SVS must not depend on an internal TLS service or CA mount'
+fi
+grep -Fq 'ACR_API_ORIGIN: http://acr-tls-proxy:8080' "$svs" \
+  || fail 'SVS browser traffic must use the proxy plaintext listener'
+[[ "$(grep -Fc 'listen 8080;' "$svs")" -ge 1 ]] \
+  || fail 'SVS request-ID proxy must retain a plaintext service listener'
 
 # --- read-only posture ---------------------------------------------------------------------
 grep -Fq 'writeback was enabled by default' "$script" || fail 'the writeback assertion is missing'
@@ -296,7 +309,7 @@ grep -Fq 'the ops api service reads ClickHouse database' "$script" \
 
 grep -Fq 'ACR_DEVICE_VERIFICATION_URL' "$driver" \
   || fail 'the isolated ACR runtime must receive the concrete web device verification URL'
-grep -Fq 'compose logs --no-color acr-pki-init clickhouse migrate acr-ops-tls acr-migrate acr-api acr-tls-proxy' "$driver" \
+grep -Fq 'compose logs --no-color clickhouse migrate api acr-migrate acr-api acr-tls-proxy' "$driver" \
   || fail 'failed isolated runs must retain the TLS proxy diagnostics for device-login transport failures'
 grep -Fq 'run_device_login_lifecycle' "$script" \
   || fail 'the live gate must exercise CLI login through web approval and lifecycle commands'

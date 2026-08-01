@@ -159,8 +159,7 @@ type hostedEnvironmentInput struct {
 func hostedProcessEnvironment(input hostedEnvironmentInput) map[string]string {
 	return map[string]string{
 		"ACR_ENVIRONMENT": "test", "ACR_REQUIRE_BACKING_STORES": "true", "ACR_ADDR": input.address,
-		"ACR_ALLOW_INSECURE_POSTGRES": "true",
-		"ACR_POSTGRES_DSN":            input.postgres.dsn, "ACR_CLICKHOUSE_DSN": input.clickhouse.dsn,
+		"ACR_POSTGRES_DSN": input.postgres.dsn, "ACR_CLICKHOUSE_DSN": input.clickhouse.dsn,
 		"ACR_EVIDENCE_ID_ACTIVE_KID": "current", "ACR_EVIDENCE_ID_KEYS": "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
 		"ACR_DEV_HEALTH_ENTITLEMENT_URL": input.entitlement.baseURL, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": input.entitlement.tokenPath,
 		"ACR_DEVICE_VERIFICATION_URL":          "https://verify.example.test/device",

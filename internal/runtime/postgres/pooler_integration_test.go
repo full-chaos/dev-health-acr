@@ -25,7 +25,7 @@ func TestOpen_rejectsActualPgBouncerTransactionAndStatementModes(t *testing.T) {
 			require.NotContains(t, migrationDSN, "pool_mode")
 
 			// When
-			_, err := Open(ctx, Config{DSN: migrationDSN, PoolerAdminDSN: adminDSN, PingTimeout: 30 * time.Second, AllowInsecure: true})
+			_, err := Open(ctx, Config{DSN: migrationDSN, PoolerAdminDSN: adminDSN, PingTimeout: 30 * time.Second})
 
 			// Then
 			require.ErrorIs(t, err, ErrTransactionPooler)
@@ -40,7 +40,7 @@ func TestOpen_acceptsActualPgBouncerSessionMode(t *testing.T) {
 	migrationDSN, adminDSN := newPgBouncerDSNs(t, ctx, "session")
 
 	// When
-	db, err := Open(ctx, Config{DSN: migrationDSN, PoolerAdminDSN: adminDSN, PingTimeout: 30 * time.Second, AllowInsecure: true})
+	db, err := Open(ctx, Config{DSN: migrationDSN, PoolerAdminDSN: adminDSN, PingTimeout: 30 * time.Second})
 
 	// Then
 	require.NoError(t, err)
@@ -55,7 +55,7 @@ func TestOpen_rejectsActualPgBouncerDatabasePoolModeOverride(t *testing.T) {
 	migrationDSN, adminDSN := newPgBouncerDSNsWithModes(t, ctx, pgBouncerModes{global: "session", database: "transaction"})
 
 	// When
-	_, err := Open(ctx, Config{DSN: migrationDSN, PoolerAdminDSN: adminDSN, PingTimeout: 30 * time.Second, AllowInsecure: true})
+	_, err := Open(ctx, Config{DSN: migrationDSN, PoolerAdminDSN: adminDSN, PingTimeout: 30 * time.Second})
 
 	// Then
 	require.ErrorIs(t, err, ErrTransactionPooler)
@@ -77,7 +77,7 @@ func TestOpen_resolvesActualPgBouncerForcedUserPoolMode(t *testing.T) {
 			migrationDSN, adminDSN := newPgBouncerDSNsWithModes(t, ctx, modes)
 
 			// When
-			database, err := Open(ctx, Config{DSN: migrationDSN, PoolerAdminDSN: adminDSN, PingTimeout: 30 * time.Second, AllowInsecure: true})
+			database, err := Open(ctx, Config{DSN: migrationDSN, PoolerAdminDSN: adminDSN, PingTimeout: 30 * time.Second})
 
 			// Then
 			if test.wantErr != nil {

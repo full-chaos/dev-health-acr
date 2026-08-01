@@ -41,17 +41,15 @@ The default listen address is `:8080`. Override it through `ACR_ADDR` or the `se
 | `ACR_POSTGRES_CONN_MAX_LIFETIME` | `30m` | PostgreSQL connection lifetime |
 | `ACR_POSTGRES_CONN_MAX_IDLE_TIME` | `5m` | PostgreSQL idle connection lifetime |
 | `ACR_POSTGRES_PING_TIMEOUT` | `5s` | PostgreSQL startup ping and readiness timeout |
-| `ACR_ALLOW_INSECURE_POSTGRES` | `false` | Test-environment-only override for disposable plaintext PostgreSQL fixtures |
 | `ACR_ENABLE_EPISODE_WRITEBACK` | `false` | Explicitly enables the hosted episode service and route permission |
 | `ACR_EVIDENCE_ID_ACTIVE_KID` / `ACR_EVIDENCE_ID_ACTIVE_KID_FILE` | empty | Active evidence-ID signing key identifier |
 | `ACR_EVIDENCE_ID_KEYS` / `ACR_EVIDENCE_ID_KEYS_FILE` | empty | Comma-separated evidence-ID key material |
-| `ACR_DEV_HEALTH_ENTITLEMENT_URL` | empty | Dev Health entitlement/health service origin (HTTPS required outside loopback) |
+| `ACR_DEV_HEALTH_ENTITLEMENT_URL` | empty | Dev Health entitlement/health service HTTP(S) origin |
 | `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE` | empty | Path to the bearer token file used to authenticate to the entitlement service |
 | `ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT` | `5s` | Per-request timeout for entitlement and health checks |
 | `ACR_DEV_HEALTH_ENTITLEMENT_MAX_RESPONSE_BYTES` | `16384` | Maximum bytes read from an entitlement response body |
 | `ACR_DEV_HEALTH_ENTITLEMENT_PROXY_URL` | empty | Optional explicit HTTP(S) proxy for entitlement requests; no credentials permitted |
 | `ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE` | empty | Optional PEM CA bundle for entitlement service TLS verification |
-| `ACR_DEV_HEALTH_ENTITLEMENT_ALLOW_INSECURE_LOOPBACK` | `false` | Allows plaintext HTTP only when the entitlement origin is loopback (local development) |
 | `ACR_TRUSTED_PROXY_CIDRS` | empty | Comma-separated proxy networks allowed to supply `X-Forwarded-For` |
 | `ACR_WEB_ASSERTION_ISSUER` | empty | Fixed trusted-web assertion issuer; must be set with audience and JWKS file |
 | `ACR_WEB_ASSERTION_AUDIENCE` | empty | Fixed trusted-web assertion audience; must be set with issuer and JWKS file |
@@ -61,12 +59,11 @@ DSN values are never emitted by `SafeAttributes` or startup logs. DSN presence
 alone is not readiness: staging/production startup composes the complete hosted
 runtime, verifies the PostgreSQL schema and privileges, executes a bounded
 ClickHouse catalog probe, and checks the entitlement service before listening.
-Hosted, credential-administration, and migration PostgreSQL/PgBouncer network
-DSNs require certificate-verified TLS; Unix sockets are accepted without TLS.
-The plaintext override is rejected outside `ACR_ENVIRONMENT=test`.
-ClickHouse must use certificate-verified TLS in staging and production. Plaintext
-ClickHouse is accepted only in development and test environments; supplying a CA
-bundle keeps certificate verification enabled in every environment.
+Hosted, credential-administration, and migration PostgreSQL/PgBouncer transports
+follow their DSNs. Plaintext and certificate-verified TLS are both supported in
+every environment. ClickHouse likewise follows its explicit DSN: native port
+9000 is the ordinary private-service default, while `secure=true` plus an
+optional CA bundle keeps certificate verification enabled when TLS is selected.
 
 Entitlement provider selection is automatic. A complete
 `ACR_DEV_HEALTH_ENTITLEMENT_URL` plus
@@ -74,8 +71,8 @@ Entitlement provider selection is automatic. A complete
 both selects an offline allow-all provider only in `development` and `test`;
 that provider still accepts only a non-empty organization and the fixed
 `agent_context_runtime` key. Partial remote configuration and orphaned proxy,
-CA, or insecure-loopback options are rejected. `staging` and `production`
-always require remote HTTPS entitlement and preserve the fail-before-listen
+CA options are rejected. `staging` and `production` always require a remote
+HTTP(S) entitlement origin and preserve the fail-before-listen
 health check. Remote readiness and request authorization remain fail closed
 during a Dev Health outage; local entitlement performs no network operation.
 

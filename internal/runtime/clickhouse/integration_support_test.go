@@ -29,7 +29,7 @@ func integrationClient(t *testing.T) (*Client, Options) {
 		}
 		t.Skip("ACR_CLICKHOUSE_INTEGRATION_ISOLATED=1 is required before the integration test can target seeded data")
 	}
-	options := Options{DSN: dsn, Environment: "test", TLS: integrationTLSConfig(t), QueryTimeout: 10 * time.Second}
+	options := Options{DSN: dsn, TLS: integrationTLSConfig(t), QueryTimeout: 10 * time.Second}
 	client, err := NewClickHouseQueryClientWithOptions(options)
 	if err != nil {
 		t.Fatalf("NewClickHouseQueryClientWithOptions() error = %v", err)

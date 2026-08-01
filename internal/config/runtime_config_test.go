@@ -43,7 +43,6 @@ func TestLoad_selects_local_entitlement_without_remote_configuration_in_developm
 			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_URL")
 			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE")
 			if environment == "development" {
-				delete(values, "ACR_ALLOW_INSECURE_POSTGRES")
 				values["ACR_POSTGRES_DSN"] = "postgres://configured?sslmode=verify-full"
 			}
 
@@ -97,7 +96,6 @@ func TestLoad_rejects_local_entitlement_in_staging_and_production(t *testing.T) 
 			values := completeRuntimeEnvironment()
 			values["ACR_ENVIRONMENT"] = environment
 			values["ACR_POSTGRES_DSN"] = "postgres://configured?sslmode=verify-full"
-			delete(values, "ACR_ALLOW_INSECURE_POSTGRES")
 			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_URL")
 			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE")
 
@@ -110,15 +108,12 @@ func TestLoad_rejects_local_entitlement_in_staging_and_production(t *testing.T) 
 }
 
 func TestLoad_rejects_remote_only_entitlement_options_in_local_mode(t *testing.T) {
-	for _, field := range []string{"ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE", "ACR_DEV_HEALTH_ENTITLEMENT_PROXY_URL", "ACR_DEV_HEALTH_ENTITLEMENT_ALLOW_INSECURE_LOOPBACK"} {
+	for _, field := range []string{"ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE", "ACR_DEV_HEALTH_ENTITLEMENT_PROXY_URL"} {
 		t.Run(field, func(t *testing.T) {
 			values := completeRuntimeEnvironment()
 			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_URL")
 			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE")
 			values[field] = "configured"
-			if field == "ACR_DEV_HEALTH_ENTITLEMENT_ALLOW_INSECURE_LOOPBACK" {
-				values[field] = "true"
-			}
 
 			_, err := load(mapLookup(values))
 			if err == nil || !strings.Contains(err.Error(), field) {
@@ -187,69 +182,20 @@ func TestLoad_episode_writeback_defaults_disabled(t *testing.T) {
 	}
 }
 
-func TestLoad_requires_verified_PostgreSQL_TLS_for_hosted_network_DSNs(t *testing.T) {
-	tests := []struct {
-		name    string
-		primary string
-		pooler  string
-	}{
-		{name: "implicit prefer", primary: "postgres://db.example.test/acr"},
-		{name: "disabled", primary: "postgres://db.example.test/acr?sslmode=disable"},
-		{name: "encrypted but unverified", primary: "postgres://db.example.test/acr?sslmode=require"},
-		{name: "pooler disabled", primary: "postgres://db.example.test/acr?sslmode=verify-full", pooler: "postgres://pooler.example.test/pgbouncer?sslmode=disable"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			// Given
-			values := completeRuntimeEnvironment()
-			delete(values, "ACR_ALLOW_INSECURE_POSTGRES")
-			values["ACR_ENVIRONMENT"] = "production"
-			values["ACR_POSTGRES_DSN"] = test.primary
-			values["ACR_POSTGRES_POOLER_ADMIN_DSN"] = test.pooler
-
-			// When
-			_, err := load(mapLookup(values))
-
-			// Then
-			if err == nil || !strings.Contains(err.Error(), "verified TLS") {
-				t.Fatalf("load() error = %v, want verified TLS rejection", err)
-			}
-		})
-	}
-}
-
-func TestLoad_allows_explicit_insecure_PostgreSQL_only_in_test_environment(t *testing.T) {
-	// Given
+func TestLoad_accepts_plaintext_PostgreSQL_DSNs_in_production(t *testing.T) {
 	values := completeRuntimeEnvironment()
-	values["ACR_ENVIRONMENT"] = "test"
-	values["ACR_ALLOW_INSECURE_POSTGRES"] = "true"
+	values["ACR_ENVIRONMENT"] = "production"
+	values["ACR_POSTGRES_DSN"] = "postgres://db.internal/acr?sslmode=disable"
+	values["ACR_POSTGRES_POOLER_ADMIN_DSN"] = "postgres://pooler.internal/pgbouncer?sslmode=disable"
+	values["ACR_POSTGRES_CONNECTION_KIND"] = "pgbouncer"
 
-	// When
 	cfg, err := load(mapLookup(values))
 
-	// Then
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.AllowInsecurePostgres {
-		t.Fatal("explicit test-only insecure PostgreSQL override was not retained")
-	}
-	values["ACR_ENVIRONMENT"] = "development"
-	if _, err := load(mapLookup(values)); err == nil {
-		t.Fatal("insecure PostgreSQL override was accepted outside the test environment")
-	}
-}
-
-func TestLoad_rejectsInsecurePostgresGloballyEvenWithoutRequiredBackingStores(t *testing.T) {
-	// Given
-	values := map[string]string{"ACR_ALLOW_INSECURE_POSTGRES": "true"}
-
-	// When
-	_, err := load(mapLookup(values))
-
-	// Then
-	if err == nil || !strings.Contains(err.Error(), "ACR_ALLOW_INSECURE_POSTGRES") {
-		t.Fatalf("load() error = %v, want restricted-to-test rejection even without required backing stores", err)
+	if cfg.PostgresDSN != values["ACR_POSTGRES_DSN"] || cfg.PostgresPoolerAdminDSN != values["ACR_POSTGRES_POOLER_ADMIN_DSN"] {
+		t.Fatalf("plaintext PostgreSQL DSNs were not retained: %#v", cfg)
 	}
 }
 
@@ -319,7 +265,6 @@ func TestLoad_acceptsPgBouncerConnectionKindWithAdminDSN(t *testing.T) {
 func completeRuntimeEnvironment() map[string]string {
 	return map[string]string{
 		"ACR_ENVIRONMENT":                       "test",
-		"ACR_ALLOW_INSECURE_POSTGRES":           "true",
 		"ACR_REQUIRE_BACKING_STORES":            "true",
 		"ACR_CLICKHOUSE_DSN":                    "clickhouse://configured",
 		"ACR_POSTGRES_DSN":                      "postgres://configured",
