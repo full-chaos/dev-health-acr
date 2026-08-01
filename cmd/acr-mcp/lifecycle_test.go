@@ -1079,6 +1079,36 @@ func TestLogoutRetainsCredential_when_remoteRevocationFails(t *testing.T) {
 	}
 }
 
+func TestLogoutLocalRemovesCredentialWithoutHostedConfiguration(t *testing.T) {
+	// Given
+	token := validDoctorToken(114)
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(sidecar.APIURLEnvironment, "://invalid-hosted-configuration")
+	t.Setenv(sidecar.TokenEnvironment, "")
+	t.Setenv(sidecar.TokenKeyringDisabledEnvironment, "true")
+	t.Setenv(sidecar.TokenFileEnvironment, path)
+
+	// When
+	code, output := captureStdout(t, func() int { return runCLI([]string{"logout", "--local"}) })
+
+	// Then
+	if code != 0 {
+		t.Fatalf("local logout exit code = %d, want 0", code)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("file credential remains after local logout: %v", err)
+	}
+	if !strings.Contains(output, "remote revocation was not attempted") {
+		t.Fatalf("local logout output = %q, want explicit remote-revocation warning", output)
+	}
+	if strings.Contains(output, token) {
+		t.Fatal("local logout output leaked credential material")
+	}
+}
+
 func TestLogoutRetainsCredential_whenSelfRevokeReturnsMalformedSuccess(t *testing.T) {
 	// Given
 	token := validDoctorToken(105)

@@ -15,8 +15,6 @@ func TestLoad_requires_complete_runtime_when_backing_stores_are_explicit(t *test
 		{name: "clickhouse", missing: "ACR_CLICKHOUSE_DSN"},
 		{name: "evidence key id", missing: "ACR_EVIDENCE_ID_ACTIVE_KID"},
 		{name: "evidence keys", missing: "ACR_EVIDENCE_ID_KEYS"},
-		{name: "entitlement URL", missing: "ACR_DEV_HEALTH_ENTITLEMENT_URL"},
-		{name: "entitlement token", missing: "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE"},
 		{name: "device verification URL", missing: "ACR_DEVICE_VERIFICATION_URL"},
 		{name: "postgres connection kind", missing: "ACR_POSTGRES_CONNECTION_KIND"},
 	}
@@ -32,6 +30,99 @@ func TestLoad_requires_complete_runtime_when_backing_stores_are_explicit(t *test
 			// Then
 			if err == nil || !strings.Contains(err.Error(), test.missing) {
 				t.Fatalf("load() error = %v, want missing %s", err, test.missing)
+			}
+		})
+	}
+}
+
+func TestLoad_selects_local_entitlement_without_remote_configuration_in_development_and_test(t *testing.T) {
+	for _, environment := range []string{"development", "test"} {
+		t.Run(environment, func(t *testing.T) {
+			values := completeRuntimeEnvironment()
+			values["ACR_ENVIRONMENT"] = environment
+			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_URL")
+			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE")
+			if environment == "development" {
+				delete(values, "ACR_ALLOW_INSECURE_POSTGRES")
+				values["ACR_POSTGRES_DSN"] = "postgres://configured?sslmode=verify-full"
+			}
+
+			cfg, err := load(mapLookup(values))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.EntitlementMode(); got != EntitlementModeLocal {
+				t.Fatalf("entitlement mode = %q, want %q", got, EntitlementModeLocal)
+			}
+		})
+	}
+}
+
+func TestLoad_selects_remote_entitlement_when_URL_and_token_are_complete(t *testing.T) {
+	values := completeRuntimeEnvironment()
+
+	cfg, err := load(mapLookup(values))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.EntitlementMode(); got != EntitlementModeRemote {
+		t.Fatalf("entitlement mode = %q, want %q", got, EntitlementModeRemote)
+	}
+}
+
+func TestLoad_rejects_partial_remote_entitlement_configuration(t *testing.T) {
+	tests := []struct {
+		name   string
+		remove string
+	}{
+		{name: "missing URL", remove: "ACR_DEV_HEALTH_ENTITLEMENT_URL"},
+		{name: "missing token", remove: "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			values := completeRuntimeEnvironment()
+			delete(values, test.remove)
+
+			_, err := load(mapLookup(values))
+			if err == nil || !strings.Contains(err.Error(), "must be configured together") {
+				t.Fatalf("load() error = %v, want partial entitlement rejection", err)
+			}
+		})
+	}
+}
+
+func TestLoad_rejects_local_entitlement_in_staging_and_production(t *testing.T) {
+	for _, environment := range []string{"staging", "production"} {
+		t.Run(environment, func(t *testing.T) {
+			values := completeRuntimeEnvironment()
+			values["ACR_ENVIRONMENT"] = environment
+			values["ACR_POSTGRES_DSN"] = "postgres://configured?sslmode=verify-full"
+			delete(values, "ACR_ALLOW_INSECURE_POSTGRES")
+			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_URL")
+			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE")
+
+			_, err := load(mapLookup(values))
+			if err == nil || !strings.Contains(err.Error(), "remote entitlement configuration is required") {
+				t.Fatalf("load() error = %v, want remote-only %s rejection", err, environment)
+			}
+		})
+	}
+}
+
+func TestLoad_rejects_remote_only_entitlement_options_in_local_mode(t *testing.T) {
+	for _, field := range []string{"ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE", "ACR_DEV_HEALTH_ENTITLEMENT_PROXY_URL", "ACR_DEV_HEALTH_ENTITLEMENT_ALLOW_INSECURE_LOOPBACK"} {
+		t.Run(field, func(t *testing.T) {
+			values := completeRuntimeEnvironment()
+			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_URL")
+			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE")
+			values[field] = "configured"
+			if field == "ACR_DEV_HEALTH_ENTITLEMENT_ALLOW_INSECURE_LOOPBACK" {
+				values[field] = "true"
+			}
+
+			_, err := load(mapLookup(values))
+			if err == nil || !strings.Contains(err.Error(), field) {
+				t.Fatalf("load() error = %v, want orphaned %s rejection", err, field)
 			}
 		})
 	}

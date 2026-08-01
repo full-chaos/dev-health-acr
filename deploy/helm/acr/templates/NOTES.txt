@@ -6,12 +6,20 @@ Image (immutable):
 Boundary reminders (ADR-0004):
   - This chart packages only acr-api and its pre-install/pre-upgrade migration
     Job. No MCP workload is deployed; acr-mcp remains host-local.
-  - Postgres, ClickHouse, and the Dev Health Ops entitlement service are
-    external, pre-existing dependencies. This chart provisions none of them.
+  - Postgres and ClickHouse are external, pre-existing dependencies. This chart
+    provisions neither of them.
+  {{- if include "acr.remoteEntitlement" . }}
+  - Remote entitlement is enabled; Dev Health Ops is an external dependency.
+  {{- else }}
+  - Local development/test entitlement is enabled; no Dev Health Ops URL,
+    token, CA bundle, or network dependency is used.
+  {{- end }}
   - All credentials are referenced from existing Secrets:
       runtime:      {{ .Values.credentials.runtime.existingSecret }}
       migration:    {{ .Values.credentials.migration.existingSecret }}
+      {{- if include "acr.remoteEntitlement" . }}
       entitlement:  {{ .Values.credentials.entitlementToken.existingSecret }}
+      {{- end }}
     Ensure these Secrets exist in namespace {{ .Release.Namespace }} before the
     migration hook runs (live existence is verified at deploy time, Todo 19).
 

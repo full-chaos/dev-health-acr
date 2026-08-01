@@ -64,21 +64,19 @@ services:
     environment:
       ACR_ADDR: :8080
       ACR_ENVIRONMENT: development
+      ACR_REQUIRE_BACKING_STORES: "true"
       ACR_POSTGRES_CONNECTION_KIND: direct
       ACR_ENABLE_EPISODE_WRITEBACK: ${ACR_ENABLE_EPISODE_WRITEBACK:-false}
+      ACR_DEVICE_VERIFICATION_URL: ${ACR_DEVICE_VERIFICATION_URL:-http://localhost:3000/acr/device}
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
       ACR_CLICKHOUSE_CA_BUNDLE: /run/secrets/acr_ca
-      ACR_DEV_HEALTH_ENTITLEMENT_URL: https://api:8000
-      ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /run/secrets/acr_ops_token
-      ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE: /run/secrets/acr_ca
       ACR_EVIDENCE_ID_ACTIVE_KID_FILE: /run/secrets/acr_evidence_active_kid
       ACR_EVIDENCE_ID_KEYS_FILE: /run/secrets/acr_evidence_keys
-    secrets: [acr_runtime_dsn, acr_clickhouse_dsn, acr_ops_token, acr_ca, acr_evidence_active_kid, acr_evidence_keys]
+    secrets: [acr_runtime_dsn, acr_clickhouse_dsn, acr_ca, acr_evidence_active_kid, acr_evidence_keys]
     depends_on:
       postgres: { condition: service_healthy }
       clickhouse: { condition: service_healthy }
-      api: { condition: service_healthy }
       acr-db-acl: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/readyz"]
@@ -100,7 +98,6 @@ secrets:
   acr_runtime_dsn: { file: "${ACR_RUNTIME_DSN_FILE:?ACR_RUNTIME_DSN_FILE is required}" }
   acr_migration_dsn: { file: "${ACR_MIGRATION_DSN_FILE:?ACR_MIGRATION_DSN_FILE is required}" }
   acr_clickhouse_dsn: { file: "${ACR_CLICKHOUSE_DSN_FILE:?ACR_CLICKHOUSE_DSN_FILE is required}" }
-  acr_ops_token: { file: "${ACR_OPS_TOKEN_FILE:?ACR_OPS_TOKEN_FILE is required}" }
   acr_ca: { file: "${ACR_CA_FILE:?ACR_CA_FILE is required}" }
   acr_evidence_active_kid: { file: "${ACR_EVIDENCE_ACTIVE_KID_FILE:?ACR_EVIDENCE_ACTIVE_KID_FILE is required}" }
   acr_evidence_keys: { file: "${ACR_EVIDENCE_KEYS_FILE:?ACR_EVIDENCE_KEYS_FILE is required}" }

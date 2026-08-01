@@ -132,6 +132,14 @@ the absolute Dev Health Web approval page (for example,
 `https://health.example.com/acr/device`). The chart rejects a backed release
 that omits this runtime-required value.
 
+Development and test renders select the offline local entitlement provider when
+`config.entitlement.url`, `credentials.entitlementToken`, and
+`config.entitlementCaBundle` are all omitted. This is the default in
+`values-development.yaml` and the local Kind Helm driver. Supplying a complete
+URL and token Secret reference selects the remote provider instead. Staging and
+production reject local or partial entitlement configuration before rendering;
+their remote startup and request-time checks remain fail closed.
+
 ### Kustomize
 
 The checked-in overlays are private caller-owned namespace templates, not

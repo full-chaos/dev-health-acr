@@ -124,7 +124,7 @@
     "credentials": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["runtime", "migration", "entitlementToken"],
+      "required": ["runtime", "migration"],
       "properties": {
         "runtime": {
           "type": "object",
@@ -152,7 +152,6 @@
         "entitlementToken": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["existingSecret"],
           "properties": {
             "existingSecret": { "type": "string" },
             "key": { "type": "string" }

@@ -199,6 +199,8 @@ case "$scenario" in
     exit 0 ;;
   mutable-token-copy-image)
     negative mutable-token-copy-image "mutable-image: security.tokenCopyImage" \
+      --set-string "config.entitlement.url=https://ops.dev-health.internal" \
+      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
       --set-string "security.tokenCopyImage=registry.internal/dev-health-acr/token-copy:latest"
     exit 0 ;;
   missing-device-verification-url)
@@ -281,9 +283,18 @@ if grep -qiE '^\s*stringData:\s*$' "$rendered"; then
 fi
 pass "secret-ref: credentials and imagePullSecrets are existing-Secret references only"
 
-# Gate 8: the projected Secret filename, rather than its source key, is copied by the init container.
+# Gate 8: local mode has no remote entitlement inputs; explicit remote mode
+# retains the hardened Secret projection contract.
+if grep -Eq 'ACR_DEV_HEALTH_ENTITLEMENT_|prepare-entitlement-token|entitlement-token|entitlement-ca|port: 443' "$rendered"; then
+  fail_gate "local-entitlement: development render contains a remote entitlement URL, token, CA, init container, or egress port"
+fi
+pass "local-entitlement: development render omits remote URL/token/CA/network inputs"
+
 distinct_token_render="$workdir/distinct-token.yaml"
 render \
+  --set-string 'config.entitlement.url=https://ops.dev-health.internal' \
+  --set-string 'credentials.entitlementToken.existingSecret=acr-entitlement-token' \
+  --set-string 'config.entitlementCaBundle.existingSecret=acr-entitlement-ca' \
   --set-string 'credentials.entitlementToken.key=source-token' \
   --set-string 'config.entitlement.tokenFileName=runtime-token' \
   >"$distinct_token_render"
@@ -292,15 +303,22 @@ grep -qF 'cp /source/runtime-token /target/runtime-token' "$distinct_token_rende
 pass "entitlement-token: init container copies the projected Secret filename"
 
 token_copy_image="registry.example/token-copy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-token_copy_render="$(render --set-string "security.tokenCopyImage=${token_copy_image}")"
+token_copy_render="$(render \
+  --set-string 'config.entitlement.url=https://ops.dev-health.internal' \
+  --set-string 'credentials.entitlementToken.existingSecret=acr-entitlement-token' \
+  --set-string "security.tokenCopyImage=${token_copy_image}")"
 token_copy_block="$(awk '/        - name: prepare-entitlement-token/{inside=1} inside{print} inside && /^      containers:/{exit}' <<<"${token_copy_render}")"
 grep -Fq "image: \"${token_copy_image}\"" <<<"${token_copy_block}" \
   || fail_gate "token-copy-image: prepare-entitlement-token does not use security.tokenCopyImage"
 pass "token-copy-image: prepare-entitlement-token uses the configured immutable image"
 
 assert_restricted_container() {
-  local name="$1" block
-  block="$(container_block "$name")"
+  local name="$1" source="${2:-$rendered}" block
+  block="$(awk -v name="$name" '
+    $0 == "        - name: " name { inside = 1 }
+    inside && $0 ~ /^        - name: / && $0 != "        - name: " name { exit }
+    inside { print }
+  ' "$source")"
   [[ -n "$block" ]] || fail_gate "restricted-container: $name is missing"
   for token in 'runAsNonRoot: true' 'runAsUser: 65532' 'readOnlyRootFilesystem: true' 'allowPrivilegeEscalation: false' 'privileged: false' 'type: RuntimeDefault'; do
     grep -qF "$token" <<<"$block" || fail_gate "restricted-container: $name must render '$token'"
@@ -313,7 +331,7 @@ assert_restricted_container() {
   fi
 }
 
-assert_restricted_container prepare-entitlement-token
+assert_restricted_container prepare-entitlement-token "$distinct_token_render"
 assert_restricted_container acr-api
 assert_restricted_container acr-migrate
 pass "pod-security: every rendered API, migration, and present init container is Restricted-compatible"
@@ -328,7 +346,7 @@ migrate = next((d for d in policies if 'component: migration' in d), '')
 def fail(msg):
     print('  FAIL network-policy: '+msg, file=sys.stderr); sys.exit(1)
 if not api or not migrate: fail('API and migration NetworkPolicies must both render')
-for port in ('port: 5432', 'port: 9440', 'port: 443'):
+for port in ('port: 5432', 'port: 9440'):
     if port not in api: fail('API egress is missing TLS-native '+port)
 if 'port: 8443' in api or 'port: 8123' in api: fail('API egress contains a legacy plaintext/non-default ClickHouse port')
 if 'protocol: TCP' not in api: fail('API egress must explicitly use TCP')
@@ -336,7 +354,8 @@ if 'port: 8080' not in api or 'namespaceSelector:' not in api: fail('API ingress
 if 'port: 5432' not in migrate or 'protocol: TCP' not in migrate: fail('migration policy must allow TCP PostgreSQL only')
 for port in ('port: 9440', 'port: 443', 'port: 8080'):
     if port in migrate: fail('migration policy must not allow non-PostgreSQL dependency '+port)
-print('  ok   network-policy: API permits TCP TLS-native Postgres/ClickHouse/Ops ports and Gateway ingress; migration permits only DNS + TCP Postgres')
+if 'port: 443' in api: fail('local API egress must not retain the remote entitlement port')
+print('  ok   network-policy: local API permits TCP TLS-native Postgres/ClickHouse ports and Gateway ingress; migration permits only DNS + TCP Postgres')
 PY
 
 # Gate 9: migration ordering via pre-install/pre-upgrade hook.
@@ -413,14 +432,11 @@ device_verification_url="$(grep 'ACR_DEVICE_VERIFICATION_URL' "$rendered" | head
   || fail_gate "device-verification-url: rendered URL '$device_verification_url' does not match the configured approval page"
 pass "device-verification-url: hosted runtime approval URL is rendered ($device_verification_url)"
 
-# Gate 14: entitlement URL is an origin (no path).
-ent_url="$(grep 'ACR_DEV_HEALTH_ENTITLEMENT_URL' "$rendered" | head -1 | grep -oE 'https?://[^"]+')"
-if [[ -n "$ent_url" ]]; then
-  grep -Eq '^https?://[^/]+/?$' <<<"$ent_url" || fail_gate "entitlement-origin: rendered URL '$ent_url' has a path; runtime requires an origin"
-  pass "entitlement-origin: rendered entitlement URL is an origin ($ent_url)"
-else
-  printf '  note entitlement URL empty in these values\n'
-fi
+# Gate 14: remote mode remains explicit and HTTPS-only.
+ent_url="$(grep 'ACR_DEV_HEALTH_ENTITLEMENT_URL' "$distinct_token_render" | head -1 | grep -oE 'https?://[^"]+')"
+[[ "$ent_url" == "https://ops.dev-health.internal" ]] \
+  || fail_gate "entitlement-origin: explicit remote render did not retain the HTTPS origin"
+pass "entitlement-origin: explicit remote render retains HTTPS origin and token projection"
 
 # Gate 15: Secret rotation rolls pods (checksum/credentials present and reactive).
 cc=$(grep -c 'checksum/credentials' "$rendered")
@@ -454,6 +470,8 @@ grep -Eq 'secretName: "?acr-postgres-ca"?' "$rendered" || fail_gate "postgres-tl
 pass "postgres-tls: Deployment and migration Job mount the existing CA bundle for verified DSNs"
 
 custom_projection="$(render \
+  --set-string config.entitlement.url=https://ops.dev-health.internal \
+  --set-string credentials.entitlementToken.existingSecret=acr-entitlement-token \
   --set-string credentials.entitlementToken.key=entitlement.custom \
   --set-string config.entitlement.tokenFileName=token.custom \
   --set-string config.postgresCaBundle.existingSecret=acr-postgres-ca \

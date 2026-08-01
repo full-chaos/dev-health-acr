@@ -7,7 +7,7 @@ import (
 
 const (
 	loginUsageLine  = "Usage: acr-mcp login [--refresh] [--no-browser] [--org <org>] [--repo <owner/repo>]"
-	logoutUsageLine = "Usage: acr-mcp logout"
+	logoutUsageLine = "Usage: acr-mcp logout [--local]"
 )
 
 var errLifecycleArgsInvalid = errors.New("lifecycle arguments are invalid")
@@ -22,6 +22,10 @@ type loginArgs struct {
 	noBrowser bool
 	org       string
 	repos     []string
+}
+
+type logoutArgs struct {
+	local bool
 }
 
 func parseLoginArgs(args []string) (loginArgs, error) {
@@ -86,4 +90,14 @@ func loginHelpRequested(args []string) bool {
 
 func logoutHelpRequested(args []string) bool {
 	return len(args) == 1 && isHelpArg(args[0])
+}
+
+func parseLogoutArgs(args []string) (logoutArgs, error) {
+	if len(args) == 0 {
+		return logoutArgs{}, nil
+	}
+	if len(args) == 1 && args[0] == "--local" {
+		return logoutArgs{local: true}, nil
+	}
+	return logoutArgs{}, errLifecycleArgsInvalid
 }

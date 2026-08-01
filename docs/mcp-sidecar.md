@@ -184,7 +184,7 @@ If permissions are too loose (macOS/Linux) or the platform doesn't support bound
 
 ```text
 Usage: acr-mcp login [--refresh] [--no-browser] [--org <org>] [--repo <owner/repo>]
-Usage: acr-mcp logout
+Usage: acr-mcp logout [--local]
 ```
 
 `login` runs the device authorization flow, prints the verification address and
@@ -201,7 +201,10 @@ repository.
 device flow. Rotation preserves the existing repository scopes; it never widens
 an exact credential. To adopt the organization-wide default from an older exact
 credential, run `acr-mcp logout`, then complete a fresh `acr-mcp login` approval.
-`logout` revokes remotely and then removes local material.
+`logout` revokes remotely and then removes local material. `logout --local`
+removes local material without loading hosted API configuration or attempting
+remote revocation, and warns that the remotely issued credentials may remain
+active.
 
 Plain `login` is idempotent. When a shape-valid local credential already exists,
 it verifies that exact credential with the hosted capabilities endpoint while
@@ -268,6 +271,16 @@ starts only after every revocation has succeeded. Any revocation failure retains
 credential that is still live. An established credential the server answers
 `invalid_token` for is already inactive and does not block cleanup.
 
+**`logout --local` is the explicit offline-erasure path.** It does not load the
+hosted URL, CA bundle, or other HTTP configuration and sends no revocation
+requests. It still acquires the lifecycle lock, enumerates every configured
+credential source, and uses the same snapshot-bound purge, so an unreadable
+source or a value changed after enumeration remains fail closed. Successful
+local removal is not proof of remote revocation; the command says that plainly,
+and the credentials may remain usable by another holder until they expire or an
+administrator revokes them. Do not use this mode as evidence of server-side
+logout.
+
 The purge that follows is a single deduplicated pass over the whole set, not one
 purge per credential. Purging one at a time reported the same configured
 location once per credential and, worse, could remove a location belonging to a
@@ -285,6 +298,10 @@ revoked and removed first. Unset the variable in your shell to finish:
 ```bash
 acr-mcp logout        # revokes everything, clears the keyring entry and token file
 unset ACR_API_TOKEN   # the one location logout cannot reach
+
+# If the hosted service is unavailable:
+acr-mcp logout --local # clears removable local material; does not revoke remotely
+unset ACR_API_TOKEN
 ```
 
 Reported locations are exact so they are actionable, but they are built from
@@ -292,9 +309,10 @@ operator-supplied configuration, so each is token-redacted, length-bounded, and
 quoted before printing, and the list itself is capped with the omitted count
 stated rather than silently truncated.
 
-**MCP itself stays local.** `login` and `logout` talk to the hosted API over
-HTTPS; the MCP surface (`serve`) is local STDIO only and exposes no network
-listener, so no credential lifecycle operation is reachable from another host.
+**MCP itself stays local.** `login` and ordinary `logout` talk to the hosted API
+over HTTPS; `logout --local` performs no network operation. The MCP surface
+(`serve`) is local STDIO only and exposes no network listener, so no credential
+lifecycle operation is reachable from another host.
 
 ### Token Format
 

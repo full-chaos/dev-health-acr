@@ -486,7 +486,8 @@ func runLogoutCommand(args []string) int {
 		fmt.Fprintln(os.Stdout, logoutUsageLine)
 		return 0
 	}
-	if len(args) != 0 {
+	parsed, err := parseLogoutArgs(args)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "logout: invalid arguments")
 		fmt.Fprintln(os.Stderr, logoutUsageLine)
 		return 2
@@ -497,10 +498,13 @@ func runLogoutCommand(args []string) int {
 		return lifecycleExitFailure
 	}
 	defer session.Close()
-	cfg, err := sidecar.LoadConfig()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "logout: configuration is invalid: "+sidecar.DescribeConfigError(err))
-		return lifecycleExitFailure
+	var cfg sidecar.Config
+	if !parsed.local {
+		cfg, err = sidecar.LoadConfig()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "logout: configuration is invalid: "+sidecar.DescribeConfigError(err))
+			return lifecycleExitFailure
+		}
 	}
 	material, err := session.CollectCredentialMaterial()
 	if err != nil {
@@ -511,8 +515,20 @@ func runLogoutCommand(args []string) int {
 		return lifecycleExitFailure
 	}
 	if len(material) == 0 {
+		if parsed.local {
+			fmt.Fprintln(os.Stdout, "already logged out locally; remote revocation was not attempted")
+			return 0
+		}
 		fmt.Fprintln(os.Stderr, "logout: a valid local credential is required")
 		return lifecycleExitFailure
+	}
+	if parsed.local {
+		if err := session.PurgeAllCredentialMaterial(material); err != nil {
+			fmt.Fprintln(os.Stderr, "logout: local cleanup requires operator action at "+describeCleanupLocations(err)+"; remote revocation was not attempted and credentials may remain active")
+			return lifecycleExitFailure
+		}
+		fmt.Fprintln(os.Stdout, "local logout successful; remote revocation was not attempted and credentials may remain active")
+		return 0
 	}
 	for _, token := range sidecar.DistinctCredentialTokens(material) {
 		if err := revokeCredentialToken(context.Background(), cfg, token); err != nil {

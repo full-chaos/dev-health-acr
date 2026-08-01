@@ -140,9 +140,9 @@ operator has run a live CodeGraph environment.
 ## Local credential lifecycle boundary
 
 `acr-mcp login` and `acr-mcp logout` are the only local operations that create
-or destroy credential material, and they hold to four rules.
+or destroy credential material, and they hold to five rules.
 
-- **Nothing local is deleted while a credential may still be live.** Logout
+- **Ordinary logout deletes nothing while a credential may still be live.** Logout
   enumerates every configured location -- environment, OS keyring, token file --
   and revokes each distinct value before removing any of them. Resolving the
   single highest-precedence credential instead left lower-precedence ones live on
@@ -155,6 +155,13 @@ or destroy credential material, and they hold to four rules.
   and reported rather than deleted. This narrows, but does not eliminate, the
   window between proving a value and deleting it by address; see the parent-
   directory rule below for the same caveat applied to the unlink itself.
+- **Offline erasure is explicit and does not claim revocation.** `logout --local`
+  deliberately skips hosted configuration and network calls, then uses the same
+  complete enumeration, lifecycle lock, and snapshot-bound purge. The command
+  warns that another holder may continue using the remotely active credential.
+  An unreadable source still prevents partial deletion, and an exported
+  `ACR_API_TOKEN` still requires action in the parent shell. This mode is local
+  secret erasure, not evidence of server-side logout.
 - **An ambiguous write is treated as a write.** A credential store that commits
   and then fails -- a keyring mutation whose write-out or reply fails, a token file
   renamed into place whose directory fsync fails -- returns the candidate locator
@@ -184,9 +191,9 @@ or destroy credential material, and they hold to four rules.
   concludes. Operator-facing cleanup locations are token-redacted, bounded, and
   quoted, so a configured path or keyring address cannot forge log lines.
 
-The MCP surface itself is local STDIO with no network listener; credential
-lifecycle traffic is outbound HTTPS to the hosted API only, so no lifecycle
-operation is reachable from another host.
+The MCP surface itself is local STDIO with no network listener. Login and
+ordinary logout use outbound HTTPS to the hosted API; `logout --local` performs
+no network operation. No lifecycle operation is reachable from another host.
 
 ## Limits: current contract versus downstream enforcement
 
