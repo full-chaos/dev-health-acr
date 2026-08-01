@@ -3,7 +3,7 @@ Default-deny NetworkPolicy with explicit ingress to the API port and explicit
 egress to DNS and the external Postgres/ClickHouse/entitlement dependency ports.
 Endpoints are resolved from referenced Secrets at runtime, so standard Kubernetes
 NetworkPolicy can constrain protocol and port but cannot inspect TLS or restrict a
-secret-supplied hostname. Callers must configure only TLS-native dependency ports.
+secret-supplied hostname. Callers must configure ports matching their explicit DSNs and origins.
 */ -}}
 {{- if .Values.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1

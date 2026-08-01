@@ -1102,16 +1102,14 @@ services:
       AUTH_URL: http://127.0.0.1:${WEB_PORT}
       BACKEND_URL: http://api:8000
       REDIS_URL: redis://valkey:6379/0
-      ACR_API_ORIGIN: https://acr-tls-proxy:8443
+      ACR_API_ORIGIN: http://acr-api:8080
       ACR_WEB_ASSERTION_AUDIENCE: dev-health-acr
       ACR_WEB_ASSERTION_ISSUER: dev-health-web
       ACR_WEB_ASSERTION_KEY_FILE: /run/acr-e2e/web-assertion.key
       ACR_WEB_ASSERTION_KID: acr-fullstack-web
-      NODE_EXTRA_CA_CERTS: /run/acr-e2e/ca.crt
       NEXT_PUBLIC_DEV_HEALTH_TEST_MODE: "false"
     volumes:
       - ${STATE}/web/web-assertion.key:/run/acr-e2e/web-assertion.key:ro
-      - ${STATE}/pki/ca.crt:/run/acr-e2e/ca.crt:ro
     depends_on:
       api: { condition: service_healthy }
       bugsink: { condition: service_started }

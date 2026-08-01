@@ -58,7 +58,7 @@ func TestCredentialCLIRejectsRotationSourcesWithoutReplacementOverlapOrSuccessAu
 					"--actor", "22222222-2222-2222-2222-222222222222")
 				require.Zero(t, revoked.exitCode, revoked.stderr)
 			}
-			db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn, AllowInsecure: true})
+			db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, db.Close()) })
 			var beforeExpires, beforeRevoked sql.NullTime

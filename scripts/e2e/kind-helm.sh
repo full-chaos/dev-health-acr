@@ -398,7 +398,7 @@ static_check() {
   assert_denied_egress_failure_marker() {
     local block dsn marker literal_dollar='$'
     block="$(function_block run_denied_egress)"
-    dsn="expected_migration_failure_dsn=\"postgres://postgres:acr-e2e-pass@postgres.${literal_dollar}{ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt\""
+    dsn="expected_migration_failure_dsn=\"postgres://postgres:acr-e2e-pass@postgres.${literal_dollar}{ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:5432/acr?sslmode=disable\""
     marker='expected_migration_failure_marker="PostgreSQL is unavailable"'
     for token in "${dsn}" "${marker}" assert_failed_migration_hook; do
       grep -Fq -- "${token}" <<<"${block}" || {
@@ -450,8 +450,7 @@ static_check() {
   assert_local_entitlement_contract
   assert_denied_egress_failure_marker
   assert_kind_image_cleanup_aliases
-  check_static 'postgresCaBundle' 'chart mounts the PostgreSQL CA referenced by verified DSNs' "${CHART}/templates/deployment.yaml"
-  check_static 'tcp_port_secure' 'fixture exposes TLS ClickHouse native transport' "${FIXTURE_SCRIPT}"
+  check_static 'clickhousePort: 9000' 'chart defaults to the internal ClickHouse native port' "${CHART}/values.yaml"
   check_static 'acr-e2e\.fullchaos\.dev/fixture-id' 'fixture permits only explicitly labelled consumer namespaces' "${FIXTURE_SCRIPT}"
   if [[ "${failures}" -ne 0 ]]; then
     write_evidence failed "static checks failed (${failures})"
@@ -685,12 +684,10 @@ build_local_image() {
 create_fixture_references() {
   local runtime_dsn migration_dsn clickhouse_dsn
   assert_source_guard
-  runtime_dsn="postgres://postgres:acr-e2e-pass@postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
+  runtime_dsn="postgres://postgres:acr-e2e-pass@postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:5432/acr?sslmode=disable"
   migration_dsn="${runtime_dsn}"
-  clickhouse_dsn="clickhouse://readonly@clickhouse.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:${ACR_E2E_CLICKHOUSE_NATIVE_PORT}/default?secure=true"
+  clickhouse_dsn="clickhouse://readonly@clickhouse.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:9000/default"
 
-  kube -n "${namespace}" create secret generic acr-postgres-ca --from-file=ca.crt="${ACR_E2E_CA_CERT}" >/dev/null
-  kube -n "${namespace}" create secret generic acr-clickhouse-ca --from-file=ca.crt="${ACR_E2E_CA_CERT}" >/dev/null
   kube -n "${namespace}" create secret generic acr-runtime \
     --from-literal=ACR_POSTGRES_DSN="${runtime_dsn}" \
     --from-literal=ACR_CLICKHOUSE_DSN="${clickhouse_dsn}" \
@@ -764,12 +761,6 @@ config:
   requireBackingStores: true
   postgresConnectionKind: direct
   deviceVerificationUrl: https://${ACR_E2E_GATEWAY_HOSTNAME}/acr/device
-  postgresCaBundle:
-    existingSecret: acr-postgres-ca
-    key: ca.crt
-  clickhouseCaBundle:
-    existingSecret: acr-clickhouse-ca
-    key: ca.crt
 credentials:
   runtime:
     existingSecret: acr-runtime
@@ -807,7 +798,7 @@ networkPolicy:
   egress:
     dns: true
     postgresPort: 5432
-    clickhousePort: ${ACR_E2E_CLICKHOUSE_NATIVE_PORT}
+    clickhousePort: 9000
 EOF
   printf '%s\n' "${target}"
 }
@@ -959,13 +950,17 @@ assert_network_policy() {
     fail "NetworkPolicy blocked required PostgreSQL egress under Restricted Pod Security Admission"
     return 1
   fi
-  if ! network_policy_probe deny "nc -z -w 5 clickhouse.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local 8123" 1; then
-    fail "NetworkPolicy did not prove a completed forbidden ClickHouse plaintext connection failure"
+  if ! network_policy_probe allow-clickhouse "nc -z -w 5 clickhouse.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local 9000" 0; then
+    fail "NetworkPolicy blocked required ClickHouse native egress"
+    return 1
+  fi
+  if ! network_policy_probe deny "nc -z -w 5 clickhouse.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local 9440" 1; then
+    fail "NetworkPolicy did not prove an unconfigured ClickHouse TLS port is denied"
     return 1
   fi
   denied="$(kube -n "${namespace}" get networkpolicy "${deploy}" -o jsonpath='{.spec.policyTypes[*]}')"
   [[ "${denied}" == *Egress* ]] || { fail "NetworkPolicy lacks default-deny egress"; return 1; }
-  log "NetworkPolicy allows required TLS-native ports and denies plaintext ClickHouse; Kubernetes policy is port-only and cannot verify a TLS destination hostname"
+  log "NetworkPolicy allows required internal Postgres and ClickHouse ports and denies unconfigured dependency ports"
 }
 
 upgrade_for_checksum_rollouts() {
@@ -1087,13 +1082,13 @@ assert_denied_migration_egress() {
     fail "denied egress NetworkPolicy did not retain default deny while excluding PostgreSQL port 5432"; return 1;
   }
   migration_dsn="$(kube -n "${namespace}" get secret acr-migration -o jsonpath='{.data.ACR_POSTGRES_MIGRATION_DSN}' | base64 -d)"
-  [[ "${migration_dsn}" == "postgres://postgres:acr-e2e-pass@postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt" ]] || {
-    fail "denied egress changed the verified migration DSN instead of isolating the NetworkPolicy"; return 1;
+  [[ "${migration_dsn}" == "postgres://postgres:acr-e2e-pass@postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:5432/acr?sslmode=disable" ]] || {
+    fail "denied egress changed the migration DSN instead of isolating the NetworkPolicy"; return 1;
   }
   if ! network_policy_probe migration-deny "nc -z -w 5 postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local 5432" 1 migration; then
     fail "selected denied-egress policy did not block an equivalent PostgreSQL connection"; return 1
   fi
-  log "migration failure is causally supported by a selected default-deny NetworkPolicy: an equivalent PostgreSQL connection failed while the verified DSN remained unchanged"
+  log "migration failure is causally supported by a selected default-deny NetworkPolicy: an equivalent PostgreSQL connection failed while the DSN remained unchanged"
 }
 
 inject_denied_migration_policy() {
@@ -1187,7 +1182,7 @@ run_bad_migration() {
   build_local_image bad-migration
   current="${built_image_ref}"
   expected_migration_failure_marker="PostgreSQL is unavailable"
-  expected_migration_failure_dsn='postgres://postgres:acr-e2e-pass@postgres.invalid:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt'
+  expected_migration_failure_dsn='postgres://postgres:acr-e2e-pass@postgres.invalid:5432/acr?sslmode=disable'
   kube -n "${namespace}" delete secret acr-migration >/dev/null
   kube -n "${namespace}" create secret generic acr-migration \
     --from-literal="ACR_POSTGRES_MIGRATION_DSN=${expected_migration_failure_dsn}" >/dev/null
@@ -1198,7 +1193,7 @@ run_bad_migration() {
   fi
   diagnose_workload_failure
   assert_failed_migration_hook
-  queue_expected_failure bad-migration 'injected verified-TLS migration endpoint failed as PostgreSQL unavailable before API readiness'
+  queue_expected_failure bad-migration 'injected migration endpoint failed as PostgreSQL unavailable before API readiness'
   log 'expected failure proven: bad migration hook failed before application readiness'
   return 0
 }
@@ -1291,7 +1286,7 @@ EOF
 run_denied_egress() {
   local current values
   expected_migration_failure_marker="PostgreSQL is unavailable"
-  expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
+  expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:5432/acr?sslmode=disable"
 	create_fixture_references
   build_local_image denied-egress
   current="${built_image_ref}"
@@ -1304,7 +1299,7 @@ run_denied_egress() {
   diagnose_workload_failure
   assert_failed_migration_hook
   assert_denied_migration_egress
-  queue_expected_failure denied-migration-egress 'migration egress denial failed nonzero because its selected default-deny NetworkPolicy excludes verified PostgreSQL port 5432; an equivalent selected probe also failed; no Available API Deployment'
+  queue_expected_failure denied-migration-egress 'migration egress denial failed nonzero because its selected default-deny NetworkPolicy excludes PostgreSQL port 5432; an equivalent selected probe also failed; no Available API Deployment'
   log 'expected failure proven: migration egress is denied by its NetworkPolicy, not a changed DSN'
   return 0
 }

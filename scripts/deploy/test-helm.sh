@@ -38,7 +38,7 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               mutable-image, invalid-secret-ref, invalid-image-pull-secret-ref,
               shared-runtime-migration-dsn, injected-mcp, entitlement-path,
               pgbouncer-missing-pooler, extra-container, direct-with-pooler,
-              http-url, userinfo-url, query-url, fragment-url, unknown-root-key,
+              unsupported-entitlement-scheme, userinfo-url, query-url, fragment-url, unknown-root-key,
               unknown-config-key, alternate-port, mutable-token-copy-image,
               missing-device-verification-url, invalid-device-verification-url.
 
@@ -169,9 +169,9 @@ case "$scenario" in
     negative direct-with-pooler "direct-mode-pooler" \
       --set-string "credentials.runtime.poolerAdminDsnKey=ACR_POSTGRES_POOLER_ADMIN_DSN"
     exit 0 ;;
-  http-url)
-    negative http-url "entitlement-origin" \
-      --set-string "config.entitlement.url=http://ops.dev-health.internal"
+  unsupported-entitlement-scheme)
+    negative unsupported-entitlement-scheme "entitlement-origin" \
+      --set-string "config.entitlement.url=ftp://ops.dev-health.internal"
     exit 0 ;;
   userinfo-url)
     negative userinfo-url "entitlement-origin" \
@@ -292,7 +292,7 @@ pass "local-entitlement: development render omits remote URL/token/CA/network in
 
 distinct_token_render="$workdir/distinct-token.yaml"
 render \
-  --set-string 'config.entitlement.url=https://ops.dev-health.internal' \
+  --set-string 'config.entitlement.url=http://ops.dev-health.internal:8000' \
   --set-string 'credentials.entitlementToken.existingSecret=acr-entitlement-token' \
   --set-string 'config.entitlementCaBundle.existingSecret=acr-entitlement-ca' \
   --set-string 'credentials.entitlementToken.key=source-token' \
@@ -346,16 +346,16 @@ migrate = next((d for d in policies if 'component: migration' in d), '')
 def fail(msg):
     print('  FAIL network-policy: '+msg, file=sys.stderr); sys.exit(1)
 if not api or not migrate: fail('API and migration NetworkPolicies must both render')
-for port in ('port: 5432', 'port: 9440'):
-    if port not in api: fail('API egress is missing TLS-native '+port)
-if 'port: 8443' in api or 'port: 8123' in api: fail('API egress contains a legacy plaintext/non-default ClickHouse port')
+for port in ('port: 5432', 'port: 9000'):
+    if port not in api: fail('API egress is missing internal dependency '+port)
+if 'port: 9440' in api or 'port: 8123' in api: fail('API egress contains an unexpected ClickHouse port')
 if 'protocol: TCP' not in api: fail('API egress must explicitly use TCP')
 if 'port: 8080' not in api or 'namespaceSelector:' not in api: fail('API ingress must be constrained to the configured Gateway namespace selector')
 if 'port: 5432' not in migrate or 'protocol: TCP' not in migrate: fail('migration policy must allow TCP PostgreSQL only')
-for port in ('port: 9440', 'port: 443', 'port: 8080'):
+for port in ('port: 9000', 'port: 8000', 'port: 8080'):
     if port in migrate: fail('migration policy must not allow non-PostgreSQL dependency '+port)
-if 'port: 443' in api: fail('local API egress must not retain the remote entitlement port')
-print('  ok   network-policy: local API permits TCP TLS-native Postgres/ClickHouse ports and Gateway ingress; migration permits only DNS + TCP Postgres')
+if 'port: 8000' in api: fail('local API egress must not retain the remote entitlement port')
+print('  ok   network-policy: local API permits TCP Postgres/ClickHouse ports and Gateway ingress; migration permits only DNS + TCP Postgres')
 PY
 
 # Gate 9: migration ordering via pre-install/pre-upgrade hook.
@@ -432,11 +432,11 @@ device_verification_url="$(grep 'ACR_DEVICE_VERIFICATION_URL' "$rendered" | head
   || fail_gate "device-verification-url: rendered URL '$device_verification_url' does not match the configured approval page"
 pass "device-verification-url: hosted runtime approval URL is rendered ($device_verification_url)"
 
-# Gate 14: remote mode remains explicit and HTTPS-only.
+# Gate 14: remote mode remains explicit and accepts an ordinary HTTP service origin.
 ent_url="$(grep 'ACR_DEV_HEALTH_ENTITLEMENT_URL' "$distinct_token_render" | head -1 | grep -oE 'https?://[^"]+')"
-[[ "$ent_url" == "https://ops.dev-health.internal" ]] \
-  || fail_gate "entitlement-origin: explicit remote render did not retain the HTTPS origin"
-pass "entitlement-origin: explicit remote render retains HTTPS origin and token projection"
+[[ "$ent_url" == "http://ops.dev-health.internal:8000" ]] \
+  || fail_gate "entitlement-origin: explicit remote render did not retain the HTTP origin"
+pass "entitlement-origin: explicit remote render retains HTTP origin and token projection"
 
 # Gate 15: Secret rotation rolls pods (checksum/credentials present and reactive).
 cc=$(grep -c 'checksum/credentials' "$rendered")
@@ -464,10 +464,10 @@ grep -q 'ACR_POSTGRES_POOLER_ADMIN_DSN' <<<"$pgb" || fail_gate "pgbouncer: runti
 grep -q 'ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN' <<<"$pgb" || fail_gate "pgbouncer: migration ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN not wired in pgbouncer mode"
 pass "pgbouncer: connection kind pgbouncer wires runtime + migration pooler admin DSNs"
 
-pg_ca_mounts=$(grep -c '/var/run/acr/postgres-ca' "$rendered")
-[[ "$pg_ca_mounts" -ge 2 ]] || fail_gate "postgres-tls: Deployment and migration Job must mount the PostgreSQL CA bundle (found $pg_ca_mounts)"
-grep -Eq 'secretName: "?acr-postgres-ca"?' "$rendered" || fail_gate "postgres-tls: existing PostgreSQL CA Secret reference missing"
-pass "postgres-tls: Deployment and migration Job mount the existing CA bundle for verified DSNs"
+if grep -q '/var/run/acr/postgres-ca' "$rendered"; then
+  fail_gate "postgres-transport: ordinary development render must not require a PostgreSQL CA bundle"
+fi
+pass "postgres-transport: ordinary development render has no mandatory PostgreSQL CA bundle"
 
 custom_projection="$(render \
   --set-string config.entitlement.url=https://ops.dev-health.internal \

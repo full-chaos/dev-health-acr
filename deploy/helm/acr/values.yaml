@@ -56,8 +56,8 @@ config:
   # Absolute browser URL shown by the device authorization flow. This normally
   # points at the Dev Health Web approval page, not at acr-api itself.
   deviceVerificationUrl: ""
-  # External Dev Health Ops entitlement endpoint (HTTPS required outside
-  # loopback). The service is consumed, never deployed, by this chart.
+  # Dev Health Ops entitlement origin. HTTP and HTTPS are both supported; use
+  # HTTPS plus entitlementCaBundle when the internal service explicitly uses TLS.
   entitlement:
     url: ""
     timeout: "5s"
@@ -209,8 +209,8 @@ networkPolicy:
   egress:
     # Allow DNS resolution.
     dns: true
-    # TLS-native dependency ports. These must match the secure DSNs and
-    # entitlement origin in the referenced Secrets/configuration.
+    # Internal dependency ports. Override these when the explicit DSNs or
+    # entitlement origin select different ports, including TLS-native ports.
     postgresPort: 5432
-    clickhousePort: 9440
-    entitlementPort: 443
+    clickhousePort: 9000
+    entitlementPort: 8000

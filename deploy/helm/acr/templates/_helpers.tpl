@@ -227,8 +227,8 @@ remote token or CA inputs.
 {{- $tokenSecret := .Values.credentials.entitlementToken.existingSecret | default "" -}}
 {{- $caSecret := .Values.config.entitlementCaBundle.existingSecret | default "" -}}
 {{- if $url -}}
-{{- if not (regexMatch "^https://[^/@?#]+$" $url) -}}
-{{- fail (printf "entitlement-origin: config.entitlement.url %q must be an HTTPS origin only (https scheme, host[:port], no userinfo, path, query, or fragment)" $url) -}}
+{{- if not (regexMatch "^https?://[^/@?#]+$" $url) -}}
+{{- fail (printf "entitlement-origin: config.entitlement.url %q must be an HTTP(S) origin only (http or https scheme, host[:port], no userinfo, path, query, or fragment)" $url) -}}
 {{- end -}}
 {{- if not $tokenSecret -}}
 {{- fail "entitlement-partial: credentials.entitlementToken.existingSecret is required when config.entitlement.url is set" -}}

@@ -118,7 +118,7 @@ fi
 require_literal "image: $image" "immutable-image: requested image was not rendered"
 pass "immutable-image: API and migration images use the requested digest"
 
-for token in 'secretKeyRef:' 'name: acr-runtime-credentials' 'name: acr-migration-credentials' 'ACR_POSTGRES_DSN' 'ACR_POSTGRES_MIGRATION_DSN' 'imagePullSecrets:' 'ACR_CLICKHOUSE_CA_BUNDLE' 'ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE' 'secretName: acr-postgres-ca' 'secretName: acr-clickhouse-ca' 'secretName: acr-entitlement-ca'; do
+for token in 'secretKeyRef:' 'name: acr-runtime-credentials' 'name: acr-migration-credentials' 'ACR_POSTGRES_DSN' 'ACR_POSTGRES_MIGRATION_DSN' 'imagePullSecrets:' 'ACR_DEV_HEALTH_ENTITLEMENT_URL: http://ops.dev-health.internal:8000'; do
   require_literal "$token" "secret-ref: missing $token"
 done
 if grep -qE 'name: acr-runtime-credentials.*ACR_POSTGRES_MIGRATION_DSN|name: acr-migration-credentials.*ACR_POSTGRES_DSN' "$work/rendered.yaml"; then
@@ -126,9 +126,12 @@ if grep -qE 'name: acr-runtime-credentials.*ACR_POSTGRES_MIGRATION_DSN|name: acr
 fi
 pass "secret-ref: distinct existing runtime and migration credential references"
 
-for token in 'runAsNonRoot: true' 'readOnlyRootFilesystem: true' 'allowPrivilegeEscalation: false' 'type: RuntimeDefault' 'automountServiceAccountToken: false' 'port: 5432' 'port: 9440' 'name: prepare-entitlement-token' 'name: entitlement-token-source' 'name: entitlement-ca-source'; do
+for token in 'runAsNonRoot: true' 'readOnlyRootFilesystem: true' 'allowPrivilegeEscalation: false' 'type: RuntimeDefault' 'automountServiceAccountToken: false' 'port: 5432' 'port: 9000' 'port: 8000' 'name: prepare-entitlement-token' 'name: entitlement-token-source'; do
   require_literal "$token" "pod-security: missing $token"
 done
+if grep -Eq 'ACR_(POSTGRES|CLICKHOUSE|DEV_HEALTH_ENTITLEMENT)_CA_BUNDLE|secretName: acr-(postgres|clickhouse|entitlement)-ca' "$work/rendered.yaml"; then
+  fail_gate 'ordinary Kustomize base must not require internal CA bundles'
+fi
 require_literal 'drop:' 'pod-security: missing capability drop'
 require_literal '- ALL' 'pod-security: capabilities are not dropped'
 pass "pod-security: restricted workloads and PostgreSQL-only migration egress"
@@ -138,15 +141,7 @@ for target in 'Deployment acr-api' 'Job acr-migrate'; do
   require_resource_literal "$kind" "$name" 'runAsNonRoot: true' "pod-security: ${kind}/${name} lacks restricted pod security"
   require_resource_literal "$kind" "$name" 'medium: Memory' "pod-security: ${kind}/${name} lacks memory-backed writable storage"
 done
-for path in '/var/run/acr/postgres-ca' '/var/run/acr/clickhouse-ca' '/var/run/acr/entitlement-ca'; do
-  require_resource_literal Deployment acr-api "$path" "ca-parity: API lacks ${path} mount"
-done
-require_resource_literal Job acr-migrate '/var/run/acr/postgres-ca' 'ca-parity: migration lacks PostgreSQL CA mount'
-for token in 'key: ca.crt' 'path: ca.crt'; do
-  require_resource_literal Deployment acr-api "$token" "ca-parity: API lacks normalized ${token}"
-  require_resource_literal Job acr-migrate "$token" "ca-parity: migration lacks normalized ${token}"
-done
-pass "ca-parity: normalized CA keys, paths, and required mounts are rendered"
+pass "internal-transport: ordinary base renders without CA projections"
 
 if [[ "$overlay" == staging || "$overlay" == production ]]; then
   require_literal "ACR_ENVIRONMENT: $overlay" "overlay: wrong environment value"

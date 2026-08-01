@@ -3,7 +3,6 @@ package entitlements
 import (
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -27,16 +26,15 @@ const (
 // Config configures the Dev Health service entitlement boundary. It excludes
 // the token value: New reads that secret only from TokenFile.
 type Config struct {
-	BaseURL               *url.URL
-	TokenFile             string
-	Timeout               time.Duration
-	MaxResponseBytes      int64
-	ProxyURL              *url.URL
-	CACertPath            string
-	AllowInsecureLoopback bool
-	PositiveCacheTTL      time.Duration
-	NegativeCacheTTL      time.Duration
-	CacheCapacity         int
+	BaseURL          *url.URL
+	TokenFile        string
+	Timeout          time.Duration
+	MaxResponseBytes int64
+	ProxyURL         *url.URL
+	CACertPath       string
+	PositiveCacheTTL time.Duration
+	NegativeCacheTTL time.Duration
+	CacheCapacity    int
 }
 
 func (c Config) withDefaults() Config {
@@ -65,8 +63,8 @@ func (c Config) validate() error {
 	if c.BaseURL.User != nil || c.BaseURL.RawQuery != "" || c.BaseURL.Fragment != "" || c.BaseURL.Path != "" {
 		return errors.New("Dev Health entitlement URL must be an origin")
 	}
-	if c.BaseURL.Scheme != "https" && !(c.AllowInsecureLoopback && c.BaseURL.Scheme == "http" && isLoopback(c.BaseURL.Hostname())) {
-		return errors.New("Dev Health entitlement URL must use HTTPS")
+	if c.BaseURL.Scheme != "https" && c.BaseURL.Scheme != "http" {
+		return errors.New("Dev Health entitlement URL must use HTTP or HTTPS")
 	}
 	if strings.TrimSpace(c.TokenFile) == "" {
 		return errors.New("Dev Health entitlement token file is required")
@@ -87,12 +85,4 @@ func (c Config) validate() error {
 		return errors.New("Dev Health entitlement proxy must be an HTTP(S) URL without credentials")
 	}
 	return nil
-}
-
-func isLoopback(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }

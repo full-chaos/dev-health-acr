@@ -62,7 +62,7 @@ HTTP proxy URL. Example: `http://proxy.corp.example.com:8080`. When set, it repl
 Path to an additional PEM-encoded CA bundle file, layered on top of the system trust store for the hosted API TLS connection. Must be a regular file, not a directory. Use when the API server uses a self-signed or corporate certificate. Supported only on macOS and Linux; on every other platform, including Windows, loading fails closed (see Platform Support below).
 
 **ACR_API_ALLOW_INSECURE_LOOPBACK**
-Boolean (`true`/`false`). Opts into plain HTTP instead of HTTPS, and only when `ACR_API_URL` resolves to a loopback host (`127.0.0.1`, `::1`, or `localhost`). Default: `false`. For local fixture/test drivers only; never set this against a non-loopback host.
+Deprecated compatibility boolean (`true`/`false`). A plain `http://` `ACR_API_URL` is automatically accepted when its host is loopback (`127.0.0.1`, `::1`, or `localhost`), so this variable is no longer required. Non-loopback HTTP remains rejected regardless of this value.
 
 **ACR_SIDECAR_CLIENT_NAME**
 Identifies the sidecar client in the hosted API client-info payload. Default: `dev-health-acr-mcp`.

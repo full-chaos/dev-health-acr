@@ -41,9 +41,6 @@ data:
   ACR_ENVIRONMENT: {{ .Values.config.environment | quote }}
   ACR_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
   ACR_POSTGRES_CONNECTION_KIND: {{ .Values.config.postgresConnectionKind | quote }}
-  {{- if eq .Values.config.environment "test" }}
-  ACR_ALLOW_INSECURE_POSTGRES: "true"
-  {{- end }}
 ---
 {{- if .Values.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1

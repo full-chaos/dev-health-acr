@@ -30,7 +30,7 @@ services:
       ACR_ENVIRONMENT: development
       ACR_POSTGRES_CONNECTION_KIND: direct
       ACR_POSTGRES_MIGRATION_DSN_FILE: /run/secrets/acr_migration_dsn
-    secrets: [acr_migration_dsn, acr_ca]
+    secrets: [acr_migration_dsn]
     depends_on:
       postgres: { condition: service_healthy }
       acr-db-init: { condition: service_completed_successfully }
@@ -70,10 +70,9 @@ services:
       ACR_DEVICE_VERIFICATION_URL: ${ACR_DEVICE_VERIFICATION_URL:-http://localhost:3000/acr/device}
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
-      ACR_CLICKHOUSE_CA_BUNDLE: /run/secrets/acr_ca
       ACR_EVIDENCE_ID_ACTIVE_KID_FILE: /run/secrets/acr_evidence_active_kid
       ACR_EVIDENCE_ID_KEYS_FILE: /run/secrets/acr_evidence_keys
-    secrets: [acr_runtime_dsn, acr_clickhouse_dsn, acr_ca, acr_evidence_active_kid, acr_evidence_keys]
+    secrets: [acr_runtime_dsn, acr_clickhouse_dsn, acr_evidence_active_kid, acr_evidence_keys]
     depends_on:
       postgres: { condition: service_healthy }
       clickhouse: { condition: service_healthy }
@@ -98,6 +97,5 @@ secrets:
   acr_runtime_dsn: { file: "${ACR_RUNTIME_DSN_FILE:?ACR_RUNTIME_DSN_FILE is required}" }
   acr_migration_dsn: { file: "${ACR_MIGRATION_DSN_FILE:?ACR_MIGRATION_DSN_FILE is required}" }
   acr_clickhouse_dsn: { file: "${ACR_CLICKHOUSE_DSN_FILE:?ACR_CLICKHOUSE_DSN_FILE is required}" }
-  acr_ca: { file: "${ACR_CA_FILE:?ACR_CA_FILE is required}" }
   acr_evidence_active_kid: { file: "${ACR_EVIDENCE_ACTIVE_KID_FILE:?ACR_EVIDENCE_ACTIVE_KID_FILE is required}" }
   acr_evidence_keys: { file: "${ACR_EVIDENCE_KEYS_FILE:?ACR_EVIDENCE_KEYS_FILE is required}" }

@@ -15,8 +15,6 @@ import (
 
 const migrationDSNEnvironment = "ACR_POSTGRES_MIGRATION_DSN"
 const poolerAdminDSNEnvironment = "ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN"
-const migrationEnvironment = "ACR_ENVIRONMENT"
-const migrationInsecureEnvironment = "ACR_ALLOW_INSECURE_POSTGRES"
 const migrationConnectionKindEnvironment = "ACR_POSTGRES_CONNECTION_KIND"
 
 type lookupEnv func(string) (string, bool)
@@ -43,16 +41,10 @@ func run(ctx context.Context, args []string, lookup lookupEnv, output io.Writer)
 	if err != nil {
 		return err
 	}
-	environment, _ := lookup(migrationEnvironment)
-	insecureRaw, _ := lookup(migrationInsecureEnvironment)
-	allowInsecure, err := runtimepostgres.InsecureTestTransportOverride(strings.TrimSpace(environment), strings.TrimSpace(insecureRaw))
-	if err != nil {
-		return err
-	}
 	if err := validateDeclaredMigrationConnectionKind(lookup, poolerAdminDSN); err != nil {
 		return err
 	}
-	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn, PoolerAdminDSN: poolerAdminDSN, AllowInsecure: allowInsecure})
+	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn, PoolerAdminDSN: poolerAdminDSN})
 	if err != nil {
 		return fmt.Errorf("open PostgreSQL: %w", err)
 	}

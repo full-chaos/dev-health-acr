@@ -59,7 +59,7 @@ func TestCredentialCLI_passesPoolerAdminDSNToPostgresOpener(t *testing.T) {
 	require.ErrorContains(t, err, "invalid PgBouncer administration configuration")
 }
 
-func TestCredentialCLIRejectsInsecurePostgreSQLOutsideTestEnvironment(t *testing.T) {
+func TestCredentialCLIAcceptsPlaintextPostgreSQLOutsideTestEnvironment(t *testing.T) {
 	// Given
 	lookup := credentialEnvironment(map[string]string{postgresDSNEnvironment: "postgres://user:sentinel-secret@db.example/acr?sslmode=disable"})
 
@@ -67,8 +67,9 @@ func TestCredentialCLIRejectsInsecurePostgreSQLOutsideTestEnvironment(t *testing
 	err := runCredentialCLI(context.Background(), []string{"list", "--org-id", "11111111-1111-1111-1111-111111111111"}, lookup, &bytes.Buffer{}, &bytes.Buffer{})
 
 	// Then
-	require.ErrorContains(t, err, "verified TLS")
+	require.ErrorContains(t, err, "PostgreSQL is unavailable")
 	require.NotContains(t, err.Error(), "sentinel-secret")
+	require.NotContains(t, err.Error(), "verified TLS")
 }
 
 func TestCredentialCLI_rejectsDeclaredConnectionKindContradictions(t *testing.T) {

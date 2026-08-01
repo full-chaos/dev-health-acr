@@ -47,7 +47,7 @@ curl http://127.0.0.1:8080/healthz
 curl http://127.0.0.1:8080/readyz
 ```
 
-Use the Compose acceptance driver for a full local TLS fixture. Its root
+Use the Compose acceptance driver for a full local edge-TLS fixture. Its root
 Compose input belongs to the caller's Dev Health checkout; the ACR overlay is
 the checked-in file below. The helper creates ephemeral credentials and secret
 files itself, and tears down only its isolated `acr-e2e-*` project:
@@ -68,10 +68,12 @@ is not a production endpoint.
 
 ### TLS, origins, and web assertions
 
-Production caller configuration must use TLS-verified origins and immutable
-image digests. `ACR_DEV_HEALTH_ENTITLEMENT_URL` is an HTTPS origin outside a
-loopback development fixture. The hosted API's externally published origin is
-configured by the caller's Gateway and is not an ACR API runtime default.
+Production caller configuration must use immutable image digests. Internal
+PostgreSQL, ClickHouse, and entitlement transports follow their explicit DSNs
+and origins and may use ordinary private-network plaintext. When an internal
+dependency explicitly selects TLS, configure its CA bundle as needed. The
+hosted API's externally published origin remains configured by the caller's
+TLS-terminating Gateway and is not an ACR API runtime default.
 
 Trusted web assertions are enabled only as a complete set:
 
@@ -216,10 +218,10 @@ Troubleshoot with safe status, error classes, and deployment logs:
 
 | Symptom | Safe response |
 | --- | --- |
-| Migration Job fails | Stop the rollout; inspect sanitized Job logs, confirm the separate migration Secret and TLS DSN, then run `acr-migrate status`. Do not apply the API Deployment or attempt schema rollback. |
-| CA or TLS failure | Confirm the referenced CA Secret/file is a regular owner-only file and matches the server chain; keep production origins HTTPS. Exercise the local TLS fixture instead of disabling verification. |
+| Migration Job fails | Stop the rollout; inspect sanitized Job logs, confirm the separate migration Secret and configured DSN, then run `acr-migrate status`. Do not apply the API Deployment or attempt schema rollback. |
+| CA or TLS failure | For an externally exposed ACR origin or an explicitly TLS-enabled dependency, confirm the referenced CA Secret/file is a regular owner-only file and matches the server chain. Keep external origins HTTPS; private service transports follow their configured HTTP origins or DSNs. Exercise the local edge-TLS fixture instead of disabling edge verification. |
 | `invalid_token` after rotation or revocation | Confirm the sidecar selected the intended credential source with `doctor --offline`; replace the revoked value through the credential lifecycle. Do not print the token. |
-| ClickHouse probe or read failure | Treat evidence as unavailable or degraded, verify the read-only ClickHouse DSN, CA, and least-privilege role with the evidence owner, and do not write to ClickHouse. |
+| ClickHouse probe or read failure | Treat evidence as unavailable or degraded, verify the read-only ClickHouse DSN and least-privilege role with the evidence owner, verify a CA only when that DSN explicitly enables TLS, and do not write to ClickHouse. |
 | Entitlement denial | Verify `agent_context_runtime` separately from the credential's scope and repository selector. An entitlement does not grant a credential permission. |
 
 The Compose acceptance helper includes migration, CA, revoked-credential, and
@@ -240,7 +242,8 @@ go run ./cmd/acr-mcp metadata
 ```
 
 `ACR_API_URL` must be an origin. Plain HTTP is permitted only for an explicit
-loopback test fixture with `ACR_API_ALLOW_INSECURE_LOOPBACK=true`. For a
+loopback origin; no additional insecure-transport flag is required. The legacy
+`ACR_API_ALLOW_INSECURE_LOOPBACK` variable remains accepted for compatibility. For a
 corporate/private CA, use `ACR_API_CA_BUNDLE` on macOS or Linux with a
 restricted regular file. See [MCP client examples](examples/mcp-clients/),
 then run the clean-room STDIO handshake:

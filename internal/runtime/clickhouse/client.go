@@ -28,7 +28,6 @@ var (
 
 type Options struct {
 	DSN              string
-	Environment      string
 	TLS              *tls.Config
 	DialTimeout      time.Duration
 	ReadTimeout      time.Duration
@@ -71,9 +70,6 @@ func NewClickHouseQueryClientWithOptions(options Options) (*Client, error) {
 	}
 	applyOptions(configured, options)
 	if strings.EqualFold(connectionURL.Scheme, "http") && configured.TLS != nil {
-		return nil, fmt.Errorf("validate ClickHouse TLS: %w", ErrInvalidConfiguration)
-	}
-	if configured.TLS == nil && options.Environment != "development" && options.Environment != "test" {
 		return nil, fmt.Errorf("validate ClickHouse TLS: %w", ErrInvalidConfiguration)
 	}
 	if configured.TLS != nil && configured.TLS.InsecureSkipVerify {

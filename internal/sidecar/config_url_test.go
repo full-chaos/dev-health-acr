@@ -42,11 +42,15 @@ func TestLoadConfigAllowsPlainHTTPForLocalhostNameWithExplicitFixtureFlag(t *tes
 	}
 }
 
-func TestLoadConfigRejectsPlainHTTPLoopbackWithoutFixtureFlag(t *testing.T) {
-	if _, err := loadConfig(lookupFromMap(map[string]string{
+func TestLoadConfigAllowsPlainHTTPLoopbackWithoutFixtureFlag(t *testing.T) {
+	cfg, err := loadConfig(lookupFromMap(map[string]string{
 		APIURLEnvironment: "http://127.0.0.1:38111",
-	})); err == nil {
-		t.Fatal("plain HTTP loopback was accepted without the explicit fixture flag")
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIBaseURL.String() != "http://127.0.0.1:38111" {
+		t.Fatalf("API URL = %q, want explicit loopback origin", cfg.APIBaseURL)
 	}
 }
 

@@ -2,8 +2,10 @@
 
 These manifests deploy only ACR API resources into a caller-owned namespace.
 They reference existing runtime, migration, entitlement, and registry-pull
-Secrets. They do not create Secrets, a Gateway, a Gateway controller, a
-database, or an MCP workload.
+Secrets. The base uses plaintext private-service transports; an operator overlay
+may select TLS DSNs/origins and add the corresponding CA projections. The base
+does not create Secrets, a Gateway, a Gateway controller, a database, or an MCP
+workload.
 
 Each overlay pins `acr-api` to an immutable digest. The deployment script
 applies supporting resources, creates and waits for `acr-migrate`, and applies

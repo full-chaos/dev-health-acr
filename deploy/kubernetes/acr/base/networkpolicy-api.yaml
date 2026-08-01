@@ -30,7 +30,7 @@ spec:
           port: 5432
     - ports:
         - protocol: TCP
-          port: 9440
+          port: 9000
     - ports:
         - protocol: TCP
-          port: 443
+          port: 8000

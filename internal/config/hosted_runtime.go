@@ -42,9 +42,6 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, requiredByEnvironmen
 	if cfg.PostgresPingTimeout, err = durationValue(lookup, "ACR_POSTGRES_PING_TIMEOUT", defaultHostedPostgresPingTimeout); err != nil {
 		return err
 	}
-	if cfg.AllowInsecurePostgres, err = boolValue(lookup, "ACR_ALLOW_INSECURE_POSTGRES", false); err != nil {
-		return err
-	}
 	if cfg.RequireBackingStores, err = boolValue(lookup, "ACR_REQUIRE_BACKING_STORES", requiredByEnvironment); err != nil {
 		return err
 	}
@@ -62,10 +59,6 @@ func validateHostedRuntime(cfg Config) error {
 		return errors.New("ACR_CLICKHOUSE_DSN is required when backing stores are required")
 	case strings.TrimSpace(cfg.PostgresDSN) == "":
 		return errors.New("ACR_POSTGRES_DSN is required when backing stores are required")
-	case !cfg.AllowInsecurePostgres && !verifiedPostgresDSN(cfg.PostgresDSN):
-		return errors.New("ACR_POSTGRES_DSN must use verified TLS")
-	case !cfg.AllowInsecurePostgres && cfg.PostgresPoolerAdminDSN != "" && !verifiedPostgresDSN(cfg.PostgresPoolerAdminDSN):
-		return errors.New("ACR_POSTGRES_POOLER_ADMIN_DSN must use verified TLS")
 	case !hasActiveEvidenceIDKey(cfg):
 		return errors.New("ACR_EVIDENCE_ID_ACTIVE_KID and ACR_EVIDENCE_ID_KEYS must configure an active evidence key when backing stores are required")
 	case strings.TrimSpace(cfg.DeviceVerificationURL) == "":
@@ -101,10 +94,6 @@ func validatePostgresConnectionKind(cfg Config) error {
 	return runtimepostgres.ValidateConnectionKind(kind, cfg.PostgresPoolerAdminDSN)
 }
 
-func verifiedPostgresDSN(dsn string) bool {
-	return runtimepostgres.ValidateDSNTransport(dsn, false) == nil
-}
-
 func hasActiveEvidenceIDKey(c Config) bool {
 	return validEvidenceKID(c.EvidenceIDActiveKID) && len(c.EvidenceIDKeys[c.EvidenceIDActiveKID]) >= evidenceIDKeyMinimumBytes
 }
@@ -120,7 +109,6 @@ func (c Config) SafeAttributes() []any {
 		"postgres_configured", c.PostgresDSN != "",
 		"postgres_pooler_admin_configured", c.PostgresPoolerAdminDSN != "",
 		"postgres_max_idle_conns_configured", c.PostgresMaxIdleConnsConfigured,
-		"insecure_postgres_allowed", c.AllowInsecurePostgres,
 		"episode_writeback_enabled", c.EnableEpisodeWriteback,
 		"minimum_sidecar_version", c.MinimumSidecarVersion,
 		"entitlement_key", c.EntitlementKey,

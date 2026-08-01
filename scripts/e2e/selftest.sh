@@ -333,7 +333,7 @@ assert_helm_harness_behaviors() {
     namespace=test
     release=acr-runtime
     expected_migration_failure_marker="PostgreSQL is unavailable"
-    expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.invalid:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
+    expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.invalid:5432/acr?sslmode=disable"
     kube() {
       case "$*" in
         *"wait --for=condition=failed job/acr-runtime-migrate"*) return 0 ;;
@@ -360,7 +360,7 @@ assert_helm_harness_behaviors() {
     namespace=test
     release=acr-runtime
     expected_migration_failure_marker="PostgreSQL is unavailable"
-    expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.invalid:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
+    expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.invalid:5432/acr?sslmode=disable"
     kube() {
       case "$*" in
         *"wait --for=condition=failed job/acr-runtime-migrate"*) return 0 ;;
@@ -387,7 +387,7 @@ assert_helm_harness_behaviors() {
     namespace=test
     release=acr-runtime
     expected_migration_failure_marker="PostgreSQL is unavailable"
-    expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.invalid:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
+    expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.invalid:5432/acr?sslmode=disable"
     kube() {
       case "$*" in
         *"wait --for=condition=failed job/acr-runtime-migrate"*) return 0 ;;
@@ -414,7 +414,7 @@ assert_helm_harness_behaviors() {
     namespace=test
     release=acr-runtime
     expected_migration_failure_marker="PostgreSQL is unavailable"
-    expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.invalid:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
+    expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.invalid:5432/acr?sslmode=disable"
     kube() {
       case "$*" in
         *"wait --for=condition=failed job/acr-runtime-migrate"*) return 0 ;;
@@ -449,7 +449,7 @@ assert_helm_harness_behaviors() {
     diagnose_workload_failure() { :; }
     assert_failed_migration_hook() {
       [[ "${expected_migration_failure_marker}" == "PostgreSQL is unavailable" ]]
-      [[ "${expected_migration_failure_dsn}" == "postgres://postgres:acr-e2e-pass@postgres.deps.svc.cluster.local:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt" ]]
+      [[ "${expected_migration_failure_dsn}" == "postgres://postgres:acr-e2e-pass@postgres.deps.svc.cluster.local:5432/acr?sslmode=disable" ]]
     }
     assert_denied_migration_egress() { :; }
     queue_expected_failure() { :; }
@@ -525,7 +525,6 @@ assert_static_hardening() {
   assert_helm_script_contains 'establish_source_guard' 'every live Helm scenario requires a source quiescence guard'
   assert_helm_script_contains 'sleep 60' 'source guard establishes sixty seconds of source quiescence'
   assert_helm_script_contains 'capture_clean_git_provenance' 'source guard captures exact clean Git provenance'
-  assert_helm_script_contains 'from-literal=token=acr-e2e-ops-token-initial' 'fixture entitlement token matches the controlled Ops responder'
   assert_helm_script_contains 'commit_sha=' 'scenario evidence records its exact commit SHA'
   assert_helm_script_contains 'working_tree_clean=' 'scenario evidence records clean-tree provenance'
   assert_helm_script_contains 'assert_source_guard' 'local image builds recheck the source hash guard'
@@ -539,10 +538,9 @@ assert_static_hardening() {
   assert_helm_script_contains 'involvedObject.name=\$\{pod\}' 'missing runtime Secret evidence is scoped to the API Pod'
   assert_helm_script_contains 'secret_name="acr-runtime"' 'missing runtime Secret assertion requires the exact Secret name'
   assert_helm_script_contains 'waiting_reason.*CreateContainerConfigError' 'missing runtime Secret assertion requires the exact waiting reason'
-  assert_helm_script_contains 'expected_migration_failure_dsn' 'bad migration assertion selects the exact verified-TLS fixture configuration'
-  assert_helm_script_contains "entitlement_url=\"https://\\${literal_dollar}\{ACR_E2E_OPS_ENTITLEMENT_HOST\}:\\${literal_dollar}\{ACR_E2E_OPS_ENTITLEMENT_PORT\}\"" 'Helm fixture derives entitlement URL host and port from fixture exports'
-  assert_helm_script_contains "entitlementPort: \\${literal_dollar}\{ACR_E2E_OPS_ENTITLEMENT_PORT\}" 'Helm fixture allows the exported entitlement TLS port'
-  assert_helm_script_contains "expected_migration_failure_dsn=\"postgres://postgres:acr-e2e-pass@postgres\.\\${literal_dollar}\{ACR_E2E_DEPS_NAMESPACE\}\.svc\.cluster\.local:5432/acr\\?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca\.crt\"" 'denied-egress initializes the exact verified migration DSN before assertion'
+  assert_helm_script_contains 'expected_migration_failure_dsn' 'bad migration assertion selects the exact fixture configuration'
+  assert_helm_script_contains 'local Kind values must not create or configure remote entitlement' 'Helm fixture uses the local entitlement provider'
+  assert_helm_script_contains "expected_migration_failure_dsn=\"postgres://postgres:acr-e2e-pass@postgres\.\\${literal_dollar}\{ACR_E2E_DEPS_NAMESPACE\}\.svc\.cluster\.local:5432/acr\\?sslmode=disable\"" 'denied-egress initializes the exact migration DSN before assertion'
   assert_helm_script_contains 'PostgreSQL is unavailable' 'bad migration assertion classifies the redacted unavailable boundary'
   assert_helm_script_contains 'migration hook exposed injected connection details' 'bad migration assertion rejects leaked connection details'
   assert_helm_script_contains 'acr-migrate.*up' 'bad migration assertion proves the intended migration hook command'

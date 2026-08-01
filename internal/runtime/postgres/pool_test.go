@@ -16,7 +16,6 @@ func TestOpen_pingsPostgresAndAppliesBoundedPoolSettings(t *testing.T) {
 	dsn := newTestPostgresDSN(t, ctx)
 	config := Config{
 		DSN:             dsn,
-		AllowInsecure:   true,
 		MaxOpenConns:    2,
 		MaxIdleConns:    1,
 		ConnMaxLifetime: time.Minute,
@@ -74,7 +73,7 @@ func TestOpen_redactsDSN_whenConnectionCannotBeEstablished(t *testing.T) {
 	// Given
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	config := Config{DSN: "postgres://acr:do-not-leak@127.0.0.1:1/acr?sslmode=disable", PingTimeout: time.Second, AllowInsecure: true}
+	config := Config{DSN: "postgres://acr:do-not-leak@127.0.0.1:1/acr?sslmode=disable", PingTimeout: time.Second}
 
 	// When
 	_, err := Open(ctx, config)
@@ -85,21 +84,9 @@ func TestOpen_redactsDSN_whenConnectionCannotBeEstablished(t *testing.T) {
 	require.False(t, strings.Contains(err.Error(), "127.0.0.1:1"))
 }
 
-func TestOpen_rejectsUnverifiedTLSWithoutLeakingDSN(t *testing.T) {
-	// Given
-	config := Config{DSN: "postgres://user:sentinel-secret@db.example/acr?sslmode=require"}
-
-	// When
-	_, err := Open(context.Background(), config)
-
-	// Then
-	require.ErrorContains(t, err, "verified TLS")
-	require.NotContains(t, err.Error(), "sentinel-secret")
-}
-
-func TestValidateDSNTransport_acceptsUnixSocketWithoutTLS(t *testing.T) {
-	err := ValidateDSNTransport("postgres:///acr?host=/var/run/postgresql", false)
-	require.NoError(t, err)
+func TestConfig_validateAcceptsPlaintextNetworkDSN(t *testing.T) {
+	config := Config{DSN: "postgres://user:sentinel-secret@db.internal/acr?sslmode=disable"}
+	require.NoError(t, config.validate())
 }
 
 func newTestPostgresDSN(t *testing.T, ctx context.Context) string {

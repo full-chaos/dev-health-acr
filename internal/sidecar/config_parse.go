@@ -24,16 +24,16 @@ func validateOriginOnly(base *url.URL) error {
 	return nil
 }
 
-func validateScheme(base *url.URL, allow bool) error {
+func validateScheme(base *url.URL, _ bool) error {
 	switch base.Scheme {
 	case "https":
 		return nil
 	case "http":
-		if allow && isLoopbackHost(base.Hostname()) {
+		if isLoopbackHost(base.Hostname()) {
 			return nil
 		}
 	}
-	return &ConfigError{Field: APIURLEnvironment, Detail: "must use https (plain http is only allowed for an explicit loopback fixture)"}
+	return &ConfigError{Field: APIURLEnvironment, Detail: "must use https (plain http is only allowed for a loopback origin)"}
 }
 func isLoopbackHost(host string) bool {
 	ip := net.ParseIP(host)

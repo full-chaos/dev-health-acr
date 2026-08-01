@@ -121,25 +121,27 @@ func TestProductionRequiresDevHealthEntitlementConfiguration(t *testing.T) {
 	}
 }
 
-func TestProductionRejectsInsecureDevHealthEntitlementURL(t *testing.T) {
+func TestProductionAcceptsPlainHTTPDevHealthEntitlementURL(t *testing.T) {
 	// Given
 	values := map[string]string{
 		"ACR_ENVIRONMENT": "production", "ACR_REQUIRE_BACKING_STORES": "false",
 		"ACR_CLICKHOUSE_DSN": "clickhouse://redacted", "ACR_POSTGRES_DSN": "postgres://redacted?sslmode=verify-full",
 		"ACR_EVIDENCE_ID_ACTIVE_KID": "current", "ACR_EVIDENCE_ID_KEYS": "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
-		"ACR_DEV_HEALTH_ENTITLEMENT_URL":                     "http://127.0.0.1:8080",
-		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE":              "/run/secrets/ops-token",
-		"ACR_DEVICE_VERIFICATION_URL":                        "https://verify.example.test/device",
-		"ACR_DEV_HEALTH_ENTITLEMENT_ALLOW_INSECURE_LOOPBACK": "true",
-		"ACR_POSTGRES_CONNECTION_KIND":                       "direct",
+		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "http://ops.internal:8000",
+		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
+		"ACR_DEVICE_VERIFICATION_URL":           "https://verify.example.test/device",
+		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
 	}
 
 	// When
-	_, err := load(mapLookup(values))
+	cfg, err := load(mapLookup(values))
 
 	// Then
-	if err == nil || !strings.Contains(err.Error(), "must use HTTPS") {
-		t.Fatalf("load() error = %v; want HTTPS requirement", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DevHealthEntitlementURL != "http://ops.internal:8000" {
+		t.Fatalf("entitlement URL = %q, want plain internal origin", cfg.DevHealthEntitlementURL)
 	}
 }
 

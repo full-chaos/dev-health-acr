@@ -260,7 +260,7 @@ credentials are not stored in project configuration.
 
 ### "ACR_API_URL" set but doctor reports `invalid_configuration`
 
-- The value is nonblank but fails validation: it must be `https://` (or `http://` against an explicit loopback fixture with `ACR_API_ALLOW_INSECURE_LOOPBACK=true`), with no embedded userinfo, path, query string, or fragment -- scheme and host only.
+- The value is nonblank but fails validation: it must be `https://`, or `http://` with a loopback host, with no embedded userinfo, path, query string, or fragment -- scheme and host only. Loopback HTTP needs no additional flag.
 - Run `acr-mcp doctor` and read the `api_url` check's `detail` field for the specific reason.
 
 ### "ACR API credential is configured but malformed"

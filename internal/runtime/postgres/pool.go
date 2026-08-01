@@ -25,7 +25,6 @@ var ErrTransactionPooler = errors.New("PostgreSQL transaction pooler is not supp
 type Config struct {
 	DSN             string
 	PoolerAdminDSN  string
-	AllowInsecure   bool
 	MaxOpenConns    int
 	MaxIdleConns    int
 	MaxIdleConnsSet bool
@@ -70,15 +69,9 @@ func (c *Config) validate() error {
 	if _, err := pgx.ParseConfig(c.DSN); err != nil {
 		return errors.New("invalid PostgreSQL configuration")
 	}
-	if err := ValidateDSNTransport(c.DSN, c.AllowInsecure); err != nil {
-		return err
-	}
 	if c.PoolerAdminDSN != "" {
 		if _, err := pgx.ParseConfig(c.PoolerAdminDSN); err != nil {
 			return errors.New("invalid PgBouncer administration configuration")
-		}
-		if err := ValidateDSNTransport(c.PoolerAdminDSN, c.AllowInsecure); err != nil {
-			return errors.New("PgBouncer administration DSN must use verified TLS")
 		}
 	}
 	if c.MaxOpenConns == 0 {

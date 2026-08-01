@@ -227,7 +227,7 @@ func TestClientNew_enforces_transport_file_and_cache_boundaries(t *testing.T) {
 		name string
 		cfg  entitlements.Config
 	}{
-		{"rejects HTTP outside explicit loopback", entitlements.Config{BaseURL: mustURL(t, "http://example.invalid")}},
+		{"rejects unsupported URL scheme", entitlements.Config{BaseURL: mustURL(t, "ftp://example.invalid")}},
 		{"rejects unsupported proxy", entitlements.Config{ProxyURL: mustURL(t, "socks5://127.0.0.1:8080")}},
 		{"rejects missing token file", entitlements.Config{TokenFile: filepath.Join(t.TempDir(), "missing")}},
 		{"rejects token with newline", entitlements.Config{TokenFile: writeToken(t, "bad\nshape\n")}},
@@ -244,6 +244,38 @@ func TestClientNew_enforces_transport_file_and_cache_boundaries(t *testing.T) {
 			}
 			assertSecretSafe(t, err, testToken)
 		})
+	}
+}
+
+func TestClient_accepts_plain_HTTP_for_private_service_origin(t *testing.T) {
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Header.Get("Authorization"), "Bearer "+testToken; got != want {
+			t.Errorf("Authorization = %q, want %q", got, want)
+		}
+		_, _ = w.Write([]byte(`{"schema_version":"acr_entitlement.v1","org_id":"org-1","agent_context_runtime":true}`))
+	}))
+	defer server.Close()
+	client, err := entitlements.New(entitlements.Config{
+		BaseURL:          mustURL(t, server.URL),
+		TokenFile:        writeToken(t, testToken),
+		Timeout:          time.Second,
+		MaxResponseBytes: 2048,
+		PositiveCacheTTL: time.Minute,
+		NegativeCacheTTL: time.Second,
+		CacheCapacity:    2,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	// When
+	entitled, err := client.HasEntitlement(context.Background(), "org-1", "agent_context_runtime")
+
+	// Then
+	if err != nil || !entitled {
+		t.Fatalf("HasEntitlement() = %t, %v; want true, nil", entitled, err)
 	}
 }
 
