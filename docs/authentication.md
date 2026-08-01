@@ -88,6 +88,15 @@ inactive and does not block cleanup; on a credential this client just had issued
 it stays a failure, because a token the server minted seconds ago and now refuses
 is evidence the client cannot tell.
 
+`acr-mcp logout --local` is the explicit offline exception. It skips hosted URL,
+TLS, and remote revocation entirely, then applies the same fail-closed enumeration
+and snapshot-bound local purge. It reports that the remotely issued credentials
+may remain active. Use it when the hosted service is unavailable and local
+credential erasure is more important than proving server-side revocation; revoke
+the credentials through an authenticated administrative surface after service is
+restored. An exported `ACR_API_TOKEN` still requires `unset ACR_API_TOKEN` in the
+parent shell.
+
 `login` preflights `CredentialPersistenceSupported` before starting a device
 authorization, so a platform without secure persistence never causes the server
 to mint a one-time credential that has nowhere to live.

@@ -386,18 +386,14 @@ static_check() {
       failures=$((failures + 1))
     fi
   }
-  assert_fixture_entitlement_port_contract() {
-    local fixture_block values_block literal_dollar='$'
+  assert_local_entitlement_contract() {
+    local fixture_block values_block
     fixture_block="$(function_block create_fixture_references)"
     values_block="$(function_block write_values)"
-    grep -Fq -- "entitlement_url=\"https://${literal_dollar}{ACR_E2E_OPS_ENTITLEMENT_HOST}:${literal_dollar}{ACR_E2E_OPS_ENTITLEMENT_PORT}\"" <<<"${fixture_block}" || {
-      fail 'static: entitlement URL must use the fixture host and port exports'
+    if grep -Eq 'acr-entitlement|OPS_ENTITLEMENT|entitlementToken|entitlementCaBundle|entitlementPort|entitlement_url' <<<"${fixture_block}${values_block}"; then
+      fail 'static: local Kind values must not create or configure remote entitlement URL, token, CA, or egress'
       failures=$((failures + 1))
-    }
-    grep -Fq -- "entitlementPort: ${literal_dollar}{ACR_E2E_OPS_ENTITLEMENT_PORT}" <<<"${values_block}" || {
-      fail 'static: API NetworkPolicy must allow the fixture entitlement port'
-      failures=$((failures + 1))
-    }
+    fi
   }
   assert_denied_egress_failure_marker() {
     local block dsn marker literal_dollar='$'
@@ -451,7 +447,7 @@ static_check() {
   assert_helm_context
   assert_missing_image_pull_secret_boundary
   assert_unprogrammed_gateway_boundary
-  assert_fixture_entitlement_port_contract
+  assert_local_entitlement_contract
   assert_denied_egress_failure_marker
   assert_kind_image_cleanup_aliases
   check_static 'postgresCaBundle' 'chart mounts the PostgreSQL CA referenced by verified DSNs' "${CHART}/templates/deployment.yaml"
@@ -687,16 +683,14 @@ build_local_image() {
 }
 
 create_fixture_references() {
-  local runtime_dsn migration_dsn clickhouse_dsn entitlement_url
+  local runtime_dsn migration_dsn clickhouse_dsn
   assert_source_guard
   runtime_dsn="postgres://postgres:acr-e2e-pass@postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
   migration_dsn="${runtime_dsn}"
   clickhouse_dsn="clickhouse://readonly@clickhouse.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:${ACR_E2E_CLICKHOUSE_NATIVE_PORT}/default?secure=true"
-  entitlement_url="https://${ACR_E2E_OPS_ENTITLEMENT_HOST}:${ACR_E2E_OPS_ENTITLEMENT_PORT}"
 
   kube -n "${namespace}" create secret generic acr-postgres-ca --from-file=ca.crt="${ACR_E2E_CA_CERT}" >/dev/null
   kube -n "${namespace}" create secret generic acr-clickhouse-ca --from-file=ca.crt="${ACR_E2E_CA_CERT}" >/dev/null
-  kube -n "${namespace}" create secret generic acr-entitlement-ca --from-file=ca.crt="${ACR_E2E_CA_CERT}" >/dev/null
   kube -n "${namespace}" create secret generic acr-runtime \
     --from-literal=ACR_POSTGRES_DSN="${runtime_dsn}" \
     --from-literal=ACR_CLICKHOUSE_DSN="${clickhouse_dsn}" \
@@ -704,10 +698,8 @@ create_fixture_references() {
     --from-literal=ACR_EVIDENCE_ID_KEYS='current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=' >/dev/null
   kube -n "${namespace}" create secret generic acr-migration \
     --from-literal=ACR_POSTGRES_MIGRATION_DSN="${migration_dsn}" >/dev/null
-  kube -n "${namespace}" create secret generic acr-entitlement-token --from-literal=token=acr-e2e-ops-token-initial >/dev/null
   kube -n "${namespace}" create secret docker-registry "${ACR_E2E_IMAGE_PULL_SECRET}" \
     --docker-server="${ACR_E2E_REGISTRY_ENDPOINT}" --docker-username=fixture --docker-password=fixture >/dev/null
-  printf '%s\n' "${entitlement_url}"
 }
 
 validate_immutable_image_ref() {
@@ -758,7 +750,7 @@ publish_image_to_fixture_registry() {
 }
 
 write_values() {
-  local image="$1" entitlement_url="$2" gateway_name="${3:-${ACR_E2E_GATEWAY_NAME}}" gateway_namespace="${4:-${ACR_E2E_GATEWAY_NAMESPACE}}" gateway_section_name="${5:-https}" target="${run_dir}/values.yaml"
+  local image="$1" gateway_name="${2:-${ACR_E2E_GATEWAY_NAME}}" gateway_namespace="${3:-${ACR_E2E_GATEWAY_NAMESPACE}}" gateway_section_name="${4:-https}" target="${run_dir}/values.yaml"
   assert_source_guard
   cat >"${target}" <<EOF
 image:
@@ -771,18 +763,13 @@ config:
   logLevel: info
   requireBackingStores: true
   postgresConnectionKind: direct
+  deviceVerificationUrl: https://${ACR_E2E_GATEWAY_HOSTNAME}/acr/device
   postgresCaBundle:
     existingSecret: acr-postgres-ca
     key: ca.crt
   clickhouseCaBundle:
     existingSecret: acr-clickhouse-ca
     key: ca.crt
-  entitlementCaBundle:
-    existingSecret: acr-entitlement-ca
-    key: ca.crt
-  entitlement:
-    url: ${entitlement_url}
-    timeout: 5s
 credentials:
   runtime:
     existingSecret: acr-runtime
@@ -793,9 +780,6 @@ credentials:
   migration:
     existingSecret: acr-migration
     postgresDsnKey: ACR_POSTGRES_MIGRATION_DSN
-  entitlementToken:
-    existingSecret: acr-entitlement-token
-    key: token
 deployment:
   replicaCount: 1
   podLabels:
@@ -824,7 +808,6 @@ networkPolicy:
     dns: true
     postgresPort: 5432
     clickhousePort: ${ACR_E2E_CLICKHOUSE_NATIVE_PORT}
-    entitlementPort: ${ACR_E2E_OPS_ENTITLEMENT_PORT}
 EOF
   printf '%s\n' "${target}"
 }
@@ -1155,26 +1138,23 @@ diagnose_workload_failure() {
   while IFS= read -r pod || [[ -n "${pod}" ]]; do
     [[ -n "${pod}" ]] || continue
     {
-      printf '\ninit_container=%s\n' "${pod}"
-      kube -n "${namespace}" logs "${pod}" -c prepare-entitlement-token || true
       printf '\napi_container=%s\n' "${pod}"
       kube -n "${namespace}" get "pod/${pod}" -o jsonpath='{.status.containerStatuses[?(@.name=="acr-api")].state.terminated} {.status.containerStatuses[?(@.name=="acr-api")].lastState.terminated}{"\n"}' || true
       kube -n "${namespace}" logs "${pod}" -c acr-api || true
       kube -n "${namespace}" logs "${pod}" -c acr-api --previous || true
     } >>"${diagnostics}"
     kube -n "${namespace}" logs "${pod}" --all-containers=true >&2 || true
-    kube -n "${namespace}" logs "${pod}" -c prepare-entitlement-token >&2 || true
   done < <(kube -n "${namespace}" get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
 }
 
 run_lifecycle() {
-  local previous current entitlement values history_before history_after configured
-  entitlement="$(create_fixture_references)"
+  local previous current values history_before history_after configured
+  create_fixture_references
   build_local_image v1
   previous="${built_image_ref}"
   build_local_image v2
   current="${built_image_ref}"
-  values="$(write_values "${previous}" "${entitlement}")"
+  values="$(write_values "${previous}")"
   if ! run_helm "${values}" >/dev/null; then
     diagnose_workload_failure
     return 1
@@ -1202,8 +1182,8 @@ run_lifecycle() {
 }
 
 run_bad_migration() {
-  local entitlement current values
-  entitlement="$(create_fixture_references)"
+  local current values
+	create_fixture_references
   build_local_image bad-migration
   current="${built_image_ref}"
   expected_migration_failure_marker="PostgreSQL is unavailable"
@@ -1211,7 +1191,7 @@ run_bad_migration() {
   kube -n "${namespace}" delete secret acr-migration >/dev/null
   kube -n "${namespace}" create secret generic acr-migration \
     --from-literal="ACR_POSTGRES_MIGRATION_DSN=${expected_migration_failure_dsn}" >/dev/null
-  values="$(write_values "${current}" "${entitlement}")"
+	values="$(write_values "${current}")"
   if run_helm_failure "${values}" --set migration.backoffLimit=0 --set migration.activeDeadlineSeconds=60 >/dev/null 2>&1; then
     fail "bad migration unexpectedly installed"
     return 1
@@ -1224,12 +1204,12 @@ run_bad_migration() {
 }
 
 run_missing_secret() {
-  local entitlement current values
-  entitlement="$(create_fixture_references)"
+  local current values
+	create_fixture_references
   build_local_image missing-secret
   current="${built_image_ref}"
   kube -n "${namespace}" delete secret acr-runtime >/dev/null
-  values="$(write_values "${current}" "${entitlement}")"
+	values="$(write_values "${current}")"
   if run_helm_failure "${values}" --timeout 45s >/dev/null 2>&1; then
     fail "missing runtime Secret unexpectedly installed"
     return 1
@@ -1242,14 +1222,14 @@ run_missing_secret() {
 }
 
 run_missing_image_pull_secret() {
-  local entitlement current registry_image values
-  entitlement="$(create_fixture_references)"
+  local current registry_image values
+	create_fixture_references
   build_local_image missing-image-pull-secret
   current="${built_image_ref}"
   publish_image_to_fixture_registry "${current}"
   registry_image="${published_image_ref}"
   kube -n "${namespace}" delete secret "${ACR_E2E_IMAGE_PULL_SECRET}" >/dev/null
-  values="$(write_values "${current}" "${entitlement}")"
+	values="$(write_values "${current}")"
   if kube -n "${namespace}" get secret "${ACR_E2E_IMAGE_PULL_SECRET}" >/dev/null 2>&1; then
     fail "missing imagePullSecret fault was not injected"
     return 1
@@ -1279,8 +1259,8 @@ wait_gateway_programmed_false() {
 }
 
 run_unprogrammed_gateway() {
-  local entitlement current values gateway_name="unprogrammed-${run_id}"
-  entitlement="$(create_fixture_references)"
+  local current values gateway_name="unprogrammed-${run_id}"
+	create_fixture_references
   build_local_image unprogrammed-gateway
   current="${built_image_ref}"
   kube -n "${namespace}" apply -f - >/dev/null <<EOF
@@ -1300,7 +1280,7 @@ spec:
           - kind: Secret
             name: missing-gateway-certificate
 EOF
-  values="$(write_values "${current}" "${entitlement}" "${gateway_name}" "${namespace}" "https")"
+	values="$(write_values "${current}" "${gateway_name}" "${namespace}" "https")"
   run_helm "${values}" >/dev/null || { fail "unprogrammed Gateway prevented Helm installation before route status could be checked"; return 1; }
   wait_gateway_programmed_false "${gateway_name}"
   queue_expected_failure unprogrammed-gateway 'Gateway reconciled Programmed=False because its certificate reference is absent'
@@ -1309,13 +1289,13 @@ EOF
 }
 
 run_denied_egress() {
-  local entitlement current values
+  local current values
   expected_migration_failure_marker="PostgreSQL is unavailable"
   expected_migration_failure_dsn="postgres://postgres:acr-e2e-pass@postgres.${ACR_E2E_DEPS_NAMESPACE}.svc.cluster.local:5432/acr?sslmode=verify-full&sslrootcert=/var/run/acr/postgres-ca/ca.crt"
-  entitlement="$(create_fixture_references)"
+	create_fixture_references
   build_local_image denied-egress
   current="${built_image_ref}"
-  values="$(write_values "${current}" "${entitlement}")"
+	values="$(write_values "${current}")"
   inject_denied_migration_policy
   if run_helm_failure "${values}" --set networkPolicy.egress.postgresPort=1 --set migration.backoffLimit=0 --set migration.activeDeadlineSeconds=60 >/dev/null 2>&1; then
     fail "denied egress unexpectedly installed"
@@ -1330,15 +1310,15 @@ run_denied_egress() {
 }
 
 run_app_rollback() {
-  local current entitlement values history_before history_after configured
+  local current values history_before history_after configured
   [[ -n "${previous_image}" ]] || die "app-rollback requires an explicitly loaded --previous-image immutable digest"
   validate_immutable_image_ref "${previous_image}"
   docker exec "${cluster}-control-plane" ctr -n k8s.io images list -q | grep -Fxq "${previous_image}" \
     || die "app-rollback previous image is not loaded in the Todo 18 Kind node: ${previous_image}"
-  entitlement="$(create_fixture_references)"
+	create_fixture_references
   build_local_image rollback-current
   current="${built_image_ref}"
-  values="$(write_values "${current}" "${entitlement}")"
+	values="$(write_values "${current}")"
   if ! run_helm "${values}" >/dev/null; then
     diagnose_workload_failure
     return 1

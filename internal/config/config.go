@@ -230,13 +230,11 @@ func (c Config) Validate() error {
 	if c.AllowInsecurePostgres && c.Environment != "test" {
 		return errors.New("ACR_ALLOW_INSECURE_POSTGRES is restricted to the test environment")
 	}
+	if err := validateEntitlementConfiguration(c); err != nil {
+		return err
+	}
 	if c.RequireBackingStores {
 		if err := validateHostedRuntime(c); err != nil {
-			return err
-		}
-	}
-	if strings.TrimSpace(c.DevHealthEntitlementURL) != "" {
-		if err := validateDevHealthEntitlementURL(c); err != nil {
 			return err
 		}
 	}

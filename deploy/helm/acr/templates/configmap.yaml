@@ -38,10 +38,10 @@ data:
   {{- end }}
   {{- end }}
   {{- end }}
-  {{- with .Values.config.entitlement }}
-  ACR_DEV_HEALTH_ENTITLEMENT_URL: {{ .url | quote }}
-  ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT: {{ .timeout | quote }}
-  ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: {{ printf "%s/%s" (.tokenMountPath | trimSuffix "/") .tokenFileName | quote }}
+  {{- if include "acr.remoteEntitlement" . }}
+  ACR_DEV_HEALTH_ENTITLEMENT_URL: {{ .Values.config.entitlement.url | quote }}
+  ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT: {{ .Values.config.entitlement.timeout | quote }}
+  ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: {{ printf "%s/%s" (.Values.config.entitlement.tokenMountPath | trimSuffix "/") .Values.config.entitlement.tokenFileName | quote }}
   {{- end }}
   {{- if .Values.config.postgresCaBundle.existingSecret }}
   ACR_POSTGRES_CA_BUNDLE: "/var/run/acr/postgres-ca/ca.crt"
@@ -49,6 +49,6 @@ data:
   {{- if .Values.config.clickhouseCaBundle.existingSecret }}
   ACR_CLICKHOUSE_CA_BUNDLE: "/var/run/acr/clickhouse-ca/ca.crt"
   {{- end }}
-  {{- if .Values.config.entitlementCaBundle.existingSecret }}
+  {{- if and (include "acr.remoteEntitlement" .) .Values.config.entitlementCaBundle.existingSecret }}
   ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE: "/var/run/acr/entitlement-ca/ca.crt"
   {{- end }}

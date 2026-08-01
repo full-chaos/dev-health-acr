@@ -73,6 +73,12 @@ grep -Fq 'acr-credentials:' "$script"
 grep -Fq 'compose run --rm --no-deps acr-credentials credentials create' "$script"
 if grep -Fq 'compose run --rm --no-deps acr-api credentials' "$script"; then exit 1; fi
 grep -Fq 'ACR_EVIDENCE_ID_ACTIVE_KID_FILE: /run/secrets/acr_evidence_active_kid' "$root/deploy/compose/acr.compose.yml"
+grep -Fq 'ACR_REQUIRE_BACKING_STORES: "true"' "$root/deploy/compose/acr.compose.yml"
+grep -Fq 'ACR_DEVICE_VERIFICATION_URL:' "$root/deploy/compose/acr.compose.yml"
+if grep -Eq 'ACR_DEV_HEALTH_ENTITLEMENT_(URL|TOKEN_FILE|CA_BUNDLE)|acr_ops_token|api: \{ condition: service_healthy \}' "$root/deploy/compose/acr.compose.yml"; then
+  printf 'root-local Compose must use the offline development entitlement provider\n' >&2
+  exit 1
+fi
 grep -Fq 'random_base64()' "$script"
 grep -Fq 'record_acl_probe()' "$script"
 grep -Fq 'rotate_acr_credential()' "$script"

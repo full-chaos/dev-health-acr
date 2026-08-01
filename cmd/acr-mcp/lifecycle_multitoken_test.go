@@ -231,6 +231,36 @@ func TestLogoutRevokesEveryDistinctLocalCredentialBeforeRemovingAnything(t *test
 	}
 }
 
+func TestLogoutLocalRemovesEveryRemovableSourceWithoutRemoteCalls(t *testing.T) {
+	// Given
+	fixture := setUpMultiCredentialLogout(t)
+
+	// When
+	code, stderr := captureStderr(t, func() int { return runCLI([]string{"logout", "--local"}) })
+
+	// Then
+	if code != lifecycleExitFailure {
+		t.Fatalf("local logout exit code = %d, want %d while ACR_API_TOKEN is still exported", code, lifecycleExitFailure)
+	}
+	if revoked := fixture.server.revokedTokens(); len(revoked) != 0 {
+		t.Fatalf("local logout remote revocations = %d, want none", len(revoked))
+	}
+	if _, err := os.Stat(fixture.filePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("token file survived local logout: %v", err)
+	}
+	if _, remains := fixture.keyringStore.Entries()[fixture.keyringAddr]; remains {
+		t.Fatal("keyring entry survived local logout")
+	}
+	if !strings.Contains(stderr, sidecar.TokenEnvironment) || !strings.Contains(stderr, "remote revocation was not attempted") {
+		t.Fatalf("local logout stderr = %q, want exported-variable location and remote-revocation warning", stderr)
+	}
+	for _, token := range []string{fixture.environment, fixture.file, fixture.keyring} {
+		if strings.Contains(stderr, token) {
+			t.Fatal("local logout stderr leaked credential material")
+		}
+	}
+}
+
 // Deletion is ordered strictly after every revocation. A failure against any
 // one credential -- here the lowest-precedence one, which a first-credential-
 // only implementation would never even attempt -- must retain all local

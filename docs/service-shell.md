@@ -68,6 +68,17 @@ ClickHouse must use certificate-verified TLS in staging and production. Plaintex
 ClickHouse is accepted only in development and test environments; supplying a CA
 bundle keeps certificate verification enabled in every environment.
 
+Entitlement provider selection is automatic. A complete
+`ACR_DEV_HEALTH_ENTITLEMENT_URL` plus
+`ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE` selects the remote provider. Omitting
+both selects an offline allow-all provider only in `development` and `test`;
+that provider still accepts only a non-empty organization and the fixed
+`agent_context_runtime` key. Partial remote configuration and orphaned proxy,
+CA, or insecure-loopback options are rejected. `staging` and `production`
+always require remote HTTPS entitlement and preserve the fail-before-listen
+health check. Remote readiness and request authorization remain fail closed
+during a Dev Health outage; local entitlement performs no network operation.
+
 Each listed secret pair accepts exactly one source. A `_FILE` source must name
 a regular, non-symlink file that is not writable by group or others; its
 trimmed contents are bounded to 64 KiB. Invalid paths, permissions, file sizes,
@@ -85,6 +96,10 @@ each at an owner-only regular file with mode `0600`; do not use symlinks or
 group-/other-writable files. Compose maps those paths to the corresponding
 container `_FILE` variables, so Compose deployments use the file source.
 Direct and `_FILE` sources are mutually exclusive; there is no fallback precedence.
+The checked-in root-local Compose fragment enables backing stores but omits all
+remote entitlement inputs, so `acr-api` can start independently of Dev Health
+Ops restart order. Helm verification also renders an explicit remote URL, token,
+and CA configuration to keep the production-style boundary covered.
 
 ### Hosted database operations
 

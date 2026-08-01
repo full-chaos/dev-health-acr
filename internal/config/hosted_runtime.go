@@ -68,10 +68,6 @@ func validateHostedRuntime(cfg Config) error {
 		return errors.New("ACR_POSTGRES_POOLER_ADMIN_DSN must use verified TLS")
 	case !hasActiveEvidenceIDKey(cfg):
 		return errors.New("ACR_EVIDENCE_ID_ACTIVE_KID and ACR_EVIDENCE_ID_KEYS must configure an active evidence key when backing stores are required")
-	case strings.TrimSpace(cfg.DevHealthEntitlementURL) == "":
-		return errors.New("ACR_DEV_HEALTH_ENTITLEMENT_URL is required when backing stores are required")
-	case strings.TrimSpace(cfg.DevHealthEntitlementTokenFile) == "":
-		return errors.New("ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE is required when backing stores are required")
 	case strings.TrimSpace(cfg.DeviceVerificationURL) == "":
 		return errors.New("ACR_DEVICE_VERIFICATION_URL is required when backing stores are required")
 	case !isAbsoluteDeviceVerificationURL(cfg.DeviceVerificationURL):
@@ -128,6 +124,7 @@ func (c Config) SafeAttributes() []any {
 		"episode_writeback_enabled", c.EnableEpisodeWriteback,
 		"minimum_sidecar_version", c.MinimumSidecarVersion,
 		"entitlement_key", c.EntitlementKey,
+		"entitlement_mode", string(c.EntitlementMode()),
 		"evidence_id_active_kid", c.EvidenceIDActiveKID,
 		"evidence_id_key_count", len(c.EvidenceIDKeys),
 		"trusted_proxy_count", len(c.TrustedProxyCIDRs),

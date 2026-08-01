@@ -8,6 +8,7 @@ least-privilege runtime credentials and never runs acr-mcp.
 {{- include "acr.validateDeviceVerificationURL" . -}}
 {{- include "acr.validateEntitlementOrigin" . -}}
 {{- $image := include "acr.image" . -}}
+{{- $remoteEntitlement := include "acr.remoteEntitlement" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -76,6 +77,7 @@ spec:
           {{- end }}
         {{- end }}
       {{- end }}
+      {{- if $remoteEntitlement }}
       initContainers:
         - name: prepare-entitlement-token
           image: {{ include "acr.tokenCopyImage" . | quote }}
@@ -95,6 +97,7 @@ spec:
             {{- end }}
             - name: entitlement-ca
               mountPath: /target-ca
+      {{- end }}
       containers:
         - name: acr-api
           image: {{ $image | quote }}
@@ -163,9 +166,11 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if $remoteEntitlement }}
             - name: entitlement-token
               mountPath: {{ .Values.config.entitlement.tokenMountPath | quote }}
               readOnly: true
+            {{- end }}
             {{- if .Values.config.postgresCaBundle.existingSecret }}
             - name: postgres-ca
               mountPath: /var/run/acr/postgres-ca
@@ -176,7 +181,7 @@ spec:
               mountPath: /var/run/acr/clickhouse-ca
               readOnly: true
             {{- end }}
-            {{- if .Values.config.entitlementCaBundle.existingSecret }}
+            {{- if and $remoteEntitlement .Values.config.entitlementCaBundle.existingSecret }}
             - name: entitlement-ca
               mountPath: /var/run/acr/entitlement-ca
               readOnly: true
@@ -190,6 +195,7 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if $remoteEntitlement }}
         - name: entitlement-token
           emptyDir:
             medium: Memory
@@ -209,6 +215,7 @@ spec:
             items:
               - key: {{ .Values.config.entitlementCaBundle.key | quote }}
                 path: ca.crt
+        {{- end }}
         {{- end }}
         {{- if .Values.config.postgresCaBundle.existingSecret }}
         - name: postgres-ca

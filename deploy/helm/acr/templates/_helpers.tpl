@@ -141,7 +141,9 @@ enforces that the migration DSN is not the runtime DSN reference.
 {{- $c := .Values.credentials -}}
 {{- $runtimeSecret := include "acr.requireSecretName" (dict "name" ($c.runtime.existingSecret | default "") "label" "invalid-secret-ref" "field" "credentials.runtime.existingSecret") -}}
 {{- $migrationSecret := include "acr.requireSecretName" (dict "name" ($c.migration.existingSecret | default "") "label" "invalid-secret-ref" "field" "credentials.migration.existingSecret") -}}
+{{- if include "acr.remoteEntitlement" . -}}
 {{- $_ := include "acr.requireSecretName" (dict "name" ($c.entitlementToken.existingSecret | default "") "label" "invalid-secret-ref" "field" "credentials.entitlementToken.existingSecret") -}}
+{{- end -}}
 {{- $runtimeKey := $c.runtime.postgresDsnKey | default "ACR_POSTGRES_DSN" -}}
 {{- $migrationKey := $c.migration.postgresDsnKey | default "ACR_POSTGRES_MIGRATION_DSN" -}}
 {{- if and (eq $runtimeSecret $migrationSecret) (eq $runtimeKey $migrationKey) -}}
@@ -211,15 +213,35 @@ URL whenever backing stores are enabled.
 {{- end -}}
 
 {{/*
-Entitlement-origin guard. The runtime requires an HTTPS origin only: scheme
-must be https, and the URL must carry no userinfo, path, query, or fragment
-(scheme://host[:port] only). This mirrors the sidecar's origin contract.
+Remote entitlement is selected automatically when an origin is supplied. Local
+allow-all entitlement is restricted to development/test and must not retain
+remote token or CA inputs.
 */}}
+{{- define "acr.remoteEntitlement" -}}
+{{- if (.Values.config.entitlement.url | default "") -}}true{{- end -}}
+{{- end -}}
+
 {{- define "acr.validateEntitlementOrigin" -}}
 {{- $url := .Values.config.entitlement.url | default "" -}}
+{{- $environment := .Values.config.environment -}}
+{{- $tokenSecret := .Values.credentials.entitlementToken.existingSecret | default "" -}}
+{{- $caSecret := .Values.config.entitlementCaBundle.existingSecret | default "" -}}
 {{- if $url -}}
 {{- if not (regexMatch "^https://[^/@?#]+$" $url) -}}
 {{- fail (printf "entitlement-origin: config.entitlement.url %q must be an HTTPS origin only (https scheme, host[:port], no userinfo, path, query, or fragment)" $url) -}}
+{{- end -}}
+{{- if not $tokenSecret -}}
+{{- fail "entitlement-partial: credentials.entitlementToken.existingSecret is required when config.entitlement.url is set" -}}
+{{- end -}}
+{{- else -}}
+{{- if or (eq $environment "staging") (eq $environment "production") -}}
+{{- fail (printf "entitlement-remote-required: config.entitlement.url and credentials.entitlementToken.existingSecret are required in %s" $environment) -}}
+{{- end -}}
+{{- if $tokenSecret -}}
+{{- fail "entitlement-partial: credentials.entitlementToken.existingSecret must be empty when local entitlement is selected" -}}
+{{- end -}}
+{{- if $caSecret -}}
+{{- fail "entitlement-partial: config.entitlementCaBundle.existingSecret must be empty when local entitlement is selected" -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
