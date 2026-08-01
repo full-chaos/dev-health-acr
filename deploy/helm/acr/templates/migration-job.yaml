@@ -1,3 +1,4 @@
+{{- if .Values.migration.enabled }}
 {{- /*
 Pre-install/pre-upgrade migration Job. Runs acr-migrate up with the
 schema-owner migration DSN (never the runtime DSN) and completes before the
@@ -85,3 +86,4 @@ spec:
               - key: {{ .Values.config.postgresCaBundle.key | quote }}
                 path: ca.crt
         {{- end }}
+{{- end }}

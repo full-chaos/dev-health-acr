@@ -154,6 +154,7 @@ deployment:
   extraContainers: []
 
 migration:
+  enabled: true
   # Bounded retries for the pre-install/pre-upgrade migration hook.
   backoffLimit: 3
   activeDeadlineSeconds: 600
