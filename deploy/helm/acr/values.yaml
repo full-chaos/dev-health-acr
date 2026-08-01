@@ -46,6 +46,7 @@ config:
   idleTimeout: "60s"
   shutdownTimeout: "10s"
   requireBackingStores: true
+  localCompositionReady: false
   # direct or pgbouncer; must not contradict a PgBouncer admin DSN.
   postgresConnectionKind: direct
   maxItems: 30

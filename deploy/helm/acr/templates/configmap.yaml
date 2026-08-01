@@ -1,4 +1,5 @@
 {{- /* Non-secret process configuration. Credentials never appear here. */ -}}
+{{- include "acr.validateLocalCompositionReadiness" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -19,6 +20,7 @@ data:
   ACR_IDLE_TIMEOUT: {{ .Values.config.idleTimeout | quote }}
   ACR_SHUTDOWN_TIMEOUT: {{ .Values.config.shutdownTimeout | quote }}
   ACR_REQUIRE_BACKING_STORES: {{ .Values.config.requireBackingStores | quote }}
+  ACR_LOCAL_COMPOSITION_READY: {{ .Values.config.localCompositionReady | quote }}
   ACR_POSTGRES_CONNECTION_KIND: {{ .Values.config.postgresConnectionKind | quote }}
   ACR_MAX_ITEMS: {{ .Values.config.maxItems | quote }}
   ACR_MAX_OUTPUT_TOKENS: {{ .Values.config.maxOutputTokens | quote }}

@@ -246,6 +246,14 @@ remote token or CA inputs.
 {{- end -}}
 {{- end -}}
 
+{{- define "acr.validateLocalCompositionReadiness" -}}
+{{- if .Values.config.localCompositionReady -}}
+{{- if or (ne .Values.config.environment "development") .Values.config.requireBackingStores -}}
+{{- fail "local-composition-ready: config.localCompositionReady requires config.environment=development and config.requireBackingStores=false" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Credentials checksum input. Rolls pods when a referenced Secret changes name or
 when the operator bumps credentials.rotationRevision after rotating Secret
