@@ -115,9 +115,13 @@ func developmentDependencies(cfg config.Config, serviceVersion string, logger *s
 		Limits: contractsv1.CapabilityLimits{MaxItems: cfg.MaxItems, MaxOutputTokens: cfg.MaxOutputTokens,
 			MaxSerializedBytes: cfg.MaxSerializedBytes, RequestsPerMinute: cfg.ContextRequestsPerMinute()},
 	}}
+	runtimeReadiness := api.CheckFunc{CheckName: "runtime_dependencies", Fn: func(context.Context) error { return errors.New("hosted read runtime is not configured") }}
+	if cfg.LocalCompositionReady {
+		runtimeReadiness.Fn = func(context.Context) error { return nil }
+	}
 	checks := []api.ReadinessCheck{
 		api.CheckFunc{CheckName: "configuration", Fn: func(context.Context) error { return cfg.Validate() }},
-		api.CheckFunc{CheckName: "runtime_dependencies", Fn: func(context.Context) error { return errors.New("hosted read runtime is not configured") }},
+		runtimeReadiness,
 	}
 	return api.Dependencies{
 		Capabilities: capabilities, ReadinessChecks: checks, Limits: manager, AuthAttempts: authAttempts,
