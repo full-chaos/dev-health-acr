@@ -6,6 +6,7 @@
   "additionalProperties": false,
   "required": ["image", "config", "credentials"],
   "properties": {
+    "global": { "type": "object", "additionalProperties": true },
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
     "image": {
@@ -187,6 +188,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "enabled": { "type": "boolean" },
         "backoffLimit": { "type": "integer", "minimum": 0 },
         "activeDeadlineSeconds": { "type": "integer", "minimum": 1 },
         "resources": { "type": "object" },
