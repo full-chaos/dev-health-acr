@@ -160,10 +160,22 @@ grep -Fq 'ACR_POSTGRES_MIGRATION_DSN or ACR_POSTGRES_MIGRATION_DSN_FILE is requi
 migration_network="acr-container-verify-$$-${RANDOM}"
 docker network create "$migration_network" >/dev/null
 migration_password="acr-${RANDOM}-${RANDOM}-$$"
+# PGDATA must be set explicitly and must be a strict subdirectory of the mount.
+# Relying on the image default only ever worked by coincidence: through 17 that
+# default was /var/lib/postgresql/data, which equalled the tmpfs path, and 18
+# moved it to /var/lib/postgresql/<major>/docker, at which point the entrypoint
+# refuses to start against what it now sees as an unused mount:
+#
+#   Error: ... there appears to be PostgreSQL data in:
+#     /var/lib/postgresql/data (unused mount/volume)
+#
+# Mount the parent and name the subdirectory, matching compose.yml and the Ops
+# Helm chart's bundled PostgreSQL.
 postgres_container="$(docker run -d \
   --network "$migration_network" \
   --network-alias postgres \
-  --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=512m \
+  --tmpfs /var/lib/postgresql:rw,noexec,nosuid,size=512m \
+  -e PGDATA=/var/lib/postgresql/pgdata \
   -e POSTGRES_USER=acr \
   -e "POSTGRES_PASSWORD=${migration_password}" \
   -e POSTGRES_DB=acr \
