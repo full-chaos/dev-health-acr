@@ -157,9 +157,9 @@ jobs:
       # `make container-pins` is deliberately not run here. It resolved each reviewed tag over
       # the network and failed when the digest had moved — but the Dockerfile and the compose
       # files pin every image by digest, so a moved tag cannot change what is built. It
-      # protected nothing and failed on upstream's release cadence: ten of the reviewed
+      # protected nothing and failed on upstream's release cadence: nine of the reviewed
       # references are on tags that move by design (`:latest`, `nonroot`, and rolling series
-      # like `postgres:17-alpine`). A red gate that fires for a reason unrelated to the change
+      # like `postgres:18-alpine`). A red gate that fires for a reason unrelated to the change
       # under review trains reviewers to click through, which costs more than the signal was
       # worth. The pin list itself is still load-bearing and still enforced offline:
       # scripts/e2e/test-compose.sh requires every compose image to appear in it, which is what

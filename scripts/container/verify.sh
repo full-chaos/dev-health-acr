@@ -5,7 +5,10 @@ api_image="${1:?usage: verify.sh <api-image> <mcp-image>}"
 mcp_image="${2:?usage: verify.sh <api-image> <mcp-image>}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 sentinel="${ACR_CONTAINER_SECRET_SENTINEL:-ACR_CONTAINER_SECRET_SENTINEL_9b4f4fe1}"
-postgres_image='docker.io/library/postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193'
+# Must stay on the version ACR actually ships against -- the same digest the
+# compose stack and the Helm chart's bundled PostgreSQL use. A harness pinned to
+# an older major verifies migrations no deployment ever runs.
+postgres_image='docker.io/library/postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15'
 tmp_dir="$(mktemp -d)"
 git_workspace=""
 migration_network=""
