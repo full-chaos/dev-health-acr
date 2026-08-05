@@ -50,7 +50,7 @@ GitHub action commit SHA):
 | Scanner | `aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c` |
 | Scanner DB snapshot | `ghcr.io/aquasecurity/trivy-db@sha256:7d5d30fa0e218e69d7f530f9ac32ccceeab48fb73245ae850b19e83186c66e6f` |
 | SBOM generator | `anchore/syft:v1.46.0@sha256:473a60e3a58e29aca3aedb3e99e787bb4ef273917e44d10fcbea4330a07320bb` |
-| Migration smoke database | `postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193` |
+| Migration smoke database | `postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15` |
 | Compose E2E PostgreSQL helper | `postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15` |
 | Compose E2E ClickHouse helper | `clickhouse/clickhouse-server:latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5` |
 | Compose E2E PgBouncer helper | `edoburu/pgbouncer:latest@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd` |
@@ -75,9 +75,9 @@ run all gates below. Never substitute a digest from memory or retain an old
 digest under a new tag. `make container-pins` resolves every reviewed OCI tag
 and reports tag/digest drift. It is an on-demand command, deliberately not a CI
 gate: every image is pinned by digest in the Dockerfile and the compose files,
-so a moved tag cannot change what is built, and ten of the reviewed references
+so a moved tag cannot change what is built, and nine of the reviewed references
 sit on tags that move by design (`:latest`, `nonroot`, rolling series such as
-`postgres:17-alpine`). Gating on it produced red builds on upstream's release
+`postgres:18-alpine`). Gating on it produced red builds on upstream's release
 cadence rather than on anything under review. Run it when you want to know
 whether a newer image exists. What still gates, offline and without flaking, is
 the pin list itself: `scripts/e2e/test-compose.sh` requires every compose image

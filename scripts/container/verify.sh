@@ -5,7 +5,10 @@ api_image="${1:?usage: verify.sh <api-image> <mcp-image>}"
 mcp_image="${2:?usage: verify.sh <api-image> <mcp-image>}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 sentinel="${ACR_CONTAINER_SECRET_SENTINEL:-ACR_CONTAINER_SECRET_SENTINEL_9b4f4fe1}"
-postgres_image='docker.io/library/postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193'
+# Must stay on the version ACR actually ships against -- the same digest the
+# compose stack and the Helm chart's bundled PostgreSQL use. A harness pinned to
+# an older major verifies migrations no deployment ever runs.
+postgres_image='docker.io/library/postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15'
 tmp_dir="$(mktemp -d)"
 git_workspace=""
 migration_network=""
@@ -157,10 +160,22 @@ grep -Fq 'ACR_POSTGRES_MIGRATION_DSN or ACR_POSTGRES_MIGRATION_DSN_FILE is requi
 migration_network="acr-container-verify-$$-${RANDOM}"
 docker network create "$migration_network" >/dev/null
 migration_password="acr-${RANDOM}-${RANDOM}-$$"
+# PGDATA must be set explicitly and must be a strict subdirectory of the mount.
+# Relying on the image default only ever worked by coincidence: through 17 that
+# default was /var/lib/postgresql/data, which equalled the tmpfs path, and 18
+# moved it to /var/lib/postgresql/<major>/docker, at which point the entrypoint
+# refuses to start against what it now sees as an unused mount:
+#
+#   Error: ... there appears to be PostgreSQL data in:
+#     /var/lib/postgresql/data (unused mount/volume)
+#
+# Mount the parent and name the subdirectory, matching compose.yml and the Ops
+# Helm chart's bundled PostgreSQL.
 postgres_container="$(docker run -d \
   --network "$migration_network" \
   --network-alias postgres \
-  --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=512m \
+  --tmpfs /var/lib/postgresql:rw,noexec,nosuid,size=512m \
+  -e PGDATA=/var/lib/postgresql/pgdata \
   -e POSTGRES_USER=acr \
   -e "POSTGRES_PASSWORD=${migration_password}" \
   -e POSTGRES_DB=acr \

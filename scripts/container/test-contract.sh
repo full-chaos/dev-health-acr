@@ -109,7 +109,7 @@ if grep -q -- '--ignore-unfixed' "${repo_root}/Makefile"; then exit 1; fi
 if grep -q -- '--ignore-unfixed' "${repo_root}/docs/container-images.md"; then exit 1; fi
 grep -q 'acr-api-amd64' "${repo_root}/docs/container-images.md"
 grep -q 'acr-mcp-arm64' "${repo_root}/docs/container-images.md"
-for transitive_pin in 'docker/dockerfile:1.20@sha256:' 'tonistiigi/binfmt:qemu-v10.2.3@sha256:' 'moby/buildkit:v0.31.0@sha256:' 'anchore/syft:v1.46.0@sha256:' 'aquasecurity/trivy-db@sha256:' 'postgres:17-alpine@sha256:' 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' 'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16' 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'; do
+for transitive_pin in 'docker/dockerfile:1.20@sha256:' 'tonistiigi/binfmt:qemu-v10.2.3@sha256:' 'moby/buildkit:v0.31.0@sha256:' 'anchore/syft:v1.46.0@sha256:' 'aquasecurity/trivy-db@sha256:' 'postgres:18-alpine@sha256:' 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' 'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16' 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'; do
   grep -qF "$transitive_pin" "${repo_root}/docs/container-images.md" || {
     printf 'container documentation is missing transitive pin: %s\n' "$transitive_pin" >&2
     exit 1
