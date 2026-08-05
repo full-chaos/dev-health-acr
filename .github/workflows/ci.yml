@@ -114,6 +114,33 @@ jobs:
         run: make hosted-integration
       - name: Check known Go vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
+      # Reporting steps run last and with if: always() so a failure or flake
+      # in coverage/JUnit generation or upload can never skip the product
+      # verification gates above (crosscompile, contract-test, build,
+      # govulncheck, etc.) -- those must run to completion (or fail on their
+      # own terms) regardless of whether this reporting tail succeeds. This
+      # also means the reports still get generated and uploaded when an
+      # earlier gate step failed and stopped the job, giving CI a JUnit/
+      # coverage artifact to inspect for exactly the run that failed.
+      - name: Generate coverage and JUnit reports
+        if: always()
+        run: make test-coverage
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: go-coverage
+          path: .tmp/coverage/coverage.xml
+          if-no-files-found: warn
+          retention-days: 90
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: go-junit
+          path: .tmp/coverage/junit.xml
+          if-no-files-found: warn
+          retention-days: 90
 
   containers:
     runs-on: ubuntu-24.04
