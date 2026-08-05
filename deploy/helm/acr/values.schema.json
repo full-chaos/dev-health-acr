@@ -67,6 +67,7 @@
         "idleTimeout": { "type": "string" },
         "shutdownTimeout": { "type": "string" },
         "requireBackingStores": { "type": "boolean" },
+        "localCompositionReady": { "type": "boolean" },
         "postgresConnectionKind": { "type": "string", "enum": ["direct", "pgbouncer"] },
         "maxItems": { "type": "integer", "minimum": 1, "maximum": 50 },
         "maxOutputTokens": { "type": "integer", "minimum": 500, "maximum": 16000 },

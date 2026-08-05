@@ -46,6 +46,9 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, requiredByEnvironmen
 		return err
 	}
 	cfg.RequireBackingStores = cfg.RequireBackingStores || requiredByEnvironment
+	if cfg.LocalCompositionReady, err = boolValue(lookup, "ACR_LOCAL_COMPOSITION_READY", false); err != nil {
+		return err
+	}
 	if cfg.EnableEpisodeWriteback, err = boolValue(lookup, "ACR_ENABLE_EPISODE_WRITEBACK", false); err != nil {
 		return err
 	}
@@ -104,6 +107,7 @@ func (c Config) SafeAttributes() []any {
 		"environment", c.Environment,
 		"listen_address", c.ListenAddress,
 		"backing_stores_required", c.RequireBackingStores,
+		"local_composition_ready", c.LocalCompositionReady,
 		"clickhouse_configured", c.ClickHouseDSN != "",
 		"clickhouse_ca_bundle_configured", c.ClickHouseCACertPath != "",
 		"postgres_configured", c.PostgresDSN != "",

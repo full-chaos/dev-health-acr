@@ -52,6 +52,7 @@ type Config struct {
 	PostgresConnMaxIdleTime              time.Duration
 	PostgresPingTimeout                  time.Duration
 	RequireBackingStores                 bool
+	LocalCompositionReady                bool
 	EnableEpisodeWriteback               bool
 	MinimumSidecarVersion                string
 	RevokedClientVersions                []string
@@ -224,6 +225,9 @@ func (c Config) Validate() error {
 	}
 	if err := validateEntitlementConfiguration(c); err != nil {
 		return err
+	}
+	if c.LocalCompositionReady && (c.Environment != "development" || c.RequireBackingStores) {
+		return errors.New("ACR_LOCAL_COMPOSITION_READY requires development with backing stores disabled")
 	}
 	if c.RequireBackingStores {
 		if err := validateHostedRuntime(c); err != nil {
