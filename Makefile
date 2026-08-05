@@ -1,10 +1,23 @@
-.PHONY: fmt fmt-check test test-race test-shuffle-random crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
+.PHONY: fmt fmt-check test test-race test-shuffle-random test-coverage crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
 GOTEST_SHUFFLE_SEED ?= 20260727
 GOTEST_TIMEOUT ?= 300s
 VERSION_PKG := github.com/full-chaos/dev-health-acr/internal/version
+
+# Pinned exact versions (not @latest) so the coverage/JUnit toolchain is
+# reproducible across CI and local runs. gotestsum wraps `go test`, so the
+# JUnit report and the coverage profile come from a single test run rather
+# than running the suite twice; gocover-cobertura then converts the Go
+# coverage profile into the Cobertura XML the TestOps ingester's coverage
+# sniffer accepts.
+GOTESTSUM_VERSION := v1.13.0
+GOCOVER_COBERTURA_VERSION := v1.5.0
+COVERAGE_DIR ?= .tmp/coverage
+COVERAGE_PROFILE := $(COVERAGE_DIR)/cover.out
+COVERAGE_COBERTURA := $(COVERAGE_DIR)/coverage.xml
+COVERAGE_JUNIT := $(COVERAGE_DIR)/junit.xml
 LOCAL_BUILD_VERSION := $(shell awk -F'"' '/^const localBuildVersion = / { print $$2; exit }' internal/version/version.go)
 LOCAL_BUILD_COMMIT := $(shell git rev-parse HEAD)
 LOCAL_BUILD_DATE := $(shell TZ=UTC0 git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)
@@ -48,6 +61,31 @@ test-race:
 # Keep randomized order discovery out of the deterministic verification gate.
 test-shuffle-random:
 	go test -count=1 -race -shuffle=on -timeout $(GOTEST_TIMEOUT) ./...
+
+# test-coverage produces machine-readable CI artifacts: JUnit XML for test
+# results and Cobertura XML for coverage. gotestsum wraps a single `go test`
+# invocation (forwarding everything after `--`) so both reports come from one
+# run of the suite, not two. This is additive to `test`/`test-race`, not a
+# replacement -- those stay the plain, dependency-free gate; this target adds
+# reporting on top for CI to publish.
+#
+# CI uploads both reports with `if: always()` specifically so a failing run
+# still leaves a JUnit file showing what failed and a coverage file for the
+# lines that did execute. That only works if this target itself keeps going
+# past a failing `go test`: the Cobertura conversion below runs whenever a
+# coverage profile exists, and the target still exits with the original test
+# status afterward, rather than aborting (make's default) at the first
+# non-zero command and leaving coverage.xml missing on the one path where
+# CI's `if: always()` upload was meant to catch it.
+test-coverage:
+	mkdir -p $(COVERAGE_DIR)
+	status=0; \
+	go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --junitfile $(COVERAGE_JUNIT) -- \
+		-count=1 -coverprofile=$(COVERAGE_PROFILE) ./... || status=$$?; \
+	if [ -f $(COVERAGE_PROFILE) ]; then \
+		go run github.com/boumenot/gocover-cobertura@$(GOCOVER_COBERTURA_VERSION) < $(COVERAGE_PROFILE) > $(COVERAGE_COBERTURA) || status=$$?; \
+	fi; \
+	exit $$status
 
 crosscompile:
 	GOOS=windows GOARCH=amd64 go build ./...
