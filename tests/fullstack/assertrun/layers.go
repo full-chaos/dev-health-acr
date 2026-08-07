@@ -328,6 +328,22 @@ func layerHTTPDenial(rc *runContext, l *Layer) {
 
 // --- L3 mcp ---
 
+// recordEpisodeExpectation resolves CHAOS-3565's cohort-scoped expectation
+// for record_episode_never_observed. record_episode is disabled by default
+// everywhere -- DisabledTools in cmd/acr-mcp/main.go and an empty hosted
+// Capabilities.EnabledTools mean OpenCode is never even told the tool
+// exists, so the unconditional "never observed" default in every existing
+// oracle is untouched. CHAOS-3565 (episode writeback for the design-partner
+// cohort, dev/acceptance only) makes that conditional per task rather than
+// deleting the check: a task oracle for a cohort-scoped run sets
+// episode_write=true to assert record_episode WAS exercised instead.
+func recordEpisodeExpectation(oracle Oracle) (expectObserved bool, label string) {
+	if oracle.EpisodeWrite != nil && *oracle.EpisodeWrite {
+		return true, "observed"
+	}
+	return false, "not observed"
+}
+
 func layerMCP(rc *runContext) *Layer {
 	l := newLayer("L3", "mcp")
 
@@ -392,7 +408,8 @@ func layerMCP(rc *runContext) *Layer {
 	rc.nonEvidenceToolIO = nonEvidenceIO
 
 	l.add("observed_context_for_task", observed.has("context_for_task"), "observed", fmt.Sprintf("%v", observed.has("context_for_task")), "")
-	l.add("record_episode_never_observed", !observed.has("record_episode"), "not observed", fmt.Sprintf("%v", observed.has("record_episode")), "")
+	expectRecordEpisode, recordEpisodeLabel := recordEpisodeExpectation(rc.oracle)
+	l.add("record_episode_never_observed", observed.has("record_episode") == expectRecordEpisode, recordEpisodeLabel, fmt.Sprintf("%v", observed.has("record_episode")), "")
 
 	// Parse every source_evidence invocation into a clientEvidenceCall (argument + result),
 	// grounded against the live packet -- this is the primary source of truth L4/L5 build on

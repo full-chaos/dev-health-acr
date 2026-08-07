@@ -66,10 +66,19 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		// The episode read path (CHAOS-3564) is currently wired from the same
 		// service instance as writeback, so it shares EnableEpisodeWriteback's
 		// gate rather than getting its own flag: today's only writeback source
-		// is this same flag, so there is nothing to read until it is on.
+		// is this same flag, so there is nothing to read until it is on. Reads
+		// are never cohort-restricted (CHAOS-3565's cohort gate governs
+		// writes only): the read path's own org/repository-scope check
+		// already limits every caller to their own data, and only cohort
+		// orgs will ever have anything to read anyway.
 		if reader, ok := episodeCreator.(api.EpisodeReader); ok {
 			episodeReader = reader
 		}
+		// CHAOS-3565: writeback is further scoped to a configured
+		// design-partner cohort of org IDs. config.Validate already requires
+		// a non-empty cohort whenever writeback is on, so this wrapping is
+		// unconditional here.
+		episodeCreator = newCohortScopedEpisodeCreator(episodeCreator, request.config.EpisodeWritebackCohortOrgIDs)
 	}
 	checks := []api.ReadinessCheck{
 		api.CheckFunc{CheckName: "postgres", Fn: postgres.check},

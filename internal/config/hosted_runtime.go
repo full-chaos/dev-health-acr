@@ -52,6 +52,10 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, requiredByEnvironmen
 	if cfg.EnableEpisodeWriteback, err = boolValue(lookup, "ACR_ENABLE_EPISODE_WRITEBACK", false); err != nil {
 		return err
 	}
+	// CHAOS-3565: the design-partner cohort allowed to write episodes when
+	// writeback is enabled. Read unconditionally (like the flag itself) so
+	// Validate can require it whenever EnableEpisodeWriteback is true.
+	cfg.EpisodeWritebackCohortOrgIDs = stringListValue(lookup, "ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS")
 	return nil
 }
 
