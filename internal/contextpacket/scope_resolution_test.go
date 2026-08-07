@@ -78,5 +78,5 @@ func (*catalogClient) Query(_ context.Context, statement string, _ []contextpack
 	if statement == contextpacket.RepositoryScopeQueryV1 {
 		return &rowScanner{rows: [][]any{{"00000000-0000-0000-0000-000000000001", "example-org/widget-service", "main"}}}, nil
 	}
-	return &rowScanner{rows: [][]any{{"acr:v1:test:1", "dev_health", "test", "1", "test", "", "native", 0.9, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}}}, nil
+	return &rowScanner{rows: [][]any{{"acr:v1:test:1", "dev_health", "test", "1", "test", "", "native", 0.9, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), (*time.Time)(nil)}}}, nil
 }

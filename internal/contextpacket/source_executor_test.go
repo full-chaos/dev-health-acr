@@ -115,7 +115,7 @@ func TestClickHouseSourceExecutor_bounds_usable_unique_rows_before_ranking(t *te
 	// Given
 	rows := make([][]any, 101)
 	for index := range rows {
-		rows[index] = []any{"acr:v1:test:1", "dev_health", "test", "1", "test", "", "native", 0.9000000000000001, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+		rows[index] = []any{"acr:v1:test:1", "dev_health", "test", "1", "test", "", "native", 0.9000000000000001, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), (*time.Time)(nil)}
 	}
 	client := &boundedRowClient{rows: &rowScanner{rows: rows}}
 	executor := contextpacket.NewClickHouseSourceExecutor(client)
@@ -145,6 +145,34 @@ func TestClickHouseSourceExecutor_bounds_usable_unique_rows_before_ranking(t *te
 	}
 	if len(client.bindings) != 2 || client.bindings[0].Name != "include_low_confidence" || client.bindings[0].Value != uint8(0) || client.bindings[1].Name != "source_row_limit" || client.bindings[1].Value != uint32(100) {
 		t.Fatalf("row limit binding = %#v", client.bindings)
+	}
+}
+
+func TestClickHouseSourceExecutor_mapsEventAtWhenPresentAndLeavesItAbsentWhenNull(t *testing.T) {
+	// Given a row with a real event time and a row with none.
+	eventTime := time.Date(2026, 1, 1, 6, 0, 0, 0, time.UTC)
+	rows := &rowScanner{rows: [][]any{
+		{"acr:v1:test:with-event", "dev_health", "test", "1", "test", "", "native", 1.0, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), &eventTime},
+		{"acr:v1:test:without-event", "dev_health", "test", "2", "test", "", "native", 1.0, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), (*time.Time)(nil)},
+	}}
+	client := &boundedRowClient{rows: rows}
+	executor := contextpacket.NewClickHouseSourceExecutor(client)
+
+	// When
+	evidence, err := executor.QueryEvidence(context.Background(), contextpacket.SourceQueryCatalogV1[0], nil)
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evidence) != 2 {
+		t.Fatalf("evidence=%d, want 2", len(evidence))
+	}
+	if evidence[0].EventAt == nil || !evidence[0].EventAt.Equal(eventTime) {
+		t.Fatalf("event_at = %v, want %v", evidence[0].EventAt, eventTime)
+	}
+	if evidence[1].EventAt != nil {
+		t.Fatalf("event_at = %v, want nil (never synthesized)", evidence[1].EventAt)
 	}
 }
 
@@ -185,7 +213,7 @@ func (c *rowClient) Query(_ context.Context, statement string, _ []contextpacket
 			if err := c.fail[query.ID]; err != nil {
 				return nil, err
 			}
-			return &rowScanner{rows: [][]any{{"acr:v1:test:1", "dev_health", "test", "1", query.ID, "", "native", 0.9000000000000001, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}}}, nil
+			return &rowScanner{rows: [][]any{{"acr:v1:test:1", "dev_health", "test", "1", query.ID, "", "native", 0.9000000000000001, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), (*time.Time)(nil)}}}, nil
 		}
 	}
 	return nil, errors.New("unexpected query")
@@ -207,6 +235,11 @@ func (s *rowScanner) Scan(dest ...any) error {
 			*value = s.rows[s.row][index].(float64)
 		case *time.Time:
 			*value = s.rows[s.row][index].(time.Time)
+		case **time.Time:
+			// Nullable(DateTime64) columns such as event_at scan into a
+			// pointer-to-pointer: nil means the source has no real event
+			// time; a *time.Time means it does.
+			*value, _ = s.rows[s.row][index].(*time.Time)
 		default:
 			return errors.New("unexpected destination")
 		}

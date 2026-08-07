@@ -52,7 +52,7 @@ func (c highCardinalityEvidenceClient) Query(_ context.Context, statement string
 	if !strings.Contains(statement, "FROM ci_pipeline_runs AS c FINAL") {
 		return &rowScanner{}, nil
 	}
-	target := []any{c.targetEvidenceID, "dev_health", "ci_pipeline_run", "target-run", "CI target-run", "", "native", 1.0, "passed", time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)}
+	target := []any{c.targetEvidenceID, "dev_health", "ci_pipeline_run", "target-run", "CI target-run", "", "native", 1.0, "passed", time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC), (*time.Time)(nil)}
 	branch, _ := bindingValue[string](bindings, "branch")
 	if branch == "main" {
 		return &rowScanner{rows: [][]any{target}}, nil
@@ -60,7 +60,7 @@ func (c highCardinalityEvidenceClient) Query(_ context.Context, statement string
 	rows := make([][]any, 0, 502)
 	for index := range 501 {
 		id := fmt.Sprintf("unrelated-%03d", index)
-		rows = append(rows, []any{"acr:v1:ci:" + id, "dev_health", "ci_pipeline_run", id, "CI " + id, "", "native", 1.0, "passed", time.Date(2026, 1, 15, 12, 0, 501-index, 0, time.UTC)})
+		rows = append(rows, []any{"acr:v1:ci:" + id, "dev_health", "ci_pipeline_run", id, "CI " + id, "", "native", 1.0, "passed", time.Date(2026, 1, 15, 12, 0, 501-index, 0, time.UTC), (*time.Time)(nil)})
 	}
 	rows = append(rows, target)
 	if locatorHash, ok := bindingValue[string](bindings, "evidence_locator_hash"); ok {
@@ -99,7 +99,7 @@ func (r *locatorQueryRows) Scan(destinations ...any) error {
 	if r.scanErr != nil {
 		return r.scanErr
 	}
-	values := []any{"acr:v1:ci:opaque-reference", "dev_health", "ci_pipeline_run", "run-1", "CI run", "", "native", 1.0, "fixture", time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)}
+	values := []any{"acr:v1:ci:opaque-reference", "dev_health", "ci_pipeline_run", "run-1", "CI run", "", "native", 1.0, "fixture", time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC), (*time.Time)(nil)}
 	for index, destination := range destinations {
 		switch value := destination.(type) {
 		case *string:
@@ -108,6 +108,8 @@ func (r *locatorQueryRows) Scan(destinations ...any) error {
 			*value = values[index].(float64)
 		case *time.Time:
 			*value = values[index].(time.Time)
+		case **time.Time:
+			*value, _ = values[index].(*time.Time)
 		default:
 			return fmt.Errorf("unsupported destination %T", destination)
 		}

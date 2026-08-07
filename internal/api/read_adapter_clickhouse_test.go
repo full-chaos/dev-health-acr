@@ -51,6 +51,6 @@ func (r *fixtureClickHouseRows) Close() error { return nil }
 func fixtureEvidenceRow() []any {
 	return []any{
 		"acr:v1:ci:run-4821", "dev_health", "ci_pipeline_run", "run-4821", "CI run-4821", "", "native", 1.0,
-		"failure", time.Date(2026, 7, 10, 11, 0, 0, 0, time.UTC),
+		"failure", time.Date(2026, 7, 10, 11, 0, 0, 0, time.UTC), (*time.Time)(nil),
 	}
 }
