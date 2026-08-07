@@ -17,6 +17,7 @@ const (
 	ScopeContextRead  = "context:read"
 	ScopeEvidenceRead = "evidence:read"
 	ScopeEpisodeWrite = "episode:write"
+	ScopeEpisodeRead  = "episode:read"
 )
 
 var (
@@ -34,6 +35,7 @@ var knownScopes = map[string]struct{}{
 	ScopeContextRead:  {},
 	ScopeEvidenceRead: {},
 	ScopeEpisodeWrite: {},
+	ScopeEpisodeRead:  {},
 }
 
 type CreateCredentialRequest struct {

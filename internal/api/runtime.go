@@ -38,6 +38,16 @@ type EpisodeCreator interface {
 	Create(context.Context, storage.Principal, contractsv1.AgentEpisodeCreate) (contractsv1.AgentEpisode, bool, error)
 }
 
+// EpisodeReader is deliberately a separate interface from EpisodeCreator:
+// episode:read and episode:write are independent grants (see
+// episode.authorizeRead), and keeping the interfaces separate means a
+// runtime can wire read access without also implying write access, or vice
+// versa.
+type EpisodeReader interface {
+	GetByID(context.Context, storage.Principal, string) (contractsv1.AgentEpisode, error)
+	List(context.Context, storage.Principal, string, int) ([]contractsv1.AgentEpisode, error)
+}
+
 type RuntimeDependencies struct {
 	Credentials                *storage.CredentialLifecycle
 	DeviceAuthorizations       storage.DeviceAuthorizationStore
@@ -48,6 +58,7 @@ type RuntimeDependencies struct {
 	Assembler                  ContextPacketAssembler
 	Evidence                   storage.EvidenceStore
 	Episodes                   EpisodeCreator
+	EpisodeReader              EpisodeReader
 	ReadinessChecks            []ReadinessCheck
 }
 
@@ -61,6 +72,9 @@ func (r *RuntimeDependencies) validate() error {
 	}
 	if r.Episodes != nil && storage.IsNil(r.Episodes) {
 		return errors.New("hosted episode runtime must not be typed nil")
+	}
+	if r.EpisodeReader != nil && storage.IsNil(r.EpisodeReader) {
+		return errors.New("hosted episode read runtime must not be typed nil")
 	}
 	if len(r.ReadinessChecks) < 3 {
 		return errors.New("hosted read runtime requires postgres, clickhouse, and entitlement readiness checks")

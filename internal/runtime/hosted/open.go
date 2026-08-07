@@ -57,10 +57,18 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	runtime.closers = []func() error{entitlement.Close, clickhouse.close}
 
 	var episodeCreator api.EpisodeCreator
+	var episodeReader api.EpisodeReader
 	if request.config.EnableEpisodeWriteback {
 		episodeCreator, err = request.factories.newEpisode(episodeServiceRequest{postgres: postgres, options: request.options, hooks: hooks})
 		if err != nil {
 			return nil, closeAfterError(runtime, fmt.Errorf("initialize episode runtime: %w", err))
+		}
+		// The episode read path (CHAOS-3564) is currently wired from the same
+		// service instance as writeback, so it shares EnableEpisodeWriteback's
+		// gate rather than getting its own flag: today's only writeback source
+		// is this same flag, so there is nothing to read until it is on.
+		if reader, ok := episodeCreator.(api.EpisodeReader); ok {
+			episodeReader = reader
 		}
 	}
 	checks := []api.ReadinessCheck{
@@ -104,7 +112,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		EvidenceStoreFactory: clickhouse.factory, ClientIP: clientIP, UsageTelemetry: usageTelemetry,
 		Runtime: &api.RuntimeDependencies{
 			Credentials: postgres.credentials, Audit: postgres.audit, Entitlements: entitlement, Assembler: assembler,
-			Evidence: clickhouse.evidence, Episodes: episodeCreator, ReadinessChecks: checks,
+			Evidence: clickhouse.evidence, Episodes: episodeCreator, EpisodeReader: episodeReader, ReadinessChecks: checks,
 			DeviceAuthorizations: postgres.devices, DeviceVerificationURL: request.config.DeviceVerificationURL,
 			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(request.options.Now)),
 		},

@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: f2629334a310bc29de85ba118e6aeaf3b89040baf316c3e9eb1f63b17607f648
+# canonical-content-sha256: c135613dbf4dcbb156fd75e3281f30e8fb3594ba95f68f87dda8e330ce35734f
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -130,6 +130,58 @@ paths:
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
   "/api/v1/agent-context/episodes":
+    get:
+      operationId: "listEpisodes"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+        -
+          in: "query"
+          name: "repository"
+          required: false
+          schema:
+            maxLength: 512
+            type: "string"
+        -
+          in: "query"
+          name: "limit"
+          required: false
+          schema:
+            maximum: 100
+            minimum: 1
+            type: "integer"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  "$ref": "../jsonschema/v1/agent_episode.v1.schema.json"
+                type: "array"
+          description: "The caller's episodes, newest first, optionally filtered to one repository"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "426":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+        "504":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+      x-required-entitlement: "agent_context_runtime"
+      x-required-scope: "episode:read"
     post:
       operationId: "createEpisode"
       parameters:
@@ -193,6 +245,50 @@ paths:
           bearerAuth: []
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "episode:write"
+  "/api/v1/agent-context/episodes/{episode_id}":
+    get:
+      operationId: "getEpisode"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+        -
+          in: "path"
+          name: "episode_id"
+          required: true
+          schema:
+            maxLength: 256
+            minLength: 8
+            type: "string"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/agent_episode.v1.schema.json"
+          description: "Episode after independent organization, repository, retention, and redaction authorization"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "426":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+        "504":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+      x-required-entitlement: "agent_context_runtime"
+      x-required-scope: "episode:read"
   "/api/v1/agent-context/evidence/{evidence_ref_id}":
     get:
       operationId: "getEvidence"

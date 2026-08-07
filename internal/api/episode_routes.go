@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -77,6 +78,108 @@ func (a *App) handleEpisode(w http.ResponseWriter, r *http.Request) {
 	}
 	a.recordReadAudit(r.Context(), principal, "episode_recorded", "agent_episode", episode.EpisodeID, "success", map[string]any{"request_bytes": r.ContentLength, "response_bytes": len(encoded), "duplicate": duplicate})
 	writeEncodedJSON(w, status, encoded)
+}
+
+// handleGetEpisode serves a single episode by its server-assigned
+// episode_id. Cross-tenant access and deletion both surface as the same
+// 404 a missing ID gets (see storage.EpisodeStore.GetByEpisodeID).
+func (a *App) handleGetEpisode(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
+		return
+	}
+	if a.runtime.EpisodeReader == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Episode reads are temporarily unavailable", true, nil)
+		return
+	}
+	episodeID := r.PathValue("episode_id")
+	if strings.TrimSpace(episodeID) != episodeID || len([]rune(episodeID)) < 8 || len([]rune(episodeID)) > 256 {
+		a.writeEpisodeReadNotFound(w, r, principal)
+		return
+	}
+	found, err := a.runtime.EpisodeReader.GetByID(r.Context(), principal, episodeID)
+	if err != nil {
+		a.writeEpisodeReadError(w, r, principal, err)
+		return
+	}
+	encoded, err := encodeBounded(found, a.config.MaxEvidenceResponseBytes)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "Episode response exceeded service limits", false, nil)
+		return
+	}
+	if err := CompleteUsage(r.Context(), limits.ResourceUsage{Items: 1, Tokens: int64((len(encoded) + 3) / 4), Bytes: int64(len(encoded))}); err != nil {
+		writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Episode response exceeded service limits", false, nil)
+		return
+	}
+	a.recordReadAudit(r.Context(), principal, "episode_read", "agent_episode", found.EpisodeID, "success", nil)
+	writeEncodedJSON(w, http.StatusOK, encoded)
+}
+
+// handleListEpisodes serves the caller's episodes, newest first, optionally
+// filtered to one repository. The response is a bare JSON array of
+// agent_episode.v1 objects -- each element already carries its own
+// schema_version, so no separate collection-level contract is needed.
+func (a *App) handleListEpisodes(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
+		return
+	}
+	if a.runtime.EpisodeReader == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Episode reads are temporarily unavailable", true, nil)
+		return
+	}
+	repositorySlug := strings.TrimSpace(r.URL.Query().Get("repository"))
+	if repositorySlug != "" {
+		slug, err := auth.NormalizeRepositorySlug(repositorySlug)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "repository is invalid", false, nil)
+			return
+		}
+		repositorySlug = slug
+	}
+	limit := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, convErr := strconv.Atoi(raw)
+		if convErr != nil || parsed < 0 {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "limit is invalid", false, nil)
+			return
+		}
+		limit = parsed
+	}
+	episodes, err := a.runtime.EpisodeReader.List(r.Context(), principal, repositorySlug, limit)
+	if err != nil {
+		a.writeEpisodeReadError(w, r, principal, err)
+		return
+	}
+	if episodes == nil {
+		episodes = []contractsv1.AgentEpisode{}
+	}
+	encoded, err := encodeBounded(episodes, a.config.MaxEvidenceResponseBytes)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "Episode list response exceeded service limits", false, nil)
+		return
+	}
+	if err := CompleteUsage(r.Context(), limits.ResourceUsage{Items: int64(len(episodes)), Tokens: int64((len(encoded) + 3) / 4), Bytes: int64(len(encoded))}); err != nil {
+		writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Episode list response exceeded service limits", false, nil)
+		return
+	}
+	a.recordReadAudit(r.Context(), principal, "episode_list", "agent_episode", "list", "success", map[string]any{"count": len(episodes)})
+	writeEncodedJSON(w, http.StatusOK, encoded)
+}
+
+func (a *App) writeEpisodeReadNotFound(w http.ResponseWriter, r *http.Request, principal storage.Principal) {
+	a.recordReadAudit(r.Context(), principal, "episode_read_denied", "agent_episode", "unavailable", "denied", nil)
+	writeError(w, r, http.StatusNotFound, "not_found", "Episode was not found", false, nil)
+}
+
+func (a *App) writeEpisodeReadError(w http.ResponseWriter, r *http.Request, principal storage.Principal, err error) {
+	if errors.Is(err, storage.ErrNotFound) {
+		a.writeEpisodeReadNotFound(w, r, principal)
+		return
+	}
+	a.writeReadDependencyError(w, r, err, "episode_read")
 }
 
 func (a *App) writeEpisodeError(w http.ResponseWriter, r *http.Request, principal storage.Principal, create contractsv1.AgentEpisodeCreate, err error) {

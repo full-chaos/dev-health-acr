@@ -341,6 +341,18 @@ func layerMCP(rc *runContext) *Layer {
 	} else if names, err := mcpToolNames(raw); err != nil {
 		l.add("mcp_tools_decode", false, "", "", err.Error())
 	} else {
+		// CHAOS-3564 (episode read path) annotation: adding the episode
+		// get/list routes was flagged as a known risk to this exact-match
+		// oracle, so it was checked deliberately. The read path is HTTP-only
+		// (GET /api/v1/agent-context/episodes and .../episodes/{episode_id}),
+		// registered in internal/api/app.go against internal/api's own mux --
+		// it never touches internal/mcp or cmd/acr-mcp's hardcoded tool list
+		// (see internal/mcp/server.go's toolContextForTask/toolSourceEvidence
+		// constants and cmd/acr-mcp/main.go's EnabledTools). That is a
+		// deliberate curated-contract boundary (see CHAOS-3564's "no native
+		// graph/MCP exposure" constraint), not an oversight, so this baseline
+		// stays exactly the two tools that exist today. If a future ticket
+		// adds a curated MCP episode tool, this baseline must change with it.
 		expected := []string{"context_for_task", "source_evidence"}
 		if len(rc.oracle.ExpectedMCPTools) > 0 {
 			expected = rc.oracle.ExpectedMCPTools
