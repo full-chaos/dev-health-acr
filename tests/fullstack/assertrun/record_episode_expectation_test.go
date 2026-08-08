@@ -46,12 +46,12 @@ func TestRecordEpisodeCheck_forbiddenState_isByteIdenticalToPreCHAOS3565Behavior
 	t.Run("not observed passes", func(t *testing.T) {
 		l := newLayer("L3", "mcp")
 		recordEpisodeCheck(l, recordEpisodeForbidden, false, nil, nil)
-		assertSingleCheck(t, l, "record_episode_never_observed", true, false)
+		assertSingleCheck(t, l, "record_episode_never_observed", true, false, "not observed", "false")
 	})
 	t.Run("observed fails", func(t *testing.T) {
 		l := newLayer("L3", "mcp")
 		recordEpisodeCheck(l, recordEpisodeForbidden, true, &ToolInvocation{Name: "record_episode"}, nil)
-		assertSingleCheck(t, l, "record_episode_never_observed", false, false)
+		assertSingleCheck(t, l, "record_episode_never_observed", false, false, "not observed", "true")
 	})
 }
 
@@ -76,7 +76,7 @@ func TestRecordEpisodeCheck_permittedOptionalState_neverFailsWhenNotObserved(t *
 func TestRecordEpisodeCheck_permittedOptionalState_failsOnFailedInvocation(t *testing.T) {
 	l := newLayer("L3", "mcp")
 	recordEpisodeCheck(l, recordEpisodePermittedOptional, true, &ToolInvocation{Name: "record_episode", Status: "error"}, nil)
-	assertSingleCheck(t, l, "record_episode_permitted_optional", false, false)
+	assertSingleCheck(t, l, "record_episode_permitted_optional", false, false, "a successful record_episode result", "tool call failed")
 }
 
 func TestRecordEpisodeCheck_permittedOptionalState_validatesObservedResultAgainstContract(t *testing.T) {
@@ -97,24 +97,28 @@ func TestRecordEpisodeCheck_permittedOptionalState_validatesObservedResultAgains
 	t.Run("valid result passes", func(t *testing.T) {
 		l := newLayer("L3", "mcp")
 		recordEpisodeCheck(l, recordEpisodePermittedOptional, true, &ToolInvocation{Name: "record_episode", Status: "completed", ResultText: validResult}, schemas)
-		assertSingleCheck(t, l, "record_episode_permitted_optional", true, false)
+		assertSingleCheck(t, l, "record_episode_permitted_optional", true, false, "valid mcp_record_episode_response.v1", "valid")
 	})
 	t.Run("malformed result fails", func(t *testing.T) {
 		l := newLayer("L3", "mcp")
 		recordEpisodeCheck(l, recordEpisodePermittedOptional, true, &ToolInvocation{Name: "record_episode", Status: "completed", ResultText: `{"schema_version":"mcp_record_episode_response.v1"}`}, schemas)
-		assertSingleCheck(t, l, "record_episode_permitted_optional", false, false)
+		assertSingleCheck(t, l, "record_episode_permitted_optional", false, false, "valid mcp_record_episode_response.v1", "invalid")
 	})
 }
 
 // assertSingleCheck fails the test unless l has exactly one check named name with the given
-// ok/skipped state.
-func assertSingleCheck(t *testing.T, l *Layer, name string, ok, skipped bool) {
+// ok/skipped state AND the given Expected/Actual rendering. Comparing Expected/Actual matters
+// (review finding NEW-5): a mutation that swaps the literal label passed to l.add (e.g.
+// "not observed" -> "observed" at layers.go's recordEpisodeCheck) leaves the pass/fail
+// condition -- and so OK/Skipped -- untouched, so a check that only compared those would stay
+// green against a report that now claims the wrong expected state.
+func assertSingleCheck(t *testing.T, l *Layer, name string, ok, skipped bool, expected, actual string) {
 	t.Helper()
 	if len(l.Checks) != 1 {
 		t.Fatalf("checks = %#v, want exactly one", l.Checks)
 	}
 	check := l.Checks[0]
-	if check.Name != name || check.OK != ok || check.Skipped != skipped {
-		t.Fatalf("check = %#v, want {Name:%q OK:%t Skipped:%t}", check, name, ok, skipped)
+	if check.Name != name || check.OK != ok || check.Skipped != skipped || check.Expected != expected || check.Actual != actual {
+		t.Fatalf("check = %#v, want {Name:%q OK:%t Skipped:%t Expected:%q Actual:%q}", check, name, ok, skipped, expected, actual)
 	}
 }
