@@ -1,6 +1,7 @@
 package api
 
 import (
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -182,4 +183,55 @@ func tightEpisodeResourceLimitManager(t *testing.T, budget limits.ResourceBudget
 		t.Fatal(err)
 	}
 	return manager
+}
+
+// TestListEpisodes_clampsOverflowingPositiveLimitInsteadOfRejecting is the
+// regression test for the Codex cross-system review finding X7: the
+// OpenAPI contract (L8) documents limit as "0 (or omitted) uses the
+// service default; values above the service maximum are silently clamped,
+// never rejected" -- true for any in-range value (e.g. limit=10000 clamps
+// to maxEpisodeListLimit downstream in the store), but a limit string that
+// overflows Go's int range (strconv.Atoi returns math.MaxInt with
+// strconv.ErrRange, not a syntax error) was previously treated as
+// convErr != nil and rejected with 400, contradicting the documented
+// "never rejected" contract for a value that is still, in every meaningful
+// sense, just a very large valid limit.
+func TestListEpisodes_clampsOverflowingPositiveLimitInsteadOfRejecting(t *testing.T) {
+	reader := &fakeEpisodeReader{list: []contractsv1.AgentEpisode{}}
+	app, token := hostedEpisodeReaderTestApp(t, reader, []string{auth.ScopeEpisodeRead})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/episodes?limit=999999999999999999999999999999", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (an overflowing positive limit must clamp, not reject), body = %s", response.Code, response.Body.String())
+	}
+	if reader.listLimit != math.MaxInt {
+		t.Fatalf("reader saw limit = %d, want math.MaxInt (strconv.Atoi's own overflow clamp, which the store then bounds to its own maximum)", reader.listLimit)
+	}
+}
+
+// TestListEpisodes_rejectsOverflowingNegativeLimit proves the X7 fix
+// doesn't overcorrect: a limit string that overflows AND is negative is
+// still a semantically invalid limit (the same class as limit=-1), not
+// merely "too large", so it must still be rejected.
+func TestListEpisodes_rejectsOverflowingNegativeLimit(t *testing.T) {
+	reader := &fakeEpisodeReader{}
+	app, token := hostedEpisodeReaderTestApp(t, reader, []string{auth.ScopeEpisodeRead})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/episodes?limit=-999999999999999999999999999999", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body = %s", response.Code, response.Body.String())
+	}
+	if reader.listLimit != 0 || reader.gotPrincipal.OrgID != "" {
+		t.Fatalf("reader was reached with an invalid overflowing-negative limit: %#v", reader)
+	}
 }

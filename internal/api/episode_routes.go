@@ -176,6 +176,20 @@ func (a *App) handleListEpisodes(w http.ResponseWriter, r *http.Request) {
 	limit := 0
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		parsed, convErr := strconv.Atoi(raw)
+		// A limit string that overflows Go's int range (e.g. sixty digits)
+		// is not a syntax error -- strconv.Atoi still parses the sign and
+		// digits, it just can't represent the magnitude, and returns
+		// math.MaxInt/MinInt with strconv.ErrRange. The OpenAPI contract
+		// (L8) promises any value above the service maximum is silently
+		// clamped downstream, never rejected -- true for limit=10000, so it
+		// must also be true for an overflowing positive value, which is
+		// just an even larger instance of the same case. A negative
+		// overflow is still semantically invalid the same way limit=-1 is,
+		// so it stays rejected.
+		var numErr *strconv.NumError
+		if convErr != nil && errors.As(convErr, &numErr) && errors.Is(numErr.Err, strconv.ErrRange) && parsed >= 0 {
+			convErr = nil
+		}
 		if convErr != nil || parsed < 0 {
 			writeError(w, r, http.StatusBadRequest, "invalid_request", "limit is invalid", false, nil)
 			return
