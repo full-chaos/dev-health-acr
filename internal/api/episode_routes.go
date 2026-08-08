@@ -136,6 +136,11 @@ func (a *App) handleGetEpisode(w http.ResponseWriter, r *http.Request) {
 		a.writeEpisodeReadError(w, r, principal, err)
 		return
 	}
+	if err := found.Validate(); err != nil {
+		a.logger.ErrorContext(r.Context(), "episode reader returned invalid output", "request_id", RequestID(r.Context()), "failure_class", "episode_output")
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "Episode response is invalid", false, nil)
+		return
+	}
 	encoded, err := encodeBounded(found, a.config.MaxEvidenceResponseBytes)
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "Episode response exceeded service limits", false, nil)
@@ -203,6 +208,13 @@ func (a *App) handleListEpisodes(w http.ResponseWriter, r *http.Request) {
 	}
 	if episodes == nil {
 		episodes = []contractsv1.AgentEpisode{}
+	}
+	for _, episode := range episodes {
+		if err := episode.Validate(); err != nil {
+			a.logger.ErrorContext(r.Context(), "episode reader returned invalid output", "request_id", RequestID(r.Context()), "failure_class", "episode_output")
+			writeError(w, r, http.StatusInternalServerError, "internal_error", "Episode list response is invalid", false, nil)
+			return
+		}
 	}
 	encoded, err := encodeBounded(episodes, a.config.MaxEvidenceResponseBytes)
 	if err != nil {

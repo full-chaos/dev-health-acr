@@ -235,3 +235,44 @@ func TestListEpisodes_rejectsOverflowingNegativeLimit(t *testing.T) {
 		t.Fatalf("reader was reached with an invalid overflowing-negative limit: %#v", reader)
 	}
 }
+
+// TestGetEpisode_rejectsCorruptedStoredPayload and
+// TestListEpisodes_rejectsCorruptedStoredPayload are the regression tests
+// for the Codex cross-system review finding X9: handleGetEpisode/
+// handleListEpisodes encoded whatever contractsv1.AgentEpisode the reader
+// returned directly, without calling .Validate() first -- unlike the write
+// path (handleEpisode), which validates its creator's output before
+// encoding it (episode_routes.go, "episode creator returned invalid
+// output"). A corrupted stored row (e.g. a schema migration gap, a bad
+// manual DB edit, or a future store bug) would silently violate the
+// agent_episode.v1 response contract instead of failing loudly as an
+// internal/dependency error.
+func TestGetEpisode_rejectsCorruptedStoredPayload(t *testing.T) {
+	reader := &fakeEpisodeReader{episode: contractsv1.AgentEpisode{}} // zero value: fails Validate()
+	app, token := hostedEpisodeReaderTestApp(t, reader, []string{auth.ScopeEpisodeRead})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/episodes/episode_server_01", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (a corrupted stored episode must never be served as a valid response), body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestListEpisodes_rejectsCorruptedStoredPayload(t *testing.T) {
+	reader := &fakeEpisodeReader{list: []contractsv1.AgentEpisode{storedEpisode(), {}}} // second entry: zero value, fails Validate()
+	app, token := hostedEpisodeReaderTestApp(t, reader, []string{auth.ScopeEpisodeRead})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/episodes", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (a list containing a corrupted stored episode must never be served), body = %s", response.Code, response.Body.String())
+	}
+}
