@@ -208,12 +208,37 @@ func (a *App) writeEpisodeReadNotFound(w http.ResponseWriter, r *http.Request, p
 	writeError(w, r, http.StatusNotFound, "not_found", "Episode was not found", false, nil)
 }
 
+// writeEpisodeReadError classifies internal/episode's authorizeRead errors
+// explicitly, mirroring writeEpisodeError's pattern for the write path
+// (review finding H2): these are permanent, expected auth refusals -- a
+// credential structurally missing repository scope, the episode:read
+// scope, or the runtime entitlement -- not transient dependency failures,
+// so they must not fall into writeReadDependencyError's generic
+// ERROR-logged, retryable:true default. In practice these should never
+// trigger post-B1-fix (protectedRuntimeHandler's middleware already
+// enforces scope and entitlement before the handler runs), but authorizeRead
+// re-checks both as defense-in-depth, so this handler must classify
+// whatever it can actually return. The four causes that collapse into the
+// same not-found (cross-tenant access, unauthorized repository scope on an
+// existing episode, redaction, retention expiry) are untouched -- those are
+// per-record outcomes from the store, never surfaced here as anything but
+// storage.ErrNotFound.
 func (a *App) writeEpisodeReadError(w http.ResponseWriter, r *http.Request, principal storage.Principal, err error) {
-	if errors.Is(err, storage.ErrNotFound) {
+	switch {
+	case errors.Is(err, storage.ErrNotFound):
 		a.writeEpisodeReadNotFound(w, r, principal)
-		return
+	case errors.Is(err, auth.ErrRepositoryForbidden):
+		a.recordReadAudit(r.Context(), principal, "episode_read_denied", "agent_episode", "unavailable", "denied", nil)
+		writeError(w, r, http.StatusForbidden, "repo_forbidden", "Credential is not authorized for this repository", false, nil)
+	case errors.Is(err, auth.ErrInsufficientScope):
+		a.recordReadAudit(r.Context(), principal, "episode_read_denied", "agent_episode", "unavailable", "denied", nil)
+		writeError(w, r, http.StatusForbidden, "insufficient_scope", "Credential is missing the required scope", false, map[string]any{"required_scope": auth.ScopeEpisodeRead})
+	case errors.Is(err, episode.ErrEntitlementRequired):
+		a.recordReadAudit(r.Context(), principal, "episode_read_denied", "agent_episode", "unavailable", "denied", nil)
+		writeError(w, r, http.StatusForbidden, "feature_not_enabled", "Agent Context Runtime is not enabled for this organization", false, nil)
+	default:
+		a.writeReadDependencyError(w, r, err, "episode_read")
 	}
-	a.writeReadDependencyError(w, r, err, "episode_read")
 }
 
 func (a *App) writeEpisodeError(w http.ResponseWriter, r *http.Request, principal storage.Principal, create contractsv1.AgentEpisodeCreate, err error) {

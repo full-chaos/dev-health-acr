@@ -1,14 +1,17 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/episode"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -163,5 +166,57 @@ func TestListEpisodes_requiresEpisodeReadScope(t *testing.T) {
 
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403, body = %s", response.Code, response.Body.String())
+	}
+}
+
+// TestEpisodeReadErrors_authRefusalsAreNonRetryableAndNotLoggedAsError is
+// the regression test for review finding H2: authorizeRead's auth-refusal
+// sentinels (repository scope, episode:read scope, runtime entitlement)
+// previously fell into writeReadDependencyError's generic default -- 503
+// upstream_unavailable, retryable:true, ERROR "hosted read dependency
+// failed" -- indistinguishable from a real outage. RED: this test failed
+// (503 instead of 403) against the pre-fix default-case handling for all
+// three sentinels; GREEN after writeEpisodeReadError classified them
+// explicitly.
+func TestEpisodeReadErrors_authRefusalsAreNonRetryableAndNotLoggedAsError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		wantCode string
+	}{
+		{name: "repository forbidden", err: auth.ErrRepositoryForbidden, wantCode: "repo_forbidden"},
+		{name: "insufficient scope", err: auth.ErrInsufficientScope, wantCode: "insufficient_scope"},
+		{name: "entitlement required", err: episode.ErrEntitlementRequired, wantCode: "feature_not_enabled"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var buffer bytes.Buffer
+			reader := &fakeEpisodeReader{getErr: test.err}
+			app, token := hostedEpisodeReaderTestApp(t, reader, []string{auth.ScopeEpisodeRead})
+			app.logger = testLogger(&buffer)
+
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/episodes/episode_server_01", nil)
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("X-ACR-Client-Version", "1.0.0")
+			response := httptest.NewRecorder()
+			app.Handler().ServeHTTP(response, request)
+
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", response.Code)
+			}
+			var envelope contractsv1.ErrorEnvelope
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if envelope.Error.Code != test.wantCode {
+				t.Fatalf("code = %q, want %q", envelope.Error.Code, test.wantCode)
+			}
+			if envelope.Error.Retryable {
+				t.Fatalf("auth refusal envelope retryable = true, want false: %#v", envelope)
+			}
+			if strings.Contains(buffer.String(), `"level":"ERROR"`) {
+				t.Fatalf("auth refusal logged at ERROR level, want non-ERROR: %s", buffer.String())
+			}
+		})
 	}
 }
