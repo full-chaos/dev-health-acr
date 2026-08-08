@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -36,16 +37,25 @@ WHERE org_id = $1::uuid AND episode_id = $2
 }
 
 // List returns the caller's episodes, newest first, optionally filtered to
-// one repository slug. Every row is re-checked against the caller's
-// repository scopes (scanAuthorizedEpisode), not just the org filter in the
-// WHERE clause, so a credential scoped to only some repositories in the org
-// never sees another repository's episodes.
+// one repository slug. The repository-scope predicate is pushed into SQL
+// (the same jsonb_array_elements_text pattern purgeExpired uses,
+// episodes.go) so it applies BEFORE the LIMIT, not just in Go afterward: a
+// credential scoped to only some repositories in the org must never receive
+// a short or empty page because newer episodes in OTHER repositories filled
+// the LIMIT window first (review finding M3). scanAuthorizedEpisode's
+// per-row Go re-check stays in place as belt-and-braces defense in depth,
+// not as the only thing standing between an out-of-scope row and the
+// response.
 func (s *EpisodeStore) List(ctx context.Context, principal storage.Principal, repositorySlug string, limit int) ([]contractsv1.AgentEpisode, error) {
 	if limit <= 0 {
 		limit = defaultEpisodeListLimit
 	}
 	if limit > maxEpisodeListLimit {
 		limit = maxEpisodeListLimit
+	}
+	scopesJSON, err := json.Marshal(principal.RepositoryScopes)
+	if err != nil {
+		return nil, fmt.Errorf("encode repository scopes: %w", err)
 	}
 	rows, err := s.DB.QueryContext(ctx, `
 SELECT episode_id, repo_slug, payload, created_at, redaction_state
@@ -54,8 +64,12 @@ WHERE org_id = $1::uuid
   AND redaction_state <> 'purged_tombstone'
   AND (expires_at IS NULL OR expires_at > NOW())
   AND ($2 = '' OR repo_slug = $2)
+  AND EXISTS (
+          SELECT 1 FROM jsonb_array_elements_text($4::jsonb) AS allowed(scope)
+          WHERE allowed.scope = '*' OR repo_slug = allowed.scope OR repo_slug LIKE replace(allowed.scope, '/*', '/%')
+      )
 ORDER BY created_at DESC, episode_id ASC
-LIMIT $3`, principal.OrgID, repositorySlug, limit)
+LIMIT $3`, principal.OrgID, repositorySlug, limit, string(scopesJSON))
 	if err != nil {
 		return nil, fmt.Errorf("list episodes: %w", err)
 	}

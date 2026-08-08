@@ -93,12 +93,21 @@ func TestList_scopesToOrgFiltersRepositoryAndBoundsLimitInSQL(t *testing.T) {
 		!strings.Contains(capturedQuery, "redaction_state <> 'purged_tombstone'") ||
 		!strings.Contains(capturedQuery, "expires_at IS NULL OR expires_at > NOW()") ||
 		!strings.Contains(capturedQuery, "$2 = '' OR repo_slug = $2") ||
+		!strings.Contains(capturedQuery, "jsonb_array_elements_text($4::jsonb)") ||
 		!strings.Contains(capturedQuery, "ORDER BY created_at DESC") ||
 		!strings.Contains(capturedQuery, "LIMIT $3") {
 		t.Fatalf("list query missing a required scope/order/bound clause: %s", capturedQuery)
 	}
-	if len(capturedArgs) != 3 || capturedArgs[1].Value != "owner/repo" || capturedArgs[2].Value != int64(defaultEpisodeListLimit) {
-		t.Fatalf("bound args = %#v, want default limit applied for a non-positive caller limit", capturedArgs)
+	// The repository-scope EXISTS clause must appear before LIMIT in the
+	// query text -- Postgres applies WHERE (including a subquery EXISTS)
+	// before LIMIT regardless of clause order, but this pins the intent
+	// directly: LIMIT is not what stands between an out-of-scope row and the
+	// page (review finding M3).
+	if idx := strings.Index(capturedQuery, "jsonb_array_elements_text"); idx == -1 || idx > strings.Index(capturedQuery, "LIMIT $3") {
+		t.Fatalf("repository-scope filter must precede LIMIT in the query text: %s", capturedQuery)
+	}
+	if len(capturedArgs) != 4 || capturedArgs[1].Value != "owner/repo" || capturedArgs[2].Value != int64(defaultEpisodeListLimit) || capturedArgs[3].Value != `["owner/repo"]` {
+		t.Fatalf("bound args = %#v, want default limit applied for a non-positive caller limit and the principal's repository scopes bound as JSON", capturedArgs)
 	}
 }
 
@@ -115,7 +124,7 @@ func TestList_clampsOverLargeLimitToMax(t *testing.T) {
 	if _, err := store.List(context.Background(), postgresPrincipal(), "", 10_000); err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(capturedArgs) != 3 || capturedArgs[2].Value != int64(maxEpisodeListLimit) {
+	if len(capturedArgs) != 4 || capturedArgs[2].Value != int64(maxEpisodeListLimit) {
 		t.Fatalf("bound limit = %#v, want clamped to %d", capturedArgs, maxEpisodeListLimit)
 	}
 }
