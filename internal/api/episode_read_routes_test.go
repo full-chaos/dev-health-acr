@@ -115,6 +115,53 @@ func TestGetEpisode_missingEpisodeIsNotFound(t *testing.T) {
 	}
 }
 
+// TestGetEpisode_notFoundRequestIDIsPerRequestNotPerCause is verification
+// evidence for the Codex cross-system review finding X2: the claim was that
+// not-found responses "differ across requests via request_id/X-Request-ID",
+// implying a caller could infer the not-found CAUSE (cross-tenant,
+// out-of-scope repository, expired, purged, or genuinely missing --
+// storage.EpisodeStore already collapses all of these to the identical
+// storage.ErrNotFound before handleGetEpisode ever sees them) from the
+// response's request_id. requestIDMiddleware (app.go) assigns the ID before
+// the request reaches any handler, auth check, or store lookup -- it cannot
+// depend on a cause that is not yet known. This sends two requests sharing
+// the exact same not-found cause and proves their request IDs still differ:
+// if the ID were somehow cause-derived (deterministic per cause), two
+// identical-cause requests would produce the SAME id, not different ones.
+// The indistinguishability requirement the finding invokes is about the
+// response being uniform ACROSS CAUSES for comparable requests, not about
+// request_id being stable across separate requests -- see also
+// TestCreateEpisode_writebackNotEnabledForOrg_matchesDisabledCreatorResponseBody,
+// the codebase's own established convention for this class of parity test,
+// which explicitly zeroes RequestID before comparing two envelopes for
+// exactly this reason (episode_routes_test.go).
+func TestGetEpisode_notFoundRequestIDIsPerRequestNotPerCause(t *testing.T) {
+	reader := &fakeEpisodeReader{getErr: storage.ErrNotFound}
+	app, token := hostedEpisodeReaderTestApp(t, reader, []string{auth.ScopeEpisodeRead})
+
+	request := func() *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/episodes/does-not-exist", nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("X-ACR-Client-Version", "1.0.0")
+		return r
+	}
+
+	first, second := httptest.NewRecorder(), httptest.NewRecorder()
+	app.Handler().ServeHTTP(first, request())
+	app.Handler().ServeHTTP(second, request())
+
+	if first.Code != http.StatusNotFound || second.Code != http.StatusNotFound {
+		t.Fatalf("statuses = %d, %d, want 404, 404", first.Code, second.Code)
+	}
+	firstID, secondID := first.Header().Get("X-Request-ID"), second.Header().Get("X-Request-ID")
+	if firstID == "" || secondID == "" {
+		t.Fatalf("request ids = %q, %q -- want both non-empty", firstID, secondID)
+	}
+	if firstID == secondID {
+		t.Fatalf("two requests sharing the identical not-found cause got the same request_id (%q) -- if this ever happens the ID generator has become deterministic/cause-derived, which is the opposite of what X2 alleged", firstID)
+	}
+}
+
 func TestGetEpisode_requiresEpisodeReadScope(t *testing.T) {
 	reader := &fakeEpisodeReader{episode: storedEpisode()}
 	// A credential with only episode:write must not be able to read episodes
