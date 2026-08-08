@@ -72,6 +72,21 @@ func (s *Service) Create(ctx context.Context, principal storage.Principal, creat
 	if err := validateCreate(principal, create); err != nil {
 		return contractsv1.AgentEpisode{}, false, err
 	}
+	// Normalized here, not just by the HTTP handler that is today's only
+	// caller: memory.EpisodeStore's repository-scope check lowercases both
+	// sides before comparing, but postgres.EpisodeStore's SQL EXISTS clause
+	// compares repo_slug by exact, case-sensitive equality against the
+	// credential's scope (always lowercase, per
+	// auth.NormalizeRepositoryScopes) -- a mixed-case slug that reached the
+	// store unnormalized was stored, readable via GetByID, but silently
+	// invisible to List/purgeExpired in postgres while still visible in
+	// memory. Normalizing at the service boundary makes both backends agree
+	// regardless of caller (review finding X5).
+	slug, err := auth.NormalizeRepositorySlug(create.Repository.Slug)
+	if err != nil {
+		return contractsv1.AgentEpisode{}, false, err
+	}
+	create.Repository = contractsv1.RepositoryRef{Slug: slug}
 	if err := auth.AuthorizeRepository(principal, create.Repository.Slug); err != nil {
 		return contractsv1.AgentEpisode{}, false, err
 	}
