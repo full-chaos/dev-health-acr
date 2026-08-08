@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -149,4 +150,135 @@ func TestEpisodeStore_List_scopesFiltersOrdersAndExcludesDeletedOrExpired(t *tes
 	if results, err := store.List(context.Background(), unauthorized, "", 10); err != nil || len(results) != 0 {
 		t.Fatalf("unauthorized list = (%#v, %v), want (empty, nil)", results, err)
 	}
+}
+
+// TestList_defaultsNonPositiveLimit is the regression test for review
+// finding M6's default-limit-trigger mutant: a non-positive caller limit
+// must be replaced with defaultEpisodeListLimit, not passed through
+// unbounded or left at zero (which would return no rows at all).
+func TestList_defaultsNonPositiveLimit(t *testing.T) {
+	store := NewEpisodeStore()
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
+	expiresAt := time.Now().Add(time.Hour)
+	for i := range defaultEpisodeListLimit + 5 {
+		create := testEpisodeCreate()
+		create.ClientEpisodeID = fmt.Sprintf("episode_default_%02d", i)
+		create.IdempotencyKey = fmt.Sprintf("idempotency_default_%02d", i)
+		if _, _, err := store.CreateIdempotent(context.Background(), principal, create, &expiresAt); err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+	}
+	for _, limit := range []int{0, -1, -100} {
+		results, err := store.List(context.Background(), principal, "", limit)
+		if err != nil {
+			t.Fatalf("list limit=%d: %v", limit, err)
+		}
+		if len(results) != defaultEpisodeListLimit {
+			t.Fatalf("list limit=%d returned %d results, want the default limit %d", limit, len(results), defaultEpisodeListLimit)
+		}
+	}
+}
+
+// TestList_clampsOverLargeLimitToMax is the regression test for review
+// finding M6's max-limit-clamp mutant: a caller-supplied limit above
+// maxEpisodeListLimit must be clamped, never trusted unbounded.
+func TestList_clampsOverLargeLimitToMax(t *testing.T) {
+	store := NewEpisodeStore()
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
+	expiresAt := time.Now().Add(time.Hour)
+	for i := range maxEpisodeListLimit + 5 {
+		create := testEpisodeCreate()
+		create.ClientEpisodeID = fmt.Sprintf("episode_max_%03d", i)
+		create.IdempotencyKey = fmt.Sprintf("idempotency_max_%03d", i)
+		if _, _, err := store.CreateIdempotent(context.Background(), principal, create, &expiresAt); err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+	}
+	results, err := store.List(context.Background(), principal, "", 10_000)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(results) != maxEpisodeListLimit {
+		t.Fatalf("list with an over-large limit returned %d results, want clamped to %d", len(results), maxEpisodeListLimit)
+	}
+}
+
+// TestList_truncatesToLimitWhenMoreMatchesExist is the regression test for
+// review finding M6's truncation mutant: when more matching episodes exist
+// than the (already-clamped) limit, the result must actually be cut down to
+// that limit, not returned in full.
+func TestList_truncatesToLimitWhenMoreMatchesExist(t *testing.T) {
+	store := NewEpisodeStore()
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
+	expiresAt := time.Now().Add(time.Hour)
+	const seeded = 7
+	const limit = 3
+	for i := range seeded {
+		create := testEpisodeCreate()
+		create.ClientEpisodeID = fmt.Sprintf("episode_trunc_%02d", i)
+		create.IdempotencyKey = fmt.Sprintf("idempotency_trunc_%02d", i)
+		if _, _, err := store.CreateIdempotent(context.Background(), principal, create, &expiresAt); err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+	}
+	results, err := store.List(context.Background(), principal, "", limit)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(results) != limit {
+		t.Fatalf("list returned %d results for %d matching episodes and limit=%d, want exactly %d", len(results), seeded, limit, limit)
+	}
+}
+
+// TestGetByEpisodeID_rejectsPurgedTombstoneAsNotFound and
+// TestList_excludesPurgedTombstone are the regression tests for review
+// finding M6's purged_tombstone-guard mutants. Without the guard in
+// GetByEpisodeID, a purged episode would return (AgentEpisode{}, nil) --
+// 200 OK with an empty body -- instead of ErrNotFound: an existence oracle,
+// since it is distinguishable from a truly-unknown ID (which still 404s).
+// presentation() independently zeroes a purged_tombstone record's fields,
+// but that does not change the *error*, which is what actually determines
+// the HTTP status a caller observes (episode_routes.go), so this asserts
+// the error, not just the body shape.
+func TestGetByEpisodeID_rejectsPurgedTombstoneAsNotFound(t *testing.T) {
+	store, created, principal := seedPurgedEpisode(t)
+	if _, err := store.GetByEpisodeID(context.Background(), principal, created.EpisodeID); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("purged episode read error = %v, want ErrNotFound (not a 200-with-empty-body existence oracle)", err)
+	}
+}
+
+func TestList_excludesPurgedTombstone(t *testing.T) {
+	store, created, principal := seedPurgedEpisode(t)
+	results, err := store.List(context.Background(), principal, "", 10)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	// Asserted by count, not just by matching created.EpisodeID: presentation()
+	// independently blanks a purged_tombstone record's EpisodeID to "", so a
+	// row-count check is what actually catches the guard being removed from
+	// List's own filter -- an ID-based check alone would miss a leaked,
+	// ID-blanked row sitting in the results slice.
+	if len(results) != 0 {
+		t.Fatalf("list = %#v, want zero results (only a purged_tombstone episode exists for this principal, created=%s)", results, created.EpisodeID)
+	}
+}
+
+// seedPurgedEpisode creates one active episode, then purges it through the
+// real retention path (PurgeExpiredForPrincipal), so the resulting
+// purged_tombstone record is exactly the shape a real retention purge
+// produces -- not a hand-authored fixture.
+func seedPurgedEpisode(t *testing.T) (*EpisodeStore, contractsv1.AgentEpisode, storage.Principal) {
+	t.Helper()
+	store := NewEpisodeStore()
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
+	pastExpiry := time.Now().Add(-time.Hour)
+	created, _, err := store.CreateIdempotent(context.Background(), principal, testEpisodeCreate(), &pastExpiry)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	purged, err := store.PurgeExpiredForPrincipal(context.Background(), principal, time.Now(), 10)
+	if err != nil || purged != 1 {
+		t.Fatalf("purge = (%d, %v), want (1, nil)", purged, err)
+	}
+	return store, created, principal
 }
