@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/episode"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -68,6 +69,34 @@ func TestGetEpisode_returnsAuthorizedEpisode(t *testing.T) {
 	}
 	if reader.gotEpisodeID != "episode_server_01" {
 		t.Fatalf("reader saw episode id = %q", reader.gotEpisodeID)
+	}
+}
+
+// TestGetEpisode_recordsEpisodeOperationTelemetry is the regression test for
+// the Codex cross-system review finding X10: requestOperation
+// (observability.go) classifies requests to the exact literal path
+// "/api/v1/agent-context/episodes" as OperationEpisode, and has a HasPrefix
+// case for "/api/v1/agent-context/evidence/", but has no case at all for
+// "/api/v1/agent-context/episodes/{episode_id}" -- so a GET on a single
+// episode fell through to the default branch and was classified as
+// OperationUnknown, corrupting per-operation observability for that route.
+func TestGetEpisode_recordsEpisodeOperationTelemetry(t *testing.T) {
+	sink := &snapshotSink{}
+	reader := &fakeEpisodeReader{episode: storedEpisode()}
+	app, token := hostedEpisodeReaderTestApp(t, reader, []string{auth.ScopeEpisodeRead})
+	app.observability = observability.NewHooks(sink, nil)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/episodes/episode_server_01", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if observation := sink.only(t); observation.Operation != observability.OperationEpisode {
+		t.Fatalf("operation = %v, want OperationEpisode (a single-episode GET must not be classified as OperationUnknown)", observation.Operation)
 	}
 }
 
