@@ -53,6 +53,9 @@ config:
   maxOutputTokens: 4000
   maxSerializedBytes: 262144
   requestsPerMinute: 60
+  # Also requires config.environment=development (dev/acceptance only, never
+  # staging or production) -- rendering fails closed (acr.validateEpisodeWriteback)
+  # if enabled on any other environment.
   enableEpisodeWriteback: false
   # Required, non-empty, whenever enableEpisodeWriteback is true: the
   # design-partner cohort of org IDs writeback is scoped to (CHAOS-3565).

@@ -41,7 +41,7 @@ The default listen address is `:8080`. Override it through `ACR_ADDR` or the `se
 | `ACR_POSTGRES_CONN_MAX_LIFETIME` | `30m` | PostgreSQL connection lifetime |
 | `ACR_POSTGRES_CONN_MAX_IDLE_TIME` | `5m` | PostgreSQL idle connection lifetime |
 | `ACR_POSTGRES_PING_TIMEOUT` | `5s` | PostgreSQL startup ping and readiness timeout |
-| `ACR_ENABLE_EPISODE_WRITEBACK` | `false` | Explicitly enables the hosted episode service and route permission |
+| `ACR_ENABLE_EPISODE_WRITEBACK` | `false` | Explicitly enables the hosted episode service and route permission; also requires `ACR_ENVIRONMENT=development` (startup fails otherwise -- dev/acceptance only, never staging or production) |
 | `ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS` | empty | Comma-separated design-partner cohort of org IDs writeback is scoped to; required, non-empty, whenever `ACR_ENABLE_EPISODE_WRITEBACK=true` (startup fails otherwise). Every other org's episode writes are rejected even though the service itself is up and reads remain unrestricted |
 | `ACR_EVIDENCE_ID_ACTIVE_KID` / `ACR_EVIDENCE_ID_ACTIVE_KID_FILE` | empty | Active evidence-ID signing key identifier |
 | `ACR_EVIDENCE_ID_KEYS` / `ACR_EVIDENCE_ID_KEYS_FILE` | empty | Comma-separated evidence-ID key material |
@@ -141,7 +141,9 @@ for the target repository. Invalid or unentitled callers may receive `401` or
 `403` before runtime availability is evaluated. A valid authorized caller
 receives a retryable `503` while writeback is disabled. Enabling
 `ACR_ENABLE_EPISODE_WRITEBACK=true` alone is not sufficient: it also requires
-a non-empty `ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS` (startup fails otherwise),
+`ACR_ENVIRONMENT=development` (dev/acceptance only -- startup fails on any
+other environment, including staging and production) and a non-empty
+`ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS` (startup fails otherwise),
 and writes are then scoped to that design-partner cohort of org IDs -- a
 caller from any other org still receives the same `503` an org sees when
 writeback is disabled outright, never a signal that the feature exists for

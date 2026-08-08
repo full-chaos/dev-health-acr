@@ -40,7 +40,8 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               pgbouncer-missing-pooler, extra-container, direct-with-pooler,
               unsupported-entitlement-scheme, userinfo-url, query-url, fragment-url, unknown-root-key,
               unknown-config-key, alternate-port, mutable-token-copy-image,
-              missing-device-verification-url, invalid-device-verification-url.
+              missing-device-verification-url, invalid-device-verification-url,
+              episode-writeback-missing-cohort.
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -212,6 +213,10 @@ case "$scenario" in
     negative invalid-device-verification-url "device-verification-url" \
       --set "config.requireBackingStores=true" \
       --set-string "config.deviceVerificationUrl=/acr/device"
+    exit 0 ;;
+  episode-writeback-missing-cohort)
+    negative episode-writeback-missing-cohort "episode-writeback" \
+      --set "config.enableEpisodeWriteback=true"
     exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;
