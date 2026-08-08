@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: c135613dbf4dcbb156fd75e3281f30e8fb3594ba95f68f87dda8e330ce35734f
+# canonical-content-sha256: 1b0709bfbc5c10c0b47510fa638236eca92eedf13ec51d633a3fc173b9cc9334
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -149,8 +149,8 @@ paths:
           name: "limit"
           required: false
           schema:
-            maximum: 100
-            minimum: 1
+            description: "0 (or omitted) uses the service default; values above the service maximum are silently clamped, never rejected."
+            minimum: 0
             type: "integer"
       responses:
         "200":
@@ -166,6 +166,8 @@ paths:
         "401":
           "$ref": "#/components/responses/Error"
         "403":
+          "$ref": "#/components/responses/Error"
+        "413":
           "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"
@@ -273,6 +275,8 @@ paths:
         "403":
           "$ref": "#/components/responses/Error"
         "404":
+          "$ref": "#/components/responses/Error"
+        "413":
           "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"

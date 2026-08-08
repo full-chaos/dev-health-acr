@@ -443,8 +443,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1,
-              "maximum": 100
+              "minimum": 0,
+              "description": "0 (or omitted) uses the service default; values above the service maximum are silently clamped, never rejected."
             }
           }
         ],
@@ -472,6 +472,9 @@
             "$ref": "#/components/responses/Error"
           },
           "426": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
             "$ref": "#/components/responses/Error"
           },
           "429": {
@@ -538,6 +541,9 @@
             "$ref": "#/components/responses/Error"
           },
           "426": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
             "$ref": "#/components/responses/Error"
           },
           "429": {
