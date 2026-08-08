@@ -3,11 +3,14 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -217,6 +220,81 @@ func TestEpisodeReadErrors_authRefusalsAreNonRetryableAndNotLoggedAsError(t *tes
 			if strings.Contains(buffer.String(), `"level":"ERROR"`) {
 				t.Fatalf("auth refusal logged at ERROR level, want non-ERROR: %s", buffer.String())
 			}
+		})
+	}
+}
+
+// episodeReadRouteRequests is table-driven across both episode read routes
+// so the app.go wiring for each (protectedRuntimeHandler(..., entitlement,
+// allowWebAssertions, ...)) is exercised identically -- review findings H4
+// and M5 flagged that flipping either bool on either route left the whole
+// suite green.
+var episodeReadRouteRequests = []struct {
+	name string
+	path string
+}{
+	{name: "GetByID", path: "/api/v1/agent-context/episodes/episode_server_01"},
+	{name: "List", path: "/api/v1/agent-context/episodes"},
+}
+
+// TestEpisodeReadRoutes_requireEntitlement is the regression test for
+// review finding H4: app.go wires both episode read routes with
+// protectedRuntimeHandler's entitlement argument as true, but nothing
+// asserted that -- flipping it to false left the suite green. A credential
+// with the episode:read scope but no agent_context_runtime entitlement must
+// be rejected before ever reaching the reader.
+func TestEpisodeReadRoutes_requireEntitlement(t *testing.T) {
+	for _, test := range episodeReadRouteRequests {
+		t.Run(test.name, func(t *testing.T) {
+			entitlements := EntitlementFunc(func(context.Context, string, string) (bool, error) { return false, nil })
+			reader := &fakeEpisodeReader{episode: storedEpisode()}
+			app, token := newHostedTestApp(t, nil, nil, []string{auth.ScopeEpisodeRead}, entitlements, nil)
+			app.runtime.EpisodeReader = reader
+
+			request := httptest.NewRequest(http.MethodGet, test.path, nil)
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("X-ACR-Client-Version", "1.0.0")
+			response := httptest.NewRecorder()
+			app.Handler().ServeHTTP(response, request)
+
+			assertErrorResponse(t, response, http.StatusForbidden, "feature_not_enabled")
+			if reader.gotEpisodeID != "" || reader.listRepository != "" {
+				t.Fatalf("reader was reached without the required entitlement: %#v", reader)
+			}
+		})
+	}
+}
+
+// TestEpisodeReadRoutes_rejectWebAssertions is the regression test for
+// review finding M5: app.go wires both episode read routes with
+// allowWebAssertions=false, but nothing asserted that -- flipping it to
+// true left the suite green. A request carrying only a signed web
+// assertion (no bearer token) must be rejected the same way
+// TestWebAssertion_cannotAuthenticateEpisodeWrite already proves for the
+// write route.
+func TestEpisodeReadRoutes_rejectWebAssertions(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := auth.NewWebAssertionVerifier(auth.WebAssertionOptions{Issuer: "https://web.example.test", Audience: "acr-api", JWKSPath: writeAPIJWKS(t, public), Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range episodeReadRouteRequests {
+		t.Run(test.name, func(t *testing.T) {
+			app, _ := newHostedTestAppWithWebAssertions(t, nil, nil, nil, nil, nil, verifier)
+			app.runtime.EpisodeReader = &fakeEpisodeReader{episode: storedEpisode()}
+
+			request := httptest.NewRequest(http.MethodGet, test.path, nil)
+			request.Header.Set("X-ACR-Client-Version", "1.0.0")
+			request.Header.Set(auth.WebAssertionHeader, signAPIAssertionAt(t, private, request, nil, "read_"+test.name, now))
+
+			response := httptest.NewRecorder()
+			app.Handler().ServeHTTP(response, request)
+
+			assertErrorResponse(t, response, http.StatusUnauthorized, "invalid_token")
 		})
 	}
 }
