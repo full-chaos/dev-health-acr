@@ -38,6 +38,21 @@ type EpisodeCreator interface {
 	Create(context.Context, storage.Principal, contractsv1.AgentEpisodeCreate) (contractsv1.AgentEpisode, bool, error)
 }
 
+// EpisodeWritebackGate is an optional interface an EpisodeCreator may
+// implement to further restrict, per requesting organization, whether a
+// write would actually be reachable -- for example CHAOS-3565's
+// design-partner cohort gate. Capability advertisement (handleCapabilities)
+// consults this before promising the record_episode tool: without it, a
+// non-cohort org with episode:write would see the tool advertised only to
+// have every call reject with ErrEpisodeWritebackNotEnabledForOrg. An
+// EpisodeCreator that does not implement this interface is treated as
+// unconditionally reachable (today's behavior, and the behavior of every
+// test double in this package), so this is additive and never narrows an
+// existing caller's advertised tools.
+type EpisodeWritebackGate interface {
+	EpisodeWritebackAllowed(orgID string) bool
+}
+
 // EpisodeReader is deliberately a separate interface from EpisodeCreator:
 // episode:read and episode:write are independent grants (see
 // episode.authorizeRead), and keeping the interfaces separate means a

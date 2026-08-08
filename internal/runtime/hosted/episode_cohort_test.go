@@ -53,3 +53,25 @@ func TestCohortScopedEpisodeCreator_emptyCohortRejectsEveryOrg(t *testing.T) {
 		t.Fatalf("empty-cohort create = (err=%v, delegated=%t), want ErrWritebackNotEnabledForOrg without delegation", err, next.called)
 	}
 }
+
+// TestCohortScopedEpisodeCreator_EpisodeWritebackAllowedMatchesCreate is the
+// differential test behind review finding H1: EpisodeWritebackAllowed (what
+// handleCapabilities consults to decide whether to advertise record_episode)
+// must never disagree with what Create actually does for the same org, or
+// capability advertisement and write enforcement drift apart -- exactly the
+// bug where a non-cohort org saw the tool advertised only to have every
+// call reject.
+func TestCohortScopedEpisodeCreator_EpisodeWritebackAllowedMatchesCreate(t *testing.T) {
+	creator := newCohortScopedEpisodeCreator(&recordingEpisodeCreator{}, []string{"org_design_partner_1"})
+
+	for _, orgID := range []string{"org_design_partner_1", "org_not_in_cohort", ""} {
+		next := &recordingEpisodeCreator{}
+		creator.next = next
+		allowed := creator.EpisodeWritebackAllowed(orgID)
+		_, _, err := creator.Create(context.Background(), storage.Principal{OrgID: orgID}, contractsv1.AgentEpisodeCreate{})
+		created := err == nil
+		if allowed != created || allowed != next.called {
+			t.Fatalf("org %q: EpisodeWritebackAllowed=%t, Create succeeded=%t, delegated=%t -- must all agree", orgID, allowed, created, next.called)
+		}
+	}
+}

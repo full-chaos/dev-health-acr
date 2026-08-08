@@ -44,8 +44,19 @@ func newCohortScopedEpisodeCreator(next api.EpisodeCreator, orgIDs []string) *co
 }
 
 func (c *cohortScopedEpisodeCreator) Create(ctx context.Context, principal storage.Principal, create contractsv1.AgentEpisodeCreate) (contractsv1.AgentEpisode, bool, error) {
-	if _, ok := c.cohort[principal.OrgID]; !ok {
+	if !c.EpisodeWritebackAllowed(principal.OrgID) {
 		return contractsv1.AgentEpisode{}, false, ErrWritebackNotEnabledForOrg
 	}
 	return c.next.Create(ctx, principal, create)
 }
+
+// EpisodeWritebackAllowed implements api.EpisodeWritebackGate: it is the
+// exact predicate Create enforces, exposed so handleCapabilities can decide
+// whether to advertise record_episode without guessing at (or drifting
+// from) what a subsequent write would actually do (review finding H1).
+func (c *cohortScopedEpisodeCreator) EpisodeWritebackAllowed(orgID string) bool {
+	_, ok := c.cohort[orgID]
+	return ok
+}
+
+var _ api.EpisodeWritebackGate = (*cohortScopedEpisodeCreator)(nil)
