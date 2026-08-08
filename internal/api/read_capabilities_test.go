@@ -147,3 +147,93 @@ func (p *capturingCapabilitiesProvider) Capabilities(_ context.Context, request 
 	p.authorization = request.Header.Get("Authorization")
 	return p.value, nil
 }
+
+type cohortGateEpisodeCreator struct {
+	fakeEpisodeCreator
+	allowed map[string]bool
+}
+
+func (c *cohortGateEpisodeCreator) EpisodeWritebackAllowed(orgID string) bool {
+	return c.allowed[orgID]
+}
+
+// TestCapabilitiesRoute_omitsRecordEpisodeForNonCohortOrg is the regression
+// test for review finding H1 (CHAOS-3565): capability advertisement must
+// consult per-org writeback reachability (EpisodeWritebackGate), not just
+// whether an EpisodeCreator is configured at all. RED: before
+// handleCapabilities consulted the gate, this failed with record_episode
+// advertised to an org the gate rejects.
+func TestCapabilitiesRoute_omitsRecordEpisodeForNonCohortOrg(t *testing.T) {
+	creator := &cohortGateEpisodeCreator{allowed: map[string]bool{"someone-else": true}}
+	app, token := hostedEpisodeTestApp(t, &creator.fakeEpisodeCreator, []string{auth.ScopeEpisodeWrite, auth.ScopeContextRead}, nil)
+	app.runtime.Episodes = creator
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, request)
+
+	var capabilities contractsv1.Capabilities
+	if err := json.Unmarshal(response.Body.Bytes(), &capabilities); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range capabilities.EnabledTools {
+		if tool == "record_episode" {
+			t.Fatalf("capabilities advertised record_episode for an org the gate rejects: %#v", capabilities.EnabledTools)
+		}
+	}
+}
+
+// TestCapabilitiesRoute_advertisesRecordEpisodeForCohortOrg is the mirror
+// positive case: an org the gate allows must still see record_episode, so
+// the fix isn't accidentally a blanket denial.
+func TestCapabilitiesRoute_advertisesRecordEpisodeForCohortOrg(t *testing.T) {
+	creator := &cohortGateEpisodeCreator{allowed: map[string]bool{"org_1": true}}
+	app, token := hostedEpisodeTestApp(t, &creator.fakeEpisodeCreator, []string{auth.ScopeEpisodeWrite, auth.ScopeContextRead}, nil)
+	app.runtime.Episodes = creator
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, request)
+
+	var capabilities contractsv1.Capabilities
+	if err := json.Unmarshal(response.Body.Bytes(), &capabilities); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, tool := range capabilities.EnabledTools {
+		found = found || tool == "record_episode"
+	}
+	if !found {
+		t.Fatalf("capabilities did not advertise record_episode for a cohort-allowed org: %#v", capabilities.EnabledTools)
+	}
+}
+
+// TestCapabilitiesRoute_advertisesRecordEpisodeWhenCreatorHasNoGate
+// preserves today's behavior for every EpisodeCreator that does not
+// implement EpisodeWritebackGate (every test double in this package, and
+// any future non-cohort-restricted runtime): non-nil is still sufficient.
+func TestCapabilitiesRoute_advertisesRecordEpisodeWhenCreatorHasNoGate(t *testing.T) {
+	app, token := hostedEpisodeTestApp(t, &fakeEpisodeCreator{}, []string{auth.ScopeEpisodeWrite, auth.ScopeContextRead}, nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, request)
+
+	var capabilities contractsv1.Capabilities
+	if err := json.Unmarshal(response.Body.Bytes(), &capabilities); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, tool := range capabilities.EnabledTools {
+		found = found || tool == "record_episode"
+	}
+	if !found {
+		t.Fatalf("capabilities did not advertise record_episode for an ungated creator: %#v", capabilities.EnabledTools)
+	}
+}

@@ -1,11 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -195,4 +197,69 @@ func storedEpisode() contractsv1.AgentEpisode {
 	create := episodeCreate()
 	create.SchemaVersion = contractsv1.AgentEpisodeSchema
 	return contractsv1.AgentEpisode{AgentEpisodeCreate: create, EpisodeID: "episode_server_01", CreatedAt: time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC), RedactionState: "active"}
+}
+
+// TestCreateEpisode_writebackNotEnabledForOrg_isNonRetryableAndNotLoggedAsError
+// is the regression test for review finding L6: ErrEpisodeWritebackNotEnabledForOrg
+// previously fell into writeEpisodeError's default case, which is meant for
+// genuine dependency failures -- it logged ERROR "episode recording
+// dependency failed" and marked the response retryable:true, even though
+// this is a permanent, expected denial (retrying the identical request
+// cannot succeed until the org is added to the cohort). RED: this test
+// failed (retryable=true, an ERROR log line present) before the dedicated
+// switch case was added.
+func TestCreateEpisode_writebackNotEnabledForOrg_isNonRetryableAndNotLoggedAsError(t *testing.T) {
+	var buffer bytes.Buffer
+	creator := &fakeEpisodeCreator{err: ErrEpisodeWritebackNotEnabledForOrg}
+	app, token := hostedEpisodeTestApp(t, creator, []string{auth.ScopeEpisodeWrite}, nil)
+	app.logger = testLogger(&buffer)
+	request := authenticatedEpisodeRequest(t, token, episodeCreate(), "idempotency_01")
+
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", response.Code)
+	}
+	var envelope contractsv1.ErrorEnvelope
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error.Retryable {
+		t.Fatalf("cohort-denial error envelope retryable = true, want false (this is a permanent, expected denial, not a transient dependency failure): %#v", envelope)
+	}
+	if strings.Contains(buffer.String(), `"level":"ERROR"`) {
+		t.Fatalf("cohort-denial logged at ERROR level, want a non-ERROR (or absent) log for an expected, permanent denial: %s", buffer.String())
+	}
+}
+
+// TestCreateEpisode_writebackNotEnabledForOrg_matchesDisabledCreatorResponseBody
+// is the parity guard the L6 fix depends on: the cohort-denial response
+// body must be byte-identical to what a nil a.runtime.Episodes already
+// produces (TestCreateEpisodeReturnsUnavailableWithoutCreator), or a caller
+// could distinguish "writeback off entirely" from "writeback on, you're
+// just not in the cohort" purely by observing the response -- exactly the
+// leak the cohort decorator's own doc comment says must never happen.
+func TestCreateEpisode_writebackNotEnabledForOrg_matchesDisabledCreatorResponseBody(t *testing.T) {
+	disabledApp, disabledToken := newHostedTestApp(t, nil, nil, []string{auth.ScopeEpisodeWrite}, nil, nil)
+	disabledRequest := authenticatedEpisodeRequest(t, disabledToken, episodeCreate(), "idempotency_01")
+	disabledResponse := httptest.NewRecorder()
+	disabledApp.Handler().ServeHTTP(disabledResponse, disabledRequest)
+
+	deniedApp, deniedToken := hostedEpisodeTestApp(t, &fakeEpisodeCreator{err: ErrEpisodeWritebackNotEnabledForOrg}, []string{auth.ScopeEpisodeWrite}, nil)
+	deniedRequest := authenticatedEpisodeRequest(t, deniedToken, episodeCreate(), "idempotency_01")
+	deniedResponse := httptest.NewRecorder()
+	deniedApp.Handler().ServeHTTP(deniedResponse, deniedRequest)
+
+	var disabledEnvelope, deniedEnvelope contractsv1.ErrorEnvelope
+	if err := json.Unmarshal(disabledResponse.Body.Bytes(), &disabledEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(deniedResponse.Body.Bytes(), &deniedEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	disabledEnvelope.RequestID, deniedEnvelope.RequestID = "", ""
+	if disabledResponse.Code != deniedResponse.Code || !reflect.DeepEqual(disabledEnvelope, deniedEnvelope) {
+		t.Fatalf("writeback-disabled response (status=%d, %#v) != cohort-denied response (status=%d, %#v) -- cohort membership leaked", disabledResponse.Code, disabledEnvelope, deniedResponse.Code, deniedEnvelope)
+	}
 }

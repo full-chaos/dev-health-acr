@@ -38,6 +38,31 @@ type EpisodeCreator interface {
 	Create(context.Context, storage.Principal, contractsv1.AgentEpisodeCreate) (contractsv1.AgentEpisode, bool, error)
 }
 
+// EpisodeWritebackGate is an optional interface an EpisodeCreator may
+// implement to further restrict, per requesting organization, whether a
+// write would actually be reachable -- for example CHAOS-3565's
+// design-partner cohort gate. Capability advertisement (handleCapabilities)
+// consults this before promising the record_episode tool: without it, a
+// non-cohort org with episode:write would see the tool advertised only to
+// have every call reject with ErrEpisodeWritebackNotEnabledForOrg. An
+// EpisodeCreator that does not implement this interface is treated as
+// unconditionally reachable (today's behavior, and the behavior of every
+// test double in this package), so this is additive and never narrows an
+// existing caller's advertised tools.
+type EpisodeWritebackGate interface {
+	EpisodeWritebackAllowed(orgID string) bool
+}
+
+// EpisodeReader is deliberately a separate interface from EpisodeCreator:
+// episode:read and episode:write are independent grants (see
+// episode.authorizeRead), and keeping the interfaces separate means a
+// runtime can wire read access without also implying write access, or vice
+// versa.
+type EpisodeReader interface {
+	GetByID(context.Context, storage.Principal, string) (contractsv1.AgentEpisode, error)
+	List(context.Context, storage.Principal, string, int) ([]contractsv1.AgentEpisode, error)
+}
+
 type RuntimeDependencies struct {
 	Credentials                *storage.CredentialLifecycle
 	DeviceAuthorizations       storage.DeviceAuthorizationStore
@@ -48,6 +73,7 @@ type RuntimeDependencies struct {
 	Assembler                  ContextPacketAssembler
 	Evidence                   storage.EvidenceStore
 	Episodes                   EpisodeCreator
+	EpisodeReader              EpisodeReader
 	ReadinessChecks            []ReadinessCheck
 }
 
@@ -61,6 +87,9 @@ func (r *RuntimeDependencies) validate() error {
 	}
 	if r.Episodes != nil && storage.IsNil(r.Episodes) {
 		return errors.New("hosted episode runtime must not be typed nil")
+	}
+	if r.EpisodeReader != nil && storage.IsNil(r.EpisodeReader) {
+		return errors.New("hosted episode read runtime must not be typed nil")
 	}
 	if len(r.ReadinessChecks) < 3 {
 		return errors.New("hosted read runtime requires postgres, clickhouse, and entitlement readiness checks")

@@ -86,6 +86,16 @@ type EpisodeStore interface {
 	PreflightIdempotency(ctx context.Context, principal Principal, episode contractsv1.AgentEpisodeCreate) (EpisodePreflight, error)
 	CreateIdempotent(ctx context.Context, principal Principal, episode contractsv1.AgentEpisodeCreate, expiresAt *time.Time) (contractsv1.AgentEpisode, bool, error)
 	GetByClientEpisodeID(ctx context.Context, principal Principal, clientEpisodeID string) (contractsv1.AgentEpisode, error)
+	// GetByEpisodeID looks up a single episode by its server-assigned episode_id,
+	// scoped to the caller's org and repository scopes. Cross-tenant access,
+	// deletion (purged_tombstone), and retention expiry are all indistinguishable
+	// from ErrNotFound -- never a distinct error a caller could use to enumerate
+	// another org's episodes.
+	GetByEpisodeID(ctx context.Context, principal Principal, episodeID string) (contractsv1.AgentEpisode, error)
+	// List returns the caller's most recent, non-expired, non-purged episodes,
+	// optionally filtered to one repository slug, newest first, bounded by
+	// limit (a non-positive or over-large limit is clamped by the adapter).
+	List(ctx context.Context, principal Principal, repositorySlug string, limit int) ([]contractsv1.AgentEpisode, error)
 	Redact(ctx context.Context, principal Principal, episodeID, reason string) (contractsv1.AgentEpisode, error)
 	PurgeExpired(ctx context.Context, before time.Time, limit int) (int, error)
 }

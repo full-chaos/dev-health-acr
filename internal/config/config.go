@@ -54,6 +54,7 @@ type Config struct {
 	RequireBackingStores                 bool
 	LocalCompositionReady                bool
 	EnableEpisodeWriteback               bool
+	EpisodeWritebackCohortOrgIDs         []string
 	MinimumSidecarVersion                string
 	RevokedClientVersions                []string
 	EntitlementKey                       string
@@ -228,6 +229,20 @@ func (c Config) Validate() error {
 	}
 	if c.LocalCompositionReady && (c.Environment != "development" || c.RequireBackingStores) {
 		return errors.New("ACR_LOCAL_COMPOSITION_READY requires development with backing stores disabled")
+	}
+	// CHAOS-3565: episode writeback is a design-partner-cohort pre-trial,
+	// dev/acceptance only -- this codebase's fullstack acceptance stack runs
+	// with ACR_ENVIRONMENT=development (scripts/e2e/compose.sh), so that is
+	// the only environment this ever enables in, never staging or
+	// production. A cohort must be explicit: an empty cohort with writeback
+	// "on" would mean every org, which is not what "cohort-scoped" means.
+	if c.EnableEpisodeWriteback {
+		if c.Environment != "development" {
+			return errors.New("ACR_ENABLE_EPISODE_WRITEBACK requires ACR_ENVIRONMENT=development (dev/acceptance only, never staging or production)")
+		}
+		if len(c.EpisodeWritebackCohortOrgIDs) == 0 {
+			return errors.New("ACR_ENABLE_EPISODE_WRITEBACK requires ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS to name the design-partner cohort")
+		}
 	}
 	if c.RequireBackingStores {
 		if err := validateHostedRuntime(c); err != nil {

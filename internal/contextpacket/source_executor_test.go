@@ -115,7 +115,7 @@ func TestClickHouseSourceExecutor_bounds_usable_unique_rows_before_ranking(t *te
 	// Given
 	rows := make([][]any, 101)
 	for index := range rows {
-		rows[index] = []any{"acr:v1:test:1", "dev_health", "test", "1", "test", "", "native", 0.9000000000000001, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+		rows[index] = []any{"acr:v1:test:1", "dev_health", "test", "1", "test", "", "native", 0.9000000000000001, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), (*time.Time)(nil)}
 	}
 	client := &boundedRowClient{rows: &rowScanner{rows: rows}}
 	executor := contextpacket.NewClickHouseSourceExecutor(client)
@@ -145,6 +145,44 @@ func TestClickHouseSourceExecutor_bounds_usable_unique_rows_before_ranking(t *te
 	}
 	if len(client.bindings) != 2 || client.bindings[0].Name != "include_low_confidence" || client.bindings[0].Value != uint8(0) || client.bindings[1].Name != "source_row_limit" || client.bindings[1].Value != uint32(100) {
 		t.Fatalf("row limit binding = %#v", client.bindings)
+	}
+}
+
+func TestClickHouseSourceExecutor_mapsEventAtWhenPresentAndLeavesItAbsentWhenNull(t *testing.T) {
+	// Given a row with a real event time and a row with none, from an actual
+	// producer query rather than a hand-authored one. deployments.v1's
+	// event_at expression -- coalesce(d.deployed_at, d.started_at) -- is
+	// built from two Nullable columns (see 000_raw_tables.sql), so a real
+	// deployments row can legitimately return either a populated or an
+	// absent event_at: both rows below are shapes this query could actually
+	// emit. SourceQueryCatalogV1[0] (repository_freshness.v1) was used here
+	// previously; its event_at is eventAtAbsent (a NULL literal) for every
+	// row, so the old fixture's "with-event" row was one that query could
+	// never actually produce.
+	query := catalogQuery(t, "deployments.v1")
+	eventTime := time.Date(2026, 1, 1, 6, 0, 0, 0, time.UTC)
+	rows := &rowScanner{rows: [][]any{
+		{"acr:v1:deployment:with-event", "dev_health", "deployment", "1", "prod deployment", "", "native", 1.0, "deployment_id=1", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), &eventTime},
+		{"acr:v1:deployment:without-event", "dev_health", "deployment", "2", "prod deployment", "", "native", 1.0, "deployment_id=2", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), (*time.Time)(nil)},
+	}}
+	client := &boundedRowClient{rows: rows}
+	executor := contextpacket.NewClickHouseSourceExecutor(client)
+
+	// When
+	evidence, err := executor.QueryEvidence(context.Background(), query, nil)
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evidence) != 2 {
+		t.Fatalf("evidence=%d, want 2", len(evidence))
+	}
+	if evidence[0].EventAt == nil || !evidence[0].EventAt.Equal(eventTime) {
+		t.Fatalf("event_at = %v, want %v", evidence[0].EventAt, eventTime)
+	}
+	if evidence[1].EventAt != nil {
+		t.Fatalf("event_at = %v, want nil (never synthesized)", evidence[1].EventAt)
 	}
 }
 
@@ -185,7 +223,7 @@ func (c *rowClient) Query(_ context.Context, statement string, _ []contextpacket
 			if err := c.fail[query.ID]; err != nil {
 				return nil, err
 			}
-			return &rowScanner{rows: [][]any{{"acr:v1:test:1", "dev_health", "test", "1", query.ID, "", "native", 0.9000000000000001, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}}}, nil
+			return &rowScanner{rows: [][]any{{"acr:v1:test:1", "dev_health", "test", "1", query.ID, "", "native", 0.9000000000000001, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), (*time.Time)(nil)}}}, nil
 		}
 	}
 	return nil, errors.New("unexpected query")
@@ -200,15 +238,13 @@ func (s *rowScanner) Next() bool { return s.row < len(s.rows) }
 
 func (s *rowScanner) Scan(dest ...any) error {
 	for index, target := range dest {
-		switch value := target.(type) {
-		case *string:
-			*value = s.rows[s.row][index].(string)
-		case *float64:
-			*value = s.rows[s.row][index].(float64)
-		case *time.Time:
-			*value = s.rows[s.row][index].(time.Time)
-		default:
-			return errors.New("unexpected destination")
+		// Nullable(DateTime64) columns such as event_at scan into a
+		// pointer-to-pointer: nil means the source has no real event time; a
+		// *time.Time means it does. scanFixtureColumn (shared with
+		// locatorQueryRows.Scan) is what fails loudly on a mistyped fixture
+		// value instead of silently swallowing it into that same nil.
+		if err := scanFixtureColumn(target, s.rows[s.row][index]); err != nil {
+			return err
 		}
 	}
 	s.row++

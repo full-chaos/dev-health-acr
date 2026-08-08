@@ -188,10 +188,53 @@ func TestBoundedCountsUnicodeRunes(t *testing.T) {
 	}
 }
 
+// episodePrincipal is deliberately granted both episode:write and
+// episode:read: it is the shared "fully authorized" fixture used across
+// this package's Create/Redact/Purge tests, several of which also call
+// Service.Get purely to observe post-mutation state (not to test read
+// authorization itself). Tests that specifically probe read-scope or
+// entitlement enforcement (e.g.
+// TestService_Get_requiresReadScopeAndEntitlement) start from this and
+// strip the specific grant under test.
 func episodePrincipal(orgID string) storage.Principal {
 	return storage.Principal{
-		OrgID: orgID, CredentialID: "cred_01", RepositoryScopes: []string{"owner/repo"}, Permissions: []string{auth.ScopeEpisodeWrite},
+		OrgID: orgID, CredentialID: "cred_01", RepositoryScopes: []string{"owner/repo"}, Permissions: []string{auth.ScopeEpisodeWrite, auth.ScopeEpisodeRead},
 		ProductEntitlements: []string{"agent_context_runtime"},
+	}
+}
+
+// TestService_Get_requiresReadScopeAndEntitlement is the regression test for
+// the Codex cross-system review finding X3: Service.Get (the client-ID
+// lookup) skipped authorizeRead entirely, unlike GetByID/List, which both
+// enforce it. Exhaustive grep found zero production callers of Service.Get
+// today, so this is defense-in-depth rather than a live bypass -- but the
+// ruling was to add the check anyway, for consistency with the other two
+// read methods and so any future caller inherits the same guarantee.
+func TestService_Get_requiresReadScopeAndEntitlement(t *testing.T) {
+	service, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), withPacketStore(ServiceOptions{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := episodePrincipal("org_1")
+	create := episodeCreate()
+	if _, _, err := service.Create(context.Background(), principal, create); err != nil {
+		t.Fatal(err)
+	}
+
+	missingScope := principal
+	missingScope.Permissions = []string{auth.ScopeEpisodeWrite}
+	if _, err := service.Get(context.Background(), missingScope, create.ClientEpisodeID); !errors.Is(err, auth.ErrInsufficientScope) {
+		t.Fatalf("missing read scope error = %v, want ErrInsufficientScope", err)
+	}
+
+	missingEntitlement := principal
+	missingEntitlement.ProductEntitlements = nil
+	if _, err := service.Get(context.Background(), missingEntitlement, create.ClientEpisodeID); !errors.Is(err, ErrEntitlementRequired) {
+		t.Fatalf("missing entitlement error = %v, want ErrEntitlementRequired", err)
+	}
+
+	if _, err := service.Get(context.Background(), principal, create.ClientEpisodeID); err != nil {
+		t.Fatalf("fully authorized get failed: %v", err)
 	}
 }
 

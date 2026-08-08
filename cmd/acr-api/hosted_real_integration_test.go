@@ -84,9 +84,33 @@ func TestHostedRuntime_real_binary_serves_and_fails_readiness_safely(t *testing.
 	if evidence.Availability != contractsv1.EvidenceAvailable || evidence.Evidence.EvidenceRefID == "" {
 		t.Fatalf("expanded evidence = %#v", evidence)
 	}
+	// Was KNOWN-BROKEN as of CHAOS-3565 (annotated, not fixed, in commit
+	// 7278395): this sub-case had never actually run against a live Docker
+	// daemon, so the three gaps below were never empirically confirmed. The
+	// CI hosted-integration job's own docker-gated run always failed earlier
+	// than this point -- at the native ClickHouse fixture step (see the
+	// event_at fix in source_integration_test.go, review finding tracked
+	// under the CI-red diagnosis) -- so this sub-case was silently unreached
+	// in every CI run to date, not merely local-sandbox-unreached as the
+	// prior annotation assumed. Fixing the fixture step unmasks this one;
+	// fixed here for real, verified against a live Docker daemon
+	// (ACR_HOSTED_INTEGRATION=1):
+	//  1. hostedProcessEnvironment sets ACR_ENVIRONMENT="test", but
+	//     config.Validate requires ACR_ENVIRONMENT=development whenever
+	//     ACR_ENABLE_EPISODE_WRITEBACK=true -- overridden below.
+	//  2. ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS (CHAOS-3565 review finding H3)
+	//     is a second hard startup requirement whenever writeback is
+	//     enabled -- set below.
+	//  3. Capability advertisement of record_episode is conditional on the
+	//     requesting org's cohort membership (CHAOS-3565 review finding H1).
+	//     postgres.token's org is the package-level hostedIntegrationOrg
+	//     constant (hosted_service_fixtures_test.go) -- no threading needed,
+	//     it names the cohort directly.
 	enabledAddress := reserveAddress(t)
 	enabledEnvironment := maps.Clone(environment)
 	enabledEnvironment["ACR_ADDR"] = enabledAddress
+	enabledEnvironment["ACR_ENVIRONMENT"] = "development"
+	enabledEnvironment["ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS"] = hostedIntegrationOrg
 	enabledEnvironment["ACR_ENABLE_EPISODE_WRITEBACK"] = "true"
 	enabledProcess := startAPIProcess(t, ctx, apiProcessRequest{binary: binary, environment: enabledEnvironment})
 	enabledAPI := hostedAPI{client: &http.Client{Timeout: 30 * time.Second}, baseURL: "http://" + enabledAddress, token: postgres.token}

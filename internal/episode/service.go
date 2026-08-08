@@ -72,6 +72,21 @@ func (s *Service) Create(ctx context.Context, principal storage.Principal, creat
 	if err := validateCreate(principal, create); err != nil {
 		return contractsv1.AgentEpisode{}, false, err
 	}
+	// Normalized here, not just by the HTTP handler that is today's only
+	// caller: memory.EpisodeStore's repository-scope check lowercases both
+	// sides before comparing, but postgres.EpisodeStore's SQL EXISTS clause
+	// compares repo_slug by exact, case-sensitive equality against the
+	// credential's scope (always lowercase, per
+	// auth.NormalizeRepositoryScopes) -- a mixed-case slug that reached the
+	// store unnormalized was stored, readable via GetByID, but silently
+	// invisible to List/purgeExpired in postgres while still visible in
+	// memory. Normalizing at the service boundary makes both backends agree
+	// regardless of caller (review finding X5).
+	slug, err := auth.NormalizeRepositorySlug(create.Repository.Slug)
+	if err != nil {
+		return contractsv1.AgentEpisode{}, false, err
+	}
+	create.Repository = contractsv1.RepositoryRef{Slug: slug}
 	if err := auth.AuthorizeRepository(principal, create.Repository.Slug); err != nil {
 		return contractsv1.AgentEpisode{}, false, err
 	}
@@ -142,7 +157,15 @@ func normalizeRepository(slug string) string {
 	return strings.ToLower(strings.TrimSpace(slug))
 }
 
+// Get is the client-supplied-ID lookup counterpart to GetByID. It has no
+// production caller today (confirmed by exhaustive grep), but authorizeRead
+// is enforced here anyway, for consistency with GetByID/List and so any
+// future caller inherits the same read/write independence guarantee rather
+// than silently bypassing it (review finding X3).
 func (s *Service) Get(ctx context.Context, principal storage.Principal, clientEpisodeID string) (contractsv1.AgentEpisode, error) {
+	if err := authorizeRead(principal); err != nil {
+		return contractsv1.AgentEpisode{}, err
+	}
 	if principal.OrgID == "" || clientEpisodeID == "" {
 		return contractsv1.AgentEpisode{}, storage.ErrNotFound
 	}
@@ -153,6 +176,42 @@ func (s *Service) Get(ctx context.Context, principal storage.Principal, clientEp
 		return contractsv1.AgentEpisode{}, fmt.Errorf("get episode: %w", err)
 	}
 	return episode, nil
+}
+
+// GetByID reads a single episode by its server-assigned episode_id.
+// authorizeRead is independent of authorizeWrite: a credential scoped only
+// to episode:write (a recorder-only agent) must not be able to read
+// episodes back, and vice versa.
+func (s *Service) GetByID(ctx context.Context, principal storage.Principal, episodeID string) (contractsv1.AgentEpisode, error) {
+	if err := authorizeRead(principal); err != nil {
+		return contractsv1.AgentEpisode{}, err
+	}
+	if strings.TrimSpace(episodeID) == "" {
+		return contractsv1.AgentEpisode{}, storage.ErrNotFound
+	}
+	storeStarted := s.now()
+	episode, err := s.store.GetByEpisodeID(ctx, principal, episodeID)
+	s.observeStoreCall(ctx, storeStarted, err)
+	if err != nil {
+		return contractsv1.AgentEpisode{}, fmt.Errorf("get episode: %w", err)
+	}
+	return episode, nil
+}
+
+// List returns the caller's episodes, newest first, optionally filtered to
+// one repository. The storage adapter applies retention/redaction/scope to
+// every row (see storage.EpisodeStore.List), not just to a single lookup.
+func (s *Service) List(ctx context.Context, principal storage.Principal, repositorySlug string, limit int) ([]contractsv1.AgentEpisode, error) {
+	if err := authorizeRead(principal); err != nil {
+		return nil, err
+	}
+	storeStarted := s.now()
+	episodes, err := s.store.List(ctx, principal, repositorySlug, limit)
+	s.observeStoreCall(ctx, storeStarted, err)
+	if err != nil {
+		return nil, fmt.Errorf("list episodes: %w", err)
+	}
+	return episodes, nil
 }
 
 func (s *Service) Redact(ctx context.Context, principal storage.Principal, episodeID, reason string) (contractsv1.AgentEpisode, error) {
@@ -226,6 +285,23 @@ func authorizeWrite(principal storage.Principal) error {
 		return auth.ErrRepositoryForbidden
 	}
 	if !auth.HasScope(principal.Permissions, auth.ScopeEpisodeWrite) {
+		return auth.ErrInsufficientScope
+	}
+	if slices.Contains(principal.ProductEntitlements, "agent_context_runtime") {
+		return nil
+	}
+	return ErrEntitlementRequired
+}
+
+// authorizeRead is deliberately separate from authorizeWrite: episode:write
+// and episode:read are independent grants, so a recorder-only credential
+// must not be able to read episodes back, and a read-only credential must
+// not be able to record them.
+func authorizeRead(principal storage.Principal) error {
+	if len(principal.RepositoryScopes) == 0 {
+		return auth.ErrRepositoryForbidden
+	}
+	if !auth.HasScope(principal.Permissions, auth.ScopeEpisodeRead) {
 		return auth.ErrInsufficientScope
 	}
 	if slices.Contains(principal.ProductEntitlements, "agent_context_runtime") {

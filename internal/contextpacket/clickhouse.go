@@ -96,7 +96,11 @@ func (r *CatalogClickHouseRows) ResolveEvidenceReference(ctx context.Context, or
 	}
 	plan := ReadPlan{OrgID: orgID, RepoID: scope.RepoID, RepoSlug: scope.RepoSlug}
 	if locatorHash == "" {
-		return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, confidence, citation, observed_at FROM (`+query.Statement+`) LIMIT 501`, plan.Bindings(), 501)
+		// This column list must stay in lockstep with scanEvidenceRow's
+		// Scan destinations (source_executor.go): it is a second, independent
+		// SELECT projection of the same catalog subquery, not a "SELECT *"
+		// that would pass the inner query's columns through automatically.
+		return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, confidence, citation, observed_at, event_at FROM (`+query.Statement+`) LIMIT 501`, plan.Bindings(), 501)
 	}
 	if len(locatorHash) != 64 {
 		return nil, storage.ErrNotFound

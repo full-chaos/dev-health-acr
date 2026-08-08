@@ -134,7 +134,13 @@ func TestLoad_maps_postgres_pool_and_episode_writeback(t *testing.T) {
 	values["ACR_POSTGRES_CONN_MAX_LIFETIME"] = "45m"
 	values["ACR_POSTGRES_CONN_MAX_IDLE_TIME"] = "7m"
 	values["ACR_POSTGRES_PING_TIMEOUT"] = "4s"
+	// CHAOS-3565: episode writeback now requires ACR_ENVIRONMENT=development
+	// and an explicit design-partner cohort (see episode_writeback_cohort_test.go
+	// for the dedicated coverage of that gate); this test only cares about the
+	// unrelated PostgreSQL pool/CA mappings above, so it just satisfies the gate.
+	values["ACR_ENVIRONMENT"] = "development"
 	values["ACR_ENABLE_EPISODE_WRITEBACK"] = "true"
+	values["ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS"] = "org_design_partner_1"
 
 	// When
 	cfg, err := load(mapLookup(values))

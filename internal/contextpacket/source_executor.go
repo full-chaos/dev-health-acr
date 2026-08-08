@@ -108,10 +108,11 @@ func scanEvidenceRow(rows ClickHouseRowScanner) (contractsv1.EvidenceRef, error)
 	var id, system, entityType, entityID, label, safeURI, provenance, citation string
 	var confidence float64
 	var observedAt time.Time
-	if err := rows.Scan(&id, &system, &entityType, &entityID, &label, &safeURI, &provenance, &confidence, &citation, &observedAt); err != nil {
+	var eventAt *time.Time
+	if err := rows.Scan(&id, &system, &entityType, &entityID, &label, &safeURI, &provenance, &confidence, &citation, &observedAt, &eventAt); err != nil {
 		return contractsv1.EvidenceRef{}, err
 	}
-	return contractsv1.EvidenceRef{
+	ref := contractsv1.EvidenceRef{
 		SchemaVersion: contractsv1.EvidenceRefSchema,
 		EvidenceRefID: id,
 		Source:        contractsv1.EvidenceSource{System: system, EntityType: entityType, EntityID: entityID, DisplayLabel: label, SafeURI: safeURI},
@@ -120,5 +121,12 @@ func scanEvidenceRow(rows ClickHouseRowScanner) (contractsv1.EvidenceRef, error)
 		Citation:      citation,
 		ObservedAt:    observedAt.UTC(),
 		Availability:  contractsv1.EvidenceAvailable,
-	}, nil
+	}
+	// event_at is only ever set by a real event-time column in the catalog
+	// query (see source_queries.go); never synthesize it here.
+	if eventAt != nil {
+		utc := eventAt.UTC()
+		ref.EventAt = &utc
+	}
+	return ref, nil
 }

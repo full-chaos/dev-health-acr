@@ -313,3 +313,53 @@ func TestDeviceContractFixtures_validate(t *testing.T) {
 		})
 	}
 }
+
+// TestCredentialLifecycleResponses_acceptEpisodeReadScope is the regression
+// test for the Codex cross-system review finding X4: validCredentialScopes
+// (validate_device.go) and acr_client_credential.v1.schema.json's scopes
+// enum both listed "context:read", "evidence:read", "episode:write" but
+// omitted "episode:read" (CHAOS-3564's episode read scope). A real
+// credential legitimately holding episode:read that was rotated or revoked
+// would have its CredentialRotateResponse/CredentialRevokeResponse.Validate()
+// reject the response -- internal/sidecar's RotateOwnCredential/
+// revokeOwnCredential call Validate() AFTER the server has already
+// performed the real rotation/revocation, so this is not a harmless
+// rejection: the sidecar would report failure (ErrInvalidResponse) for an
+// operation the server already completed.
+func TestCredentialLifecycleResponses_acceptEpisodeReadScope(t *testing.T) {
+	createdAt := time.Date(2026, time.July, 25, 0, 0, 0, 0, time.UTC)
+	expiresAt := createdAt.Add(deviceCredentialLifetime)
+	credential := ClientCredential{
+		SchemaVersion:    ClientCredentialSchema,
+		CredentialID:     "credential-0001",
+		Name:             "MCP sidecar",
+		TokenPrefix:      "fcacr_abcd1234",
+		OrgID:            "org_fullchaos",
+		RepositoryScopes: []string{"full-chaos/dev-health-acr"},
+		Scopes:           []string{"context:read", "evidence:read", "episode:read"},
+		CreatedAt:        createdAt,
+		ExpiresAt:        &expiresAt,
+	}
+
+	t.Run("rotate", func(t *testing.T) {
+		response := CredentialRotateResponse{
+			SchemaVersion: CredentialRotateResponseSchema, AccessToken: "[REDACTED]", Credential: credential,
+			Receipt: CredentialRotationReceipt{SourceCredentialID: "credential-0001", ReplacementCredentialID: "credential-0002", RollbackUntil: createdAt.Add(15 * time.Minute)},
+		}
+		if err := response.Validate(); err != nil {
+			t.Fatalf("rotate response with an episode:read-scoped credential rejected: %v", err)
+		}
+		assertSchemaParity(t, "credential_rotate_response.v1.schema.json", response)
+	})
+
+	t.Run("revoke", func(t *testing.T) {
+		revokedAt := createdAt.Add(time.Hour)
+		revokedCredential := credential
+		revokedCredential.RevokedAt = &revokedAt
+		response := CredentialRevokeResponse{SchemaVersion: CredentialRevokeResponseSchema, Credential: revokedCredential}
+		if err := response.Validate(); err != nil {
+			t.Fatalf("revoke response with an episode:read-scoped credential rejected: %v", err)
+		}
+		assertSchemaParity(t, "credential_revoke_response.v1.schema.json", response)
+	})
+}

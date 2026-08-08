@@ -328,6 +328,80 @@ func layerHTTPDenial(rc *runContext, l *Layer) {
 
 // --- L3 mcp ---
 
+// recordEpisodeState resolves CHAOS-3565's cohort-scoped expectation for
+// record_episode into exactly two states -- never a third "required" state,
+// per review finding M4: nothing in this harness obliges an LLM agent to
+// call record_episode even when it is permitted and reachable, so asserting
+// "it WAS observed" would bet the whole task's pass/fail on nondeterministic
+// agent behavior rather than on anything this service actually guarantees.
+//
+//   - recordEpisodeForbidden (default: oracle.EpisodeWrite is nil or false):
+//     record_episode is disabled by default everywhere -- DisabledTools in
+//     cmd/acr-mcp/main.go and an empty hosted Capabilities.EnabledTools mean
+//     OpenCode is never even told the tool exists -- so it must never be
+//     observed. This is every existing/landed oracle's state, unconditionally,
+//     and its check id and behavior are byte-identical to before CHAOS-3565.
+//   - recordEpisodePermittedOptional (oracle.EpisodeWrite == true): a
+//     design-partner-cohort-scoped task where the tool is reachable
+//     (capabilities_episode_write/capabilities_required_tools in L2 already
+//     assert that) but optional. Observing it is not required; if it WAS
+//     observed, its result must validate against the MCP contract.
+type recordEpisodeState int
+
+const (
+	recordEpisodeForbidden recordEpisodeState = iota
+	recordEpisodePermittedOptional
+)
+
+func recordEpisodeExpectedState(oracle Oracle) recordEpisodeState {
+	if oracle.EpisodeWrite != nil && *oracle.EpisodeWrite {
+		return recordEpisodePermittedOptional
+	}
+	return recordEpisodeForbidden
+}
+
+// mcpRecordEpisodeResult validates a record_episode tool invocation's result text against
+// mcp_record_episode_response.v1, mirroring mcpSourceEvidenceResult's decode-and-validate
+// pattern for source_evidence (clientevidence.go). ResultText is the raw JSON-encoded string
+// OpenCode's event stream carries (see events.go).
+func mcpRecordEpisodeResult(schemas *schemaLoader, resultText string) error {
+	if err := schemas.validateJSON("mcp_record_episode_response.v1.schema.json", []byte(resultText)); err != nil {
+		return fmt.Errorf("record_episode result does not validate against mcp_record_episode_response.v1: %w", err)
+	}
+	return nil
+}
+
+// recordEpisodeCheck records L3's record_episode check(s), split by state so the emitted
+// check id always matches what's actually being asserted (review finding M5): a row named
+// "record_episode_never_observed" always means exactly that, never "observed and valid" or
+// "optionally observed". invocation is the first observed record_episode ToolInvocation, or
+// nil if none was observed; it is only read when observedRecordEpisode is true.
+func recordEpisodeCheck(l *Layer, state recordEpisodeState, observedRecordEpisode bool, invocation *ToolInvocation, schemas *schemaLoader) {
+	switch state {
+	case recordEpisodeForbidden:
+		// Unconditional default, byte-identical to every oracle before
+		// CHAOS-3565: the check id, expected label, and pass condition are
+		// exactly what they were when this was the only branch.
+		l.add("record_episode_never_observed", !observedRecordEpisode, "not observed", fmt.Sprintf("%v", observedRecordEpisode), "")
+	case recordEpisodePermittedOptional:
+		// A distinct check id: record_episode being present here is not a
+		// failure of "record_episode_never_observed" (that check does not
+		// run in this state at all), so it must not share that name.
+		switch {
+		case !observedRecordEpisode:
+			l.skip("record_episode_permitted_optional", "record_episode was not observed this run -- writeback is optional for a design-partner-cohort-scoped task, never required")
+		case invocation.Failed():
+			l.add("record_episode_permitted_optional", false, "a successful record_episode result", "tool call failed", "")
+		default:
+			if err := mcpRecordEpisodeResult(schemas, invocation.ResultText); err != nil {
+				l.add("record_episode_permitted_optional", false, "valid mcp_record_episode_response.v1", "invalid", err.Error())
+			} else {
+				l.add("record_episode_permitted_optional", true, "valid mcp_record_episode_response.v1", "valid", "")
+			}
+		}
+	}
+}
+
 func layerMCP(rc *runContext) *Layer {
 	l := newLayer("L3", "mcp")
 
@@ -341,6 +415,18 @@ func layerMCP(rc *runContext) *Layer {
 	} else if names, err := mcpToolNames(raw); err != nil {
 		l.add("mcp_tools_decode", false, "", "", err.Error())
 	} else {
+		// CHAOS-3564 (episode read path) annotation: adding the episode
+		// get/list routes was flagged as a known risk to this exact-match
+		// oracle, so it was checked deliberately. The read path is HTTP-only
+		// (GET /api/v1/agent-context/episodes and .../episodes/{episode_id}),
+		// registered in internal/api/app.go against internal/api's own mux --
+		// it never touches internal/mcp or cmd/acr-mcp's hardcoded tool list
+		// (see internal/mcp/server.go's toolContextForTask/toolSourceEvidence
+		// constants and cmd/acr-mcp/main.go's EnabledTools). That is a
+		// deliberate curated-contract boundary (see CHAOS-3564's "no native
+		// graph/MCP exposure" constraint), not an oversight, so this baseline
+		// stays exactly the two tools that exist today. If a future ticket
+		// adds a curated MCP episode tool, this baseline must change with it.
 		expected := []string{"context_for_task", "source_evidence"}
 		if len(rc.oracle.ExpectedMCPTools) > 0 {
 			expected = rc.oracle.ExpectedMCPTools
@@ -370,17 +456,21 @@ func layerMCP(rc *runContext) *Layer {
 	}
 	observed := newStringSet()
 	var nonEvidenceIO []byte
-	for _, inv := range invocations {
+	var recordEpisodeInvocation *ToolInvocation
+	for i, inv := range invocations {
 		observed.add(inv.Name)
 		if inv.Name != "context_for_task" && inv.Name != "source_evidence" {
 			nonEvidenceIO = append(nonEvidenceIO, inv.Arguments...)
 			nonEvidenceIO = append(nonEvidenceIO, inv.ResultText...)
 		}
+		if inv.Name == "record_episode" && recordEpisodeInvocation == nil {
+			recordEpisodeInvocation = &invocations[i]
+		}
 	}
 	rc.nonEvidenceToolIO = nonEvidenceIO
 
 	l.add("observed_context_for_task", observed.has("context_for_task"), "observed", fmt.Sprintf("%v", observed.has("context_for_task")), "")
-	l.add("record_episode_never_observed", !observed.has("record_episode"), "not observed", fmt.Sprintf("%v", observed.has("record_episode")), "")
+	recordEpisodeCheck(l, recordEpisodeExpectedState(rc.oracle), observed.has("record_episode"), recordEpisodeInvocation, rc.packetSchemas)
 
 	// Parse every source_evidence invocation into a clientEvidenceCall (argument + result),
 	// grounded against the live packet -- this is the primary source of truth L4/L5 build on

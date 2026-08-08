@@ -49,6 +49,9 @@ func requestOperation(request *http.Request) observability.Operation {
 		if strings.HasPrefix(request.URL.Path, "/api/v1/agent-context/evidence/") {
 			return observability.OperationEvidence
 		}
+		if strings.HasPrefix(request.URL.Path, "/api/v1/agent-context/episodes/") {
+			return observability.OperationEpisode
+		}
 		return observability.OperationUnknown
 	}
 }

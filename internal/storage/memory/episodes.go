@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -131,6 +132,15 @@ func (s *EpisodeStore) PurgeExpiredForPrincipal(_ context.Context, principal sto
 	return s.purgeExpired(before, limit, principal.OrgID, principal.RepositoryScopes)
 }
 
+// purgeExpiredCandidate is one row eligible for purge, ordered the same way
+// postgres.EpisodeStore's purgeExpired SQL orders its own candidates
+// (`ORDER BY expires_at, episode_id`) before applying limit -- see
+// purgeExpired below (review finding X6).
+type purgeExpiredCandidate struct {
+	id        string
+	expiresAt time.Time
+}
+
 func (s *EpisodeStore) purgeExpired(before time.Time, limit int, orgID string, scopes []string) (int, error) {
 	if strings.TrimSpace(orgID) == "" || len(scopes) == 0 {
 		return 0, storage.ErrNotFound
@@ -140,18 +150,38 @@ func (s *EpisodeStore) purgeExpired(before time.Time, limit int, orgID string, s
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	purged := 0
+	// Go deliberately randomizes map iteration order, so candidates are
+	// collected first and sorted (oldest expiry, then episode_id, matching
+	// postgres exactly) before limit is applied -- ranging s.byID directly
+	// and cutting off at limit mid-iteration purged a non-deterministic,
+	// order-independent subset instead of always preferring the
+	// oldest-expiring rows the way postgres does.
+	candidates := make([]purgeExpiredCandidate, 0, len(s.byID))
 	for id, record := range s.byID {
-		if purged == limit || record.episode.RedactionState == "purged_tombstone" || record.orgID != orgID || !episodeRepositoryAllowed(scopes, record.episode.Repository.Slug) {
+		if record.episode.RedactionState == "purged_tombstone" || record.orgID != orgID || !episodeRepositoryAllowed(scopes, record.episode.Repository.Slug) {
 			continue
 		}
 		expiresAt := episodeExpiry(record.episode)
 		if expiresAt != nil && !expiresAt.After(before) {
-			record.episode.AgentEpisodeCreate = contractsv1.AgentEpisodeCreate{}
-			record.episode.RedactionState = "purged_tombstone"
-			s.byID[id] = record
-			purged++
+			candidates = append(candidates, purgeExpiredCandidate{id: id, expiresAt: *expiresAt})
 		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].expiresAt.Equal(candidates[j].expiresAt) {
+			return candidates[i].id < candidates[j].id
+		}
+		return candidates[i].expiresAt.Before(candidates[j].expiresAt)
+	})
+	purged := 0
+	for _, candidate := range candidates {
+		if purged == limit {
+			break
+		}
+		record := s.byID[candidate.id]
+		record.episode.AgentEpisodeCreate = contractsv1.AgentEpisodeCreate{}
+		record.episode.RedactionState = "purged_tombstone"
+		s.byID[candidate.id] = record
+		purged++
 	}
 	return purged, nil
 }

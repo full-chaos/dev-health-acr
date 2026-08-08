@@ -255,6 +255,23 @@ remote token or CA inputs.
 {{- end -}}
 
 {{/*
+Mirrors internal/config.Config.Validate's ACR_ENABLE_EPISODE_WRITEBACK
+requirements (CHAOS-3565): fail the render, not just the container's later
+startup, when writeback is enabled without a development environment or
+without a non-empty design-partner cohort.
+*/}}
+{{- define "acr.validateEpisodeWriteback" -}}
+{{- if .Values.config.enableEpisodeWriteback -}}
+{{- if ne .Values.config.environment "development" -}}
+{{- fail "episode-writeback: config.enableEpisodeWriteback requires config.environment=development (dev/acceptance only, never staging or production)" -}}
+{{- end -}}
+{{- if not .Values.config.episodeWritebackCohortOrgIds -}}
+{{- fail "episode-writeback: config.enableEpisodeWriteback requires a non-empty config.episodeWritebackCohortOrgIds design-partner cohort" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Credentials checksum input. Rolls pods when a referenced Secret changes name or
 when the operator bumps credentials.rotationRevision after rotating Secret
 content (which Helm cannot observe directly).
