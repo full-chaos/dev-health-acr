@@ -141,6 +141,19 @@ func TestIntegrationFileComplexity_empty_branch_chooses_one_ref_for_tied_run_tim
 	}
 }
 
+// Both hand-rolled SourceQuery.Statements in this file (quality-boundary.v1
+// below, provenance-boundary.v1 further down) must project all 11 columns
+// scanEvidenceRow (source_executor.go) now Scans, ending in event_at --
+// QueryEvidence wraps the raw Statement in a bare `SELECT * FROM (...)`, so
+// the column count/order come entirely from the Statement itself, not from
+// standardColumns (source_queries.go), which only the catalog-driven
+// queries go through. CHAOS-3562 added event_at as an 11th Scan
+// destination without updating these two ad-hoc test fixtures, so the CI
+// hosted-integration job (make hosted-integration -> the native ClickHouse
+// fixture check) failed with "expected 10 destination arguments in Scan,
+// not 11" from the moment that landed -- undetected here because this file
+// only runs against a real ClickHouse container (ACR_HOSTED_INTEGRATION=1),
+// which local `go test ./...` runs skip by design.
 func TestIntegrationSourceExecutor_filters_and_deduplicates_before_read_cap(t *testing.T) {
 	// Given
 	client, _ := integrationClient(t)
@@ -158,7 +171,8 @@ func TestIntegrationSourceExecutor_filters_and_deduplicates_before_read_cap(t *t
 			'native' provenance,
 			if(number < 100, 0.1, 0.9) confidence,
 			if(number < 100, 'low quality', if(number < 200, 'duplicate', 'target')) citation,
-			toDateTime(toUInt32(1700000000 + (201 - number))) observed_at
+			toDateTime(toUInt32(1700000000 + (201 - number))) observed_at,
+			CAST(NULL AS Nullable(DateTime64(3, 'UTC'))) event_at
 		FROM numbers(201)`,
 	}
 
@@ -199,7 +213,8 @@ func TestIntegrationSourceExecutor_preserves_ranked_provenance_before_read_cap(t
 			if(number >= 101, 'native', 'heuristic') provenance,
 			0.9 confidence,
 			multiIf(number = 0 OR number = 101, 'duplicate', number <= 100, 'distractor', 'target') citation,
-			toDateTime(toUInt32(1700000000 + (103 - number))) observed_at
+			toDateTime(toUInt32(1700000000 + (103 - number))) observed_at,
+			CAST(NULL AS Nullable(DateTime64(3, 'UTC'))) event_at
 		FROM numbers(103)`,
 	}
 
