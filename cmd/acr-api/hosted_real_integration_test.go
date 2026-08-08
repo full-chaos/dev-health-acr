@@ -84,34 +84,33 @@ func TestHostedRuntime_real_binary_serves_and_fails_readiness_safely(t *testing.
 	if evidence.Availability != contractsv1.EvidenceAvailable || evidence.Evidence.EvidenceRefID == "" {
 		t.Fatalf("expanded evidence = %#v", evidence)
 	}
-	// KNOWN-BROKEN as of CHAOS-3565 (not fixed in this commit): this
-	// sub-case has never actually run, because the whole test is gated
-	// behind ACR_HOSTED_INTEGRATION=1 (see the Skip above) and nobody has
-	// opted in against this sandbox. If it were run today it would fail
-	// before ever reaching the assertion below, for three independent
-	// reasons:
+	// Was KNOWN-BROKEN as of CHAOS-3565 (annotated, not fixed, in commit
+	// 7278395): this sub-case had never actually run against a live Docker
+	// daemon, so the three gaps below were never empirically confirmed. The
+	// CI hosted-integration job's own docker-gated run always failed earlier
+	// than this point -- at the native ClickHouse fixture step (see the
+	// event_at fix in source_integration_test.go, review finding tracked
+	// under the CI-red diagnosis) -- so this sub-case was silently unreached
+	// in every CI run to date, not merely local-sandbox-unreached as the
+	// prior annotation assumed. Fixing the fixture step unmasks this one;
+	// fixed here for real, verified against a live Docker daemon
+	// (ACR_HOSTED_INTEGRATION=1):
 	//  1. hostedProcessEnvironment sets ACR_ENVIRONMENT="test", but
-	//     config.Validate now requires ACR_ENVIRONMENT=development whenever
-	//     ACR_ENABLE_EPISODE_WRITEBACK=true -- enabledProcess would fail
-	//     startup validation regardless of (2).
-	//  2. enabledEnvironment never sets ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS,
-	//     which CHAOS-3565 review finding H3 made a second hard startup
-	//     requirement whenever writeback is enabled.
-	//  3. Even with (1) and (2) fixed, review finding H1 made capability
-	//     advertisement of record_episode conditional on the requesting
-	//     org's cohort membership -- and postgres.token's org ID (from
-	//     newPostgresFixture) is not known here, so there is no cohort list
-	//     that would correctly make the assertion below pass without first
-	//     threading that org ID out of the fixture.
-	// An opt-in test that cannot pass must not read as coverage to its next
-	// owner: fixing this requires (1) an ACR_ENVIRONMENT override in
-	// enabledEnvironment, (2) an ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS entry
-	// naming postgres.token's org, and (3) verification against a live
-	// Docker daemon (ACR_HOSTED_INTEGRATION=1), none of which happened in
-	// this session -- left for whoever owns this test next.
+	//     config.Validate requires ACR_ENVIRONMENT=development whenever
+	//     ACR_ENABLE_EPISODE_WRITEBACK=true -- overridden below.
+	//  2. ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS (CHAOS-3565 review finding H3)
+	//     is a second hard startup requirement whenever writeback is
+	//     enabled -- set below.
+	//  3. Capability advertisement of record_episode is conditional on the
+	//     requesting org's cohort membership (CHAOS-3565 review finding H1).
+	//     postgres.token's org is the package-level hostedIntegrationOrg
+	//     constant (hosted_service_fixtures_test.go) -- no threading needed,
+	//     it names the cohort directly.
 	enabledAddress := reserveAddress(t)
 	enabledEnvironment := maps.Clone(environment)
 	enabledEnvironment["ACR_ADDR"] = enabledAddress
+	enabledEnvironment["ACR_ENVIRONMENT"] = "development"
+	enabledEnvironment["ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS"] = hostedIntegrationOrg
 	enabledEnvironment["ACR_ENABLE_EPISODE_WRITEBACK"] = "true"
 	enabledProcess := startAPIProcess(t, ctx, apiProcessRequest{binary: binary, environment: enabledEnvironment})
 	enabledAPI := hostedAPI{client: &http.Client{Timeout: 30 * time.Second}, baseURL: "http://" + enabledAddress, token: postgres.token}
