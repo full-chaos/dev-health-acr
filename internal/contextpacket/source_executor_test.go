@@ -228,20 +228,13 @@ func (s *rowScanner) Next() bool { return s.row < len(s.rows) }
 
 func (s *rowScanner) Scan(dest ...any) error {
 	for index, target := range dest {
-		switch value := target.(type) {
-		case *string:
-			*value = s.rows[s.row][index].(string)
-		case *float64:
-			*value = s.rows[s.row][index].(float64)
-		case *time.Time:
-			*value = s.rows[s.row][index].(time.Time)
-		case **time.Time:
-			// Nullable(DateTime64) columns such as event_at scan into a
-			// pointer-to-pointer: nil means the source has no real event
-			// time; a *time.Time means it does.
-			*value, _ = s.rows[s.row][index].(*time.Time)
-		default:
-			return errors.New("unexpected destination")
+		// Nullable(DateTime64) columns such as event_at scan into a
+		// pointer-to-pointer: nil means the source has no real event time; a
+		// *time.Time means it does. scanFixtureColumn (shared with
+		// locatorQueryRows.Scan) is what fails loudly on a mistyped fixture
+		// value instead of silently swallowing it into that same nil.
+		if err := scanFixtureColumn(target, s.rows[s.row][index]); err != nil {
+			return err
 		}
 	}
 	s.row++

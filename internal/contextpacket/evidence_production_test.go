@@ -100,18 +100,12 @@ func (r *locatorQueryRows) Scan(destinations ...any) error {
 		return r.scanErr
 	}
 	values := []any{"acr:v1:ci:opaque-reference", "dev_health", "ci_pipeline_run", "run-1", "CI run", "", "native", 1.0, "fixture", time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC), (*time.Time)(nil)}
+	// scanFixtureColumn is shared with rowScanner.Scan (source_executor_test.go)
+	// so the column-mapping logic -- including failing loudly on a mistyped
+	// event_at fixture value -- exists in exactly one place.
 	for index, destination := range destinations {
-		switch value := destination.(type) {
-		case *string:
-			*value = values[index].(string)
-		case *float64:
-			*value = values[index].(float64)
-		case *time.Time:
-			*value = values[index].(time.Time)
-		case **time.Time:
-			*value, _ = values[index].(*time.Time)
-		default:
-			return fmt.Errorf("unsupported destination %T", destination)
+		if err := scanFixtureColumn(destination, values[index]); err != nil {
+			return err
 		}
 	}
 	return nil
