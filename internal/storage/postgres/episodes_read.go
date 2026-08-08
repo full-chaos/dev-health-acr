@@ -66,7 +66,8 @@ WHERE org_id = $1::uuid
   AND ($2 = '' OR repo_slug = $2)
   AND EXISTS (
           SELECT 1 FROM jsonb_array_elements_text($4::jsonb) AS allowed(scope)
-          WHERE allowed.scope = '*' OR repo_slug = allowed.scope OR repo_slug LIKE replace(allowed.scope, '/*', '/%')
+          WHERE allowed.scope = '*' OR repo_slug = allowed.scope
+             OR repo_slug LIKE replace(replace(replace(replace(allowed.scope, '\', '\\'), '%', '\%'), '_', '\_'), '/*', '/%') ESCAPE '\'
       )
 ORDER BY created_at DESC, episode_id ASC
 LIMIT $3`, principal.OrgID, repositorySlug, limit, string(scopesJSON))

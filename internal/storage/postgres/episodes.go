@@ -165,7 +165,7 @@ WITH candidates AS (
 	  AND org_id = $3::uuid
 	  AND EXISTS (
 	          SELECT 1 FROM jsonb_array_elements_text($4::jsonb) AS allowed(scope)
-	          WHERE allowed.scope = '*' OR repo_slug = allowed.scope OR repo_slug LIKE replace(allowed.scope, '/*', '/%')
+	          WHERE allowed.scope = '*' OR repo_slug = allowed.scope OR repo_slug LIKE replace(replace(replace(replace(allowed.scope, '\', '\\'), '%', '\%'), '_', '\_'), '/*', '/%') ESCAPE '\'
 	      )
     ORDER BY expires_at, episode_id LIMIT $2 FOR UPDATE SKIP LOCKED
 )
