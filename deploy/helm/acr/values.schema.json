@@ -74,6 +74,7 @@
         "maxSerializedBytes": { "type": "integer", "minimum": 8192, "maximum": 1048576 },
         "requestsPerMinute": { "type": "integer", "minimum": 1 },
         "enableEpisodeWriteback": { "type": "boolean" },
+        "episodeWritebackCohortOrgIds": { "type": "array", "items": { "type": "string" } },
         "deviceVerificationUrl": { "type": "string" },
         "entitlement": {
           "type": "object",

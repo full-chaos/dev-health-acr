@@ -42,6 +42,7 @@ The default listen address is `:8080`. Override it through `ACR_ADDR` or the `se
 | `ACR_POSTGRES_CONN_MAX_IDLE_TIME` | `5m` | PostgreSQL idle connection lifetime |
 | `ACR_POSTGRES_PING_TIMEOUT` | `5s` | PostgreSQL startup ping and readiness timeout |
 | `ACR_ENABLE_EPISODE_WRITEBACK` | `false` | Explicitly enables the hosted episode service and route permission |
+| `ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS` | empty | Comma-separated design-partner cohort of org IDs writeback is scoped to; required, non-empty, whenever `ACR_ENABLE_EPISODE_WRITEBACK=true` (startup fails otherwise). Every other org's episode writes are rejected even though the service itself is up and reads remain unrestricted |
 | `ACR_EVIDENCE_ID_ACTIVE_KID` / `ACR_EVIDENCE_ID_ACTIVE_KID_FILE` | empty | Active evidence-ID signing key identifier |
 | `ACR_EVIDENCE_ID_KEYS` / `ACR_EVIDENCE_ID_KEYS_FILE` | empty | Comma-separated evidence-ID key material |
 | `ACR_DEV_HEALTH_ENTITLEMENT_URL` | empty | Dev Health entitlement/health service HTTP(S) origin |
@@ -138,8 +139,14 @@ audited and rate-limited; they are not represented as impossible.
 `agent_context_runtime` entitlement, and an `episode:write` scope authorized
 for the target repository. Invalid or unentitled callers may receive `401` or
 `403` before runtime availability is evaluated. A valid authorized caller
-receives a retryable `503` while writeback is disabled; enabling
-`ACR_ENABLE_EPISODE_WRITEBACK=true` makes the hosted episode service available.
+receives a retryable `503` while writeback is disabled. Enabling
+`ACR_ENABLE_EPISODE_WRITEBACK=true` alone is not sufficient: it also requires
+a non-empty `ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS` (startup fails otherwise),
+and writes are then scoped to that design-partner cohort of org IDs -- a
+caller from any other org still receives the same `503` an org sees when
+writeback is disabled outright, never a signal that the feature exists for
+someone else. Capability advertisement (`GET /api/v1/agent-context/capabilities`)
+reflects this: `record_episode` is only advertised to a cohort org.
 
 ## Request behavior
 

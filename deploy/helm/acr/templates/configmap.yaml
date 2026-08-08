@@ -1,5 +1,6 @@
 {{- /* Non-secret process configuration. Credentials never appear here. */ -}}
 {{- include "acr.validateLocalCompositionReadiness" . -}}
+{{- include "acr.validateEpisodeWriteback" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -27,6 +28,7 @@ data:
   ACR_MAX_SERIALIZED_BYTES: {{ .Values.config.maxSerializedBytes | quote }}
   ACR_REQUESTS_PER_MINUTE: {{ .Values.config.requestsPerMinute | quote }}
   ACR_ENABLE_EPISODE_WRITEBACK: {{ .Values.config.enableEpisodeWriteback | quote }}
+  ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS: {{ .Values.config.episodeWritebackCohortOrgIds | default (list) | join "," | quote }}
   ACR_DEVICE_VERIFICATION_URL: {{ .Values.config.deviceVerificationUrl | quote }}
   {{- if or (eq .Values.config.environment "development") (eq .Values.config.environment "test") }}
   {{- with .Values.config.webAssertion }}

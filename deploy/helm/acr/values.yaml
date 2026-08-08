@@ -54,6 +54,12 @@ config:
   maxSerializedBytes: 262144
   requestsPerMinute: 60
   enableEpisodeWriteback: false
+  # Required, non-empty, whenever enableEpisodeWriteback is true: the
+  # design-partner cohort of org IDs writeback is scoped to (CHAOS-3565).
+  # Every other org's writes are rejected even though the service itself is
+  # up. Rendering fails closed (acr.validateEpisodeWriteback) if writeback
+  # is enabled and this is left empty.
+  episodeWritebackCohortOrgIds: []
   # Absolute browser URL shown by the device authorization flow. This normally
   # points at the Dev Health Web approval page, not at acr-api itself.
   deviceVerificationUrl: ""

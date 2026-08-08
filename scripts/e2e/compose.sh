@@ -232,6 +232,7 @@ services:
       ACR_LOG_LEVEL: debug
       ACR_POSTGRES_CONNECTION_KIND: direct
       ACR_ENABLE_EPISODE_WRITEBACK: "${ACR_ENABLE_EPISODE_WRITEBACK:-false}"
+      ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS: "${ACR_EPISODE_WRITEBACK_COHORT_ORG_IDS:-}"
       ACR_REQUIRE_BACKING_STORES: "true"
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
