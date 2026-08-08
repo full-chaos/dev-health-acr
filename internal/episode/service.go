@@ -157,7 +157,15 @@ func normalizeRepository(slug string) string {
 	return strings.ToLower(strings.TrimSpace(slug))
 }
 
+// Get is the client-supplied-ID lookup counterpart to GetByID. It has no
+// production caller today (confirmed by exhaustive grep), but authorizeRead
+// is enforced here anyway, for consistency with GetByID/List and so any
+// future caller inherits the same read/write independence guarantee rather
+// than silently bypassing it (review finding X3).
 func (s *Service) Get(ctx context.Context, principal storage.Principal, clientEpisodeID string) (contractsv1.AgentEpisode, error) {
+	if err := authorizeRead(principal); err != nil {
+		return contractsv1.AgentEpisode{}, err
+	}
 	if principal.OrgID == "" || clientEpisodeID == "" {
 		return contractsv1.AgentEpisode{}, storage.ErrNotFound
 	}
