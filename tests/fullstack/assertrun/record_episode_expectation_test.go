@@ -1,31 +1,120 @@
 package main
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
-// These cover CHAOS-3565's cohort-scoping of record_episode_never_observed:
-// the check must stay the unconditional "never observed" default for every
-// existing/unset oracle, and only flip for a task whose oracle explicitly
-// marks it as design-partner-cohort-scoped via episode_write=true.
+// These cover CHAOS-3565's cohort-scoping of record_episode: the default oracle state
+// (nil/false episode_write) must stay the unconditional "never observed" check,
+// byte-identical to before CHAOS-3565 (review finding M4's "no landed oracle's behavior may
+// change"), and episode_write=true must resolve to a permitted-optional state -- never a
+// hard "must be observed" requirement, since nothing in this harness obliges an LLM agent to
+// call record_episode even when it is reachable.
 
-func TestRecordEpisodeExpectation_defaultsToNeverObserved(t *testing.T) {
-	expect, label := recordEpisodeExpectation(Oracle{})
-	if expect || label != "not observed" {
-		t.Fatalf("default expectation = (%t, %q), want (false, %q)", expect, label, "not observed")
+func TestRecordEpisodeExpectedState_defaultsToForbidden(t *testing.T) {
+	if state := recordEpisodeExpectedState(Oracle{}); state != recordEpisodeForbidden {
+		t.Fatalf("default state = %v, want recordEpisodeForbidden", state)
 	}
 }
 
-func TestRecordEpisodeExpectation_explicitFalseStaysNeverObserved(t *testing.T) {
+func TestRecordEpisodeExpectedState_explicitFalseStaysForbidden(t *testing.T) {
 	write := false
-	expect, label := recordEpisodeExpectation(Oracle{EpisodeWrite: &write})
-	if expect || label != "not observed" {
-		t.Fatalf("explicit-false expectation = (%t, %q), want (false, %q)", expect, label, "not observed")
+	if state := recordEpisodeExpectedState(Oracle{EpisodeWrite: &write}); state != recordEpisodeForbidden {
+		t.Fatalf("explicit-false state = %v, want recordEpisodeForbidden", state)
 	}
 }
 
-func TestRecordEpisodeExpectation_cohortScopedTrueExpectsObserved(t *testing.T) {
+func TestRecordEpisodeExpectedState_explicitTrueIsPermittedOptionalNotRequired(t *testing.T) {
 	write := true
-	expect, label := recordEpisodeExpectation(Oracle{EpisodeWrite: &write})
-	if !expect || label != "observed" {
-		t.Fatalf("cohort-scoped expectation = (%t, %q), want (true, %q)", expect, label, "observed")
+	if state := recordEpisodeExpectedState(Oracle{EpisodeWrite: &write}); state != recordEpisodePermittedOptional {
+		t.Fatalf("explicit-true state = %v, want recordEpisodePermittedOptional (never a hard-required state)", state)
+	}
+}
+
+// TestRecordEpisodeCheck_forbiddenState_isByteIdenticalToPreCHAOS3565Behavior is the M4/M5
+// regression test for the default (forbidden) path: same check id
+// ("record_episode_never_observed"), same expected/actual rendering, same pass condition, for
+// every oracle that predates CHAOS-3565 (nil/false episode_write). Confirmed RED against a
+// mutant that reused the old hard-boolean-equality logic
+// (observedRecordEpisode == expectRecordEpisode with expectRecordEpisode from a stale
+// recordEpisodeExpectation helper) collapsed into this single-check-id function: see the
+// commit message for the manual mutation used to prove this and
+// TestRecordEpisodeCheck_permittedOptionalState_neverFailsWhenNotObserved below for the
+// specific behavior that mutation would have broken.
+func TestRecordEpisodeCheck_forbiddenState_isByteIdenticalToPreCHAOS3565Behavior(t *testing.T) {
+	t.Run("not observed passes", func(t *testing.T) {
+		l := newLayer("L3", "mcp")
+		recordEpisodeCheck(l, recordEpisodeForbidden, false, nil, nil)
+		assertSingleCheck(t, l, "record_episode_never_observed", true, false)
+	})
+	t.Run("observed fails", func(t *testing.T) {
+		l := newLayer("L3", "mcp")
+		recordEpisodeCheck(l, recordEpisodeForbidden, true, &ToolInvocation{Name: "record_episode"}, nil)
+		assertSingleCheck(t, l, "record_episode_never_observed", false, false)
+	})
+}
+
+// TestRecordEpisodeCheck_permittedOptionalState_neverFailsWhenNotObserved is the core M4 fix:
+// a cohort-scoped task whose agent simply never chose to call record_episode must not fail
+// the run -- it must SKIP (visible as neither a silent pass nor a failure; see report.go's
+// skip doc comment), not require observation.
+func TestRecordEpisodeCheck_permittedOptionalState_neverFailsWhenNotObserved(t *testing.T) {
+	l := newLayer("L3", "mcp")
+	recordEpisodeCheck(l, recordEpisodePermittedOptional, false, nil, nil)
+	if len(l.Checks) != 1 || l.Checks[0].Name != "record_episode_permitted_optional" {
+		t.Fatalf("checks = %#v, want one record_episode_permitted_optional check", l.Checks)
+	}
+	if !l.Checks[0].Skipped {
+		t.Fatalf("check = %#v, want Skipped=true (never observed must not silently read as a pass, nor as a failure)", l.Checks[0])
+	}
+	if !l.OK {
+		t.Fatal("a skipped optional check must not fail the layer")
+	}
+}
+
+func TestRecordEpisodeCheck_permittedOptionalState_failsOnFailedInvocation(t *testing.T) {
+	l := newLayer("L3", "mcp")
+	recordEpisodeCheck(l, recordEpisodePermittedOptional, true, &ToolInvocation{Name: "record_episode", Status: "error"}, nil)
+	assertSingleCheck(t, l, "record_episode_permitted_optional", false, false)
+}
+
+func TestRecordEpisodeCheck_permittedOptionalState_validatesObservedResultAgainstContract(t *testing.T) {
+	schemas := newSchemaLoader(filepath.Join(repoRoot(t), "contracts/jsonschema/v1"))
+	validResult := `{
+	  "schema_version": "mcp_record_episode_response.v1",
+	  "status": "recorded",
+	  "client_episode_id": "client_ep_01J0ACR001",
+	  "idempotency_key": "idem_01J0ACR001",
+	  "episode_id": "ep_01J0ACR001",
+	  "created_at": "2026-07-10T14:10:01Z",
+	  "redaction_state": "active",
+	  "duplicate": false,
+	  "scope": {"branch": "main", "commit_sha": "22e472d"},
+	  "transcript_disposition": "not_submitted"
+	}`
+
+	t.Run("valid result passes", func(t *testing.T) {
+		l := newLayer("L3", "mcp")
+		recordEpisodeCheck(l, recordEpisodePermittedOptional, true, &ToolInvocation{Name: "record_episode", Status: "completed", ResultText: validResult}, schemas)
+		assertSingleCheck(t, l, "record_episode_permitted_optional", true, false)
+	})
+	t.Run("malformed result fails", func(t *testing.T) {
+		l := newLayer("L3", "mcp")
+		recordEpisodeCheck(l, recordEpisodePermittedOptional, true, &ToolInvocation{Name: "record_episode", Status: "completed", ResultText: `{"schema_version":"mcp_record_episode_response.v1"}`}, schemas)
+		assertSingleCheck(t, l, "record_episode_permitted_optional", false, false)
+	})
+}
+
+// assertSingleCheck fails the test unless l has exactly one check named name with the given
+// ok/skipped state.
+func assertSingleCheck(t *testing.T, l *Layer, name string, ok, skipped bool) {
+	t.Helper()
+	if len(l.Checks) != 1 {
+		t.Fatalf("checks = %#v, want exactly one", l.Checks)
+	}
+	check := l.Checks[0]
+	if check.Name != name || check.OK != ok || check.Skipped != skipped {
+		t.Fatalf("check = %#v, want {Name:%q OK:%t Skipped:%t}", check, name, ok, skipped)
 	}
 }
