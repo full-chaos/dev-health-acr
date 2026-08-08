@@ -149,17 +149,27 @@ func TestClickHouseSourceExecutor_bounds_usable_unique_rows_before_ranking(t *te
 }
 
 func TestClickHouseSourceExecutor_mapsEventAtWhenPresentAndLeavesItAbsentWhenNull(t *testing.T) {
-	// Given a row with a real event time and a row with none.
+	// Given a row with a real event time and a row with none, from an actual
+	// producer query rather than a hand-authored one. deployments.v1's
+	// event_at expression -- coalesce(d.deployed_at, d.started_at) -- is
+	// built from two Nullable columns (see 000_raw_tables.sql), so a real
+	// deployments row can legitimately return either a populated or an
+	// absent event_at: both rows below are shapes this query could actually
+	// emit. SourceQueryCatalogV1[0] (repository_freshness.v1) was used here
+	// previously; its event_at is eventAtAbsent (a NULL literal) for every
+	// row, so the old fixture's "with-event" row was one that query could
+	// never actually produce.
+	query := catalogQuery(t, "deployments.v1")
 	eventTime := time.Date(2026, 1, 1, 6, 0, 0, 0, time.UTC)
 	rows := &rowScanner{rows: [][]any{
-		{"acr:v1:test:with-event", "dev_health", "test", "1", "test", "", "native", 1.0, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), &eventTime},
-		{"acr:v1:test:without-event", "dev_health", "test", "2", "test", "", "native", 1.0, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), (*time.Time)(nil)},
+		{"acr:v1:deployment:with-event", "dev_health", "deployment", "1", "prod deployment", "", "native", 1.0, "deployment_id=1", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), &eventTime},
+		{"acr:v1:deployment:without-event", "dev_health", "deployment", "2", "prod deployment", "", "native", 1.0, "deployment_id=2", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), (*time.Time)(nil)},
 	}}
 	client := &boundedRowClient{rows: rows}
 	executor := contextpacket.NewClickHouseSourceExecutor(client)
 
 	// When
-	evidence, err := executor.QueryEvidence(context.Background(), contextpacket.SourceQueryCatalogV1[0], nil)
+	evidence, err := executor.QueryEvidence(context.Background(), query, nil)
 
 	// Then
 	if err != nil {
