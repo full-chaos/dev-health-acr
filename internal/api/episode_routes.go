@@ -15,9 +15,22 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+// ErrEpisodeWritebackNotEnabledForOrg is returned by an EpisodeCreator (for
+// example CHAOS-3565's cohort decorator, internal/runtime/hosted) for an
+// org writeback is not enabled for. It lives here rather than in the
+// runtime package that raises it because writeEpisodeError needs to match
+// it by identity without internal/api importing internal/runtime/hosted
+// (which already imports internal/api for the EpisodeCreator interface --
+// importing back would cycle). It intentionally carries no detail
+// distinguishing "the feature is scoped to a cohort and you're not in it"
+// from "the feature is off entirely": both map to the exact same response
+// this handler already gives a nil a.runtime.Episodes, so a denied org sees
+// exactly what it would see if writeback were disabled outright.
+var ErrEpisodeWritebackNotEnabledForOrg = errors.New("episode writeback is not enabled for this organization")
+
 func (a *App) handleEpisode(w http.ResponseWriter, r *http.Request) {
 	if a.runtime.Episodes == nil {
-		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Episode recording is temporarily unavailable", true, nil)
+		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Episode recording is temporarily unavailable", false, nil)
 		return
 	}
 	var create contractsv1.AgentEpisodeCreate
@@ -202,6 +215,15 @@ func (a *App) writeEpisodeError(w http.ResponseWriter, r *http.Request, principa
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Episode recording was canceled", true, nil)
 	case errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded):
 		writeError(w, r, http.StatusGatewayTimeout, "upstream_unavailable", "Episode recording timed out", true, nil)
+	case errors.Is(err, ErrEpisodeWritebackNotEnabledForOrg):
+		// A permanent, expected denial (writeback is off for this org, by
+		// config) -- not a transient dependency failure, so no ERROR log and
+		// no retryable:true (retrying the identical request cannot succeed
+		// until the org is added to the cohort). The response body is
+		// byte-identical to the nil a.runtime.Episodes case above: neither
+		// leaks whether a cohort exists that this org merely isn't in.
+		a.recordReadAudit(r.Context(), principal, "episode_write_denied", "agent_episode", "unavailable", "denied", nil)
+		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Episode recording is temporarily unavailable", false, nil)
 	default:
 		a.logger.ErrorContext(r.Context(), "episode recording dependency failed", "request_id", RequestID(r.Context()), "failure_class", "episode_creator")
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Episode recording is temporarily unavailable", true, nil)

@@ -2,7 +2,6 @@ package hosted
 
 import (
 	"context"
-	"errors"
 
 	"github.com/full-chaos/dev-health-acr/internal/api"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -10,16 +9,17 @@ import (
 )
 
 // ErrWritebackNotEnabledForOrg is returned for an org outside the
-// configured design-partner cohort (CHAOS-3565). It intentionally carries
-// no detail distinguishing "the cohort exists but you're not in it" from
-// "writeback is off": episode_routes.go's writeEpisodeError maps any error
-// that isn't one of its named cases (ErrNoPersistAccepted, ErrNotFound,
-// ErrConflict, an "invalid episode:" validation error, or a context
-// cancellation/timeout) to the exact same 503 upstream_unavailable a nil
+// configured design-partner cohort (CHAOS-3565). It is the exact same
+// sentinel api.ErrEpisodeWritebackNotEnabledForOrg -- api can't import this
+// package (this package already imports api for the EpisodeCreator
+// interface), so the sentinel lives there and this is just this package's
+// name for it, kept so existing callers/tests in this package don't need to
+// spell out the api-qualified name. episode_routes.go's writeEpisodeError
+// maps it to the exact same 503 upstream_unavailable, non-retryable, a nil
 // EpisodeCreator already produces -- so a non-cohort org sees precisely
 // what it would see if writeback were disabled outright, never a signal
 // that the feature exists.
-var ErrWritebackNotEnabledForOrg = errors.New("episode writeback is not enabled for this organization")
+var ErrWritebackNotEnabledForOrg = api.ErrEpisodeWritebackNotEnabledForOrg
 
 // cohortScopedEpisodeCreator restricts episode Create to a configured
 // design-partner cohort of org IDs. It is a pure decorator in front of an
