@@ -28,6 +28,25 @@ import (
 // exactly what it would see if writeback were disabled outright.
 var ErrEpisodeWritebackNotEnabledForOrg = errors.New("episode writeback is not enabled for this organization")
 
+// withAgentContextRuntimeEntitlement returns principal with
+// agentContextRuntimeEntitlement appended to ProductEntitlements. This is
+// the only place that field is ever populated: requireEntitlement (see
+// protectedRuntimeHandler, runtime.go) verifies the org's entitlement via
+// the real entitlement provider but never writes that fact back into the
+// principal, so every handler behind it that calls into internal/episode
+// (whose authorizeWrite/authorizeRead independently re-check
+// ProductEntitlements as defense-in-depth) must translate "middleware
+// already confirmed this" into the marker that check expects -- review
+// finding B1 was exactly this translation missing from both read handlers
+// (only the write handler did it), which made every authorized
+// episode:read call fail with ErrEntitlementRequired in production. Builds
+// a fresh slice rather than mutating principal.ProductEntitlements in
+// place, since PrincipalFromContext's backing array may be shared.
+func withAgentContextRuntimeEntitlement(principal storage.Principal) storage.Principal {
+	principal.ProductEntitlements = append(append([]string(nil), principal.ProductEntitlements...), agentContextRuntimeEntitlement)
+	return principal
+}
+
 func (a *App) handleEpisode(w http.ResponseWriter, r *http.Request) {
 	if a.runtime.Episodes == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Episode recording is temporarily unavailable", false, nil)
@@ -64,7 +83,7 @@ func (a *App) handleEpisode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	create.Repository = contractsv1.RepositoryRef{Slug: slug}
-	principal.ProductEntitlements = append(append([]string(nil), principal.ProductEntitlements...), agentContextRuntimeEntitlement)
+	principal = withAgentContextRuntimeEntitlement(principal)
 	episode, duplicate, err := a.runtime.Episodes.Create(r.Context(), principal, create)
 	if err != nil {
 		a.writeEpisodeError(w, r, principal, create, err)
@@ -102,6 +121,7 @@ func (a *App) handleGetEpisode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 		return
 	}
+	principal = withAgentContextRuntimeEntitlement(principal)
 	if a.runtime.EpisodeReader == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Episode reads are temporarily unavailable", true, nil)
 		return
@@ -139,6 +159,7 @@ func (a *App) handleListEpisodes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 		return
 	}
+	principal = withAgentContextRuntimeEntitlement(principal)
 	if a.runtime.EpisodeReader == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Episode reads are temporarily unavailable", true, nil)
 		return
