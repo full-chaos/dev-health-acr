@@ -37,75 +37,28 @@ jobs:
           printf '%s  %s\n' "$EXPECTED_SHA256" "$RUNNER_TEMP/context-fabric-reset.tar.gz" | sha256sum --check --strict
           tar -xzf "$RUNNER_TEMP/context-fabric-reset.tar.gz" -C .
           go mod tidy
-      - name: Reconcile pre-existing Reset 0A/0B compile drift
+      - name: Normalize selected adapter sources
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
-          tests = Path("internal/contextfabric/fact_registry_test.go")
-          text = tests.read_text()
-          replacements = [
-              ("\t\t\t}},\n\t}\n\treadiness := &factProviderStub{", "\t\t\t}},\n\t\t},\n\t}\n\treadiness := &factProviderStub{"),
-              ("\t\t\t}},\n\t}\n\tregistry, err := NewFactCapabilityRegistry", "\t\t\t}},\n\t\t},\n\t}\n\tregistry, err := NewFactCapabilityRegistry"),
-          ]
-          for old, new in replacements:
-              if old not in text:
-                  raise SystemExit(f"expected fact-registry compile-drift marker not found: {old!r}")
-              text = text.replace(old, new, 1)
-          tests.write_text(text)
-
-          validator = Path("internal/contracts/v1/validate_context_fabric_projection.go")
-          text = validator.read_text()
-          replacement = '''func (c ContextFabricCapabilities) Validate() error {
-          if !c.Enabled {
-          \tif c.SupportsOpenQuestions || c.SupportsPriorSubjectReceipts || len(c.SupportedRequestSchemaVersions) != 0 || len(c.SupportedResultSchemaVersions) != 0 {
-          \t\treturn fmt.Errorf("disabled context fabric capabilities must not advertise active features")
-          \t}
-          \treturn nil
-          }
-          if !c.SupportsOpenQuestions || c.SupportedRequestSchemaVersions == nil || !uniqueStrings(c.SupportedRequestSchemaVersions) || c.SupportedResultSchemaVersions == nil || !uniqueStrings(c.SupportedResultSchemaVersions) {
-          \treturn fmt.Errorf("context fabric capabilities violate v1 bounds")
-          }
-          if err := c.Limits.Validate(); err != nil {
-          \treturn fmt.Errorf("limits: %w", err)
-          }
-          return nil
-          }
-
-          '''
-          updated, count = re.subn(
-              r'func \(c ContextFabricCapabilities\) Validate\(\) error \{.*?\n\}\n\n(?=func \(l ContextFabricCapabilityLimits\) Validate)',
-              replacement,
-              text,
-              count=1,
-              flags=re.S,
-          )
-          if count != 1:
-              raise SystemExit(f"expected one ContextFabricCapabilities validator, replaced {count}")
-          validator.write_text(updated)
-
-          reader = Path("internal/contextfabric/zepgraph/reader.go")
-          text = reader.read_text()
-          if '\n\t"fmt"\n' not in text:
-              raise SystemExit("expected unused fmt import marker not found")
-          reader.write_text(text.replace('\n\t"fmt"\n', '\n', 1))
-
-          projection = Path("internal/contextfabric/zepgraph/projection.go")
-          text = projection.read_text()
-          if '\n\t"sort"\n' not in text:
-              raise SystemExit("expected unused sort import marker not found")
-          projection.write_text(text.replace('\n\t"sort"\n', '\n', 1))
+          for path, marker in (
+              (Path("internal/contextfabric/zepgraph/reader.go"), '\n\t"fmt"\n'),
+              (Path("internal/contextfabric/zepgraph/projection.go"), '\n\t"sort"\n'),
+          ):
+              text = path.read_text()
+              if marker in text:
+                  path.write_text(text.replace(marker, '\n', 1))
           PY
-          gofmt -w internal/contextfabric/fact_registry_test.go internal/contracts/v1/validate_context_fabric_projection.go internal/contextfabric/model_runtime.go internal/contextfabric/genkitruntime internal/contextfabric/zepgraph
+          gofmt -w internal/contextfabric/model_runtime.go internal/contextfabric/genkitruntime internal/contextfabric/zepgraph
           git diff --check
-      - name: Commit selected SDK adapters and reconciled contracts
+      - name: Commit selected SDK adapters and dependency lock
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add go.mod go.sum docs/adr/0007-context-fabric-zep-graph-adapter.md docs/adr/0008-context-fabric-genkit-model-runtime.md internal/contextfabric/model_runtime.go internal/contextfabric/genkitruntime internal/contextfabric/zepgraph internal/contextfabric/fact_registry_test.go internal/contracts/v1/validate_context_fabric_projection.go
+          git add go.mod go.sum docs/adr/0007-context-fabric-zep-graph-adapter.md docs/adr/0008-context-fabric-genkit-model-runtime.md internal/contextfabric/model_runtime.go internal/contextfabric/genkitruntime internal/contextfabric/zepgraph
           if git diff --cached --quiet; then
             exit 0
           fi
