@@ -88,8 +88,7 @@ func TestEngineInvestigatesNovelQuestionThroughComposableCapabilities(t *testing
 				t.Fatalf("synthesis subjects = %#v, want %#v", input.Graph.Resolution.Committed, project)
 			}
 			return InvestigationResult{
-				Status:              InvestigationComplete,
-				DirectJudgment:      "Ask Dev is not ready to ship.",
+				Status: InvestigationComplete, DirectJudgment: "Ask Dev is not ready to ship.",
 				DeterministicAnswer: "Ask Dev is not ready to ship because release-readiness blockers remain.",
 				Versions:            VersionSet{ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1", CanonicalServiceVersion: "ops-v1"},
 			}, nil
