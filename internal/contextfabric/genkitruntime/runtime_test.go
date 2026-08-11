@@ -73,7 +73,7 @@ func TestSDKGeneratorUsesGenkitStructuredOutputAndUsage(t *testing.T) {
 			t.Fatal(err)
 		}
 		return &ai.ModelResponse{
-			Message:      ai.NewModelTextMessage(string(encoded)),
+			Message:      &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{ai.NewJSONPart(string(encoded))}},
 			FinishReason: ai.FinishReasonStop,
 			Usage:        &ai.GenerationUsage{InputTokens: 17, OutputTokens: 9, TotalTokens: 26},
 		}, nil

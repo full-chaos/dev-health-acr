@@ -59,8 +59,13 @@ func TestInvestigationResultValidateRequiresEvidenceClosedDrivers(t *testing.T) 
 	t.Parallel()
 
 	result := validInvestigationResult()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	result.Drivers = []DriverJudgment{{
-		DriverID: "driver_1", Standing: DriverPrincipal, Title: "Release readiness", Summary: "Release readiness remains incomplete.",
+		DriverID: "driver_12345678", Standing: DriverPrincipal, Category: "release_readiness",
+		Title: "Release readiness", Summary: "Release readiness remains incomplete.",
+		AffectedSubjects: []SubjectRef{project}, EvidenceRefIDs: []string{},
+		Derivation: DerivationRuleInferred, EpistemicStatus: EpistemicInferred,
+		Confidence: 0.9, Current: true,
 	}}
 
 	if err := result.Validate(); err == nil || !strings.Contains(err.Error(), "lacks evidence closure") {

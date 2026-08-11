@@ -68,11 +68,6 @@ func (a *Adapter) ApplyProjectionBatch(ctx context.Context, batch contextfabric.
 	if err := a.ensureGraph(ctx, batch.OrgID); err != nil {
 		return contextfabric.ProjectionReceipt{}, err
 	}
-	for _, entity := range batch.Entities {
-		if err := a.projectEntity(ctx, batch.OrgID, entity); err != nil {
-			return contextfabric.ProjectionReceipt{}, err
-		}
-	}
 	for _, relationship := range batch.Relationships {
 		if err := a.projectRelationship(ctx, batch.OrgID, relationship); err != nil {
 			return contextfabric.ProjectionReceipt{}, err
@@ -85,6 +80,11 @@ func (a *Adapter) ApplyProjectionBatch(ctx context.Context, batch contextfabric.
 	}
 	for _, episode := range batch.Episodes {
 		if err := a.projectEpisode(ctx, batch.OrgID, episode); err != nil {
+			return contextfabric.ProjectionReceipt{}, err
+		}
+	}
+	for _, entity := range batch.Entities {
+		if err := a.projectEntity(ctx, batch.OrgID, entity); err != nil {
 			return contextfabric.ProjectionReceipt{}, err
 		}
 	}

@@ -89,7 +89,7 @@ func TestProjectionWorkerDoesNotAdvanceCheckpointWhenBackendFails(t *testing.T) 
 
 	batch := validProjectionBatch()
 	backend := &projectionBackendStub{err: errors.New("backend unavailable")}
-	checkpoints := &checkpointStoreStub{}
+	checkpoints := &checkpointStoreStub{checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "dev-health-ops", Cursor: batch.Cursor}}
 	worker, err := NewProjectionWorker(projectionSourceStub{batch: batch, available: true}, backend, checkpoints, ProjectionWorkerOptions{})
 	if err != nil {
 		t.Fatalf("NewProjectionWorker() error = %v", err)
