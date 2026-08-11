@@ -83,8 +83,10 @@ type ProjectionSource interface {
 }
 
 // ProjectionCheckpointStore advances only after the backend has durably
-// accepted a batch. It is intentionally separate from the graph backend.
+// accepted a batch. CompareAndSwapProjectionCheckpoint must return
+// ErrProjectionConflict when expected no longer matches the durable cursor, so
+// concurrent projectors cannot silently skip or reorder batches.
 type ProjectionCheckpointStore interface {
 	LoadProjectionCheckpoint(context.Context, string, string) (ProjectionCheckpoint, error)
-	SaveProjectionCheckpoint(context.Context, ProjectionCheckpoint) error
+	CompareAndSwapProjectionCheckpoint(context.Context, ProjectionCheckpoint, ProjectionCheckpoint) error
 }
