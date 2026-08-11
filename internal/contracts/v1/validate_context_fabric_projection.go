@@ -151,7 +151,13 @@ func (t ContextFabricProjectionTombstone) Validate() error {
 }
 
 func (c ContextFabricCapabilities) Validate() error {
-	if c.SupportedSchemaVersions == nil || len(c.SupportedSchemaVersions) < 3 || !uniqueStrings(c.SupportedSchemaVersions) || c.SupportedInvestigationShapes == nil || !allStringsInSet(c.SupportedInvestigationShapes, validInvestigationShape) || c.SupportedSubjectKinds == nil || !allStringsInSet(c.SupportedSubjectKinds, validContextFabricSubjectKind) || c.SupportedFactKinds == nil || !allStringsInSet(c.SupportedFactKinds, validFactKind) || !stringLengthBetween(c.Backend, 1, 128) || !stringLengthBetween(c.BackendVersion, 0, 256) {
+	if !c.Enabled {
+		if c.SupportsOpenQuestions || c.SupportsPriorSubjectReceipts || len(c.SupportedRequestSchemaVersions) != 0 || len(c.SupportedResultSchemaVersions) != 0 {
+			return fmt.Errorf("disabled context fabric capabilities must not advertise active features")
+		}
+		return nil
+	}
+	if !c.SupportsOpenQuestions || c.SupportedRequestSchemaVersions == nil || !uniqueStrings(c.SupportedRequestSchemaVersions) || c.SupportedResultSchemaVersions == nil || !uniqueStrings(c.SupportedResultSchemaVersions) {
 		return fmt.Errorf("context fabric capabilities violate v1 bounds")
 	}
 	if err := c.Limits.Validate(); err != nil {

@@ -43,6 +43,7 @@ func TestFactCapabilityRegistryBatchesCapabilitiesAndPreservesEvidenceVersions(t
 				Kind: FactStatus, Subject: project, Fields: map[string]FactValue{"status": StringFactValue("in_progress")},
 				ObservedAt: &observed, EvidenceRefIDs: []string{"evidence_status_1234"}, SourceState: SourceAvailable,
 			}},
+		},
 	}
 	readiness := &factProviderStub{
 		capability: FactCapability{Kind: FactReadiness, Name: "ops-readiness", Version: "readiness-v3", SupportedSubjectKinds: []SubjectKind{SubjectProject}, RequiresEvidence: true},
@@ -52,6 +53,7 @@ func TestFactCapabilityRegistryBatchesCapabilitiesAndPreservesEvidenceVersions(t
 				Kind: FactReadiness, Subject: project, Fields: map[string]FactValue{"release_ready": BooleanFactValue(false)},
 				ObservedAt: &observed, EvidenceRefIDs: []string{"evidence_readiness_1234"}, SourceState: SourceAvailable,
 			}},
+		},
 	}
 	registry, err := NewFactCapabilityRegistry([]FactProvider{readiness, status}, FactRegistryOptions{})
 	if err != nil {
