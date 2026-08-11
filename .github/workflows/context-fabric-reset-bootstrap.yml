@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: context-fabric-reset-bootstrap
@@ -64,7 +65,9 @@ jobs:
           fi
           git commit -m "feat(context-fabric): implement selected graph and model runtimes"
           git push origin HEAD:agent/chaos-3749-context-fabric-reset-scaffold
-      - name: Verify selected adapters and commit diagnostics on failure
+      - name: Verify selected adapters and publish diagnostics on failure
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
           : > "$RUNNER_TEMP/context-fabric-verification.log"
@@ -75,12 +78,13 @@ jobs:
             test_status=${PIPESTATUS[0]}
           fi
           if [ "$test_status" -ne 0 ]; then
-            mkdir -p docs/verification
-            cp "$RUNNER_TEMP/context-fabric-verification.log" docs/verification/context-fabric-reset.log
-            git config user.name github-actions[bot]
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add -f docs/verification/context-fabric-reset.log
-            git commit -m "chore(context-fabric): capture adapter verification diagnostics"
-            git push origin HEAD:agent/chaos-3749-context-fabric-reset-scaffold
+            {
+              echo '### Context Fabric Reset 0C/0D verification diagnostics'
+              echo
+              echo '```text'
+              tail -n 220 "$RUNNER_TEMP/context-fabric-verification.log"
+              echo '```'
+            } > "$RUNNER_TEMP/context-fabric-comment.md"
+            gh api "repos/${GITHUB_REPOSITORY}/issues/76/comments" --method POST --field body="$(cat "$RUNNER_TEMP/context-fabric-comment.md")"
             exit "$test_status"
           fi
