@@ -58,7 +58,7 @@ func TestEngineInvestigatesNovelQuestionThroughComposableCapabilities(t *testing
 	t.Parallel()
 
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
-	resolution := SubjectResolution{Committed: []SubjectRef{project}}
+	resolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}
 	interpretation := InterpretedQuestion{
 		Shape: ShapeOpen, RequestedJudgment: "release_readiness_and_drivers", TimeContext: TimeContext{Axis: TemporalCurrent},
 		FactRequirements: []FactRequirement{{Kind: FactStatus}, {Kind: FactReadiness}},
@@ -75,13 +75,19 @@ func TestEngineInvestigatesNovelQuestionThroughComposableCapabilities(t *testing
 		Graph: graphReaderStub{
 			resolution: resolution,
 			context: GraphContext{
+				Paths:            []RelationshipPath{},
+				DriverCandidates: []DriverJudgment{},
 				FactRequirements: []FactRequirement{{Kind: FactBlockers}, {Kind: FactReadiness}},
 				EvidenceRefIDs:   []string{"evidence_project_status"},
+				Coverage:         Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 			},
 		},
 		Facts: factReaderFunc(func(_ context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
 			observedFactRequest = request
-			return CanonicalFactBundle{Version: "ops-v1"}, nil
+			return CanonicalFactBundle{
+				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+			}, nil
 		}),
 		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
 			if len(input.Graph.Resolution.Committed) != 1 || input.Graph.Resolution.Committed[0] != project {
@@ -90,7 +96,10 @@ func TestEngineInvestigatesNovelQuestionThroughComposableCapabilities(t *testing
 			return InvestigationResult{
 				Status: InvestigationComplete, DirectJudgment: "Ask Dev is not ready to ship.",
 				DeterministicAnswer: "Ask Dev is not ready to ship because release-readiness blockers remain.",
-				Versions:            VersionSet{ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1", CanonicalServiceVersion: "ops-v1"},
+				Versions: VersionSet{
+					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+					InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+				},
 			}, nil
 		}),
 		Results: store,
@@ -108,11 +117,11 @@ func TestEngineInvestigatesNovelQuestionThroughComposableCapabilities(t *testing
 	if result.ResultID != "result_12345678" {
 		t.Fatalf("ResultID = %q", result.ResultID)
 	}
-	if result.Versions.ServiceVersion != "acr-test" {
-		t.Fatalf("ServiceVersion = %q", result.Versions.ServiceVersion)
+	if result.Versions.ServiceVersion != "acr-test" || result.Versions.CanonicalServiceVersion != "ops-v1" {
+		t.Fatalf("versions = %#v", result.Versions)
 	}
 	if !reflect.DeepEqual(result, store.saved) {
-		t.Fatalf("saved result does not match returned result")
+		t.Fatal("saved result does not match returned result")
 	}
 	if !reflect.DeepEqual(observedFactRequest.Subjects, []SubjectRef{project}) {
 		t.Fatalf("fact subjects = %#v", observedFactRequest.Subjects)
