@@ -95,29 +95,56 @@ func validInvestigationRequest() InvestigationRequest {
 }
 
 func validInvestigationResult() InvestigationResult {
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	return InvestigationResult{
-		SchemaVersion:       InvestigationResultSchemaV1,
-		ResultID:            "result_12345678",
-		RequestID:           "request_12345678",
-		GeneratedAt:         time.Now().UTC(),
-		Status:              InvestigationComplete,
-		Question:            "What is the actual status of Ask Dev and what is driving it?",
+		SchemaVersion: InvestigationResultSchemaV1,
+		ResultID:      "result_12345678",
+		RequestID:     "request_12345678",
+		GeneratedAt:   time.Now().UTC(),
+		Status:        InvestigationComplete,
+		Question:      "What is the actual status of Ask Dev and what is driving it?",
+		Interpretation: InterpretedQuestion{
+			Shape: ShapeOpen, RequestedJudgment: "status_and_drivers",
+			TimeContext:      TimeContext{Axis: TemporalCurrent},
+			FactRequirements: []FactRequirement{{Kind: FactStatus}},
+		},
+		SubjectResolution:   SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
 		DirectJudgment:      "Ask Dev is not release-ready.",
+		CurrentState:        "Release acceptance remains incomplete.",
+		StrongestPressures:  []string{},
+		Drivers:             []DriverJudgment{},
+		RemainingWork:       []Finding{},
+		ReadinessGaps:       []Finding{},
+		Paths:               []RelationshipPath{},
+		Conflicts:           []Finding{},
+		Limitations:         []string{},
+		EvidenceRefIDs:      []string{},
+		Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		Versions:            VersionSet{ServiceVersion: "test-v1", ContractVersion: InvestigationResultSchemaV1, Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1", CanonicalServiceVersion: "ops-v1"},
 		DeterministicAnswer: "Ask Dev is not release-ready because required acceptance work remains open.",
+		Warnings:            []string{},
 	}
 }
 
 func validProjectionBatch() ProjectionBatch {
+	now := time.Now().UTC()
 	return ProjectionBatch{
 		SchemaVersion: ProjectionBatchSchemaV1,
 		BatchID:       "batch_12345678",
 		OrgID:         "org_1",
 		Source:        "dev-health-ops",
 		SourceVersion: "source_v1",
-		GeneratedAt:   time.Now().UTC(),
+		Cursor:        "cursor_1",
+		NextCursor:    "cursor_2",
+		GeneratedAt:   now,
 		Entities: []EntityProjection{{
-			Subject:    SubjectRef{Kind: SubjectProject, CanonicalID: "project_1", Label: "Ask Dev"},
-			ObservedAt: time.Now().UTC(), SourceVersion: "source_v1",
+			Subject:        SubjectRef{Kind: SubjectProject, CanonicalID: "project_1", Label: "Ask Dev"},
+			Authorization:  AuthorizationScope{ProjectIDs: []string{"project_1"}},
+			EvidenceRefIDs: []string{"evidence_project_1"}, ObservedAt: now, SourceVersion: "source_v1",
 		}},
+		Relationships: []RelationshipProjection{},
+		Contents:      []ContentProjection{},
+		Episodes:      []EpisodeProjection{},
+		Tombstones:    []ProjectionTombstone{},
 	}
 }

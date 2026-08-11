@@ -129,7 +129,7 @@ func (r *FactCapabilityRegistry) Capabilities() []FactCapability {
 		capability.AllowedParameters = append([]string(nil), capability.AllowedParameters...)
 		capabilities = append(capabilities, capability)
 	}
-	sort.Slice(capabilities, func(i, j int) bool { return capabilities[i].Kind < capabilities[j].Kind })
+	sort.Slice(capabilities, func(i, j int) bool { return factKindOrder(capabilities[i].Kind) < factKindOrder(capabilities[j].Kind) })
 	return capabilities
 }
 
@@ -356,7 +356,7 @@ func classifyFactReadError(err error) (SourceState, string) {
 func sortCanonicalFacts(facts []CanonicalFact) {
 	sort.SliceStable(facts, func(i, j int) bool {
 		if facts[i].Kind != facts[j].Kind {
-			return facts[i].Kind < facts[j].Kind
+			return factKindOrder(facts[i].Kind) < factKindOrder(facts[j].Kind)
 		}
 		if facts[i].Subject.Kind != facts[j].Subject.Kind {
 			return facts[i].Subject.Kind < facts[j].Subject.Kind
@@ -366,6 +366,21 @@ func sortCanonicalFacts(facts []CanonicalFact) {
 		}
 		return facts[i].Source < facts[j].Source
 	})
+}
+
+func factKindOrder(kind FactKind) int {
+	order := map[FactKind]int{
+		FactIdentity: 0, FactMembership: 1, FactStatus: 2, FactActualCompletion: 3,
+		FactWork: 4, FactBlockers: 5, FactRequiredChildren: 6, FactPullRequests: 7,
+		FactReviews: 8, FactContinuousIntegration: 9, FactDeployments: 10,
+		FactIncidents: 11, FactMetrics: 12, FactHealth: 13, FactWorkload: 14,
+		FactInvestment: 15, FactReadiness: 16, FactOperationalDeficiencies: 17,
+		FactSourceHealth: 18, FactEvidence: 19,
+	}
+	if value, ok := order[kind]; ok {
+		return value
+	}
+	return len(order)
 }
 
 func stateRejectsFacts(state SourceState) bool {

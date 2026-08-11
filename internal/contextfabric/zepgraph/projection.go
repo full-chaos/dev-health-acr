@@ -172,11 +172,11 @@ func (a *Adapter) projectRelationship(ctx context.Context, orgID string, relatio
 		GraphID: ptr(graphID(a.config.GraphPrefix, orgID)), Fact: relationshipFact(relationship), FactName: normalizeRelation(relationship.Type),
 		FactUUID:       ptr(relationshipUUID(orgID, relationship.RelationshipID)),
 		SourceNodeUUID: ptr(nodeUUID(orgID, relationship.From)), SourceNodeName: ptr(relationship.From.Label), SourceNodeLabels: []string{zepLabel(relationship.From.Kind)},
-		SourceNodeAttributes: subjectAttributes(relationship.From, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion),
-		TargetNodeUUID:       ptr(nodeUUID(orgID, relationship.To)), TargetNodeName: ptr(relationship.To.Label), TargetNodeLabels: []string{zepLabel(relationship.To.Kind)},
-		TargetNodeAttributes: subjectAttributes(relationship.To, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion),
-		EdgeAttributes:       projectionRelationshipAttributes(relationship),
-		CreatedAt:            ptr(relationship.ObservedAt.UTC().Format(time.RFC3339Nano)),
+		SourceNodeSummary: ptr(subjectSearchSummary(relationship.From)), SourceNodeAttributes: subjectAttributes(relationship.From, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion),
+		TargetNodeUUID: ptr(nodeUUID(orgID, relationship.To)), TargetNodeName: ptr(relationship.To.Label), TargetNodeLabels: []string{zepLabel(relationship.To.Kind)},
+		TargetNodeSummary: ptr(subjectSearchSummary(relationship.To)), TargetNodeAttributes: subjectAttributes(relationship.To, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion),
+		EdgeAttributes: projectionRelationshipAttributes(relationship),
+		CreatedAt:      ptr(relationship.ObservedAt.UTC().Format(time.RFC3339Nano)),
 	}
 	if relationship.ValidFrom != nil {
 		request.ValidAt = ptr(relationship.ValidFrom.UTC().Format(time.RFC3339Nano))
@@ -196,8 +196,8 @@ func (a *Adapter) projectContent(ctx context.Context, orgID string, content cont
 		GraphID: ptr(graphID(a.config.GraphPrefix, orgID)), Fact: content.Subject.Label + " is documented by " + content.Title,
 		FactName: "DOCUMENTED_BY", FactUUID: ptr(relationshipUUID(orgID, "content:"+content.ContentID)),
 		SourceNodeUUID: ptr(nodeUUID(orgID, content.Subject)), SourceNodeName: ptr(content.Subject.Label), SourceNodeLabels: []string{zepLabel(content.Subject.Kind)},
-		SourceNodeAttributes: subjectAttributes(content.Subject, content.Authorization, content.EvidenceRefIDs, content.ObservedAt, nil, nil, content.SourceVersion),
-		TargetNodeUUID:       ptr(contentUUID(orgID, "document", content.ContentID)), TargetNodeName: ptr(content.Title), TargetNodeLabels: []string{zepLabel(contextfabric.SubjectDocument)},
+		SourceNodeSummary: ptr(subjectSearchSummary(content.Subject)), SourceNodeAttributes: subjectAttributes(content.Subject, content.Authorization, content.EvidenceRefIDs, content.ObservedAt, nil, nil, content.SourceVersion),
+		TargetNodeUUID: ptr(contentUUID(orgID, "document", content.ContentID)), TargetNodeName: ptr(content.Title), TargetNodeLabels: []string{zepLabel(contextfabric.SubjectDocument)},
 		TargetNodeSummary: ptr(content.Body), TargetNodeAttributes: map[string]interface{}{
 			"canonical_id": content.ContentID, "subject_kind": string(contextfabric.SubjectDocument), "content_digest": content.ContentDigest,
 			"untrusted": true, "authorization_repositories": encodeScope(content.Authorization.RepositorySlugs),
@@ -216,8 +216,8 @@ func (a *Adapter) projectEpisode(ctx context.Context, orgID string, episode cont
 		GraphID: ptr(graphID(a.config.GraphPrefix, orgID)), Fact: episode.Subject.Label + " has episode " + episode.EpisodeID,
 		FactName: "HAS_EPISODE", FactUUID: ptr(relationshipUUID(orgID, "episode:"+episode.EpisodeID)),
 		SourceNodeUUID: ptr(nodeUUID(orgID, episode.Subject)), SourceNodeName: ptr(episode.Subject.Label), SourceNodeLabels: []string{zepLabel(episode.Subject.Kind)},
-		SourceNodeAttributes: subjectAttributes(episode.Subject, episode.Authorization, episode.EvidenceRefIDs, episode.EndedAt, &episode.StartedAt, &episode.EndedAt, episode.SourceVersion),
-		TargetNodeUUID:       ptr(contentUUID(orgID, "episode", episode.EpisodeID)), TargetNodeName: ptr(episode.EpisodeID), TargetNodeLabels: []string{zepLabel(contextfabric.SubjectEpisode)},
+		SourceNodeSummary: ptr(subjectSearchSummary(episode.Subject)), SourceNodeAttributes: subjectAttributes(episode.Subject, episode.Authorization, episode.EvidenceRefIDs, episode.EndedAt, &episode.StartedAt, &episode.EndedAt, episode.SourceVersion),
+		TargetNodeUUID: ptr(contentUUID(orgID, "episode", episode.EpisodeID)), TargetNodeName: ptr(episode.EpisodeID), TargetNodeLabels: []string{zepLabel(contextfabric.SubjectEpisode)},
 		TargetNodeSummary: ptr(summary), TargetNodeAttributes: map[string]interface{}{
 			"canonical_id": episode.EpisodeID, "subject_kind": string(contextfabric.SubjectEpisode), "goal": episode.Goal,
 			"outcome": episode.Outcome, "authorization_repositories": encodeScope(episode.Authorization.RepositorySlugs),
@@ -275,6 +275,10 @@ func projectionWatermark(batch contextfabric.ProjectionBatch) string {
 	parts := []string{batch.BatchID, batch.OrgID, batch.Source, batch.SourceVersion, batch.Cursor, batch.NextCursor}
 	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return "zep:" + hex.EncodeToString(digest[:16])
+}
+
+func subjectSearchSummary(subject contextfabric.SubjectRef) string {
+	return strings.TrimSpace(subject.Label + "\nCanonical ID: " + subject.CanonicalID + "\nKind: " + string(subject.Kind))
 }
 
 func entitySearchSummary(entity contextfabric.EntityProjection) string {

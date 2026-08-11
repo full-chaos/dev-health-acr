@@ -43,7 +43,18 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		candidate.MatchReasons = []string{"Exact canonical subject hint matched the organization graph."}
 		candidatesBySubject[subjectKey(candidate.Subject)] = candidate
 	}
-	if len(terms) == 0 && len(candidatesBySubject) == 0 {
+	if len(candidatesBySubject) > 0 {
+		candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
+		committed := make([]contextfabric.SubjectRef, 0, len(candidatesBySubject))
+		for _, candidate := range candidatesBySubject {
+			candidates = append(candidates, candidate)
+			committed = append(committed, candidate.Subject)
+		}
+		sort.Slice(candidates, func(i, j int) bool { return subjectKey(candidates[i].Subject) < subjectKey(candidates[j].Subject) })
+		sort.Slice(committed, func(i, j int) bool { return subjectKey(committed[i]) < subjectKey(committed[j]) })
+		return contextfabric.SubjectResolution{Candidates: candidates, Committed: committed}, nil
+	}
+	if len(terms) == 0 {
 		return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}}, nil
 	}
 	for _, term := range terms {

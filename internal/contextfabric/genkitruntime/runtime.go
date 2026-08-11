@@ -65,6 +65,7 @@ func (g sdkGenerator) Interpret(ctx context.Context, request generationRequest) 
 		ai.WithModelName(request.Model),
 		ai.WithSystem(request.System),
 		ai.WithPrompt("%s", request.Prompt),
+		ai.WithCustomConstrainedOutput(),
 	)
 	if err != nil {
 		return interpretationOutput{}, contextfabric.ModelUsage{}, err
@@ -80,6 +81,7 @@ func (g sdkGenerator) Synthesize(ctx context.Context, request generationRequest)
 		ai.WithModelName(request.Model),
 		ai.WithSystem(request.System),
 		ai.WithPrompt("%s", request.Prompt),
+		ai.WithCustomConstrainedOutput(),
 	)
 	if err != nil {
 		return synthesisOutput{}, contextfabric.ModelUsage{}, err

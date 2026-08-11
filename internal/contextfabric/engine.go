@@ -117,6 +117,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if strings.TrimSpace(result.Versions.ContractVersion) == "" {
 		result.Versions.ContractVersion = InvestigationResultSchemaV1
 	}
+	if strings.TrimSpace(result.Versions.CanonicalServiceVersion) == "" {
+		result.Versions.CanonicalServiceVersion = facts.Version
+	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, fmt.Errorf("%w: %v", ErrInvalidResult, err)
 	}

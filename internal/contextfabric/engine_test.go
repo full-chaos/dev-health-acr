@@ -95,7 +95,11 @@ func TestEngineInvestigatesNovelQuestionThroughComposableCapabilities(t *testing
 			}
 			return InvestigationResult{
 				Status: InvestigationComplete, DirectJudgment: "Ask Dev is not ready to ship.",
-				DeterministicAnswer: "Ask Dev is not ready to ship because release-readiness blockers remain.",
+				CurrentState: "Release-readiness blockers remain.", StrongestPressures: []string{},
+				Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
+				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{},
+				EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				DeterministicAnswer: "Ask Dev is not ready to ship because release-readiness blockers remain.", Warnings: []string{},
 				Versions: VersionSet{
 					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
 					InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
