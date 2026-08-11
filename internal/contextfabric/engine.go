@@ -27,14 +27,14 @@ type EngineDependencies struct {
 // Engine coordinates one open-ended investigation. It deliberately composes
 // capabilities rather than matching the question against a route/plan table.
 type Engine struct {
-	interpreter     QuestionInterpreter
-	graph           GraphReader
-	facts           CanonicalFactReader
-	synthesizer     AnswerSynthesizer
-	results         InvestigationResultStore
-	serviceVersion  string
-	now             func() time.Time
-	newResultID     func() string
+	interpreter    QuestionInterpreter
+	graph          GraphReader
+	facts          CanonicalFactReader
+	synthesizer    AnswerSynthesizer
+	results        InvestigationResultStore
+	serviceVersion string
+	now            func() time.Time
+	newResultID    func() string
 }
 
 func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine, error) {
