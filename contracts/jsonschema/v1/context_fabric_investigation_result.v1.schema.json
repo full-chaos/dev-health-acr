@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/context_fabric_investigation_result.v1.schema.json",
+  "title": "ACR Context Fabric Investigation Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "context_fabric_investigation_result.v1"
+    },
+    "result_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "degraded",
+        "clarification_required",
+        "no_match"
+      ]
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8000
+    },
+    "interpretation": {
+      "$ref": "context_fabric_common.v1.schema.json#/$defs/InterpretedQuestion"
+    },
+    "subject_resolution": {
+      "$ref": "context_fabric_common.v1.schema.json#/$defs/SubjectResolution"
+    },
+    "cohort": {
+      "$ref": "context_fabric_common.v1.schema.json#/$defs/Cohort"
+    },
+    "direct_judgment": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "current_state": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "strongest_pressures": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      },
+      "maxItems": 50
+    },
+    "drivers": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/DriverJudgment"
+      },
+      "maxItems": 50
+    },
+    "remaining_work": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/Finding"
+      },
+      "maxItems": 250
+    },
+    "readiness_gaps": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/Finding"
+      },
+      "maxItems": 250
+    },
+    "paths": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/RelationshipPath"
+      },
+      "maxItems": 250
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/Finding"
+      },
+      "maxItems": 250
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      },
+      "maxItems": 100
+    },
+    "evidence_ref_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 256
+      },
+      "maxItems": 500,
+      "uniqueItems": true
+    },
+    "coverage": {
+      "$ref": "context_fabric_common.v1.schema.json#/$defs/Coverage"
+    },
+    "versions": {
+      "$ref": "context_fabric_common.v1.schema.json#/$defs/VersionSet"
+    },
+    "deterministic_answer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 12000
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      },
+      "maxItems": 100
+    }
+  },
+  "required": [
+    "schema_version",
+    "result_id",
+    "request_id",
+    "generated_at",
+    "status",
+    "question",
+    "interpretation",
+    "subject_resolution",
+    "direct_judgment",
+    "current_state",
+    "strongest_pressures",
+    "drivers",
+    "remaining_work",
+    "readiness_gaps",
+    "paths",
+    "conflicts",
+    "limitations",
+    "evidence_ref_ids",
+    "coverage",
+    "versions",
+    "deterministic_answer",
+    "warnings"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "complete",
+              "partial"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "direct_judgment": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        }
+      }
+    }
+  ]
+}
