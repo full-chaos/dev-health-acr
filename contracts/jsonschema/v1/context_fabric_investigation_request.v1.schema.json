@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/context_fabric_investigation_request.v1.schema.json",
+  "title": "ACR Context Fabric Investigation Request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "context_fabric_investigation_request.v1"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8000
+    },
+    "conversation": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/ConversationTurn"
+      },
+      "maxItems": 50,
+      "uniqueItems": true
+    },
+    "prior_subject_receipts": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/BoundSubjectReceipt"
+      },
+      "maxItems": 20,
+      "uniqueItems": true
+    },
+    "requested_scope": {
+      "$ref": "context_fabric_common.v1.schema.json#/$defs/RequestedScope"
+    },
+    "time_context": {
+      "$ref": "context_fabric_common.v1.schema.json#/$defs/TimeContext"
+    },
+    "options": {
+      "$ref": "context_fabric_common.v1.schema.json#/$defs/InvestigationOptions"
+    },
+    "consumer": {
+      "$ref": "context_fabric_common.v1.schema.json#/$defs/ConsumerInfo"
+    }
+  },
+  "required": [
+    "schema_version",
+    "request_id",
+    "question",
+    "time_context",
+    "options",
+    "consumer"
+  ]
+}
