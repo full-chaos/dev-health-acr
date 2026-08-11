@@ -116,7 +116,7 @@ func validProjectionBatch() ProjectionBatch {
 		SourceVersion: "source_v1",
 		GeneratedAt:   time.Now().UTC(),
 		Entities: []EntityProjection{{
-			Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_1", Label: "Ask Dev"},
+			Subject:    SubjectRef{Kind: SubjectProject, CanonicalID: "project_1", Label: "Ask Dev"},
 			ObservedAt: time.Now().UTC(), SourceVersion: "source_v1",
 		}},
 	}
