@@ -45,7 +45,8 @@ func NewProjectionWorker(source ProjectionSource, backend ProjectionBackend, che
 }
 
 // RunOnce processes at most one canonical projection batch. A checkpoint is
-// advanced only after the selected backend has durably accepted the batch.
+// advanced only after the selected backend has durably accepted the batch and
+// only when the durable checkpoint still matches the cursor this worker read.
 func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string) (ProjectionRun, error) {
 	if strings.TrimSpace(orgID) == "" || strings.TrimSpace(sourceName) == "" {
 		return ProjectionRun{}, errors.New("projection worker requires organization and source")
@@ -78,8 +79,11 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		OrgID: orgID, Source: sourceName, Cursor: batch.NextCursor, SourceVersion: batch.SourceVersion,
 		BackendWatermark: receipt.BackendWatermark, UpdatedAt: w.now().UTC(),
 	}
-	if err := w.checkpoints.SaveProjectionCheckpoint(ctx, updated); err != nil {
-		return ProjectionRun{}, fmt.Errorf("save projection checkpoint: %w", err)
+	if err := w.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, checkpoint, updated); err != nil {
+		if errors.Is(err, ErrProjectionConflict) {
+			return ProjectionRun{}, err
+		}
+		return ProjectionRun{}, fmt.Errorf("advance projection checkpoint: %w", err)
 	}
 	return ProjectionRun{
 		BatchID: batch.BatchID, Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: batch.NextCursor,
