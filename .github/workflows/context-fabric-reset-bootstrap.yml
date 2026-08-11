@@ -85,6 +85,18 @@ jobs:
           if count != 1:
               raise SystemExit(f"expected one ContextFabricCapabilities validator, replaced {count}")
           validator.write_text(updated)
+
+          reader = Path("internal/contextfabric/zepgraph/reader.go")
+          text = reader.read_text()
+          if '\n\t"fmt"\n' not in text:
+              raise SystemExit("expected unused fmt import marker not found")
+          reader.write_text(text.replace('\n\t"fmt"\n', '\n', 1))
+
+          projection = Path("internal/contextfabric/zepgraph/projection.go")
+          text = projection.read_text()
+          if '\n\t"sort"\n' not in text:
+              raise SystemExit("expected unused sort import marker not found")
+          projection.write_text(text.replace('\n\t"sort"\n', '\n', 1))
           PY
           gofmt -w internal/contextfabric/fact_registry_test.go internal/contracts/v1/validate_context_fabric_projection.go internal/contextfabric/model_runtime.go internal/contextfabric/genkitruntime internal/contextfabric/zepgraph
           git diff --check
