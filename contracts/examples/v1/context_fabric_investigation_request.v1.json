@@ -1,0 +1,45 @@
+{
+  "schema_version": "context_fabric_investigation_request.v1",
+  "request_id": "request_12345678",
+  "question": "Most of the work is closed, so why is Ask Dev still not ready to ship?",
+  "conversation": [
+    {
+      "turn_id": "turn_12345678",
+      "role": "user",
+      "content": "Tell me about the Ask Dev project.",
+      "created_at": "2026-08-11T16:00:00Z"
+    }
+  ],
+  "prior_subject_receipts": [],
+  "requested_scope": {
+    "project_ids": [
+      "project_ask_dev"
+    ],
+    "subject_hints": [
+      {
+        "kind": "project",
+        "id": "project_ask_dev",
+        "label": "Ask Dev",
+        "source": "workbench"
+      }
+    ]
+  },
+  "time_context": {
+    "axis": "current"
+  },
+  "options": {
+    "max_subject_candidates": 10,
+    "max_cohort_members": 50,
+    "max_relationship_paths": 50,
+    "max_drivers": 10,
+    "max_evidence_refs": 100,
+    "max_serialized_bytes": 262144,
+    "allow_clarification": true,
+    "include_debug": false
+  },
+  "consumer": {
+    "name": "context-fabric-workbench",
+    "version": "0.1.0",
+    "surface": "workbench"
+  }
+}
