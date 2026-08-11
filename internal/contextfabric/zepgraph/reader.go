@@ -3,7 +3,6 @@ package zepgraph
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"sort"
 	"strings"
