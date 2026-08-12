@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -471,5 +472,61 @@ func TestContextFabricResultSurvivesJSONRoundTripRevalidation(t *testing.T) {
 	}
 	if err := decoded.Validate(); err != nil {
 		t.Fatalf("Validate() after JSON round trip error = %v, want a re-decoded valid result to stay valid", err)
+	}
+}
+
+// TestContextFabricCoverageDegradedReasonsBounds pins BOTH directions of
+// the Coverage.DegradedReasons relaxation, so the exact line a reviewer
+// will challenge carries its own evidence.
+//
+// Direction 1 (why the relaxation is correct): degraded_reasons is
+// `omitempty` in Go and is NOT in the Coverage schema's required set --
+// only sources and partial are -- so absent and empty are both legal, and
+// the nil a decode produces from an omitted field must validate. Demanding
+// non-nil rejected the service's own valid output on every re-read.
+//
+// Direction 2 (what the relaxation did NOT give away): every other bound
+// on the field still holds. Relaxing nil is not relaxing the field.
+func TestContextFabricCoverageDegradedReasonsBounds(t *testing.T) {
+	t.Parallel()
+	tooMany := make([]string, 251)
+	for i := range tooMany {
+		tooMany[i] = "reason-" + strconv.Itoa(i)
+	}
+	cases := []struct {
+		name    string
+		reasons []string
+		wantErr bool
+	}{
+		{"nil is accepted -- an omitted optional field decodes to this", nil, false},
+		{"empty is accepted -- the in-Go form that serializes to omitted", []string{}, false},
+		{"populated is accepted", []string{"clickhouse: degraded"}, false},
+		{"over the 250 bound is still rejected", tooMany, true},
+		{"duplicates are still rejected", []string{"same", "same"}, true},
+		{"an over-long reason is still rejected", []string{strings.Repeat("x", 2001)}, true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			coverage := ContextFabricCoverage{Sources: []ContextFabricSourceObservation{}, DegradedReasons: testCase.reasons}
+			err := coverage.Validate()
+			if testCase.wantErr && err == nil {
+				t.Fatal("Validate() error = nil, want the bound to still be enforced")
+			}
+			if !testCase.wantErr && err != nil {
+				t.Fatalf("Validate() error = %v, want accepted", err)
+			}
+		})
+	}
+}
+
+// TestContextFabricCoverageSourcesStillRequiresNonNil is the companion
+// guard: sources IS in the schema's required set, so relaxing
+// degraded_reasons must not have relaxed it by association.
+func TestContextFabricCoverageSourcesStillRequiresNonNil(t *testing.T) {
+	t.Parallel()
+	coverage := ContextFabricCoverage{Sources: nil, DegradedReasons: []string{}}
+	if err := coverage.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want nil sources to remain invalid -- it is a required field")
 	}
 }

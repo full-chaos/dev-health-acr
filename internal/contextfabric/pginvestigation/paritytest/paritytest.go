@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,4 +259,76 @@ func runGet(t *testing.T, ctx context.Context, store contextfabric.Investigation
 	if !bytes.Equal(gotJSON, wantJSON) {
 		t.Fatalf("get %q: result mismatch\n got: %s\nwant: %s", step.ResultID, gotJSON, wantJSON)
 	}
+}
+
+// RawSeed plants a payload directly into a store's backing storage,
+// bypassing Save. Each store supplies its own (a map write for the memory
+// store, a direct INSERT for Postgres) because there is no port-level way
+// to reach the state these cases need: a row that arrived by some path
+// other than Save.
+type RawSeed func(t *testing.T, orgID, resultID string, payload []byte)
+
+// TaintedExplicitNullPayload serializes result and rewrites its coverage to
+// carry a literal `"degraded_reasons": null`.
+//
+// This is the one wire shape encoding/json cannot round-trip faithfully:
+// degraded_reasons is `omitempty` in Go and optional (never nullable) in
+// the Coverage schema, so OMITTED is the only schema-conformant way to
+// skip it -- yet an omitted field and an explicit null both decode to the
+// same nil slice. Once json.Unmarshal returns, the distinction is gone, so
+// a store must catch it on the raw bytes.
+func TaintedExplicitNullPayload(t *testing.T, result contextfabric.InvestigationResult) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+	tainted := bytes.Replace(encoded, []byte(`"sources":[]`), []byte(`"sources":[],"degraded_reasons":null`), 1)
+	if bytes.Equal(tainted, encoded) {
+		t.Fatal("test setup: expected substring not found in fixture JSON, so nothing was tainted")
+	}
+	return tainted
+}
+
+// RunExplicitNullDegradedReasonsSuite is the SHARED half of the
+// explicit-null guard. Each store carries its own copy of the raw-bytes
+// check, so without one table binding them, the two implementations can
+// drift apart silently -- which is the exact failure mode this package
+// exists to prevent. Both the read path and the write path are covered:
+// a planted row must not be returned to a caller, and must not be trusted
+// as the target of an idempotent replay either.
+func RunExplicitNullDegradedReasonsSuite(t *testing.T, newStore func(t *testing.T) (contextfabric.InvestigationResultStore, RawSeed)) {
+	t.Helper()
+
+	t.Run("get rejects a stored result with explicit null degraded_reasons", func(t *testing.T) {
+		store, seed := newStore(t)
+		valid := ValidResult("result-explicit-null-get", "is the rollout healthy?")
+		seed(t, orgA.OrgID, valid.ResultID, TaintedExplicitNullPayload(t, valid))
+
+		_, err := store.Get(context.Background(), orgA, valid.ResultID)
+		if err == nil {
+			t.Fatal("Get() error = nil, want a stored explicit-null row to be rejected rather than returned")
+		}
+		if !strings.Contains(err.Error(), "degraded_reasons") || !strings.Contains(err.Error(), "null") {
+			t.Fatalf("Get() error = %v, want it to name the offending field", err)
+		}
+	})
+
+	t.Run("save rejects a replay against a stored explicit null result", func(t *testing.T) {
+		store, seed := newStore(t)
+		valid := ValidResult("result-explicit-null-save", "is the rollout healthy?")
+		seed(t, orgA.OrgID, valid.ResultID, TaintedExplicitNullPayload(t, valid))
+
+		// Saving the clean equivalent must NOT be waved through as a
+		// successful idempotent replay: doing so would report success
+		// while leaving the invalid stored row in place forever, since
+		// these stores never overwrite.
+		err := store.Save(context.Background(), orgA, valid)
+		if err == nil {
+			t.Fatal("Save() error = nil, want a replay against a stored explicit-null row to be rejected, not treated as an idempotent success")
+		}
+		if !strings.Contains(err.Error(), "degraded_reasons") || !strings.Contains(err.Error(), "null") {
+			t.Fatalf("Save() error = %v, want it to name the offending field", err)
+		}
+	})
 }

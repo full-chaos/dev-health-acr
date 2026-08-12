@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation/paritytest"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -104,4 +105,23 @@ func TestGetRejectsStoredResultWithExplicitNullDegradedReasons(t *testing.T) {
 	if !strings.Contains(err.Error(), "degraded_reasons") || !strings.Contains(err.Error(), "null") {
 		t.Fatalf("Get() error = %v, want it to identify the explicit-null degraded_reasons field", err)
 	}
+}
+
+// TestStore_explicitNullDegradedReasonsParity runs the SHARED explicit-null
+// table. Each store carries its own copy of the raw-bytes check, so this
+// is what stops the two from drifting apart -- the per-store tests above
+// prove this store's behavior, but only the shared table proves both
+// stores agree. It lives in the white-box file because seeding a raw row
+// needs access to s.results.
+func TestStore_explicitNullDegradedReasonsParity(t *testing.T) {
+	t.Parallel()
+	paritytest.RunExplicitNullDegradedReasonsSuite(t, func(t *testing.T) (contextfabric.InvestigationResultStore, paritytest.RawSeed) {
+		store := NewStore()
+		return store, func(t *testing.T, orgID, resultID string, payload []byte) {
+			t.Helper()
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			store.results[resultID] = entry{orgID: orgID, payload: payload}
+		}
+	})
 }

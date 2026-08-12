@@ -220,3 +220,24 @@ VALUES ($1, $2, $3, $4)`, valid.ResultID, "org-1", tainted, valid.GeneratedAt)
 	require.Contains(t, getErr.Error(), "degraded_reasons")
 	require.Contains(t, getErr.Error(), "null")
 }
+
+// TestStore_explicitNullDegradedReasonsParity runs the SHARED explicit-null
+// table against Postgres. pginvestigation and memoryinvestigation each
+// carry their own copy of the raw-bytes check; this table is what stops
+// the two from drifting apart.
+func TestStore_explicitNullDegradedReasonsParity(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+
+	paritytest.RunExplicitNullDegradedReasonsSuite(t, func(t *testing.T) (contextfabric.InvestigationResultStore, paritytest.RawSeed) {
+		store, err := pginvestigation.NewStore(db)
+		require.NoError(t, err)
+		return store, func(t *testing.T, orgID, resultID string, payload []byte) {
+			t.Helper()
+			_, execErr := db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at)
+VALUES ($1, $2, $3, $4)`, resultID, orgID, payload, time.Date(2026, 1, 15, 9, 30, 0, 0, time.UTC))
+			require.NoError(t, execErr)
+		}
+	})
+}
