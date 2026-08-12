@@ -40,12 +40,14 @@ zero rows, gated off by `ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED`
 publishes a canonical table/API for those kinds.
 
 Approved episodes are **not** ClickHouse data — they're ACR's own
-`acr.agent_episodes` (Postgres, `internal/storage.EpisodeStore`). That
-interface has no incremental-scan method today (only point lookups), so I
-need to add one narrow read method (`ListApprovedSince(ctx, orgID, cursor,
-limit)` or similar) — this touches `internal/storage`, nominally owned by
-the security/persistence lane. Flagging for awareness rather than blocking on
-it; happy to route it through review if you'd rather own that edit.
+`acr.agent_episodes` (Postgres, `internal/storage.EpisodeStore`). Per the
+ruling below, `EpisodeStore` gained one narrow read method,
+`ListSince(ctx, orgID, since, afterEpisodeID, limit)`, implemented in both
+`internal/storage/postgres` and `internal/storage/memory` with tests in
+each — the projection worker is just one more `EpisodeStore` caller, the
+same way `internal/episode.Service` is. "Approved" here means durably
+created (`CreateIdempotent`) and not yet redacted/purged; a later
+`Redact` or `no_persist` retention is projected as a tombstone.
 
 Full-snapshot rebuild is not a separate `ProjectionSource` method: a
 checkpoint reset to the zero cursor signals "start of full snapshot" to
@@ -130,17 +132,32 @@ Flagging as the other open call.
   and canonical sources are untouched; existing `ProjectionBackend.
   PurgeOrganization` + checkpoint reset gives org-scoped rebuild.
 
-## Open decisions to veto/confirm
+## Rulings (2026-08-12, team-lead)
 
-1. Postgres advisory lock for cross-replica per-org single-flight, vs.
-   in-process-only + `replicas: 1`.
-2. Explicit org allowlist env var vs. auto-discovery from
-   `client_credentials`.
-3. Adding one narrow incremental-read method to `storage.EpisodeStore`
-   (or a parallel projection-only interface instead, to avoid touching the
-   shared interface at all).
-4. `ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED` as the reserved name for the
-   3754/3755 read-side flag.
+1. **Postgres advisory lock: approved.** Cross-replica correctness beats a
+   `replicas: 1` convention. Caveat, as directed: `pg_try_advisory_lock`'s
+   two-int32 key is `(advisoryLockClassID, hashtext(orgID))` — a 32-bit
+   `hashtext` collision between two *different* organizations' IDs would
+   over-serialize them (they'd contend for the same lock slot and one would
+   just wait/retry next tick) but can never *under*-serialize two orgs into
+   running concurrently while believing they're isolated; it fails toward
+   extra safety, not toward the race the amendment exists to prevent.
+2. **Org selection: explicit allowlist, confirmed — no auto-discovery.**
+   `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS` stays the only source of the org
+   set for this reset. **Named follow-up:** an entitlement- or
+   `client_credentials`-driven auto-discovery mode, so an org doesn't need a
+   manual allowlist edit to get projected — out of scope here because it
+   would project every org with credentials regardless of whether that org
+   opted into Context Fabric.
+3. **`storage.EpisodeStore` extended directly — no parallel interface.**
+   Implemented as described above: `ListSince` on the shared interface,
+   both backends, with tests following each store's existing conventions
+   (the memory store's injected-clock pattern for ordering/pagination
+   tests; the postgres store's real-`testcontainers` integration tests,
+   seeded through the real `CreateIdempotent`/`Redact` writers).
+4. **`ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED`: approved and relayed to 3754.**
 
-Proceeding with implementation on the above defaults unless you say
-otherwise.
+Migration-numbering caution: verified `origin/main`'s migration set was
+still `0001`–`0005` immediately before implementation began (no other lane
+had landed a new one), so `0006_context_fabric_projection_checkpoints.sql`
+did not need renumbering.

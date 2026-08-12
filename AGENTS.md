@@ -128,7 +128,7 @@ pinned OpenCode release; it runs in its own workflow, not in `make verify`. See
 - `internal/contracts/**`, `internal/contractcheck/**`: contract owner.
 - `internal/contextpacket/**`: context assembly owner.
 - `internal/auth/**`, `internal/storage/**`: security and persistence owners.
-- `internal/contextfabric/**`, `cmd/acr-projector/**`: Context Fabric owner. Adapter subpackages (`zepgraph`, `devhealthsource`, `pgprojection`) stay self-contained against their backend rather than depending on `internal/storage`.
+- `internal/contextfabric/**`, `cmd/acr-projector/**`: Context Fabric owner. Backend adapter subpackages (`zepgraph`, `pgprojection`) own their SQL/vendor client directly rather than adding a backend-specific concept to `internal/storage`; `devhealthsource` is the exception where the data already belongs to `internal/storage` (approved episodes) and reads through `storage.EpisodeStore` like any other caller instead of forking a parallel path.
 - `docs/adr/**`: architecture decision owner.
 
 ## NOTES

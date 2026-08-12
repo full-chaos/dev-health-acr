@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgprojection"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // EpisodesSourceName is the Source value EpisodesProjectionSource writes.
@@ -21,16 +21,19 @@ const (
 	episodesSnapshotCap         = 500
 )
 
-// EpisodeRows is the narrow read boundary EpisodesProjectionSource needs;
-// pgprojection.EpisodeStore satisfies it against Postgres.
+// EpisodeRows is the narrow read boundary EpisodesProjectionSource needs.
+// storage.EpisodeStore (both the Postgres and memory implementations)
+// satisfies it directly via its ListSince method -- there is no
+// projection-only episode-read interface; the projection worker is simply
+// one more EpisodeStore caller, like internal/episode.Service.
 type EpisodeRows interface {
-	EpisodesSince(ctx context.Context, orgID string, since time.Time, afterID string, limit int) ([]pgprojection.EpisodeRow, error)
+	ListSince(ctx context.Context, orgID string, since time.Time, afterEpisodeID string, limit int) ([]storage.EpisodeProjectionRecord, error)
 }
 
 // EpisodesProjectionSource is the production contextfabric.ProjectionSource
 // for approved agent episodes (acr.agent_episodes). "Approved" here means
-// durably created through internal/storage.EpisodeStore.CreateIdempotent --
-// ACR has no separate approval workflow yet. A later redaction
+// durably created through storage.EpisodeStore.CreateIdempotent -- ACR has
+// no separate approval workflow yet. A later redaction
 // (EpisodeStore.Redact) is projected as a tombstone on the next batch that
 // observes it, propagating the revocation into the graph.
 type EpisodesProjectionSource struct {
@@ -62,7 +65,7 @@ func (s *EpisodesProjectionSource) NextProjectionBatch(ctx context.Context, chec
 	if fullSnapshot {
 		limit = episodesSnapshotCap
 	}
-	rows, err := s.rows.EpisodesSince(ctx, orgID, state.Since, state.After, limit+1)
+	rows, err := s.rows.ListSince(ctx, orgID, state.Since, state.After, limit+1)
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("%w: read approved episodes: %v", contextfabric.ErrUnavailable, err)
 	}
@@ -94,7 +97,7 @@ func (s *EpisodesProjectionSource) clock() time.Time {
 	return s.now().UTC()
 }
 
-func episodeCandidate(row pgprojection.EpisodeRow) candidate {
+func episodeCandidate(row storage.EpisodeProjectionRecord) candidate {
 	canonicalID := "episode:" + row.EpisodeID
 	if row.RedactionState != "active" {
 		tombstone := contractsv1.ContextFabricProjectionTombstone{

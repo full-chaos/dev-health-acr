@@ -8,15 +8,15 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgprojection"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 type fakeEpisodeRows struct {
-	rows []pgprojection.EpisodeRow
+	rows []storage.EpisodeProjectionRecord
 	err  error
 }
 
-func (f *fakeEpisodeRows) EpisodesSince(_ context.Context, _ string, _ time.Time, _ string, limit int) ([]pgprojection.EpisodeRow, error) {
+func (f *fakeEpisodeRows) ListSince(_ context.Context, _ string, _ time.Time, _ string, limit int) ([]storage.EpisodeProjectionRecord, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -29,8 +29,8 @@ func (f *fakeEpisodeRows) EpisodesSince(_ context.Context, _ string, _ time.Time
 func TestEpisodesProjectionSourceProjectsActiveEpisodes(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
-	source, err := devhealthsource.NewEpisodesProjectionSource(&fakeEpisodeRows{rows: []pgprojection.EpisodeRow{
-		{EpisodeID: "ep-1", RepoSlug: "example-org/widget-service", ClientEpisodeID: "client-1", Goal: "fix flake", Outcome: "succeeded", Summary: "fixed it", StartedAt: at, EndedAt: at.Add(time.Minute), CreatedAt: at, RedactionState: "active"},
+	source, err := devhealthsource.NewEpisodesProjectionSource(&fakeEpisodeRows{rows: []storage.EpisodeProjectionRecord{
+		{EpisodeID: "ep-1", RepoSlug: "example-org/widget-service", Goal: "fix flake", Outcome: "succeeded", Summary: "fixed it", StartedAt: at, EndedAt: at.Add(time.Minute), CreatedAt: at, RedactionState: "active"},
 	}})
 	if err != nil {
 		t.Fatalf("new source: %v", err)
@@ -56,7 +56,7 @@ func TestEpisodesProjectionSourceProjectsActiveEpisodes(t *testing.T) {
 func TestEpisodesProjectionSourceRedactedEpisodeBecomesTombstone(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
-	source, err := devhealthsource.NewEpisodesProjectionSource(&fakeEpisodeRows{rows: []pgprojection.EpisodeRow{
+	source, err := devhealthsource.NewEpisodesProjectionSource(&fakeEpisodeRows{rows: []storage.EpisodeProjectionRecord{
 		{EpisodeID: "ep-1", RepoSlug: "example-org/widget-service", Outcome: "succeeded", StartedAt: at, EndedAt: at, CreatedAt: at, RedactionState: "redacted"},
 	}})
 	if err != nil {

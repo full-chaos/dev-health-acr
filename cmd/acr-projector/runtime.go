@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/zepgraph"
 	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
+	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
 )
 
@@ -90,7 +91,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
-	episodeRows, err := pgprojection.NewEpisodeStore(db)
+	episodeRows, err := storagepostgres.NewEpisodeStore(db)
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
