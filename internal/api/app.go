@@ -75,6 +75,7 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("POST /api/v1/agent-context/context-packets", a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, false, true, http.HandlerFunc(a.handleContextPacket)))
 	mux.Handle("GET /api/v1/agent-context/evidence/{evidence_ref_id}", a.protectedRuntimeHandler(limits.RequestClassEvidence, auth.ScopeEvidenceRead, true, true, http.HandlerFunc(a.handleEvidence)))
 	mux.Handle("POST /api/v1/agent-context/episodes", a.protectedRuntimeHandler(limits.RequestClassEpisode, auth.ScopeEpisodeWrite, true, false, http.HandlerFunc(a.handleEpisode)))
+	mux.Handle("POST "+ContextFabricInvestigationsPath, a.ContextFabricInvestigationHandler(a.investigator()))
 	mux.Handle("POST /api/v1/oauth/device_authorization", a.deviceRuntimeHandler(http.HandlerFunc(a.handleDeviceAuthorization)))
 	mux.Handle("POST /api/v1/oauth/token", a.deviceRuntimeHandler(http.HandlerFunc(a.handleDeviceToken)))
 	mux.Handle("POST /api/v1/oauth/device_approval", a.deviceRuntimeHandler(a.deviceApprovalHandler(http.HandlerFunc(a.handleDeviceApproval))))

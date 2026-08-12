@@ -97,7 +97,12 @@ func validOpenAPIPath(path string) bool {
 		"/api/v1/oauth/token",
 		"/api/v1/oauth/device_approval",
 		"/api/v1/auth/credentials/self/rotate",
-		"/api/v1/auth/credentials/self/revoke":
+		"/api/v1/auth/credentials/self/revoke",
+		// CHAOS-3755: the Context Fabric investigation endpoint. Not
+		// under the /api/v1/agent-context/ prefix wildcard above because
+		// it is a distinct consumer-neutral surface (ADR 0006), so it is
+		// listed explicitly like the oauth/credential-self routes above.
+		"/api/v1/context-fabric/investigations":
 		return true
 	default:
 		return false
