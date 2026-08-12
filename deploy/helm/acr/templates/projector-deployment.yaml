@@ -1,0 +1,155 @@
+{{- /*
+acr-projector Deployment (CHAOS-3753): the Context Fabric projection worker,
+run directly from the same immutable image as acr-api with its entrypoint
+overridden -- no helper script, matching how the acr-migrate Job already
+reuses this image. Independent lifecycle: its own Deployment, its own
+replica count, its own enable/disable lever
+(contextFabric.projector.projectionEnabled), separate from acr-api's.
+*/ -}}
+{{- if .Values.contextFabric.projector.enabled }}
+{{- include "acr.validateCredentials" . -}}
+{{- include "acr.validateConnectionKind" . -}}
+{{- $image := include "acr.image" . -}}
+{{- $projector := .Values.contextFabric.projector -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "acr.fullname" . }}-projector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.projectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ $projector.replicaCount }}
+  revisionHistoryLimit: {{ $projector.revisionHistoryLimit }}
+  selector:
+    matchLabels:
+      {{- include "acr.projectorSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "acr.projectorSelectorLabels" . | nindent 8 }}
+        {{- with $projector.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/projector-configmap.yaml") . | sha256sum }}
+        checksum/credentials: {{ include "acr.credentialsChecksumInput" . | sha256sum }}
+        {{- with $projector.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "acr.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- include "acr.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "acr.podSecurityContext" . | nindent 8 }}
+      {{- with $projector.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $projector.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $projector.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: acr-projector
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/acr-projector", "serve"]
+          ports:
+            - name: http
+              containerPort: 8090
+              protocol: TCP
+          securityContext:
+            {{- include "acr.containerSecurityContext" . | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "acr.fullname" . }}-projector-config
+          env:
+            - name: ACR_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.runtime.existingSecret | quote }}
+                  key: {{ .Values.credentials.runtime.postgresDsnKey | default "ACR_POSTGRES_DSN" | quote }}
+            - name: ACR_CLICKHOUSE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.runtime.existingSecret | quote }}
+                  key: {{ .Values.credentials.runtime.clickhouseDsnKey | default "ACR_CLICKHOUSE_DSN" | quote }}
+            {{- if eq .Values.config.postgresConnectionKind "pgbouncer" }}
+            - name: ACR_POSTGRES_POOLER_ADMIN_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.runtime.existingSecret | quote }}
+                  key: {{ .Values.credentials.runtime.poolerAdminDsnKey | quote }}
+            {{- end }}
+            {{- if .Values.contextFabric.zep.existingSecret }}
+            - name: ACR_CONTEXT_FABRIC_ZEP_BASE_URL
+              value: {{ .Values.contextFabric.zep.baseUrl | quote }}
+            - name: ACR_CONTEXT_FABRIC_ZEP_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.contextFabric.zep.existingSecret | quote }}
+                  key: {{ .Values.contextFabric.zep.apiKeyKey | default "ACR_CONTEXT_FABRIC_ZEP_API_KEY" | quote }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          resources:
+            {{- toYaml $projector.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.config.postgresCaBundle.existingSecret }}
+            - name: postgres-ca
+              mountPath: /var/run/acr/postgres-ca
+              readOnly: true
+            {{- end }}
+            {{- if .Values.config.clickhouseCaBundle.existingSecret }}
+            - name: clickhouse-ca
+              mountPath: /var/run/acr/clickhouse-ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.config.postgresCaBundle.existingSecret }}
+        - name: postgres-ca
+          secret:
+            secretName: {{ .Values.config.postgresCaBundle.existingSecret | quote }}
+            items:
+              - key: {{ .Values.config.postgresCaBundle.key | quote }}
+                path: ca.crt
+        {{- end }}
+        {{- if .Values.config.clickhouseCaBundle.existingSecret }}
+        - name: clickhouse-ca
+          secret:
+            secretName: {{ .Values.config.clickhouseCaBundle.existingSecret | quote }}
+            items:
+              - key: {{ .Values.config.clickhouseCaBundle.key | quote }}
+                path: ca.crt
+        {{- end }}
+{{- end }}

@@ -90,6 +90,42 @@ services:
       traefik.http.routers.acr.entrypoints: web
       traefik.http.services.acr.loadbalancer.server.port: "8080"
     networks: [dev-health]
+  # acr-projector runs the Context Fabric projection worker (CHAOS-3753)
+  # directly from the shared ACR image, entrypoint overridden exactly like
+  # acr-migrate above -- independent lifecycle/deployment control from
+  # acr-api, not a separate build. Disabled (ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=false)
+  # by default: there is no self-hostable Zep/Graphiti backend and no Zep
+  # Cloud credential in local development (ADR 0007), so this service comes
+  # up healthy-and-idle rather than crash-looping over a dependency nothing
+  # here can supply. Set ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true and the
+  # ACR_CONTEXT_FABRIC_ZEP_* / ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS
+  # variables once a Zep Cloud credential exists to enable it.
+  acr-projector:
+    image: ${ACR_IMAGE:?ACR_IMAGE must be an immutable image digest}
+    entrypoint: ["/usr/local/bin/acr-projector"]
+    command: ["serve"]
+    environment:
+      ACR_PROJECTOR_ADDR: :8090
+      ACR_ENVIRONMENT: development
+      ACR_REQUIRE_BACKING_STORES: "true"
+      ACR_POSTGRES_CONNECTION_KIND: direct
+      ACR_CONTEXT_FABRIC_PROJECTION_ENABLED: ${ACR_CONTEXT_FABRIC_PROJECTION_ENABLED:-false}
+      ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS: ${ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS:-}
+      ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED: ${ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED:-false}
+      ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
+      ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
+    secrets: [acr_runtime_dsn, acr_clickhouse_dsn]
+    depends_on:
+      postgres: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+      acr-db-acl: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8090/readyz"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks: [dev-health]
 secrets:
   acr_postgres_password: { file: "${ACR_POSTGRES_ADMIN_PASSWORD_FILE:?ACR_POSTGRES_ADMIN_PASSWORD_FILE is required}" }
   acr_runtime_db_password: { file: "${ACR_RUNTIME_DB_PASSWORD_FILE:?ACR_RUNTIME_DB_PASSWORD_FILE is required}" }

@@ -32,11 +32,15 @@ RUN --mount=type=cache,id=acr-go-build-${BUILD_CACHE_ID},target=/root/.cache/go-
     go build -buildvcs=false -trimpath \
       -ldflags="-s -w -buildid= -X github.com/full-chaos/dev-health-acr/internal/version.Version=${VERSION} -X github.com/full-chaos/dev-health-acr/internal/version.Commit=${COMMIT} -X github.com/full-chaos/dev-health-acr/internal/version.Date=${BUILD_DATE}" \
       -o /out/acr-migrate ./cmd/acr-migrate && \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+    go build -buildvcs=false -trimpath \
+      -ldflags="-s -w -buildid= -X github.com/full-chaos/dev-health-acr/internal/version.Version=${VERSION} -X github.com/full-chaos/dev-health-acr/internal/version.Commit=${COMMIT} -X github.com/full-chaos/dev-health-acr/internal/version.Date=${BUILD_DATE}" \
+      -o /out/acr-projector ./cmd/acr-projector && \
     mkdir -p /out-api-root/etc/ssl/certs /out-api-root/usr/local/bin \
       /out-mcp-root/etc/ssl/certs /out-mcp-root/usr/local/bin && \
     cp /etc/ssl/certs/ca-certificates.crt /out-api-root/etc/ssl/certs/ca-certificates.crt && \
     cp /etc/ssl/certs/ca-certificates.crt /out-mcp-root/etc/ssl/certs/ca-certificates.crt && \
-    cp /out/acr-api /out/acr-migrate /out-api-root/usr/local/bin/ && \
+    cp /out/acr-api /out/acr-migrate /out/acr-projector /out-api-root/usr/local/bin/ && \
     cp /out/acr-mcp /out-mcp-root/usr/local/bin/ && \
     find /out-api-root /out-mcp-root -exec touch -d "@${SOURCE_DATE_EPOCH}" {} +
 

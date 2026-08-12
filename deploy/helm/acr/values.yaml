@@ -173,6 +173,56 @@ service:
   port: 8080
   annotations: {}
 
+# Context Fabric projection worker (CHAOS-3753): an independently deployed
+# and scaled Deployment running the acr-projector binary from the same
+# image as acr-api, entrypoint overridden -- matching how the acr-migrate
+# Job already reuses this image. Disabled by default: enabling it before a
+# Zep Cloud credential exists (see ADR 0007 -- no self-hostable Zep/Graphiti
+# backend) would bring the workload up in its documented healthy-disabled
+# state, so there is no reason to run the extra pod until credentials exist.
+contextFabric:
+  # Zep/Graphiti graph backend credential (ADR 0007), consumed only by
+  # acr-projector's ProjectionBackend. Empty existingSecret leaves Context
+  # Fabric unconfigured -- zepgraph.Configured() then keeps the adapter (and
+  # so the coordinator) from ever constructing, matching the "an unset
+  # deployment should never fail closed" contract in ADR 0007. There is no
+  # self-hostable Zep/Graphiti server image (ADR 0007's "Deployment
+  # topology"), so unlike postgres/clickhouse this is a Secret reference
+  # only -- this chart never runs a Zep workload.
+  zep:
+    baseUrl: ""
+    existingSecret: ""
+    apiKeyKey: ACR_CONTEXT_FABRIC_ZEP_API_KEY
+  projector:
+    enabled: false
+    replicaCount: 1
+    revisionHistoryLimit: 3
+    # Independent from `enabled` above: `enabled` controls whether this
+    # Deployment exists at all; `projectionEnabled` is the acr-projector
+    # process's own ACR_CONTEXT_FABRIC_PROJECTION_ENABLED master switch
+    # (rollback/disable lever without deleting the Deployment).
+    projectionEnabled: false
+    # Explicit organization allowlist -- see docs/design/context-fabric-projection-worker.md
+    # for why this starts explicit rather than auto-discovered.
+    orgIds: []
+    pollInterval: "15s"
+    concurrency: 4
+    teamsProjectsEnabled: false
+    podAnnotations: {}
+    podLabels: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+    service:
+      port: 8090
+
 # Optional Gateway API HTTPRoute targeting a caller-supplied, pre-existing
 # Gateway. This chart never installs a Gateway controller or a Gateway object.
 gateway:

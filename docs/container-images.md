@@ -1,15 +1,20 @@
 # Container images
 
 `Dockerfile` has exactly two production targets: `acr-api` (plus the separate
-`acr-migrate` command) and `acr-mcp`, a local STDIO sidecar—not a daemon or a
-Compose/Kubernetes service.
+`acr-migrate` and `acr-projector` commands) and `acr-mcp`, a local STDIO
+sidecar—not a daemon or a Compose/Kubernetes service.
 
-Both binaries are static cross-builds (`CGO_ENABLED=0`, `-trimpath`, cleared
+All binaries are static cross-builds (`CGO_ENABLED=0`, `-trimpath`, cleared
 Go build ID, `-buildvcs=false`, `SOURCE_DATE_EPOCH`) carrying the actual clean
 commit's metadata. They run as numeric UID/GID `65532:65532`, accept a
 read-only root filesystem, and receive no credentials or runtime configuration
 at build time. The API target is Distroless, containing only CA certificates,
-`acr-api`, and `acr-migrate`; it has no shell or package manager.
+`acr-api`, `acr-migrate`, and `acr-projector`; it has no shell or package
+manager. `acr-projector` (Context Fabric's projection worker, CHAOS-3753) is
+deployed as its own Compose service / Kubernetes Deployment from this same
+image, entrypoint overridden to `acr-projector serve` — independent
+lifecycle and scaling, not a separate build, exactly like `acr-migrate`'s
+`up` command today.
 
 Every runtime probe (in `container-test`'s `verify.sh` and the fixture
 commands in this document) additionally runs with `--cap-drop ALL` and

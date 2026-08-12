@@ -1,0 +1,23 @@
+{{- /*
+ClusterIP Service exposing acr-projector's readiness/health port for
+in-cluster probing (e.g. a Prometheus scrape or manual debug curl). Not
+routed externally: this worker has no public HTTP surface.
+*/ -}}
+{{- if .Values.contextFabric.projector.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "acr.fullname" . }}-projector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.projectorLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "acr.projectorSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.contextFabric.projector.service.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}
