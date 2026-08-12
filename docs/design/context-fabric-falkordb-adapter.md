@@ -73,10 +73,18 @@
    `GRAPH.EXPLAIN` shows `Filter` above `ProcedureCall` — every tenant's
    matches are materialized and then discarded.
 
-3. **Reading a non-existent graph creates it.**
+3. **Reading a non-existent graph creates it -- but only via `GRAPH.QUERY`.**
    `GRAPH.QUERY g_typo "MATCH (n) RETURN count(n)"` → `0`, and `g_typo` then
    appears in `GRAPH.LIST`. There is no "graph not found" error, so a typo'd
-   org ID silently produces an empty graph rather than an error.
+   org ID silently produces an empty graph rather than an error via the
+   read-write command. **`GRAPH.RO_QUERY` does NOT have this behavior** --
+   verified live (and now the shipped mitigation, §3): a read-only query
+   against an absent or just-deleted graph key returns
+   `ERR Invalid graph operation on empty key` instead of fabricating an
+   empty graph. `falkorgraph` issues every read through `GRAPH.RO_QUERY` and
+   every write through `GRAPH.QUERY`, so this hazard is fully closed with no
+   separate existence check, `GRAPH.LIST` enumeration, or bootstrap marker
+   node required -- see `TestLiveReadOnlyPathAfterPurgeReturnsNotFoundWithoutAutoCreating`.
 
 4. **Index creation is not idempotent and `IF NOT EXISTS` does not parse.**
    Second create → `Attribute 'email' is already indexed`.
@@ -264,12 +272,26 @@ Two consequences worth writing down:
   wrong. That keeps a cheap, defense-in-depth check available against a restore
   into the wrong graph key, and keeps identities identical across the two
   backends.
-- **The auto-create hazard (§1.3(3)) inverts `ensureGraph`.** `zepgraph` does
-  `GetGraph` → 404 → `CreateGraph`. FalkorDB has no such thing; any read
-  creates the graph. So "does this org's graph exist" is not answerable by
-  reading it. Use `GRAPH.LIST` (or a bootstrap marker node) when existence
-  actually matters, and treat the watermark-not-found path as "graph exists but
-  has no watermark node", which is the only shape FalkorDB can express.
+- **The auto-create hazard (§1.3(3)) inverts `ensureGraph`, and is fully
+  closed by which command issues the read -- ruled and shipped, superseding
+  this section's original `GRAPH.LIST`/marker-node proposal.** `zepgraph`
+  does `GetGraph` → 404 → `CreateGraph`. FalkorDB's `GRAPH.QUERY` has no
+  such thing; any read through it creates the graph. But **`GRAPH.RO_QUERY`
+  does not** -- verified live, and confirmed as the adopted mitigation: it
+  returns `ERR Invalid graph operation on empty key` against an absent
+  graph, giving every read-only lookup an honest not-found signal with zero
+  extra machinery. `falkorgraph` issues every read through `GRAPH.RO_QUERY`
+  (never `GRAPH.QUERY`) and every write through `GRAPH.QUERY` (which must
+  auto-create on a brand-new org's first write -- that half is intentional,
+  not a hazard), so "does this org's graph exist" never needs a `GRAPH.LIST`
+  enumeration or a bootstrap marker node to answer. `ProjectionWatermark`
+  against a purged or never-projected org now returns a real `ErrNotFound`
+  (via this same RO_QUERY path), not "graph exists but has no watermark
+  node" as originally sketched here. See
+  `TestLiveReadOnlyPathAfterPurgeReturnsNotFoundWithoutAutoCreating` and
+  item (10) of `TestLiveFalkorDBContextFabricLifecycle` (a write after purge
+  still re-bootstraps correctly, proving the write half keeps auto-creating
+  as intended).
 
 ---
 
@@ -725,17 +747,14 @@ verified hazard:
 - `AND`-vs-`OR` tokenization of a multi-word question, proving `DiscoverContext`
   does not silently return empty;
 - score normalization ordering (a 4.5 hit must outrank a 0.5 hit);
-- **auto-create-on-read (§1.3(3), ruled):** a read against an org whose graph
-  was never written to must be *detected* as "no such org graph yet" through
-  a deliberate existence check (`GRAPH.LIST`, or a bootstrap marker node —
-  §3's inverted `ensureGraph`), not discovered after the fact by noticing
-  FalkorDB silently created an empty graph key for it. Prove both that (a)
-  the deliberate existence check correctly reports "absent" before any read
-  touches that graph key, and (b) if a read must still happen first for some
-  path, the graph key FalkorDB creates as a side effect is empty/harmless
-  and does not desync from the bootstrap-idempotency check in (2) above --
-  a stray empty graph key must not make a later real bootstrap think the
-  org's schema already exists.
+- **auto-create-on-read (§1.3(3)/§3, resolved) -- DONE.** Superseded by the
+  `GRAPH.RO_QUERY`-for-every-read decision: no separate existence check was
+  needed after all. Proven by `TestLiveReadOnlyPathAfterPurgeReturnsNotFoundWithoutAutoCreating`
+  (a read against a never-projected org, and again after a purge, both
+  return `ErrNotFound`, never a fabricated empty result) and by item (10) of
+  `TestLiveFalkorDBContextFabricLifecycle` (a write after purge still
+  re-bootstraps and succeeds, proving the write-side auto-create keeps
+  working as intended and the two paths don't desync).
 
 ---
 
