@@ -29,6 +29,13 @@ type fakeAPI struct {
 	err              error
 	createGraphCalls int
 	deleteGraphErr   error
+	// getNodeErr/getNodeEdgesErr inject a transient (non-not-found) error
+	// for a specific UUID, independent of the blanket f.err field -- used
+	// to distinguish "the node doesn't exist" (NotFoundError, already
+	// covered by a plain nodes-map lookup miss) from "the backend call
+	// itself failed" (Codex round-3 P1-1/P2-4 probes).
+	getNodeErr      map[string]error
+	getNodeEdgesErr map[string]error
 }
 
 func newFakeAPI() *fakeAPI {
@@ -103,6 +110,9 @@ func (f *fakeAPI) Search(_ context.Context, request *zep.GraphSearchQuery) (*zep
 }
 
 func (f *fakeAPI) GetNode(_ context.Context, uuid string) (*zep.EntityNode, error) {
+	if err, ok := f.getNodeErr[uuid]; ok {
+		return nil, err
+	}
 	node, ok := f.nodes[uuid]
 	if !ok {
 		return nil, &zep.NotFoundError{}
@@ -116,6 +126,9 @@ func (f *fakeAPI) DeleteNode(_ context.Context, uuid string) error {
 }
 
 func (f *fakeAPI) GetNodeEdges(_ context.Context, uuid string) ([]*zep.EntityEdge, error) {
+	if err, ok := f.getNodeEdgesErr[uuid]; ok {
+		return nil, err
+	}
 	result := []*zep.EntityEdge{}
 	for _, edge := range f.edges {
 		if edge.SourceNodeUUID == uuid || edge.TargetNodeUUID == uuid {
@@ -500,6 +513,104 @@ func TestResolveSubjectsMergesHybridSearchWhenOnlyReceiptDerivedHintResolves(t *
 	}
 }
 
+// TestResolveSubjectsRetainsSharedParentAheadOfHigherScoringObservationsUnderTightBudget
+// is the probe for Codex round-3 finding "2" (truncate-before-decide class
+// fix, scenario a): two document candidates independently score higher
+// than their shared canonical parent (the parent's confidence is
+// necessarily discounted, being one traversal hop removed -- see
+// traverseObservationToSubject). Truncating to Options.MaxSubjectCandidates
+// by raw confidence BEFORE the parent-aware commit decision ran could drop
+// the parent out of the candidate set entirely, before it ever got a
+// chance to compete -- leaving both documents excluded (each has a parent)
+// and nothing left eligible, producing fake ambiguity for a question that
+// should have resolved cleanly to the shared parent.
+func TestResolveSubjectsRetainsSharedParentAheadOfHigherScoringObservationsUnderTightBudget(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	parentRef := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	parent := graphNode(nodeUUID("org_1", parentRef), parentRef.Kind, parentRef.CanonicalID, parentRef.Label, "*", 0.9)
+	doc1 := &zep.EntityNode{
+		UUID: "node-doc-1", Name: "Ask Dev Postmortem One", Relevance: ptr(0.95),
+		Attributes: map[string]interface{}{
+			"canonical_id": "document_1", "subject_kind": string(contextfabric.SubjectDocument), "label": "Ask Dev Postmortem One",
+			"authorization_repositories": "*", "authorization_projects": "*", "authorization_teams": "*",
+			"evidence_refs": "|evidence_doc_1_1234|",
+		},
+	}
+	doc2 := &zep.EntityNode{
+		UUID: "node-doc-2", Name: "Ask Dev Postmortem Two", Relevance: ptr(0.92),
+		Attributes: map[string]interface{}{
+			"canonical_id": "document_2", "subject_kind": string(contextfabric.SubjectDocument), "label": "Ask Dev Postmortem Two",
+			"authorization_repositories": "*", "authorization_projects": "*", "authorization_teams": "*",
+			"evidence_refs": "|evidence_doc_2_1234|",
+		},
+	}
+	api.nodes[parent.UUID] = parent
+	api.nodes[doc1.UUID] = doc1
+	api.nodes[doc2.UUID] = doc2
+	api.edges["edge-doc-1"] = &zep.EntityEdge{UUID: "edge-doc-1", Name: "DOCUMENTED_BY", SourceNodeUUID: parent.UUID, TargetNodeUUID: doc1.UUID}
+	api.edges["edge-doc-2"] = &zep.EntityEdge{UUID: "edge-doc-2", Name: "DOCUMENTED_BY", SourceNodeUUID: parent.UUID, TargetNodeUUID: doc2.UUID}
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{doc1, doc2}}
+	request := validRequest()
+	request.Options.MaxSubjectCandidates = 2
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"Postmortem"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "project_ask_dev" {
+		t.Fatalf("resolution.Committed = %#v, want the shared canonical parent committed, not a fake ambiguity", resolution.Committed)
+	}
+	var sawParent bool
+	for _, candidate := range resolution.Candidates {
+		if candidate.Subject.CanonicalID == "project_ask_dev" {
+			sawParent = true
+		}
+	}
+	if !sawParent {
+		t.Fatalf("resolution.Candidates = %#v, want the committed parent present in the truncated candidate list", resolution.Candidates)
+	}
+}
+
+// TestResolveSubjectsCommitsReceiptSubjectOverHybridExactMatchUnderTightBudget
+// is the probe for Codex round-3 finding "3" (same class fix, scenario b):
+// a receipt-derived committed candidate and an unrelated hybrid-exact
+// match both have Confidence==1, so under the old confidence-then-
+// lexical-tie-break truncation, a tight MaxSubjectCandidates could drop
+// the receipt-derived subject purely by losing a lexical tie-break --
+// letting the unrelated hybrid match auto-commit instead, even though the
+// receipt-derived subject is the authoritative answer once resolved.
+func TestResolveSubjectsCommitsReceiptSubjectOverHybridExactMatchUnderTightBudget(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	receiptSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_z", Label: "Project Z"}
+	api.nodes[nodeUUID("org_1", receiptSubject)] = graphNode(nodeUUID("org_1", receiptSubject), receiptSubject.Kind, receiptSubject.CanonicalID, receiptSubject.Label, "*", 1)
+	// "project_a" sorts lexically before "project_z", so the old
+	// confidence-tie/lexical-tiebreak truncation would keep this one.
+	hybridExact := graphNode("node-hybrid-exact", contextfabric.SubjectProject, "project_a", "Project A", "*", 0.3)
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{hybridExact}}
+	request := validRequest()
+	request.Options.MaxSubjectCandidates = 1
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
+		{Kind: receiptSubject.Kind, ID: receiptSubject.CanonicalID, Label: receiptSubject.Label, Source: "prior_subject_receipt"},
+	}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"Project A"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	})
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "project_z" {
+		t.Fatalf("resolution.Committed = %#v, want the receipt-derived subject committed under a tight budget, never truncated out by an unrelated hybrid match", resolution.Committed)
+	}
+}
+
 // TestResolveSubjectsTraversalIgnoresUnrelatedRelationEdges proves
 // traversal only follows the specific containment/attribution relation
 // kinds projectContent/projectEpisode use (DOCUMENTED_BY, HAS_EPISODE) to
@@ -591,6 +702,97 @@ func TestResolveSubjectsTraversalRequiresEdgeAuthorization(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveSubjectsTraversalErrorPreventsAutoCommitOfObservation is the
+// probe for Codex round-3 finding P1-1: traverseObservationToSubject
+// collapsed a GetNodeEdges/GetNode backend error to the same "false" it
+// returns for a genuine, confirmed absence of a parent. That re-enabled
+// the exact round-2 misattribution (a document auto-committing itself)
+// whenever the backend call for its parent transiently failed, since a
+// failure looked identical to "this document really has no parent". A
+// transient failure must fail toward ambiguity instead.
+func TestResolveSubjectsTraversalErrorPreventsAutoCommitOfObservation(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	document := &zep.EntityNode{
+		UUID: "node-document-erroring", Name: "Ask Dev readiness review", Relevance: ptr(0.9),
+		Attributes: map[string]interface{}{
+			"canonical_id": "document_error", "subject_kind": string(contextfabric.SubjectDocument), "label": "Ask Dev readiness review",
+			"authorization_repositories": "*", "authorization_projects": "*", "authorization_teams": "*",
+			"evidence_refs": "|evidence_document_error1|",
+		},
+	}
+	api.nodes[document.UUID] = document
+	api.getNodeEdgesErr = map[string]error{document.UUID: errors.New("transient backend failure")}
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{document}}
+	request := validRequest()
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"readiness review"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want no auto-commit when traversal errored -- a transient backend failure must not be treated as a confirmed absence of a canonical parent", resolution.Committed)
+	}
+}
+
+// recordingGraphTelemetry is a fake GraphTelemetry that records only the
+// counts it was called with, proving the P1-1 degradation signal is
+// content-safe (count only) and actually wired, not just theoretically
+// available.
+type recordingGraphTelemetry struct {
+	observationTraversalDegraded []int
+}
+
+func (r *recordingGraphTelemetry) RecordObservationTraversalDegraded(_ context.Context, _ string, count int) {
+	r.observationTraversalDegraded = append(r.observationTraversalDegraded, count)
+}
+
+// TestResolveSubjectsReportsTraversalDegradationThroughTelemetry proves the
+// P1-1 "counts into the degradation signal" half of the ruling: a
+// traversal error is reported through the optional GraphTelemetry hook
+// with a content-safe count, since SubjectResolution itself carries no
+// coverage/degradation field for ResolveSubjects to report through.
+func TestResolveSubjectsReportsTraversalDegradationThroughTelemetry(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	telemetry := &recordingGraphTelemetry{}
+	adapter, err := newWithAPI(Config{
+		BaseURL: "http://127.0.0.1:9999/api/v2", APIKey: "test-key", GraphPrefix: "acr-cf",
+		RequestTimeout: time.Second, MaxAttempts: 1, MaxResults: 25, AllowInsecure: true, Telemetry: telemetry,
+	}, api)
+	if err != nil {
+		t.Fatalf("newWithAPI() error = %v", err)
+	}
+	document := &zep.EntityNode{
+		UUID: "node-document-erroring", Name: "Ask Dev readiness review", Relevance: ptr(0.9),
+		Attributes: map[string]interface{}{
+			"canonical_id": "document_error", "subject_kind": string(contextfabric.SubjectDocument), "label": "Ask Dev readiness review",
+			"authorization_repositories": "*", "authorization_projects": "*", "authorization_teams": "*",
+			"evidence_refs": "|evidence_document_error1|",
+		},
+	}
+	api.nodes[document.UUID] = document
+	api.getNodeEdgesErr = map[string]error{document.UUID: errors.New("transient backend failure")}
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{document}}
+	request := validRequest()
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"readiness review"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	if _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted); err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(telemetry.observationTraversalDegraded) != 1 || telemetry.observationTraversalDegraded[0] != 1 {
+		t.Fatalf("telemetry = %#v, want exactly one degradation report of count 1", telemetry.observationTraversalDegraded)
+	}
+}
+
+// TestResolveSubjectsExcludesInternalBookkeepingSubjectsFromCandidates
 
 // TestResolveSubjectsExcludesInternalBookkeepingSubjectsFromCandidates
 // guards against the adapter's own projection anchor nodes (the

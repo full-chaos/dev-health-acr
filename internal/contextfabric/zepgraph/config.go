@@ -36,6 +36,25 @@ type Config struct {
 	MaxAttempts    uint
 	MaxResults     int
 	AllowInsecure  bool
+	// Telemetry is optional (nil-safe). When set, the Adapter reports
+	// content-safe operational counters through it -- see GraphTelemetry.
+	Telemetry GraphTelemetry
+}
+
+// GraphTelemetry receives content-safe operational counters from the
+// zepgraph Adapter, mirroring contextfabric.EngineTelemetry's contract:
+// implementations must record only counts and fixed classifications --
+// never subject, node, edge, or graph content.
+type GraphTelemetry interface {
+	// RecordObservationTraversalDegraded reports how many
+	// traverseObservationToSubject calls on one ResolveSubjects call ended
+	// in observationTraversalErrored (Codex round-3 finding P1-1) -- a
+	// backend failure or unverifiable second-hop node during
+	// observation-to-entity traversal, as opposed to a confirmed absence
+	// of a canonical parent. ResolveSubjects never errors or otherwise
+	// surfaces this to the caller (it fails toward ambiguity instead), so
+	// this count is the only operator-visible signal that it happened.
+	RecordObservationTraversalDegraded(ctx context.Context, orgID string, count int)
 }
 
 func (c Config) validate() error {

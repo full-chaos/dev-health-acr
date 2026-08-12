@@ -71,11 +71,19 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	if anyCallerSourced(candidatesBySubject, callerSourced) {
 		return finalizeExactResolution(candidatesBySubject, callerSourced, request.Options.MaxSubjectCandidates), nil
 	}
-	// observationHasParent tracks, per observation (document/episode)
-	// subject key, whether traverseObservationToSubject found it a
-	// canonical parent candidate this call. See the N1 commit-eligibility
-	// rule below.
-	observationHasParent := make(map[string]bool)
+	// observationParentKey maps an observation (document/episode) subject
+	// key to its found canonical parent's subject key -- only set when
+	// traversal actually found one (observationParentFound). observationBlocked
+	// marks an observation subject key as NOT auto-commit-eligible, which
+	// is true both when a parent was found (the parent should get to
+	// compete instead) and when traversal errored (P1-1: an unresolved
+	// traversal must fail toward ambiguity, never toward treating the
+	// observation as if it were confirmed parentless). traversalDegraded
+	// counts traversalErrored outcomes for the optional telemetry report
+	// below.
+	observationParentKey := make(map[string]string)
+	observationBlocked := make(map[string]bool)
+	traversalDegraded := 0
 	for _, term := range terms {
 		results, err := a.search(ctx, principal.OrgID, term, zep.GraphSearchScopeNodes, nil, request.Options.MaxSubjectCandidates)
 		if err != nil {
@@ -98,16 +106,50 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			// additional candidate (never a replacement -- a caller may
 			// genuinely mean the document or episode).
 			if isObservationSubjectKind(candidate.Subject.Kind) {
-				if traversed, ok := a.traverseObservationToSubject(ctx, principal, request.RequestedScope, term, node); ok {
-					observationHasParent[key] = true
+				traversed, outcome := a.traverseObservationToSubject(ctx, principal, request.RequestedScope, term, node)
+				switch outcome {
+				case observationParentFound:
+					observationBlocked[key] = true
 					traversedKey := subjectKey(traversed.Subject)
+					observationParentKey[key] = traversedKey
 					if current, exists := candidatesBySubject[traversedKey]; !exists || traversed.Confidence > current.Confidence {
 						candidatesBySubject[traversedKey] = traversed
 					}
+				case observationTraversalErrored:
+					observationBlocked[key] = true
+					traversalDegraded++
+				case observationNoParent:
+					// Confirmed: no parent. Leave eligible.
 				}
 			}
 		}
 	}
+	if traversalDegraded > 0 && a.config.Telemetry != nil {
+		a.config.Telemetry.RecordObservationTraversalDegraded(ctx, principal.OrgID, traversalDegraded)
+	}
+	return resolveFromMergedCandidates(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification), nil
+}
+
+// resolveFromMergedCandidates implements the class fix for Codex round-3
+// findings "2" and "3": both were the same defect -- truncation ran BEFORE
+// the semantic decision phases (parent-aware eligibility, commit
+// priority), so whichever candidates truncation happened to keep could
+// silently exclude the one the decision phase would have picked. This
+// function runs in explicit phases with truncation LAST:
+//
+//  1. gather -- candidatesBySubject is already fully assembled by the
+//     caller (hints, receipts, hybrid search, and traversal all merged).
+//  2. parent resolution + eligibility -- already computed by the caller
+//     (observationParentKey, observationBlocked).
+//  3. commit decision, over the FULL untruncated candidate set: a
+//     receipt-derived exact match (State=Committed, Confidence==1) always
+//     wins outright; otherwise the parent-aware confidence heuristics
+//     decide a single auto-committed subject, or ambiguity. A committed
+//     subject is decided BEFORE truncation and can never be dropped by it.
+//  4. truncation LAST: committed subject(s) first, then the canonical
+//     parent of any retained observation, then everything else by
+//     confidence/stable key.
+func resolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool) contextfabric.SubjectResolution {
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
 	for _, candidate := range candidatesBySubject {
 		candidates = append(candidates, candidate)
@@ -118,67 +160,104 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		}
 		return candidates[i].Confidence > candidates[j].Confidence
 	})
-	if len(candidates) > request.Options.MaxSubjectCandidates {
-		candidates = candidates[:request.Options.MaxSubjectCandidates]
+	resolution := contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{}}
+	if len(candidates) == 0 {
+		resolution.Candidates = candidates
+		return resolution
 	}
-	resolution := contextfabric.SubjectResolution{Candidates: candidates, Committed: []contextfabric.SubjectRef{}}
-	for _, candidate := range candidates {
-		// A receipt-derived hint (State=Committed, Confidence=1) that
-		// survived into this merged set is trusted exactly like any other
-		// exact match here -- this is the same fast path a caller-explicit
-		// hint would have taken via the short-circuit above, just reached
-		// after hybrid search also had a chance to run and merge in
-		// anything else the interpretation named.
+
+	// Phase 3: commit decision over the FULL, untruncated ranked set.
+	committedIndex := make(map[int]bool)
+	for index, candidate := range candidates {
 		if candidate.State == contextfabric.ResolutionCommitted && candidate.Confidence == 1 {
+			committedIndex[index] = true
 			resolution.Committed = append(resolution.Committed, candidate.Subject)
 		}
 	}
-	if len(resolution.Committed) > 0 {
-		return resolution, nil
+	ambiguous := false
+	if len(committedIndex) == 0 {
+		// Observation-kind subjects (documents, episodes) are auto-commit-
+		// eligible via the confidence heuristics below only when traversal
+		// confirmed they have no canonical parent and did not merely fail
+		// to determine one (P1-1). When a parent candidate DOES exist (or
+		// traversal errored), the observation stays excluded so the parent
+		// -- necessarily lower-confidence, being one hop removed -- still
+		// gets the chance to compete on its own terms, rather than the
+		// (higher-relevance-by-construction, or simply unverifiable)
+		// observation always outranking it by raw score alone.
+		commitIndex := make([]int, 0, len(candidates))
+		for index, candidate := range candidates {
+			if isObservationSubjectKind(candidate.Subject.Kind) && observationBlocked[subjectKey(candidate.Subject)] {
+				continue
+			}
+			commitIndex = append(commitIndex, index)
+		}
+		switch {
+		case len(commitIndex) == 1 && candidates[commitIndex[0]].Confidence >= 0.72:
+			committedIndex[commitIndex[0]] = true
+			candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
+			resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
+		case len(commitIndex) >= 2:
+			top, second := candidates[commitIndex[0]], candidates[commitIndex[1]]
+			if gap := top.Confidence - second.Confidence; top.Confidence >= 0.88 && gap >= 0.12 {
+				committedIndex[commitIndex[0]] = true
+				candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted
+				resolution.Committed = []contextfabric.SubjectRef{candidates[commitIndex[0]].Subject}
+			} else {
+				ambiguous = true
+			}
+		default:
+			ambiguous = true
+		}
 	}
-	if len(candidates) == 0 {
-		return resolution, nil
+	if ambiguous {
+		for index := range candidates {
+			candidates[index].State = contextfabric.ResolutionAmbiguous
+		}
+		if allowClarification {
+			resolution.ClarificationPrompt = clarificationPrompt(candidates)
+		}
 	}
-	// Observation-kind subjects (documents, episodes) are auto-commit-
-	// eligible via the confidence heuristics below ONLY when traversal
-	// found no canonical parent for them (N1): if none exists, the
-	// document/episode itself is the best -- often only -- answer, and
-	// must be able to resolve a question genuinely about it. When a parent
-	// candidate DOES exist, the observation stays excluded so the parent
-	// (necessarily lower-confidence, being one hop removed) still gets the
-	// chance to compete and win on its own terms, rather than the
-	// (higher-relevance-by-construction) observation always outranking it
-	// by raw score alone -- see traverseObservationToSubject.
-	commitIndex := make([]int, 0, len(candidates))
-	for index, candidate := range candidates {
-		if isObservationSubjectKind(candidate.Subject.Kind) && observationHasParent[subjectKey(candidate.Subject)] {
+
+	// Phase 4: truncation last. parentKeys is the set of subject keys that
+	// are themselves the resolved canonical parent of at least one
+	// observation candidate present in this set -- prioritized just below
+	// the committed subject(s) so a document's answer-bearing parent is
+	// never crowded out of a tight budget by the document's own higher raw
+	// relevance (see the shared-parent probe this fixes).
+	parentKeys := make(map[string]bool)
+	for _, candidate := range candidates {
+		if !isObservationSubjectKind(candidate.Subject.Kind) {
 			continue
 		}
-		commitIndex = append(commitIndex, index)
-	}
-	commit := func(index int) contextfabric.SubjectResolution {
-		candidates[index].State = contextfabric.ResolutionCommitted
-		resolution.Candidates = candidates
-		resolution.Committed = []contextfabric.SubjectRef{candidates[index].Subject}
-		return resolution
-	}
-	if len(commitIndex) == 1 && candidates[commitIndex[0]].Confidence >= 0.72 {
-		return commit(commitIndex[0]), nil
-	}
-	if len(commitIndex) >= 2 {
-		top, second := candidates[commitIndex[0]], candidates[commitIndex[1]]
-		if gap := top.Confidence - second.Confidence; top.Confidence >= 0.88 && gap >= 0.12 {
-			return commit(commitIndex[0]), nil
+		if parentKey, ok := observationParentKey[subjectKey(candidate.Subject)]; ok {
+			parentKeys[parentKey] = true
 		}
 	}
-	for index := range candidates {
-		candidates[index].State = contextfabric.ResolutionAmbiguous
+	tier := func(index int) int {
+		switch {
+		case committedIndex[index]:
+			return 0
+		case parentKeys[subjectKey(candidates[index].Subject)]:
+			return 1
+		default:
+			return 2
+		}
 	}
-	resolution.Candidates = candidates
-	if request.Options.AllowClarification {
-		resolution.ClarificationPrompt = clarificationPrompt(candidates)
+	order := make([]int, len(candidates))
+	for i := range order {
+		order[i] = i
 	}
-	return resolution, nil
+	sort.SliceStable(order, func(i, j int) bool { return tier(order[i]) < tier(order[j]) })
+	ordered := make([]contextfabric.SubjectCandidate, len(candidates))
+	for i, index := range order {
+		ordered[i] = candidates[index]
+	}
+	if max > 0 && len(ordered) > max {
+		ordered = ordered[:max]
+	}
+	resolution.Candidates = ordered
+	return resolution
 }
 
 // anyCallerSourced reports whether any resolved candidate came from a
@@ -670,29 +749,45 @@ func isObservationAttributionRelation(name string) bool {
 	}
 }
 
-// traverseObservationToSubject implements observation-to-entity traversal:
-// given a document/episode node that a hybrid search matched on its text
-// (title, body, goal, outcome, summary), it walks the node's incoming edge
-// back to the canonical entity that document/episode is projected against
-// (projectContent/projectEpisode always set that entity as the edge's
-// source and the document/episode as the target) and proposes that entity
-// as an additional subject candidate. This lets a term that only appears
-// inside a document body or episode summary still resolve to the subject
-// the question is actually about, without requiring the term to match the
-// subject's own label, alias, or previous name directly.
-//
-// The traversed entity is independently re-authorized (authorizedAttributes
-// via nodeCandidate) before it can become a candidate -- the caller's
-// authorization to see the observation never carries over to the entity it
-// describes.
-func (a *Adapter) traverseObservationToSubject(ctx context.Context, principal storage.Principal, scope contextfabric.RequestedScope, term string, observation *zep.EntityNode) (contextfabric.SubjectCandidate, bool) {
+// observationTraversal classifies the outcome of
+// traverseObservationToSubject. Codex round-3 finding P1-1: a backend
+// error must never collapse to the same signal as a confirmed, legitimate
+// absence of a parent -- doing so re-enabled the round-2 misattribution
+// bug (a document auto-committing itself) whenever the parent lookup
+// merely failed transiently.
+type observationTraversal int
+
+const (
+	// observationNoParent means the traversal completed and found no
+	// attribution edge (or none survived relation-type/authorization
+	// filtering) -- a genuine, confirmed absence of a canonical parent.
+	observationNoParent observationTraversal = iota
+	// observationParentFound means a canonical parent candidate was found
+	// and is returned.
+	observationParentFound
+	// observationTraversalErrored means a backend call failed, or a
+	// second-hop node could not be fetched or could not be verified as
+	// belonging to this organization -- parent status is genuinely
+	// unknown, not confirmed absent.
+	observationTraversalErrored
+)
+
+func (a *Adapter) traverseObservationToSubject(ctx context.Context, principal storage.Principal, scope contextfabric.RequestedScope, term string, observation *zep.EntityNode) (contextfabric.SubjectCandidate, observationTraversal) {
 	if observation == nil || strings.TrimSpace(observation.UUID) == "" {
-		return contextfabric.SubjectCandidate{}, false
+		return contextfabric.SubjectCandidate{}, observationNoParent
 	}
 	edges, err := a.api.GetNodeEdges(ctx, observation.UUID)
 	if err != nil {
-		return contextfabric.SubjectCandidate{}, false
+		return contextfabric.SubjectCandidate{}, observationTraversalErrored
 	}
+	// uncertain tracks whether any candidate attribution edge was found
+	// but could not be resolved to a trusted parent (a second-hop fetch
+	// failure or an organization-identity mismatch) -- as opposed to no
+	// candidate edge existing at all. Only the latter is a confirmed "no
+	// parent"; the former must report observationTraversalErrored so the
+	// caller fails toward ambiguity rather than treating an unresolved
+	// edge as if it never existed.
+	uncertain := false
 	for _, edge := range edges {
 		if edge == nil || edge.TargetNodeUUID != observation.UUID || strings.TrimSpace(edge.SourceNodeUUID) == "" {
 			continue
@@ -707,12 +802,14 @@ func (a *Adapter) traverseObservationToSubject(ctx context.Context, principal st
 		// narrowly. Skipping this check would let a principal who can see
 		// both nodes separately learn the relationship between them
 		// regardless of whether they are authorized to see that
-		// relationship specifically.
+		// relationship specifically. A clean authorization denial is a
+		// definitive answer, not a failure, so it does not set uncertain.
 		if !authorizedAttributes(principal, scope, edge.Attributes) {
 			continue
 		}
 		source, err := a.api.GetNode(ctx, edge.SourceNodeUUID)
 		if err != nil || source == nil {
+			uncertain = true
 			continue
 		}
 		// GetNode is a second-hop, UUID-only lookup (see
@@ -720,6 +817,7 @@ func (a *Adapter) traverseObservationToSubject(ctx context.Context, principal st
 		// actually belongs to this organization before trusting it as the
 		// document/episode's canonical subject.
 		if _, verified := verifiedNodeSubject(principal.OrgID, edge.SourceNodeUUID, source); !verified {
+			uncertain = true
 			continue
 		}
 		candidate, ok := nodeCandidate(principal, scope, term, source)
@@ -731,11 +829,13 @@ func (a *Adapter) traverseObservationToSubject(ctx context.Context, principal st
 		// directly.
 		candidate.Confidence *= 0.85
 		candidate.MatchReasons = []string{"Matched an associated document or episode that references this subject."}
-		return candidate, true
+		return candidate, observationParentFound
 	}
-	return contextfabric.SubjectCandidate{}, false
+	if uncertain {
+		return contextfabric.SubjectCandidate{}, observationTraversalErrored
+	}
+	return contextfabric.SubjectCandidate{}, observationNoParent
 }
-
 func authorizedAttributes(principal storage.Principal, requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {
 	if len(principal.RepositoryScopes) > 0 {
 		encoded := stringAttribute(attributes, "authorization_repositories")
