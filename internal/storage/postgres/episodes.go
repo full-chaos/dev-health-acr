@@ -132,6 +132,44 @@ RETURNING episode_id, payload, created_at, redaction_state`, principal.OrgID, ep
 	return episode, nil
 }
 
+// ListSince is the org-wide incremental read behind storage.EpisodeStore.
+// See the interface doc comment for the full contract.
+func (s *EpisodeStore) ListSince(ctx context.Context, orgID string, since time.Time, afterEpisodeID string, limit int) ([]storage.EpisodeProjectionRecord, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return nil, errors.New("organization is required")
+	}
+	rows, err := s.DB.QueryContext(ctx, `
+SELECT episode_id, repo_slug, redaction_state, outcome, started_at, ended_at, created_at, payload
+FROM acr.agent_episodes
+WHERE org_id = $1::uuid AND (created_at > $2 OR (created_at = $2 AND episode_id > $3))
+ORDER BY created_at ASC, episode_id ASC
+LIMIT $4`, orgID, since, afterEpisodeID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list episodes since: %w", sanitizeDatabaseError(err))
+	}
+	defer rows.Close()
+	result := make([]storage.EpisodeProjectionRecord, 0, limit)
+	for rows.Next() {
+		var record storage.EpisodeProjectionRecord
+		var payload []byte
+		if err := rows.Scan(&record.EpisodeID, &record.RepoSlug, &record.RedactionState, &record.Outcome, &record.StartedAt, &record.EndedAt, &record.CreatedAt, &payload); err != nil {
+			return nil, fmt.Errorf("scan episode since: %w", sanitizeDatabaseError(err))
+		}
+		record.StartedAt, record.EndedAt, record.CreatedAt = record.StartedAt.UTC(), record.EndedAt.UTC(), record.CreatedAt.UTC()
+		if record.RedactionState == "active" {
+			if create, err := storedEpisodeCreate(payload); err == nil {
+				record.Goal, record.Summary, record.TaskRef = create.Goal, create.Summary, create.TaskRef
+			}
+		}
+		result = append(result, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate episodes since: %w", sanitizeDatabaseError(err))
+	}
+	return result, nil
+}
+
 func (s *EpisodeStore) PurgeExpired(ctx context.Context, before time.Time, limit int) (int, error) {
 	return 0, errors.New("principal-scoped episode purge is required")
 }

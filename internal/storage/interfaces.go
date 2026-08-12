@@ -88,6 +88,33 @@ type EpisodeStore interface {
 	GetByClientEpisodeID(ctx context.Context, principal Principal, clientEpisodeID string) (contractsv1.AgentEpisode, error)
 	Redact(ctx context.Context, principal Principal, episodeID, reason string) (contractsv1.AgentEpisode, error)
 	PurgeExpired(ctx context.Context, before time.Time, limit int) (int, error)
+	// ListSince is the narrow, org-wide (not repository-scoped) incremental
+	// read used by projection/export consumers such as CHAOS-3753's
+	// devhealthsource: ordered by (CreatedAt, EpisodeID), strictly after
+	// (since, afterEpisodeID), at most limit rows. It intentionally takes an
+	// orgID rather than a Principal -- like CredentialStore.List -- because a
+	// projection worker is a service-level caller with no meaningful
+	// repository scope of its own, not a repository-scoped client. Redacted
+	// and purged-tombstone episodes are still returned (with content already
+	// scrubbed by CreateIdempotent/Redact) so a caller can detect and
+	// propagate the state change; RedactionState reports which.
+	ListSince(ctx context.Context, orgID string, since time.Time, afterEpisodeID string, limit int) ([]EpisodeProjectionRecord, error)
+}
+
+// EpisodeProjectionRecord is EpisodeStore.ListSince's row shape: enough to
+// project or export an episode without exposing storage internals (payload
+// JSON encoding, repository_id, idempotency keys).
+type EpisodeProjectionRecord struct {
+	EpisodeID      string
+	RepoSlug       string
+	TaskRef        string
+	Goal           string
+	Outcome        string
+	Summary        string
+	RedactionState string
+	StartedAt      time.Time
+	EndedAt        time.Time
+	CreatedAt      time.Time
 }
 
 // EpisodePreflight is the opaque idempotency state used before creating an

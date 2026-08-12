@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -125,6 +126,49 @@ func (s *EpisodeStore) Redact(_ context.Context, principal storage.Principal, ep
 		s.byID[episodeID] = record
 	}
 	return presentation(record.episode), nil
+}
+
+// ListSince is the org-wide incremental read behind storage.EpisodeStore.
+// See the interface doc comment for the full contract.
+func (s *EpisodeStore) ListSince(_ context.Context, orgID string, since time.Time, afterEpisodeID string, limit int) ([]storage.EpisodeProjectionRecord, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return nil, errors.New("organization is required")
+	}
+	s.mu.RLock()
+	matches := make([]episodeRecord, 0, len(s.byID))
+	for _, record := range s.byID {
+		if record.orgID != orgID {
+			continue
+		}
+		createdAt := record.episode.CreatedAt
+		if createdAt.Before(since) || (createdAt.Equal(since) && record.episode.EpisodeID <= afterEpisodeID) {
+			continue
+		}
+		matches = append(matches, record)
+	}
+	s.mu.RUnlock()
+	sort.Slice(matches, func(i, j int) bool {
+		if !matches[i].episode.CreatedAt.Equal(matches[j].episode.CreatedAt) {
+			return matches[i].episode.CreatedAt.Before(matches[j].episode.CreatedAt)
+		}
+		return matches[i].episode.EpisodeID < matches[j].episode.EpisodeID
+	})
+	if limit >= 0 && len(matches) > limit {
+		matches = matches[:limit]
+	}
+	result := make([]storage.EpisodeProjectionRecord, 0, len(matches))
+	for _, record := range matches {
+		row := storage.EpisodeProjectionRecord{
+			EpisodeID: record.episode.EpisodeID, RepoSlug: record.repoSlug, RedactionState: record.episode.RedactionState,
+			Outcome: record.episode.Outcome, StartedAt: record.episode.StartedAt, EndedAt: record.episode.EndedAt, CreatedAt: record.episode.CreatedAt,
+		}
+		if row.RedactionState == "active" {
+			row.Goal, row.Summary, row.TaskRef = record.episode.Goal, record.episode.Summary, record.episode.TaskRef
+		}
+		result = append(result, row)
+	}
+	return result, nil
 }
 
 func (s *EpisodeStore) PurgeExpired(_ context.Context, before time.Time, limit int) (int, error) {

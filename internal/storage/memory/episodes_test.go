@@ -312,6 +312,123 @@ func TestEpisodeStoreAllowsSameKeysInSiblingRepositories(t *testing.T) {
 	}
 }
 
+func TestEpisodeStoreListSinceOrdersPaginatesAndIsolatesByOrganization(t *testing.T) {
+	clock := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	store := NewEpisodeStore(func() time.Time { return clock })
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
+	other := storage.Principal{OrgID: "org_2", RepositoryScopes: []string{"owner/repo"}}
+
+	create := testEpisodeCreate()
+	create.ClientEpisodeID, create.IdempotencyKey = "ep-1", "idem-1"
+	if _, _, err := store.CreateIdempotent(context.Background(), principal, create, nil); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Minute)
+	create.ClientEpisodeID, create.IdempotencyKey = "ep-2", "idem-2"
+	if _, _, err := store.CreateIdempotent(context.Background(), principal, create, nil); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Minute)
+	create.ClientEpisodeID, create.IdempotencyKey = "ep-3", "idem-3"
+	if _, _, err := store.CreateIdempotent(context.Background(), other, create, nil); err != nil {
+		t.Fatal(err) // a different organization; must never appear in org_1's list
+	}
+
+	all, err := store.ListSince(context.Background(), "org_1", time.Time{}, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected exactly org_1's 2 episodes, got %d: %+v", len(all), all)
+	}
+	if !all[0].CreatedAt.Before(all[1].CreatedAt) {
+		t.Fatalf("expected ascending (created_at, episode_id) order, got %+v", all)
+	}
+
+	// Pagination: page 1 of size 1, then resume from its cursor.
+	page1, err := store.ListSince(context.Background(), "org_1", time.Time{}, "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page1) != 1 || page1[0].EpisodeID != all[0].EpisodeID {
+		t.Fatalf("page1 = %+v, want first episode only", page1)
+	}
+	page2, err := store.ListSince(context.Background(), "org_1", page1[0].CreatedAt, page1[0].EpisodeID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page2) != 1 || page2[0].EpisodeID != all[1].EpisodeID {
+		t.Fatalf("page2 = %+v, want the second episode only", page2)
+	}
+}
+
+func TestEpisodeStoreListSinceReportsRedactionAndPurgeStateWithoutLeakingContent(t *testing.T) {
+	clock := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	store := NewEpisodeStore(func() time.Time { return clock })
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
+
+	active := testEpisodeCreate()
+	active.ClientEpisodeID, active.IdempotencyKey = "ep-active", "idem-active"
+	activeEpisode, _, err := store.CreateIdempotent(context.Background(), principal, active, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Minute)
+	redacted := testEpisodeCreate()
+	redacted.ClientEpisodeID, redacted.IdempotencyKey = "ep-redacted", "idem-redacted"
+	redactedEpisode, _, err := store.CreateIdempotent(context.Background(), principal, redacted, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Redact(context.Background(), principal, redactedEpisode.EpisodeID, "request"); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Minute)
+	purged := testEpisodeCreate()
+	purged.ClientEpisodeID, purged.IdempotencyKey = "ep-purged", "idem-purged"
+	purged.RetentionClass = "no_persist"
+	if _, _, err := store.CreateIdempotent(context.Background(), principal, purged, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := store.ListSince(context.Background(), "org_1", time.Time{}, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("expected all 3 episodes (including redacted and purged, as tombstone signals), got %d: %+v", len(rows), rows)
+	}
+	byID := map[string]storage.EpisodeProjectionRecord{}
+	for _, row := range rows {
+		byID[row.EpisodeID] = row
+	}
+	if got := byID[activeEpisode.EpisodeID]; got.RedactionState != "active" || got.Goal == "" {
+		t.Fatalf("active episode row = %+v", got)
+	}
+	if got := byID[redactedEpisode.EpisodeID]; got.RedactionState != "redacted" || got.Goal != "" {
+		t.Fatalf("redacted episode row must report its state without content: %+v", got)
+	}
+	foundPurged := false
+	for _, row := range rows {
+		if row.RedactionState == "purged_tombstone" {
+			foundPurged = true
+			if row.Goal != "" || row.Summary != "" {
+				t.Fatalf("purged episode row must not carry content: %+v", row)
+			}
+		}
+	}
+	if !foundPurged {
+		t.Fatalf("expected a purged_tombstone row: %+v", rows)
+	}
+}
+
+func TestEpisodeStoreListSinceRejectsEmptyOrganization(t *testing.T) {
+	store := NewEpisodeStore(nil)
+	if _, err := store.ListSince(context.Background(), "", time.Time{}, "", 10); err == nil {
+		t.Fatal("expected an error for an empty organization")
+	}
+}
+
 func testEpisodeCreate() contractsv1.AgentEpisodeCreate {
 	return contractsv1.AgentEpisodeCreate{
 		SchemaVersion: contractsv1.AgentEpisodeCreateSchema, ClientEpisodeID: "episode_01", IdempotencyKey: "idempotency_01", ContextPacketID: "packet_01",
