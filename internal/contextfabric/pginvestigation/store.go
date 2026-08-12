@@ -104,6 +104,14 @@ SELECT org_id, payload FROM acr.context_fabric_investigation_results WHERE resul
 	if err := row.Scan(&existingOrgID, &existingPayload); err != nil {
 		return fmt.Errorf("read existing investigation result: %w", sanitizeError(err))
 	}
+	// P2 (Codex delta review, CHAOS-3755): the EXISTING stored row may
+	// have reached storage some other way (see the matching comment in
+	// Get) and could carry an explicit null where the schema only ever
+	// allows an omitted or real-array value. Reject that before trusting
+	// it as a valid idempotent-replay target.
+	if err := rejectExplicitNullDegradedReasons(existingPayload); err != nil {
+		return fmt.Errorf("pginvestigation: stored investigation result %q is invalid: %w", resultID, err)
+	}
 	if existingOrgID != orgID {
 		return fmt.Errorf("pginvestigation: investigation result %q already exists under a different organization", resultID)
 	}
@@ -142,6 +150,16 @@ SELECT payload FROM acr.context_fabric_investigation_results WHERE result_id = $
 		return contextfabric.InvestigationResult{}, fmt.Errorf("get investigation result: %w", sanitizeError(err))
 	}
 
+	// P2 (Codex delta review, CHAOS-3755): an explicit `"degraded_reasons":
+	// null` collapses to the identical Go nil slice an OMITTED field would
+	// decode to, so Validate()'s relaxed nil-check (correct for the
+	// omitted case) cannot tell them apart after decoding into the
+	// struct. The JSON Schema only allows degraded_reasons to be an array
+	// WHEN PRESENT -- never null -- so this must be caught on the raw
+	// bytes, before or independent of the struct decode.
+	if err := rejectExplicitNullDegradedReasons(payload); err != nil {
+		return contextfabric.InvestigationResult{}, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
+	}
 	var result contextfabric.InvestigationResult
 	if err := json.Unmarshal(payload, &result); err != nil {
 		return contextfabric.InvestigationResult{}, fmt.Errorf("pginvestigation: decode investigation result: %w", err)
@@ -185,6 +203,31 @@ func canonicalize(payload []byte) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(result)
+}
+
+// rejectExplicitNullDegradedReasons reports whether payload contains a
+// literal `"coverage":{"degraded_reasons":null,...}` (P2, Codex delta
+// review, CHAOS-3755). coverage.degraded_reasons is `omitempty` in Go and
+// not in the Coverage schema's required set, so "absent" is the only
+// schema-conformant way to skip it -- explicit null is not a valid array
+// and violates the schema even though, once decoded into
+// ContextFabricCoverage.DegradedReasons ([]string), it is indistinguishable
+// from the omitted case (both become a nil slice). This check runs on the
+// raw bytes specifically because that distinction stops existing the
+// moment json.Unmarshal returns.
+func rejectExplicitNullDegradedReasons(payload []byte) error {
+	var probe struct {
+		Coverage struct {
+			DegradedReasons json.RawMessage `json:"degraded_reasons"`
+		} `json:"coverage"`
+	}
+	if err := json.Unmarshal(payload, &probe); err != nil {
+		return fmt.Errorf("decode for explicit-null check: %w", err)
+	}
+	if bytes.Equal(bytes.TrimSpace(probe.Coverage.DegradedReasons), []byte("null")) {
+		return errors.New("coverage.degraded_reasons must be omitted or an array, not explicit null")
+	}
+	return nil
 }
 
 func sanitizeError(err error) error {

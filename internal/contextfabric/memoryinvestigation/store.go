@@ -75,6 +75,14 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, found := s.results[resultID]; found {
+		// P2 (Codex delta review, CHAOS-3755): the EXISTING stored row may
+		// have reached storage some other way (see the matching comment
+		// in Get) and could carry an explicit null where the schema only
+		// ever allows an omitted or real-array value. Reject that before
+		// trusting it as a valid idempotent-replay target.
+		if err := rejectExplicitNullDegradedReasons(existing.payload); err != nil {
+			return fmt.Errorf("memoryinvestigation: stored investigation result %q is invalid: %w", resultID, err)
+		}
 		// M1 (Codex adversarial review, CHAOS-3755): the conflict check
 		// is org-scoped FIRST, independent of content equality.
 		// InvestigationResult carries no organization discriminator of
@@ -118,6 +126,16 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 		return contextfabric.InvestigationResult{}, ErrNotFound
 	}
 
+	// P2 (Codex delta review, CHAOS-3755): an explicit `"degraded_reasons":
+	// null` collapses to the identical Go nil slice an OMITTED field would
+	// decode to, so Validate()'s relaxed nil-check (correct for the
+	// omitted case) cannot tell them apart after decoding into the
+	// struct. The JSON Schema only allows degraded_reasons to be an array
+	// WHEN PRESENT -- never null -- so this must be caught on the raw
+	// bytes, before or independent of the struct decode.
+	if err := rejectExplicitNullDegradedReasons(stored.payload); err != nil {
+		return contextfabric.InvestigationResult{}, fmt.Errorf("memoryinvestigation: stored investigation result is invalid: %w", err)
+	}
 	var result contextfabric.InvestigationResult
 	if err := json.Unmarshal(stored.payload, &result); err != nil {
 		return contextfabric.InvestigationResult{}, fmt.Errorf("memoryinvestigation: decode investigation result: %w", err)
@@ -132,4 +150,29 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 		return contextfabric.InvestigationResult{}, fmt.Errorf("memoryinvestigation: stored investigation result is invalid: %w", err)
 	}
 	return result, nil
+}
+
+// rejectExplicitNullDegradedReasons reports whether payload contains a
+// literal `"coverage":{"degraded_reasons":null,...}` (P2, Codex delta
+// review, CHAOS-3755). coverage.degraded_reasons is `omitempty` in Go and
+// not in the Coverage schema's required set, so "absent" is the only
+// schema-conformant way to skip it -- explicit null is not a valid array
+// and violates the schema even though, once decoded into
+// ContextFabricCoverage.DegradedReasons ([]string), it is indistinguishable
+// from the omitted case (both become a nil slice). This check runs on the
+// raw bytes specifically because that distinction stops existing the
+// moment json.Unmarshal returns.
+func rejectExplicitNullDegradedReasons(payload []byte) error {
+	var probe struct {
+		Coverage struct {
+			DegradedReasons json.RawMessage `json:"degraded_reasons"`
+		} `json:"coverage"`
+	}
+	if err := json.Unmarshal(payload, &probe); err != nil {
+		return fmt.Errorf("decode for explicit-null check: %w", err)
+	}
+	if bytes.Equal(bytes.TrimSpace(probe.Coverage.DegradedReasons), []byte("null")) {
+		return errors.New("coverage.degraded_reasons must be omitted or an array, not explicit null")
+	}
+	return nil
 }

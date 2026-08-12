@@ -1,8 +1,10 @@
 package pginvestigation_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -158,4 +160,63 @@ func TestStore_getUnknownResultIDIsIndistinguishableFromWrongOrg(t *testing.T) {
 	require.ErrorIs(t, wrongOrgErr, pginvestigation.ErrNotFound)
 	require.ErrorIs(t, unknownIDErr, pginvestigation.ErrNotFound)
 	require.Equal(t, unknownIDErr.Error(), wrongOrgErr.Error(), "wrong-org and truly-missing must produce the identical error")
+}
+
+// TestStore_getRejectsStoredResultThatFailsValidation is the M2 Get-guard
+// probe (Codex adversarial + delta review, CHAOS-3755) for the production
+// store specifically -- memoryinvestigation has its own white-box version
+// (store_internal_test.go), but nothing exercised this store's copy of the
+// same guard. Save validates on write, so the only way to reach Get's own
+// validation is to write a row directly, bypassing Save -- exactly the
+// state the guard exists for (a row that reached storage some other way).
+func TestStore_getRejectsStoredResultThatFailsValidation(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	store, err := pginvestigation.NewStore(db)
+	require.NoError(t, err)
+
+	// Syntactically valid JSON, semantically invalid InvestigationResult:
+	// missing schema_version, status, interpretation, coverage, and every
+	// required collection. json.Unmarshal cannot catch this -- only
+	// InvestigationResult.Validate() can.
+	_, err = db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at)
+VALUES ($1, $2, $3, $4)`, "result-corrupt-pg", "org-1", []byte(`{"result_id":"result-corrupt-pg","question":"what happened?"}`), time.Now().UTC())
+	require.NoError(t, err)
+
+	_, getErr := store.Get(ctx, storage.Principal{OrgID: "org-1"}, "result-corrupt-pg")
+	require.Error(t, getErr)
+	require.Contains(t, getErr.Error(), "stored investigation result is invalid")
+}
+
+// TestStore_getRejectsStoredResultWithExplicitNullDegradedReasons is the P2
+// fix (Codex delta review, CHAOS-3755): coverage.degraded_reasons is
+// omitempty in Go and optional (not `null`) in the JSON Schema -- an
+// explicit `null` collapses to the same Go nil slice an omitted field
+// would decode to, so it must be caught on the raw stored bytes, not after
+// json.Unmarshal has already erased the distinction. The row is planted
+// with a direct INSERT (bypassing Save, which never produces explicit
+// null through its own marshal path) to reach the state this guards
+// against: a row written by some other path.
+func TestStore_getRejectsStoredResultWithExplicitNullDegradedReasons(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	store, err := pginvestigation.NewStore(db)
+	require.NoError(t, err)
+
+	valid := validResult("result-explicit-null")
+	encoded, err := json.Marshal(valid)
+	require.NoError(t, err)
+	tainted := bytes.Replace(encoded, []byte(`"sources":[]`), []byte(`"sources":[],"degraded_reasons":null`), 1)
+	require.NotEqual(t, string(encoded), string(tainted), "test setup: expected substring not found in fixture JSON")
+
+	_, err = db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at)
+VALUES ($1, $2, $3, $4)`, valid.ResultID, "org-1", tainted, valid.GeneratedAt)
+	require.NoError(t, err)
+
+	_, getErr := store.Get(ctx, storage.Principal{OrgID: "org-1"}, valid.ResultID)
+	require.Error(t, getErr)
+	require.Contains(t, getErr.Error(), "degraded_reasons")
+	require.Contains(t, getErr.Error(), "null")
 }
