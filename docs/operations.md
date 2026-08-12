@@ -255,7 +255,7 @@ new build.
 | `ACR_CONTEXT_FABRIC_MODEL_BASE_URL` | `https://api.openai.com/v1/` | OpenAI-compatible API root. Set this for BYO. |
 | `ACR_CONTEXT_FABRIC_MODEL_PROVIDER` | `openai` | Plugin namespace, recorded verbatim as `ModelExecutionReceipt.Provider`. Give a BYO endpoint its own stable name so replay can tell receipts apart. |
 | `ACR_CONTEXT_FABRIC_MODEL` | `gpt-5-nano` | Bare model id (no provider prefix). Ids containing `/`, e.g. `meta-llama/Llama-3.1-8B-Instruct`, are supported. |
-| `ACR_CONTEXT_FABRIC_MODEL_FALLBACK` | *(unset)* | Optional second, stronger model on the same provider, tried only when the primary call fails or returns output that does not validate. **Recommended value for the OpenAI default: `gpt-5.6-luna`.** Unset by default because a fallback is a second billable call. |
+| `ACR_CONTEXT_FABRIC_MODEL_FALLBACK` | *(unset)* | Second, stronger model on the same provider, tried when the primary call fails or returns output that does not validate. Unset by default (a fallback is a second billable call), but **effectively required in practice — set it to `gpt-5.6-luna` alongside the `gpt-5-nano` default.** See the measurements below. |
 | `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` | `45s` | Bounds one generation attempt (1s–2m). |
 | `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS` | `2` | Attempts `genkitruntime` makes per operation (1–3). |
 | `ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES` | `2` | The OpenAI SDK's own retry loop *within* one attempt (0–5). Set `0` to make `genkitruntime` the single retry owner — the right choice for a local BYO server. |
@@ -313,18 +313,26 @@ unless `ACR_TEST_MODEL_API_KEY` is set —
 `go test ./internal/contextfabric/modelprovider -run Live` for the runtime
 and `go test ./internal/api -run LiveEndpoint` for the endpoint):
 interpretation passed ACR's validator on every run, but synthesis — the
-strictest validator in the pipeline — passed roughly one run in three at the
-runtime level and took **five attempts** to produce one valid answer through
-the endpoint. Every failure was a clean, correctly classified 502
+strictest validator in the pipeline — did not. `gpt-5-nano` alone answered
+**1 of 16** endpoint attempts; the richer the synthesis input (graph paths
+plus several canonical facts), the worse it did, so the runtime-level rate of
+roughly one in three overstates it for real traffic.
+
+Every failure was a clean, correctly classified 502
 `upstream_invalid_output`, never a wrong answer: value-level closure rejects
-what it cannot bind to a canonical fact. Invalid output is deliberately
+what it cannot bind to a canonical fact. So the failure mode is availability,
+not correctness — but at 1 in 16 the endpoint is unusable.
+
+**The fallback is required, not optional.** Invalid output is deliberately
 **not** retried (`genkitruntime` fails closed on a schema-shaped failure
-rather than re-rolling the same input), so the configured fallback is the
-mitigation: set `ACR_CONTEXT_FABRIC_MODEL_FALLBACK=gpt-5.6-luna` in any
-deployment expected to answer reliably. `genkitruntime` invokes the fallback
-on invalid output as well as on transport failure, and records
-`fallback_used` on the receipt. Tracking how often that happens per model is
-the `ModelReceiptSink` evaluator's job (CHAOS-3756).
+rather than re-rolling the same input); the fallback model is the only
+mitigation, and `genkitruntime` invokes it on invalid output as well as on
+transport failure. With `ACR_CONTEXT_FABRIC_MODEL_FALLBACK=gpt-5.6-luna` the
+same endpoint answered **3 of 3**, at 72–102s per request. Set it in every
+deployment expected to answer. Each fallback is a second billable call and is
+recorded as `fallback_used` on the receipt; tracking that rate per model is
+the `ModelReceiptSink` evaluator's job (CHAOS-3756), and a sustained high
+rate is the signal to promote the fallback to primary.
 
 ### Helm
 

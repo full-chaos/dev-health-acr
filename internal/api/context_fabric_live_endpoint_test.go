@@ -57,6 +57,13 @@ func TestLiveEndpointAnswersARealInvestigation(t *testing.T) {
 	if value := os.Getenv("ACR_TEST_MODEL"); value != "" {
 		modelConfig.Model = value
 	}
+	// Setting a fallback exercises the production mitigation for a primary
+	// model that fails value-level closure: genkitruntime retries the whole
+	// operation on the stronger model when the primary's output does not
+	// validate.
+	if value := os.Getenv("ACR_TEST_MODEL_FALLBACK"); value != "" {
+		modelConfig.FallbackModel = value
+	}
 	modelRuntime, err := modelprovider.New(context.Background(), modelConfig)
 	if err != nil {
 		t.Fatal(err)
