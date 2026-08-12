@@ -596,6 +596,76 @@ func TestApplyProjectionBatchSkipsStaleOutOfOrderTombstone(t *testing.T) {
 	}
 }
 
+// TestApplyProjectionBatchSkipsStaleOutOfOrderTombstoneForEpisodeAndContent
+// is the R2 regression: episode and content/document target nodes must
+// carry observed_at just like entity/relationship nodes do, so the same
+// staleness guard proven in TestApplyProjectionBatchSkipsStaleOutOfOrderTombstone
+// (entity + relationship) also protects episode and content nodes. Without
+// observed_at, tombstoneIsStale can never detect staleness for that kind
+// and a stale, out-of-order tombstone deletes a newer episode/content
+// unconditionally.
+func TestApplyProjectionBatchSkipsStaleOutOfOrderTombstoneForEpisodeAndContent(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	newer := time.Date(2026, 8, 11, 23, 0, 0, 0, time.UTC)
+	stale := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_live", Label: "Live Project"}
+
+	write := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_newwrite", OrgID: "org_1", Source: "dev-health-ops",
+		SourceVersion: "ops-v9", Cursor: "c0", NextCursor: "c1", GeneratedAt: newer,
+		Entities: []contextfabric.EntityProjection{},
+		Contents: []contextfabric.ContentProjection{{
+			ContentID: "content_live", Subject: subject, Title: "Live doc", Body: "body", ContentDigest: "digest_live_1234", Untrusted: true,
+			Authorization:  contextfabric.AuthorizationScope{RepositorySlugs: []string{"team-a/repo"}},
+			EvidenceRefIDs: []string{"evidence_live_1234"}, ObservedAt: newer, SourceVersion: "ops-v9",
+		}},
+		Episodes: []contextfabric.EpisodeProjection{{
+			EpisodeID: "episode_live", Subject: subject, Goal: "goal", Outcome: "succeeded", Summary: "summary",
+			Authorization:  contextfabric.AuthorizationScope{RepositorySlugs: []string{"team-a/repo"}},
+			EvidenceRefIDs: []string{"evidence_live_1234"}, StartedAt: newer.Add(-time.Minute), EndedAt: newer, SourceVersion: "ops-v9",
+		}},
+		Relationships: []contextfabric.RelationshipProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), write); err != nil {
+		t.Fatalf("write ApplyProjectionBatch() error = %v", err)
+	}
+	contentNodeID := contentUUID("org_1", "document", "content_live")
+	episodeNodeID := contentUUID("org_1", "episode", "episode_live")
+	if _, ok := api.nodes[contentNodeID]; !ok {
+		t.Fatal("seed setup wrong: content was not projected")
+	}
+	if _, ok := api.nodes[episodeNodeID]; !ok {
+		t.Fatal("seed setup wrong: episode was not projected")
+	}
+	if got := stringAttribute(api.nodes[episodeNodeID].Attributes, "observed_at"); got == "" {
+		t.Fatal("episode node has no observed_at attribute -- the staleness guard cannot protect it")
+	}
+
+	tomb := write
+	tomb.BatchID = "batch_staletomb"
+	tomb.SourceVersion = "ops-v1"
+	tomb.GeneratedAt = stale
+	tomb.Cursor = "c1"
+	tomb.NextCursor = "c2"
+	tomb.Contents = []contextfabric.ContentProjection{}
+	tomb.Episodes = []contextfabric.EpisodeProjection{}
+	tomb.Tombstones = []contextfabric.ProjectionTombstone{
+		{Kind: "document", CanonicalID: "content_live", Reason: "stale delete delivered out of order", EffectiveAt: stale, SourceVersion: "ops-v1"},
+		{Kind: "episode", CanonicalID: "episode_live", Reason: "stale delete delivered out of order", EffectiveAt: stale, SourceVersion: "ops-v1"},
+	}
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), tomb); err != nil {
+		t.Fatalf("tombstone ApplyProjectionBatch() error = %v", err)
+	}
+	if _, ok := api.nodes[contentNodeID]; !ok {
+		t.Fatal("STALE TOMBSTONE WON: content written at 2026-08-11/ops-v9 was deleted by a tombstone effective 2020-01-01/ops-v1")
+	}
+	if _, ok := api.nodes[episodeNodeID]; !ok {
+		t.Fatal("STALE TOMBSTONE WON: episode written at 2026-08-11/ops-v9 was deleted by a tombstone effective 2020-01-01/ops-v1")
+	}
+}
+
 func TestPurgeOrganizationIsIdempotentWhenGraphAlreadyAbsent(t *testing.T) {
 	t.Parallel()
 	api := newFakeAPI()

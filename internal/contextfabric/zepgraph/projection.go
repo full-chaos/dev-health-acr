@@ -239,7 +239,14 @@ func (a *Adapter) projectEpisode(ctx context.Context, orgID string, episode cont
 			"outcome": episode.Outcome, "authorization_repositories": encodeScope(episode.Authorization.RepositorySlugs),
 			"authorization_projects": encodeScope(episode.Authorization.ProjectIDs), "authorization_teams": encodeScope(episode.Authorization.TeamIDs),
 			"evidence_refs": encodeScope(episode.EvidenceRefIDs), "started_at": episode.StartedAt.UTC().Format(time.RFC3339Nano),
-			"ended_at": episode.EndedAt.UTC().Format(time.RFC3339Nano), "source_version": episode.SourceVersion,
+			// observed_at is what tombstoneIsStale (see applyTombstone)
+			// reads to decide whether an out-of-order tombstone is stale
+			// relative to this node. Without it, staleness can never be
+			// detected for episode nodes and a stale tombstone deletes
+			// unconditionally. EndedAt is the episode's own natural
+			// "as of" timestamp, matching CreatedAt below.
+			"ended_at": episode.EndedAt.UTC().Format(time.RFC3339Nano), "observed_at": episode.EndedAt.UTC().Format(time.RFC3339Nano),
+			"source_version": episode.SourceVersion,
 		},
 		CreatedAt: ptr(episode.EndedAt.UTC().Format(time.RFC3339Nano)), ValidAt: ptr(episode.StartedAt.UTC().Format(time.RFC3339Nano)),
 	}
