@@ -1,4 +1,4 @@
-package hosted
+package clickhouse
 
 import (
 	"crypto/tls"
@@ -8,9 +8,14 @@ import (
 	"os"
 )
 
-const maximumClickHouseCABytes = 1 << 20
+const maximumCABundleBytes = 1 << 20
 
-func clickHouseTLSConfig(path string) (configuration *tls.Config, resultErr error) {
+// TLSConfigFromCABundle loads an optional ClickHouse CA bundle from disk
+// into a *tls.Config. An empty path is not an error: it means "use the
+// system trust store," matching every ACR ClickHouse caller's default.
+// Shared by internal/runtime/hosted and cmd/acr-projector so this
+// security-sensitive loading path has exactly one implementation.
+func TLSConfigFromCABundle(path string) (configuration *tls.Config, resultErr error) {
 	if path == "" {
 		return nil, nil
 	}
@@ -25,11 +30,11 @@ func clickHouseTLSConfig(path string) (configuration *tls.Config, resultErr erro
 		}
 	}()
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maximumClickHouseCABytes {
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maximumCABundleBytes {
 		return nil, errors.New("ClickHouse CA bundle is invalid")
 	}
-	contents, err := io.ReadAll(io.LimitReader(file, maximumClickHouseCABytes+1))
-	if err != nil || len(contents) > maximumClickHouseCABytes {
+	contents, err := io.ReadAll(io.LimitReader(file, maximumCABundleBytes+1))
+	if err != nil || len(contents) > maximumCABundleBytes {
 		return nil, errors.New("ClickHouse CA bundle is invalid")
 	}
 	roots, err := x509.SystemCertPool()

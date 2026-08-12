@@ -10,7 +10,7 @@ import (
 )
 
 func openClickHouse(_ context.Context, request clickHouseOpenRequest) (clickHouseComponents, error) {
-	tlsConfig, err := clickHouseTLSConfig(request.config.ClickHouseCACertPath)
+	tlsConfig, err := runtimeclickhouse.TLSConfigFromCABundle(request.config.ClickHouseCACertPath)
 	if err != nil {
 		return clickHouseComponents{}, err
 	}
