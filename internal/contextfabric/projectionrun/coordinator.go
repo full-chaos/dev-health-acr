@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -70,6 +71,8 @@ type Coordinator struct {
 	orgIDs      []string
 	sourceNames []string
 	workers     map[string]*contextfabric.ProjectionWorker
+	backend     contextfabric.ProjectionBackend
+	checkpoints contextfabric.ProjectionCheckpointStore
 	locker      OrgLocker
 	observer    Observer
 	poll        time.Duration
@@ -135,9 +138,66 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	}
 	return &Coordinator{
 		orgIDs: append([]string(nil), cfg.OrgIDs...), sourceNames: sourceNames, workers: workers,
+		backend: cfg.Backend, checkpoints: cfg.Checkpoints,
 		locker: cfg.Locker, observer: cfg.Observer, poll: cfg.PollInterval, concurrency: cfg.Concurrency,
 		maxBackoff: cfg.MaxBackoff, now: cfg.Now, logger: cfg.Logger, backoff: make(map[string]*pairBackoff),
 	}, nil
+}
+
+// Rebuild purges an organization's projected graph state and resets every
+// configured source's checkpoint to the zero cursor, under the same
+// single-flight guard as ordinary ticks (org lock, then in-process mutex).
+// The next Tick for this organization then replays each source's bounded
+// full-snapshot batch (see devhealthsource's empty-cursor convention) --
+// Rebuild itself does not project anything; it only clears the way.
+//
+// PurgeOrganization runs before any checkpoint is reset, so a crash between
+// the two steps leaves every source's checkpoint pointing at data the
+// backend no longer has -- the next tick's batch would then fail cursor
+// validation against the (already-purged) organization's true state and
+// keep retrying rather than silently resuming from a stale, wrong position.
+func (c *Coordinator) Rebuild(ctx context.Context, orgID string) error {
+	if strings.TrimSpace(orgID) == "" {
+		return errors.New("projectionrun: organization is required")
+	}
+	mutexAny, _ := c.orgMu.LoadOrStore(orgID, &sync.Mutex{})
+	mutex := mutexAny.(*sync.Mutex)
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	unlock, err := c.locker.Lock(ctx, orgID)
+	if err != nil {
+		return fmt.Errorf("projectionrun: acquire organization lock for rebuild: %w", err)
+	}
+	defer func() {
+		if unlockErr := unlock(); unlockErr != nil {
+			c.logger.WarnContext(ctx, "projection organization unlock failed after rebuild", "org_id", orgID, "error", unlockErr)
+		}
+	}()
+
+	if err := c.backend.PurgeOrganization(ctx, orgID); err != nil {
+		return fmt.Errorf("projectionrun: purge organization: %w", err)
+	}
+	var resetErrs []error
+	for _, source := range c.sourceNames {
+		current, err := c.checkpoints.LoadProjectionCheckpoint(ctx, orgID, source)
+		if err != nil {
+			resetErrs = append(resetErrs, fmt.Errorf("load checkpoint for %s: %w", source, err))
+			continue
+		}
+		if current.Cursor == "" {
+			continue // never projected, or already reset
+		}
+		reset := contextfabric.ProjectionCheckpoint{OrgID: orgID, Source: source, UpdatedAt: c.now().UTC()}
+		if err := c.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, current, reset); err != nil {
+			resetErrs = append(resetErrs, fmt.Errorf("reset checkpoint for %s: %w", source, err))
+		}
+	}
+	if len(resetErrs) > 0 {
+		return errors.Join(resetErrs...)
+	}
+	c.logger.InfoContext(ctx, "projection organization rebuilt", "org_id", orgID)
+	return nil
 }
 
 // Run schedules ticks on PollInterval until ctx is canceled. It never

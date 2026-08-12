@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,11 +17,14 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
-const rootUsage = `Usage: acr-projector [serve|version]
+const rootUsage = `Usage: acr-projector [serve|rebuild|version]
 
 Commands:
-  serve    run the Context Fabric projection worker and readiness server
-  version  print build identity
+  serve            run the Context Fabric projection worker and readiness server
+  rebuild --org ID purge one organization's projected graph state and reset
+                    its checkpoints; the next serve tick replays a full
+                    snapshot from scratch (rollback/disaster-recovery lever)
+  version           print build identity
 `
 
 func main() {
@@ -50,9 +54,60 @@ func run(args []string) error {
 		return nil
 	case "serve":
 		return serve(args)
+	case "rebuild":
+		return rebuild(args)
 	default:
-		return fmt.Errorf("unknown command %q; use serve or version", command)
+		return fmt.Errorf("unknown command %q; use serve, rebuild, or version", command)
 	}
+}
+
+// rebuild is the operator-facing entry point for CHAOS-3753's full-snapshot
+// rebuild: purge the organization's backend state, reset its checkpoints,
+// and let the next `serve` tick replay a bounded, complete-enumeration
+// batch (devhealthsource's empty-cursor convention). It constructs the
+// runtime as if projection were enabled regardless of
+// ACR_CONTEXT_FABRIC_PROJECTION_ENABLED: an operator invoking this command
+// has already made the decision, independent of the continuous-loop switch.
+func rebuild(args []string) error {
+	cfg, err := config.LoadProjector()
+	if err != nil {
+		return fmt.Errorf("configuration: %w", err)
+	}
+	flags := flag.NewFlagSet("acr-projector rebuild", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	org := flags.String("org", "", "organization ID to rebuild (required)")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*org) == "" {
+		return errors.New("acr-projector rebuild requires --org")
+	}
+	cfg.ProjectionEnabled = true
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("configuration: %w", err)
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	runtime, err := openRuntime(ctx, cfg, logger)
+	if err != nil {
+		return fmt.Errorf("open runtime: %w", err)
+	}
+	defer func() {
+		if closeErr := runtime.Close(); closeErr != nil {
+			logger.Error("error closing runtime", "error", closeErr)
+		}
+	}()
+	if runtime.Coordinator == nil {
+		return errors.New("acr-projector rebuild requires Postgres, ClickHouse, and a configured Zep graph backend")
+	}
+	if err := runtime.Coordinator.Rebuild(ctx, *org); err != nil {
+		return fmt.Errorf("rebuild organization %s: %w", *org, err)
+	}
+	_, err = fmt.Printf("rebuilt organization %s\n", *org)
+	return err
 }
 
 func serve(args []string) error {

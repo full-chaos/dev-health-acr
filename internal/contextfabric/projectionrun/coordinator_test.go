@@ -76,10 +76,11 @@ type fakeBackend struct {
 	maxInFlight map[string]int
 	applied     []contextfabric.ProjectionBatch
 	failOrgs    map[string]bool
+	purged      map[string]bool
 }
 
 func newFakeBackend() *fakeBackend {
-	return &fakeBackend{inFlight: map[string]int{}, maxInFlight: map[string]int{}, failOrgs: map[string]bool{}}
+	return &fakeBackend{inFlight: map[string]int{}, maxInFlight: map[string]int{}, failOrgs: map[string]bool{}, purged: map[string]bool{}}
 }
 
 func (b *fakeBackend) ApplyProjectionBatch(ctx context.Context, batch contextfabric.ProjectionBatch) (contextfabric.ProjectionReceipt, error) {
@@ -108,7 +109,12 @@ func (b *fakeBackend) ApplyProjectionBatch(ctx context.Context, batch contextfab
 func (b *fakeBackend) ProjectionWatermark(context.Context, string, string) (contextfabric.ProjectionWatermark, error) {
 	return contextfabric.ProjectionWatermark{}, nil
 }
-func (b *fakeBackend) PurgeOrganization(context.Context, string) error { return nil }
+func (b *fakeBackend) PurgeOrganization(_ context.Context, orgID string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.purged[orgID] = true
+	return nil
+}
 
 func (b *fakeBackend) maxConcurrent(orgID string) int {
 	b.mu.Lock()

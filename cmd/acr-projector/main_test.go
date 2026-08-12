@@ -72,3 +72,17 @@ func TestVersionFlagShortcut(t *testing.T) {
 		t.Fatalf("version output = %q", output)
 	}
 }
+
+func TestRebuildRequiresOrgFlag(t *testing.T) {
+	err := run([]string{"rebuild"})
+	if err == nil || !strings.Contains(err.Error(), "requires --org") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRebuildWithoutBackingStoresReportsWhatIsMissing(t *testing.T) {
+	err := run([]string{"rebuild", "--org", "org-1"})
+	if err == nil || !strings.Contains(err.Error(), "requires Postgres, ClickHouse, and a configured Zep graph backend") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

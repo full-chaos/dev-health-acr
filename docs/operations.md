@@ -164,10 +164,21 @@ never race two sources' writes for the same organization. See
 `internal/contextfabric/zepgraph`'s `ApplyProjectionBatch` doc comment and
 ADR 0007 for why: the adapter's attribute merge has no compare-and-swap.
 
-**Rebuild:** reset an organization's checkpoint to the empty cursor and
-call `ProjectionBackend.PurgeOrganization` first; `devhealthsource` treats
-an empty cursor as "start a bounded, complete-enumeration snapshot" (see
-the design note) so the next batch replays canonical state from scratch.
+**Rebuild:**
+
+```bash
+acr-projector rebuild --org <organization-id>
+```
+
+Purges the organization's backend state (`ProjectionBackend.PurgeOrganization`)
+then resets every configured source's checkpoint to the empty cursor, under
+the same single-flight guard as an ordinary tick. `devhealthsource` treats an
+empty cursor as "start a bounded, complete-enumeration snapshot" (see the
+design note), so the next `serve` tick replays canonical state from scratch
+exactly as it would for an organization that has never been projected. It
+runs regardless of `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED` (an operator
+invoking it has already made that call) but still needs Postgres, ClickHouse,
+and a configured Zep backend to do anything.
 
 The adapter's own lifecycle contract (projection, idempotent replay,
 retrieval, tombstones, watermark, purge, organization isolation) is proved
