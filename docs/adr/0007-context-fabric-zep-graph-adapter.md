@@ -1,9 +1,24 @@
 # ADR 0007: Use Graphiti/Zep through the official Go SDK behind ACR graph ports
 
-- Status: Accepted
-- Date: 2026-08-11
+- Status: **Superseded by [ADR 0009](0009-context-fabric-falkordb-graph-adapter.md)**
+- Date: 2026-08-11 (superseded 2026-08-12)
 - Decision owners: Context Fabric / ACR
 - Implements: CHAOS-3752
+
+**Superseded.** This ADR's own "Deployment topology" section already
+documented, from research alone, that Zep v3 is a Zep Cloud-only API with no
+supportable self-hosted image, making the credential this ADR requires an
+external, environment-provisioned dependency this repository cannot
+provision on its own timeline. CHAOS-3752 was re-scoped: `zep-go/v3` was
+proven live (not just by reading docs) to speak a completely disjoint wire
+protocol from a real self-hosted Graphiti server (every route 404s; see the
+CHAOS-3752 investigation record), and the final backend decision landed on
+FalkorDB, a self-hosted graph database needing no external credential at
+all. `internal/contextfabric/zepgraph` remains in-tree (still fully tested,
+selectable by config) rather than deleted; the rest of this document is kept
+for its still-accurate historical record of the Zep/Graphiti research and
+the adapter contract shape both backends share. See ADR 0009 for the current
+decision.
 
 ## Context
 
