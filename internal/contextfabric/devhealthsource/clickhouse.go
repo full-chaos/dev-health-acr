@@ -49,12 +49,13 @@ func NewClickHouseProjectionSource(client contextpacket.ClickHouseQueryClient) (
 }
 
 // candidate is a sortable, already-built projection item. Exactly one of
-// Entity, Relationship, or Tombstone is set.
+// Entity, Relationship, Episode, or Tombstone is set.
 type candidate struct {
 	observedAt   time.Time
 	sortKey      string
 	entity       *contractsv1.ContextFabricEntityProjection
 	relationship *contractsv1.ContextFabricRelationshipProjection
+	episode      *contractsv1.ContextFabricEpisodeProjection
 	tombstone    *contractsv1.ContextFabricProjectionTombstone
 }
 
@@ -94,7 +95,7 @@ func (s *ClickHouseProjectionSource) fullSnapshot(ctx context.Context, orgID str
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	sortCandidates(all)
-	batch, err := buildBatch(orgID, "", all, true, true, s.clock())
+	batch, err := buildBatch(orgID, SourceName, sourceVersion, "", all, true, true, s.clock())
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
@@ -121,7 +122,7 @@ func (s *ClickHouseProjectionSource) incremental(ctx context.Context, orgID, cur
 	if len(all) > incrementalBatchCap {
 		all = all[:incrementalBatchCap]
 	}
-	batch, err := buildBatch(orgID, cursor, all, false, false, s.clock())
+	batch, err := buildBatch(orgID, SourceName, sourceVersion, cursor, all, false, false, s.clock())
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
@@ -144,14 +145,14 @@ func sortCandidates(all []candidate) {
 	})
 }
 
-func buildBatch(orgID, cursor string, all []candidate, fullSnapshot, completeEnumeration bool, generatedAt time.Time) (contextfabric.ProjectionBatch, error) {
+func buildBatch(orgID, source, version, cursor string, all []candidate, fullSnapshot, completeEnumeration bool, generatedAt time.Time) (contextfabric.ProjectionBatch, error) {
 	last := all[len(all)-1]
 	nextCursor, err := encodeCursor(cursorState{Since: last.observedAt, After: last.sortKey})
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, err
 	}
 	batch := contextfabric.ProjectionBatch{
-		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, OrgID: orgID, Source: SourceName, SourceVersion: sourceVersion,
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, OrgID: orgID, Source: source, SourceVersion: version,
 		Cursor: cursor, NextCursor: nextCursor, GeneratedAt: generatedAt,
 		FullSnapshot: fullSnapshot, CompleteEnumeration: completeEnumeration,
 		Entities: []contractsv1.ContextFabricEntityProjection{}, Relationships: []contractsv1.ContextFabricRelationshipProjection{},
@@ -164,11 +165,13 @@ func buildBatch(orgID, cursor string, all []candidate, fullSnapshot, completeEnu
 			batch.Entities = append(batch.Entities, *c.entity)
 		case c.relationship != nil:
 			batch.Relationships = append(batch.Relationships, *c.relationship)
+		case c.episode != nil:
+			batch.Episodes = append(batch.Episodes, *c.episode)
 		case c.tombstone != nil:
 			batch.Tombstones = append(batch.Tombstones, *c.tombstone)
 		}
 	}
-	batch.BatchID = deterministicBatchID(orgID, SourceName, cursor, nextCursor)
+	batch.BatchID = deterministicBatchID(orgID, source, cursor, nextCursor)
 	if err := batch.Validate(); err != nil {
 		return contextfabric.ProjectionBatch{}, fmt.Errorf("devhealthsource: built an invalid projection batch: %w", err)
 	}
