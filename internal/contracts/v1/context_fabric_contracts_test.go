@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 )
 
 func TestContextFabricGoldenContractsDecodeAndValidate(t *testing.T) {
@@ -157,6 +159,48 @@ func TestContextFabricEntityProjectionRejectsSeparatorCharacterInAliases(t *test
 			mutate.fn(&batch.Entities[0])
 			if err := batch.Validate(); err == nil {
 				t.Fatalf("Validate() accepted a '|'-bearing %s value", mutate.name)
+			}
+		})
+	}
+}
+
+// TestContextFabricSeparatorRejectionMatchesBetweenGoAndJSONSchema is the
+// round-3 regression: the Go validators reject '|' in authorization scope
+// values, evidence ref IDs, aliases, and previous names, but the published
+// JSON Schema must reject the exact same values -- a schema-valid payload
+// must never be a Go-invalid one. Each case marshals a batch that Go
+// rejects and asserts the JSON Schema rejects the same serialized bytes.
+func TestContextFabricSeparatorRejectionMatchesBetweenGoAndJSONSchema(t *testing.T) {
+	t.Parallel()
+	for _, mutate := range []struct {
+		name string
+		fn   func(*ContextFabricProjectionBatch)
+	}{
+		{"entity_alias", func(b *ContextFabricProjectionBatch) { b.Entities[0].Aliases = []string{"A|B"} }},
+		{"entity_previous_name", func(b *ContextFabricProjectionBatch) { b.Entities[0].PreviousNames = []string{"A|B"} }},
+		{"entity_authorization_repository_slug", func(b *ContextFabricProjectionBatch) {
+			b.Entities[0].Authorization.RepositorySlugs = []string{"team-a/repo|team-b/repo"}
+		}},
+		{"entity_authorization_project_id", func(b *ContextFabricProjectionBatch) {
+			b.Entities[0].Authorization = ContextFabricAuthorizationScope{ProjectIDs: []string{"project_a|project_b"}}
+		}},
+		{"entity_authorization_team_id", func(b *ContextFabricProjectionBatch) {
+			b.Entities[0].Authorization = ContextFabricAuthorizationScope{TeamIDs: []string{"team_a|team_b"}}
+		}},
+		{"entity_evidence_ref_id", func(b *ContextFabricProjectionBatch) { b.Entities[0].EvidenceRefIDs = []string{"evidence_a|b_1234"} }},
+	} {
+		t.Run(mutate.name, func(t *testing.T) {
+			batch := validContextFabricProjectionBatch()
+			mutate.fn(&batch)
+			if err := batch.Validate(); err == nil {
+				t.Fatalf("Go Validate() accepted a '|'-bearing %s value", mutate.name)
+			}
+			encoded, err := json.Marshal(batch)
+			if err != nil {
+				t.Fatalf("marshal batch: %v", err)
+			}
+			if err := contractcheck.ValidateSerialized("", "context_fabric_projection_batch.v1.schema.json", encoded); err == nil {
+				t.Fatalf("JSON Schema accepted a '|'-bearing %s value that Go rejects -- schema/Go validation drift", mutate.name)
 			}
 		})
 	}

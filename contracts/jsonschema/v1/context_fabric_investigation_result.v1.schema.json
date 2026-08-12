@@ -112,7 +112,8 @@
       "items": {
         "type": "string",
         "minLength": 8,
-        "maxLength": 256
+        "maxLength": 256,
+        "pattern": "^[^|]*$"
       },
       "maxItems": 500,
       "uniqueItems": true
