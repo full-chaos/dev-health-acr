@@ -21,7 +21,7 @@ func TestCoordinatorRebuildRejectsAnOrganizationOutsideTheAllowlist(t *testing.T
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs:  []string{"org-allowed"},
 		Sources: []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
-		Backend: backend, Checkpoints: checkpoints, Logger: discardLogger(),
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), Logger: discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
@@ -42,7 +42,7 @@ func TestCoordinatorRebuildAllowsAnOrganizationInsideTheAllowlist(t *testing.T) 
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs:  []string{"org-allowed"},
 		Sources: []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
-		Backend: backend, Checkpoints: checkpoints, Logger: discardLogger(),
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), Logger: discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)

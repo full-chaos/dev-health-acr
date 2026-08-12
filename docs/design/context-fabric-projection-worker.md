@@ -152,6 +152,41 @@ Flagging as the other open call.
   and canonical sources are untouched; existing `ProjectionBackend.
   PurgeOrganization` + checkpoint reset gives org-scoped rebuild.
 
+## Rebuild atomicity (codex finding C2, post-review)
+
+`PurgeOrganization` (the backend) and resetting every source's checkpoint
+(Postgres) are two separate durable systems with no shared transaction.
+The first implementation purged first and reset checkpoints second with
+nothing recording that a rebuild was underway; a crash between the two
+left a checkpoint still pointing at a real cursor while the graph behind
+it was gone, and the next ordinary tick would run *incremental* projection
+against that purged graph -- applying only the delta, not a full replay,
+silently losing the organization's history while looking like a normal
+successful tick.
+
+Fixed with a durable rebuild marker
+(`acr.context_fabric_projection_rebuild_markers`, migration 0007;
+`internal/contextfabric/projectionrun.RebuildMarker`,
+`pgprojection.RebuildMarkerStore`): `BeginRebuild` (idempotent insert)
+commits *before* the purge; `CompleteRebuild` (idempotent delete) runs only
+after every checkpoint is confirmed reset. `Coordinator.runOrg` checks the
+marker before running any ordinary per-source tick for an organization; if
+present, it resumes the exact same idempotent purge-then-reset-then-clear
+sequence (`performRebuild`) instead of projecting, and skips ordinary
+projection for that tick regardless of outcome. Every step in the sequence
+is independently idempotent (purge per ADR 0007, checkpoint reset is a
+no-op when already `""`, marker insert/delete are `ON CONFLICT`/no-op-on-absence),
+so resuming from an unknown crash point is always safe to just redo from
+the top rather than requiring point-in-time crash detection.
+
+Proven with a fault-injection probe
+(`TestCoordinatorRefusesIncrementalProjectionAfterACrashBetweenPurgeAndReset`):
+drive `BeginRebuild` + `PurgeOrganization` directly (simulating a crash
+before the reset step), then tick, and assert the source is never asked
+for a batch against the stale checkpoint -- confirmed to fail without the
+fix (temporarily disabling the marker check reproduces the exact bug), and
+to pass with it.
+
 ## Rulings (2026-08-12, team-lead)
 
 1. **Postgres advisory lock: approved.** Cross-replica correctness beats a

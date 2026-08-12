@@ -41,6 +41,24 @@ type noopObserver struct{}
 
 func (noopObserver) ObserveProjectionOutcome(Outcome) {}
 
+// RebuildMarker enforces the CHAOS-3753 codex finding C2 invariant: no code
+// path may run incremental projection against a purged-but-not-reset
+// graph. PurgeOrganization and resetting every source's checkpoint are two
+// separate durable operations with no shared transaction between them (the
+// backend and the checkpoint store are different systems), so a crash
+// between them must be detectable and resumable rather than silently
+// leaving a stale, non-empty checkpoint pointing at data the backend no
+// longer has. RebuildMarkerStore (pgprojection) is the production
+// implementation; see migrations/postgres/0007_context_fabric_projection_rebuild_markers.sql.
+type RebuildMarker interface {
+	// BeginRebuild marks orgID as having a rebuild in progress. Idempotent.
+	BeginRebuild(ctx context.Context, orgID string) error
+	// IsRebuildInProgress reports whether orgID currently has a marker.
+	IsRebuildInProgress(ctx context.Context, orgID string) (bool, error)
+	// CompleteRebuild clears orgID's marker. Idempotent.
+	CompleteRebuild(ctx context.Context, orgID string) error
+}
+
 const (
 	defaultPollInterval = 15 * time.Second
 	defaultConcurrency  = 4
@@ -49,17 +67,18 @@ const (
 )
 
 type Config struct {
-	OrgIDs       []string
-	Sources      []SourcePair
-	Backend      contextfabric.ProjectionBackend
-	Checkpoints  contextfabric.ProjectionCheckpointStore
-	Locker       OrgLocker // nil -> NoopOrgLocker (in-process mutex only)
-	Observer     Observer  // nil -> discarded
-	PollInterval time.Duration
-	Concurrency  int
-	MaxBackoff   time.Duration
-	Now          func() time.Time
-	Logger       *slog.Logger
+	OrgIDs         []string
+	Sources        []SourcePair
+	Backend        contextfabric.ProjectionBackend
+	Checkpoints    contextfabric.ProjectionCheckpointStore
+	RebuildMarkers RebuildMarker // required -- see RebuildMarker's doc comment
+	Locker         OrgLocker     // nil -> NoopOrgLocker (in-process mutex only)
+	Observer       Observer      // nil -> discarded
+	PollInterval   time.Duration
+	Concurrency    int
+	MaxBackoff     time.Duration
+	Now            func() time.Time
+	Logger         *slog.Logger
 }
 
 // Coordinator schedules contextfabric.ProjectionWorker.RunOnce across every
@@ -68,18 +87,19 @@ type Config struct {
 // (org, source) pair, cancellation, and failure isolation: one pair's error
 // never blocks another org or source.
 type Coordinator struct {
-	orgIDs      []string
-	sourceNames []string
-	workers     map[string]*contextfabric.ProjectionWorker
-	backend     contextfabric.ProjectionBackend
-	checkpoints contextfabric.ProjectionCheckpointStore
-	locker      OrgLocker
-	observer    Observer
-	poll        time.Duration
-	concurrency int
-	maxBackoff  time.Duration
-	now         func() time.Time
-	logger      *slog.Logger
+	orgIDs         []string
+	sourceNames    []string
+	workers        map[string]*contextfabric.ProjectionWorker
+	backend        contextfabric.ProjectionBackend
+	checkpoints    contextfabric.ProjectionCheckpointStore
+	rebuildMarkers RebuildMarker
+	locker         OrgLocker
+	observer       Observer
+	poll           time.Duration
+	concurrency    int
+	maxBackoff     time.Duration
+	now            func() time.Time
+	logger         *slog.Logger
 
 	orgMu sync.Map // orgID -> *sync.Mutex, in-process first line of defense
 
@@ -111,6 +131,9 @@ func (c *Coordinator) allowsOrg(orgID string) bool {
 func NewCoordinator(cfg Config) (*Coordinator, error) {
 	if cfg.Backend == nil || cfg.Checkpoints == nil {
 		return nil, errors.New("projectionrun: backend and checkpoint store are required")
+	}
+	if cfg.RebuildMarkers == nil {
+		return nil, errors.New("projectionrun: rebuild markers are required (see RebuildMarker's doc comment)")
 	}
 	if len(cfg.Sources) == 0 {
 		return nil, errors.New("projectionrun: at least one source is required")
@@ -154,7 +177,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	}
 	return &Coordinator{
 		orgIDs: append([]string(nil), cfg.OrgIDs...), sourceNames: sourceNames, workers: workers,
-		backend: cfg.Backend, checkpoints: cfg.Checkpoints,
+		backend: cfg.Backend, checkpoints: cfg.Checkpoints, rebuildMarkers: cfg.RebuildMarkers,
 		locker: cfg.Locker, observer: cfg.Observer, poll: cfg.PollInterval, concurrency: cfg.Concurrency,
 		maxBackoff: cfg.MaxBackoff, now: cfg.Now, logger: cfg.Logger, backoff: make(map[string]*pairBackoff),
 	}, nil
@@ -166,12 +189,6 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 // The next Tick for this organization then replays each source's bounded
 // full-snapshot batch (see devhealthsource's empty-cursor convention) --
 // Rebuild itself does not project anything; it only clears the way.
-//
-// PurgeOrganization runs before any checkpoint is reset, so a crash between
-// the two steps leaves every source's checkpoint pointing at data the
-// backend no longer has -- the next tick's batch would then fail cursor
-// validation against the (already-purged) organization's true state and
-// keep retrying rather than silently resuming from a stale, wrong position.
 func (c *Coordinator) Rebuild(ctx context.Context, orgID string) error {
 	if strings.TrimSpace(orgID) == "" {
 		return errors.New("projectionrun: organization is required")
@@ -193,10 +210,41 @@ func (c *Coordinator) Rebuild(ctx context.Context, orgID string) error {
 			c.logger.WarnContext(ctx, "projection organization unlock failed after rebuild", "org_id", orgID, "error", unlockErr)
 		}
 	}()
+	return c.performRebuild(ctx, orgID)
+}
 
+// performRebuild is the crash-resumable rebuild sequence, callable either as
+// an explicit Rebuild or as runOrg's automatic resume of a rebuild a prior
+// crash interrupted. Every step is idempotent (BeginRebuild, PurgeOrganization
+// per ADR 0007, and a checkpoint reset that's a no-op when already ""), so
+// re-running the whole sequence from scratch is always safe regardless of
+// which step a previous attempt actually reached. The caller must already
+// hold both the in-process mutex and the OrgLocker for orgID.
+//
+// Order matters for the CHAOS-3753 codex finding C2 invariant (no code path
+// may run incremental projection against a purged-but-not-reset graph): the
+// marker is durably persisted BEFORE the purge, so a crash at any point
+// after that leaves it in place; runOrg refuses ordinary ticks and instead
+// resumes this exact sequence while the marker is present. It is cleared
+// only after every checkpoint is confirmed reset.
+func (c *Coordinator) performRebuild(ctx context.Context, orgID string) error {
+	if err := c.rebuildMarkers.BeginRebuild(ctx, orgID); err != nil {
+		return fmt.Errorf("projectionrun: mark rebuild in progress: %w", err)
+	}
 	if err := c.backend.PurgeOrganization(ctx, orgID); err != nil {
 		return fmt.Errorf("projectionrun: purge organization: %w", err)
 	}
+	if err := c.resetAllCheckpoints(ctx, orgID); err != nil {
+		return err
+	}
+	if err := c.rebuildMarkers.CompleteRebuild(ctx, orgID); err != nil {
+		return fmt.Errorf("projectionrun: clear rebuild marker: %w", err)
+	}
+	c.logger.InfoContext(ctx, "projection organization rebuilt", "org_id", orgID)
+	return nil
+}
+
+func (c *Coordinator) resetAllCheckpoints(ctx context.Context, orgID string) error {
 	var resetErrs []error
 	for _, source := range c.sourceNames {
 		current, err := c.checkpoints.LoadProjectionCheckpoint(ctx, orgID, source)
@@ -215,7 +263,6 @@ func (c *Coordinator) Rebuild(ctx context.Context, orgID string) error {
 	if len(resetErrs) > 0 {
 		return errors.Join(resetErrs...)
 	}
-	c.logger.InfoContext(ctx, "projection organization rebuilt", "org_id", orgID)
 	return nil
 }
 
@@ -281,6 +328,25 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string) {
 			c.logger.WarnContext(ctx, "projection organization unlock failed", "org_id", orgID, "error", unlockErr)
 		}
 	}()
+
+	// CHAOS-3753 codex finding C2 invariant: never run incremental
+	// projection against a purged-but-not-reset graph. A marker present
+	// here means a prior Rebuild (this replica or another) crashed between
+	// purging the backend and confirming every checkpoint reset -- resume
+	// that exact sequence instead of proceeding, and skip ordinary
+	// projection for this org this tick regardless of outcome (the marker
+	// state, not a stale checkpoint, is the true source of truth right now).
+	if inProgress, err := c.rebuildMarkers.IsRebuildInProgress(ctx, orgID); err != nil {
+		c.logger.WarnContext(ctx, "check rebuild marker failed; skipping tick", "org_id", orgID, "error", err)
+		return
+	} else if inProgress {
+		if err := c.performRebuild(ctx, orgID); err != nil {
+			c.logger.WarnContext(ctx, "resume interrupted rebuild failed; will retry next tick", "org_id", orgID, "error", err)
+		} else {
+			c.logger.InfoContext(ctx, "resumed an interrupted rebuild", "org_id", orgID)
+		}
+		return
+	}
 
 	for _, source := range c.sourceNames {
 		if ctx.Err() != nil {

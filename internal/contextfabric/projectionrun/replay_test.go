@@ -23,7 +23,7 @@ func TestCoordinatorReplayOfTheSameCheckpointProducesTheSameIdempotentBatch(t *t
 	source := &fakeSource{name: "source-a"}
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
-		Backend: backend, Checkpoints: checkpoints, Logger: discardLogger(),
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), Logger: discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)

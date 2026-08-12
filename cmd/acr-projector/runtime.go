@@ -91,6 +91,10 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
+	rebuildMarkers, err := pgprojection.NewRebuildMarkerStore(db)
+	if err != nil {
+		return nil, errors.Join(err, runtime.Close())
+	}
 	episodeRows, err := storagepostgres.NewEpisodeStore(db)
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
@@ -117,7 +121,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 			{Name: devhealthsource.EpisodesSourceName, Source: episodesSource},
 			{Name: devhealthsource.TeamsProjectsSourceName, Source: teamsProjectsSource},
 		},
-		Backend: backend, Checkpoints: checkpoints, Locker: locker,
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: rebuildMarkers, Locker: locker,
 		PollInterval: cfg.PollInterval, Concurrency: cfg.Concurrency, Logger: logger,
 	})
 	if err != nil {

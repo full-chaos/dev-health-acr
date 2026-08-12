@@ -180,6 +180,14 @@ runs regardless of `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED` (an operator
 invoking it has already made that call) but still needs Postgres, ClickHouse,
 and a configured Zep backend to do anything.
 
+Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
+commits before the purge and clears only after every checkpoint is
+confirmed reset. If `acr-projector` crashes mid-rebuild, ordinary `serve`
+ticks detect the marker on their own and resume the same purge-reset-clear
+sequence automatically -- no manual `rebuild --org` re-invocation is
+required, and no tick ever runs incremental projection against a
+purged-but-not-reset organization in the meantime.
+
 The adapter's own lifecycle contract (projection, idempotent replay,
 retrieval, tombstones, watermark, purge, organization isolation) is proved
 against a fake transport in `internal/contextfabric/zepgraph`. A live

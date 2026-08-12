@@ -132,6 +132,53 @@ func (b *fakeBackend) appliedCount() int {
 	return len(b.applied)
 }
 
+// fakeRebuildMarker mirrors pgprojection.RebuildMarkerStore's contract
+// in-memory, with optional fault injection (beginErr/completeErr/checkErr)
+// for simulating a crash between purge and checkpoint reset (CHAOS-3753
+// codex finding C2).
+type fakeRebuildMarker struct {
+	mu                                  sync.Mutex
+	inProgress                          map[string]bool
+	beginErr, completeErr, checkErr     error
+	beginCalls, completeCalls, isCalled int
+}
+
+func newFakeRebuildMarker() *fakeRebuildMarker {
+	return &fakeRebuildMarker{inProgress: map[string]bool{}}
+}
+
+func (m *fakeRebuildMarker) BeginRebuild(_ context.Context, orgID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.beginCalls++
+	if m.beginErr != nil {
+		return m.beginErr
+	}
+	m.inProgress[orgID] = true
+	return nil
+}
+
+func (m *fakeRebuildMarker) IsRebuildInProgress(_ context.Context, orgID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.isCalled++
+	if m.checkErr != nil {
+		return false, m.checkErr
+	}
+	return m.inProgress[orgID], nil
+}
+
+func (m *fakeRebuildMarker) CompleteRebuild(_ context.Context, orgID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.completeCalls++
+	if m.completeErr != nil {
+		return m.completeErr
+	}
+	delete(m.inProgress, orgID)
+	return nil
+}
+
 type fakeCheckpointStore struct {
 	mu   sync.Mutex
 	data map[string]contextfabric.ProjectionCheckpoint
@@ -174,7 +221,7 @@ func TestCoordinatorEnforcesSingleFlightPerOrganizationAcrossOverlappingTicks(t 
 			{Name: "source-a", Source: &fakeSource{name: "source-a", delay: 10 * time.Millisecond}},
 			{Name: "source-b", Source: &fakeSource{name: "source-b", delay: 10 * time.Millisecond}},
 		},
-		Backend: backend, Checkpoints: checkpoints, Concurrency: 8, Logger: discardLogger(),
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), Concurrency: 8, Logger: discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
@@ -209,7 +256,7 @@ func TestCoordinatorIsolatesFailureToItsOwnPair(t *testing.T) {
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs:  []string{"org-fails", "org-ok"},
 		Sources: []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
-		Backend: backend, Checkpoints: checkpoints, Logger: discardLogger(),
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), Logger: discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
@@ -239,7 +286,7 @@ func TestCoordinatorBacksOffAFailingPairThenRetriesLater(t *testing.T) {
 	source := &fakeSource{name: "source-a"}
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
-		Backend: backend, Checkpoints: checkpoints, Logger: discardLogger(),
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), Logger: discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
@@ -260,7 +307,7 @@ func TestCoordinatorSkipsAnOrganizationLockedByAnotherReplica(t *testing.T) {
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs:  []string{"org-locked-elsewhere", "org-free"},
 		Sources: []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
-		Backend: backend, Checkpoints: checkpoints, Locker: locker, Logger: discardLogger(),
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), Locker: locker, Logger: discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
@@ -284,7 +331,7 @@ func TestCoordinatorRunStopsOnCancellation(t *testing.T) {
 	checkpoints := newFakeCheckpointStore()
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
-		Backend: backend, Checkpoints: checkpoints, PollInterval: time.Hour, Logger: discardLogger(),
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), PollInterval: time.Hour, Logger: discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
@@ -316,7 +363,7 @@ func TestPairBackoffKeyStaysDistinctPerSource(t *testing.T) {
 		Sources: []projectionrun.SourcePair{
 			{Name: "source-a", Source: sourceA}, {Name: "source-b", Source: sourceB},
 		},
-		Backend: backend, Checkpoints: checkpoints, Logger: discardLogger(),
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), Logger: discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)

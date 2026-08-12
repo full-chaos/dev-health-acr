@@ -19,7 +19,7 @@ func TestCoordinatorRebuildPurgesResetsThenNextTickReplaysFromScratch(t *testing
 	source := &fakeSource{name: "source-a"}
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
-		Backend: backend, Checkpoints: checkpoints, Logger: discardLogger(),
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), Logger: discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
@@ -81,7 +81,7 @@ func TestCoordinatorRebuildDoesNotResetCheckpointsWhenPurgeFails(t *testing.T) {
 	source := &fakeSource{name: "source-a"}
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: source}},
-		Backend: backend, Checkpoints: checkpoints, Logger: discardLogger(),
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), Logger: discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
@@ -115,7 +115,7 @@ func TestCoordinatorRebuildRejectsEmptyOrganization(t *testing.T) {
 	checkpoints := newFakeCheckpointStore()
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
-		Backend: backend, Checkpoints: checkpoints, Logger: discardLogger(),
+		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(), Logger: discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
