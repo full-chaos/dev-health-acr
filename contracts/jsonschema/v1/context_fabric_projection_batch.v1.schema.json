@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/context_fabric_projection_batch.v1.schema.json",
+  "title": "ACR Context Fabric Projection Batch v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "context_fabric_projection_batch.v1"
+    },
+    "batch_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256
+    },
+    "org_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "source_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "cursor": {
+      "type": "string",
+      "maxLength": 512
+    },
+    "next_cursor": {
+      "type": "string",
+      "maxLength": 512
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "full_snapshot": {
+      "type": "boolean"
+    },
+    "complete_enumeration": {
+      "type": "boolean"
+    },
+    "entities": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/EntityProjection"
+      },
+      "maxItems": 10000
+    },
+    "relationships": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/RelationshipProjection"
+      },
+      "maxItems": 20000
+    },
+    "contents": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/ContentProjection"
+      },
+      "maxItems": 5000
+    },
+    "episodes": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/EpisodeProjection"
+      },
+      "maxItems": 5000
+    },
+    "tombstones": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/ProjectionTombstone"
+      },
+      "maxItems": 10000
+    }
+  },
+  "required": [
+    "schema_version",
+    "batch_id",
+    "org_id",
+    "source",
+    "source_version",
+    "cursor",
+    "next_cursor",
+    "generated_at",
+    "full_snapshot",
+    "complete_enumeration",
+    "entities",
+    "relationships",
+    "contents",
+    "episodes",
+    "tombstones"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "full_snapshot": {
+            "const": true
+          }
+        },
+        "required": [
+          "full_snapshot"
+        ]
+      },
+      "then": {
+        "properties": {
+          "complete_enumeration": {
+            "const": true
+          }
+        }
+      }
+    },
+    {
+      "anyOf": [
+        {
+          "properties": {
+            "entities": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "properties": {
+            "relationships": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "properties": {
+            "contents": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "properties": {
+            "episodes": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "properties": {
+            "tombstones": {
+              "minItems": 1
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

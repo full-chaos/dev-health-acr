@@ -105,6 +105,50 @@ the plaintext value is returned only at issuance. Rotation supports at most a
 15-minute overlap. After revocation commits, new requests reject the token;
 in-flight requests are not cancelled.
 
+### Context Fabric Zep graph dependency (Reset 0, not yet wired)
+
+`internal/contextfabric/zepgraph` is the ACR-owned adapter to Graphiti/Zep
+(see [ADR 0007](adr/0007-context-fabric-zep-graph-adapter.md) for the full
+decision record). Two things are true about it at once today:
+
+- Zep v3 (the API `github.com/getzep/zep-go/v3` speaks) is Zep Cloud only.
+  Zep discontinued the self-hosted Community Edition, so there is no vendor
+  container image to add to the Compose overlay or the Helm chart the way
+  Postgres or ClickHouse are added. Running it requires a Zep Cloud account
+  and API key, which is an external credential this repository does not
+  provision.
+- Neither Compose nor the Helm chart configures `zepgraph` yet, and neither
+  should until Reset 1 (CHAOS-3753/3754/3755) wires
+  `internal/contextfabric/zepgraph.ConfigFromEnv` into the hosted runtime
+  bundle and registers the Context Fabric endpoint. Wiring deployment
+  configuration ahead of a consumer would be dead configuration.
+
+The adapter already understands its own environment contract, ready for
+that Reset 1 wiring: `ACR_CONTEXT_FABRIC_ZEP_BASE_URL`,
+`ACR_CONTEXT_FABRIC_ZEP_API_KEY` (accepting a `_FILE`-suffixed secret-file
+variable, same convention as every other ACR secret), `ACR_CONTEXT_FABRIC_ZEP_GRAPH_PREFIX`,
+`ACR_CONTEXT_FABRIC_ZEP_REQUEST_TIMEOUT`, `ACR_CONTEXT_FABRIC_ZEP_MAX_ATTEMPTS`,
+`ACR_CONTEXT_FABRIC_ZEP_MAX_RESULTS`, and `ACR_CONTEXT_FABRIC_ZEP_ALLOW_INSECURE`.
+`zepgraph.Configured` reports whether the base URL is set at all, so an
+unconfigured deployment never constructs the adapter.
+
+The adapter's full lifecycle contract (projection, idempotent replay,
+retrieval, tombstones, watermark, purge, organization isolation) is proved
+against a fake transport in `internal/contextfabric/zepgraph`. A live
+end-to-end proof exists as `TestLiveZepContextFabricLifecycle` in the same
+package, gated on `ACR_TEST_ZEP_BASE_URL` and `ACR_TEST_ZEP_API_KEY`:
+
+```bash
+ACR_TEST_ZEP_BASE_URL=https://api.getzep.com/api/v2 \
+ACR_TEST_ZEP_API_KEY=<zep-cloud-api-key> \
+  go test -count=1 -run TestLiveZep ./internal/contextfabric/zepgraph -v
+```
+
+It has not run against a real endpoint as part of CHAOS-3752: no Zep Cloud
+account or API key exists in this environment. Provisioning one (account,
+plan, and API key) is a prerequisite for both this live test and the Reset
+1 Compose/Helm wiring above.
+
 ### Helm
 
 Render the private chart offline before a release promotion. The values schema

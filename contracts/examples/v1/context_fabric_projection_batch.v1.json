@@ -1,0 +1,80 @@
+{
+  "schema_version": "context_fabric_projection_batch.v1",
+  "batch_id": "batch_12345678",
+  "org_id": "org_1",
+  "source": "dev-health-ops",
+  "source_version": "ops-projection-v1",
+  "cursor": "cursor_41",
+  "next_cursor": "cursor_42",
+  "generated_at": "2026-08-11T16:00:00Z",
+  "full_snapshot": false,
+  "complete_enumeration": false,
+  "entities": [
+    {
+      "subject": {
+        "kind": "project",
+        "canonical_id": "project_ask_dev",
+        "label": "Ask Dev"
+      },
+      "aliases": [
+        "AskDev"
+      ],
+      "previous_names": [
+        "Dev Agent"
+      ],
+      "provider_ids": {
+        "linear_project_id": "linear_project_123"
+      },
+      "properties": {
+        "lifecycle": {
+          "string": "in_progress"
+        }
+      },
+      "authorization": {
+        "project_ids": [
+          "project_ask_dev"
+        ]
+      },
+      "evidence_ref_ids": [
+        "evidence_project_identity"
+      ],
+      "observed_at": "2026-08-11T15:59:00Z",
+      "source_version": "ops-projection-v1"
+    }
+  ],
+  "relationships": [
+    {
+      "relationship_id": "relationship_12345678",
+      "type": "OWNS",
+      "from": {
+        "kind": "team",
+        "canonical_id": "team_dev_health",
+        "label": "Dev Health"
+      },
+      "to": {
+        "kind": "project",
+        "canonical_id": "project_ask_dev",
+        "label": "Ask Dev"
+      },
+      "properties": {},
+      "derivation": "canonical_structured",
+      "epistemic_status": "observed",
+      "authorization": {
+        "project_ids": [
+          "project_ask_dev"
+        ],
+        "team_ids": [
+          "team_dev_health"
+        ]
+      },
+      "evidence_ref_ids": [
+        "evidence_project_identity"
+      ],
+      "observed_at": "2026-08-11T15:59:00Z",
+      "source_version": "ops-projection-v1"
+    }
+  ],
+  "contents": [],
+  "episodes": [],
+  "tombstones": []
+}

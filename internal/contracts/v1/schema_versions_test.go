@@ -3,8 +3,8 @@ package v1
 import "testing"
 
 // TestAllSchemaVersionsHasNoDuplicates locks AllSchemaVersions as a genuine
-// set: a duplicate entry would silently mask a missing distinct schema
-// version while still passing a naive length check.
+// set: a duplicate entry would silently mask a missing distinct schema version
+// while still passing a naive length check.
 func TestAllSchemaVersionsHasNoDuplicates(t *testing.T) {
 	seen := make(map[string]bool, len(AllSchemaVersions))
 	for _, version := range AllSchemaVersions {
@@ -15,14 +15,10 @@ func TestAllSchemaVersionsHasNoDuplicates(t *testing.T) {
 	}
 }
 
-// TestAllSchemaVersionsIncludesEveryDeclaredSchemaConstant is a Given/When/
-// Then regression: Given every schema_version constant declared in this
-// package (types.go's HTTP schemas plus mcp_types.go's MCP schemas), When
-// AllSchemaVersions is checked, Then every one of them must be present.
-// This is the drift gate: a future PR that adds a new schema_version
-// constant but forgets to add it to AllSchemaVersions fails this test
-// immediately, instead of silently shipping a hosted API that cannot
-// satisfy a sidecar requiring the new schema.
+// TestAllSchemaVersionsIncludesEveryDeclaredSchemaConstant is the drift gate:
+// every schema_version constant declared in this package must be represented in
+// the canonical advertised set, including published-but-reserved Context
+// Fabric contracts whose endpoint availability remains independently gated.
 func TestAllSchemaVersionsIncludesEveryDeclaredSchemaConstant(t *testing.T) {
 	declared := []string{
 		ContextPacketRequestSchema,
@@ -35,6 +31,9 @@ func TestAllSchemaVersionsIncludesEveryDeclaredSchemaConstant(t *testing.T) {
 		AgentEpisodeSchema,
 		ClientCredentialSchema,
 		ErrorSchema,
+		ContextFabricInvestigationRequestSchema,
+		ContextFabricInvestigationResultSchema,
+		ContextFabricProjectionBatchSchema,
 		MCPContextForTaskRequestSchema,
 		MCPContextForTaskResponseSchema,
 		MCPSourceEvidenceRequestSchema,

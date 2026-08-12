@@ -1,0 +1,294 @@
+package v1
+
+import (
+	"fmt"
+	"strings"
+)
+
+func (s ContextFabricSubjectRef) Validate() error {
+	if !validContextFabricSubjectKind(s.Kind) || !stringLengthBetween(s.CanonicalID, 1, 256) || !stringLengthBetween(s.Label, 1, 512) {
+		return fmt.Errorf("subject reference violates v1 bounds")
+	}
+	if strings.TrimSpace(s.CanonicalID) != s.CanonicalID || strings.TrimSpace(s.Label) != s.Label {
+		return fmt.Errorf("subject reference must be trimmed")
+	}
+	return nil
+}
+
+func (c ContextFabricSubjectCandidate) Validate() error {
+	if !stringLengthBetween(c.ReceiptID, 8, 256) || !validResolutionState(c.State) || c.Confidence < 0 || c.Confidence > 1 {
+		return fmt.Errorf("subject candidate identity, state, or confidence violates v1 bounds")
+	}
+	if err := c.Subject.Validate(); err != nil {
+		return fmt.Errorf("subject: %w", err)
+	}
+	if len(c.MatchedTerms) > 100 || len(c.MatchReasons) < 1 || len(c.MatchReasons) > 100 || !uniqueTrimmedStrings(c.MatchedTerms, 512) || !uniqueTrimmedStrings(c.MatchReasons, 1024) {
+		return fmt.Errorf("subject candidate match metadata violates v1 bounds")
+	}
+	if !boundedEvidenceRefs(c.EvidenceRefIDs, 500, true) {
+		return fmt.Errorf("subject candidate evidence references violate v1 bounds")
+	}
+	return nil
+}
+
+func (r ContextFabricSubjectResolution) Validate() error {
+	if r.Candidates == nil || r.Committed == nil || len(r.Candidates) > 50 || len(r.Committed) > 250 {
+		return fmt.Errorf("subject resolution arrays violate v1 bounds")
+	}
+	seenReceipts := make(map[string]struct{}, len(r.Candidates))
+	for _, candidate := range r.Candidates {
+		if err := candidate.Validate(); err != nil {
+			return fmt.Errorf("candidates: %w", err)
+		}
+		if _, exists := seenReceipts[candidate.ReceiptID]; exists {
+			return fmt.Errorf("candidate receipt IDs must be unique")
+		}
+		seenReceipts[candidate.ReceiptID] = struct{}{}
+	}
+	if !uniqueSubjects(r.Committed) {
+		return fmt.Errorf("committed subjects must be valid and unique")
+	}
+	if !stringLengthBetween(r.ClarificationPrompt, 0, 2000) || strings.TrimSpace(r.ClarificationPrompt) != r.ClarificationPrompt {
+		return fmt.Errorf("clarification prompt violates v1 bounds")
+	}
+	return nil
+}
+
+func (c ContextFabricCohort) Validate() error {
+	if !validContextFabricSubjectKind(c.Kind) || (c.Kind != ContextFabricSubjectTeam && c.Kind != ContextFabricSubjectProject) || c.Members == nil || len(c.Members) > 250 || len(c.Exclusions) > 250 || !stringLengthBetween(strings.TrimSpace(c.Rationale), 1, 4000) || (c.Complete && c.Truncated) {
+		return fmt.Errorf("cohort violates v1 bounds")
+	}
+	seen := make(map[string]struct{}, len(c.Members))
+	lastRank := 0
+	for _, member := range c.Members {
+		if err := member.Validate(); err != nil {
+			return fmt.Errorf("members: %w", err)
+		}
+		if member.Subject.Kind != c.Kind || member.Rank <= lastRank {
+			return fmt.Errorf("cohort member kind or rank is invalid")
+		}
+		key := subjectKey(member.Subject)
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("cohort members must be unique")
+		}
+		seen[key] = struct{}{}
+		lastRank = member.Rank
+	}
+	for _, exclusion := range c.Exclusions {
+		if err := exclusion.Validate(); err != nil {
+			return fmt.Errorf("exclusions: %w", err)
+		}
+		if exclusion.Subject.Kind != c.Kind {
+			return fmt.Errorf("cohort exclusion kind is invalid")
+		}
+		if _, exists := seen[subjectKey(exclusion.Subject)]; exists {
+			return fmt.Errorf("cohort exclusion duplicates a member")
+		}
+	}
+	return nil
+}
+
+func (m ContextFabricCohortMember) Validate() error {
+	if err := m.Subject.Validate(); err != nil {
+		return fmt.Errorf("subject: %w", err)
+	}
+	if m.Rank < 1 || len(m.InclusionReasons) < 1 || len(m.InclusionReasons) > 50 || !uniqueTrimmedStrings(m.InclusionReasons, 1024) || !boundedEvidenceRefs(m.EvidenceRefIDs, 500, true) {
+		return fmt.Errorf("cohort member violates v1 bounds")
+	}
+	return nil
+}
+
+func (e ContextFabricCohortExclusion) Validate() error {
+	if err := e.Subject.Validate(); err != nil {
+		return fmt.Errorf("subject: %w", err)
+	}
+	if !stringLengthBetween(strings.TrimSpace(e.Reason), 1, 2000) {
+		return fmt.Errorf("cohort exclusion reason violates v1 bounds")
+	}
+	return nil
+}
+
+func (p ContextFabricRelationshipPath) Validate() error {
+	if !stringLengthBetween(p.PathID, 8, 256) || len(p.Nodes) < 2 || len(p.Nodes) > 51 || len(p.Edges) != len(p.Nodes)-1 || !stringLengthBetween(strings.TrimSpace(p.WhyRelevant), 1, 4000) || !boundedEvidenceRefs(p.EvidenceRefIDs, 500, false) {
+		return fmt.Errorf("relationship path violates v1 bounds")
+	}
+	if !uniqueSubjects(p.Nodes) {
+		return fmt.Errorf("relationship path nodes must be valid and unique")
+	}
+	for index, edge := range p.Edges {
+		if err := edge.Validate(); err != nil {
+			return fmt.Errorf("edges: %w", err)
+		}
+		if edge.From != p.Nodes[index] || edge.To != p.Nodes[index+1] {
+			return fmt.Errorf("relationship path edge continuity is invalid")
+		}
+	}
+	return nil
+}
+
+func (e ContextFabricRelationshipEdge) Validate() error {
+	if !stringLengthBetween(strings.TrimSpace(e.Type), 1, 128) || !validDerivationMethod(e.Derivation) || !validEpistemicStatus(e.EpistemicStatus) || !boundedEvidenceRefs(e.EvidenceRefIDs, 500, false) {
+		return fmt.Errorf("relationship edge violates v1 bounds")
+	}
+	if err := e.From.Validate(); err != nil {
+		return fmt.Errorf("from: %w", err)
+	}
+	if err := e.To.Validate(); err != nil {
+		return fmt.Errorf("to: %w", err)
+	}
+	if err := validateTimeRange(e.ObservedAt, e.ValidFrom, e.ValidTo); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d ContextFabricDriverJudgment) Validate() error {
+	if !stringLengthBetween(d.DriverID, 8, 256) || !validDriverStanding(d.Standing) || !stringLengthBetween(strings.TrimSpace(d.Category), 1, 128) || !stringLengthBetween(strings.TrimSpace(d.Title), 1, 512) || !stringLengthBetween(strings.TrimSpace(d.Summary), 1, 4000) || !validDerivationMethod(d.Derivation) || !validEpistemicStatus(d.EpistemicStatus) || d.Confidence < 0 || d.Confidence > 1 || !stringLengthBetween(d.Qualification, 0, 2000) {
+		return fmt.Errorf("driver judgment violates v1 bounds")
+	}
+	if len(d.AffectedSubjects) < 1 || len(d.AffectedSubjects) > 250 || !uniqueSubjects(d.AffectedSubjects) || len(d.PathIDs) > 250 || !uniqueTrimmedStrings(d.PathIDs, 256) || !boundedEvidenceRefs(d.EvidenceRefIDs, 500, true) {
+		return fmt.Errorf("driver subject, path, or evidence references violate v1 bounds")
+	}
+	if d.Standing != ContextFabricDriverWithheld && len(d.PathIDs) == 0 && len(d.EvidenceRefIDs) == 0 {
+		return fmt.Errorf("non-withheld driver lacks evidence closure")
+	}
+	if d.Standing == ContextFabricDriverWithheld && strings.TrimSpace(d.Qualification) == "" {
+		return fmt.Errorf("withheld driver requires a qualification")
+	}
+	return nil
+}
+
+func (f ContextFabricFinding) Validate() error {
+	if !stringLengthBetween(f.FindingID, 8, 256) || !stringLengthBetween(strings.TrimSpace(f.Kind), 1, 128) || !stringLengthBetween(strings.TrimSpace(f.Summary), 1, 4000) || len(f.Subjects) > 250 || !uniqueSubjects(f.Subjects) || !boundedEvidenceRefs(f.EvidenceRefIDs, 500, false) {
+		return fmt.Errorf("finding violates v1 bounds")
+	}
+	return nil
+}
+
+func (o ContextFabricSourceObservation) Validate() error {
+	if !stringLengthBetween(strings.TrimSpace(o.Source), 1, 128) || !validSourceState(o.State) || !stringLengthBetween(o.Watermark, 0, 512) || !stringLengthBetween(o.Reason, 0, 2000) {
+		return fmt.Errorf("source observation violates v1 bounds")
+	}
+	if o.ObservedAt != nil && o.ObservedAt.IsZero() {
+		return fmt.Errorf("source observation timestamp is invalid")
+	}
+	if o.State != ContextFabricSourceAvailable && strings.TrimSpace(o.Reason) == "" {
+		return fmt.Errorf("non-available source requires a reason")
+	}
+	return nil
+}
+
+func (c ContextFabricCoverage) Validate() error {
+	if c.Sources == nil || len(c.Sources) > 250 || c.DegradedReasons == nil || len(c.DegradedReasons) > 250 || !uniqueTrimmedStrings(c.DegradedReasons, 2000) {
+		return fmt.Errorf("coverage violates v1 bounds")
+	}
+	seen := make(map[string]struct{}, len(c.Sources))
+	for _, source := range c.Sources {
+		if err := source.Validate(); err != nil {
+			return fmt.Errorf("sources: %w", err)
+		}
+		if _, exists := seen[source.Source]; exists {
+			return fmt.Errorf("coverage source names must be unique")
+		}
+		seen[source.Source] = struct{}{}
+	}
+	return nil
+}
+
+func (v ContextFabricVersionSet) Validate() error {
+	values := []string{v.ServiceVersion, v.ContractVersion, v.Backend, v.ProjectionVersion, v.QueryVersion, v.InterpretationVersion, v.SynthesisVersion, v.CanonicalServiceVersion}
+	for _, value := range values {
+		if !validVersion(value) {
+			return fmt.Errorf("version metadata violates v1 bounds")
+		}
+	}
+	if !stringLengthBetween(v.BackendVersion, 0, 256) || strings.TrimSpace(v.BackendVersion) != v.BackendVersion {
+		return fmt.Errorf("backend_version violates v1 bounds")
+	}
+	return nil
+}
+
+func (q ContextFabricInterpretedQuestion) Validate() error {
+	if !validInvestigationShape(q.Shape) || !stringLengthBetween(strings.TrimSpace(q.RequestedJudgment), 1, 256) || len(q.SubjectTerms) > 100 || len(q.ComparisonTerms) > 100 || !uniqueTrimmedStrings(q.SubjectTerms, 512) || !uniqueTrimmedStrings(q.ComparisonTerms, 512) || len(q.FactRequirements) > 64 || !stringLengthBetween(q.ClarificationReason, 0, 2000) {
+		return fmt.Errorf("interpreted question violates v1 bounds")
+	}
+	if err := q.TimeContext.Validate(); err != nil {
+		return fmt.Errorf("time_context: %w", err)
+	}
+	seen := make(map[ContextFabricFactKind]struct{}, len(q.FactRequirements))
+	for _, requirement := range q.FactRequirements {
+		if err := requirement.Validate(); err != nil {
+			return fmt.Errorf("fact_requirements: %w", err)
+		}
+		if _, exists := seen[requirement.Kind]; exists {
+			return fmt.Errorf("fact_requirements kinds must be unique")
+		}
+		seen[requirement.Kind] = struct{}{}
+	}
+	if q.ClarificationNeeded && strings.TrimSpace(q.ClarificationReason) == "" {
+		return fmt.Errorf("clarification_needed requires a reason")
+	}
+	return nil
+}
+
+func (r ContextFabricFactRequirement) Validate() error {
+	if !validFactKind(r.Kind) || len(r.Subjects) > 250 || !uniqueSubjects(r.Subjects) || len(r.Parameters) > 32 {
+		return fmt.Errorf("fact requirement violates v1 bounds")
+	}
+	for key, value := range r.Parameters {
+		if !stringLengthBetween(key, 1, 128) || !stringLengthBetween(value, 0, 1024) || strings.TrimSpace(key) != key || strings.TrimSpace(value) != value {
+			return fmt.Errorf("fact requirement parameter violates v1 bounds")
+		}
+	}
+	return nil
+}
+
+func (r ContextFabricInvestigationResult) Validate() error {
+	if r.SchemaVersion != ContextFabricInvestigationResultSchema || !stringLengthBetween(r.ResultID, 8, 256) || !stringLengthBetween(r.RequestID, 8, 256) || r.GeneratedAt.IsZero() || !stringLengthBetween(strings.TrimSpace(r.Question), 1, 8000) || !validInvestigationStatus(r.Status) {
+		return fmt.Errorf("result identity or status violates v1 bounds")
+	}
+	if err := r.Interpretation.Validate(); err != nil {
+		return fmt.Errorf("interpretation: %w", err)
+	}
+	if err := r.SubjectResolution.Validate(); err != nil {
+		return fmt.Errorf("subject_resolution: %w", err)
+	}
+	if r.Cohort != nil {
+		if err := r.Cohort.Validate(); err != nil {
+			return fmt.Errorf("cohort: %w", err)
+		}
+	}
+	if !stringLengthBetween(r.DirectJudgment, 0, 8000) || !stringLengthBetween(r.CurrentState, 0, 8000) || !stringLengthBetween(r.DeterministicAnswer, 1, 16000) || r.StrongestPressures == nil || len(r.StrongestPressures) > 50 || !uniqueTrimmedStrings(r.StrongestPressures, 2000) || r.Drivers == nil || len(r.Drivers) > 50 || r.RemainingWork == nil || len(r.RemainingWork) > 250 || r.ReadinessGaps == nil || len(r.ReadinessGaps) > 250 || r.Paths == nil || len(r.Paths) > 250 || r.Conflicts == nil || len(r.Conflicts) > 250 || r.Limitations == nil || len(r.Limitations) > 250 || !uniqueTrimmedStrings(r.Limitations, 4000) || r.EvidenceRefIDs == nil || !boundedEvidenceRefs(r.EvidenceRefIDs, 500, true) || r.Warnings == nil || len(r.Warnings) > 250 || !uniqueTrimmedStrings(r.Warnings, 4000) {
+		return fmt.Errorf("result answer fields violate v1 bounds")
+	}
+	if r.Status == ContextFabricInvestigationComplete || r.Status == ContextFabricInvestigationPartial {
+		if strings.TrimSpace(r.DirectJudgment) == "" {
+			return fmt.Errorf("answer-capable result requires a direct judgment")
+		}
+	}
+	if r.Status == ContextFabricInvestigationClarificationRequired && r.SubjectResolution.ClarificationPrompt == "" {
+		return fmt.Errorf("clarification result requires a prompt")
+	}
+	if err := validateDrivers(r.Drivers); err != nil {
+		return err
+	}
+	if err := validateFindings("remaining_work", r.RemainingWork); err != nil {
+		return err
+	}
+	if err := validateFindings("readiness_gaps", r.ReadinessGaps); err != nil {
+		return err
+	}
+	if err := validatePaths(r.Paths); err != nil {
+		return err
+	}
+	if err := validateFindings("conflicts", r.Conflicts); err != nil {
+		return err
+	}
+	if err := r.Coverage.Validate(); err != nil {
+		return fmt.Errorf("coverage: %w", err)
+	}
+	if err := r.Versions.Validate(); err != nil {
+		return fmt.Errorf("versions: %w", err)
+	}
+	return nil
+}
