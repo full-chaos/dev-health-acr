@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -341,10 +343,23 @@ func TestProjectionEnrichesEmbeddedEntityTextWithoutLeakingNativeEvidence(t *tes
 	}
 }
 
+// TestApplyProjectionBatchCreatesGraphOnceAndIsIdempotentUnderReplay checks
+// idempotent replay against full node/edge content snapshots, not just
+// counts. Matching sizes and receipt counters alone would still pass if
+// replay silently overwrote a node's summary or narrowed its authorization
+// scope -- e.g. an upsert that recomputed attributes from a mutated input
+// and replaced the original. Comparing full snapshots by deep equality is
+// what actually proves replay is a true no-op.
 func TestApplyProjectionBatchCreatesGraphOnceAndIsIdempotentUnderReplay(t *testing.T) {
 	t.Parallel()
 	api := newFakeAPI()
 	adapter := mustAdapter(t, api)
+	// Pin the clock: the organization-root watermark node's observed_at is
+	// stamped with a.now() on every projection, so without a fixed clock a
+	// true no-op replay would still show a legitimately advancing
+	// timestamp on that one node, which is not the mutation this test
+	// exists to catch.
+	adapter.now = func() time.Time { return time.Date(2026, 8, 11, 21, 0, 0, 0, time.UTC) }
 	batch := validBatch()
 
 	first, err := adapter.ApplyProjectionBatch(context.Background(), batch)
@@ -358,6 +373,8 @@ func TestApplyProjectionBatchCreatesGraphOnceAndIsIdempotentUnderReplay(t *testi
 		t.Fatalf("createGraphCalls = %d, want 1", api.createGraphCalls)
 	}
 	nodeCount, edgeCount := len(api.nodes), len(api.edges)
+	beforeNodes := snapshotNodes(api.nodes)
+	beforeEdges := snapshotEdges(api.edges)
 
 	second, err := adapter.ApplyProjectionBatch(context.Background(), batch)
 	if err != nil {
@@ -373,6 +390,87 @@ func TestApplyProjectionBatchCreatesGraphOnceAndIsIdempotentUnderReplay(t *testi
 		second.ContentsApplied != first.ContentsApplied || second.EpisodesApplied != first.EpisodesApplied {
 		t.Fatalf("replay receipt differs: first=%#v second=%#v", first, second)
 	}
+	if diff := diffNodeSnapshots(beforeNodes, snapshotNodes(api.nodes)); diff != "" {
+		t.Fatalf("replay mutated node content: %s", diff)
+	}
+	if diff := diffEdgeSnapshots(beforeEdges, snapshotEdges(api.edges)); diff != "" {
+		t.Fatalf("replay mutated edge content: %s", diff)
+	}
+}
+
+type nodeSnapshot struct {
+	Name       string
+	Summary    string
+	Labels     []string
+	Attributes map[string]interface{}
+}
+
+func snapshotNodes(nodes map[string]*zep.EntityNode) map[string]nodeSnapshot {
+	snapshot := make(map[string]nodeSnapshot, len(nodes))
+	for id, node := range nodes {
+		snapshot[id] = nodeSnapshot{
+			Name: node.Name, Summary: node.Summary, Labels: append([]string(nil), node.Labels...),
+			Attributes: cloneAnyMap(node.Attributes),
+		}
+	}
+	return snapshot
+}
+
+func diffNodeSnapshots(before, after map[string]nodeSnapshot) string {
+	if reflect.DeepEqual(before, after) {
+		return ""
+	}
+	if len(before) != len(after) {
+		return fmt.Sprintf("node count changed: %d -> %d", len(before), len(after))
+	}
+	for id, want := range before {
+		got, ok := after[id]
+		if !ok {
+			return fmt.Sprintf("node %s disappeared", id)
+		}
+		if !reflect.DeepEqual(want, got) {
+			return fmt.Sprintf("node %s changed: %#v -> %#v", id, want, got)
+		}
+	}
+	return "node set changed"
+}
+
+type edgeSnapshot struct {
+	Name           string
+	Fact           string
+	SourceNodeUUID string
+	TargetNodeUUID string
+	Attributes     map[string]interface{}
+}
+
+func snapshotEdges(edges map[string]*zep.EntityEdge) map[string]edgeSnapshot {
+	snapshot := make(map[string]edgeSnapshot, len(edges))
+	for id, edge := range edges {
+		snapshot[id] = edgeSnapshot{
+			Name: edge.Name, Fact: edge.Fact, SourceNodeUUID: edge.SourceNodeUUID, TargetNodeUUID: edge.TargetNodeUUID,
+			Attributes: cloneAnyMap(edge.Attributes),
+		}
+	}
+	return snapshot
+}
+
+func diffEdgeSnapshots(before, after map[string]edgeSnapshot) string {
+	if reflect.DeepEqual(before, after) {
+		return ""
+	}
+	if len(before) != len(after) {
+		return fmt.Sprintf("edge count changed: %d -> %d", len(before), len(after))
+	}
+	for id, want := range before {
+		got, ok := after[id]
+		if !ok {
+			return fmt.Sprintf("edge %s disappeared", id)
+		}
+		if !reflect.DeepEqual(want, got) {
+			return fmt.Sprintf("edge %s changed: %#v -> %#v", id, want, got)
+		}
+	}
+	return "edge set changed"
 }
 
 func TestApplyProjectionBatchTombstonesDeleteAcrossKindsAndReplayIsIdempotent(t *testing.T) {
