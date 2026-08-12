@@ -298,7 +298,7 @@ endpoint ever travels into logs, receipts, or telemetry built from it.
 **`ACR_REQUEST_TIMEOUT` must be raised before enabling investigations.** It
 defaults to **15s**, and it bounds the whole HTTP request. A real
 investigation is two sequential model calls (interpret, then synthesise) and
-was measured end-to-end through the endpoint at **55–80s** against
+was measured end-to-end through the endpoint at **45–95s** against
 `gpt-5-nano`. Left at the default, every investigation returns 504 before
 the model answers, regardless of how well the model is doing. Size it above
 `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` × `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS`
@@ -314,25 +314,31 @@ unless `ACR_TEST_MODEL_API_KEY` is set —
 and `go test ./internal/api -run LiveEndpoint` for the endpoint):
 interpretation passed ACR's validator on every run, but synthesis — the
 strictest validator in the pipeline — did not. `gpt-5-nano` alone answered
-**2 of 21** endpoint attempts; the richer the synthesis input (graph paths
+**2 of 33** endpoint attempts; the richer the synthesis input (graph paths
 plus several canonical facts), the worse it did, so the runtime-level rate of
 roughly one in three overstates it for real traffic.
 
 Every failure was a clean, correctly classified 502
 `upstream_invalid_output`, never a wrong answer: value-level closure rejects
 what it cannot bind to a canonical fact. So the failure mode is availability,
-not correctness — but at 1 in 16 the endpoint is unusable.
+not correctness — but at 2 in 33 the endpoint is unusable.
 
 **The fallback is required, not optional.** Invalid output is deliberately
 **not** retried (`genkitruntime` fails closed on a schema-shaped failure
 rather than re-rolling the same input); the fallback model is the only
 mitigation, and `genkitruntime` invokes it on invalid output as well as on
 transport failure. With `ACR_CONTEXT_FABRIC_MODEL_FALLBACK=gpt-5.6-luna` the
-same endpoint answered **6 of 6**, at 55–80s per request. Set it in every
+same endpoint answered **16 of 17**, at 45–95s per request. Set it in every
 deployment expected to answer. Each fallback is a second billable call and is
 recorded as `fallback_used` on the receipt; tracking that rate per model is
 the `ModelReceiptSink` evaluator's job (CHAOS-3756), and a sustained high
 rate is the signal to promote the fallback to primary.
+
+The fallback raises the answer rate; it does not make it 1.0. One of those
+17 attempts still failed, so a caller must treat a 502
+`upstream_invalid_output` as an expected, retryable outcome even with the
+fallback configured — do not build a client that assumes an investigation
+always returns an answer on the first call.
 
 ### Helm
 
