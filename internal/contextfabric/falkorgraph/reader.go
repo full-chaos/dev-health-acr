@@ -1,0 +1,201 @@
+package falkorgraph
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+// isInternalSubject always reports false: falkorgraph has no anchor/marker
+// nodes the way zepgraph does (organizationRoot, projection-watermark
+// subject) -- those exist only because Zep's AddFactTriple forces every
+// fact to have a source+target node. This adapter's watermark is its own
+// reserved-label node (labelWatermark), never a :Subject node, so it can
+// never surface as a subject candidate or relationship endpoint in the
+// first place; there is nothing here to filter.
+func isInternalSubject(contextfabric.SubjectRef) bool { return false }
+
+func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion) (contextfabric.SubjectResolution, error) {
+	key := graphKey(a.config.GraphPrefix, principal.OrgID)
+	deps := graphrank.ResolveDeps{
+		ExactHint: func(ctx context.Context, subject contextfabric.SubjectRef) (graphrank.CandidateNode, bool, error) {
+			cypher := fmt.Sprintf("MATCH (n:%s {%s:$org, %s:$kind, %s:$id}) RETURN n", labelSubject, propOrgID, propKind, propCanonicalID)
+			rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": principal.OrgID, "kind": string(subject.Kind), "id": subject.CanonicalID}, true)
+			if err != nil {
+				return graphrank.CandidateNode{}, false, safeDependencyError("resolve exact subject hint", err)
+			}
+			if len(rows) == 0 {
+				return graphrank.CandidateNode{}, false, nil
+			}
+			n, ok := rows[0]["n"].(*node)
+			if !ok || n == nil {
+				return graphrank.CandidateNode{}, false, nil
+			}
+			return toCandidateNode(n), true, nil
+		},
+		Search: func(ctx context.Context, term string, limit int) ([]graphrank.CandidateNode, error) {
+			return a.fulltextSearchNodes(ctx, key, term, limit)
+		},
+		Traverse: func(ctx context.Context, term string, observation graphrank.CandidateNode) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
+			return graphrank.TraverseObservationToSubject(ctx, principal, request.RequestedScope, term, observation, isInternalSubject,
+				func(ctx context.Context, uuid string) ([]graphrank.CandidateEdge, error) {
+					return a.edgesOfNode(ctx, key, uuid)
+				},
+				func(ctx context.Context, uuid string) (graphrank.CandidateNode, bool) {
+					n, err := a.nodeByUUID(ctx, key, uuid)
+					if err != nil || n == nil {
+						return graphrank.CandidateNode{}, false
+					}
+					return toCandidateNode(n), true
+				},
+			)
+		},
+		IsInternal: isInternalSubject,
+		TraversalDegraded: func(ctx context.Context, orgID string, count int) {
+			if a.config.Telemetry != nil {
+				a.config.Telemetry.RecordObservationTraversalDegraded(ctx, orgID, count)
+			}
+		},
+	}
+	return graphrank.ResolveSubjects(ctx, principal, request, interpreted, deps)
+}
+
+func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Principal, request contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {
+	if strings.TrimSpace(principal.OrgID) == "" {
+		return contextfabric.GraphContext{}, errors.New("authenticated organization is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return contextfabric.GraphContext{}, err
+	}
+	key := graphKey(a.config.GraphPrefix, principal.OrgID)
+	limit := request.Request.Options.MaxRelationshipPaths
+	if limit > a.config.MaxResults {
+		limit = a.config.MaxResults
+	}
+
+	// falkorgraph resolves every edge endpoint from a single whole-path
+	// query -- one graph per org means there is no second-hop concept the
+	// way zepgraph needs one (see reader.go's package-level doc in
+	// zepgraph and graphrank.ResolvedEdge's doc comment). Two sources feed
+	// the candidate edge set: (1) a bounded hop-walk from the committed
+	// origin subjects (native Cypher variable-length path, [*1..2]), and
+	// (2) a lexical full-text search over the question text, for the
+	// subjectless-cohort case (no committed origin) and for text-relevant
+	// items outside the hop radius.
+	var resolvedNodes []graphrank.CandidateNode
+	var resolvedEdges []graphrank.ResolvedEdge
+	seenEdge := make(map[string]bool)
+	seenNode := make(map[string]bool)
+
+	for _, subject := range request.Resolution.Committed {
+		nodes, edges, err := a.hopWalk(ctx, key, subject, 2, limit)
+		if err != nil {
+			return contextfabric.GraphContext{}, err
+		}
+		for _, n := range nodes {
+			nk := graphrank.SubjectKey(mustSubject(n))
+			if !seenNode[nk] {
+				seenNode[nk] = true
+				resolvedNodes = append(resolvedNodes, n)
+			}
+		}
+		for _, e := range edges {
+			if !seenEdge[e.UUID] {
+				seenEdge[e.UUID] = true
+				resolvedEdges = append(resolvedEdges, e)
+			}
+		}
+	}
+
+	textNodes, err := a.fulltextSearchNodes(ctx, key, request.Request.Question, limit)
+	if err != nil {
+		return contextfabric.GraphContext{}, err
+	}
+	for _, n := range textNodes {
+		if subject, ok := graphrank.NodeSubject(n); ok {
+			nk := graphrank.SubjectKey(subject)
+			if !seenNode[nk] {
+				seenNode[nk] = true
+				resolvedNodes = append(resolvedNodes, n)
+			}
+			textEdges, err := a.edgesOfNode(ctx, key, n.UUID)
+			if err != nil {
+				return contextfabric.GraphContext{}, err
+			}
+			for _, ce := range textEdges {
+				if seenEdge[ce.UUID] {
+					continue
+				}
+				resolved, ok := a.resolveEdge(ctx, key, ce)
+				if !ok {
+					continue
+				}
+				seenEdge[ce.UUID] = true
+				resolvedEdges = append(resolvedEdges, resolved)
+			}
+		}
+	}
+
+	candidateEdges := make([]graphrank.CandidateEdge, 0, len(resolvedEdges))
+	for _, r := range resolvedEdges {
+		candidateEdges = append(candidateEdges, graphrank.CandidateEdge{
+			UUID: r.UUID, Name: r.Name, Fact: r.Fact, Relevance: r.Relevance, Score: r.Score,
+		})
+	}
+	order := graphrank.SortEdgesByRelevance(candidateEdges)
+	orderedResolved := make([]graphrank.ResolvedEdge, 0, len(resolvedEdges))
+	byUUID := make(map[string]graphrank.ResolvedEdge, len(resolvedEdges))
+	for _, r := range resolvedEdges {
+		byUUID[r.UUID] = r
+	}
+	for _, e := range order {
+		orderedResolved = append(orderedResolved, byUUID[e.UUID])
+	}
+
+	admission := graphrank.AdmitEdges(principal.OrgID, orderedResolved, request.Request.Options, isInternalSubject)
+	cohort := graphrank.DiscoveredCohort(principal, request, resolvedNodes, isInternalSubject)
+	factRequirements := admission.FactRequirements
+	if cohort != nil {
+		factRequirements = mergeFactRequirements(factRequirements, contextfabric.FactHealth, contextfabric.FactWorkload)
+	}
+	return contextfabric.GraphContext{
+		Resolution: request.Resolution, Cohort: cohort, Paths: admission.Paths, DriverCandidates: admission.Drivers,
+		EvidenceRefIDs: admission.EvidenceRefIDs, FactRequirements: factRequirements,
+		Coverage: contextfabric.Coverage{
+			Sources: []contextfabric.SourceObservation{{Source: "context-fabric:graph", State: contextfabric.SourceAvailable, ObservedAt: ptrTime(a.now().UTC())}},
+			// falkorgraph never has a second-hop concept to degrade
+			// (one-graph-per-org resolves every edge from a single query),
+			// so it is never partial for that reason. It may still be
+			// worth revisiting once a real MaxRelationshipPaths/timeout
+			// interaction surfaces a different degradation source.
+			Partial: false,
+		},
+	}, nil
+}
+
+func mergeFactRequirements(existing []contextfabric.FactRequirement, kinds ...contextfabric.FactKind) []contextfabric.FactRequirement {
+	seen := make(map[contextfabric.FactKind]bool, len(existing)+len(kinds))
+	result := append([]contextfabric.FactRequirement(nil), existing...)
+	for _, requirement := range existing {
+		seen[requirement.Kind] = true
+	}
+	for _, kind := range kinds {
+		if !seen[kind] {
+			seen[kind] = true
+			result = append(result, contextfabric.FactRequirement{Kind: kind})
+		}
+	}
+	return result
+}
+
+func mustSubject(n graphrank.CandidateNode) contextfabric.SubjectRef {
+	subject, _ := graphrank.NodeSubject(n)
+	return subject
+}
+
+func ptrTime[T any](v T) *T { return &v }
