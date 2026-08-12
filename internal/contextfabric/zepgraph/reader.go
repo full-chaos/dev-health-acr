@@ -22,6 +22,17 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	}
 	terms := subjectTerms(request, interpreted)
 	candidatesBySubject := make(map[string]contextfabric.SubjectCandidate)
+	// callerSourced marks which resolved subjects came from a
+	// caller-explicit hint -- any SubjectHint.Source other than
+	// "prior_subject_receipt" (Engine's own marker for a
+	// prior-subject-receipt expansion; see resolvePriorSubjectHints).
+	// Round-2 findings N4/N5 both hinge on this distinction: a
+	// caller-explicit hint is an authoritative, direct ask and keeps the
+	// short-circuit/truncation-priority behavior below; a receipt-derived
+	// hint is not -- it is Engine's best guess at what a conversational
+	// reference bound to previously, and the current question may name a
+	// different subject entirely.
+	callerSourced := make(map[string]bool)
 	for _, hint := range request.RequestedScope.SubjectHints {
 		if strings.TrimSpace(hint.ID) == "" || hint.Kind == "" {
 			continue
@@ -29,6 +40,9 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		subject := contextfabric.SubjectRef{Kind: hint.Kind, CanonicalID: strings.TrimSpace(hint.ID), Label: strings.TrimSpace(hint.Label)}
 		if subject.Label == "" {
 			subject.Label = subject.CanonicalID
+		}
+		if strings.TrimSpace(hint.Source) != "prior_subject_receipt" {
+			callerSourced[subjectKey(subject)] = true
 		}
 		node, err := a.api.GetNode(ctx, nodeUUID(principal.OrgID, subject))
 		if err != nil {
@@ -46,32 +60,21 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		candidate.MatchReasons = []string{"Exact canonical subject hint matched the organization graph."}
 		candidatesBySubject[subjectKey(candidate.Subject)] = candidate
 	}
-	if len(candidatesBySubject) > 0 {
-		candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
-		for _, candidate := range candidatesBySubject {
-			candidates = append(candidates, candidate)
-		}
-		sort.Slice(candidates, func(i, j int) bool { return subjectKey(candidates[i].Subject) < subjectKey(candidates[j].Subject) })
-		// The hybrid-search branch below truncates to
-		// Options.MaxSubjectCandidates; the exact-hint branch must too --
-		// a caller (including Engine's prior-subject-receipt expansion)
-		// can legitimately supply more exact hints than either its own
-		// budget or the v1 contract's absolute Candidates bound admits,
-		// and an unbounded resolution here would otherwise only fail much
-		// later, when the final InvestigationResult itself fails to
-		// validate.
-		if max := request.Options.MaxSubjectCandidates; max > 0 && len(candidates) > max {
-			candidates = candidates[:max]
-		}
-		committed := make([]contextfabric.SubjectRef, 0, len(candidates))
-		for _, candidate := range candidates {
-			committed = append(committed, candidate.Subject)
-		}
-		return contextfabric.SubjectResolution{Candidates: candidates, Committed: committed}, nil
+	// A caller-explicit hint that resolved is authoritative and
+	// short-circuits here, exactly as before. A receipt-only resolution
+	// (candidatesBySubject may be non-empty, but nothing in it came from a
+	// caller-explicit hint) must NOT short-circuit -- N5 -- it falls
+	// through to hybrid search below, which merges into the same map, so a
+	// conversational follow-up naming a different subject than the one a
+	// prior receipt bound can still be found and compete on its own terms.
+	if anyCallerSourced(candidatesBySubject, callerSourced) {
+		return finalizeExactResolution(candidatesBySubject, callerSourced, request.Options.MaxSubjectCandidates), nil
 	}
-	if len(terms) == 0 {
-		return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}}, nil
-	}
+	// observationHasParent tracks, per observation (document/episode)
+	// subject key, whether traverseObservationToSubject found it a
+	// canonical parent candidate this call. See the N1 commit-eligibility
+	// rule below.
+	observationHasParent := make(map[string]bool)
 	for _, term := range terms {
 		results, err := a.search(ctx, principal.OrgID, term, zep.GraphSearchScopeNodes, nil, request.Options.MaxSubjectCandidates)
 		if err != nil {
@@ -95,6 +98,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			// genuinely mean the document or episode).
 			if isObservationSubjectKind(candidate.Subject.Kind) {
 				if traversed, ok := a.traverseObservationToSubject(ctx, principal, request.RequestedScope, term, node); ok {
+					observationHasParent[key] = true
 					traversedKey := subjectKey(traversed.Subject)
 					if current, exists := candidatesBySubject[traversedKey]; !exists || traversed.Confidence > current.Confidence {
 						candidatesBySubject[traversedKey] = traversed
@@ -118,6 +122,12 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	}
 	resolution := contextfabric.SubjectResolution{Candidates: candidates, Committed: []contextfabric.SubjectRef{}}
 	for _, candidate := range candidates {
+		// A receipt-derived hint (State=Committed, Confidence=1) that
+		// survived into this merged set is trusted exactly like any other
+		// exact match here -- this is the same fast path a caller-explicit
+		// hint would have taken via the short-circuit above, just reached
+		// after hybrid search also had a chance to run and merge in
+		// anything else the interpretation named.
 		if candidate.State == contextfabric.ResolutionCommitted && candidate.Confidence == 1 {
 			resolution.Committed = append(resolution.Committed, candidate.Subject)
 		}
@@ -128,23 +138,19 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	if len(candidates) == 0 {
 		return resolution, nil
 	}
-	// Observation-kind subjects (documents, episodes) describe something
-	// about a canonical entity; they are not themselves eligible for
-	// automatic commitment from hybrid search -- only an exact hint
-	// (RequestedScope.SubjectHints, handled entirely above and unaffected
-	// by this) can commit one, i.e. only when the caller explicitly asked
-	// for that document/episode by identity. This is a subject-kind rule,
-	// not text matching: without it, a term that only appears inside a
-	// document body could out-rank and auto-commit the document itself
-	// over the (necessarily lower-confidence, since it is one hop removed)
-	// canonical entity that document is about -- see
-	// traverseObservationToSubject. commitIndex, not commitable itself, is
-	// what the auto-commit thresholds below apply to, so a weak or absent
-	// non-observation candidate still falls through to ambiguity/
-	// clarification exactly as before, never silently to the observation.
+	// Observation-kind subjects (documents, episodes) are auto-commit-
+	// eligible via the confidence heuristics below ONLY when traversal
+	// found no canonical parent for them (N1): if none exists, the
+	// document/episode itself is the best -- often only -- answer, and
+	// must be able to resolve a question genuinely about it. When a parent
+	// candidate DOES exist, the observation stays excluded so the parent
+	// (necessarily lower-confidence, being one hop removed) still gets the
+	// chance to compete and win on its own terms, rather than the
+	// (higher-relevance-by-construction) observation always outranking it
+	// by raw score alone -- see traverseObservationToSubject.
 	commitIndex := make([]int, 0, len(candidates))
 	for index, candidate := range candidates {
-		if isObservationSubjectKind(candidate.Subject.Kind) {
+		if isObservationSubjectKind(candidate.Subject.Kind) && observationHasParent[subjectKey(candidate.Subject)] {
 			continue
 		}
 		commitIndex = append(commitIndex, index)
@@ -172,6 +178,45 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		resolution.ClarificationPrompt = clarificationPrompt(candidates)
 	}
 	return resolution, nil
+}
+
+// anyCallerSourced reports whether any resolved candidate came from a
+// caller-explicit hint (see callerSourced in ResolveSubjects).
+func anyCallerSourced(candidatesBySubject map[string]contextfabric.SubjectCandidate, callerSourced map[string]bool) bool {
+	for key := range candidatesBySubject {
+		if callerSourced[key] {
+			return true
+		}
+	}
+	return false
+}
+
+// finalizeExactResolution implements N4's two-class truncation: when the
+// resolved exact-hint candidates exceed Options.MaxSubjectCandidates,
+// caller-explicit hints are retained first (all of them, up to the bound);
+// receipt-derived hints fill only the remaining room, never displacing a
+// caller-explicit one. Order is otherwise deterministic (subjectKey) within
+// each class.
+func finalizeExactResolution(candidatesBySubject map[string]contextfabric.SubjectCandidate, callerSourced map[string]bool, max int) contextfabric.SubjectResolution {
+	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
+	for _, candidate := range candidatesBySubject {
+		candidates = append(candidates, candidate)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		iCaller, jCaller := callerSourced[subjectKey(candidates[i].Subject)], callerSourced[subjectKey(candidates[j].Subject)]
+		if iCaller != jCaller {
+			return iCaller
+		}
+		return subjectKey(candidates[i].Subject) < subjectKey(candidates[j].Subject)
+	})
+	if max > 0 && len(candidates) > max {
+		candidates = candidates[:max]
+	}
+	committed := make([]contextfabric.SubjectRef, 0, len(candidates))
+	for _, candidate := range candidates {
+		committed = append(committed, candidate.Subject)
+	}
+	return contextfabric.SubjectResolution{Candidates: candidates, Committed: committed}
 }
 
 func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Principal, request contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {

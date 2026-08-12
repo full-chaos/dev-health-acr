@@ -385,6 +385,121 @@ func TestResolveSubjectsTraversesObservationNodeToCanonicalSubject(t *testing.T)
 	}
 }
 
+// TestResolveSubjectsCommitsDocumentOnlyQuestionWithNoCanonicalParent is the
+// probe for Codex round-2 finding N1 (G1 over-correction): the prior fix
+// excluded every observation-kind candidate from auto-commit
+// unconditionally, so a question genuinely ABOUT a document -- one with no
+// traversable canonical parent at all -- could never resolve; it fell to
+// permanent ambiguity/clarification instead of answering. Per the design
+// ruling, an observation candidate is auto-commit-eligible whenever
+// traversal found no parent for it.
+func TestResolveSubjectsCommitsDocumentOnlyQuestionWithNoCanonicalParent(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	// No incoming DOCUMENTED_BY/HAS_EPISODE edge exists for this document
+	// at all (GetNodeEdges returns nothing), so traversal cannot find a
+	// canonical parent -- this document is the best (only) answer.
+	document := &zep.EntityNode{
+		UUID: "node-standalone-document", Name: "Platform Postmortem", Relevance: ptr(0.9),
+		Attributes: map[string]interface{}{
+			"canonical_id": "document_5678", "subject_kind": string(contextfabric.SubjectDocument), "label": "Platform Postmortem",
+			"authorization_repositories": "*", "authorization_projects": "*", "authorization_teams": "*",
+			"evidence_refs": "|evidence_document_5678|",
+		},
+	}
+	api.nodes[document.UUID] = document
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{document}}
+	request := validRequest()
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"Platform Postmortem"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "document_5678" {
+		t.Fatalf("resolution.Committed = %#v, want the standalone document committed since no canonical parent exists", resolution.Committed)
+	}
+}
+
+// TestResolveSubjectsExactHintTruncationRetainsCallerHintsOverReceiptDerivedOnes
+// is the probe for Codex round-2 finding N4 (G4 fix regression): the exact-
+// hint branch's truncation sorted purely by lexical subjectKey, with no
+// notion of which hint came from the caller versus from Engine's
+// prior-subject-receipt expansion. A receipt-derived subject whose key
+// happened to sort first could displace a subject the caller explicitly
+// asked for by ID. Per the design ruling, caller-explicit hints must always
+// be retained ahead of receipt-derived ones under truncation.
+func TestResolveSubjectsExactHintTruncationRetainsCallerHintsOverReceiptDerivedOnes(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	// "project_a" sorts lexically before "project_z", so the old pure-
+	// lexical truncation would keep "project_a" (receipt-derived) and drop
+	// "project_z" (the caller's own explicit hint) under a budget of 1.
+	callerSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_z", Label: "Project Z"}
+	receiptSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_a", Label: "Project A"}
+	api.nodes[nodeUUID("org_1", callerSubject)] = graphNode(nodeUUID("org_1", callerSubject), callerSubject.Kind, callerSubject.CanonicalID, callerSubject.Label, "*", 1)
+	api.nodes[nodeUUID("org_1", receiptSubject)] = graphNode(nodeUUID("org_1", receiptSubject), receiptSubject.Kind, receiptSubject.CanonicalID, receiptSubject.Label, "*", 1)
+	request := validRequest()
+	request.Options.MaxSubjectCandidates = 1
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
+		{Kind: callerSubject.Kind, ID: callerSubject.CanonicalID, Label: callerSubject.Label, Source: "workbench"},
+		{Kind: receiptSubject.Kind, ID: receiptSubject.CanonicalID, Label: receiptSubject.Label, Source: "prior_subject_receipt"},
+	}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	})
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "project_z" {
+		t.Fatalf("resolution.Committed = %#v, want the caller-explicit hint retained over the receipt-derived one", resolution.Committed)
+	}
+}
+
+// TestResolveSubjectsMergesHybridSearchWhenOnlyReceiptDerivedHintResolves
+// is the probe for Codex round-2 finding N5 (G9 receipt short-circuit): a
+// receipt-derived hint resolving was treated exactly like a caller-explicit
+// one, short-circuiting before hybrid search ever ran -- so a conversational
+// follow-up like "what about the other one" (interpreted subject terms
+// naming a DIFFERENT subject than whatever the prior receipt bound) could
+// never actually search for that other subject; only the stale receipt
+// subject was ever considered. Per the design ruling, a receipt-only
+// resolution must not prevent hybrid search from running and merging in.
+func TestResolveSubjectsMergesHybridSearchWhenOnlyReceiptDerivedHintResolves(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	receiptSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_a", Label: "Project A"}
+	api.nodes[nodeUUID("org_1", receiptSubject)] = graphNode(nodeUUID("org_1", receiptSubject), receiptSubject.Kind, receiptSubject.CanonicalID, receiptSubject.Label, "*", 1)
+	other := graphNode("node-other", contextfabric.SubjectProject, "project_b", "Project B", "*", 0.9)
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{other}}
+	request := validRequest()
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
+		{Kind: receiptSubject.Kind, ID: receiptSubject.CanonicalID, Label: receiptSubject.Label, Source: "prior_subject_receipt"},
+	}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"Project B"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	})
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	var sawOther bool
+	for _, candidate := range resolution.Candidates {
+		if candidate.Subject.CanonicalID == "project_b" {
+			sawOther = true
+		}
+	}
+	if !sawOther {
+		t.Fatalf("resolution = %#v, want hybrid search to still run and merge in the interpreted subject term even though a receipt-derived hint already resolved", resolution)
+	}
+}
+
 // TestResolveSubjectsTraversalIgnoresUnrelatedRelationEdges proves
 // traversal only follows the specific containment/attribution relation
 // kinds projectContent/projectEpisode use (DOCUMENTED_BY, HAS_EPISODE) to
