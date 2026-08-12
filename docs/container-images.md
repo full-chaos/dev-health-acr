@@ -60,6 +60,7 @@ GitHub action commit SHA):
 | Compose E2E Valkey helper | `valkey/valkey:9-alpine@sha256:ee91f7a174ac4d6a6b0685b3a60e321f0a9dbbb691f9b0e285be2ba1d1be8328` |
 | Compose E2E Mailpit helper | `axllent/mailpit:latest@sha256:b868afa176bfd6cce2323ea316cd99ccad77915e51e595748f6d786700ecf109` |
 | Compose E2E TLS proxy | `nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10` |
+| Context Fabric graph backend (ADR 0009, profile-gated) | `falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3` (FalkorDB 4.20.2, module ver 42002, Redis 8.6.3) |
 
 CI action refs are commit-SHA pinned: `actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0`,
 `actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16`,
