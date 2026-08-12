@@ -328,6 +328,76 @@ func TestClickHouseProjectionSourceIncidentTombstoneOnSoftDelete(t *testing.T) {
 	}
 }
 
+// TestClickHouseProjectionSourceFullSnapshotPagesWhenAggregateEntitiesExceedTheContractBound
+// is CHAOS-3753 codex round-2 finding K4's regression test: fullSnapshot
+// only treated an organization as oversized when a SINGLE table's query
+// was individually truncated at snapshotPerQueryCap (150). Seven
+// entity-producing tables can each independently stay under that per-table
+// cap (149 rows apiece) while their SUM (1043 entities) still exceeds the
+// v1 contract's aggregate 1000-entity bound -- oversized stayed false, so
+// fullSnapshot proceeded straight to buildBatch, which failed contract
+// validation instead of paging.
+func TestClickHouseProjectionSourceFullSnapshotPagesWhenAggregateEntitiesExceedTheContractBound(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+	const perTable = 149 // strictly under snapshotPerQueryCap (150): no single table ever reports truncated
+	repoRows, workItemRows, pullRequestRows, deploymentRows, incidentRows, reviewRows, ciRunRows :=
+		make([][]any, 0, perTable), make([][]any, 0, perTable), make([][]any, 0, perTable), make([][]any, 0, perTable), make([][]any, 0, perTable), make([][]any, 0, perTable), make([][]any, 0, perTable)
+	for i := 0; i < perTable; i++ {
+		id := fmt.Sprintf("%03d", i)
+		repoRows = append(repoRows, []any{"repo-" + id, "example-org/repo-" + id, "synthetic", at})
+		workItemRows = append(workItemRows, []any{"WIDGET-" + id, "repo-1", "example-org/widget-service", "task " + id, "in_progress", "", at})
+		pullRequestRows = append(pullRequestRows, []any{"repo-1", "example-org/widget-service", int64(i), "PR " + id, "open", at})
+		deploymentRows = append(deploymentRows, []any{"repo-1", "example-org/widget-service", "deploy-" + id, "success", "production", at})
+		incidentRows = append(incidentRows, []any{"incident-" + id, "repo-1", "example-org/widget-service", "incident " + id, "open", "low", at, uint8(0)})
+		reviewRows = append(reviewRows, []any{"review-" + id, "repo-1", int64(i), "approved", at, "example-org/widget-service"})
+		ciRunRows = append(ciRunRows, []any{"run-" + id, "repo-1", "main", "success", "example-org/widget-service", at})
+	}
+	tables := baseTables(at)
+	for index, table := range tables {
+		switch table.match {
+		case "FROM repos":
+			tables[index].rows = repoRows
+		case "FROM work_items AS w":
+			tables[index].rows = workItemRows
+		case "FROM git_pull_requests AS p":
+			tables[index].rows = pullRequestRows
+		case "FROM deployments AS d":
+			tables[index].rows = deploymentRows
+		case "FROM operational_incidents AS i":
+			tables[index].rows = incidentRows
+		default:
+			tables[index].rows = nil
+		}
+	}
+	tables = append(tables,
+		fakeTable{match: "FROM git_pull_request_reviews AS r", rows: reviewRows},
+		fakeTable{match: "FROM ci_pipeline_runs AS c", rows: ciRunRows},
+	)
+	client := &fakeClient{tables: tables}
+	source, err := devhealthsource.NewClickHouseProjectionSource(client)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+
+	batch, available, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName})
+	if err != nil {
+		t.Fatalf("next projection batch: %v (aggregate entity count across tables must trigger paging, not a contract-bound validation failure)", err)
+	}
+	if !available {
+		t.Fatal("expected a batch to be available")
+	}
+	if batch.FullSnapshot {
+		t.Fatalf("an aggregate-oversized organization must page (FullSnapshot=false), not claim a complete single-batch snapshot: %+v", batch)
+	}
+	if err := batch.Validate(); err != nil {
+		t.Fatalf("batch failed contract validation: %v", err)
+	}
+	if len(batch.Entities) > 1000 {
+		t.Fatalf("entities = %d, must stay within the v1 contract bound", len(batch.Entities))
+	}
+}
+
 // TestClickHouseProjectionSourcePagedBatchNeverSplitsARowsCandidatesAcrossAPageBoundary
 // is CHAOS-3753 codex round-2 finding K2's regression test. RULING
 // (team-lead): truncation happens on SQL-row boundaries only -- an

@@ -83,6 +83,18 @@ func (s *ClickHouseProjectionSource) NextProjectionBatch(ctx context.Context, ch
 // and failed the same way; initial projection never completed). The
 // fallback produces an ordinary bounded incremental-shaped batch per tick
 // until caught up, exactly like any other incremental catch-up.
+//
+// "Too large" is detected two ways (codex round-2 finding K4): a single
+// table individually truncated at snapshotPerQueryCap, OR the aggregate
+// candidate count across every table exceeding the v1 contract's own
+// per-batch bounds even when no single table was truncated -- N tables
+// each just under their own per-table cap can still sum past the
+// contract's aggregate entity/relationship bound (e.g. seven tables at
+// 149 rows apiece is 1043 entities, over the 1000 cap). Checking only the
+// per-table signal let that case reach buildBatch and fail contract
+// validation instead of paging -- the same "stuck forever" shape C6 fixed
+// for the per-table case, just triggered by an aggregate rather than a
+// single oversized table.
 func (s *ClickHouseProjectionSource) fullSnapshot(ctx context.Context, orgID string) (contextfabric.ProjectionBatch, bool, error) {
 	var all []candidate
 	oversized := false
@@ -95,6 +107,15 @@ func (s *ClickHouseProjectionSource) fullSnapshot(ctx context.Context, orgID str
 			oversized = true
 		}
 		all = append(all, rows...)
+	}
+	if !oversized {
+		entities, relationships, tombstones := candidateCounts(all)
+		// +1: every non-oversized path below adds one organization entity
+		// candidate before calling buildBatch: this checks against exactly
+		// what buildBatch is about to validate, not what's in all right now.
+		if entities+1 > contractsv1.ContextFabricProjectionBatchMaxEntities || relationships > contractsv1.ContextFabricProjectionBatchMaxRelationships || tombstones > contractsv1.ContextFabricProjectionBatchMaxTombstones {
+			oversized = true
+		}
 	}
 	if oversized {
 		return s.pagedBatch(ctx, orgID, "", cursorState{}, true)
@@ -154,6 +175,26 @@ func (s *ClickHouseProjectionSource) pagedBatch(ctx context.Context, orgID, curs
 		return contextfabric.ProjectionBatch{}, false, err
 	}
 	return batch, true, nil
+}
+
+// candidateCounts tallies candidates by kind -- CHAOS-3753 codex round-2
+// finding K4 -- so a caller can check an aggregate count against the v1
+// contract's per-batch bounds before calling buildBatch. devhealthsource's
+// ClickHouse tables never produce episode or content candidates (those
+// come from EpisodesProjectionSource / not implemented here), so this
+// only needs to report the three kinds this file actually builds.
+func candidateCounts(all []candidate) (entities, relationships, tombstones int) {
+	for _, c := range all {
+		switch {
+		case c.entity != nil:
+			entities++
+		case c.relationship != nil:
+			relationships++
+		case c.tombstone != nil:
+			tombstones++
+		}
+	}
+	return entities, relationships, tombstones
 }
 
 func (s *ClickHouseProjectionSource) clock() time.Time {

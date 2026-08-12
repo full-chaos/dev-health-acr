@@ -45,7 +45,7 @@ func (b ContextFabricProjectionBatch) Validate() error {
 	if len(b.Entities)+len(b.Relationships)+len(b.Contents)+len(b.Episodes)+len(b.Tombstones) == 0 {
 		return fmt.Errorf("projection batch is empty")
 	}
-	if len(b.Entities) > 1000 || len(b.Relationships) > 5000 || len(b.Contents) > 1000 || len(b.Episodes) > 1000 || len(b.Tombstones) > 5000 {
+	if len(b.Entities) > ContextFabricProjectionBatchMaxEntities || len(b.Relationships) > ContextFabricProjectionBatchMaxRelationships || len(b.Contents) > ContextFabricProjectionBatchMaxContents || len(b.Episodes) > ContextFabricProjectionBatchMaxEpisodes || len(b.Tombstones) > ContextFabricProjectionBatchMaxTombstones {
 		return fmt.Errorf("projection batch exceeds v1 item bounds")
 	}
 	if err := validateEntityProjections(b.Entities); err != nil {

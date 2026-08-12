@@ -11,6 +11,22 @@ const (
 	ContextFabricProjectionBatchSchema      = "context_fabric_projection_batch.v1"
 )
 
+// ContextFabricProjectionBatch{Max...} are the v1 semantic (Go-level)
+// per-batch item bounds ContextFabricProjectionBatch.Validate() enforces
+// -- stricter than the JSON Schema's wire-format maxItems ceiling, which
+// is a looser bound this application-level policy sits inside of.
+// Exported (CHAOS-3753 codex round-2 finding K4) so a producer -- e.g.
+// devhealthsource's fullSnapshot -- can detect an aggregate-oversized
+// batch itself, before ever calling Validate(), rather than duplicating
+// these numbers and risking drift.
+const (
+	ContextFabricProjectionBatchMaxEntities      = 1000
+	ContextFabricProjectionBatchMaxRelationships = 5000
+	ContextFabricProjectionBatchMaxContents      = 1000
+	ContextFabricProjectionBatchMaxEpisodes      = 1000
+	ContextFabricProjectionBatchMaxTombstones    = 5000
+)
+
 // ContextFabricReservedOrganizationScopePrefix is the reserved namespace a
 // synthesized Organization entity uses to encode organization-wide
 // authorization inside AuthorizationScope.ProjectIDs -- ContextFabric has
