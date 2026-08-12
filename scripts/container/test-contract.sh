@@ -76,8 +76,7 @@ grep -Eq 'driver-opts: image=moby/buildkit:v0\.31\.0@sha256:[0-9a-f]{64}' "$ci_w
 # not a mutable tag alone.
 grep -Eq '^# syntax=docker/dockerfile:[^[:space:]]+@sha256:[0-9a-f]{64}$' "${repo_root}/Dockerfile"
 
-# 4. Both target architectures must be scanned and SBOMed; unfixed
-# HIGH/CRITICAL findings must not be hidden via --ignore-unfixed.
+# 4. Both target architectures must be SBOMed.
 grep -q 'bash scripts/container/oci.sh' "${repo_root}/Makefile"
 grep -q 'CONTAINER_PLATFORMS=linux/amd64,linux/arm64' "${repo_root}/scripts/container/oci.sh"
 test "$(grep -c 'CONTAINER_NO_CACHE=1 CONTAINER_OUTPUT=oci' "${repo_root}/scripts/container/oci.sh")" -eq 2
@@ -94,7 +93,7 @@ grep -q 'CONTAINER_SCAN_OCI_ROOT' "${repo_root}/scripts/container/scan.sh"
 grep -q 'materialize_archive_layouts acr-api' "${repo_root}/scripts/container/scan.sh"
 grep -q 'materialize_archive_layouts acr-mcp' "${repo_root}/scripts/container/scan.sh"
 grep -q 'ln -s "../[$]{product}-source/blobs"' "${repo_root}/scripts/container/scan.sh"
-scan_failure_line="$(grep -n 'one or more image scan or SBOM gates failed' "${repo_root}/scripts/container/scan.sh" | cut -d: -f1)"
+scan_failure_line="$(grep -n 'one or more SBOM gates failed' "${repo_root}/scripts/container/scan.sh" | cut -d: -f1)"
 scan_publish_line="$(grep -n 'publish-directory.sh' "${repo_root}/scripts/container/scan.sh" | cut -d: -f1)"
 test "$scan_failure_line" -lt "$scan_publish_line" || {
   printf 'container scan must reject failures before publication\n' >&2
@@ -105,11 +104,9 @@ if grep -q $'^\tsync$' "${repo_root}/Makefile"; then
   printf 'container scan must wait for each OCI exporter, not use a global sync\n' >&2
   exit 1
 fi
-if grep -q -- '--ignore-unfixed' "${repo_root}/Makefile"; then exit 1; fi
-if grep -q -- '--ignore-unfixed' "${repo_root}/docs/container-images.md"; then exit 1; fi
 grep -q 'acr-api-amd64' "${repo_root}/docs/container-images.md"
 grep -q 'acr-mcp-arm64' "${repo_root}/docs/container-images.md"
-for transitive_pin in 'docker/dockerfile:1.20@sha256:' 'tonistiigi/binfmt:qemu-v10.2.3@sha256:' 'moby/buildkit:v0.31.0@sha256:' 'anchore/syft:v1.46.0@sha256:' 'aquasecurity/trivy-db@sha256:' 'postgres:18-alpine@sha256:' 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' 'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16' 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'; do
+for transitive_pin in 'docker/dockerfile:1.20@sha256:' 'tonistiigi/binfmt:qemu-v10.2.3@sha256:' 'moby/buildkit:v0.31.0@sha256:' 'anchore/syft:v1.46.0@sha256:' 'postgres:18-alpine@sha256:' 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' 'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16' 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'; do
   grep -qF "$transitive_pin" "${repo_root}/docs/container-images.md" || {
     printf 'container documentation is missing transitive pin: %s\n' "$transitive_pin" >&2
     exit 1
@@ -257,12 +254,13 @@ if grep -Eq 'done < <\(jq' "${repo_root}/scripts/container/validate-oci.sh" "${r
   exit 1
 fi
 
-# 17. Scanning uses one immutable, freshness-checked Trivy DB snapshot for
-# four network-disabled scans and an immutable Syft image for four SBOMs.
-grep -q 'aquasecurity/trivy-db@sha256:' "${repo_root}/scripts/container/scan.sh"
-grep -q 'trivy_db_layer=' "${repo_root}/scripts/container/scan.sh"
-grep -q 'TRIVY_DB_MAX_AGE_HOURS' "${repo_root}/scripts/container/scan.sh"
-test "$(grep -c -- '--skip-db-update' "${repo_root}/scripts/container/scan.sh")" -eq 1
+# 17. SBOM generation uses an immutable Syft image, network-disabled, for
+# four SBOMs. No vulnerability scanner is invoked (CHAOS-3772 tracks
+# reintroducing one without a recurring pin-expiry time bomb).
+if grep -qi 'trivy' "${repo_root}/scripts/container/scan.sh"; then
+  printf 'scan.sh must not reference Trivy\n' >&2
+  exit 1
+fi
 grep -q 'anchore/syft:v1.46.0@sha256:' "${repo_root}/scripts/container/scan.sh"
 grep -q 'container-scan.work.XXXXXX' "${repo_root}/scripts/container/scan.sh"
 scan_script="${repo_root}/scripts/container/scan.sh"
@@ -274,23 +272,19 @@ grep -qF "scanner_gid=\"\$(id -g)\"" "$scan_script" || {
   printf 'container scanners must derive the invoking host GID\n' >&2
   exit 1
 }
-test "$(grep -cF -- "--user \"\${scanner_uid}:\${scanner_gid}\"" "$scan_script")" -eq 3 || {
-  printf 'DB download, Trivy scans, and Syft SBOMs must run as the invoking non-root user\n' >&2
+test "$(grep -cF -- "--user \"\${scanner_uid}:\${scanner_gid}\"" "$scan_script")" -eq 1 || {
+  printf 'Syft SBOMs must run as the invoking non-root user\n' >&2
   exit 1
 }
-test "$(grep -c -- '--read-only' "$scan_script")" -eq 3 || {
+test "$(grep -c -- '--read-only' "$scan_script")" -eq 1 || {
   printf 'every scanner container must use a read-only root filesystem\n' >&2
   exit 1
 }
-test "$(grep -cF -- '--tmpfs /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777' "$scan_script")" -eq 3 || {
+test "$(grep -cF -- '--tmpfs /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777' "$scan_script")" -eq 1 || {
   printf 'every scanner container must provide bounded non-root scratch space\n' >&2
   exit 1
 }
-if grep -q '/root/.cache/trivy' "$scan_script"; then
-  printf 'Trivy cache must not depend on root-home traversal or ownership\n' >&2
-  exit 1
-fi
-if grep -q "rm -rf \"\$scan_root\" \"\$report_root\" \"\$trivy_cache\"" "${repo_root}/scripts/container/scan.sh"; then
+if grep -q "rm -rf \"\$scan_root\" \"\$report_root\"" "${repo_root}/scripts/container/scan.sh"; then
   printf 'container scan must not delete shared work roots before generating reports\n' >&2
   exit 1
 fi

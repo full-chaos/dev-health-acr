@@ -92,7 +92,7 @@ Every publication must pass all of the following before the final publish step:
 3. Native smoke tests on Linux, macOS, and Windows.
 4. Multi-platform `linux/amd64` and `linux/arm64` OCI image builds for
    `acr-api` and `acr-mcp`.
-5. Container archive validation, Trivy scanning, and SPDX SBOM generation.
+5. Container archive validation and SPDX SBOM generation.
 6. Final checksum and manifest reconciliation across binary and container
    outputs.
 
