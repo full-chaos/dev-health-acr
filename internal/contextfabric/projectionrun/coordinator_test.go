@@ -197,9 +197,9 @@ func TestCoordinatorIsolatesFailureToItsOwnPair(t *testing.T) {
 	backend.failOrgs["org-fails"] = true
 	checkpoints := newFakeCheckpointStore()
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
-		OrgIDs:      []string{"org-fails", "org-ok"},
-		Sources:     []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
-		Backend:     backend, Checkpoints: checkpoints, Logger: discardLogger(),
+		OrgIDs:  []string{"org-fails", "org-ok"},
+		Sources: []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
+		Backend: backend, Checkpoints: checkpoints, Logger: discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
@@ -248,9 +248,9 @@ func TestCoordinatorSkipsAnOrganizationLockedByAnotherReplica(t *testing.T) {
 	checkpoints := newFakeCheckpointStore()
 	locker := &denyingLocker{denied: map[string]bool{"org-locked-elsewhere": true}}
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
-		OrgIDs:      []string{"org-locked-elsewhere", "org-free"},
-		Sources:     []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
-		Backend:     backend, Checkpoints: checkpoints, Locker: locker, Logger: discardLogger(),
+		OrgIDs:  []string{"org-locked-elsewhere", "org-free"},
+		Sources: []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
+		Backend: backend, Checkpoints: checkpoints, Locker: locker, Logger: discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
