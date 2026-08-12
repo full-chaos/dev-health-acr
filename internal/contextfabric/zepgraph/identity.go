@@ -83,12 +83,40 @@ func encodeScope(values []string) string {
 	return builder.String()
 }
 
+// scopeContains reports whether a node/edge's encoded authorization scope
+// admits the caller-side scope value. value is one entry from a principal's
+// storage.Principal.RepositoryScopes (or a requested-scope filter), which,
+// per internal/auth.RepositoryAllowed, may be an exact "owner/repo" slug,
+// the global wildcard "*", or an "owner/*" wildcard. Both wildcard forms are
+// handled the same way internal/auth resolves them for a concrete slug --
+// deliberately mirrored here rather than re-derived, so the two callers
+// cannot silently drift.
+//
+// A value of "*" authorizes unconditionally: encoded is already the
+// authorization list for one node inside one organization's graph (the
+// graph ID itself is server-derived from the organization ID), so widening
+// within it can never cross an organization boundary. An "owner/*" value
+// authorizes only if the node's own encoded list contains at least one
+// repository under that owner -- it does not widen to other owners or to
+// nodes with no repositories under that owner at all.
 func scopeContains(encoded, value string) bool {
 	if encoded == scopeDeniedSentinel {
 		return false
 	}
 	if encoded == "*" {
 		return true
+	}
+	value = strings.TrimSpace(value)
+	if value == "*" {
+		return true
+	}
+	if owner, ok := strings.CutSuffix(value, "/*"); ok && owner != "" {
+		for _, entry := range decodeScope(encoded) {
+			if entryOwner, _, found := strings.Cut(entry, "/"); found && entryOwner == owner {
+				return true
+			}
+		}
+		return false
 	}
 	return strings.Contains(encoded, scopeSeparator+value+scopeSeparator)
 }

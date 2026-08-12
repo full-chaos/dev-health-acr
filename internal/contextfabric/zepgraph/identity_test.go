@@ -75,3 +75,55 @@ func TestDecodeScopeTreatsTheDeniedSentinelAsEmpty(t *testing.T) {
 		t.Fatalf("decodeScope(sentinel) = %#v, want empty", got)
 	}
 }
+
+// TestScopeContainsAcceptsPrincipalSideWildcards is the direct regression
+// for the CHAOS-3752 Reset 0 review must-do: principal-side wildcard scopes
+// ("*", "owner/*"), both valid per internal/auth.RepositoryAllowed and
+// internal/auth.validRepositoryScope, must match a node's specific encoded
+// authorization list instead of matching nothing.
+func TestScopeContainsAcceptsPrincipalSideWildcards(t *testing.T) {
+	t.Parallel()
+	encoded := encodeScope([]string{"acme/repo-x", "acme/repo-y"})
+	cases := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"global wildcard matches any encoded repository", "*", true},
+		{"owner wildcard matches an encoded repository under that owner", "acme/*", true},
+		{"owner wildcard does not match an unrelated owner", "other/*", false},
+		{"exact match still works alongside wildcard handling", "acme/repo-x", true},
+		{"exact match on an absent repository still fails", "acme/repo-z", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := scopeContains(encoded, tc.value); got != tc.want {
+				t.Fatalf("scopeContains(%q, %q) = %v, want %v", encoded, tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestScopeContainsWildcardNeverWidensPastTheDeniedSentinelOrEmptyEncoding
+// proves the wildcard fix does not resurrect the F1 fail-open bug: a
+// principal-side wildcard must still authorize nothing against the
+// fail-closed sentinel, and an owner wildcard must not match when the
+// encoded list simply has no repository under that owner.
+func TestScopeContainsWildcardNeverWidensPastTheDeniedSentinelOrEmptyEncoding(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"*", "acme/*"} {
+		if scopeContains(scopeDeniedSentinel, value) {
+			t.Fatalf("scopeContains(sentinel, %q) = true, want false", value)
+		}
+	}
+	onlyOtherOwner := encodeScope([]string{"other/repo-y"})
+	if scopeContains(onlyOtherOwner, "acme/*") {
+		t.Fatal("owner wildcard matched an encoded scope with no repository under that owner")
+	}
+	// A bare "/*" (empty owner) must not match every entry as if it were a
+	// second global wildcard.
+	if scopeContains(onlyOtherOwner, "/*") {
+		t.Fatal("empty-owner wildcard must not match")
+	}
+}
