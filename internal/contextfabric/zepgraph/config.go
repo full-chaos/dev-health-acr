@@ -11,6 +11,7 @@ import (
 	"time"
 
 	acrconfig "github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	zep "github.com/getzep/zep-go/v3"
 	zepclient "github.com/getzep/zep-go/v3/client"
 	zepcore "github.com/getzep/zep-go/v3/core"
@@ -298,11 +299,20 @@ func safeDependencyError(operation string, err error) error {
 	case http.StatusNotFound:
 		return fmt.Errorf("%s: %w", operation, ErrNotFound)
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return fmt.Errorf("%s: %w", operation, ErrUnauthorized)
+		// The graph backend rejected ACR's own service credential -- an
+		// ACR-side operational problem, not evidence about the requesting
+		// principal's authorization for any subject. It must never be
+		// classified the way a caller-facing "unauthorized" would be (that
+		// would incorrectly imply the caller lacks access to something);
+		// it degrades exactly like any other dependency outage, so it also
+		// wraps the vendor-neutral contextfabric.ErrUnavailable.
+		return fmt.Errorf("%s: %w: %w", operation, ErrUnauthorized, contextfabric.ErrUnavailable)
 	case http.StatusTooManyRequests:
-		return fmt.Errorf("%s: %w", operation, ErrRateLimited)
+		// Also wraps the vendor-neutral contextfabric.ErrRateLimited so
+		// the route layer can classify this without importing zepgraph.
+		return fmt.Errorf("%s: %w: %w", operation, ErrRateLimited, contextfabric.ErrRateLimited)
 	default:
-		return fmt.Errorf("%s: graph dependency unavailable", operation)
+		return fmt.Errorf("%s: graph dependency unavailable: %w", operation, contextfabric.ErrUnavailable)
 	}
 }
 

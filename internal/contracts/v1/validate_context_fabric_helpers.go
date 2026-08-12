@@ -18,7 +18,7 @@ func validateScalarMap(values map[string]ContextFabricScalarValue) error {
 	return nil
 }
 
-func validateDrivers(values []ContextFabricDriverJudgment) error {
+func validateDrivers(values []ContextFabricDriverJudgment, claimed map[string]ContextFabricClaimedFact) error {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
 		if err := value.Validate(); err != nil {
@@ -28,11 +28,14 @@ func validateDrivers(values []ContextFabricDriverJudgment) error {
 			return fmt.Errorf("driver IDs must be unique")
 		}
 		seen[value.DriverID] = struct{}{}
+		if err := validateClaimedFactReferences("driver", value.ClaimedFactIDs, value.Category, claimed); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func validateFindings(name string, values []ContextFabricFinding) error {
+func validateFindings(name string, values []ContextFabricFinding, claimed map[string]ContextFabricClaimedFact) error {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
 		if err := value.Validate(); err != nil {
@@ -42,6 +45,57 @@ func validateFindings(name string, values []ContextFabricFinding) error {
 			return fmt.Errorf("%s IDs must be unique", name)
 		}
 		seen[value.FindingID] = struct{}{}
+		if err := validateClaimedFactReferences(name, value.ClaimedFactIDs, value.Kind, claimed); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateClaimedFacts checks ContextFabricInvestigationResult.ClaimedFacts
+// bounds and ClaimID uniqueness, returning a ClaimID-indexed lookup map for
+// validateClaimedFactReferences to cross-check driver/finding references
+// against.
+func validateClaimedFacts(values []ContextFabricClaimedFact) (map[string]ContextFabricClaimedFact, error) {
+	if values == nil || len(values) > 250 {
+		return nil, fmt.Errorf("claimed facts violate v1 bounds")
+	}
+	seen := make(map[string]ContextFabricClaimedFact, len(values))
+	for _, value := range values {
+		if err := value.Validate(); err != nil {
+			return nil, fmt.Errorf("claimed_facts: %w", err)
+		}
+		if _, exists := seen[value.ClaimID]; exists {
+			return nil, fmt.Errorf("claimed fact IDs must be unique")
+		}
+		seen[value.ClaimID] = value
+	}
+	return seen, nil
+}
+
+// validateClaimedFactReferences checks that every ID in claimIDs resolves
+// inside claimed, and -- when category names a canonical-fact-shaped
+// judgment per ContextFabricDriverCategoryRequiresClaimedFact -- that at
+// least one referenced claim's Kind matches. This is the result-level half
+// of value-level evidence closure: it proves a driver/finding's claim
+// actually exists and is of the right shape. It does NOT compare claim
+// values against a canonical fact bundle -- that bundle isn't part of the
+// persisted result, so that comparison is SynthesisDraft.ValidateAgainst's
+// job in internal/contextfabric, which runs before a result is ever built.
+func validateClaimedFactReferences(name string, claimIDs []string, category string, claimed map[string]ContextFabricClaimedFact) error {
+	requiredKind, required := ContextFabricDriverCategoryRequiresClaimedFact(ContextFabricDriverCategory(category))
+	matchedKind := false
+	for _, id := range claimIDs {
+		fact, ok := claimed[id]
+		if !ok {
+			return fmt.Errorf("%s references unknown claimed fact %q", name, id)
+		}
+		if required && fact.Kind == requiredKind {
+			matchedKind = true
+		}
+	}
+	if required && !matchedKind {
+		return fmt.Errorf("%s category %q requires a claimed fact of kind %q", name, category, requiredKind)
 	}
 	return nil
 }
@@ -222,6 +276,31 @@ func subjectKey(subject ContextFabricSubjectRef) string {
 
 func validVersion(value string) bool {
 	return stringLengthBetween(value, 1, 256) && strings.TrimSpace(value) == value
+}
+
+// validDriverCategory reports whether value is one of the closed
+// ContextFabricDriverCategory vocabulary members (CHAOS-3755 adversarial
+// review finding H4). Before this, ContextFabricDriverJudgment.Category
+// was an unbounded free string, so a model could pick a novel spelling
+// that ContextFabricDriverCategoryRequiresClaimedFact's exact-match lookup
+// would never recognize as fact-shaped -- silently bypassing value-level
+// closure for a judgment that was, in substance, exactly the kind of
+// canonical-fact claim closure exists to check. Closing the vocabulary
+// makes that bypass structurally impossible: every category is either a
+// known fact-shaped one (requires a claim) or a known narrative one
+// (relationship/narrative -- doesn't), never an unrecognized third thing.
+func validDriverCategory(value ContextFabricDriverCategory) bool {
+	switch value {
+	case ContextFabricDriverCategoryStatus, ContextFabricDriverCategoryCompletion, ContextFabricDriverCategoryWork,
+		ContextFabricDriverCategoryBlockers, ContextFabricDriverCategoryReviews, ContextFabricDriverCategoryCI,
+		ContextFabricDriverCategoryDeployments, ContextFabricDriverCategoryIncidents, ContextFabricDriverCategoryHealth,
+		ContextFabricDriverCategoryWorkload, ContextFabricDriverCategoryInvestment, ContextFabricDriverCategoryReadiness,
+		ContextFabricDriverCategoryDeficiency, ContextFabricDriverCategorySourceHealth,
+		ContextFabricDriverCategoryRelationship, ContextFabricDriverCategoryNarrative:
+		return true
+	default:
+		return false
+	}
 }
 
 func allStringsInSet[T ~string](values []T, valid func(T) bool) bool {

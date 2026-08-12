@@ -13,6 +13,18 @@ import (
 
 const canonicalFactRegistryVersion = "context-fabric-facts.v1"
 
+// maxCanonicalFactsPerBundle bounds how many CanonicalFacts one
+// CanonicalFactBundle may carry, across ALL providers that contributed to
+// it (CHAOS-3755 adversarial review finding H7). The bundle becomes model
+// input, so an unbounded one is both a cost and a prompt-size hazard.
+//
+// A request may name up to 64 fact requirements, so a purely per-provider
+// limit still multiplies out; this is the ceiling on the total. It sits
+// deliberately above any single provider's per-query limit so an ordinary
+// multi-kind investigation is never truncated by it -- this is a backstop
+// against pathological fanout, not a routine budget.
+const maxCanonicalFactsPerBundle = 2000
+
 type FactCapability struct {
 	Kind                  FactKind
 	Name                  string
@@ -251,6 +263,28 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 	}
 	if strings.TrimSpace(result.Version) == "" || strings.TrimSpace(result.Version) != result.Version {
 		return errors.New("provider returned an invalid version")
+	}
+	// Registry-level fanout cap (CHAOS-3755 adversarial review finding
+	// H7). Each provider bounds its OWN query, but nothing bounded the
+	// SUM across providers: a request may name many fact kinds, and every
+	// one of them could legitimately return up to its own per-query limit,
+	// so the bundle -- which becomes model input -- could still grow
+	// without any server-side ceiling. This is the second, independent
+	// bound: it holds even for a provider that ignores or lacks a query
+	// limit of its own (a future non-ClickHouse provider, or one whose
+	// LIMIT is dropped by a refactor), because it is enforced here at the
+	// merge point every provider result must pass through.
+	//
+	// Over-budget facts are DROPPED and the source is marked truncated
+	// rather than the read failing: a partial, explicitly-truncated answer
+	// is the honest outcome, and Coverage already carries truncation
+	// outward so the model and the caller both see it.
+	if remaining := maxCanonicalFactsPerBundle - len(bundle.Facts); remaining < len(result.Facts) {
+		if remaining < 0 {
+			remaining = 0
+		}
+		result.Facts = result.Facts[:remaining]
+		result.Truncated = true
 	}
 	if result.Truncated {
 		result.State = SourceTruncated

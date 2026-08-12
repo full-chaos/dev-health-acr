@@ -60,7 +60,7 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 		readinessTimeout = defaultPostgresReadinessTimeout
 	}
 	return postgresComponents{
-		credentials: credentials, devices: devices, audit: audit, packets: packets, episodes: episodes,
+		credentials: credentials, devices: devices, audit: audit, packets: packets, episodes: episodes, db: database,
 		check: func(ctx context.Context) error {
 			checkContext, cancel := context.WithTimeout(ctx, readinessTimeout)
 			defer cancel()

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -68,6 +69,25 @@ func TestContextFabricRequestStrictDecodeRejectsUnknownTrailingAndInvalidNull(t 
 	}
 	if err := request.Validate(); err == nil {
 		t.Fatal("invalid null question was accepted")
+	}
+}
+
+// TestContextFabricDriverJudgmentValidateRejectsUnrecognizedCategory is the
+// Go-level half of the H4 fix (CHAOS-3755 adversarial review): Category is
+// a closed contract enum now, so an unrecognized value is rejected at
+// ContextFabricDriverJudgment.Validate() directly, independent of any
+// canonical-fact-claim reasoning layered on top in internal/contextfabric.
+func TestContextFabricDriverJudgmentValidateRejectsUnrecognizedCategory(t *testing.T) {
+	t.Parallel()
+	project := ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	driver := ContextFabricDriverJudgment{
+		DriverID: "driver_12345678", Standing: ContextFabricDriverWithheld, Category: "not_a_real_category",
+		Title: "Title", Summary: "Summary", AffectedSubjects: []ContextFabricSubjectRef{project},
+		Derivation: ContextFabricDerivationRuleInferred, EpistemicStatus: ContextFabricEpistemicInferred,
+		Confidence: 0.5, Qualification: "withheld", Current: true,
+	}
+	if err := driver.Validate(); err == nil || !strings.Contains(err.Error(), "driver judgment violates v1 bounds") {
+		t.Fatalf("Validate() error = %v, want an unrecognized category to be rejected", err)
 	}
 }
 
@@ -395,6 +415,7 @@ func validContextFabricContractResult() ContextFabricInvestigationResult {
 		Conflicts:           []ContextFabricFinding{},
 		Limitations:         []string{},
 		EvidenceRefIDs:      []string{},
+		ClaimedFacts:        []ContextFabricClaimedFact{},
 		Coverage:            ContextFabricCoverage{Sources: []ContextFabricSourceObservation{}, DegradedReasons: []string{}},
 		Versions:            ContextFabricVersionSet{ServiceVersion: "acr-v1", ContractVersion: ContextFabricInvestigationResultSchema, Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1", CanonicalServiceVersion: "ops-v1"},
 		DeterministicAnswer: "Ask Dev is not release-ready because required work remains.",
@@ -411,5 +432,101 @@ func validContextFabricProjectionBatch() ContextFabricProjectionBatch {
 			Properties: map[string]ContextFabricScalarValue{"provider": {String: &text}}, Authorization: ContextFabricAuthorizationScope{ProjectIDs: []string{"project_ask_dev"}}, EvidenceRefIDs: []string{"evidence_12345678"}, ObservedAt: time.Now().UTC(), SourceVersion: "source-v1",
 		}},
 		Relationships: []ContextFabricRelationshipProjection{}, Contents: []ContextFabricContentProjection{}, Episodes: []ContextFabricEpisodeProjection{}, Tombstones: []ContextFabricProjectionTombstone{},
+	}
+}
+
+// TestContextFabricResultSurvivesJSONRoundTripRevalidation is the probe for
+// the Coverage.Validate relaxation that landed with the store-side
+// validate-on-read work (CHAOS-3755 finding M2). Coverage.DegradedReasons
+// is `omitempty` in Go and is NOT in the Coverage schema's required set
+// (only sources and partial are), so a legitimately EMPTY, non-nil slice
+// serializes to an omitted field and decodes back as nil. A validator that
+// demanded non-nil there would reject the service's own valid output the
+// moment anything re-read it -- which is exactly what
+// InvestigationResultStore.Get now does on every read.
+//
+// This asserts the round trip, not the relaxed condition in isolation:
+// re-tightening Coverage.Validate would make this fail, whereas a test
+// that only built a nil-DegradedReasons value by hand would not prove the
+// scenario that motivated the change.
+func TestContextFabricResultSurvivesJSONRoundTripRevalidation(t *testing.T) {
+	t.Parallel()
+	original := validContextFabricContractResult()
+	if err := original.Validate(); err != nil {
+		t.Fatalf("fixture Validate() error = %v, want the fixture itself to be valid", err)
+	}
+	if original.Coverage.DegradedReasons == nil {
+		t.Fatal("fixture Coverage.DegradedReasons is nil, want a non-nil empty slice so the round trip is meaningful")
+	}
+
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var decoded ContextFabricInvestigationResult
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if decoded.Coverage.DegradedReasons != nil {
+		t.Fatalf("Coverage.DegradedReasons = %#v after round trip, want nil -- omitempty should have dropped the empty slice, which is the whole point of this probe", decoded.Coverage.DegradedReasons)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("Validate() after JSON round trip error = %v, want a re-decoded valid result to stay valid", err)
+	}
+}
+
+// TestContextFabricCoverageDegradedReasonsBounds pins BOTH directions of
+// the Coverage.DegradedReasons relaxation, so the exact line a reviewer
+// will challenge carries its own evidence.
+//
+// Direction 1 (why the relaxation is correct): degraded_reasons is
+// `omitempty` in Go and is NOT in the Coverage schema's required set --
+// only sources and partial are -- so absent and empty are both legal, and
+// the nil a decode produces from an omitted field must validate. Demanding
+// non-nil rejected the service's own valid output on every re-read.
+//
+// Direction 2 (what the relaxation did NOT give away): every other bound
+// on the field still holds. Relaxing nil is not relaxing the field.
+func TestContextFabricCoverageDegradedReasonsBounds(t *testing.T) {
+	t.Parallel()
+	tooMany := make([]string, 251)
+	for i := range tooMany {
+		tooMany[i] = "reason-" + strconv.Itoa(i)
+	}
+	cases := []struct {
+		name    string
+		reasons []string
+		wantErr bool
+	}{
+		{"nil is accepted -- an omitted optional field decodes to this", nil, false},
+		{"empty is accepted -- the in-Go form that serializes to omitted", []string{}, false},
+		{"populated is accepted", []string{"clickhouse: degraded"}, false},
+		{"over the 250 bound is still rejected", tooMany, true},
+		{"duplicates are still rejected", []string{"same", "same"}, true},
+		{"an over-long reason is still rejected", []string{strings.Repeat("x", 2001)}, true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			coverage := ContextFabricCoverage{Sources: []ContextFabricSourceObservation{}, DegradedReasons: testCase.reasons}
+			err := coverage.Validate()
+			if testCase.wantErr && err == nil {
+				t.Fatal("Validate() error = nil, want the bound to still be enforced")
+			}
+			if !testCase.wantErr && err != nil {
+				t.Fatalf("Validate() error = %v, want accepted", err)
+			}
+		})
+	}
+}
+
+// TestContextFabricCoverageSourcesStillRequiresNonNil is the companion
+// guard: sources IS in the schema's required set, so relaxing
+// degraded_reasons must not have relaxed it by association.
+func TestContextFabricCoverageSourcesStillRequiresNonNil(t *testing.T) {
+	t.Parallel()
+	coverage := ContextFabricCoverage{Sources: nil, DegradedReasons: []string{}}
+	if err := coverage.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want nil sources to remain invalid -- it is a required field")
 	}
 }

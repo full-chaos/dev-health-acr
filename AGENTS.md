@@ -42,6 +42,9 @@ docs/adr/                  # Owned architecture decisions
 | Context Fabric domain/ports | `internal/contextfabric` | Backend-neutral models, ports, engine, checkpoint-safe `ProjectionWorker` |
 | Context Fabric projection worker | `cmd/acr-projector`, `internal/contextfabric/projectionrun`, `internal/contextfabric/devhealthsource`, `internal/contextfabric/pgprojection` | Independent binary; single-flight-per-org coordinator; see `docs/design/context-fabric-projection-worker.md` |
 | Context Fabric graph backend | `internal/contextfabric/zepgraph` | ADR 0007; `ProjectionBackend`/`GraphReader` over Zep/Graphiti |
+| Context Fabric fact providers | `internal/contextfabric/devhealthfacts` | ClickHouse-backed `FactProvider`s; 8 fact kinds gated off (no canonical source) |
+| Context Fabric result persistence | `internal/contextfabric/pginvestigation`, `internal/contextfabric/memoryinvestigation` | Immutable `InvestigationResultStore`; org-scoped `Get` is a binding precondition |
+| Context Fabric investigation endpoint | `internal/api/context_fabric_routes.go`, `internal/runtime/hosted` | `POST /api/v1/context-fabric/investigations`; `ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED`; see `docs/design/context-fabric-result-semantics.md` |
 
 ## CODE MAP
 

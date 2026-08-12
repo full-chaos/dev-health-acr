@@ -164,6 +164,7 @@ type RelationshipPath = contractsv1.ContextFabricRelationshipPath
 type RelationshipEdge = contractsv1.ContextFabricRelationshipEdge
 type DriverJudgment = contractsv1.ContextFabricDriverJudgment
 type Finding = contractsv1.ContextFabricFinding
+type ClaimedFact = contractsv1.ContextFabricClaimedFact
 type SourceObservation = contractsv1.ContextFabricSourceObservation
 type Coverage = contractsv1.ContextFabricCoverage
 type VersionSet = contractsv1.ContextFabricVersionSet

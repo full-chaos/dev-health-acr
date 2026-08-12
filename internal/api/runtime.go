@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -48,7 +49,14 @@ type RuntimeDependencies struct {
 	Assembler                  ContextPacketAssembler
 	Evidence                   storage.EvidenceStore
 	Episodes                   EpisodeCreator
-	ReadinessChecks            []ReadinessCheck
+	// Investigator is optional -- context-fabric composition never fails
+	// closed over an unconfigured optional dependency (same convention as
+	// zepgraph.Configured for the graph backend). When nil, the
+	// investigations route is not registered at all (see Handler()),
+	// mirroring how Episodes being nil leaves the episode route
+	// unregistered.
+	Investigator    contextfabric.Investigator
+	ReadinessChecks []ReadinessCheck
 }
 
 func (r *RuntimeDependencies) validate() error {
@@ -61,6 +69,9 @@ func (r *RuntimeDependencies) validate() error {
 	}
 	if r.Episodes != nil && storage.IsNil(r.Episodes) {
 		return errors.New("hosted episode runtime must not be typed nil")
+	}
+	if r.Investigator != nil && storage.IsNil(r.Investigator) {
+		return errors.New("hosted context fabric investigator must not be typed nil")
 	}
 	if len(r.ReadinessChecks) < 3 {
 		return errors.New("hosted read runtime requires postgres, clickhouse, and entitlement readiness checks")

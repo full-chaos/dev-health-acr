@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: f2629334a310bc29de85ba118e6aeaf3b89040baf316c3e9eb1f63b17607f648
+# canonical-content-sha256: b3c0851ebe7d4977442f2f24c2296efb19ecc58a30c9566decb331590316df11
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -303,6 +303,54 @@ paths:
       security:
         -
           bearerAuth: []
+  "/api/v1/context-fabric/investigations":
+    post:
+      operationId: "createContextFabricInvestigation"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "../jsonschema/v1/context_fabric_investigation_request.v1.schema.json"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/context_fabric_investigation_result.v1.schema.json"
+          description: "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "413":
+          "$ref": "#/components/responses/Error"
+        "426":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "502":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+        "504":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+        -
+          webAssertionAuth: []
+      x-required-entitlement: "agent_context_runtime"
+      x-required-scope: "context:read"
   "/api/v1/oauth/device_approval":
     post:
       operationId: "approveDeviceAuthorization"

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	zep "github.com/getzep/zep-go/v3"
 	zepcore "github.com/getzep/zep-go/v3/core"
 )
@@ -104,8 +105,21 @@ func TestSafeDependencyErrorClassifiesAndHidesDependencyBodies(t *testing.T) {
 		})
 	}
 	unclassified := safeDependencyError("op", &zep.InternalServerError{Body: rawBody})
-	if unclassified == nil || unclassified.Error() != "op: graph dependency unavailable" {
+	if unclassified == nil || unclassified.Error() != "op: graph dependency unavailable: context fabric dependency unavailable" {
 		t.Fatalf("unclassified safeDependencyError() = %v", unclassified)
+	}
+	if !errors.Is(unclassified, contextfabric.ErrUnavailable) {
+		t.Fatal("unclassified safeDependencyError() must wrap the vendor-neutral contextfabric.ErrUnavailable")
+	}
+	// The graph backend rejecting ACR's own service credential must
+	// degrade like any other dependency outage (contextfabric.ErrUnavailable),
+	// never surface as a caller-facing authorization failure -- see
+	// safeDependencyError's comment.
+	if got := safeDependencyError("op", &zep.ForbiddenError{Body: rawBody}); !errors.Is(got, contextfabric.ErrUnavailable) {
+		t.Fatalf("unauthorized safeDependencyError() = %v, want Is(contextfabric.ErrUnavailable)", got)
+	}
+	if got := safeDependencyError("op", zepcore.NewAPIError(http.StatusTooManyRequests, nil, errors.New(secretMessage))); !errors.Is(got, contextfabric.ErrRateLimited) {
+		t.Fatalf("rate limited safeDependencyError() = %v, want Is(contextfabric.ErrRateLimited)", got)
 	}
 }
 

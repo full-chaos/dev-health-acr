@@ -145,7 +145,7 @@ func TestEngineInvestigatesNovelQuestionThroughComposableCapabilities(t *testing
 				CurrentState: "Release-readiness blockers remain.", StrongestPressures: []string{},
 				Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
 				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{},
-				EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 				DeterministicAnswer: "Ask Dev is not ready to ship because release-readiness blockers remain.", Warnings: []string{},
 				Versions: VersionSet{
 					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
@@ -226,6 +226,7 @@ func mustEngineForPriorReceiptTest(t *testing.T, graph GraphReader, store Invest
 				Status: InvestigationComplete, DirectJudgment: "Ask Dev is on track.", CurrentState: "Nominal.",
 				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
 				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+				ClaimedFacts:        []ClaimedFact{},
 				Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 				DeterministicAnswer: "Ask Dev is on track based on available context.", Warnings: []string{},
 				Versions: VersionSet{
@@ -448,4 +449,168 @@ func factKinds(requirements []FactRequirement) []FactKind {
 		kinds = append(kinds, requirement.Kind)
 	}
 	return kinds
+}
+
+// TestEngineRefusesNonCurrentTimeAxis is the engine half of the H6 fix
+// (Codex adversarial review, CHAOS-3755). The v1 request contract accepts
+// four temporal axes, but every canonical fact source behind this engine
+// reads CURRENT state only -- so a "what was the status last month"
+// question was previously answered with today's data, presented as if it
+// were that answer, with nothing in the response marking it wrong.
+//
+// The refusal must happen BEFORE any capability runs: doing the work and
+// then discarding it would still bill the caller and still hit the graph
+// and model, and a later change could easily let the result escape.
+func TestEngineRefusesNonCurrentTimeAxis(t *testing.T) {
+	t.Parallel()
+	asOf := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		time TimeContext
+	}{
+		{"valid time", TimeContext{Axis: TemporalValidTime, AsOf: &asOf}},
+		{"observed time", TimeContext{Axis: TemporalObservedTime, AsOf: &asOf}},
+		{"range", TimeContext{Axis: TemporalRange, Start: &start, End: &asOf}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			interpreted := false
+			engine, err := NewEngine(EngineDependencies{
+				Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+					interpreted = true
+					return InterpretedQuestion{}, nil
+				}),
+				Graph: graphReaderStub{},
+				Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+					return CanonicalFactBundle{}, nil
+				}),
+				Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+					return InvestigationResult{}, nil
+				}),
+			}, EngineOptions{ServiceVersion: "acr-test", NewResultID: func() string { return "result_12345678" }})
+			if err != nil {
+				t.Fatalf("NewEngine() error = %v", err)
+			}
+
+			request := validInvestigationRequest()
+			request.TimeContext = testCase.time
+			_, err = engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+
+			if !errors.Is(err, ErrUnsupportedTimeAxis) {
+				t.Fatalf("Investigate() error = %v, want ErrUnsupportedTimeAxis", err)
+			}
+			if interpreted {
+				t.Fatal("the interpreter ran for an unsupported time axis; the refusal must come first, before any capability does work")
+			}
+		})
+	}
+}
+
+// TestEngineAllowsCurrentTimeAxis is the over-blocking guard for the test
+// above: refusing everything would also "pass" it.
+func TestEngineAllowsCurrentTimeAxis(t *testing.T) {
+	t.Parallel()
+	request := validInvestigationRequest()
+	if request.TimeContext.Axis != TemporalCurrent {
+		t.Fatalf("fixture axis = %q, want the shared fixture to be a current-time request", request.TimeContext.Axis)
+	}
+	engine := mustEngineForPriorReceiptTest(t, graphReaderStub{}, nil, nil)
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); errors.Is(err, ErrUnsupportedTimeAxis) {
+		t.Fatalf("Investigate() error = %v, want a current-time request to not be refused", err)
+	}
+}
+
+// TestEngineRefusesNonCurrentTimeAxisFromInterpretation is the P2 probe
+// (codex delta review, CHAOS-3755). The wire-level axis check cannot catch
+// this: the REQUEST says current, and only the interpreter -- reading the
+// question itself -- concludes the caller is asking about the past.
+//
+// Before the post-interpretation guard, such an investigation ran the
+// graph, the fact reads and synthesis, then answered a historical question
+// with current data. This asserts both halves of the fix: the sentinel is
+// returned, AND no capability downstream of interpretation was invoked, so
+// a refused investigation costs nothing and cannot leak a partial answer.
+func TestEngineRefusesNonCurrentTimeAxisFromInterpretation(t *testing.T) {
+	t.Parallel()
+	asOf := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		time TimeContext
+	}{
+		{"interpreted as valid time", TimeContext{Axis: TemporalValidTime, AsOf: &asOf}},
+		{"interpreted as observed time", TimeContext{Axis: TemporalObservedTime, AsOf: &asOf}},
+		{"interpreted as a range", TimeContext{Axis: TemporalRange, Start: &start, End: &asOf}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			graph := &countingGraphReader{}
+			factsRead, synthesized := false, false
+			engine, err := NewEngine(EngineDependencies{
+				// The request carries axis=current; the INTERPRETER is
+				// what selects a historical axis, exactly as a real model
+				// runtime does (genkitruntime's interpretationOutput
+				// takes the model's axis verbatim when non-empty).
+				Interpreter: interpreterFunc(func(_ context.Context, _ storage.Principal, request InvestigationRequest) (InterpretedQuestion, error) {
+					if request.TimeContext.Axis != TemporalCurrent {
+						t.Fatalf("request axis = %q, want the wire request to be current so this test exercises the interpretation path", request.TimeContext.Axis)
+					}
+					return InterpretedQuestion{
+						Shape: ShapeSingleSubject, RequestedJudgment: "status", TimeContext: testCase.time,
+						FactRequirements: []FactRequirement{{Kind: FactStatus}},
+					}, nil
+				}),
+				Graph: graph,
+				Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+					factsRead = true
+					return CanonicalFactBundle{}, nil
+				}),
+				Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+					synthesized = true
+					return InvestigationResult{}, nil
+				}),
+			}, EngineOptions{ServiceVersion: "acr-test", NewResultID: func() string { return "result_12345678" }})
+			if err != nil {
+				t.Fatalf("NewEngine() error = %v", err)
+			}
+
+			request := validInvestigationRequest()
+			if request.TimeContext.Axis != TemporalCurrent {
+				t.Fatalf("fixture axis = %q, want current", request.TimeContext.Axis)
+			}
+			_, err = engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+
+			if !errors.Is(err, ErrUnsupportedTimeAxis) {
+				t.Fatalf("Investigate() error = %v, want ErrUnsupportedTimeAxis for an interpreted historical question", err)
+			}
+			if graph.resolveCalls != 0 || graph.discoverCalls != 0 {
+				t.Fatalf("graph was used (resolve=%d discover=%d); a refused investigation must do no graph work", graph.resolveCalls, graph.discoverCalls)
+			}
+			if factsRead {
+				t.Fatal("canonical facts were read for a refused investigation")
+			}
+			if synthesized {
+				t.Fatal("synthesis ran for a refused investigation")
+			}
+		})
+	}
+}
+
+// countingGraphReader records whether the engine reached the graph at all.
+type countingGraphReader struct {
+	resolveCalls  int
+	discoverCalls int
+}
+
+func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion) (SubjectResolution, error) {
+	g.resolveCalls++
+	return SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, nil
+}
+
+func (g *countingGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
+	g.discoverCalls++
+	return GraphContext{}, nil
 }

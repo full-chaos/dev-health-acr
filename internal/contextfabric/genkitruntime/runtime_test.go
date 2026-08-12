@@ -424,7 +424,7 @@ func validSynthesisOutput() synthesisOutput {
 		StrongestPressures: []string{"Release acceptance remains open."},
 		Drivers: []contextfabric.DriverJudgment{{
 			DriverID: "driver_12345678", Standing: contextfabric.DriverPrincipal,
-			Category: "release_readiness", Title: "Release acceptance remains open",
+			Category: "relationship", Title: "Release acceptance remains open",
 			Summary: "Required acceptance has not completed.", AffectedSubjects: []contextfabric.SubjectRef{project},
 			PathIDs: []string{"path_12345678"}, EvidenceRefIDs: []string{"evidence_release_1234"},
 			Derivation: contextfabric.DerivationRuleInferred, EpistemicStatus: contextfabric.EpistemicInferred,

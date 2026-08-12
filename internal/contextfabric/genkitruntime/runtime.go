@@ -28,9 +28,17 @@ const (
 	// 0008), so a prompt content change must bump this even though the
 	// interpretationOutput schema itself is unchanged.
 	defaultInterpretationPromptVersion = "context-fabric-interpretation.v2"
-	defaultSynthesisPromptVersion      = "context-fabric-synthesis.v1"
-	defaultSchemaVersion               = "context-fabric-model-output.v1"
-	defaultEvaluatorVersion            = "context-fabric-grounding.v1"
+	// defaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
+	// review round: v2 added claimed_facts for value-level closure; v3
+	// closes the driver category vocabulary (a fixed 16-value set, no
+	// longer free text), requires a claimed fact's subject to be one the
+	// citing driver/finding actually names, requires subject labels to
+	// match the input verbatim, and marks direct_judgment/current_state/
+	// deterministic_answer as advisory-only (ACR recomposes them
+	// server-side and never returns the model's own text for them).
+	defaultSynthesisPromptVersion = "context-fabric-synthesis.v3"
+	defaultSchemaVersion          = "context-fabric-model-output.v1"
+	defaultEvaluatorVersion       = "context-fabric-grounding.v1"
 )
 
 type Config struct {
@@ -530,18 +538,25 @@ func synthesisInputFromDomain(input contextfabric.SynthesisInput) synthesisInput
 }
 
 type synthesisOutput struct {
-	Status              string                         `json:"status" jsonschema:"enum=complete,enum=partial,enum=degraded,enum=clarification_required,enum=no_match"`
-	DirectJudgment      string                         `json:"direct_judgment"`
-	CurrentState        string                         `json:"current_state"`
-	StrongestPressures  []string                       `json:"strongest_pressures"`
-	Drivers             []contextfabric.DriverJudgment `json:"drivers"`
-	RemainingWork       []contextfabric.Finding        `json:"remaining_work"`
-	ReadinessGaps       []contextfabric.Finding        `json:"readiness_gaps"`
-	Conflicts           []contextfabric.Finding        `json:"conflicts"`
-	Limitations         []string                       `json:"limitations"`
-	EvidenceRefIDs      []string                       `json:"evidence_ref_ids"`
-	DeterministicAnswer string                         `json:"deterministic_answer"`
-	Warnings            []string                       `json:"warnings"`
+	Status             string                         `json:"status" jsonschema:"enum=complete,enum=partial,enum=degraded,enum=clarification_required,enum=no_match"`
+	DirectJudgment     string                         `json:"direct_judgment"`
+	CurrentState       string                         `json:"current_state"`
+	StrongestPressures []string                       `json:"strongest_pressures"`
+	Drivers            []contextfabric.DriverJudgment `json:"drivers"`
+	RemainingWork      []contextfabric.Finding        `json:"remaining_work"`
+	ReadinessGaps      []contextfabric.Finding        `json:"readiness_gaps"`
+	Conflicts          []contextfabric.Finding        `json:"conflicts"`
+	Limitations        []string                       `json:"limitations"`
+	EvidenceRefIDs     []string                       `json:"evidence_ref_ids"`
+	// ClaimedFacts is the model's restatement of the canonical fact field
+	// values (from the "canonical_facts" input) that its fact-shaped
+	// drivers/findings rely on. See ContextFabricClaimedFact's doc comment
+	// -- SynthesisDraft.ValidateAgainst checks every entry against the
+	// canonical fact bundle by exact value equality before this can ever
+	// reach a persisted result.
+	ClaimedFacts        []contextfabric.ClaimedFact `json:"claimed_facts"`
+	DeterministicAnswer string                      `json:"deterministic_answer"`
+	Warnings            []string                    `json:"warnings"`
 }
 
 func (o synthesisOutput) toDomain() (contextfabric.SynthesisDraft, error) {
@@ -551,7 +566,8 @@ func (o synthesisOutput) toDomain() (contextfabric.SynthesisDraft, error) {
 		StrongestPressures: trimmedUnique(o.StrongestPressures), Drivers: append([]contextfabric.DriverJudgment(nil), o.Drivers...),
 		RemainingWork: append([]contextfabric.Finding(nil), o.RemainingWork...), ReadinessGaps: append([]contextfabric.Finding(nil), o.ReadinessGaps...),
 		Conflicts: append([]contextfabric.Finding(nil), o.Conflicts...), Limitations: trimmedUnique(o.Limitations),
-		EvidenceRefIDs: trimmedUnique(o.EvidenceRefIDs), DeterministicAnswer: strings.TrimSpace(o.DeterministicAnswer), Warnings: trimmedUnique(o.Warnings),
+		EvidenceRefIDs: trimmedUnique(o.EvidenceRefIDs), ClaimedFacts: append([]contextfabric.ClaimedFact(nil), o.ClaimedFacts...),
+		DeterministicAnswer: strings.TrimSpace(o.DeterministicAnswer), Warnings: trimmedUnique(o.Warnings),
 	}
 	if strings.TrimSpace(draft.DeterministicAnswer) == "" {
 		return contextfabric.SynthesisDraft{}, errors.New("deterministic answer is required")

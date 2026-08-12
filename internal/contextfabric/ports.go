@@ -17,6 +17,40 @@ var (
 	// ErrProjectionConflict identifies an out-of-order or incompatible
 	// projection batch. The worker must not advance its checkpoint.
 	ErrProjectionConflict = errors.New("context fabric projection conflict")
+	// ErrRateLimited signals a bounded dependency (graph backend or
+	// canonical fact source) rejected a call because a rate or quota limit
+	// was exceeded. Adapters must wrap their own vendor-specific
+	// rate-limit classification into this at their package boundary --
+	// e.g. zepgraph.ErrRateLimited also wraps this -- so callers (Engine,
+	// the route layer) can classify the failure without importing any
+	// specific backend's package. This keeps ErrModelRateLimited (a
+	// distinct, pre-existing sentinel for the model runtime specifically)
+	// and this one both reachable from one vendor-neutral check.
+	ErrRateLimited = errors.New("context fabric dependency rate limited")
+	// ErrUnsupportedTimeAxis identifies a request that asked a
+	// historical or point-in-time question the Context Fabric cannot
+	// currently answer (CHAOS-3755 adversarial review finding H6).
+	//
+	// The v1 request contract accepts four temporal axes, but every
+	// canonical fact source behind this engine reads CURRENT state only.
+	// Answering a "what was the status last month" question with today's
+	// data -- presented as if it were that answer -- is a false
+	// historical answer, and the worst kind, because nothing in the
+	// response marks it as wrong. So the engine refuses the request
+	// outright rather than silently degrading it.
+	//
+	// This is a REQUEST-level refusal (the route maps it to 400), not a
+	// dependency failure: the caller asked a well-formed question the
+	// service does not support, and the honest answer is to say so. The
+	// providers refuse the same thing independently at their own
+	// boundary; this is the clean, early half of that pair.
+	//
+	// Deliberately not enforced in ContextFabricInvestigationRequest.
+	// Validate(): the wire contract's accepted axes are unchanged, so
+	// tightening it there would be a contract-level meaning change
+	// requiring a new major version. What is unsupported is this
+	// engine's ability to answer, which is a service concern.
+	ErrUnsupportedTimeAxis = errors.New("context fabric time axis is not supported")
 )
 
 // Investigator is the consumer-neutral Context Fabric entry point. Ask Dev,

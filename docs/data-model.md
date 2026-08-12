@@ -25,6 +25,9 @@ No HTTP handler embeds raw ClickHouse SQL. Versioned adapters return typed evide
 | `acr.context_packet_snapshots` | Immutable validated packet replay snapshots | 30 days |
 | `acr.agent_episodes` | Idempotent append-only agent-run evidence and redaction tombstones | 90 days |
 | `acr.audit_events` | Credential, read, denial, write, redaction, and purge audit trail | Policy-defined |
+| `acr.context_fabric_projection_checkpoints` (`0006`) | Per-organization, per-source graph projection cursor | Mutable operational state, no retention |
+| `acr.context_fabric_projection_rebuild_markers` (`0007`) | Crash-resumable marker for an in-progress graph rebuild | Deleted when the rebuild completes |
+| `acr.context_fabric_investigation_results` (`0009`) | Immutable persisted `context_fabric_investigation_result.v1` snapshots (`internal/contextfabric/pginvestigation`), read back for `PriorSubjectReceipts` follow-up binding | Immutable; no purge path yet |
 
 The database does not hold plaintext bearer secrets or raw transcripts.
 

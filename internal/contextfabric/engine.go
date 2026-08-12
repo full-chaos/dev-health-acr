@@ -86,6 +86,19 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return InvestigationResult{}, errors.New("authenticated organization is required")
 	}
+	// Refuse historical/point-in-time questions before doing any work.
+	// Every canonical fact source behind this engine reads current state
+	// only, so continuing would answer the caller's question with data
+	// that does not correspond to the time they asked about. See
+	// ErrUnsupportedTimeAxis.
+	//
+	// This is the FIRST of two checks. It rejects what the caller asked
+	// for on the wire; the second (below, after Interpret) rejects what
+	// the question was understood to mean. Both are required -- see the
+	// second check's comment for why this one alone is not enough.
+	if err := requireCurrentTimeAxis(request.TimeContext.Axis); err != nil {
+		return InvestigationResult{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return InvestigationResult{}, err
 	}
@@ -93,6 +106,30 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	interpretation, err := e.interpreter.Interpret(ctx, principal, request)
 	if err != nil {
 		return InvestigationResult{}, fmt.Errorf("interpret question: %w", err)
+	}
+	// Re-check the axis on the INTERPRETED question, not just the wire
+	// request (CHAOS-3755 codex delta review, P2).
+	//
+	// Interpretation may legitimately change the axis: a caller can send
+	// axis=current while the question itself is historical ("what was the
+	// status last month"), and a QuestionInterpreter is expected to
+	// recognize that and set valid_time. The wire-level check above
+	// cannot see this -- it ran before the question was understood -- so
+	// on its own it lets an interpreted-historical investigation run the
+	// graph, the fact reads, and synthesis, and answer with current data.
+	// That is the exact false-historical-answer this refusal exists to
+	// prevent, reached by a different door.
+	//
+	// The invariant belongs HERE rather than in any QuestionInterpreter
+	// implementation: clamping a model's axis inside the runtime adapter
+	// would silently rewrite the question into one the caller never
+	// asked, and the next interpreter implementation would reopen the
+	// hole. The engine owns what it can honestly answer.
+	//
+	// Placed before prior-receipt expansion and every capability call, so
+	// a refused investigation does no graph or fact work at all.
+	if err := requireCurrentTimeAxis(interpretation.TimeContext.Axis); err != nil {
+		return InvestigationResult{}, err
 	}
 	// Prior-result receipts (PriorSubjectReceipts) name a subject already
 	// committed or proposed in an earlier InvestigationResult -- e.g. a
@@ -266,6 +303,18 @@ func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal s
 	if skipped := receiptCount - survived; skipped > 0 {
 		e.telemetry.RecordPriorSubjectReceiptsSkipped(ctx, principal, skipped)
 	}
+}
+
+// requireCurrentTimeAxis is the single definition of what this engine can
+// honestly answer, shared by the wire-request check and the
+// post-interpretation check so the two can never diverge. Any axis other
+// than current is refused with ErrUnsupportedTimeAxis, which the route
+// maps to a non-retryable 400.
+func requireCurrentTimeAxis(axis TemporalAxis) error {
+	if axis == TemporalCurrent {
+		return nil
+	}
+	return fmt.Errorf("%w: %q", ErrUnsupportedTimeAxis, axis)
 }
 
 func investigationSubjects(resolution SubjectResolution, cohort *Cohort) []SubjectRef {

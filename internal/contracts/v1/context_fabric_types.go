@@ -187,6 +187,76 @@ const (
 	ContextFabricFactEvidence                ContextFabricFactKind = "evidence"
 )
 
+// ContextFabricDriverCategory is a closed vocabulary for
+// ContextFabricDriverJudgment.Category / ContextFabricFinding.Kind values
+// that assert something canonical-fact-shaped (as opposed to a
+// graph-associated or purely narrative category, e.g. "relationship" or
+// "narrative", which are additive free-text values outside this table by
+// design). ContextFabricDriverCategoryFactKind is the ONLY mechanism that
+// decides whether a driver/finding must cite a ClaimedFact -- it is an
+// exact-match lookup against this closed map, never a substring/keyword
+// match over Category, Title, or Summary text (CHAOS-3755 must-do: value
+// closure has to be enum-driven, not string-matched, or wording alone could
+// dodge it in either direction).
+type ContextFabricDriverCategory string
+
+const (
+	ContextFabricDriverCategoryStatus       ContextFabricDriverCategory = "status"
+	ContextFabricDriverCategoryCompletion   ContextFabricDriverCategory = "actual_completion"
+	ContextFabricDriverCategoryWork         ContextFabricDriverCategory = "work"
+	ContextFabricDriverCategoryBlockers     ContextFabricDriverCategory = "blockers"
+	ContextFabricDriverCategoryReviews      ContextFabricDriverCategory = "reviews"
+	ContextFabricDriverCategoryCI           ContextFabricDriverCategory = "continuous_integration"
+	ContextFabricDriverCategoryDeployments  ContextFabricDriverCategory = "deployments"
+	ContextFabricDriverCategoryIncidents    ContextFabricDriverCategory = "incidents"
+	ContextFabricDriverCategoryHealth       ContextFabricDriverCategory = "health"
+	ContextFabricDriverCategoryWorkload     ContextFabricDriverCategory = "workload"
+	ContextFabricDriverCategoryInvestment   ContextFabricDriverCategory = "investment"
+	ContextFabricDriverCategoryReadiness    ContextFabricDriverCategory = "readiness"
+	ContextFabricDriverCategoryDeficiency   ContextFabricDriverCategory = "operational_deficiency"
+	ContextFabricDriverCategorySourceHealth ContextFabricDriverCategory = "source_health"
+	// ContextFabricDriverCategoryRelationship and
+	// ContextFabricDriverCategoryNarrative are graph-associated /
+	// inference-only categories. They are intentionally absent from
+	// contextFabricDriverCategoryFactKind: no canonical fact backs a
+	// relationship-derived or purely narrative judgment, so no
+	// ClaimedFactID requirement applies to them.
+	ContextFabricDriverCategoryRelationship ContextFabricDriverCategory = "relationship"
+	ContextFabricDriverCategoryNarrative    ContextFabricDriverCategory = "narrative"
+)
+
+// contextFabricDriverCategoryFactKind is the closed Category->FactKind
+// table. See ContextFabricDriverCategoryRequiresClaimedFact.
+var contextFabricDriverCategoryFactKind = map[ContextFabricDriverCategory]ContextFabricFactKind{
+	ContextFabricDriverCategoryStatus:       ContextFabricFactStatus,
+	ContextFabricDriverCategoryCompletion:   ContextFabricFactActualCompletion,
+	ContextFabricDriverCategoryWork:         ContextFabricFactWork,
+	ContextFabricDriverCategoryBlockers:     ContextFabricFactBlockers,
+	ContextFabricDriverCategoryReviews:      ContextFabricFactReviews,
+	ContextFabricDriverCategoryCI:           ContextFabricFactContinuousIntegration,
+	ContextFabricDriverCategoryDeployments:  ContextFabricFactDeployments,
+	ContextFabricDriverCategoryIncidents:    ContextFabricFactIncidents,
+	ContextFabricDriverCategoryHealth:       ContextFabricFactHealth,
+	ContextFabricDriverCategoryWorkload:     ContextFabricFactWorkload,
+	ContextFabricDriverCategoryInvestment:   ContextFabricFactInvestment,
+	ContextFabricDriverCategoryReadiness:    ContextFabricFactReadiness,
+	ContextFabricDriverCategoryDeficiency:   ContextFabricFactOperationalDeficiencies,
+	ContextFabricDriverCategorySourceHealth: ContextFabricFactSourceHealth,
+}
+
+// ContextFabricDriverCategoryRequiresClaimedFact reports whether category
+// asserts a canonical-fact-shaped judgment and, if so, which FactKind it is
+// shaped after. A driver or finding in a category this returns true for
+// must cite at least one ClaimedFactID resolving to a ContextFabricClaimedFact
+// of the matching Kind (see ContextFabricDriverJudgment.Validate /
+// ContextFabricFinding.Validate) -- ordinary EvidenceRefIDs/PathIDs closure
+// is not sufficient for these categories, because it proves something was
+// cited, not that the cited value agrees with the canonical fact.
+func ContextFabricDriverCategoryRequiresClaimedFact(category ContextFabricDriverCategory) (ContextFabricFactKind, bool) {
+	kind, ok := contextFabricDriverCategoryFactKind[category]
+	return kind, ok
+}
+
 type ContextFabricInvestigationRequest struct {
 	SchemaVersion        string                             `json:"schema_version"`
 	RequestID            string                             `json:"request_id"`
@@ -314,19 +384,25 @@ type ContextFabricRelationshipEdge struct {
 }
 
 type ContextFabricDriverJudgment struct {
-	DriverID         string                        `json:"driver_id"`
-	Standing         ContextFabricDriverStanding   `json:"standing"`
-	Category         string                        `json:"category"`
-	Title            string                        `json:"title"`
-	Summary          string                        `json:"summary"`
-	AffectedSubjects []ContextFabricSubjectRef     `json:"affected_subjects"`
-	PathIDs          []string                      `json:"path_ids,omitempty"`
-	EvidenceRefIDs   []string                      `json:"evidence_ref_ids"`
-	Derivation       ContextFabricDerivationMethod `json:"derivation"`
-	EpistemicStatus  ContextFabricEpistemicStatus  `json:"epistemic_status"`
-	Confidence       float64                       `json:"confidence"`
-	Qualification    string                        `json:"qualification,omitempty"`
-	Current          bool                          `json:"current"`
+	DriverID         string                      `json:"driver_id"`
+	Standing         ContextFabricDriverStanding `json:"standing"`
+	Category         string                      `json:"category"`
+	Title            string                      `json:"title"`
+	Summary          string                      `json:"summary"`
+	AffectedSubjects []ContextFabricSubjectRef   `json:"affected_subjects"`
+	PathIDs          []string                    `json:"path_ids,omitempty"`
+	EvidenceRefIDs   []string                    `json:"evidence_ref_ids"`
+	// ClaimedFactIDs references ContextFabricInvestigationResult.ClaimedFacts
+	// entries this driver's judgment rests on -- the canonical-observation
+	// leg of the graph-association/source-assertion/canonical-observation/
+	// inference distinction. Required (non-empty) whenever Category matches
+	// ContextFabricDriverCategoryRequiresClaimedFact; optional otherwise.
+	ClaimedFactIDs  []string                      `json:"claimed_fact_ids,omitempty"`
+	Derivation      ContextFabricDerivationMethod `json:"derivation"`
+	EpistemicStatus ContextFabricEpistemicStatus  `json:"epistemic_status"`
+	Confidence      float64                       `json:"confidence"`
+	Qualification   string                        `json:"qualification,omitempty"`
+	Current         bool                          `json:"current"`
 }
 
 type ContextFabricFinding struct {
@@ -335,6 +411,27 @@ type ContextFabricFinding struct {
 	Summary        string                    `json:"summary"`
 	Subjects       []ContextFabricSubjectRef `json:"subjects,omitempty"`
 	EvidenceRefIDs []string                  `json:"evidence_ref_ids"`
+	// ClaimedFactIDs mirrors ContextFabricDriverJudgment.ClaimedFactIDs --
+	// see that field's doc comment.
+	ClaimedFactIDs []string `json:"claimed_fact_ids,omitempty"`
+}
+
+// ContextFabricClaimedFact is a synthesis-time restatement of a single
+// canonical fact field the answer relies on. It exists so evidence closure
+// can be checked at VALUE level by exact code (deep equality), not by
+// trusting free-text prose: ContextFabricInvestigationResult.Validate does
+// not itself compare ClaimedFacts against canonical fact values (Validate
+// only checks wire-shape bounds and internal referential integrity -- it has
+// no canonical fact bundle to compare against), but
+// SynthesisDraft.ValidateAgainst in internal/contextfabric does, before a
+// result is ever built. See docs/design/context-fabric-result-semantics.md
+// for the full four-way evidence distinction this type is part of.
+type ContextFabricClaimedFact struct {
+	ClaimID string                   `json:"claim_id"`
+	Kind    ContextFabricFactKind    `json:"kind"`
+	Subject ContextFabricSubjectRef  `json:"subject"`
+	Field   string                   `json:"field"`
+	Value   ContextFabricScalarValue `json:"value"`
 }
 
 type ContextFabricSourceObservation struct {
@@ -389,29 +486,36 @@ type ContextFabricFactRequirement struct {
 }
 
 type ContextFabricInvestigationResult struct {
-	SchemaVersion       string                           `json:"schema_version"`
-	ResultID            string                           `json:"result_id"`
-	RequestID           string                           `json:"request_id"`
-	GeneratedAt         time.Time                        `json:"generated_at"`
-	Status              ContextFabricInvestigationStatus `json:"status"`
-	Question            string                           `json:"question"`
-	Interpretation      ContextFabricInterpretedQuestion `json:"interpretation"`
-	SubjectResolution   ContextFabricSubjectResolution   `json:"subject_resolution"`
-	Cohort              *ContextFabricCohort             `json:"cohort,omitempty"`
-	DirectJudgment      string                           `json:"direct_judgment"`
-	CurrentState        string                           `json:"current_state"`
-	StrongestPressures  []string                         `json:"strongest_pressures"`
-	Drivers             []ContextFabricDriverJudgment    `json:"drivers"`
-	RemainingWork       []ContextFabricFinding           `json:"remaining_work"`
-	ReadinessGaps       []ContextFabricFinding           `json:"readiness_gaps"`
-	Paths               []ContextFabricRelationshipPath  `json:"paths"`
-	Conflicts           []ContextFabricFinding           `json:"conflicts"`
-	Limitations         []string                         `json:"limitations"`
-	EvidenceRefIDs      []string                         `json:"evidence_ref_ids"`
-	Coverage            ContextFabricCoverage            `json:"coverage"`
-	Versions            ContextFabricVersionSet          `json:"versions"`
-	DeterministicAnswer string                           `json:"deterministic_answer"`
-	Warnings            []string                         `json:"warnings"`
+	SchemaVersion      string                           `json:"schema_version"`
+	ResultID           string                           `json:"result_id"`
+	RequestID          string                           `json:"request_id"`
+	GeneratedAt        time.Time                        `json:"generated_at"`
+	Status             ContextFabricInvestigationStatus `json:"status"`
+	Question           string                           `json:"question"`
+	Interpretation     ContextFabricInterpretedQuestion `json:"interpretation"`
+	SubjectResolution  ContextFabricSubjectResolution   `json:"subject_resolution"`
+	Cohort             *ContextFabricCohort             `json:"cohort,omitempty"`
+	DirectJudgment     string                           `json:"direct_judgment"`
+	CurrentState       string                           `json:"current_state"`
+	StrongestPressures []string                         `json:"strongest_pressures"`
+	Drivers            []ContextFabricDriverJudgment    `json:"drivers"`
+	RemainingWork      []ContextFabricFinding           `json:"remaining_work"`
+	ReadinessGaps      []ContextFabricFinding           `json:"readiness_gaps"`
+	Paths              []ContextFabricRelationshipPath  `json:"paths"`
+	Conflicts          []ContextFabricFinding           `json:"conflicts"`
+	Limitations        []string                         `json:"limitations"`
+	EvidenceRefIDs     []string                         `json:"evidence_ref_ids"`
+	// ClaimedFacts is the closed, checkable set of canonical fact
+	// restatements every fact-shaped driver/finding in this result cites
+	// by ClaimID. See ContextFabricClaimedFact's doc comment for why this
+	// exists and docs/design/context-fabric-result-semantics.md for the
+	// full evidence-kind distinction (canonical observation vs graph
+	// association vs source assertion vs inference).
+	ClaimedFacts        []ContextFabricClaimedFact `json:"claimed_facts"`
+	Coverage            ContextFabricCoverage      `json:"coverage"`
+	Versions            ContextFabricVersionSet    `json:"versions"`
+	DeterministicAnswer string                     `json:"deterministic_answer"`
+	Warnings            []string                   `json:"warnings"`
 }
 
 // ContextFabricScalarValue is the only free-form value admitted by the public

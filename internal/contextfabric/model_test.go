@@ -61,7 +61,7 @@ func TestInvestigationResultValidateRequiresEvidenceClosedDrivers(t *testing.T) 
 	result := validInvestigationResult()
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	result.Drivers = []DriverJudgment{{
-		DriverID: "driver_12345678", Standing: DriverPrincipal, Category: "release_readiness",
+		DriverID: "driver_12345678", Standing: DriverPrincipal, Category: "relationship",
 		Title: "Release readiness", Summary: "Release readiness remains incomplete.",
 		AffectedSubjects: []SubjectRef{project}, EvidenceRefIDs: []string{},
 		Derivation: DerivationRuleInferred, EpistemicStatus: EpistemicInferred,
@@ -124,6 +124,7 @@ func validInvestigationResult() InvestigationResult {
 		Conflicts:           []Finding{},
 		Limitations:         []string{},
 		EvidenceRefIDs:      []string{},
+		ClaimedFacts:        []ClaimedFact{},
 		Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 		Versions:            VersionSet{ServiceVersion: "test-v1", ContractVersion: InvestigationResultSchemaV1, Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1", CanonicalServiceVersion: "ops-v1"},
 		DeterministicAnswer: "Ask Dev is not release-ready because required acceptance work remains open.",

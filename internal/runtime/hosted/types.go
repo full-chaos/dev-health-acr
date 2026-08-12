@@ -2,6 +2,7 @@ package hosted
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"sync"
@@ -75,15 +76,24 @@ type postgresComponents struct {
 	audit       storage.AuditStore
 	packets     storage.PacketStore
 	episodes    storage.EpisodeStore
-	check       func(context.Context) error
-	close       func() error
+	// db is the raw pool, exposed so hosted.open can build additional
+	// caller-owned adapters (e.g. pginvestigation.Store) on it directly --
+	// this package never opens a second PostgreSQL connection.
+	db    *sql.DB
+	check func(context.Context) error
+	close func() error
 }
 
 type clickHouseComponents struct {
 	evidence storage.EvidenceStore
 	factory  contextpacket.EvidenceStoreFactory
-	check    func(context.Context) error
-	close    func() error
+	// queryClient is the raw ClickHouse query boundary, exposed so
+	// hosted.open can build additional caller-owned adapters (e.g.
+	// devhealthfacts providers) on it directly -- this package never opens
+	// a second ClickHouse connection.
+	queryClient contextpacket.ClickHouseQueryClient
+	check       func(context.Context) error
+	close       func() error
 }
 
 type entitlementChecker interface {
