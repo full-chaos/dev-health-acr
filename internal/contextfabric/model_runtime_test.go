@@ -842,3 +842,79 @@ func TestTruncateAtSentenceBoundaryLeavesShortTextUnchanged(t *testing.T) {
 		t.Fatalf("truncateAtSentenceBoundary() = %q, want unchanged", got)
 	}
 }
+
+// --- M4 exact-boundary tests (Codex delta review, CHAOS-3755) ---
+//
+// The generic truncation test above proves truncation kicks in eventually.
+// These prove it kicks in at exactly the right rune count for
+// DirectJudgment and CurrentState specifically (8000, per
+// ContextFabricInvestigationResult.Validate()'s
+// stringLengthBetween(_, 0, 8000) bound) -- not one rune early (which
+// would silently drop content that should have fit) and not one rune late
+// (which would let an oversized field back into a persisted result).
+
+func TestTruncateAtSentenceBoundaryAtDirectJudgmentExactBoundaryIsUnchanged(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("a", directJudgmentMaxLength)
+	got := truncateAtSentenceBoundary(text, directJudgmentMaxLength)
+	if got != text {
+		t.Fatalf("truncateAtSentenceBoundary() at exactly %d runes was altered (got %d runes), want it left unchanged", directJudgmentMaxLength, len([]rune(got)))
+	}
+	if strings.Contains(got, "truncated") {
+		t.Fatal("text exactly at the boundary must not carry a truncation marker")
+	}
+}
+
+func TestTruncateAtSentenceBoundaryOneRuneOverDirectJudgmentBoundaryIsTruncated(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("a", directJudgmentMaxLength+1)
+	got := truncateAtSentenceBoundary(text, directJudgmentMaxLength)
+	if length := len([]rune(got)); length > directJudgmentMaxLength {
+		t.Fatalf("truncateAtSentenceBoundary() length = %d, want <= %d for input one rune over the boundary", length, directJudgmentMaxLength)
+	}
+	if !strings.Contains(got, "truncated") {
+		t.Fatal("text one rune over the boundary must carry an explicit truncation marker")
+	}
+}
+
+func TestTruncateAtSentenceBoundaryAtCurrentStateExactBoundaryIsUnchanged(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("a", currentStateMaxLength)
+	got := truncateAtSentenceBoundary(text, currentStateMaxLength)
+	if got != text {
+		t.Fatalf("truncateAtSentenceBoundary() at exactly %d runes was altered (got %d runes), want it left unchanged", currentStateMaxLength, len([]rune(got)))
+	}
+	if strings.Contains(got, "truncated") {
+		t.Fatal("text exactly at the boundary must not carry a truncation marker")
+	}
+}
+
+func TestTruncateAtSentenceBoundaryOneRuneOverCurrentStateBoundaryIsTruncated(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("a", currentStateMaxLength+1)
+	got := truncateAtSentenceBoundary(text, currentStateMaxLength)
+	if length := len([]rune(got)); length > currentStateMaxLength {
+		t.Fatalf("truncateAtSentenceBoundary() length = %d, want <= %d for input one rune over the boundary", length, currentStateMaxLength)
+	}
+	if !strings.Contains(got, "truncated") {
+		t.Fatal("text one rune over the boundary must carry an explicit truncation marker")
+	}
+}
+
+// TestComposeFieldConstantsMatchContractBounds ties the composer constants
+// to the actual Go-level contract bounds
+// (validate_context_fabric_result.go's ContextFabricInvestigationResult.Validate)
+// so a bound changing on one side without the other fails loudly here
+// instead of silently drifting.
+func TestComposeFieldConstantsMatchContractBounds(t *testing.T) {
+	t.Parallel()
+	if directJudgmentMaxLength != 8000 {
+		t.Fatalf("directJudgmentMaxLength = %d, want 8000 to match ContextFabricInvestigationResult.Validate()'s DirectJudgment bound", directJudgmentMaxLength)
+	}
+	if currentStateMaxLength != 8000 {
+		t.Fatalf("currentStateMaxLength = %d, want 8000 to match ContextFabricInvestigationResult.Validate()'s CurrentState bound", currentStateMaxLength)
+	}
+	if deterministicAnswerMaxLength != 16000 {
+		t.Fatalf("deterministicAnswerMaxLength = %d, want 16000 to match ContextFabricInvestigationResult.Validate()'s DeterministicAnswer bound", deterministicAnswerMaxLength)
+	}
+}
