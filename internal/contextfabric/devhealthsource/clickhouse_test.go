@@ -2,6 +2,8 @@ package devhealthsource_test
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -14,6 +16,24 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
+
+// testCursor builds a devhealthsource cursor string without depending on
+// the package's unexported encodeCursor -- same wire shape
+// (base64.RawURLEncoding of {"since":...,"after":...}, cursor.go), used to
+// start a test directly in the incremental() path (a non-empty cursor)
+// without the fullSnapshot org-anchor candidate complicating row-boundary
+// arithmetic.
+func testCursor(t *testing.T, since time.Time, after string) string {
+	t.Helper()
+	encoded, err := json.Marshal(struct {
+		Since time.Time `json:"since"`
+		After string    `json:"after"`
+	}{Since: since, After: after})
+	if err != nil {
+		t.Fatalf("encode test cursor: %v", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(encoded)
+}
 
 type fakeTable struct {
 	match string
@@ -305,6 +325,89 @@ func TestClickHouseProjectionSourceIncidentTombstoneOnSoftDelete(t *testing.T) {
 		if relationship.From.CanonicalID == "incident:incident-1" {
 			t.Fatalf("deleted incident must not carry a live relationship: %+v", relationship)
 		}
+	}
+}
+
+// TestClickHouseProjectionSourcePagedBatchNeverSplitsARowsCandidatesAcrossAPageBoundary
+// is CHAOS-3753 codex round-2 finding K2's regression test. RULING
+// (team-lead): truncation happens on SQL-row boundaries only -- an
+// entity's relationship must never be split from it by a page boundary;
+// the cursor advances only past fully-emitted rows. pagedBatch used to
+// slice the flattened, merged candidate list at a fixed index
+// (incrementalBatchCap candidates, not rows), which could land between an
+// entity and its relationship (two candidates sharing one source row) and
+// silently drop the relationship forever -- the cursor would still advance
+// past that row's position (the entity was the last emitted candidate, so
+// it becomes the batch's NextCursor position), so the next page's strict
+// "> after" predicate would never revisit that row again.
+//
+// Seeds incrementalBatchCap-1 (199) single-candidate repos rows, then one
+// work_item row (entity + BELONGS_TO_REPOSITORY relationship, two
+// candidates from one row) timestamped strictly after all of them. Sorted,
+// that's 201 raw candidates across exactly incrementalBatchCap (200) rows
+// -- the work item's entity is the 200th candidate (right at the old
+// candidate-count cap) and its relationship is the 201st (just past it):
+// exactly the split position. Starts from a non-empty cursor (bypassing
+// fullSnapshot's org-anchor candidate, which would otherwise consume one
+// of the row slots and shift this arithmetic) to land squarely in the
+// incremental()/pagedBatch(includeOrganization=false) path under test.
+func TestClickHouseProjectionSourcePagedBatchNeverSplitsARowsCandidatesAcrossAPageBoundary(t *testing.T) {
+	t.Parallel()
+	const incrementalBatchCap = 200 // must match clickhouse.go's incrementalBatchCap
+	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+
+	repoRows := make([][]any, 0, incrementalBatchCap-1)
+	for i := 0; i < incrementalBatchCap-1; i++ {
+		repoRows = append(repoRows, []any{fmt.Sprintf("repo-%03d", i), fmt.Sprintf("example-org/repo-%03d", i), "synthetic", at.Add(time.Duration(i) * time.Second)})
+	}
+	workItemAt := at.Add(incrementalBatchCap * time.Second) // strictly after every repos row
+	tables := baseTables(at)
+	for index, table := range tables {
+		switch table.match {
+		case "FROM repos":
+			tables[index].rows = repoRows
+		case "FROM work_items AS w":
+			tables[index].rows = [][]any{{"WIDGET-1", "repo-000", "example-org/repo-000", "Investigate checkout flake", "in_progress", "", workItemAt}}
+			tables[index].cursorOf = workItemCursorOf
+		default:
+			tables[index].rows = nil
+		}
+	}
+	client := &fakeClient{tables: tables}
+	source, err := devhealthsource.NewClickHouseProjectionSource(client)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+
+	// Start strictly before every seeded row, in the incremental() path.
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName, Cursor: testCursor(t, at.Add(-time.Hour), "")}
+
+	batch, available, err := source.NextProjectionBatch(context.Background(), checkpoint)
+	if err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if !available {
+		t.Fatal("expected a batch")
+	}
+	if len(batch.Entities) != incrementalBatchCap {
+		t.Fatalf("entities = %d, want exactly %d (%d repos + the work item, all fitting in one row-capped page): %+v", len(batch.Entities), incrementalBatchCap, incrementalBatchCap-1, batch.Entities)
+	}
+	foundWorkItemEntity, foundRelationship := false, false
+	for _, entity := range batch.Entities {
+		if entity.Subject.CanonicalID == "work_item:WIDGET-1" {
+			foundWorkItemEntity = true
+		}
+	}
+	for _, relationship := range batch.Relationships {
+		if relationship.From.CanonicalID == "work_item:WIDGET-1" && relationship.Type == "BELONGS_TO_REPOSITORY" {
+			foundRelationship = true
+		}
+	}
+	if !foundWorkItemEntity {
+		t.Fatal("the work item's entity must be projected")
+	}
+	if !foundRelationship {
+		t.Fatal("the work item's BELONGS_TO_REPOSITORY relationship must be projected alongside its entity -- a page boundary must never split them, silently losing the relationship forever")
 	}
 }
 

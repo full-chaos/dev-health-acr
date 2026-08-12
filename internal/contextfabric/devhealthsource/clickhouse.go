@@ -145,8 +145,9 @@ func (s *ClickHouseProjectionSource) pagedBatch(ctx context.Context, orgID, curs
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	sortCandidates(all)
-	if len(all) > incrementalBatchCap {
-		all = all[:incrementalBatchCap]
+	all = truncateToCompleteRows(all, incrementalBatchCap)
+	if len(all) == 0 {
+		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	batch, err := buildBatch(orgID, SourceName, sourceVersion, cursor, all, false, false, s.clock())
 	if err != nil {
@@ -169,6 +170,39 @@ func sortCandidates(all []candidate) {
 		}
 		return all[i].sortKey < all[j].sortKey
 	})
+}
+
+// truncateToCompleteRows caps all (already sorted by sortCandidates) at
+// maxRows source rows, never splitting one row's candidates across the cut
+// -- CHAOS-3753 codex round-2 finding K2. A single ClickHouse row can
+// scan into more than one candidate (an entity plus its
+// BELONGS_TO_REPOSITORY relationship; see fetch's doc comment in
+// tables.go), and every candidate from one row shares the exact same
+// (observedAt, sortKey) pair by convention, so after a stable sort they
+// are always contiguous. The previous version sliced the flattened
+// candidate list at a fixed candidate-count index, which could land
+// inside such a group: the entity would be emitted, the relationship
+// silently dropped, and -- because the emitted entity became the batch's
+// last candidate, and therefore its NextCursor position -- the dropped
+// relationship's row would never be revisited by any later page either
+// (the next page's strict "since"/"after" predicate treats that row as
+// already seen). Capping by whole rows instead means a row that doesn't
+// fully fit is deferred, unsplit, to the next page: the cursor only ever
+// advances past a row once every one of its candidates has been emitted.
+func truncateToCompleteRows(all []candidate, maxRows int) []candidate {
+	if maxRows <= 0 {
+		return nil
+	}
+	rows := 0
+	for i, c := range all {
+		if i == 0 || !c.observedAt.Equal(all[i-1].observedAt) || c.sortKey != all[i-1].sortKey {
+			rows++
+			if rows > maxRows {
+				return all[:i]
+			}
+		}
+	}
+	return all
 }
 
 func buildBatch(orgID, source, version, cursor string, all []candidate, fullSnapshot, completeEnumeration bool, generatedAt time.Time) (contextfabric.ProjectionBatch, error) {
