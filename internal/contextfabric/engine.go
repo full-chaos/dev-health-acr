@@ -86,6 +86,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return InvestigationResult{}, errors.New("authenticated organization is required")
 	}
+	// Refuse historical/point-in-time questions before doing any work.
+	// Every canonical fact source behind this engine reads current state
+	// only, so continuing would answer the caller's question with data
+	// that does not correspond to the time they asked about. See
+	// ErrUnsupportedTimeAxis.
+	if request.TimeContext.Axis != TemporalCurrent {
+		return InvestigationResult{}, fmt.Errorf("%w: %q", ErrUnsupportedTimeAxis, request.TimeContext.Axis)
+	}
 	if err := ctx.Err(); err != nil {
 		return InvestigationResult{}, err
 	}

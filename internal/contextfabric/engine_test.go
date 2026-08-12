@@ -450,3 +450,74 @@ func factKinds(requirements []FactRequirement) []FactKind {
 	}
 	return kinds
 }
+
+// TestEngineRefusesNonCurrentTimeAxis is the engine half of the H6 fix
+// (Codex adversarial review, CHAOS-3755). The v1 request contract accepts
+// four temporal axes, but every canonical fact source behind this engine
+// reads CURRENT state only -- so a "what was the status last month"
+// question was previously answered with today's data, presented as if it
+// were that answer, with nothing in the response marking it wrong.
+//
+// The refusal must happen BEFORE any capability runs: doing the work and
+// then discarding it would still bill the caller and still hit the graph
+// and model, and a later change could easily let the result escape.
+func TestEngineRefusesNonCurrentTimeAxis(t *testing.T) {
+	t.Parallel()
+	asOf := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		time TimeContext
+	}{
+		{"valid time", TimeContext{Axis: TemporalValidTime, AsOf: &asOf}},
+		{"observed time", TimeContext{Axis: TemporalObservedTime, AsOf: &asOf}},
+		{"range", TimeContext{Axis: TemporalRange, Start: &start, End: &asOf}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			interpreted := false
+			engine, err := NewEngine(EngineDependencies{
+				Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+					interpreted = true
+					return InterpretedQuestion{}, nil
+				}),
+				Graph: graphReaderStub{},
+				Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+					return CanonicalFactBundle{}, nil
+				}),
+				Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+					return InvestigationResult{}, nil
+				}),
+			}, EngineOptions{ServiceVersion: "acr-test", NewResultID: func() string { return "result_12345678" }})
+			if err != nil {
+				t.Fatalf("NewEngine() error = %v", err)
+			}
+
+			request := validInvestigationRequest()
+			request.TimeContext = testCase.time
+			_, err = engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+
+			if !errors.Is(err, ErrUnsupportedTimeAxis) {
+				t.Fatalf("Investigate() error = %v, want ErrUnsupportedTimeAxis", err)
+			}
+			if interpreted {
+				t.Fatal("the interpreter ran for an unsupported time axis; the refusal must come first, before any capability does work")
+			}
+		})
+	}
+}
+
+// TestEngineAllowsCurrentTimeAxis is the over-blocking guard for the test
+// above: refusing everything would also "pass" it.
+func TestEngineAllowsCurrentTimeAxis(t *testing.T) {
+	t.Parallel()
+	request := validInvestigationRequest()
+	if request.TimeContext.Axis != TemporalCurrent {
+		t.Fatalf("fixture axis = %q, want the shared fixture to be a current-time request", request.TimeContext.Axis)
+	}
+	engine := mustEngineForPriorReceiptTest(t, graphReaderStub{}, nil, nil)
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); errors.Is(err, ErrUnsupportedTimeAxis) {
+		t.Fatalf("Investigate() error = %v, want a current-time request to not be refused", err)
+	}
+}

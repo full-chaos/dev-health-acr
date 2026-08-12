@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -30,6 +31,16 @@ func (f investigatorFunc) Investigate(ctx context.Context, principal storage.Pri
 // (read_test_helpers_test.go) but also wires the given Investigator into
 // RuntimeDependencies, which that shared helper does not expose.
 func newContextFabricTestApp(t *testing.T, investigator contextfabric.Investigator) (*App, string) {
+	t.Helper()
+	app, token, _ := newContextFabricTestAppWithAudit(t, investigator)
+	return app, token
+}
+
+// newContextFabricTestAppWithAudit also returns the audit store, so the
+// M5 failure-audit tests can assert what was recorded. The plain
+// newContextFabricTestApp wraps it for the majority of tests that do not
+// care about audit contents.
+func newContextFabricTestAppWithAudit(t *testing.T, investigator contextfabric.Investigator) (*App, string, *memory.AuditStore) {
 	t.Helper()
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
@@ -62,7 +73,7 @@ func newContextFabricTestApp(t *testing.T, investigator contextfabric.Investigat
 	if err != nil {
 		t.Fatal(err)
 	}
-	return app, token
+	return app, token, audit
 }
 
 type noopAssembler struct{}
@@ -261,3 +272,139 @@ func TestContextFabricResultItemsCountsClaimedFacts(t *testing.T) {
 }
 
 func ptrString(value string) *string { return &value }
+
+// auditStatuses returns every recorded audit event's action+status pair,
+// so a test can assert an operational failure was audited without
+// depending on unrelated events (credential issue, etc.) recorded by the
+// shared fixture.
+func contextFabricFailureAudits(events []storage.AuditEvent) []storage.AuditEvent {
+	failures := make([]storage.AuditEvent, 0, len(events))
+	for _, event := range events {
+		if event.Action == "context_fabric_investigation_failed" {
+			failures = append(failures, event)
+		}
+	}
+	return failures
+}
+
+// TestContextFabricInvestigationRouteAuditsOperationalFailures is the M5
+// probe (Codex adversarial review, CHAOS-3755). Every operational failure
+// class returned an error response BEFORE reaching any audit call, so the
+// audit log recorded only successful investigations -- an operator reading
+// it would see no evidence that anything else was ever attempted.
+func TestContextFabricInvestigationRouteAuditsOperationalFailures(t *testing.T) {
+	cases := []struct {
+		name        string
+		err         error
+		wantStatus  int
+		wantFailure string
+	}{
+		{"dependency unavailable", contextfabric.ErrUnavailable, http.StatusServiceUnavailable, "dependency_unavailable"},
+		{"rate limited", contextfabric.ErrRateLimited, http.StatusTooManyRequests, "rate_limited"},
+		{"model produced invalid output", contextfabric.ErrModelOutput, http.StatusBadGateway, "invalid_model_output"},
+		{"unsupported time axis", contextfabric.ErrUnsupportedTimeAxis, http.StatusBadRequest, "unsupported_time_axis"},
+		{"unclassified internal failure", errors.New("something broke"), http.StatusInternalServerError, "internal_error"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			app, token, audit := newContextFabricTestAppWithAudit(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+				return contextfabric.InvestigationResult{}, testCase.err
+			}))
+			response := httptest.NewRecorder()
+
+			app.Handler().ServeHTTP(response, investigationRequest(t, token))
+
+			if response.Code != testCase.wantStatus {
+				t.Fatalf("status = %d, want %d body=%s", response.Code, testCase.wantStatus, response.Body.String())
+			}
+			failures := contextFabricFailureAudits(audit.Events())
+			if len(failures) != 1 {
+				t.Fatalf("recorded %d investigation-failure audit events, want exactly 1 -- an operational failure must be audited", len(failures))
+			}
+			if got := failures[0].Metadata["failure_class"]; got != testCase.wantFailure {
+				t.Fatalf("failure_class = %v, want %q", got, testCase.wantFailure)
+			}
+			if failures[0].Status != "failed" {
+				t.Fatalf("audit status = %q, want %q", failures[0].Status, "failed")
+			}
+			if failures[0].OrgID == "" {
+				t.Fatal("audit event has no org, so it cannot be attributed")
+			}
+		})
+	}
+}
+
+// TestContextFabricInvestigationRouteDoesNotAuditCanceledRequests is the
+// over-blocking guard for the test above: a caller hanging up is not a
+// server-side failure and must not be recorded as one, or every abandoned
+// request would look like an incident.
+func TestContextFabricInvestigationRouteDoesNotAuditCanceledRequests(t *testing.T) {
+	app, token, audit := newContextFabricTestAppWithAudit(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		return contextfabric.InvestigationResult{}, context.Canceled
+	}))
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, investigationRequest(t, token))
+
+	if failures := contextFabricFailureAudits(audit.Events()); len(failures) != 0 {
+		t.Fatalf("recorded %d failure audit events for a canceled request, want 0", len(failures))
+	}
+}
+
+// TestContextFabricInvestigationRouteUnsupportedTimeAxisIsClientError is
+// the route half of the H6 fix: a historical/point-in-time question the
+// engine refuses must surface as a 400 the caller can act on, NOT a 5xx
+// that reads as an ACR outage and invites a retry that can never succeed.
+func TestContextFabricInvestigationRouteUnsupportedTimeAxisIsClientError(t *testing.T) {
+	app, token := newContextFabricTestApp(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		return contextfabric.InvestigationResult{}, contextfabric.ErrUnsupportedTimeAxis
+	}))
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, investigationRequest(t, token))
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 body=%s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Error struct {
+			Retryable bool `json:"retryable"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Error.Retryable {
+		t.Fatal("unsupported time axis was marked retryable, but retrying the same request can never succeed")
+	}
+}
+
+// TestContextFabricInvestigationRouteCountsClaimedFactsTowardItemBudget is
+// the M3 probe (Codex adversarial review, CHAOS-3755). ClaimedFacts was the
+// one result collection excluded from the response item budget, so a result
+// carrying an unbounded number of them billed as zero items and passed a
+// budget it should have exceeded. The fixture's other collections are all
+// empty, so the item count here is exactly the claimed-fact count.
+func TestContextFabricInvestigationRouteCountsClaimedFactsTowardItemBudget(t *testing.T) {
+	// MaxItems is 50 in the test limits policy (see newContextFabricTestApp).
+	const overBudget = 51
+	result := validContextFabricInvestigationResult()
+	subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	ready := false
+	for i := 0; i < overBudget; i++ {
+		result.ClaimedFacts = append(result.ClaimedFacts, contractsv1.ContextFabricClaimedFact{
+			ClaimID: "claim_" + strconv.Itoa(1000+i), Kind: contractsv1.ContextFabricFactStatus,
+			Subject: subject, Field: "release_ready", Value: contractsv1.ContextFabricScalarValue{Boolean: &ready},
+		})
+	}
+	app, token := newContextFabricTestApp(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		return result, nil
+	}))
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, investigationRequest(t, token))
+
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 -- %d claimed facts must exceed the 50-item budget body=%s", response.Code, overBudget, response.Body.String())
+	}
+}

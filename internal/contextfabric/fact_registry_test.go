@@ -230,3 +230,98 @@ func canonicalFactRequest(project SubjectRef, kinds ...FactKind) CanonicalFactRe
 var _ FactProvider = (*factProviderStub)(nil)
 var _ CanonicalFactReader = (*FactCapabilityRegistry)(nil)
 var _ = errors.Is
+
+// TestFactCapabilityRegistryCapsTotalFactsAcrossProviders is the
+// registry-level half of the H7 fix (Codex adversarial review,
+// CHAOS-3755). Each provider bounds its own query, but nothing bounded the
+// SUM across providers: a request may name up to 64 fact kinds, so even
+// perfectly well-behaved providers could together hand the model an
+// unbounded bundle. The cap is enforced at the merge point every provider
+// result passes through, so it also holds for a provider that has no query
+// limit of its own.
+func TestFactCapabilityRegistryCapsTotalFactsAcrossProviders(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	// Two providers, each returning well over half the cap, so neither
+	// alone exceeds it but together they would.
+	const perProvider = maxCanonicalFactsPerBundle*2/3 + 10
+	kinds := []FactKind{FactStatus, FactReadiness}
+	providers := make([]FactProvider, 0, len(kinds))
+	for _, kind := range kinds {
+		providers = append(providers, &factProviderStub{
+			capability: FactCapability{Kind: kind, Name: string(kind), Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}},
+			result:     FactProviderResult{Facts: manyFacts(kind, project, perProvider), State: SourceAvailable, Version: "v1"},
+		})
+	}
+	registry, err := NewFactCapabilityRegistry(providers, FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+	}
+
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, canonicalFactRequest(project, kinds...))
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(bundle.Facts) > maxCanonicalFactsPerBundle {
+		t.Fatalf("len(bundle.Facts) = %d, want <= %d", len(bundle.Facts), maxCanonicalFactsPerBundle)
+	}
+	// Truncation must be visible outward, not silent: a caller and the
+	// model both need to know the fact set is incomplete.
+	if !bundle.Coverage.Partial {
+		t.Fatal("bundle.Coverage.Partial = false, want a capped bundle to report itself as partial")
+	}
+	truncated := false
+	for _, source := range bundle.Coverage.Sources {
+		if source.State == SourceTruncated {
+			truncated = true
+		}
+	}
+	if !truncated {
+		t.Fatalf("no coverage source reported %q, want the capped provider marked truncated: %#v", SourceTruncated, bundle.Coverage.Sources)
+	}
+}
+
+// TestFactCapabilityRegistryDoesNotCapOrdinaryBundles is the over-blocking
+// guard: the cap is a backstop against pathological fanout, so a normal
+// multi-kind investigation must pass through untouched and unmarked.
+func TestFactCapabilityRegistryDoesNotCapOrdinaryBundles(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	kinds := []FactKind{FactStatus, FactReadiness}
+	providers := make([]FactProvider, 0, len(kinds))
+	for _, kind := range kinds {
+		providers = append(providers, &factProviderStub{
+			capability: FactCapability{Kind: kind, Name: string(kind), Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}},
+			result:     FactProviderResult{Facts: manyFacts(kind, project, 3), State: SourceAvailable, Version: "v1"},
+		})
+	}
+	registry, err := NewFactCapabilityRegistry(providers, FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+	}
+
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, canonicalFactRequest(project, kinds...))
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(bundle.Facts) != 6 {
+		t.Fatalf("len(bundle.Facts) = %d, want 6", len(bundle.Facts))
+	}
+	if bundle.Coverage.Partial {
+		t.Fatal("bundle.Coverage.Partial = true, want an ordinary bundle to be complete")
+	}
+}
+
+// manyFacts builds count minimal valid CanonicalFacts of one kind about
+// one subject, standing in for a pathological provider fanout.
+func manyFacts(kind FactKind, subject SubjectRef, count int) []CanonicalFact {
+	facts := make([]CanonicalFact, 0, count)
+	value := "open"
+	for i := 0; i < count; i++ {
+		facts = append(facts, CanonicalFact{
+			Kind: kind, Subject: subject, Fields: map[string]FactValue{"state": {String: &value}},
+			SourceState: SourceAvailable, Source: "test", SourceVersion: "v1",
+		})
+	}
+	return facts
+}
