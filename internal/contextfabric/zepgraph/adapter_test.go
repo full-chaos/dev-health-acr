@@ -373,6 +373,7 @@ func TestApplyProjectionBatchCreatesGraphOnceAndIsIdempotentUnderReplay(t *testi
 		t.Fatalf("createGraphCalls = %d, want 1", api.createGraphCalls)
 	}
 	nodeCount, edgeCount := len(api.nodes), len(api.edges)
+	firstTriples := len(api.triples)
 	beforeNodes := snapshotNodes(api.nodes)
 	beforeEdges := snapshotEdges(api.edges)
 
@@ -385,6 +386,15 @@ func TestApplyProjectionBatchCreatesGraphOnceAndIsIdempotentUnderReplay(t *testi
 	}
 	if len(api.nodes) != nodeCount || len(api.edges) != edgeCount {
 		t.Fatalf("replay grew backend state: nodes %d->%d edges %d->%d", nodeCount, len(api.nodes), edgeCount, len(api.edges))
+	}
+	// A replay of the identical batch reissues the same set of
+	// AddFactTriple calls (deterministic UUIDs converge the backend to the
+	// same final state) -- but it must reissue exactly that set, no more
+	// and no fewer. Asserting the total exactly doubles catches both a
+	// silently skipped write (e.g. an incorrect early-return that drops a
+	// relationship on replay) and silently duplicated writes.
+	if got, want := len(api.triples), firstTriples*2; got != want {
+		t.Fatalf("replay triple call count = %d, want %d (exactly the first apply's %d calls reissued)", got, want, firstTriples)
 	}
 	if second.EntitiesApplied != first.EntitiesApplied || second.EdgesApplied != first.EdgesApplied ||
 		second.ContentsApplied != first.ContentsApplied || second.EpisodesApplied != first.EpisodesApplied {
@@ -441,6 +451,11 @@ type edgeSnapshot struct {
 	SourceNodeUUID string
 	TargetNodeUUID string
 	Attributes     map[string]interface{}
+	CreatedAt      string
+	ValidAt        *string
+	InvalidAt      *string
+	ExpiredAt      *string
+	Episodes       []string
 }
 
 func snapshotEdges(edges map[string]*zep.EntityEdge) map[string]edgeSnapshot {
@@ -449,6 +464,13 @@ func snapshotEdges(edges map[string]*zep.EntityEdge) map[string]edgeSnapshot {
 		snapshot[id] = edgeSnapshot{
 			Name: edge.Name, Fact: edge.Fact, SourceNodeUUID: edge.SourceNodeUUID, TargetNodeUUID: edge.TargetNodeUUID,
 			Attributes: cloneAnyMap(edge.Attributes),
+			// String values are immutable, so copying the *string itself
+			// (not a fresh pointer to a copied value) is safe: nothing
+			// downstream can mutate what it points to out from under this
+			// snapshot, and reflect.DeepEqual compares pointee values, not
+			// pointer identity.
+			CreatedAt: edge.CreatedAt, ValidAt: edge.ValidAt, InvalidAt: edge.InvalidAt, ExpiredAt: edge.ExpiredAt,
+			Episodes: append([]string(nil), edge.Episodes...),
 		}
 	}
 	return snapshot
