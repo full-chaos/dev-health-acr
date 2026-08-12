@@ -35,6 +35,7 @@ type fakeClient struct {
 }
 
 func (c *fakeClient) Query(_ context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	requireOrgIDBinding(statement, bindings)
 	for _, table := range c.tables {
 		if strings.Contains(statement, table.match) {
 			if table.err != nil {
@@ -87,6 +88,31 @@ func applyCursor(rows [][]any, cursorOf func(row []any) (time.Time, string), bin
 		return ti.Before(tj)
 	})
 	return kept
+}
+
+// requireOrgIDBinding is CHAOS-3753 codex finding W2's fake-assertion fix:
+// the fake previously accepted any bindings at all, silently ignoring them,
+// so a query that forgot to bind org_id (and therefore would have scoped a
+// real ClickHouse WHERE clause to nothing, or -- worse -- to every tenant)
+// would still pass every test in this file. Every production query text
+// this package builds references the {org_id:String} placeholder; this
+// panics (not t.Fatalf -- fakeClient has no *testing.T handle, and a
+// missing binding here is a programming error in the query under test, not
+// a test-data assumption) if a statement claims to use it but no matching
+// binding was actually supplied.
+func requireOrgIDBinding(statement string, bindings []contextpacket.ClickHouseBinding) {
+	if !strings.Contains(statement, "{org_id:String}") {
+		return
+	}
+	for _, binding := range bindings {
+		if binding.Name == "org_id" {
+			if value, ok := binding.Value.(string); ok && strings.TrimSpace(value) != "" {
+				return
+			}
+			panic("devhealthsource_test: fakeClient.Query received a blank org_id binding for a statement that requires one")
+		}
+	}
+	panic("devhealthsource_test: fakeClient.Query received a statement referencing {org_id:String} with no org_id binding -- the query under test forgot to scope itself to an organization")
 }
 
 type fakeScanner struct {
