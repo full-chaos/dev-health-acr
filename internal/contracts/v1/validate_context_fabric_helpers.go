@@ -77,11 +77,27 @@ func boundedEvidenceRefs(values []string, maximum int, allowEmpty bool) bool {
 		return false
 	}
 	for _, value := range values {
-		if !stringLengthBetween(value, 8, 256) || strings.TrimSpace(value) != value {
+		// '|' is the delimited-string separator backends such as the
+		// zepgraph adapter use to encode a list of evidence ref IDs; an
+		// evidence ref ID containing it would corrupt that encoding and
+		// silently narrow the stored evidence closure.
+		if !stringLengthBetween(value, 8, 256) || strings.TrimSpace(value) != value || strings.Contains(value, "|") {
 			return false
 		}
 	}
 	return uniqueStrings(values)
+}
+
+// containsSeparatorCharacter reports whether any value contains '|', the
+// delimited-string separator character used by backends that persist a list
+// of strings as a single "|a|b|"-encoded field (see zepgraph's encodeScope).
+func containsSeparatorCharacter(values []string) bool {
+	for _, value := range values {
+		if strings.Contains(value, "|") {
+			return true
+		}
+	}
+	return false
 }
 
 func uniqueTrimmedStrings(values []string, maximum int) bool {

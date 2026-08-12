@@ -247,6 +247,36 @@ func TestDiscoverContextReturnsEvidenceClosedDriverAndSubjectlessCohort(t *testi
 	}
 }
 
+// TestApplyProjectionBatchRejectsSeparatorBearingAuthorizationScope is the F1
+// end-to-end regression: the v1 contract layer must reject a scope value
+// containing the adapter's internal encoding separator ('|') before
+// anything is written, so a separator-bearing scope can never be widened
+// (via zepgraph's prior "silently fall back to '*'" bug) into an
+// unrelated-principal read.
+func TestApplyProjectionBatchRejectsSeparatorBearingAuthorizationScope(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	private := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_secret", Label: "Secret Project"}
+
+	batch := validBatch()
+	batch.Entities = []contextfabric.EntityProjection{{
+		Subject:        private,
+		Authorization:  contextfabric.AuthorizationScope{RepositorySlugs: []string{"full-chaos/private|leak"}},
+		EvidenceRefIDs: []string{"evidence_secret_1234"}, ObservedAt: batch.GeneratedAt, SourceVersion: "ops-v1",
+	}}
+	batch.Relationships = []contextfabric.RelationshipProjection{}
+	batch.Contents = []contextfabric.ContentProjection{}
+	batch.Episodes = []contextfabric.EpisodeProjection{}
+
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), batch); err == nil {
+		t.Fatal("ApplyProjectionBatch() accepted a '|'-bearing authorization scope")
+	}
+	if node := api.nodes[nodeUUID(batch.OrgID, private)]; node != nil {
+		t.Fatalf("a rejected batch still wrote a node: %#v", node)
+	}
+}
+
 func TestPurgeOrganizationDeletesOnlyDerivedGraph(t *testing.T) {
 	t.Parallel()
 	api := newFakeAPI()

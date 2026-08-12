@@ -12,6 +12,16 @@ import (
 
 const scopeSeparator = "|"
 
+// scopeDeniedSentinel is what encodeScope returns for a non-empty input that
+// produced zero usable encoded values (every value was empty after
+// trimming, or contained the separator character). It is deliberately never
+// "*": encoding nothing from a non-empty list must fail closed -- authorize
+// or return nothing -- rather than widen to "matches everything", which is
+// what a bare-separator encoding ("|") previously collapsed to. scopeContains
+// and decodeScope both special-case this value so it can never match or
+// decode to anything.
+const scopeDeniedSentinel = "\x00scope-encoding-rejected\x00"
+
 func graphID(prefix, orgID string) string {
 	digest := sha256.Sum256([]byte("context-fabric-graph\x00" + orgID))
 	return strings.TrimSpace(prefix) + "-" + hex.EncodeToString(digest[:16])
@@ -61,18 +71,22 @@ func encodeScope(values []string) string {
 	for _, value := range copyValues {
 		value = strings.TrimSpace(value)
 		if value == "" || strings.Contains(value, scopeSeparator) {
-			continue
+			// A single unusable value must not silently narrow the encoded
+			// scope to whatever values did survive -- that reads later as
+			// "this list was always shorter", not "an input value was
+			// rejected". Fail closed for the whole list instead.
+			return scopeDeniedSentinel
 		}
 		builder.WriteString(value)
 		builder.WriteString(scopeSeparator)
-	}
-	if builder.Len() == 1 {
-		return "*"
 	}
 	return builder.String()
 }
 
 func scopeContains(encoded, value string) bool {
+	if encoded == scopeDeniedSentinel {
+		return false
+	}
 	if encoded == "*" {
 		return true
 	}

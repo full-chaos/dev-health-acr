@@ -548,7 +548,7 @@ func relationTitle(name, target string) string {
 }
 
 func decodeScope(encoded string) []string {
-	if encoded == "" || encoded == "*" {
+	if encoded == "" || encoded == "*" || encoded == scopeDeniedSentinel {
 		return []string{}
 	}
 	parts := strings.Split(encoded, scopeSeparator)

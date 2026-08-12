@@ -83,6 +83,14 @@ func (s ContextFabricAuthorizationScope) Validate() error {
 	if len(s.RepositorySlugs)+len(s.ProjectIDs)+len(s.TeamIDs) == 0 {
 		return fmt.Errorf("authorization scope must not be empty")
 	}
+	// Backends that persist a scope as a delimited string (e.g. the zepgraph
+	// adapter's "|a|b|" encoding) use '|' as their internal separator. A
+	// scope value containing '|' would corrupt that encoding into multiple
+	// unintended scope entries, so it must fail here, at the port, before
+	// any backend ever sees it.
+	if containsSeparatorCharacter(s.RepositorySlugs) || containsSeparatorCharacter(s.ProjectIDs) || containsSeparatorCharacter(s.TeamIDs) {
+		return fmt.Errorf("authorization scope value must not contain '|'")
+	}
 	return nil
 }
 

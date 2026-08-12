@@ -103,6 +103,40 @@ func TestContextFabricProjectionRequiresCompleteEnumerationAndScalarOneOf(t *tes
 	}
 }
 
+// TestContextFabricAuthorizationScopeRejectsSeparatorCharacter guards the v1
+// port against a scope value that would corrupt a backend's delimited-string
+// encoding (e.g. zepgraph's "|a|b|" scope encoding uses '|' as its
+// separator): such a value must be rejected here, before any backend ever
+// sees it.
+func TestContextFabricAuthorizationScopeRejectsSeparatorCharacter(t *testing.T) {
+	t.Parallel()
+	for _, scope := range []ContextFabricAuthorizationScope{
+		{RepositorySlugs: []string{"full-chaos/private|leak"}},
+		{ProjectIDs: []string{"project_a|project_b"}},
+		{TeamIDs: []string{"team_a|team_b"}},
+	} {
+		if err := scope.Validate(); err == nil {
+			t.Fatalf("Validate() accepted a '|'-bearing scope value: %#v", scope)
+		}
+	}
+	// A clean scope with the same shape must still be accepted.
+	if err := (ContextFabricAuthorizationScope{RepositorySlugs: []string{"full-chaos/private"}}).Validate(); err != nil {
+		t.Fatalf("Validate() rejected a clean scope: %v", err)
+	}
+}
+
+// TestContextFabricBoundedEvidenceRefsRejectsSeparatorCharacter guards
+// against the same corruption for evidence ref IDs, which the zepgraph
+// adapter encodes with the same delimited-string scheme.
+func TestContextFabricBoundedEvidenceRefsRejectsSeparatorCharacter(t *testing.T) {
+	t.Parallel()
+	batch := validContextFabricProjectionBatch()
+	batch.Entities[0].EvidenceRefIDs = []string{"evidence_a|b_1234"}
+	if err := batch.Validate(); err == nil {
+		t.Fatal("Validate() accepted a '|'-bearing evidence ref ID")
+	}
+}
+
 func contextFabricGolden(t *testing.T, name string) []byte {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
