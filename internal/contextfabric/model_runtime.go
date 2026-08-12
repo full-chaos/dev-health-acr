@@ -226,7 +226,12 @@ func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal sto
 }
 
 type RuntimeAnswerSynthesizerOptions struct {
-	ServiceVersion          string
+	ServiceVersion string
+	// Backend and BackendVersion land verbatim in the public
+	// InvestigationResult.Versions -- callers must set Backend to the
+	// vendor-neutral capability class (e.g. "graph"), never a specific
+	// vendor or product name, and must treat BackendVersion as an opaque
+	// token. See ContextFabricVersionSet's field docs.
 	Backend                 string
 	BackendVersion          string
 	ProjectionVersion       string

@@ -236,7 +236,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		Resolution: request.Resolution, Cohort: cohort, Paths: paths, DriverCandidates: drivers,
 		EvidenceRefIDs: evidence, FactRequirements: factRequirements,
 		Coverage: contextfabric.Coverage{
-			Sources:         []contextfabric.SourceObservation{{Source: "context-fabric:zep", State: contextfabric.SourceAvailable, ObservedAt: ptr(a.now().UTC()), Watermark: graphID(a.config.GraphPrefix, principal.OrgID)}},
+			// Source and Watermark land verbatim in the public
+			// InvestigationResult.Coverage, so neither may name the backing
+			// graph vendor or leak its internal graph identifier: "graph" is
+			// the vendor-neutral source name, and Watermark stays empty
+			// until a real, non-identifying watermark value exists.
+			Sources:         []contextfabric.SourceObservation{{Source: "context-fabric:graph", State: contextfabric.SourceAvailable, ObservedAt: ptr(a.now().UTC())}},
 			DegradedReasons: []string{},
 		},
 	}, nil

@@ -231,6 +231,20 @@ func TestDiscoverContextReturnsEvidenceClosedDriverAndSubjectlessCohort(t *testi
 	if contextResult.Cohort == nil || contextResult.Cohort.Kind != contextfabric.SubjectTeam || len(contextResult.Cohort.Members) != 1 {
 		t.Fatalf("cohort = %#v", contextResult.Cohort)
 	}
+	// Coverage.Source and Coverage.Watermark land verbatim in the public
+	// InvestigationResult: the source name must not encode the graph
+	// vendor, and the watermark must not leak the adapter's internal graph
+	// identifier (config.GraphPrefix + org ID).
+	if len(contextResult.Coverage.Sources) != 1 {
+		t.Fatalf("coverage sources = %#v", contextResult.Coverage.Sources)
+	}
+	source := contextResult.Coverage.Sources[0]
+	if source.Source != "context-fabric:graph" {
+		t.Fatalf("coverage source = %q, want a vendor-neutral source name", source.Source)
+	}
+	if source.Watermark != "" {
+		t.Fatalf("coverage watermark = %q, want empty until a real, non-identifying watermark exists", source.Watermark)
+	}
 }
 
 func TestPurgeOrganizationDeletesOnlyDerivedGraph(t *testing.T) {

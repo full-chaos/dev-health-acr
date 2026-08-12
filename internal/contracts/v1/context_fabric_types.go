@@ -304,9 +304,17 @@ type ContextFabricCoverage struct {
 }
 
 type ContextFabricVersionSet struct {
-	ServiceVersion          string `json:"service_version"`
-	ContractVersion         string `json:"contract_version"`
-	Backend                 string `json:"backend"`
+	ServiceVersion  string `json:"service_version"`
+	ContractVersion string `json:"contract_version"`
+	// Backend names the graph retrieval capability class (e.g. "graph"),
+	// not the vendor or product backing it. The public answer contract
+	// must not name a specific vendor: a vendor swap is an operational
+	// change, not a client-visible contract change.
+	Backend string `json:"backend"`
+	// BackendVersion is an opaque version token for the backend
+	// implementation in force. Callers must treat it as opaque -- it is
+	// not guaranteed to follow any particular scheme and must not be
+	// parsed for vendor identity or capability.
 	BackendVersion          string `json:"backend_version,omitempty"`
 	ProjectionVersion       string `json:"projection_version"`
 	QueryVersion            string `json:"query_version"`

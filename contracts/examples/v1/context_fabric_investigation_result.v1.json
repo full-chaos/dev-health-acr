@@ -206,7 +206,7 @@
   "versions": {
     "service_version": "0.2.0",
     "contract_version": "context_fabric_investigation_result.v1",
-    "backend": "zep",
+    "backend": "graph",
     "backend_version": "v3",
     "projection_version": "projection-v1",
     "query_version": "query-v1",

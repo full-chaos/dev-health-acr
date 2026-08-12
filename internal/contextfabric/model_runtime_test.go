@@ -339,7 +339,7 @@ func TestRuntimeAnswerSynthesizerBuildsResultVersionsFromReceiptAndOptions(t *te
 		Runtime: fakeModelRuntime{draft: draft, receipt: receipt},
 		Sink:    sink,
 		Options: RuntimeAnswerSynthesizerOptions{
-			ServiceVersion: "acr-v9", Backend: "zep", BackendVersion: "zep-v1",
+			ServiceVersion: "acr-v9", Backend: "graph", BackendVersion: "graph-v1",
 			ProjectionVersion: "projection-v9", QueryVersion: "query-v9", CanonicalServiceVersion: "ops-v9",
 		},
 	}
@@ -350,7 +350,7 @@ func TestRuntimeAnswerSynthesizerBuildsResultVersionsFromReceiptAndOptions(t *te
 	if result.Versions.InterpretationVersion != "schema-v9" || result.Versions.SynthesisVersion != "prompt-v9+model-v9" {
 		t.Fatalf("Versions = %#v", result.Versions)
 	}
-	if result.Versions.ServiceVersion != "acr-v9" || result.Versions.Backend != "zep" || result.Versions.CanonicalServiceVersion != "ops-v9" {
+	if result.Versions.ServiceVersion != "acr-v9" || result.Versions.Backend != "graph" || result.Versions.CanonicalServiceVersion != "ops-v9" {
 		t.Fatalf("Versions = %#v", result.Versions)
 	}
 	if len(sink.recorded) != 1 {
