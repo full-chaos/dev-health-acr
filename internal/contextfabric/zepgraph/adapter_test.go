@@ -322,9 +322,13 @@ func TestResolveSubjectsTraversesObservationNodeToCanonicalSubject(t *testing.T)
 	t.Parallel()
 	api := newFakeAPI()
 	adapter := mustAdapter(t, api)
-	subject := graphNode("node-subject", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.4)
+	// Both the document and its canonical subject are set to a high raw
+	// relevance -- deliberately high enough that, before the G1 fix, the
+	// document's own (higher, undiscounted) confidence would win the
+	// auto-commit comparison against the traversed-and-discounted subject.
+	subject := graphNode("node-subject", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.9)
 	document := &zep.EntityNode{
-		UUID: "node-document", Name: "Ask Dev readiness review", Relevance: ptr(0.93),
+		UUID: "node-document", Name: "Ask Dev readiness review", Relevance: ptr(0.95),
 		Attributes: map[string]interface{}{
 			"canonical_id": "document_1234", "subject_kind": string(contextfabric.SubjectDocument), "label": "Ask Dev readiness review",
 			"authorization_repositories": "*", "authorization_projects": "*", "authorization_teams": "*",
@@ -366,6 +370,106 @@ func TestResolveSubjectsTraversesObservationNodeToCanonicalSubject(t *testing.T)
 	}
 	if subjectConfidence <= 0 || subjectConfidence >= resultConfidence(document.Relevance, document.Score) {
 		t.Fatalf("traversed subject confidence = %v, want positive and discounted below the observation's own confidence", subjectConfidence)
+	}
+	// The canonical subject the document is about must be what gets
+	// committed -- never the document itself, even though the document's
+	// own raw confidence is higher. Committing the document here would
+	// mean a term that only appeared inside a document body silently
+	// answered the investigation as if the document were the subject.
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "project_ask_dev" {
+		t.Fatalf("resolution.Committed = %#v, want only the traversed canonical subject committed, never the document", resolution.Committed)
+	}
+}
+
+// TestResolveSubjectsTraversalIgnoresUnrelatedRelationEdges proves
+// traversal only follows the specific containment/attribution relation
+// kinds projectContent/projectEpisode use (DOCUMENTED_BY, HAS_EPISODE) to
+// attach a document/episode to its authoritative canonical subject, not
+// any edge that happens to point at the observation node. A generic
+// MENTIONS/REFERENCES relationship from some unrelated node must never be
+// followed as if that unrelated node were the entity the document is
+// about.
+func TestResolveSubjectsTraversalIgnoresUnrelatedRelationEdges(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	unrelated := graphNode("node-unrelated", contextfabric.SubjectProject, "project_unrelated", "Unrelated Project", "*", 0.99)
+	document := &zep.EntityNode{
+		UUID: "node-document", Name: "Ask Dev readiness review", Relevance: ptr(0.95),
+		Attributes: map[string]interface{}{
+			"canonical_id": "document_1234", "subject_kind": string(contextfabric.SubjectDocument), "label": "Ask Dev readiness review",
+			"authorization_repositories": "*", "authorization_projects": "*", "authorization_teams": "*",
+			"evidence_refs": "|evidence_document_1234|",
+		},
+	}
+	api.nodes[unrelated.UUID] = unrelated
+	api.nodes[document.UUID] = document
+	api.edges["edge-mentions"] = &zep.EntityEdge{
+		UUID: "edge-mentions", Name: "MENTIONS", Fact: "Unrelated Project mentions Ask Dev readiness review.",
+		SourceNodeUUID: unrelated.UUID, TargetNodeUUID: document.UUID,
+		Attributes: map[string]interface{}{"authorization_repositories": "*"},
+	}
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{document}}
+	request := validRequest()
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"readiness review"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	for _, candidate := range resolution.Candidates {
+		if candidate.Subject.CanonicalID == "project_unrelated" {
+			t.Fatalf("resolution = %#v, a MENTIONS edge must never be followed as an attribution relation", resolution)
+		}
+	}
+}
+
+// TestResolveSubjectsTraversalRequiresEdgeAuthorization proves traversal
+// independently authorizes the attribution edge itself, not just the
+// source node it points to. A source node visible to the principal on its
+// own must not be traversed to if the specific document-attribution fact
+// (the edge) is scoped to a repository the principal cannot see -- the
+// edge's own authorization narrows what the *relationship* discloses,
+// independent of either endpoint's own visibility.
+func TestResolveSubjectsTraversalRequiresEdgeAuthorization(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	subject := graphNode("node-subject", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.9)
+	document := &zep.EntityNode{
+		UUID: "node-document", Name: "Ask Dev readiness review", Relevance: ptr(0.95),
+		Attributes: map[string]interface{}{
+			"canonical_id": "document_1234", "subject_kind": string(contextfabric.SubjectDocument), "label": "Ask Dev readiness review",
+			"authorization_repositories": "*", "authorization_projects": "*", "authorization_teams": "*",
+			"evidence_refs": "|evidence_document_1234|",
+		},
+	}
+	api.nodes[subject.UUID] = subject
+	api.nodes[document.UUID] = document
+	api.edges["edge-documented-by"] = &zep.EntityEdge{
+		UUID: "edge-documented-by", Name: "DOCUMENTED_BY", Fact: "Ask Dev is documented by Ask Dev readiness review.",
+		SourceNodeUUID: subject.UUID, TargetNodeUUID: document.UUID,
+		// The attribution fact itself is scoped to a repository the
+		// calling principal does not have, even though both the subject
+		// and the document nodes are individually unrestricted ("*").
+		Attributes: map[string]interface{}{"authorization_repositories": "|other/private|"},
+	}
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{document}}
+	request := validRequest()
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"readiness review"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	for _, candidate := range resolution.Candidates {
+		if candidate.Subject.CanonicalID == "project_ask_dev" {
+			t.Fatalf("resolution = %#v, an unauthorized attribution edge must not be traversed even though the source node is itself unrestricted", resolution)
+		}
 	}
 }
 

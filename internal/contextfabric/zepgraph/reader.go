@@ -116,18 +116,41 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	if len(candidates) == 0 {
 		return resolution, nil
 	}
-	if len(candidates) == 1 && candidates[0].Confidence >= 0.72 {
-		candidates[0].State = contextfabric.ResolutionCommitted
-		resolution.Candidates = candidates
-		resolution.Committed = []contextfabric.SubjectRef{candidates[0].Subject}
-		return resolution, nil
+	// Observation-kind subjects (documents, episodes) describe something
+	// about a canonical entity; they are not themselves eligible for
+	// automatic commitment from hybrid search -- only an exact hint
+	// (RequestedScope.SubjectHints, handled entirely above and unaffected
+	// by this) can commit one, i.e. only when the caller explicitly asked
+	// for that document/episode by identity. This is a subject-kind rule,
+	// not text matching: without it, a term that only appears inside a
+	// document body could out-rank and auto-commit the document itself
+	// over the (necessarily lower-confidence, since it is one hop removed)
+	// canonical entity that document is about -- see
+	// traverseObservationToSubject. commitIndex, not commitable itself, is
+	// what the auto-commit thresholds below apply to, so a weak or absent
+	// non-observation candidate still falls through to ambiguity/
+	// clarification exactly as before, never silently to the observation.
+	commitIndex := make([]int, 0, len(candidates))
+	for index, candidate := range candidates {
+		if isObservationSubjectKind(candidate.Subject.Kind) {
+			continue
+		}
+		commitIndex = append(commitIndex, index)
 	}
-	gap := candidates[0].Confidence - candidates[1].Confidence
-	if candidates[0].Confidence >= 0.88 && gap >= 0.12 {
-		candidates[0].State = contextfabric.ResolutionCommitted
+	commit := func(index int) contextfabric.SubjectResolution {
+		candidates[index].State = contextfabric.ResolutionCommitted
 		resolution.Candidates = candidates
-		resolution.Committed = []contextfabric.SubjectRef{candidates[0].Subject}
-		return resolution, nil
+		resolution.Committed = []contextfabric.SubjectRef{candidates[index].Subject}
+		return resolution
+	}
+	if len(commitIndex) == 1 && candidates[commitIndex[0]].Confidence >= 0.72 {
+		return commit(commitIndex[0]), nil
+	}
+	if len(commitIndex) >= 2 {
+		top, second := candidates[commitIndex[0]], candidates[commitIndex[1]]
+		if gap := top.Confidence - second.Confidence; top.Confidence >= 0.88 && gap >= 0.12 {
+			return commit(commitIndex[0]), nil
+		}
 	}
 	for index := range candidates {
 		candidates[index].State = contextfabric.ResolutionAmbiguous
@@ -441,6 +464,23 @@ func isObservationSubjectKind(kind contextfabric.SubjectKind) bool {
 	return kind == contextfabric.SubjectDocument || kind == contextfabric.SubjectEpisode
 }
 
+// isObservationAttributionRelation reports whether name is one of the
+// specific relation kinds projectContent/projectEpisode use to attach a
+// document or episode to the canonical subject it is authoritatively about
+// ("DOCUMENTED_BY", "HAS_EPISODE"). traverseObservationToSubject must not
+// follow any other edge that happens to point at an observation node --
+// e.g. a generic MENTIONS/REFERENCES/SUPERSEDES relationship between two
+// documents -- since those describe a much weaker, not-necessarily-singular
+// association than "this is the entity's own document".
+func isObservationAttributionRelation(name string) bool {
+	switch normalizeRelation(name) {
+	case "DOCUMENTED_BY", "HAS_EPISODE":
+		return true
+	default:
+		return false
+	}
+}
+
 // traverseObservationToSubject implements observation-to-entity traversal:
 // given a document/episode node that a hybrid search matched on its text
 // (title, body, goal, outcome, summary), it walks the node's incoming edge
@@ -466,6 +506,20 @@ func (a *Adapter) traverseObservationToSubject(ctx context.Context, principal st
 	}
 	for _, edge := range edges {
 		if edge == nil || edge.TargetNodeUUID != observation.UUID || strings.TrimSpace(edge.SourceNodeUUID) == "" {
+			continue
+		}
+		if !isObservationAttributionRelation(edge.Name) {
+			continue
+		}
+		// The attribution edge is its own authorization boundary,
+		// independent of either endpoint's own scope: a source node and a
+		// document can each be individually unrestricted while the fact
+		// "this document belongs to this subject" is itself scoped more
+		// narrowly. Skipping this check would let a principal who can see
+		// both nodes separately learn the relationship between them
+		// regardless of whether they are authorized to see that
+		// relationship specifically.
+		if !authorizedAttributes(principal, scope, edge.Attributes) {
 			continue
 		}
 		source, err := a.api.GetNode(ctx, edge.SourceNodeUUID)
