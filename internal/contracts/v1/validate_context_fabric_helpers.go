@@ -60,6 +60,93 @@ func validatePaths(values []ContextFabricRelationshipPath) error {
 	return nil
 }
 
+// validateEntityProjections rejects a batch that projects the same subject
+// (by kind + canonical ID) more than once. A backend that upserts by
+// subject key would silently apply only the last entry -- e.g. its
+// authorization scope or aliases -- while a caller-visible receipt still
+// reports every entity as applied, understating what was actually dropped.
+func validateEntityProjections(values []ContextFabricEntityProjection) error {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if err := value.Validate(); err != nil {
+			return fmt.Errorf("entities: %w", err)
+		}
+		key := subjectKey(value.Subject)
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("entities: subject must appear at most once per batch")
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+// validateRelationshipProjections rejects a batch that reuses the same
+// RelationshipID for more than one relationship -- a backend that upserts
+// edges by relationship ID would silently overwrite the earlier edge's
+// target/authorization/evidence with the later one's.
+func validateRelationshipProjections(values []ContextFabricRelationshipProjection) error {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if err := value.Validate(); err != nil {
+			return fmt.Errorf("relationships: %w", err)
+		}
+		if _, exists := seen[value.RelationshipID]; exists {
+			return fmt.Errorf("relationships: relationship IDs must be unique within a batch")
+		}
+		seen[value.RelationshipID] = struct{}{}
+	}
+	return nil
+}
+
+// validateContentProjections rejects a batch that reuses the same
+// ContentID for more than one content item.
+func validateContentProjections(values []ContextFabricContentProjection) error {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if err := value.Validate(); err != nil {
+			return fmt.Errorf("contents: %w", err)
+		}
+		if _, exists := seen[value.ContentID]; exists {
+			return fmt.Errorf("contents: content IDs must be unique within a batch")
+		}
+		seen[value.ContentID] = struct{}{}
+	}
+	return nil
+}
+
+// validateEpisodeProjections rejects a batch that reuses the same
+// EpisodeID for more than one episode.
+func validateEpisodeProjections(values []ContextFabricEpisodeProjection) error {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if err := value.Validate(); err != nil {
+			return fmt.Errorf("episodes: %w", err)
+		}
+		if _, exists := seen[value.EpisodeID]; exists {
+			return fmt.Errorf("episodes: episode IDs must be unique within a batch")
+		}
+		seen[value.EpisodeID] = struct{}{}
+	}
+	return nil
+}
+
+// validateProjectionTombstones rejects a batch that tombstones the same
+// subject (by kind + canonical ID) more than once.
+func validateProjectionTombstones(values []ContextFabricProjectionTombstone) error {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if err := value.Validate(); err != nil {
+			return fmt.Errorf("tombstones: %w", err)
+		}
+		key := value.Kind + "\x00" + value.CanonicalID
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("tombstones: kind and canonical ID must be unique within a batch")
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
 func validateTimeRange(observed, validFrom, validTo *time.Time) error {
 	for _, value := range []*time.Time{observed, validFrom, validTo} {
 		if value != nil && value.IsZero() {

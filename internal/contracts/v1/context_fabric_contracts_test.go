@@ -137,6 +137,63 @@ func TestContextFabricBoundedEvidenceRefsRejectsSeparatorCharacter(t *testing.T)
 	}
 }
 
+// TestContextFabricProjectionBatchRejectsDuplicateEntitySubject guards
+// against a batch projecting the same subject twice: a backend that upserts
+// entities by subject key would silently apply only the last record (its
+// aliases, authorization scope, evidence) while a receipt still reports
+// every entity as applied.
+func TestContextFabricProjectionBatchRejectsDuplicateEntitySubject(t *testing.T) {
+	t.Parallel()
+	batch := validContextFabricProjectionBatch()
+	subject := ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_dup", Label: "Duplicate"}
+	batch.Entities = []ContextFabricEntityProjection{
+		{
+			Subject: subject, Aliases: []string{"FirstAlias"},
+			Authorization:  ContextFabricAuthorizationScope{RepositorySlugs: []string{"team-a/repo"}},
+			EvidenceRefIDs: []string{"evidence_first_1234"}, ObservedAt: batch.GeneratedAt, SourceVersion: "ops-v1",
+		},
+		{
+			Subject: subject, Aliases: []string{"SecondAlias"},
+			Authorization:  ContextFabricAuthorizationScope{RepositorySlugs: []string{"team-b/repo"}},
+			EvidenceRefIDs: []string{"evidence_second_1234"}, ObservedAt: batch.GeneratedAt, SourceVersion: "ops-v1",
+		},
+	}
+	if err := batch.Validate(); err == nil {
+		t.Fatal("Validate() accepted a batch projecting the same subject twice")
+	}
+}
+
+// TestContextFabricProjectionBatchRejectsDuplicateRelationshipID guards
+// against a batch reusing the same RelationshipID: a backend that upserts
+// edges by relationship ID would silently overwrite the earlier edge's
+// target/authorization/evidence with the later one's, orphaning the
+// earlier target.
+func TestContextFabricProjectionBatchRejectsDuplicateRelationshipID(t *testing.T) {
+	t.Parallel()
+	batch := validContextFabricProjectionBatch()
+	batch.Entities = []ContextFabricEntityProjection{}
+	from := ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_a", Label: "A"}
+	to1 := ContextFabricSubjectRef{Kind: ContextFabricSubjectWorkItem, CanonicalID: "work_b", Label: "B"}
+	to2 := ContextFabricSubjectRef{Kind: ContextFabricSubjectWorkItem, CanonicalID: "work_c", Label: "C"}
+	batch.Relationships = []ContextFabricRelationshipProjection{
+		{
+			RelationshipID: "relationship_dup1", Type: "BLOCKS", From: from, To: to1,
+			Derivation: ContextFabricDerivationCanonicalStructured, EpistemicStatus: ContextFabricEpistemicObserved,
+			Authorization:  ContextFabricAuthorizationScope{RepositorySlugs: []string{"team-a/repo"}},
+			EvidenceRefIDs: []string{"evidence_one_1234"}, ObservedAt: batch.GeneratedAt, SourceVersion: "ops-v1",
+		},
+		{
+			RelationshipID: "relationship_dup1", Type: "BLOCKS", From: from, To: to2,
+			Derivation: ContextFabricDerivationCanonicalStructured, EpistemicStatus: ContextFabricEpistemicObserved,
+			Authorization:  ContextFabricAuthorizationScope{RepositorySlugs: []string{"team-b/repo"}},
+			EvidenceRefIDs: []string{"evidence_two_1234"}, ObservedAt: batch.GeneratedAt, SourceVersion: "ops-v1",
+		},
+	}
+	if err := batch.Validate(); err == nil {
+		t.Fatal("Validate() accepted a batch reusing the same relationship ID")
+	}
+}
+
 func contextFabricGolden(t *testing.T, name string) []byte {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)

@@ -48,30 +48,20 @@ func (b ContextFabricProjectionBatch) Validate() error {
 	if len(b.Entities) > 1000 || len(b.Relationships) > 5000 || len(b.Contents) > 1000 || len(b.Episodes) > 1000 || len(b.Tombstones) > 5000 {
 		return fmt.Errorf("projection batch exceeds v1 item bounds")
 	}
-	for _, entity := range b.Entities {
-		if err := entity.Validate(); err != nil {
-			return fmt.Errorf("entities: %w", err)
-		}
+	if err := validateEntityProjections(b.Entities); err != nil {
+		return err
 	}
-	for _, relationship := range b.Relationships {
-		if err := relationship.Validate(); err != nil {
-			return fmt.Errorf("relationships: %w", err)
-		}
+	if err := validateRelationshipProjections(b.Relationships); err != nil {
+		return err
 	}
-	for _, content := range b.Contents {
-		if err := content.Validate(); err != nil {
-			return fmt.Errorf("contents: %w", err)
-		}
+	if err := validateContentProjections(b.Contents); err != nil {
+		return err
 	}
-	for _, episode := range b.Episodes {
-		if err := episode.Validate(); err != nil {
-			return fmt.Errorf("episodes: %w", err)
-		}
+	if err := validateEpisodeProjections(b.Episodes); err != nil {
+		return err
 	}
-	for _, tombstone := range b.Tombstones {
-		if err := tombstone.Validate(); err != nil {
-			return fmt.Errorf("tombstones: %w", err)
-		}
+	if err := validateProjectionTombstones(b.Tombstones); err != nil {
+		return err
 	}
 	return nil
 }
