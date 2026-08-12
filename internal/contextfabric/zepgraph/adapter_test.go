@@ -793,8 +793,6 @@ func TestResolveSubjectsReportsTraversalDegradationThroughTelemetry(t *testing.T
 }
 
 // TestResolveSubjectsExcludesInternalBookkeepingSubjectsFromCandidates
-
-// TestResolveSubjectsExcludesInternalBookkeepingSubjectsFromCandidates
 // guards against the adapter's own projection anchor nodes (the
 // organization root, projection watermark markers) leaking into a public
 // subject resolution -- neither can ever be what a caller meant by name,
@@ -1167,14 +1165,115 @@ func TestDiscoverContextReportsSecondHopVerificationFailuresInCoverage(t *testin
 	if !contextResult.Coverage.Partial {
 		t.Fatalf("coverage = %#v, want Partial=true when a second-hop node failed organization-identity verification", contextResult.Coverage)
 	}
-	found := false
-	for _, reason := range contextResult.Coverage.DegradedReasons {
-		if strings.Contains(reason, "second_hop") && strings.Contains(reason, "1") {
-			found = true
-		}
+	// Pinned to the exact token (not a substring match): the reason
+	// vocabulary is a small, fixed, content-safe set, and a caller reading
+	// DegradedReasons downstream needs the token to be stable, not just
+	// "contains some words".
+	if len(contextResult.Coverage.DegradedReasons) != 1 || contextResult.Coverage.DegradedReasons[0] != "second_hop_node_unverified:1" {
+		t.Fatalf("degraded reasons = %#v, want exactly [\"second_hop_node_unverified:1\"]", contextResult.Coverage.DegradedReasons)
 	}
-	if !found {
-		t.Fatalf("degraded reasons = %#v, want a count-bearing second-hop verification reason", contextResult.Coverage.DegradedReasons)
+}
+
+// TestDiscoverContextCountsEveryClassOfSecondHopDropIntoCoverage is the
+// probe for Codex round-3 finding P2-4: only a UUID-identity mismatch
+// (verifiedNodeSubject returning false) was counted into the degradation
+// signal. A second-hop node that could not be fetched at all -- because it
+// does not exist (a stale reference) or because the backend call itself
+// failed (a transient error) -- was dropped silently before that counter,
+// undercounting real degradation and leaving Coverage looking healthy.
+// Every second-hop drop must count, with a reason class of its own.
+func TestDiscoverContextCountsEveryClassOfSecondHopDropIntoCoverage(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		configure func(api *fakeAPI, uuid string)
+	}{
+		{"stale node (never projected)", func(*fakeAPI, string) {
+			// No node registered under uuid at all -- GetNode returns
+			// NotFoundError, exactly as it would for a stale/deleted
+			// reference.
+		}},
+		{"transient backend error", func(api *fakeAPI, uuid string) {
+			api.getNodeErr = map[string]error{uuid: errors.New("transient backend failure")}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			api := newFakeAPI()
+			adapter := mustAdapter(t, api)
+			project := graphNode("project-node", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.95)
+			const secondHopUUID = "second-hop-target-uuid"
+			tc.configure(api, secondHopUUID)
+			edge := &zep.EntityEdge{
+				UUID: "edge-1", Name: "BLOCKS", Fact: "Release acceptance blocks Ask Dev.",
+				SourceNodeUUID: project.UUID, TargetNodeUUID: secondHopUUID,
+				Attributes: map[string]interface{}{"authorization_repositories": "*", "evidence_refs": "|evidence_release_1234|", "epistemic_status": "observed"},
+			}
+			api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{project}, Edges: []*zep.EntityEdge{edge}}
+			discoveryRequest := contextfabric.GraphDiscoveryRequest{
+				Request: validRequest(),
+				Interpretation: contextfabric.InterpretedQuestion{
+					Shape: contextfabric.ShapeOpen, RequestedJudgment: "blockers", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+					FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactBlockers}},
+				},
+				Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+			}
+			contextResult, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org_1"}, discoveryRequest)
+			if err != nil {
+				t.Fatalf("DiscoverContext() error = %v", err)
+			}
+			if !contextResult.Coverage.Partial {
+				t.Fatalf("coverage = %#v, want Partial=true for a %s second-hop node", contextResult.Coverage, tc.name)
+			}
+			if len(contextResult.Coverage.DegradedReasons) != 1 || contextResult.Coverage.DegradedReasons[0] != "second_hop_node_unavailable:1" {
+				t.Fatalf("degraded reasons = %#v, want exactly [\"second_hop_node_unavailable:1\"] for a %s node", contextResult.Coverage.DegradedReasons, tc.name)
+			}
+		})
+	}
+}
+
+// TestDiscoverContextEdgeAdmissionTieBreaksDeterministicallyOnEqualRelevance
+// closes the round-3 requested test gap for N2: when two edges have EQUAL
+// relevance, admission order must still be deterministic (the edge with
+// the lexicographically smaller UUID sorts first), not dependent on
+// whatever order a map or backend happens to iterate/return them in.
+func TestDiscoverContextEdgeAdmissionTieBreaksDeterministicallyOnEqualRelevance(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	project := graphNode("project-node", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.95)
+	first := graphNode("work-node-first", contextfabric.SubjectWorkItem, "work_first", "Work First", "*", 0.8)
+	second := graphNode("work-node-second", contextfabric.SubjectWorkItem, "work_second", "Work Second", "*", 0.8)
+	// Equal relevance on both edges; only the UUID ordering can break the
+	// tie. "edge-aaa" < "edge-bbb" lexicographically.
+	edges := []*zep.EntityEdge{
+		{
+			UUID: "edge-bbb", Name: "BLOCKS", Fact: "Work Second blocks Ask Dev.", SourceNodeUUID: project.UUID, TargetNodeUUID: second.UUID,
+			Attributes: map[string]interface{}{"authorization_repositories": "*", "evidence_refs": "|evidence_second_12345|", "epistemic_status": "observed"}, Relevance: ptr(0.5),
+		},
+		{
+			UUID: "edge-aaa", Name: "BLOCKS", Fact: "Work First blocks Ask Dev.", SourceNodeUUID: project.UUID, TargetNodeUUID: first.UUID,
+			Attributes: map[string]interface{}{"authorization_repositories": "*", "evidence_refs": "|evidence_first_123456|", "epistemic_status": "observed"}, Relevance: ptr(0.5),
+		},
+	}
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{project, first, second}, Edges: edges}
+	request := validRequest()
+	request.Options.MaxEvidenceRefs = 1
+	discoveryRequest := contextfabric.GraphDiscoveryRequest{
+		Request: request,
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeOpen, RequestedJudgment: "blockers", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactBlockers}},
+		},
+		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+	}
+	contextResult, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org_1"}, discoveryRequest)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(contextResult.Paths) != 1 || contextResult.Paths[0].Nodes[1].CanonicalID != "work_first" {
+		t.Fatalf("paths = %#v, want the lexicographically-smaller edge UUID (edge-aaa) to win the equal-relevance tie deterministically", contextResult.Paths)
 	}
 }
 

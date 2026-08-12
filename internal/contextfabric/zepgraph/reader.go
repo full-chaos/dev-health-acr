@@ -347,14 +347,29 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	drivers := make([]contextfabric.DriverJudgment, 0, len(edges))
 	evidenceSet := make(map[string]struct{})
 	requirements := make(map[contextfabric.FactKind]contextfabric.FactRequirement)
-	// secondHopVerificationFailures counts edges dropped because a
-	// second-hop node (see verifiedNodeSubject) did not verify as
-	// belonging to this organization's graph -- N6. The count (never the
+	// secondHopDrops counts every second-hop node drop by reason class --
+	// P2-4: a UUID-identity mismatch (verifiedNodeSubject returning false,
+	// N6) was previously the only counted case; a second-hop node that
+	// could not be fetched at all (does not exist, or the backend call
+	// itself failed) or that failed authorization was dropped silently
+	// before any counter, undercounting real degradation. The count (never
 	// node/edge content) is surfaced through Coverage below so a caller
 	// can tell degradation happened instead of an investigation silently
 	// looking complete with fewer paths/drivers than the graph actually
 	// held.
-	secondHopVerificationFailures := 0
+	secondHopDrops := make(map[string]int)
+	fetchSecondHop := func(uuid string) *zep.EntityNode {
+		fetched, _ := a.api.GetNode(ctx, uuid)
+		if fetched == nil {
+			secondHopDrops["second_hop_node_unavailable"]++
+			return nil
+		}
+		if !authorizedAttributes(principal, request.Request.RequestedScope, fetched.Attributes) {
+			secondHopDrops["second_hop_node_unauthorized"]++
+			return nil
+		}
+		return fetched
+	}
 	for _, edge := range edges {
 		if !authorizedAttributes(principal, request.Request.RequestedScope, edge.Attributes) {
 			continue
@@ -367,15 +382,15 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// require verifiedNodeSubject below before being trusted.
 		from, fromFirstHop := nodes[edge.SourceNodeUUID]
 		if !fromFirstHop {
-			from, _ = a.api.GetNode(ctx, edge.SourceNodeUUID)
-			if from == nil || !authorizedAttributes(principal, request.Request.RequestedScope, from.Attributes) {
+			from = fetchSecondHop(edge.SourceNodeUUID)
+			if from == nil {
 				continue
 			}
 		}
 		to, toFirstHop := nodes[edge.TargetNodeUUID]
 		if !toFirstHop {
-			to, _ = a.api.GetNode(ctx, edge.TargetNodeUUID)
-			if to == nil || !authorizedAttributes(principal, request.Request.RequestedScope, to.Attributes) {
+			to = fetchSecondHop(edge.TargetNodeUUID)
+			if to == nil {
 				continue
 			}
 		}
@@ -386,7 +401,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		} else {
 			fromSubject, ok = verifiedNodeSubject(principal.OrgID, edge.SourceNodeUUID, from)
 			if !ok {
-				secondHopVerificationFailures++
+				secondHopDrops["second_hop_node_unverified"]++
 			}
 		}
 		if !ok || isInternalBookkeepingSubject(fromSubject) {
@@ -397,7 +412,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		} else {
 			toSubject, ok = verifiedNodeSubject(principal.OrgID, edge.TargetNodeUUID, to)
 			if !ok {
-				secondHopVerificationFailures++
+				secondHopDrops["second_hop_node_unverified"]++
 			}
 		}
 		if !ok || fromSubject == toSubject || isInternalBookkeepingSubject(toSubject) {
@@ -493,15 +508,20 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	sort.Strings(evidence)
 	degradedReasons := []string{}
 	partial := false
-	if secondHopVerificationFailures > 0 {
-		// N6: content-safe (count + fixed reason token, never node/edge
-		// content) signal that some second-hop graph data was dropped
-		// rather than trusted, so a later synthesis stage (Reset 1C) can
-		// surface this as a limitation instead of the investigation
-		// silently looking complete with fewer paths/drivers than the
-		// graph actually held.
+	if len(secondHopDrops) > 0 {
+		// N6/P2-4: content-safe (fixed reason token + count, never
+		// node/edge content) signal that some second-hop graph data was
+		// dropped rather than trusted, so a later synthesis stage
+		// (Reset 1C) can surface this as a limitation instead of the
+		// investigation silently looking complete with fewer paths/drivers
+		// than the graph actually held. One entry per reason class, sorted
+		// for determinism.
 		partial = true
-		degradedReasons = []string{fmt.Sprintf("second_hop_node_unverified:%d", secondHopVerificationFailures)}
+		degradedReasons = make([]string, 0, len(secondHopDrops))
+		for reason, count := range secondHopDrops {
+			degradedReasons = append(degradedReasons, fmt.Sprintf("%s:%d", reason, count))
+		}
+		sort.Strings(degradedReasons)
 	}
 	return contextfabric.GraphContext{
 		Resolution: request.Resolution, Cohort: cohort, Paths: paths, DriverCandidates: drivers,
@@ -749,6 +769,21 @@ func isObservationAttributionRelation(name string) bool {
 	}
 }
 
+// traverseObservationToSubject implements observation-to-entity traversal:
+// given a document/episode node that a hybrid search matched on its text
+// (title, body, goal, outcome, summary), it walks the node's incoming edge
+// back to the canonical entity that document/episode is projected against
+// (projectContent/projectEpisode always set that entity as the edge's
+// source and the document/episode as the target) and proposes that entity
+// as an additional subject candidate. This lets a term that only appears
+// inside a document body or episode summary still resolve to the subject
+// the question is actually about, without requiring the term to match the
+// subject's own label, alias, or previous name directly.
+//
+// The traversed entity is independently re-authorized (authorizedAttributes
+// via nodeCandidate) before it can become a candidate -- the caller's
+// authorization to see the observation never carries over to the entity it
+// describes.
 // observationTraversal classifies the outcome of
 // traverseObservationToSubject. Codex round-3 finding P1-1: a backend
 // error must never collapse to the same signal as a confirmed, legitimate
@@ -836,6 +871,7 @@ func (a *Adapter) traverseObservationToSubject(ctx context.Context, principal st
 	}
 	return contextfabric.SubjectCandidate{}, observationNoParent
 }
+
 func authorizedAttributes(principal storage.Principal, requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {
 	if len(principal.RepositoryScopes) > 0 {
 		encoded := stringAttribute(attributes, "authorization_repositories")
