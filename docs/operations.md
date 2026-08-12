@@ -298,7 +298,7 @@ endpoint ever travels into logs, receipts, or telemetry built from it.
 **`ACR_REQUEST_TIMEOUT` must be raised before enabling investigations.** It
 defaults to **15s**, and it bounds the whole HTTP request. A real
 investigation is two sequential model calls (interpret, then synthesise) and
-was measured end-to-end through the endpoint at **~90s** against
+was measured end-to-end through the endpoint at **55–80s** against
 `gpt-5-nano`. Left at the default, every investigation returns 504 before
 the model answers, regardless of how well the model is doing. Size it above
 `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` × `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS`
@@ -314,7 +314,7 @@ unless `ACR_TEST_MODEL_API_KEY` is set —
 and `go test ./internal/api -run LiveEndpoint` for the endpoint):
 interpretation passed ACR's validator on every run, but synthesis — the
 strictest validator in the pipeline — did not. `gpt-5-nano` alone answered
-**1 of 16** endpoint attempts; the richer the synthesis input (graph paths
+**2 of 21** endpoint attempts; the richer the synthesis input (graph paths
 plus several canonical facts), the worse it did, so the runtime-level rate of
 roughly one in three overstates it for real traffic.
 
@@ -328,7 +328,7 @@ not correctness — but at 1 in 16 the endpoint is unusable.
 rather than re-rolling the same input); the fallback model is the only
 mitigation, and `genkitruntime` invokes it on invalid output as well as on
 transport failure. With `ACR_CONTEXT_FABRIC_MODEL_FALLBACK=gpt-5.6-luna` the
-same endpoint answered **3 of 3**, at 72–102s per request. Set it in every
+same endpoint answered **6 of 6**, at 55–80s per request. Set it in every
 deployment expected to answer. Each fallback is a second billable call and is
 recorded as `fallback_used` on the receipt; tracking that rate per model is
 the `ModelReceiptSink` evaluator's job (CHAOS-3756), and a sustained high
