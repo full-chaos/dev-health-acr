@@ -73,17 +73,31 @@ func (s *ClickHouseProjectionSource) NextProjectionBatch(ctx context.Context, ch
 	return s.incremental(ctx, orgID, checkpoint.Cursor)
 }
 
+// fullSnapshot attempts one complete-enumeration batch (FullSnapshot: true,
+// CompleteEnumeration: true -- ContextFabricProjectionBatch.Validate()
+// requires both together). When the organization is too large for that
+// single bounded batch, it falls back to pagedBatch from the same zero
+// cursor instead of erroring -- CHAOS-3753 codex finding C6: refusing left
+// any organization above the per-table cap permanently stuck (every
+// subsequent tick re-attempted the same oversized single-batch snapshot
+// and failed the same way; initial projection never completed). The
+// fallback produces an ordinary bounded incremental-shaped batch per tick
+// until caught up, exactly like any other incremental catch-up.
 func (s *ClickHouseProjectionSource) fullSnapshot(ctx context.Context, orgID string) (contextfabric.ProjectionBatch, bool, error) {
 	var all []candidate
+	oversized := false
 	for _, table := range entityTables {
 		rows, truncated, err := table.query(ctx, s.client, orgID, cursorState{}, snapshotPerQueryCap)
 		if err != nil {
 			return contextfabric.ProjectionBatch{}, false, fmt.Errorf("%w: read %s: %v", contextfabric.ErrUnavailable, table.name, err)
 		}
 		if truncated {
-			return contextfabric.ProjectionBatch{}, false, fmt.Errorf("devhealthsource: organization %s exceeds full-snapshot capacity for %s; incremental catch-up is required instead of a rebuild at this scale", redactOrg(orgID), table.name)
+			oversized = true
 		}
 		all = append(all, rows...)
+	}
+	if oversized {
+		return s.pagedBatch(ctx, orgID, "", cursorState{}, true)
 	}
 	// A fixed anchor, not the wall clock: the organization candidate must
 	// sort identically across replays of the same underlying data so that
@@ -107,6 +121,15 @@ func (s *ClickHouseProjectionSource) incremental(ctx context.Context, orgID, cur
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
+	return s.pagedBatch(ctx, orgID, cursor, state, false)
+}
+
+// pagedBatch is the shared bounded-per-tick paging path for both ordinary
+// incremental catch-up and the fullSnapshot oversized-organization
+// fallback (C6). includeOrganization is true only for the very first page
+// of a from-scratch catch-up (cursor == ""), so the synthesized
+// Organization entity is projected exactly once, not on every page.
+func (s *ClickHouseProjectionSource) pagedBatch(ctx context.Context, orgID, cursor string, state cursorState, includeOrganization bool) (contextfabric.ProjectionBatch, bool, error) {
 	var all []candidate
 	for _, table := range entityTables {
 		rows, _, err := table.query(ctx, s.client, orgID, state, incrementalBatchCap)
@@ -114,6 +137,9 @@ func (s *ClickHouseProjectionSource) incremental(ctx context.Context, orgID, cur
 			return contextfabric.ProjectionBatch{}, false, fmt.Errorf("%w: read %s: %v", contextfabric.ErrUnavailable, table.name, err)
 		}
 		all = append(all, rows...)
+	}
+	if includeOrganization {
+		all = append(all, organizationCandidate(orgID, organizationAnchorTime))
 	}
 	if len(all) == 0 {
 		return contextfabric.ProjectionBatch{}, false, nil
@@ -243,12 +269,20 @@ func repoAuthorization(repoSlug string) contractsv1.ContextFabricAuthorizationSc
 	return contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{repoSlug}}
 }
 
-func belongsToRepository(from contractsv1.ContextFabricSubjectRef, repoSlug, repoID string, observedAt time.Time, evidenceRefID string) candidate {
+// belongsToRepository's rowKey must equal the exact same value the entity
+// candidate for this same source row used as its sortKey (see tables.go's
+// sincePredicate doc comment) -- CHAOS-3753 codex finding C5. Before the
+// fix this used the relationship's own RelationshipID, which is a
+// different string than the row's keyset-pagination identity, so a page
+// boundary landing between an entity and its relationship candidate (both
+// from the same row, sharing one timestamp) would have resumed from the
+// wrong position.
+func belongsToRepository(from contractsv1.ContextFabricSubjectRef, repoSlug, repoID string, observedAt time.Time, evidenceRefID, rowKey string) candidate {
 	to := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository:" + repoID, Label: repoSlug}
 	relationship := contractsv1.ContextFabricRelationshipProjection{
 		RelationshipID: "relationship:belongs_to_repository:" + from.CanonicalID, Type: "BELONGS_TO_REPOSITORY", From: from, To: to,
 		Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
 		Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt, SourceVersion: sourceVersion,
 	}
-	return candidate{observedAt: observedAt, sortKey: relationship.RelationshipID, relationship: &relationship}
+	return candidate{observedAt: observedAt, sortKey: rowKey, relationship: &relationship}
 }

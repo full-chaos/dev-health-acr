@@ -33,11 +33,30 @@ var entityTables = []entityTable{
 	{name: "work_graph_deployment_incident_edges", query: queryDeploymentIncidentEdges},
 }
 
-func sincePredicate(cursor cursorState, column string) string {
+// sincePredicate builds the keyset-pagination predicate. rowKeyExpr MUST be
+// a SQL expression that, for a given row, evaluates to exactly the same
+// string every candidate scanned from that row uses as candidate.sortKey
+// (see each query function below) -- CHAOS-3753 codex finding C5: a
+// mismatched or ambiguous tiebreaker (the previous version hardcoded the
+// bare identifier "id", which -- in every query joining "repos AS r" --
+// resolved to repos.id, not the entity's own id, silently paginating on
+// the wrong column for every table except repos itself) causes rows to be
+// skipped or replayed whenever two rows share the same timestampExpr
+// value, which is common (bulk syncs land in the same second).
+func sincePredicate(cursor cursorState, timestampExpr, rowKeyExpr string) string {
 	if cursor.Since.IsZero() && cursor.After == "" {
 		return ""
 	}
-	return fmt.Sprintf(" AND (%s > {since:DateTime64(6,'UTC')} OR (%s = {since:DateTime64(6,'UTC')} AND toString(%s) > {after:String}))", column, column, "id")
+	return fmt.Sprintf(" AND (%s > {since:DateTime64(6,'UTC')} OR (%s = {since:DateTime64(6,'UTC')} AND toString(%s) > {after:String}))", timestampExpr, timestampExpr, rowKeyExpr)
+}
+
+// orderBy is sincePredicate's ORDER BY counterpart: the same
+// (timestampExpr, rowKeyExpr) pair, so the rows this query returns are in
+// exactly the order the predicate above assumes for the next page. Every
+// query below builds its ORDER BY through this helper rather than
+// hand-writing a possibly-divergent one.
+func orderBy(timestampExpr, rowKeyExpr string) string {
+	return fmt.Sprintf(" ORDER BY %s ASC, toString(%s) ASC LIMIT {row_limit:UInt32}", timestampExpr, rowKeyExpr)
 }
 
 func rowLimitBindings(orgID string, cursor cursorState, limit int) []contextpacket.ClickHouseBinding {
@@ -55,7 +74,10 @@ func rowLimitBindings(orgID string, cursor cursorState, limit int) []contextpack
 // in order) and reports whether more than limit rows were available. scan
 // may return more than one candidate per row (e.g. an entity plus its
 // BELONGS_TO_REPOSITORY relationship); truncation is still decided per row,
-// not per candidate, to match the SQL LIMIT.
+// not per candidate, to match the SQL LIMIT. Every candidate scan returns
+// for one row MUST share the same sortKey (the row's keyset-pagination
+// identity -- see sincePredicate) regardless of how many candidates that
+// row produces.
 func fetch(ctx context.Context, client contextpacket.ClickHouseQueryClient, statement string, bindings []contextpacket.ClickHouseBinding, limit int, scan func(contextpacket.ClickHouseRowScanner) ([]candidate, error)) ([]candidate, bool, error) {
 	rows, err := client.Query(ctx, statement, bindings)
 	if err != nil {
@@ -86,8 +108,7 @@ func fetch(ctx context.Context, client contextpacket.ClickHouseQueryClient, stat
 
 func queryRepositories(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	statement := `SELECT toString(id), repo, ifNull(provider, ''), last_synced FROM repos FINAL
-WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced") + `
-ORDER BY last_synced ASC, id ASC LIMIT {row_limit:UInt32}`
+WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + orderBy("last_synced", "id")
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var id, slug, provider string
 		var observedAt time.Time
@@ -109,9 +130,8 @@ ORDER BY last_synced ASC, id ASC LIMIT {row_limit:UInt32}`
 
 func queryWorkItems(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	statement := `SELECT w.work_item_id, toString(w.repo_id), r.repo, ifNull(w.title, ''), ifNull(w.status, ''), ifNull(w.url, ''), w.updated_at
-FROM work_items AS w FINAL INNER JOIN repos AS r FINAL ON r.id = w.repo_id
-WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at") + `
-ORDER BY w.updated_at ASC, w.work_item_id ASC LIMIT {row_limit:UInt32}`
+FROM work_items AS w FINAL INNER JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
+WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", "w.work_item_id") + orderBy("w.updated_at", "w.work_item_id")
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var workItemID, repoID, repoSlug, title, status, url string
 		var observedAt time.Time
@@ -134,17 +154,17 @@ ORDER BY w.updated_at ASC, w.work_item_id ASC LIMIT {row_limit:UInt32}`
 		}
 		_ = url
 		return []candidate{
-			{observedAt: observedAt, sortKey: "work_item:" + workItemID, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:work-item:"+workItemID),
+			{observedAt: observedAt, sortKey: workItemID, entity: &entity},
+			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:work-item:"+workItemID, workItemID),
 		}, nil
 	})
 }
 
 func queryPullRequests(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+	const rowKey = "concat(toString(p.repo_id), ':', toString(p.number))"
 	statement := `SELECT toString(p.repo_id), r.repo, p.number, ifNull(p.title, ''), ifNull(p.state, ''), p.last_synced
-FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id
-WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced") + `
-ORDER BY p.last_synced ASC, p.number ASC LIMIT {row_limit:UInt32}`
+FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id
+WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowKey) + orderBy("p.last_synced", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var repoID, repoSlug, state string
 		var number int64
@@ -155,6 +175,7 @@ ORDER BY p.last_synced ASC, p.number ASC LIMIT {row_limit:UInt32}`
 		}
 		observedAt = observedAt.UTC()
 		canonicalID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
+		rowSortKey := fmt.Sprintf("%s:%d", repoID, number)
 		label := title
 		if strings.TrimSpace(label) == "" {
 			label = fmt.Sprintf("PR #%d", number)
@@ -169,17 +190,17 @@ ORDER BY p.last_synced ASC, p.number ASC LIMIT {row_limit:UInt32}`
 			EvidenceRefIDs: []string{"acr:v1:pull-request:" + repoID + ":" + fmt.Sprint(number)}, ObservedAt: observedAt, SourceVersion: sourceVersion,
 		}
 		return []candidate{
-			{observedAt: observedAt, sortKey: canonicalID, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:pull-request:"+repoID+":"+fmt.Sprint(number)),
+			{observedAt: observedAt, sortKey: rowSortKey, entity: &entity},
+			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:pull-request:"+repoID+":"+fmt.Sprint(number), rowSortKey),
 		}, nil
 	})
 }
 
 func queryDeployments(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	statement := `SELECT toString(d.repo_id), r.repo, d.deployment_id, ifNull(d.status, ''), ifNull(d.environment, ''), coalesce(d.deployed_at, d.started_at, d.last_synced)
-FROM deployments AS d FINAL INNER JOIN repos AS r FINAL ON r.id = d.repo_id
-WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "coalesce(d.deployed_at, d.started_at, d.last_synced)") + `
-ORDER BY coalesce(d.deployed_at, d.started_at, d.last_synced) ASC, d.deployment_id ASC LIMIT {row_limit:UInt32}`
+	const timestampExpr = "coalesce(d.deployed_at, d.started_at, d.last_synced)"
+	statement := `SELECT toString(d.repo_id), r.repo, d.deployment_id, ifNull(d.status, ''), ifNull(d.environment, ''), ` + timestampExpr + `
+FROM deployments AS d FINAL INNER JOIN repos AS r FINAL ON r.id = d.repo_id AND r.org_id = d.org_id
+WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "d.deployment_id") + orderBy(timestampExpr, "d.deployment_id")
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var repoID, repoSlug, deploymentID, status, environment string
 		var observedAt time.Time
@@ -204,8 +225,8 @@ ORDER BY coalesce(d.deployed_at, d.started_at, d.last_synced) ASC, d.deployment_
 			EvidenceRefIDs: []string{"acr:v1:deployment:" + deploymentID}, ObservedAt: observedAt, SourceVersion: sourceVersion,
 		}
 		return []candidate{
-			{observedAt: observedAt, sortKey: "deployment:" + deploymentID, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:deployment:"+deploymentID),
+			{observedAt: observedAt, sortKey: deploymentID, entity: &entity},
+			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:deployment:"+deploymentID, deploymentID),
 		}, nil
 	})
 }
@@ -216,14 +237,14 @@ ORDER BY coalesce(d.deployed_at, d.started_at, d.last_synced) ASC, d.deployment_
 // is_deleted is the one confirmed soft-delete signal in this schema and
 // becomes a ProjectionTombstone.
 func queryIncidents(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+	const timestampExpr = "coalesce(i.started_at, i.source_event_at, i.observed_at)"
 	statement := `SELECT i.id, toString(m.repo_id) AS repo_id, r.repo AS repo_slug, ifNull(i.title, ''),
        ifNull(i.normalized_status, ifNull(i.raw_status, '')), ifNull(i.normalized_severity, ifNull(i.raw_severity, '')),
-       coalesce(i.started_at, i.source_event_at, i.observed_at), i.is_deleted
+       ` + timestampExpr + `, i.is_deleted
 FROM operational_incidents AS i FINAL
 INNER JOIN operational_service_repository_mappings AS m FINAL ON i.org_id = m.org_id AND i.service_id = m.service_id AND m.is_active = 1
-INNER JOIN repos AS r FINAL ON r.id = m.repo_id
-WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, "coalesce(i.started_at, i.source_event_at, i.observed_at)") + `
-ORDER BY coalesce(i.started_at, i.source_event_at, i.observed_at) ASC, i.id ASC LIMIT {row_limit:UInt32}`
+INNER JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
+WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id") + orderBy(timestampExpr, "i.id")
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var incidentID, repoID, repoSlug, title, status, severity string
 		var observedAt time.Time
@@ -237,7 +258,7 @@ ORDER BY coalesce(i.started_at, i.source_event_at, i.observed_at) ASC, i.id ASC 
 			tombstone := contractsv1.ContextFabricProjectionTombstone{
 				Kind: "incident", CanonicalID: canonicalID, Reason: "source_deleted", EffectiveAt: observedAt, SourceVersion: sourceVersion,
 			}
-			return []candidate{{observedAt: observedAt, sortKey: canonicalID, tombstone: &tombstone}}, nil
+			return []candidate{{observedAt: observedAt, sortKey: incidentID, tombstone: &tombstone}}, nil
 		}
 		label := title
 		if strings.TrimSpace(label) == "" {
@@ -256,19 +277,19 @@ ORDER BY coalesce(i.started_at, i.source_event_at, i.observed_at) ASC, i.id ASC 
 			EvidenceRefIDs: []string{"acr:v1:incident:" + incidentID}, ObservedAt: observedAt, SourceVersion: sourceVersion,
 		}
 		return []candidate{
-			{observedAt: observedAt, sortKey: canonicalID, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:incident:"+incidentID),
+			{observedAt: observedAt, sortKey: incidentID, entity: &entity},
+			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:incident:"+incidentID, incidentID),
 		}, nil
 	})
 }
 
 func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+	const rowKey = "concat(d.source_work_item_id, ':', d.target_work_item_id)"
 	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, 'related_to'), r.repo, d.last_synced
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS w FINAL ON w.org_id = d.org_id AND w.work_item_id = d.source_work_item_id
-INNER JOIN repos AS r FINAL ON r.id = w.repo_id
-WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced") + `
-ORDER BY d.last_synced ASC, d.source_work_item_id ASC LIMIT {row_limit:UInt32}`
+INNER JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
+WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowKey) + orderBy("d.last_synced", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var sourceID, targetID, relationshipType, repoSlug string
 		var observedAt time.Time
@@ -285,16 +306,15 @@ ORDER BY d.last_synced ASC, d.source_work_item_id ASC LIMIT {row_limit:UInt32}`
 			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-dependency:" + sourceID + ":" + targetID},
 			ObservedAt: observedAt, SourceVersion: sourceVersion,
 		}
-		return []candidate{{observedAt: observedAt, sortKey: relationshipID, relationship: &relationship}}, nil
+		return []candidate{{observedAt: observedAt, sortKey: sourceID + ":" + targetID, relationship: &relationship}}, nil
 	})
 }
 
 func queryDeploymentIncidentEdges(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	statement := `SELECT e.edge_id, e.deployment_id, e.incident_id, r.repo, e.observed_at
 FROM work_graph_deployment_incident_edges AS e FINAL
-INNER JOIN repos AS r FINAL ON r.id = e.repo_id
-WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incident_id NOT IN ('', 'none')` + sincePredicate(cursor, "e.observed_at") + `
-ORDER BY e.observed_at ASC, e.edge_id ASC LIMIT {row_limit:UInt32}`
+INNER JOIN repos AS r FINAL ON r.id = e.repo_id AND r.org_id = toString(e.org_id)
+WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incident_id NOT IN ('', 'none')` + sincePredicate(cursor, "e.observed_at", "e.edge_id") + orderBy("e.observed_at", "e.edge_id")
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var edgeID, deploymentID, incidentID, repoSlug string
 		var observedAt time.Time
@@ -311,6 +331,6 @@ ORDER BY e.observed_at ASC, e.edge_id ASC LIMIT {row_limit:UInt32}`
 			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:deployment-incident:" + edgeID},
 			ObservedAt: observedAt, SourceVersion: sourceVersion,
 		}
-		return []candidate{{observedAt: observedAt, sortKey: relationshipID, relationship: &relationship}}, nil
+		return []candidate{{observedAt: observedAt, sortKey: edgeID, relationship: &relationship}}, nil
 	})
 }
