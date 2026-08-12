@@ -21,6 +21,7 @@ func TestIncidentsProviderHappyPath(t *testing.T) {
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactIncidents)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactIncidents, Subjects: []contextfabric.SubjectRef{incidentSubject("incident-1")},
 	})
 	if err != nil {
@@ -43,6 +44,7 @@ func TestIncidentsProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	client := &fakeClient{tables: []fakeTable{{match: "FROM operational_incidents", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactIncidents)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactIncidents, Subjects: []contextfabric.SubjectRef{incidentSubject("incident-404")},
 	})
 	if err != nil {
@@ -58,6 +60,7 @@ func TestIncidentsProviderQueryErrorReturnsFactReadFailure(t *testing.T) {
 	client := &fakeClient{tables: []fakeTable{{match: "FROM operational_incidents", err: errors.New("boom")}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactIncidents)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactIncidents, Subjects: []contextfabric.SubjectRef{incidentSubject("incident-1")},
 	})
 	var failure *contextfabric.FactReadFailure
@@ -71,6 +74,7 @@ func TestIncidentsProviderOrgScoped(t *testing.T) {
 	client := &fakeClient{tables: []fakeTable{{match: "FROM operational_incidents", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactIncidents)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-8"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactIncidents, Subjects: []contextfabric.SubjectRef{incidentSubject("incident-1")},
 	})
 	if err != nil {

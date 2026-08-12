@@ -25,16 +25,21 @@ func (p *StatusProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+		return result, nil
+	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject := subjectIndex(query.Subjects, workItemPrefix)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	statement := `SELECT w.work_item_id, ifNull(w.status, '')
+	statement := withRowLimit(`SELECT w.work_item_id, ifNull(w.status, '')
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
+	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
 		var id, status string
 		if err := row.Scan(&id, &status); err != nil {
 			return err
@@ -53,7 +58,7 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item status", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }
 
 // WorkProvider implements contextfabric.FactProvider for FactWork -- minimal
@@ -70,16 +75,21 @@ func (p *WorkProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+		return result, nil
+	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject := subjectIndex(query.Subjects, workItemPrefix)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	statement := `SELECT w.work_item_id, ifNull(w.title, '')
+	statement := withRowLimit(`SELECT w.work_item_id, ifNull(w.title, '')
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
+	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
 		var id, title string
 		if err := row.Scan(&id, &title); err != nil {
 			return err
@@ -98,7 +108,7 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item work descriptors", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }
 
 // ActualCompletionProvider implements contextfabric.FactProvider for
@@ -126,6 +136,9 @@ func (p *ActualCompletionProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+		return result, nil
+	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
@@ -135,10 +148,12 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 	// isNotNull/ifNull avoid ever scanning a bare Nullable(DateTime64) column
 	// into Go, matching devhealthsource/tables.go's convention of only ever
 	// scanning coalesced, non-null timestamps.
-	statement := `SELECT w.work_item_id, isNotNull(w.completed_at), ifNull(w.completed_at, toDateTime64(0, 6, 'UTC'))
+	statement := withRowLimit(`SELECT w.work_item_id, isNotNull(w.completed_at), ifNull(w.completed_at, toDateTime64(0, 6, 'UTC'))
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
+	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
 		var id string
 		var isCompleted uint8
 		var completedAt time.Time
@@ -162,5 +177,5 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item actual completion", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

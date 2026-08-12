@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,29 @@ const queryVersion = "devhealthfacts.clickhouse.v1"
 // a second timeout of their own -- they only ever propagate the ctx they
 // are given into ClickHouseQueryClient.Query.
 const defaultTimeout = 5 * time.Second
+
+// maxFactRowsPerQuery bounds how many rows a single provider query is
+// allowed to read from ClickHouse (H6/H7 adversarial finding: "unbounded
+// fanout" -- a single subject with a pathological number of matching rows,
+// e.g. thousands of work_item_dependencies rows, otherwise returns them all
+// before any truncation happens). 200 gives generous headroom for any one
+// subject's rows (the providers in this package never return more than a
+// handful of rows per subject in the ordinary case) while still sitting
+// well under CanonicalFactBundle's bundle-level bounds, so one pathological
+// subject can't blow the whole investigation's fact budget.
+const maxFactRowsPerQuery = 200
+
+// withRowLimit appends a LIMIT clause bounding a provider's SELECT to
+// maxFactRowsPerQuery. maxFactRowsPerQuery is an internal Go constant, never
+// a caller-supplied value, so -- mirroring this package's existing
+// convention for such constants (see dependencies.go's
+// blockerRelationshipType, inlined the same way) -- it is safe to inline
+// directly into the statement rather than route it through
+// clickhouseFacts.query's bindings, which only ever carry caller/subject
+// scoped values (org_id, ids).
+func withRowLimit(statement string) string {
+	return statement + "\nLIMIT " + strconv.Itoa(maxFactRowsPerQuery)
+}
 
 // clickhouseFacts is the shared ClickHouse query boundary every provider in
 // this package embeds. It reuses internal/contextpacket.ClickHouseQueryClient
@@ -57,11 +81,59 @@ func (f clickhouseFacts) query(ctx context.Context, statement, orgID string, ids
 // readFailure wraps a query/scan error into the *contextfabric.FactReadFailure
 // shape the registry classifies (fact_registry.go's classifyFactReadError),
 // rather than a bare error.
+//
+// Reason is a fixed, non-parameterized string built only from action (an
+// internal Go string literal every caller controls -- never caller/request
+// supplied) -- it deliberately never embeds err.Error() or "%v" of err (M6
+// adversarial finding: fact_registry.go's classifyFactReadError copies this
+// Reason straight into the PUBLIC context_fabric_investigation_result.v1
+// response's coverage.sources[].reason, so a raw ClickHouse driver error --
+// which can carry connection details, internal hostnames, or query
+// fragments -- must never reach it). This mirrors
+// internal/contextfabric/zepgraph/config.go's safeDependencyError, which
+// classifies to a fixed reason and never embeds the raw SDK error either.
+// contextfabric.FactReadFailure carries no field for the original err, and
+// this package has no server-side logging seam to hand it to (inventing one
+// here is out of scope for this fix), so err is accepted for call sites'
+// context but intentionally never reaches the returned error at all.
 func readFailure(action string, err error) error {
 	return &contextfabric.FactReadFailure{
 		State:  contextfabric.SourceUnavailable,
-		Reason: fmt.Sprintf("devhealthfacts: %s: %v", action, err),
+		Reason: "devhealthfacts: " + action + " failed",
 	}
+}
+
+// timeUnsupportedReason is the fixed, non-parameterized Reason every
+// provider in this package returns when checkCurrentTimeOnly refuses a
+// query (H6 adversarial finding: "false historical answers"). It never
+// interpolates the requested query -- only ever this literal string.
+const timeUnsupportedReason = "devhealthfacts: only current-time (axis=current) queries are supported; requested axis was rejected to avoid presenting current data as if it answered a historical/point-in-time question"
+
+// checkCurrentTimeOnly reports whether query.Time.Axis requests anything
+// other than contextfabric.TemporalCurrent. No provider in this package has
+// a historical/point-in-time query path -- every ReadFacts here always
+// queries and returns CURRENT ClickHouse state -- so honoring any other
+// axis would silently answer a historical question (e.g. "what was the
+// status last month") with today's data presented as if it were the
+// answer. RULING: refuse instead of guessing. When this returns
+// (result, true), the caller must return result, nil as ReadFacts' entire
+// result, without ever calling clickhouseFacts.query.
+//
+// The zero value of TimeContext.Axis is treated as unsupported too, not as
+// an implicit "current": fact_registry.go's buildFactQuery always copies
+// request.Question.TimeContext straight from a validated
+// CanonicalFactRequest, and contractsv1.ContextFabricTimeContext.Validate
+// rejects an empty Axis outright (it must be one of the four defined enum
+// values) -- so a genuinely empty Axis reaching a provider here is itself
+// evidence of an unvalidated caller, never evidence the caller wants "now".
+func checkCurrentTimeOnly(query contextfabric.FactQuery) (contextfabric.FactProviderResult, bool) {
+	if query.Time.Axis == contextfabric.TemporalCurrent {
+		return contextfabric.FactProviderResult{}, false
+	}
+	return contextfabric.FactProviderResult{
+		State:  contextfabric.SourceUnconfigured,
+		Reason: timeUnsupportedReason,
+	}, true
 }
 
 // requireOrgID validates principal.OrgID the same way every provider in this

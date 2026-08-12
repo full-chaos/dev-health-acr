@@ -27,6 +27,7 @@ func TestPullRequestsProviderHappyPath(t *testing.T) {
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactPullRequests)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{pullRequestSubject("repo-1", "1042")},
 	})
 	if err != nil {
@@ -45,6 +46,7 @@ func TestPullRequestsProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	client := &fakeClient{tables: []fakeTable{{match: "FROM git_pull_requests", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactPullRequests)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{pullRequestSubject("repo-1", "1042")},
 	})
 	if err != nil {
@@ -60,6 +62,7 @@ func TestPullRequestsProviderQueryErrorReturnsFactReadFailure(t *testing.T) {
 	client := &fakeClient{tables: []fakeTable{{match: "FROM git_pull_requests", err: errors.New("boom")}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactPullRequests)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{pullRequestSubject("repo-1", "1042")},
 	})
 	var failure *contextfabric.FactReadFailure
@@ -73,6 +76,7 @@ func TestPullRequestsProviderOrgScoped(t *testing.T) {
 	client := &fakeClient{tables: []fakeTable{{match: "FROM git_pull_requests", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactPullRequests)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-3"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{pullRequestSubject("repo-1", "1042")},
 	})
 	if err != nil {
@@ -93,6 +97,7 @@ func TestReviewsProviderHappyPath(t *testing.T) {
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReviews)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactReviews, Subjects: []contextfabric.SubjectRef{reviewSubject("review-1")},
 	})
 	if err != nil {
@@ -108,6 +113,7 @@ func TestReviewsProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	client := &fakeClient{tables: []fakeTable{{match: "FROM git_pull_request_reviews", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReviews)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactReviews, Subjects: []contextfabric.SubjectRef{reviewSubject("review-404")},
 	})
 	if err != nil {
@@ -123,6 +129,7 @@ func TestReviewsProviderQueryErrorReturnsFactReadFailure(t *testing.T) {
 	client := &fakeClient{tables: []fakeTable{{match: "FROM git_pull_request_reviews", err: errors.New("boom")}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReviews)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactReviews, Subjects: []contextfabric.SubjectRef{reviewSubject("review-1")},
 	})
 	var failure *contextfabric.FactReadFailure

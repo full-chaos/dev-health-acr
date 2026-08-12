@@ -26,6 +26,7 @@ func TestIdentityProviderHappyPath(t *testing.T) {
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactIdentity)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind:     contextfabric.FactIdentity,
 		Subjects: []contextfabric.SubjectRef{repoSubject("repo-1"), workItemSubject("WIDGET-101")},
 	})
@@ -67,6 +68,7 @@ func TestIdentityProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactIdentity)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind:     contextfabric.FactIdentity,
 		Subjects: []contextfabric.SubjectRef{repoSubject("repo-missing")},
 	})
@@ -88,6 +90,7 @@ func TestIdentityProviderQueryErrorReturnsFactReadFailure(t *testing.T) {
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactIdentity)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind:     contextfabric.FactIdentity,
 		Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
 	})
@@ -107,6 +110,7 @@ func TestIdentityProviderOrgScopedToRequestedSubjectsOnly(t *testing.T) {
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactIdentity)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind:     contextfabric.FactIdentity,
 		Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
 	})
@@ -128,6 +132,7 @@ func TestMembershipProviderWorkItemReportsRepository(t *testing.T) {
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMembership)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind:     contextfabric.FactMembership,
 		Subjects: []contextfabric.SubjectRef{workItemSubject("WIDGET-101")},
 	})
@@ -153,6 +158,7 @@ func TestMembershipProviderRepositoryReportsOrganization(t *testing.T) {
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMembership)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind:     contextfabric.FactMembership,
 		Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
 	})

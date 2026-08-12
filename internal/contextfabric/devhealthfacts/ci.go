@@ -23,16 +23,21 @@ func (p *ContinuousIntegrationProvider) Capability() contextfabric.FactCapabilit
 }
 
 func (p *ContinuousIntegrationProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+		return result, nil
+	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject := subjectIndex(query.Subjects, "ci_pipeline_run:")
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	statement := `SELECT c.run_id, ifNull(c.status, '')
+	statement := withRowLimit(`SELECT c.run_id, ifNull(c.status, '')
 FROM ci_pipeline_runs AS c FINAL
-WHERE c.org_id = {org_id:String} AND c.run_id IN {ids:Array(String)}`
+WHERE c.org_id = {org_id:String} AND c.run_id IN {ids:Array(String)}`)
+	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
 		var runID, status string
 		if err := row.Scan(&runID, &status); err != nil {
 			return err
@@ -51,5 +56,5 @@ WHERE c.org_id = {org_id:String} AND c.run_id IN {ids:Array(String)}`
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query ci pipeline runs", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

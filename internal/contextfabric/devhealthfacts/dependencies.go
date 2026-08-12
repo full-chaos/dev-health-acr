@@ -38,6 +38,9 @@ func (p *BlockersProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+		return result, nil
+	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
@@ -47,10 +50,12 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	// blockerRelationshipType is an internal Go constant, not a caller
 	// supplied value, so it is safe to inline as a SQL string literal here
 	// rather than a bound parameter.
-	statement := `SELECT d.source_work_item_id, d.target_work_item_id
+	statement := withRowLimit(`SELECT d.source_work_item_id, d.target_work_item_id
 FROM work_item_dependencies AS d FINAL
-WHERE d.org_id = {org_id:String} AND d.target_work_item_id IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'`
+WHERE d.org_id = {org_id:String} AND d.target_work_item_id IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'`)
+	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
 		var sourceID, targetID string
 		if err := row.Scan(&sourceID, &targetID); err != nil {
 			return err
@@ -69,7 +74,7 @@ WHERE d.org_id = {org_id:String} AND d.target_work_item_id IN {ids:Array(String)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }
 
 // RequiredChildrenProvider implements contextfabric.FactProvider for
@@ -90,16 +95,21 @@ func (p *RequiredChildrenProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *RequiredChildrenProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+		return result, nil
+	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject := subjectIndex(query.Subjects, workItemPrefix)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, '')
+	statement := withRowLimit(`SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, '')
 FROM work_item_dependencies AS d FINAL
-WHERE d.org_id = {org_id:String} AND d.source_work_item_id IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) != '` + blockerRelationshipType + `'`
+WHERE d.org_id = {org_id:String} AND d.source_work_item_id IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) != '` + blockerRelationshipType + `'`)
+	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
 		var sourceID, targetID, relationshipType string
 		if err := row.Scan(&sourceID, &targetID, &relationshipType); err != nil {
 			return err
@@ -121,5 +131,5 @@ WHERE d.org_id = {org_id:String} AND d.source_work_item_id IN {ids:Array(String)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item required children", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

@@ -26,18 +26,24 @@ func (p *IdentityProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+		return result, nil
+	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
+	truncated := false
 
 	repoIDs, repoBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), "repository:")
 	if len(repoIDs) > 0 {
-		statement := `SELECT toString(r.id), ifNull(r.repo, ''), ifNull(r.provider, '')
+		statement := withRowLimit(`SELECT toString(r.id), ifNull(r.repo, ''), ifNull(r.provider, '')
 FROM repos AS r FINAL
-WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`
+WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`)
+		rowCount := 0
 		scanErr := p.facts.query(ctx, statement, orgID, repoIDs, func(row contextpacket.ClickHouseRowScanner) error {
+			rowCount++
 			var id, slug, provider string
 			if err := row.Scan(&id, &slug, &provider); err != nil {
 				return err
@@ -62,14 +68,17 @@ WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query repository identity", scanErr)
 		}
+		truncated = truncated || rowCount >= maxFactRowsPerQuery
 	}
 
 	workItemIDs, workItemBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), "work_item:")
 	if len(workItemIDs) > 0 {
-		statement := `SELECT w.work_item_id, ifNull(w.title, '')
+		statement := withRowLimit(`SELECT w.work_item_id, ifNull(w.title, '')
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
+		rowCount := 0
 		scanErr := p.facts.query(ctx, statement, orgID, workItemIDs, func(row contextpacket.ClickHouseRowScanner) error {
+			rowCount++
 			var id, title string
 			if err := row.Scan(&id, &title); err != nil {
 				return err
@@ -91,9 +100,10 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query work item identity", scanErr)
 		}
+		truncated = truncated || rowCount >= maxFactRowsPerQuery
 	}
 
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: truncated}, nil
 }
 
 // MembershipProvider implements contextfabric.FactProvider for
@@ -118,18 +128,24 @@ func (p *MembershipProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+		return result, nil
+	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
+	truncated := false
 
 	repoIDs, repoBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), "repository:")
 	if len(repoIDs) > 0 {
-		statement := `SELECT toString(r.id)
+		statement := withRowLimit(`SELECT toString(r.id)
 FROM repos AS r FINAL
-WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`
+WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`)
+		rowCount := 0
 		scanErr := p.facts.query(ctx, statement, orgID, repoIDs, func(row contextpacket.ClickHouseRowScanner) error {
+			rowCount++
 			var id string
 			if err := row.Scan(&id); err != nil {
 				return err
@@ -148,14 +164,17 @@ WHERE r.org_id = {org_id:String} AND toString(r.id) IN {ids:Array(String)}`
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query repository membership", scanErr)
 		}
+		truncated = truncated || rowCount >= maxFactRowsPerQuery
 	}
 
 	workItemIDs, workItemBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), "work_item:")
 	if len(workItemIDs) > 0 {
-		statement := `SELECT w.work_item_id, toString(w.repo_id), ifNull(r.repo, '')
+		statement := withRowLimit(`SELECT w.work_item_id, toString(w.repo_id), ifNull(r.repo, '')
 FROM work_items AS w FINAL INNER JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
+		rowCount := 0
 		scanErr := p.facts.query(ctx, statement, orgID, workItemIDs, func(row contextpacket.ClickHouseRowScanner) error {
+			rowCount++
 			var id, repoID, repoSlug string
 			if err := row.Scan(&id, &repoID, &repoSlug); err != nil {
 				return err
@@ -177,7 +196,8 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query work item membership", scanErr)
 		}
+		truncated = truncated || rowCount >= maxFactRowsPerQuery
 	}
 
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: truncated}, nil
 }

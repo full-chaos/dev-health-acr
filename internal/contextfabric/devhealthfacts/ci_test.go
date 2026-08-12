@@ -20,6 +20,7 @@ func TestContinuousIntegrationProviderHappyPath(t *testing.T) {
 	client := &fakeClient{tables: []fakeTable{{match: "FROM ci_pipeline_runs", rows: [][]any{{"run-1", "success"}}}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactContinuousIntegration)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactContinuousIntegration, Subjects: []contextfabric.SubjectRef{ciRunSubject("run-1")},
 	})
 	if err != nil {
@@ -35,6 +36,7 @@ func TestContinuousIntegrationProviderZeroRowSubjectHasNoFactEntry(t *testing.T)
 	client := &fakeClient{tables: []fakeTable{{match: "FROM ci_pipeline_runs", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactContinuousIntegration)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactContinuousIntegration, Subjects: []contextfabric.SubjectRef{ciRunSubject("run-404")},
 	})
 	if err != nil {
@@ -50,6 +52,7 @@ func TestContinuousIntegrationProviderQueryErrorReturnsFactReadFailure(t *testin
 	client := &fakeClient{tables: []fakeTable{{match: "FROM ci_pipeline_runs", err: errors.New("boom")}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactContinuousIntegration)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactContinuousIntegration, Subjects: []contextfabric.SubjectRef{ciRunSubject("run-1")},
 	})
 	var failure *contextfabric.FactReadFailure
@@ -63,6 +66,7 @@ func TestContinuousIntegrationProviderOrgScoped(t *testing.T) {
 	client := &fakeClient{tables: []fakeTable{{match: "FROM ci_pipeline_runs", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactContinuousIntegration)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-5"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactContinuousIntegration, Subjects: []contextfabric.SubjectRef{ciRunSubject("run-1")},
 	})
 	if err != nil {

@@ -21,6 +21,7 @@ func TestDeploymentsProviderHappyPath(t *testing.T) {
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactDeployments)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactDeployments, Subjects: []contextfabric.SubjectRef{deploymentSubject("deploy-1")},
 	})
 	if err != nil {
@@ -43,6 +44,7 @@ func TestDeploymentsProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	client := &fakeClient{tables: []fakeTable{{match: "FROM deployments", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactDeployments)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactDeployments, Subjects: []contextfabric.SubjectRef{deploymentSubject("deploy-404")},
 	})
 	if err != nil {
@@ -58,6 +60,7 @@ func TestDeploymentsProviderQueryErrorReturnsFactReadFailure(t *testing.T) {
 	client := &fakeClient{tables: []fakeTable{{match: "FROM deployments", err: errors.New("boom")}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactDeployments)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactDeployments, Subjects: []contextfabric.SubjectRef{deploymentSubject("deploy-1")},
 	})
 	var failure *contextfabric.FactReadFailure
@@ -71,6 +74,7 @@ func TestDeploymentsProviderOrgScoped(t *testing.T) {
 	client := &fakeClient{tables: []fakeTable{{match: "FROM deployments", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactDeployments)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-6"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Kind: contextfabric.FactDeployments, Subjects: []contextfabric.SubjectRef{deploymentSubject("deploy-1")},
 	})
 	if err != nil {

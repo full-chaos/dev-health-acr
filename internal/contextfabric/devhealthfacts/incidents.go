@@ -33,16 +33,21 @@ func (p *IncidentsProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *IncidentsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+		return result, nil
+	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject := subjectIndex(query.Subjects, "incident:")
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	statement := `SELECT i.id, ifNull(i.normalized_status, ifNull(i.raw_status, '')), ifNull(i.normalized_severity, ifNull(i.raw_severity, ''))
+	statement := withRowLimit(`SELECT i.id, ifNull(i.normalized_status, ifNull(i.raw_status, '')), ifNull(i.normalized_severity, ifNull(i.raw_severity, ''))
 FROM operational_incidents AS i FINAL
-WHERE i.org_id = {org_id:String} AND i.id IN {ids:Array(String)} AND i.is_deleted = 0`
+WHERE i.org_id = {org_id:String} AND i.id IN {ids:Array(String)} AND i.is_deleted = 0`)
+	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
 		var incidentID, status, severity string
 		if err := row.Scan(&incidentID, &status, &severity); err != nil {
 			return err
@@ -64,5 +69,5 @@ WHERE i.org_id = {org_id:String} AND i.id IN {ids:Array(String)} AND i.is_delete
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query incidents", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

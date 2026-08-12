@@ -36,16 +36,21 @@ func (p *PullRequestsProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+		return result, nil
+	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject := pullRequestSubjectIndex(query.Subjects)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	statement := `SELECT toString(p.repo_id), p.number, ifNull(p.state, '')
+	statement := withRowLimit(`SELECT toString(p.repo_id), p.number, ifNull(p.state, '')
 FROM git_pull_requests AS p FINAL
-WHERE p.org_id = {org_id:String} AND concat(toString(p.repo_id), ':', toString(p.number)) IN {ids:Array(String)}`
+WHERE p.org_id = {org_id:String} AND concat(toString(p.repo_id), ':', toString(p.number)) IN {ids:Array(String)}`)
+	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
 		var repoID string
 		var number int64
 		var state string
@@ -67,7 +72,7 @@ WHERE p.org_id = {org_id:String} AND concat(toString(p.repo_id), ':', toString(p
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query pull requests", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }
 
 // ReviewsProvider implements contextfabric.FactProvider for FactReviews from
@@ -84,16 +89,21 @@ func (p *ReviewsProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *ReviewsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+		return result, nil
+	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject := subjectIndex(query.Subjects, "pull_request_review:")
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	statement := `SELECT r.review_id, ifNull(r.state, '')
+	statement := withRowLimit(`SELECT r.review_id, ifNull(r.state, '')
 FROM git_pull_request_reviews AS r FINAL
-WHERE r.org_id = {org_id:String} AND r.review_id IN {ids:Array(String)}`
+WHERE r.org_id = {org_id:String} AND r.review_id IN {ids:Array(String)}`)
+	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
 		var reviewID, state string
 		if err := row.Scan(&reviewID, &state); err != nil {
 			return err
@@ -112,5 +122,5 @@ WHERE r.org_id = {org_id:String} AND r.review_id IN {ids:Array(String)}`
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query pull request reviews", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }
