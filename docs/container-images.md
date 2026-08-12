@@ -52,8 +52,6 @@ GitHub action commit SHA):
 | QEMU binfmt | `docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0` |
 | Buildx CLI | `v0.35.0` linux-amd64 asset, SHA-256 `d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda` |
 | BuildKit driver | `moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1` |
-| Scanner | `aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c` |
-| Scanner DB snapshot | `ghcr.io/aquasecurity/trivy-db@sha256:7d5d30fa0e218e69d7f530f9ac32ccceeab48fb73245ae850b19e83186c66e6f` |
 | SBOM generator | `anchore/syft:v1.46.0@sha256:473a60e3a58e29aca3aedb3e99e787bb4ef273917e44d10fcbea4330a07320bb` |
 | Migration smoke database | `postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15` |
 | Compose E2E PostgreSQL helper | `postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15` |
@@ -86,10 +84,7 @@ sit on tags that move by design (`:latest`, `nonroot`, rolling series such as
 cadence rather than on anything under review. Run it when you want to know
 whether a newer image exists. What still gates, offline and without flaking, is
 the pin list itself: `scripts/e2e/test-compose.sh` requires every compose image
-to appear in it, so an unreviewed image cannot enter the stack. The Trivy database is a deliberately immutable
-snapshot rather than a stable release tag: refresh its manifest and layer
-digests together at least weekly, confirm `metadata.json` age and chronology,
-and retain the snapshot identity beside the scan reports.
+to appear in it, so an unreviewed image cannot enter the stack.
 
 ## Build context and verification
 
@@ -176,30 +171,30 @@ earlier layer's same-named entry) so the extracted binary reflects the
 actual final merged filesystem rather than the first layer that happens to
 contain a same-named entry.
 
-`container-scan` writes four Trivy reports and four SPDX JSON SBOMs:
+`container-scan` writes four SPDX JSON SBOMs:
 
 - `acr-api-amd64`, `acr-api-arm64`
 - `acr-mcp-amd64`, `acr-mcp-arm64`
 
 The ordinary local target builds independent layouts. The tagged Release
-workflow sets `CONTAINER_SCAN_OCI_ROOT=.tmp/container-oci`, so Trivy and Syft
-select both platforms directly from the exact multi-platform archives that are
+workflow sets `CONTAINER_SCAN_OCI_ROOT=.tmp/container-oci`, so Syft selects
+both platforms directly from the exact multi-platform archives that are
 later attached and copied to GHCR; it performs no release-scan rebuild.
 
-Each invocation uses unique OCI layout, scanner cache, and report staging roots.
-It pulls the digest-pinned Trivy and Syft images, downloads the pinned Trivy DB
-snapshot once, validates the expected DB layer plus `metadata.json` freshness,
-and performs all four scans with `--skip-db-update`, `--network none`, and the
-same recorded cache. Only after every scanner command and report validator
-succeeds does a bounded publication lock atomically point `.tmp/container-reports`
-at the new immutable report generation; failed or concurrent runs cannot replace
-the last known-good reports, expose a missing stable path, or leave work/lock
-state behind. It fails on every
-HIGH/CRITICAL finding, including unfixed findings, and currently has no
-exceptions. A future exception
-must be a reviewed, tracked ignore file entry with CVE, narrow package/image
-scope, rationale, owner, and expiration date—then be removed at expiry or the
-gate must fail again.
+Each invocation uses unique OCI layout and report staging roots. It pulls the
+digest-pinned Syft image and generates all four SBOMs with `--network none`.
+Only after every SBOM command and report validator succeeds does a bounded
+publication lock atomically point `.tmp/container-reports` at the new
+immutable report generation; failed or concurrent runs cannot replace the
+last known-good reports, expose a missing stable path, or leave work/lock
+state behind.
+
+No vulnerability scanner runs in this gate. Trivy previously scanned these
+images against a pinned, weekly-refreshed `trivy-db` snapshot; that pin
+expired and failed the containers CI check repo-wide twice within a week
+(see #74), so the scan was removed rather than left as a recurring time
+bomb. Reintroducing image vulnerability scanning without that failure mode
+is tracked in CHAOS-3772.
 
 `container-reproducible` refuses a dirty product worktree, derives identity
 from `HEAD`, creates a `git archive HEAD` snapshot, and performs two clean
