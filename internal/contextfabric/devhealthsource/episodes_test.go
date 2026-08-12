@@ -3,6 +3,7 @@ package devhealthsource_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -98,6 +99,73 @@ func TestEpisodesProjectionSourceNoRowsReturnsUnavailable(t *testing.T) {
 	}
 	if available {
 		t.Fatal("expected no batch to be available")
+	}
+}
+
+// TestEpisodesProjectionSourcePagesToCompletionAfterARebuildWhenOversized
+// is CHAOS-3753 codex round-2 finding K3's regression test: NextProjectionBatch
+// hard-errored when a from-scratch (cursor == "") read exceeded
+// episodesSnapshotCap (500) approved episodes, instead of paging like the
+// ClickHouse source's C6 fix. A rebuild always resets the checkpoint to
+// the zero cursor, so for an organization above that size the error was
+// permanent, not transient: every subsequent tick re-attempted the exact
+// same oversized from-scratch read and failed the exact same way forever.
+// Seeds 501 episodes (one over the cap) in a real memory.EpisodeStore
+// (cursor-filtering fidelity matters here, unlike a fake that ignores its
+// since/after arguments) and drives NextProjectionBatch across ticks,
+// each resuming from the previous tick's NextCursor -- exactly how
+// projectionrun.Coordinator actually calls it after a rebuild -- until
+// every episode has been projected exactly once.
+func TestEpisodesProjectionSourcePagesToCompletionAfterARebuildWhenOversized(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+	store := memory.NewEpisodeStore(func() time.Time { return clock })
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"owner/repo"}}
+	const episodeCount = 501 // one over episodesSnapshotCap (500)
+	for i := 0; i < episodeCount; i++ {
+		create := contractsv1.AgentEpisodeCreate{
+			SchemaVersion: contractsv1.AgentEpisodeCreateSchema, ClientEpisodeID: fmt.Sprintf("episode-%04d", i), IdempotencyKey: fmt.Sprintf("idem-%04d", i),
+			ContextPacketID: "packet_01", Goal: "fix the checkout flake", Summary: "fixed it", Repository: contractsv1.RepositoryRef{Slug: "owner/repo", RepoID: "repo_01"},
+			Client:    contractsv1.EpisodeClient{Name: "test", Version: "1", SidecarVersion: "1"},
+			StartedAt: clock, EndedAt: clock, Outcome: "succeeded", RetentionClass: "default_90d",
+			Artifacts: contractsv1.EpisodeArtifacts{FilesTouched: []string{}, ArtifactURIs: []string{}, TestsRun: []string{}}, Transcript: contractsv1.TranscriptRef{Mode: "none"},
+		}
+		if _, _, err := store.CreateIdempotent(context.Background(), principal, create, nil); err != nil {
+			t.Fatalf("create episode %d: %v", i, err)
+		}
+		clock = clock.Add(time.Second) // distinct UpdatedAt per episode
+	}
+
+	source, err := devhealthsource.NewEpisodesProjectionSource(store)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+
+	// A rebuild resets the checkpoint to the zero cursor.
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.EpisodesSourceName}
+	seen := map[string]bool{}
+	pages := 0
+	for pages = 0; pages < episodeCount; pages++ {
+		batch, available, err := source.NextProjectionBatch(context.Background(), checkpoint)
+		if err != nil {
+			t.Fatalf("page %d: next projection batch: %v", pages, err)
+		}
+		if !available {
+			break
+		}
+		for _, episode := range batch.Episodes {
+			if seen[episode.EpisodeID] {
+				t.Fatalf("page %d: episode %s was projected twice", pages, episode.EpisodeID)
+			}
+			seen[episode.EpisodeID] = true
+		}
+		checkpoint.Cursor = batch.NextCursor
+	}
+	if len(seen) != episodeCount {
+		t.Fatalf("expected all %d episodes to be projected across %d pages, got %d", episodeCount, pages, len(seen))
+	}
+	if pages < 2 {
+		t.Fatalf("expected catch-up to take more than one page given the oversized organization, took %d", pages)
 	}
 }
 

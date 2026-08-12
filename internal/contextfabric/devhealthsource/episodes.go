@@ -56,24 +56,34 @@ func (s *EpisodesProjectionSource) NextProjectionBatch(ctx context.Context, chec
 	if orgID == "" {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("devhealthsource: organization is required")
 	}
-	fullSnapshot := checkpoint.Cursor == ""
+	fromScratch := checkpoint.Cursor == ""
 	state, err := decodeCursor(checkpoint.Cursor)
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
 	limit := episodesIncrementalBatchCap
-	if fullSnapshot {
+	if fromScratch {
 		limit = episodesSnapshotCap
 	}
 	rows, err := s.rows.ListSince(ctx, orgID, state.Since, state.After, limit+1)
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("%w: read approved episodes: %v", contextfabric.ErrUnavailable, err)
 	}
+	// CHAOS-3753 codex round-2 finding K3: an oversized from-scratch read
+	// (more than episodesSnapshotCap approved episodes) used to hard-error
+	// here instead of paging, mirroring the ClickHouse source's C6 bug --
+	// and because a rebuild always resets the checkpoint to the zero
+	// cursor, that error was permanent, not transient: every subsequent
+	// tick re-attempted the identical oversized from-scratch read and
+	// failed the same way forever. It now pages like the ClickHouse
+	// source's C6 fix: cap this page at limit and let the caller resume
+	// from NextCursor next tick, same as ordinary incremental catch-up.
+	// Every episodeCandidate is exactly one candidate per row (never an
+	// entity-plus-relationship pair like devhealthsource's ClickHouse
+	// tables), so a plain slice truncation here is already row-safe --
+	// K2's truncateToCompleteRows has nothing to protect against.
 	truncated := len(rows) > limit
 	if truncated {
-		if fullSnapshot {
-			return contextfabric.ProjectionBatch{}, false, fmt.Errorf("devhealthsource: organization %s exceeds full-snapshot episode capacity; incremental catch-up is required instead of a rebuild at this scale", redactOrg(orgID))
-		}
 		rows = rows[:limit]
 	}
 	if len(rows) == 0 {
@@ -83,7 +93,10 @@ func (s *EpisodesProjectionSource) NextProjectionBatch(ctx context.Context, chec
 	for _, row := range rows {
 		all = append(all, episodeCandidate(row))
 	}
-	batch, err := buildBatch(orgID, EpisodesSourceName, episodesSourceVersion, checkpoint.Cursor, all, fullSnapshot, fullSnapshot, s.clock())
+	// A batch may only claim FullSnapshot+CompleteEnumeration when it
+	// genuinely enumerated everything: fromScratch AND not truncated.
+	complete := fromScratch && !truncated
+	batch, err := buildBatch(orgID, EpisodesSourceName, episodesSourceVersion, checkpoint.Cursor, all, complete, complete, s.clock())
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
