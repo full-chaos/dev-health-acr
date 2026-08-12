@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
+	acrconfig "github.com/full-chaos/dev-health-acr/internal/config"
 	zep "github.com/getzep/zep-go/v3"
 	zepclient "github.com/getzep/zep-go/v3/client"
 	zepcore "github.com/getzep/zep-go/v3/core"
@@ -63,6 +65,121 @@ func (c Config) validate() error {
 		return errors.New("zep graph prefix is required and must be bounded")
 	}
 	return nil
+}
+
+// Environment variable names for ConfigFromEnv, matching the ACR_<COMPONENT>_
+// naming and KEY / KEY_FILE secret convention used by internal/config. These
+// are not read anywhere else in this repository yet: Context Fabric graph
+// composition into the hosted runtime bundle is Reset 1 scope. Compose and
+// Helm document these names (see docs/adr/0007) so the Reset 1 composition
+// wiring and the deployment configuration agree without renegotiation.
+const (
+	EnvBaseURL        = "ACR_CONTEXT_FABRIC_ZEP_BASE_URL"
+	EnvAPIKey         = "ACR_CONTEXT_FABRIC_ZEP_API_KEY"
+	EnvGraphPrefix    = "ACR_CONTEXT_FABRIC_ZEP_GRAPH_PREFIX"
+	EnvRequestTimeout = "ACR_CONTEXT_FABRIC_ZEP_REQUEST_TIMEOUT"
+	EnvMaxAttempts    = "ACR_CONTEXT_FABRIC_ZEP_MAX_ATTEMPTS"
+	EnvMaxResults     = "ACR_CONTEXT_FABRIC_ZEP_MAX_RESULTS"
+	EnvAllowInsecure  = "ACR_CONTEXT_FABRIC_ZEP_ALLOW_INSECURE"
+)
+
+// Configured reports whether the environment selects the Zep adapter at all.
+// Context Fabric's graph dependency is optional at the deployment level: an
+// unset base URL means the caller should not construct a zepgraph.Adapter.
+func Configured(lookup func(string) (string, bool)) bool {
+	value, ok := lookup(EnvBaseURL)
+	return ok && strings.TrimSpace(value) != ""
+}
+
+// ConfigFromEnv builds a Config from the process environment. It uses the
+// same KEY / KEY_FILE secret convention as internal/config.SecretValue so the
+// API key may be supplied directly (development) or via a mounted secret
+// file (Compose/Kubernetes). Callers own deciding when to call this — see
+// Configured — because an unset deployment should never fail closed over a
+// dependency it did not opt into.
+func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
+	apiKey, err := acrconfig.SecretValue(lookup, EnvAPIKey)
+	if err != nil {
+		return Config{}, fmt.Errorf("zep API key: %w", err)
+	}
+	cfg := Config{
+		BaseURL:     envString(lookup, EnvBaseURL, ""),
+		APIKey:      apiKey,
+		GraphPrefix: envString(lookup, EnvGraphPrefix, "acr-cf"),
+	}
+	if cfg.RequestTimeout, err = envDuration(lookup, EnvRequestTimeout, 30*time.Second); err != nil {
+		return Config{}, err
+	}
+	maxAttempts, err := envUint(lookup, EnvMaxAttempts, 3)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.MaxAttempts = maxAttempts
+	if cfg.MaxResults, err = envInt(lookup, EnvMaxResults, 25); err != nil {
+		return Config{}, err
+	}
+	if cfg.AllowInsecure, err = envBool(lookup, EnvAllowInsecure, false); err != nil {
+		return Config{}, err
+	}
+	if err := cfg.validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func envString(lookup func(string) (string, bool), key, fallback string) string {
+	if value, ok := lookup(key); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return fallback
+}
+
+func envDuration(lookup func(string) (string, bool), key string, fallback time.Duration) (time.Duration, error) {
+	value, ok := lookup(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a valid duration", key)
+	}
+	return parsed, nil
+}
+
+func envInt(lookup func(string) (string, bool), key string, fallback int) (int, error) {
+	value, ok := lookup(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer", key)
+	}
+	return parsed, nil
+}
+
+func envUint(lookup func(string) (string, bool), key string, fallback uint) (uint, error) {
+	value, ok := lookup(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseUint(strings.TrimSpace(value), 10, 8)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a non-negative integer", key)
+	}
+	return uint(parsed), nil
+}
+
+func envBool(lookup func(string) (string, bool), key string, fallback bool) (bool, error) {
+	value, ok := lookup(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean", key)
+	}
+	return parsed, nil
 }
 
 type api interface {
