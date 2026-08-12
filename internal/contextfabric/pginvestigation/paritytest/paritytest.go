@@ -56,6 +56,16 @@ var (
 	generatedAt = time.Date(2026, 1, 15, 9, 30, 0, 0, time.UTC)
 )
 
+// ValidResult builds a FULLY VALID InvestigationResult (satisfies
+// InvestigationResult.Validate() -- both stores validate on Save and on
+// Get). It is exported so a store's own tests can build the same
+// known-valid fixture the shared parity table uses, instead of each
+// package keeping a private copy that drifts as
+// InvestigationResult.Validate() tightens.
+func ValidResult(resultID, question string) contextfabric.InvestigationResult {
+	return result(resultID, question)
+}
+
 // result builds a FULLY VALID InvestigationResult (satisfies
 // InvestigationResult.Validate() -- see M2 below, both stores now validate
 // on Save and on Get). Every field Validate() requires non-nil/non-empty

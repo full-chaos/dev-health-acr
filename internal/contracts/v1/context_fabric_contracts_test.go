@@ -433,3 +433,43 @@ func validContextFabricProjectionBatch() ContextFabricProjectionBatch {
 		Relationships: []ContextFabricRelationshipProjection{}, Contents: []ContextFabricContentProjection{}, Episodes: []ContextFabricEpisodeProjection{}, Tombstones: []ContextFabricProjectionTombstone{},
 	}
 }
+
+// TestContextFabricResultSurvivesJSONRoundTripRevalidation is the probe for
+// the Coverage.Validate relaxation that landed with the store-side
+// validate-on-read work (CHAOS-3755 finding M2). Coverage.DegradedReasons
+// is `omitempty` in Go and is NOT in the Coverage schema's required set
+// (only sources and partial are), so a legitimately EMPTY, non-nil slice
+// serializes to an omitted field and decodes back as nil. A validator that
+// demanded non-nil there would reject the service's own valid output the
+// moment anything re-read it -- which is exactly what
+// InvestigationResultStore.Get now does on every read.
+//
+// This asserts the round trip, not the relaxed condition in isolation:
+// re-tightening Coverage.Validate would make this fail, whereas a test
+// that only built a nil-DegradedReasons value by hand would not prove the
+// scenario that motivated the change.
+func TestContextFabricResultSurvivesJSONRoundTripRevalidation(t *testing.T) {
+	t.Parallel()
+	original := validContextFabricContractResult()
+	if err := original.Validate(); err != nil {
+		t.Fatalf("fixture Validate() error = %v, want the fixture itself to be valid", err)
+	}
+	if original.Coverage.DegradedReasons == nil {
+		t.Fatal("fixture Coverage.DegradedReasons is nil, want a non-nil empty slice so the round trip is meaningful")
+	}
+
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var decoded ContextFabricInvestigationResult
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if decoded.Coverage.DegradedReasons != nil {
+		t.Fatalf("Coverage.DegradedReasons = %#v after round trip, want nil -- omitempty should have dropped the empty slice, which is the whole point of this probe", decoded.Coverage.DegradedReasons)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("Validate() after JSON round trip error = %v, want a re-decoded valid result to stay valid", err)
+	}
+}
