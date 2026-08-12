@@ -12,7 +12,7 @@ import (
 
 func TestPurgeReportsAuditFailure(t *testing.T) {
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
-	store := memory.NewEpisodeStore()
+	store := memory.NewEpisodeStore(func() time.Time { return now })
 	principal := episodePrincipal("org_1")
 	creator, err := NewService(store, memory.NewAuditStore(), withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
@@ -38,7 +38,7 @@ func TestPurgeReportsAuditFailure(t *testing.T) {
 func TestCreateAndRedactPreflightAuditFailuresLeaveEpisodeUnchanged(t *testing.T) {
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	principal := episodePrincipal("org_1")
-	store := memory.NewEpisodeStore()
+	store := memory.NewEpisodeStore(func() time.Time { return now })
 	failing, err := NewService(store, failingAuditStore{}, withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestCreateAndRedactPreflightAuditFailuresLeaveEpisodeUnchanged(t *testing.T
 
 func TestNoPersistAttemptsAreAudited(t *testing.T) {
 	audit := memory.NewAuditStore()
-	service, err := NewService(memory.NewEpisodeStore(), audit, withPacketStore(ServiceOptions{}))
+	service, err := NewService(memory.NewEpisodeStore(nil), audit, withPacketStore(ServiceOptions{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestNoPersistAttemptsAreAudited(t *testing.T) {
 func TestCompletionAuditFailureDoesNotReportMutationFailure(t *testing.T) {
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	principal := episodePrincipal("org_1")
-	store := memory.NewEpisodeStore()
+	store := memory.NewEpisodeStore(func() time.Time { return now })
 	service, err := NewService(store, &failOnNthAudit{store: memory.NewAuditStore(), failAt: 2}, withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
 		t.Fatal(err)

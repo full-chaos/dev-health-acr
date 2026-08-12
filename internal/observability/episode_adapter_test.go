@@ -89,8 +89,9 @@ func TestEpisodeStoreObserverEmitsActualStoreDimensions(t *testing.T) {
 func TestEpisodeTerminalObserverInstrumentsRealService(t *testing.T) {
 	sink := NewMemorySink(3)
 	hooks := NewHooks(sink, nil)
-	service, err := episode.NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), episode.ServiceOptions{
-		Now:              func() time.Time { return time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC) },
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	service, err := episode.NewService(memory.NewEpisodeStore(func() time.Time { return now }), memory.NewAuditStore(), episode.ServiceOptions{
+		Now:              func() time.Time { return now },
 		TerminalObserver: NewEpisodeTerminalObserver(hooks), StoreObserver: NewEpisodeStoreObserver(hooks), StoreBackend: episode.StoreBackendMemory,
 		PacketStore: observationPacketStore{},
 	})

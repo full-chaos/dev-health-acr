@@ -16,7 +16,7 @@ import (
 func TestCreateIsScopedIdempotentAndAudited(t *testing.T) {
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
-	service, err := NewService(memory.NewEpisodeStore(), audit, withPacketStore(ServiceOptions{
+	service, err := NewService(memory.NewEpisodeStore(func() time.Time { return now }), audit, withPacketStore(ServiceOptions{
 		Now: func() time.Time { return now },
 	}))
 	if err != nil {
@@ -41,7 +41,7 @@ func TestCreateIsScopedIdempotentAndAudited(t *testing.T) {
 
 func TestCreatePreservesDuplicateAndConflictIdempotencyBehavior(t *testing.T) {
 	// Given
-	service, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), withPacketStore(ServiceOptions{}))
+	service, err := NewService(memory.NewEpisodeStore(nil), memory.NewAuditStore(), withPacketStore(ServiceOptions{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestCreatePreservesDuplicateAndConflictIdempotencyBehavior(t *testing.T) {
 }
 
 func TestCreateRejectsTranscriptContentAndKeepsNoPersistUnreadable(t *testing.T) {
-	service, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), withPacketStore(ServiceOptions{}))
+	service, err := NewService(memory.NewEpisodeStore(nil), memory.NewAuditStore(), withPacketStore(ServiceOptions{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestCreateRejectsTranscriptContentAndKeepsNoPersistUnreadable(t *testing.T)
 func TestRedactUsesScopedTombstoneAndSafeAuditMetadata(t *testing.T) {
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
-	service, err := NewService(memory.NewEpisodeStore(), audit, withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
+	service, err := NewService(memory.NewEpisodeStore(func() time.Time { return now }), audit, withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestRedactUsesScopedTombstoneAndSafeAuditMetadata(t *testing.T) {
 func TestPurgeExpiredIsScopedAndAudited(t *testing.T) {
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
-	service, err := NewService(memory.NewEpisodeStore(), audit, withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
+	service, err := NewService(memory.NewEpisodeStore(func() time.Time { return now }), audit, withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestPurgeExpiredIsScopedAndAudited(t *testing.T) {
 }
 
 func TestCreateRequiresWriteScopeAndEntitlement(t *testing.T) {
-	service, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), withPacketStore(ServiceOptions{}))
+	service, err := NewService(memory.NewEpisodeStore(nil), memory.NewAuditStore(), withPacketStore(ServiceOptions{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,11 +154,11 @@ func TestCreateRequiresWriteScopeAndEntitlement(t *testing.T) {
 }
 
 func TestServiceRequiresAuditStoreAndRepositoryGrantForPurge(t *testing.T) {
-	if _, err := NewService(memory.NewEpisodeStore(), nil, withPacketStore(ServiceOptions{})); err == nil {
+	if _, err := NewService(memory.NewEpisodeStore(nil), nil, withPacketStore(ServiceOptions{})); err == nil {
 		t.Fatal("service accepted a nil audit store")
 	}
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
-	store := memory.NewEpisodeStore()
+	store := memory.NewEpisodeStore(func() time.Time { return now })
 	principal := episodePrincipal("org_1")
 	service, err := NewService(store, memory.NewAuditStore(), withPacketStore(ServiceOptions{Now: func() time.Time { return now }}))
 	if err != nil {

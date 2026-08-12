@@ -12,7 +12,7 @@ import (
 func TestCreateAuditsAfterRequestCancellationAndTimesOutBounded(t *testing.T) {
 	// Given
 	audit := &blockingAuditStore{started: make(chan struct{})}
-	service, err := NewService(memory.NewEpisodeStore(), audit, withPacketStore(ServiceOptions{}))
+	service, err := NewService(memory.NewEpisodeStore(nil), audit, withPacketStore(ServiceOptions{}))
 	if err != nil {
 		t.Fatal(err)
 	}
