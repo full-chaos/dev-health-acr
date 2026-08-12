@@ -227,19 +227,27 @@ func deterministicBatchID(orgID, source, cursor, nextCursor string) string {
 // The still-unimplemented TeamsProjectsSource (teams_projects.go) is the
 // one future producer that WILL need to populate real ProjectIDs; it MUST
 // call IsReservedAuthorizationScopeID on every value first and reject (not
-// silently rename) any collision. See
+// silently rename) any collision.
+//
+// This is no longer convention-only (CHAOS-3753 codex finding W2): both
+// the prefix and the membership check now come straight from
+// internal/contracts/v1 (ContextFabricReservedOrganizationScopePrefix /
+// ContextFabricIsReservedOrganizationScopeID), which
+// ContextFabricEntityProjection.Validate() et al. enforce at the contract
+// boundary -- any non-organization producer that forgot the doc-comment
+// obligation above now fails batch.Validate() outright, not just this
+// package's own review discipline. See
 // docs/design/context-fabric-projection-worker.md for the residual risk
-// this convention-based reservation cannot close on its own, and why it is
-// flagged for a real per-kind scope field when Reset 1B/1C designs
-// org-level authorization.
-const organizationScopePrefix = "acr-context-fabric:org-scope:"
+// (a dedicated per-kind organization-scope field) still flagged for Reset
+// 1B/1C's org-level authorization design.
+const organizationScopePrefix = contractsv1.ContextFabricReservedOrganizationScopePrefix
 
 // IsReservedAuthorizationScopeID reports whether id falls inside the
 // reserved organization-scope namespace. Exported so any future canonical
 // project/team producer (in this package or elsewhere) can guard against
 // emitting a colliding real ID -- see organizationScopePrefix.
 func IsReservedAuthorizationScopeID(id string) bool {
-	return strings.HasPrefix(id, organizationScopePrefix)
+	return contractsv1.ContextFabricIsReservedOrganizationScopeID(id)
 }
 
 func organizationScopeID(orgID string) string { return organizationScopePrefix + orgID }

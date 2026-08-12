@@ -127,6 +127,61 @@ func TestContextFabricAuthorizationScopeRejectsSeparatorCharacter(t *testing.T) 
 	}
 }
 
+// TestContextFabricReservedOrganizationScopeRejectedOutsideOrganizationSubject
+// is CHAOS-3753 codex finding W2's contract-level regression test: only an
+// entity/content/episode projection whose Subject.Kind is
+// ContextFabricSubjectOrganization may emit a ProjectIDs value inside
+// ContextFabricReservedOrganizationScopePrefix's namespace -- any other
+// producer doing so (a real project ID from an upstream data source that
+// happened to collide with the reserved prefix) must be rejected at the
+// contract boundary, not merely by a doc-comment convention downstream
+// producers might forget to check.
+func TestContextFabricReservedOrganizationScopeRejectedOutsideOrganizationSubject(t *testing.T) {
+	t.Parallel()
+	reserved := ContextFabricReservedOrganizationScopePrefix + "org-1"
+
+	// The one legitimate producer: an Organization-kind subject.
+	batch := validContextFabricProjectionBatch()
+	batch.Entities[0].Subject.Kind = ContextFabricSubjectOrganization
+	batch.Entities[0].Subject.CanonicalID = "organization:org-1"
+	batch.Entities[0].Authorization = ContextFabricAuthorizationScope{ProjectIDs: []string{reserved}}
+	if err := batch.Validate(); err != nil {
+		t.Fatalf("Validate() rejected the legitimate organization-scope producer: %v", err)
+	}
+	// The published JSON Schema must agree: it must not over-reject the one
+	// legitimate producer just because it also rejects everyone else.
+	encoded, err := json.Marshal(batch)
+	if err != nil {
+		t.Fatalf("marshal batch: %v", err)
+	}
+	if err := contractcheck.ValidateSerialized("", "context_fabric_projection_batch.v1.schema.json", encoded); err != nil {
+		t.Fatalf("JSON Schema rejected the legitimate organization-scope producer that Go accepts -- schema/Go validation drift: %v", err)
+	}
+
+	// Every other subject kind must be rejected.
+	batch = validContextFabricProjectionBatch()
+	batch.Entities[0].Subject.Kind = ContextFabricSubjectProject
+	batch.Entities[0].Authorization = ContextFabricAuthorizationScope{ProjectIDs: []string{reserved}}
+	if err := batch.Validate(); err == nil || !strings.Contains(err.Error(), "reserved organization-scope") {
+		t.Fatalf("Validate() accepted a non-organization subject using the reserved scope namespace: %v", err)
+	}
+
+	// A relationship -- no single subject to exempt -- must always be
+	// rejected, even though its From subject happens to be an organization.
+	relationship := ContextFabricRelationshipProjection{
+		RelationshipID: "relationship_reserved_probe",
+		Type:           "BELONGS_TO",
+		From:           ContextFabricSubjectRef{Kind: ContextFabricSubjectOrganization, CanonicalID: "organization:org-1", Label: "org-1"},
+		To:             ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"},
+		Derivation:     ContextFabricDerivationCanonicalStructured, EpistemicStatus: ContextFabricEpistemicObserved,
+		Authorization:  ContextFabricAuthorizationScope{ProjectIDs: []string{reserved}},
+		EvidenceRefIDs: []string{"evidence_12345678"}, ObservedAt: time.Now().UTC(), SourceVersion: "source-v1",
+	}
+	if err := relationship.Validate(); err == nil || !strings.Contains(err.Error(), "reserved organization-scope") {
+		t.Fatalf("Validate() accepted a relationship using the reserved scope namespace: %v", err)
+	}
+}
+
 // TestContextFabricBoundedEvidenceRefsRejectsSeparatorCharacter guards
 // against the same corruption for evidence ref IDs, which the zepgraph
 // adapter encodes with the same delimited-string scheme.
@@ -188,6 +243,14 @@ func TestContextFabricSeparatorRejectionMatchesBetweenGoAndJSONSchema(t *testing
 			b.Entities[0].Authorization = ContextFabricAuthorizationScope{TeamIDs: []string{"team_a|team_b"}}
 		}},
 		{"entity_evidence_ref_id", func(b *ContextFabricProjectionBatch) { b.Entities[0].EvidenceRefIDs = []string{"evidence_a|b_1234"} }},
+		// validContextFabricProjectionBatch's one entity is a
+		// ContextFabricSubjectProject, not an organization -- CHAOS-3753
+		// codex finding W2: a non-organization subject must never be able to
+		// emit a ProjectIDs value inside the reserved organization-scope
+		// namespace, in Go or in the published schema.
+		{"entity_authorization_reserved_organization_scope", func(b *ContextFabricProjectionBatch) {
+			b.Entities[0].Authorization = ContextFabricAuthorizationScope{ProjectIDs: []string{ContextFabricReservedOrganizationScopePrefix + "org-1"}}
+		}},
 	} {
 		t.Run(mutate.name, func(t *testing.T) {
 			batch := validContextFabricProjectionBatch()

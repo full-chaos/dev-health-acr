@@ -1422,7 +1422,33 @@
         "evidence_ref_ids",
         "observed_at",
         "source_version"
-      ]
+      ],
+      "if": {
+        "properties": {
+          "subject": {
+            "properties": {
+              "kind": {
+                "const": "organization"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "authorization": {
+            "properties": {
+              "project_ids": {
+                "items": {
+                  "not": {
+                    "pattern": "^acr-context-fabric:org-scope:"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "RelationshipProjection": {
       "type": "object",
@@ -1473,7 +1499,22 @@
           ]
         },
         "authorization": {
-          "$ref": "#/$defs/AuthorizationScope"
+          "allOf": [
+            {
+              "$ref": "#/$defs/AuthorizationScope"
+            },
+            {
+              "properties": {
+                "project_ids": {
+                  "items": {
+                    "not": {
+                      "pattern": "^acr-context-fabric:org-scope:"
+                    }
+                  }
+                }
+              }
+            }
+          ]
         },
         "evidence_ref_ids": {
           "type": "array",
@@ -1584,7 +1625,33 @@
         "observed_at",
         "source_version",
         "untrusted"
-      ]
+      ],
+      "if": {
+        "properties": {
+          "subject": {
+            "properties": {
+              "kind": {
+                "const": "organization"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "authorization": {
+            "properties": {
+              "project_ids": {
+                "items": {
+                  "not": {
+                    "pattern": "^acr-context-fabric:org-scope:"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "EpisodeProjection": {
       "type": "object",
@@ -1653,7 +1720,33 @@
         "started_at",
         "ended_at",
         "source_version"
-      ]
+      ],
+      "if": {
+        "properties": {
+          "subject": {
+            "properties": {
+              "kind": {
+                "const": "organization"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "authorization": {
+            "properties": {
+              "project_ids": {
+                "items": {
+                  "not": {
+                    "pattern": "^acr-context-fabric:org-scope:"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "ProjectionTombstone": {
       "type": "object",
