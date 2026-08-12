@@ -73,11 +73,12 @@ func (s ContextFabricAuthorizationScope) Validate() error {
 	if len(s.RepositorySlugs)+len(s.ProjectIDs)+len(s.TeamIDs) == 0 {
 		return fmt.Errorf("authorization scope must not be empty")
 	}
-	// Backends that persist a scope as a delimited string (e.g. the zepgraph
-	// adapter's "|a|b|" encoding) use '|' as their internal separator. A
-	// scope value containing '|' would corrupt that encoding into multiple
-	// unintended scope entries, so it must fail here, at the port, before
-	// any backend ever sees it.
+	// A backend that persists a scope as a delimited string (e.g. zepgraph's
+	// "|a|b|" encoding, before its CHAOS-3771 deletion) uses '|' as its
+	// internal separator. A scope value containing '|' would corrupt that
+	// encoding into multiple unintended scope entries, so it must fail
+	// here, at the port, before any backend ever sees it -- kept as a
+	// contract invariant regardless of which backend is current.
 	if containsSeparatorCharacter(s.RepositorySlugs) || containsSeparatorCharacter(s.ProjectIDs) || containsSeparatorCharacter(s.TeamIDs) {
 		return fmt.Errorf("authorization scope value must not contain '|'")
 	}
@@ -91,11 +92,11 @@ func (e ContextFabricEntityProjection) Validate() error {
 	if len(e.Aliases) > 100 || len(e.PreviousNames) > 100 || !uniqueTrimmedStrings(e.Aliases, 512) || !uniqueTrimmedStrings(e.PreviousNames, 512) || len(e.ProviderIDs) > 50 || len(e.Properties) > 100 || !boundedEvidenceRefs(e.EvidenceRefIDs, 500, false) || e.ObservedAt.IsZero() || !validVersion(e.SourceVersion) {
 		return fmt.Errorf("entity projection violates v1 bounds")
 	}
-	// Backends that persist a list as a delimited string (e.g. the
-	// zepgraph adapter's "|a|b|" alias encoding) use '|' as their internal
-	// separator; consistent with the authorization scope rule above, an
-	// alias/previous-name containing it must fail here rather than be
-	// silently dropped by that encoding.
+	// A backend that persists a list as a delimited string (e.g. zepgraph's
+	// "|a|b|" alias encoding, before its CHAOS-3771 deletion) uses '|' as
+	// its internal separator; consistent with the authorization scope rule
+	// above, an alias/previous-name containing it must fail here rather
+	// than be silently dropped by that encoding.
 	if containsSeparatorCharacter(e.Aliases) || containsSeparatorCharacter(e.PreviousNames) {
 		return fmt.Errorf("entity alias or previous name must not contain '|'")
 	}

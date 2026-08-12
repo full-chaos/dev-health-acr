@@ -181,18 +181,16 @@ service:
 # healthy-disabled state, so there is no reason to run the extra pod until
 # one exists.
 contextFabric:
-  # FalkorDB graph backend (ADR 0009, supersedes ADR 0007's Zep Cloud
-  # decision), consumed by acr-projector's ProjectionBackend
-  # (contextFabric.projector below wires these values into that
-  # Deployment). Empty addr leaves Context Fabric unconfigured --
+  # FalkorDB graph backend (ADR 0009), consumed by acr-projector's
+  # ProjectionBackend (contextFabric.projector below wires these values
+  # into that Deployment). Empty addr leaves Context Fabric unconfigured --
   # falkorgraph.Configured() then keeps the adapter from ever constructing,
-  # matching the "an unset deployment should never fail closed" contract
-  # carried over from ADR 0007. FalkorDB is self-hosted -- this chart does
-  # not run a FalkorDB workload itself, the same posture as
-  # postgres/clickhouse being externally provisioned; point addr at
-  # wherever it runs. Unlike Zep, no credential is required by default
-  # (FalkorDB has no auth out of the box), so existingSecret is optional
-  # and empty by default. acr-api's own optional Investigator (gated by
+  # matching the "an unset deployment should never fail closed" contract.
+  # FalkorDB is self-hosted -- this chart does not run a FalkorDB workload
+  # itself, the same posture as postgres/clickhouse being externally
+  # provisioned; point addr at wherever it runs. No credential is required
+  # by default (FalkorDB has no auth out of the box), so existingSecret is
+  # optional and empty by default. acr-api's own optional Investigator (gated by
   # ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED) reads this same env var
   # contract when set, but this chart's acr-api Deployment does not wire it
   # yet -- pre-existing gap, not introduced or closed by this change.

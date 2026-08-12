@@ -20,12 +20,26 @@ import (
 // see queries.go/identity.go -- not zepgraph's org-derived nodeUUID hash),
 // so this needs its own proof: the security property under test is that
 // GraphReader.ResolveSubjects re-authorizes every prior receipt against the
-// CALLING principal's own graph identity, and falkorgraph's graph-per-org
-// design makes that isolation structural (the fake conn below only "plants"
-// the secret subject reachable when the query's own org parameter is
-// "org_b" -- see nodeByKindID/ResolveSubjects' ExactHint cypher, which both
-// pass org_id as a query parameter regardless of which organization's graph
-// key the call nominally targets in this fake).
+// CALLING principal's own graph identity.
+//
+// The fake conn below is deliberately HOSTILE with respect to the org query
+// parameter: it ignores params["org"] entirely and returns the planted org B
+// row for any kind+id match, regardless of what org the caller claims. A
+// bare fakeConn cannot interpret Cypher (it never even inspects the cypher
+// string), so it cannot prove the production query's org_id:$org predicate
+// is honored -- only a real FalkorDB server can (see
+// adapter_live_integration_test.go's cross-organization isolation step).
+// What this fake CAN prove -- and is gated on -- is the actual mechanism
+// available to a fake at this boundary: falkorgraph's graph-per-org design,
+// where ResolveSubjects/ExactHint issue every query against
+// graphKey(prefix, principal.OrgID), a server-derived key string computed
+// fresh per call from the CALLING principal, never from anything the
+// hostile prior result claimed. The fake returns the org B row only when
+// queried under org B's own graph key -- exactly the physical separation a
+// real FalkorDB server provides between graph keys, no predicate needed.
+// Revert-verify: neutering that graph-key derivation (e.g. hardcoding it,
+// or deriving it from something other than principal.OrgID) makes org A's
+// lookup hit org B's key and this test fails.
 
 type hostileResultStore struct {
 	alwaysReturn contextfabric.InvestigationResult
@@ -85,16 +99,14 @@ func TestEngineWithRealGraphReaderNeverLeaksCrossOrgSubjectFromHostileResultStor
 	t.Parallel()
 
 	orgBSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_org_b_secret", Label: "Org B Secret Project"}
+	const fakeGraphPrefix = "acr-cf-fake" // must match newFakeAdapter's Config.GraphPrefix below
+	orgBGraphKey := graphKey(fakeGraphPrefix, "org_b")
 
-	// The fake conn plants the secret subject only for org_b: the
-	// ExactHint/nodeByKindID cypher both pass the calling org as the "org"
-	// query parameter, so a lookup issued for any other principal's org
-	// (org_a) never matches this row, regardless of which graph key string
-	// the call nominally targets -- exactly mirroring how the real server's
-	// graph-per-org key would put this subject in a different Redis key
-	// entirely.
-	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
-		if params["org"] == "org_b" && params["kind"] == string(orgBSubject.Kind) && params["id"] == orgBSubject.CanonicalID {
+	// Hostile: gated on the graph key alone, never on params["org"] -- see
+	// the doc comment above for why. Planted under org B's own graph key,
+	// exactly where the real system's graph-per-org design would put it.
+	fake := &fakeConn{queryFunc: func(ctx context.Context, gk, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if gk == orgBGraphKey && params["kind"] == string(orgBSubject.Kind) && params["id"] == orgBSubject.CanonicalID {
 			return []row{fakeSubjectNodeRow(string(orgBSubject.Kind), orgBSubject.CanonicalID, orgBSubject.Label)}, nil
 		}
 		return nil, nil

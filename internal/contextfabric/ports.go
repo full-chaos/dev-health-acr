@@ -20,12 +20,12 @@ var (
 	// ErrRateLimited signals a bounded dependency (graph backend or
 	// canonical fact source) rejected a call because a rate or quota limit
 	// was exceeded. Adapters must wrap their own vendor-specific
-	// rate-limit classification into this at their package boundary --
-	// e.g. zepgraph.ErrRateLimited also wraps this -- so callers (Engine,
-	// the route layer) can classify the failure without importing any
-	// specific backend's package. This keeps ErrModelRateLimited (a
-	// distinct, pre-existing sentinel for the model runtime specifically)
-	// and this one both reachable from one vendor-neutral check.
+	// rate-limit classification into this at their package boundary so
+	// callers (Engine, the route layer) can classify the failure without
+	// importing any specific backend's package. This keeps
+	// ErrModelRateLimited (a distinct, pre-existing sentinel for the model
+	// runtime specifically) and this one both reachable from one
+	// vendor-neutral check.
 	ErrRateLimited = errors.New("context fabric dependency rate limited")
 	// ErrUnsupportedTimeAxis identifies a request that asked a
 	// historical or point-in-time question the Context Fabric cannot
@@ -131,19 +131,23 @@ type InvestigationResultStore interface {
 // must be idempotent for the same batch ID and source version.
 //
 // Precondition: callers must serialize ApplyProjectionBatch calls per
-// organization. The zepgraph implementation has no compare-and-swap (no
-// attribute-level CAS) against concurrent writers touching the same
-// subject: it reads a node's canonical attributes, merges in the new
-// projection's attributes, and writes the merge back, with no protection
-// against a second, concurrent projection interleaving between that read
-// and write for the same org. Two sources projecting the same subject at
-// the same time can lose one side's canonical metadata (aliases, provider
+// organization. Not every implementation of this interface can be assumed
+// to have a real attribute-level compare-and-swap against concurrent
+// writers touching the same subject: an implementation without one that
+// reads a node's canonical attributes, merges in the new projection's
+// attributes, and writes the merge back has no protection against a
+// second, concurrent projection interleaving between that read and write
+// for the same org, and two sources projecting the same subject at the
+// same time can lose one side's canonical metadata (aliases, provider
 // IDs) to a stale merge that overwrites it. A CHAOS-3753 projection worker
 // MUST serialize batches per organization (e.g. one in-flight
 // ApplyProjectionBatch call per org at a time); it must not run multiple
 // sources' batches for the same org concurrently. This is a caller
-// obligation, not something ProjectionBackend enforces or can enforce
-// without a real CAS primitive.
+// obligation ProjectionBackend itself cannot enforce -- and is required
+// regardless of whether the current implementation's own merge happens to
+// be atomic (ADR 0009): other batch-level ordering guarantees still
+// depend on the per-organization serialization, not just attribute-merge
+// atomicity.
 type ProjectionBackend interface {
 	ApplyProjectionBatch(context.Context, ProjectionBatch) (ProjectionReceipt, error)
 	ProjectionWatermark(context.Context, string, string) (ProjectionWatermark, error)

@@ -41,7 +41,7 @@ docs/adr/                  # Owned architecture decisions
 | Isolated stack lifecycle | `scripts/e2e/compose.sh` | Sourceable library; `prepare_stack` is the reusable boundary, `ACR_E2E_SEED_HOOK` swaps the corpus |
 | Context Fabric domain/ports | `internal/contextfabric` | Backend-neutral models, ports, engine, checkpoint-safe `ProjectionWorker` |
 | Context Fabric projection worker | `cmd/acr-projector`, `internal/contextfabric/projectionrun`, `internal/contextfabric/devhealthsource`, `internal/contextfabric/pgprojection` | Independent binary; single-flight-per-org coordinator; see `docs/design/context-fabric-projection-worker.md` |
-| Context Fabric graph backend | `internal/contextfabric/zepgraph` | ADR 0007; `ProjectionBackend`/`GraphReader` over Zep/Graphiti |
+| Context Fabric graph backend | `internal/contextfabric/falkorgraph`, `internal/contextfabric/graphrank` | ADR 0009; `ProjectionBackend`/`GraphReader` over self-hosted FalkorDB |
 | Context Fabric fact providers | `internal/contextfabric/devhealthfacts` | ClickHouse-backed `FactProvider`s; 8 fact kinds gated off (no canonical source) |
 | Context Fabric result persistence | `internal/contextfabric/pginvestigation`, `internal/contextfabric/memoryinvestigation` | Immutable `InvestigationResultStore`; org-scoped `Get` is a binding precondition |
 | Context Fabric investigation endpoint | `internal/api/context_fabric_routes.go`, `internal/runtime/hosted` | `POST /api/v1/context-fabric/investigations`; `ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED`; see `docs/design/context-fabric-result-semantics.md` |
@@ -131,7 +131,7 @@ pinned OpenCode release; it runs in its own workflow, not in `make verify`. See
 - `internal/contracts/**`, `internal/contractcheck/**`: contract owner.
 - `internal/contextpacket/**`: context assembly owner.
 - `internal/auth/**`, `internal/storage/**`: security and persistence owners.
-- `internal/contextfabric/**`, `cmd/acr-projector/**`: Context Fabric owner. Backend adapter subpackages (`zepgraph`, `pgprojection`) own their SQL/vendor client directly rather than adding a backend-specific concept to `internal/storage`; `devhealthsource` is the exception where the data already belongs to `internal/storage` (approved episodes) and reads through `storage.EpisodeStore` like any other caller instead of forking a parallel path.
+- `internal/contextfabric/**`, `cmd/acr-projector/**`: Context Fabric owner. Backend adapter subpackages (`falkorgraph`, `pgprojection`) own their SQL/vendor client directly rather than adding a backend-specific concept to `internal/storage`; `devhealthsource` is the exception where the data already belongs to `internal/storage` (approved episodes) and reads through `storage.EpisodeStore` like any other caller instead of forking a parallel path.
 - `docs/adr/**`: architecture decision owner.
 
 ## NOTES

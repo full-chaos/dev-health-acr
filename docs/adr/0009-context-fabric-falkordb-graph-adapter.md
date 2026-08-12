@@ -410,7 +410,7 @@ Docker-backed `Live*` tests, no env gate, no skip):
 
 - `graphrank`: `scope_test.go`, `candidate_test.go`, `traverse_test.go`,
   `resolve_test.go`, `resolution_test.go` (new), `discover_test.go`
-  (extended) -- 3 → 34 test functions, each calling graphrank's real
+  (extended) -- 3 → 37 test functions, each calling graphrank's real
   exported API directly, not through any zepgraph wrapper.
 - `falkorgraph`: `config_test.go`, `cancellation_test.go`, `sdk_test.go`,
   `engine_org_isolation_test.go` (new) -- the last is a `falkorgraph` twin
@@ -420,7 +420,17 @@ Docker-backed `Live*` tests, no env gate, no skip):
   re-authorizes every prior receipt against the *calling* principal's own
   graph identity. `falkorgraph` derives node identity differently from
   `zepgraph` (its own node-key scheme, not `nodeUUID`), so this needed its
-  own proof, not just a `graphrank` one.
+  own proof, not just a `graphrank` one. Its first version was not
+  guard-sensitive: the fake conn planted the cross-org row conditioned on
+  the query's own `org` parameter, so it proved `ResolveSubjects` passes
+  the calling principal's org through, not that the production graph key
+  actually isolates the organizations -- a broken `key := graphKey(...)`
+  derivation would have still passed. Fixed (post-review) to plant the row
+  keyed only on the graph-key argument, gated on nothing else, simulating a
+  server with no org predicate at all; only the production `graphKey`
+  derivation being computed from the *calling* principal keeps the row out
+  of org A's results. Revert-verified: hardcoding that derivation to always
+  resolve org B's key makes the test fail.
 
 Disposition of all 72 zepgraph test functions across its four test files:
 31 ported to `graphrank` (pure ranking/resolution/authorization logic, now
