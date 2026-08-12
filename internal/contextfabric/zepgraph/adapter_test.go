@@ -208,6 +208,67 @@ func TestResolveSubjectsFiltersUnauthorizedNodesBeforeCandidates(t *testing.T) {
 	}
 }
 
+// TestResolveSubjectsExcludesInternalBookkeepingSubjectsFromCandidates
+// guards against the adapter's own projection anchor nodes (the
+// organization root, projection watermark markers) leaking into a public
+// subject resolution -- neither can ever be what a caller meant by name,
+// and both carry an unrestricted "*" authorization scope by construction,
+// so without this exclusion they could surface as a spurious candidate for
+// almost any hybrid search.
+func TestResolveSubjectsExcludesInternalBookkeepingSubjectsFromCandidates(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	root := graphNode("node-root", contextfabric.SubjectOrganization, "organization-root", "Organization", "*", 0.99)
+	watermark := graphNode("node-watermark", contextfabric.SubjectMetric, "projection-watermark:dev-health-ops", "Projection watermark dev-health-ops", "*", 0.98)
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{root, watermark}}
+	request := validRequest()
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"organization"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Candidates) != 0 || len(resolution.Committed) != 0 {
+		t.Fatalf("resolution = %#v, want internal bookkeeping nodes excluded entirely", resolution)
+	}
+}
+
+// TestDiscoverContextExcludesInternalBookkeepingRelationships guards the
+// relationship path against the same organization-root/watermark-marker
+// leakage as candidate resolution: even if a bookkeeping edge somehow
+// carried evidence, it must never surface as a public relationship path.
+func TestDiscoverContextExcludesInternalBookkeepingRelationships(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	root := graphNode("node-root", contextfabric.SubjectOrganization, "organization-root", "Organization", "*", 0.5)
+	subject := graphNode("node-subject", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.9)
+	edge := &zep.EntityEdge{
+		UUID: "edge-bookkeeping", Name: "HAS_SUBJECT", Fact: "Organization contains Ask Dev.",
+		SourceNodeUUID: root.UUID, TargetNodeUUID: subject.UUID,
+		Attributes: map[string]interface{}{"authorization_repositories": "*", "evidence_refs": "|evidence_leaked_1234|", "epistemic_status": "observed"},
+	}
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{root, subject}, Edges: []*zep.EntityEdge{edge}}
+	discoveryRequest := contextfabric.GraphDiscoveryRequest{
+		Request: validRequest(),
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+		},
+		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+	}
+	contextResult, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org_1"}, discoveryRequest)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(contextResult.Paths) != 0 || len(contextResult.EvidenceRefIDs) != 0 {
+		t.Fatalf("graph context = %#v, want internal bookkeeping relationship excluded", contextResult)
+	}
+}
+
 func TestDiscoverContextReturnsEvidenceClosedDriverAndSubjectlessCohort(t *testing.T) {
 	t.Parallel()
 	api := newFakeAPI()

@@ -166,11 +166,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			}
 		}
 		fromSubject, ok := nodeSubject(from)
-		if !ok {
+		if !ok || isInternalBookkeepingSubject(fromSubject) {
 			continue
 		}
 		toSubject, ok := nodeSubject(to)
-		if !ok || fromSubject == toSubject {
+		if !ok || fromSubject == toSubject || isInternalBookkeepingSubject(toSubject) {
 			continue
 		}
 		evidence := edgeEvidence(edge)
@@ -355,7 +355,7 @@ func nodeCandidate(principal storage.Principal, scope contextfabric.RequestedSco
 		return contextfabric.SubjectCandidate{}, false
 	}
 	subject, ok := nodeSubject(node)
-	if !ok {
+	if !ok || isInternalBookkeepingSubject(subject) {
 		return contextfabric.SubjectCandidate{}, false
 	}
 	confidence := resultConfidence(node.Relevance, node.Score)
@@ -390,6 +390,24 @@ func nodeSubject(node *zep.EntityNode) (contextfabric.SubjectRef, bool) {
 		return contextfabric.SubjectRef{}, false
 	}
 	return subject, true
+}
+
+// isInternalBookkeepingSubject reports whether subject is one of the
+// adapter's own internal marker nodes (organizationRoot, markerSubject in
+// identity.go) rather than a real canonical entity. These nodes exist only
+// so projection has an anchor node for organization-scoped triples (the
+// "HAS_SUBJECT" root edge, projection watermarks); a caller can never
+// usefully mean one of them by name, and surfacing them as a subject
+// candidate or a relationship endpoint would leak adapter-internal
+// bookkeeping into a public result.
+func isInternalBookkeepingSubject(subject contextfabric.SubjectRef) bool {
+	if subject.Kind == contextfabric.SubjectOrganization && subject.CanonicalID == "organization-root" {
+		return true
+	}
+	if subject.Kind == contextfabric.SubjectMetric && strings.HasPrefix(subject.CanonicalID, "projection-watermark:") {
+		return true
+	}
+	return false
 }
 
 func authorizedAttributes(principal storage.Principal, requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {
