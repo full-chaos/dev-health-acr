@@ -152,8 +152,20 @@ same `_FILE` secret convention as every other ACR secret; Helm:
 Cloud account and API key exist — an external, environment-provisioned
 credential this repository does not create (ADR 0007). Reads
 (`internal/contextfabric.GraphReader`, the investigation endpoint) are a
-completely independent enablement, reserved as
-`ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED` for Reset 1B/1C.
+completely independent enablement: `ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED`
+(`config.GraphReadsEnabledEnvVar`), wired by CHAOS-3755's hosted composition
+(`internal/runtime/hosted.buildContextFabricInvestigator`). Set it to `true`
+alongside the same Zep credential above to register `POST
+/api/v1/context-fabric/investigations`; leave it `false` (the default) and
+the route stays registered but returns 503 (`api.handleRuntimeUnavailable`)
+for every request. Note that even with both flags true, the endpoint cannot
+produce an answer yet: no production `genkit.Genkit` model provider is
+constructed anywhere in this repository (provider choice, credentials, and
+plugin selection are a decision for a follow-up change), so
+`RuntimeQuestionInterpreter`/`RuntimeAnswerSynthesizer` are wired with a nil
+`ModelRuntime` and degrade every request to 503 `upstream_unavailable`
+(`ErrModelUnavailable`) until that provider is configured -- the graph and
+canonical-fact layers are real and live in the meantime.
 
 **Single-flight per organization** (the CHAOS-3753 acceptance amendment):
 the coordinator holds a PostgreSQL advisory lock

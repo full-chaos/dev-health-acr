@@ -69,6 +69,28 @@ A model cannot bypass:
 - result schema validation;
 - serialized-output budgets.
 
+### Value-level evidence closure (CHAOS-3755 amendment)
+
+The evidence closure above, as originally built, is structural only: it
+proves a driver or finding cites something real, not that the cited value
+agrees with what was actually observed. A synthesis draft claiming
+"release-ready" against a canonical `release_ready=false` fact passed every
+Reset 0 validator unchanged -- recorded as a must-do from the Reset 0
+adversarial review.
+
+CHAOS-3755 closes that gap deterministically: `ContextFabricClaimedFact`
+entries restate a canonical fact field verbatim, and
+`SynthesisDraft.ValidateAgainst` deep-equals every claim against the actual
+`CanonicalFactBundle` the synthesizer received before a result can ever be
+built. `DeterministicAnswer` is server-composed from the validated result
+rather than model-authored, so it cannot itself reintroduce an unchecked
+claim. See [docs/design/context-fabric-result-semantics.md](../design/context-fabric-result-semantics.md)
+for the full mechanism and its honest residual limitation: free-text prose
+fields (`direct_judgment`, `current_state`, `limitations`) are not
+provably closed by code -- that is an entailment problem, not a
+deterministic one, and remains open for a future evaluator pass (below)
+rather than a synchronous request-path check.
+
 ## Provider and tool policy
 
 - Provider and model selection are server-owned configuration.
