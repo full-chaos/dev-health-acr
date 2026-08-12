@@ -958,6 +958,16 @@ func TestResolveSubjectsResolvesSubjectMatchedByAliasOrPreviousName(t *testing.T
 	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "project_ask_dev" {
 		t.Fatalf("resolution = %#v, want the previous-name match resolved to the canonical subject", resolution)
 	}
+	// Codex finding G9(c): the fake Search ignores its query entirely and
+	// always returns the configured searchResult, so without this
+	// assertion the test would pass identically even if the adapter sent
+	// an empty or unrelated query -- it would prove nothing about whether
+	// the alias/previous-name term actually reached the backend search
+	// that is what lets Zep's real embedded-alias-text indexing find it
+	// (ADR 0007, entitySearchSummary).
+	if len(api.searches) != 1 || api.searches[0].Query != "Dev Agent" {
+		t.Fatalf("searches = %#v, want the previous-name term forwarded to the backend search query", api.searches)
+	}
 }
 
 func TestProjectionEnrichesEmbeddedEntityTextWithoutLeakingNativeEvidence(t *testing.T) {
