@@ -22,7 +22,7 @@ func TestCreateReturnsIndistinguishableNotFoundForInvalidOrMismatchedPacket(t *t
 	if err := packetStore.SaveSnapshot(context.Background(), principal, mismatched, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), ServiceOptions{Now: func() time.Time { return now }, PacketStore: packetStore})
+	service, err := NewService(memory.NewEpisodeStore(func() time.Time { return now }), memory.NewAuditStore(), ServiceOptions{Now: func() time.Time { return now }, PacketStore: packetStore})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestCreateReplaysIdenticalEpisodeAfterPacketExpires(t *testing.T) {
 	if err := packetStore.SaveSnapshot(context.Background(), principal, episodePacket(now, create.ContextPacketID, create.Repository.Slug), now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), ServiceOptions{Now: func() time.Time { return now }, PacketStore: packetStore})
+	service, err := NewService(memory.NewEpisodeStore(func() time.Time { return now }), memory.NewAuditStore(), ServiceOptions{Now: func() time.Time { return now }, PacketStore: packetStore})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestCreateReturnsCancellationBeforePacketPreflightOrPersistence(t *testing.
 	if err := packetStore.SaveSnapshot(context.Background(), principal, episodePacket(now, create.ContextPacketID, create.Repository.Slug), now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	episodeStore := memory.NewEpisodeStore()
+	episodeStore := memory.NewEpisodeStore(func() time.Time { return now })
 	auditStore := memory.NewAuditStore()
 	service, err := NewService(episodeStore, auditStore, ServiceOptions{Now: func() time.Time { return now }, PacketStore: packetStore})
 	if err != nil {
@@ -111,7 +111,7 @@ func TestCreateUsesAtomicStoreAuthorityWhenConcurrentPreflightsMiss(t *testing.T
 	if err := packetStore.SaveSnapshot(context.Background(), principal, episodePacket(now, create.ContextPacketID, create.Repository.Slug), now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), ServiceOptions{Now: func() time.Time { return now }, PacketStore: packetStore})
+	service, err := NewService(memory.NewEpisodeStore(func() time.Time { return now }), memory.NewAuditStore(), ServiceOptions{Now: func() time.Time { return now }, PacketStore: packetStore})
 	if err != nil {
 		t.Fatal(err)
 	}

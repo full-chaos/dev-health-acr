@@ -13,6 +13,13 @@ import (
 )
 
 func TestServiceCreateObservesOneBoundedTerminalOutcome(t *testing.T) {
+	// fixedNow must be injected into both the service (ServiceOptions.Now)
+	// and every memory.NewEpisodeStore below -- the store previously checked
+	// expiry against the real wall clock regardless of what the service was
+	// told "now" is, which silently broke once real time passed the
+	// fixture's expiry.
+	fixedNow := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	nowFunc := func() time.Time { return fixedNow }
 	tests := []struct {
 		name    string
 		store   storage.EpisodeStore
@@ -23,14 +30,14 @@ func TestServiceCreateObservesOneBoundedTerminalOutcome(t *testing.T) {
 	}{
 		{
 			name:   "success",
-			store:  memory.NewEpisodeStore(),
+			store:  memory.NewEpisodeStore(nowFunc),
 			audit:  memory.NewAuditStore(),
 			create: episodeCreate(),
 			want:   TerminalObservation{Outcome: TerminalOutcomeSuccess, AuditDelivery: AuditDeliveryDelivered},
 		},
 		{
 			name:   "duplicate",
-			store:  memory.NewEpisodeStore(),
+			store:  memory.NewEpisodeStore(nowFunc),
 			audit:  memory.NewAuditStore(),
 			create: episodeCreate(),
 			prepare: func(service *Service, principal storage.Principal, create contractsv1.AgentEpisodeCreate) error {
@@ -41,21 +48,21 @@ func TestServiceCreateObservesOneBoundedTerminalOutcome(t *testing.T) {
 		},
 		{
 			name:   "storage failure",
-			store:  failingEpisodeStore{EpisodeStore: memory.NewEpisodeStore()},
+			store:  failingEpisodeStore{EpisodeStore: memory.NewEpisodeStore(nowFunc)},
 			audit:  memory.NewAuditStore(),
 			create: episodeCreate(),
 			want:   TerminalObservation{Outcome: TerminalOutcomeFailure, AuditDelivery: AuditDeliveryDelivered},
 		},
 		{
 			name:   "preflight audit failure",
-			store:  memory.NewEpisodeStore(),
+			store:  memory.NewEpisodeStore(nowFunc),
 			audit:  failingAuditStore{},
 			create: episodeCreate(),
 			want:   TerminalObservation{Outcome: TerminalOutcomeFailure, AuditDelivery: AuditDeliveryFailed},
 		},
 		{
 			name:   "validation failure",
-			store:  memory.NewEpisodeStore(),
+			store:  memory.NewEpisodeStore(nowFunc),
 			audit:  memory.NewAuditStore(),
 			create: contractsv1.AgentEpisodeCreate{},
 			want:   TerminalObservation{Outcome: TerminalOutcomeFailure, AuditDelivery: AuditDeliverySkipped},
@@ -67,7 +74,7 @@ func TestServiceCreateObservesOneBoundedTerminalOutcome(t *testing.T) {
 			// Given
 			observer := newTerminalObserver()
 			service, err := NewService(test.store, test.audit, withPacketStore(ServiceOptions{
-				Now:              func() time.Time { return time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC) },
+				Now:              nowFunc,
 				TerminalObserver: observer,
 			}))
 			if err != nil {
@@ -97,7 +104,7 @@ func TestServiceCreateObservesOneBoundedTerminalOutcome(t *testing.T) {
 
 func TestServiceRedactObservesRedactionAndAuditDelivery(t *testing.T) {
 	// Given
-	store := memory.NewEpisodeStore()
+	store := memory.NewEpisodeStore(nil)
 	creator, err := NewService(store, memory.NewAuditStore(), withPacketStore(ServiceOptions{}))
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +138,7 @@ func TestServiceRedactObservesRedactionAndAuditDelivery(t *testing.T) {
 func TestServiceCreateObservesCompletionAuditFailure(t *testing.T) {
 	// Given
 	observer := newTerminalObserver()
-	service, err := NewService(memory.NewEpisodeStore(), &failOnNthAudit{store: memory.NewAuditStore(), failAt: 2}, withPacketStore(ServiceOptions{TerminalObserver: observer}))
+	service, err := NewService(memory.NewEpisodeStore(nil), &failOnNthAudit{store: memory.NewAuditStore(), failAt: 2}, withPacketStore(ServiceOptions{TerminalObserver: observer}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +159,7 @@ func TestServiceCreateObservesCompletionAuditFailure(t *testing.T) {
 }
 
 func TestServiceCreateRecoversTerminalObserverPanic(t *testing.T) {
-	service, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), withPacketStore(ServiceOptions{TerminalObserver: panickingTerminalObserver{}, StoreObserver: panickingStoreObserver{}}))
+	service, err := NewService(memory.NewEpisodeStore(nil), memory.NewAuditStore(), withPacketStore(ServiceOptions{TerminalObserver: panickingTerminalObserver{}, StoreObserver: panickingStoreObserver{}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,10 +179,10 @@ func TestServiceObservesOnlyActualStoreCalls(t *testing.T) {
 		create contractsv1.AgentEpisodeCreate
 		want   int
 	}{
-		{name: "success", store: memory.NewEpisodeStore(), audit: memory.NewAuditStore(), create: episodeCreate(), want: 2},
-		{name: "storage failure", store: failingEpisodeStore{EpisodeStore: memory.NewEpisodeStore()}, audit: memory.NewAuditStore(), create: episodeCreate(), want: 2},
-		{name: "audit failure", store: memory.NewEpisodeStore(), audit: failingAuditStore{}, create: episodeCreate(), want: 1},
-		{name: "validation failure", store: memory.NewEpisodeStore(), audit: memory.NewAuditStore(), create: contractsv1.AgentEpisodeCreate{}},
+		{name: "success", store: memory.NewEpisodeStore(nil), audit: memory.NewAuditStore(), create: episodeCreate(), want: 2},
+		{name: "storage failure", store: failingEpisodeStore{EpisodeStore: memory.NewEpisodeStore(nil)}, audit: memory.NewAuditStore(), create: episodeCreate(), want: 2},
+		{name: "audit failure", store: memory.NewEpisodeStore(nil), audit: failingAuditStore{}, create: episodeCreate(), want: 1},
+		{name: "validation failure", store: memory.NewEpisodeStore(nil), audit: memory.NewAuditStore(), create: contractsv1.AgentEpisodeCreate{}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

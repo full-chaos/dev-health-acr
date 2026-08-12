@@ -127,7 +127,7 @@ func testBuildRequest(t *testing.T, events *[]string, failAt string) buildReques
 		credentials: credentials,
 		audit:       audit,
 		packets:     memory.NewPacketStore(nowTime(now)),
-		episodes:    memory.NewEpisodeStore(),
+		episodes:    memory.NewEpisodeStore(nowTime(now)),
 		check:       stageFunction(events, failAt, "postgres.check"),
 		close:       stageCloseFunction(events, failAt, "postgres.close"),
 	}

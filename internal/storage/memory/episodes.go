@@ -19,6 +19,7 @@ const redactedEpisodeText = "[redacted]"
 
 type EpisodeStore struct {
 	mu       sync.RWMutex
+	now      func() time.Time
 	byID     map[string]episodeRecord
 	byClient map[string]string
 	byKey    map[string]string
@@ -32,8 +33,18 @@ type episodeRecord struct {
 	clientID string
 }
 
-func NewEpisodeStore() *EpisodeStore {
-	return &EpisodeStore{byID: map[string]episodeRecord{}, byClient: map[string]string{}, byKey: map[string]string{}}
+// NewEpisodeStore builds an in-memory EpisodeStore. now supplies the clock
+// used for every expiry decision (CreatedAt fallback, Get, Redact); pass nil
+// to default to time.Now. Callers that inject a fixed clock into the
+// episode.Service (ServiceOptions.Now) must inject that same clock here --
+// otherwise expiry checks race the real wall clock against a fictional
+// service-layer "now" and silently start failing whenever real time crosses
+// the fixture's expiry threshold.
+func NewEpisodeStore(now func() time.Time) *EpisodeStore {
+	if now == nil {
+		now = time.Now
+	}
+	return &EpisodeStore{now: now, byID: map[string]episodeRecord{}, byClient: map[string]string{}, byKey: map[string]string{}}
 }
 
 func (s *EpisodeStore) PreflightIdempotency(ctx context.Context, principal storage.Principal, create contractsv1.AgentEpisodeCreate) (storage.EpisodePreflight, error) {
@@ -89,7 +100,7 @@ func (s *EpisodeStore) CreateIdempotent(ctx context.Context, principal storage.P
 	if err := ctx.Err(); err != nil {
 		return contractsv1.AgentEpisode{}, false, err
 	}
-	stored := contractsv1.AgentEpisode{AgentEpisodeCreate: cloneEpisodeCreate(create), EpisodeID: id, CreatedAt: time.Now().UTC(), RedactionState: "active"}
+	stored := contractsv1.AgentEpisode{AgentEpisodeCreate: cloneEpisodeCreate(create), EpisodeID: id, CreatedAt: s.now().UTC(), RedactionState: "active"}
 	if expiresAt != nil {
 		stored.CreatedAt = expiresAt.Add(-defaultRetention(create.RetentionClass))
 	}
@@ -105,7 +116,7 @@ func (s *EpisodeStore) Redact(_ context.Context, principal storage.Principal, ep
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, exists := s.byID[episodeID]
-	if !exists || record.orgID != principal.OrgID || record.episode.RedactionState == "purged_tombstone" || episodeExpired(record.episode, time.Now().UTC()) || record.episode.AgentEpisodeCreate.Repository.Slug == "" || !episodeRepositoryAllowed(principal.RepositoryScopes, record.episode.Repository.Slug) {
+	if !exists || record.orgID != principal.OrgID || record.episode.RedactionState == "purged_tombstone" || episodeExpired(record.episode, s.now().UTC()) || record.episode.AgentEpisodeCreate.Repository.Slug == "" || !episodeRepositoryAllowed(principal.RepositoryScopes, record.episode.Repository.Slug) {
 		return contractsv1.AgentEpisode{}, storage.ErrNotFound
 	}
 	if record.episode.RedactionState == "active" {

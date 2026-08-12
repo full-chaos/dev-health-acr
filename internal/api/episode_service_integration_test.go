@@ -29,7 +29,7 @@ func TestCreateEpisodeWithRealServiceSeparatesPacketNotFoundFromNoPersist(t *tes
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			// Given
-			service, err := episode.NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), episode.ServiceOptions{PacketStore: episodePacketStore{err: test.packetErr}})
+			service, err := episode.NewService(memory.NewEpisodeStore(nil), memory.NewAuditStore(), episode.ServiceOptions{PacketStore: episodePacketStore{err: test.packetErr}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -51,7 +51,7 @@ func TestCreateEpisodeWithRealServiceSeparatesPacketNotFoundFromNoPersist(t *tes
 
 func TestCreateEpisodeWithRealServiceReturnsCanonicalConflictEnvelope(t *testing.T) {
 	// Given
-	service, err := episode.NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), episode.ServiceOptions{PacketStore: episodePacketStore{}})
+	service, err := episode.NewService(memory.NewEpisodeStore(nil), memory.NewAuditStore(), episode.ServiceOptions{PacketStore: episodePacketStore{}})
 	if err != nil {
 		t.Fatal(err)
 	}
