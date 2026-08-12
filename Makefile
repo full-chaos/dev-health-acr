@@ -136,6 +136,7 @@ build:
 	go build -ldflags "$(LOCAL_BUILD_LDFLAGS)" -o .tmp/acr-mcp ./cmd/acr-mcp
 	go build -o .tmp/contractcheck ./cmd/contractcheck
 	go build -o .tmp/acr-migrate ./cmd/acr-migrate
+	go build -ldflags "$(LOCAL_BUILD_LDFLAGS)" -o .tmp/acr-projector ./cmd/acr-projector
 
 verify: fmt-check vet test test-race crosscompile contract-test codegraph-contract canonical-receipts fullstack-contract build
 

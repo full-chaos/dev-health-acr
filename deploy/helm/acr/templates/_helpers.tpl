@@ -59,6 +59,22 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/part-of: dev-health-acr
 {{- end -}}
 
+{{- define "acr.projectorSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "acr.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: projector
+{{- end -}}
+
+{{- define "acr.projectorLabels" -}}
+helm.sh/chart: {{ include "acr.chart" . }}
+{{ include "acr.projectorSelectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/part-of: dev-health-acr
+{{- end -}}
+
 {{- define "acr.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "acr.fullname" .) .Values.serviceAccount.name -}}

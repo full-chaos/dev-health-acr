@@ -45,7 +45,7 @@ func (b ContextFabricProjectionBatch) Validate() error {
 	if len(b.Entities)+len(b.Relationships)+len(b.Contents)+len(b.Episodes)+len(b.Tombstones) == 0 {
 		return fmt.Errorf("projection batch is empty")
 	}
-	if len(b.Entities) > 1000 || len(b.Relationships) > 5000 || len(b.Contents) > 1000 || len(b.Episodes) > 1000 || len(b.Tombstones) > 5000 {
+	if len(b.Entities) > ContextFabricProjectionBatchMaxEntities || len(b.Relationships) > ContextFabricProjectionBatchMaxRelationships || len(b.Contents) > ContextFabricProjectionBatchMaxContents || len(b.Episodes) > ContextFabricProjectionBatchMaxEpisodes || len(b.Tombstones) > ContextFabricProjectionBatchMaxTombstones {
 		return fmt.Errorf("projection batch exceeds v1 item bounds")
 	}
 	if err := validateEntityProjections(b.Entities); err != nil {
@@ -102,6 +102,9 @@ func (e ContextFabricEntityProjection) Validate() error {
 	if err := e.Authorization.Validate(); err != nil {
 		return fmt.Errorf("authorization: %w", err)
 	}
+	if err := validateReservedOrganizationScope(e.Subject.Kind, e.Authorization); err != nil {
+		return err
+	}
 	for provider, id := range e.ProviderIDs {
 		if !stringLengthBetween(provider, 1, 128) || !stringLengthBetween(id, 1, 512) || strings.TrimSpace(provider) != provider || strings.TrimSpace(id) != id {
 			return fmt.Errorf("provider identity violates v1 bounds")
@@ -129,6 +132,12 @@ func (r ContextFabricRelationshipProjection) Validate() error {
 	if err := r.Authorization.Validate(); err != nil {
 		return fmt.Errorf("authorization: %w", err)
 	}
+	// A relationship has no single subject an organization-scope exemption
+	// could attach to (it has From/To), so it may never carry the reserved
+	// organization-scope namespace at all.
+	if err := validateReservedOrganizationScope("", r.Authorization); err != nil {
+		return err
+	}
 	if err := validateScalarMap(r.Properties); err != nil {
 		return fmt.Errorf("properties: %w", err)
 	}
@@ -139,14 +148,37 @@ func (c ContextFabricContentProjection) Validate() error {
 	if !stringLengthBetween(c.ContentID, 8, 256) || c.Subject.Validate() != nil || !stringLengthBetween(strings.TrimSpace(c.Title), 1, 1024) || !stringLengthBetween(c.Body, 0, 100000) || !stringLengthBetween(c.ContentDigest, 8, 256) || !boundedEvidenceRefs(c.EvidenceRefIDs, 500, false) || c.ObservedAt.IsZero() || !validVersion(c.SourceVersion) || !c.Untrusted {
 		return fmt.Errorf("content projection violates v1 bounds or untrusted-content requirement")
 	}
-	return c.Authorization.Validate()
+	if err := c.Authorization.Validate(); err != nil {
+		return err
+	}
+	return validateReservedOrganizationScope(c.Subject.Kind, c.Authorization)
 }
 
 func (e ContextFabricEpisodeProjection) Validate() error {
 	if !stringLengthBetween(e.EpisodeID, 8, 256) || e.Subject.Validate() != nil || !stringLengthBetween(strings.TrimSpace(e.Goal), 1, 4000) || !stringLengthBetween(strings.TrimSpace(e.Outcome), 1, 128) || !stringLengthBetween(strings.TrimSpace(e.Summary), 1, 8000) || !boundedEvidenceRefs(e.EvidenceRefIDs, 500, false) || e.StartedAt.IsZero() || e.EndedAt.IsZero() || e.EndedAt.Before(e.StartedAt) || !validVersion(e.SourceVersion) {
 		return fmt.Errorf("episode projection violates v1 bounds")
 	}
-	return e.Authorization.Validate()
+	if err := e.Authorization.Validate(); err != nil {
+		return err
+	}
+	return validateReservedOrganizationScope(e.Subject.Kind, e.Authorization)
+}
+
+// validateReservedOrganizationScope rejects any AuthorizationScope.ProjectIDs
+// value inside ContextFabricReservedOrganizationScopePrefix's namespace
+// unless kind is ContextFabricSubjectOrganization -- see that constant's
+// doc comment (CHAOS-3753 codex finding W2). Pass "" for projection kinds
+// (e.g. relationships) that have no single subject to exempt.
+func validateReservedOrganizationScope(kind ContextFabricSubjectKind, scope ContextFabricAuthorizationScope) error {
+	if kind == ContextFabricSubjectOrganization {
+		return nil
+	}
+	for _, id := range scope.ProjectIDs {
+		if ContextFabricIsReservedOrganizationScopeID(id) {
+			return fmt.Errorf("authorization: project id falls inside the reserved organization-scope namespace")
+		}
+	}
+	return nil
 }
 
 func (t ContextFabricProjectionTombstone) Validate() error {

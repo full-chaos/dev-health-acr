@@ -58,8 +58,8 @@ func (s *EpisodeStore) CreateIdempotent(ctx context.Context, principal storage.P
 INSERT INTO acr.agent_episodes (
     episode_id, org_id, repo_id, repo_slug, context_packet_id, client_episode_id,
     idempotency_key, schema_version, outcome, retention_class, redaction_state, payload, started_at,
-    ended_at, created_at, expires_at
-) VALUES ($1, $2::uuid, $3::uuid, $4, NULLIF($5, ''), $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, NOW(), $15)
+    ended_at, created_at, updated_at, expires_at
+) VALUES ($1, $2::uuid, $3::uuid, $4, NULLIF($5, ''), $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, NOW(), NOW(), $15)
 ON CONFLICT DO NOTHING
 	RETURNING episode_id, payload, created_at, redaction_state`, id, principal.OrgID, repositoryID,
 		create.Repository.Slug, create.ContextPacketID, create.ClientEpisodeID, create.IdempotencyKey, contractsv1.AgentEpisodeSchema,
@@ -118,7 +118,7 @@ SELECT episode_id, repo_slug, payload, created_at, redaction_state
 			return contractsv1.AgentEpisode{}, fmt.Errorf("encode redacted episode: %w", err)
 		}
 		row = tx.QueryRowContext(ctx, `
-UPDATE acr.agent_episodes SET payload = jsonb_set(payload, '{episode}', $3::jsonb), redaction_state = 'redacted', redacted_at = NOW()
+UPDATE acr.agent_episodes SET payload = jsonb_set(payload, '{episode}', $3::jsonb), redaction_state = 'redacted', redacted_at = NOW(), updated_at = NOW()
 WHERE org_id = $1::uuid AND episode_id = $2
 RETURNING episode_id, payload, created_at, redaction_state`, principal.OrgID, episodeID, string(payload))
 		episode, err = scanEpisode(row)
@@ -130,6 +130,44 @@ RETURNING episode_id, payload, created_at, redaction_state`, principal.OrgID, ep
 		return contractsv1.AgentEpisode{}, fmt.Errorf("commit episode redaction: %w", err)
 	}
 	return episode, nil
+}
+
+// ListSince is the org-wide incremental read behind storage.EpisodeStore.
+// See the interface doc comment for the full contract.
+func (s *EpisodeStore) ListSince(ctx context.Context, orgID string, since time.Time, afterEpisodeID string, limit int) ([]storage.EpisodeProjectionRecord, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return nil, errors.New("organization is required")
+	}
+	rows, err := s.DB.QueryContext(ctx, `
+SELECT episode_id, repo_slug, redaction_state, outcome, started_at, ended_at, created_at, updated_at, payload
+FROM acr.agent_episodes
+WHERE org_id = $1::uuid AND (updated_at > $2 OR (updated_at = $2 AND episode_id > $3))
+ORDER BY updated_at ASC, episode_id ASC
+LIMIT $4`, orgID, since, afterEpisodeID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list episodes since: %w", sanitizeDatabaseError(err))
+	}
+	defer rows.Close()
+	result := make([]storage.EpisodeProjectionRecord, 0, limit)
+	for rows.Next() {
+		var record storage.EpisodeProjectionRecord
+		var payload []byte
+		if err := rows.Scan(&record.EpisodeID, &record.RepoSlug, &record.RedactionState, &record.Outcome, &record.StartedAt, &record.EndedAt, &record.CreatedAt, &record.UpdatedAt, &payload); err != nil {
+			return nil, fmt.Errorf("scan episode since: %w", sanitizeDatabaseError(err))
+		}
+		record.StartedAt, record.EndedAt, record.CreatedAt, record.UpdatedAt = record.StartedAt.UTC(), record.EndedAt.UTC(), record.CreatedAt.UTC(), record.UpdatedAt.UTC()
+		if record.RedactionState == "active" {
+			if create, err := storedEpisodeCreate(payload); err == nil {
+				record.Goal, record.Summary, record.TaskRef = create.Goal, create.Summary, create.TaskRef
+			}
+		}
+		result = append(result, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate episodes since: %w", sanitizeDatabaseError(err))
+	}
+	return result, nil
 }
 
 func (s *EpisodeStore) PurgeExpired(ctx context.Context, before time.Time, limit int) (int, error) {
@@ -171,7 +209,7 @@ WITH candidates AS (
 )
 UPDATE acr.agent_episodes AS episode
 SET payload = jsonb_build_object('idempotency_digest', episode.payload->>'idempotency_digest', 'tombstone', true),
-    redaction_state = 'purged_tombstone'
+    redaction_state = 'purged_tombstone', updated_at = NOW()
 FROM candidates WHERE episode.episode_id = candidates.episode_id`, before, limit, orgID, string(scopesJSON))
 	if err != nil {
 		return 0, fmt.Errorf("purge expired episodes: %w", err)

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,11 @@ type episodeRecord struct {
 	orgID    string
 	repoSlug string
 	clientID string
+	// updatedAt is ListSince's watermark column (storage.EpisodeStore's doc
+	// comment, CHAOS-3753 codex finding C4): equal to episode.CreatedAt at
+	// creation, bumped on every state-changing write (Redact,
+	// purgeExpired), independent of contractsv1.AgentEpisode's wire shape.
+	updatedAt time.Time
 }
 
 // NewEpisodeStore builds an in-memory EpisodeStore. now supplies the clock
@@ -107,7 +113,10 @@ func (s *EpisodeStore) CreateIdempotent(ctx context.Context, principal storage.P
 	if create.RetentionClass == "no_persist" {
 		stored = contractsv1.AgentEpisode{EpisodeID: id, RedactionState: "purged_tombstone"}
 	}
-	s.byID[id] = episodeRecord{episode: stored, digest: digest, orgID: principal.OrgID, repoSlug: create.Repository.Slug, clientID: create.ClientEpisodeID}
+	s.byID[id] = episodeRecord{
+		episode: stored, digest: digest, orgID: principal.OrgID, repoSlug: create.Repository.Slug, clientID: create.ClientEpisodeID,
+		updatedAt: stored.CreatedAt,
+	}
 	s.byClient[clientKey], s.byKey[idempotencyKey] = id, id
 	return presentation(stored), false, nil
 }
@@ -122,9 +131,54 @@ func (s *EpisodeStore) Redact(_ context.Context, principal storage.Principal, ep
 	if record.episode.RedactionState == "active" {
 		record.episode.AgentEpisodeCreate = redactedCreate(record.episode.AgentEpisodeCreate)
 		record.episode.RedactionState = "redacted"
+		record.updatedAt = s.now().UTC()
 		s.byID[episodeID] = record
 	}
 	return presentation(record.episode), nil
+}
+
+// ListSince is the org-wide incremental read behind storage.EpisodeStore.
+// See the interface doc comment for the full contract.
+func (s *EpisodeStore) ListSince(_ context.Context, orgID string, since time.Time, afterEpisodeID string, limit int) ([]storage.EpisodeProjectionRecord, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return nil, errors.New("organization is required")
+	}
+	s.mu.RLock()
+	matches := make([]episodeRecord, 0, len(s.byID))
+	for _, record := range s.byID {
+		if record.orgID != orgID {
+			continue
+		}
+		updatedAt := record.updatedAt
+		if updatedAt.Before(since) || (updatedAt.Equal(since) && record.episode.EpisodeID <= afterEpisodeID) {
+			continue
+		}
+		matches = append(matches, record)
+	}
+	s.mu.RUnlock()
+	sort.Slice(matches, func(i, j int) bool {
+		if !matches[i].updatedAt.Equal(matches[j].updatedAt) {
+			return matches[i].updatedAt.Before(matches[j].updatedAt)
+		}
+		return matches[i].episode.EpisodeID < matches[j].episode.EpisodeID
+	})
+	if limit >= 0 && len(matches) > limit {
+		matches = matches[:limit]
+	}
+	result := make([]storage.EpisodeProjectionRecord, 0, len(matches))
+	for _, record := range matches {
+		row := storage.EpisodeProjectionRecord{
+			EpisodeID: record.episode.EpisodeID, RepoSlug: record.repoSlug, RedactionState: record.episode.RedactionState,
+			Outcome: record.episode.Outcome, StartedAt: record.episode.StartedAt, EndedAt: record.episode.EndedAt,
+			CreatedAt: record.episode.CreatedAt, UpdatedAt: record.updatedAt,
+		}
+		if row.RedactionState == "active" {
+			row.Goal, row.Summary, row.TaskRef = record.episode.Goal, record.episode.Summary, record.episode.TaskRef
+		}
+		result = append(result, row)
+	}
+	return result, nil
 }
 
 func (s *EpisodeStore) PurgeExpired(_ context.Context, before time.Time, limit int) (int, error) {
@@ -160,6 +214,7 @@ func (s *EpisodeStore) purgeExpired(before time.Time, limit int, orgID string, s
 		if expiresAt != nil && !expiresAt.After(before) {
 			record.episode.AgentEpisodeCreate = contractsv1.AgentEpisodeCreate{}
 			record.episode.RedactionState = "purged_tombstone"
+			record.updatedAt = s.now().UTC()
 			s.byID[id] = record
 			purged++
 		}

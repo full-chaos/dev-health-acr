@@ -1,12 +1,53 @@
 package v1
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const (
 	ContextFabricInvestigationRequestSchema = "context_fabric_investigation_request.v1"
 	ContextFabricInvestigationResultSchema  = "context_fabric_investigation_result.v1"
 	ContextFabricProjectionBatchSchema      = "context_fabric_projection_batch.v1"
 )
+
+// ContextFabricProjectionBatch{Max...} are the v1 semantic (Go-level)
+// per-batch item bounds ContextFabricProjectionBatch.Validate() enforces
+// -- stricter than the JSON Schema's wire-format maxItems ceiling, which
+// is a looser bound this application-level policy sits inside of.
+// Exported (CHAOS-3753 codex round-2 finding K4) so a producer -- e.g.
+// devhealthsource's fullSnapshot -- can detect an aggregate-oversized
+// batch itself, before ever calling Validate(), rather than duplicating
+// these numbers and risking drift.
+const (
+	ContextFabricProjectionBatchMaxEntities      = 1000
+	ContextFabricProjectionBatchMaxRelationships = 5000
+	ContextFabricProjectionBatchMaxContents      = 1000
+	ContextFabricProjectionBatchMaxEpisodes      = 1000
+	ContextFabricProjectionBatchMaxTombstones    = 5000
+)
+
+// ContextFabricReservedOrganizationScopePrefix is the reserved namespace a
+// synthesized Organization entity uses to encode organization-wide
+// authorization inside AuthorizationScope.ProjectIDs -- ContextFabric has
+// no dedicated organization-scope field yet (see
+// docs/design/context-fabric-projection-worker.md, "Flagged for 1B/1C
+// org-level authorization review"). Only an entity/content/episode
+// projection whose Subject.Kind is ContextFabricSubjectOrganization may
+// ever carry a ProjectIDs value inside this namespace -- Validate() below
+// rejects any other producer that does, at the contract boundary, rather
+// than leaving it to convention (CHAOS-3753 codex finding W2): a real
+// project ID that happened to collide with this prefix would otherwise
+// incorrectly inherit organization-wide authorization once downstream
+// scope filtering exists.
+const ContextFabricReservedOrganizationScopePrefix = "acr-context-fabric:org-scope:"
+
+// ContextFabricIsReservedOrganizationScopeID reports whether id falls
+// inside the reserved organization-scope namespace -- see
+// ContextFabricReservedOrganizationScopePrefix.
+func ContextFabricIsReservedOrganizationScopeID(id string) bool {
+	return strings.HasPrefix(id, ContextFabricReservedOrganizationScopePrefix)
+}
 
 type ContextFabricInvestigationStatus string
 
@@ -42,6 +83,13 @@ const (
 	ContextFabricSubjectDecision     ContextFabricSubjectKind = "decision"
 	ContextFabricSubjectEpisode      ContextFabricSubjectKind = "episode"
 	ContextFabricSubjectMetric       ContextFabricSubjectKind = "metric"
+	// ContextFabricSubjectPullRequestReview and ContextFabricSubjectCIRun
+	// (CHAOS-3753 codex finding C7) are additive v1 enum values -- new
+	// entity kinds a producer may emit, not a change in meaning for any
+	// existing one, so this stays v1 per contracts/AGENTS.md ("narrowed
+	// values...require a new major version"; this is a widening).
+	ContextFabricSubjectPullRequestReview ContextFabricSubjectKind = "pull_request_review"
+	ContextFabricSubjectCIRun             ContextFabricSubjectKind = "ci_pipeline_run"
 )
 
 type ContextFabricResolutionState string

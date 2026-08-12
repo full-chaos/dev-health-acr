@@ -24,6 +24,50 @@
         }
       }
     },
+    "contextFabric": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "zep": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "ADR 0007 Zep/Graphiti graph backend credential, consumed only by acr-projector. No Zep workload is ever rendered by this chart.",
+          "properties": {
+            "baseUrl": { "type": "string" },
+            "existingSecret": { "type": "string" },
+            "apiKeyKey": { "type": "string" }
+          }
+        },
+        "projector": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "CHAOS-3753 Context Fabric projection worker: an independently deployed/scaled Deployment running the acr-projector binary from the same image, disabled by default.",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "replicaCount": { "type": "integer", "minimum": 1 },
+            "revisionHistoryLimit": { "type": "integer", "minimum": 0 },
+            "projectionEnabled": { "type": "boolean" },
+            "orgIds": { "type": "array", "items": { "type": "string" } },
+            "pollInterval": { "type": "string" },
+            "concurrency": { "type": "integer", "minimum": 1 },
+            "teamsProjectsEnabled": { "type": "boolean" },
+            "podAnnotations": { "type": "object", "additionalProperties": true },
+            "podLabels": { "type": "object", "additionalProperties": true },
+            "nodeSelector": { "type": "object", "additionalProperties": true },
+            "tolerations": { "type": "array" },
+            "affinity": { "type": "object", "additionalProperties": true },
+            "resources": { "type": "object", "additionalProperties": true },
+            "service": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "port": { "type": "integer" }
+              }
+            }
+          }
+        }
+      }
+    },
     "imagePullSecrets": {
       "type": "array",
       "items": {

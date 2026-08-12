@@ -76,7 +76,7 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 
 	// Then
 	require.NoError(t, firstErr)
-	require.Equal(t, "applied 5 migrations\n", first.String())
+	require.Equal(t, "applied 8 migrations\n", first.String())
 	require.NoError(t, secondErr)
 	require.Equal(t, "no migrations applied\n", second.String())
 }

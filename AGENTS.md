@@ -39,6 +39,9 @@ docs/adr/                  # Owned architecture decisions
 | Security requirements | `docs/threat-model.md` | Current versus downstream controls are explicitly separated |
 | Full-stack acceptance | `scripts/e2e/fullstack-opencode.sh`, `tests/fullstack/`, `testdata/fullstack/v1/` | Real OpenCode against the live stack; contract in `docs/fullstack-acceptance.md` |
 | Isolated stack lifecycle | `scripts/e2e/compose.sh` | Sourceable library; `prepare_stack` is the reusable boundary, `ACR_E2E_SEED_HOOK` swaps the corpus |
+| Context Fabric domain/ports | `internal/contextfabric` | Backend-neutral models, ports, engine, checkpoint-safe `ProjectionWorker` |
+| Context Fabric projection worker | `cmd/acr-projector`, `internal/contextfabric/projectionrun`, `internal/contextfabric/devhealthsource`, `internal/contextfabric/pgprojection` | Independent binary; single-flight-per-org coordinator; see `docs/design/context-fabric-projection-worker.md` |
+| Context Fabric graph backend | `internal/contextfabric/zepgraph` | ADR 0007; `ProjectionBackend`/`GraphReader` over Zep/Graphiti |
 
 ## CODE MAP
 
@@ -125,6 +128,7 @@ pinned OpenCode release; it runs in its own workflow, not in `make verify`. See
 - `internal/contracts/**`, `internal/contractcheck/**`: contract owner.
 - `internal/contextpacket/**`: context assembly owner.
 - `internal/auth/**`, `internal/storage/**`: security and persistence owners.
+- `internal/contextfabric/**`, `cmd/acr-projector/**`: Context Fabric owner. Backend adapter subpackages (`zepgraph`, `pgprojection`) own their SQL/vendor client directly rather than adding a backend-specific concept to `internal/storage`; `devhealthsource` is the exception where the data already belongs to `internal/storage` (approved episodes) and reads through `storage.EpisodeStore` like any other caller instead of forking a parallel path.
 - `docs/adr/**`: architecture decision owner.
 
 ## NOTES
