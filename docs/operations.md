@@ -168,14 +168,8 @@ wired by CHAOS-3755's hosted composition
 alongside the same graph backend configuration above to register `POST
 /api/v1/context-fabric/investigations`; leave it `false` (the default) and
 the route stays registered but returns 503 (`api.handleRuntimeUnavailable`)
-for every request. Note that even with both flags true, the endpoint cannot
-produce an answer yet: no production `genkit.Genkit` model provider is
-constructed anywhere in this repository (provider choice, credentials, and
-plugin selection are a decision for a follow-up change), so
-`RuntimeQuestionInterpreter`/`RuntimeAnswerSynthesizer` are wired with a nil
-`ModelRuntime` and degrade every request to 503 `upstream_unavailable`
-(`ErrModelUnavailable`) until that provider is configured -- the graph and
-canonical-fact layers are real and live in the meantime.
+for every request. Answering also needs a model provider, which is a third
+independent enablement — see the next section.
 
 **Single-flight per organization** (the CHAOS-3753 acceptance amendment):
 the coordinator holds a PostgreSQL advisory lock
@@ -239,6 +233,82 @@ checkpoint store
 single-flight/failure-isolation/backoff behavior are proved against real
 PostgreSQL (`testcontainers`) and fakes standing in for the graph backend
 and canonical source, following the same pattern.
+
+### Context Fabric model provider (BYO LLM, CHAOS-3770)
+
+The investigation endpoint interprets the question and synthesises the
+answer through `internal/contextfabric.ModelRuntime`. Hosted composition
+builds it in `internal/runtime/hosted.newContextFabricModelRuntime` from
+`internal/contextfabric/modelprovider`, which is the only place in this
+repository that constructs a production `genkit.Genkit` instance.
+
+**BYO LLM is the supported shape**, so the configuration surface names a
+provider, not a vendor: a provider kind, a base URL, a model id, and a
+credential. Pointing it at any OpenAI-compatible endpoint — a customer's
+own OpenAI key, a corporate gateway, or a self-hosted vLLM/Ollama/llama.cpp
+server — is a pure configuration change. No code change, no new plugin, no
+new build.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ACR_CONTEXT_FABRIC_MODEL_API_KEY` / `_FILE` | *(unset)* | Bearer credential, `KEY`/`KEY_FILE` convention (`config.SecretValue`). Required unless a base URL is set. |
+| `ACR_CONTEXT_FABRIC_MODEL_BASE_URL` | `https://api.openai.com/v1/` | OpenAI-compatible API root. Set this for BYO. |
+| `ACR_CONTEXT_FABRIC_MODEL_PROVIDER` | `openai` | Plugin namespace, recorded verbatim as `ModelExecutionReceipt.Provider`. Give a BYO endpoint its own stable name so replay can tell receipts apart. |
+| `ACR_CONTEXT_FABRIC_MODEL` | `gpt-5-nano` | Bare model id (no provider prefix). Ids containing `/`, e.g. `meta-llama/Llama-3.1-8B-Instruct`, are supported. |
+| `ACR_CONTEXT_FABRIC_MODEL_FALLBACK` | *(unset)* | Optional second, stronger model on the same provider, tried only when the primary call fails or returns output that does not validate. **Recommended value for the OpenAI default: `gpt-5.6-luna`.** Unset by default because a fallback is a second billable call. |
+| `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` | `45s` | Bounds one generation attempt (1s–2m). |
+| `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS` | `2` | Attempts `genkitruntime` makes per operation (1–3). |
+| `ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES` | `2` | The OpenAI SDK's own retry loop *within* one attempt (0–5). Set `0` to make `genkitruntime` the single retry owner — the right choice for a local BYO server. |
+| `ACR_CONTEXT_FABRIC_MODEL_ALLOW_INSECURE_BASE_URL` | `false` | Permits a plaintext `http://` base URL. Only for a loopback or private-network BYO server: the credential travels as a bearer token on every request. |
+
+Two behaviours matter operationally, and they are opposites on purpose:
+
+- **No provider configured is a supported state, not an error.**
+  `modelprovider.Configured` returns false, the model runtime stays nil,
+  and `RuntimeQuestionInterpreter`/`RuntimeAnswerSynthesizer` degrade every
+  request to a clean 503 `upstream_unavailable` (`ErrModelUnavailable`).
+  The route stays registered, authorized and audited, and the graph and
+  canonical-fact layers stay real and live. This is the CHAOS-3755
+  behaviour, and it is regression-tested
+  (`hosted.TestNewContextFabricModelRuntime_keepsTheCleanFiveOhThreeWithoutACredential`).
+- **A provider configured but mis-specified fails startup.** A bad URL, an
+  out-of-band timeout, a conflicting `KEY`/`KEY_FILE` pair, or an
+  unreadable secret file aborts composition with an error naming the
+  variable. An operator who asked for a provider must find out at startup,
+  not one 503 at a time.
+
+Ambient `OPENAI_API_KEY` / `OPENAI_BASE_URL` are deliberately **not**
+consulted, and cannot leak in: the OpenAI SDK seeds itself from them, so
+`modelprovider` always passes the credential and base URL explicitly to
+override that. Opting this service into a paid provider is an ACR
+configuration decision, never something inherited from the process
+environment.
+
+Provider failures are classified into the `ErrModelRateLimited` /
+`ErrModelOutput` / `ErrModelUnavailable` taxonomy that alerting keys off,
+and the classification is proved against the real plugin and the real SDK
+transport replaying recorded provider responses
+(`modelprovider.TestNew_classifiesRecordedProviderFailures`): 429 and quota
+exhaustion map to `ErrModelRateLimited`; 401, 403 and 5xx map to
+`ErrModelUnavailable`; output that violates the response schema, or is not
+JSON at all, maps to `ErrModelOutput`. The classified error carries only a
+class and a fixed message — no provider response body, prompt fragment, or
+endpoint ever travels into logs, receipts, or telemetry built from it.
+
+**Model choice matters, and `gpt-5-nano` alone is not enough.** Measured
+live against `gpt-5-nano` (the CHAOS-3770 acceptance probe:
+`ACR_TEST_MODEL_API_KEY=... go test ./internal/contextfabric/modelprovider -run Live`,
+skipped unless that variable is set): interpretation passed ACR's validator
+on every run, but synthesis — the strictest validator in the pipeline —
+passed on roughly one run in three, failing the rest on value-level closure
+rules. Invalid output is deliberately **not** retried (`genkitruntime` fails
+closed on a schema-shaped failure rather than re-rolling the same input), so
+the configured fallback is the mitigation: set
+`ACR_CONTEXT_FABRIC_MODEL_FALLBACK=gpt-5.6-luna` in any deployment expected
+to answer reliably. `genkitruntime` invokes the fallback on invalid output
+as well as on transport failure, and records `fallback_used` on the receipt.
+Tracking how often that happens per model is the `ModelReceiptSink`
+evaluator's job (CHAOS-3756).
 
 ### Helm
 

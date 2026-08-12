@@ -19,15 +19,26 @@ import (
 const SDKVersion = "v1.11.0"
 
 const (
-	// defaultInterpretationPromptVersion is v2 as of CHAOS-3754: the
-	// interpretation system prompt (prompts.go) was extended to cover
-	// conversational-reference resolution, alias/acronym/previous-name
-	// subject terms, and subjectless team/project cohort framing. A
-	// receipt's PromptVersion is part of what a replay/evaluation
-	// pipeline uses to interpret ModelExecutionReceipt content (ADR
-	// 0008), so a prompt content change must bump this even though the
-	// interpretationOutput schema itself is unchanged.
-	defaultInterpretationPromptVersion = "context-fabric-interpretation.v2"
+	// defaultInterpretationPromptVersion is v3 as of CHAOS-3770's live
+	// acceptance: v2 (CHAOS-3754) extended the interpretation system
+	// prompt (prompts.go) to cover conversational-reference resolution,
+	// alias/acronym/previous-name subject terms, and subjectless
+	// team/project cohort framing; v3 closes the canonical fact-kind
+	// vocabulary in the prompt itself. Against a real provider, v2
+	// invented fact-kind names on ordinary questions
+	// (InterpretedQuestion.Validate then rejected every interpretation
+	// with "fact requirement violates v1 bounds"), because
+	// factRequirementOutput.Kind deliberately carries NO jsonschema enum
+	// -- the layering is that Genkit parses permissively and the
+	// ACR-owned semantic validator owns the registry. Closing the
+	// vocabulary in the prompt is the fix that keeps that layering,
+	// mirroring what v3 of the synthesis prompt did for driver
+	// categories. A receipt's PromptVersion is part of what a
+	// replay/evaluation pipeline uses to interpret
+	// ModelExecutionReceipt content (ADR 0008), so a prompt content
+	// change must bump this even though the interpretationOutput schema
+	// itself is unchanged.
+	defaultInterpretationPromptVersion = "context-fabric-interpretation.v3"
 	// defaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
@@ -35,16 +46,33 @@ const (
 	// citing driver/finding actually names, requires subject labels to
 	// match the input verbatim, and marks direct_judgment/current_state/
 	// deterministic_answer as advisory-only (ACR recomposes them
-	// server-side and never returns the model's own text for them).
-	defaultSynthesisPromptVersion = "context-fabric-synthesis.v3"
+	// server-side and never returns the model's own text for them). v4 is
+	// CHAOS-3770's live-acceptance fix, the synthesis counterpart of
+	// interpretation v3 above: driver standing, derivation method,
+	// epistemic status and claimed-fact kind are closed vocabularies with
+	// no jsonschema enum on the shared contracts types, and driver_id /
+	// finding_id / claim_id carry a minimum length and a
+	// claimed_fact_ids-must-resolve rule that a model cannot infer. v3
+	// stated none of them, so a real provider failed
+	// SynthesisDraft.ValidateAgainst on ordinary inputs; v4 states them.
+	defaultSynthesisPromptVersion = "context-fabric-synthesis.v4"
 	defaultSchemaVersion          = "context-fabric-model-output.v1"
 	defaultEvaluatorVersion       = "context-fabric-grounding.v1"
 )
 
 type Config struct {
-	Genkit                      *genkit.Genkit
-	Provider                    string
-	Model                       string
+	Genkit   *genkit.Genkit
+	Provider string
+	Model    string
+	// ModelRef is the fully qualified Genkit action name used to select the
+	// model at generation time -- "<plugin provider>/<model id>", e.g.
+	// "openai/gpt-5-nano". Genkit resolves a model only by that namespaced
+	// key (an unqualified name parses to an empty provider and matches no
+	// plugin), while Provider and Model stay the plain, replay-facing
+	// values recorded in every ModelExecutionReceipt. Defaults to Model
+	// when empty, which is what a test double or an already-qualified
+	// caller wants.
+	ModelRef                    string
 	ModelVersion                string
 	InterpretationPromptVersion string
 	SynthesisPromptVersion      string
@@ -139,6 +167,9 @@ func newWithGenerator(config Config, gen generator) (*Runtime, error) {
 			return nil, fmt.Errorf("%s is required and must be bounded", name)
 		}
 	}
+	if strings.TrimSpace(config.ModelRef) == "" {
+		config.ModelRef = config.Model
+	}
 	if strings.TrimSpace(config.ModelVersion) == "" {
 		config.ModelVersion = config.Model
 	}
@@ -200,7 +231,7 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 	attempts, generationErr := r.withRetry(ctx, func(callCtx context.Context) error {
 		var err error
 		output, usage, err = r.generator.Interpret(callCtx, generationRequest{
-			Model: r.config.Model, System: interpretationSystemPrompt, Prompt: string(encoded),
+			Model: r.config.ModelRef, System: interpretationSystemPrompt, Prompt: string(encoded),
 		})
 		return err
 	})
@@ -255,7 +286,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	attempts, generationErr := r.withRetry(ctx, func(callCtx context.Context) error {
 		var err error
 		output, usage, err = r.generator.Synthesize(callCtx, generationRequest{
-			Model: r.config.Model, System: synthesisSystemPrompt, Prompt: string(encoded),
+			Model: r.config.ModelRef, System: synthesisSystemPrompt, Prompt: string(encoded),
 		})
 		return err
 	})

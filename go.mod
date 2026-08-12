@@ -9,6 +9,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
+	github.com/openai/openai-go v1.8.2
 	github.com/redis/go-redis/v9 v9.17.2
 	github.com/segmentio/encoding v0.5.4
 	github.com/stretchr/testify v1.11.1
@@ -88,6 +89,10 @@ require (
 	github.com/shirou/gopsutil/v4 v4.26.5 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
+	github.com/tidwall/gjson v1.18.0 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
