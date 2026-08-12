@@ -189,7 +189,11 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 		return err
 	})
 	completed := r.now().UTC()
-	receipt := r.receipt(contextfabric.ModelOperationInterpret, r.config.InterpretationPromptVersion, started, completed, attempts, encoded, nil, usage, generationErr)
+	var classifiedErr error
+	if generationErr != nil {
+		classifiedErr = classifyModelError(generationErr)
+	}
+	receipt := r.receipt(contextfabric.ModelOperationInterpret, r.config.InterpretationPromptVersion, started, completed, attempts, encoded, nil, usage, classifiedErr)
 	if generationErr != nil {
 		if r.config.Fallback != nil {
 			interpreted, fallbackReceipt, fallbackErr := r.config.Fallback.InterpretQuestion(ctx, principal, request)
@@ -199,7 +203,7 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 				return interpreted, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
 		}
-		return contextfabric.InterpretedQuestion{}, receipt, classifyModelError(generationErr)
+		return contextfabric.InterpretedQuestion{}, receipt, classifiedErr
 	}
 	interpreted, err := output.toDomain(request.TimeContext)
 	if err != nil {
@@ -240,7 +244,11 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		return err
 	})
 	completed := r.now().UTC()
-	receipt := r.receipt(contextfabric.ModelOperationSynthesize, r.config.SynthesisPromptVersion, started, completed, attempts, encoded, nil, usage, generationErr)
+	var classifiedErr error
+	if generationErr != nil {
+		classifiedErr = classifyModelError(generationErr)
+	}
+	receipt := r.receipt(contextfabric.ModelOperationSynthesize, r.config.SynthesisPromptVersion, started, completed, attempts, encoded, nil, usage, classifiedErr)
 	if generationErr != nil {
 		if r.config.Fallback != nil {
 			draft, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
@@ -250,7 +258,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 				return draft, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
 		}
-		return contextfabric.SynthesisDraft{}, receipt, classifyModelError(generationErr)
+		return contextfabric.SynthesisDraft{}, receipt, classifiedErr
 	}
 	draft, err := output.toDomain()
 	if err == nil {
@@ -294,11 +302,13 @@ func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error)
 	return r.config.MaxAttempts, last
 }
 
+// receipt builds the content-safe execution receipt for one generation
+// attempt. err, when non-nil, must already be the classifyModelError output
+// (or a context cancellation/deadline error) so the receipt Outcome reflects
+// the same rate-limit/invalid-output/unavailable classification callers see
+// on the returned Go error.
 func (r *Runtime) receipt(operation contextfabric.ModelOperation, promptVersion string, started, completed time.Time, attempts int, input, output []byte, usage contextfabric.ModelUsage, err error) contextfabric.ModelExecutionReceipt {
-	outcome := "error"
-	if err == nil {
-		outcome = "pending_validation"
-	}
+	outcome := receiptOutcomeForError(err)
 	receipt := contextfabric.ModelExecutionReceipt{
 		Operation: operation, Provider: r.config.Provider, Model: r.config.Model,
 		ModelVersion: r.config.ModelVersion, PromptVersion: promptVersion,
@@ -310,6 +320,27 @@ func (r *Runtime) receipt(operation contextfabric.ModelOperation, promptVersion 
 		receipt.OutputDigest = contextfabric.DigestModelValue(output)
 	}
 	return receipt
+}
+
+// receiptOutcomeForError maps a nil or already-classified generation error
+// to the receipt Outcome vocabulary from ADR 0008 (success, fallback,
+// invalid_output, unavailable), plus rate_limited for the finer-grained
+// classification callers get from classifyModelError. err is expected to be
+// nil or the direct result of classifyModelError; a context cancellation or
+// deadline error (passed through classifyModelError unchanged) counts as
+// unavailable from a receipts standpoint, since the runtime's own bounded
+// deadline is what stopped the call.
+func receiptOutcomeForError(err error) string {
+	switch {
+	case err == nil:
+		return "pending_validation"
+	case errors.Is(err, contextfabric.ErrModelRateLimited):
+		return "rate_limited"
+	case errors.Is(err, contextfabric.ErrModelOutput):
+		return "invalid_output"
+	default:
+		return "unavailable"
+	}
 }
 
 func boundedJSON(value any, maximum int) ([]byte, error) {

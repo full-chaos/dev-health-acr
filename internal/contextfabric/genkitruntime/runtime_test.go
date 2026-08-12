@@ -453,7 +453,7 @@ func TestRuntimeClassifiesRateLimitedGenerationError(t *testing.T) {
 	if errors.Is(err, contextfabric.ErrModelUnavailable) {
 		t.Fatalf("InterpretQuestion() error = %v, must not also match ErrModelUnavailable", err)
 	}
-	if receipt.Outcome != "error" || receipt.FallbackUsed {
+	if receipt.Outcome != "rate_limited" || receipt.FallbackUsed {
 		t.Fatalf("receipt = %#v", receipt)
 	}
 }
