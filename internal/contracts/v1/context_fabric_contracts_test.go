@@ -137,6 +137,31 @@ func TestContextFabricBoundedEvidenceRefsRejectsSeparatorCharacter(t *testing.T)
 	}
 }
 
+// TestContextFabricEntityProjectionRejectsSeparatorCharacterInAliases
+// guards against the same corruption for entity aliases and previous
+// names: the zepgraph adapter's encodeScope uses '|' as its delimited-
+// string separator, so a '|'-bearing alias/previous-name would corrupt
+// that encoding and be silently dropped rather than stored, rather than
+// failing loudly at the port.
+func TestContextFabricEntityProjectionRejectsSeparatorCharacterInAliases(t *testing.T) {
+	t.Parallel()
+	for _, mutate := range []struct {
+		name string
+		fn   func(*ContextFabricEntityProjection)
+	}{
+		{"aliases", func(e *ContextFabricEntityProjection) { e.Aliases = []string{"Ask|Dev"} }},
+		{"previous_names", func(e *ContextFabricEntityProjection) { e.PreviousNames = []string{"Old|Name"} }},
+	} {
+		t.Run(mutate.name, func(t *testing.T) {
+			batch := validContextFabricProjectionBatch()
+			mutate.fn(&batch.Entities[0])
+			if err := batch.Validate(); err == nil {
+				t.Fatalf("Validate() accepted a '|'-bearing %s value", mutate.name)
+			}
+		})
+	}
+}
+
 // TestContextFabricProjectionBatchRejectsDuplicateEntitySubject guards
 // against a batch projecting the same subject twice: a backend that upserts
 // entities by subject key would silently apply only the last record (its

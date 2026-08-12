@@ -91,6 +91,14 @@ func (e ContextFabricEntityProjection) Validate() error {
 	if len(e.Aliases) > 100 || len(e.PreviousNames) > 100 || !uniqueTrimmedStrings(e.Aliases, 512) || !uniqueTrimmedStrings(e.PreviousNames, 512) || len(e.ProviderIDs) > 50 || len(e.Properties) > 100 || !boundedEvidenceRefs(e.EvidenceRefIDs, 500, false) || e.ObservedAt.IsZero() || !validVersion(e.SourceVersion) {
 		return fmt.Errorf("entity projection violates v1 bounds")
 	}
+	// Backends that persist a list as a delimited string (e.g. the
+	// zepgraph adapter's "|a|b|" alias encoding) use '|' as their internal
+	// separator; consistent with the authorization scope rule above, an
+	// alias/previous-name containing it must fail here rather than be
+	// silently dropped by that encoding.
+	if containsSeparatorCharacter(e.Aliases) || containsSeparatorCharacter(e.PreviousNames) {
+		return fmt.Errorf("entity alias or previous name must not contain '|'")
+	}
 	if err := e.Authorization.Validate(); err != nil {
 		return fmt.Errorf("authorization: %w", err)
 	}
