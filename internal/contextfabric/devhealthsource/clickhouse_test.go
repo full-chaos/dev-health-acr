@@ -494,16 +494,36 @@ func TestClickHouseProjectionSourceFullSnapshotPagesToCompletionWhenOversized(t 
 	t.Parallel()
 	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
 	const repoCount = 200
-	rows := make([][]any, 0, repoCount)
+	const workItemCount = 200
+	repoRows := make([][]any, 0, repoCount)
 	for i := 0; i < repoCount; i++ {
-		rows = append(rows, []any{fmt.Sprintf("repo-%03d", i), fmt.Sprintf("example-org/repo-%03d", i), "synthetic", at.Add(time.Duration(i) * time.Second)})
+		repoRows = append(repoRows, []any{fmt.Sprintf("repo-%03d", i), fmt.Sprintf("example-org/repo-%03d", i), "synthetic", at.Add(time.Duration(i) * time.Second)})
+	}
+	// Interleaved with the single-candidate repos rows above (same
+	// timestamp range) rather than segregated into their own time window:
+	// a real oversized organization has multiple tables contributing at
+	// once, and every page boundary should have a real chance of landing
+	// on a multi-candidate row -- CONTRIVED-proof gap flagged in the codex
+	// round-2 review: the previous fixture isolated this scenario to
+	// repos alone (every other table's rows set to nil), which cannot
+	// exercise K2's row-group-safe truncation (an entity plus its
+	// BELONGS_TO_REPOSITORY relationship, two candidates sharing one row)
+	// under multi-page paging at all.
+	workItemRows := make([][]any, 0, workItemCount)
+	for i := 0; i < workItemCount; i++ {
+		id := fmt.Sprintf("WIDGET-%03d", i)
+		workItemRows = append(workItemRows, []any{id, "repo-000", "example-org/repo-000", "task " + id, "in_progress", "", at.Add(time.Duration(i)*time.Second + 500*time.Millisecond)})
 	}
 	tables := baseTables(at)
 	for index, table := range tables {
-		if table.match == "FROM repos" {
-			tables[index].rows = rows
-		} else {
-			tables[index].rows = nil // isolate this scenario to one oversized table
+		switch table.match {
+		case "FROM repos":
+			tables[index].rows = repoRows
+		case "FROM work_items AS w":
+			tables[index].rows = workItemRows
+			tables[index].cursorOf = workItemCursorOf
+		default:
+			tables[index].rows = nil // isolate this scenario to the two oversized tables
 		}
 	}
 	client := &fakeClient{tables: tables}
@@ -514,9 +534,11 @@ func TestClickHouseProjectionSourceFullSnapshotPagesToCompletionWhenOversized(t 
 
 	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName}
 	seenRepos := map[string]bool{}
+	seenWorkItemEntities := map[string]bool{}
+	seenWorkItemRelationships := map[string]bool{}
 	sawOrganization := false
 	pages := 0
-	for pages = 0; pages < repoCount; pages++ { // generous upper bound; must converge well before this
+	for pages = 0; pages < repoCount+workItemCount; pages++ { // generous upper bound; must converge well before this
 		batch, available, err := source.NextProjectionBatch(context.Background(), checkpoint)
 		if err != nil {
 			t.Fatalf("page %d: next projection batch: %v", pages, err)
@@ -531,28 +553,52 @@ func TestClickHouseProjectionSourceFullSnapshotPagesToCompletionWhenOversized(t 
 			t.Fatalf("page %d: batch failed contract validation: %v", pages, err)
 		}
 		for _, entity := range batch.Entities {
-			if entity.Subject.Kind == contextfabric.SubjectOrganization {
+			switch entity.Subject.Kind {
+			case contextfabric.SubjectOrganization:
 				if sawOrganization {
 					t.Fatal("the organization entity must be projected exactly once across the whole catch-up, not once per page")
 				}
 				sawOrganization = true
+			case contextfabric.SubjectWorkItem:
+				if seenWorkItemEntities[entity.Subject.CanonicalID] {
+					t.Fatalf("page %d: work item %s was projected twice -- pagination skipped or replayed a row", pages, entity.Subject.CanonicalID)
+				}
+				seenWorkItemEntities[entity.Subject.CanonicalID] = true
+			default:
+				if seenRepos[entity.Subject.CanonicalID] {
+					t.Fatalf("page %d: repository %s was projected twice -- pagination skipped or replayed a row", pages, entity.Subject.CanonicalID)
+				}
+				seenRepos[entity.Subject.CanonicalID] = true
+			}
+		}
+		for _, relationship := range batch.Relationships {
+			if relationship.Type != "BELONGS_TO_REPOSITORY" || relationship.From.Kind != contextfabric.SubjectWorkItem {
 				continue
 			}
-			if seenRepos[entity.Subject.CanonicalID] {
-				t.Fatalf("page %d: repository %s was projected twice -- pagination skipped or replayed a row", pages, entity.Subject.CanonicalID)
+			if seenWorkItemRelationships[relationship.From.CanonicalID] {
+				t.Fatalf("page %d: work item %s's relationship was projected twice", pages, relationship.From.CanonicalID)
 			}
-			seenRepos[entity.Subject.CanonicalID] = true
+			// K2: this relationship must appear in the SAME batch as its
+			// entity -- never split across a page boundary.
+			if !seenWorkItemEntities[relationship.From.CanonicalID] {
+				t.Fatalf("page %d: work item %s's relationship was projected without its entity in the same or an earlier batch", pages, relationship.From.CanonicalID)
+			}
+			seenWorkItemRelationships[relationship.From.CanonicalID] = true
 		}
 		checkpoint.Cursor = batch.NextCursor
 	}
 	if len(seenRepos) != repoCount {
 		t.Fatalf("expected all %d repositories to be projected across %d pages, got %d: missing >= 1", repoCount, pages, len(seenRepos))
 	}
+	if len(seenWorkItemEntities) != workItemCount || len(seenWorkItemRelationships) != workItemCount {
+		t.Fatalf("expected all %d work items and their relationships to be projected across %d pages, got %d entities / %d relationships",
+			workItemCount, pages, len(seenWorkItemEntities), len(seenWorkItemRelationships))
+	}
 	if !sawOrganization {
 		t.Fatal("expected the organization entity to be projected exactly once during catch-up")
 	}
 	if pages < 2 {
-		t.Fatalf("expected catch-up to take more than one page given the oversized table, took %d", pages)
+		t.Fatalf("expected catch-up to take more than one page given the oversized tables, took %d", pages)
 	}
 }
 

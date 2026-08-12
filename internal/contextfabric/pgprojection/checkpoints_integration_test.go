@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -158,6 +159,17 @@ func TestCheckpointStore_replayAfterRebuildResetAdvancesNormally(t *testing.T) {
 // proves the fix didn't regress the original first-ever-checkpoint race:
 // when NO row exists yet, two concurrent CAS calls from the true zero value
 // must still have exactly one winner.
+//
+// CONTRIVED-proof gap flagged in the codex round-2 review: the previous
+// version called the two CompareAndSwapProjectionCheckpoint calls one
+// after the other and awaited each in turn -- by the time the second call
+// even started, the first had already committed, so this was really
+// testing "insert, then insert-again-and-conflict", a strictly weaker,
+// entirely deterministic property that says nothing about real
+// concurrent contention on the same INSERT ... ON CONFLICT DO NOTHING.
+// Now launches both calls as goroutines released simultaneously from a
+// shared channel (each uses a separate pooled connection, so this is
+// genuine concurrent contention at the database level, not simulated).
 func TestCheckpointStore_firstInsertStillLosesToARacingConcurrentFirstInsert(t *testing.T) {
 	ctx := context.Background()
 	store, err := pgprojection.NewCheckpointStore(newCheckpointTestDatabase(t, ctx))
@@ -165,12 +177,27 @@ func TestCheckpointStore_firstInsertStillLosesToARacingConcurrentFirstInsert(t *
 	zero, err := store.LoadProjectionCheckpoint(ctx, "org-1", "dev_health_clickhouse")
 	require.NoError(t, err)
 
-	firstErr := store.CompareAndSwapProjectionCheckpoint(ctx, zero, contextfabric.ProjectionCheckpoint{
-		OrgID: "org-1", Source: "dev_health_clickhouse", Cursor: "cursor-a", SourceVersion: "v1", UpdatedAt: time.Now().UTC(),
-	})
-	secondErr := store.CompareAndSwapProjectionCheckpoint(ctx, zero, contextfabric.ProjectionCheckpoint{
-		OrgID: "org-1", Source: "dev_health_clickhouse", Cursor: "cursor-b", SourceVersion: "v1", UpdatedAt: time.Now().UTC(),
-	})
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var firstErr, secondErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		firstErr = store.CompareAndSwapProjectionCheckpoint(ctx, zero, contextfabric.ProjectionCheckpoint{
+			OrgID: "org-1", Source: "dev_health_clickhouse", Cursor: "cursor-a", SourceVersion: "v1", UpdatedAt: time.Now().UTC(),
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		secondErr = store.CompareAndSwapProjectionCheckpoint(ctx, zero, contextfabric.ProjectionCheckpoint{
+			OrgID: "org-1", Source: "dev_health_clickhouse", Cursor: "cursor-b", SourceVersion: "v1", UpdatedAt: time.Now().UTC(),
+		})
+	}()
+	close(start) // release both goroutines at once
+	wg.Wait()
+
 	require.True(t, (firstErr == nil) != (secondErr == nil), "exactly one of two racing first-ever inserts must win: first=%v second=%v", firstErr, secondErr)
 	if secondErr != nil {
 		require.True(t, errors.Is(secondErr, contextfabric.ErrProjectionConflict))
