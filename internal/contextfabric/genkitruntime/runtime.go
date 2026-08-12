@@ -28,11 +28,15 @@ const (
 	// 0008), so a prompt content change must bump this even though the
 	// interpretationOutput schema itself is unchanged.
 	defaultInterpretationPromptVersion = "context-fabric-interpretation.v2"
-	// defaultSynthesisPromptVersion is v2 as of CHAOS-3755: the prompt now
-	// requires claimed_facts for canonical-fact-shaped drivers/findings
-	// (value-level evidence closure), and synthesisOutput's wire shape
-	// grew the matching claimed_facts field.
-	defaultSynthesisPromptVersion = "context-fabric-synthesis.v2"
+	// defaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
+	// review round: v2 added claimed_facts for value-level closure; v3
+	// closes the driver category vocabulary (a fixed 16-value set, no
+	// longer free text), requires a claimed fact's subject to be one the
+	// citing driver/finding actually names, requires subject labels to
+	// match the input verbatim, and marks direct_judgment/current_state/
+	// deterministic_answer as advisory-only (ACR recomposes them
+	// server-side and never returns the model's own text for them).
+	defaultSynthesisPromptVersion = "context-fabric-synthesis.v3"
 	defaultSchemaVersion          = "context-fabric-model-output.v1"
 	defaultEvaluatorVersion       = "context-fabric-grounding.v1"
 )

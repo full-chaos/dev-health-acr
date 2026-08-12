@@ -42,6 +42,11 @@ type Case struct {
 	Name string
 	Save []SaveStep
 	Get  GetStep
+	// ExtraGets are additional Get checks run after Get, for cases that
+	// need to verify more than one principal's view of the same
+	// result_id (e.g. M1's cross-org-conflict case: org A's row is
+	// intact AND org B never actually acquired it).
+	ExtraGets []GetStep
 }
 
 var (
@@ -51,14 +56,26 @@ var (
 	generatedAt = time.Date(2026, 1, 15, 9, 30, 0, 0, time.UTC)
 )
 
+// result builds a FULLY VALID InvestigationResult (satisfies
+// InvestigationResult.Validate() -- see M2 below, both stores now validate
+// on Save and on Get). Every field Validate() requires non-nil/non-empty
+// is populated, even where the specific scenario a Case exercises doesn't
+// care about its content.
 func result(resultID, question string) contextfabric.InvestigationResult {
+	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project-" + resultID, Label: "Project " + resultID}
 	return contextfabric.InvestigationResult{
-		SchemaVersion:       contextfabric.InvestigationResultSchemaV1,
-		ResultID:            resultID,
-		RequestID:           "request-" + resultID,
-		GeneratedAt:         generatedAt,
-		Status:              contextfabric.InvestigationComplete,
-		Question:            question,
+		SchemaVersion: contextfabric.InvestigationResultSchemaV1,
+		ResultID:      resultID,
+		RequestID:     "request-" + resultID,
+		GeneratedAt:   generatedAt,
+		Status:        contextfabric.InvestigationComplete,
+		Question:      question,
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status",
+			TimeContext:      contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+		},
+		SubjectResolution:   contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{project}},
 		DirectJudgment:      "judgment for " + question,
 		DeterministicAnswer: "deterministic answer for " + question,
 		StrongestPressures:  []string{},
@@ -69,7 +86,13 @@ func result(resultID, question string) contextfabric.InvestigationResult {
 		Conflicts:           []contextfabric.Finding{},
 		Limitations:         []string{},
 		EvidenceRefIDs:      []string{},
-		Warnings:            []string{},
+		ClaimedFacts:        []contextfabric.ClaimedFact{},
+		Coverage:            contextfabric.Coverage{Sources: []contextfabric.SourceObservation{}, DegradedReasons: []string{}},
+		Versions: contextfabric.VersionSet{
+			ServiceVersion: "test", ContractVersion: contextfabric.InvestigationResultSchemaV1, Backend: "test",
+			ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1",
+		},
+		Warnings: []string{},
 	}
 }
 
@@ -85,6 +108,28 @@ func Cases() []Case {
 	divergent := original
 	divergent.DirectJudgment = "a different judgment"
 	divergent.Question = "why did the deploy fail? (mutated)"
+
+	// M1 (Codex adversarial review, CHAOS-3755): a result_id collision
+	// across two DIFFERENT organizations must reject the second Save
+	// outright, org-scoped -- not silently succeed (idempotent) or
+	// silently overwrite org A's row just because result_id (the sole
+	// prior conflict target) matched. Deliberately BYTE-IDENTICAL content
+	// for both orgs: InvestigationResult carries no organization
+	// discriminator of its own (see the port's doc comment), so the
+	// content-equality idempotent-replay path alone cannot distinguish
+	// "the same org retried" from "a different org saved the exact same
+	// content" -- the conflict check must be org-scoped independent of
+	// content equality, or org B's save would be silently treated as a
+	// successful idempotent replay while the row still belongs to org A.
+	crossOrgConflictA := result("result-id-cross-org-conflict", "org A's question")
+	crossOrgConflictB := crossOrgConflictA
+
+	// M2 (Codex adversarial review, CHAOS-3755): Save must reject a
+	// semantically invalid result (the same InvestigationResult.Validate()
+	// the public API enforces before ever returning a result to a caller)
+	// rather than persisting it -- an immutable row that fails the
+	// contract it's supposed to satisfy can never be corrected later.
+	invalid := contextfabric.InvestigationResult{ResultID: "result-id-invalid-0000001"}
 
 	return []Case{
 		{
@@ -117,6 +162,28 @@ func Cases() []Case {
 			},
 			Get: GetStep{Principal: orgA, ResultID: original.ResultID, Want: &original},
 		},
+		{
+			Name: "save under a different org with a colliding result id is rejected and leaves org A's row intact",
+			Save: []SaveStep{
+				{Principal: orgA, Result: crossOrgConflictA},
+				{Principal: orgB, Result: crossOrgConflictB, WantErr: true},
+			},
+			Get: GetStep{Principal: orgA, ResultID: crossOrgConflictA.ResultID, Want: &crossOrgConflictA},
+			ExtraGets: []GetStep{
+				// Org B's Save was rejected -- it must never be able to
+				// Get this result_id either. A store that let this
+				// succeed would mean org B's rejected Save nonetheless
+				// left the result reachable under org B's own identity.
+				{Principal: orgB, ResultID: crossOrgConflictB.ResultID, WantNotFound: true},
+			},
+		},
+		{
+			Name: "save rejects a semantically invalid result and persists nothing",
+			Save: []SaveStep{
+				{Principal: orgA, Result: invalid, WantErr: true},
+			},
+			Get: GetStep{Principal: orgA, ResultID: invalid.ResultID, WantNotFound: true},
+		},
 	}
 }
 
@@ -147,30 +214,38 @@ func RunSuite(t *testing.T, newStore func(t *testing.T) contextfabric.Investigat
 				}
 			}
 
-			got, err := store.Get(ctx, testCase.Get.Principal, testCase.Get.ResultID)
-			if testCase.Get.WantNotFound {
-				if !isNotFound(err) {
-					t.Fatalf("get %q: want not-found error, got %v", testCase.Get.ResultID, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("get %q: unexpected error: %v", testCase.Get.ResultID, err)
-			}
-			if testCase.Get.Want == nil {
-				return
-			}
-			gotJSON, err := json.Marshal(got)
-			if err != nil {
-				t.Fatalf("marshal got result: %v", err)
-			}
-			wantJSON, err := json.Marshal(*testCase.Get.Want)
-			if err != nil {
-				t.Fatalf("marshal want result: %v", err)
-			}
-			if !bytes.Equal(gotJSON, wantJSON) {
-				t.Fatalf("get %q: result mismatch\n got: %s\nwant: %s", testCase.Get.ResultID, gotJSON, wantJSON)
+			runGet(t, ctx, store, testCase.Get, isNotFound)
+			for _, extra := range testCase.ExtraGets {
+				runGet(t, ctx, store, extra, isNotFound)
 			}
 		})
+	}
+}
+
+func runGet(t *testing.T, ctx context.Context, store contextfabric.InvestigationResultStore, step GetStep, isNotFound func(error) bool) {
+	t.Helper()
+	got, err := store.Get(ctx, step.Principal, step.ResultID)
+	if step.WantNotFound {
+		if !isNotFound(err) {
+			t.Fatalf("get %q: want not-found error, got %v", step.ResultID, err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("get %q: unexpected error: %v", step.ResultID, err)
+	}
+	if step.Want == nil {
+		return
+	}
+	gotJSON, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal got result: %v", err)
+	}
+	wantJSON, err := json.Marshal(*step.Want)
+	if err != nil {
+		t.Fatalf("marshal want result: %v", err)
+	}
+	if !bytes.Equal(gotJSON, wantJSON) {
+		t.Fatalf("get %q: result mismatch\n got: %s\nwant: %s", step.ResultID, gotJSON, wantJSON)
 	}
 }

@@ -216,7 +216,17 @@ func (o ContextFabricSourceObservation) Validate() error {
 }
 
 func (c ContextFabricCoverage) Validate() error {
-	if c.Sources == nil || len(c.Sources) > 250 || c.DegradedReasons == nil || len(c.DegradedReasons) > 250 || !uniqueTrimmedStrings(c.DegradedReasons, 2000) {
+	// DegradedReasons has no non-nil requirement, unlike Sources: the JSON
+	// Schema's Coverage.required is ["sources", "partial"] only --
+	// degraded_reasons is genuinely optional there, and its Go tag is
+	// `omitempty`, so an empty (non-nil) slice a caller sets in Go
+	// legitimately round-trips through JSON as an OMITTED field and comes
+	// back nil. A validator that rejected nil here would spuriously
+	// reject its own valid output the moment anything re-decodes it from
+	// JSON (as InvestigationResultStore implementations now do on every
+	// Get -- CHAOS-3755 finding M2) even though nothing was ever actually
+	// invalid.
+	if c.Sources == nil || len(c.Sources) > 250 || len(c.DegradedReasons) > 250 || !uniqueTrimmedStrings(c.DegradedReasons, 2000) {
 		return fmt.Errorf("coverage violates v1 bounds")
 	}
 	seen := make(map[string]struct{}, len(c.Sources))

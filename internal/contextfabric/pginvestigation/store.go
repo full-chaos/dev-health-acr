@@ -56,6 +56,13 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	if orgID == "" || resultID == "" {
 		return errors.New("pginvestigation: organization and result id are required")
 	}
+	// M2 (Codex adversarial review, CHAOS-3755): reject a semantically
+	// invalid result before it is ever persisted -- an immutable row that
+	// fails the same contract the public API enforces on every returned
+	// result can never be corrected later.
+	if err := result.Validate(); err != nil {
+		return fmt.Errorf("pginvestigation: invalid investigation result: %w", err)
+	}
 	payload, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("pginvestigation: marshal investigation result: %w", err)
@@ -79,13 +86,26 @@ ON CONFLICT (result_id) DO NOTHING`,
 
 	// A row already existed for this result_id. Immutability requires that
 	// this only succeeds if it is a byte-for-byte replay of the same
-	// content (e.g. a retried request); any divergence must error rather
-	// than silently keep the original row.
+	// content UNDER THE SAME ORGANIZATION (e.g. a retried request); any
+	// divergence in either dimension must error rather than silently keep
+	// or overwrite the original row.
+	//
+	// M1 (Codex adversarial review, CHAOS-3755): the organization check
+	// runs FIRST, independent of content equality. InvestigationResult
+	// carries no organization discriminator of its own, so a
+	// byte-identical replay from a DIFFERENT org would otherwise pass the
+	// content-equality check below and be treated as a successful
+	// idempotent replay, while the row still belongs to whichever org
+	// wrote it first.
 	row := s.db.QueryRowContext(ctx, `
-SELECT payload FROM acr.context_fabric_investigation_results WHERE result_id = $1`, resultID)
+SELECT org_id, payload FROM acr.context_fabric_investigation_results WHERE result_id = $1`, resultID)
+	var existingOrgID string
 	var existingPayload []byte
-	if err := row.Scan(&existingPayload); err != nil {
+	if err := row.Scan(&existingOrgID, &existingPayload); err != nil {
 		return fmt.Errorf("read existing investigation result: %w", sanitizeError(err))
+	}
+	if existingOrgID != orgID {
+		return fmt.Errorf("pginvestigation: investigation result %q already exists under a different organization", resultID)
 	}
 	same, err := equivalentPayloads(existingPayload, payload)
 	if err != nil {
@@ -125,6 +145,16 @@ SELECT payload FROM acr.context_fabric_investigation_results WHERE result_id = $
 	var result contextfabric.InvestigationResult
 	if err := json.Unmarshal(payload, &result); err != nil {
 		return contextfabric.InvestigationResult{}, fmt.Errorf("pginvestigation: decode investigation result: %w", err)
+	}
+	// M2 (Codex adversarial review, CHAOS-3755): validate on read too, not
+	// just on write. Save already rejects an invalid result before it is
+	// stored, but Get defends independently against any row that reached
+	// storage some other way (e.g. written directly, or by a future/older
+	// binary with different validation, or a row an operator hand-edited)
+	// -- a caller must never receive a result this package cannot vouch
+	// for.
+	if err := result.Validate(); err != nil {
+		return contextfabric.InvestigationResult{}, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
 	}
 	return result, nil
 }

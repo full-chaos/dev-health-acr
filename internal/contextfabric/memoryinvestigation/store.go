@@ -60,6 +60,13 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	if orgID == "" || resultID == "" {
 		return errors.New("memoryinvestigation: organization and result id are required")
 	}
+	// M2 (Codex adversarial review, CHAOS-3755): reject a semantically
+	// invalid result before it is ever persisted -- an immutable row that
+	// fails the same contract the public API enforces on every returned
+	// result can never be corrected later.
+	if err := result.Validate(); err != nil {
+		return fmt.Errorf("memoryinvestigation: invalid investigation result: %w", err)
+	}
 	payload, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("memoryinvestigation: marshal investigation result: %w", err)
@@ -68,6 +75,16 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, found := s.results[resultID]; found {
+		// M1 (Codex adversarial review, CHAOS-3755): the conflict check
+		// is org-scoped FIRST, independent of content equality.
+		// InvestigationResult carries no organization discriminator of
+		// its own, so a byte-identical replay from a DIFFERENT org would
+		// otherwise pass the content-equality check below and be treated
+		// as a successful idempotent replay, while the row still belongs
+		// to whichever org wrote it first.
+		if existing.orgID != orgID {
+			return fmt.Errorf("memoryinvestigation: investigation result %q already exists under a different organization", resultID)
+		}
 		if bytes.Equal(existing.payload, payload) {
 			return nil
 		}
@@ -104,6 +121,15 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	var result contextfabric.InvestigationResult
 	if err := json.Unmarshal(stored.payload, &result); err != nil {
 		return contextfabric.InvestigationResult{}, fmt.Errorf("memoryinvestigation: decode investigation result: %w", err)
+	}
+	// M2 (Codex adversarial review, CHAOS-3755): validate on read too, not
+	// just on write. Save already rejects an invalid result before it is
+	// stored, but Get defends independently against any row that reached
+	// storage some other way (e.g. written directly, or by a future/older
+	// binary with different validation) -- a caller must never receive a
+	// result this package cannot vouch for.
+	if err := result.Validate(); err != nil {
+		return contextfabric.InvestigationResult{}, fmt.Errorf("memoryinvestigation: stored investigation result is invalid: %w", err)
 	}
 	return result, nil
 }
