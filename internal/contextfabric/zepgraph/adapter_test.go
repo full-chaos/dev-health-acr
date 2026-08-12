@@ -713,8 +713,6 @@ func TestResolveSubjectsTraversalRequiresEdgeAuthorization(t *testing.T) {
 // transient failure must fail toward ambiguity instead.
 func TestResolveSubjectsTraversalErrorPreventsAutoCommitOfObservation(t *testing.T) {
 	t.Parallel()
-	api := newFakeAPI()
-	adapter := mustAdapter(t, api)
 	document := &zep.EntityNode{
 		UUID: "node-document-erroring", Name: "Ask Dev readiness review", Relevance: ptr(0.9),
 		Attributes: map[string]interface{}{
@@ -723,20 +721,71 @@ func TestResolveSubjectsTraversalErrorPreventsAutoCommitOfObservation(t *testing
 			"evidence_refs": "|evidence_document_error1|",
 		},
 	}
-	api.nodes[document.UUID] = document
-	api.getNodeEdgesErr = map[string]error{document.UUID: errors.New("transient backend failure")}
-	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{document}}
-	request := validRequest()
-	interpreted := contextfabric.InterpretedQuestion{
-		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"readiness review"},
-		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	const sourceUUID = "node-attributed-source"
+	cases := []struct {
+		name      string
+		configure func(api *fakeAPI)
+	}{
+		{
+			// The GetNodeEdges call for the observation itself fails --
+			// traversal never even learns whether an attribution edge
+			// exists.
+			name: "GetNodeEdges fails",
+			configure: func(api *fakeAPI) {
+				api.getNodeEdgesErr = map[string]error{document.UUID: errors.New("transient backend failure")}
+			},
+		},
+		{
+			// A genuine attribution edge exists, but the second-hop
+			// GetNode call for its source node fails.
+			name: "source GetNode fails",
+			configure: func(api *fakeAPI) {
+				api.edges["edge-documented-by"] = &zep.EntityEdge{
+					UUID: "edge-documented-by", Name: "DOCUMENTED_BY", Fact: "Ask Dev is documented by Ask Dev readiness review.",
+					SourceNodeUUID: sourceUUID, TargetNodeUUID: document.UUID,
+				}
+				api.getNodeErr = map[string]error{sourceUUID: errors.New("transient backend failure")}
+			},
+		},
+		{
+			// A genuine attribution edge exists and its source node is
+			// fetched successfully, but the fetched node's own identity
+			// does not hash back to the UUID it was fetched under (see
+			// verifiedNodeSubject / Codex round-2 G7) -- the same
+			// "impostor" pattern as
+			// TestDiscoverContextRejectsSecondHopNodeNotBelongingToCallersOrganization,
+			// exercised here on traversal's own second-hop GetNode call.
+			name: "source identity verification fails",
+			configure: func(api *fakeAPI) {
+				api.edges["edge-documented-by"] = &zep.EntityEdge{
+					UUID: "edge-documented-by", Name: "DOCUMENTED_BY", Fact: "Ask Dev is documented by Ask Dev readiness review.",
+					SourceNodeUUID: sourceUUID, TargetNodeUUID: document.UUID,
+				}
+				api.nodes[sourceUUID] = graphNode(sourceUUID, contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.9)
+			},
+		},
 	}
-	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted)
-	if err != nil {
-		t.Fatalf("ResolveSubjects() error = %v", err)
-	}
-	if len(resolution.Committed) != 0 {
-		t.Fatalf("resolution.Committed = %#v, want no auto-commit when traversal errored -- a transient backend failure must not be treated as a confirmed absence of a canonical parent", resolution.Committed)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			api := newFakeAPI()
+			adapter := mustAdapter(t, api)
+			api.nodes[document.UUID] = document
+			tc.configure(api)
+			api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{document}}
+			request := validRequest()
+			interpreted := contextfabric.InterpretedQuestion{
+				Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"readiness review"},
+				TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+			}
+			resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted)
+			if err != nil {
+				t.Fatalf("ResolveSubjects() error = %v", err)
+			}
+			if len(resolution.Committed) != 0 {
+				t.Fatalf("resolution.Committed = %#v, want no auto-commit for %s -- an unresolved traversal must not be treated as a confirmed absence of a canonical parent", resolution.Committed, tc.name)
+			}
+		})
 	}
 }
 
@@ -1185,17 +1234,27 @@ func TestDiscoverContextReportsSecondHopVerificationFailuresInCoverage(t *testin
 func TestDiscoverContextCountsEveryClassOfSecondHopDropIntoCoverage(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name      string
-		configure func(api *fakeAPI, uuid string)
+		name       string
+		configure  func(api *fakeAPI, uuid string)
+		wantReason string
 	}{
 		{"stale node (never projected)", func(*fakeAPI, string) {
 			// No node registered under uuid at all -- GetNode returns
 			// NotFoundError, exactly as it would for a stale/deleted
 			// reference.
-		}},
+		}, "second_hop_node_unavailable:1"},
 		{"transient backend error", func(api *fakeAPI, uuid string) {
 			api.getNodeErr = map[string]error{uuid: errors.New("transient backend failure")}
-		}},
+		}, "second_hop_node_unavailable:1"},
+		{
+			// Codex round-4 finding 3: the reachable but unauthorized
+			// second-hop branch (fetchSecondHop's authorizedAttributes
+			// check) was never exercised by the round-3 test -- only the
+			// "could not be fetched at all" branches were.
+			"unauthorized (fetched, but scope denies it)", func(api *fakeAPI, uuid string) {
+				api.nodes[uuid] = graphNode(uuid, contextfabric.SubjectWorkItem, "work_release", "Release acceptance", "|other/private|", 0.8)
+			}, "second_hop_node_unauthorized:1",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1219,15 +1278,20 @@ func TestDiscoverContextCountsEveryClassOfSecondHopDropIntoCoverage(t *testing.T
 				},
 				Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
 			}
-			contextResult, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org_1"}, discoveryRequest)
+			// A principal scoped to one repository: "*"-scoped nodes/edges
+			// (project, the edge itself) stay authorized regardless, but a
+			// second-hop node explicitly scoped to a different repository
+			// is denied -- exactly the "unauthorized" case's setup.
+			principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
+			contextResult, err := adapter.DiscoverContext(context.Background(), principal, discoveryRequest)
 			if err != nil {
 				t.Fatalf("DiscoverContext() error = %v", err)
 			}
 			if !contextResult.Coverage.Partial {
 				t.Fatalf("coverage = %#v, want Partial=true for a %s second-hop node", contextResult.Coverage, tc.name)
 			}
-			if len(contextResult.Coverage.DegradedReasons) != 1 || contextResult.Coverage.DegradedReasons[0] != "second_hop_node_unavailable:1" {
-				t.Fatalf("degraded reasons = %#v, want exactly [\"second_hop_node_unavailable:1\"] for a %s node", contextResult.Coverage.DegradedReasons, tc.name)
+			if len(contextResult.Coverage.DegradedReasons) != 1 || contextResult.Coverage.DegradedReasons[0] != tc.wantReason {
+				t.Fatalf("degraded reasons = %#v, want exactly [%q] for a %s node", contextResult.Coverage.DegradedReasons, tc.wantReason, tc.name)
 			}
 		})
 	}
@@ -2004,6 +2068,46 @@ func TestResolveSubjectsMarksCloseCandidatesAmbiguousAndOffersClarification(t *t
 	}
 	if resolution.ClarificationPrompt == "" {
 		t.Fatal("resolution.ClarificationPrompt is empty for an ambiguous, clarification-allowed request")
+	}
+}
+
+// TestResolveSubjectsClarificationPromptOnlyNamesRetainedCandidates is the
+// probe for Codex round-4 finding 1: clarificationPrompt was built from the
+// full, untruncated candidate set, but Options.MaxSubjectCandidates
+// truncation happens afterward -- with a tight cap and multiple ambiguous
+// matches, the prompt could name a subject that Phase 4 truncation then
+// dropped from resolution.Candidates entirely, offering the caller a
+// choice that does not appear in the machine-readable result they would
+// resolve it against.
+func TestResolveSubjectsClarificationPromptOnlyNamesRetainedCandidates(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	alpha := graphNode("node-alpha", contextfabric.SubjectProject, "project_alpha", "Widget Alpha", "*", 0.75)
+	beta := graphNode("node-beta", contextfabric.SubjectProject, "project_beta", "Widget Beta", "*", 0.70)
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{alpha, beta}}
+	request := validRequest()
+	request.Options.MaxSubjectCandidates = 1
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"Which widget"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Candidates) != 1 {
+		t.Fatalf("resolution.Candidates = %#v, want truncated to Options.MaxSubjectCandidates=1", resolution.Candidates)
+	}
+	retained := make(map[string]bool, len(resolution.Candidates))
+	for _, candidate := range resolution.Candidates {
+		retained[candidate.Subject.Label] = true
+	}
+	for _, label := range []string{"Widget Alpha", "Widget Beta"} {
+		mentioned := strings.Contains(resolution.ClarificationPrompt, label)
+		if mentioned && !retained[label] {
+			t.Fatalf("ClarificationPrompt = %q, names %q which was truncated out of resolution.Candidates = %#v", resolution.ClarificationPrompt, label, resolution.Candidates)
+		}
 	}
 }
 

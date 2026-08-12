@@ -214,9 +214,6 @@ func resolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 		for index := range candidates {
 			candidates[index].State = contextfabric.ResolutionAmbiguous
 		}
-		if allowClarification {
-			resolution.ClarificationPrompt = clarificationPrompt(candidates)
-		}
 	}
 
 	// Phase 4: truncation last. parentKeys is the set of subject keys that
@@ -257,6 +254,15 @@ func resolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 		ordered = ordered[:max]
 	}
 	resolution.Candidates = ordered
+	// Codex round-4 finding 1: the clarification prompt must be built from
+	// the RETAINED (post-truncation) candidate set, not the full set --
+	// naming a subject in the prompt that Phase 4 truncation already
+	// dropped from resolution.Candidates would offer the caller a choice
+	// absent from the machine-readable result they would resolve it
+	// against.
+	if ambiguous && allowClarification {
+		resolution.ClarificationPrompt = clarificationPrompt(ordered)
+	}
 	return resolution
 }
 
