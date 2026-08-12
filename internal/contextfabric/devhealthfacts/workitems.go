@@ -1,0 +1,166 @@
+package devhealthfacts
+
+import (
+	"context"
+	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+const workItemPrefix = "work_item:"
+
+// StatusProvider implements contextfabric.FactProvider for FactStatus from
+// work_items.status -- the same column devhealthsource/tables.go's
+// queryWorkItems already reads.
+type StatusProvider struct{ facts clickhouseFacts }
+
+func newStatusProvider(client contextpacket.ClickHouseQueryClient) *StatusProvider {
+	return &StatusProvider{facts: clickhouseFacts{client: client}}
+}
+
+func (p *StatusProvider) Capability() contextfabric.FactCapability {
+	return newCapability(contextfabric.FactStatus, "devhealthfacts.status", []contextfabric.SubjectKind{contextfabric.SubjectWorkItem})
+}
+
+func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	orgID, err := requireOrgID(principal.OrgID)
+	if err != nil {
+		return contextfabric.FactProviderResult{}, err
+	}
+	ids, bySubject := subjectIndex(query.Subjects, workItemPrefix)
+	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
+	statement := `SELECT w.work_item_id, ifNull(w.status, '')
+FROM work_items AS w FINAL
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var id, status string
+		if err := row.Scan(&id, &status); err != nil {
+			return err
+		}
+		subject, ok := bySubject[id]
+		if !ok {
+			return nil
+		}
+		facts = append(facts, contextfabric.CanonicalFact{
+			Kind: contextfabric.FactStatus, Subject: subject,
+			Fields:         map[string]contextfabric.FactValue{"status": stringOrNull(status)},
+			EvidenceRefIDs: []string{evidenceRefID("work-item", id)},
+		})
+		return nil
+	})
+	if scanErr != nil {
+		return contextfabric.FactProviderResult{}, readFailure("query work item status", scanErr)
+	}
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+}
+
+// WorkProvider implements contextfabric.FactProvider for FactWork -- minimal
+// work descriptors (title) from work_items.title, the same column
+// devhealthsource/tables.go's queryWorkItems already reads.
+type WorkProvider struct{ facts clickhouseFacts }
+
+func newWorkProvider(client contextpacket.ClickHouseQueryClient) *WorkProvider {
+	return &WorkProvider{facts: clickhouseFacts{client: client}}
+}
+
+func (p *WorkProvider) Capability() contextfabric.FactCapability {
+	return newCapability(contextfabric.FactWork, "devhealthfacts.work", []contextfabric.SubjectKind{contextfabric.SubjectWorkItem})
+}
+
+func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	orgID, err := requireOrgID(principal.OrgID)
+	if err != nil {
+		return contextfabric.FactProviderResult{}, err
+	}
+	ids, bySubject := subjectIndex(query.Subjects, workItemPrefix)
+	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
+	statement := `SELECT w.work_item_id, ifNull(w.title, '')
+FROM work_items AS w FINAL
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var id, title string
+		if err := row.Scan(&id, &title); err != nil {
+			return err
+		}
+		subject, ok := bySubject[id]
+		if !ok {
+			return nil
+		}
+		facts = append(facts, contextfabric.CanonicalFact{
+			Kind: contextfabric.FactWork, Subject: subject,
+			Fields:         map[string]contextfabric.FactValue{"title": stringOrNull(title)},
+			EvidenceRefIDs: []string{evidenceRefID("work-item", id)},
+		})
+		return nil
+	})
+	if scanErr != nil {
+		return contextfabric.FactProviderResult{}, readFailure("query work item work descriptors", scanErr)
+	}
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+}
+
+// ActualCompletionProvider implements contextfabric.FactProvider for
+// FactActualCompletion from work_items.completed_at.
+//
+// Deviation from devhealthsource: devhealthsource/tables.go's queryWorkItems
+// never selects completed_at (it only needed status/title/url/updated_at for
+// projection), but the column is real -- it is seeded by
+// testdata/fullstack/v1/seed/clickhouse/001_widget_service.sql's
+// `INSERT INTO work_items (... completed_at, closed_at ...)` -- and
+// FactActualCompletion has no honest way to answer "did this actually
+// complete, and when" without it; a heuristic guess at which work_items.status
+// strings count as "done" would be exactly the kind of invented vocabulary
+// the fact/evidence semantics this package must not invent. "completed" is
+// defined as completed_at being non-null; completed_at is only present in
+// Fields when non-null.
+type ActualCompletionProvider struct{ facts clickhouseFacts }
+
+func newActualCompletionProvider(client contextpacket.ClickHouseQueryClient) *ActualCompletionProvider {
+	return &ActualCompletionProvider{facts: clickhouseFacts{client: client}}
+}
+
+func (p *ActualCompletionProvider) Capability() contextfabric.FactCapability {
+	return newCapability(contextfabric.FactActualCompletion, "devhealthfacts.actual_completion", []contextfabric.SubjectKind{contextfabric.SubjectWorkItem})
+}
+
+func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	orgID, err := requireOrgID(principal.OrgID)
+	if err != nil {
+		return contextfabric.FactProviderResult{}, err
+	}
+	ids, bySubject := subjectIndex(query.Subjects, workItemPrefix)
+	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
+	// isNotNull/ifNull avoid ever scanning a bare Nullable(DateTime64) column
+	// into Go, matching devhealthsource/tables.go's convention of only ever
+	// scanning coalesced, non-null timestamps.
+	statement := `SELECT w.work_item_id, isNotNull(w.completed_at), ifNull(w.completed_at, toDateTime64(0, 6, 'UTC'))
+FROM work_items AS w FINAL
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var id string
+		var isCompleted uint8
+		var completedAt time.Time
+		if err := row.Scan(&id, &isCompleted, &completedAt); err != nil {
+			return err
+		}
+		subject, ok := bySubject[id]
+		if !ok {
+			return nil
+		}
+		fields := map[string]contextfabric.FactValue{"completed": contextfabric.BooleanFactValue(isCompleted != 0)}
+		if isCompleted != 0 {
+			fields["completed_at"] = contextfabric.StringFactValue(completedAt.UTC().Format(time.RFC3339))
+		}
+		facts = append(facts, contextfabric.CanonicalFact{
+			Kind: contextfabric.FactActualCompletion, Subject: subject, Fields: fields,
+			EvidenceRefIDs: []string{evidenceRefID("work-item", id)},
+		})
+		return nil
+	})
+	if scanErr != nil {
+		return contextfabric.FactProviderResult{}, readFailure("query work item actual completion", scanErr)
+	}
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+}
