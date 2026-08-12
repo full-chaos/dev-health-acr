@@ -208,14 +208,19 @@ func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal sto
 		return InterpretedQuestion{}, ErrModelUnavailable
 	}
 	question, receipt, err := r.Runtime.InterpretQuestion(ctx, principal, request)
+	if err == nil {
+		if validateErr := question.Validate(); validateErr != nil {
+			receipt.Outcome = "invalid_output"
+			err = fmt.Errorf("%w: %v", ErrModelOutput, validateErr)
+		} else if receipt.Outcome == "pending_validation" {
+			receipt.Outcome = "success"
+		}
+	}
 	if sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt); sinkErr != nil && err == nil {
 		return InterpretedQuestion{}, sinkErr
 	}
 	if err != nil {
 		return InterpretedQuestion{}, err
-	}
-	if err := question.Validate(); err != nil {
-		return InterpretedQuestion{}, fmt.Errorf("%w: %v", ErrModelOutput, err)
 	}
 	return question, nil
 }
@@ -240,14 +245,19 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		return InvestigationResult{}, ErrModelUnavailable
 	}
 	draft, receipt, err := r.Runtime.SynthesizeAnswer(ctx, principal, input)
+	if err == nil {
+		if validateErr := draft.ValidateAgainst(input); validateErr != nil {
+			receipt.Outcome = "invalid_output"
+			err = fmt.Errorf("%w: %v", ErrModelOutput, validateErr)
+		} else if receipt.Outcome == "pending_validation" {
+			receipt.Outcome = "success"
+		}
+	}
 	if sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt); sinkErr != nil && err == nil {
 		return InvestigationResult{}, sinkErr
 	}
 	if err != nil {
 		return InvestigationResult{}, err
-	}
-	if err := draft.ValidateAgainst(input); err != nil {
-		return InvestigationResult{}, fmt.Errorf("%w: %v", ErrModelOutput, err)
 	}
 	result := InvestigationResult{
 		Status:              draft.Status,

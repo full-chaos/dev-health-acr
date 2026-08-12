@@ -177,6 +177,55 @@ func TestRuntimeQuestionInterpreterWrapsInvalidStructuredOutput(t *testing.T) {
 	}
 }
 
+// TestRuntimeQuestionInterpreterCorrectsReceiptOutcomeToInvalidOutputOnRejection
+// guards against a regression where the receipt was recorded with whatever
+// Outcome the ModelRuntime returned (here "success", simulating a
+// ModelRuntime implementation that does not self-validate) BEFORE this
+// adapter's own InterpretedQuestion.Validate() call, so a receipt claiming
+// success was durably persisted for output this same call then rejected.
+func TestRuntimeQuestionInterpreterCorrectsReceiptOutcomeToInvalidOutputOnRejection(t *testing.T) {
+	t.Parallel()
+	sink := &fakeReceiptSink{}
+	invalid := InterpretedQuestion{Shape: "not_a_real_shape", RequestedJudgment: "x", TimeContext: TimeContext{Axis: TemporalCurrent}}
+	receipt := validModelReceiptFixture(ModelOperationInterpret)
+	receipt.Outcome = "success"
+	interpreter := RuntimeQuestionInterpreter{
+		Runtime: fakeModelRuntime{interpreted: invalid, receipt: receipt},
+		Sink:    sink,
+	}
+	if _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); !errors.Is(err, ErrModelOutput) {
+		t.Fatalf("Interpret() error = %v, want ErrModelOutput", err)
+	}
+	if len(sink.recorded) != 1 || sink.recorded[0].Outcome != "invalid_output" {
+		t.Fatalf("sink.recorded = %#v, want exactly one receipt with outcome invalid_output", sink.recorded)
+	}
+}
+
+// TestRuntimeQuestionInterpreterPromotesPendingValidationOutcomeToSuccess
+// guards against the ADR 0008 "pending_validation" outcome never being
+// resolved: a ModelRuntime that has not itself validated its output records
+// pending_validation, and this adapter is the one place that applies
+// InterpretedQuestion.Validate() and must promote the outcome once it does.
+func TestRuntimeQuestionInterpreterPromotesPendingValidationOutcomeToSuccess(t *testing.T) {
+	t.Parallel()
+	sink := &fakeReceiptSink{}
+	receipt := validModelReceiptFixture(ModelOperationInterpret)
+	receipt.Outcome = "pending_validation"
+	interpreted := InterpretedQuestion{
+		Shape: ShapeOpen, RequestedJudgment: "status_and_drivers", TimeContext: TimeContext{Axis: TemporalCurrent},
+	}
+	interpreter := RuntimeQuestionInterpreter{
+		Runtime: fakeModelRuntime{interpreted: interpreted, receipt: receipt},
+		Sink:    sink,
+	}
+	if _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil {
+		t.Fatalf("Interpret() error = %v", err)
+	}
+	if len(sink.recorded) != 1 || sink.recorded[0].Outcome != "success" {
+		t.Fatalf("sink.recorded = %#v, want exactly one receipt with outcome success", sink.recorded)
+	}
+}
+
 func TestRuntimeAnswerSynthesizerReturnsErrModelUnavailableWhenRuntimeNil(t *testing.T) {
 	t.Parallel()
 	synthesizer := RuntimeAnswerSynthesizer{}
@@ -199,6 +248,81 @@ func TestRuntimeAnswerSynthesizerRejectsDraftThatInventsEvidence(t *testing.T) {
 	_, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
 	if !errors.Is(err, ErrModelOutput) {
 		t.Fatalf("Synthesize() error = %v, want ErrModelOutput", err)
+	}
+}
+
+// TestRuntimeAnswerSynthesizerCorrectsReceiptOutcomeToInvalidOutputOnRejection
+// guards against a regression where the receipt was recorded with whatever
+// Outcome the ModelRuntime returned (here "success") BEFORE this adapter's
+// own draft.ValidateAgainst(input) call, so a receipt claiming success was
+// durably persisted for a draft this same call then rejected with
+// ErrModelOutput.
+func TestRuntimeAnswerSynthesizerCorrectsReceiptOutcomeToInvalidOutputOnRejection(t *testing.T) {
+	t.Parallel()
+	sink := &fakeReceiptSink{}
+	input := validSynthesisInputFixture()
+	draft := validSynthesisDraftFixture(input)
+	draft.EvidenceRefIDs = []string{"evidence_invented_by_model"}
+	receipt := validModelReceiptFixture(ModelOperationSynthesize)
+	receipt.Outcome = "success"
+	synthesizer := RuntimeAnswerSynthesizer{
+		Runtime: fakeModelRuntime{draft: draft, receipt: receipt},
+		Sink:    sink,
+	}
+	if _, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input); !errors.Is(err, ErrModelOutput) {
+		t.Fatalf("Synthesize() error = %v, want ErrModelOutput", err)
+	}
+	if len(sink.recorded) != 1 || sink.recorded[0].Outcome != "invalid_output" {
+		t.Fatalf("sink.recorded = %#v, want exactly one receipt with outcome invalid_output", sink.recorded)
+	}
+}
+
+// TestRuntimeAnswerSynthesizerDowngradesRejectedFallbackOutcomeToInvalidOutput
+// covers the fallback seam specifically: a ModelRuntime may record
+// Outcome:"fallback" when its primary call failed and a fallback draft was
+// returned instead, but if that fallback draft itself fails this adapter's
+// validation, the persisted outcome must become invalid_output -- a rejected
+// fallback is not a successful fallback.
+func TestRuntimeAnswerSynthesizerDowngradesRejectedFallbackOutcomeToInvalidOutput(t *testing.T) {
+	t.Parallel()
+	sink := &fakeReceiptSink{}
+	input := validSynthesisInputFixture()
+	draft := validSynthesisDraftFixture(input)
+	draft.EvidenceRefIDs = []string{"evidence_invented_by_model"}
+	receipt := validModelReceiptFixture(ModelOperationSynthesize)
+	receipt.Outcome = "fallback"
+	receipt.FallbackUsed = true
+	synthesizer := RuntimeAnswerSynthesizer{
+		Runtime: fakeModelRuntime{draft: draft, receipt: receipt},
+		Sink:    sink,
+	}
+	if _, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input); !errors.Is(err, ErrModelOutput) {
+		t.Fatalf("Synthesize() error = %v, want ErrModelOutput", err)
+	}
+	if len(sink.recorded) != 1 || sink.recorded[0].Outcome != "invalid_output" {
+		t.Fatalf("sink.recorded = %#v, want exactly one receipt with outcome invalid_output", sink.recorded)
+	}
+}
+
+// TestRuntimeAnswerSynthesizerPromotesPendingValidationOutcomeToSuccess
+// guards against the ADR 0008 "pending_validation" outcome never being
+// resolved for the synthesis path.
+func TestRuntimeAnswerSynthesizerPromotesPendingValidationOutcomeToSuccess(t *testing.T) {
+	t.Parallel()
+	sink := &fakeReceiptSink{}
+	input := validSynthesisInputFixture()
+	draft := validSynthesisDraftFixture(input)
+	receipt := validModelReceiptFixture(ModelOperationSynthesize)
+	receipt.Outcome = "pending_validation"
+	synthesizer := RuntimeAnswerSynthesizer{
+		Runtime: fakeModelRuntime{draft: draft, receipt: receipt},
+		Sink:    sink,
+	}
+	if _, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input); err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if len(sink.recorded) != 1 || sink.recorded[0].Outcome != "success" {
+		t.Fatalf("sink.recorded = %#v, want exactly one receipt with outcome success", sink.recorded)
 	}
 }
 
