@@ -505,6 +505,77 @@ func TestResolveSubjectsExcludesInternalBookkeepingSubjectsFromCandidates(t *tes
 	}
 }
 
+// TestIsInternalBookkeepingSubjectIsCaseInsensitive is the probe for Codex
+// finding G8(a): isInternalBookkeepingSubject compared canonical_id with
+// exact case, so a case-variant value (which the write path never
+// legitimately produces today, but which nothing structurally prevents a
+// future write path or data-repair script from writing) would not be
+// recognized as adapter-internal bookkeeping.
+func TestIsInternalBookkeepingSubjectIsCaseInsensitive(t *testing.T) {
+	t.Parallel()
+	cases := []contextfabric.SubjectRef{
+		{Kind: contextfabric.SubjectOrganization, CanonicalID: "Organization-Root"},
+		{Kind: contextfabric.SubjectOrganization, CanonicalID: "ORGANIZATION-ROOT"},
+		{Kind: contextfabric.SubjectMetric, CanonicalID: "PROJECTION-WATERMARK:dev-health-ops"},
+		{Kind: contextfabric.SubjectMetric, CanonicalID: "Projection-Watermark:dev-health-ops"},
+	}
+	for _, subject := range cases {
+		if !isInternalBookkeepingSubject(subject) {
+			t.Fatalf("isInternalBookkeepingSubject(%#v) = false, want true regardless of case", subject)
+		}
+	}
+}
+
+// TestDiscoveredCohortExcludesInternalBookkeepingSubjects is the probe for
+// Codex finding G8(b): discoveredCohort's membership loop never called
+// isInternalBookkeepingSubject, relying entirely on interpretedCohortKind
+// only ever returning Team/Project (which a bookkeeping node's real kind,
+// Organization/Metric, can never match) to keep bookkeeping nodes out.
+// That is an accident of the current cohort-kind range, not a guarantee --
+// this constructs the case where a node's reported subject_kind attribute
+// coincides with the interpreted cohort kind despite the canonical_id
+// still being one of the reserved bookkeeping identifiers, which the
+// kind-mismatch alone cannot catch.
+func TestDiscoveredCohortExcludesInternalBookkeepingSubjects(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	impostorRoot := &zep.EntityNode{
+		UUID: "node-impostor-root", Name: "Organization", Relevance: ptr(0.9),
+		Attributes: map[string]interface{}{
+			// subject_kind reports "team" -- matching interpretedCohortKind's
+			// output below -- while canonical_id still carries the reserved
+			// organization-root identifier.
+			"canonical_id": "organization-root", "subject_kind": string(contextfabric.SubjectTeam), "label": "Organization",
+			"authorization_repositories": "*", "authorization_projects": "*", "authorization_teams": "*",
+			"evidence_refs": "*",
+		},
+	}
+	genuineTeam := graphNode("node-team", contextfabric.SubjectTeam, "team_platform", "Platform", "*", 0.9)
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{impostorRoot, genuineTeam}}
+	discoveryRequest := contextfabric.GraphDiscoveryRequest{
+		Request: validRequest(),
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeDiscoveredCohort, RequestedJudgment: "teams_under_pressure",
+			TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactHealth}},
+		},
+		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+	}
+	discoveryRequest.Request.Question = "Which teams are under the most pressure?"
+	contextResult, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org_1"}, discoveryRequest)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if contextResult.Cohort == nil {
+		t.Fatal("cohort = nil, want the genuine team still discovered")
+	}
+	for _, member := range contextResult.Cohort.Members {
+		if member.Subject.CanonicalID == "organization-root" {
+			t.Fatalf("cohort = %#v, an internal bookkeeping identifier must never surface as a cohort member", contextResult.Cohort)
+		}
+	}
+}
+
 // TestResolveSubjectsAndDiscoverContextRejectAlreadyCancelledContext proves
 // budget/deadline/cancellation enforcement at the graph retrieval boundary,
 // not just inside the outer Engine.

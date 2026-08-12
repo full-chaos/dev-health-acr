@@ -380,7 +380,7 @@ func (a *Adapter) discoveredCohort(principal storage.Principal, request contextf
 			continue
 		}
 		subject, ok := nodeSubject(node)
-		if !ok || subject.Kind != kind {
+		if !ok || subject.Kind != kind || isInternalBookkeepingSubject(subject) {
 			continue
 		}
 		key := subjectKey(subject)
@@ -523,10 +523,26 @@ func verifiedNodeSubject(orgID, fetchedUUID string, node *zep.EntityNode) (conte
 // candidate or a relationship endpoint would leak adapter-internal
 // bookkeeping into a public result.
 func isInternalBookkeepingSubject(subject contextfabric.SubjectRef) bool {
-	if subject.Kind == contextfabric.SubjectOrganization && subject.CanonicalID == "organization-root" {
+	// Matched on CanonicalID alone, not gated on the reported Kind also
+	// being Organization/Metric. organizationRoot/markerSubject
+	// (identity.go) only ever write these reserved canonical_id values
+	// paired with those kinds -- but a node's own subject_kind is just
+	// another attribute read back off the wire (see nodeSubject), not
+	// something this adapter can independently verify. Requiring an exact
+	// Kind match here would let a node that reports some OTHER kind (a
+	// bug in a differently-configured write path, or a deliberately
+	// malformed one) bypass the exclusion while still carrying one of
+	// these reserved identifiers, so the identifier itself is treated as
+	// reserved regardless of what kind accompanies it. Normalized
+	// case-insensitively for the same reason: the write path never
+	// legitimately produces anything but the exact lowercase form, but
+	// nothing structurally prevents a differently-cased value from
+	// reaching this check.
+	canonicalID := strings.ToLower(subject.CanonicalID)
+	if canonicalID == "organization-root" {
 		return true
 	}
-	if subject.Kind == contextfabric.SubjectMetric && strings.HasPrefix(subject.CanonicalID, "projection-watermark:") {
+	if strings.HasPrefix(canonicalID, "projection-watermark:") {
 		return true
 	}
 	return false
