@@ -127,3 +127,34 @@ func TestScopeContainsWildcardNeverWidensPastTheDeniedSentinelOrEmptyEncoding(t 
 		t.Fatal("empty-owner wildcard must not match")
 	}
 }
+
+// TestScopeContainsDeniesMissingOrEmptyAuthorizationAttribute is the probe
+// for Codex finding G3(a): scopeContains("", "*") previously returned true
+// because the "*" (global wildcard) branch fired before checking whether
+// encoded represented an actual authorization list at all. encodeScope
+// never legitimately produces "" (empty repo list encodes to "*", not
+// ""), so an empty encoded attribute can only mean the attribute is
+// missing or malformed -- absence of a scope must deny, never authorize,
+// regardless of how permissive the caller-side value is.
+func TestScopeContainsDeniesMissingOrEmptyAuthorizationAttribute(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"*", "acme/*", "acme/repo-x"} {
+		if scopeContains("", value) {
+			t.Fatalf("scopeContains(\"\", %q) = true, want false: a missing/empty authorization attribute must never authorize", value)
+		}
+	}
+}
+
+// TestScopeContainsOwnerWildcardRejectsMalformedSlugEntries is the probe
+// for Codex finding G3(b): the owner/* matcher split each decoded entry on
+// its first "/" without validating the result was a well-formed
+// "owner/repo" slug (per internal/auth.NormalizeRepositorySlug), so a
+// malformed entry like "acme/" (empty repo) or "acme/not/real" (extra
+// segment) still satisfied an "acme/*" wildcard by owner-prefix alone.
+func TestScopeContainsOwnerWildcardRejectsMalformedSlugEntries(t *testing.T) {
+	t.Parallel()
+	encoded := scopeSeparator + "acme/" + scopeSeparator + "acme/not/real" + scopeSeparator
+	if scopeContains(encoded, "acme/*") {
+		t.Fatalf("scopeContains(%q, \"acme/*\") = true, want false: malformed entries must not satisfy an owner wildcard", encoded)
+	}
+}
