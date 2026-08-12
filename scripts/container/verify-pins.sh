@@ -15,7 +15,6 @@ pins=(
   'cgr.dev/chainguard/git:latest|sha256:0690687448b0beca8c84f52a26ddc3b088623f617def56348194fde48f8573cd'
   'docker.io/tonistiigi/binfmt:qemu-v10.2.3|sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0'
   'docker.io/moby/buildkit:v0.31.0|sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1'
-  'docker.io/aquasec/trivy:0.69.3|sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c'
   'docker.io/anchore/syft:v1.46.0|sha256:473a60e3a58e29aca3aedb3e99e787bb4ef273917e44d10fcbea4330a07320bb'
   'docker.io/library/postgres:18-alpine|sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15'
   'docker.io/clickhouse/clickhouse-server:latest|sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5'
