@@ -458,5 +458,80 @@ func TestRuntimeClassifiesRateLimitedGenerationError(t *testing.T) {
 	}
 }
 
+// TestNewWithGeneratorValidatesConfig proves server-owned configuration
+// bounds are enforced at construction time (provider/model required and
+// bounded, timeout/attempts/input-size clamped to the ranges ADR 0008
+// documents) rather than discovered per call.
+func TestNewWithGeneratorValidatesConfig(t *testing.T) {
+	t.Parallel()
+	base := func() Config {
+		return Config{
+			Provider: "test-provider", Model: "test/model", ModelVersion: "test-model-v1",
+			Timeout: time.Second, MaxAttempts: 1, MaxInputBytes: 128 << 10,
+		}
+	}
+	cases := []struct {
+		name    string
+		mutate  func(Config) Config
+		wantErr bool
+	}{
+		{"valid_baseline", func(c Config) Config { return c }, false},
+		{"missing_provider", func(c Config) Config { c.Provider = ""; return c }, true},
+		{"missing_model", func(c Config) Config { c.Model = ""; return c }, true},
+		{"provider_too_long", func(c Config) Config { c.Provider = strings.Repeat("p", 257); return c }, true},
+		{"timeout_too_short", func(c Config) Config { c.Timeout = 500 * time.Millisecond; return c }, true},
+		{"timeout_too_long", func(c Config) Config { c.Timeout = 3 * time.Minute; return c }, true},
+		{"timeout_zero_defaults", func(c Config) Config { c.Timeout = 0; return c }, false},
+		{"max_attempts_too_high", func(c Config) Config { c.MaxAttempts = 4; return c }, true},
+		{"max_attempts_zero_defaults", func(c Config) Config { c.MaxAttempts = 0; return c }, false},
+		{"max_attempts_boundary_three_ok", func(c Config) Config { c.MaxAttempts = 3; return c }, false},
+		{"max_input_bytes_too_small", func(c Config) Config { c.MaxInputBytes = 4 << 10; return c }, true},
+		{"max_input_bytes_too_large", func(c Config) Config { c.MaxInputBytes = 2 << 20; return c }, true},
+		{"max_input_bytes_zero_defaults", func(c Config) Config { c.MaxInputBytes = 0; return c }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := newWithGenerator(tc.mutate(base()), &generatorStub{})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("newWithGenerator() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestNewWithGeneratorRejectsNilGenerator(t *testing.T) {
+	t.Parallel()
+	_, err := newWithGenerator(Config{Provider: "test", Model: "test/model"}, nil)
+	if err == nil {
+		t.Fatal("newWithGenerator(nil generator) error = nil, want error")
+	}
+}
+
+func TestNewRejectsMissingGenkitInstance(t *testing.T) {
+	t.Parallel()
+	_, err := New(Config{Provider: "test", Model: "test/model"})
+	if err == nil {
+		t.Fatal("New() with nil Genkit error = nil, want error")
+	}
+}
+
+func TestNewWithGeneratorDefaultsVersionsFromModel(t *testing.T) {
+	t.Parallel()
+	runtime, err := newWithGenerator(Config{Provider: "test-provider", Model: "test/model"}, &generatorStub{})
+	if err != nil {
+		t.Fatalf("newWithGenerator() error = %v", err)
+	}
+	if runtime.config.ModelVersion != "test/model" {
+		t.Fatalf("ModelVersion default = %q, want model name", runtime.config.ModelVersion)
+	}
+	if runtime.config.InterpretationPromptVersion != defaultInterpretationPromptVersion ||
+		runtime.config.SynthesisPromptVersion != defaultSynthesisPromptVersion ||
+		runtime.config.SchemaVersion != defaultSchemaVersion ||
+		runtime.config.EvaluatorVersion != defaultEvaluatorVersion {
+		t.Fatalf("config defaults = %#v", runtime.config)
+	}
+}
+
 var _ generator = (*generatorStub)(nil)
 var _ contextfabric.ModelRuntime = fallbackRuntime{}
