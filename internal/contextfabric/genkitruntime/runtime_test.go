@@ -177,6 +177,51 @@ func TestRuntimeInterpretsOpenQuestionWithoutQuestionRegistry(t *testing.T) {
 	}
 }
 
+// TestRuntimeInterpretsBootstrapQuestionParaphrasesAndNovelCombinationsIdentically
+// is the direct evidence for the CHAOS-3754 acceptance bar: the bootstrap
+// project-status question, several held-out paraphrases never used to shape
+// any production code path, and a novel compound question combining facts
+// no single fixture in this repository combines, must all flow through the
+// identical InterpretQuestion path. There is no per-case production
+// branch to add: the runtime forwards whatever question text it receives
+// unmodified to the generator and returns whatever structured
+// interpretation the generator (model) decided, so "held out" here means
+// exactly what it should -- these strings influence nothing but the test
+// assertion, never a code path.
+func TestRuntimeInterpretsBootstrapQuestionParaphrasesAndNovelCombinationsIdentically(t *testing.T) {
+	t.Parallel()
+	questions := []string{
+		"What is the actual status of the Ask Dev project, and what are the current drivers?",
+		"Where does Ask Dev actually stand right now, and what's pushing it in that direction?",
+		"Can you tell me the real state of the Ask Dev effort and why it is there?",
+		"Honestly, is Ask Dev actually on track, and what is behind that?",
+		"Compare the release readiness of Ask Dev against the platform migration, factoring in open incidents from the last two weeks and who owns the remaining blockers.",
+	}
+	for _, question := range questions {
+		t.Run(question, func(t *testing.T) {
+			t.Parallel()
+			stub := &generatorStub{interpretation: validInterpretationOutput()}
+			runtime := mustRuntime(t, stub, Config{})
+			request := validRequest()
+			request.Question = question
+
+			interpreted, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+			if err != nil {
+				t.Fatalf("InterpretQuestion() error = %v", err)
+			}
+			if interpreted.Shape != contextfabric.ShapeOpen || receipt.Outcome != "success" {
+				t.Fatalf("interpreted = %#v receipt = %#v", interpreted, receipt)
+			}
+			if len(stub.requests) != 1 || !strings.Contains(stub.requests[0].Prompt, question) {
+				t.Fatalf("generator did not receive the exact question text unmodified: requests = %#v", stub.requests)
+			}
+			if strings.Contains(stub.requests[0].System, "supported questions") || strings.Contains(stub.requests[0].System, "allowed question") {
+				t.Fatalf("system prompt references a supported-question registry: %q", stub.requests[0].System)
+			}
+		})
+	}
+}
+
 func TestRuntimeRejectsInvalidStructuredInterpretation(t *testing.T) {
 	t.Parallel()
 	output := validInterpretationOutput()
