@@ -313,21 +313,71 @@ stays v1 per that doc's own rule ("narrowed values...require a new major
 version"; this is the opposite).
 
 `queryPullRequestReviews`/`queryCIRuns` (`devhealthsource/tables.go`) reuse
-the exact JOIN shape `internal/contextpacket/source_queries.go` already
-uses for `pull_request_reviews.v1`/`ci_pipeline_runs.v1` rather than
-inventing a new one -- both tables lack their own `org_id` column (per
-that existing, already-production query, which scopes entirely through
-the `repos` join), so W1's "`org_id` in every join" house rule has nothing
-to add here that the column doesn't already lack elsewhere. A review
-projects as an entity plus a `BELONGS_TO_PULL_REQUEST` relationship; a CI
-run projects as an entity plus the existing `BELONGS_TO_REPOSITORY`
-relationship. Neither table has a known soft-delete signal (unlike
-`operational_incidents.is_deleted`), so neither tombstones, matching the
-existing precedent for every other non-incident table.
+the JOIN shape `internal/contextpacket/source_queries.go` already uses for
+`pull_request_reviews.v1`/`ci_pipeline_runs.v1`, with one correction --
+see "Every join carries `org_id` equality" below; the first version of
+this code wrongly assumed neither table carries its own `org_id` column.
+A review projects as an entity plus a `BELONGS_TO_PULL_REQUEST`
+relationship; a CI run projects as an entity plus the existing
+`BELONGS_TO_REPOSITORY` relationship. Neither table has a known
+soft-delete signal (unlike `operational_incidents.is_deleted`), so neither
+tombstones, matching the existing precedent for every other non-incident
+table.
 
 Proven by `TestClickHouseProjectionSourceProjectsPullRequestReviewsAndCIRuns`,
 confirmed to fail (no review/CI-run entities projected) against a
 temporary removal from `entityTables` and pass again with it restored.
+
+## Every join carries `org_id` equality, no exceptions (codex round-2 finding K1)
+
+C7's two new joins (`git_pull_request_reviews` -> `git_pull_requests`,
+`git_pull_request_reviews`/`ci_pipeline_runs` -> `repos`) shipped without
+`org_id` equality -- the exact class W1 had already fixed everywhere else
+in this file, reintroduced by copying `internal/contextpacket`'s existing
+query for these two tables verbatim, including its omission. That existing
+query gets away with it (org scoping still works) only because it filters
+the *joined* `repos` row by `org_id` in its `WHERE` clause; it never
+proves the *join itself* picked the right `repos` row when `repo_id`
+collides across tenants. This file's class rule is now unconditional:
+
+> Every `INNER JOIN` in `devhealthsource/tables.go` MUST compare `org_id`
+> on both sides, in addition to whatever foreign key it already compares.
+> No table is exempt, regardless of what any other query elsewhere in the
+> codebase happens to do.
+
+Full join inventory (`devhealthsource/tables.go`, verified current as of
+this fix -- every multi-table query in the file):
+
+| Query | Join | `org_id` predicate |
+| --- | --- | --- |
+| `queryWorkItems` | `work_items AS w` -> `repos AS r` | `r.org_id = w.org_id` |
+| `queryPullRequests` | `git_pull_requests AS p` -> `repos AS r` | `r.org_id = p.org_id` |
+| `queryDeployments` | `deployments AS d` -> `repos AS r` | `r.org_id = d.org_id` |
+| `queryIncidents` | `operational_incidents AS i` -> `operational_service_repository_mappings AS m` | `i.org_id = m.org_id` |
+| `queryIncidents` | `... AS m` -> `repos AS r` | `r.org_id = m.org_id` |
+| `queryWorkItemDependencies` | `work_item_dependencies AS d` -> `work_items AS w` | `w.org_id = d.org_id` |
+| `queryWorkItemDependencies` | `... AS w` -> `repos AS r` | `r.org_id = w.org_id` |
+| `queryDeploymentIncidentEdges` | `work_graph_deployment_incident_edges AS e` -> `repos AS r` | `r.org_id = toString(e.org_id)` (type-cast: `e.org_id` is `UUID`) |
+| `queryPullRequestReviews` | `git_pull_request_reviews AS r` -> `git_pull_requests AS p` | `r.org_id = p.org_id` (fixed by K1) |
+| `queryPullRequestReviews` | `... AS r` -> `repos AS repo` | `repo.org_id = r.org_id` (fixed by K1) |
+| `queryCIRuns` | `ci_pipeline_runs AS c` -> `repos AS repo` | `repo.org_id = c.org_id` (fixed by K1) |
+
+(`queryRepositories` and `queryCIRuns`'s `git_pull_requests`-less shape
+have no second join to check; both already filter their own table's
+`org_id` directly.)
+
+Also closed: the two-tenant isolation testcontainer
+(`clickhouse_org_isolation_integration_test.go`) previously created the
+review/CI tables *without* `org_id` and left them empty, so it could not
+have caught this class for these two tables even in principle -- fixed to
+add `org_id` (matching production, confirmed by
+`testdata/fullstack/v1/README.md:96`) and seed genuinely colliding rows
+(a `git_pull_requests` row per organization sharing one
+`(repo_id, number)`, one `git_pull_request_reviews` row, one
+`ci_pipeline_runs` row) so the same test now also exercises these two
+joins. The fake's `requireOrgIDBinding` (W2) needed no extension of its
+own: it asserts generically on any statement referencing
+`{org_id:String}`, which both new queries already do.
 
 ## Rulings (2026-08-12, team-lead)
 

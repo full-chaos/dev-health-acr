@@ -342,22 +342,27 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 	})
 }
 
-// queryPullRequestReviews and queryCIRuns (CHAOS-3753 codex finding C7)
-// reuse the exact JOIN shape internal/contextpacket/source_queries.go
-// already uses for pull_request_reviews.v1 / ci_pipeline_runs.v1, rather
-// than inventing a new one: neither git_pull_request_reviews nor
-// ci_pipeline_runs carries its own org_id column (confirmed by that
-// existing, already-production query never referencing one), so tenant
-// scoping here comes entirely through the repos join, same as that proven
-// query -- there is no "AND x.org_id = repo.org_id" to add (W1's house
-// rule) because the column doesn't exist to compare.
+// queryPullRequestReviews and queryCIRuns (CHAOS-3753 codex finding C7,
+// corrected for codex round-2 finding K1) reuse the JOIN shape
+// internal/contextpacket/source_queries.go already uses for
+// pull_request_reviews.v1 / ci_pipeline_runs.v1, with one deliberate
+// difference: that existing query never filters git_pull_request_reviews
+// or ci_pipeline_runs by their own org_id, but both tables DO carry one in
+// production (testdata/fullstack/v1/README.md:96 -- migration
+// 027_add_org_id_to_sorting_keys.py added it to six tables, including
+// these two, and made it part of each ReplacingMergeTree's dedup ORDER BY
+// key). K1: the first version of this code copied that existing query's
+// omission verbatim, repeating the exact class of bug W1 already fixed
+// elsewhere in this file -- see the design doc's "every join carries
+// org_id equality, no exceptions" class rule, and the full join inventory
+// there.
 func queryPullRequestReviews(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const rowKey = "r.review_id"
 	statement := `SELECT r.review_id, toString(r.repo_id), r.number, ifNull(r.state, ''), r.submitted_at, repo.repo
 FROM git_pull_request_reviews AS r FINAL
-INNER JOIN git_pull_requests AS p FINAL ON r.repo_id = p.repo_id AND r.number = p.number
-INNER JOIN repos AS repo FINAL ON repo.id = r.repo_id
-WHERE repo.org_id = {org_id:String}` + sincePredicate(cursor, "r.submitted_at", rowKey) + orderBy("r.submitted_at", rowKey)
+INNER JOIN git_pull_requests AS p FINAL ON r.repo_id = p.repo_id AND r.number = p.number AND r.org_id = p.org_id
+INNER JOIN repos AS repo FINAL ON repo.id = r.repo_id AND repo.org_id = r.org_id
+WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.submitted_at", rowKey) + orderBy("r.submitted_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var reviewID, repoID, state, repoSlug string
 		var number int64
@@ -397,8 +402,8 @@ func queryCIRuns(ctx context.Context, client contextpacket.ClickHouseQueryClient
 	const rowKey = "c.run_id"
 	statement := `SELECT c.run_id, toString(c.repo_id), ifNull(c.branch, ''), ifNull(c.status, ''), repo.repo, ` + timestampExpr + `
 FROM ci_pipeline_runs AS c FINAL
-INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id
-WHERE repo.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, rowKey) + orderBy(timestampExpr, rowKey)
+INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id AND repo.org_id = c.org_id
+WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, rowKey) + orderBy(timestampExpr, rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var runID, repoID, branch, status, repoSlug string
 		var observedAt time.Time
