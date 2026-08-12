@@ -831,6 +831,151 @@ func TestDiscoverContextTruncatesEvidenceRefsToBudget(t *testing.T) {
 	}
 }
 
+// TestDiscoverContextAdmitsHigherRelevanceEdgeRegardlessOfBackendOrder is
+// the probe for Codex round-2 finding N2 (G5 ordering): evidence admission
+// processed results.Edges in whatever order the backend slice happened to
+// return them, so under a tight budget a low-relevance edge appearing
+// first could consume the budget and exclude a materially more relevant
+// edge appearing later. Per the design ruling, edges are normalized
+// (sorted by relevance desc, tie-broken by a stable canonical key) before
+// admission.
+func TestDiscoverContextAdmitsHigherRelevanceEdgeRegardlessOfBackendOrder(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	project := graphNode("project-node", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.95)
+	low := graphNode("work-node-low", contextfabric.SubjectWorkItem, "work_low", "Work Low", "*", 0.8)
+	high := graphNode("work-node-high", contextfabric.SubjectWorkItem, "work_high", "Work High", "*", 0.8)
+	// The low-relevance edge is placed FIRST in backend order; the
+	// high-relevance edge is placed second.
+	edges := []*zep.EntityEdge{
+		{
+			UUID: "edge-low", Name: "BLOCKS", Fact: "Work Low blocks Ask Dev.", SourceNodeUUID: project.UUID, TargetNodeUUID: low.UUID,
+			Attributes: map[string]interface{}{"authorization_repositories": "*", "evidence_refs": "|evidence_low_12345|", "epistemic_status": "observed"}, Relevance: ptr(0.2),
+		},
+		{
+			UUID: "edge-high", Name: "BLOCKS", Fact: "Work High blocks Ask Dev.", SourceNodeUUID: project.UUID, TargetNodeUUID: high.UUID,
+			Attributes: map[string]interface{}{"authorization_repositories": "*", "evidence_refs": "|evidence_high_12345|", "epistemic_status": "observed"}, Relevance: ptr(0.9),
+		},
+	}
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{project, low, high}, Edges: edges}
+	request := validRequest()
+	request.Options.MaxEvidenceRefs = 1
+	discoveryRequest := contextfabric.GraphDiscoveryRequest{
+		Request: request,
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeOpen, RequestedJudgment: "blockers", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactBlockers}},
+		},
+		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+	}
+	contextResult, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org_1"}, discoveryRequest)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(contextResult.Paths) != 1 || contextResult.Paths[0].Nodes[1].CanonicalID != "work_high" {
+		t.Fatalf("paths = %#v, want the higher-relevance edge admitted under a scarce evidence budget, regardless of backend order", contextResult.Paths)
+	}
+}
+
+// TestDiscoverContextDoesNotConsumeEvidenceBudgetForARejectedPath is the
+// probe for Codex round-2 finding N3 (G5 budget leak): evidenceSet was
+// mutated before path.Validate() ran, so an edge whose resulting path
+// failed validation still permanently consumed its share of
+// Options.MaxEvidenceRefs, potentially crowding out a later, genuinely
+// valid edge under a tight budget. Per the design ruling, admission must
+// validate first and mutate the shared evidence set only after the
+// path/driver is actually accepted.
+func TestDiscoverContextDoesNotConsumeEvidenceBudgetForARejectedPath(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	project := graphNode("project-node", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.95)
+	invalidTarget := graphNode("work-node-invalid", contextfabric.SubjectWorkItem, "work_invalid", "Work Invalid", "*", 0.8)
+	validTarget := graphNode("work-node-valid", contextfabric.SubjectWorkItem, "work_valid", "Work Valid", "*", 0.8)
+	edges := []*zep.EntityEdge{
+		{
+			// "short" is under the v1 contract's 8-character minimum for an
+			// evidence ref ID (boundedEvidenceRefs), so the resulting path
+			// fails RelationshipPath.Validate() and must never be admitted.
+			UUID: "edge-invalid", Name: "BLOCKS", Fact: "Work Invalid blocks Ask Dev.", SourceNodeUUID: project.UUID, TargetNodeUUID: invalidTarget.UUID,
+			Attributes: map[string]interface{}{"authorization_repositories": "*", "evidence_refs": "|short|", "epistemic_status": "observed"}, Relevance: ptr(0.9),
+		},
+		{
+			UUID: "edge-valid", Name: "BLOCKS", Fact: "Work Valid blocks Ask Dev.", SourceNodeUUID: project.UUID, TargetNodeUUID: validTarget.UUID,
+			Attributes: map[string]interface{}{"authorization_repositories": "*", "evidence_refs": "|evidence_valid_12345|", "epistemic_status": "observed"}, Relevance: ptr(0.5),
+		},
+	}
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{project, invalidTarget, validTarget}, Edges: edges}
+	request := validRequest()
+	request.Options.MaxEvidenceRefs = 1
+	discoveryRequest := contextfabric.GraphDiscoveryRequest{
+		Request: request,
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeOpen, RequestedJudgment: "blockers", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactBlockers}},
+		},
+		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+	}
+	contextResult, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org_1"}, discoveryRequest)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(contextResult.Paths) != 1 || contextResult.Paths[0].Nodes[1].CanonicalID != "work_valid" {
+		t.Fatalf("paths = %#v, want the valid edge admitted -- the invalid edge must not have consumed the evidence budget before its path was rejected", contextResult.Paths)
+	}
+	if len(contextResult.EvidenceRefIDs) != 1 || contextResult.EvidenceRefIDs[0] != "evidence_valid_12345" {
+		t.Fatalf("evidence ref IDs = %#v, want only the admitted edge's evidence", contextResult.EvidenceRefIDs)
+	}
+}
+
+// TestDiscoverContextReportsSecondHopVerificationFailuresInCoverage is the
+// probe for Codex round-2 finding N6 (G7 silent degradation): a second-hop
+// node that failed organization-identity verification (verifiedNodeSubject)
+// was simply dropped -- the edge silently produced no path or driver, while
+// Coverage kept reporting the graph source as available with no degraded
+// reason, giving 1C's synthesis nothing to surface as a limitation. Per the
+// design ruling, these failures are counted into a content-safe
+// (count + reason, no content) degraded-coverage signal.
+func TestDiscoverContextReportsSecondHopVerificationFailuresInCoverage(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	project := graphNode("project-node", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.95)
+	const impostorUUID = "impostor-uuid-does-not-match-derivation"
+	api.nodes[impostorUUID] = graphNode(impostorUUID, contextfabric.SubjectWorkItem, "work_release", "Release acceptance", "*", 0.8)
+	edge := &zep.EntityEdge{
+		UUID: "edge-1", Name: "BLOCKS", Fact: "Release acceptance blocks Ask Dev.",
+		SourceNodeUUID: project.UUID, TargetNodeUUID: impostorUUID,
+		Attributes: map[string]interface{}{"authorization_repositories": "*", "evidence_refs": "|evidence_release_1234|", "epistemic_status": "observed"},
+	}
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{project}, Edges: []*zep.EntityEdge{edge}}
+	discoveryRequest := contextfabric.GraphDiscoveryRequest{
+		Request: validRequest(),
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeOpen, RequestedJudgment: "blockers", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactBlockers}},
+		},
+		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+	}
+	contextResult, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org_1"}, discoveryRequest)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if !contextResult.Coverage.Partial {
+		t.Fatalf("coverage = %#v, want Partial=true when a second-hop node failed organization-identity verification", contextResult.Coverage)
+	}
+	found := false
+	for _, reason := range contextResult.Coverage.DegradedReasons {
+		if strings.Contains(reason, "second_hop") && strings.Contains(reason, "1") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("degraded reasons = %#v, want a count-bearing second-hop verification reason", contextResult.Coverage.DegradedReasons)
+	}
+}
+
 // TestDiscoverContextExcludesInternalBookkeepingRelationships guards the
 // relationship path against the same organization-root/watermark-marker
 // leakage as candidate resolution: even if a bookkeeping edge somehow

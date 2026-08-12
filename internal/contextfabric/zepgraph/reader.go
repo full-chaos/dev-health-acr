@@ -3,6 +3,7 @@ package zepgraph
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -244,12 +245,39 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			nodes[node.UUID] = node
 		}
 	}
-	paths := make([]contextfabric.RelationshipPath, 0, len(results.Edges))
-	drivers := make([]contextfabric.DriverJudgment, 0, len(results.Edges))
+	// N2: admission order must not depend on whatever order the backend
+	// happened to return edges in. Under a scarce evidence budget, edge
+	// order otherwise determines which edges win purely by being first,
+	// not by relevance -- normalize by sorting on relevance (descending),
+	// tie-broken by the edge's own stable UUID, before the admission loop
+	// below ever runs.
+	edges := make([]*zep.EntityEdge, 0, len(results.Edges))
+	for _, edge := range results.Edges {
+		if edge != nil {
+			edges = append(edges, edge)
+		}
+	}
+	sort.SliceStable(edges, func(i, j int) bool {
+		ri, rj := resultConfidence(edges[i].Relevance, edges[i].Score), resultConfidence(edges[j].Relevance, edges[j].Score)
+		if ri != rj {
+			return ri > rj
+		}
+		return edges[i].UUID < edges[j].UUID
+	})
+	paths := make([]contextfabric.RelationshipPath, 0, len(edges))
+	drivers := make([]contextfabric.DriverJudgment, 0, len(edges))
 	evidenceSet := make(map[string]struct{})
 	requirements := make(map[contextfabric.FactKind]contextfabric.FactRequirement)
-	for _, edge := range results.Edges {
-		if edge == nil || !authorizedAttributes(principal, request.Request.RequestedScope, edge.Attributes) {
+	// secondHopVerificationFailures counts edges dropped because a
+	// second-hop node (see verifiedNodeSubject) did not verify as
+	// belonging to this organization's graph -- N6. The count (never the
+	// node/edge content) is surfaced through Coverage below so a caller
+	// can tell degradation happened instead of an investigation silently
+	// looking complete with fewer paths/drivers than the graph actually
+	// held.
+	secondHopVerificationFailures := 0
+	for _, edge := range edges {
+		if !authorizedAttributes(principal, request.Request.RequestedScope, edge.Attributes) {
 			continue
 		}
 		// from/to found directly in nodes are first-hop results from
@@ -278,6 +306,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			fromSubject, ok = nodeSubject(from)
 		} else {
 			fromSubject, ok = verifiedNodeSubject(principal.OrgID, edge.SourceNodeUUID, from)
+			if !ok {
+				secondHopVerificationFailures++
+			}
 		}
 		if !ok || isInternalBookkeepingSubject(fromSubject) {
 			continue
@@ -286,6 +317,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			toSubject, ok = nodeSubject(to)
 		} else {
 			toSubject, ok = verifiedNodeSubject(principal.OrgID, edge.TargetNodeUUID, to)
+			if !ok {
+				secondHopVerificationFailures++
+			}
 		}
 		if !ok || fromSubject == toSubject || isInternalBookkeepingSubject(toSubject) {
 			continue
@@ -297,11 +331,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// Codex finding G5: Options.MaxEvidenceRefs must bound the FINAL
 		// result's entire evidence surface -- every path's and driver's
 		// own EvidenceRefIDs, not just the separately truncated aggregate
-		// list below. Enforcing it here, before a path/driver is admitted
-		// at all, keeps Paths, DriverCandidates, and the aggregate
-		// EvidenceRefIDs consistent with the same bounded evidence set by
-		// construction, rather than truncating the aggregate after the
-		// fact while still admitting every path/driver that produced it.
+		// list below. Checked here, before a path/driver is admitted at
+		// all, against the *projected* size (evidenceSet is not mutated
+		// yet -- N3, below) so Paths, DriverCandidates, and the aggregate
+		// EvidenceRefIDs stay consistent with the same bounded evidence
+		// set by construction.
 		if maxEvidence := request.Request.Options.MaxEvidenceRefs; maxEvidence > 0 {
 			projected := len(evidenceSet)
 			for _, id := range evidence {
@@ -312,9 +346,6 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			if projected > maxEvidence {
 				continue
 			}
-		}
-		for _, id := range evidence {
-			evidenceSet[id] = struct{}{}
 		}
 		relationship := contextfabric.RelationshipEdge{
 			Type: normalizeRelation(edge.Name), From: fromSubject, To: toSubject,
@@ -329,6 +360,15 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		if err := path.Validate(); err != nil {
 			continue
+		}
+		// N3: the shared evidence set is only mutated once the path this
+		// evidence belongs to has actually been accepted. Committing it
+		// earlier (before path.Validate()) meant a malformed edge could
+		// permanently consume its share of a scarce evidence budget even
+		// though its own path was rejected and never admitted -- silently
+		// crowding out a later, genuinely valid edge.
+		for _, id := range evidence {
+			evidenceSet[id] = struct{}{}
 		}
 		paths = append(paths, path)
 		if standing, category, factKind, relevant := relationMeaning(edge.Name); relevant {
@@ -372,6 +412,18 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		evidence = append(evidence, id)
 	}
 	sort.Strings(evidence)
+	degradedReasons := []string{}
+	partial := false
+	if secondHopVerificationFailures > 0 {
+		// N6: content-safe (count + fixed reason token, never node/edge
+		// content) signal that some second-hop graph data was dropped
+		// rather than trusted, so a later synthesis stage (Reset 1C) can
+		// surface this as a limitation instead of the investigation
+		// silently looking complete with fewer paths/drivers than the
+		// graph actually held.
+		partial = true
+		degradedReasons = []string{fmt.Sprintf("second_hop_node_unverified:%d", secondHopVerificationFailures)}
+	}
 	return contextfabric.GraphContext{
 		Resolution: request.Resolution, Cohort: cohort, Paths: paths, DriverCandidates: drivers,
 		EvidenceRefIDs: evidence, FactRequirements: factRequirements,
@@ -382,7 +434,8 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			// the vendor-neutral source name, and Watermark stays empty
 			// until a real, non-identifying watermark value exists.
 			Sources:         []contextfabric.SourceObservation{{Source: "context-fabric:graph", State: contextfabric.SourceAvailable, ObservedAt: ptr(a.now().UTC())}},
-			DegradedReasons: []string{},
+			Partial:         partial,
+			DegradedReasons: degradedReasons,
 		},
 	}, nil
 }
