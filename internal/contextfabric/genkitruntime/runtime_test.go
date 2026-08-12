@@ -57,16 +57,35 @@ func (f fallbackRuntime) SynthesizeAnswer(context.Context, storage.Principal, co
 func TestSDKGeneratorUsesGenkitStructuredOutputAndUsage(t *testing.T) {
 	ctx := context.Background()
 	g := genkit.Init(ctx)
+	modelSupports := &ai.ModelSupports{
+		Constrained: ai.ConstrainedSupportAll,
+		SystemRole:  true,
+		Multiturn:   true,
+		Output:      []string{"json"},
+	}
 	genkit.DefineModel(g, "test/context-fabric", &ai.ModelOptions{
-		Label: "Context Fabric test model",
-		Supports: &ai.ModelSupports{
-			Constrained: ai.ConstrainedSupportAll,
-			SystemRole:  true,
-			Output:      []string{"json"},
-		},
+		Label:    "Context Fabric test model",
+		Supports: modelSupports,
 	}, func(_ context.Context, request *ai.ModelRequest, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		if request.Output == nil || request.Output.Format != ai.OutputFormatJSON || len(request.Messages) < 2 {
-			t.Fatalf("model request = %#v", request)
+		if request.Output == nil || request.Output.Format != ai.OutputFormatJSON {
+			t.Fatalf("model request output format = %#v, want JSON", request.Output)
+		}
+		if len(request.Messages) != 2 {
+			t.Fatalf("model request messages = %#v, want system + user", request.Messages)
+		}
+		system, user := request.Messages[0], request.Messages[1]
+		if system.Role != ai.RoleSystem || !strings.Contains(system.Text(), "bounded interpretation layer") {
+			t.Fatalf("system message = %#v", system)
+		}
+		// Genkit's custom-constrained mode injects the JSON output schema as
+		// instructions on the system message rather than on request.Output.Schema
+		// (that field is only populated for native provider-side constrained
+		// decoding). Assert the schema actually reached the model this way.
+		if !strings.Contains(system.Text(), "conform to the following schema") || !strings.Contains(system.Text(), "requested_judgment") {
+			t.Fatalf("system message missing injected JSON schema: %#v", system)
+		}
+		if user.Role != ai.RoleUser || !strings.Contains(user.Text(), "What is driving Ask Dev?") {
+			t.Fatalf("user message = %#v", user)
 		}
 		encoded, err := json.Marshal(validInterpretationOutput())
 		if err != nil {
@@ -76,6 +95,29 @@ func TestSDKGeneratorUsesGenkitStructuredOutputAndUsage(t *testing.T) {
 			Message:      &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{ai.NewJSONPart(string(encoded))}},
 			FinishReason: ai.FinishReasonStop,
 			Usage:        &ai.GenerationUsage{InputTokens: 17, OutputTokens: 9, TotalTokens: 26},
+		}, nil
+	})
+	// Model returns JSON that Genkit itself accepts (fact_requirements.kind
+	// carries no jsonschema enum constraint, so Genkit's own schema
+	// validation passes it through and parses a typed interpretationOutput
+	// successfully). Only the ACR-owned semantic validator
+	// (InterpretedQuestion.Validate -> FactRequirement.Validate ->
+	// validFactKind) knows the canonical fact-kind registry and must reject
+	// the invented kind after Genkit has already produced a typed value.
+	genkit.DefineModel(g, "test/context-fabric-invented-fact-kind", &ai.ModelOptions{
+		Label:    "Context Fabric test model (invented fact kind)",
+		Supports: modelSupports,
+	}, func(_ context.Context, request *ai.ModelRequest, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		invalid := validInterpretationOutput()
+		invalid.FactRequirements = []factRequirementOutput{{Kind: "invented_fact_kind_not_in_registry"}}
+		encoded, err := json.Marshal(invalid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &ai.ModelResponse{
+			Message:      &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{ai.NewJSONPart(string(encoded))}},
+			FinishReason: ai.FinishReasonStop,
+			Usage:        &ai.GenerationUsage{InputTokens: 1, OutputTokens: 1, TotalTokens: 2},
 		}, nil
 	})
 	runtime, err := New(Config{
@@ -91,6 +133,24 @@ func TestSDKGeneratorUsesGenkitStructuredOutputAndUsage(t *testing.T) {
 	}
 	if interpreted.Shape != contextfabric.ShapeOpen || receipt.Usage.TotalTokens != 26 || receipt.Usage.InputTokens != 17 || receipt.Usage.OutputTokens != 9 {
 		t.Fatalf("interpreted = %#v receipt = %#v", interpreted, receipt)
+	}
+	if receipt.Outcome != "success" || receipt.Provider != "test" || receipt.Model != "test/context-fabric" {
+		t.Fatalf("receipt = %#v", receipt)
+	}
+
+	inventedFactKindRuntime, err := New(Config{
+		Genkit: g, Provider: "test", Model: "test/context-fabric-invented-fact-kind", ModelVersion: "test-v1",
+		Timeout: time.Second, MaxAttempts: 1, MaxInputBytes: 128 << 10,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_, invalidReceipt, err := inventedFactKindRuntime.InterpretQuestion(ctx, storage.Principal{OrgID: "org_1"}, validRequest())
+	if err == nil || !errors.Is(err, contextfabric.ErrModelOutput) {
+		t.Fatalf("InterpretQuestion() with invented fact kind error = %v, want ErrModelOutput", err)
+	}
+	if invalidReceipt.Outcome != "invalid_output" {
+		t.Fatalf("invalidReceipt = %#v", invalidReceipt)
 	}
 }
 
