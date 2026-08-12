@@ -258,7 +258,7 @@ func validInvestigationShape(value ContextFabricInvestigationShape) bool {
 
 func validContextFabricSubjectKind(value ContextFabricSubjectKind) bool {
 	switch value {
-	case ContextFabricSubjectOrganization, ContextFabricSubjectTeam, ContextFabricSubjectProject, ContextFabricSubjectRepository, ContextFabricSubjectWorkItem, ContextFabricSubjectPullRequest, ContextFabricSubjectDeployment, ContextFabricSubjectIncident, ContextFabricSubjectDocument, ContextFabricSubjectDecision, ContextFabricSubjectEpisode, ContextFabricSubjectMetric:
+	case ContextFabricSubjectOrganization, ContextFabricSubjectTeam, ContextFabricSubjectProject, ContextFabricSubjectRepository, ContextFabricSubjectWorkItem, ContextFabricSubjectPullRequest, ContextFabricSubjectDeployment, ContextFabricSubjectIncident, ContextFabricSubjectDocument, ContextFabricSubjectDecision, ContextFabricSubjectEpisode, ContextFabricSubjectMetric, ContextFabricSubjectPullRequestReview, ContextFabricSubjectCIRun:
 		return true
 	default:
 		return false

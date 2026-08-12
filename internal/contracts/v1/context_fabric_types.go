@@ -67,6 +67,13 @@ const (
 	ContextFabricSubjectDecision     ContextFabricSubjectKind = "decision"
 	ContextFabricSubjectEpisode      ContextFabricSubjectKind = "episode"
 	ContextFabricSubjectMetric       ContextFabricSubjectKind = "metric"
+	// ContextFabricSubjectPullRequestReview and ContextFabricSubjectCIRun
+	// (CHAOS-3753 codex finding C7) are additive v1 enum values -- new
+	// entity kinds a producer may emit, not a change in meaning for any
+	// existing one, so this stays v1 per contracts/AGENTS.md ("narrowed
+	// values...require a new major version"; this is a widening).
+	ContextFabricSubjectPullRequestReview ContextFabricSubjectKind = "pull_request_review"
+	ContextFabricSubjectCIRun             ContextFabricSubjectKind = "ci_pipeline_run"
 )
 
 type ContextFabricResolutionState string

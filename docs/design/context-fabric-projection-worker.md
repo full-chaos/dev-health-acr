@@ -20,9 +20,11 @@ Confirmed real, queryable per-org tables (already read by `contextpacket`):
 `operational_incidents`, `work_graph_edges`,
 `work_graph_deployment_incident_edges`,
 `work_graph_pr_review_outcome_edges`. These back the required Repository,
-WorkItem, PullRequest, Deployment, Incident entity kinds and the explicit
-relationship projections (from the `work_graph_*` edge tables and
-`work_item_dependencies`). `operational_incidents.is_deleted` is an existing
+WorkItem, PullRequest, Deployment, Incident entity kinds, the
+`PullRequestReview`/`CIRun` kinds added post-review (codex finding C7,
+below), and the explicit relationship projections (from the `work_graph_*`
+edge tables and `work_item_dependencies`). `operational_incidents.is_deleted`
+is an existing
 soft-delete column and is the tombstone signal for incidents; the same
 pattern (an `is_active`/`*_at` marker where a table has one) drives
 tombstones elsewhere — commits are immutable and never tombstone.
@@ -294,6 +296,38 @@ temporary revert and pass again with the fix restored:
   `memory.EpisodeStore` -- project, redact, then resume from the
   already-advanced checkpoint and assert the next batch contains the
   tombstone, exactly the scenario the review specified.
+
+## PR reviews and CI runs (codex finding C7, post-review)
+
+The original design note listed `git_pull_request_reviews` and
+`ci_pipeline_runs` among the "confirmed real, queryable per-org tables,"
+but no batch ever actually emitted either -- the design doc's stated scope
+didn't match the shipped coverage. Per the review's stated preference
+("implement unless there's a real blocker; reviews/CI runs are core
+work-graph signal"), both are now implemented, not descoped: two new
+entity kinds, `ContextFabricSubjectPullRequestReview`
+(`pull_request_review`) and `ContextFabricSubjectCIRun`
+(`ci_pipeline_run`), added additively to the v1 contract (JSON Schema +
+Go, both directions, per contracts/AGENTS.md) -- an additive enum widening
+stays v1 per that doc's own rule ("narrowed values...require a new major
+version"; this is the opposite).
+
+`queryPullRequestReviews`/`queryCIRuns` (`devhealthsource/tables.go`) reuse
+the exact JOIN shape `internal/contextpacket/source_queries.go` already
+uses for `pull_request_reviews.v1`/`ci_pipeline_runs.v1` rather than
+inventing a new one -- both tables lack their own `org_id` column (per
+that existing, already-production query, which scopes entirely through
+the `repos` join), so W1's "`org_id` in every join" house rule has nothing
+to add here that the column doesn't already lack elsewhere. A review
+projects as an entity plus a `BELONGS_TO_PULL_REQUEST` relationship; a CI
+run projects as an entity plus the existing `BELONGS_TO_REPOSITORY`
+relationship. Neither table has a known soft-delete signal (unlike
+`operational_incidents.is_deleted`), so neither tombstones, matching the
+existing precedent for every other non-incident table.
+
+Proven by `TestClickHouseProjectionSourceProjectsPullRequestReviewsAndCIRuns`,
+confirmed to fail (no review/CI-run entities projected) against a
+temporary removal from `entityTables` and pass again with it restored.
 
 ## Rulings (2026-08-12, team-lead)
 

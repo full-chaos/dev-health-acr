@@ -115,6 +115,11 @@ func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection 
 		`CREATE TABLE operational_service_repository_mappings (org_id String, service_id String, repo_id String, is_active UInt8) ENGINE = ReplacingMergeTree ORDER BY (org_id, service_id, repo_id)`,
 		`CREATE TABLE work_item_dependencies (source_work_item_id String, target_work_item_id String, relationship_type Nullable(String), org_id String, last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (source_work_item_id, target_work_item_id)`,
 		`CREATE TABLE work_graph_deployment_incident_edges (edge_id String, deployment_id String, incident_id String, repo_id String, org_id UUID, observed_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY edge_id`,
+		// No org_id column -- see queryPullRequestReviews/queryCIRuns's doc
+		// comment in tables.go: neither table carries one in production, so
+		// there's nothing to add here either.
+		`CREATE TABLE git_pull_request_reviews (review_id String, repo_id String, number Int64, state Nullable(String), submitted_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY review_id`,
+		`CREATE TABLE ci_pipeline_runs (run_id String, repo_id String, branch Nullable(String), status Nullable(String), started_at DateTime64(6, 'UTC'), finished_at Nullable(DateTime64(6, 'UTC'))) ENGINE = ReplacingMergeTree ORDER BY run_id`,
 	}
 	for _, statement := range statements {
 		if err := connection.Exec(ctx, statement); err != nil {

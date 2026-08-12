@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 type fakeTable struct {
@@ -163,6 +164,70 @@ func baseTables(at time.Time) []fakeTable {
 		{match: "FROM operational_incidents AS i", rows: [][]any{{"incident-1", "repo-1", "example-org/widget-service", "Widget incident", "open", "low", at, uint8(0)}}},
 		{match: "FROM work_item_dependencies AS d", rows: [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "example-org/widget-service", at}}},
 		{match: "FROM work_graph_deployment_incident_edges AS e", rows: [][]any{{"edge-1", "deploy-1", "incident-1", "example-org/widget-service", at}}},
+	}
+}
+
+// TestClickHouseProjectionSourceProjectsPullRequestReviewsAndCIRuns is
+// CHAOS-3753 codex finding C7's regression test: the design doc declared
+// git_pull_request_reviews and ci_pipeline_runs coverage, but no batch
+// ever emitted them. Proves both now project as entities (with a
+// BELONGS_TO_PULL_REQUEST / BELONGS_TO_REPOSITORY relationship each).
+func TestClickHouseProjectionSourceProjectsPullRequestReviewsAndCIRuns(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+	tables := baseTables(at)
+	tables = append(tables,
+		fakeTable{match: "FROM git_pull_request_reviews AS r", rows: [][]any{{"review-1", "repo-1", int64(1042), "approved", at, "example-org/widget-service"}}},
+		fakeTable{match: "FROM ci_pipeline_runs AS c", rows: [][]any{{"run-1", "repo-1", "main", "success", "example-org/widget-service", at}}},
+	)
+	client := &fakeClient{tables: tables}
+	source, err := devhealthsource.NewClickHouseProjectionSource(client)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	batch, available, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName})
+	if err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if !available {
+		t.Fatal("expected a batch to be available")
+	}
+	if err := batch.Validate(); err != nil {
+		t.Fatalf("batch failed contract validation: %v", err)
+	}
+
+	foundReview, foundReviewRelationship := false, false
+	foundRun, foundRunRelationship := false, false
+	for _, entity := range batch.Entities {
+		switch entity.Subject.CanonicalID {
+		case "pull_request_review:review-1":
+			foundReview = true
+			if entity.Subject.Kind != contractsv1.ContextFabricSubjectPullRequestReview {
+				t.Fatalf("review entity kind = %q", entity.Subject.Kind)
+			}
+		case "ci_pipeline_run:run-1":
+			foundRun = true
+			if entity.Subject.Kind != contractsv1.ContextFabricSubjectCIRun {
+				t.Fatalf("CI run entity kind = %q", entity.Subject.Kind)
+			}
+		}
+	}
+	for _, relationship := range batch.Relationships {
+		if relationship.From.CanonicalID == "pull_request_review:review-1" && relationship.Type == "BELONGS_TO_PULL_REQUEST" {
+			foundReviewRelationship = true
+			if relationship.To.CanonicalID != "pull_request:repo-1:1042" {
+				t.Fatalf("review relationship target = %q", relationship.To.CanonicalID)
+			}
+		}
+		if relationship.From.CanonicalID == "ci_pipeline_run:run-1" && relationship.Type == "BELONGS_TO_REPOSITORY" {
+			foundRunRelationship = true
+		}
+	}
+	if !foundReview || !foundReviewRelationship {
+		t.Fatalf("pull request review not fully projected: entity=%t relationship=%t, batch=%+v", foundReview, foundReviewRelationship, batch)
+	}
+	if !foundRun || !foundRunRelationship {
+		t.Fatalf("CI run not fully projected: entity=%t relationship=%t, batch=%+v", foundRun, foundRunRelationship, batch)
 	}
 }
 

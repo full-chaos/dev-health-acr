@@ -22,7 +22,12 @@ type entityTable struct {
 // work_graph_pr_review_outcome_edges are intentionally excluded: their
 // source_id/target_id columns don't carry a subject kind, and guessing one
 // would risk mis-typed relationships entering the graph -- see
-// docs/design/context-fabric-projection-worker.md.
+// docs/design/context-fabric-projection-worker.md. git_pull_request_reviews
+// and ci_pipeline_runs (CHAOS-3753 codex finding C7) are included: PR
+// reviews and CI runs are core work-graph signal, and both are already read
+// for context packets (source_queries.go's pull_request_reviews.v1 /
+// ci_pipeline_runs.v1), so this reuses that same join shape rather than
+// inventing a new one.
 var entityTables = []entityTable{
 	{name: "repos", query: queryRepositories},
 	{name: "work_items", query: queryWorkItems},
@@ -31,6 +36,8 @@ var entityTables = []entityTable{
 	{name: "operational_incidents", query: queryIncidents},
 	{name: "work_item_dependencies", query: queryWorkItemDependencies},
 	{name: "work_graph_deployment_incident_edges", query: queryDeploymentIncidentEdges},
+	{name: "git_pull_request_reviews", query: queryPullRequestReviews},
+	{name: "ci_pipeline_runs", query: queryCIRuns},
 }
 
 // sincePredicate builds the keyset-pagination predicate. rowKeyExpr MUST be
@@ -332,5 +339,88 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 			ObservedAt: observedAt, SourceVersion: sourceVersion,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: edgeID, relationship: &relationship}}, nil
+	})
+}
+
+// queryPullRequestReviews and queryCIRuns (CHAOS-3753 codex finding C7)
+// reuse the exact JOIN shape internal/contextpacket/source_queries.go
+// already uses for pull_request_reviews.v1 / ci_pipeline_runs.v1, rather
+// than inventing a new one: neither git_pull_request_reviews nor
+// ci_pipeline_runs carries its own org_id column (confirmed by that
+// existing, already-production query never referencing one), so tenant
+// scoping here comes entirely through the repos join, same as that proven
+// query -- there is no "AND x.org_id = repo.org_id" to add (W1's house
+// rule) because the column doesn't exist to compare.
+func queryPullRequestReviews(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+	const rowKey = "r.review_id"
+	statement := `SELECT r.review_id, toString(r.repo_id), r.number, ifNull(r.state, ''), r.submitted_at, repo.repo
+FROM git_pull_request_reviews AS r FINAL
+INNER JOIN git_pull_requests AS p FINAL ON r.repo_id = p.repo_id AND r.number = p.number
+INNER JOIN repos AS repo FINAL ON repo.id = r.repo_id
+WHERE repo.org_id = {org_id:String}` + sincePredicate(cursor, "r.submitted_at", rowKey) + orderBy("r.submitted_at", rowKey)
+	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+		var reviewID, repoID, state, repoSlug string
+		var number int64
+		var observedAt time.Time
+		if err := r.Scan(&reviewID, &repoID, &number, &state, &observedAt, &repoSlug); err != nil {
+			return nil, err
+		}
+		observedAt = observedAt.UTC()
+		canonicalID := "pull_request_review:" + reviewID
+		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequestReview, CanonicalID: canonicalID, Label: fmt.Sprintf("PR #%d review", number)}
+		properties := map[string]contractsv1.ContextFabricScalarValue{}
+		if state != "" {
+			properties["state"] = stringScalar(state)
+		}
+		entity := contractsv1.ContextFabricEntityProjection{
+			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
+			EvidenceRefIDs: []string{"acr:v1:review:" + reviewID}, ObservedAt: observedAt, SourceVersion: sourceVersion,
+		}
+		pullRequestID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
+		relationship := contractsv1.ContextFabricRelationshipProjection{
+			RelationshipID: "relationship:belongs_to_pull_request:" + canonicalID, Type: "BELONGS_TO_PULL_REQUEST",
+			From:       subject,
+			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: pullRequestID, Label: pullRequestID},
+			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
+			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:review:" + reviewID},
+			ObservedAt: observedAt, SourceVersion: sourceVersion,
+		}
+		return []candidate{
+			{observedAt: observedAt, sortKey: reviewID, entity: &entity},
+			{observedAt: observedAt, sortKey: reviewID, relationship: &relationship},
+		}, nil
+	})
+}
+
+func queryCIRuns(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+	const timestampExpr = "coalesce(c.finished_at, c.started_at)"
+	const rowKey = "c.run_id"
+	statement := `SELECT c.run_id, toString(c.repo_id), ifNull(c.branch, ''), ifNull(c.status, ''), repo.repo, ` + timestampExpr + `
+FROM ci_pipeline_runs AS c FINAL
+INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id
+WHERE repo.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, rowKey) + orderBy(timestampExpr, rowKey)
+	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+		var runID, repoID, branch, status, repoSlug string
+		var observedAt time.Time
+		if err := r.Scan(&runID, &repoID, &branch, &status, &repoSlug, &observedAt); err != nil {
+			return nil, err
+		}
+		observedAt = observedAt.UTC()
+		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: "ci_pipeline_run:" + runID, Label: "CI " + runID}
+		properties := map[string]contractsv1.ContextFabricScalarValue{}
+		if status != "" {
+			properties["status"] = stringScalar(status)
+		}
+		if branch != "" {
+			properties["branch"] = stringScalar(branch)
+		}
+		entity := contractsv1.ContextFabricEntityProjection{
+			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
+			EvidenceRefIDs: []string{"acr:v1:ci:" + runID}, ObservedAt: observedAt, SourceVersion: sourceVersion,
+		}
+		return []candidate{
+			{observedAt: observedAt, sortKey: runID, entity: &entity},
+			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:ci:"+runID, runID),
+		}, nil
 	})
 }

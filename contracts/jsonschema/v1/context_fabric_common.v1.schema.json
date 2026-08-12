@@ -122,7 +122,9 @@
             "document",
             "decision",
             "episode",
-            "metric"
+            "metric",
+            "pull_request_review",
+            "ci_pipeline_run"
           ]
         },
         "canonical_id": {
@@ -160,7 +162,9 @@
             "document",
             "decision",
             "episode",
-            "metric"
+            "metric",
+            "pull_request_review",
+            "ci_pipeline_run"
           ]
         },
         "id": {
@@ -480,7 +484,9 @@
             "document",
             "decision",
             "episode",
-            "metric"
+            "metric",
+            "pull_request_review",
+            "ci_pipeline_run"
           ]
         },
         "members": {
