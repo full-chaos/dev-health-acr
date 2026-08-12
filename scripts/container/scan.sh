@@ -11,8 +11,8 @@ exact_archives=false
 
 trivy_image='aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c'
 syft_image='anchore/syft:v1.46.0@sha256:473a60e3a58e29aca3aedb3e99e787bb4ef273917e44d10fcbea4330a07320bb'
-trivy_db='ghcr.io/aquasecurity/trivy-db@sha256:a680a5167de22ebd71830f6a704d104a09b3c4f91c7f942836db40e44de6352e'
-trivy_db_layer='sha256:9a4bd36c6f6989abbb128a5e07fa59e59e4b46dcf8455930c3088405d56cb9c1'
+trivy_db='ghcr.io/aquasecurity/trivy-db@sha256:58571ef4cdbc32284069fd81b746472f22e9e98ef33185173b40031acebed5f8'
+trivy_db_layer='sha256:3a00f4987ee5ad4afcf5d2b23e6f3aeda26bdbe8c9c653976b51208ea67736ff'
 max_db_age_hours="${TRIVY_DB_MAX_AGE_HOURS:-168}"
 
 require() { command -v "$1" >/dev/null || { printf '%s is required\n' "$1" >&2; exit 1; }; }
