@@ -51,7 +51,7 @@ type RuntimeDependencies struct {
 	Episodes                   EpisodeCreator
 	// Investigator is optional -- context-fabric composition never fails
 	// closed over an unconfigured optional dependency (same convention as
-	// zepgraph.Configured for the graph backend). When nil, the
+	// falkorgraph.Configured for the graph backend). When nil, the
 	// investigations route is not registered at all (see Handler()),
 	// mirroring how Episodes being nil leaves the episode route
 	// unregistered.

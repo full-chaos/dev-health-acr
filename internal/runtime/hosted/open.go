@@ -14,8 +14,8 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/zepgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
@@ -141,14 +141,14 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 // just cannot answer until a model provider is configured. That is the
 // same "safely degrades" contract the graph and canonical-fact layers use.
 func buildContextFabricInvestigator(request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents) (contextfabric.Investigator, error) {
-	if !request.config.EnableContextFabricInvestigations || !zepgraph.Configured(os.LookupEnv) {
+	if !request.config.EnableContextFabricInvestigations || !falkorgraph.Configured(os.LookupEnv) {
 		return nil, nil
 	}
-	graphConfig, err := zepgraph.ConfigFromEnv(os.LookupEnv)
+	graphConfig, err := falkorgraph.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
 		return nil, fmt.Errorf("load context fabric graph configuration: %w", err)
 	}
-	graphReader, err := zepgraph.New(graphConfig)
+	graphReader, err := falkorgraph.New(graphConfig)
 	if err != nil {
 		return nil, fmt.Errorf("initialize context fabric graph adapter: %w", err)
 	}

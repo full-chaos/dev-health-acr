@@ -177,22 +177,32 @@ service:
 # and scaled Deployment running the acr-projector binary from the same
 # image as acr-api, entrypoint overridden -- matching how the acr-migrate
 # Job already reuses this image. Disabled by default: enabling it before a
-# Zep Cloud credential exists (see ADR 0007 -- no self-hostable Zep/Graphiti
-# backend) would bring the workload up in its documented healthy-disabled
-# state, so there is no reason to run the extra pod until credentials exist.
+# FalkorDB endpoint exists would bring the workload up in its documented
+# healthy-disabled state, so there is no reason to run the extra pod until
+# one exists.
 contextFabric:
-  # Zep/Graphiti graph backend credential (ADR 0007), consumed only by
-  # acr-projector's ProjectionBackend. Empty existingSecret leaves Context
-  # Fabric unconfigured -- zepgraph.Configured() then keeps the adapter (and
-  # so the coordinator) from ever constructing, matching the "an unset
-  # deployment should never fail closed" contract in ADR 0007. There is no
-  # self-hostable Zep/Graphiti server image (ADR 0007's "Deployment
-  # topology"), so unlike postgres/clickhouse this is a Secret reference
-  # only -- this chart never runs a Zep workload.
-  zep:
-    baseUrl: ""
+  # FalkorDB graph backend (ADR 0009, supersedes ADR 0007's Zep Cloud
+  # decision), consumed by acr-projector's ProjectionBackend
+  # (contextFabric.projector below wires these values into that
+  # Deployment). Empty addr leaves Context Fabric unconfigured --
+  # falkorgraph.Configured() then keeps the adapter from ever constructing,
+  # matching the "an unset deployment should never fail closed" contract
+  # carried over from ADR 0007. FalkorDB is self-hosted -- this chart does
+  # not run a FalkorDB workload itself, the same posture as
+  # postgres/clickhouse being externally provisioned; point addr at
+  # wherever it runs. Unlike Zep, no credential is required by default
+  # (FalkorDB has no auth out of the box), so existingSecret is optional
+  # and empty by default. acr-api's own optional Investigator (gated by
+  # ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED) reads this same env var
+  # contract when set, but this chart's acr-api Deployment does not wire it
+  # yet -- pre-existing gap, not introduced or closed by this change.
+  falkor:
+    addr: ""
+    tls: true
+    allowInsecure: false
+    graphPrefix: "acr-cf"
     existingSecret: ""
-    apiKeyKey: ACR_CONTEXT_FABRIC_ZEP_API_KEY
+    passwordKey: ACR_CONTEXT_FABRIC_FALKOR_PASSWORD
   projector:
     enabled: false
     replicaCount: 1
