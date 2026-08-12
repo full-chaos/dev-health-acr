@@ -17,6 +17,9 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.SubjectResolution{}, errors.New("authenticated organization is required")
 	}
+	if err := ctx.Err(); err != nil {
+		return contextfabric.SubjectResolution{}, err
+	}
 	terms := subjectTerms(request, interpreted)
 	candidatesBySubject := make(map[string]contextfabric.SubjectCandidate)
 	for _, hint := range request.RequestedScope.SubjectHints {
@@ -71,6 +74,21 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			if current, exists := candidatesBySubject[key]; !exists || candidate.Confidence > current.Confidence {
 				candidatesBySubject[key] = candidate
 			}
+			// Observation-to-entity traversal: a hybrid match on a document
+			// or episode node means the term appeared in text *about* some
+			// canonical entity, not necessarily that the caller is asking
+			// about the document/episode itself. Walk back to whichever
+			// entity that observation is attached to and propose it as an
+			// additional candidate (never a replacement -- a caller may
+			// genuinely mean the document or episode).
+			if isObservationSubjectKind(candidate.Subject.Kind) {
+				if traversed, ok := a.traverseObservationToSubject(ctx, principal, request.RequestedScope, term, node); ok {
+					traversedKey := subjectKey(traversed.Subject)
+					if current, exists := candidatesBySubject[traversedKey]; !exists || traversed.Confidence > current.Confidence {
+						candidatesBySubject[traversedKey] = traversed
+					}
+				}
+			}
 		}
 	}
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
@@ -124,6 +142,9 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Principal, request contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.GraphContext{}, errors.New("authenticated organization is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return contextfabric.GraphContext{}, err
 	}
 	originIDs := make([]string, 0, len(request.Resolution.Committed))
 	for _, subject := range request.Resolution.Committed {
@@ -232,6 +253,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		evidence = append(evidence, id)
 	}
 	sort.Strings(evidence)
+	if max := request.Request.Options.MaxEvidenceRefs; max > 0 && len(evidence) > max {
+		evidence = evidence[:max]
+	}
 	return contextfabric.GraphContext{
 		Resolution: request.Resolution, Cohort: cohort, Paths: paths, DriverCandidates: drivers,
 		EvidenceRefIDs: evidence, FactRequirements: factRequirements,
@@ -408,6 +432,58 @@ func isInternalBookkeepingSubject(subject contextfabric.SubjectRef) bool {
 		return true
 	}
 	return false
+}
+
+// isObservationSubjectKind reports whether kind describes an observation
+// about a canonical entity (a document or episode) rather than a
+// first-class subject in its own right. See traverseObservationToSubject.
+func isObservationSubjectKind(kind contextfabric.SubjectKind) bool {
+	return kind == contextfabric.SubjectDocument || kind == contextfabric.SubjectEpisode
+}
+
+// traverseObservationToSubject implements observation-to-entity traversal:
+// given a document/episode node that a hybrid search matched on its text
+// (title, body, goal, outcome, summary), it walks the node's incoming edge
+// back to the canonical entity that document/episode is projected against
+// (projectContent/projectEpisode always set that entity as the edge's
+// source and the document/episode as the target) and proposes that entity
+// as an additional subject candidate. This lets a term that only appears
+// inside a document body or episode summary still resolve to the subject
+// the question is actually about, without requiring the term to match the
+// subject's own label, alias, or previous name directly.
+//
+// The traversed entity is independently re-authorized (authorizedAttributes
+// via nodeCandidate) before it can become a candidate -- the caller's
+// authorization to see the observation never carries over to the entity it
+// describes.
+func (a *Adapter) traverseObservationToSubject(ctx context.Context, principal storage.Principal, scope contextfabric.RequestedScope, term string, observation *zep.EntityNode) (contextfabric.SubjectCandidate, bool) {
+	if observation == nil || strings.TrimSpace(observation.UUID) == "" {
+		return contextfabric.SubjectCandidate{}, false
+	}
+	edges, err := a.api.GetNodeEdges(ctx, observation.UUID)
+	if err != nil {
+		return contextfabric.SubjectCandidate{}, false
+	}
+	for _, edge := range edges {
+		if edge == nil || edge.TargetNodeUUID != observation.UUID || strings.TrimSpace(edge.SourceNodeUUID) == "" {
+			continue
+		}
+		source, err := a.api.GetNode(ctx, edge.SourceNodeUUID)
+		if err != nil || source == nil {
+			continue
+		}
+		candidate, ok := nodeCandidate(principal, scope, term, source)
+		if !ok || isObservationSubjectKind(candidate.Subject.Kind) {
+			continue
+		}
+		// One hop removed from a direct label/alias/text match, so the
+		// traversed candidate never outranks a subject the search matched
+		// directly.
+		candidate.Confidence *= 0.85
+		candidate.MatchReasons = []string{"Matched an associated document or episode that references this subject."}
+		return candidate, true
+	}
+	return contextfabric.SubjectCandidate{}, false
 }
 
 func authorizedAttributes(principal storage.Principal, requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {

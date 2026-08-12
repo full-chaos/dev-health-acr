@@ -208,6 +208,133 @@ func TestResolveSubjectsFiltersUnauthorizedNodesBeforeCandidates(t *testing.T) {
 	}
 }
 
+// TestResolveSubjectsAcceptsPrincipalWildcardRepositoryScope is the direct
+// regression for the CHAOS-3752 Reset 0 review must-do: a principal holding
+// an org-wide "*" or an "owner/*" repository scope (both valid per
+// internal/auth.RepositoryAllowed/validRepositoryScope, e.g. issued to a
+// device grant) previously matched no projected node at all, because
+// zepgraph's scopeContains only compared exact repository strings. Retrieval
+// authorization must accept both wildcard forms.
+func TestResolveSubjectsAcceptsPrincipalWildcardRepositoryScope(t *testing.T) {
+	t.Parallel()
+	narrowlyScoped := graphNode("node-narrow", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "|acme/repo-x|", 1)
+	request := validRequest()
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"Ask Dev"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+
+	for _, tc := range []struct {
+		name   string
+		scopes []string
+		want   bool
+	}{
+		{"global wildcard authorizes a narrowly-scoped node", []string{"*"}, true},
+		{"owner wildcard authorizes a node under that owner", []string{"acme/*"}, true},
+		{"owner wildcard for a different owner still denies (no unsafe widening)", []string{"other/*"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			api := newFakeAPI()
+			adapter := mustAdapter(t, api)
+			api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{narrowlyScoped}}
+			resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: tc.scopes}, request, interpreted)
+			if err != nil {
+				t.Fatalf("ResolveSubjects() error = %v", err)
+			}
+			got := len(resolution.Candidates) == 1 && resolution.Candidates[0].Subject.CanonicalID == "project_ask_dev"
+			if got != tc.want {
+				t.Fatalf("resolution = %#v, want candidate present = %v", resolution, tc.want)
+			}
+		})
+	}
+}
+
+// TestResolveSubjectsWildcardScopeDoesNotWidenAcrossOrganizations proves the
+// wildcard fix stays inside organization isolation: it operates purely on
+// the per-node repository authorization tag, never on the search request's
+// organization scope, which stays the server-derived per-organization graph
+// ID (proved separately by TestGraphIdentityIsServerDerivedAndOrganizationIsolated)
+// regardless of the principal's repository scope.
+func TestResolveSubjectsWildcardScopeDoesNotWidenAcrossOrganizations(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	node := graphNode("node-org-2", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "|acme/repo-x|", 1)
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{node}}
+	request := validRequest()
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"Ask Dev"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	if _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_2", RepositoryScopes: []string{"*"}}, request, interpreted); err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(api.searches) != 1 {
+		t.Fatalf("searches = %d, want 1", len(api.searches))
+	}
+	wantGraphID := graphID(adapter.config.GraphPrefix, "org_2")
+	if api.searches[0].GraphID == nil || *api.searches[0].GraphID != wantGraphID {
+		t.Fatalf("search graph ID = %v, want %q (org isolation is structural, not scope-matching)", api.searches[0].GraphID, wantGraphID)
+	}
+}
+
+// TestResolveSubjectsTraversesObservationNodeToCanonicalSubject is the
+// direct proof of observation-to-entity traversal: a hybrid search hit on a
+// document node (the term only matched inside its indexed body/summary
+// text) must still resolve back to the canonical subject that document is
+// projected against, in addition to proposing the document itself.
+func TestResolveSubjectsTraversesObservationNodeToCanonicalSubject(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	subject := graphNode("node-subject", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.4)
+	document := &zep.EntityNode{
+		UUID: "node-document", Name: "Ask Dev readiness review", Relevance: ptr(0.93),
+		Attributes: map[string]interface{}{
+			"canonical_id": "document_1234", "subject_kind": string(contextfabric.SubjectDocument), "label": "Ask Dev readiness review",
+			"authorization_repositories": "*", "authorization_projects": "*", "authorization_teams": "*",
+			"evidence_refs": "|evidence_document_1234|",
+		},
+	}
+	api.nodes[subject.UUID] = subject
+	api.nodes[document.UUID] = document
+	api.edges["edge-documented-by"] = &zep.EntityEdge{
+		UUID: "edge-documented-by", Name: "DOCUMENTED_BY", Fact: "Ask Dev is documented by Ask Dev readiness review.",
+		SourceNodeUUID: subject.UUID, TargetNodeUUID: document.UUID,
+	}
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{document}}
+	request := validRequest()
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"readiness review"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	var sawDocument, sawSubject bool
+	var subjectConfidence float64
+	for _, candidate := range resolution.Candidates {
+		if candidate.Subject.CanonicalID == "document_1234" {
+			sawDocument = true
+		}
+		if candidate.Subject.CanonicalID == "project_ask_dev" {
+			sawSubject = true
+			subjectConfidence = candidate.Confidence
+		}
+	}
+	if !sawDocument {
+		t.Fatalf("resolution = %#v, want the matched document proposed as a candidate", resolution)
+	}
+	if !sawSubject {
+		t.Fatalf("resolution = %#v, want the traversed canonical subject proposed as a candidate", resolution)
+	}
+	if subjectConfidence <= 0 || subjectConfidence >= resultConfidence(document.Relevance, document.Score) {
+		t.Fatalf("traversed subject confidence = %v, want positive and discounted below the observation's own confidence", subjectConfidence)
+	}
+}
+
 // TestResolveSubjectsExcludesInternalBookkeepingSubjectsFromCandidates
 // guards against the adapter's own projection anchor nodes (the
 // organization root, projection watermark markers) leaking into a public
@@ -236,36 +363,29 @@ func TestResolveSubjectsExcludesInternalBookkeepingSubjectsFromCandidates(t *tes
 	}
 }
 
-// TestDiscoverContextExcludesInternalBookkeepingRelationships guards the
-// relationship path against the same organization-root/watermark-marker
-// leakage as candidate resolution: even if a bookkeeping edge somehow
-// carried evidence, it must never surface as a public relationship path.
-func TestDiscoverContextExcludesInternalBookkeepingRelationships(t *testing.T) {
+// TestResolveSubjectsAndDiscoverContextRejectAlreadyCancelledContext proves
+// budget/deadline/cancellation enforcement at the graph retrieval boundary,
+// not just inside the outer Engine.
+func TestResolveSubjectsAndDiscoverContextRejectAlreadyCancelledContext(t *testing.T) {
 	t.Parallel()
 	api := newFakeAPI()
 	adapter := mustAdapter(t, api)
-	root := graphNode("node-root", contextfabric.SubjectOrganization, "organization-root", "Organization", "*", 0.5)
-	subject := graphNode("node-subject", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.9)
-	edge := &zep.EntityEdge{
-		UUID: "edge-bookkeeping", Name: "HAS_SUBJECT", Fact: "Organization contains Ask Dev.",
-		SourceNodeUUID: root.UUID, TargetNodeUUID: subject.UUID,
-		Attributes: map[string]interface{}{"authorization_repositories": "*", "evidence_refs": "|evidence_leaked_1234|", "epistemic_status": "observed"},
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := validRequest()
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"Ask Dev"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{root, subject}, Edges: []*zep.EntityEdge{edge}}
-	discoveryRequest := contextfabric.GraphDiscoveryRequest{
-		Request: validRequest(),
-		Interpretation: contextfabric.InterpretedQuestion{
-			Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-			FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
-		},
-		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+	if _, err := adapter.ResolveSubjects(ctx, storage.Principal{OrgID: "org_1"}, request, interpreted); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ResolveSubjects() error = %v, want context.Canceled", err)
 	}
-	contextResult, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org_1"}, discoveryRequest)
-	if err != nil {
-		t.Fatalf("DiscoverContext() error = %v", err)
+	discovery := contextfabric.GraphDiscoveryRequest{Request: request, Interpretation: interpreted, Resolution: contextfabric.SubjectResolution{}}
+	if _, err := adapter.DiscoverContext(ctx, storage.Principal{OrgID: "org_1"}, discovery); !errors.Is(err, context.Canceled) {
+		t.Fatalf("DiscoverContext() error = %v, want context.Canceled", err)
 	}
-	if len(contextResult.Paths) != 0 || len(contextResult.EvidenceRefIDs) != 0 {
-		t.Fatalf("graph context = %#v, want internal bookkeeping relationship excluded", contextResult)
+	if len(api.searches) != 0 {
+		t.Fatalf("searches = %d, want zero backend calls for an already-cancelled context", len(api.searches))
 	}
 }
 
@@ -315,6 +435,79 @@ func TestDiscoverContextReturnsEvidenceClosedDriverAndSubjectlessCohort(t *testi
 	}
 	if source.Watermark != "" {
 		t.Fatalf("coverage watermark = %q, want empty until a real, non-identifying watermark exists", source.Watermark)
+	}
+}
+
+// TestDiscoverContextTruncatesEvidenceRefsToBudget proves
+// Options.MaxEvidenceRefs is enforced on the aggregated evidence list, not
+// just on candidate/path/driver counts.
+func TestDiscoverContextTruncatesEvidenceRefsToBudget(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	project := graphNode("project-node", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.95)
+	first := graphNode("work-node-1", contextfabric.SubjectWorkItem, "work_1", "Work One", "*", 0.8)
+	second := graphNode("work-node-2", contextfabric.SubjectWorkItem, "work_2", "Work Two", "*", 0.8)
+	edges := []*zep.EntityEdge{
+		{
+			UUID: "edge-1", Name: "BLOCKS", Fact: "Work One blocks Ask Dev.", SourceNodeUUID: project.UUID, TargetNodeUUID: first.UUID,
+			Attributes: map[string]interface{}{"authorization_repositories": "*", "evidence_refs": "|evidence_one_1234|", "epistemic_status": "observed"}, Relevance: ptr(0.9),
+		},
+		{
+			UUID: "edge-2", Name: "BLOCKS", Fact: "Work Two blocks Ask Dev.", SourceNodeUUID: project.UUID, TargetNodeUUID: second.UUID,
+			Attributes: map[string]interface{}{"authorization_repositories": "*", "evidence_refs": "|evidence_two_1234|", "epistemic_status": "observed"}, Relevance: ptr(0.9),
+		},
+	}
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{project, first, second}, Edges: edges}
+	request := validRequest()
+	request.Options.MaxEvidenceRefs = 1
+	discoveryRequest := contextfabric.GraphDiscoveryRequest{
+		Request: request,
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeOpen, RequestedJudgment: "blockers", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactBlockers}},
+		},
+		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+	}
+	contextResult, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org_1"}, discoveryRequest)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(contextResult.EvidenceRefIDs) != 1 {
+		t.Fatalf("evidence ref IDs = %#v, want truncated to Options.MaxEvidenceRefs=1", contextResult.EvidenceRefIDs)
+	}
+}
+
+// TestDiscoverContextExcludesInternalBookkeepingRelationships guards the
+// relationship path against the same organization-root/watermark-marker
+// leakage as candidate resolution: even if a bookkeeping edge somehow
+// carried evidence, it must never surface as a public relationship path.
+func TestDiscoverContextExcludesInternalBookkeepingRelationships(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	root := graphNode("node-root", contextfabric.SubjectOrganization, "organization-root", "Organization", "*", 0.5)
+	subject := graphNode("node-subject", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.9)
+	edge := &zep.EntityEdge{
+		UUID: "edge-bookkeeping", Name: "HAS_SUBJECT", Fact: "Organization contains Ask Dev.",
+		SourceNodeUUID: root.UUID, TargetNodeUUID: subject.UUID,
+		Attributes: map[string]interface{}{"authorization_repositories": "*", "evidence_refs": "|evidence_leaked_1234|", "epistemic_status": "observed"},
+	}
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{root, subject}, Edges: []*zep.EntityEdge{edge}}
+	discoveryRequest := contextfabric.GraphDiscoveryRequest{
+		Request: validRequest(),
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+		},
+		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+	}
+	contextResult, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org_1"}, discoveryRequest)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(contextResult.Paths) != 0 || len(contextResult.EvidenceRefIDs) != 0 {
+		t.Fatalf("graph context = %#v, want internal bookkeeping relationship excluded", contextResult)
 	}
 }
 
@@ -379,6 +572,68 @@ func TestResolveSubjectsUsesExactCanonicalHintBeforeSemanticSearch(t *testing.T)
 	}
 	if len(resolution.Committed) != 1 || resolution.Committed[0] != subject || len(api.searches) != 0 {
 		t.Fatalf("resolution = %#v searches = %#v", resolution, api.searches)
+	}
+}
+
+// TestResolveSubjectsExactHintForUnauthorizedSubjectIsSkippedSilently proves
+// the exact-hint path fails closed with no leak and no error when the named
+// subject exists but is not authorized for the calling principal. This is
+// the path Engine's prior-subject-receipt expansion feeds into (see
+// CHAOS-3754 Engine.resolvePriorSubjectHints): a receipt naming a subject
+// the principal is not (or no longer) authorized for must degrade exactly
+// the same way an ordinary caller-supplied SubjectHint does.
+func TestResolveSubjectsExactHintForUnauthorizedSubjectIsSkippedSilently(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_secret", Label: "Secret Project"}
+	api.nodes[nodeUUID("org_1", subject)] = graphNode(nodeUUID("org_1", subject), subject.Kind, subject.CanonicalID, subject.Label, "|other/private|", 1)
+	request := validRequest()
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: "prior_subject_receipt"}}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}, request, contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	})
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v, want a silent skip, not an error", err)
+	}
+	if len(resolution.Candidates) != 0 || len(resolution.Committed) != 0 {
+		t.Fatalf("resolution = %#v, want the unauthorized subject to never surface", resolution)
+	}
+}
+
+// TestResolveSubjectsResolvesSubjectMatchedByAliasOrPreviousName proves alias
+// and previous-name resolution end to end: ADR 0007 embeds aliases and
+// previous names in the node's indexed search summary
+// (entitySearchSummary/projectionEntityAttributes) precisely so a term that
+// only matches an alias or a former name -- never the current canonical
+// label -- still resolves. The adapter cannot make the backend's semantic
+// match happen (that is Zep's hybrid search), but it must accept and
+// correctly score a node the backend returned this way: high relevance,
+// canonical label different from the search term, single strong result.
+func TestResolveSubjectsResolvesSubjectMatchedByAliasOrPreviousName(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	// The canonical label is "Ask Dev"; the term below only matches the
+	// previous name "Dev Agent" embedded in the node's summary/attributes,
+	// never the label itself, so the exact-match fast path in
+	// nodeCandidate cannot fire -- this exercises the hybrid-confidence
+	// path exclusively.
+	node := graphNode("node-previous-name", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.9)
+	node.Attributes["previous_names"] = "|Dev Agent|"
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{node}}
+	request := validRequest()
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"Dev Agent"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "project_ask_dev" {
+		t.Fatalf("resolution = %#v, want the previous-name match resolved to the canonical subject", resolution)
 	}
 }
 
