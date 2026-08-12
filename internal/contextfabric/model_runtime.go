@@ -254,16 +254,16 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		DirectJudgment:      strings.TrimSpace(draft.DirectJudgment),
 		CurrentState:        strings.TrimSpace(draft.CurrentState),
 		StrongestPressures:  append([]string(nil), draft.StrongestPressures...),
-		Drivers:             append([]DriverJudgment(nil), draft.Drivers...),
-		RemainingWork:       append([]Finding(nil), draft.RemainingWork...),
-		ReadinessGaps:       append([]Finding(nil), draft.ReadinessGaps...),
-		Paths:               append([]RelationshipPath(nil), input.Graph.Paths...),
-		Conflicts:           append([]Finding(nil), draft.Conflicts...),
-		Limitations:         append([]string(nil), draft.Limitations...),
-		EvidenceRefIDs:      append([]string(nil), draft.EvidenceRefIDs...),
+		Drivers:             cloneSlice(draft.Drivers),
+		RemainingWork:       cloneSlice(draft.RemainingWork),
+		ReadinessGaps:       cloneSlice(draft.ReadinessGaps),
+		Paths:               cloneSlice(input.Graph.Paths),
+		Conflicts:           cloneSlice(draft.Conflicts),
+		Limitations:         cloneSlice(draft.Limitations),
+		EvidenceRefIDs:      cloneSlice(draft.EvidenceRefIDs),
 		Coverage:            mergeCoverage(input.Graph.Coverage, input.Facts.Coverage),
 		DeterministicAnswer: strings.TrimSpace(draft.DeterministicAnswer),
-		Warnings:            append([]string(nil), draft.Warnings...),
+		Warnings:            cloneSlice(draft.Warnings),
 		Versions: VersionSet{
 			ServiceVersion:          nonEmptyVersion(r.Options.ServiceVersion, "unwired"),
 			ContractVersion:         InvestigationResultSchemaV1,
@@ -367,6 +367,18 @@ func synthesisSubjects(input SynthesisInput) map[string]struct{} {
 		}
 	}
 	return result
+}
+
+// cloneSlice returns an independent copy of values. Unlike
+// append([]T(nil), values...), it always returns a non-nil slice -- even
+// when values is empty or nil -- because the public InvestigationResult
+// validator rejects a nil collection outright (see
+// internal/contracts/v1/validate_context_fabric_result.go), and an ordinary
+// draft with no conflicts, limitations, or warnings must still validate.
+func cloneSlice[T any](values []T) []T {
+	cloned := make([]T, len(values))
+	copy(cloned, values)
+	return cloned
 }
 
 func subjectKeyForModel(subject SubjectRef) string {

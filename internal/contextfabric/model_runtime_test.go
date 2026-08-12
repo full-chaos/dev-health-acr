@@ -234,6 +234,48 @@ func TestRuntimeAnswerSynthesizerBuildsResultVersionsFromReceiptAndOptions(t *te
 	}
 }
 
+// TestRuntimeAnswerSynthesizerProducesNonNilCollectionsForEmptyDraft guards
+// against a regression where an ordinary, fully valid draft with no
+// conflicts/limitations/warnings/etc. produced a public InvestigationResult
+// with nil collection fields (via append([]T(nil), empty...)) that the
+// public contract validator rejects outright, so the engine would fail
+// closed on the common case of a clean, no-conflict investigation.
+func TestRuntimeAnswerSynthesizerProducesNonNilCollectionsForEmptyDraft(t *testing.T) {
+	t.Parallel()
+	input := validSynthesisInputFixture()
+	draft := validSynthesisDraftFixture(input) // RemainingWork/ReadinessGaps/Conflicts/Limitations/Warnings are all empty
+	synthesizer := RuntimeAnswerSynthesizer{
+		Runtime: fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)},
+		Sink:    &fakeReceiptSink{},
+		Options: RuntimeAnswerSynthesizerOptions{ServiceVersion: "acr-v1", Backend: "graph", ProjectionVersion: "p-v1", QueryVersion: "q-v1", CanonicalServiceVersion: "ops-v1"},
+	}
+	result, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	for name, isNil := range map[string]bool{
+		"Drivers": result.Drivers == nil, "RemainingWork": result.RemainingWork == nil, "ReadinessGaps": result.ReadinessGaps == nil,
+		"Paths": result.Paths == nil, "Conflicts": result.Conflicts == nil, "Limitations": result.Limitations == nil,
+		"EvidenceRefIDs": result.EvidenceRefIDs == nil, "Warnings": result.Warnings == nil,
+	} {
+		if isNil {
+			t.Errorf("result.%s is nil; the public contract validator rejects that", name)
+		}
+	}
+	// Fill in the envelope fields the engine (not the synthesizer) owns, then
+	// confirm the result the engine would return is contract-valid end to end.
+	result.SchemaVersion = InvestigationResultSchemaV1
+	result.ResultID = "result_12345678"
+	result.RequestID = "request_12345678"
+	result.GeneratedAt = time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)
+	result.Question = input.Request.Question
+	result.Interpretation = input.Interpretation
+	result.SubjectResolution = input.Graph.Resolution
+	if err := result.Validate(); err != nil {
+		t.Fatalf("result.Validate() error = %v, want a valid public result for an empty-collection draft", err)
+	}
+}
+
 // --- fixtures ---
 
 func validSynthesisInputFixture() SynthesisInput {
