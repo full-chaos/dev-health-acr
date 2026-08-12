@@ -187,6 +187,66 @@ for a batch against the stale checkpoint -- confirmed to fail without the
 fix (temporarily disabling the marker check reproduces the exact bug), and
 to pass with it.
 
+## Keyset pagination, oversized organizations, and tenant-scoped joins (codex findings C5/C6/W1, post-review)
+
+**C5 — pagination tiebreaker.** Every table's cursor pagination compares
+`(timestampExpr, rowKeyExpr)` in strict lexicographic order (`ts > since OR
+(ts = since AND rowKey > after)`), so that a page boundary landing inside a
+group of rows sharing one timestamp — common: bulk syncs land many rows in
+the same second — still emits each row exactly once. The first
+implementation hardcoded the tiebreaker to a bare `id`, which — because
+nearly every query joins `repos AS r` — silently resolved to `repos.id`
+instead of the entity's own identifier for six of seven tables (`repos`
+itself was the one table it happened to get right). `sincePredicate`/
+`orderBy` now take an explicit `rowKeyExpr` per table, and every
+`candidate.sortKey` was corrected to match exactly what that expression
+produces. Proven by
+`TestClickHouseProjectionSourceKeysetPaginationSurvivesTiedTimestamps`,
+which deliberately probes a *joined* table (`work_items`), not `repos`,
+since a repos-only probe would not have caught the original bug.
+
+**Honest limitation: event-time watermarks miss backfilled/corrected rows.**
+This cursor is `(observed/updated timestamp, id)`, not a monotonic sequence
+number. If a source system backfills or corrects a row so its timestamp
+column moves *backward* relative to a watermark this source has already
+passed — a corrected `updated_at`, a late-arriving webhook that predates
+rows already projected — that row will not be picked up by any future
+incremental batch; only a full rebuild (`acr-projector rebuild --org`)
+re-observes it. This is a real, currently-accepted gap, not a hidden one:
+closing it properly needs either a strictly-monotonic ingest-side sequence
+column (not currently in ClickHouse schema) or a small trailing
+re-scan window, and is out of scope for Reset 1A.
+
+**C6 — oversized organizations.** `fullSnapshot()` used to return a hard,
+permanent error when any table exceeded its per-query cap
+(`snapshotPerQueryCap`, 150 rows) — and since a never-before-projected
+organization always starts at a zero cursor (always routed through
+`fullSnapshot()`), any organization above that size could never complete
+initial projection; every tick re-attempted and failed the identical
+oversized single-batch snapshot. It now falls back to the same bounded
+per-tick paging path `incremental()` already used (extracted into a shared
+`pagedBatch`), completing catch-up across ordinary ticks instead of
+erroring forever. Proven by
+`TestClickHouseProjectionSourceFullSnapshotPagesToCompletionWhenOversized`.
+
+**W1 — tenant-scoped joins.** Six `INNER JOIN repos AS r` clauses compared
+only `r.id = <table>.repo_id`, without also requiring `r.org_id =
+<table>.org_id`. Two independently-synced repositories that happen to
+share an `id` across two different organizations — a real risk with
+non-UUID source ids, replayed syncs, or seed data — could join to the
+*wrong* tenant's repository row, attaching a foreign slug and
+authorization scope. All six joins now also require organization equality.
+Proven against a real ClickHouse instance (the package's `fakeClient`
+cannot execute an actual SQL join, so it could not have caught this bug —
+see the fake's `cursorOf` doc comment, and W2 below) by
+`TestClickHouseProjectionSourceScopesTheRepositoryJoinByOrganization`,
+which seeds two organizations' `repos` rows sharing one `id` and asserts
+the projected work item never picks up the wrong tenant's slug.
+
+All three fixes were verified probe-first: each new test was confirmed to
+fail (with the original bug's exact symptom) against a temporary revert of
+its fix, then to pass again once the fix was restored.
+
 ## Rulings (2026-08-12, team-lead)
 
 1. **Postgres advisory lock: approved.** Cross-replica correctness beats a
