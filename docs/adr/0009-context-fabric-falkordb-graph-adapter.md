@@ -334,9 +334,158 @@ against a real backend, in CI, with no external credential gate:
 - FalkorDB's SSPL license risk is explicitly accepted by Chris: consumed as
   a deployment dependency (a container image), not as linked code -- the
   Go client itself (`falkordb-go/v2`) is BSD-3-Clause.
-- `zepgraph` stays in-tree, fully tested, and selectable by config; nothing
-  in this ADR deletes it or claims FalkorDB replaces every future backend
-  decision, only that it is the current one.
+- `zepgraph` stayed in-tree, fully tested, and selectable by config through
+  this ADR's initial merge; the CHAOS-3771 addendum below records its
+  deletion.
 - Helm chart wiring and hosted runtime composition (which backend
-  `cmd/acr-projector`/`cmd/acr-api` actually construct) remain open,
-  explicitly flagged above rather than silently assumed done.
+  `cmd/acr-projector`/`cmd/acr-api` actually construct) remained open at
+  this ADR's initial merge, explicitly flagged above rather than silently
+  assumed done; the CHAOS-3771 addendum below records them closing.
+
+## Addendum (CHAOS-3771, 2026-08-12): runtime cutover and zepgraph deletion
+
+This ADR's initial merge (CHAOS-3752) shipped the `falkorgraph` adapter
+behind the existing ports but left three things explicitly open, listed
+above: Helm wiring, hosted runtime composition, and `zepgraph`'s fate.
+CHAOS-3771 closes all three.
+
+### Runtime composition
+
+`cmd/acr-projector`'s `openProjectionBackend` and
+`internal/runtime/hosted/open.go`'s `buildContextFabricInvestigator` now
+construct `falkorgraph.Adapter` (`falkorgraph.Configured` /
+`falkorgraph.ConfigFromEnv` / `falkorgraph.New`) instead of `zepgraph`'s
+equivalents. Both call sites keep the same "an unset dependency must never
+fail closed" gating this ADR already established: an absent
+`ACR_CONTEXT_FABRIC_FALKOR_ADDR` leaves the projection coordinator and the
+investigator un-constructed, not erroring. The hosted investigator keeps its
+separate, unchanged gate: `ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED`
+(`config.EnableContextFabricInvestigations`) AND `falkorgraph.Configured`,
+exactly as it was AND `zepgraph.Configured` before. No change to
+`internal/contextfabric/ports.go`, `graphrank`, or the contract layer --
+only which adapter composition selects.
+
+### Helm
+
+`deploy/helm/acr/values.yaml`'s `contextFabric.zep.*` (base URL +
+`existingSecret`/`apiKeyKey`) is replaced by `contextFabric.falkor.*`
+(`addr`, `tls`, `allowInsecure`, `graphPrefix`, `existingSecret`,
+`passwordKey`), wired into `templates/projector-deployment.yaml`'s
+`ACR_CONTEXT_FABRIC_FALKOR_*` env block and declared in
+`values.schema.json`. FalkorDB needs no credential by default, so the
+`existingSecret` block is conditional the same way Zep's was, just
+optional rather than expected. `acr-api`'s own Helm `Deployment` still does
+not wire any graph-backend env at all (a gap that pre-dates this ADR --
+only the projector chart ever wired Zep either) -- not closed here,
+recorded so it is not mistaken for done.
+
+### `zepgraph` deletion
+
+Chris's ruling (CHAOS-3771 Linear comment, 2026-08-12): **delete, not keep
+dormant.** "The Zep backend and anything Python-prototype-derived is
+deprecated/reference-only." `internal/contextfabric/zepgraph` (8 files:
+`adapter_test.go`, `config.go`, `config_test.go`,
+`engine_org_isolation_test.go`, `identity.go`, `identity_test.go`,
+`projection.go`, `reader.go`) is removed outright, along with
+`ACR_CONTEXT_FABRIC_ZEP_*` env/config and the `github.com/getzep/zep-go/v3`
+dependency (`go mod tidy`, no other dependency churn). CHAOS-3773
+(a zepgraph attribution-edge scope gap) is closed as moot on this basis --
+there is nothing left to fix it in. `internal/contextfabric/graphrank`
+stays: it is backend-neutral and `falkorgraph` depends on it directly.
+
+**Coverage audit before deletion, not after.** `graphrank` exports roughly
+25 functions but had only 3 test functions of its own; nearly all real
+coverage of its ranking/authorization/resolution logic (`ScopeMatch`,
+`ResolveFromMergedCandidates`/`FinalizeExactResolution`/`AnyCallerSourced`/
+`ClarificationPrompt`, `AdmitEdges`, `DiscoveredCohort`,
+`TraverseObservationToSubject`, `NodeCandidate`, `SubjectTerms`) lived only
+inside `zepgraph`'s test files, exercised indirectly through its
+zep-specific wrapper functions. `falkorgraph` separately had no
+`config_test.go`, no context-cancellation test, and no pinned-SDK-
+constructibility test, despite the design doc (§9) having planned all
+three. Both gaps were closed in a dedicated commit *before* `zepgraph` was
+deleted, verified green (`go test ./internal/contextfabric/graphrank/...
+./internal/contextfabric/falkorgraph/... -race -count=1`, including the
+Docker-backed `Live*` tests, no env gate, no skip):
+
+- `graphrank`: `scope_test.go`, `candidate_test.go`, `traverse_test.go`,
+  `resolve_test.go`, `resolution_test.go` (new), `discover_test.go`
+  (extended) -- 3 → 34 test functions, each calling graphrank's real
+  exported API directly, not through any zepgraph wrapper.
+- `falkorgraph`: `config_test.go`, `cancellation_test.go`, `sdk_test.go`,
+  `engine_org_isolation_test.go` (new) -- the last is a `falkorgraph` twin
+  of zepgraph's Codex-G6 proof (`TestEngineWithRealGraphReaderNeverLeaksCrossOrgSubjectFromHostileResultStore`):
+  a hostile `InvestigationResultStore` that ignores organization scoping
+  must never leak a cross-organization subject, because `ResolveSubjects`
+  re-authorizes every prior receipt against the *calling* principal's own
+  graph identity. `falkorgraph` derives node identity differently from
+  `zepgraph` (its own node-key scheme, not `nodeUUID`), so this needed its
+  own proof, not just a `graphrank` one.
+
+Disposition of all 72 zepgraph test functions across its four test files:
+31 ported to `graphrank` (pure ranking/resolution/authorization logic, now
+tested against graphrank's real types instead of through a zepgraph
+wrapper), 10 covered by a newly-written `falkorgraph` test that closes one
+of the gaps above (`config_test.go`, `cancellation_test.go`, `sdk_test.go`,
+`engine_org_isolation_test.go`), 16 already had an equivalent in
+`falkorgraph`'s existing `Live*`/`codex_round*`/`pure_test.go` suite (no
+action needed), and the remaining 15 have no analogue by design --
+disclosed, not silently dropped:
+
+- **Zep SDK-transport-specific** (`TestSDKAPIGetCallsRetryBoundedAttemptsOnServerErrors`,
+  `TestSDKAPIBodyBearingCallsMakeExactlyOneRequestOnServerError`,
+  `TestZepStatusCodeClassifiesTypedSDKErrors`): `zep-go` v3.22.0 re-issues
+  the same `*http.Request` without rewinding the body on retry, forcing
+  `MaxAttempts(1)` on body-bearing calls, and classifies typed SDK error
+  structs. `go-redis` rebuilds its request per attempt (no equivalent
+  race) and `falkorgraph` classifies by verified error-text match
+  (`classifyFalkorError`, already covered by `pure_test.go`) -- this ADR's
+  original text already called this out: "the ADR 0007 retry caveat
+  disappears."
+- **Second-hop fetch-and-verify machinery**
+  (`TestDiscoverContextCountsEveryClassOfSecondHopDropIntoCoverage`,
+  `TestDiscoverContextRejectsSecondHopNodeNotBelongingToCallersOrganization`,
+  `TestDiscoverContextReportsSecondHopVerificationFailuresInCoverage`):
+  `zepgraph` needs this because Zep's `GetNode` is an unscoped UUID lookup;
+  graph-per-org means `falkorgraph` never has an unscoped lookup to verify,
+  per the "Retrieval semantics" section above. No analogue by design, not
+  an oversight.
+- **Zep's pipe-encoding wire format** (`TestEncodeScope*`,
+  `TestDecodeScopeTreatsTheDeniedSentinelAsEmpty`,
+  `TestApplyProjectionBatchRejectsSeparatorBearingAuthorizationScope`,
+  `TestApplyProjectionBatchTreatsNilNilTargetAsAbsentDuringTombstone`):
+  `zepgraph`-only wire mechanics (the `scopeDeniedSentinel` fail-closed
+  encoding, the Zep SDK's `(nil, nil)` 200-with-null-body quirk).
+  `falkorgraph` stores native lists and gets real rows/errors from its
+  conn; these have no equivalent shape to test.
+- `TestIsInternalBookkeepingSubjectIsCaseInsensitive`: `isInternalBookkeepingSubject`
+  was deliberately not moved to `graphrank` (this ADR's design doc, §7) --
+  `falkorgraph` has no anchor/marker nodes, so its own predicate is
+  trivially always-false, not a port of Zep's.
+
+**Known, disclosed gaps that remain after this pass** (not claimed as
+complete coverage): no snapshot-diff rigor proving idempotent replay
+changes zero node/edge attributes (only that replay succeeds and
+re-resolves); document/episode tombstone kinds are not separately proven
+against a real server (only relationship and entity are); no dedicated
+auth/TLS connection-option-wiring test (`pure_test.go` covers error-string
+classification only). None of these regress a real, `zepgraph`-covered
+guarantee -- `zepgraph` itself did not have a stronger version of the first
+two either -- but they are recorded here rather than left implicit.
+
+### Live acceptance
+
+`cmd/acr-projector/runtime_falkordb_live_test.go` (no env gate, real
+testcontainers Postgres + FalkorDB) runs the actual production composition
+path -- `openRuntime`, `openProjectionBackend` -- against a real FalkorDB
+and a real PostgreSQL: one real `projectionrun.Coordinator.Tick` lands a
+projected episode, the checkpoint advances durably in Postgres, the nodes
+are independently confirmed present via a raw `GRAPH.RO_QUERY` (a bare
+`go-redis` client, not this repository's own decoder), and a second,
+independently constructed `falkorgraph.Adapter` -- built the same way
+`internal/runtime/hosted/open.go`'s `buildContextFabricInvestigator` builds
+one -- resolves the just-projected subject back out. The investigation HTTP
+endpoint itself still returns 503 without a model runtime configured
+(CHAOS-3770's scope, not this one); this test proves the graph
+projection-and-retrieval half of Context Fabric works against the real,
+composed backend, independent of answer synthesis.
