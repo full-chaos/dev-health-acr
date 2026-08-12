@@ -179,6 +179,16 @@ func (a *Adapter) pollConstraintsOperational(ctx context.Context, key string) er
 		if err != nil {
 			return safeDependencyError("poll constraint status", err)
 		}
+		// Codex P2e (round 2): zero rows must not pass vacuously. bootstrapSchema
+		// just created two constraints (subject + relationship) immediately
+		// before this call, so a report of NO constraints at all for this key
+		// is itself a symptom something is wrong (a key mismatch, a dropped
+		// write, an unexpected server response shape) -- treated the same as
+		// an unrecognized status, not silently accepted the way an empty
+		// `for range` loop leaving allOperational at its initial true would.
+		if len(statuses) == 0 {
+			return fmt.Errorf("%w: constraint status query returned no constraints for key %q", errConstraintBootstrapFailed, key)
+		}
 		// Codex P2e: strict allowlist, not a PENDING/FAILED denylist. The
 		// original form defaulted allOperational=true and only flipped it
 		// for the two known-bad statuses, so any OTHER value -- an unknown

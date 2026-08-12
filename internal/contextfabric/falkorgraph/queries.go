@@ -165,17 +165,32 @@ func (a *Adapter) nodeByKindID(ctx context.Context, key, orgID, kind, canonicalI
 // origin subject `n` and the neighbor `other`) -- filtering only the origin
 // side would still let a cross-tenant neighbor node leak into the result
 // through a stray or corrupted edge.
+//
+// Codex P2a (round 2): the combined UNION result is wrapped in a `CALL {}`
+// subquery so an outer `ORDER BY r.relationship_id ASC` can apply to it --
+// verified live that a bare `ORDER BY` placed directly after a top-level
+// `UNION` is silently NOT honored by this FalkorDB version (the combined
+// rows come back in the union's own internal order regardless), while the
+// exact same ORDER BY on a `CALL { <the union> } RETURN ...` wrapper sorts
+// correctly. This makes edgesOfNode's own output deterministic by the same
+// key graphrank's relevance tie-break uses (ascending relationship UUID) --
+// see hopWalk's doc comment for why a real relevance-bearing property does
+// not exist for a graph-walked edge in the first place, and why this
+// property is the correct proxy for it.
 func (a *Adapter) edgesOfNode(ctx context.Context, key, orgID, uuid string) ([]graphrank.CandidateEdge, error) {
 	kind, canonicalID := splitSubjectUUID(uuid)
 	if kind == "" {
 		return nil, nil
 	}
 	cypher := fmt.Sprintf(
-		"MATCH (n:%s {%s:$org, %s:$kind, %s:$id})-[r:%s]->(other:%s {%s:$org}) RETURN r, %s AS srcKind, $id AS srcId, other.%s AS dstKind, other.%s AS dstId "+
+		"CALL { "+
+			"MATCH (n:%s {%s:$org, %s:$kind, %s:$id})-[r:%s]->(other:%s {%s:$org}) RETURN r, %s AS srcKind, $id AS srcId, other.%s AS dstKind, other.%s AS dstId "+
 			"UNION "+
-			"MATCH (other:%s {%s:$org})-[r:%s]->(n:%s {%s:$org, %s:$kind, %s:$id}) RETURN r, other.%s AS srcKind, other.%s AS srcId, %s AS dstKind, $id AS dstId",
+			"MATCH (other:%s {%s:$org})-[r:%s]->(n:%s {%s:$org, %s:$kind, %s:$id}) RETURN r, other.%s AS srcKind, other.%s AS srcId, %s AS dstKind, $id AS dstId "+
+			"} RETURN r, srcKind, srcId, dstKind, dstId ORDER BY r.%s ASC",
 		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, labelSubject, propOrgID, "$kind", propKind, propCanonicalID,
 		labelSubject, propOrgID, labelRelation, labelSubject, propOrgID, propKind, propCanonicalID, propKind, propCanonicalID, "$kind",
+		propRelationshipID,
 	)
 	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": orgID, "kind": kind, "id": canonicalID}, true)
 	if err != nil {
@@ -289,9 +304,33 @@ func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal 
 	}, edgeAdmitted
 }
 
+// rankAndBoundCandidateEdges sorts edges by graphrank's own relevance
+// tie-break and caps the set entering resolution to a generous multiple of
+// the remaining collection budget.
+//
+// Codex P2a (round 2): a collection-side truncation decision must always
+// operate on a RANKED set, never on whatever order a query happened to
+// return -- collecting per-node/per-hop bounded but rank-aware, per the
+// review's own alternative to a single fully-global pre-collection sort
+// (which is not expressible as one Cypher pass across multiple frontier
+// nodes and, per edgesOfNode's doc comment, is not even reliably honored by
+// this FalkorDB version across a single UNION without the CALL{} wrapper).
+// The multiplier bound below exists only to cap worst-case resolution cost
+// (a pathological hub node with thousands of neighbors, almost all of which
+// end up authorization-filtered) -- it still operates on the RANKED list,
+// so it can only ever trim away the edges that were already going to lose
+// the tie-break, never a contender for the surviving budget.
+func rankAndBoundCandidateEdges(edges []graphrank.CandidateEdge, collectLimit int) []graphrank.CandidateEdge {
+	ranked := graphrank.SortEdgesByRelevance(edges)
+	if collectLimit > 0 && len(ranked) > collectLimit*4 {
+		ranked = ranked[:collectLimit*4]
+	}
+	return ranked
+}
+
 // hopWalk performs a bounded N-hop traversal from one origin subject,
 // returning every neighbor node and resolved edge reached, plus a count of
-// edges dropped due to a genuine lookup failure (Codex P2c -- see
+// edges/nodes dropped due to a genuine lookup failure (Codex P2c -- see
 // edgeResolution).
 //
 // Codex P2a: walk collection is bounded by a generous superset limit (the
@@ -303,13 +342,22 @@ func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal 
 // truncation to MaxRelationshipPaths happens exactly once, inside AdmitEdges,
 // after ranking.
 //
-// Implemented as iterative edgesOfNode calls (1-hop, then 1-hop from each new
-// neighbor) rather than a single native Cypher [*1..2] variable-length path
-// query -- simpler to decode correctly against the pinned client's
-// compact-protocol path parsing, at the cost of N extra round trips for an
-// N-neighbor node. Revisit as a single [*1..2] query if that cost matters in
-// practice; the adapter's external behavior does not depend on which query
-// shape produces it.
+// Codex P2a (round 2): that alone was not enough -- collection could still
+// exhaust collectLimit itself in arrival order (whichever frontier node was
+// processed first, whichever row a query happened to return first) before a
+// higher-ranked edge discovered later ever got a chance to compete for the
+// budget. Every graph-walked edge ties at ResultConfidence=0 (there is no
+// real relevance signal for a hop-walked edge the way a full-text search
+// score is one), so graphrank.SortEdgesByRelevance's own deterministic
+// tie-break -- ascending relationship UUID -- IS the correct admission
+// order, not an approximation of one; this function now collects an ENTIRE
+// hop's candidate edges from every frontier node before making ANY
+// truncation decision, ranks that full set with the exact same tie-break,
+// and only then resolves/admits edges in ranked order up to the remaining
+// budget (rankAndBoundCandidateEdges). A candidate that gets
+// authorization-filtered or fails to resolve does not consume budget, so a
+// lower-ranked-but-admissible edge is never starved by a higher-ranked one
+// that turned out to be unauthorized.
 func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, origin contextfabric.SubjectRef, maxHops, collectLimit int) ([]graphrank.CandidateNode, []graphrank.ResolvedEdge, int, error) {
 	originUUID := subjectUUID(string(origin.Kind), origin.CanonicalID)
 	visited := make(map[string]graphrank.CandidateNode)
@@ -318,7 +366,7 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 	failedLookups := 0
 	frontier := []string{originUUID}
 	for hop := 0; hop < maxHops && len(frontier) > 0 && (collectLimit <= 0 || len(edges) < collectLimit); hop++ {
-		var next []string
+		var hopCandidates []graphrank.CandidateEdge
 		for _, uuid := range frontier {
 			candidateEdges, err := a.edgesOfNode(ctx, key, orgID, uuid)
 			if err != nil {
@@ -328,37 +376,54 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 				if seenEdge[ce.UUID] {
 					continue
 				}
-				resolved, resolution := a.resolveEdge(ctx, key, orgID, principal, scope, ce)
-				switch resolution {
-				case edgeLookupFailed:
-					failedLookups++
-					continue
-				case edgeFiltered:
-					continue
-				}
 				seenEdge[ce.UUID] = true
-				edges = append(edges, resolved)
-				for _, neighbor := range []string{ce.SourceNodeUUID, ce.TargetNodeUUID} {
-					if neighbor == originUUID {
-						continue
-					}
-					if _, ok := visited[neighbor]; ok {
-						continue
-					}
-					n, err := a.nodeByUUID(ctx, key, orgID, neighbor)
-					if err != nil || n == nil {
-						continue
-					}
-					candidate := toCandidateNode(n)
-					visited[neighbor] = candidate
-					next = append(next, neighbor)
-				}
-				if collectLimit > 0 && len(edges) >= collectLimit {
-					break
-				}
+				hopCandidates = append(hopCandidates, ce)
 			}
+		}
+		if len(hopCandidates) == 0 {
+			frontier = nil
+			continue
+		}
+		var next []string
+		for _, ce := range rankAndBoundCandidateEdges(hopCandidates, collectLimit-len(edges)) {
 			if collectLimit > 0 && len(edges) >= collectLimit {
 				break
+			}
+			resolved, resolution := a.resolveEdge(ctx, key, orgID, principal, scope, ce)
+			switch resolution {
+			case edgeLookupFailed:
+				failedLookups++
+				continue
+			case edgeFiltered:
+				continue
+			}
+			edges = append(edges, resolved)
+			for _, neighbor := range []string{ce.SourceNodeUUID, ce.TargetNodeUUID} {
+				if neighbor == originUUID {
+					continue
+				}
+				if _, ok := visited[neighbor]; ok {
+					continue
+				}
+				// Codex P2c (round 2): a genuine lookup failure here was
+				// previously indistinguishable from a legitimate "this
+				// neighbor no longer exists" -- both fell through the same
+				// `continue`, so a real backend failure reached only through
+				// this bookkeeping fetch (the edge/path it belonged to was
+				// already admitted via resolveEdge above) never surfaced as
+				// Coverage.Partial. Only err != nil is a failure; n == nil
+				// with no error is a legitimate miss.
+				n, err := a.nodeByUUID(ctx, key, orgID, neighbor)
+				if err != nil {
+					failedLookups++
+					continue
+				}
+				if n == nil {
+					continue
+				}
+				candidate := toCandidateNode(n)
+				visited[neighbor] = candidate
+				next = append(next, neighbor)
 			}
 		}
 		frontier = next

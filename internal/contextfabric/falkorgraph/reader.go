@@ -131,33 +131,52 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	if err != nil {
 		return contextfabric.GraphContext{}, err
 	}
+	// Codex P2a (round 2): the full-text-adjacent edge set is gathered from
+	// EVERY matched node before any truncation decision, then ranked and
+	// bounded the same way hopWalk's own per-hop collection is (Codex round
+	// 2: "full-text node expansion also gathers adjacent edges with no
+	// global cap") -- the previous version resolved every adjacent edge
+	// from every matched node unconditionally as it was found, so an edge
+	// discovered from the last matched node could never be dropped in favor
+	// of a better one found earlier, but it also had no bound at all.
+	var textCandidates []graphrank.CandidateEdge
 	for _, n := range textNodes {
-		if subject, ok := graphrank.NodeSubject(n); ok {
-			nk := graphrank.SubjectKey(subject)
-			if !seenNode[nk] {
-				seenNode[nk] = true
-				resolvedNodes = append(resolvedNodes, n)
-			}
-			textEdges, err := a.edgesOfNode(ctx, key, principal.OrgID, n.UUID)
-			if err != nil {
-				return contextfabric.GraphContext{}, err
-			}
-			for _, ce := range textEdges {
-				if seenEdge[ce.UUID] {
-					continue
-				}
-				resolved, resolution := a.resolveEdge(ctx, key, principal.OrgID, principal, scope, ce)
-				switch resolution {
-				case edgeLookupFailed:
-					failedLookups++
-					continue
-				case edgeFiltered:
-					continue
-				}
-				seenEdge[ce.UUID] = true
-				resolvedEdges = append(resolvedEdges, resolved)
-			}
+		subject, ok := graphrank.NodeSubject(n)
+		if !ok {
+			continue
 		}
+		nk := graphrank.SubjectKey(subject)
+		if !seenNode[nk] {
+			seenNode[nk] = true
+			resolvedNodes = append(resolvedNodes, n)
+		}
+		textEdges, err := a.edgesOfNode(ctx, key, principal.OrgID, n.UUID)
+		if err != nil {
+			return contextfabric.GraphContext{}, err
+		}
+		for _, ce := range textEdges {
+			if seenEdge[ce.UUID] {
+				continue
+			}
+			seenEdge[ce.UUID] = true
+			textCandidates = append(textCandidates, ce)
+		}
+	}
+	textAdmitted := 0
+	for _, ce := range rankAndBoundCandidateEdges(textCandidates, collectLimit) {
+		if collectLimit > 0 && textAdmitted >= collectLimit {
+			break
+		}
+		resolved, resolution := a.resolveEdge(ctx, key, principal.OrgID, principal, scope, ce)
+		switch resolution {
+		case edgeLookupFailed:
+			failedLookups++
+			continue
+		case edgeFiltered:
+			continue
+		}
+		resolvedEdges = append(resolvedEdges, resolved)
+		textAdmitted++
 	}
 
 	candidateEdges := make([]graphrank.CandidateEdge, 0, len(resolvedEdges))

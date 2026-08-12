@@ -554,6 +554,71 @@ The cost is over-fetching rows that are then filtered out. Bound it with the
 existing `MaxResults` / `LIMIT` and accept it. The org predicate itself needs
 no pushdown at all — it is structural.
 
+### 6.5 Rank before truncate — a per-hop approximation, not a global sort (Codex CHAOS-3752 review, round 2)
+
+A graph-walked edge (as opposed to a full-text search hit) has no real
+relevance score — `Relevance`/`Score` are always nil, so
+`graphrank.ResultConfidence` ties every such edge at 0 and
+`graphrank.SortEdgesByRelevance` falls back to its documented deterministic
+tie-break: ascending `relationship_id`. That tie-break **is** the correct
+admission order for this class of edge, not an approximation of a "real" one
+— there is no richer signal to approximate.
+
+The failure mode a round-1 fix left open: `hopWalk` collected edges
+hop-by-hop and stopped the moment it hit `collectLimit`, so whichever edges
+happened to be **enumerated first** — by FalkorDB's own unordered `MATCH`
+traversal, or by which frontier node's turn came first in the walk — won the
+budget, regardless of where they'd land in the tie-break order. A worse edge
+reached early could permanently starve a better one reached one step later.
+
+**What would fully solve this**: a single Cypher query returning the entire
+candidate superset across all hops and all frontier nodes, sorted globally,
+in one round trip. Not implemented: `hopWalk` is deliberately N iterative
+`edgesOfNode` calls rather than one native `[*1..2]` variable-length path
+query (§ package doc in `queries.go`), specifically to avoid decoding a
+variable-length path shape against the pinned client's compact protocol.
+Rewriting that shape is a larger change than this fix warrants.
+
+**What is implemented instead** (`rankAndBoundCandidateEdges` in
+`queries.go`):
+
+1. `edgesOfNode`'s own UNION result is deterministically ordered server-side
+   (`ORDER BY r.relationship_id ASC`) — but wrapped in a `CALL { ... }`
+   subquery first. **Verified live against the pinned image
+   (`falkordb/falkordb@sha256:ad09d…`)**: a bare `ORDER BY` placed directly
+   after a top-level `UNION` is silently **not honored** — the combined rows
+   come back in the union's own internal order regardless of the trailing
+   clause. The exact same `ORDER BY` on `CALL { <the union> } RETURN r, ...
+   ORDER BY r.relationship_id ASC` sorts correctly. Treat this as a
+   FalkorDB/RedisGraph engine quirk, not a general Cypher guarantee — recheck
+   on any future FalkorDB version bump.
+2. `hopWalk` collects an **entire hop's** candidate edges, from every
+   frontier node, before making any truncation decision — never truncating
+   mid-node or mid-hop on arrival order.
+3. That full hop-level set is ranked (`graphrank.SortEdgesByRelevance`) and
+   only then resolved/admitted in ranked order, up to the remaining budget.
+   A candidate that turns out unauthorized or unresolvable does not consume
+   budget, so a lower-ranked-but-admissible edge is never starved by a
+   higher-ranked one that turned out unusable.
+4. As a cost guard against a pathological hub node (thousands of
+   neighbors, almost all filtered), the ranked set is capped to
+   `collectLimit * 4` **after** ranking — so the cap can only ever discard
+   edges that had already lost the tie-break, never a contender for the
+   surviving budget.
+
+This is per-hop, not globally, rank-aware: a later hop cannot reach back and
+displace an edge already admitted in an earlier hop. Given `maxHops` is a
+small fixed constant (2) and `collectLimit` is `config.MaxResults` (capped at
+50), this is judged an acceptable approximation of full global ranking, not
+a substitute for it — revisit if evidence emerges that admission quality
+actually depends on cross-hop reordering.
+
+The same rank-before-truncate discipline is applied to the full-text-adjacent
+edge expansion in `DiscoverContext` (edges reachable from a lexical search
+hit, not from a committed origin subject): every matched node's adjacent
+edges are gathered first, then ranked and bounded identically, instead of
+being resolved unconditionally per node with no aggregate cap at all.
+
 ---
 
 ## 7. Extract the ranking logic first — as its own commit — DONE
