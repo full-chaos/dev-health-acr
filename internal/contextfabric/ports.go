@@ -70,6 +70,21 @@ type InvestigationResultStore interface {
 
 // ProjectionBackend is the write-side graph/index boundary. Applying a batch
 // must be idempotent for the same batch ID and source version.
+//
+// Precondition: callers must serialize ApplyProjectionBatch calls per
+// organization. The zepgraph implementation has no compare-and-swap (no
+// attribute-level CAS) against concurrent writers touching the same
+// subject: it reads a node's canonical attributes, merges in the new
+// projection's attributes, and writes the merge back, with no protection
+// against a second, concurrent projection interleaving between that read
+// and write for the same org. Two sources projecting the same subject at
+// the same time can lose one side's canonical metadata (aliases, provider
+// IDs) to a stale merge that overwrites it. A CHAOS-3753 projection worker
+// MUST serialize batches per organization (e.g. one in-flight
+// ApplyProjectionBatch call per org at a time); it must not run multiple
+// sources' batches for the same org concurrently. This is a caller
+// obligation, not something ProjectionBackend enforces or can enforce
+// without a real CAS primitive.
 type ProjectionBackend interface {
 	ApplyProjectionBatch(context.Context, ProjectionBatch) (ProjectionReceipt, error)
 	ProjectionWatermark(context.Context, string, string) (ProjectionWatermark, error)
