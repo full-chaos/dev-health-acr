@@ -12,7 +12,7 @@ import (
 
 func TestNewServiceRequiresPacketStore(t *testing.T) {
 	// Given / When
-	_, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), ServiceOptions{})
+	_, err := NewService(memory.NewEpisodeStore(nil), memory.NewAuditStore(), ServiceOptions{})
 
 	// Then
 	if err == nil {
@@ -22,7 +22,7 @@ func TestNewServiceRequiresPacketStore(t *testing.T) {
 
 func TestCreateReturnsNoPersistAcceptedOnlyAfterTombstonePersistence(t *testing.T) {
 	// Given
-	service, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), withPacketStore(ServiceOptions{}))
+	service, err := NewService(memory.NewEpisodeStore(nil), memory.NewAuditStore(), withPacketStore(ServiceOptions{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestCreateReturnsNoPersistAcceptedOnlyAfterTombstonePersistence(t *testing.
 func TestCreateObservesPreflightAndAtomicStoreCalls(t *testing.T) {
 	// Given
 	observer := &storeObserver{}
-	service, err := NewService(memory.NewEpisodeStore(), memory.NewAuditStore(), withPacketStore(ServiceOptions{StoreObserver: observer, StoreBackend: StoreBackendMemory}))
+	service, err := NewService(memory.NewEpisodeStore(nil), memory.NewAuditStore(), withPacketStore(ServiceOptions{StoreObserver: observer, StoreBackend: StoreBackendMemory}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestCreateObservesPreflightAndAtomicStoreCalls(t *testing.T) {
 
 func TestCreateReturnsCanonicalResponseSchemaWithoutChangingCreateDigest(t *testing.T) {
 	// Given
-	store := memory.NewEpisodeStore()
+	store := memory.NewEpisodeStore(nil)
 	service, err := NewService(store, memory.NewAuditStore(), withPacketStore(ServiceOptions{}))
 	if err != nil {
 		t.Fatal(err)

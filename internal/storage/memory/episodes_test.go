@@ -11,7 +11,7 @@ import (
 )
 
 func TestEpisodeStoreScopesDuplicatesRedactsAndPurges(t *testing.T) {
-	store := NewEpisodeStore()
+	store := NewEpisodeStore(nil)
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
 	create := testEpisodeCreate()
 	expiresAt := time.Now().Add(time.Hour)
@@ -63,7 +63,7 @@ func TestEpisodeStoreScopesDuplicatesRedactsAndPurges(t *testing.T) {
 }
 
 func TestEpisodeStoreNoPersistRetainsOnlyIdempotencyTombstone(t *testing.T) {
-	store := NewEpisodeStore()
+	store := NewEpisodeStore(nil)
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
 	create := testEpisodeCreate()
 	create.RetentionClass = "no_persist"
@@ -80,7 +80,7 @@ func TestEpisodeStoreNoPersistRetainsOnlyIdempotencyTombstone(t *testing.T) {
 }
 
 func TestEpisodeStorePurgeRequiresRepositoryScope(t *testing.T) {
-	store := NewEpisodeStore()
+	store := NewEpisodeStore(nil)
 	expiresAt := time.Now().Add(time.Hour)
 	owner := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
 	other := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/other"}}
@@ -103,7 +103,7 @@ func TestEpisodeStorePurgeRequiresRepositoryScope(t *testing.T) {
 }
 
 func TestEpisodeStoreScopedPurgeRejectsEmptyRepositoryScope(t *testing.T) {
-	store := NewEpisodeStore()
+	store := NewEpisodeStore(nil)
 	expiresAt := time.Now().Add(time.Hour)
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
 	create := testEpisodeCreate()
@@ -119,7 +119,7 @@ func TestEpisodeStoreScopedPurgeRejectsEmptyRepositoryScope(t *testing.T) {
 }
 
 func TestEpisodeStoreScopedPurgeRejectsEmptyOrganization(t *testing.T) {
-	store := NewEpisodeStore()
+	store := NewEpisodeStore(nil)
 	expiresAt := time.Now().Add(time.Hour)
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
 	create := testEpisodeCreate()
@@ -135,7 +135,7 @@ func TestEpisodeStoreScopedPurgeRejectsEmptyOrganization(t *testing.T) {
 }
 
 func TestEpisodeStoreExpiredEpisodesCannotBeReadOrRedacted(t *testing.T) {
-	store := NewEpisodeStore()
+	store := NewEpisodeStore(nil)
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
 	create := testEpisodeCreate()
 	expiresAt := time.Now().Add(-time.Minute)
@@ -151,8 +151,54 @@ func TestEpisodeStoreExpiredEpisodesCannotBeReadOrRedacted(t *testing.T) {
 	}
 }
 
+// TestEpisodeStoreExpiryFollowsInjectedClockRegardlessOfWallClock guards
+// against a regression where GetByClientEpisodeID and Redact computed expiry
+// against the real time.Now() instead of the store's injected clock. That
+// bug was invisible while the real wall clock happened to sit before a
+// fixture's expiry date and only surfaced once real time passed it -- so the
+// clock here is pinned far in the past AND far in the future relative to the
+// real wall clock to prove expiry now tracks the injected clock alone.
+func TestEpisodeStoreExpiryFollowsInjectedClockRegardlessOfWallClock(t *testing.T) {
+	tests := []struct {
+		name  string
+		clock time.Time
+	}{
+		{name: "injected clock far in the past relative to the real wall clock", clock: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{name: "injected clock far in the future relative to the real wall clock", clock: time.Date(2035, 1, 1, 0, 0, 0, 0, time.UTC)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewEpisodeStore(func() time.Time { return test.clock })
+			principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
+			create := testEpisodeCreate()
+			expiresAt := test.clock.Add(time.Hour)
+			created, _, err := store.CreateIdempotent(context.Background(), principal, create, &expiresAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Before expiry by the injected clock, the episode must be
+			// readable regardless of what the real wall clock says.
+			if _, err := store.GetByClientEpisodeID(context.Background(), principal, create.ClientEpisodeID); err != nil {
+				t.Fatalf("episode unreadable before its injected-clock expiry: %v", err)
+			}
+
+			// Advance only the injected clock past expiry -- the real wall
+			// clock is untouched. The episode must now read and redact as
+			// expired purely because of the injected clock.
+			test.clock = expiresAt.Add(time.Minute)
+			if _, err := store.GetByClientEpisodeID(context.Background(), principal, create.ClientEpisodeID); !errors.Is(err, storage.ErrNotFound) {
+				t.Fatalf("expired-by-injected-clock episode still readable: %v", err)
+			}
+			if _, err := store.Redact(context.Background(), principal, created.EpisodeID, "request"); !errors.Is(err, storage.ErrNotFound) {
+				t.Fatalf("expired-by-injected-clock episode still redactable: %v", err)
+			}
+		})
+	}
+}
+
 func TestEpisodeStoreRawPurgeMethodsFailClosed(t *testing.T) {
-	store := NewEpisodeStore()
+	store := NewEpisodeStore(nil)
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
 	create := testEpisodeCreate()
 	expiresAt := time.Now().Add(time.Hour)
@@ -171,7 +217,7 @@ func TestEpisodeStoreRawPurgeMethodsFailClosed(t *testing.T) {
 }
 
 func TestEpisodeStoreCreateRequiresRepositoryScope(t *testing.T) {
-	store := NewEpisodeStore()
+	store := NewEpisodeStore(nil)
 	if _, _, err := store.CreateIdempotent(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/other"}}, testEpisodeCreate(), nil); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("unauthorized direct create error = %v", err)
 	}
@@ -179,7 +225,7 @@ func TestEpisodeStoreCreateRequiresRepositoryScope(t *testing.T) {
 
 func TestEpisodeStoreCreateIdempotentRejectsCanceledContextBeforeMutation(t *testing.T) {
 	// Given
-	store := NewEpisodeStore()
+	store := NewEpisodeStore(nil)
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -198,7 +244,7 @@ func TestEpisodeStoreCreateIdempotentRejectsCanceledContextBeforeMutation(t *tes
 
 func TestEpisodeStoreIdempotencyIsScopedToRepository(t *testing.T) {
 	// Given
-	store := NewEpisodeStore()
+	store := NewEpisodeStore(nil)
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo", "owner/other"}}
 	create := testEpisodeCreate()
 	if _, _, err := store.CreateIdempotent(context.Background(), principal, create, nil); err != nil {
@@ -219,7 +265,7 @@ func TestEpisodeStoreIdempotencyIsScopedToRepository(t *testing.T) {
 
 func TestEpisodeStorePreflightClassifiesMissIdenticalAndConflictWithoutTombstoneData(t *testing.T) {
 	// Given
-	store := NewEpisodeStore()
+	store := NewEpisodeStore(nil)
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
 	create := testEpisodeCreate()
 	if result, err := store.PreflightIdempotency(context.Background(), principal, create); err != nil || result != storage.EpisodePreflightMiss {
@@ -247,7 +293,7 @@ func TestEpisodeStorePreflightClassifiesMissIdenticalAndConflictWithoutTombstone
 }
 
 func TestEpisodeStoreAllowsSameKeysInSiblingRepositories(t *testing.T) {
-	store := NewEpisodeStore()
+	store := NewEpisodeStore(nil)
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo_a", "owner/repo_b"}}
 
 	// Create in repo_a
