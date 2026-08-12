@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -57,16 +58,35 @@ func (f fallbackRuntime) SynthesizeAnswer(context.Context, storage.Principal, co
 func TestSDKGeneratorUsesGenkitStructuredOutputAndUsage(t *testing.T) {
 	ctx := context.Background()
 	g := genkit.Init(ctx)
+	modelSupports := &ai.ModelSupports{
+		Constrained: ai.ConstrainedSupportAll,
+		SystemRole:  true,
+		Multiturn:   true,
+		Output:      []string{"json"},
+	}
 	genkit.DefineModel(g, "test/context-fabric", &ai.ModelOptions{
-		Label: "Context Fabric test model",
-		Supports: &ai.ModelSupports{
-			Constrained: ai.ConstrainedSupportAll,
-			SystemRole:  true,
-			Output:      []string{"json"},
-		},
+		Label:    "Context Fabric test model",
+		Supports: modelSupports,
 	}, func(_ context.Context, request *ai.ModelRequest, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		if request.Output == nil || request.Output.Format != ai.OutputFormatJSON || len(request.Messages) < 2 {
-			t.Fatalf("model request = %#v", request)
+		if request.Output == nil || request.Output.Format != ai.OutputFormatJSON {
+			t.Fatalf("model request output format = %#v, want JSON", request.Output)
+		}
+		if len(request.Messages) != 2 {
+			t.Fatalf("model request messages = %#v, want system + user", request.Messages)
+		}
+		system, user := request.Messages[0], request.Messages[1]
+		if system.Role != ai.RoleSystem || !strings.Contains(system.Text(), "bounded interpretation layer") {
+			t.Fatalf("system message = %#v", system)
+		}
+		// Genkit's custom-constrained mode injects the JSON output schema as
+		// instructions on the system message rather than on request.Output.Schema
+		// (that field is only populated for native provider-side constrained
+		// decoding). Assert the schema actually reached the model this way.
+		if !strings.Contains(system.Text(), "conform to the following schema") || !strings.Contains(system.Text(), "requested_judgment") {
+			t.Fatalf("system message missing injected JSON schema: %#v", system)
+		}
+		if user.Role != ai.RoleUser || !strings.Contains(user.Text(), "What is driving Ask Dev?") {
+			t.Fatalf("user message = %#v", user)
 		}
 		encoded, err := json.Marshal(validInterpretationOutput())
 		if err != nil {
@@ -76,6 +96,29 @@ func TestSDKGeneratorUsesGenkitStructuredOutputAndUsage(t *testing.T) {
 			Message:      &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{ai.NewJSONPart(string(encoded))}},
 			FinishReason: ai.FinishReasonStop,
 			Usage:        &ai.GenerationUsage{InputTokens: 17, OutputTokens: 9, TotalTokens: 26},
+		}, nil
+	})
+	// Model returns JSON that Genkit itself accepts (fact_requirements.kind
+	// carries no jsonschema enum constraint, so Genkit's own schema
+	// validation passes it through and parses a typed interpretationOutput
+	// successfully). Only the ACR-owned semantic validator
+	// (InterpretedQuestion.Validate -> FactRequirement.Validate ->
+	// validFactKind) knows the canonical fact-kind registry and must reject
+	// the invented kind after Genkit has already produced a typed value.
+	genkit.DefineModel(g, "test/context-fabric-invented-fact-kind", &ai.ModelOptions{
+		Label:    "Context Fabric test model (invented fact kind)",
+		Supports: modelSupports,
+	}, func(_ context.Context, request *ai.ModelRequest, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		invalid := validInterpretationOutput()
+		invalid.FactRequirements = []factRequirementOutput{{Kind: "invented_fact_kind_not_in_registry"}}
+		encoded, err := json.Marshal(invalid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &ai.ModelResponse{
+			Message:      &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{ai.NewJSONPart(string(encoded))}},
+			FinishReason: ai.FinishReasonStop,
+			Usage:        &ai.GenerationUsage{InputTokens: 1, OutputTokens: 1, TotalTokens: 2},
 		}, nil
 	})
 	runtime, err := New(Config{
@@ -91,6 +134,24 @@ func TestSDKGeneratorUsesGenkitStructuredOutputAndUsage(t *testing.T) {
 	}
 	if interpreted.Shape != contextfabric.ShapeOpen || receipt.Usage.TotalTokens != 26 || receipt.Usage.InputTokens != 17 || receipt.Usage.OutputTokens != 9 {
 		t.Fatalf("interpreted = %#v receipt = %#v", interpreted, receipt)
+	}
+	if receipt.Outcome != "success" || receipt.Provider != "test" || receipt.Model != "test/context-fabric" {
+		t.Fatalf("receipt = %#v", receipt)
+	}
+
+	inventedFactKindRuntime, err := New(Config{
+		Genkit: g, Provider: "test", Model: "test/context-fabric-invented-fact-kind", ModelVersion: "test-v1",
+		Timeout: time.Second, MaxAttempts: 1, MaxInputBytes: 128 << 10,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_, invalidReceipt, err := inventedFactKindRuntime.InterpretQuestion(ctx, storage.Principal{OrgID: "org_1"}, validRequest())
+	if err == nil || !errors.Is(err, contextfabric.ErrModelOutput) {
+		t.Fatalf("InterpretQuestion() with invented fact kind error = %v, want ErrModelOutput", err)
+	}
+	if invalidReceipt.Outcome != "invalid_output" {
+		t.Fatalf("invalidReceipt = %#v", invalidReceipt)
 	}
 }
 
@@ -304,6 +365,171 @@ func validReceipt(operation contextfabric.ModelOperation) contextfabric.ModelExe
 		PromptVersion: "fallback-v1", SchemaVersion: "schema-v1", EvaluatorVersion: "eval-v1",
 		StartedAt: now, CompletedAt: now, Attempts: 1,
 		InputDigest: strings.Repeat("a", 64), OutputDigest: strings.Repeat("b", 64), Outcome: "success",
+	}
+}
+
+func TestClassifyModelErrorDistinguishesRateLimitUnavailableAndInvalidOutput(t *testing.T) {
+	t.Parallel()
+	sensitive := "leaked secret prompt fragment"
+	cases := []struct {
+		name   string
+		err    error
+		wantIs error
+	}{
+		{"rate_limited", core.NewError(core.RESOURCE_EXHAUSTED, "quota exhausted: %s", sensitive), contextfabric.ErrModelRateLimited},
+		{"unavailable_status", core.NewError(core.UNAVAILABLE, "backend down: %s", sensitive), contextfabric.ErrModelUnavailable},
+		{"deadline_status", core.NewError(core.DEADLINE_EXCEEDED, "slow: %s", sensitive), contextfabric.ErrModelUnavailable},
+		{"aborted_status", core.NewError(core.ABORTED, "aborted: %s", sensitive), contextfabric.ErrModelUnavailable},
+		{"invalid_argument_status", core.NewError(core.INVALID_ARGUMENT, "bad request: %s", sensitive), contextfabric.ErrModelOutput},
+		{"internal_schema_mismatch", core.NewError(core.INTERNAL, "model failed to generate output matching expected schema: %s", sensitive), contextfabric.ErrModelOutput},
+		{"internal_generic", core.NewError(core.INTERNAL, "unexpected panic: %s", sensitive), contextfabric.ErrModelUnavailable},
+		{"unmapped_status", core.NewError(core.NOT_FOUND, "route missing: %s", sensitive), contextfabric.ErrModelUnavailable},
+		{"plain_rate_limit_string", errors.New("received 429 Too Many Requests"), contextfabric.ErrModelRateLimited},
+		{"plain_opaque_string", errors.New("boom"), contextfabric.ErrModelUnavailable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := classifyModelError(tc.err)
+			if !errors.Is(got, tc.wantIs) {
+				t.Fatalf("classifyModelError(%v) = %v, want errors.Is match for %v", tc.err, got, tc.wantIs)
+			}
+			if strings.Contains(got.Error(), sensitive) {
+				t.Fatalf("classifyModelError leaked provider message content: %v", got)
+			}
+		})
+	}
+}
+
+func TestClassifyModelErrorPreservesCancellationAndDeadline(t *testing.T) {
+	t.Parallel()
+	if got := classifyModelError(context.Canceled); !errors.Is(got, context.Canceled) {
+		t.Fatalf("classifyModelError(context.Canceled) = %v", got)
+	}
+	if got := classifyModelError(context.DeadlineExceeded); !errors.Is(got, context.DeadlineExceeded) {
+		t.Fatalf("classifyModelError(context.DeadlineExceeded) = %v", got)
+	}
+}
+
+func TestRetryableUsesStructuredGenkitStatusOverStringHeuristics(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"resource_exhausted_retryable", core.NewError(core.RESOURCE_EXHAUSTED, "quota"), true},
+		{"unavailable_retryable", core.NewError(core.UNAVAILABLE, "down"), true},
+		{"deadline_exceeded_status_retryable", core.NewError(core.DEADLINE_EXCEEDED, "slow"), true},
+		{"aborted_retryable", core.NewError(core.ABORTED, "aborted"), true},
+		{"invalid_argument_not_retryable", core.NewError(core.INVALID_ARGUMENT, "bad schema: invented_kind value present in response"), false},
+		{"context_canceled_not_retryable", context.Canceled, false},
+		{"plain_502_retryable", errors.New("upstream returned 502"), true},
+		{"plain_opaque_not_retryable", errors.New("boom"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := retryable(tc.err); got != tc.want {
+				t.Fatalf("retryable(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRuntimeClassifiesRateLimitedGenerationError proves the classification
+// reaches callers end to end: a rate-limited generation failure with no
+// fallback configured surfaces as contextfabric.ErrModelRateLimited from
+// InterpretQuestion, not the generic ErrModelUnavailable.
+func TestRuntimeClassifiesRateLimitedGenerationError(t *testing.T) {
+	t.Parallel()
+	runtime := mustRuntime(t, &generatorStub{
+		interpretErr: core.NewError(core.RESOURCE_EXHAUSTED, "quota exhausted for org_1"),
+	}, Config{MaxAttempts: 1})
+	_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+	if err == nil || !errors.Is(err, contextfabric.ErrModelRateLimited) {
+		t.Fatalf("InterpretQuestion() error = %v, want ErrModelRateLimited", err)
+	}
+	if errors.Is(err, contextfabric.ErrModelUnavailable) {
+		t.Fatalf("InterpretQuestion() error = %v, must not also match ErrModelUnavailable", err)
+	}
+	if receipt.Outcome != "rate_limited" || receipt.FallbackUsed {
+		t.Fatalf("receipt = %#v", receipt)
+	}
+}
+
+// TestNewWithGeneratorValidatesConfig proves server-owned configuration
+// bounds are enforced at construction time (provider/model required and
+// bounded, timeout/attempts/input-size clamped to the ranges ADR 0008
+// documents) rather than discovered per call.
+func TestNewWithGeneratorValidatesConfig(t *testing.T) {
+	t.Parallel()
+	base := func() Config {
+		return Config{
+			Provider: "test-provider", Model: "test/model", ModelVersion: "test-model-v1",
+			Timeout: time.Second, MaxAttempts: 1, MaxInputBytes: 128 << 10,
+		}
+	}
+	cases := []struct {
+		name    string
+		mutate  func(Config) Config
+		wantErr bool
+	}{
+		{"valid_baseline", func(c Config) Config { return c }, false},
+		{"missing_provider", func(c Config) Config { c.Provider = ""; return c }, true},
+		{"missing_model", func(c Config) Config { c.Model = ""; return c }, true},
+		{"provider_too_long", func(c Config) Config { c.Provider = strings.Repeat("p", 257); return c }, true},
+		{"timeout_too_short", func(c Config) Config { c.Timeout = 500 * time.Millisecond; return c }, true},
+		{"timeout_too_long", func(c Config) Config { c.Timeout = 3 * time.Minute; return c }, true},
+		{"timeout_zero_defaults", func(c Config) Config { c.Timeout = 0; return c }, false},
+		{"max_attempts_too_high", func(c Config) Config { c.MaxAttempts = 4; return c }, true},
+		{"max_attempts_zero_defaults", func(c Config) Config { c.MaxAttempts = 0; return c }, false},
+		{"max_attempts_boundary_three_ok", func(c Config) Config { c.MaxAttempts = 3; return c }, false},
+		{"max_input_bytes_too_small", func(c Config) Config { c.MaxInputBytes = 4 << 10; return c }, true},
+		{"max_input_bytes_too_large", func(c Config) Config { c.MaxInputBytes = 2 << 20; return c }, true},
+		{"max_input_bytes_zero_defaults", func(c Config) Config { c.MaxInputBytes = 0; return c }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := newWithGenerator(tc.mutate(base()), &generatorStub{})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("newWithGenerator() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestNewWithGeneratorRejectsNilGenerator(t *testing.T) {
+	t.Parallel()
+	_, err := newWithGenerator(Config{Provider: "test", Model: "test/model"}, nil)
+	if err == nil {
+		t.Fatal("newWithGenerator(nil generator) error = nil, want error")
+	}
+}
+
+func TestNewRejectsMissingGenkitInstance(t *testing.T) {
+	t.Parallel()
+	_, err := New(Config{Provider: "test", Model: "test/model"})
+	if err == nil {
+		t.Fatal("New() with nil Genkit error = nil, want error")
+	}
+}
+
+func TestNewWithGeneratorDefaultsVersionsFromModel(t *testing.T) {
+	t.Parallel()
+	runtime, err := newWithGenerator(Config{Provider: "test-provider", Model: "test/model"}, &generatorStub{})
+	if err != nil {
+		t.Fatalf("newWithGenerator() error = %v", err)
+	}
+	if runtime.config.ModelVersion != "test/model" {
+		t.Fatalf("ModelVersion default = %q, want model name", runtime.config.ModelVersion)
+	}
+	if runtime.config.InterpretationPromptVersion != defaultInterpretationPromptVersion ||
+		runtime.config.SynthesisPromptVersion != defaultSynthesisPromptVersion ||
+		runtime.config.SchemaVersion != defaultSchemaVersion ||
+		runtime.config.EvaluatorVersion != defaultEvaluatorVersion {
+		t.Fatalf("config defaults = %#v", runtime.config)
 	}
 }
 

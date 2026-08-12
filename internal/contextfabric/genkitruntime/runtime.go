@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -188,7 +189,11 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 		return err
 	})
 	completed := r.now().UTC()
-	receipt := r.receipt(contextfabric.ModelOperationInterpret, r.config.InterpretationPromptVersion, started, completed, attempts, encoded, nil, usage, generationErr)
+	var classifiedErr error
+	if generationErr != nil {
+		classifiedErr = classifyModelError(generationErr)
+	}
+	receipt := r.receipt(contextfabric.ModelOperationInterpret, r.config.InterpretationPromptVersion, started, completed, attempts, encoded, nil, usage, classifiedErr)
 	if generationErr != nil {
 		if r.config.Fallback != nil {
 			interpreted, fallbackReceipt, fallbackErr := r.config.Fallback.InterpretQuestion(ctx, principal, request)
@@ -198,7 +203,7 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 				return interpreted, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
 		}
-		return contextfabric.InterpretedQuestion{}, receipt, classifyModelError(generationErr)
+		return contextfabric.InterpretedQuestion{}, receipt, classifiedErr
 	}
 	interpreted, err := output.toDomain(request.TimeContext)
 	if err != nil {
@@ -239,7 +244,11 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		return err
 	})
 	completed := r.now().UTC()
-	receipt := r.receipt(contextfabric.ModelOperationSynthesize, r.config.SynthesisPromptVersion, started, completed, attempts, encoded, nil, usage, generationErr)
+	var classifiedErr error
+	if generationErr != nil {
+		classifiedErr = classifyModelError(generationErr)
+	}
+	receipt := r.receipt(contextfabric.ModelOperationSynthesize, r.config.SynthesisPromptVersion, started, completed, attempts, encoded, nil, usage, classifiedErr)
 	if generationErr != nil {
 		if r.config.Fallback != nil {
 			draft, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
@@ -249,7 +258,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 				return draft, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
 		}
-		return contextfabric.SynthesisDraft{}, receipt, classifyModelError(generationErr)
+		return contextfabric.SynthesisDraft{}, receipt, classifiedErr
 	}
 	draft, err := output.toDomain()
 	if err == nil {
@@ -293,11 +302,13 @@ func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error)
 	return r.config.MaxAttempts, last
 }
 
+// receipt builds the content-safe execution receipt for one generation
+// attempt. err, when non-nil, must already be the classifyModelError output
+// (or a context cancellation/deadline error) so the receipt Outcome reflects
+// the same rate-limit/invalid-output/unavailable classification callers see
+// on the returned Go error.
 func (r *Runtime) receipt(operation contextfabric.ModelOperation, promptVersion string, started, completed time.Time, attempts int, input, output []byte, usage contextfabric.ModelUsage, err error) contextfabric.ModelExecutionReceipt {
-	outcome := "error"
-	if err == nil {
-		outcome = "pending_validation"
-	}
+	outcome := receiptOutcomeForError(err)
 	receipt := contextfabric.ModelExecutionReceipt{
 		Operation: operation, Provider: r.config.Provider, Model: r.config.Model,
 		ModelVersion: r.config.ModelVersion, PromptVersion: promptVersion,
@@ -309,6 +320,27 @@ func (r *Runtime) receipt(operation contextfabric.ModelOperation, promptVersion 
 		receipt.OutputDigest = contextfabric.DigestModelValue(output)
 	}
 	return receipt
+}
+
+// receiptOutcomeForError maps a nil or already-classified generation error
+// to the receipt Outcome vocabulary from ADR 0008 (success, fallback,
+// invalid_output, unavailable), plus rate_limited for the finer-grained
+// classification callers get from classifyModelError. err is expected to be
+// nil or the direct result of classifyModelError; a context cancellation or
+// deadline error (passed through classifyModelError unchanged) counts as
+// unavailable from a receipts standpoint, since the runtime's own bounded
+// deadline is what stopped the call.
+func receiptOutcomeForError(err error) string {
+	switch {
+	case err == nil:
+		return "pending_validation"
+	case errors.Is(err, contextfabric.ErrModelRateLimited):
+		return "rate_limited"
+	case errors.Is(err, contextfabric.ErrModelOutput):
+		return "invalid_output"
+	default:
+		return "unavailable"
+	}
 }
 
 func boundedJSON(value any, maximum int) ([]byte, error) {
@@ -329,6 +361,22 @@ func retryable(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
+	// Genkit (and well-behaved plugins) surface transport and provider
+	// failures as *core.GenkitError with a gRPC-style status. Prefer that
+	// structured signal over string sniffing when it is present.
+	var genkitErr *core.GenkitError
+	if errors.As(err, &genkitErr) {
+		switch genkitErr.Status {
+		case core.RESOURCE_EXHAUSTED, core.UNAVAILABLE, core.DEADLINE_EXCEEDED, core.ABORTED:
+			return true
+		case core.INVALID_ARGUMENT:
+			// Malformed request or schema-incompatible output; the model is
+			// not going to succeed against the same input, so this fails
+			// closed instead of retrying (ADR 0008: invalid output fails
+			// closed).
+			return false
+		}
+	}
 	lower := strings.ToLower(err.Error())
 	for _, token := range []string{"429", "rate limit", "temporarily unavailable", "timeout", "deadline", "connection reset", "502", "503", "504"} {
 		if strings.Contains(lower, token) {
@@ -338,9 +386,47 @@ func retryable(err error) bool {
 	return false
 }
 
+// classifyModelError maps a raw generation error into one of the ACR-owned
+// model runtime sentinels (ErrModelRateLimited, ErrModelOutput,
+// ErrModelUnavailable) so callers can apply distinct handling and alerting
+// per CHAOS-3756. Only the error class and provider status name are
+// preserved in the wrapped message; the original error (which may carry
+// provider response fragments) is intentionally dropped rather than
+// wrapped, so raw prompt or response content never reaches logs, receipts,
+// or telemetry built from this error.
 func classifyModelError(err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
+	}
+	var genkitErr *core.GenkitError
+	if errors.As(err, &genkitErr) {
+		switch genkitErr.Status {
+		case core.RESOURCE_EXHAUSTED:
+			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelRateLimited, genkitErr.Status)
+		case core.INVALID_ARGUMENT:
+			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelOutput, genkitErr.Status)
+		case core.INTERNAL:
+			// Genkit reports its own structured-output/schema mismatch as
+			// INTERNAL (see ai.jsonHandler.ParseMessage), so INTERNAL is
+			// ambiguous between a genuine provider fault and invalid model
+			// output. Distinguish by the fixed prefix Genkit always uses for
+			// the schema-mismatch case; never inspect or forward the rest of
+			// the message, which may quote the malformed output.
+			if strings.HasPrefix(genkitErr.Message, "model failed to generate output matching expected schema") {
+				return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelOutput, genkitErr.Status)
+			}
+			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
+		case core.UNAVAILABLE, core.DEADLINE_EXCEEDED, core.ABORTED:
+			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
+		default:
+			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
+		}
+	}
+	lower := strings.ToLower(err.Error())
+	for _, token := range []string{"429", "rate limit", "too many requests", "quota exceeded"} {
+		if strings.Contains(lower, token) {
+			return fmt.Errorf("%w: model generation failed", contextfabric.ErrModelRateLimited)
+		}
 	}
 	return fmt.Errorf("%w: model generation failed", contextfabric.ErrModelUnavailable)
 }
