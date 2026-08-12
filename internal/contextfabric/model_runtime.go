@@ -16,6 +16,11 @@ import (
 var (
 	ErrModelUnavailable = errors.New("context fabric model runtime unavailable")
 	ErrModelOutput      = errors.New("context fabric model output invalid")
+	// ErrModelRateLimited signals the configured provider/model rejected the
+	// call because a rate or quota limit was exceeded. It is a distinct
+	// classification from ErrModelUnavailable so callers can apply different
+	// backoff or alerting policy to throttling versus outages.
+	ErrModelRateLimited = errors.New("context fabric model runtime rate limited")
 )
 
 type ModelOperation string

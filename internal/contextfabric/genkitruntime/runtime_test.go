@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -364,6 +365,96 @@ func validReceipt(operation contextfabric.ModelOperation) contextfabric.ModelExe
 		PromptVersion: "fallback-v1", SchemaVersion: "schema-v1", EvaluatorVersion: "eval-v1",
 		StartedAt: now, CompletedAt: now, Attempts: 1,
 		InputDigest: strings.Repeat("a", 64), OutputDigest: strings.Repeat("b", 64), Outcome: "success",
+	}
+}
+
+func TestClassifyModelErrorDistinguishesRateLimitUnavailableAndInvalidOutput(t *testing.T) {
+	t.Parallel()
+	sensitive := "leaked secret prompt fragment"
+	cases := []struct {
+		name   string
+		err    error
+		wantIs error
+	}{
+		{"rate_limited", core.NewError(core.RESOURCE_EXHAUSTED, "quota exhausted: %s", sensitive), contextfabric.ErrModelRateLimited},
+		{"unavailable_status", core.NewError(core.UNAVAILABLE, "backend down: %s", sensitive), contextfabric.ErrModelUnavailable},
+		{"deadline_status", core.NewError(core.DEADLINE_EXCEEDED, "slow: %s", sensitive), contextfabric.ErrModelUnavailable},
+		{"aborted_status", core.NewError(core.ABORTED, "aborted: %s", sensitive), contextfabric.ErrModelUnavailable},
+		{"invalid_argument_status", core.NewError(core.INVALID_ARGUMENT, "bad request: %s", sensitive), contextfabric.ErrModelOutput},
+		{"internal_schema_mismatch", core.NewError(core.INTERNAL, "model failed to generate output matching expected schema: %s", sensitive), contextfabric.ErrModelOutput},
+		{"internal_generic", core.NewError(core.INTERNAL, "unexpected panic: %s", sensitive), contextfabric.ErrModelUnavailable},
+		{"unmapped_status", core.NewError(core.NOT_FOUND, "route missing: %s", sensitive), contextfabric.ErrModelUnavailable},
+		{"plain_rate_limit_string", errors.New("received 429 Too Many Requests"), contextfabric.ErrModelRateLimited},
+		{"plain_opaque_string", errors.New("boom"), contextfabric.ErrModelUnavailable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := classifyModelError(tc.err)
+			if !errors.Is(got, tc.wantIs) {
+				t.Fatalf("classifyModelError(%v) = %v, want errors.Is match for %v", tc.err, got, tc.wantIs)
+			}
+			if strings.Contains(got.Error(), sensitive) {
+				t.Fatalf("classifyModelError leaked provider message content: %v", got)
+			}
+		})
+	}
+}
+
+func TestClassifyModelErrorPreservesCancellationAndDeadline(t *testing.T) {
+	t.Parallel()
+	if got := classifyModelError(context.Canceled); !errors.Is(got, context.Canceled) {
+		t.Fatalf("classifyModelError(context.Canceled) = %v", got)
+	}
+	if got := classifyModelError(context.DeadlineExceeded); !errors.Is(got, context.DeadlineExceeded) {
+		t.Fatalf("classifyModelError(context.DeadlineExceeded) = %v", got)
+	}
+}
+
+func TestRetryableUsesStructuredGenkitStatusOverStringHeuristics(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"resource_exhausted_retryable", core.NewError(core.RESOURCE_EXHAUSTED, "quota"), true},
+		{"unavailable_retryable", core.NewError(core.UNAVAILABLE, "down"), true},
+		{"deadline_exceeded_status_retryable", core.NewError(core.DEADLINE_EXCEEDED, "slow"), true},
+		{"aborted_retryable", core.NewError(core.ABORTED, "aborted"), true},
+		{"invalid_argument_not_retryable", core.NewError(core.INVALID_ARGUMENT, "bad schema: invented_kind value present in response"), false},
+		{"context_canceled_not_retryable", context.Canceled, false},
+		{"plain_502_retryable", errors.New("upstream returned 502"), true},
+		{"plain_opaque_not_retryable", errors.New("boom"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := retryable(tc.err); got != tc.want {
+				t.Fatalf("retryable(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRuntimeClassifiesRateLimitedGenerationError proves the classification
+// reaches callers end to end: a rate-limited generation failure with no
+// fallback configured surfaces as contextfabric.ErrModelRateLimited from
+// InterpretQuestion, not the generic ErrModelUnavailable.
+func TestRuntimeClassifiesRateLimitedGenerationError(t *testing.T) {
+	t.Parallel()
+	runtime := mustRuntime(t, &generatorStub{
+		interpretErr: core.NewError(core.RESOURCE_EXHAUSTED, "quota exhausted for org_1"),
+	}, Config{MaxAttempts: 1})
+	_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+	if err == nil || !errors.Is(err, contextfabric.ErrModelRateLimited) {
+		t.Fatalf("InterpretQuestion() error = %v, want ErrModelRateLimited", err)
+	}
+	if errors.Is(err, contextfabric.ErrModelUnavailable) {
+		t.Fatalf("InterpretQuestion() error = %v, must not also match ErrModelUnavailable", err)
+	}
+	if receipt.Outcome != "error" || receipt.FallbackUsed {
+		t.Fatalf("receipt = %#v", receipt)
 	}
 }
 

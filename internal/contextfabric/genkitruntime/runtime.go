@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -329,6 +330,22 @@ func retryable(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
+	// Genkit (and well-behaved plugins) surface transport and provider
+	// failures as *core.GenkitError with a gRPC-style status. Prefer that
+	// structured signal over string sniffing when it is present.
+	var genkitErr *core.GenkitError
+	if errors.As(err, &genkitErr) {
+		switch genkitErr.Status {
+		case core.RESOURCE_EXHAUSTED, core.UNAVAILABLE, core.DEADLINE_EXCEEDED, core.ABORTED:
+			return true
+		case core.INVALID_ARGUMENT:
+			// Malformed request or schema-incompatible output; the model is
+			// not going to succeed against the same input, so this fails
+			// closed instead of retrying (ADR 0008: invalid output fails
+			// closed).
+			return false
+		}
+	}
 	lower := strings.ToLower(err.Error())
 	for _, token := range []string{"429", "rate limit", "temporarily unavailable", "timeout", "deadline", "connection reset", "502", "503", "504"} {
 		if strings.Contains(lower, token) {
@@ -338,9 +355,47 @@ func retryable(err error) bool {
 	return false
 }
 
+// classifyModelError maps a raw generation error into one of the ACR-owned
+// model runtime sentinels (ErrModelRateLimited, ErrModelOutput,
+// ErrModelUnavailable) so callers can apply distinct handling and alerting
+// per CHAOS-3756. Only the error class and provider status name are
+// preserved in the wrapped message; the original error (which may carry
+// provider response fragments) is intentionally dropped rather than
+// wrapped, so raw prompt or response content never reaches logs, receipts,
+// or telemetry built from this error.
 func classifyModelError(err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
+	}
+	var genkitErr *core.GenkitError
+	if errors.As(err, &genkitErr) {
+		switch genkitErr.Status {
+		case core.RESOURCE_EXHAUSTED:
+			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelRateLimited, genkitErr.Status)
+		case core.INVALID_ARGUMENT:
+			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelOutput, genkitErr.Status)
+		case core.INTERNAL:
+			// Genkit reports its own structured-output/schema mismatch as
+			// INTERNAL (see ai.jsonHandler.ParseMessage), so INTERNAL is
+			// ambiguous between a genuine provider fault and invalid model
+			// output. Distinguish by the fixed prefix Genkit always uses for
+			// the schema-mismatch case; never inspect or forward the rest of
+			// the message, which may quote the malformed output.
+			if strings.HasPrefix(genkitErr.Message, "model failed to generate output matching expected schema") {
+				return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelOutput, genkitErr.Status)
+			}
+			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
+		case core.UNAVAILABLE, core.DEADLINE_EXCEEDED, core.ABORTED:
+			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
+		default:
+			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
+		}
+	}
+	lower := strings.ToLower(err.Error())
+	for _, token := range []string{"429", "rate limit", "too many requests", "quota exceeded"} {
+		if strings.Contains(lower, token) {
+			return fmt.Errorf("%w: model generation failed", contextfabric.ErrModelRateLimited)
+		}
 	}
 	return fmt.Errorf("%w: model generation failed", contextfabric.ErrModelUnavailable)
 }
