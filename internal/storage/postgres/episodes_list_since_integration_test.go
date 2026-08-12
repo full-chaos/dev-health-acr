@@ -207,8 +207,12 @@ func TestEpisodeStore_UpdatedAtTriggerIsStrictlyMonotonicEvenWhenTheClockHasNotA
 	// The trigger fires on every UPDATE, including this one -- disable it
 	// for exactly this one setup statement so the artificial future value
 	// actually lands, then re-enable it before exercising the real write
-	// under test below.
-	future := time.Now().UTC().Add(24 * time.Hour)
+	// under test below. Truncated to microsecond precision: TIMESTAMPTZ
+	// only stores microseconds, so an untruncated time.Now() (nanosecond
+	// precision) round-trips through Postgres as a rounded/truncated value
+	// and the exact-equality sanity check below would flake whenever the
+	// nanosecond component isn't already a multiple of 1000ns.
+	future := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Microsecond)
 	_, err = db.ExecContext(ctx, `ALTER TABLE acr.agent_episodes DISABLE TRIGGER trg_agent_episodes_bump_updated_at`)
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `UPDATE acr.agent_episodes SET updated_at = $1 WHERE episode_id = $2`, future, episode.EpisodeID)
