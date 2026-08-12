@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -101,6 +103,7 @@ type SynthesisDraft struct {
 	Conflicts           []Finding           `json:"conflicts"`
 	Limitations         []string            `json:"limitations"`
 	EvidenceRefIDs      []string            `json:"evidence_ref_ids"`
+	ClaimedFacts        []ClaimedFact       `json:"claimed_facts"`
 	DeterministicAnswer string              `json:"deterministic_answer"`
 	Warnings            []string            `json:"warnings"`
 }
@@ -149,6 +152,38 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 			return fmt.Errorf("synthesis references unknown evidence %q", evidenceRefID)
 		}
 	}
+	// Value-level evidence closure (CHAOS-3755 must-do): structural
+	// grounding above only proves a citation exists, not that its claimed
+	// value agrees with the canonical fact it's supposedly grounded in --
+	// a synthesis draft claiming "release-ready" against a canonical
+	// release_ready=false fact would pass every check above unchanged.
+	// ClaimedFacts closes that gap deterministically: every claim must
+	// resolve to an actually-observed canonical fact field, by exact
+	// struct equality, not wording.
+	claimedByID := make(map[string]ClaimedFact, len(d.ClaimedFacts))
+	for _, claim := range d.ClaimedFacts {
+		if err := claim.Validate(); err != nil {
+			return fmt.Errorf("claimed_facts: %w", err)
+		}
+		if _, exists := claimedByID[claim.ClaimID]; exists {
+			return fmt.Errorf("claimed fact IDs must be unique")
+		}
+		claimedByID[claim.ClaimID] = claim
+		if _, ok := allowedSubjects[subjectKeyForModel(claim.Subject)]; !ok {
+			return fmt.Errorf("claimed fact references subject outside the investigation")
+		}
+		canonical, ok := lookupCanonicalFact(input.Facts.Facts, claim.Kind, claim.Subject)
+		if !ok {
+			return fmt.Errorf("claimed fact %s/%s has no canonical observation to ground it", claim.Kind, claim.Field)
+		}
+		observed, present := canonical.Fields[claim.Field]
+		if !present {
+			return fmt.Errorf("claimed fact field %q was not canonically observed", claim.Field)
+		}
+		if !factValueEqualsScalar(observed, claim.Value) {
+			return fmt.Errorf("claimed fact %q contradicts the canonical value observed for %s.%s", claim.ClaimID, claim.Kind, claim.Field)
+		}
+	}
 	for _, driver := range d.Drivers {
 		if err := driver.Validate(); err != nil {
 			return fmt.Errorf("driver: %w", err)
@@ -167,6 +202,9 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 			if _, ok := allowedEvidence[evidenceRefID]; !ok {
 				return fmt.Errorf("driver references unknown evidence %q", evidenceRefID)
 			}
+		}
+		if err := requireGroundedClaims("driver", driver.Category, driver.ClaimedFactIDs, claimedByID); err != nil {
+			return err
 		}
 	}
 	for name, findings := range map[string][]Finding{
@@ -188,9 +226,65 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 					return fmt.Errorf("%s references unknown evidence %q", name, evidenceRefID)
 				}
 			}
+			if err := requireGroundedClaims(name, finding.Kind, finding.ClaimedFactIDs, claimedByID); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+// requireGroundedClaims checks that every ID in claimedFactIDs resolves
+// inside claimed, and -- when category names a canonical-fact-shaped
+// judgment per ContextFabricDriverCategoryRequiresClaimedFact -- that at
+// least one referenced claim's Kind matches. Catching this here (at
+// model-output validation time, classified ErrModelOutput -> 502) rather
+// than only later at InvestigationResult.Validate() (classified
+// ErrInvalidResult -> 500) lets the route correctly attribute a
+// closure-violating draft to the model, not to ACR.
+func requireGroundedClaims(name, category string, claimedFactIDs []string, claimed map[string]ClaimedFact) error {
+	requiredKind, required := contractsv1.ContextFabricDriverCategoryRequiresClaimedFact(contractsv1.ContextFabricDriverCategory(category))
+	matchedKind := false
+	for _, claimID := range claimedFactIDs {
+		claim, ok := claimed[claimID]
+		if !ok {
+			return fmt.Errorf("%s references unknown claimed fact %q", name, claimID)
+		}
+		if required && claim.Kind == requiredKind {
+			matchedKind = true
+		}
+	}
+	if required && !matchedKind {
+		return fmt.Errorf("%s category %q requires a claimed fact of kind %q", name, category, requiredKind)
+	}
+	return nil
+}
+
+func factValueEqualsScalar(fv FactValue, sv ScalarValue) bool {
+	switch {
+	case fv.String != nil:
+		return sv.String != nil && *sv.String == *fv.String
+	case fv.Integer != nil:
+		return sv.Integer != nil && *sv.Integer == *fv.Integer
+	case fv.Number != nil:
+		return sv.Number != nil && *sv.Number == *fv.Number
+	case fv.Boolean != nil:
+		return sv.Boolean != nil && *sv.Boolean == *fv.Boolean
+	case fv.Null:
+		return sv.Null
+	default:
+		return false
+	}
+}
+
+func lookupCanonicalFact(facts []CanonicalFact, kind FactKind, subject SubjectRef) (CanonicalFact, bool) {
+	key := subjectKeyForModel(subject)
+	for _, fact := range facts {
+		if fact.Kind == kind && subjectKeyForModel(fact.Subject) == key {
+			return fact, true
+		}
+	}
+	return CanonicalFact{}, false
 }
 
 type ModelRuntime interface {
@@ -279,19 +373,26 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		return InvestigationResult{}, err
 	}
 	result := InvestigationResult{
-		Status:              draft.Status,
-		DirectJudgment:      strings.TrimSpace(draft.DirectJudgment),
-		CurrentState:        strings.TrimSpace(draft.CurrentState),
-		StrongestPressures:  cloneSlice(draft.StrongestPressures),
-		Drivers:             cloneSlice(draft.Drivers),
-		RemainingWork:       cloneSlice(draft.RemainingWork),
-		ReadinessGaps:       cloneSlice(draft.ReadinessGaps),
-		Paths:               cloneSlice(input.Graph.Paths),
-		Conflicts:           cloneSlice(draft.Conflicts),
-		Limitations:         cloneSlice(draft.Limitations),
-		EvidenceRefIDs:      cloneSlice(draft.EvidenceRefIDs),
-		Coverage:            mergeCoverage(input.Graph.Coverage, input.Facts.Coverage),
-		DeterministicAnswer: strings.TrimSpace(draft.DeterministicAnswer),
+		Status:             draft.Status,
+		DirectJudgment:     strings.TrimSpace(draft.DirectJudgment),
+		CurrentState:       strings.TrimSpace(draft.CurrentState),
+		StrongestPressures: cloneSlice(draft.StrongestPressures),
+		Drivers:            cloneSlice(draft.Drivers),
+		RemainingWork:      cloneSlice(draft.RemainingWork),
+		ReadinessGaps:      cloneSlice(draft.ReadinessGaps),
+		Paths:              cloneSlice(input.Graph.Paths),
+		Conflicts:          cloneSlice(draft.Conflicts),
+		Limitations:        cloneSlice(draft.Limitations),
+		EvidenceRefIDs:     cloneSlice(draft.EvidenceRefIDs),
+		ClaimedFacts:       cloneSlice(draft.ClaimedFacts),
+		Coverage:           mergeCoverage(input.Graph.Coverage, input.Facts.Coverage),
+		// DeterministicAnswer is server-composed, not model-authored: it is
+		// a pure function of the already-validated Status, Drivers, and
+		// ClaimedFacts, computed after ValidateAgainst has passed. That is
+		// the only reading of "deterministic" that can't itself introduce
+		// a fresh, unchecked claim -- draft.DeterministicAnswer (whatever
+		// prose the model produced) is deliberately discarded here.
+		DeterministicAnswer: composeDeterministicAnswer(draft),
 		Warnings:            cloneSlice(draft.Warnings),
 		Versions: VersionSet{
 			ServiceVersion:          nonEmptyVersion(r.Options.ServiceVersion, "unwired"),
@@ -306,6 +407,90 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		},
 	}
 	return result, nil
+}
+
+// composeDeterministicAnswer renders DeterministicAnswer server-side from
+// already-validated structured fields only (Status, principal Drivers,
+// ClaimedFacts) -- see the call site's comment for why. It never reads
+// draft.DirectJudgment/CurrentState/DeterministicAnswer (unvalidated
+// model prose) and cannot itself diverge from a canonical fact value
+// because every value it renders came from ClaimedFacts, which
+// ValidateAgainst already proved equal to the canonical fact bundle.
+func composeDeterministicAnswer(draft SynthesisDraft) string {
+	var b strings.Builder
+	b.WriteString(statusSentence(draft.Status))
+	if titles := principalDriverTitles(draft.Drivers); len(titles) > 0 {
+		b.WriteString(" Principal driver(s): ")
+		b.WriteString(strings.Join(titles, "; "))
+		b.WriteString(".")
+	}
+	if claims := claimedFactSentences(draft.ClaimedFacts); len(claims) > 0 {
+		b.WriteString(" Canonical facts: ")
+		b.WriteString(strings.Join(claims, "; "))
+		b.WriteString(".")
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func statusSentence(status InvestigationStatus) string {
+	switch status {
+	case InvestigationComplete:
+		return "This investigation is complete."
+	case InvestigationPartial:
+		return "This investigation is partial: some canonical or graph coverage was unavailable."
+	case InvestigationDegraded:
+		return "This investigation is degraded: coverage was limited."
+	case InvestigationClarificationRequired:
+		return "Clarification is required before this question can be answered."
+	case InvestigationNoMatch:
+		return "No investigation subject could be resolved for this question."
+	default:
+		return "This investigation could not produce a complete answer."
+	}
+}
+
+func principalDriverTitles(drivers []DriverJudgment) []string {
+	filtered := make([]DriverJudgment, 0, len(drivers))
+	for _, driver := range drivers {
+		if driver.Standing == DriverPrincipal {
+			filtered = append(filtered, driver)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool { return filtered[i].DriverID < filtered[j].DriverID })
+	titles := make([]string, 0, len(filtered))
+	for _, driver := range filtered {
+		if title := strings.TrimSpace(driver.Title); title != "" {
+			titles = append(titles, title)
+		}
+	}
+	return titles
+}
+
+func claimedFactSentences(claims []ClaimedFact) []string {
+	sorted := append([]ClaimedFact(nil), claims...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ClaimID < sorted[j].ClaimID })
+	sentences := make([]string, 0, len(sorted))
+	for _, claim := range sorted {
+		sentences = append(sentences, fmt.Sprintf("%s.%s=%s for %s", claim.Kind, claim.Field, scalarValueString(claim.Value), claim.Subject.Label))
+	}
+	return sentences
+}
+
+func scalarValueString(v ScalarValue) string {
+	switch {
+	case v.String != nil:
+		return *v.String
+	case v.Integer != nil:
+		return strconv.FormatInt(*v.Integer, 10)
+	case v.Number != nil:
+		return strconv.FormatFloat(*v.Number, 'g', -1, 64)
+	case v.Boolean != nil:
+		return strconv.FormatBool(*v.Boolean)
+	case v.Null:
+		return "null"
+	default:
+		return ""
+	}
 }
 
 func recordModelReceipt(ctx context.Context, principal storage.Principal, sink ModelReceiptSink, receipt ModelExecutionReceipt) error {

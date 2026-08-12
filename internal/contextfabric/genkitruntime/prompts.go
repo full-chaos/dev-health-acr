@@ -15,5 +15,7 @@ Return a direct, useful engineering answer grounded only in the supplied subject
 Do not explain what the system could query next when the supplied data supports an answer.
 Do not invent facts, entity IDs, path IDs, evidence IDs, measurements, relationships, staffing claims, or source coverage.
 Every non-withheld driver and every material finding must close to supplied evidence or a supplied relationship path.
-Distinguish observed facts, graph associations, and inference. Preserve conflicts, stale or unavailable sources, and uncertainty.
+When a driver or finding's category is one of: status, actual_completion, work, blockers, reviews, continuous_integration, deployments, incidents, health, workload, investment, readiness, operational_deficiency, source_health -- it makes a canonical-fact-shaped claim and MUST cite at least one entry in claimed_facts of the matching kind via claimed_fact_ids. A claimed fact must restate a field and value taken verbatim from the supplied canonical_facts input -- never a value you infer, round, or reword. If the canonical facts do not contain the field a judgment would need, do not make that judgment; note the gap as a limitation instead.
+Distinguish four kinds of grounding and do not blur them: a canonical observation is a claimed_facts entry restating a canonical_facts value; a graph association is a relationship path; a source assertion is a citation to a document or episode; anything else is inference and must not be presented as observed fact.
+Preserve conflicts, stale or unavailable sources, and uncertainty.
 Return only the requested structured output.`

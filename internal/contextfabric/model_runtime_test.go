@@ -537,3 +537,149 @@ func validModelReceiptFixture(operation ModelOperation) ModelExecutionReceipt {
 
 var _ ModelRuntime = fakeModelRuntime{}
 var _ ModelReceiptSink = (*fakeReceiptSink)(nil)
+
+// --- Value-level evidence closure (CHAOS-3755) ---
+
+// closureFixture builds a SynthesisInput/valid draft pair where the driver's
+// Category is "readiness" -- a category in
+// ContextFabricDriverCategoryRequiresClaimedFact's closed table -- backed by
+// a canonical FactReadiness fact with field release_ready=false, and a
+// ClaimedFact that restates it correctly. This is the exact scenario the
+// Linear must-do named: "a synthesis draft claiming 'release-ready' against
+// canonical release_ready=false".
+func closureFixture() (SynthesisInput, SynthesisDraft) {
+	input := validSynthesisInputFixture()
+	draft := validSynthesisDraftFixture(input)
+	draft.Drivers[0].Category = "readiness"
+	draft.Drivers[0].ClaimedFactIDs = []string{"claim_readiness_1"}
+	draft.ClaimedFacts = []ClaimedFact{{
+		ClaimID: "claim_readiness_1", Kind: FactReadiness, Subject: input.Graph.Resolution.Committed[0],
+		Field: "release_ready", Value: boolScalar(false),
+	}}
+	return input, draft
+}
+
+func TestSynthesisDraftValidateAgainstAcceptsClaimedFactMatchingCanonicalValue(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	if err := draft.ValidateAgainst(input); err != nil {
+		t.Fatalf("ValidateAgainst() error = %v, want a matching claim to validate", err)
+	}
+}
+
+// TestSynthesisDraftValidateAgainstRejectsClaimedFactContradictingCanonicalValue
+// is the direct proof for the Linear must-do: a claim that restates a
+// canonical field with the WRONG value must not survive, even though it
+// references a real field on a real canonical fact (unlike the older
+// "invents evidence/subject/path" tests, this is a value-level mismatch,
+// not a structural one).
+func TestSynthesisDraftValidateAgainstRejectsClaimedFactContradictingCanonicalValue(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	// The canonical fact says release_ready=false; the model claims true.
+	draft.ClaimedFacts[0].Value = boolScalar(true)
+	err := draft.ValidateAgainst(input)
+	if err == nil || !strings.Contains(err.Error(), "contradicts the canonical value") {
+		t.Fatalf("ValidateAgainst() error = %v, want a contradicts-canonical-value error", err)
+	}
+}
+
+func TestSynthesisDraftValidateAgainstRejectsClaimedFactForUnobservedField(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	draft.ClaimedFacts[0].Field = "field_never_observed"
+	err := draft.ValidateAgainst(input)
+	if err == nil || !strings.Contains(err.Error(), "not canonically observed") {
+		t.Fatalf("ValidateAgainst() error = %v, want a not-canonically-observed error", err)
+	}
+}
+
+func TestSynthesisDraftValidateAgainstRejectsClaimedFactForKindWithNoCanonicalObservation(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	// FactHealth was never read into input.Facts.Facts at all.
+	draft.ClaimedFacts[0].Kind = FactHealth
+	err := draft.ValidateAgainst(input)
+	if err == nil || !strings.Contains(err.Error(), "no canonical observation") {
+		t.Fatalf("ValidateAgainst() error = %v, want a no-canonical-observation error", err)
+	}
+}
+
+func TestSynthesisDraftValidateAgainstRejectsDriverInFactShapedCategoryWithoutAnyClaim(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	draft.Drivers[0].ClaimedFactIDs = nil
+	draft.ClaimedFacts = nil
+	err := draft.ValidateAgainst(input)
+	if err == nil || !strings.Contains(err.Error(), "requires a claimed fact") {
+		t.Fatalf("ValidateAgainst() error = %v, want a category-requires-claimed-fact error", err)
+	}
+}
+
+// TestSynthesisDraftValidateAgainstDoesNotRequireClaimsForUnmappedCategory
+// proves the category->claim requirement is a closed enum lookup, not a
+// blanket rule -- "release_readiness" (the fixture's original category,
+// free text chosen by a hypothetical model) is NOT in
+// ContextFabricDriverCategoryRequiresClaimedFact's table, so plain evidence
+// closure remains sufficient for it.
+func TestSynthesisDraftValidateAgainstDoesNotRequireClaimsForUnmappedCategory(t *testing.T) {
+	t.Parallel()
+	input := validSynthesisInputFixture()
+	draft := validSynthesisDraftFixture(input)
+	if err := draft.ValidateAgainst(input); err != nil {
+		t.Fatalf("ValidateAgainst() error = %v, want an unmapped category to validate without any claim", err)
+	}
+}
+
+func TestSynthesisDraftValidateAgainstRejectsUnknownClaimedFactID(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	draft.Drivers[0].ClaimedFactIDs = []string{"claim_never_declared"}
+	err := draft.ValidateAgainst(input)
+	if err == nil || !strings.Contains(err.Error(), "unknown claimed fact") {
+		t.Fatalf("ValidateAgainst() error = %v, want an unknown-claimed-fact error", err)
+	}
+}
+
+func TestSynthesisDraftValidateAgainstRejectsClaimedFactSubjectOutsideInvestigation(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	draft.ClaimedFacts[0].Subject = SubjectRef{Kind: SubjectProject, CanonicalID: "project_invented_by_model", Label: "Invented"}
+	err := draft.ValidateAgainst(input)
+	if err == nil || !strings.Contains(err.Error(), "outside the investigation") {
+		t.Fatalf("ValidateAgainst() error = %v, want a subject-outside-investigation error", err)
+	}
+}
+
+// TestRuntimeAnswerSynthesizerComposesDeterministicAnswerServerSide proves
+// DeterministicAnswer is a pure function of validated Status/Drivers/
+// ClaimedFacts, not whatever prose the model produced: the model's own
+// DeterministicAnswer text is discarded entirely, and the server-composed
+// replacement can never itself contradict a canonical value because it
+// only ever renders values already proven equal to the canonical bundle.
+func TestRuntimeAnswerSynthesizerComposesDeterministicAnswerServerSide(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	draft.DeterministicAnswer = "the model's own possibly-ungrounded prose, which must be discarded"
+	synthesizer := RuntimeAnswerSynthesizer{
+		Runtime: fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)},
+	}
+	result, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if strings.Contains(result.DeterministicAnswer, "possibly-ungrounded") {
+		t.Fatalf("DeterministicAnswer = %q, want the model's prose discarded", result.DeterministicAnswer)
+	}
+	if !strings.Contains(result.DeterministicAnswer, "Release acceptance remains open") {
+		t.Fatalf("DeterministicAnswer = %q, want it to include the principal driver title", result.DeterministicAnswer)
+	}
+	if !strings.Contains(result.DeterministicAnswer, "readiness.release_ready=false") {
+		t.Fatalf("DeterministicAnswer = %q, want it to include the claimed fact restatement", result.DeterministicAnswer)
+	}
+	if len(result.ClaimedFacts) != 1 || result.ClaimedFacts[0].ClaimID != "claim_readiness_1" {
+		t.Fatalf("result.ClaimedFacts = %#v, want the validated claim carried through", result.ClaimedFacts)
+	}
+}
+
+func boolScalar(value bool) ScalarValue { return ScalarValue{Boolean: &value} }

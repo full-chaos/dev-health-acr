@@ -17,6 +17,16 @@ var (
 	// ErrProjectionConflict identifies an out-of-order or incompatible
 	// projection batch. The worker must not advance its checkpoint.
 	ErrProjectionConflict = errors.New("context fabric projection conflict")
+	// ErrRateLimited signals a bounded dependency (graph backend or
+	// canonical fact source) rejected a call because a rate or quota limit
+	// was exceeded. Adapters must wrap their own vendor-specific
+	// rate-limit classification into this at their package boundary --
+	// e.g. zepgraph.ErrRateLimited also wraps this -- so callers (Engine,
+	// the route layer) can classify the failure without importing any
+	// specific backend's package. This keeps ErrModelRateLimited (a
+	// distinct, pre-existing sentinel for the model runtime specifically)
+	// and this one both reachable from one vendor-neutral check.
+	ErrRateLimited = errors.New("context fabric dependency rate limited")
 )
 
 // Investigator is the consumer-neutral Context Fabric entry point. Ask Dev,
