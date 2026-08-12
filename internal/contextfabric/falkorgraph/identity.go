@@ -179,14 +179,24 @@ func (a *Adapter) pollConstraintsOperational(ctx context.Context, key string) er
 		if err != nil {
 			return safeDependencyError("poll constraint status", err)
 		}
+		// Codex P2e: strict allowlist, not a PENDING/FAILED denylist. The
+		// original form defaulted allOperational=true and only flipped it
+		// for the two known-bad statuses, so any OTHER value -- an unknown
+		// status this server version might report, or an empty string from
+		// a malformed/partial response -- silently fell through as
+		// "operational" and let a write proceed against a constraint that
+		// was never actually confirmed enforcing.
 		allOperational := true
 		for _, status := range statuses {
-			if status.Status == "PENDING" {
+			switch status.Status {
+			case "OPERATIONAL":
+				// fine, keep checking the rest
+			case "PENDING":
 				allOperational = false
-				break
-			}
-			if status.Status == "FAILED" {
+			case "FAILED":
 				return errConstraintBootstrapFailed
+			default:
+				return fmt.Errorf("%w: unexpected constraint status %q for %s.%s", errConstraintBootstrapFailed, status.Status, status.EntityType, status.Label)
 			}
 		}
 		if allOperational {

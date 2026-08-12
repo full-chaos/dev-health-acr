@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // fulltextSearchNodes runs a lexical full-text search over Subject nodes'
@@ -18,17 +19,35 @@ import (
 // joined with "|" (OR) instead. Field names in a full-text query must never
 // come from caller text (an unrecognized @field: silently returns empty,
 // no error) -- this function never emits one.
-func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, text string, limit int) ([]graphrank.CandidateNode, error) {
+//
+// Codex P2b/P2d: orgID is a mandatory predicate on every read (ADR 0009:95
+// claims this as defense-in-depth even though the graph key already scopes
+// the whole database to one organization -- a second, cheap check that
+// costs nothing and catches a graphKey derivation bug or a stray
+// cross-tenant write before it can ever surface). The result LIMIT is
+// applied server-side, in the Cypher itself, rather than by fetching every
+// match and breaking client-side after the desired count -- unlike the
+// former client-side break, this bounds the actual query cost, not just the
+// slice the caller sees. limit is always this adapter's own bounded int
+// (clamped to a.config.MaxResults below), never caller text, so inlining it
+// as a literal into the query string is safe -- see safeParams' doc for why
+// untrusted values never take this path.
+func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text string, limit int) ([]graphrank.CandidateNode, error) {
 	terms := tokenizeForFulltext(text)
 	if len(terms) == 0 {
 		return nil, nil
 	}
-	if limit <= 0 {
+	if limit <= 0 || limit > a.config.MaxResults {
 		limit = a.config.MaxResults
 	}
 	query := strings.Join(terms, "|")
-	cypher := fmt.Sprintf("CALL db.idx.fulltext.queryNodes('%s', $query) YIELD node, score RETURN node, score", labelSubject)
-	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"query": query}, true)
+	cypher := fmt.Sprintf(
+		"CALL db.idx.fulltext.queryNodes('%s', $query) YIELD node, score "+
+			"WHERE node.%s = $org "+
+			"RETURN node, score ORDER BY score DESC LIMIT %d",
+		labelSubject, propOrgID, limit,
+	)
+	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"query": query, "org": orgID}, true)
 	if err != nil {
 		return nil, safeDependencyError("search context graph", err)
 	}
@@ -43,9 +62,6 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, text string, lim
 			candidate.Score = &score
 		}
 		results = append(results, candidate)
-		if limit > 0 && len(results) >= limit {
-			break
-		}
 	}
 	return results, nil
 }
@@ -113,17 +129,21 @@ func toCandidateNode(n *node) graphrank.CandidateNode {
 	}
 }
 
-func (a *Adapter) nodeByUUID(ctx context.Context, key, uuid string) (*node, error) {
+func (a *Adapter) nodeByUUID(ctx context.Context, key, orgID, uuid string) (*node, error) {
 	kind, canonicalID := splitSubjectUUID(uuid)
 	if kind == "" {
 		return nil, nil
 	}
-	return a.nodeByKindID(ctx, key, kind, canonicalID)
+	return a.nodeByKindID(ctx, key, orgID, kind, canonicalID)
 }
 
-func (a *Adapter) nodeByKindID(ctx context.Context, key, kind, canonicalID string) (*node, error) {
-	cypher := fmt.Sprintf("MATCH (n:%s {%s:$kind, %s:$id}) RETURN n", labelSubject, propKind, propCanonicalID)
-	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"kind": kind, "id": canonicalID}, true)
+// nodeByKindID looks up one Subject node by its natural key. Codex P2b: the
+// org_id predicate is mandatory on every read query, not only the ones that
+// happened to already carry it -- this is the standing review rule
+// regardless of how strong graph-key tenancy isolation already is.
+func (a *Adapter) nodeByKindID(ctx context.Context, key, orgID, kind, canonicalID string) (*node, error) {
+	cypher := fmt.Sprintf("MATCH (n:%s {%s:$org, %s:$kind, %s:$id}) RETURN n", labelSubject, propOrgID, propKind, propCanonicalID)
+	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": orgID, "kind": kind, "id": canonicalID}, true)
 	if err != nil {
 		return nil, safeDependencyError("get node", err)
 	}
@@ -140,19 +160,24 @@ func (a *Adapter) nodeByKindID(ctx context.Context, key, kind, canonicalID strin
 // the relation_type property -- the Cypher relationship type itself is
 // always the generic labelRelation, so it carries no semantic information on
 // its own). Used by ResolveSubjects' observation-to-entity traversal.
-func (a *Adapter) edgesOfNode(ctx context.Context, key, uuid string) ([]graphrank.CandidateEdge, error) {
+//
+// Codex P2b: org_id is filtered on BOTH node patterns in the UNION (the
+// origin subject `n` and the neighbor `other`) -- filtering only the origin
+// side would still let a cross-tenant neighbor node leak into the result
+// through a stray or corrupted edge.
+func (a *Adapter) edgesOfNode(ctx context.Context, key, orgID, uuid string) ([]graphrank.CandidateEdge, error) {
 	kind, canonicalID := splitSubjectUUID(uuid)
 	if kind == "" {
 		return nil, nil
 	}
 	cypher := fmt.Sprintf(
-		"MATCH (n:%s {%s:$kind, %s:$id})-[r:%s]->(other:%s) RETURN r, %s AS srcKind, $id AS srcId, other.%s AS dstKind, other.%s AS dstId "+
+		"MATCH (n:%s {%s:$org, %s:$kind, %s:$id})-[r:%s]->(other:%s {%s:$org}) RETURN r, %s AS srcKind, $id AS srcId, other.%s AS dstKind, other.%s AS dstId "+
 			"UNION "+
-			"MATCH (other:%s)-[r:%s]->(n:%s {%s:$kind, %s:$id}) RETURN r, other.%s AS srcKind, other.%s AS srcId, %s AS dstKind, $id AS dstId",
-		labelSubject, propKind, propCanonicalID, labelRelation, labelSubject, "$kind", propKind, propCanonicalID,
-		labelSubject, labelRelation, labelSubject, propKind, propCanonicalID, propKind, propCanonicalID, "$kind",
+			"MATCH (other:%s {%s:$org})-[r:%s]->(n:%s {%s:$org, %s:$kind, %s:$id}) RETURN r, other.%s AS srcKind, other.%s AS srcId, %s AS dstKind, $id AS dstId",
+		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, labelSubject, propOrgID, "$kind", propKind, propCanonicalID,
+		labelSubject, propOrgID, labelRelation, labelSubject, propOrgID, propKind, propCanonicalID, propKind, propCanonicalID, "$kind",
 	)
-	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"kind": kind, "id": canonicalID}, true)
+	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": orgID, "kind": kind, "id": canonicalID}, true)
 	if err != nil {
 		return nil, safeDependencyError("get node edges", err)
 	}
@@ -194,66 +219,121 @@ func optionalString(value interface{}) *string {
 	return &s
 }
 
+// edgeResolution classifies what resolveEdge did with one candidate edge,
+// so a caller can tell a legitimate exclusion (unauthorized, or an endpoint
+// that genuinely no longer exists) apart from a degraded one (a lookup that
+// actually failed) -- Codex P2c: the two must never be reported identically,
+// since collapsing them into one silent "not admitted" produced
+// Coverage.Partial=false even when a real backend failure had quietly
+// dropped material from the result.
+type edgeResolution int
+
+const (
+	edgeAdmitted edgeResolution = iota
+	edgeFiltered
+	edgeLookupFailed
+)
+
 // resolveEdge converts a CandidateEdge (as returned by edgesOfNode) into a
 // fully-resolved graphrank.ResolvedEdge by decoding its endpoint subjectUUIDs
 // back into SubjectRefs via a node lookup for the label -- falkorgraph never
 // needs a "second-hop verify" step the way zepgraph does (every lookup here
 // is already structurally scoped to principal's own organization graph key),
 // so this is a plain fetch, not a trust decision.
-func (a *Adapter) resolveEdge(ctx context.Context, key string, ce graphrank.CandidateEdge) (graphrank.ResolvedEdge, bool) {
+//
+// Codex P1: authorization is checked here, on the edge's own attributes AND
+// on both resolved endpoints' attributes, before the edge is ever handed to
+// graphrank.AdmitEdges -- AdmitEdges itself applies no authorization check
+// (it only excludes self-loops and internal-bookkeeping endpoints), so an
+// unauthorized edge or an edge into/out of an unauthorized subject must
+// never reach it. This mirrors zepgraph's DiscoverContext exactly:
+// graphrank.AuthorizedAttributes gates the edge, then each endpoint,
+// independently.
+func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, ce graphrank.CandidateEdge) (graphrank.ResolvedEdge, edgeResolution) {
+	if !graphrank.AuthorizedAttributes(principal, scope, ce.Attributes) {
+		return graphrank.ResolvedEdge{}, edgeFiltered
+	}
 	fromKind, fromID := splitSubjectUUID(ce.SourceNodeUUID)
 	toKind, toID := splitSubjectUUID(ce.TargetNodeUUID)
-	fromNode, err := a.nodeByKindID(ctx, key, fromKind, fromID)
-	if err != nil || fromNode == nil {
-		return graphrank.ResolvedEdge{}, false
+	fromNode, err := a.nodeByKindID(ctx, key, orgID, fromKind, fromID)
+	if err != nil {
+		return graphrank.ResolvedEdge{}, edgeLookupFailed
 	}
-	toNode, err := a.nodeByKindID(ctx, key, toKind, toID)
-	if err != nil || toNode == nil {
-		return graphrank.ResolvedEdge{}, false
+	if fromNode == nil {
+		return graphrank.ResolvedEdge{}, edgeFiltered
 	}
-	fromSubject, ok := graphrank.NodeSubject(toCandidateNode(fromNode))
+	toNode, err := a.nodeByKindID(ctx, key, orgID, toKind, toID)
+	if err != nil {
+		return graphrank.ResolvedEdge{}, edgeLookupFailed
+	}
+	if toNode == nil {
+		return graphrank.ResolvedEdge{}, edgeFiltered
+	}
+	fromCandidate := toCandidateNode(fromNode)
+	toCandidate := toCandidateNode(toNode)
+	if !graphrank.AuthorizedAttributes(principal, scope, fromCandidate.Attributes) || !graphrank.AuthorizedAttributes(principal, scope, toCandidate.Attributes) {
+		return graphrank.ResolvedEdge{}, edgeFiltered
+	}
+	fromSubject, ok := graphrank.NodeSubject(fromCandidate)
 	if !ok {
-		return graphrank.ResolvedEdge{}, false
+		return graphrank.ResolvedEdge{}, edgeFiltered
 	}
-	toSubject, ok := graphrank.NodeSubject(toCandidateNode(toNode))
+	toSubject, ok := graphrank.NodeSubject(toCandidate)
 	if !ok {
-		return graphrank.ResolvedEdge{}, false
+		return graphrank.ResolvedEdge{}, edgeFiltered
 	}
 	return graphrank.ResolvedEdge{
 		UUID: ce.UUID, Name: ce.Name, Fact: ce.Fact, From: fromSubject, To: toSubject,
 		Relevance: ce.Relevance, Score: ce.Score, Attributes: ce.Attributes,
 		CreatedAt: ce.CreatedAt, ValidAt: ce.ValidAt, InvalidAt: ce.InvalidAt, ExpiredAt: ce.ExpiredAt,
-	}, true
+	}, edgeAdmitted
 }
 
 // hopWalk performs a bounded N-hop traversal from one origin subject,
-// returning every neighbor node and resolved edge reached. Implemented as
-// iterative edgesOfNode calls (1-hop, then 1-hop from each new neighbor)
-// rather than a single native Cypher [*1..2] variable-length path query --
-// simpler to decode correctly against the pinned client's compact-protocol
-// path parsing, at the cost of N extra round trips for an N-neighbor node.
-// Revisit as a single [*1..2] query if that cost matters in practice; the
-// adapter's external behavior does not depend on which query shape produces
-// it.
-func (a *Adapter) hopWalk(ctx context.Context, key string, origin contextfabric.SubjectRef, maxHops, limit int) ([]graphrank.CandidateNode, []graphrank.ResolvedEdge, error) {
+// returning every neighbor node and resolved edge reached, plus a count of
+// edges dropped due to a genuine lookup failure (Codex P2c -- see
+// edgeResolution).
+//
+// Codex P2a: walk collection is bounded by a generous superset limit (the
+// caller passes a.config.MaxResults, not request.Options.MaxRelationshipPaths),
+// never by the final per-request path limit -- truncating to
+// MaxRelationshipPaths during collection, before graphrank.SortEdgesByRelevance
+// and graphrank.AdmitEdges ever see the full candidate set, could silently
+// discard a higher-relevance edge in favor of one merely reached first. Final
+// truncation to MaxRelationshipPaths happens exactly once, inside AdmitEdges,
+// after ranking.
+//
+// Implemented as iterative edgesOfNode calls (1-hop, then 1-hop from each new
+// neighbor) rather than a single native Cypher [*1..2] variable-length path
+// query -- simpler to decode correctly against the pinned client's
+// compact-protocol path parsing, at the cost of N extra round trips for an
+// N-neighbor node. Revisit as a single [*1..2] query if that cost matters in
+// practice; the adapter's external behavior does not depend on which query
+// shape produces it.
+func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, origin contextfabric.SubjectRef, maxHops, collectLimit int) ([]graphrank.CandidateNode, []graphrank.ResolvedEdge, int, error) {
 	originUUID := subjectUUID(string(origin.Kind), origin.CanonicalID)
 	visited := make(map[string]graphrank.CandidateNode)
 	var edges []graphrank.ResolvedEdge
 	seenEdge := make(map[string]bool)
+	failedLookups := 0
 	frontier := []string{originUUID}
-	for hop := 0; hop < maxHops && len(frontier) > 0 && (limit <= 0 || len(edges) < limit); hop++ {
+	for hop := 0; hop < maxHops && len(frontier) > 0 && (collectLimit <= 0 || len(edges) < collectLimit); hop++ {
 		var next []string
 		for _, uuid := range frontier {
-			candidateEdges, err := a.edgesOfNode(ctx, key, uuid)
+			candidateEdges, err := a.edgesOfNode(ctx, key, orgID, uuid)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, failedLookups, err
 			}
 			for _, ce := range candidateEdges {
 				if seenEdge[ce.UUID] {
 					continue
 				}
-				resolved, ok := a.resolveEdge(ctx, key, ce)
-				if !ok {
+				resolved, resolution := a.resolveEdge(ctx, key, orgID, principal, scope, ce)
+				switch resolution {
+				case edgeLookupFailed:
+					failedLookups++
+					continue
+				case edgeFiltered:
 					continue
 				}
 				seenEdge[ce.UUID] = true
@@ -265,7 +345,7 @@ func (a *Adapter) hopWalk(ctx context.Context, key string, origin contextfabric.
 					if _, ok := visited[neighbor]; ok {
 						continue
 					}
-					n, err := a.nodeByUUID(ctx, key, neighbor)
+					n, err := a.nodeByUUID(ctx, key, orgID, neighbor)
 					if err != nil || n == nil {
 						continue
 					}
@@ -273,11 +353,11 @@ func (a *Adapter) hopWalk(ctx context.Context, key string, origin contextfabric.
 					visited[neighbor] = candidate
 					next = append(next, neighbor)
 				}
-				if limit > 0 && len(edges) >= limit {
+				if collectLimit > 0 && len(edges) >= collectLimit {
 					break
 				}
 			}
-			if limit > 0 && len(edges) >= limit {
+			if collectLimit > 0 && len(edges) >= collectLimit {
 				break
 			}
 		}
@@ -287,5 +367,5 @@ func (a *Adapter) hopWalk(ctx context.Context, key string, origin contextfabric.
 	for _, n := range visited {
 		nodes = append(nodes, n)
 	}
-	return nodes, edges, nil
+	return nodes, edges, failedLookups, nil
 }

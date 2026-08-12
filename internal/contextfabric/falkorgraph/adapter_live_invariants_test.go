@@ -198,3 +198,102 @@ func TestLiveResolveSubjectsAcceptsPrincipalWildcardRepositoryScope(t *testing.T
 		t.Fatalf("unrelated-owner resolution = %#v, want no unsafe widening", deniedResolution)
 	}
 }
+
+// TestLiveDiscoverContextEnforcesAuthorizationOnPathsAndAttributionEdges is
+// the Codex P1 probe: a restricted principal with an authorized origin
+// subject must never receive (a) a relationship path whose OWN authorization
+// attributes it cannot see, even when both the path's endpoints are
+// independently visible to it, or (b) a DOCUMENTED_BY attribution edge whose
+// underlying content is scoped to a repository the principal cannot see.
+// Before this fix, DiscoverContext applied no Go-side authorization check at
+// all to traversed edges or their endpoints (reader.go's old doc comment
+// even asserted the opposite: "falkorgraph never needs a second-hop verify
+// step"), so both leaks were live.
+func TestLiveDiscoverContextEnforcesAuthorizationOnPathsAndAttributionEdges(t *testing.T) {
+	adapter := newLiveAdapter(t, context.Background())
+	ctx := context.Background()
+	orgID := "live-authz-" + time.Now().UTC().Format("20060102T150405.000000000")
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
+
+	observed := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_authz", Label: "Authz Project"}
+	visibleWork := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_visible", Label: "Visible Work"}
+	restrictedWork := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_restricted", Label: "Restricted Work"}
+	allowedScope := contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/allowed"}}
+	privateScope := contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/private"}}
+
+	batch := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_authz_1", OrgID: orgID, Source: "live-test",
+		SourceVersion: "v1", Cursor: "", NextCursor: "cursor-1", GeneratedAt: observed,
+		Entities: []contextfabric.EntityProjection{
+			{Subject: project, Authorization: allowedScope, EvidenceRefIDs: []string{"evidence_project"}, ObservedAt: observed, SourceVersion: "v1"},
+			{Subject: visibleWork, Authorization: allowedScope, EvidenceRefIDs: []string{"evidence_visible_work"}, ObservedAt: observed, SourceVersion: "v1"},
+			// restrictedWork itself is authorized to "acme/allowed" (visible
+			// on its own) -- only the RELATIONSHIP to it is scoped private,
+			// so this proves edge-level authorization is checked
+			// independently of both endpoints' own authorization.
+			{Subject: restrictedWork, Authorization: allowedScope, EvidenceRefIDs: []string{"evidence_restricted_work"}, ObservedAt: observed, SourceVersion: "v1"},
+		},
+		Relationships: []contextfabric.RelationshipProjection{
+			{
+				RelationshipID: "rel_visible", Type: "DEPENDS_ON", From: project, To: visibleWork,
+				Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
+				Authorization: allowedScope, EvidenceRefIDs: []string{"evidence_dep_visible"}, ObservedAt: observed, SourceVersion: "v1",
+			},
+			{
+				RelationshipID: "rel_restricted", Type: "DEPENDS_ON", From: project, To: restrictedWork,
+				Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
+				Authorization: privateScope, EvidenceRefIDs: []string{"evidence_dep_restricted"}, ObservedAt: observed, SourceVersion: "v1",
+			},
+		},
+		Contents: []contextfabric.ContentProjection{{
+			ContentID: "content_private_1", Subject: project, Title: "Private design note", Body: "sensitive body text",
+			ContentDigest: "digest_content_private_1_sha256", Authorization: privateScope, EvidenceRefIDs: []string{"evidence_content_private"},
+			ObservedAt: observed, SourceVersion: "v1", Untrusted: true,
+		}},
+		Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+	if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
+		t.Fatalf("ApplyProjectionBatch() error = %v", err)
+	}
+
+	principal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/allowed"}}
+	request := liveInvestigationRequest()
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: project.Kind, ID: project.CanonicalID, Label: project.Label, Source: "live-test"}}
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "dependencies", SubjectTerms: []string{project.Label},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactBlockers}},
+	}
+	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0] != project {
+		t.Fatalf("origin resolution = %#v, want the project resolvable (its own scope IS visible to the restricted principal)", resolution)
+	}
+
+	discovery := contextfabric.GraphDiscoveryRequest{Request: request, Interpretation: interpreted, Resolution: resolution}
+	result, err := adapter.DiscoverContext(ctx, principal, discovery)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+
+	sawVisibleDependency := false
+	for pathIndex := range result.Paths {
+		for edgeIndex := range result.Paths[pathIndex].Edges {
+			edge := result.Paths[pathIndex].Edges[edgeIndex]
+			if edge.Type == "DEPENDS_ON" && edge.To == restrictedWork {
+				t.Fatalf("unauthorized relationship leaked into the result despite both endpoints being individually visible: %#v", edge)
+			}
+			if edge.Type == "DEPENDS_ON" && edge.To == visibleWork {
+				sawVisibleDependency = true
+			}
+			if edge.Type == "DOCUMENTED_BY" {
+				t.Fatalf("unauthorized attribution edge leaked into the result: %#v", edge)
+			}
+		}
+	}
+	if !sawVisibleDependency {
+		t.Fatalf("authorized DEPENDS_ON relationship missing -- authorization filtering must not exclude paths the principal IS scoped to see: %#v", result.Paths)
+	}
+}

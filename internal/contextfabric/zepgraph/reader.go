@@ -227,7 +227,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	cohort := graphrank.DiscoveredCohort(principal, request, nodesResult, isInternalBookkeepingSubject)
 	factRequirements := admission.FactRequirements
 	if cohort != nil {
-		factRequirements = mergeFactRequirements(factRequirements, contextfabric.FactHealth, contextfabric.FactWorkload)
+		factRequirements = graphrank.MergeFactRequirements(factRequirements, contextfabric.FactHealth, contextfabric.FactWorkload)
 	}
 
 	degradedReasons := []string{}
@@ -254,26 +254,6 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			DegradedReasons: degradedReasons,
 		},
 	}, nil
-}
-
-// mergeFactRequirements dedups additional fact kinds into an already-sorted
-// requirement list, matching the original DiscoverContext behavior of
-// merging every driver-derived and cohort-derived FactRequirement into one
-// map before a single final sort.
-func mergeFactRequirements(existing []contextfabric.FactRequirement, kinds ...contextfabric.FactKind) []contextfabric.FactRequirement {
-	seen := make(map[contextfabric.FactKind]bool, len(existing)+len(kinds))
-	result := append([]contextfabric.FactRequirement(nil), existing...)
-	for _, requirement := range existing {
-		seen[requirement.Kind] = true
-	}
-	for _, kind := range kinds {
-		if !seen[kind] {
-			seen[kind] = true
-			result = append(result, contextfabric.FactRequirement{Kind: kind})
-		}
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Kind < result[j].Kind })
-	return result
 }
 
 func (a *Adapter) search(ctx context.Context, orgID, query string, scope zep.GraphSearchScope, origins []string, limit int) (*zep.GraphSearchResults, error) {

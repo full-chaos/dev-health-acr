@@ -191,7 +191,18 @@ func (a *Adapter) projectContent(ctx context.Context, key, orgID string, content
 	cypher := subjectMergeCypher("a", kindLabel(content.Subject.Kind)) + " SET a += $subjectAttrs " +
 		subjectMergeCypher("b", kindLabel(documentSubject.Kind)) + " SET b += $docAttrs " +
 		fmt.Sprintf("MERGE (a)-[r:%s {%s:$rid}]->(b) SET r += $edgeAttrs", labelRelation, propRelationshipID)
-	edgeAttrs := map[string]interface{}{propRelationType: "DOCUMENTED_BY", propEvidenceRefs: graphrank.UniqueSorted(content.EvidenceRefIDs)}
+	// Codex P1: the attribution edge itself must carry authorization, or a
+	// scoped principal's edge-level authorization check (DiscoverContext)
+	// denies it unconditionally regardless of the document/episode's own
+	// scope -- an absent authorization_* key means "deny" by convention
+	// (graphrank's AuthorizedAttributes), not "unrestricted". This edge
+	// inherits the content's own projected scope: the DOCUMENTED_BY fact
+	// is exactly as authorized as the document it attributes.
+	edgeAttrs := map[string]interface{}{
+		propRelationType: "DOCUMENTED_BY", propEvidenceRefs: graphrank.UniqueSorted(content.EvidenceRefIDs),
+		propAuthzRepos: authorizationValue(content.Authorization.RepositorySlugs), propAuthzProjects: authorizationValue(content.Authorization.ProjectIDs),
+		propAuthzTeams: authorizationValue(content.Authorization.TeamIDs),
+	}
 	params := map[string]interface{}{"rid": "content:" + content.ContentID, "subjectAttrs": subjectAttrs, "docAttrs": documentAttrs, "edgeAttrs": edgeAttrs}
 	mergeMaps(params, subjectMergeParams("a", content.Subject, orgID))
 	mergeMaps(params, subjectMergeParams("b", documentSubject, orgID))
@@ -215,7 +226,13 @@ func (a *Adapter) projectEpisode(ctx context.Context, key, orgID string, episode
 	cypher := subjectMergeCypher("a", kindLabel(episode.Subject.Kind)) + " SET a += $subjectAttrs " +
 		subjectMergeCypher("b", kindLabel(episodeSubject.Kind)) + " SET b += $episodeAttrs " +
 		fmt.Sprintf("MERGE (a)-[r:%s {%s:$rid}]->(b) SET r += $edgeAttrs", labelRelation, propRelationshipID)
-	edgeAttrs := map[string]interface{}{propRelationType: "HAS_EPISODE", propEvidenceRefs: graphrank.UniqueSorted(episode.EvidenceRefIDs)}
+	// Codex P1: same reasoning as projectContent's DOCUMENTED_BY edge --
+	// this attribution edge inherits the episode's own projected scope.
+	edgeAttrs := map[string]interface{}{
+		propRelationType: "HAS_EPISODE", propEvidenceRefs: graphrank.UniqueSorted(episode.EvidenceRefIDs),
+		propAuthzRepos: authorizationValue(episode.Authorization.RepositorySlugs), propAuthzProjects: authorizationValue(episode.Authorization.ProjectIDs),
+		propAuthzTeams: authorizationValue(episode.Authorization.TeamIDs),
+	}
 	params := map[string]interface{}{"rid": "episode:" + episode.EpisodeID, "subjectAttrs": subjectAttrs, "episodeAttrs": episodeAttrs, "edgeAttrs": edgeAttrs}
 	mergeMaps(params, subjectMergeParams("a", episode.Subject, orgID))
 	mergeMaps(params, subjectMergeParams("b", episodeSubject, orgID))

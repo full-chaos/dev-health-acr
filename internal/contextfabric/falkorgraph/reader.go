@@ -39,15 +39,15 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			return toCandidateNode(n), true, nil
 		},
 		Search: func(ctx context.Context, term string, limit int) ([]graphrank.CandidateNode, error) {
-			return a.fulltextSearchNodes(ctx, key, term, limit)
+			return a.fulltextSearchNodes(ctx, key, principal.OrgID, term, limit)
 		},
 		Traverse: func(ctx context.Context, term string, observation graphrank.CandidateNode) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
 			return graphrank.TraverseObservationToSubject(ctx, principal, request.RequestedScope, term, observation, isInternalSubject,
 				func(ctx context.Context, uuid string) ([]graphrank.CandidateEdge, error) {
-					return a.edgesOfNode(ctx, key, uuid)
+					return a.edgesOfNode(ctx, key, principal.OrgID, uuid)
 				},
 				func(ctx context.Context, uuid string) (graphrank.CandidateNode, bool) {
-					n, err := a.nodeByUUID(ctx, key, uuid)
+					n, err := a.nodeByUUID(ctx, key, principal.OrgID, uuid)
 					if err != nil || n == nil {
 						return graphrank.CandidateNode{}, false
 					}
@@ -73,10 +73,18 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		return contextfabric.GraphContext{}, err
 	}
 	key := graphKey(a.config.GraphPrefix, principal.OrgID)
-	limit := request.Request.Options.MaxRelationshipPaths
-	if limit > a.config.MaxResults {
-		limit = a.config.MaxResults
-	}
+	scope := request.Request.RequestedScope
+
+	// Codex P2a: collection is bounded by a.config.MaxResults, a generous
+	// superset cap -- NEVER by request.Request.Options.MaxRelationshipPaths,
+	// the final per-request admission budget. Truncating to the tight
+	// per-request limit here, before graphrank.SortEdgesByRelevance and
+	// graphrank.AdmitEdges ever see the full candidate set, could let a
+	// low-value edge reached early consume the limit while a
+	// higher-relevance edge discovered later never gets the chance to
+	// compete for it. The one and only truncation to MaxRelationshipPaths
+	// happens inside AdmitEdges, after ranking.
+	collectLimit := a.config.MaxResults
 
 	// falkorgraph resolves every edge endpoint from a single whole-path
 	// query -- one graph per org means there is no second-hop concept the
@@ -91,12 +99,19 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	var resolvedEdges []graphrank.ResolvedEdge
 	seenEdge := make(map[string]bool)
 	seenNode := make(map[string]bool)
+	// failedLookups counts edges dropped because a genuine backend lookup
+	// failed (not because authorization or a legitimate "endpoint no longer
+	// exists" filtered them) -- Codex P2c: this is the signal that
+	// distinguishes real degradation from ordinary, silent filtering, and it
+	// alone drives Coverage.Partial.
+	failedLookups := 0
 
 	for _, subject := range request.Resolution.Committed {
-		nodes, edges, err := a.hopWalk(ctx, key, subject, 2, limit)
+		nodes, edges, failed, err := a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit)
 		if err != nil {
 			return contextfabric.GraphContext{}, err
 		}
+		failedLookups += failed
 		for _, n := range nodes {
 			nk := graphrank.SubjectKey(mustSubject(n))
 			if !seenNode[nk] {
@@ -112,7 +127,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 	}
 
-	textNodes, err := a.fulltextSearchNodes(ctx, key, request.Request.Question, limit)
+	textNodes, err := a.fulltextSearchNodes(ctx, key, principal.OrgID, request.Request.Question, collectLimit)
 	if err != nil {
 		return contextfabric.GraphContext{}, err
 	}
@@ -123,7 +138,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 				seenNode[nk] = true
 				resolvedNodes = append(resolvedNodes, n)
 			}
-			textEdges, err := a.edgesOfNode(ctx, key, n.UUID)
+			textEdges, err := a.edgesOfNode(ctx, key, principal.OrgID, n.UUID)
 			if err != nil {
 				return contextfabric.GraphContext{}, err
 			}
@@ -131,8 +146,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 				if seenEdge[ce.UUID] {
 					continue
 				}
-				resolved, ok := a.resolveEdge(ctx, key, ce)
-				if !ok {
+				resolved, resolution := a.resolveEdge(ctx, key, principal.OrgID, principal, scope, ce)
+				switch resolution {
+				case edgeLookupFailed:
+					failedLookups++
+					continue
+				case edgeFiltered:
 					continue
 				}
 				seenEdge[ce.UUID] = true
@@ -161,36 +180,27 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	cohort := graphrank.DiscoveredCohort(principal, request, resolvedNodes, isInternalSubject)
 	factRequirements := admission.FactRequirements
 	if cohort != nil {
-		factRequirements = mergeFactRequirements(factRequirements, contextfabric.FactHealth, contextfabric.FactWorkload)
+		factRequirements = graphrank.MergeFactRequirements(factRequirements, contextfabric.FactHealth, contextfabric.FactWorkload)
+	}
+
+	// Codex P2c: a failed endpoint lookup is a real, silent loss of material
+	// (an edge/path that legitimately exists in the graph but this
+	// investigation could not confirm and admit) -- it must never present as
+	// clean, complete coverage.
+	partial := failedLookups > 0
+	var degradedReasons []string
+	if partial {
+		degradedReasons = []string{fmt.Sprintf("endpoint_lookup_failed:%d", failedLookups)}
 	}
 	return contextfabric.GraphContext{
 		Resolution: request.Resolution, Cohort: cohort, Paths: admission.Paths, DriverCandidates: admission.Drivers,
 		EvidenceRefIDs: admission.EvidenceRefIDs, FactRequirements: factRequirements,
 		Coverage: contextfabric.Coverage{
-			Sources: []contextfabric.SourceObservation{{Source: "context-fabric:graph", State: contextfabric.SourceAvailable, ObservedAt: ptrTime(a.now().UTC())}},
-			// falkorgraph never has a second-hop concept to degrade
-			// (one-graph-per-org resolves every edge from a single query),
-			// so it is never partial for that reason. It may still be
-			// worth revisiting once a real MaxRelationshipPaths/timeout
-			// interaction surfaces a different degradation source.
-			Partial: false,
+			Sources:         []contextfabric.SourceObservation{{Source: "context-fabric:graph", State: contextfabric.SourceAvailable, ObservedAt: ptrTime(a.now().UTC())}},
+			Partial:         partial,
+			DegradedReasons: degradedReasons,
 		},
 	}, nil
-}
-
-func mergeFactRequirements(existing []contextfabric.FactRequirement, kinds ...contextfabric.FactKind) []contextfabric.FactRequirement {
-	seen := make(map[contextfabric.FactKind]bool, len(existing)+len(kinds))
-	result := append([]contextfabric.FactRequirement(nil), existing...)
-	for _, requirement := range existing {
-		seen[requirement.Kind] = true
-	}
-	for _, kind := range kinds {
-		if !seen[kind] {
-			seen[kind] = true
-			result = append(result, contextfabric.FactRequirement{Kind: kind})
-		}
-	}
-	return result
 }
 
 func mustSubject(n graphrank.CandidateNode) contextfabric.SubjectRef {
