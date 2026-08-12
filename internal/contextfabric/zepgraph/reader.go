@@ -207,25 +207,41 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		if edge == nil || !authorizedAttributes(principal, request.Request.RequestedScope, edge.Attributes) {
 			continue
 		}
-		from, ok := nodes[edge.SourceNodeUUID]
-		if !ok {
+		// from/to found directly in nodes are first-hop results from
+		// Search, which is itself scoped by GraphID -- trusted as
+		// belonging to principal.OrgID's graph. from/to reached only
+		// through the fallback GetNode call are second-hop: GetNode has no
+		// per-call graph/organization parameter, so those additionally
+		// require verifiedNodeSubject below before being trusted.
+		from, fromFirstHop := nodes[edge.SourceNodeUUID]
+		if !fromFirstHop {
 			from, _ = a.api.GetNode(ctx, edge.SourceNodeUUID)
 			if from == nil || !authorizedAttributes(principal, request.Request.RequestedScope, from.Attributes) {
 				continue
 			}
 		}
-		to, ok := nodes[edge.TargetNodeUUID]
-		if !ok {
+		to, toFirstHop := nodes[edge.TargetNodeUUID]
+		if !toFirstHop {
 			to, _ = a.api.GetNode(ctx, edge.TargetNodeUUID)
 			if to == nil || !authorizedAttributes(principal, request.Request.RequestedScope, to.Attributes) {
 				continue
 			}
 		}
-		fromSubject, ok := nodeSubject(from)
+		var fromSubject, toSubject contextfabric.SubjectRef
+		var ok bool
+		if fromFirstHop {
+			fromSubject, ok = nodeSubject(from)
+		} else {
+			fromSubject, ok = verifiedNodeSubject(principal.OrgID, edge.SourceNodeUUID, from)
+		}
 		if !ok || isInternalBookkeepingSubject(fromSubject) {
 			continue
 		}
-		toSubject, ok := nodeSubject(to)
+		if toFirstHop {
+			toSubject, ok = nodeSubject(to)
+		} else {
+			toSubject, ok = verifiedNodeSubject(principal.OrgID, edge.TargetNodeUUID, to)
+		}
 		if !ok || fromSubject == toSubject || isInternalBookkeepingSubject(toSubject) {
 			continue
 		}
@@ -471,6 +487,33 @@ func nodeSubject(node *zep.EntityNode) (contextfabric.SubjectRef, bool) {
 	return subject, true
 }
 
+// verifiedNodeSubject is nodeSubject plus organization-identity
+// verification for a "second-hop" node: one fetched by a UUID this adapter
+// did not itself derive (e.g. edge.SourceNodeUUID/TargetNodeUUID from a
+// search result, or GetNodeEdges), as opposed to a UUID this adapter
+// computed itself via nodeUUID(orgID, subject) (which is trivially always
+// correct for orgID, since the adapter chose it).
+//
+// GetNode and GetNodeEdges are UUID-only lookups with no per-call
+// graph/organization parameter, unlike Search, which is scoped by GraphID.
+// That makes a second-hop lookup the one place a node genuinely belonging
+// to a different organization's graph -- reached through a compromised or
+// misbehaving backend response, not through any fault of Search's own
+// GraphID scoping -- could be trusted without this check. Because
+// nodeUUID is a keyed SHA-256 digest of organization ID + subject kind +
+// canonical ID, only a node whose own reported attributes hash back to the
+// UUID it was actually fetched under can pass.
+func verifiedNodeSubject(orgID, fetchedUUID string, node *zep.EntityNode) (contextfabric.SubjectRef, bool) {
+	subject, ok := nodeSubject(node)
+	if !ok {
+		return contextfabric.SubjectRef{}, false
+	}
+	if nodeUUID(orgID, subject) != fetchedUUID {
+		return contextfabric.SubjectRef{}, false
+	}
+	return subject, true
+}
+
 // isInternalBookkeepingSubject reports whether subject is one of the
 // adapter's own internal marker nodes (organizationRoot, markerSubject in
 // identity.go) rather than a real canonical entity. These nodes exist only
@@ -556,6 +599,13 @@ func (a *Adapter) traverseObservationToSubject(ctx context.Context, principal st
 		}
 		source, err := a.api.GetNode(ctx, edge.SourceNodeUUID)
 		if err != nil || source == nil {
+			continue
+		}
+		// GetNode is a second-hop, UUID-only lookup (see
+		// verifiedNodeSubject's doc comment); verify the fetched node
+		// actually belongs to this organization before trusting it as the
+		// document/episode's canonical subject.
+		if _, verified := verifiedNodeSubject(principal.OrgID, edge.SourceNodeUUID, source); !verified {
 			continue
 		}
 		candidate, ok := nodeCandidate(principal, scope, term, source)

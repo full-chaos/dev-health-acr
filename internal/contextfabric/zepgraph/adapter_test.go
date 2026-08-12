@@ -326,7 +326,11 @@ func TestResolveSubjectsTraversesObservationNodeToCanonicalSubject(t *testing.T)
 	// relevance -- deliberately high enough that, before the G1 fix, the
 	// document's own (higher, undiscounted) confidence would win the
 	// auto-commit comparison against the traversed-and-discounted subject.
-	subject := graphNode("node-subject", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.9)
+	// The subject's UUID must be the real nodeUUID derivation (not an
+	// arbitrary fixture string) so the G7 organization-identity
+	// verification on the traversal's second-hop GetNode accepts it.
+	subjectRef := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	subject := graphNode(nodeUUID("org_1", subjectRef), subjectRef.Kind, subjectRef.CanonicalID, subjectRef.Label, "*", 0.9)
 	document := &zep.EntityNode{
 		UUID: "node-document", Name: "Ask Dev readiness review", Relevance: ptr(0.95),
 		Attributes: map[string]interface{}{
@@ -671,6 +675,57 @@ func TestDiscoverContextExcludesInternalBookkeepingRelationships(t *testing.T) {
 	}
 	if len(contextResult.Paths) != 0 || len(contextResult.EvidenceRefIDs) != 0 {
 		t.Fatalf("graph context = %#v, want internal bookkeeping relationship excluded", contextResult)
+	}
+}
+
+// TestDiscoverContextRejectsSecondHopNodeNotBelongingToCallersOrganization
+// is the probe for Codex finding G7: GetNode and GetNodeEdges are
+// UUID-only lookups with no per-call graph/organization parameter (unlike
+// Search, which is scoped by GraphID), so a second-hop read -- a
+// source/target UUID discovered from a search-result edge, not derived by
+// this adapter itself -- was trusted without verifying the fetched node
+// actually belongs to the caller's organization graph. Since nodeUUID is a
+// keyed digest of organization ID + subject kind + canonical ID, a node
+// genuinely belonging to the caller's organization always hashes back to
+// the UUID it was fetched under; this proves a node that does not is
+// rejected rather than silently trusted.
+func TestDiscoverContextRejectsSecondHopNodeNotBelongingToCallersOrganization(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	project := graphNode("project-node", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.95)
+	// impostorUUID is an arbitrary UUID an edge references as its target.
+	// The node GetNode returns for it reports canonical identity
+	// "work_release" -- but that identity's real, deterministically-derived
+	// UUID under org_1 is nodeUUID("org_1", ...), which is NOT
+	// impostorUUID. This is exactly what a compromised/misbehaving second-
+	// hop response looks like: a node handed back under a UUID it does not
+	// actually correspond to for this organization.
+	const impostorUUID = "impostor-uuid-does-not-match-derivation"
+	api.nodes[impostorUUID] = graphNode(impostorUUID, contextfabric.SubjectWorkItem, "work_release", "Release acceptance", "*", 0.8)
+	edge := &zep.EntityEdge{
+		UUID: "edge-1", Name: "BLOCKS", Fact: "Release acceptance blocks Ask Dev.",
+		SourceNodeUUID: project.UUID, TargetNodeUUID: impostorUUID,
+		Attributes: map[string]interface{}{"authorization_repositories": "*", "evidence_refs": "|evidence_release_1234|", "epistemic_status": "observed"},
+	}
+	// project is a first-hop result (from Search); impostorUUID is not --
+	// it is only reachable through the edge's TargetNodeUUID, forcing the
+	// GetNode second-hop fallback.
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{project}, Edges: []*zep.EntityEdge{edge}}
+	discoveryRequest := contextfabric.GraphDiscoveryRequest{
+		Request: validRequest(),
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeOpen, RequestedJudgment: "blockers", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactBlockers}},
+		},
+		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+	}
+	contextResult, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org_1"}, discoveryRequest)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(contextResult.Paths) != 0 || len(contextResult.DriverCandidates) != 0 {
+		t.Fatalf("graph context = %#v, want the second-hop node rejected for failing organization identity verification", contextResult)
 	}
 }
 
