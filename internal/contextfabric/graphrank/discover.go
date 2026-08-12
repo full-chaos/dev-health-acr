@@ -1,0 +1,283 @@
+package graphrank
+
+import (
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+// ResolvedEdge is a candidate relationship edge whose endpoints the backend
+// has already fully resolved to SubjectRef -- however it needed to (a
+// first-hop-trusted node from its own search results, a second-hop
+// fetch-and-verify against an org-agnostic UUID lookup, or a single
+// whole-path query that never needed the distinction at all). AdmitEdges
+// owns none of that resolution or the I/O it took -- see zepgraph's
+// DiscoverContext for the Zep-shaped second-hop machinery, which is
+// deliberately NOT here: a backend where every lookup is already
+// structurally scoped to one organization (e.g. falkorgraph's
+// one-graph-per-org) has no second-hop concept to inject, and forcing one
+// into this shared package would leak a Zep-specific shape into every other
+// backend.
+type ResolvedEdge struct {
+	UUID string
+	// Name is the raw, backend-reported relation name; AdmitEdges applies
+	// NormalizeRelation itself.
+	Name      string
+	Fact      string
+	From, To  contextfabric.SubjectRef
+	Relevance *float64
+	Score     *float64
+	// Attributes must carry "epistemic_status" (string) and "evidence_refs"
+	// ([]string, graphrank's shared convention -- see EvidenceRefs).
+	Attributes map[string]interface{}
+	// CreatedAt/ValidAt/InvalidAt/ExpiredAt are RFC3339Nano-formatted
+	// timestamps (or empty/nil).
+	CreatedAt string
+	ValidAt   *string
+	InvalidAt *string
+	ExpiredAt *string
+}
+
+// AdmitEdgesResult is AdmitEdges' output.
+type AdmitEdgesResult struct {
+	Paths            []contextfabric.RelationshipPath
+	Drivers          []contextfabric.DriverJudgment
+	EvidenceRefIDs   []string
+	FactRequirements []contextfabric.FactRequirement
+}
+
+// AdmitEdges applies the evidence-budget-bounded admission decision to an
+// already-endpoint-resolved candidate edge list, building
+// RelationshipPaths and DriverJudgments. edges must already be in the
+// backend's intended admission order (typically descending relevance,
+// stable-tie-broken by edge UUID -- see ResultConfidence) since admission
+// order determines which edges win a scarce evidence budget (Codex N2);
+// AdmitEdges does not re-sort, so a backend that skips sorting gets
+// backend-order-dependent admission, exactly as it would have before this
+// extraction.
+//
+// Self-loop and internal-bookkeeping-endpoint exclusion happen here (pure,
+// no I/O) rather than trusting the caller to have filtered them, since both
+// checks need nothing but the already-resolved SubjectRefs.
+//
+// Ported from the admission-loop body of zepgraph.(*Adapter).DiscoverContext.
+func AdmitEdges(orgID string, edges []ResolvedEdge, options contextfabric.InvestigationOptions, isInternal func(contextfabric.SubjectRef) bool) AdmitEdgesResult {
+	paths := make([]contextfabric.RelationshipPath, 0, len(edges))
+	drivers := make([]contextfabric.DriverJudgment, 0, len(edges))
+	evidenceSet := make(map[string]struct{})
+	requirements := make(map[contextfabric.FactKind]contextfabric.FactRequirement)
+	for _, edge := range edges {
+		if edge.From == edge.To || isInternal(edge.From) || isInternal(edge.To) {
+			continue
+		}
+		evidence := UniqueSorted(EvidenceRefs(edge.Attributes))
+		if len(evidence) == 0 {
+			continue
+		}
+		// Codex finding G5: Options.MaxEvidenceRefs must bound the FINAL
+		// result's entire evidence surface -- every path's and driver's own
+		// EvidenceRefIDs, not just the separately truncated aggregate list
+		// below. Checked here, before a path/driver is admitted at all,
+		// against the *projected* size (evidenceSet is not mutated yet --
+		// N3, below) so Paths, DriverCandidates, and the aggregate
+		// EvidenceRefIDs stay consistent with the same bounded evidence set
+		// by construction.
+		if maxEvidence := options.MaxEvidenceRefs; maxEvidence > 0 {
+			projected := len(evidenceSet)
+			for _, id := range evidence {
+				if _, exists := evidenceSet[id]; !exists {
+					projected++
+				}
+			}
+			if projected > maxEvidence {
+				continue
+			}
+		}
+		relationship := contextfabric.RelationshipEdge{
+			Type: NormalizeRelation(edge.Name), From: edge.From, To: edge.To,
+			Derivation: contextfabric.DerivationGraphAssociated, EpistemicStatus: edgeEpistemicStatus(edge),
+			ObservedAt: ParseOptionalTime(edge.CreatedAt), ValidFrom: ParseOptionalTimePtr(edge.ValidAt), ValidTo: edgeValidTo(edge),
+			EvidenceRefIDs: evidence,
+		}
+		pathID := DeterministicUUID("context-fabric-path", orgID, edge.UUID)
+		path := contextfabric.RelationshipPath{
+			PathID: pathID, Nodes: []contextfabric.SubjectRef{edge.From, edge.To}, Edges: []contextfabric.RelationshipEdge{relationship},
+			WhyRelevant: edgeFact(edge), EvidenceRefIDs: evidence, Truncated: false,
+		}
+		if err := path.Validate(); err != nil {
+			continue
+		}
+		// N3: the shared evidence set is only mutated once the path this
+		// evidence belongs to has actually been accepted. Committing it
+		// earlier (before path.Validate()) meant a malformed edge could
+		// permanently consume its share of a scarce evidence budget even
+		// though its own path was rejected and never admitted -- silently
+		// crowding out a later, genuinely valid edge.
+		for _, id := range evidence {
+			evidenceSet[id] = struct{}{}
+		}
+		paths = append(paths, path)
+		if standing, category, factKind, relevant := relationMeaning(edge.Name); relevant {
+			driver := contextfabric.DriverJudgment{
+				DriverID: DeterministicUUID("context-fabric-driver", orgID, edge.UUID), Standing: standing, Category: category,
+				Title: relationTitle(edge.Name, edge.To.Label), Summary: edgeFact(edge), AffectedSubjects: []contextfabric.SubjectRef{edge.From},
+				PathIDs: []string{pathID}, EvidenceRefIDs: evidence, Derivation: contextfabric.DerivationGraphAssociated,
+				EpistemicStatus: contextfabric.EpistemicInferred, Confidence: ResultConfidence(edge.Relevance, edge.Score), Current: edge.InvalidAt == nil && edge.ExpiredAt == nil,
+			}
+			if driver.Confidence == 0 {
+				driver.Confidence = 0.55
+			}
+			if err := driver.Validate(); err == nil {
+				drivers = append(drivers, driver)
+				requirements[factKind] = contextfabric.FactRequirement{Kind: factKind}
+			}
+		}
+	}
+	if len(paths) > options.MaxRelationshipPaths {
+		paths = paths[:options.MaxRelationshipPaths]
+	}
+	if len(drivers) > options.MaxDrivers {
+		drivers = drivers[:options.MaxDrivers]
+	}
+	factRequirements := make([]contextfabric.FactRequirement, 0, len(requirements))
+	for _, requirement := range requirements {
+		factRequirements = append(factRequirements, requirement)
+	}
+	sort.Slice(factRequirements, func(i, j int) bool { return factRequirements[i].Kind < factRequirements[j].Kind })
+	evidence := make([]string, 0, len(evidenceSet))
+	for id := range evidenceSet {
+		evidence = append(evidence, id)
+	}
+	sort.Strings(evidence)
+	return AdmitEdgesResult{Paths: paths, Drivers: drivers, EvidenceRefIDs: evidence, FactRequirements: factRequirements}
+}
+
+// SortEdgesByRelevance sorts edges descending by ResultConfidence, tie-broken
+// by UUID for determinism -- the exact ordering AdmitEdges' admission budget
+// assumes it was given (Codex N2: admission order must not depend on
+// whatever order the backend happened to return edges in). A backend calls
+// this on its raw search results before resolving endpoints (first-hop
+// trust, second-hop fetch, or otherwise), since sorting only needs the
+// relevance/score/UUID fields already present pre-resolution.
+func SortEdgesByRelevance(edges []CandidateEdge) []CandidateEdge {
+	sorted := append([]CandidateEdge(nil), edges...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ri, rj := ResultConfidence(sorted[i].Relevance, sorted[i].Score), ResultConfidence(sorted[j].Relevance, sorted[j].Score)
+		if ri != rj {
+			return ri > rj
+		}
+		return sorted[i].UUID < sorted[j].UUID
+	})
+	return sorted
+}
+
+// DiscoveredCohort discovers a subjectless team/project cohort from a
+// backend's first-hop search result nodes, when the interpreted question
+// shape calls for one. Pure: only reads already-fetched nodes, no I/O of its
+// own, so (unlike DiscoverContext's old second-hop machinery) it needed no
+// change to stay shared. Ported from
+// zepgraph.(*Adapter).discoveredCohort.
+func DiscoveredCohort(principal storage.Principal, discovery contextfabric.GraphDiscoveryRequest, nodes []CandidateNode, isInternal func(contextfabric.SubjectRef) bool) *contextfabric.Cohort {
+	if discovery.Interpretation.Shape != contextfabric.ShapeDiscoveredCohort && discovery.Interpretation.Shape != contextfabric.ShapeExplicitCohort {
+		return nil
+	}
+	kind := interpretedCohortKind(discovery.Interpretation)
+	members := make([]contextfabric.CohortMember, 0)
+	seen := make(map[string]struct{})
+	for _, node := range nodes {
+		if !AuthorizedAttributes(principal, discovery.Request.RequestedScope, node.Attributes) {
+			continue
+		}
+		subject, ok := NodeSubject(node)
+		if !ok || subject.Kind != kind || isInternal(subject) {
+			continue
+		}
+		key := SubjectKey(subject)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		members = append(members, contextfabric.CohortMember{
+			Subject: subject, Rank: len(members) + 1,
+			InclusionReasons: []string{"Graph retrieval associated this subject with the requested organization-level condition."},
+			EvidenceRefIDs:   EvidenceRefs(node.Attributes),
+		})
+		if len(members) >= discovery.Request.Options.MaxCohortMembers {
+			break
+		}
+	}
+	if len(members) == 0 {
+		return nil
+	}
+	return &contextfabric.Cohort{
+		Kind: kind, Members: members, Exclusions: []contextfabric.CohortExclusion{},
+		Rationale: "Subjects were discovered from the authorized Context Fabric graph using the user's open-ended cohort question.",
+		Complete:  len(members) < discovery.Request.Options.MaxCohortMembers, Truncated: len(members) >= discovery.Request.Options.MaxCohortMembers,
+	}
+}
+
+func interpretedCohortKind(interpreted contextfabric.InterpretedQuestion) contextfabric.SubjectKind {
+	values := append([]string{interpreted.RequestedJudgment}, interpreted.SubjectTerms...)
+	for _, value := range values {
+		lower := strings.ToLower(value)
+		if strings.Contains(lower, "project") || strings.Contains(lower, "initiative") {
+			return contextfabric.SubjectProject
+		}
+		if strings.Contains(lower, "team") || strings.Contains(lower, "group") {
+			return contextfabric.SubjectTeam
+		}
+	}
+	return contextfabric.SubjectTeam
+}
+
+func edgeEpistemicStatus(edge ResolvedEdge) contextfabric.EpistemicStatus {
+	value := contextfabric.EpistemicStatus(StringAttribute(edge.Attributes, "epistemic_status"))
+	switch value {
+	case contextfabric.EpistemicObserved, contextfabric.EpistemicSourceAsserted, contextfabric.EpistemicInferred, contextfabric.EpistemicDisputed, contextfabric.EpistemicSuperseded, contextfabric.EpistemicUnknown:
+		return value
+	default:
+		return contextfabric.EpistemicUnknown
+	}
+}
+
+func edgeValidTo(edge ResolvedEdge) *time.Time {
+	if parsed := ParseOptionalTimePtr(edge.InvalidAt); parsed != nil {
+		return parsed
+	}
+	return ParseOptionalTimePtr(edge.ExpiredAt)
+}
+
+func edgeFact(edge ResolvedEdge) string {
+	if strings.TrimSpace(edge.Fact) != "" {
+		return strings.TrimSpace(edge.Fact)
+	}
+	return "The graph associated the two subjects through " + strings.ToLower(edge.Name) + "."
+}
+
+func relationMeaning(name string) (contextfabric.DriverStanding, string, contextfabric.FactKind, bool) {
+	normalized := NormalizeRelation(name)
+	switch normalized {
+	case "BLOCKS", "BLOCKED_BY", "REQUIRES", "DEPENDS_ON":
+		return contextfabric.DriverPrincipal, "dependency", contextfabric.FactBlockers, true
+	case "CAUSES", "CONTRIBUTES_TO", "PRESSURES":
+		return contextfabric.DriverContributing, "pressure", contextfabric.FactHealth, true
+	case "INDICATES", "SYMPTOM_OF":
+		return contextfabric.DriverSymptom, "signal", contextfabric.FactMetrics, true
+	default:
+		return contextfabric.DriverContext, "relationship", contextfabric.FactEvidence, false
+	}
+}
+
+func relationTitle(name, target string) string {
+	words := strings.Fields(strings.ToLower(strings.ReplaceAll(NormalizeRelation(name), "_", " ")))
+	for index, word := range words {
+		if word == "" {
+			continue
+		}
+		words[index] = strings.ToUpper(word[:1]) + word[1:]
+	}
+	return strings.Join(words, " ") + ": " + target
+}

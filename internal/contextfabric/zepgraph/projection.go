@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	zep "github.com/getzep/zep-go/v3"
 )
 
@@ -491,31 +492,15 @@ func scalarString(value contextfabric.ScalarValue) string {
 	return strings.TrimSpace(*value.String)
 }
 
+// safeAttributeName and normalizeRelation delegate to graphrank -- see there
+// (CHAOS-3752 extraction: shared so relation-type/attribute-name
+// normalization is identical across every graph backend).
 func safeAttributeName(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	var builder strings.Builder
-	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
-			builder.WriteRune(r)
-		} else {
-			builder.WriteByte('_')
-		}
-		if builder.Len() >= 64 {
-			break
-		}
-	}
-	if builder.Len() == 0 {
-		return "value"
-	}
-	return builder.String()
+	return graphrank.SafeAttributeName(value)
 }
 
 func normalizeRelation(value string) string {
-	value = strings.ToUpper(safeAttributeName(value))
-	if value == "" {
-		return "RELATES_TO"
-	}
-	return value
+	return graphrank.NormalizeRelation(value)
 }
 
 func zepLabel(kind contextfabric.SubjectKind) string {

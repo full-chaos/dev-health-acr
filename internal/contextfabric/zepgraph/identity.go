@@ -3,12 +3,11 @@ package zepgraph
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"sort"
 	"strings"
 
-	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
 
 const scopeSeparator = "|"
@@ -28,13 +27,11 @@ func graphID(prefix, orgID string) string {
 	return strings.TrimSpace(prefix) + "-" + hex.EncodeToString(digest[:16])
 }
 
+// deterministicUUID delegates to graphrank.DeterministicUUID -- see there
+// (CHAOS-3752 extraction: shared so every graph backend derives result
+// identifiers, e.g. subject receipts and relationship paths, identically).
 func deterministicUUID(parts ...string) string {
-	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	bytes := digest[:16]
-	bytes[6] = (bytes[6] & 0x0f) | 0x50
-	bytes[8] = (bytes[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		bytes[0:4], bytes[4:6], bytes[6:8], bytes[8:10], bytes[10:16])
+	return graphrank.DeterministicUUID(parts...)
 }
 
 func nodeUUID(orgID string, subject contextfabric.SubjectRef) string {
@@ -119,26 +116,32 @@ func scopeContains(encoded, value string) bool {
 	if encoded == "*" {
 		return true
 	}
-	value = strings.TrimSpace(value)
-	if value == "*" {
-		return true
+	// The wildcard/owner-wildcard/exact-membership matching itself is
+	// CHAOS-3752-extracted into graphrank.ScopeMatch, shared with every
+	// other graph backend -- everything above this point is specific to
+	// this adapter's pipe-encoded wire representation (the fail-closed
+	// sentinel and the "the encoded list itself is the wildcard" shortcut
+	// have no meaning once decoded into a plain []string).
+	return graphrank.ScopeMatch(decodeScope(encoded), value)
+}
+
+// decodeScope reverses encodeScope. The fail-closed sentinel and the bare
+// wildcard "*" both decode to an empty list -- deliberately: a caller that
+// forgets to special-case "*" before decoding (as scopeContains itself must
+// -- see above) gets "no entries" rather than silently treating the literal
+// three-character string "*" as one decoded value.
+func decodeScope(encoded string) []string {
+	if encoded == "" || encoded == "*" || encoded == scopeDeniedSentinel {
+		return []string{}
 	}
-	if owner, ok := strings.CutSuffix(value, "/*"); ok && owner != "" {
-		owner = strings.ToLower(owner)
-		for _, entry := range decodeScope(encoded) {
-			normalized, err := auth.NormalizeRepositorySlug(entry)
-			if err != nil {
-				continue
-			}
-			if entryOwner, _, _ := strings.Cut(normalized, "/"); entryOwner == owner {
-				return true
-			}
-		}
-		return false
-	}
-	return strings.Contains(encoded, scopeSeparator+value+scopeSeparator)
+	parts := strings.Split(encoded, scopeSeparator)
+	return uniqueSorted(parts)
 }
 
 func subjectKey(subject contextfabric.SubjectRef) string {
-	return string(subject.Kind) + "\x00" + subject.CanonicalID
+	return graphrank.SubjectKey(subject)
+}
+
+func uniqueSorted(values []string) []string {
+	return graphrank.UniqueSorted(values)
 }
