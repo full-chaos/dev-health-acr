@@ -83,7 +83,7 @@ A model cannot bypass:
 
 - `Provider`, `Model` — required, non-empty, ≤256 bytes.
 - `ModelVersion` — defaults to `Model` when unset.
-- `InterpretationPromptVersion`, `SynthesisPromptVersion`, `SchemaVersion`, `EvaluatorVersion` — default to the `context-fabric-*.v1` constants in `genkitruntime`.
+- `InterpretationPromptVersion`, `SynthesisPromptVersion`, `SchemaVersion`, `EvaluatorVersion` — default to the `context-fabric-*` constants in `genkitruntime`. All four were `.v1` at Reset 0; `InterpretationPromptVersion` moved to `.v2` in CHAOS-3754 when the interpretation system prompt gained conversational-reference resolution, alias/acronym/previous-name subject-term guidance, and subjectless team/project cohort framing. `SynthesisPromptVersion`, `SchemaVersion`, and `EvaluatorVersion` remain `.v1`.
 - `Timeout` — per-attempt deadline, must be in `[1s, 2m]`; defaults to 45s.
 - `MaxAttempts` — must be in `[1, 3]`; defaults to 2.
 - `MaxInputBytes` — bounded-input budget for the encoded interpretation/synthesis payload, must be in `[8KiB, 1MiB]`; defaults to 512KiB.

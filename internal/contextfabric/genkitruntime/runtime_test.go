@@ -2,6 +2,8 @@ package genkitruntime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -174,6 +176,88 @@ func TestRuntimeInterpretsOpenQuestionWithoutQuestionRegistry(t *testing.T) {
 	}
 	if len(stub.requests) != 1 || strings.Contains(stub.requests[0].System, "supported questions") {
 		t.Fatalf("requests = %#v", stub.requests)
+	}
+}
+
+// echoingGenerator derives interpretationOutput.RequestedJudgment from a
+// digest of the exact prompt it received, instead of a fixed value
+// regardless of input. A fixed-response fake cannot distinguish "the
+// runtime forwarded this call's exact input to the model" from "a hidden
+// text branch intercepted this specific input and substituted a canned
+// response" -- both produce the same observable output. Deriving the
+// output from the input closes that gap: if production code ever
+// short-circuited a particular question with a hardcoded response instead
+// of actually calling the generator with it, the returned judgment would
+// not match this call's own prompt digest.
+type echoingGenerator struct {
+	requests []generationRequest
+}
+
+func (g *echoingGenerator) Interpret(_ context.Context, request generationRequest) (interpretationOutput, contextfabric.ModelUsage, error) {
+	g.requests = append(g.requests, request)
+	output := validInterpretationOutput()
+	output.RequestedJudgment = echoJudgment(request.Prompt)
+	return output, contextfabric.ModelUsage{}, nil
+}
+
+func (g *echoingGenerator) Synthesize(context.Context, generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
+	return synthesisOutput{}, contextfabric.ModelUsage{}, errors.New("echoingGenerator.Synthesize is unused")
+}
+
+func echoJudgment(prompt string) string {
+	digest := sha256.Sum256([]byte(prompt))
+	return "echo_" + hex.EncodeToString(digest[:8])
+}
+
+// TestRuntimeInterpretsBootstrapQuestionParaphrasesAndNovelCombinationsIdentically
+// is the direct evidence for the CHAOS-3754 acceptance bar: the bootstrap
+// project-status question, several held-out paraphrases never used to shape
+// any production code path, and a novel compound question combining facts
+// no single fixture in this repository combines, must all flow through the
+// identical InterpretQuestion path. There is no per-case production
+// branch to add: the runtime forwards whatever question text it receives
+// unmodified to the generator and returns whatever structured
+// interpretation the generator (model) decided, so "held out" here means
+// exactly what it should -- these strings influence nothing but the test
+// assertion, never a code path. Using echoingGenerator (Codex finding
+// G9(b)) rather than a fixed-response stub means each case's output is
+// independently verified to be a genuine function of that case's own
+// generator call, not a shared response that would mask a hidden
+// text-specific branch producing the same final shape by coincidence.
+func TestRuntimeInterpretsBootstrapQuestionParaphrasesAndNovelCombinationsIdentically(t *testing.T) {
+	t.Parallel()
+	questions := []string{
+		"What is the actual status of the Ask Dev project, and what are the current drivers?",
+		"Where does Ask Dev actually stand right now, and what's pushing it in that direction?",
+		"Can you tell me the real state of the Ask Dev effort and why it is there?",
+		"Honestly, is Ask Dev actually on track, and what is behind that?",
+		"Compare the release readiness of Ask Dev against the platform migration, factoring in open incidents from the last two weeks and who owns the remaining blockers.",
+	}
+	for _, question := range questions {
+		t.Run(question, func(t *testing.T) {
+			t.Parallel()
+			gen := &echoingGenerator{}
+			runtime := mustRuntime(t, gen, Config{})
+			request := validRequest()
+			request.Question = question
+
+			interpreted, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+			if err != nil {
+				t.Fatalf("InterpretQuestion() error = %v", err)
+			}
+			if interpreted.Shape != contextfabric.ShapeOpen || receipt.Outcome != "success" {
+				t.Fatalf("interpreted = %#v receipt = %#v", interpreted, receipt)
+			}
+			if len(gen.requests) != 1 || !strings.Contains(gen.requests[0].Prompt, question) {
+				t.Fatalf("generator did not receive the exact question text unmodified: requests = %#v", gen.requests)
+			}
+			if want := echoJudgment(gen.requests[0].Prompt); interpreted.RequestedJudgment != want {
+				t.Fatalf("interpreted.RequestedJudgment = %q, want %q (this call's own prompt echo, proving a genuine per-call round trip)", interpreted.RequestedJudgment, want)
+			}
+			if strings.Contains(gen.requests[0].System, "supported questions") || strings.Contains(gen.requests[0].System, "allowed question") {
+				t.Fatalf("system prompt references a supported-question registry: %q", gen.requests[0].System)
+			}
+		})
 	}
 }
 

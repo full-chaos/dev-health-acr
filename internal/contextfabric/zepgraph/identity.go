@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
@@ -83,12 +84,57 @@ func encodeScope(values []string) string {
 	return builder.String()
 }
 
+// scopeContains reports whether a node/edge's encoded authorization scope
+// admits the caller-side scope value. value is one entry from a principal's
+// storage.Principal.RepositoryScopes (or a requested-scope filter), which,
+// per internal/auth.RepositoryAllowed, may be an exact "owner/repo" slug,
+// the global wildcard "*", or an "owner/*" wildcard. Both wildcard forms are
+// handled the same way internal/auth resolves them for a concrete slug --
+// deliberately mirrored here rather than re-derived, so the two callers
+// cannot silently drift.
+//
+// A value of "*" authorizes unconditionally: encoded is already the
+// authorization list for one node inside one organization's graph (the
+// graph ID itself is server-derived from the organization ID), so widening
+// within it can never cross an organization boundary. An "owner/*" value
+// authorizes only if the node's own encoded list contains at least one
+// well-formed repository slug under that owner -- it does not widen to
+// other owners, to nodes with no repositories under that owner at all, or
+// to a malformed entry that merely starts with "owner/" (e.g. "owner/" or
+// "owner/extra/segment", which is never a repository encodeScope itself
+// would have produced, but which a caller-authored ContextFabricAuthorizationScope
+// is not currently format-validated to exclude -- see
+// ContextFabricAuthorizationScope.Validate()).
+//
+// encoded == "" is never a legitimate encoding (encodeScope always
+// produces "*" for an empty/absent scope list, never ""), so it can only
+// mean the authorization attribute is missing or malformed. Absence of a
+// scope must deny, never authorize -- including against a "*" or "owner/*"
+// caller-side value, which is the one case the wildcard-widening fix above
+// could otherwise still slip through.
 func scopeContains(encoded, value string) bool {
-	if encoded == scopeDeniedSentinel {
+	if encoded == "" || encoded == scopeDeniedSentinel {
 		return false
 	}
 	if encoded == "*" {
 		return true
+	}
+	value = strings.TrimSpace(value)
+	if value == "*" {
+		return true
+	}
+	if owner, ok := strings.CutSuffix(value, "/*"); ok && owner != "" {
+		owner = strings.ToLower(owner)
+		for _, entry := range decodeScope(encoded) {
+			normalized, err := auth.NormalizeRepositorySlug(entry)
+			if err != nil {
+				continue
+			}
+			if entryOwner, _, _ := strings.Cut(normalized, "/"); entryOwner == owner {
+				return true
+			}
+		}
+		return false
 	}
 	return strings.Contains(encoded, scopeSeparator+value+scopeSeparator)
 }

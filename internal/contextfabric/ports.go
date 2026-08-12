@@ -63,6 +63,31 @@ type AnswerSynthesizer interface {
 
 // InvestigationResultStore persists immutable result snapshots for prior-turn
 // binding, replay, Workbench inspection, and future consumer projections.
+//
+// Binding precondition: Get MUST be scoped to principal.OrgID. It must
+// never return a result belonging to a different organization, regardless
+// of whether resultID happens to collide, is guessed, or is otherwise
+// supplied by a caller outside that organization. ContextFabricInvestigationResult
+// carries no organization discriminator of its own (by design -- it is a
+// per-principal-scoped read, not a self-describing record), so a Get
+// implementation that skips organization scoping is a full cross-tenant
+// data leak with nothing downstream positioned to catch the wrong record
+// by inspecting it.
+//
+// This is a binding precondition on implementations, not something Engine
+// enforces or can enforce by inspecting the returned value. What Engine
+// does provide is a second, independent layer specifically for the
+// PriorSubjectReceipts consumer of Get (see resolvePriorSubjectHints):
+// every subject a receipt resolves to is re-authorized through
+// GraphReader's exact-hint path before it can become a candidate, and that
+// re-authorization is unconditionally scoped to the *calling* principal's
+// own organization graph (GraphReader.ResolveSubjects's node lookups are
+// keyed by principal.OrgID, never by anything read back from the prior
+// result). So even a Get implementation that violates this precondition
+// and returns another organization's result cannot leak that organization's
+// subject into the caller's investigation: GraphReader will look for it in
+// the caller's own org graph, where it does not exist, and the receipt is
+// silently skipped exactly like any other unresolvable one.
 type InvestigationResultStore interface {
 	Save(context.Context, storage.Principal, InvestigationResult) error
 	Get(context.Context, storage.Principal, string) (InvestigationResult, error)
