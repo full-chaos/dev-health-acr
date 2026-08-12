@@ -279,19 +279,72 @@ func (a *Adapter) applyTombstone(ctx context.Context, orgID string, tombstone co
 	var err error
 	switch strings.ToLower(tombstone.Kind) {
 	case "relationship", "edge":
-		err = a.api.DeleteEdge(ctx, relationshipUUID(orgID, tombstone.CanonicalID))
+		err = a.deleteEdgeIfNotNewer(ctx, relationshipUUID(orgID, tombstone.CanonicalID), tombstone)
 	case "document", "content":
-		err = a.api.DeleteNode(ctx, contentUUID(orgID, "document", tombstone.CanonicalID))
+		err = a.deleteNodeIfNotNewer(ctx, contentUUID(orgID, "document", tombstone.CanonicalID), tombstone)
 	case "episode":
-		err = a.api.DeleteNode(ctx, contentUUID(orgID, "episode", tombstone.CanonicalID))
+		err = a.deleteNodeIfNotNewer(ctx, contentUUID(orgID, "episode", tombstone.CanonicalID), tombstone)
 	default:
 		subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectKind(tombstone.Kind), CanonicalID: tombstone.CanonicalID, Label: tombstone.CanonicalID}
-		err = a.api.DeleteNode(ctx, nodeUUID(orgID, subject))
+		err = a.deleteNodeIfNotNewer(ctx, nodeUUID(orgID, subject), tombstone)
 	}
 	if zepStatusCode(err) == 404 {
 		return nil
 	}
 	return safeDependencyError("apply graph tombstone", err)
+}
+
+// deleteNodeIfNotNewer reads the target node before deleting it. A
+// tombstone only asserts "this subject was gone as of EffectiveAt" -- if
+// the node's stored observed_at is strictly newer than that, a later
+// projection has re-established the subject since the tombstone was
+// generated, and an out-of-order delete must not destroy that newer state.
+func (a *Adapter) deleteNodeIfNotNewer(ctx context.Context, uuid string, tombstone contextfabric.ProjectionTombstone) error {
+	existing, err := a.api.GetNode(ctx, uuid)
+	if zepStatusCode(err) == 404 {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if tombstoneIsStale(existing.Attributes, tombstone) {
+		return nil
+	}
+	return a.api.DeleteNode(ctx, uuid)
+}
+
+// deleteEdgeIfNotNewer is deleteNodeIfNotNewer's counterpart for
+// relationship/edge-kind tombstones.
+func (a *Adapter) deleteEdgeIfNotNewer(ctx context.Context, uuid string, tombstone contextfabric.ProjectionTombstone) error {
+	existing, err := a.api.GetEdge(ctx, uuid)
+	if zepStatusCode(err) == 404 {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if tombstoneIsStale(existing.Attributes, tombstone) {
+		return nil
+	}
+	return a.api.DeleteEdge(ctx, uuid)
+}
+
+// tombstoneIsStale reports whether the target's stored observed_at is
+// strictly after the tombstone's EffectiveAt -- i.e. the tombstone arrived
+// out of order relative to a more recent projection of the same subject.
+// A target with no parseable observed_at is treated as not-stale (delete
+// proceeds), matching the pre-fix behavior for records that predate this
+// check or come from a code path that never set the attribute.
+func tombstoneIsStale(attributes map[string]interface{}, tombstone contextfabric.ProjectionTombstone) bool {
+	raw := stringAttribute(attributes, "observed_at")
+	if raw == "" {
+		return false
+	}
+	stored, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return false
+	}
+	return stored.After(tombstone.EffectiveAt)
 }
 
 func (a *Adapter) writeWatermark(ctx context.Context, batch contextfabric.ProjectionBatch, watermark string) error {

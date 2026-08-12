@@ -123,6 +123,14 @@ func (f *fakeAPI) GetNodeEdges(_ context.Context, uuid string) ([]*zep.EntityEdg
 	return result, nil
 }
 
+func (f *fakeAPI) GetEdge(_ context.Context, uuid string) (*zep.EntityEdge, error) {
+	edge, ok := f.edges[uuid]
+	if !ok {
+		return nil, &zep.NotFoundError{}
+	}
+	return edge, nil
+}
+
 func (f *fakeAPI) DeleteEdge(_ context.Context, uuid string) error {
 	delete(f.edges, uuid)
 	return nil
@@ -421,6 +429,72 @@ func TestApplyProjectionBatchTombstonesDeleteAcrossKindsAndReplayIsIdempotent(t 
 	tombstoneBatch.BatchID = "batch_tombstone2"
 	if _, err := adapter.ApplyProjectionBatch(context.Background(), tombstoneBatch); err != nil {
 		t.Fatalf("repeat tombstone ApplyProjectionBatch() error = %v", err)
+	}
+}
+
+// TestApplyProjectionBatchSkipsStaleOutOfOrderTombstone is the F5
+// regression: a tombstone that arrives out of order (its EffectiveAt is
+// older than the target's already-stored observed_at) must not delete
+// state that a later projection has since re-established. Covers both a
+// node-kind tombstone (default subject case) and an edge-kind
+// (relationship) tombstone, since deleteNodeIfNotNewer/deleteEdgeIfNotNewer
+// share the same staleness check.
+func TestApplyProjectionBatchSkipsStaleOutOfOrderTombstone(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	newer := time.Date(2026, 8, 11, 23, 0, 0, 0, time.UTC)
+	stale := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_live", Label: "Live Project"}
+	work := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_live", Label: "Live Work"}
+
+	write := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_newwrite", OrgID: "org_1", Source: "dev-health-ops",
+		SourceVersion: "ops-v9", Cursor: "c0", NextCursor: "c1", GeneratedAt: newer,
+		Entities: []contextfabric.EntityProjection{{
+			Subject: project, Authorization: contextfabric.AuthorizationScope{RepositorySlugs: []string{"team-a/repo"}},
+			EvidenceRefIDs: []string{"evidence_live_1234"}, ObservedAt: newer, SourceVersion: "ops-v9",
+		}},
+		Relationships: []contextfabric.RelationshipProjection{{
+			RelationshipID: "relationship_live", Type: "DEPENDS_ON", From: project, To: work,
+			Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
+			Authorization:  contextfabric.AuthorizationScope{RepositorySlugs: []string{"team-a/repo"}},
+			EvidenceRefIDs: []string{"evidence_live_1234"}, ObservedAt: newer, SourceVersion: "ops-v9",
+		}},
+		Contents: []contextfabric.ContentProjection{}, Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), write); err != nil {
+		t.Fatalf("write ApplyProjectionBatch() error = %v", err)
+	}
+	projectNodeID := nodeUUID("org_1", project)
+	relationshipEdgeID := relationshipUUID("org_1", "relationship_live")
+	if _, ok := api.nodes[projectNodeID]; !ok {
+		t.Fatal("seed setup wrong: entity was not projected")
+	}
+	if _, ok := api.edges[relationshipEdgeID]; !ok {
+		t.Fatal("seed setup wrong: relationship was not projected")
+	}
+
+	tomb := write
+	tomb.BatchID = "batch_staletomb"
+	tomb.SourceVersion = "ops-v1"
+	tomb.GeneratedAt = stale
+	tomb.Cursor = "c1"
+	tomb.NextCursor = "c2"
+	tomb.Entities = []contextfabric.EntityProjection{}
+	tomb.Relationships = []contextfabric.RelationshipProjection{}
+	tomb.Tombstones = []contextfabric.ProjectionTombstone{
+		{Kind: string(project.Kind), CanonicalID: project.CanonicalID, Reason: "stale delete delivered out of order", EffectiveAt: stale, SourceVersion: "ops-v1"},
+		{Kind: "relationship", CanonicalID: "relationship_live", Reason: "stale delete delivered out of order", EffectiveAt: stale, SourceVersion: "ops-v1"},
+	}
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), tomb); err != nil {
+		t.Fatalf("tombstone ApplyProjectionBatch() error = %v", err)
+	}
+	if _, ok := api.nodes[projectNodeID]; !ok {
+		t.Fatal("STALE TOMBSTONE WON: a node written at 2026-08-11/ops-v9 was deleted by a tombstone effective 2020-01-01/ops-v1")
+	}
+	if _, ok := api.edges[relationshipEdgeID]; !ok {
+		t.Fatal("STALE TOMBSTONE WON: an edge written at 2026-08-11/ops-v9 was deleted by a tombstone effective 2020-01-01/ops-v1")
 	}
 }
 

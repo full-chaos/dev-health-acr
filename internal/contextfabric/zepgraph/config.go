@@ -191,6 +191,7 @@ type api interface {
 	GetNode(context.Context, string) (*zep.EntityNode, error)
 	DeleteNode(context.Context, string) error
 	GetNodeEdges(context.Context, string) ([]*zep.EntityEdge, error)
+	GetEdge(context.Context, string) (*zep.EntityEdge, error)
 	DeleteEdge(context.Context, string) error
 }
 
@@ -255,6 +256,10 @@ func (s *sdkAPI) DeleteNode(ctx context.Context, nodeUUID string) error {
 
 func (s *sdkAPI) GetNodeEdges(ctx context.Context, nodeUUID string) ([]*zep.EntityEdge, error) {
 	return s.client.Graph.Node.GetEdges(ctx, nodeUUID)
+}
+
+func (s *sdkAPI) GetEdge(ctx context.Context, edgeUUID string) (*zep.EntityEdge, error) {
+	return s.client.Graph.Edge.Get(ctx, edgeUUID)
 }
 
 func (s *sdkAPI) DeleteEdge(ctx context.Context, edgeUUID string) error {
