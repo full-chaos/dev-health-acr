@@ -168,13 +168,21 @@ func (a *Adapter) projectEntity(ctx context.Context, orgID string, entity contex
 }
 
 func (a *Adapter) projectRelationship(ctx context.Context, orgID string, relationship contextfabric.RelationshipProjection) error {
+	fromAttributes, err := a.mergedSubjectAttributes(ctx, orgID, relationship.From, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion)
+	if err != nil {
+		return err
+	}
+	toAttributes, err := a.mergedSubjectAttributes(ctx, orgID, relationship.To, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion)
+	if err != nil {
+		return err
+	}
 	request := &zep.AddTripleRequest{
 		GraphID: ptr(graphID(a.config.GraphPrefix, orgID)), Fact: relationshipFact(relationship), FactName: normalizeRelation(relationship.Type),
 		FactUUID:       ptr(relationshipUUID(orgID, relationship.RelationshipID)),
 		SourceNodeUUID: ptr(nodeUUID(orgID, relationship.From)), SourceNodeName: ptr(relationship.From.Label), SourceNodeLabels: []string{zepLabel(relationship.From.Kind)},
-		SourceNodeSummary: ptr(subjectSearchSummary(relationship.From)), SourceNodeAttributes: subjectAttributes(relationship.From, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion),
+		SourceNodeSummary: ptr(subjectSearchSummary(relationship.From)), SourceNodeAttributes: fromAttributes,
 		TargetNodeUUID: ptr(nodeUUID(orgID, relationship.To)), TargetNodeName: ptr(relationship.To.Label), TargetNodeLabels: []string{zepLabel(relationship.To.Kind)},
-		TargetNodeSummary: ptr(subjectSearchSummary(relationship.To)), TargetNodeAttributes: subjectAttributes(relationship.To, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion),
+		TargetNodeSummary: ptr(subjectSearchSummary(relationship.To)), TargetNodeAttributes: toAttributes,
 		EdgeAttributes: projectionRelationshipAttributes(relationship),
 		CreatedAt:      ptr(relationship.ObservedAt.UTC().Format(time.RFC3339Nano)),
 	}
@@ -187,16 +195,20 @@ func (a *Adapter) projectRelationship(ctx context.Context, orgID string, relatio
 	if relationship.EpistemicStatus == contextfabric.EpistemicSuperseded && relationship.ValidTo != nil {
 		request.ExpiredAt = ptr(relationship.ValidTo.UTC().Format(time.RFC3339Nano))
 	}
-	_, err := a.api.AddFactTriple(ctx, request)
+	_, err = a.api.AddFactTriple(ctx, request)
 	return safeDependencyError("project relationship", err)
 }
 
 func (a *Adapter) projectContent(ctx context.Context, orgID string, content contextfabric.ContentProjection) error {
+	subjectAttrs, err := a.mergedSubjectAttributes(ctx, orgID, content.Subject, content.Authorization, content.EvidenceRefIDs, content.ObservedAt, nil, nil, content.SourceVersion)
+	if err != nil {
+		return err
+	}
 	request := &zep.AddTripleRequest{
 		GraphID: ptr(graphID(a.config.GraphPrefix, orgID)), Fact: content.Subject.Label + " is documented by " + content.Title,
 		FactName: "DOCUMENTED_BY", FactUUID: ptr(relationshipUUID(orgID, "content:"+content.ContentID)),
 		SourceNodeUUID: ptr(nodeUUID(orgID, content.Subject)), SourceNodeName: ptr(content.Subject.Label), SourceNodeLabels: []string{zepLabel(content.Subject.Kind)},
-		SourceNodeSummary: ptr(subjectSearchSummary(content.Subject)), SourceNodeAttributes: subjectAttributes(content.Subject, content.Authorization, content.EvidenceRefIDs, content.ObservedAt, nil, nil, content.SourceVersion),
+		SourceNodeSummary: ptr(subjectSearchSummary(content.Subject)), SourceNodeAttributes: subjectAttrs,
 		TargetNodeUUID: ptr(contentUUID(orgID, "document", content.ContentID)), TargetNodeName: ptr(content.Title), TargetNodeLabels: []string{zepLabel(contextfabric.SubjectDocument)},
 		TargetNodeSummary: ptr(content.Body), TargetNodeAttributes: map[string]interface{}{
 			"canonical_id": content.ContentID, "subject_kind": string(contextfabric.SubjectDocument), "content_digest": content.ContentDigest,
@@ -206,17 +218,21 @@ func (a *Adapter) projectContent(ctx context.Context, orgID string, content cont
 		},
 		CreatedAt: ptr(content.ObservedAt.UTC().Format(time.RFC3339Nano)),
 	}
-	_, err := a.api.AddFactTriple(ctx, request)
+	_, err = a.api.AddFactTriple(ctx, request)
 	return safeDependencyError("project content", err)
 }
 
 func (a *Adapter) projectEpisode(ctx context.Context, orgID string, episode contextfabric.EpisodeProjection) error {
 	summary := strings.TrimSpace(episode.Goal + "\nOutcome: " + episode.Outcome + "\n" + episode.Summary)
+	subjectAttrs, err := a.mergedSubjectAttributes(ctx, orgID, episode.Subject, episode.Authorization, episode.EvidenceRefIDs, episode.EndedAt, &episode.StartedAt, &episode.EndedAt, episode.SourceVersion)
+	if err != nil {
+		return err
+	}
 	request := &zep.AddTripleRequest{
 		GraphID: ptr(graphID(a.config.GraphPrefix, orgID)), Fact: episode.Subject.Label + " has episode " + episode.EpisodeID,
 		FactName: "HAS_EPISODE", FactUUID: ptr(relationshipUUID(orgID, "episode:"+episode.EpisodeID)),
 		SourceNodeUUID: ptr(nodeUUID(orgID, episode.Subject)), SourceNodeName: ptr(episode.Subject.Label), SourceNodeLabels: []string{zepLabel(episode.Subject.Kind)},
-		SourceNodeSummary: ptr(subjectSearchSummary(episode.Subject)), SourceNodeAttributes: subjectAttributes(episode.Subject, episode.Authorization, episode.EvidenceRefIDs, episode.EndedAt, &episode.StartedAt, &episode.EndedAt, episode.SourceVersion),
+		SourceNodeSummary: ptr(subjectSearchSummary(episode.Subject)), SourceNodeAttributes: subjectAttrs,
 		TargetNodeUUID: ptr(contentUUID(orgID, "episode", episode.EpisodeID)), TargetNodeName: ptr(episode.EpisodeID), TargetNodeLabels: []string{zepLabel(contextfabric.SubjectEpisode)},
 		TargetNodeSummary: ptr(summary), TargetNodeAttributes: map[string]interface{}{
 			"canonical_id": episode.EpisodeID, "subject_kind": string(contextfabric.SubjectEpisode), "goal": episode.Goal,
@@ -227,8 +243,36 @@ func (a *Adapter) projectEpisode(ctx context.Context, orgID string, episode cont
 		},
 		CreatedAt: ptr(episode.EndedAt.UTC().Format(time.RFC3339Nano)), ValidAt: ptr(episode.StartedAt.UTC().Format(time.RFC3339Nano)),
 	}
-	_, err := a.api.AddFactTriple(ctx, request)
+	_, err = a.api.AddFactTriple(ctx, request)
 	return safeDependencyError("project episode", err)
+}
+
+// mergedSubjectAttributes returns the current, correct attribute set for a
+// canonical subject node: the fresh scalar fields for this write (canonical
+// ID, kind, label, authorization, evidence, source version, temporal bounds)
+// layered over any previously projected canonical entity metadata (aliases,
+// previous names, provider IDs, properties). A relationship, content, or
+// episode upsert must never erase authoritative entity metadata that
+// projectEntity already wrote, regardless of whether the backend merges or
+// replaces node attributes on repeated writes to the same node UUID.
+func (a *Adapter) mergedSubjectAttributes(ctx context.Context, orgID string, subject contextfabric.SubjectRef, authorization contextfabric.AuthorizationScope, evidence []string, observedAt time.Time, validFrom, validTo *time.Time, sourceVersion string) (map[string]interface{}, error) {
+	attributes := subjectAttributes(subject, authorization, evidence, observedAt, validFrom, validTo, sourceVersion)
+	existing, err := a.api.GetNode(ctx, nodeUUID(orgID, subject))
+	if err != nil {
+		if zepStatusCode(err) == 404 {
+			return attributes, nil
+		}
+		return nil, safeDependencyError("read canonical subject attributes", err)
+	}
+	if existing == nil {
+		return attributes, nil
+	}
+	for key, value := range existing.Attributes {
+		if _, exists := attributes[key]; !exists {
+			attributes[key] = value
+		}
+	}
+	return attributes, nil
 }
 
 func (a *Adapter) applyTombstone(ctx context.Context, orgID string, tombstone contextfabric.ProjectionTombstone) error {
