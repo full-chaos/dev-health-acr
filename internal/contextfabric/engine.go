@@ -22,6 +22,27 @@ type EngineDependencies struct {
 	Facts       CanonicalFactReader
 	Synthesizer AnswerSynthesizer
 	Results     InvestigationResultStore
+	// Telemetry is optional. When set, Engine reports content-safe
+	// operational counters through it -- see EngineTelemetry.
+	Telemetry EngineTelemetry
+}
+
+// EngineTelemetry receives content-safe operational counters from Engine.
+// Implementations must record only counts and fixed classifications --
+// never question text, subject labels, canonical IDs, result IDs, or any
+// other investigation content -- so a signal is diagnosable without
+// becoming a new disclosure surface.
+type EngineTelemetry interface {
+	// RecordPriorSubjectReceiptsSkipped reports how many of one
+	// Investigate call's PriorSubjectReceipts did not end up bound to a
+	// resolved subject -- whether because the referenced prior result
+	// could not be loaded, no candidate in it matched the receipt, or the
+	// resolved subject did not survive current authorization/graph
+	// resolution. Investigate never errors or otherwise surfaces this to
+	// the caller (a stale, foreign, or now-unauthorized receipt degrades
+	// silently), so this count is the only operator-visible signal that it
+	// happened.
+	RecordPriorSubjectReceiptsSkipped(ctx context.Context, principal storage.Principal, skipped int)
 }
 
 // Engine coordinates one open-ended investigation. It deliberately composes
@@ -32,6 +53,7 @@ type Engine struct {
 	facts          CanonicalFactReader
 	synthesizer    AnswerSynthesizer
 	results        InvestigationResultStore
+	telemetry      EngineTelemetry
 	serviceVersion string
 	now            func() time.Time
 	newResultID    func() string
@@ -52,7 +74,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 	}
 	return &Engine{
 		interpreter: dependencies.Interpreter, graph: dependencies.Graph, facts: dependencies.Facts,
-		synthesizer: dependencies.Synthesizer, results: dependencies.Results,
+		synthesizer: dependencies.Synthesizer, results: dependencies.Results, telemetry: dependencies.Telemetry,
 		serviceVersion: options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
 	}, nil
 }
@@ -72,12 +94,51 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if err != nil {
 		return InvestigationResult{}, fmt.Errorf("interpret question: %w", err)
 	}
-	resolution, err := e.graph.ResolveSubjects(ctx, principal, request, interpretation)
+	// Prior-result receipts (PriorSubjectReceipts) name a subject already
+	// committed or proposed in an earlier InvestigationResult -- e.g. a
+	// conversational follow-up ("what about it") binding back to the
+	// subject a prior turn resolved. A receipt is a one-way identifier
+	// (ReceiptID), not itself a resolvable subject: only the Engine holds
+	// the InvestigationResultStore needed to look one up, so expansion
+	// happens here rather than inside GraphReader. The expanded request
+	// feeds the exact-hint path GraphReader already has (SubjectHint), so
+	// every resolved receipt is independently re-authorized before it can
+	// become a candidate -- a stale, foreign, or now-unauthorized receipt
+	// is skipped, never trusted outright, and never treated as an error.
+	graphRequest := request
+	var priorHints []SubjectHint
+	if e.results != nil && len(request.PriorSubjectReceipts) > 0 {
+		priorHints = e.resolvePriorSubjectHints(ctx, principal, request.PriorSubjectReceipts)
+		// The v1 contract bounds RequestedScope.SubjectHints at 50
+		// (ContextFabricRequestedScope.Validate). request.Validate()
+		// already proved the caller's own hints are within that bound,
+		// but Engine's own expansion must not push the combined total
+		// back out of it -- drop excess receipt-derived hints (never the
+		// caller's own explicit hints), and let the existing skip
+		// telemetry in recordPriorSubjectReceiptSkips below count the
+		// drop exactly like any other unresolved receipt.
+		const maxSubjectHints = 50
+		if available := maxSubjectHints - len(request.RequestedScope.SubjectHints); len(priorHints) > available {
+			if available < 0 {
+				available = 0
+			}
+			priorHints = priorHints[:available]
+		}
+		if len(priorHints) > 0 {
+			graphRequest.RequestedScope.SubjectHints = append(
+				append([]SubjectHint(nil), request.RequestedScope.SubjectHints...), priorHints...,
+			)
+		}
+	}
+	resolution, err := e.graph.ResolveSubjects(ctx, principal, graphRequest, interpretation)
 	if err != nil {
 		return InvestigationResult{}, fmt.Errorf("resolve subjects: %w", err)
 	}
+	if len(request.PriorSubjectReceipts) > 0 {
+		e.recordPriorSubjectReceiptSkips(ctx, principal, len(request.PriorSubjectReceipts), priorHints, resolution)
+	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
-		Request: request, Interpretation: interpretation, Resolution: resolution,
+		Request: graphRequest, Interpretation: interpretation, Resolution: resolution,
 	})
 	if err != nil {
 		return InvestigationResult{}, fmt.Errorf("discover graph context: %w", err)
@@ -129,6 +190,82 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 	}
 	return result, nil
+}
+
+// resolvePriorSubjectHints expands PriorSubjectReceipts into SubjectHints by
+// loading each referenced prior InvestigationResult (deduplicated per
+// ResultID) and matching ReceiptID against that result's
+// SubjectResolution.Candidates. A receipt that fails to load (not found,
+// unauthorized, unavailable) or has no matching candidate is silently
+// skipped: an unresolvable prior-turn reference must degrade to "not bound"
+// rather than fail the whole investigation or fall back to an unauthorized
+// guess.
+func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, receipts []BoundSubjectReceipt) []SubjectHint {
+	hints := make([]SubjectHint, 0, len(receipts))
+	loaded := make(map[string]InvestigationResult, len(receipts))
+	for _, receipt := range receipts {
+		if ctx.Err() != nil {
+			return hints
+		}
+		resultID := strings.TrimSpace(receipt.ResultID)
+		receiptID := strings.TrimSpace(receipt.ReceiptID)
+		if resultID == "" || receiptID == "" {
+			continue
+		}
+		prior, ok := loaded[resultID]
+		if !ok {
+			fetched, err := e.results.Get(ctx, principal, resultID)
+			if err != nil {
+				continue
+			}
+			prior = fetched
+			loaded[resultID] = prior
+		}
+		for _, candidate := range prior.SubjectResolution.Candidates {
+			if candidate.ReceiptID != receiptID {
+				continue
+			}
+			hints = append(hints, SubjectHint{
+				Kind: candidate.Subject.Kind, ID: candidate.Subject.CanonicalID,
+				Label: candidate.Subject.Label, Source: "prior_subject_receipt",
+			})
+			break
+		}
+	}
+	return hints
+}
+
+// recordPriorSubjectReceiptSkips counts every PriorSubjectReceipt that did
+// not end up bound to a resolved subject on this Investigate call and
+// reports only that count (never receipt, result, or subject content)
+// through the optional EngineTelemetry hook. A receipt counts as skipped
+// both when resolvePriorSubjectHints already dropped it (unloadable prior
+// result, no matching candidate) and when it became a hint but the subject
+// did not survive graph resolution -- e.g. GraphReader's exact-hint
+// authorization check silently rejected it, the same path an ordinary
+// client-supplied SubjectHint goes through. Either way Investigate itself
+// never errors or otherwise surfaces the skip, so this is the only
+// operator-visible signal.
+func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal storage.Principal, receiptCount int, priorHints []SubjectHint, resolution SubjectResolution) {
+	if e.telemetry == nil {
+		return
+	}
+	resolved := make(map[string]struct{}, len(resolution.Candidates)+len(resolution.Committed))
+	for _, candidate := range resolution.Candidates {
+		resolved[subjectKeyForModel(candidate.Subject)] = struct{}{}
+	}
+	for _, subject := range resolution.Committed {
+		resolved[subjectKeyForModel(subject)] = struct{}{}
+	}
+	survived := 0
+	for _, hint := range priorHints {
+		if _, ok := resolved[string(hint.Kind)+"\x00"+hint.ID]; ok {
+			survived++
+		}
+	}
+	if skipped := receiptCount - survived; skipped > 0 {
+		e.telemetry.RecordPriorSubjectReceiptsSkipped(ctx, principal, skipped)
+	}
 }
 
 func investigationSubjects(resolution SubjectResolution, cohort *Cohort) []SubjectRef {

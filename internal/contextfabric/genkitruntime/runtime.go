@@ -19,7 +19,15 @@ import (
 const SDKVersion = "v1.11.0"
 
 const (
-	defaultInterpretationPromptVersion = "context-fabric-interpretation.v1"
+	// defaultInterpretationPromptVersion is v2 as of CHAOS-3754: the
+	// interpretation system prompt (prompts.go) was extended to cover
+	// conversational-reference resolution, alias/acronym/previous-name
+	// subject terms, and subjectless team/project cohort framing. A
+	// receipt's PromptVersion is part of what a replay/evaluation
+	// pipeline uses to interpret ModelExecutionReceipt content (ADR
+	// 0008), so a prompt content change must bump this even though the
+	// interpretationOutput schema itself is unchanged.
+	defaultInterpretationPromptVersion = "context-fabric-interpretation.v2"
 	defaultSynthesisPromptVersion      = "context-fabric-synthesis.v1"
 	defaultSchemaVersion               = "context-fabric-model-output.v1"
 	defaultEvaluatorVersion            = "context-fabric-grounding.v1"
