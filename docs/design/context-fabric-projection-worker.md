@@ -247,6 +247,54 @@ All three fixes were verified probe-first: each new test was confirmed to
 fail (with the original bug's exact symptom) against a temporary revert of
 its fix, then to pass again once the fix was restored.
 
+## Revocations must reach the graph (codex finding C4, post-review)
+
+`EpisodeStore.ListSince` ordered and paginated on `CreatedAt`, which never
+changes. `devhealthsource.episodeCandidate`'s tombstone conversion (any
+`RedactionState != "active"` becomes a `ProjectionTombstone`) was always
+correct, but `ListSince` never handed it a row whose state changed *after*
+a caller's checkpoint had already advanced past that row's `CreatedAt`
+position -- a `Redact()` or `PurgeExpiredForPrincipal()` call happening
+post-projection silently never reached the graph, even though the contract
+doc comment claimed otherwise ("a caller can detect and propagate the
+state change").
+
+Fixed with a genuine last-modification watermark: `acr.agent_episodes`
+gained an `updated_at` column (migration `0008`), set equal to `created_at`
+at insert time (same `NOW()`, same statement) and bumped by both `Redact()`
+and `PurgeExpiredForPrincipal()`. `ListSince` now orders/paginates on
+`(updated_at, episode_id)` instead of `(created_at, episode_id)` in both
+`internal/storage/postgres` and `internal/storage/memory` (mirroring the
+existing dual-implementation requirement), and
+`storage.EpisodeProjectionRecord` carries the new `UpdatedAt` field.
+`devhealthsource.episodeCandidate`'s `observedAt`/tombstone `EffectiveAt`
+now use `UpdatedAt`, not `CreatedAt` -- using the wrong column here would
+be the same C5-class bug (the candidate's cursor position must match
+exactly what the next `ListSince` call filters on, or the cursor never
+converges with the row it's meant to track).
+
+**Honest backfill limitation**: rows already purged
+(`redaction_state = 'purged_tombstone'`) before this migration have no
+historical modification timestamp to recover -- that absence is exactly
+what C4 identified. The migration backfills `updated_at =
+COALESCE(redacted_at, created_at)` for existing rows, which is the best
+available signal; only prospectively (state transitions after the
+migration applies) does the fix fully close the gap.
+
+Proven probe-first at three layers, each confirmed to fail against a
+temporary revert and pass again with the fix restored:
+- `internal/storage/postgres`:
+  `TestEpisodeStore_ListSinceSurfacesARedactionThatHappensAfterTheWatermarkAlreadyPassedTheRow`
+  and the `...Purge...` counterpart, against real Postgres.
+- `internal/storage/memory`: the same two probes, against the in-memory
+  store.
+- `internal/contextfabric/devhealthsource`:
+  `TestEpisodesProjectionSourceRedactionAfterProjectionSurfacesAsATombstoneInTheNextBatch`
+  drives `EpisodesProjectionSource.NextProjectionBatch` twice against a real
+  `memory.EpisodeStore` -- project, redact, then resume from the
+  already-advanced checkpoint and assert the next batch contains the
+  tombstone, exactly the scenario the review specified.
+
 ## Rulings (2026-08-12, team-lead)
 
 1. **Postgres advisory lock: approved.** Cross-replica correctness beats a

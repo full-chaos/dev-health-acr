@@ -90,7 +90,7 @@ type EpisodeStore interface {
 	PurgeExpired(ctx context.Context, before time.Time, limit int) (int, error)
 	// ListSince is the narrow, org-wide (not repository-scoped) incremental
 	// read used by projection/export consumers such as CHAOS-3753's
-	// devhealthsource: ordered by (CreatedAt, EpisodeID), strictly after
+	// devhealthsource: ordered by (UpdatedAt, EpisodeID), strictly after
 	// (since, afterEpisodeID), at most limit rows. It intentionally takes an
 	// orgID rather than a Principal -- like CredentialStore.List -- because a
 	// projection worker is a service-level caller with no meaningful
@@ -98,6 +98,18 @@ type EpisodeStore interface {
 	// and purged-tombstone episodes are still returned (with content already
 	// scrubbed by CreateIdempotent/Redact) so a caller can detect and
 	// propagate the state change; RedactionState reports which.
+	//
+	// The watermark is UpdatedAt, not CreatedAt (CHAOS-3753 codex finding
+	// C4): CreatedAt never changes, so a Redact/PurgeExpired* state
+	// transition happening after a row's CreatedAt position had already been
+	// passed by a caller's checkpoint could never be observed again --
+	// revocations never reached a projection worker. UpdatedAt equals
+	// CreatedAt at creation and is bumped by every state-changing write
+	// (Redact, PurgeExpiredForPrincipal), so a post-projection state change
+	// always produces a fresh, reachable watermark position. Callers that
+	// build a cursor from a returned record MUST use UpdatedAt (not
+	// CreatedAt) as the row's position, or their own cursor will never
+	// converge with this ordering.
 	ListSince(ctx context.Context, orgID string, since time.Time, afterEpisodeID string, limit int) ([]EpisodeProjectionRecord, error)
 }
 
@@ -115,6 +127,8 @@ type EpisodeProjectionRecord struct {
 	StartedAt      time.Time
 	EndedAt        time.Time
 	CreatedAt      time.Time
+	// UpdatedAt is ListSince's watermark column -- see its doc comment.
+	UpdatedAt time.Time
 }
 
 // EpisodePreflight is the opaque idempotency state used before creating an

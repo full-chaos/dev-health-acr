@@ -98,6 +98,87 @@ func TestEpisodeStore_ListSinceReportsRedactionAndPurgeStateWithoutLeakingConten
 	require.True(t, foundPurged, "expected a purged_tombstone row: %+v", rows)
 }
 
+// TestEpisodeStore_ListSinceSurfacesARedactionThatHappensAfterTheWatermarkAlreadyPassedTheRow
+// is CHAOS-3753 codex finding C4's regression test: ListSince used to
+// order/paginate on CreatedAt, which never changes, so a Redact() call
+// happening after a caller's checkpoint had already advanced past the
+// row's CreatedAt position could never be observed again -- a
+// post-projection revocation never reached the graph. This drives the
+// exact sequence the review specified: project (ListSince sees the row,
+// caller's cursor advances past it) -> redact -> the next ListSince call
+// using that already-advanced cursor must now surface the row.
+func TestEpisodeStore_ListSinceSurfacesARedactionThatHappensAfterTheWatermarkAlreadyPassedTheRow(t *testing.T) {
+	ctx := context.Background()
+	db := newCredentialStoreDatabase(t, ctx)
+	store, err := NewEpisodeStore(db)
+	require.NoError(t, err)
+	principal := storage.Principal{OrgID: "11111111-1111-1111-1111-111111111111", RepositoryScopes: []string{"owner/repo"}}
+
+	episode, _, err := store.CreateIdempotent(ctx, principal, listSinceEpisodeCreate("ep-redact-later"), nil)
+	require.NoError(t, err)
+
+	// "Project": the worker sees the still-active episode and advances its
+	// checkpoint past this row's watermark position.
+	projected, err := store.ListSince(ctx, principal.OrgID, time.Time{}, "", 10)
+	require.NoError(t, err)
+	require.Len(t, projected, 1)
+	require.Equal(t, "active", projected[0].RedactionState)
+	checkpointSince, checkpointAfter := projected[0].UpdatedAt, projected[0].EpisodeID
+
+	// Confirm the checkpoint genuinely has nothing new yet.
+	empty, err := store.ListSince(ctx, principal.OrgID, checkpointSince, checkpointAfter, 10)
+	require.NoError(t, err)
+	require.Empty(t, empty, "no state change has happened yet")
+
+	_, err = store.Redact(ctx, principal, episode.EpisodeID, "user request")
+	require.NoError(t, err)
+
+	// The bug: replaying the SAME already-advanced checkpoint must now
+	// surface the redaction, proving the watermark moved.
+	revoked, err := store.ListSince(ctx, principal.OrgID, checkpointSince, checkpointAfter, 10)
+	require.NoError(t, err)
+	require.Len(t, revoked, 1, "the redaction must surface in the next batch after the checkpoint that already saw the episode active")
+	require.Equal(t, episode.EpisodeID, revoked[0].EpisodeID)
+	require.Equal(t, "redacted", revoked[0].RedactionState)
+	require.True(t, revoked[0].UpdatedAt.After(checkpointSince), "the redaction must produce a watermark position after the one already seen")
+}
+
+// TestEpisodeStore_ListSinceSurfacesAPurgeThatHappensAfterTheWatermarkAlreadyPassedTheRow
+// is the same C4 probe for the purge path, which (unlike Redact) had no
+// modification timestamp at all before this fix.
+func TestEpisodeStore_ListSinceSurfacesAPurgeThatHappensAfterTheWatermarkAlreadyPassedTheRow(t *testing.T) {
+	ctx := context.Background()
+	db := newCredentialStoreDatabase(t, ctx)
+	store, err := NewEpisodeStore(db)
+	require.NoError(t, err)
+	principal := storage.Principal{OrgID: "11111111-1111-1111-1111-111111111111", RepositoryScopes: []string{"owner/repo"}}
+
+	// PurgeExpiredForPrincipal purges on the expires_at column, which the
+	// service layer (internal/episode.Service) computes from RetentionClass
+	// before calling CreateIdempotent -- storage.EpisodeStore itself takes
+	// it as an explicit parameter and stores exactly what it's given
+	// (nil leaves expires_at NULL, which never satisfies "expires_at <= $1"
+	// and so never purges), so this test supplies one directly.
+	expiresAt := time.Now().UTC().Add(90 * 24 * time.Hour)
+	episode, _, err := store.CreateIdempotent(ctx, principal, listSinceEpisodeCreate("ep-purge-later"), &expiresAt)
+	require.NoError(t, err)
+
+	projected, err := store.ListSince(ctx, principal.OrgID, time.Time{}, "", 10)
+	require.NoError(t, err)
+	require.Len(t, projected, 1)
+	checkpointSince, checkpointAfter := projected[0].UpdatedAt, projected[0].EpisodeID
+
+	purged, err := store.PurgeExpiredForPrincipal(ctx, principal, expiresAt.Add(time.Hour), 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, purged)
+
+	revoked, err := store.ListSince(ctx, principal.OrgID, checkpointSince, checkpointAfter, 10)
+	require.NoError(t, err)
+	require.Len(t, revoked, 1, "the purge must surface in the next batch after the checkpoint that already saw the episode active")
+	require.Equal(t, episode.EpisodeID, revoked[0].EpisodeID)
+	require.Equal(t, "purged_tombstone", revoked[0].RedactionState)
+}
+
 func TestEpisodeStore_ListSinceRejectsEmptyOrganization(t *testing.T) {
 	ctx := context.Background()
 	db := newCredentialStoreDatabase(t, ctx)

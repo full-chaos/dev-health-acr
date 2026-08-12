@@ -23,12 +23,13 @@ func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7}, migrationVersions(t, ctx, runner, db))
+	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7, 8}, migrationVersions(t, ctx, runner, db))
 	requireRotatedAtColumn(t, ctx, db)
 	requireDeviceAuthorizationsTable(t, ctx, db)
 	requireDeviceAuthorizationHintColumns(t, ctx, db)
 	requireContextFabricProjectionCheckpointsTable(t, ctx, db)
 	requireContextFabricProjectionRebuildMarkersTable(t, ctx, db)
+	requireAgentEpisodesUpdatedAtColumn(t, ctx, db)
 }
 
 func TestRunner_isIdempotent_whenMigrationsAreAlreadyApplied(t *testing.T) {
@@ -44,7 +45,7 @@ func TestRunner_isIdempotent_whenMigrationsAreAlreadyApplied(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7}, migrationVersions(t, ctx, runner, db))
+	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7, 8}, migrationVersions(t, ctx, runner, db))
 	requireRotatedAtColumn(t, ctx, db)
 	requireDeviceAuthorizationsTable(t, ctx, db)
 	requireDeviceAuthorizationHintColumns(t, ctx, db)
@@ -87,7 +88,7 @@ func TestRunner_upgradesInOrder_whenDatabaseMatchesReleasedMain(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7}, migrationVersions(t, ctx, latest, db))
+	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7, 8}, migrationVersions(t, ctx, latest, db))
 	requireRotatedAtColumn(t, ctx, db)
 	requireDeviceAuthorizationsTable(t, ctx, db)
 	requireDeviceAuthorizationHintColumns(t, ctx, db)
@@ -115,7 +116,7 @@ func TestRunner_serializesConcurrentUp_calls(t *testing.T) {
 	for err := range errs {
 		require.NoError(t, err)
 	}
-	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7}, migrationVersions(t, ctx, runner, db))
+	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7, 8}, migrationVersions(t, ctx, runner, db))
 }
 
 func TestRunner_rollsBackFailedMigration_withoutHistoryRow(t *testing.T) {
@@ -221,7 +222,7 @@ func TestRunner_backfillsLegacyChecksum_afterCanonicalHistoryValidation(t *testi
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7}, migrationVersions(t, ctx, runner, db))
+	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7, 8}, migrationVersions(t, ctx, runner, db))
 	var checksum string
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT checksum FROM acr.schema_migrations WHERE version = 1").Scan(&checksum))
 	require.NotEmpty(t, checksum)
@@ -274,6 +275,16 @@ func requireContextFabricProjectionRebuildMarkersTable(t *testing.T, ctx context
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT EXISTS (
 		SELECT 1 FROM information_schema.tables
 		WHERE table_schema = 'acr' AND table_name = 'context_fabric_projection_rebuild_markers'
+	)`).Scan(&exists))
+	require.True(t, exists)
+}
+
+func requireAgentEpisodesUpdatedAtColumn(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	var exists bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = 'acr' AND table_name = 'agent_episodes' AND column_name = 'updated_at'
 	)`).Scan(&exists))
 	require.True(t, exists)
 }

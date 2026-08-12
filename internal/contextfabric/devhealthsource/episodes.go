@@ -97,13 +97,23 @@ func (s *EpisodesProjectionSource) clock() time.Time {
 	return s.now().UTC()
 }
 
+// episodeCandidate's observedAt (and a tombstone's EffectiveAt) MUST be
+// row.UpdatedAt, not row.CreatedAt -- CHAOS-3753 codex finding C4/C5:
+// EpisodeStore.ListSince's watermark is UpdatedAt (see its doc comment), so
+// the cursor buildBatch encodes from the last candidate's observedAt must
+// match that exact column, or a state change that legitimately advanced
+// the watermark would encode a NextCursor pointing at the row's stale
+// CreatedAt position -- the row would either be skipped forever (if
+// CreatedAt < UpdatedAt, the common case) or replayed forever (if a caller
+// re-derives since from it), never converging with ListSince's own
+// ordering.
 func episodeCandidate(row storage.EpisodeProjectionRecord) candidate {
 	canonicalID := "episode:" + row.EpisodeID
 	if row.RedactionState != "active" {
 		tombstone := contractsv1.ContextFabricProjectionTombstone{
-			Kind: "episode", CanonicalID: canonicalID, Reason: row.RedactionState, EffectiveAt: row.CreatedAt, SourceVersion: episodesSourceVersion,
+			Kind: "episode", CanonicalID: canonicalID, Reason: row.RedactionState, EffectiveAt: row.UpdatedAt, SourceVersion: episodesSourceVersion,
 		}
-		return candidate{observedAt: row.CreatedAt, sortKey: row.EpisodeID, tombstone: &tombstone}
+		return candidate{observedAt: row.UpdatedAt, sortKey: row.EpisodeID, tombstone: &tombstone}
 	}
 	goal := strings.TrimSpace(row.Goal)
 	if goal == "" {
@@ -124,5 +134,5 @@ func episodeCandidate(row storage.EpisodeProjectionRecord) candidate {
 		Authorization: repoAuthorization(row.RepoSlug), EvidenceRefIDs: []string{"acr:v1:episode:" + row.EpisodeID},
 		StartedAt: row.StartedAt, EndedAt: row.EndedAt, SourceVersion: episodesSourceVersion,
 	}
-	return candidate{observedAt: row.CreatedAt, sortKey: row.EpisodeID, episode: &episode}
+	return candidate{observedAt: row.UpdatedAt, sortKey: row.EpisodeID, episode: &episode}
 }

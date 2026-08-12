@@ -422,6 +422,96 @@ func TestEpisodeStoreListSinceReportsRedactionAndPurgeStateWithoutLeakingContent
 	}
 }
 
+// TestEpisodeStoreListSinceSurfacesARedactionThatHappensAfterTheWatermarkAlreadyPassedTheRow
+// is CHAOS-3753 codex finding C4's regression test for the memory store
+// (see the Postgres counterpart in internal/storage/postgres for the same
+// probe against the real SQL implementation): ListSince used to order and
+// paginate on CreatedAt, which never changes, so a Redact() call happening
+// after a caller's checkpoint had already advanced past the row's
+// CreatedAt position could never be observed again.
+func TestEpisodeStoreListSinceSurfacesARedactionThatHappensAfterTheWatermarkAlreadyPassedTheRow(t *testing.T) {
+	clock := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	store := NewEpisodeStore(func() time.Time { return clock })
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
+
+	create := testEpisodeCreate()
+	episode, _, err := store.CreateIdempotent(context.Background(), principal, create, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// "Project": the worker sees the still-active episode and advances its
+	// checkpoint past this row's watermark position.
+	projected, err := store.ListSince(context.Background(), "org_1", time.Time{}, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projected) != 1 || projected[0].RedactionState != "active" {
+		t.Fatalf("projected = %+v", projected)
+	}
+	checkpointSince, checkpointAfter := projected[0].UpdatedAt, projected[0].EpisodeID
+
+	if empty, err := store.ListSince(context.Background(), "org_1", checkpointSince, checkpointAfter, 10); err != nil || len(empty) != 0 {
+		t.Fatalf("expected nothing new before the redaction, got %+v, err=%v", empty, err)
+	}
+
+	clock = clock.Add(time.Hour) // redaction happens strictly after the checkpoint's watermark
+	if _, err := store.Redact(context.Background(), principal, episode.EpisodeID, "user request"); err != nil {
+		t.Fatal(err)
+	}
+
+	revoked, err := store.ListSince(context.Background(), "org_1", checkpointSince, checkpointAfter, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(revoked) != 1 || revoked[0].EpisodeID != episode.EpisodeID || revoked[0].RedactionState != "redacted" {
+		t.Fatalf("expected the redaction to surface in the next batch after the checkpoint that already saw the episode active, got %+v", revoked)
+	}
+	if !revoked[0].UpdatedAt.After(checkpointSince) {
+		t.Fatalf("expected the redaction's watermark position (%v) to be after the one already seen (%v)", revoked[0].UpdatedAt, checkpointSince)
+	}
+}
+
+// TestEpisodeStoreListSinceSurfacesAPurgeThatHappensAfterTheWatermarkAlreadyPassedTheRow
+// is the same C4 probe for the purge path.
+func TestEpisodeStoreListSinceSurfacesAPurgeThatHappensAfterTheWatermarkAlreadyPassedTheRow(t *testing.T) {
+	clock := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	store := NewEpisodeStore(func() time.Time { return clock })
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"owner/repo"}}
+
+	create := testEpisodeCreate() // default_90d retention
+	episode, _, err := store.CreateIdempotent(context.Background(), principal, create, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projected, err := store.ListSince(context.Background(), "org_1", time.Time{}, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projected) != 1 {
+		t.Fatalf("projected = %+v", projected)
+	}
+	checkpointSince, checkpointAfter := projected[0].UpdatedAt, projected[0].EpisodeID
+
+	clock = clock.Add(91 * 24 * time.Hour) // past default_90d's retention window
+	purged, err := store.PurgeExpiredForPrincipal(context.Background(), principal, clock, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if purged != 1 {
+		t.Fatalf("purged = %d, want 1", purged)
+	}
+
+	revoked, err := store.ListSince(context.Background(), "org_1", checkpointSince, checkpointAfter, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(revoked) != 1 || revoked[0].EpisodeID != episode.EpisodeID || revoked[0].RedactionState != "purged_tombstone" {
+		t.Fatalf("expected the purge to surface in the next batch after the checkpoint that already saw the episode active, got %+v", revoked)
+	}
+}
+
 func TestEpisodeStoreListSinceRejectsEmptyOrganization(t *testing.T) {
 	store := NewEpisodeStore(nil)
 	if _, err := store.ListSince(context.Background(), "", time.Time{}, "", 10); err == nil {
