@@ -584,37 +584,34 @@ func TestSDKAPIGetCallsRetryBoundedAttemptsOnServerErrors(t *testing.T) {
 	}
 }
 
-// TestSDKAPIBodyBearingCallsDegradeSafelyUnderBoundedRetry documents a real,
-// pinned-version (v3.22.0) finding: internal/caller.go's Retrier re-invokes
-// client.Do with the SAME *http.Request across attempts and never explicitly
-// rewinds Request.Body between them. For a body-bearing call (Search here;
-// the same applies to AddFactTriple and CreateGraph) this makes the outcome
-// of a bounded retry against a transient 5xx racy — depending on Go's HTTP
-// transport-level connection reuse timing, the retried attempt sometimes
-// reaches the server successfully and sometimes fails client-side with a
-// net/http transfer error ("ContentLength=N with Body length 0") before ever
-// reaching the network. Both outcomes were reproduced locally. ADR 0007 must
-// not claim retries are proven effective for writes/search on this pinned
-// SDK version. This test asserts only what is deterministic: ACR degrades
-// safely either way (no panic, the server is reached at least once, and no
-// dependency response body leaks through safeDependencyError).
-func TestSDKAPIBodyBearingCallsDegradeSafelyUnderBoundedRetry(t *testing.T) {
+// TestSDKAPIBodyBearingCallsMakeExactlyOneRequestOnServerError is the F2
+// hardening: internal/caller.go's Retrier in the pinned SDK version
+// (v3.22.0) re-invokes client.Do with the SAME *http.Request across
+// attempts and never explicitly rewinds Request.Body between them, which
+// previously made a bounded retry against a transient 5xx racy for a
+// body-bearing call -- depending on Go's HTTP transport-level connection
+// reuse timing, the retried attempt sometimes reached the server
+// successfully and sometimes failed client-side with a net/http transfer
+// error ("ContentLength=N with Body length 0") before ever reaching the
+// network. Both outcomes were reproduced locally against this pinned SDK
+// version. Body-bearing calls (Search here; the same applies to
+// AddFactTriple and CreateGraph) now pass a per-call MaxAttempts(1) that
+// overrides the client's configured retry budget, so the outcome is
+// deterministic: the server is hit exactly once, and no dependency response
+// body leaks through safeDependencyError, regardless of how high
+// Config.MaxAttempts is set.
+func TestSDKAPIBodyBearingCallsMakeExactlyOneRequestOnServerError(t *testing.T) {
 	t.Parallel()
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		requests++
-		if requests == 1 {
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(`{"message":"transient-secret-detail"}`))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"nodes":[],"edges":[],"episodes":[],"observations":[],"thread_summaries":[]}`))
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"message":"transient-secret-detail"}`))
 	}))
 	defer server.Close()
 	client, err := newSDKAPI(Config{
 		BaseURL: server.URL + "/api/v2", APIKey: "test-key", GraphPrefix: "acr-cf",
-		RequestTimeout: 2 * time.Second, MaxAttempts: 2, MaxResults: 10, AllowInsecure: true,
+		RequestTimeout: 2 * time.Second, MaxAttempts: 3, MaxResults: 10, AllowInsecure: true,
 	})
 	if err != nil {
 		t.Fatalf("newSDKAPI() error = %v", err)
@@ -622,17 +619,18 @@ func TestSDKAPIBodyBearingCallsDegradeSafelyUnderBoundedRetry(t *testing.T) {
 	scope := zep.GraphSearchScopeNodes
 	graph := graphID("acr-cf", "org-retry")
 	_, searchErr := client.Search(context.Background(), &zep.GraphSearchQuery{GraphID: &graph, Query: "Ask Dev", Scope: &scope})
-	if searchErr != nil {
-		classified := safeDependencyError("search", searchErr)
-		if classified == nil || classified.Error() == "" {
-			t.Fatalf("safeDependencyError() produced no safe error for %v", searchErr)
-		}
-		if strings.Contains(classified.Error(), "transient-secret-detail") {
-			t.Fatalf("safeDependencyError() leaked dependency detail: %q", classified.Error())
-		}
+	if searchErr == nil {
+		t.Fatal("Search() against a persistently failing server unexpectedly succeeded")
 	}
-	if requests < 1 {
-		t.Fatal("Search() never reached the server")
+	classified := safeDependencyError("search", searchErr)
+	if classified == nil || classified.Error() == "" {
+		t.Fatalf("safeDependencyError() produced no safe error for %v", searchErr)
+	}
+	if strings.Contains(classified.Error(), "transient-secret-detail") {
+		t.Fatalf("safeDependencyError() leaked dependency detail: %q", classified.Error())
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want exactly 1: a body-bearing call must never retry against this pinned SDK version's non-rewinding request body, regardless of Config.MaxAttempts", requests)
 	}
 }
 

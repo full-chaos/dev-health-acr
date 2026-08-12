@@ -69,13 +69,20 @@ No `zep-go` request or response type is allowed in public Context Fabric contrac
   calls — `Search`, `AddFactTriple`, `CreateGraph` — a retried attempt races
   Go's `net/http` transport: it was reproduced both succeeding and failing
   client-side with `http: ContentLength=N with Body length 0` across
-  otherwise-identical local runs (`TestSDKAPIBodyBearingCallsDegradeSafelyUnderBoundedRetry`).
-  ACR still degrades safely either way — no panic, no leaked dependency body
-  — but **retries must not be relied on to make a transient 5xx/429 on a
-  write or search call recoverable** until the SDK is upgraded past this
-  version or ACR adds its own call-level retry (a fresh top-level SDK method
-  call, not the SDK's internal one, builds a fresh request and does not hit
-  this race).
+  otherwise-identical local runs.
+  **Hardening (current behavior):** `sdkAPI` now passes a per-call
+  `zepoption.WithMaxAttempts(1)` on all three body-bearing calls, which
+  overrides `Config.MaxAttempts` for just those calls. This makes the
+  outcome deterministic — one attempt, one request — rather than racy:
+  a transient 5xx/429 on a write or search call is no longer retried at
+  all and surfaces to the caller immediately (proved:
+  `TestSDKAPIBodyBearingCallsMakeExactlyOneRequestOnServerError`, which
+  asserts exactly one request reaches the server regardless of how high
+  `Config.MaxAttempts` is set). This trades a chance at transient-failure
+  recovery for a guaranteed-safe outcome; regaining retry on writes/search
+  requires either upgrading past this SDK version or ACR adding its own
+  call-level retry (a fresh top-level SDK method call, not the SDK's
+  internal one, builds a fresh request and does not hit this race).
 - Context cancellation propagates to the SDK (proved:
   `TestSDKAPIPropagatesContextCancellation`).
 - 404, authorization, and rate-limit failures are classified into bounded

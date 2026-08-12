@@ -198,6 +198,17 @@ type sdkAPI struct {
 	client *zepclient.Client
 }
 
+// suppressBodyRetry overrides the client's configured MaxAttempts to 1 for
+// the body-bearing calls below (CreateGraph, AddFactTriple, Search). The
+// pinned SDK version never rewinds http.Request.Body before a retry, so its
+// internal retrier resends a request whose body reader is already drained
+// -- an empty/truncated body on any retried attempt, not a genuine retry.
+// That makes the client-level retry setting nondeterministic specifically
+// for these three calls. Bodyless reads and deletes (GetGraph, DeleteGraph,
+// GetNode, DeleteNode, GetNodeEdges, DeleteEdge) are unaffected and keep the
+// configured bounded retries.
+var suppressBodyRetry = zepoption.WithMaxAttempts(1)
+
 func newSDKAPI(config Config) (api, error) {
 	if err := config.validate(); err != nil {
 		return nil, err
@@ -217,7 +228,7 @@ func (s *sdkAPI) GetGraph(ctx context.Context, graphID string) (*zep.Graph, erro
 }
 
 func (s *sdkAPI) CreateGraph(ctx context.Context, request *zep.CreateGraphRequest) (*zep.Graph, error) {
-	return s.client.Graph.Create(ctx, request)
+	return s.client.Graph.Create(ctx, request, suppressBodyRetry)
 }
 
 func (s *sdkAPI) DeleteGraph(ctx context.Context, graphID string) error {
@@ -226,11 +237,11 @@ func (s *sdkAPI) DeleteGraph(ctx context.Context, graphID string) error {
 }
 
 func (s *sdkAPI) AddFactTriple(ctx context.Context, request *zep.AddTripleRequest) (*zep.AddTripleResponse, error) {
-	return s.client.Graph.AddFactTriple(ctx, request)
+	return s.client.Graph.AddFactTriple(ctx, request, suppressBodyRetry)
 }
 
 func (s *sdkAPI) Search(ctx context.Context, request *zep.GraphSearchQuery) (*zep.GraphSearchResults, error) {
-	return s.client.Graph.Search(ctx, request)
+	return s.client.Graph.Search(ctx, request, suppressBodyRetry)
 }
 
 func (s *sdkAPI) GetNode(ctx context.Context, nodeUUID string) (*zep.EntityNode, error) {
