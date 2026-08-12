@@ -94,15 +94,11 @@ services:
   # directly from the shared ACR image, entrypoint overridden exactly like
   # acr-migrate above -- independent lifecycle/deployment control from
   # acr-api, not a separate build. Disabled (ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=false)
-  # by default: there is no self-hostable Zep/Graphiti backend and no Zep
-  # Cloud credential in local development (ADR 0007), so this service comes
-  # up healthy-and-idle rather than crash-looping over a dependency nothing
-  # here can supply. Set ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true and
-  # ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS, plus the Zep Cloud credential below,
-  # once a Zep Cloud account and API key exist to enable it --
-  # zepgraph.Configured/runtime.go's own "unset dependency fails open, not
-  # closed" posture means leaving these two unset is exactly what keeps this
-  # service healthy-and-idle rather than crash-looping.
+  # by default: the `falkordb` service below is itself profile-gated
+  # (`context-fabric-graph`), disabled unless an operator opts in, so this
+  # service comes up healthy-and-idle rather than depending hard on a graph
+  # backend that may not be running -- see the FalkorDB env block below for
+  # what to set to enable it.
   acr-projector:
     image: ${ACR_IMAGE:?ACR_IMAGE must be an immutable image digest}
     entrypoint: ["/usr/local/bin/acr-projector"]
@@ -115,16 +111,14 @@ services:
       ACR_CONTEXT_FABRIC_PROJECTION_ENABLED: ${ACR_CONTEXT_FABRIC_PROJECTION_ENABLED:-false}
       ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS: ${ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS:-}
       ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED: ${ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED:-false}
-      # FalkorDB graph backend (ADR 0009, supersedes ADR 0007's Zep Cloud
-      # decision): self-hosted, no external credential required -- unlike
-      # Zep, there is no secret to leave unprovisioned here. Still left
-      # unset/disabled by default: the `falkordb` service below is itself
-      # gated behind the `context-fabric-graph` profile, disabled unless an
-      # operator opts in, so acr-projector comes up healthy-and-idle exactly
-      # like it did under the Zep Cloud posture (zepgraph.Configured /
-      # falkorgraph.Configured's own "unset dependency fails open, not
-      # closed" behavior) rather than depending hard on a profile-gated
-      # service that may not be running.
+      # FalkorDB graph backend (ADR 0009): self-hosted, no external
+      # credential required, so there is no secret to leave unprovisioned
+      # here. Still left unset/disabled by default: the `falkordb` service
+      # below is itself gated behind the `context-fabric-graph` profile,
+      # disabled unless an operator opts in, so acr-projector comes up
+      # healthy-and-idle (falkorgraph.Configured's own "unset dependency
+      # fails open, not closed" behavior) rather than depending hard on a
+      # profile-gated service that may not be running.
       ACR_CONTEXT_FABRIC_FALKOR_ADDR: ${ACR_CONTEXT_FABRIC_FALKOR_ADDR:-}
       ACR_CONTEXT_FABRIC_FALKOR_PASSWORD_FILE: ${ACR_CONTEXT_FABRIC_FALKOR_PASSWORD_FILE:-}
       ACR_CONTEXT_FABRIC_FALKOR_TLS: ${ACR_CONTEXT_FABRIC_FALKOR_TLS:-false}
@@ -143,9 +137,8 @@ services:
       retries: 3
       start_period: 30s
     networks: [dev-health]
-  # falkordb is the Context Fabric graph backend (ADR 0009). Self-hosted, no
-  # external credential -- the operational win over the ADR 0007 Zep Cloud
-  # posture this supersedes. Disabled by default (profile-gated): local dev
+  # falkordb is the Context Fabric graph backend (ADR 0009). Self-hosted,
+  # no external credential required. Disabled by default (profile-gated): local dev
   # and CI do not pay for a graph database they have not opted into. Enable
   # with `docker compose --profile context-fabric-graph up`, and set
   # ACR_CONTEXT_FABRIC_FALKOR_ADDR=falkordb:6379 (plus

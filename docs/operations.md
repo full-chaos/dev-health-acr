@@ -113,12 +113,8 @@ against every configured organization: it reads canonical Dev Health data
 (`internal/contextfabric/devhealthsource`, ClickHouse + `acr.agent_episodes`)
 and applies it to the graph backend. The graph backend is FalkorDB,
 self-hosted (`internal/contextfabric/falkorgraph`,
-[ADR 0009](adr/0009-context-fabric-falkordb-graph-adapter.md)), which
-superseded the Zep Cloud decision in
-[ADR 0007](adr/0007-context-fabric-zep-graph-adapter.md) -- `zepgraph`
-remains in-tree and fully tested, selectable behind the same
-`ProjectionBackend`/`GraphReader` ports, but FalkorDB is the current
-decision and needs no external credential to run. See
+[ADR 0009](adr/0009-context-fabric-falkordb-graph-adapter.md)), and needs
+no external credential to run. See
 [the design note](design/context-fabric-projection-worker.md) for the
 projection worker's own full shape and open follow-ups (Team/Project
 projection, org auto-discovery), and
@@ -145,8 +141,7 @@ Deployment both do this directly; neither introduces a helper script.
 Both Compose and Helm default `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED` to
 `false`. Reaching a healthy, running-but-disabled `acr-projector` is
 therefore the expected out-of-the-box state — the same "an unset dependency
-must never fail closed" posture as `falkorgraph.Configured`
-(`zepgraph.Configured` before it), because:
+must never fail closed" posture as `falkorgraph.Configured`, because:
 
 - the `falkordb` Compose service (ADR 0009) is profile-gated
   (`context-fabric-graph`), disabled unless an operator opts in, so local
@@ -159,16 +154,13 @@ To actually run it: bring up the `falkordb` Compose service
 (`docker compose --profile context-fabric-graph up`), set
 `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true`, supply
 `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS`, and point
-`ACR_CONTEXT_FABRIC_FALKOR_ADDR` at it (e.g. `falkordb:6379`) — unlike Zep
-Cloud, FalkorDB is self-hosted and needs no external credential at all (ADR
-0009); `ACR_CONTEXT_FABRIC_FALKOR_PASSWORD` stays optional and empty by
-default, matching FalkorDB's own no-auth default. **Not yet wired:** Helm
-has no `contextFabric.falkor.*` values yet (only the ADR 0007-era
-`contextFabric.zep.*`), and neither `cmd/acr-projector` nor `cmd/acr-api`'s
-hosted runtime composition has been changed to construct a
-`falkorgraph.Adapter` — both are flagged as open follow-ups in ADR 0009,
-not silently assumed done (`internal/runtime/hosted` still constructs
-`zepgraph.New` for reads today). Reads (`internal/contextfabric.GraphReader`,
+`ACR_CONTEXT_FABRIC_FALKOR_ADDR` at it (e.g. `falkordb:6379`) — FalkorDB is
+self-hosted and needs no external credential at all (ADR 0009);
+`ACR_CONTEXT_FABRIC_FALKOR_PASSWORD` stays optional and empty by default,
+matching FalkorDB's own no-auth default. Both `cmd/acr-projector` and
+`cmd/acr-api`'s hosted runtime composition construct a `falkorgraph.Adapter`
+from this same env contract; Helm's `contextFabric.falkor.*` values wire the
+projector Deployment the same way. Reads (`internal/contextfabric.GraphReader`,
 the investigation endpoint) are a completely independent enablement:
 `ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED` (`config.GraphReadsEnabledEnvVar`),
 wired by CHAOS-3755's hosted composition
@@ -190,13 +182,11 @@ the coordinator holds a PostgreSQL advisory lock
 (`projectionrun.PostgresOrgLocker`, `pg_try_advisory_lock`) for an
 organization's entire multi-source projection pass, so concurrent
 `acr-projector` replicas — and overlapping ticks within one replica — can
-never race two sources' writes for the same organization. This requirement
-originates with `zepgraph`'s attribute merge, which has no compare-and-swap
-(ADR 0007) — `falkorgraph`'s own merge is a single atomic `MERGE ... SET n
-+= $attrs` statement under FalkorDB's own row lock (ADR 0009), which closes
-that specific race, but the per-organization serialization requirement is
-kept unchanged for both backends: other batch-level ordering guarantees
-still depend on it, not just the attribute-merge race.
+never race two sources' writes for the same organization. `falkorgraph`'s
+own merge is a single atomic `MERGE ... SET n += $attrs` statement under
+FalkorDB's own row lock (ADR 0009), but the per-organization serialization
+requirement is kept regardless: other batch-level ordering guarantees still
+depend on it, not just single-node attribute-merge atomicity.
 
 **Rebuild:**
 
@@ -237,12 +227,14 @@ go test -count=1 -run TestLiveFalkorDBContextFabricLifecycle ./internal/contextf
 ```
 
 This always runs, in ordinary CI included — FalkorDB needs no external
-credential, unlike Zep Cloud. `internal/contextfabric/zepgraph` (ADR 0007,
-superseded but still in-tree) proves the same contract against a fake
-transport, plus a live end-to-end proof gated on `ACR_TEST_ZEP_BASE_URL`/
-`ACR_TEST_ZEP_API_KEY` that has never run against a real endpoint (no Zep
-Cloud account exists in this environment) — see ADR 0007 for that test's
-own invocation. `acr-projector`'s own checkpoint store
+credential, so there is no environment gate to skip.
+`cmd/acr-projector/runtime_falkordb_live_test.go` additionally proves the
+real runtime-composition path end to end: `openRuntime` against a real
+FalkorDB and PostgreSQL, one real `Coordinator.Tick`, the checkpoint
+advancing in Postgres, nodes present via a raw `GRAPH.RO_QUERY`, and a
+second `falkorgraph.Adapter` (built the way `acr-api`'s hosted composition
+builds one) resolving the projected subject back out. `acr-projector`'s own
+checkpoint store
 (`internal/contextfabric/pgprojection`), org-lock, and coordinator
 single-flight/failure-isolation/backoff behavior are proved against real
 PostgreSQL (`testcontainers`) and fakes standing in for the graph backend

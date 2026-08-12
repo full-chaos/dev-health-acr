@@ -28,14 +28,17 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "zep": {
+        "falkor": {
           "type": "object",
           "additionalProperties": false,
-          "description": "ADR 0007 Zep/Graphiti graph backend credential, consumed only by acr-projector. No Zep workload is ever rendered by this chart.",
+          "description": "ADR 0009 FalkorDB graph backend connection, consumed by acr-projector and acr-api's optional Investigator. No FalkorDB workload is ever rendered by this chart -- addr must point at a self-hosted instance.",
           "properties": {
-            "baseUrl": { "type": "string" },
+            "addr": { "type": "string" },
+            "tls": { "type": "boolean" },
+            "allowInsecure": { "type": "boolean" },
+            "graphPrefix": { "type": "string" },
             "existingSecret": { "type": "string" },
-            "apiKeyKey": { "type": "string" }
+            "passwordKey": { "type": "string" }
           }
         },
         "projector": {

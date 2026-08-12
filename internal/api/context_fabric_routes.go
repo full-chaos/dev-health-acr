@@ -109,7 +109,7 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	}
 	// Rate limiting: contextfabric.ErrRateLimited is the vendor-neutral
 	// classification every graph backend adapter wraps its own
-	// rate-limit error into (see zepgraph.safeDependencyError);
+	// rate-limit error into (see falkorgraph.safeDependencyError);
 	// ErrModelRateLimited is the pre-existing, distinct classification
 	// for the model runtime (ADR 0008). Both mean the same thing to a
 	// caller: back off and retry later.
@@ -119,7 +119,7 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	}
 	// contextfabric.ErrUnavailable already covers both a graph/model
 	// dependency being down AND a graph backend rejecting ACR's own
-	// service credential (zepgraph.safeDependencyError wraps that case
+	// service credential (falkorgraph.safeDependencyError wraps that case
 	// into ErrUnavailable too -- see its comment: an ACR-side credential
 	// problem is never presented to the caller as "you are unauthorized").
 	// ErrModelUnavailable joins the same bucket for the model runtime.

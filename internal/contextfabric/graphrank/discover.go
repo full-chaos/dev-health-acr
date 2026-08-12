@@ -14,13 +14,13 @@ import (
 // first-hop-trusted node from its own search results, a second-hop
 // fetch-and-verify against an org-agnostic UUID lookup, or a single
 // whole-path query that never needed the distinction at all). AdmitEdges
-// owns none of that resolution or the I/O it took -- see zepgraph's
-// DiscoverContext for the Zep-shaped second-hop machinery, which is
-// deliberately NOT here: a backend where every lookup is already
-// structurally scoped to one organization (e.g. falkorgraph's
-// one-graph-per-org) has no second-hop concept to inject, and forcing one
-// into this shared package would leak a Zep-specific shape into every other
-// backend.
+// owns none of that resolution or the I/O it took -- zepgraph's
+// DiscoverContext (before its CHAOS-3771 deletion) had the Zep-shaped
+// second-hop machinery, deliberately NOT here: a backend where every
+// lookup is already structurally scoped to one organization (e.g.
+// falkorgraph's one-graph-per-org) has no second-hop concept to inject, and
+// forcing one into this shared package would leak a Zep-specific shape into
+// every other backend.
 type ResolvedEdge struct {
 	UUID string
 	// Name is the raw, backend-reported relation name; AdmitEdges applies

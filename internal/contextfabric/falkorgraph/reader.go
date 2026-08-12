@@ -12,8 +12,8 @@ import (
 )
 
 // isInternalSubject always reports false: falkorgraph has no anchor/marker
-// nodes the way zepgraph does (organizationRoot, projection-watermark
-// subject) -- those exist only because Zep's AddFactTriple forces every
+// nodes the way zepgraph did (organizationRoot, projection-watermark
+// subject) -- those existed only because Zep's AddFactTriple forced every
 // fact to have a source+target node. This adapter's watermark is its own
 // reserved-label node (labelWatermark), never a :Subject node, so it can
 // never surface as a subject candidate or relationship endpoint in the

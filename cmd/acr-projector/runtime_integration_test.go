@@ -9,16 +9,20 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
-// TestOpenRuntimeWiresPostgresAndClickHouseThenDisablesWithoutAZepBackend
+// TestOpenRuntimeWiresPostgresAndClickHouseThenDisablesWithoutAFalkorBackend
 // proves the real composition path -- Postgres connects, migrations apply,
 // the ClickHouse client constructs -- against a real PostgreSQL instance.
-// It stops short of a live graph backend: no Zep Cloud credential exists in
-// this environment (ADR 0007's documented external blocker), so this is the
-// fake/env-gated seam the same way zepgraph.TestLiveZep* is gated. Wiring a
-// real zepgraph.Adapter here would need ACR_CONTEXT_FABRIC_ZEP_BASE_URL /
-// ACR_CONTEXT_FABRIC_ZEP_API_KEY, at which point openRuntime's own
-// zepgraph.Configured/zepgraph.New path (identical to production) takes over.
-func TestOpenRuntimeWiresPostgresAndClickHouseThenDisablesWithoutAZepBackend(t *testing.T) {
+// It stops short of a live graph backend: this test does not set
+// ACR_CONTEXT_FABRIC_FALKOR_ADDR, so this is the disabled/unconfigured seam
+// (falkorgraph's own live lifecycle test, gated on a real testcontainers
+// FalkorDB, proves the configured path -- see
+// internal/contextfabric/falkorgraph/adapter_live_integration_test.go).
+// Wiring a real falkorgraph.Adapter here would need
+// ACR_CONTEXT_FABRIC_FALKOR_ADDR (plus optional
+// ACR_CONTEXT_FABRIC_FALKOR_PASSWORD), at which point openRuntime's own
+// falkorgraph.Configured/falkorgraph.New path (identical to production)
+// takes over.
+func TestOpenRuntimeWiresPostgresAndClickHouseThenDisablesWithoutAFalkorBackend(t *testing.T) {
 	ctx := context.Background()
 	container, err := tcpostgres.Run(ctx, "postgres:18-alpine",
 		tcpostgres.WithDatabase("acr"), tcpostgres.WithUsername("acr"), tcpostgres.WithPassword("acr"), tcpostgres.BasicWaitStrategies(),
@@ -39,7 +43,7 @@ func TestOpenRuntimeWiresPostgresAndClickHouseThenDisablesWithoutAZepBackend(t *
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
 
 	if runtime.Coordinator != nil {
-		t.Fatal("coordinator must not start without a configured Zep graph backend")
+		t.Fatal("coordinator must not start without a configured FalkorDB graph backend")
 	}
 }
 

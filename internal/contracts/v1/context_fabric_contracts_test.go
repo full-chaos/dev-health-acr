@@ -127,9 +127,9 @@ func TestContextFabricProjectionRequiresCompleteEnumerationAndScalarOneOf(t *tes
 
 // TestContextFabricAuthorizationScopeRejectsSeparatorCharacter guards the v1
 // port against a scope value that would corrupt a backend's delimited-string
-// encoding (e.g. zepgraph's "|a|b|" scope encoding uses '|' as its
-// separator): such a value must be rejected here, before any backend ever
-// sees it.
+// encoding (e.g. zepgraph's "|a|b|" scope encoding used '|' as its
+// separator, before its CHAOS-3771 deletion): such a value must be rejected
+// here, before any backend ever sees it.
 func TestContextFabricAuthorizationScopeRejectsSeparatorCharacter(t *testing.T) {
 	t.Parallel()
 	for _, scope := range []ContextFabricAuthorizationScope{
@@ -204,7 +204,8 @@ func TestContextFabricReservedOrganizationScopeRejectedOutsideOrganizationSubjec
 
 // TestContextFabricBoundedEvidenceRefsRejectsSeparatorCharacter guards
 // against the same corruption for evidence ref IDs, which the zepgraph
-// adapter encodes with the same delimited-string scheme.
+// adapter encoded with the same delimited-string scheme, before its
+// CHAOS-3771 deletion.
 func TestContextFabricBoundedEvidenceRefsRejectsSeparatorCharacter(t *testing.T) {
 	t.Parallel()
 	batch := validContextFabricProjectionBatch()
@@ -216,10 +217,10 @@ func TestContextFabricBoundedEvidenceRefsRejectsSeparatorCharacter(t *testing.T)
 
 // TestContextFabricEntityProjectionRejectsSeparatorCharacterInAliases
 // guards against the same corruption for entity aliases and previous
-// names: the zepgraph adapter's encodeScope uses '|' as its delimited-
-// string separator, so a '|'-bearing alias/previous-name would corrupt
-// that encoding and be silently dropped rather than stored, rather than
-// failing loudly at the port.
+// names: the zepgraph adapter's encodeScope used '|' as its delimited-
+// string separator (before its CHAOS-3771 deletion), so a '|'-bearing
+// alias/previous-name would corrupt that encoding and be silently dropped
+// rather than stored, rather than failing loudly at the port.
 func TestContextFabricEntityProjectionRejectsSeparatorCharacterInAliases(t *testing.T) {
 	t.Parallel()
 	for _, mutate := range []struct {

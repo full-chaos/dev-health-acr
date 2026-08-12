@@ -218,10 +218,12 @@ func boundedEvidenceRefs(values []string, maximum int, allowEmpty bool) bool {
 		return false
 	}
 	for _, value := range values {
-		// '|' is the delimited-string separator backends such as the
-		// zepgraph adapter use to encode a list of evidence ref IDs; an
-		// evidence ref ID containing it would corrupt that encoding and
-		// silently narrow the stored evidence closure.
+		// '|' is the delimited-string separator a graph backend adapter
+		// storing a list of strings as a single field would use to encode
+		// evidence ref IDs (zepgraph did, before its CHAOS-3771 deletion);
+		// an evidence ref ID containing it would corrupt that encoding and
+		// silently narrow the stored evidence closure. Kept as a contract
+		// invariant regardless of which backend is current.
 		if !stringLengthBetween(value, 8, 256) || strings.TrimSpace(value) != value || strings.Contains(value, "|") {
 			return false
 		}
@@ -230,8 +232,9 @@ func boundedEvidenceRefs(values []string, maximum int, allowEmpty bool) bool {
 }
 
 // containsSeparatorCharacter reports whether any value contains '|', the
-// delimited-string separator character used by backends that persist a list
-// of strings as a single "|a|b|"-encoded field (see zepgraph's encodeScope).
+// delimited-string separator character a backend that persists a list of
+// strings as a single "|a|b|"-encoded field would use (zepgraph's
+// encodeScope did, before its CHAOS-3771 deletion).
 func containsSeparatorCharacter(values []string) bool {
 	for _, value := range values {
 		if strings.Contains(value, "|") {

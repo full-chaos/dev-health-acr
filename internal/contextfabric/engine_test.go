@@ -339,8 +339,8 @@ func TestEngineSkipsUnresolvablePriorSubjectReceiptWithoutFailing(t *testing.T) 
 // is the direct proof requested for the receipt path: a receipt that
 // resolves to a real prior subject, but whose subject does not survive
 // GraphReader's own authorization check (the same silent-drop behavior any
-// exact SubjectHint goes through -- see
-// zepgraph's TestResolveSubjectsFiltersUnauthorizedNodesBeforeCandidates),
+// exact SubjectHint goes through -- see graphrank's
+// TestNodeCandidateFiltersUnauthorizedNodesBeforeCandidates),
 // must not leak that subject into the investigation, must not error, and
 // must still surface as a content-safe skip count.
 func TestEngineDoesNotLeakOrErrorWhenPriorSubjectReceiptFailsGraphAuthorization(t *testing.T) {
@@ -391,7 +391,7 @@ func TestEngineDoesNotLeakOrErrorWhenPriorSubjectReceiptFailsGraphAuthorization(
 // receipt-derived hints, previously produced up to 70 hints with nothing
 // capping the total before GraphReader -- and GraphReader's exact-hint path
 // itself did not cap to Options.MaxSubjectCandidates either (see the
-// zepgraph-level fix), so an entirely valid request (each part individually
+// graph-adapter-level fix), so an entirely valid request (each part individually
 // within its own bound) could still fail deep in the pipeline once
 // SubjectResolution.Candidates exceeded the result contract's bound of 50.
 // Engine must cap the combined total at the contract bound itself, dropping

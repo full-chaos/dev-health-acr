@@ -1,4 +1,4 @@
-package zepgraph
+package falkorgraph
 
 import (
 	"context"
@@ -8,19 +8,39 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// This file wires a real contextfabric.Engine against the real zepgraph
-// Adapter (fake transport) rather than a test double for GraphReader. It
-// lives in package zepgraph -- not contextfabric -- specifically so it can
-// import contextfabric (zepgraph already depends on contextfabric; the
-// reverse is never true, so this does not create an import cycle) and get
-// the real authorization/lookup code path, which a contextfabric-package
-// stub cannot exercise.
+// This file is the falkorgraph twin of zepgraph/engine_org_isolation_test.go's
+// TestEngineWithRealGraphReaderNeverLeaksCrossOrgSubjectFromHostileResultStore
+// (Codex finding G6). It lives in package falkorgraph (not falkorgraph_test)
+// for the same reason zepgraph's does: to get a real, unmocked
+// contextfabric.Engine wired to a real *Adapter over a fake conn, exercising
+// the actual authorization/lookup code path.
+//
+// falkorgraph derives node identity differently from zepgraph (subjectUUID,
+// a plain kind+canonical_id pair scoped structurally by the graph key --
+// see queries.go/identity.go -- not zepgraph's org-derived nodeUUID hash),
+// so this needs its own proof: the security property under test is that
+// GraphReader.ResolveSubjects re-authorizes every prior receipt against the
+// CALLING principal's own graph identity.
+//
+// The fake conn below is deliberately HOSTILE with respect to the org query
+// parameter: it ignores params["org"] entirely and returns the planted org B
+// row for any kind+id match, regardless of what org the caller claims. A
+// bare fakeConn cannot interpret Cypher (it never even inspects the cypher
+// string), so it cannot prove the production query's org_id:$org predicate
+// is honored -- only a real FalkorDB server can (see
+// adapter_live_integration_test.go's cross-organization isolation step).
+// What this fake CAN prove -- and is gated on -- is the actual mechanism
+// available to a fake at this boundary: falkorgraph's graph-per-org design,
+// where ResolveSubjects/ExactHint issue every query against
+// graphKey(prefix, principal.OrgID), a server-derived key string computed
+// fresh per call from the CALLING principal, never from anything the
+// hostile prior result claimed. The fake returns the org B row only when
+// queried under org B's own graph key -- exactly the physical separation a
+// real FalkorDB server provides between graph keys, no predicate needed.
+// Revert-verify: neutering that graph-key derivation (e.g. hardcoding it,
+// or deriving it from something other than principal.OrgID) makes org A's
+// lookup hit org B's key and this test fails.
 
-// hostileResultStore is an InvestigationResultStore that violates the
-// org-scoping binding precondition documented on the port (ports.go):
-// Get ignores the calling principal entirely and always returns the same
-// fixed result, as if it read a differently-organization-scoped record
-// (or none at all) without checking who asked.
 type hostileResultStore struct {
 	alwaysReturn contextfabric.InvestigationResult
 }
@@ -68,31 +88,30 @@ func (noMatchSynthesizer) Synthesize(context.Context, storage.Principal, context
 }
 
 // TestEngineWithRealGraphReaderNeverLeaksCrossOrgSubjectFromHostileResultStore
-// is the proof requested for Codex finding G6. ContextFabricInvestigationResult
-// carries no organization discriminator (ports.go documents this as the
-// InvestigationResultStore.Get binding precondition: implementations MUST
-// scope Get to principal.OrgID), so Engine cannot defensively verify a
-// returned prior result's organization by inspecting the value itself. The
-// real defense is downstream: every subject a PriorSubjectReceipts entry
-// resolves to is re-authorized through GraphReader.ResolveSubjects's
-// exact-hint path, and that path looks the subject up by a UUID
-// deterministically keyed on the *calling* principal's own organization
-// (nodeUUID(principal.OrgID, subject)), never by anything read back from
-// the prior result. This test proves that closes the leak even against an
-// InvestigationResultStore that actively violates its own binding
-// precondition: a hostile store returns a real org B subject for any
-// principal, but org A's Engine.Investigate call still never resolves or
-// surfaces it, because that subject was never projected under org A's
-// graph identity.
+// is the falkorgraph twin of zepgraph's same-named test (Codex finding G6):
+// a hostile InvestigationResultStore that ignores org scoping and always
+// returns a fixed, real subject planted only in org B's graph must never let
+// that subject leak into org A's investigation, because
+// GraphReader.ResolveSubjects re-authorizes every prior receipt against the
+// calling principal's own identity before ever trusting the hostile store's
+// claim.
 func TestEngineWithRealGraphReaderNeverLeaksCrossOrgSubjectFromHostileResultStore(t *testing.T) {
 	t.Parallel()
-	api := newFakeAPI()
-	adapter := mustAdapter(t, api)
 
-	// A real, canonical subject that genuinely exists -- but only in
-	// organization "org_b"'s graph.
 	orgBSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_org_b_secret", Label: "Org B Secret Project"}
-	api.nodes[nodeUUID("org_b", orgBSubject)] = graphNode(nodeUUID("org_b", orgBSubject), orgBSubject.Kind, orgBSubject.CanonicalID, orgBSubject.Label, "*", 1)
+	const fakeGraphPrefix = "acr-cf-fake" // must match newFakeAdapter's Config.GraphPrefix below
+	orgBGraphKey := graphKey(fakeGraphPrefix, "org_b")
+
+	// Hostile: gated on the graph key alone, never on params["org"] -- see
+	// the doc comment above for why. Planted under org B's own graph key,
+	// exactly where the real system's graph-per-org design would put it.
+	fake := &fakeConn{queryFunc: func(ctx context.Context, gk, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if gk == orgBGraphKey && params["kind"] == string(orgBSubject.Kind) && params["id"] == orgBSubject.CanonicalID {
+			return []row{fakeSubjectNodeRow(string(orgBSubject.Kind), orgBSubject.CanonicalID, orgBSubject.Label)}, nil
+		}
+		return nil, nil
+	}}
+	adapter := newFakeAdapter(t, fake)
 
 	hostilePrior := contextfabric.InvestigationResult{
 		SubjectResolution: contextfabric.SubjectResolution{
@@ -116,8 +135,16 @@ func TestEngineWithRealGraphReaderNeverLeaksCrossOrgSubjectFromHostileResultStor
 		t.Fatalf("NewEngine() error = %v", err)
 	}
 
-	request := validRequest()
-	request.PriorSubjectReceipts = []contextfabric.BoundSubjectReceipt{{ResultID: "result_from_org_b", ReceiptID: "receipt_cross_org1"}}
+	request := contextfabric.InvestigationRequest{
+		SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_12345678",
+		Question: "What is driving this?", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Options: contextfabric.InvestigationOptions{
+			MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
+			MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144, AllowClarification: true,
+		},
+		Consumer:             contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"},
+		PriorSubjectReceipts: []contextfabric.BoundSubjectReceipt{{ResultID: "result_from_org_b", ReceiptID: "receipt_cross_org1"}},
+	}
 
 	// The calling principal is a genuinely different organization from the
 	// hostile store's fixed response.

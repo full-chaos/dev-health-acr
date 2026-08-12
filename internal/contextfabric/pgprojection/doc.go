@@ -2,8 +2,8 @@
 // ProjectionCheckpointStore. Checkpoints are a contextfabric-only concept
 // (no other package needs them), so this package owns its own SQL and
 // *sql.DB dependency directly -- mirroring how
-// internal/contextfabric/zepgraph owns its backend -- rather than adding a
-// checkpoints table to internal/storage's shared surface.
+// internal/contextfabric/falkorgraph owns its backend -- rather than adding
+// a checkpoints table to internal/storage's shared surface.
 //
 // Approved-episode reads deliberately do NOT live here: they route through
 // storage.EpisodeStore.ListSince (internal/storage/postgres and

@@ -59,9 +59,10 @@ type Config struct {
 	// GraphReadsEnabledEnvVar ("ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED"),
 	// the flag reserved for exactly this since CHAOS-3753's design. Even
 	// when true, the investigator is only wired if the graph backend is
-	// separately configured (zepgraph.Configured) -- composition never
+	// separately configured (falkorgraph.Configured) -- composition never
 	// fails closed over an unconfigured optional dependency, matching the
-	// convention ADR 0007 established for the projection worker.
+	// convention ADR 0007 established (and ADR 0009 carries forward) for
+	// the projection worker.
 	EnableContextFabricInvestigations    bool
 	MinimumSidecarVersion                string
 	RevokedClientVersions                []string

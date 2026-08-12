@@ -12,9 +12,9 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgprojection"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/zepgraph"
 	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
@@ -24,8 +24,9 @@ import (
 // Runtime is the composed acr-projector process. Coordinator is nil when
 // projection is disabled or not fully configured -- see openRuntime -- so
 // the binary always comes up and stays healthy rather than crash-looping
-// over an intentionally-unconfigured dependency (mirrors zepgraph.Configured's
-// "an unset deployment should never fail closed" posture from ADR 0007).
+// over an intentionally-unconfigured dependency (mirrors falkorgraph.Configured's
+// "an unset deployment should never fail closed" posture, carried over from
+// ADR 0007 and restated for FalkorDB in ADR 0009).
 type Runtime struct {
 	Coordinator *projectionrun.Coordinator
 	Checks      []api.ReadinessCheck
@@ -78,12 +79,12 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	}
 	runtime.closers = append(runtime.closers, clickhouseClient.Close)
 
-	backend, zepCheck, err := openProjectionBackend()
+	backend, falkorCheck, err := openProjectionBackend()
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
 	if backend == nil {
-		logger.WarnContext(ctx, "context fabric projection is enabled but no graph backend is configured (ACR_CONTEXT_FABRIC_ZEP_BASE_URL unset); running disabled")
+		logger.WarnContext(ctx, "context fabric projection is enabled but no graph backend is configured (ACR_CONTEXT_FABRIC_FALKOR_ADDR unset); running disabled")
 		return runtime, nil
 	}
 
@@ -131,7 +132,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	runtime.Checks = []api.ReadinessCheck{
 		api.CheckFunc{CheckName: "postgres", Fn: func(ctx context.Context) error { return checkPostgresRuntime(ctx, db, runner) }},
 		api.CheckFunc{CheckName: "clickhouse", Fn: clickhouseClient.Ping},
-		api.CheckFunc{CheckName: "zep", Fn: zepCheck},
+		api.CheckFunc{CheckName: "falkordb", Fn: falkorCheck},
 	}
 	return runtime, nil
 }
@@ -147,31 +148,32 @@ func checkPostgresRuntime(ctx context.Context, db *sql.DB, runner *migrations.Ru
 }
 
 // probeOrg/probeSource never correspond to a real organization; ProjectionWatermark
-// against them is expected to return zepgraph.ErrNotFound on a healthy backend
+// against them is expected to return falkorgraph.ErrNotFound on a healthy backend
 // (the marker node simply doesn't exist), which openProjectionBackend's check
 // treats as reachable, not as a failure.
 const probeOrg, probeSource = "acr-projector-readiness-probe", "readiness"
 
 // openProjectionBackend constructs the production contextfabric.ProjectionBackend
-// (the Zep/Graphiti adapter, per ADR 0007) when configured, and returns a nil
-// backend -- not an error -- when it isn't: an unconfigured Zep endpoint is an
-// accepted, intentionally-disabled state (see ADR 0007's "Deployment topology"),
-// not a startup failure.
+// (the FalkorDB adapter, per ADR 0009, which supersedes ADR 0007's Zep Cloud
+// decision) when configured, and returns a nil backend -- not an error --
+// when it isn't: an unconfigured FalkorDB endpoint is an accepted,
+// intentionally-disabled state (see ADR 0009's "Deployment topology"), not a
+// startup failure.
 func openProjectionBackend() (contextfabric.ProjectionBackend, func(context.Context) error, error) {
-	if !zepgraph.Configured(os.LookupEnv) {
+	if !falkorgraph.Configured(os.LookupEnv) {
 		return nil, nil, nil
 	}
-	zepConfig, err := zepgraph.ConfigFromEnv(os.LookupEnv)
+	falkorConfig, err := falkorgraph.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
-		return nil, nil, fmt.Errorf("zep configuration: %w", err)
+		return nil, nil, fmt.Errorf("falkordb configuration: %w", err)
 	}
-	adapter, err := zepgraph.New(zepConfig)
+	adapter, err := falkorgraph.New(falkorConfig)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open zep graph backend: %w", err)
+		return nil, nil, fmt.Errorf("open falkordb graph backend: %w", err)
 	}
 	check := func(ctx context.Context) error {
 		_, err := adapter.ProjectionWatermark(ctx, probeOrg, probeSource)
-		if err == nil || errors.Is(err, zepgraph.ErrNotFound) {
+		if err == nil || errors.Is(err, falkorgraph.ErrNotFound) {
 			return nil
 		}
 		return err

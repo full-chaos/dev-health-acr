@@ -252,7 +252,7 @@ const (
 // resolveEdge converts a CandidateEdge (as returned by edgesOfNode) into a
 // fully-resolved graphrank.ResolvedEdge by decoding its endpoint subjectUUIDs
 // back into SubjectRefs via a node lookup for the label -- falkorgraph never
-// needs a "second-hop verify" step the way zepgraph does (every lookup here
+// needs a "second-hop verify" step the way zepgraph did (every lookup here
 // is already structurally scoped to principal's own organization graph key),
 // so this is a plain fetch, not a trust decision.
 //

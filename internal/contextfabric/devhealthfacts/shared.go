@@ -90,7 +90,7 @@ func (f clickhouseFacts) query(ctx context.Context, statement, orgID string, ids
 // response's coverage.sources[].reason, so a raw ClickHouse driver error --
 // which can carry connection details, internal hostnames, or query
 // fragments -- must never reach it). This mirrors
-// internal/contextfabric/zepgraph/config.go's safeDependencyError, which
+// internal/contextfabric/falkorgraph/client.go's safeDependencyError, which
 // classifies to a fixed reason and never embeds the raw SDK error either.
 // contextfabric.FactReadFailure carries no field for the original err, and
 // this package has no server-side logging seam to hand it to (inventing one
