@@ -32,10 +32,18 @@ func (a *App) investigator() contextfabric.Investigator {
 // for the Reset 1 engine. Hosting composition supplies the investigator; API
 // code does not choose a graph backend or canonical fact adapter.
 func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Investigator) http.Handler {
-	if investigator == nil {
-		return http.HandlerFunc(a.handleRuntimeUnavailable)
-	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The nil check MUST live inside the handler body, after
+		// protectedRuntimeHandler has already run (auth, scope, rate
+		// limit) -- not as an early return from this factory that skips
+		// wrapping entirely. An early-return-unwrapped 503 would let an
+		// unauthenticated caller observe "investigator not configured"
+		// without ever being authenticated, rate-limited, or audited
+		// (CHAOS-3755 adversarial review finding H5).
+		if investigator == nil {
+			a.handleRuntimeUnavailable(w, r)
+			return
+		}
 		var request contextfabric.InvestigationRequest
 		if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil {
 			status := http.StatusBadRequest
@@ -124,7 +132,7 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 }
 
 func contextFabricResultItems(result contextfabric.InvestigationResult) int {
-	items := len(result.SubjectResolution.Candidates) + len(result.Drivers) + len(result.Paths) + len(result.RemainingWork) + len(result.ReadinessGaps) + len(result.Conflicts)
+	items := len(result.SubjectResolution.Candidates) + len(result.Drivers) + len(result.Paths) + len(result.RemainingWork) + len(result.ReadinessGaps) + len(result.Conflicts) + len(result.ClaimedFacts)
 	if result.Cohort != nil {
 		items += len(result.Cohort.Members)
 	}

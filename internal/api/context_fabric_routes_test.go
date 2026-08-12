@@ -220,3 +220,44 @@ func TestContextFabricInvestigationRouteWithoutInvestigatorReturns503(t *testing
 		t.Fatalf("status = %d, want 503 when no investigator is configured", response.Code)
 	}
 }
+
+// TestContextFabricInvestigationRouteRequiresAuthEvenWithoutInvestigator is
+// the H5 probe (Codex adversarial review, CHAOS-3755): when the hosted
+// investigator is not configured, the route must still run through the
+// full protectedRuntimeHandler boundary (auth, scope, rate limit) before
+// deciding it's unavailable -- an UNAUTHENTICATED caller must get the
+// normal 401, not a 503 that both skips auth and reveals whether the
+// investigator happens to be configured in this deployment.
+func TestContextFabricInvestigationRouteRequiresAuthEvenWithoutInvestigator(t *testing.T) {
+	app, _ := newContextFabricTestApp(t, nil)
+	request := investigationRequest(t, "not-a-real-token")
+	request.Header.Set("Authorization", "Bearer fcacr_totallyinvalidtoken0000000000")
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (auth must run before the nil-investigator check) body=%s", response.Code, response.Body.String())
+	}
+}
+
+// TestContextFabricResultItemsCountsClaimedFacts is the M3 probe (Codex
+// adversarial review, CHAOS-3755): ClaimedFacts is a real, potentially
+// large response component (one entry per canonical-fact-shaped
+// driver/finding) and must count toward the response's Items usage
+// budget the same way Drivers/Paths/Findings already do -- omitting it
+// would let a response with many claims under-report its own resource
+// usage.
+func TestContextFabricResultItemsCountsClaimedFacts(t *testing.T) {
+	result := validContextFabricInvestigationResult()
+	before := contextFabricResultItems(result)
+	result.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{
+		{ClaimID: "claim_1", Kind: contractsv1.ContextFabricFactStatus, Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}, Field: "status", Value: contractsv1.ContextFabricScalarValue{String: ptrString("in_progress")}},
+	}
+	after := contextFabricResultItems(result)
+	if after != before+1 {
+		t.Fatalf("contextFabricResultItems() = %d after adding one claim (was %d), want %d", after, before, before+1)
+	}
+}
+
+func ptrString(value string) *string { return &value }
