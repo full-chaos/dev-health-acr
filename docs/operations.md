@@ -105,34 +105,71 @@ the plaintext value is returned only at issuance. Rotation supports at most a
 15-minute overlap. After revocation commits, new requests reject the token;
 in-flight requests are not cancelled.
 
-### Context Fabric Zep graph dependency (Reset 0, not yet wired)
+### Context Fabric projection worker (`acr-projector`, CHAOS-3753)
 
-`internal/contextfabric/zepgraph` is the ACR-owned adapter to Graphiti/Zep
-(see [ADR 0007](adr/0007-context-fabric-zep-graph-adapter.md) for the full
-decision record). Two things are true about it at once today:
+`cmd/acr-projector` is a dedicated binary, independently deployed and scaled
+from `acr-api`, that runs `internal/contextfabric/projectionrun.Coordinator`
+against every configured organization: it reads canonical Dev Health data
+(`internal/contextfabric/devhealthsource`, ClickHouse + `acr.agent_episodes`)
+and applies it to the graph backend
+(`internal/contextfabric/zepgraph`, [ADR 0007](adr/0007-context-fabric-zep-graph-adapter.md)).
+See [the design note](design/context-fabric-projection-worker.md) for the
+full shape and open follow-ups (Team/Project projection, org auto-discovery).
 
-- Zep v3 (the API `github.com/getzep/zep-go/v3` speaks) is Zep Cloud only.
-  Zep discontinued the self-hosted Community Edition, so there is no vendor
-  container image to add to the Compose overlay or the Helm chart the way
-  Postgres or ClickHouse are added. Running it requires a Zep Cloud account
-  and API key, which is an external credential this repository does not
-  provision.
-- Neither Compose nor the Helm chart configures `zepgraph` yet, and neither
-  should until Reset 1 (CHAOS-3753/3754/3755) wires
-  `internal/contextfabric/zepgraph.ConfigFromEnv` into the hosted runtime
-  bundle and registers the Context Fabric endpoint. Wiring deployment
-  configuration ahead of a consumer would be dead configuration.
+It is compiled into the same image as `acr-api` (`Dockerfile`'s `acr-api`
+target also contains `/usr/local/bin/acr-projector`, exactly like
+`acr-migrate`) and run with its entrypoint overridden — Compose's
+`acr-projector` service and Helm's `contextFabric.projector.enabled`
+Deployment both do this directly; neither introduces a helper script.
 
-The adapter already understands its own environment contract, ready for
-that Reset 1 wiring: `ACR_CONTEXT_FABRIC_ZEP_BASE_URL`,
-`ACR_CONTEXT_FABRIC_ZEP_API_KEY` (accepting a `_FILE`-suffixed secret-file
-variable, same convention as every other ACR secret), `ACR_CONTEXT_FABRIC_ZEP_GRAPH_PREFIX`,
-`ACR_CONTEXT_FABRIC_ZEP_REQUEST_TIMEOUT`, `ACR_CONTEXT_FABRIC_ZEP_MAX_ATTEMPTS`,
-`ACR_CONTEXT_FABRIC_ZEP_MAX_RESULTS`, and `ACR_CONTEXT_FABRIC_ZEP_ALLOW_INSECURE`.
-`zepgraph.Configured` reports whether the base URL is set at all, so an
-unconfigured deployment never constructs the adapter.
+**Two independent enable/disable levers, on purpose:**
 
-The adapter's full lifecycle contract (projection, idempotent replay,
+- `contextFabric.projector.enabled` (Helm) / the Compose service itself —
+  whether the workload exists at all.
+- `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED` (`contextFabric.projector.projectionEnabled`
+  in Helm) — the running process's own master switch. When false, the
+  coordinator loop never starts; `/healthz`/`/readyz` still serve, reporting
+  `projection_enabled: false`. This is the rollback lever: flip it off
+  (or scale the Deployment to zero) without touching `acr-api` or the graph
+  backend.
+
+Both Compose and Helm default `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED` to
+`false`. Reaching a healthy, running-but-disabled `acr-projector` is
+therefore the expected out-of-the-box state — the same "an unset dependency
+must never fail closed" posture as `zepgraph.Configured`, because:
+
+- there is still no self-hostable Zep/Graphiti server image (ADR 0007), so
+  local development and CI have no live backend to project into;
+- `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS` (`contextFabric.projector.orgIds`)
+  is an explicit allowlist, empty by default — see the design note for why
+  this starts explicit rather than auto-discovered from `client_credentials`.
+
+To actually run it: set `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true`,
+supply `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS`, and configure the Zep Cloud
+credential (`ACR_CONTEXT_FABRIC_ZEP_BASE_URL` / `ACR_CONTEXT_FABRIC_ZEP_API_KEY`,
+same `_FILE` secret convention as every other ACR secret; Helm:
+`contextFabric.zep.baseUrl` / `contextFabric.zep.existingSecret`) once a Zep
+Cloud account and API key exist — an external, environment-provisioned
+credential this repository does not create (ADR 0007). Reads
+(`internal/contextfabric.GraphReader`, the investigation endpoint) are a
+completely independent enablement, reserved as
+`ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED` for Reset 1B/1C.
+
+**Single-flight per organization** (the CHAOS-3753 acceptance amendment):
+the coordinator holds a PostgreSQL advisory lock
+(`projectionrun.PostgresOrgLocker`, `pg_try_advisory_lock`) for an
+organization's entire multi-source projection pass, so concurrent
+`acr-projector` replicas — and overlapping ticks within one replica — can
+never race two sources' writes for the same organization. See
+`internal/contextfabric/zepgraph`'s `ApplyProjectionBatch` doc comment and
+ADR 0007 for why: the adapter's attribute merge has no compare-and-swap.
+
+**Rebuild:** reset an organization's checkpoint to the empty cursor and
+call `ProjectionBackend.PurgeOrganization` first; `devhealthsource` treats
+an empty cursor as "start a bounded, complete-enumeration snapshot" (see
+the design note) so the next batch replays canonical state from scratch.
+
+The adapter's own lifecycle contract (projection, idempotent replay,
 retrieval, tombstones, watermark, purge, organization isolation) is proved
 against a fake transport in `internal/contextfabric/zepgraph`. A live
 end-to-end proof exists as `TestLiveZepContextFabricLifecycle` in the same
@@ -144,10 +181,12 @@ ACR_TEST_ZEP_API_KEY=<zep-cloud-api-key> \
   go test -count=1 -run TestLiveZep ./internal/contextfabric/zepgraph -v
 ```
 
-It has not run against a real endpoint as part of CHAOS-3752: no Zep Cloud
-account or API key exists in this environment. Provisioning one (account,
-plan, and API key) is a prerequisite for both this live test and the Reset
-1 Compose/Helm wiring above.
+It has not run against a real endpoint: no Zep Cloud account or API key
+exists in this environment. `acr-projector`'s own checkpoint store
+(`internal/contextfabric/pgprojection`), org-lock, and coordinator
+single-flight/failure-isolation/backoff behavior are proved against real
+PostgreSQL (`testcontainers`) and fakes standing in for the graph backend
+and canonical source, following the same env/fake-gated pattern.
 
 ### Helm
 
