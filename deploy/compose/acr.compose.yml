@@ -97,9 +97,12 @@ services:
   # by default: there is no self-hostable Zep/Graphiti backend and no Zep
   # Cloud credential in local development (ADR 0007), so this service comes
   # up healthy-and-idle rather than crash-looping over a dependency nothing
-  # here can supply. Set ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true and the
-  # ACR_CONTEXT_FABRIC_ZEP_* / ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS
-  # variables once a Zep Cloud credential exists to enable it.
+  # here can supply. Set ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true and
+  # ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS, plus the Zep Cloud credential below,
+  # once a Zep Cloud account and API key exist to enable it --
+  # zepgraph.Configured/runtime.go's own "unset dependency fails open, not
+  # closed" posture means leaving these two unset is exactly what keeps this
+  # service healthy-and-idle rather than crash-looping.
   acr-projector:
     image: ${ACR_IMAGE:?ACR_IMAGE must be an immutable image digest}
     entrypoint: ["/usr/local/bin/acr-projector"]
@@ -112,6 +115,15 @@ services:
       ACR_CONTEXT_FABRIC_PROJECTION_ENABLED: ${ACR_CONTEXT_FABRIC_PROJECTION_ENABLED:-false}
       ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS: ${ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS:-}
       ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED: ${ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED:-false}
+      # Zep Cloud graph backend credential (ADR 0007): an external,
+      # environment-provisioned dependency this repository does not create.
+      # Left unset by default -- the same _FILE secret convention as every
+      # other ACR secret, but plain env passthrough rather than a
+      # Compose-native `secrets:` entry, since (unlike the required secrets
+      # below) there is no file for Compose to require the operator to
+      # provision until they actually have a Zep Cloud account.
+      ACR_CONTEXT_FABRIC_ZEP_BASE_URL: ${ACR_CONTEXT_FABRIC_ZEP_BASE_URL:-}
+      ACR_CONTEXT_FABRIC_ZEP_API_KEY_FILE: ${ACR_CONTEXT_FABRIC_ZEP_API_KEY_FILE:-}
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
     secrets: [acr_runtime_dsn, acr_clickhouse_dsn]
