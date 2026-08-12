@@ -163,7 +163,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 	}
 	textAdmitted := 0
-	for _, ce := range rankAndBoundCandidateEdges(textCandidates, collectLimit) {
+	for _, ce := range rankCandidateEdges(textCandidates) {
 		if collectLimit > 0 && textAdmitted >= collectLimit {
 			break
 		}

@@ -554,7 +554,7 @@ The cost is over-fetching rows that are then filtered out. Bound it with the
 existing `MaxResults` / `LIMIT` and accept it. The org predicate itself needs
 no pushdown at all — it is structural.
 
-### 6.5 Rank before truncate — a per-hop approximation, not a global sort (Codex CHAOS-3752 review, round 2)
+### 6.5 Rank before truncate — a per-hop approximation, not a global sort (Codex CHAOS-3752 review, rounds 2–3)
 
 A graph-walked edge (as opposed to a full-text search hit) has no real
 relevance score — `Relevance`/`Score` are always nil, so
@@ -579,8 +579,7 @@ query (§ package doc in `queries.go`), specifically to avoid decoding a
 variable-length path shape against the pinned client's compact protocol.
 Rewriting that shape is a larger change than this fix warrants.
 
-**What is implemented instead** (`rankAndBoundCandidateEdges` in
-`queries.go`):
+**What is implemented instead** (`rankCandidateEdges` in `queries.go`):
 
 1. `edgesOfNode`'s own UNION result is deterministically ordered server-side
    (`ORDER BY r.relationship_id ASC`) — but wrapped in a `CALL { ... }`
@@ -596,15 +595,29 @@ Rewriting that shape is a larger change than this fix warrants.
    frontier node, before making any truncation decision — never truncating
    mid-node or mid-hop on arrival order.
 3. That full hop-level set is ranked (`graphrank.SortEdgesByRelevance`) and
-   only then resolved/admitted in ranked order, up to the remaining budget.
-   A candidate that turns out unauthorized or unresolvable does not consume
+   only then resolved/admitted **by walking the complete ranked list, in
+   order**, until the admission budget fills or the list is exhausted. A
+   candidate that turns out unauthorized or unresolvable does not consume
    budget, so a lower-ranked-but-admissible edge is never starved by a
    higher-ranked one that turned out unusable.
-4. As a cost guard against a pathological hub node (thousands of
-   neighbors, almost all filtered), the ranked set is capped to
-   `collectLimit * 4` **after** ranking — so the cap can only ever discard
-   edges that had already lost the tie-break, never a contender for the
-   surviving budget.
+
+An earlier version of this fix (round 2) additionally capped the ranked list
+to a generous multiple of the remaining budget **before** resolution, as a
+guard against a pathological hub node with a huge, mostly-filtered neighbor
+set. Codex's round-3 review correctly rejected this: "doesn't consume
+admission budget" is true of a filtered candidate, but it still consumed a
+**prefix slot** under that cap — a long enough run of filtered candidates
+(longer than the multiplier's headroom) could still push a genuinely
+admissible, lower-ranked-only-by-tie-break edge past the cap before
+resolution ever attempted it, and there is no bound-safe prefix length to
+pick in advance, since "how many leading candidates will turn out filtered"
+is not knowable ahead of time. The cap is removed: the candidate list is
+already bounded by the per-hop collection limit and already fully in memory,
+so walking all of it in ranked order adds no unbounded work of its own — the
+prefix cap only ever saved resolution round-trips, at the cost of
+correctness. If resolution-call cost genuinely needs a bound in the future,
+it must be expressed as attempted resolutions of unfiltered candidates, not
+ranked-list position.
 
 This is per-hop, not globally, rank-aware: a later hop cannot reach back and
 displace an edge already admitted in an earlier hop. Given `maxHops` is a

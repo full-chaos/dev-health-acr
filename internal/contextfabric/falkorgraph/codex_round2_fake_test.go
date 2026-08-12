@@ -106,7 +106,7 @@ func TestDiscoverContextReportsPartialOnHopWalkNeighborBookkeepingLookupFailure(
 // six available -- round 1 fixed the OUTER MaxRelationshipPaths-vs-MaxResults
 // confusion but left this inner gap: once genuine candidates exceed
 // collectLimit itself, the walk still needs to rank before it truncates,
-// which is exactly what hopWalk's per-hop rankAndBoundCandidateEdges call
+// which is exactly what hopWalk's per-hop rankCandidateEdges call
 // now does.
 func TestDiscoverContextRanksWithinASingleNodesNeighborListBeforeTruncating(t *testing.T) {
 	origin := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "p1", Label: "Origin"}

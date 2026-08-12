@@ -304,9 +304,10 @@ func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal 
 	}, edgeAdmitted
 }
 
-// rankAndBoundCandidateEdges sorts edges by graphrank's own relevance
-// tie-break and caps the set entering resolution to a generous multiple of
-// the remaining collection budget.
+// rankCandidateEdges sorts edges by graphrank's own relevance tie-break.
+// Callers walk the FULL ranked result in order, resolving/admitting until
+// their own budget fills or the ranked list is exhausted -- never trim this
+// return value by position before resolution.
 //
 // Codex P2a (round 2): a collection-side truncation decision must always
 // operate on a RANKED set, never on whatever order a query happened to
@@ -315,17 +316,26 @@ func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal 
 // (which is not expressible as one Cypher pass across multiple frontier
 // nodes and, per edgesOfNode's doc comment, is not even reliably honored by
 // this FalkorDB version across a single UNION without the CALL{} wrapper).
-// The multiplier bound below exists only to cap worst-case resolution cost
-// (a pathological hub node with thousands of neighbors, almost all of which
-// end up authorization-filtered) -- it still operates on the RANKED list,
-// so it can only ever trim away the edges that were already going to lose
-// the tie-break, never a contender for the surviving budget.
-func rankAndBoundCandidateEdges(edges []graphrank.CandidateEdge, collectLimit int) []graphrank.CandidateEdge {
-	ranked := graphrank.SortEdgesByRelevance(edges)
-	if collectLimit > 0 && len(ranked) > collectLimit*4 {
-		ranked = ranked[:collectLimit*4]
-	}
-	return ranked
+//
+// Codex P2a (round 3): an earlier version of this function additionally
+// capped the ranked list to a generous multiple of the remaining budget
+// BEFORE resolution, reasoning that a filtered/unresolvable candidate
+// "doesn't consume budget so it can't starve a real contender" -- true for
+// the ADMISSION budget, false for the PREFIX the cap itself imposed: a long
+// enough run of filtered candidates (longer than the multiplier headroom)
+// still pushed a genuinely admissible, lower-ranked-only-by-tie-break edge
+// past the cap before resolution ever got to attempt it. There is no
+// bound-safe prefix length to cap at, because "how many leading candidates
+// will turn out filtered" is not knowable in advance. The candidate list is
+// already bounded by the per-hop collection limit and already fully in
+// memory, so walking all of it in ranked order until the admission budget
+// fills (or candidates exhaust) adds no unbounded work of its own -- the
+// prefix cap only ever saved resolution round-trips, at the cost of
+// correctness. If resolution-call cost genuinely needs a bound, it must be
+// on ATTEMPTED RESOLUTIONS OF UNFILTERED CANDIDATES (a count each caller
+// already increments as it walks), never on ranked-list position.
+func rankCandidateEdges(edges []graphrank.CandidateEdge) []graphrank.CandidateEdge {
+	return graphrank.SortEdgesByRelevance(edges)
 }
 
 // hopWalk performs a bounded N-hop traversal from one origin subject,
@@ -354,7 +364,7 @@ func rankAndBoundCandidateEdges(edges []graphrank.CandidateEdge, collectLimit in
 // hop's candidate edges from every frontier node before making ANY
 // truncation decision, ranks that full set with the exact same tie-break,
 // and only then resolves/admits edges in ranked order up to the remaining
-// budget (rankAndBoundCandidateEdges). A candidate that gets
+// budget (rankCandidateEdges). A candidate that gets
 // authorization-filtered or fails to resolve does not consume budget, so a
 // lower-ranked-but-admissible edge is never starved by a higher-ranked one
 // that turned out to be unauthorized.
@@ -385,7 +395,7 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 			continue
 		}
 		var next []string
-		for _, ce := range rankAndBoundCandidateEdges(hopCandidates, collectLimit-len(edges)) {
+		for _, ce := range rankCandidateEdges(hopCandidates) {
 			if collectLimit > 0 && len(edges) >= collectLimit {
 				break
 			}
