@@ -295,20 +295,36 @@ JSON at all, maps to `ErrModelOutput`. The classified error carries only a
 class and a fixed message — no provider response body, prompt fragment, or
 endpoint ever travels into logs, receipts, or telemetry built from it.
 
+**`ACR_REQUEST_TIMEOUT` must be raised before enabling investigations.** It
+defaults to **15s**, and it bounds the whole HTTP request. A real
+investigation is two sequential model calls (interpret, then synthesise) and
+was measured end-to-end through the endpoint at **~90s** against
+`gpt-5-nano`. Left at the default, every investigation returns 504 before
+the model answers, regardless of how well the model is doing. Size it above
+`ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` × `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS`
+× 2 (the two operations), plus headroom — with the defaults (45s × 2 × 2)
+that is a worst case of 180s. The timeout is global to the API, not
+per-route, so raising it also loosens the bound on every other route; a
+per-route timeout is the cleaner fix and is not implemented yet.
+
 **Model choice matters, and `gpt-5-nano` alone is not enough.** Measured
-live against `gpt-5-nano` (the CHAOS-3770 acceptance probe:
-`ACR_TEST_MODEL_API_KEY=... go test ./internal/contextfabric/modelprovider -run Live`,
-skipped unless that variable is set): interpretation passed ACR's validator
-on every run, but synthesis — the strictest validator in the pipeline —
-passed on roughly one run in three, failing the rest on value-level closure
-rules. Invalid output is deliberately **not** retried (`genkitruntime` fails
-closed on a schema-shaped failure rather than re-rolling the same input), so
-the configured fallback is the mitigation: set
-`ACR_CONTEXT_FABRIC_MODEL_FALLBACK=gpt-5.6-luna` in any deployment expected
-to answer reliably. `genkitruntime` invokes the fallback on invalid output
-as well as on transport failure, and records `fallback_used` on the receipt.
-Tracking how often that happens per model is the `ModelReceiptSink`
-evaluator's job (CHAOS-3756).
+live against `gpt-5-nano` (the CHAOS-3770 acceptance probes, both skipped
+unless `ACR_TEST_MODEL_API_KEY` is set —
+`go test ./internal/contextfabric/modelprovider -run Live` for the runtime
+and `go test ./internal/api -run LiveEndpoint` for the endpoint):
+interpretation passed ACR's validator on every run, but synthesis — the
+strictest validator in the pipeline — passed roughly one run in three at the
+runtime level and took **five attempts** to produce one valid answer through
+the endpoint. Every failure was a clean, correctly classified 502
+`upstream_invalid_output`, never a wrong answer: value-level closure rejects
+what it cannot bind to a canonical fact. Invalid output is deliberately
+**not** retried (`genkitruntime` fails closed on a schema-shaped failure
+rather than re-rolling the same input), so the configured fallback is the
+mitigation: set `ACR_CONTEXT_FABRIC_MODEL_FALLBACK=gpt-5.6-luna` in any
+deployment expected to answer reliably. `genkitruntime` invokes the fallback
+on invalid output as well as on transport failure, and records
+`fallback_used` on the receipt. Tracking how often that happens per model is
+the `ModelReceiptSink` evaluator's job (CHAOS-3756).
 
 ### Helm
 
