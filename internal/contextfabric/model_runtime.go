@@ -268,7 +268,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		Status:              draft.Status,
 		DirectJudgment:      strings.TrimSpace(draft.DirectJudgment),
 		CurrentState:        strings.TrimSpace(draft.CurrentState),
-		StrongestPressures:  append([]string(nil), draft.StrongestPressures...),
+		StrongestPressures:  cloneSlice(draft.StrongestPressures),
 		Drivers:             cloneSlice(draft.Drivers),
 		RemainingWork:       cloneSlice(draft.RemainingWork),
 		ReadinessGaps:       cloneSlice(draft.ReadinessGaps),

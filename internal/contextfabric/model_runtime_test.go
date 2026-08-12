@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -368,6 +369,7 @@ func TestRuntimeAnswerSynthesizerProducesNonNilCollectionsForEmptyDraft(t *testi
 	t.Parallel()
 	input := validSynthesisInputFixture()
 	draft := validSynthesisDraftFixture(input) // RemainingWork/ReadinessGaps/Conflicts/Limitations/Warnings are all empty
+	draft.StrongestPressures = nil             // no pressures identified is an ordinary, valid draft state
 	synthesizer := RuntimeAnswerSynthesizer{
 		Runtime: fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)},
 		Sink:    &fakeReceiptSink{},
@@ -378,7 +380,8 @@ func TestRuntimeAnswerSynthesizerProducesNonNilCollectionsForEmptyDraft(t *testi
 		t.Fatalf("Synthesize() error = %v", err)
 	}
 	for name, isNil := range map[string]bool{
-		"Drivers": result.Drivers == nil, "RemainingWork": result.RemainingWork == nil, "ReadinessGaps": result.ReadinessGaps == nil,
+		"StrongestPressures": result.StrongestPressures == nil,
+		"Drivers":            result.Drivers == nil, "RemainingWork": result.RemainingWork == nil, "ReadinessGaps": result.ReadinessGaps == nil,
 		"Paths": result.Paths == nil, "Conflicts": result.Conflicts == nil, "Limitations": result.Limitations == nil,
 		"EvidenceRefIDs": result.EvidenceRefIDs == nil, "Warnings": result.Warnings == nil,
 	} {
@@ -397,6 +400,21 @@ func TestRuntimeAnswerSynthesizerProducesNonNilCollectionsForEmptyDraft(t *testi
 	result.SubjectResolution = input.Graph.Resolution
 	if err := result.Validate(); err != nil {
 		t.Fatalf("result.Validate() error = %v, want a valid public result for an empty-collection draft", err)
+	}
+	// The Go validator (checked above) permits StrongestPressures to be
+	// nil, but the JSON Schema (contracts/jsonschema/v1/
+	// context_fabric_investigation_result.v1.schema.json) requires
+	// strongest_pressures as a non-nullable array and lists it in
+	// "required" -- so a nil slice, which encoding/json marshals to JSON
+	// null (there is no `omitempty` on this field), is wire-invalid even
+	// though it passes Go-level Validate(). Assert the wire bytes directly
+	// so the two validation layers can't silently disagree again.
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if strings.Contains(string(encoded), `"strongest_pressures":null`) {
+		t.Fatalf("WIRE-INVALID: strongest_pressures marshaled to null, but the JSON Schema requires an array: %s", encoded)
 	}
 }
 
