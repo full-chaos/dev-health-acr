@@ -257,15 +257,38 @@ func edgeFact(edge ResolvedEdge) string {
 	return "The graph associated the two subjects through " + strings.ToLower(edge.Name) + "."
 }
 
+// relationMeaning classifies a graph edge into a driver candidate's
+// standing, category, and the FactKind the edge suggests is worth
+// requesting from the canonical fact registry.
+//
+// Category is always "relationship" here, regardless of which edge type
+// matched: every candidate this feeds into is
+// Derivation: DerivationGraphAssociated by construction (see AdmitEdges) --
+// a graph-discovered association, not a canonical-fact-backed observation.
+// Before main's CHAOS-3755 closed driver-category vocabulary
+// (contractsv1.ContextFabricDriverCategoryRequiresClaimedFact /
+// validDriverCategory), the more descriptive per-edge-type strings this
+// function originally returned ("dependency"/"pressure"/"signal", ported
+// unmodified from the pre-CHAOS-3755 zepgraph.relationMeaning this package
+// was extracted from) were harmless free text. Once Category started
+// gating BOTH a closed-enum-membership check and a ClaimedFactID
+// requirement, those exact strings became invalid category values --
+// driver.Validate() rejects every candidate silently (see the
+// `if err := driver.Validate(); err == nil` guard in AdmitEdges),
+// degrading graph-derived driver discovery repo-wide for every backend
+// that calls AdmitEdges. factKind is unaffected: it still differentiates
+// by edge type and is used only to request that FactKind from the
+// canonical fact registry (requirements[factKind]), which is a request,
+// not a claim.
 func relationMeaning(name string) (contextfabric.DriverStanding, string, contextfabric.FactKind, bool) {
 	normalized := NormalizeRelation(name)
 	switch normalized {
 	case "BLOCKS", "BLOCKED_BY", "REQUIRES", "DEPENDS_ON":
-		return contextfabric.DriverPrincipal, "dependency", contextfabric.FactBlockers, true
+		return contextfabric.DriverPrincipal, "relationship", contextfabric.FactBlockers, true
 	case "CAUSES", "CONTRIBUTES_TO", "PRESSURES":
-		return contextfabric.DriverContributing, "pressure", contextfabric.FactHealth, true
+		return contextfabric.DriverContributing, "relationship", contextfabric.FactHealth, true
 	case "INDICATES", "SYMPTOM_OF":
-		return contextfabric.DriverSymptom, "signal", contextfabric.FactMetrics, true
+		return contextfabric.DriverSymptom, "relationship", contextfabric.FactMetrics, true
 	default:
 		return contextfabric.DriverContext, "relationship", contextfabric.FactEvidence, false
 	}
