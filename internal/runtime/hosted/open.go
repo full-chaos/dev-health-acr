@@ -2,13 +2,20 @@ package hosted
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/api"
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/zepgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
@@ -99,6 +106,10 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		Window: request.config.RequestControls.Auth.Window, AttemptLimit: request.config.RequestControls.Auth.Requests,
 		FailureLimit: request.config.RequestControls.AuthFailures, MaxTrackedKeys: request.config.RequestControls.AuthTrackedKeys,
 	})
+	investigator, err := buildContextFabricInvestigator(request, postgres, clickhouse)
+	if err != nil {
+		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric investigator: %w", err))
+	}
 	runtime.Dependencies = api.Dependencies{
 		Capabilities: capabilities, Now: request.options.Now, Observability: &hooks, Limits: manager, AuthAttempts: authAttempts,
 		EvidenceStoreFactory: clickhouse.factory, ClientIP: clientIP, UsageTelemetry: usageTelemetry,
@@ -107,9 +118,78 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			Evidence: clickhouse.evidence, Episodes: episodeCreator, ReadinessChecks: checks,
 			DeviceAuthorizations: postgres.devices, DeviceVerificationURL: request.config.DeviceVerificationURL,
 			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(request.options.Now)),
+			Investigator:               investigator,
 		},
 	}
 	return runtime, nil
+}
+
+// buildContextFabricInvestigator composes a real contextfabric.Investigator
+// (CHAOS-3755) when the operator opted in AND the graph backend is
+// separately configured. It never fails composition over an unconfigured
+// optional dependency (ADR 0007's convention): if either condition is
+// false, it returns (nil, nil) and the investigations route degrades to a
+// static 503 (see api.App.investigator / handleRuntimeUnavailable).
+//
+// The model runtime is deliberately left unwired here: no production
+// genkit.Genkit construction exists anywhere in this repo yet (provider
+// choice, credentials, and plugin selection are a decision for a follow-up
+// change, not this one). contextfabric.RuntimeQuestionInterpreter and
+// RuntimeAnswerSynthesizer both degrade gracefully to ErrModelUnavailable
+// per request when their Runtime field is nil, so the endpoint is still
+// registered, authorized, audited, and persists nothing incorrectly -- it
+// just cannot answer until a model provider is configured. That is the
+// same "safely degrades" contract the graph and canonical-fact layers use.
+func buildContextFabricInvestigator(request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents) (contextfabric.Investigator, error) {
+	if !request.config.EnableContextFabricInvestigations || !zepgraph.Configured(os.LookupEnv) {
+		return nil, nil
+	}
+	graphConfig, err := zepgraph.ConfigFromEnv(os.LookupEnv)
+	if err != nil {
+		return nil, fmt.Errorf("load context fabric graph configuration: %w", err)
+	}
+	graphReader, err := zepgraph.New(graphConfig)
+	if err != nil {
+		return nil, fmt.Errorf("initialize context fabric graph adapter: %w", err)
+	}
+	factRegistry, err := contextfabric.NewFactCapabilityRegistry(
+		devhealthfacts.NewProviders(clickhouse.queryClient),
+		contextfabric.FactRegistryOptions{Now: request.options.Now},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialize canonical fact registry: %w", err)
+	}
+	investigationStore, err := pginvestigation.NewStore(postgres.db)
+	if err != nil {
+		return nil, fmt.Errorf("initialize investigation result store: %w", err)
+	}
+	// See the function doc comment: nil Runtime is intentional until a
+	// model provider is wired.
+	var modelRuntime contextfabric.ModelRuntime
+	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
+		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime},
+		Graph:       graphReader,
+		Facts:       factRegistry,
+		Synthesizer: contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Options: contextfabric.RuntimeAnswerSynthesizerOptions{
+			ServiceVersion: request.options.ServiceVersion,
+			Backend:        "graph",
+		}},
+		Results: investigationStore,
+	}, contextfabric.EngineOptions{
+		ServiceVersion: request.options.ServiceVersion, Now: request.options.Now, NewResultID: newInvestigationResultID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize context fabric engine: %w", err)
+	}
+	return engine, nil
+}
+
+func newInvestigationResultID() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("result_fallback_%d", time.Now().UnixNano())
+	}
+	return "result_" + hex.EncodeToString(buf)
 }
 
 func validateBuildRequest(request buildRequest) error {

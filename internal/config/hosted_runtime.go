@@ -52,6 +52,15 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, requiredByEnvironmen
 	if cfg.EnableEpisodeWriteback, err = boolValue(lookup, "ACR_ENABLE_EPISODE_WRITEBACK", false); err != nil {
 		return err
 	}
+	// GraphReadsEnabledEnvVar ("ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED") is
+	// the flag CHAOS-3753's design reserved for exactly this: the
+	// independent read-side (investigation endpoint) enablement, distinct
+	// from ACR_CONTEXT_FABRIC_PROJECTION_ENABLED's write-side. Reusing it
+	// here (rather than inventing a second flag) is what CHAOS-3755 must
+	// do per that reservation.
+	if cfg.EnableContextFabricInvestigations, err = boolValue(lookup, GraphReadsEnabledEnvVar, false); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -114,6 +123,7 @@ func (c Config) SafeAttributes() []any {
 		"postgres_pooler_admin_configured", c.PostgresPoolerAdminDSN != "",
 		"postgres_max_idle_conns_configured", c.PostgresMaxIdleConnsConfigured,
 		"episode_writeback_enabled", c.EnableEpisodeWriteback,
+		"context_fabric_investigations_enabled", c.EnableContextFabricInvestigations,
 		"minimum_sidecar_version", c.MinimumSidecarVersion,
 		"entitlement_key", c.EntitlementKey,
 		"entitlement_mode", string(c.EntitlementMode()),

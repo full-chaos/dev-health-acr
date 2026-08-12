@@ -31,29 +31,38 @@ const (
 // Config contains only process-level configuration. Credentials and request
 // identity are resolved by dedicated services and must never be stored here.
 type Config struct {
-	Environment                          string
-	ListenAddress                        string
-	LogLevel                             slog.Level
-	RequestTimeout                       time.Duration
-	ReadHeaderTimeout                    time.Duration
-	ReadTimeout                          time.Duration
-	WriteTimeout                         time.Duration
-	IdleTimeout                          time.Duration
-	ShutdownTimeout                      time.Duration
-	ClickHouseDSN                        string
-	ClickHouseCACertPath                 string
-	PostgresDSN                          string
-	PostgresPoolerAdminDSN               string
-	PostgresConnectionKind               string
-	PostgresMaxOpenConns                 int
-	PostgresMaxIdleConns                 int
-	PostgresMaxIdleConnsConfigured       bool
-	PostgresConnMaxLifetime              time.Duration
-	PostgresConnMaxIdleTime              time.Duration
-	PostgresPingTimeout                  time.Duration
-	RequireBackingStores                 bool
-	LocalCompositionReady                bool
-	EnableEpisodeWriteback               bool
+	Environment                    string
+	ListenAddress                  string
+	LogLevel                       slog.Level
+	RequestTimeout                 time.Duration
+	ReadHeaderTimeout              time.Duration
+	ReadTimeout                    time.Duration
+	WriteTimeout                   time.Duration
+	IdleTimeout                    time.Duration
+	ShutdownTimeout                time.Duration
+	ClickHouseDSN                  string
+	ClickHouseCACertPath           string
+	PostgresDSN                    string
+	PostgresPoolerAdminDSN         string
+	PostgresConnectionKind         string
+	PostgresMaxOpenConns           int
+	PostgresMaxIdleConns           int
+	PostgresMaxIdleConnsConfigured bool
+	PostgresConnMaxLifetime        time.Duration
+	PostgresConnMaxIdleTime        time.Duration
+	PostgresPingTimeout            time.Duration
+	RequireBackingStores           bool
+	LocalCompositionReady          bool
+	EnableEpisodeWriteback         bool
+	// EnableContextFabricInvestigations gates hosted composition attempting
+	// to construct a real contextfabric.Investigator (CHAOS-3755). Reads
+	// GraphReadsEnabledEnvVar ("ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED"),
+	// the flag reserved for exactly this since CHAOS-3753's design. Even
+	// when true, the investigator is only wired if the graph backend is
+	// separately configured (zepgraph.Configured) -- composition never
+	// fails closed over an unconfigured optional dependency, matching the
+	// convention ADR 0007 established for the projection worker.
+	EnableContextFabricInvestigations    bool
 	MinimumSidecarVersion                string
 	RevokedClientVersions                []string
 	EntitlementKey                       string

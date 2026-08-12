@@ -161,7 +161,10 @@ func (c ProjectorConfig) SafeAttributes() []any {
 	}
 }
 
-// GraphReadsEnabledEnvVar is the reserved name for the independent
-// graph-read enablement flag Reset 1B/1C's hosted composition owns. It is
-// not read here; it exists so both lanes agree on the exact spelling.
+// GraphReadsEnabledEnvVar is the independent graph-read enablement flag
+// CHAOS-3755's hosted composition reads (see loadHostedRuntimeValues in
+// hosted_runtime.go, which sets Config.EnableContextFabricInvestigations
+// from it) -- not read in this file, which owns the write-side projector
+// config instead. Exported so both lanes, and Helm/Compose docs, agree on
+// the exact spelling.
 const GraphReadsEnabledEnvVar = envContextFabricGraphReads
