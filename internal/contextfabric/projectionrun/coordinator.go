@@ -92,6 +92,22 @@ type pairBackoff struct {
 	nextAttempt         time.Time
 }
 
+// allowsOrg reports whether orgID is in the coordinator's configured
+// allowlist (Config.OrgIDs / ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS). Every
+// entry point that acts on an organization by ID -- Tick (implicitly, since
+// it only ever iterates c.orgIDs) and Rebuild (explicitly, since it takes
+// an arbitrary caller-supplied ID) -- must go through this so an operator
+// invoking `acr-projector rebuild --org <id>` can never purge a tenant the
+// deployment was never configured to project.
+func (c *Coordinator) allowsOrg(orgID string) bool {
+	for _, allowed := range c.orgIDs {
+		if allowed == orgID {
+			return true
+		}
+	}
+	return false
+}
+
 func NewCoordinator(cfg Config) (*Coordinator, error) {
 	if cfg.Backend == nil || cfg.Checkpoints == nil {
 		return nil, errors.New("projectionrun: backend and checkpoint store are required")
@@ -159,6 +175,9 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 func (c *Coordinator) Rebuild(ctx context.Context, orgID string) error {
 	if strings.TrimSpace(orgID) == "" {
 		return errors.New("projectionrun: organization is required")
+	}
+	if !c.allowsOrg(orgID) {
+		return fmt.Errorf("projectionrun: organization %s is not in the configured allowlist", orgID)
 	}
 	mutexAny, _ := c.orgMu.LoadOrStore(orgID, &sync.Mutex{})
 	mutex := mutexAny.(*sync.Mutex)
