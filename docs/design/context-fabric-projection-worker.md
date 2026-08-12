@@ -31,6 +31,26 @@ Organization: there is no `orgs` table. The org entity is synthesized
 one-per-org from the principal's `OrgID` the worker is already scoped to,
 not queried.
 
+**Flagged for 1B/1C org-level authorization review:** the synthesized
+Organization entity's `AuthorizationScope` has no dedicated organization
+field to use (the contract only has `RepositorySlugs`/`ProjectIDs`/`TeamIDs`),
+so it's placed in `ProjectIDs` under a reserved namespace prefix
+(`organizationScopePrefix`, `IsReservedAuthorizationScopeID`,
+`clickhouse.go`). Every other entity/relationship this source produces uses
+`RepositorySlugs` instead (proved never to collide by
+`TestOnlyTheOrganizationEntityPopulatesProjectIDs`), so there is no
+collision risk from anything in this repository today. But this is a
+**convention, not a contract-enforced guarantee**: a future real Project ID
+provider (the still-unimplemented `TeamsProjectsSource`) could in principle
+be handed a value equal to the reserved prefix by its upstream data source,
+which would incorrectly inherit organization-wide authorization once
+filtering exists. `TeamsProjectsSource`'s doc comment obligates any real
+implementation to check `IsReservedAuthorizationScopeID` and reject (not
+rename) a collision, but the durable fix is a dedicated organization-scope
+field on `ContextFabricAuthorizationScope` (a contract change) once Reset
+1B/1C actually builds authorization filtering — please treat this as an
+open item for that design, not a closed one.
+
 **No canonical source exists yet in this repo for Team, Project, or
 Decision/Document entities** — no ClickHouse table, no other adapter. Per
 the handoff, I am not inventing one. `devhealthsource` defines the seam

@@ -185,13 +185,46 @@ func deterministicBatchID(orgID, source, cursor, nextCursor string) string {
 	return "batch_" + hex.EncodeToString(sum[:16])
 }
 
+// organizationScopePrefix reserves a namespace inside
+// ContextFabricAuthorizationScope.ProjectIDs for the synthesized
+// organization-level entity below. ContextFabricAuthorizationScope has no
+// dedicated organization field -- ACR derives one graph per organization
+// already (ADR 0007), so this is defense in depth, not the primary
+// isolation boundary -- but a real project ID that happened to equal this
+// exact string would incorrectly inherit organization-wide authorization,
+// so no other producer may ever emit a ProjectIDs value in this namespace.
+// devhealthsource is the only producer today (queryRepositories,
+// queryWorkItems, queryPullRequests, queryDeployments, queryIncidents,
+// queryWorkItemDependencies, queryDeploymentIncidentEdges all populate
+// Authorization via repoAuthorization, which sets RepositorySlugs, never
+// ProjectIDs -- proved by TestOnlyTheOrganizationEntityPopulatesProjectIDs).
+// The still-unimplemented TeamsProjectsSource (teams_projects.go) is the
+// one future producer that WILL need to populate real ProjectIDs; it MUST
+// call IsReservedAuthorizationScopeID on every value first and reject (not
+// silently rename) any collision. See
+// docs/design/context-fabric-projection-worker.md for the residual risk
+// this convention-based reservation cannot close on its own, and why it is
+// flagged for a real per-kind scope field when Reset 1B/1C designs
+// org-level authorization.
+const organizationScopePrefix = "acr-context-fabric:org-scope:"
+
+// IsReservedAuthorizationScopeID reports whether id falls inside the
+// reserved organization-scope namespace. Exported so any future canonical
+// project/team producer (in this package or elsewhere) can guard against
+// emitting a colliding real ID -- see organizationScopePrefix.
+func IsReservedAuthorizationScopeID(id string) bool {
+	return strings.HasPrefix(id, organizationScopePrefix)
+}
+
+func organizationScopeID(orgID string) string { return organizationScopePrefix + orgID }
+
 func organizationCandidate(orgID string, observedAt time.Time) candidate {
 	entity := contractsv1.ContextFabricEntityProjection{
 		Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectOrganization, CanonicalID: "organization:" + orgID, Label: orgID},
 		// No canonical organization-name table exists in this repository yet
 		// (see docs/design/context-fabric-projection-worker.md); the org ID
 		// is the best available label until Dev Health Ops exposes one.
-		Authorization:  contractsv1.ContextFabricAuthorizationScope{ProjectIDs: []string{"org:" + orgID}},
+		Authorization:  contractsv1.ContextFabricAuthorizationScope{ProjectIDs: []string{organizationScopeID(orgID)}},
 		EvidenceRefIDs: []string{"acr:v1:organization:" + orgID}, ObservedAt: observedAt, SourceVersion: sourceVersion,
 	}
 	return candidate{observedAt: observedAt, sortKey: entity.Subject.CanonicalID, entity: &entity}

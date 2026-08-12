@@ -77,6 +77,7 @@ type fakeBackend struct {
 	applied     []contextfabric.ProjectionBatch
 	failOrgs    map[string]bool
 	purged      map[string]bool
+	purgeErr    error
 }
 
 func newFakeBackend() *fakeBackend {
@@ -112,6 +113,9 @@ func (b *fakeBackend) ProjectionWatermark(context.Context, string, string) (cont
 func (b *fakeBackend) PurgeOrganization(_ context.Context, orgID string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.purgeErr != nil {
+		return b.purgeErr
+	}
 	b.purged[orgID] = true
 	return nil
 }

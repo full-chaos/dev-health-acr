@@ -17,6 +17,16 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // returns a source that always reports "nothing to project" rather than
 // fabricating data; wiring a real implementation here is future work once
 // Dev Health Ops publishes a canonical team/project source.
+//
+// Reservation obligation for that future implementation: real Project IDs
+// populate ContextFabricAuthorizationScope.ProjectIDs, the same field the
+// synthesized Organization entity uses for its scope (see
+// organizationScopePrefix in clickhouse.go). Before emitting any project's
+// AuthorizationScope, the real implementation MUST call
+// IsReservedAuthorizationScopeID on the project's canonical ID and reject
+// (not silently rename) a collision -- a real project ID equal to the
+// reserved namespace would otherwise incorrectly inherit organization-wide
+// authorization.
 type TeamsProjectsSource struct{ enabled bool }
 
 // NewTeamsProjectsSource returns a TeamsProjectsSource. When enabled is

@@ -63,6 +63,40 @@ func TestLoadProjectorRejectsInvalidEnvironment(t *testing.T) {
 	}
 }
 
+// TestProjectionEnablementIsIndependentOfTheGraphReadsFlag proves the two
+// enablement levers required by the ticket (independent disablement of
+// projection and reads) don't interact on the projector side: toggling
+// ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED -- the flag Reset 1B/1C's
+// GraphReader/hosted composition owns, reserved here as
+// GraphReadsEnabledEnvVar -- has zero effect on ProjectionEnabled in either
+// direction. This package intentionally never reads that variable itself;
+// the assertion is that setting it can't accidentally flip projection on
+// or off. The read side's own independent enablement is Reset 1B/1C's to
+// prove once GraphReader exists.
+func TestProjectionEnablementIsIndependentOfTheGraphReadsFlag(t *testing.T) {
+	enabled, err := loadProjector(mapLookup(map[string]string{
+		"ACR_CONTEXT_FABRIC_PROJECTION_ENABLED": "true", "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS": "org-1",
+		GraphReadsEnabledEnvVar: "false",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !enabled.ProjectionEnabled {
+		t.Fatal("projection must stay enabled regardless of the graph-reads flag's value")
+	}
+
+	disabled, err := loadProjector(mapLookup(map[string]string{
+		"ACR_CONTEXT_FABRIC_PROJECTION_ENABLED": "false",
+		GraphReadsEnabledEnvVar:                 "true",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.ProjectionEnabled {
+		t.Fatal("the graph-reads flag must never turn projection on")
+	}
+}
+
 func TestProjectorConfigSafeAttributesOmitDSNs(t *testing.T) {
 	cfg, err := loadProjector(mapLookup(map[string]string{"ACR_POSTGRES_DSN": "postgres://secret@db/acr"}))
 	if err != nil {
