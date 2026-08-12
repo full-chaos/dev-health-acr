@@ -216,8 +216,16 @@ func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal sto
 			receipt.Outcome = "success"
 		}
 	}
-	if sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt); sinkErr != nil && err == nil {
-		return InterpretedQuestion{}, sinkErr
+	if sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt); sinkErr != nil {
+		// A sink failure is never silently dropped, even when a domain
+		// validation error already occurred: losing the receipt for a
+		// rejected draft is itself worth surfacing, not just the
+		// rejection. errors.Join preserves errors.Is(err, ErrModelOutput)
+		// for callers that only check the classification.
+		if err == nil {
+			return InterpretedQuestion{}, sinkErr
+		}
+		err = errors.Join(err, sinkErr)
 	}
 	if err != nil {
 		return InterpretedQuestion{}, err
@@ -258,8 +266,14 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 			receipt.Outcome = "success"
 		}
 	}
-	if sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt); sinkErr != nil && err == nil {
-		return InvestigationResult{}, sinkErr
+	if sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt); sinkErr != nil {
+		// See the matching comment in RuntimeQuestionInterpreter.Interpret:
+		// a sink failure is never silently dropped, even when a domain
+		// validation error already occurred.
+		if err == nil {
+			return InvestigationResult{}, sinkErr
+		}
+		err = errors.Join(err, sinkErr)
 	}
 	if err != nil {
 		return InvestigationResult{}, err

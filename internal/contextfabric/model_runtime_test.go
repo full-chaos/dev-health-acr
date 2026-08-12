@@ -227,6 +227,31 @@ func TestRuntimeQuestionInterpreterPromotesPendingValidationOutcomeToSuccess(t *
 	}
 }
 
+// TestRuntimeQuestionInterpreterSurfacesSinkFailureAlongsideValidationFailure
+// guards against a regression where recordModelReceipt's error was
+// discarded whenever a domain validation error was already set: the
+// `sinkErr != nil && err == nil` guard means a sink outage on an
+// already-rejected draft is silently dropped, leaving the caller with only
+// ErrModelOutput and no signal that the rejection receipt itself was never
+// durably recorded.
+func TestRuntimeQuestionInterpreterSurfacesSinkFailureAlongsideValidationFailure(t *testing.T) {
+	t.Parallel()
+	sinkErr := errors.New("receipt sink unavailable")
+	sink := &fakeReceiptSink{err: sinkErr}
+	invalid := InterpretedQuestion{Shape: "not_a_real_shape", RequestedJudgment: "x", TimeContext: TimeContext{Axis: TemporalCurrent}}
+	interpreter := RuntimeQuestionInterpreter{
+		Runtime: fakeModelRuntime{interpreted: invalid, receipt: validModelReceiptFixture(ModelOperationInterpret)},
+		Sink:    sink,
+	}
+	_, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	if !errors.Is(err, ErrModelOutput) {
+		t.Fatalf("Interpret() error = %v, want ErrModelOutput", err)
+	}
+	if !errors.Is(err, sinkErr) {
+		t.Fatalf("Interpret() error = %v, want it to also surface the sink failure %v (the rejection receipt was never durably recorded)", err, sinkErr)
+	}
+}
+
 func TestRuntimeAnswerSynthesizerReturnsErrModelUnavailableWhenRuntimeNil(t *testing.T) {
 	t.Parallel()
 	synthesizer := RuntimeAnswerSynthesizer{}
@@ -275,6 +300,30 @@ func TestRuntimeAnswerSynthesizerCorrectsReceiptOutcomeToInvalidOutputOnRejectio
 	}
 	if len(sink.recorded) != 1 || sink.recorded[0].Outcome != "invalid_output" {
 		t.Fatalf("sink.recorded = %#v, want exactly one receipt with outcome invalid_output", sink.recorded)
+	}
+}
+
+// TestRuntimeAnswerSynthesizerSurfacesSinkFailureAlongsideValidationFailure
+// is the Synthesize-path counterpart of the Interpret-path regression
+// above: a sink outage on an already-rejected draft must not be silently
+// discarded.
+func TestRuntimeAnswerSynthesizerSurfacesSinkFailureAlongsideValidationFailure(t *testing.T) {
+	t.Parallel()
+	sinkErr := errors.New("receipt sink unavailable")
+	sink := &fakeReceiptSink{err: sinkErr}
+	input := validSynthesisInputFixture()
+	draft := validSynthesisDraftFixture(input)
+	draft.EvidenceRefIDs = []string{"evidence_invented_by_model"}
+	synthesizer := RuntimeAnswerSynthesizer{
+		Runtime: fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)},
+		Sink:    sink,
+	}
+	_, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
+	if !errors.Is(err, ErrModelOutput) {
+		t.Fatalf("Synthesize() error = %v, want ErrModelOutput", err)
+	}
+	if !errors.Is(err, sinkErr) {
+		t.Fatalf("Synthesize() error = %v, want it to also surface the sink failure %v (the rejection receipt was never durably recorded)", err, sinkErr)
 	}
 }
 
