@@ -233,6 +233,25 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		if len(evidence) == 0 {
 			continue
 		}
+		// Codex finding G5: Options.MaxEvidenceRefs must bound the FINAL
+		// result's entire evidence surface -- every path's and driver's
+		// own EvidenceRefIDs, not just the separately truncated aggregate
+		// list below. Enforcing it here, before a path/driver is admitted
+		// at all, keeps Paths, DriverCandidates, and the aggregate
+		// EvidenceRefIDs consistent with the same bounded evidence set by
+		// construction, rather than truncating the aggregate after the
+		// fact while still admitting every path/driver that produced it.
+		if maxEvidence := request.Request.Options.MaxEvidenceRefs; maxEvidence > 0 {
+			projected := len(evidenceSet)
+			for _, id := range evidence {
+				if _, exists := evidenceSet[id]; !exists {
+					projected++
+				}
+			}
+			if projected > maxEvidence {
+				continue
+			}
+		}
 		for _, id := range evidence {
 			evidenceSet[id] = struct{}{}
 		}
@@ -283,14 +302,15 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		factRequirements = append(factRequirements, requirement)
 	}
 	sort.Slice(factRequirements, func(i, j int) bool { return factRequirements[i].Kind < factRequirements[j].Kind })
+	// evidenceSet is already within Options.MaxEvidenceRefs by
+	// construction (see the admission check above); no further truncation
+	// is needed or correct here -- truncating post hoc would desync the
+	// aggregate list from the paths/drivers that were actually admitted.
 	evidence := make([]string, 0, len(evidenceSet))
 	for id := range evidenceSet {
 		evidence = append(evidence, id)
 	}
 	sort.Strings(evidence)
-	if max := request.Request.Options.MaxEvidenceRefs; max > 0 && len(evidence) > max {
-		evidence = evidence[:max]
-	}
 	return contextfabric.GraphContext{
 		Resolution: request.Resolution, Cohort: cohort, Paths: paths, DriverCandidates: drivers,
 		EvidenceRefIDs: evidence, FactRequirements: factRequirements,

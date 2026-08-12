@@ -614,6 +614,31 @@ func TestDiscoverContextTruncatesEvidenceRefsToBudget(t *testing.T) {
 	if len(contextResult.EvidenceRefIDs) != 1 {
 		t.Fatalf("evidence ref IDs = %#v, want truncated to Options.MaxEvidenceRefs=1", contextResult.EvidenceRefIDs)
 	}
+	// Codex finding G5: the budget must hold across the FINAL result's
+	// entire evidence surface, not just the flat aggregated
+	// EvidenceRefIDs list -- each path and driver carries its own
+	// EvidenceRefIDs too, and those are what actually flow into the
+	// public InvestigationResult (Paths, Drivers). Truncating only the
+	// aggregate while still admitting every path/driver that produced it
+	// leaves the caller's requested budget violated in the parts of the
+	// result that matter for serialized size.
+	allEvidence := make(map[string]struct{})
+	for _, path := range contextResult.Paths {
+		for _, id := range path.EvidenceRefIDs {
+			allEvidence[id] = struct{}{}
+		}
+	}
+	for _, driver := range contextResult.DriverCandidates {
+		for _, id := range driver.EvidenceRefIDs {
+			allEvidence[id] = struct{}{}
+		}
+	}
+	for _, id := range contextResult.EvidenceRefIDs {
+		allEvidence[id] = struct{}{}
+	}
+	if len(allEvidence) > 1 {
+		t.Fatalf("distinct evidence across paths+drivers+aggregate = %#v, want at most Options.MaxEvidenceRefs=1", allEvidence)
+	}
 }
 
 // TestDiscoverContextExcludesInternalBookkeepingRelationships guards the
