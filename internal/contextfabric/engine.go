@@ -109,6 +109,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	var priorHints []SubjectHint
 	if e.results != nil && len(request.PriorSubjectReceipts) > 0 {
 		priorHints = e.resolvePriorSubjectHints(ctx, principal, request.PriorSubjectReceipts)
+		// The v1 contract bounds RequestedScope.SubjectHints at 50
+		// (ContextFabricRequestedScope.Validate). request.Validate()
+		// already proved the caller's own hints are within that bound,
+		// but Engine's own expansion must not push the combined total
+		// back out of it -- drop excess receipt-derived hints (never the
+		// caller's own explicit hints), and let the existing skip
+		// telemetry in recordPriorSubjectReceiptSkips below count the
+		// drop exactly like any other unresolved receipt.
+		const maxSubjectHints = 50
+		if available := maxSubjectHints - len(request.RequestedScope.SubjectHints); len(priorHints) > available {
+			if available < 0 {
+				available = 0
+			}
+			priorHints = priorHints[:available]
+		}
 		if len(priorHints) > 0 {
 			graphRequest.RequestedScope.SubjectHints = append(
 				append([]SubjectHint(nil), request.RequestedScope.SubjectHints...), priorHints...,

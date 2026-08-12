@@ -713,6 +713,40 @@ func TestResolveSubjectsUsesExactCanonicalHintBeforeSemanticSearch(t *testing.T)
 	}
 }
 
+// TestResolveSubjectsExactHintPathRespectsMaxSubjectCandidates is the probe
+// for Codex finding G4: the exact-hint branch returned every resolved hint
+// unconditionally, unlike the hybrid-search branch below it, which
+// truncates to Options.MaxSubjectCandidates. A caller supplying more exact
+// hints (including Engine's prior-subject-receipt expansion, up to 20) than
+// its own configured budget -- or than the contract's absolute
+// SubjectResolution.Candidates bound of 50 -- could produce a resolution
+// too large for the final InvestigationResult to validate, failing an
+// otherwise entirely valid request deep in a later pipeline stage.
+func TestResolveSubjectsExactHintPathRespectsMaxSubjectCandidates(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	hints := make([]contextfabric.SubjectHint, 0, 5)
+	for i := 0; i < 5; i++ {
+		subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: fmt.Sprintf("project_%d", i), Label: fmt.Sprintf("Project %d", i)}
+		api.nodes[nodeUUID("org_1", subject)] = graphNode(nodeUUID("org_1", subject), subject.Kind, subject.CanonicalID, subject.Label, "*", 0.2)
+		hints = append(hints, contextfabric.SubjectHint{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: "workbench"})
+	}
+	request := validRequest()
+	request.Options.MaxSubjectCandidates = 2
+	request.RequestedScope.SubjectHints = hints
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	})
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Candidates) > 2 || len(resolution.Committed) > 2 {
+		t.Fatalf("resolution = %#v, want at most Options.MaxSubjectCandidates=2 candidates/committed", resolution)
+	}
+}
+
 // TestResolveSubjectsExactHintForUnauthorizedSubjectIsSkippedSilently proves
 // the exact-hint path fails closed with no leak and no error when the named
 // subject exists but is not authorized for the calling principal. This is

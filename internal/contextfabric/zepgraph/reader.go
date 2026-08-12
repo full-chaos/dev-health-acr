@@ -48,13 +48,25 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	}
 	if len(candidatesBySubject) > 0 {
 		candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
-		committed := make([]contextfabric.SubjectRef, 0, len(candidatesBySubject))
 		for _, candidate := range candidatesBySubject {
 			candidates = append(candidates, candidate)
-			committed = append(committed, candidate.Subject)
 		}
 		sort.Slice(candidates, func(i, j int) bool { return subjectKey(candidates[i].Subject) < subjectKey(candidates[j].Subject) })
-		sort.Slice(committed, func(i, j int) bool { return subjectKey(committed[i]) < subjectKey(committed[j]) })
+		// The hybrid-search branch below truncates to
+		// Options.MaxSubjectCandidates; the exact-hint branch must too --
+		// a caller (including Engine's prior-subject-receipt expansion)
+		// can legitimately supply more exact hints than either its own
+		// budget or the v1 contract's absolute Candidates bound admits,
+		// and an unbounded resolution here would otherwise only fail much
+		// later, when the final InvestigationResult itself fails to
+		// validate.
+		if max := request.Options.MaxSubjectCandidates; max > 0 && len(candidates) > max {
+			candidates = candidates[:max]
+		}
+		committed := make([]contextfabric.SubjectRef, 0, len(candidates))
+		for _, candidate := range candidates {
+			committed = append(committed, candidate.Subject)
+		}
 		return contextfabric.SubjectResolution{Candidates: candidates, Committed: committed}, nil
 	}
 	if len(terms) == 0 {

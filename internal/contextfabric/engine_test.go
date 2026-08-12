@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -380,6 +381,64 @@ func TestEngineDoesNotLeakOrErrorWhenPriorSubjectReceiptFailsGraphAuthorization(
 	}
 	if len(telemetry.priorSubjectReceiptsSkipped) != 1 || telemetry.priorSubjectReceiptsSkipped[0] != 1 {
 		t.Fatalf("telemetry = %#v, want exactly one skip of count 1 recorded", telemetry.priorSubjectReceiptsSkipped)
+	}
+}
+
+// TestEngineCapsCombinedSubjectHintsAtContractBound is the probe for Codex
+// finding G4: a caller already at the v1 contract's RequestedScope bound of
+// 50 SubjectHints, combined with Engine appending up to 20 more
+// receipt-derived hints, previously produced up to 70 hints with nothing
+// capping the total before GraphReader -- and GraphReader's exact-hint path
+// itself did not cap to Options.MaxSubjectCandidates either (see the
+// zepgraph-level fix), so an entirely valid request (each part individually
+// within its own bound) could still fail deep in the pipeline once
+// SubjectResolution.Candidates exceeded the result contract's bound of 50.
+// Engine must cap the combined total at the contract bound itself, dropping
+// excess receipt-derived hints (never the caller's own explicit hints) and
+// counting the drop in the same skip telemetry as any other unresolved
+// receipt.
+func TestEngineCapsCombinedSubjectHintsAtContractBound(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_1"
+	priorResult.SubjectResolution = SubjectResolution{
+		Candidates: []SubjectCandidate{{
+			ReceiptID: "receipt_abc12345", Subject: project, State: ResolutionCommitted,
+			MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 1,
+		}},
+		Committed: []SubjectRef{project},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{"result_prior_1": priorResult}}
+	graph := &capturingGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		context: GraphContext{
+			Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
+			EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	telemetry := &recordingTelemetry{}
+	engine := mustEngineForPriorReceiptTest(t, graph, store, telemetry)
+
+	request := validInvestigationRequest()
+	hints := make([]SubjectHint, 0, 50)
+	for i := 0; i < 50; i++ {
+		hints = append(hints, SubjectHint{Kind: SubjectProject, ID: fmt.Sprintf("project_caller_%d", i), Label: fmt.Sprintf("Caller Project %d", i), Source: "workbench"})
+	}
+	request.RequestedScope.SubjectHints = hints
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_1", ReceiptID: "receipt_abc12345"}}
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(graph.resolveRequests) != 1 {
+		t.Fatalf("resolveRequests = %#v", graph.resolveRequests)
+	}
+	if got := len(graph.resolveRequests[0].RequestedScope.SubjectHints); got > 50 {
+		t.Fatalf("combined subject hints sent to GraphReader = %d, want capped at the v1 contract bound of 50", got)
+	}
+	if len(telemetry.priorSubjectReceiptsSkipped) != 1 || telemetry.priorSubjectReceiptsSkipped[0] != 1 {
+		t.Fatalf("telemetry = %#v, want the capped-out receipt hint counted as a skip", telemetry.priorSubjectReceiptsSkipped)
 	}
 }
 
