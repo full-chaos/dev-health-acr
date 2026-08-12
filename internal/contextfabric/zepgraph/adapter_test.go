@@ -208,6 +208,40 @@ func TestResolveSubjectsFiltersUnauthorizedNodesBeforeCandidates(t *testing.T) {
 	}
 }
 
+// TestResolveSubjectsWrongSubjectControlNeverCommitsTheDecoy is the
+// negative "wrong subject" control: a name-similar, fully authorized decoy
+// subject with higher raw graph relevance than the actual exact match must
+// never be the one that gets committed. This is deliberately not an
+// authorization test (both subjects are visible to the principal) and not
+// an ambiguity test (the confidence gap is wide) -- it isolates plain
+// subject discrimination: an exact term match against the canonical label
+// must win over a merely relevant, superficially similar distractor.
+func TestResolveSubjectsWrongSubjectControlNeverCommitsTheDecoy(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	target := graphNode("node-target", contextfabric.SubjectProject, "project_ask_dev", "Ask Dev", "*", 0.4)
+	decoy := graphNode("node-decoy", contextfabric.SubjectProject, "project_ask_dev_analytics", "Ask Dev Analytics", "*", 0.6)
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{decoy, target}}
+	request := validRequest()
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"Ask Dev"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "project_ask_dev" {
+		t.Fatalf("resolution.Committed = %#v, want only the exact-match subject committed", resolution.Committed)
+	}
+	for _, committed := range resolution.Committed {
+		if committed.CanonicalID == "project_ask_dev_analytics" {
+			t.Fatalf("resolution = %#v, the decoy subject must never be committed", resolution)
+		}
+	}
+}
+
 // TestResolveSubjectsAcceptsPrincipalWildcardRepositoryScope is the direct
 // regression for the CHAOS-3752 Reset 0 review must-do: a principal holding
 // an org-wide "*" or an "owner/*" repository scope (both valid per
