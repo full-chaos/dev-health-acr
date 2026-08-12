@@ -71,6 +71,25 @@ func TestContextFabricRequestStrictDecodeRejectsUnknownTrailingAndInvalidNull(t 
 	}
 }
 
+// TestContextFabricDriverJudgmentValidateRejectsUnrecognizedCategory is the
+// Go-level half of the H4 fix (CHAOS-3755 adversarial review): Category is
+// a closed contract enum now, so an unrecognized value is rejected at
+// ContextFabricDriverJudgment.Validate() directly, independent of any
+// canonical-fact-claim reasoning layered on top in internal/contextfabric.
+func TestContextFabricDriverJudgmentValidateRejectsUnrecognizedCategory(t *testing.T) {
+	t.Parallel()
+	project := ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	driver := ContextFabricDriverJudgment{
+		DriverID: "driver_12345678", Standing: ContextFabricDriverWithheld, Category: "not_a_real_category",
+		Title: "Title", Summary: "Summary", AffectedSubjects: []ContextFabricSubjectRef{project},
+		Derivation: ContextFabricDerivationRuleInferred, EpistemicStatus: ContextFabricEpistemicInferred,
+		Confidence: 0.5, Qualification: "withheld", Current: true,
+	}
+	if err := driver.Validate(); err == nil || !strings.Contains(err.Error(), "driver judgment violates v1 bounds") {
+		t.Fatalf("Validate() error = %v, want an unrecognized category to be rejected", err)
+	}
+}
+
 func TestContextFabricResultRequiresEvidenceClosedDriver(t *testing.T) {
 	t.Parallel()
 

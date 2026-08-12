@@ -121,6 +121,16 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		return fmt.Errorf("deterministic answer is required")
 	}
 	allowedSubjects := synthesisSubjects(input)
+	// canonicalLabels binds every subject the model can legally reference
+	// to the ONE label the investigation input actually carries for that
+	// canonical ID (graph resolution, cohort, paths, and canonical facts
+	// are the sources of truth). A model-supplied SubjectRef whose
+	// CanonicalID is in-bounds but whose Label diverges from that is a
+	// forged/rewritten label -- e.g. presenting a project under a
+	// different name than the one the graph actually resolved -- and must
+	// be rejected the same as an out-of-bounds subject (CHAOS-3755
+	// adversarial review finding H3).
+	canonicalLabels := canonicalSubjectLabels(input)
 	allowedPaths := make(map[string]struct{}, len(input.Graph.Paths))
 	allowedEvidence := make(map[string]struct{})
 	for _, path := range input.Graph.Paths {
@@ -172,6 +182,9 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		if _, ok := allowedSubjects[subjectKeyForModel(claim.Subject)]; !ok {
 			return fmt.Errorf("claimed fact references subject outside the investigation")
 		}
+		if err := requireBoundLabel("claimed fact", claim.Subject, canonicalLabels); err != nil {
+			return err
+		}
 		canonical, ok := lookupCanonicalFact(input.Facts.Facts, claim.Kind, claim.Subject)
 		if !ok {
 			return fmt.Errorf("claimed fact %s/%s has no canonical observation to ground it", claim.Kind, claim.Field)
@@ -192,6 +205,9 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 			if _, ok := allowedSubjects[subjectKeyForModel(subject)]; !ok {
 				return fmt.Errorf("driver references subject outside the investigation")
 			}
+			if err := requireBoundLabel("driver", subject, canonicalLabels); err != nil {
+				return err
+			}
 		}
 		for _, pathID := range driver.PathIDs {
 			if _, ok := allowedPaths[pathID]; !ok {
@@ -203,7 +219,7 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 				return fmt.Errorf("driver references unknown evidence %q", evidenceRefID)
 			}
 		}
-		if err := requireGroundedClaims("driver", driver.Category, driver.ClaimedFactIDs, claimedByID); err != nil {
+		if err := requireGroundedClaims("driver", driver.Category, driver.AffectedSubjects, allowedSubjects, driver.ClaimedFactIDs, claimedByID); err != nil {
 			return err
 		}
 	}
@@ -220,13 +236,16 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 				if _, ok := allowedSubjects[subjectKeyForModel(subject)]; !ok {
 					return fmt.Errorf("%s references subject outside the investigation", name)
 				}
+				if err := requireBoundLabel(name, subject, canonicalLabels); err != nil {
+					return err
+				}
 			}
 			for _, evidenceRefID := range finding.EvidenceRefIDs {
 				if _, ok := allowedEvidence[evidenceRefID]; !ok {
 					return fmt.Errorf("%s references unknown evidence %q", name, evidenceRefID)
 				}
 			}
-			if err := requireGroundedClaims(name, finding.Kind, finding.ClaimedFactIDs, claimedByID); err != nil {
+			if err := requireGroundedClaims(name, finding.Kind, finding.Subjects, allowedSubjects, finding.ClaimedFactIDs, claimedByID); err != nil {
 				return err
 			}
 		}
@@ -235,14 +254,35 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 }
 
 // requireGroundedClaims checks that every ID in claimedFactIDs resolves
-// inside claimed, and -- when category names a canonical-fact-shaped
-// judgment per ContextFabricDriverCategoryRequiresClaimedFact -- that at
-// least one referenced claim's Kind matches. Catching this here (at
-// model-output validation time, classified ErrModelOutput -> 502) rather
-// than only later at InvestigationResult.Validate() (classified
-// ErrInvalidResult -> 500) lets the route correctly attribute a
-// closure-violating draft to the model, not to ACR.
-func requireGroundedClaims(name, category string, claimedFactIDs []string, claimed map[string]ClaimedFact) error {
+// inside claimed, that its claim is about a subject the citing driver/
+// finding actually named (scopeSubjects -- or, when a finding declares no
+// subjects of its own, any subject already established elsewhere in the
+// investigation, via fallbackAllowed), and -- when category names a
+// canonical-fact-shaped judgment per
+// ContextFabricDriverCategoryRequiresClaimedFact -- that at least one
+// referenced claim's Kind matches.
+//
+// The subject-scoping check (CHAOS-3755 adversarial review finding H1)
+// matters independently of the value-equality check ValidateAgainst
+// already does on each ClaimedFact: a driver whose AffectedSubjects is
+// [project B] citing a perfectly true, canonically-grounded claim about
+// project A is still a false public assertion -- it presents A's data as
+// if it were about B. Binding every reference to the citing driver/
+// finding's own subjects closes that.
+//
+// Catching all of this here (at model-output validation time, classified
+// ErrModelOutput -> 502) rather than only later at
+// InvestigationResult.Validate() (classified ErrInvalidResult -> 500)
+// lets the route correctly attribute a closure-violating draft to the
+// model, not to ACR.
+func requireGroundedClaims(name, category string, scopeSubjects []SubjectRef, fallbackAllowed map[string]struct{}, claimedFactIDs []string, claimed map[string]ClaimedFact) error {
+	scoped := fallbackAllowed
+	if len(scopeSubjects) > 0 {
+		scoped = make(map[string]struct{}, len(scopeSubjects))
+		for _, subject := range scopeSubjects {
+			scoped[subjectKeyForModel(subject)] = struct{}{}
+		}
+	}
 	requiredKind, required := contractsv1.ContextFabricDriverCategoryRequiresClaimedFact(contractsv1.ContextFabricDriverCategory(category))
 	matchedKind := false
 	for _, claimID := range claimedFactIDs {
@@ -250,12 +290,66 @@ func requireGroundedClaims(name, category string, claimedFactIDs []string, claim
 		if !ok {
 			return fmt.Errorf("%s references unknown claimed fact %q", name, claimID)
 		}
+		if _, ok := scoped[subjectKeyForModel(claim.Subject)]; !ok {
+			return fmt.Errorf("%s claimed fact %q is about a subject outside its own affected subjects", name, claimID)
+		}
 		if required && claim.Kind == requiredKind {
 			matchedKind = true
 		}
 	}
 	if required && !matchedKind {
 		return fmt.Errorf("%s category %q requires a claimed fact of kind %q", name, category, requiredKind)
+	}
+	return nil
+}
+
+// canonicalSubjectLabels binds every canonical ID the investigation input
+// actually named to the ONE label that ID carries in the input: graph
+// resolution (candidates and committed subjects), the discovered cohort,
+// relationship path nodes, and canonical fact subjects are all sources of
+// truth, in that order, first-write-wins (an investigation's own inputs
+// are expected to already agree; this is not a conflict-resolution
+// policy). See requireBoundLabel.
+func canonicalSubjectLabels(input SynthesisInput) map[string]string {
+	labels := make(map[string]string)
+	set := func(subject SubjectRef) {
+		key := subjectKeyForModel(subject)
+		if _, exists := labels[key]; !exists {
+			labels[key] = subject.Label
+		}
+	}
+	for _, candidate := range input.Graph.Resolution.Candidates {
+		set(candidate.Subject)
+	}
+	for _, subject := range input.Graph.Resolution.Committed {
+		set(subject)
+	}
+	if input.Graph.Cohort != nil {
+		for _, member := range input.Graph.Cohort.Members {
+			set(member.Subject)
+		}
+	}
+	for _, path := range input.Graph.Paths {
+		for _, node := range path.Nodes {
+			set(node)
+		}
+	}
+	for _, fact := range input.Facts.Facts {
+		set(fact.Subject)
+	}
+	return labels
+}
+
+// requireBoundLabel rejects a model-supplied subject whose Label diverges
+// from the one canonicalSubjectLabels recorded for its CanonicalID+Kind --
+// a forged/rewritten label presenting a real, in-bounds subject under a
+// different name (CHAOS-3755 adversarial review finding H3). A subject
+// with no entry in labels is not this check's concern: that's an
+// out-of-bounds reference, already rejected by the caller's own
+// allowedSubjects membership check before this runs.
+func requireBoundLabel(name string, subject SubjectRef, labels map[string]string) error {
+	if want, ok := labels[subjectKeyForModel(subject)]; ok && want != subject.Label {
+		return fmt.Errorf("%s references subject %q with a label that does not match the investigation input", name, subject.CanonicalID)
 	}
 	return nil
 }
@@ -373,9 +467,20 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		return InvestigationResult{}, err
 	}
 	result := InvestigationResult{
-		Status:             draft.Status,
-		DirectJudgment:     strings.TrimSpace(draft.DirectJudgment),
-		CurrentState:       strings.TrimSpace(draft.CurrentState),
+		Status: draft.Status,
+		// DirectJudgment and CurrentState are server-composed too, for the
+		// same reason DeterministicAnswer is (see its comment below):
+		// draft.DirectJudgment/draft.CurrentState (whatever prose the
+		// model produced) are deliberately discarded. The contract has no
+		// separate field labeled for raw model inference, so that prose
+		// is dropped entirely rather than smuggled into a field a
+		// consumer would reasonably read as validated (CHAOS-3755
+		// adversarial review finding H2 -- prose could otherwise assert
+		// the opposite of an already-validated claim, e.g. "on track"
+		// prose next to a principal driver whose claimed fact says
+		// release_ready=false).
+		DirectJudgment:     composeDirectJudgment(draft),
+		CurrentState:       composeCurrentState(draft),
 		StrongestPressures: cloneSlice(draft.StrongestPressures),
 		Drivers:            cloneSlice(draft.Drivers),
 		RemainingWork:      cloneSlice(draft.RemainingWork),
@@ -409,6 +514,74 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	return result, nil
 }
 
+// composeDirectJudgment/composeCurrentState/composeDeterministicAnswer's
+// max lengths mirror ContextFabricInvestigationResult.Validate()'s Go-level
+// bounds exactly (validate_context_fabric_result.go). A composer must never
+// let a large number of drivers/claims grow a rendered field past its
+// contract bound: that would turn a perfectly valid investigation into an
+// ErrInvalidResult/500 at the very last step, for a reason entirely of
+// ACR's own making (CHAOS-3755 adversarial review finding M4) -- so every
+// composer truncates itself, at a sentence boundary with an explicit
+// elision marker, rather than ever producing an oversized field.
+const (
+	directJudgmentMaxLength      = 8000
+	currentStateMaxLength        = 8000
+	deterministicAnswerMaxLength = 16000
+)
+
+// truncateAtSentenceBoundary shortens text to at most maxRunes runes,
+// preferring to cut at the last '.' or ';' within budget so the elision
+// marker doesn't land mid-sentence, and always appends an explicit marker
+// so truncation is visible to a reader/consumer rather than silent.
+func truncateAtSentenceBoundary(text string, maxRunes int) string {
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	const marker = " […truncated]"
+	markerRunes := []rune(marker)
+	budget := maxRunes - len(markerRunes)
+	if budget < 0 {
+		budget = 0
+	}
+	truncated := runes[:budget]
+	for i := len(truncated) - 1; i >= 0; i-- {
+		if truncated[i] == '.' || truncated[i] == ';' {
+			truncated = truncated[:i+1]
+			break
+		}
+	}
+	return strings.TrimSpace(string(truncated)) + marker
+}
+
+// composeDirectJudgment renders DirectJudgment server-side, for the same
+// reason composeDeterministicAnswer exists: draft.DirectJudgment (model
+// prose) is never read. Distinct from composeDeterministicAnswer in
+// content, not just name -- this is the short judgment sentence alone,
+// without the trailing claimed-fact restatement DeterministicAnswer adds.
+func composeDirectJudgment(draft SynthesisDraft) string {
+	var b strings.Builder
+	b.WriteString(statusSentence(draft.Status))
+	if titles := principalDriverTitles(draft.Drivers); len(titles) > 0 {
+		b.WriteString(" Principal driver: ")
+		b.WriteString(strings.Join(titles, "; "))
+		b.WriteString(".")
+	}
+	return truncateAtSentenceBoundary(strings.TrimSpace(b.String()), directJudgmentMaxLength)
+}
+
+// composeCurrentState renders CurrentState server-side from validated
+// ClaimedFacts only -- the "current" observed values a claim restates. See
+// composeDeterministicAnswer's doc comment for why model prose
+// (draft.CurrentState) is never read here.
+func composeCurrentState(draft SynthesisDraft) string {
+	claims := claimedFactSentences(draft.ClaimedFacts)
+	if len(claims) == 0 {
+		return "No canonical facts were observed to describe the current state."
+	}
+	return truncateAtSentenceBoundary("Current observed values: "+strings.Join(claims, "; ")+".", currentStateMaxLength)
+}
+
 // composeDeterministicAnswer renders DeterministicAnswer server-side from
 // already-validated structured fields only (Status, principal Drivers,
 // ClaimedFacts) -- see the call site's comment for why. It never reads
@@ -429,7 +602,7 @@ func composeDeterministicAnswer(draft SynthesisDraft) string {
 		b.WriteString(strings.Join(claims, "; "))
 		b.WriteString(".")
 	}
-	return strings.TrimSpace(b.String())
+	return truncateAtSentenceBoundary(strings.TrimSpace(b.String()), deterministicAnswerMaxLength)
 }
 
 func statusSentence(status InvestigationStatus) string {

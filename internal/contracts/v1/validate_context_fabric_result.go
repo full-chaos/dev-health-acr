@@ -143,7 +143,7 @@ func (e ContextFabricRelationshipEdge) Validate() error {
 }
 
 func (d ContextFabricDriverJudgment) Validate() error {
-	if !stringLengthBetween(d.DriverID, 8, 256) || !validDriverStanding(d.Standing) || !stringLengthBetween(strings.TrimSpace(d.Category), 1, 128) || !stringLengthBetween(strings.TrimSpace(d.Title), 1, 512) || !stringLengthBetween(strings.TrimSpace(d.Summary), 1, 4000) || !validDerivationMethod(d.Derivation) || !validEpistemicStatus(d.EpistemicStatus) || d.Confidence < 0 || d.Confidence > 1 || !stringLengthBetween(d.Qualification, 0, 2000) {
+	if !stringLengthBetween(d.DriverID, 8, 256) || !validDriverStanding(d.Standing) || !validDriverCategory(ContextFabricDriverCategory(d.Category)) || !stringLengthBetween(strings.TrimSpace(d.Title), 1, 512) || !stringLengthBetween(strings.TrimSpace(d.Summary), 1, 4000) || !validDerivationMethod(d.Derivation) || !validEpistemicStatus(d.EpistemicStatus) || d.Confidence < 0 || d.Confidence > 1 || !stringLengthBetween(d.Qualification, 0, 2000) {
 		return fmt.Errorf("driver judgment violates v1 bounds")
 	}
 	if len(d.AffectedSubjects) < 1 || len(d.AffectedSubjects) > 250 || !uniqueSubjects(d.AffectedSubjects) || len(d.PathIDs) > 250 || !uniqueTrimmedStrings(d.PathIDs, 256) || !boundedEvidenceRefs(d.EvidenceRefIDs, 500, true) {

@@ -740,8 +740,24 @@
         },
         "category": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 128
+          "enum": [
+            "status",
+            "actual_completion",
+            "work",
+            "blockers",
+            "reviews",
+            "continuous_integration",
+            "deployments",
+            "incidents",
+            "health",
+            "workload",
+            "investment",
+            "readiness",
+            "operational_deficiency",
+            "source_health",
+            "relationship",
+            "narrative"
+          ]
         },
         "title": {
           "type": "string",

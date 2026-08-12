@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -513,7 +514,7 @@ func validSynthesisDraftFixture(input SynthesisInput) SynthesisDraft {
 		StrongestPressures: []string{"Release acceptance remains open."},
 		Drivers: []DriverJudgment{{
 			DriverID: "driver_12345678", Standing: DriverPrincipal,
-			Category: "release_readiness", Title: "Release acceptance remains open",
+			Category: "relationship", Title: "Release acceptance remains open",
 			Summary: "Required acceptance has not completed.", AffectedSubjects: []SubjectRef{project},
 			PathIDs: []string{"path_12345678"}, EvidenceRefIDs: []string{"evidence_release_1234"},
 			Derivation: DerivationRuleInferred, EpistemicStatus: EpistemicInferred,
@@ -616,18 +617,37 @@ func TestSynthesisDraftValidateAgainstRejectsDriverInFactShapedCategoryWithoutAn
 	}
 }
 
-// TestSynthesisDraftValidateAgainstDoesNotRequireClaimsForUnmappedCategory
+// TestSynthesisDraftValidateAgainstDoesNotRequireClaimsForNarrativeCategory
 // proves the category->claim requirement is a closed enum lookup, not a
-// blanket rule -- "release_readiness" (the fixture's original category,
-// free text chosen by a hypothetical model) is NOT in
-// ContextFabricDriverCategoryRequiresClaimedFact's table, so plain evidence
-// closure remains sufficient for it.
-func TestSynthesisDraftValidateAgainstDoesNotRequireClaimsForUnmappedCategory(t *testing.T) {
+// blanket rule: "relationship" (the shared fixture's category) is a known
+// narrative/graph-associated category, deliberately absent from
+// ContextFabricDriverCategoryRequiresClaimedFact's table, so plain
+// evidence closure remains sufficient for it.
+func TestSynthesisDraftValidateAgainstDoesNotRequireClaimsForNarrativeCategory(t *testing.T) {
 	t.Parallel()
 	input := validSynthesisInputFixture()
 	draft := validSynthesisDraftFixture(input)
 	if err := draft.ValidateAgainst(input); err != nil {
-		t.Fatalf("ValidateAgainst() error = %v, want an unmapped category to validate without any claim", err)
+		t.Fatalf("ValidateAgainst() error = %v, want a narrative category to validate without any claim", err)
+	}
+}
+
+// TestSynthesisDraftValidateAgainstRejectsUnrecognizedCategory is the H4
+// fix itself (Codex adversarial review, CHAOS-3755): Category is now a
+// closed contract enum (ContextFabricDriverCategory), so a model that
+// picks a novel spelling to dodge ContextFabricDriverCategoryRequiresClaimedFact's
+// exact-match lookup is rejected outright at driver.Validate(), not
+// silently treated as an unmapped/no-claim-required category. This
+// replaces the prior test of the same shape, which unintentionally
+// "blessed" the bypass by asserting a free-text category validated fine.
+func TestSynthesisDraftValidateAgainstRejectsUnrecognizedCategory(t *testing.T) {
+	t.Parallel()
+	input := validSynthesisInputFixture()
+	draft := validSynthesisDraftFixture(input)
+	draft.Drivers[0].Category = "release_readiness_but_spelled_differently_to_dodge_the_table"
+	err := draft.ValidateAgainst(input)
+	if err == nil || !strings.Contains(err.Error(), "driver judgment violates v1 bounds") {
+		t.Fatalf("ValidateAgainst() error = %v, want an unrecognized category to be rejected outright", err)
 	}
 }
 
@@ -683,3 +703,142 @@ func TestRuntimeAnswerSynthesizerComposesDeterministicAnswerServerSide(t *testin
 }
 
 func boolScalar(value bool) ScalarValue { return ScalarValue{Boolean: &value} }
+
+// --- H1/H3 (Codex adversarial review): claims must bind to their citing
+// driver/finding's subjects, and subject/claim labels must match the
+// investigation input verbatim. ---
+
+func TestSynthesisDraftValidateAgainstRejectsClaimAboutSubjectOutsideDriverAffectedSubjects(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	workItem := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "work_1", Label: "Release acceptance"}
+	// A second, real, in-bounds canonical fact -- about workItem, not
+	// project (the driver's only AffectedSubjects entry).
+	input.Facts.Facts = append(input.Facts.Facts, CanonicalFact{
+		Kind: FactReadiness, Subject: workItem, Fields: map[string]FactValue{"release_ready": BooleanFactValue(true)},
+		EvidenceRefIDs: []string{"evidence_release_1234"}, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1",
+	})
+	draft.ClaimedFacts = append(draft.ClaimedFacts, ClaimedFact{
+		ClaimID: "claim_readiness_workitem", Kind: FactReadiness, Subject: workItem, Field: "release_ready", Value: boolScalar(true),
+	})
+	// The driver is about `project` (AffectedSubjects=[project]) but cites
+	// the workItem claim instead of (or in addition to) its own subject's
+	// claim -- a false public assertion about workItem's readiness under
+	// a driver whose AffectedSubjects never named it.
+	draft.Drivers[0].ClaimedFactIDs = []string{"claim_readiness_workitem"}
+	err := draft.ValidateAgainst(input)
+	if err == nil || !strings.Contains(err.Error(), "outside its own affected subjects") {
+		t.Fatalf("ValidateAgainst() error = %v, want a claim-outside-affected-subjects error", err)
+	}
+}
+
+func TestSynthesisDraftValidateAgainstAllowsFindingClaimAboutInvestigationSubjectWhenFindingHasNoSubjects(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	// A finding with no Subjects of its own falls back to the whole
+	// investigation's subjects (not zero subjects, which would make every
+	// claim reference impossible for subject-less findings).
+	draft.ReadinessGaps = []Finding{{
+		FindingID: "finding_readiness_gap1", Kind: "readiness", Summary: "Readiness is negative investigation-wide.",
+		EvidenceRefIDs: []string{"evidence_release_1234"}, ClaimedFactIDs: []string{"claim_readiness_1"},
+	}}
+	if err := draft.ValidateAgainst(input); err != nil {
+		t.Fatalf("ValidateAgainst() error = %v, want a subject-less finding to fall back to investigation-wide subjects", err)
+	}
+}
+
+func TestSynthesisDraftValidateAgainstRejectsDriverSubjectLabelMismatch(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	forged := draft.Drivers[0].AffectedSubjects[0]
+	forged.Label = "A Completely Different Project Name"
+	draft.Drivers[0].AffectedSubjects = []SubjectRef{forged}
+	err := draft.ValidateAgainst(input)
+	if err == nil || !strings.Contains(err.Error(), "label") {
+		t.Fatalf("ValidateAgainst() error = %v, want a label-mismatch error", err)
+	}
+}
+
+func TestSynthesisDraftValidateAgainstRejectsClaimedFactSubjectLabelMismatch(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	draft.ClaimedFacts[0].Subject.Label = "A Completely Different Project Name"
+	err := draft.ValidateAgainst(input)
+	if err == nil || !strings.Contains(err.Error(), "label") {
+		t.Fatalf("ValidateAgainst() error = %v, want a label-mismatch error", err)
+	}
+}
+
+// --- H2 (Codex adversarial review): DirectJudgment/CurrentState are
+// server-composed, not model-authored, so unvalidated prose can never
+// contradict an already-validated claim. ---
+
+func TestRuntimeAnswerSynthesizerComposesDirectJudgmentAndCurrentStateServerSide(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	draft.DirectJudgment = "Ask Dev is completely on track and release-ready, contradicting the validated claim"
+	draft.CurrentState = "Everything is fine, nothing to see here, also contradicting the validated claim"
+	synthesizer := RuntimeAnswerSynthesizer{
+		Runtime: fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)},
+	}
+	result, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if strings.Contains(result.DirectJudgment, "contradicting") || strings.Contains(result.CurrentState, "contradicting") {
+		t.Fatalf("model prose leaked through: direct_judgment=%q current_state=%q", result.DirectJudgment, result.CurrentState)
+	}
+	if !strings.Contains(result.CurrentState, "readiness.release_ready=false") {
+		t.Fatalf("CurrentState = %q, want it composed from the validated claim", result.CurrentState)
+	}
+	if result.DirectJudgment == "" {
+		t.Fatal("DirectJudgment is empty")
+	}
+}
+
+// --- M4 (Codex adversarial review): composed fields must self-truncate at
+// their contract bound rather than let Validate() reject an oversized
+// result (ErrInvalidResult -> 500) for a reason of ACR's own making. ---
+
+func TestComposeDeterministicAnswerTruncatesAtContractBoundWithManyDrivers(t *testing.T) {
+	t.Parallel()
+	input := validSynthesisInputFixture()
+	project := input.Graph.Resolution.Committed[0]
+	draft := SynthesisDraft{
+		Status: InvestigationComplete, DirectJudgment: "x", CurrentState: "x", StrongestPressures: []string{},
+		RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Conflicts: []Finding{}, Limitations: []string{},
+		EvidenceRefIDs: []string{}, DeterministicAnswer: "x", Warnings: []string{},
+	}
+	// Enough principal drivers with long titles to exceed 16000 runes if
+	// nothing bounded the composition.
+	for i := 0; i < 400; i++ {
+		title := strings.Repeat("a very long driver title that keeps repeating to grow the composed answer ", 3)
+		draft.Drivers = append(draft.Drivers, DriverJudgment{
+			DriverID: fmt.Sprintf("driver_%08d", i), Standing: DriverPrincipal, Category: "relationship",
+			Title: title, Summary: "summary", AffectedSubjects: []SubjectRef{project},
+			PathIDs: []string{"path_12345678"}, Derivation: DerivationRuleInferred, EpistemicStatus: EpistemicInferred,
+			Confidence: 0.9, Current: true,
+		})
+	}
+	answer := composeDeterministicAnswer(draft)
+	if len([]rune(answer)) > deterministicAnswerMaxLength {
+		t.Fatalf("composeDeterministicAnswer() length = %d, want <= %d", len([]rune(answer)), deterministicAnswerMaxLength)
+	}
+	if !strings.Contains(answer, "truncated") {
+		t.Fatalf("composeDeterministicAnswer() = %q, want an explicit truncation marker", answer)
+	}
+	// The synthesized field must itself pass the same bound
+	// InvestigationResult.Validate() enforces -- proving this doesn't just
+	// avoid the symptom but actually satisfies the real contract.
+	if len(answer) == 0 || len([]rune(answer)) < 1 {
+		t.Fatal("truncated answer must not be empty")
+	}
+}
+
+func TestTruncateAtSentenceBoundaryLeavesShortTextUnchanged(t *testing.T) {
+	t.Parallel()
+	short := "This is a short sentence."
+	if got := truncateAtSentenceBoundary(short, 8000); got != short {
+		t.Fatalf("truncateAtSentenceBoundary() = %q, want unchanged", got)
+	}
+}

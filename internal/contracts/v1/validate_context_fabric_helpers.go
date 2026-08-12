@@ -278,6 +278,31 @@ func validVersion(value string) bool {
 	return stringLengthBetween(value, 1, 256) && strings.TrimSpace(value) == value
 }
 
+// validDriverCategory reports whether value is one of the closed
+// ContextFabricDriverCategory vocabulary members (CHAOS-3755 adversarial
+// review finding H4). Before this, ContextFabricDriverJudgment.Category
+// was an unbounded free string, so a model could pick a novel spelling
+// that ContextFabricDriverCategoryRequiresClaimedFact's exact-match lookup
+// would never recognize as fact-shaped -- silently bypassing value-level
+// closure for a judgment that was, in substance, exactly the kind of
+// canonical-fact claim closure exists to check. Closing the vocabulary
+// makes that bypass structurally impossible: every category is either a
+// known fact-shaped one (requires a claim) or a known narrative one
+// (relationship/narrative -- doesn't), never an unrecognized third thing.
+func validDriverCategory(value ContextFabricDriverCategory) bool {
+	switch value {
+	case ContextFabricDriverCategoryStatus, ContextFabricDriverCategoryCompletion, ContextFabricDriverCategoryWork,
+		ContextFabricDriverCategoryBlockers, ContextFabricDriverCategoryReviews, ContextFabricDriverCategoryCI,
+		ContextFabricDriverCategoryDeployments, ContextFabricDriverCategoryIncidents, ContextFabricDriverCategoryHealth,
+		ContextFabricDriverCategoryWorkload, ContextFabricDriverCategoryInvestment, ContextFabricDriverCategoryReadiness,
+		ContextFabricDriverCategoryDeficiency, ContextFabricDriverCategorySourceHealth,
+		ContextFabricDriverCategoryRelationship, ContextFabricDriverCategoryNarrative:
+		return true
+	default:
+		return false
+	}
+}
+
 func allStringsInSet[T ~string](values []T, valid func(T) bool) bool {
 	seen := make(map[T]struct{}, len(values))
 	for _, value := range values {
