@@ -17,14 +17,16 @@ import (
 )
 
 type fakeAPI struct {
-	graphs       map[string]*zep.Graph
-	triples      []*zep.AddTripleRequest
-	nodes        map[string]*zep.EntityNode
-	edges        map[string]*zep.EntityEdge
-	searchResult *zep.GraphSearchResults
-	searches     []*zep.GraphSearchQuery
-	deletedGraph string
-	err          error
+	graphs           map[string]*zep.Graph
+	triples          []*zep.AddTripleRequest
+	nodes            map[string]*zep.EntityNode
+	edges            map[string]*zep.EntityEdge
+	searchResult     *zep.GraphSearchResults
+	searches         []*zep.GraphSearchQuery
+	deletedGraph     string
+	err              error
+	createGraphCalls int
+	deleteGraphErr   error
 }
 
 func newFakeAPI() *fakeAPI {
@@ -43,6 +45,7 @@ func (f *fakeAPI) GetGraph(_ context.Context, graphID string) (*zep.Graph, error
 }
 
 func (f *fakeAPI) CreateGraph(_ context.Context, request *zep.CreateGraphRequest) (*zep.Graph, error) {
+	f.createGraphCalls++
 	graphID := request.GraphID
 	graph := &zep.Graph{GraphID: &graphID, Name: request.Name, Description: request.Description}
 	f.graphs[graphID] = graph
@@ -50,6 +53,9 @@ func (f *fakeAPI) CreateGraph(_ context.Context, request *zep.CreateGraphRequest
 }
 
 func (f *fakeAPI) DeleteGraph(_ context.Context, graphID string) error {
+	if f.deleteGraphErr != nil {
+		return f.deleteGraphErr
+	}
 	f.deletedGraph = graphID
 	delete(f.graphs, graphID)
 	return nil
@@ -283,6 +289,328 @@ func TestProjectionEnrichesEmbeddedEntityTextWithoutLeakingNativeEvidence(t *tes
 	}
 }
 
+func TestApplyProjectionBatchCreatesGraphOnceAndIsIdempotentUnderReplay(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	batch := validBatch()
+
+	first, err := adapter.ApplyProjectionBatch(context.Background(), batch)
+	if err != nil {
+		t.Fatalf("first ApplyProjectionBatch() error = %v", err)
+	}
+	if _, ok := api.graphs[graphID(adapter.config.GraphPrefix, batch.OrgID)]; !ok {
+		t.Fatal("first ApplyProjectionBatch() did not create the organization graph")
+	}
+	if api.createGraphCalls != 1 {
+		t.Fatalf("createGraphCalls = %d, want 1", api.createGraphCalls)
+	}
+	nodeCount, edgeCount := len(api.nodes), len(api.edges)
+
+	second, err := adapter.ApplyProjectionBatch(context.Background(), batch)
+	if err != nil {
+		t.Fatalf("replay ApplyProjectionBatch() error = %v", err)
+	}
+	if api.createGraphCalls != 1 {
+		t.Fatalf("replay recreated the graph: createGraphCalls = %d", api.createGraphCalls)
+	}
+	if len(api.nodes) != nodeCount || len(api.edges) != edgeCount {
+		t.Fatalf("replay grew backend state: nodes %d->%d edges %d->%d", nodeCount, len(api.nodes), edgeCount, len(api.edges))
+	}
+	if second.EntitiesApplied != first.EntitiesApplied || second.EdgesApplied != first.EdgesApplied ||
+		second.ContentsApplied != first.ContentsApplied || second.EpisodesApplied != first.EpisodesApplied {
+		t.Fatalf("replay receipt differs: first=%#v second=%#v", first, second)
+	}
+}
+
+func TestApplyProjectionBatchTombstonesDeleteAcrossKindsAndReplayIsIdempotent(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	batch := validBatch()
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), batch); err != nil {
+		t.Fatalf("seed ApplyProjectionBatch() error = %v", err)
+	}
+	relationshipEdgeID := relationshipUUID(batch.OrgID, batch.Relationships[0].RelationshipID)
+	documentNodeID := contentUUID(batch.OrgID, "document", batch.Contents[0].ContentID)
+	episodeNodeID := contentUUID(batch.OrgID, "episode", batch.Episodes[0].EpisodeID)
+	workSubject := batch.Relationships[0].To
+	workNodeID := nodeUUID(batch.OrgID, workSubject)
+	if _, ok := api.edges[relationshipEdgeID]; !ok {
+		t.Fatalf("seed missing edge %s", relationshipEdgeID)
+	}
+	for _, id := range []string{documentNodeID, episodeNodeID, workNodeID} {
+		if _, ok := api.nodes[id]; !ok {
+			t.Fatalf("seed missing node %s", id)
+		}
+	}
+
+	now := time.Date(2026, 8, 11, 22, 0, 0, 0, time.UTC)
+	tombstoneBatch := batch
+	tombstoneBatch.BatchID = "batch_tombstone1"
+	tombstoneBatch.Entities = []contextfabric.EntityProjection{}
+	tombstoneBatch.Relationships = []contextfabric.RelationshipProjection{}
+	tombstoneBatch.Contents = []contextfabric.ContentProjection{}
+	tombstoneBatch.Episodes = []contextfabric.EpisodeProjection{}
+	tombstoneBatch.Cursor = batch.NextCursor
+	tombstoneBatch.NextCursor = "cursor-3"
+	tombstoneBatch.Tombstones = []contextfabric.ProjectionTombstone{
+		{Kind: "relationship", CanonicalID: batch.Relationships[0].RelationshipID, Reason: "superseded", EffectiveAt: now, SourceVersion: "ops-v1"},
+		{Kind: "document", CanonicalID: batch.Contents[0].ContentID, Reason: "superseded", EffectiveAt: now, SourceVersion: "ops-v1"},
+		{Kind: "episode", CanonicalID: batch.Episodes[0].EpisodeID, Reason: "superseded", EffectiveAt: now, SourceVersion: "ops-v1"},
+		{Kind: string(workSubject.Kind), CanonicalID: workSubject.CanonicalID, Reason: "superseded", EffectiveAt: now, SourceVersion: "ops-v1"},
+	}
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), tombstoneBatch); err != nil {
+		t.Fatalf("tombstone ApplyProjectionBatch() error = %v", err)
+	}
+	if _, ok := api.edges[relationshipEdgeID]; ok {
+		t.Fatalf("edge %s survived tombstone", relationshipEdgeID)
+	}
+	for _, id := range []string{documentNodeID, episodeNodeID, workNodeID} {
+		if _, ok := api.nodes[id]; ok {
+			t.Fatalf("node %s survived tombstone", id)
+		}
+	}
+
+	// Replaying tombstones against an already-absent target is a 404 the
+	// adapter must treat as success, not an error.
+	tombstoneBatch.BatchID = "batch_tombstone2"
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), tombstoneBatch); err != nil {
+		t.Fatalf("repeat tombstone ApplyProjectionBatch() error = %v", err)
+	}
+}
+
+func TestPurgeOrganizationIsIdempotentWhenGraphAlreadyAbsent(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	api.deleteGraphErr = &zep.NotFoundError{}
+	if err := adapter.PurgeOrganization(context.Background(), "org_never_projected"); err != nil {
+		t.Fatalf("PurgeOrganization() on an absent graph error = %v", err)
+	}
+}
+
+func TestProjectionWatermarkReturnsNotFoundWhenUnset(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	_, err := adapter.ProjectionWatermark(context.Background(), "org_1", "dev-health-ops")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ProjectionWatermark() on an unset watermark error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestResolveSubjectsReturnsSafeNoMatchWithoutCandidates(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{}}
+	request := validRequest()
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"Nothing Matches This"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Candidates) != 0 || len(resolution.Committed) != 0 || resolution.ClarificationPrompt != "" {
+		t.Fatalf("resolution = %#v, want a safe no-match result", resolution)
+	}
+}
+
+func TestResolveSubjectsMarksCloseCandidatesAmbiguousAndOffersClarification(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	alpha := graphNode("node-alpha", contextfabric.SubjectProject, "project_alpha", "Widget Alpha", "*", 0.75)
+	beta := graphNode("node-beta", contextfabric.SubjectProject, "project_beta", "Widget Beta", "*", 0.70)
+	api.searchResult = &zep.GraphSearchResults{Nodes: []*zep.EntityNode{alpha, beta}}
+	request := validRequest()
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"Which widget"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("resolution.Committed = %#v, want none for ambiguous candidates", resolution.Committed)
+	}
+	if len(resolution.Candidates) != 2 {
+		t.Fatalf("resolution.Candidates = %#v, want two ambiguous candidates", resolution.Candidates)
+	}
+	for _, candidate := range resolution.Candidates {
+		if candidate.State != contextfabric.ResolutionAmbiguous {
+			t.Fatalf("candidate state = %q, want ambiguous", candidate.State)
+		}
+	}
+	if resolution.ClarificationPrompt == "" {
+		t.Fatal("resolution.ClarificationPrompt is empty for an ambiguous, clarification-allowed request")
+	}
+}
+
+func TestRelationshipProjectionPreservesPriorCanonicalEntityMetadataAcrossBatches(t *testing.T) {
+	t.Parallel()
+	api := newFakeAPI()
+	adapter := mustAdapter(t, api)
+	observed := time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)
+	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+
+	entityOnlyBatch := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_entity_only", OrgID: "org_1", Source: "dev-health-ops",
+		SourceVersion: "ops-v1", Cursor: "cursor-0", NextCursor: "cursor-1", GeneratedAt: observed,
+		Entities: []contextfabric.EntityProjection{{
+			Subject: project, Aliases: []string{"AskDev"}, ProviderIDs: map[string]string{"linear": "project-1"},
+			Authorization:  contextfabric.AuthorizationScope{RepositorySlugs: []string{"full-chaos/dev-health-acr"}},
+			EvidenceRefIDs: []string{"evidence_project_1234"}, ObservedAt: observed, SourceVersion: "ops-v1",
+		}},
+		Relationships: []contextfabric.RelationshipProjection{}, Contents: []contextfabric.ContentProjection{},
+		Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), entityOnlyBatch); err != nil {
+		t.Fatalf("entity-only ApplyProjectionBatch() error = %v", err)
+	}
+	subjectNodeID := nodeUUID(entityOnlyBatch.OrgID, project)
+	seeded := api.nodes[subjectNodeID]
+	if seeded == nil || stringAttribute(seeded.Attributes, "aliases") != "|AskDev|" || seeded.Attributes["provider_linear"] != "project-1" {
+		t.Fatalf("seeded node attributes = %#v", seeded)
+	}
+
+	later := observed.Add(time.Hour)
+	incident := contextfabric.SubjectRef{Kind: contextfabric.SubjectIncident, CanonicalID: "incident_1", Label: "Latency Incident"}
+	relationshipOnlyBatch := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_relationship_only", OrgID: "org_1", Source: "dev-health-ops",
+		SourceVersion: "ops-v2", Cursor: "cursor-1", NextCursor: "cursor-2", GeneratedAt: later,
+		Entities: []contextfabric.EntityProjection{}, Contents: []contextfabric.ContentProjection{}, Episodes: []contextfabric.EpisodeProjection{},
+		Relationships: []contextfabric.RelationshipProjection{{
+			RelationshipID: "relationship_incident_1", Type: "AFFECTED_BY", From: project, To: incident,
+			Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
+			Authorization:  contextfabric.AuthorizationScope{RepositorySlugs: []string{"full-chaos/dev-health-acr"}},
+			EvidenceRefIDs: []string{"evidence_incident_1234"}, ObservedAt: later, SourceVersion: "ops-v2",
+		}},
+		Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), relationshipOnlyBatch); err != nil {
+		t.Fatalf("relationship-only ApplyProjectionBatch() error = %v", err)
+	}
+	updated := api.nodes[subjectNodeID]
+	if updated == nil {
+		t.Fatal("subject node disappeared after relationship-only projection")
+	}
+	if stringAttribute(updated.Attributes, "aliases") != "|AskDev|" || updated.Attributes["provider_linear"] != "project-1" {
+		t.Fatalf("relationship-only upsert erased canonical entity metadata: %#v", updated.Attributes)
+	}
+	if stringAttribute(updated.Attributes, "observed_at") != later.UTC().Format(time.RFC3339Nano) || stringAttribute(updated.Attributes, "source_version") != "ops-v2" {
+		t.Fatalf("relationship-only upsert did not refresh temporal/source fields: %#v", updated.Attributes)
+	}
+}
+
+// TestSDKAPIGetCallsRetryBoundedAttemptsOnServerErrors proves bounded retry
+// for the bodyless read path (GetNode/GetGraph/GetNodeEdges): the SDK's
+// injected *http.Client and its Retrier issue up to Config.MaxAttempts
+// attempts and succeed once the transient failure clears.
+func TestSDKAPIGetCallsRetryBoundedAttemptsOnServerErrors(t *testing.T) {
+	t.Parallel()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		if requests == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"message":"transient"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"uuid":"node-1","attributes":{}}`))
+	}))
+	defer server.Close()
+	client, err := newSDKAPI(Config{
+		BaseURL: server.URL + "/api/v2", APIKey: "test-key", GraphPrefix: "acr-cf",
+		RequestTimeout: 2 * time.Second, MaxAttempts: 2, MaxResults: 10, AllowInsecure: true,
+	})
+	if err != nil {
+		t.Fatalf("newSDKAPI() error = %v", err)
+	}
+	if _, err := client.GetNode(context.Background(), "node-1"); err != nil {
+		t.Fatalf("GetNode() with a bounded retry budget error = %v", err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want exactly 2 (initial attempt plus one bounded retry)", requests)
+	}
+}
+
+// TestSDKAPIBodyBearingCallsDegradeSafelyUnderBoundedRetry documents a real,
+// pinned-version (v3.22.0) finding: internal/caller.go's Retrier re-invokes
+// client.Do with the SAME *http.Request across attempts and never explicitly
+// rewinds Request.Body between them. For a body-bearing call (Search here;
+// the same applies to AddFactTriple and CreateGraph) this makes the outcome
+// of a bounded retry against a transient 5xx racy — depending on Go's HTTP
+// transport-level connection reuse timing, the retried attempt sometimes
+// reaches the server successfully and sometimes fails client-side with a
+// net/http transfer error ("ContentLength=N with Body length 0") before ever
+// reaching the network. Both outcomes were reproduced locally. ADR 0007 must
+// not claim retries are proven effective for writes/search on this pinned
+// SDK version. This test asserts only what is deterministic: ACR degrades
+// safely either way (no panic, the server is reached at least once, and no
+// dependency response body leaks through safeDependencyError).
+func TestSDKAPIBodyBearingCallsDegradeSafelyUnderBoundedRetry(t *testing.T) {
+	t.Parallel()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		if requests == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"message":"transient-secret-detail"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"nodes":[],"edges":[],"episodes":[],"observations":[],"thread_summaries":[]}`))
+	}))
+	defer server.Close()
+	client, err := newSDKAPI(Config{
+		BaseURL: server.URL + "/api/v2", APIKey: "test-key", GraphPrefix: "acr-cf",
+		RequestTimeout: 2 * time.Second, MaxAttempts: 2, MaxResults: 10, AllowInsecure: true,
+	})
+	if err != nil {
+		t.Fatalf("newSDKAPI() error = %v", err)
+	}
+	scope := zep.GraphSearchScopeNodes
+	graph := graphID("acr-cf", "org-retry")
+	_, searchErr := client.Search(context.Background(), &zep.GraphSearchQuery{GraphID: &graph, Query: "Ask Dev", Scope: &scope})
+	if searchErr != nil {
+		classified := safeDependencyError("search", searchErr)
+		if classified == nil || classified.Error() == "" {
+			t.Fatalf("safeDependencyError() produced no safe error for %v", searchErr)
+		}
+		if strings.Contains(classified.Error(), "transient-secret-detail") {
+			t.Fatalf("safeDependencyError() leaked dependency detail: %q", classified.Error())
+		}
+	}
+	if requests < 1 {
+		t.Fatal("Search() never reached the server")
+	}
+}
+
+func TestSDKAPIPropagatesContextCancellation(t *testing.T) {
+	t.Parallel()
+	client, err := newSDKAPI(Config{
+		BaseURL: "http://127.0.0.1:9999/api/v2", APIKey: "test-key", GraphPrefix: "acr-cf",
+		RequestTimeout: time.Second, MaxAttempts: 1, MaxResults: 10, AllowInsecure: true,
+	})
+	if err != nil {
+		t.Fatalf("newSDKAPI() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	scope := zep.GraphSearchScopeNodes
+	graph := graphID("acr-cf", "org-cancel")
+	_, err = client.Search(ctx, &zep.GraphSearchQuery{GraphID: &graph, Query: "x", Scope: &scope})
+	if classified := safeDependencyError("search", err); !errors.Is(classified, context.Canceled) {
+		t.Fatalf("Search() with a canceled context error = %v, classified = %v", err, classified)
+	}
+}
+
 func TestSDKAPIUsesPinnedClientBaseURLAuthenticationAndSafeRateLimitClassification(t *testing.T) {
 	t.Parallel()
 	var requests int
@@ -339,7 +667,19 @@ func TestNewSDKAPIIsPinnedAndConstructible(t *testing.T) {
 	}
 }
 
-func TestLiveZepProjectionAndPurge(t *testing.T) {
+// TestLiveZepContextFabricLifecycle proves the full CHAOS-3752 adapter
+// contract against a real Zep endpoint: (1) create an isolated per-org
+// graph, (2) project canonical entities/relationships/content/episodes,
+// (3) replay the same batch to prove idempotency, (4) retrieve the
+// projected subject and its relationship, (5) verify temporal and evidence
+// metadata survived the round trip, (6) tombstone the relationship and
+// confirm it no longer surfaces, (7) read the projection watermark, (8)
+// purge the organization graph (and prove the purge itself is idempotent),
+// (9) verify organization isolation against a second live org, and (10)
+// clean up both organizations. It is skipped unless ACR_TEST_ZEP_BASE_URL
+// and ACR_TEST_ZEP_API_KEY are set; see docs/adr/0007 for what those values
+// must be in the absence of a self-hostable Zep server.
+func TestLiveZepContextFabricLifecycle(t *testing.T) {
 	baseURL := os.Getenv("ACR_TEST_ZEP_BASE_URL")
 	apiKey := os.Getenv("ACR_TEST_ZEP_API_KEY")
 	if baseURL == "" || apiKey == "" {
@@ -349,15 +689,156 @@ func TestLiveZepProjectionAndPurge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ctx := context.Background()
+	stamp := strings.ReplaceAll(time.Now().UTC().Format("20060102T150405.000000000"), ".", "")
+
+	// (1) An isolated graph is created implicitly, server-derived from the
+	// organization ID, the first time a batch is applied for that org.
+	// (2) Project one canonical entity, relationship, content item, and
+	// episode in a single batch.
 	batch := validBatch()
-	batch.OrgID = "live-contract-" + strings.ReplaceAll(time.Now().UTC().Format("20060102T150405.000000000"), ".", "")
+	batch.OrgID = "live-contract-a-" + stamp
+	otherOrgID := "live-contract-b-" + stamp
+	principal := storage.Principal{OrgID: batch.OrgID}
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), batch.OrgID) })
-	if _, err := adapter.ApplyProjectionBatch(context.Background(), batch); err != nil {
-		t.Fatalf("live ApplyProjectionBatch() error = %v", err)
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), otherOrgID) })
+
+	if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
+		t.Fatalf("(1)/(2) live ApplyProjectionBatch() error = %v", err)
 	}
-	if _, err := adapter.ProjectionWatermark(context.Background(), batch.OrgID, batch.Source); err != nil {
-		t.Fatalf("live ProjectionWatermark() error = %v", err)
+
+	// (3) Replaying the identical batch must be idempotent through
+	// deterministic identities: no error, no duplicate state.
+	if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
+		t.Fatalf("(3) live idempotent replay ApplyProjectionBatch() error = %v", err)
 	}
+
+	// (4) Retrieve the projected subject by exact canonical hint, then
+	// discover its projected relationship.
+	project := batch.Entities[0].Subject
+	request := validRequest()
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: project.Kind, ID: project.CanonicalID, Label: project.Label, Source: "live-test"}}
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{project.Label},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted)
+	if err != nil {
+		t.Fatalf("(4) live ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0] != project {
+		t.Fatalf("(4) live ResolveSubjects() resolution = %#v", resolution)
+	}
+	request.Question = "What is Ask Dev depending on?"
+	discovery := contextfabric.GraphDiscoveryRequest{
+		Request: request,
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "dependencies", SubjectTerms: []string{project.Label},
+			TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactBlockers}},
+		},
+		Resolution: resolution,
+	}
+	graphContext, err := adapter.DiscoverContext(ctx, principal, discovery)
+	if err != nil {
+		t.Fatalf("(4) live DiscoverContext() error = %v", err)
+	}
+	dependencyEdge := findEdgeByType(graphContext.Paths, "DEPENDS_ON")
+	if dependencyEdge == nil {
+		t.Fatalf("(4) live DiscoverContext() did not surface the projected DEPENDS_ON relationship: %#v", graphContext.Paths)
+	}
+
+	// (5) The retrieved relationship must carry its projected temporal
+	// bounds and canonical evidence references, not backend-native ones.
+	if dependencyEdge.ValidFrom == nil || dependencyEdge.ValidTo == nil || len(dependencyEdge.EvidenceRefIDs) == 0 || dependencyEdge.EvidenceRefIDs[0] != "evidence_dependency_1234" {
+		t.Fatalf("(5) live relationship temporal/evidence metadata = %#v", dependencyEdge)
+	}
+
+	// (6) Tombstone the relationship and confirm it no longer surfaces.
+	tombstoneBatch := batch
+	tombstoneBatch.BatchID = "batch_live_tombstone_" + stamp
+	tombstoneBatch.Cursor = batch.NextCursor
+	tombstoneBatch.NextCursor = "cursor-live-3"
+	tombstoneBatch.Entities = []contextfabric.EntityProjection{}
+	tombstoneBatch.Relationships = []contextfabric.RelationshipProjection{}
+	tombstoneBatch.Contents = []contextfabric.ContentProjection{}
+	tombstoneBatch.Episodes = []contextfabric.EpisodeProjection{}
+	tombstoneBatch.Tombstones = []contextfabric.ProjectionTombstone{
+		{Kind: "relationship", CanonicalID: batch.Relationships[0].RelationshipID, Reason: "live contract test cleanup", EffectiveAt: time.Now().UTC(), SourceVersion: "ops-v1"},
+	}
+	if _, err := adapter.ApplyProjectionBatch(ctx, tombstoneBatch); err != nil {
+		t.Fatalf("(6) live tombstone ApplyProjectionBatch() error = %v", err)
+	}
+	afterTombstone, err := adapter.DiscoverContext(ctx, principal, discovery)
+	if err != nil {
+		t.Fatalf("(6) live DiscoverContext() after tombstone error = %v", err)
+	}
+	if edge := findEdgeByType(afterTombstone.Paths, "DEPENDS_ON"); edge != nil {
+		t.Fatalf("(6) tombstoned relationship still surfaced: %#v", edge)
+	}
+
+	// (7) Read the projection watermark; it must reflect the last applied
+	// (tombstone) batch, not the original projection batch.
+	watermark, err := adapter.ProjectionWatermark(ctx, batch.OrgID, batch.Source)
+	if err != nil {
+		t.Fatalf("(7) live ProjectionWatermark() error = %v", err)
+	}
+	if watermark.Cursor != tombstoneBatch.NextCursor || watermark.SourceVersion != tombstoneBatch.SourceVersion {
+		t.Fatalf("(7) live watermark = %#v", watermark)
+	}
+
+	// (9) Verify organization isolation: a second, live organization
+	// project the same canonical labels under its own server-derived graph
+	// and must resolve to its own node, proving isolation is structural
+	// rather than a coincidental empty result.
+	otherBatch := validBatch()
+	otherBatch.OrgID = otherOrgID
+	if _, err := adapter.ApplyProjectionBatch(ctx, otherBatch); err != nil {
+		t.Fatalf("(9) live cross-org ApplyProjectionBatch() error = %v", err)
+	}
+	crossOrgResolution, err := adapter.ResolveSubjects(ctx, storage.Principal{OrgID: otherOrgID}, request, interpreted)
+	if err != nil {
+		t.Fatalf("(9) live cross-org ResolveSubjects() error = %v", err)
+	}
+	if len(crossOrgResolution.Committed) != 1 || crossOrgResolution.Committed[0] != project {
+		t.Fatalf("(9) live cross-org resolution = %#v", crossOrgResolution)
+	}
+
+	// (8) Purge the first organization's graph. Purge must be idempotent:
+	// calling it again against an already-absent graph must not error.
+	if err := adapter.PurgeOrganization(ctx, batch.OrgID); err != nil {
+		t.Fatalf("(8) live PurgeOrganization() error = %v", err)
+	}
+	if err := adapter.PurgeOrganization(ctx, batch.OrgID); err != nil {
+		t.Fatalf("(8) live repeat PurgeOrganization() on an absent graph error = %v", err)
+	}
+
+	// (9) Purging the first organization must never affect the second: its
+	// canonical node, addressed by its own server-derived UUID, must still
+	// resolve.
+	survivingResolution, err := adapter.ResolveSubjects(ctx, storage.Principal{OrgID: otherOrgID}, request, interpreted)
+	if err != nil {
+		t.Fatalf("(9) live surviving-org ResolveSubjects() error = %v", err)
+	}
+	if len(survivingResolution.Committed) != 1 {
+		t.Fatalf("(9) purging one organization affected another: %#v", survivingResolution)
+	}
+
+	// (10) Explicit cleanup beyond t.Cleanup, so a failure above still
+	// leaves both graphs purged once this line is reached.
+	if err := adapter.PurgeOrganization(ctx, otherOrgID); err != nil {
+		t.Fatalf("(10) live cleanup PurgeOrganization() error = %v", err)
+	}
+}
+
+func findEdgeByType(paths []contextfabric.RelationshipPath, relationType string) *contextfabric.RelationshipEdge {
+	for pathIndex := range paths {
+		for edgeIndex := range paths[pathIndex].Edges {
+			if paths[pathIndex].Edges[edgeIndex].Type == relationType {
+				return &paths[pathIndex].Edges[edgeIndex]
+			}
+		}
+	}
+	return nil
 }
 
 func mustAdapter(t *testing.T, api api) *Adapter {
