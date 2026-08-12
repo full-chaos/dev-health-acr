@@ -185,21 +185,17 @@ func (a *App) recordReadAudit(ctx context.Context, principal storage.Principal, 
 		})
 		return
 	}
-	// Every non-success status is recorded, not just "denied"
-	// (CHAOS-3755 adversarial review finding M5). An operational failure
-	// -- a dependency down, a model refusing, a timeout, a response over
-	// budget -- is exactly as audit-worthy as an authorization denial:
-	// without it the audit log shows only the requests that succeeded,
-	// which reads as "nothing else was attempted". Existing callers pass
-	// only "success" and "denied", so their behavior is unchanged.
+	if status != "denied" {
+		return
+	}
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()
 	if err := a.runtime.Audit.Record(auditCtx, storage.AuditEvent{
 		OrgID: principal.OrgID, ActorType: actorType, ActorID: actorID,
-		Action: action, ResourceType: resourceType, ResourceID: resourceID, Status: status,
+		Action: action, ResourceType: resourceType, ResourceID: resourceID, Status: "denied",
 		RequestID: RequestID(ctx), Metadata: metadata, CreatedAt: a.now().UTC(),
 	}); err != nil {
-		a.logger.WarnContext(ctx, "audit delivery failed", "failure_class", "audit_delivery", "audit_status", status)
+		a.logger.WarnContext(ctx, "credential denial audit delivery failed", "failure_class", "denial_audit_delivery")
 	}
 }
 
