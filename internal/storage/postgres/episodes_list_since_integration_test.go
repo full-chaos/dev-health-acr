@@ -179,6 +179,143 @@ func TestEpisodeStore_ListSinceSurfacesAPurgeThatHappensAfterTheWatermarkAlready
 	require.Equal(t, "purged_tombstone", revoked[0].RedactionState)
 }
 
+// TestEpisodeStore_UpdatedAtTriggerIsStrictlyMonotonicEvenWhenTheClockHasNotAdvanced
+// is CHAOS-3753 codex round-2 finding K5's deterministic regression test.
+// An application-side "SET updated_at = NOW()" is not guaranteed strictly
+// monotonic across two writes to one row: two transitions landing in the
+// same wall-clock instant would tie under updated_at, and ListSince's
+// strict predicate can only ever surface one of two same-timestamp
+// transitions on a single row (episode_id doesn't change between them, so
+// the tiebreaker never fires) -- the second would be silently invisible
+// forever. Rather than relying on timing luck to force a real collision,
+// this pins the row's updated_at artificially far in the future via raw
+// SQL (simulating both "same instant" and "clock skew backward" at once:
+// any subsequent write's clock_timestamp() is certainly "behind" it) and
+// proves migration 0008's trigger still produces a strictly greater
+// updated_at on the next write -- exercising its GREATEST(clock_timestamp(),
+// OLD.updated_at + 1 microsecond) floor, not clock_timestamp() alone.
+func TestEpisodeStore_UpdatedAtTriggerIsStrictlyMonotonicEvenWhenTheClockHasNotAdvanced(t *testing.T) {
+	ctx := context.Background()
+	db := newCredentialStoreDatabase(t, ctx)
+	store, err := NewEpisodeStore(db)
+	require.NoError(t, err)
+	principal := storage.Principal{OrgID: "11111111-1111-1111-1111-111111111111", RepositoryScopes: []string{"owner/repo"}}
+
+	episode, _, err := store.CreateIdempotent(ctx, principal, listSinceEpisodeCreate("ep-monotonic"), nil)
+	require.NoError(t, err)
+
+	// The trigger fires on every UPDATE, including this one -- disable it
+	// for exactly this one setup statement so the artificial future value
+	// actually lands, then re-enable it before exercising the real write
+	// under test below.
+	future := time.Now().UTC().Add(24 * time.Hour)
+	_, err = db.ExecContext(ctx, `ALTER TABLE acr.agent_episodes DISABLE TRIGGER trg_agent_episodes_bump_updated_at`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE acr.agent_episodes SET updated_at = $1 WHERE episode_id = $2`, future, episode.EpisodeID)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `ALTER TABLE acr.agent_episodes ENABLE TRIGGER trg_agent_episodes_bump_updated_at`)
+	require.NoError(t, err)
+
+	checkpoint, err := store.ListSince(ctx, principal.OrgID, time.Time{}, "", 10)
+	require.NoError(t, err)
+	require.Len(t, checkpoint, 1)
+	require.True(t, checkpoint[0].UpdatedAt.Equal(future), "sanity: the artificially future updated_at took effect")
+	since, after := checkpoint[0].UpdatedAt, checkpoint[0].EpisodeID
+
+	redacted, err := store.Redact(ctx, principal, episode.EpisodeID, "user request")
+	require.NoError(t, err)
+	require.Equal(t, "redacted", redacted.RedactionState)
+
+	revoked, err := store.ListSince(ctx, principal.OrgID, since, after, 10)
+	require.NoError(t, err)
+	require.Len(t, revoked, 1, "the redaction must still surface even though clock_timestamp() at write time was behind the row's already-recorded updated_at")
+	require.Equal(t, "redacted", revoked[0].RedactionState)
+	require.True(t, revoked[0].UpdatedAt.After(future), "updated_at must be strictly greater than the previous value even when the wall clock hasn't caught up to it")
+}
+
+// TestEpisodeStore_ListSinceSurfacesRedactThenPurgeInOrder is CHAOS-3753
+// codex round-2 finding K5's real-production-sequence regression test:
+// redact immediately followed by purge (the exact sequence the finding
+// names), captured mid-sequence to prove both transitions are
+// individually observable in order, not just that the final state happens
+// to be right.
+func TestEpisodeStore_ListSinceSurfacesRedactThenPurgeInOrder(t *testing.T) {
+	ctx := context.Background()
+	db := newCredentialStoreDatabase(t, ctx)
+	store, err := NewEpisodeStore(db)
+	require.NoError(t, err)
+	principal := storage.Principal{OrgID: "11111111-1111-1111-1111-111111111111", RepositoryScopes: []string{"owner/repo"}}
+
+	// Redact() requires expires_at IS NULL OR expires_at > NOW(), so the
+	// episode must still be valid at redact time; PurgeExpiredForPrincipal
+	// takes its own "before" cutoff as a parameter rather than comparing
+	// against real time, so a short-lived but not-yet-expired window still
+	// lets the purge sweep below treat it as eligible without an actual
+	// wait.
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	episode, _, err := store.CreateIdempotent(ctx, principal, listSinceEpisodeCreate("ep-redact-then-purge"), &expiresAt)
+	require.NoError(t, err)
+
+	baseline, err := store.ListSince(ctx, principal.OrgID, time.Time{}, "", 10)
+	require.NoError(t, err)
+	require.Len(t, baseline, 1)
+	since, after := baseline[0].UpdatedAt, baseline[0].EpisodeID
+
+	_, err = store.Redact(ctx, principal, episode.EpisodeID, "user request")
+	require.NoError(t, err)
+
+	afterRedact, err := store.ListSince(ctx, principal.OrgID, since, after, 10)
+	require.NoError(t, err)
+	require.Len(t, afterRedact, 1, "the redact transition must be individually observable before the purge happens")
+	require.Equal(t, "redacted", afterRedact[0].RedactionState)
+	redactSince, redactAfter := afterRedact[0].UpdatedAt, afterRedact[0].EpisodeID
+
+	purged, err := store.PurgeExpiredForPrincipal(ctx, principal, expiresAt.Add(time.Hour), 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, purged)
+
+	afterPurge, err := store.ListSince(ctx, principal.OrgID, redactSince, redactAfter, 10)
+	require.NoError(t, err)
+	require.Len(t, afterPurge, 1, "the purge transition must surface after the redact transition, even if both happened in rapid succession")
+	require.Equal(t, "purged_tombstone", afterPurge[0].RedactionState)
+	require.True(t, afterPurge[0].UpdatedAt.After(redactSince), "the purge's updated_at must be strictly after the redact's")
+}
+
+// TestEpisodeStore_TriggerBumpsUpdatedAtEvenWhenAWriterDoesNotSetIt is
+// CHAOS-3753 codex round-2 finding K6's regression test: migration 0008's
+// original application-side-only bump protected only callers that
+// remembered to set updated_at. A coexisting older binary -- simulated
+// here by a raw UPDATE that changes redaction_state without touching
+// updated_at at all, the exact shape EpisodeStore.Redact used before this
+// migration existed -- must still surface to ListSince, because
+// monotonicity is now a property of the table (the trigger), not of any
+// particular writer's care.
+func TestEpisodeStore_TriggerBumpsUpdatedAtEvenWhenAWriterDoesNotSetIt(t *testing.T) {
+	ctx := context.Background()
+	db := newCredentialStoreDatabase(t, ctx)
+	store, err := NewEpisodeStore(db)
+	require.NoError(t, err)
+	principal := storage.Principal{OrgID: "11111111-1111-1111-1111-111111111111", RepositoryScopes: []string{"owner/repo"}}
+
+	episode, _, err := store.CreateIdempotent(ctx, principal, listSinceEpisodeCreate("ep-old-binary"), nil)
+	require.NoError(t, err)
+
+	checkpoint, err := store.ListSince(ctx, principal.OrgID, time.Time{}, "", 10)
+	require.NoError(t, err)
+	require.Len(t, checkpoint, 1)
+	since, after := checkpoint[0].UpdatedAt, checkpoint[0].EpisodeID
+
+	// A pre-C4 writer: changes redaction_state, never mentions updated_at.
+	_, err = db.ExecContext(ctx, `UPDATE acr.agent_episodes SET redaction_state = 'redacted' WHERE episode_id = $1`, episode.EpisodeID)
+	require.NoError(t, err)
+
+	revoked, err := store.ListSince(ctx, principal.OrgID, since, after, 10)
+	require.NoError(t, err)
+	require.Len(t, revoked, 1, "a writer that never touches updated_at must still surface to ListSince -- the trigger, not the writer, owns monotonicity")
+	require.Equal(t, "redacted", revoked[0].RedactionState)
+	require.True(t, revoked[0].UpdatedAt.After(since), "the trigger must have bumped updated_at even though the raw UPDATE never set it")
+}
+
 func TestEpisodeStore_ListSinceRejectsEmptyOrganization(t *testing.T) {
 	ctx := context.Background()
 	db := newCredentialStoreDatabase(t, ctx)

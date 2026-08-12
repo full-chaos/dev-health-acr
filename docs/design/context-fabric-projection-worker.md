@@ -297,6 +297,62 @@ temporary revert and pass again with the fix restored:
   already-advanced checkpoint and assert the next batch contains the
   tombstone, exactly the scenario the review specified.
 
+### `updated_at` monotonicity is a table property, not a writer's (codex round-2 findings K5/K6)
+
+Two gaps remained in the C4 fix above, both amended directly into
+migration `0008` (still unreleased at the time, so amending rather than
+adding `0009` is the correct move, not a shortcut):
+
+- **K5**: an application-side `SET updated_at = NOW()` is not guaranteed
+  strictly monotonic across two writes to the *same* row. Two transitions
+  landing in the same wall-clock instant (`Redact()` immediately followed
+  by `PurgeExpiredForPrincipal()`) could tie under `updated_at`, and
+  `ListSince`'s strict `(updated_at > since) OR (updated_at = since AND
+  episode_id > after)` predicate can only ever surface *one* of two
+  same-timestamp transitions on a single-row table (`episode_id` doesn't
+  change between them, so the tiebreaker never fires) -- the second
+  transition would be silently invisible forever. The exact C4 failure
+  shape, reintroduced one layer down.
+- **K6**: an application-side bump only protects callers that remember to
+  set it. A coexisting older binary -- a rolling deploy, or this migration
+  applied ahead of the code that knows about `updated_at` -- issuing the
+  pre-C4 `UPDATE` shape (changing `redaction_state` without touching
+  `updated_at` at all) would leave that transition permanently invisible
+  too, regardless of which binary wrote it.
+
+Fixed with a single `BEFORE UPDATE ... FOR EACH ROW` trigger
+(`acr.agent_episodes_bump_updated_at`) that unconditionally sets
+`NEW.updated_at := GREATEST(clock_timestamp(), OLD.updated_at + INTERVAL
+'1 microsecond')` on *every* update to the table, independent of what the
+writer's `UPDATE` statement did or didn't set. `clock_timestamp()` (not
+`now()`, which is fixed for an entire transaction) combined with the
+`GREATEST`/one-microsecond floor guarantees strict monotonicity even when
+the wall clock hasn't visibly ticked between two writes, or has moved
+backward. `EpisodeStore`'s own explicit `updated_at = NOW()` in
+`Redact()`/`PurgeExpiredForPrincipal()` is kept, harmlessly redundant with
+the trigger, as defense in depth and to keep intent visible at the call
+site. This is Postgres-only: `internal/storage/memory.EpisodeStore` has no
+production callers (test-double only, confirmed by a repo-wide search),
+so it carries no equivalent "coexisting old binary" or migration-lifecycle
+exposure to fix.
+
+Proven probe-first, each confirmed to fail against a temporary revert
+(K5: the trigger body downgraded to plain `clock_timestamp()`, no
+`GREATEST`/`OLD` floor; K6: the trigger removed entirely) and pass again
+with the fix restored:
+- `TestEpisodeStore_UpdatedAtTriggerIsStrictlyMonotonicEvenWhenTheClockHasNotAdvanced`
+  (K5) -- pins a row's `updated_at` artificially into the future (trigger
+  temporarily disabled for that one setup statement only), then proves a
+  real `Redact()` write still produces a strictly greater value.
+- `TestEpisodeStore_ListSinceSurfacesRedactThenPurgeInOrder` (K5) -- the
+  real production sequence named in the finding: redact immediately
+  followed by purge, captured mid-sequence to prove both transitions are
+  individually observable in order.
+- `TestEpisodeStore_TriggerBumpsUpdatedAtEvenWhenAWriterDoesNotSetIt` (K6)
+  -- a raw `UPDATE` that changes `redaction_state` without mentioning
+  `updated_at` at all (the exact pre-C4 shape) still surfaces to
+  `ListSince`.
+
 ## PR reviews and CI runs (codex finding C7, post-review)
 
 The original design note listed `git_pull_request_reviews` and
@@ -378,6 +434,60 @@ add `org_id` (matching production, confirmed by
 joins. The fake's `requireOrgIDBinding` (W2) needed no extension of its
 own: it asserts generically on any statement referencing
 `{org_id:String}`, which both new queries already do.
+
+## Paging correctness and bounds (codex round-2 findings K2/K3/K4)
+
+Three more paging-correctness gaps surfaced in the second review pass, all
+in the same family as C6/K1: a batch must degrade to bounded paging
+whenever it's too big, never partially or incorrectly.
+
+**K2 -- a row's candidates must never split across a page.** `pagedBatch`
+sliced its merged, sorted candidate list at a fixed *candidate*-count
+index (`incrementalBatchCap`). A single source row can scan into more
+than one candidate (an entity plus its `BELONGS_TO_REPOSITORY`
+relationship); if the cut landed inside such a pair, the entity was
+emitted and the relationship silently dropped -- and because the emitted
+entity became the batch's last candidate (and therefore its `NextCursor`
+position), the dropped relationship's row would never be revisited by any
+later page either. RULING (team-lead): truncation happens on SQL-row
+boundaries only; the cursor advances only past fully-emitted rows. Fixed
+by `truncateToCompleteRows`, which caps by counting row-groups (candidates
+sharing one `(observedAt, sortKey)` pair are always contiguous after the
+existing stable sort) instead of slicing at a raw index -- a row that
+doesn't fully fit is deferred, unsplit, to the next page. Proven by
+`TestClickHouseProjectionSourcePagedBatchNeverSplitsARowsCandidatesAcrossAPageBoundary`.
+
+**K3 -- the episode source must page too, not just ClickHouse.**
+`EpisodesProjectionSource.NextProjectionBatch` still hard-errored when a
+from-scratch (`cursor == ""`) read exceeded `episodesSnapshotCap` (500)
+approved episodes -- C6's exact bug, just not yet fixed in this second
+source. Since a rebuild always resets the checkpoint to the zero cursor,
+that error was permanent. Fixed the same way as C6: pages
+at `episodesIncrementalBatchCap` instead of erroring, and only claims
+`FullSnapshot`+`CompleteEnumeration` when a read was genuinely both
+from-scratch and untruncated. `episodeCandidate` is always exactly one
+candidate per row, so K2's row-group protection has nothing to do here.
+Proven by `TestEpisodesProjectionSourcePagesToCompletionAfterARebuildWhenOversized`
+(501 episodes in a real `memory.EpisodeStore`, driven across ticks from a
+rebuild-reset checkpoint).
+
+**K4 -- paging must trigger on the aggregate contract bound, not just a
+single table's truncation.** `fullSnapshot` only treated an organization
+as oversized when one table's own query was individually truncated at
+`snapshotPerQueryCap` (150). Seven entity-producing tables can each stay
+under that per-table cap while their *sum* still exceeds the v1 contract's
+aggregate 1000-entity bound (seven tables at 149 rows apiece is 1043
+entities) -- `oversized` stayed false, so `fullSnapshot` proceeded straight
+to `buildBatch`, which failed contract validation instead of paging.
+Fixed by also checking the aggregate entity/relationship/tombstone count
+(`candidateCounts`) against the contract's own bounds before deciding.
+Those bounds moved from inline magic numbers in
+`ContextFabricProjectionBatch.Validate()` to exported constants in
+`internal/contracts/v1` (`ContextFabricProjectionBatchMaxEntities` etc.),
+so this check uses exactly what `Validate()` enforces instead of
+duplicating the numbers and risking drift -- a pure refactor of
+`Validate()`, no behavior change. Proven by
+`TestClickHouseProjectionSourceFullSnapshotPagesWhenAggregateEntitiesExceedTheContractBound`.
 
 ## Rulings (2026-08-12, team-lead)
 
