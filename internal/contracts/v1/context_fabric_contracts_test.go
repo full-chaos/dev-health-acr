@@ -395,6 +395,7 @@ func validContextFabricContractResult() ContextFabricInvestigationResult {
 		Conflicts:           []ContextFabricFinding{},
 		Limitations:         []string{},
 		EvidenceRefIDs:      []string{},
+		ClaimedFacts:        []ContextFabricClaimedFact{},
 		Coverage:            ContextFabricCoverage{Sources: []ContextFabricSourceObservation{}, DegradedReasons: []string{}},
 		Versions:            ContextFabricVersionSet{ServiceVersion: "acr-v1", ContractVersion: ContextFabricInvestigationResultSchema, Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1", CanonicalServiceVersion: "ops-v1"},
 		DeterministicAnswer: "Ask Dev is not release-ready because required work remains.",

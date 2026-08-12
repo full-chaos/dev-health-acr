@@ -149,8 +149,24 @@ func (d ContextFabricDriverJudgment) Validate() error {
 	if len(d.AffectedSubjects) < 1 || len(d.AffectedSubjects) > 250 || !uniqueSubjects(d.AffectedSubjects) || len(d.PathIDs) > 250 || !uniqueTrimmedStrings(d.PathIDs, 256) || !boundedEvidenceRefs(d.EvidenceRefIDs, 500, true) {
 		return fmt.Errorf("driver subject, path, or evidence references violate v1 bounds")
 	}
+	if len(d.ClaimedFactIDs) > 250 || !uniqueTrimmedStrings(d.ClaimedFactIDs, 256) {
+		return fmt.Errorf("driver claimed fact references violate v1 bounds")
+	}
 	if d.Standing != ContextFabricDriverWithheld && len(d.PathIDs) == 0 && len(d.EvidenceRefIDs) == 0 {
 		return fmt.Errorf("non-withheld driver lacks evidence closure")
+	}
+	// Category->FactKind closure is a stronger requirement than plain
+	// evidence closure above: a driver whose Category names a
+	// canonical-fact-shaped judgment (see
+	// ContextFabricDriverCategoryRequiresClaimedFact) must cite a
+	// ClaimedFactID even if it is withheld or already has evidence/path
+	// references -- an evidence ref proves something was cited, not that
+	// the cited value agrees with the canonical fact. Full cross-reference
+	// (does the ID resolve, does its Kind match) happens at the result
+	// level in validateDrivers, where the ClaimedFacts list is available;
+	// this only enforces structural presence.
+	if _, required := ContextFabricDriverCategoryRequiresClaimedFact(ContextFabricDriverCategory(d.Category)); required && len(d.ClaimedFactIDs) == 0 {
+		return fmt.Errorf("driver category %q requires a claimed fact for value-level closure", d.Category)
 	}
 	if d.Standing == ContextFabricDriverWithheld && strings.TrimSpace(d.Qualification) == "" {
 		return fmt.Errorf("withheld driver requires a qualification")
@@ -161,6 +177,27 @@ func (d ContextFabricDriverJudgment) Validate() error {
 func (f ContextFabricFinding) Validate() error {
 	if !stringLengthBetween(f.FindingID, 8, 256) || !stringLengthBetween(strings.TrimSpace(f.Kind), 1, 128) || !stringLengthBetween(strings.TrimSpace(f.Summary), 1, 4000) || len(f.Subjects) > 250 || !uniqueSubjects(f.Subjects) || !boundedEvidenceRefs(f.EvidenceRefIDs, 500, false) {
 		return fmt.Errorf("finding violates v1 bounds")
+	}
+	if len(f.ClaimedFactIDs) > 250 || !uniqueTrimmedStrings(f.ClaimedFactIDs, 256) {
+		return fmt.Errorf("finding claimed fact references violate v1 bounds")
+	}
+	// See the matching comment in ContextFabricDriverJudgment.Validate --
+	// Finding.Kind is the category-equivalent field for findings.
+	if _, required := ContextFabricDriverCategoryRequiresClaimedFact(ContextFabricDriverCategory(f.Kind)); required && len(f.ClaimedFactIDs) == 0 {
+		return fmt.Errorf("finding kind %q requires a claimed fact for value-level closure", f.Kind)
+	}
+	return nil
+}
+
+func (c ContextFabricClaimedFact) Validate() error {
+	if !stringLengthBetween(c.ClaimID, 8, 256) || !validFactKind(c.Kind) || !stringLengthBetween(c.Field, 1, 128) || strings.TrimSpace(c.Field) != c.Field {
+		return fmt.Errorf("claimed fact identity violates v1 bounds")
+	}
+	if err := c.Subject.Validate(); err != nil {
+		return fmt.Errorf("subject: %w", err)
+	}
+	if err := c.Value.Validate(); err != nil {
+		return fmt.Errorf("value: %w", err)
 	}
 	return nil
 }
@@ -269,19 +306,23 @@ func (r ContextFabricInvestigationResult) Validate() error {
 	if r.Status == ContextFabricInvestigationClarificationRequired && r.SubjectResolution.ClarificationPrompt == "" {
 		return fmt.Errorf("clarification result requires a prompt")
 	}
-	if err := validateDrivers(r.Drivers); err != nil {
+	claimed, err := validateClaimedFacts(r.ClaimedFacts)
+	if err != nil {
 		return err
 	}
-	if err := validateFindings("remaining_work", r.RemainingWork); err != nil {
+	if err := validateDrivers(r.Drivers, claimed); err != nil {
 		return err
 	}
-	if err := validateFindings("readiness_gaps", r.ReadinessGaps); err != nil {
+	if err := validateFindings("remaining_work", r.RemainingWork, claimed); err != nil {
+		return err
+	}
+	if err := validateFindings("readiness_gaps", r.ReadinessGaps, claimed); err != nil {
 		return err
 	}
 	if err := validatePaths(r.Paths); err != nil {
 		return err
 	}
-	if err := validateFindings("conflicts", r.Conflicts); err != nil {
+	if err := validateFindings("conflicts", r.Conflicts, claimed); err != nil {
 		return err
 	}
 	if err := r.Coverage.Validate(); err != nil {

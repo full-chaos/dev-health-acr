@@ -783,6 +783,16 @@
           "maxItems": 200,
           "uniqueItems": true
         },
+        "claimed_fact_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 256
+          },
+          "maxItems": 250,
+          "uniqueItems": true
+        },
         "derivation": {
           "type": "string",
           "enum": [
@@ -909,6 +919,16 @@
           "minItems": 1,
           "maxItems": 200,
           "uniqueItems": true
+        },
+        "claimed_fact_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 256
+          },
+          "maxItems": 250,
+          "uniqueItems": true
         }
       },
       "required": [
@@ -916,6 +936,60 @@
         "kind",
         "summary",
         "evidence_ref_ids"
+      ]
+    },
+    "ClaimedFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "identity",
+            "membership",
+            "status",
+            "actual_completion",
+            "work",
+            "blockers",
+            "required_children",
+            "pull_requests",
+            "reviews",
+            "continuous_integration",
+            "deployments",
+            "incidents",
+            "metrics",
+            "health",
+            "workload",
+            "investment",
+            "readiness",
+            "operational_deficiencies",
+            "source_health",
+            "evidence"
+          ]
+        },
+        "subject": {
+          "$ref": "#/$defs/SubjectRef"
+        },
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "value": {
+          "$ref": "#/$defs/ScalarValue"
+        }
+      },
+      "required": [
+        "claim_id",
+        "kind",
+        "subject",
+        "field",
+        "value"
       ]
     },
     "SourceObservation": {

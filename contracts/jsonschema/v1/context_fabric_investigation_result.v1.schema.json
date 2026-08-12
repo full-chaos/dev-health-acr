@@ -118,6 +118,13 @@
       "maxItems": 500,
       "uniqueItems": true
     },
+    "claimed_facts": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/ClaimedFact"
+      },
+      "maxItems": 250
+    },
     "coverage": {
       "$ref": "context_fabric_common.v1.schema.json#/$defs/Coverage"
     },
@@ -158,6 +165,7 @@
     "conflicts",
     "limitations",
     "evidence_ref_ids",
+    "claimed_facts",
     "coverage",
     "versions",
     "deterministic_answer",

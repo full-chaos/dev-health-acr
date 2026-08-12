@@ -88,7 +88,7 @@
     {
       "driver_id": "driver_12345678",
       "standing": "principal",
-      "category": "release_readiness",
+      "category": "readiness",
       "title": "Release acceptance remains incomplete",
       "summary": "The project cannot be treated as ready until the required real-product acceptance path succeeds.",
       "affected_subjects": [
@@ -103,6 +103,9 @@
       ],
       "evidence_ref_ids": [
         "evidence_release_acceptance"
+      ],
+      "claimed_fact_ids": [
+        "claim_readiness_ask_dev"
       ],
       "derivation": "rule_inferred",
       "epistemic_status": "inferred",
@@ -184,6 +187,21 @@
   "evidence_ref_ids": [
     "evidence_project_identity",
     "evidence_release_acceptance"
+  ],
+  "claimed_facts": [
+    {
+      "claim_id": "claim_readiness_ask_dev",
+      "kind": "readiness",
+      "subject": {
+        "kind": "project",
+        "canonical_id": "project_ask_dev",
+        "label": "Ask Dev"
+      },
+      "field": "release_ready",
+      "value": {
+        "boolean": false
+      }
+    }
   ],
   "coverage": {
     "sources": [

@@ -145,7 +145,7 @@ func TestEngineInvestigatesNovelQuestionThroughComposableCapabilities(t *testing
 				CurrentState: "Release-readiness blockers remain.", StrongestPressures: []string{},
 				Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
 				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{},
-				EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 				DeterministicAnswer: "Ask Dev is not ready to ship because release-readiness blockers remain.", Warnings: []string{},
 				Versions: VersionSet{
 					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
@@ -226,6 +226,7 @@ func mustEngineForPriorReceiptTest(t *testing.T, graph GraphReader, store Invest
 				Status: InvestigationComplete, DirectJudgment: "Ask Dev is on track.", CurrentState: "Nominal.",
 				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
 				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+				ClaimedFacts:        []ClaimedFact{},
 				Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 				DeterministicAnswer: "Ask Dev is on track based on available context.", Warnings: []string{},
 				Versions: VersionSet{

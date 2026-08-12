@@ -57,6 +57,7 @@ func (noMatchSynthesizer) Synthesize(context.Context, storage.Principal, context
 		Status: contextfabric.InvestigationNoMatch, StrongestPressures: []string{}, Drivers: []contextfabric.DriverJudgment{},
 		RemainingWork: []contextfabric.Finding{}, ReadinessGaps: []contextfabric.Finding{}, Paths: []contextfabric.RelationshipPath{},
 		Conflicts: []contextfabric.Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+		ClaimedFacts:        []contextfabric.ClaimedFact{},
 		Coverage:            contextfabric.Coverage{Sources: []contextfabric.SourceObservation{}, DegradedReasons: []string{}},
 		DeterministicAnswer: "No confidently resolved subject was found in the authorized organization graph.", Warnings: []string{},
 		Versions: contextfabric.VersionSet{
