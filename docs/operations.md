@@ -111,10 +111,19 @@ in-flight requests are not cancelled.
 from `acr-api`, that runs `internal/contextfabric/projectionrun.Coordinator`
 against every configured organization: it reads canonical Dev Health data
 (`internal/contextfabric/devhealthsource`, ClickHouse + `acr.agent_episodes`)
-and applies it to the graph backend
-(`internal/contextfabric/zepgraph`, [ADR 0007](adr/0007-context-fabric-zep-graph-adapter.md)).
-See [the design note](design/context-fabric-projection-worker.md) for the
-full shape and open follow-ups (Team/Project projection, org auto-discovery).
+and applies it to the graph backend. The graph backend is FalkorDB,
+self-hosted (`internal/contextfabric/falkorgraph`,
+[ADR 0009](adr/0009-context-fabric-falkordb-graph-adapter.md)), which
+superseded the Zep Cloud decision in
+[ADR 0007](adr/0007-context-fabric-zep-graph-adapter.md) -- `zepgraph`
+remains in-tree and fully tested, selectable behind the same
+`ProjectionBackend`/`GraphReader` ports, but FalkorDB is the current
+decision and needs no external credential to run. See
+[the design note](design/context-fabric-projection-worker.md) for the
+projection worker's own full shape and open follow-ups (Team/Project
+projection, org auto-discovery), and
+[the FalkorDB adapter design note](design/context-fabric-falkordb-adapter.md)
+for the backend's own shape.
 
 It is compiled into the same image as `acr-api` (`Dockerfile`'s `acr-api`
 target also contains `/usr/local/bin/acr-projector`, exactly like
@@ -136,26 +145,35 @@ Deployment both do this directly; neither introduces a helper script.
 Both Compose and Helm default `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED` to
 `false`. Reaching a healthy, running-but-disabled `acr-projector` is
 therefore the expected out-of-the-box state — the same "an unset dependency
-must never fail closed" posture as `zepgraph.Configured`, because:
+must never fail closed" posture as `falkorgraph.Configured`
+(`zepgraph.Configured` before it), because:
 
-- there is still no self-hostable Zep/Graphiti server image (ADR 0007), so
-  local development and CI have no live backend to project into;
+- the `falkordb` Compose service (ADR 0009) is profile-gated
+  (`context-fabric-graph`), disabled unless an operator opts in, so local
+  development and CI do not pay for a graph database by default;
 - `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS` (`contextFabric.projector.orgIds`)
   is an explicit allowlist, empty by default — see the design note for why
   this starts explicit rather than auto-discovered from `client_credentials`.
 
-To actually run it: set `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true`,
-supply `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS`, and configure the Zep Cloud
-credential (`ACR_CONTEXT_FABRIC_ZEP_BASE_URL` / `ACR_CONTEXT_FABRIC_ZEP_API_KEY`,
-same `_FILE` secret convention as every other ACR secret; Helm:
-`contextFabric.zep.baseUrl` / `contextFabric.zep.existingSecret`) once a Zep
-Cloud account and API key exist — an external, environment-provisioned
-credential this repository does not create (ADR 0007). Reads
-(`internal/contextfabric.GraphReader`, the investigation endpoint) are a
-completely independent enablement: `ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED`
-(`config.GraphReadsEnabledEnvVar`), wired by CHAOS-3755's hosted composition
+To actually run it: bring up the `falkordb` Compose service
+(`docker compose --profile context-fabric-graph up`), set
+`ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true`, supply
+`ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS`, and point
+`ACR_CONTEXT_FABRIC_FALKOR_ADDR` at it (e.g. `falkordb:6379`) — unlike Zep
+Cloud, FalkorDB is self-hosted and needs no external credential at all (ADR
+0009); `ACR_CONTEXT_FABRIC_FALKOR_PASSWORD` stays optional and empty by
+default, matching FalkorDB's own no-auth default. **Not yet wired:** Helm
+has no `contextFabric.falkor.*` values yet (only the ADR 0007-era
+`contextFabric.zep.*`), and neither `cmd/acr-projector` nor `cmd/acr-api`'s
+hosted runtime composition has been changed to construct a
+`falkorgraph.Adapter` — both are flagged as open follow-ups in ADR 0009,
+not silently assumed done (`internal/runtime/hosted` still constructs
+`zepgraph.New` for reads today). Reads (`internal/contextfabric.GraphReader`,
+the investigation endpoint) are a completely independent enablement:
+`ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED` (`config.GraphReadsEnabledEnvVar`),
+wired by CHAOS-3755's hosted composition
 (`internal/runtime/hosted.buildContextFabricInvestigator`). Set it to `true`
-alongside the same Zep credential above to register `POST
+alongside the same graph backend configuration above to register `POST
 /api/v1/context-fabric/investigations`; leave it `false` (the default) and
 the route stays registered but returns 503 (`api.handleRuntimeUnavailable`)
 for every request. Note that even with both flags true, the endpoint cannot
@@ -172,9 +190,13 @@ the coordinator holds a PostgreSQL advisory lock
 (`projectionrun.PostgresOrgLocker`, `pg_try_advisory_lock`) for an
 organization's entire multi-source projection pass, so concurrent
 `acr-projector` replicas — and overlapping ticks within one replica — can
-never race two sources' writes for the same organization. See
-`internal/contextfabric/zepgraph`'s `ApplyProjectionBatch` doc comment and
-ADR 0007 for why: the adapter's attribute merge has no compare-and-swap.
+never race two sources' writes for the same organization. This requirement
+originates with `zepgraph`'s attribute merge, which has no compare-and-swap
+(ADR 0007) — `falkorgraph`'s own merge is a single atomic `MERGE ... SET n
++= $attrs` statement under FalkorDB's own row lock (ADR 0009), which closes
+that specific race, but the per-organization serialization requirement is
+kept unchanged for both backends: other batch-level ordering guarantees
+still depend on it, not just the attribute-merge race.
 
 **Rebuild:**
 
@@ -190,7 +212,7 @@ design note), so the next `serve` tick replays canonical state from scratch
 exactly as it would for an organization that has never been projected. It
 runs regardless of `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED` (an operator
 invoking it has already made that call) but still needs Postgres, ClickHouse,
-and a configured Zep backend to do anything.
+and a configured graph backend to do anything.
 
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is
@@ -200,24 +222,31 @@ sequence automatically -- no manual `rebuild --org` re-invocation is
 required, and no tick ever runs incremental projection against a
 purged-but-not-reset organization in the meantime.
 
-The adapter's own lifecycle contract (projection, idempotent replay,
+The active adapter's own lifecycle contract (projection, idempotent replay,
 retrieval, tombstones, watermark, purge, organization isolation) is proved
-against a fake transport in `internal/contextfabric/zepgraph`. A live
-end-to-end proof exists as `TestLiveZepContextFabricLifecycle` in the same
-package, gated on `ACR_TEST_ZEP_BASE_URL` and `ACR_TEST_ZEP_API_KEY`:
+two ways. `internal/contextfabric/falkorgraph` (ADR 0009, the current
+backend) proves deterministic helpers directly in `pure_test.go` and the
+full live lifecycle — including cross-organization isolation, a stale
+out-of-order tombstone being skipped, entity metadata surviving a
+relationship-only write, and a write after purge re-bootstrapping correctly
+— against a real FalkorDB container started per test via
+`testcontainers-go`, **with no environment gate**:
 
 ```bash
-ACR_TEST_ZEP_BASE_URL=https://api.getzep.com/api/v2 \
-ACR_TEST_ZEP_API_KEY=<zep-cloud-api-key> \
-  go test -count=1 -run TestLiveZep ./internal/contextfabric/zepgraph -v
+go test -count=1 -run TestLiveFalkorDBContextFabricLifecycle ./internal/contextfabric/falkorgraph -v
 ```
 
-It has not run against a real endpoint: no Zep Cloud account or API key
-exists in this environment. `acr-projector`'s own checkpoint store
+This always runs, in ordinary CI included — FalkorDB needs no external
+credential, unlike Zep Cloud. `internal/contextfabric/zepgraph` (ADR 0007,
+superseded but still in-tree) proves the same contract against a fake
+transport, plus a live end-to-end proof gated on `ACR_TEST_ZEP_BASE_URL`/
+`ACR_TEST_ZEP_API_KEY` that has never run against a real endpoint (no Zep
+Cloud account exists in this environment) — see ADR 0007 for that test's
+own invocation. `acr-projector`'s own checkpoint store
 (`internal/contextfabric/pgprojection`), org-lock, and coordinator
 single-flight/failure-isolation/backoff behavior are proved against real
 PostgreSQL (`testcontainers`) and fakes standing in for the graph backend
-and canonical source, following the same env/fake-gated pattern.
+and canonical source, following the same pattern.
 
 ### Helm
 

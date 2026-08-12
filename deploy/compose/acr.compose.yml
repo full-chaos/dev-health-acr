@@ -115,15 +115,20 @@ services:
       ACR_CONTEXT_FABRIC_PROJECTION_ENABLED: ${ACR_CONTEXT_FABRIC_PROJECTION_ENABLED:-false}
       ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS: ${ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS:-}
       ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED: ${ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED:-false}
-      # Zep Cloud graph backend credential (ADR 0007): an external,
-      # environment-provisioned dependency this repository does not create.
-      # Left unset by default -- the same _FILE secret convention as every
-      # other ACR secret, but plain env passthrough rather than a
-      # Compose-native `secrets:` entry, since (unlike the required secrets
-      # below) there is no file for Compose to require the operator to
-      # provision until they actually have a Zep Cloud account.
-      ACR_CONTEXT_FABRIC_ZEP_BASE_URL: ${ACR_CONTEXT_FABRIC_ZEP_BASE_URL:-}
-      ACR_CONTEXT_FABRIC_ZEP_API_KEY_FILE: ${ACR_CONTEXT_FABRIC_ZEP_API_KEY_FILE:-}
+      # FalkorDB graph backend (ADR 0009, supersedes ADR 0007's Zep Cloud
+      # decision): self-hosted, no external credential required -- unlike
+      # Zep, there is no secret to leave unprovisioned here. Still left
+      # unset/disabled by default: the `falkordb` service below is itself
+      # gated behind the `context-fabric-graph` profile, disabled unless an
+      # operator opts in, so acr-projector comes up healthy-and-idle exactly
+      # like it did under the Zep Cloud posture (zepgraph.Configured /
+      # falkorgraph.Configured's own "unset dependency fails open, not
+      # closed" behavior) rather than depending hard on a profile-gated
+      # service that may not be running.
+      ACR_CONTEXT_FABRIC_FALKOR_ADDR: ${ACR_CONTEXT_FABRIC_FALKOR_ADDR:-}
+      ACR_CONTEXT_FABRIC_FALKOR_PASSWORD_FILE: ${ACR_CONTEXT_FABRIC_FALKOR_PASSWORD_FILE:-}
+      ACR_CONTEXT_FABRIC_FALKOR_TLS: ${ACR_CONTEXT_FABRIC_FALKOR_TLS:-false}
+      ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE: ${ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE:-true}
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
     secrets: [acr_runtime_dsn, acr_clickhouse_dsn]
@@ -138,6 +143,35 @@ services:
       retries: 3
       start_period: 30s
     networks: [dev-health]
+  # falkordb is the Context Fabric graph backend (ADR 0009). Self-hosted, no
+  # external credential -- the operational win over the ADR 0007 Zep Cloud
+  # posture this supersedes. Disabled by default (profile-gated): local dev
+  # and CI do not pay for a graph database they have not opted into. Enable
+  # with `docker compose --profile context-fabric-graph up`, and set
+  # ACR_CONTEXT_FABRIC_FALKOR_ADDR=falkordb:6379 (plus
+  # ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true) to wire acr-projector to it.
+  # Image pinned by digest to the exact version this backend was developed
+  # and verified against (FalkorDB 4.20.2, module ver 42002, Redis 8.6.3) --
+  # see docs/design/context-fabric-falkordb-adapter.md §1.1 and
+  # internal/contextfabric/falkorgraph's live integration test, which pins
+  # the same digest.
+  falkordb:
+    image: falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3
+    profiles: ["context-fabric-graph"]
+    # A real GRAPH.QUERY, not PING: proves the graph module is loaded and
+    # actually executing Cypher, not just that Redis itself is up (verified
+    # necessary -- PING succeeding is not sufficient, see the design doc).
+    healthcheck:
+      test: ["CMD", "redis-cli", "GRAPH.QUERY", "_acr_health", "RETURN 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - acr_falkordb_data:/data
+    networks: [dev-health]
+volumes:
+  acr_falkordb_data:
 secrets:
   acr_postgres_password: { file: "${ACR_POSTGRES_ADMIN_PASSWORD_FILE:?ACR_POSTGRES_ADMIN_PASSWORD_FILE is required}" }
   acr_runtime_db_password: { file: "${ACR_RUNTIME_DB_PASSWORD_FILE:?ACR_RUNTIME_DB_PASSWORD_FILE is required}" }
