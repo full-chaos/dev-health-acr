@@ -207,8 +207,8 @@ type FactValue struct {
 	Null    bool     `json:"null,omitempty"`
 }
 
-func StringFactValue(value string) FactValue { return FactValue{String: &value} }
-func IntegerFactValue(value int64) FactValue { return FactValue{Integer: &value} }
+func StringFactValue(value string) FactValue  { return FactValue{String: &value} }
+func IntegerFactValue(value int64) FactValue  { return FactValue{Integer: &value} }
 func NumberFactValue(value float64) FactValue { return FactValue{Number: &value} }
 func BooleanFactValue(value bool) FactValue   { return FactValue{Boolean: &value} }
 func NullFactValue() FactValue                { return FactValue{Null: true} }
@@ -246,12 +246,12 @@ type CanonicalFact struct {
 	Kind           FactKind             `json:"kind"`
 	Subject        SubjectRef           `json:"subject"`
 	Fields         map[string]FactValue `json:"fields"`
-	ObservedAt     *time.Time            `json:"observed_at,omitempty"`
-	EventAt        *time.Time            `json:"event_at,omitempty"`
-	EvidenceRefIDs []string              `json:"evidence_ref_ids"`
-	SourceState    SourceState           `json:"source_state"`
-	Source         string                `json:"source"`
-	SourceVersion  string                `json:"source_version"`
+	ObservedAt     *time.Time           `json:"observed_at,omitempty"`
+	EventAt        *time.Time           `json:"event_at,omitempty"`
+	EvidenceRefIDs []string             `json:"evidence_ref_ids"`
+	SourceState    SourceState          `json:"source_state"`
+	Source         string               `json:"source"`
+	SourceVersion  string               `json:"source_version"`
 }
 
 func (f CanonicalFact) Validate(requireEvidence bool) error {
@@ -276,9 +276,9 @@ func (f CanonicalFact) Validate(requireEvidence bool) error {
 }
 
 type CanonicalFactBundle struct {
-	Facts      []CanonicalFact    `json:"facts"`
-	Coverage   Coverage           `json:"coverage"`
-	Version    string             `json:"version"`
+	Facts      []CanonicalFact     `json:"facts"`
+	Coverage   Coverage            `json:"coverage"`
+	Version    string              `json:"version"`
 	Versions   map[FactKind]string `json:"versions"`
 	Watermarks map[FactKind]string `json:"watermarks"`
 }

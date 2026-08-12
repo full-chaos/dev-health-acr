@@ -76,7 +76,7 @@ func TestContextFabricResultRequiresEvidenceClosedDriver(t *testing.T) {
 	result.Drivers = []ContextFabricDriverJudgment{{
 		DriverID: "driver_12345678", Standing: ContextFabricDriverPrincipal, Category: "readiness", Title: "Readiness gap", Summary: "The product is not ready.",
 		AffectedSubjects: []ContextFabricSubjectRef{{Kind: ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}},
-		PathIDs: []string{}, EvidenceRefIDs: []string{}, Derivation: ContextFabricDerivationCanonicalStructured, EpistemicStatus: ContextFabricEpistemicObserved, Confidence: 0.9, Current: true,
+		PathIDs:          []string{}, EvidenceRefIDs: []string{}, Derivation: ContextFabricDerivationCanonicalStructured, EpistemicStatus: ContextFabricEpistemicObserved, Confidence: 0.9, Current: true,
 	}}
 	if err := result.Validate(); err == nil || !strings.Contains(err.Error(), "evidence closure") {
 		t.Fatalf("Validate() error = %v", err)
@@ -184,7 +184,7 @@ func validContextFabricProjectionBatch() ContextFabricProjectionBatch {
 	return ContextFabricProjectionBatch{
 		SchemaVersion: ContextFabricProjectionBatchSchema, BatchID: "batch_12345678", OrgID: "org_1", Source: "dev-health-ops", SourceVersion: "source-v1", Cursor: "cursor_1", NextCursor: "cursor_2", GeneratedAt: time.Now().UTC(),
 		Entities: []ContextFabricEntityProjection{{
-			Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"},
+			Subject:    ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"},
 			Properties: map[string]ContextFabricScalarValue{"provider": {String: &text}}, Authorization: ContextFabricAuthorizationScope{ProjectIDs: []string{"project_ask_dev"}}, EvidenceRefIDs: []string{"evidence_12345678"}, ObservedAt: time.Now().UTC(), SourceVersion: "source-v1",
 		}},
 		Relationships: []ContextFabricRelationshipProjection{}, Contents: []ContextFabricContentProjection{}, Episodes: []ContextFabricEpisodeProjection{}, Tombstones: []ContextFabricProjectionTombstone{},
