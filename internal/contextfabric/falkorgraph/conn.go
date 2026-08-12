@@ -41,7 +41,7 @@ type constraintStatus struct {
 	Label      string
 	Properties []string
 	EntityType string // "NODE" or "RELATIONSHIP"
-	Status     string // "PENDING", "OPERATIONAL", "FAILED", ...
+	Status     string // "PENDING", "UNDER CONSTRUCTION", "OPERATIONAL", "FAILED", ...
 }
 
 // indexStatus is one row of `CALL db.indexes()`.

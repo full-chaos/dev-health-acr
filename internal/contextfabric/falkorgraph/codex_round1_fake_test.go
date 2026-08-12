@@ -137,6 +137,34 @@ func TestBootstrapSchemaAcceptsAllOperationalConstraints(t *testing.T) {
 	}
 }
 
+// TestBootstrapSchemaPollsThroughUnderConstruction proves "UNDER
+// CONSTRUCTION" is a legitimate in-progress status, not an unrecognized one:
+// live FalkorDB (confirmed by running a constraint build against a loaded
+// graph in a real container -- CHAOS-3752 CI failure) reports it between
+// PENDING and OPERATIONAL. Bootstrap must keep polling on it exactly like
+// PENDING, then succeed once the status transitions to OPERATIONAL.
+func TestBootstrapSchemaPollsThroughUnderConstruction(t *testing.T) {
+	calls := 0
+	fake := &fakeConn{constraintsFunc: func(ctx context.Context, graphKey string) ([]constraintStatus, error) {
+		calls++
+		status := "UNDER CONSTRUCTION"
+		if calls > 2 {
+			status = "OPERATIONAL"
+		}
+		return []constraintStatus{
+			{Type: "UNIQUE", Label: labelSubject, EntityType: "NODE", Status: status},
+			{Type: "UNIQUE", Label: labelRelation, EntityType: "RELATIONSHIP", Status: status},
+		}, nil
+	}}
+	adapter := newFakeAdapter(t, fake)
+	if err := adapter.bootstrapSchema(context.Background(), "test-key"); err != nil {
+		t.Fatalf("bootstrapSchema() with UNDER CONSTRUCTION then OPERATIONAL error = %v, want nil", err)
+	}
+	if calls < 3 {
+		t.Fatalf("bootstrapSchema() called constraints() %d times, want >= 3 (must actually poll through UNDER CONSTRUCTION)", calls)
+	}
+}
+
 // TestDiscoverContextReportsPartialOnEndpointLookupFailure is the Codex P2c
 // probe: a genuine backend failure resolving an edge endpoint (as opposed to
 // a legitimate "not found" or authorization filter) must never silently

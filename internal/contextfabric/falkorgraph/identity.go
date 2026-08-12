@@ -166,12 +166,13 @@ func (a *Adapter) createFulltextIndex(ctx context.Context, key string) error {
 	return safeDependencyError("bootstrap fulltext index", err)
 }
 
-// pollConstraintsOperational waits for every constraint on key to leave
-// PENDING. Constraint creation is asynchronous (verified: GRAPH.CONSTRAINT
+// pollConstraintsOperational waits for every constraint on key to reach
+// OPERATIONAL. Constraint creation is asynchronous (verified: GRAPH.CONSTRAINT
 // CREATE returns PENDING immediately; CALL db.constraints() later reports
-// OPERATIONAL) -- bootstrap must poll, not assume, or an ApplyProjectionBatch
-// racing right behind its own bootstrap call could write against a
-// constraint that isn't enforcing yet.
+// UNDER CONSTRUCTION while the backfill runs, then OPERATIONAL) -- bootstrap
+// must poll, not assume, or an ApplyProjectionBatch racing right behind its
+// own bootstrap call could write against a constraint that isn't enforcing
+// yet.
 func (a *Adapter) pollConstraintsOperational(ctx context.Context, key string) error {
 	deadline := time.Now().Add(a.config.RequestTimeout)
 	for {
@@ -196,12 +197,22 @@ func (a *Adapter) pollConstraintsOperational(ctx context.Context, key string) er
 		// a malformed/partial response -- silently fell through as
 		// "operational" and let a write proceed against a constraint that
 		// was never actually confirmed enforcing.
+		//
+		// "UNDER CONSTRUCTION" joins PENDING as a known in-progress status:
+		// confirmed live against a real FalkorDB container (falkordb/falkordb,
+		// same digest as deploy/compose/acr.compose.yml) building a
+		// constraint over a loaded graph -- db.constraints() reported
+		// PENDING immediately after GRAPH.CONSTRAINT CREATE, then UNDER
+		// CONSTRUCTION while the index backfill ran, then OPERATIONAL. A
+		// lightly loaded/local server can skip straight from PENDING to
+		// OPERATIONAL and never surface it, which is why CI's larger
+		// container caught this and local probing did not.
 		allOperational := true
 		for _, status := range statuses {
 			switch status.Status {
 			case "OPERATIONAL":
 				// fine, keep checking the rest
-			case "PENDING":
+			case "PENDING", "UNDER CONSTRUCTION":
 				allOperational = false
 			case "FAILED":
 				return errConstraintBootstrapFailed
