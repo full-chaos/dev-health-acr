@@ -314,6 +314,12 @@ func (a *Adapter) deleteNodeIfNotNewer(ctx context.Context, uuid string, tombsto
 	if err != nil {
 		return err
 	}
+	// The pinned SDK can return (nil, nil) for an HTTP 200 response with a
+	// null body -- not an error, but not a usable node either. Treat it the
+	// same as a 404: the target is absent, so the tombstone is a no-op.
+	if existing == nil {
+		return nil
+	}
 	if tombstoneIsStale(existing.Attributes, tombstone) {
 		return nil
 	}
@@ -329,6 +335,9 @@ func (a *Adapter) deleteEdgeIfNotNewer(ctx context.Context, uuid string, tombsto
 	}
 	if err != nil {
 		return err
+	}
+	if existing == nil {
+		return nil
 	}
 	if tombstoneIsStale(existing.Attributes, tombstone) {
 		return nil

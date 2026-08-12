@@ -666,6 +666,44 @@ func TestApplyProjectionBatchSkipsStaleOutOfOrderTombstoneForEpisodeAndContent(t
 	}
 }
 
+// nilReturningAPI wraps fakeAPI and overrides GetNode/GetEdge to return
+// (nil, nil) -- reproducing the pinned Zep SDK's documented behavior for an
+// HTTP 200 response with a null body, which is distinct from the
+// *zep.NotFoundError a genuine 404 produces.
+type nilReturningAPI struct{ *fakeAPI }
+
+func (nilReturningAPI) GetNode(context.Context, string) (*zep.EntityNode, error) { return nil, nil }
+func (nilReturningAPI) GetEdge(context.Context, string) (*zep.EntityEdge, error) { return nil, nil }
+
+// TestApplyProjectionBatchTreatsNilNilTargetAsAbsentDuringTombstone is the
+// R4 regression: deleteNodeIfNotNewer/deleteEdgeIfNotNewer checked the
+// GetNode/GetEdge error but not whether the returned entity was itself nil
+// before dereferencing its Attributes for the staleness check. The pinned
+// SDK can return (nil, nil) for an HTTP 200 with a null body, which is not
+// an error at all, so the previous code panicked instead of treating the
+// target the same way a genuine 404 already is: absent, tombstone is a
+// no-op success.
+func TestApplyProjectionBatchTreatsNilNilTargetAsAbsentDuringTombstone(t *testing.T) {
+	t.Parallel()
+	api := nilReturningAPI{fakeAPI: newFakeAPI()}
+	adapter := mustAdapter(t, api)
+	now := time.Date(2026, 8, 11, 22, 0, 0, 0, time.UTC)
+	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_absent", Label: "Absent Project"}
+	batch := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_nilnil_tombstone", OrgID: "org_1", Source: "dev-health-ops",
+		SourceVersion: "ops-v1", Cursor: "c0", NextCursor: "c1", GeneratedAt: now,
+		Entities: []contextfabric.EntityProjection{}, Contents: []contextfabric.ContentProjection{}, Episodes: []contextfabric.EpisodeProjection{},
+		Relationships: []contextfabric.RelationshipProjection{},
+		Tombstones: []contextfabric.ProjectionTombstone{
+			{Kind: string(project.Kind), CanonicalID: project.CanonicalID, Reason: "already absent", EffectiveAt: now, SourceVersion: "ops-v1"},
+			{Kind: "relationship", CanonicalID: "relationship_absent", Reason: "already absent", EffectiveAt: now, SourceVersion: "ops-v1"},
+		},
+	}
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), batch); err != nil {
+		t.Fatalf("ApplyProjectionBatch() with a nil,nil GetNode/GetEdge target error = %v", err)
+	}
+}
+
 func TestPurgeOrganizationIsIdempotentWhenGraphAlreadyAbsent(t *testing.T) {
 	t.Parallel()
 	api := newFakeAPI()
