@@ -54,9 +54,18 @@ WHERE org_id = $1 AND source = $2`, orgID, source)
 
 // CompareAndSwapProjectionCheckpoint advances the durable checkpoint only
 // when the row it reads back still matches the cursor the caller last
-// observed (expected.Cursor). An expected zero-value cursor means "no
-// checkpoint row exists yet" and inserts one; ON CONFLICT DO NOTHING makes a
-// racing first-ever insert lose cleanly rather than corrupt the row.
+// observed (expected.Cursor).
+//
+// It does NOT dispatch on "expected.Cursor == \"\" means no row exists yet":
+// that was wrong (CHAOS-3753 codex finding C1) -- a rebuild resets an
+// EXISTING row's cursor back to "", so a later replay's expected.Cursor is
+// also "" while a real row is present, and INSERT ... ON CONFLICT DO
+// NOTHING against that already-existing row silently affects zero rows
+// forever, permanently misreporting ErrProjectionConflict. Instead it
+// always attempts the UPDATE (which matches an existing row regardless of
+// what its cursor value is, including ""); only when that affects zero
+// rows does it attempt the INSERT, which can only succeed if no row
+// existed at all. Both affecting zero rows is a genuine conflict.
 func (s *CheckpointStore) CompareAndSwapProjectionCheckpoint(ctx context.Context, expected, updated contextfabric.ProjectionCheckpoint) error {
 	if s == nil || s.db == nil {
 		return errors.New("pgprojection: checkpoint store is not configured")
@@ -67,25 +76,33 @@ func (s *CheckpointStore) CompareAndSwapProjectionCheckpoint(ctx context.Context
 	if updated.UpdatedAt.IsZero() {
 		updated.UpdatedAt = time.Now().UTC()
 	}
-	var result sql.Result
-	var err error
-	if expected.Cursor == "" {
-		result, err = s.db.ExecContext(ctx, `
-INSERT INTO acr.context_fabric_projection_checkpoints (org_id, source, cursor, source_version, backend_watermark, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (org_id, source) DO NOTHING`,
-			updated.OrgID, updated.Source, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt)
-	} else {
-		result, err = s.db.ExecContext(ctx, `
+	updateResult, err := s.db.ExecContext(ctx, `
 UPDATE acr.context_fabric_projection_checkpoints
 SET cursor = $3, source_version = $4, backend_watermark = $5, updated_at = $6
 WHERE org_id = $1 AND source = $2 AND cursor = $7`,
-			updated.OrgID, updated.Source, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, expected.Cursor)
-	}
+		updated.OrgID, updated.Source, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, expected.Cursor)
 	if err != nil {
 		return fmt.Errorf("advance projection checkpoint: %w", sanitizeError(err))
 	}
-	rows, err := result.RowsAffected()
+	if rows, err := updateResult.RowsAffected(); err != nil {
+		return fmt.Errorf("advance projection checkpoint rows affected: %w", sanitizeError(err))
+	} else if rows == 1 {
+		return nil
+	}
+	// No existing row matched (org_id, source, cursor=expected). Either no
+	// row exists yet at all (first-ever checkpoint) or a row exists with a
+	// different cursor (a genuine conflict). Try the insert; ON CONFLICT DO
+	// NOTHING makes a racing first-ever insert -- or a row that turned out
+	// to already exist -- lose cleanly rather than corrupt the row.
+	insertResult, err := s.db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_projection_checkpoints (org_id, source, cursor, source_version, backend_watermark, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (org_id, source) DO NOTHING`,
+		updated.OrgID, updated.Source, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("advance projection checkpoint: %w", sanitizeError(err))
+	}
+	rows, err := insertResult.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("advance projection checkpoint rows affected: %w", sanitizeError(err))
 	}

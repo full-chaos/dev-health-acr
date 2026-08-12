@@ -119,6 +119,66 @@ func TestCheckpointStore_concurrentCompareAndSwapConflict(t *testing.T) {
 	require.Equal(t, "cursor-2", final.Cursor, "the losing compare-and-swap must not have moved the cursor")
 }
 
+// TestCheckpointStore_replayAfterRebuildResetAdvancesNormally is C1's probe
+// promoted to a permanent regression test: a rebuild resets an EXISTING
+// row's cursor back to "" (not "no row exists"), so replaying from that
+// reset state must advance the checkpoint exactly like any other CAS, not
+// permanently return ErrProjectionConflict via a silently-no-op INSERT.
+func TestCheckpointStore_replayAfterRebuildResetAdvancesNormally(t *testing.T) {
+	ctx := context.Background()
+	store, err := pgprojection.NewCheckpointStore(newCheckpointTestDatabase(t, ctx))
+	require.NoError(t, err)
+
+	zero, err := store.LoadProjectionCheckpoint(ctx, "org-1", "dev_health_clickhouse")
+	require.NoError(t, err)
+	require.NoError(t, store.CompareAndSwapProjectionCheckpoint(ctx, zero, contextfabric.ProjectionCheckpoint{
+		OrgID: "org-1", Source: "dev_health_clickhouse", Cursor: "cursor-1", SourceVersion: "v1", UpdatedAt: time.Now().UTC(),
+	}))
+
+	withCursor, err := store.LoadProjectionCheckpoint(ctx, "org-1", "dev_health_clickhouse")
+	require.NoError(t, err)
+	require.NoError(t, store.CompareAndSwapProjectionCheckpoint(ctx, withCursor, contextfabric.ProjectionCheckpoint{
+		OrgID: "org-1", Source: "dev_health_clickhouse", Cursor: "", UpdatedAt: time.Now().UTC(),
+	}))
+
+	reset, err := store.LoadProjectionCheckpoint(ctx, "org-1", "dev_health_clickhouse")
+	require.NoError(t, err)
+	require.Empty(t, reset.Cursor, "sanity: checkpoint must be reset to empty before replay")
+
+	require.NoError(t, store.CompareAndSwapProjectionCheckpoint(ctx, reset, contextfabric.ProjectionCheckpoint{
+		OrgID: "org-1", Source: "dev_health_clickhouse", Cursor: "cursor-2", SourceVersion: "v1", UpdatedAt: time.Now().UTC(),
+	}), "post-rebuild replay must advance the checkpoint, not permanently conflict")
+
+	final, err := store.LoadProjectionCheckpoint(ctx, "org-1", "dev_health_clickhouse")
+	require.NoError(t, err)
+	require.Equal(t, "cursor-2", final.Cursor)
+}
+
+// TestCheckpointStore_firstInsertStillLosesToARacingConcurrentFirstInsert
+// proves the fix didn't regress the original first-ever-checkpoint race:
+// when NO row exists yet, two concurrent CAS calls from the true zero value
+// must still have exactly one winner.
+func TestCheckpointStore_firstInsertStillLosesToARacingConcurrentFirstInsert(t *testing.T) {
+	ctx := context.Background()
+	store, err := pgprojection.NewCheckpointStore(newCheckpointTestDatabase(t, ctx))
+	require.NoError(t, err)
+	zero, err := store.LoadProjectionCheckpoint(ctx, "org-1", "dev_health_clickhouse")
+	require.NoError(t, err)
+
+	firstErr := store.CompareAndSwapProjectionCheckpoint(ctx, zero, contextfabric.ProjectionCheckpoint{
+		OrgID: "org-1", Source: "dev_health_clickhouse", Cursor: "cursor-a", SourceVersion: "v1", UpdatedAt: time.Now().UTC(),
+	})
+	secondErr := store.CompareAndSwapProjectionCheckpoint(ctx, zero, contextfabric.ProjectionCheckpoint{
+		OrgID: "org-1", Source: "dev_health_clickhouse", Cursor: "cursor-b", SourceVersion: "v1", UpdatedAt: time.Now().UTC(),
+	})
+	require.True(t, (firstErr == nil) != (secondErr == nil), "exactly one of two racing first-ever inserts must win: first=%v second=%v", firstErr, secondErr)
+	if secondErr != nil {
+		require.True(t, errors.Is(secondErr, contextfabric.ErrProjectionConflict))
+	} else {
+		require.True(t, errors.Is(firstErr, contextfabric.ErrProjectionConflict))
+	}
+}
+
 func TestCheckpointStore_isolatesCheckpointsPerOrganizationAndSource(t *testing.T) {
 	ctx := context.Background()
 	db := newCheckpointTestDatabase(t, ctx)
