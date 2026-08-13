@@ -182,19 +182,30 @@ func TestTimeAxisKeyForIsStableAndCollisionFree(t *testing.T) {
 }
 
 // TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest is round-1
-// F6, red→green.
+// F6, red-green -- with its rationale corrected for round-3 F1.
 //
-// The lookup keys from the WIRE request (tryReuse runs before Interpret),
-// but Save used to key from the INTERPRETED result. When an interpreter
-// read a current-axis request as historical -- exactly what it is supposed
-// to do for "what was the status last month" -- the row was saved under a
-// historical key that no identical future request could ever produce,
-// because that request keys itself "current". The whole class of
-// interpreted-historical questions therefore reused nothing, silently.
+// The surviving invariant is SYMMETRY: both reuse sides must derive the
+// key from a value both sides can compute. Save used to derive it from the
+// INTERPRETED result, which the lookup cannot see (tryReuse runs before
+// Interpret). So when an interpreter read a current-axis request as
+// historical -- exactly what it should do for "what was the status last
+// month" -- the row saved under a key no identical future request could
+// ever produce, and that whole class of question reused nothing, silently.
 //
-// Both sides now key from the wire request. Interpretation identity is not
-// lost: condition 6 re-resolves subjects against the stored Interpretation
-// before anything is served.
+// Round 1 fixed this by keying both sides on the WIRE request; round-3 F1
+// then moved both to the CLAMPED EFFECTIVE context, because the wire value
+// stops describing what an answer means once clamping has moved it. The
+// symmetry is what survived both rulings, and it is what this test guards.
+//
+// This test uses the CURRENT axis, where wire and effective coincide --
+// TimeAxisKeyFor maps it to a fixed literal and no clamping applies -- so
+// it is deliberately independent of that change. Its subject is the
+// interpretation flip, not the clamp; the clamp cases live in
+// contextfabric's own TestF1_* guards.
+//
+// Interpretation identity is not lost by keying on the request: condition
+// 6 re-resolves every subject against the stored Interpretation before
+// anything is served.
 func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) {
 	ctx := context.Background()
 	const orgID = "org-reuse-flip"
@@ -211,13 +222,14 @@ func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) 
 	interpretedHistorical := historicalResult(t, "result_flip_00001", principal.OrgID,
 		contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &asOf})
 
-	// Engine keys Save from the WIRE context, which was current.
-	wireKey := contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})
+	// Engine keys Save and the lookup identically. On the current
+	// axis that key is the fixed literal, unaffected by clamping.
+	currentAxisKey := contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})
 	snapshot, err := store.SnapshotSourceWatermarks(ctx, principal.OrgID)
 	require.NoError(t, err)
 	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
 	require.NoError(t, err)
-	require.NoError(t, store.Save(ctx, principal, interpretedHistorical, snapshot, &epoch, wireKey))
+	require.NoError(t, store.Save(ctx, principal, interpretedHistorical, snapshot, &epoch, currentAxisKey))
 
 	// A byte-identical follow-up request -- same text, same current axis --
 	// must find it. Before F6 this was a permanent miss.
@@ -228,11 +240,11 @@ func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) 
 		// A single-member chain (CHAOS-3786): the exact identity this
 		// result was stored under.
 		ModelIdentities: []string{interpretedHistorical.Versions.ModelIdentity},
-		TimeAxisKey:     wireKey,
+		TimeAxisKey:     currentAxisKey,
 	}
 	reused, found, err := store.FindReusable(ctx, principal, lookup)
 	require.NoError(t, err)
-	require.True(t, found, "an interpreted-historical answer was unreachable to the identical wire request that produced it")
+	require.True(t, found, "an interpreted-historical answer was unreachable to the identical request that produced it; both reuse sides must derive the key the same way")
 	require.Equal(t, interpretedHistorical.ResultID, reused.ResultID)
 	// And what was stored still records the historical interpretation, so
 	// condition 6 re-resolves against the right question.

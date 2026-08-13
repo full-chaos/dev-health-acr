@@ -85,6 +85,18 @@ type FactProviderResult struct {
 	// current axis, or a degradation), and contributes nothing to the
 	// composed grain.
 	Grain TemporalGrain
+	// OmittedCount is how many rows the provider DROPPED rather than
+	// reported -- today, rows whose source value could not be represented
+	// (CHAOS-3781 round-4 R4-2).
+	//
+	// It exists because omitting a row while reporting complete coverage
+	// is a measurement that fails toward "fine": the answer looks whole,
+	// the caller has no way to know something was withheld, and the
+	// omission is invisible precisely when it matters. A count above zero
+	// makes the result Truncated, which the existing vocabulary already
+	// defines as "fewer rows than exist" and which degrades coverage to
+	// partial while KEEPING the rows that were fine.
+	OmittedCount int
 }
 
 type FactProvider interface {
@@ -387,6 +399,17 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 		}
 		result.Facts = result.Facts[:remaining]
 		result.Truncated = true
+	}
+	// R4-2: an omission is a truncation of the result set, in the exact
+	// sense the existing state already names -- so it routes through the
+	// same branch rather than minting a new state. Done here, in the
+	// registry, so no provider can count omissions and forget to degrade.
+	if result.OmittedCount > 0 {
+		result.Truncated = true
+		if strings.TrimSpace(result.Reason) == "" {
+			result.Reason = "canonical fact rows were omitted"
+		}
+		result.Reason = fmt.Sprintf("%s (omitted %d)", result.Reason, result.OmittedCount)
 	}
 	if result.Truncated {
 		result.State = SourceTruncated

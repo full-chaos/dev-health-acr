@@ -146,7 +146,7 @@ func assertEngineAndSortingKeyAreFresh(t *testing.T, ctx context.Context, query 
 		tables = append(tables, table)
 	}
 	rows, err := query.Query(ctx,
-		"SELECT name, engine, sorting_key FROM system.tables WHERE database = currentDatabase() AND name IN {tables:Array(String)}",
+		"SELECT name, engine_full FROM system.tables WHERE database = currentDatabase() AND name IN {tables:Array(String)}",
 		[]contextpacket.ClickHouseBinding{{Name: "tables", Value: tables}})
 	if err != nil {
 		t.Fatalf("query live system.tables: %v", err)
@@ -154,17 +154,20 @@ func assertEngineAndSortingKeyAreFresh(t *testing.T, ctx context.Context, query 
 	defer rows.Close()
 
 	for rows.Next() {
-		var name, engine, sortingKey string
-		if err := rows.Scan(&name, &engine, &sortingKey); err != nil {
+		var name, engineFull string
+		if err := rows.Scan(&name, &engineFull); err != nil {
 			t.Fatalf("scan system.tables row: %v", err)
 		}
-		if declared, ok := devhealthschema.Engines[name]; ok && declared != engine {
-			t.Errorf("live %s is ENGINE %q but devhealthschema says %q -- a fixture with the wrong engine either rejects FINAL or dedups rows a test seeded", name, engine, declared)
-		}
-		if declared, ok := devhealthschema.OrderBy[name]; ok {
-			if want := "(" + sortingKey + ")"; declared != want {
-				t.Errorf("live %s sorts on %s but devhealthschema says %s -- regenerate from system.tables rather than authoring it", name, want, declared)
-			}
+		// engine_full, not engine (round-4 R4-1): the class alone omits
+		// the VERSION column, and a ReplacingMergeTree without its
+		// version keeps an arbitrary row among those sharing a sort key
+		// rather than the highest-versioned one. Comparing only the
+		// class let a fixture disagree with production on exactly the
+		// FINAL semantics several providers rely on. It also covers
+		// PARTITION BY, ORDER BY and SETTINGS in the same string, so no
+		// facet of the physical definition is left unverified.
+		if declared, ok := devhealthschema.EngineFull[name]; ok && declared != engineFull {
+			t.Errorf("live %s is %q but devhealthschema says %q -- regenerate from system.tables.engine_full rather than authoring any part of it", name, engineFull, declared)
 		}
 	}
 	if err := rows.Err(); err != nil {

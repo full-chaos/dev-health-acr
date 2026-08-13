@@ -89,7 +89,7 @@ FROM (
 )
 WHERE rn = 1`)
 	rowCount := 0
-	omittedUnrepresentable := false
+	omittedUnrepresentableCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, orgSubjectIDs, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var provider, status, errorMessage, createdAt string
@@ -103,7 +103,7 @@ WHERE rn = 1`)
 		}
 		durationMS, representable := representableInt64(rawDurationMS)
 		if !representable {
-			omittedUnrepresentable = true
+			omittedUnrepresentableCount++
 			return nil
 		}
 		fields := map[string]contextfabric.FactValue{
@@ -126,8 +126,11 @@ WHERE rn = 1`)
 		return contextfabric.FactProviderResult{}, readFailure("query source health", scanErr)
 	}
 	state, retentionReason := timeBound.retentionState(rowCount)
-	if omittedUnrepresentable && retentionReason == "" {
+	// Round-4 R4-2: the COUNT travels, not just a flag. The registry
+	// turns a nonzero count into a truncated/partial result, so an
+	// answer can never report complete coverage while rows were dropped.
+	if omittedUnrepresentableCount > 0 && retentionReason == "" {
 		retentionReason = unrepresentableValueReason
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery, OmittedCount: omittedUnrepresentableCount}, nil
 }

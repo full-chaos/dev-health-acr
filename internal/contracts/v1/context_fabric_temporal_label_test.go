@@ -241,3 +241,61 @@ func contextFabricGoldenResult(t *testing.T, name string) ContextFabricInvestiga
 }
 
 func timePtr(value time.Time) *time.Time { return &value }
+
+// TestR4_4_InstantsOutsideTheRepresentableRangeAreRefused is CHAOS-3781
+// round-4 R4-4, red→green.
+//
+// Any nonzero past timestamp used to pass validation and then flow into
+// UnixNano(), which is undefined outside roughly 1677-09-21..2262-04-11.
+// Year 1 does not saturate there — it WRAPS, to a plausible-looking modern
+// instant. That is worse than an obvious error: it would admit graph
+// elements at the wrong time and let two different requests collide on one
+// reuse key, both silently.
+//
+// Refused, never clamped: clamping answers a different question than the
+// one asked, which is the defect class this axis exists to remove.
+func TestR4_4_InstantsOutsideTheRepresentableRangeAreRefused(t *testing.T) {
+	t.Parallel()
+	farPast := time.Date(1, 1, 2, 0, 0, 0, 0, time.UTC)
+	farFuture := time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+	ok := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+
+	for _, testCase := range []struct {
+		name        string
+		timeContext ContextFabricTimeContext
+	}{
+		{"as_of in year 1", ContextFabricTimeContext{Axis: ContextFabricTemporalValidTime, AsOf: &farPast}},
+		{"as_of in year 9999", ContextFabricTimeContext{Axis: ContextFabricTemporalValidTime, AsOf: &farFuture}},
+		{"range start out of range", ContextFabricTimeContext{Axis: ContextFabricTemporalRange, Start: &farPast, End: &ok}},
+		{"range end out of range", ContextFabricTimeContext{Axis: ContextFabricTemporalRange, Start: &ok, End: &farFuture}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if err := testCase.timeContext.Validate(); err == nil {
+				t.Fatal("an instant outside the epoch-nanosecond range was accepted; it would wrap rather than fail on conversion")
+			}
+		})
+	}
+
+	// The wrap this prevents, demonstrated: year 1 does not saturate.
+	if farPast.UnixNano() >= 0 {
+		t.Logf("year 1 UnixNano() = %d -- wraps to a non-negative value, i.e. a plausible modern instant", farPast.UnixNano())
+	}
+}
+
+// TestR4_4_OrdinaryInstantsStillValidate is the over-blocking guard: the
+// bound must reject only what genuinely cannot be represented.
+func TestR4_4_OrdinaryInstantsStillValidate(t *testing.T) {
+	t.Parallel()
+	for _, instant := range []time.Time{
+		time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC),
+	} {
+		at := instant
+		context := ContextFabricTimeContext{Axis: ContextFabricTemporalValidTime, AsOf: &at}
+		if err := context.Validate(); err != nil {
+			t.Fatalf("%s is representable but was refused: %v", instant.Format("2006-01-02"), err)
+		}
+	}
+}

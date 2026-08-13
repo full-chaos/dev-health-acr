@@ -443,3 +443,59 @@ func TestF3_ProviderWithNoRetainedFactsContributesNoGrain(t *testing.T) {
 			bundle.TemporalGrain, GrainInstant)
 	}
 }
+
+// TestR4_2_OmissionsSurfaceAsPartialCoverage is round-4 R4-2 at the
+// registry boundary: a provider that dropped rows must not produce a
+// bundle claiming complete coverage.
+//
+// The defect shape is "measurement fails toward fine" -- the answer looks
+// whole, and the omission is invisible precisely when it matters. The
+// registry derives the degradation from the count so no provider can
+// report omissions and forget to degrade.
+func TestR4_2_OmissionsSurfaceAsPartialCoverage(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	observed := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	omitting := &factProviderStub{
+		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, RequiresEvidence: true},
+		result: FactProviderResult{
+			State: SourceAvailable, ObservedAt: &observed, Version: "v1",
+			OmittedCount: 2,
+			Facts: []CanonicalFact{{
+				Kind: FactStatus, Subject: project, Fields: map[string]FactValue{"status": StringFactValue("in_progress")},
+				ObservedAt: &observed, EvidenceRefIDs: []string{"evidence_status_1234"}, SourceState: SourceAvailable,
+			}},
+		},
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{omitting}, FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, CanonicalFactRequest{
+		Question:     InterpretedQuestion{Shape: ShapeSingleSubject, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}},
+		Subjects:     []SubjectRef{project},
+		Requirements: []FactRequirement{{Kind: FactStatus}},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if !bundle.Coverage.Partial {
+		t.Fatal("rows were omitted but coverage reports complete; an answer must never look whole while something was withheld")
+	}
+	// The surviving fact is still there -- omission degrades, it does not
+	// sink the answer (§8.6).
+	if len(bundle.Facts) != 1 {
+		t.Fatalf("Facts = %#v, want the fact that was fine to survive", bundle.Facts)
+	}
+	// And the count is legible, not just a boolean.
+	var named bool
+	for _, reason := range bundle.Coverage.DegradedReasons {
+		if strings.Contains(reason, "omitted 2") {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("DegradedReasons = %#v, want the omission count stated", bundle.Coverage.DegradedReasons)
+	}
+}

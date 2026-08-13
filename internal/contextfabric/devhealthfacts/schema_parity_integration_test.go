@@ -210,3 +210,67 @@ func TestLiveHistoricalReadsMatchProductionTyping(t *testing.T) {
 		t.Fatalf("state at %v = %q, want \"open\": the pull request merged later, on %v", asOf, *state.String, merged)
 	}
 }
+
+// TestLiveFinalKeepsTheVersionColumnWinner is CHAOS-3781 round-4 R4-1,
+// red→green, and it is a BEHAVIOURAL proof rather than a metadata one.
+//
+// The declaration used to carry only the engine CLASS
+// (`ReplacingMergeTree`), dropping the VERSION column production declares
+// (`ReplacingMergeTree(last_synced)`). A versionless ReplacingMergeTree
+// keeps an ARBITRARY row among those sharing a sort key; production keeps
+// the one with the highest version. Several providers query these tables
+// with FINAL and depend on that choice, so every fixture built from the
+// class alone was proving the wrong thing about the exact semantics under
+// test — silently, because both engines accept FINAL and return one row.
+//
+// The rows are inserted OLDEST LAST, so insert order and version order
+// disagree. Under a versionless engine the reader is free to return the
+// stale row; under production's definition it must return the newer one.
+func TestLiveFinalKeepsTheVersionColumnWinner(t *testing.T) {
+	ctx := context.Background()
+	client, direct := newCHAOS3780IntegrationClient(t, ctx)
+	for _, statement := range devhealthschema.DDL("work_items") {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+
+	const orgID = "org-final"
+	repoID := "3f2504e0-4f89-11d3-9a0c-0305e82c3303"
+	newer := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	older := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Same sort key (org_id, repo_id, work_item_id) -- two versions of one
+	// logical row. The NEWER version is inserted FIRST so that "last
+	// written" and "highest version" point at different rows.
+	seed := func(status string, lastSynced time.Time) {
+		t.Helper()
+		if err := direct.Exec(ctx,
+			`INSERT INTO work_items (work_item_id, org_id, repo_id, status, title, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			"WI-FINAL", orgID, repoID, status, "Version race", older, lastSynced); err != nil {
+			t.Fatalf("seed work_items: %v", err)
+		}
+	}
+	seed("done", newer)
+	seed("in_progress", older)
+
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactStatus)
+	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+		Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind:     contextfabric.FactStatus,
+		Subjects: []contextfabric.SubjectRef{workItemSubject("WI-FINAL")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("Facts = %#v, want exactly one row after FINAL deduped the two versions", result.Facts)
+	}
+	status, ok := result.Facts[0].Fields["status"]
+	if !ok || status.String == nil {
+		t.Fatalf("fact carries no status: %#v", result.Facts[0])
+	}
+	if *status.String != "done" {
+		t.Fatalf("FINAL returned status %q, want \"done\" -- the row with the highest last_synced. A ReplacingMergeTree declared without its version column keeps an arbitrary row instead", *status.String)
+	}
+}

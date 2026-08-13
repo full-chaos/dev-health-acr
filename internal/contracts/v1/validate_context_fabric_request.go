@@ -2,7 +2,9 @@ package v1
 
 import (
 	"fmt"
+	"math"
 	"strings"
+	"time"
 )
 
 func (r ContextFabricInvestigationRequest) Validate() error {
@@ -95,7 +97,46 @@ func (h ContextFabricSubjectHint) Validate() error {
 	return nil
 }
 
+// representableInstant reports whether an instant survives conversion to
+// epoch NANOSECONDS, the representation every temporal comparison in this
+// system uses (CHAOS-3781 round-4 R4-4).
+//
+// The bound is derived from the representation, not chosen: time.Time
+// carries a far wider range than int64 nanoseconds can hold, so an instant
+// outside roughly 1677-09-21..2262-04-11 wraps rather than saturating when
+// UnixNano() is called on it. A wrapped value is not merely wrong, it is
+// wrong in an adversarially useful way -- year 1 wraps to a plausible
+// modern instant, which would admit graph elements at the wrong time and
+// let two different requests collide on one reuse key.
+//
+// Checked HERE, at validation, rather than at each UnixNano() call site:
+// the conversion happens in the graph adapter, in the reuse key and in the
+// fact bounds, and a check at any one of them leaves the others open.
+//
+// time.Time.UnixNano's own documentation states the undefined range; the
+// constants below are its endpoints, expressed as instants so the reason
+// is legible rather than appearing as two magic integers.
+var (
+	minRepresentableInstant = time.Unix(0, math.MinInt64).UTC()
+	maxRepresentableInstant = time.Unix(0, math.MaxInt64).UTC()
+)
+
+func representableInstant(value time.Time) bool {
+	return !value.Before(minRepresentableInstant) && !value.After(maxRepresentableInstant)
+}
+
 func (t ContextFabricTimeContext) Validate() error {
+	// Every bound this axis requires must survive the epoch-nanosecond
+	// representation. An out-of-range instant is refused as a malformed
+	// request rather than clamped: clamping would answer a DIFFERENT
+	// question than the one asked, silently, which is the defect class
+	// this whole time axis exists to remove.
+	for _, instant := range []*time.Time{t.AsOf, t.Start, t.End} {
+		if instant != nil && !instant.IsZero() && !representableInstant(*instant) {
+			return fmt.Errorf("time context instant is outside the representable range (%s..%s)",
+				minRepresentableInstant.Format("2006-01-02"), maxRepresentableInstant.Format("2006-01-02"))
+		}
+	}
 	switch t.Axis {
 	case ContextFabricTemporalCurrent:
 		if t.AsOf != nil || t.Start != nil || t.End != nil {

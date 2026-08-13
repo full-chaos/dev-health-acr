@@ -87,6 +87,7 @@ var ProductionColumns = map[string][]Column{
 		{Name: "status", Type: "Nullable(String)"},
 		{Name: "started_at", Type: "DateTime64(3, 'UTC')"},
 		{Name: "finished_at", Type: "Nullable(DateTime64(3, 'UTC'))"},
+		{Name: "last_synced", Type: "DateTime64(3, 'UTC')"},
 		{Name: "org_id", Type: "String"},
 		{Name: "branch", Type: "Nullable(String)"},
 	},
@@ -128,6 +129,7 @@ var ProductionColumns = map[string][]Column{
 		{Name: "review_id", Type: "String"},
 		{Name: "state", Type: "String"},
 		{Name: "submitted_at", Type: "DateTime64(3, 'UTC')"},
+		{Name: "last_synced", Type: "DateTime64(3, 'UTC')"},
 		{Name: "org_id", Type: "String"},
 	},
 	"git_pull_requests": {
@@ -156,6 +158,7 @@ var ProductionColumns = map[string][]Column{
 	},
 	"operational_incidents": {
 		{Name: "org_id", Type: "String"},
+		{Name: "source_version_at", Type: "DateTime64(6, 'UTC')"},
 		{Name: "id", Type: "String"},
 		{Name: "source_event_at", Type: "Nullable(DateTime64(6, 'UTC'))"},
 		{Name: "observed_at", Type: "DateTime64(6, 'UTC')"},
@@ -172,6 +175,7 @@ var ProductionColumns = map[string][]Column{
 	},
 	"operational_service_repository_mappings": {
 		{Name: "org_id", Type: "String"},
+		{Name: "source_version_at", Type: "DateTime64(6, 'UTC')"},
 		{Name: "id", Type: "String"},
 		{Name: "service_id", Type: "String"},
 		{Name: "repo_id", Type: "Nullable(UUID)"},
@@ -220,6 +224,7 @@ var ProductionColumns = map[string][]Column{
 		{Name: "repo_id", Type: "Nullable(UUID)"},
 		{Name: "source", Type: "LowCardinality(String)"},
 		{Name: "observed_at", Type: "DateTime64(3, 'UTC')"},
+		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
 	},
 	"work_item_dependencies": {
 		{Name: "source_work_item_id", Type: "String"},
@@ -239,62 +244,46 @@ var ProductionColumns = map[string][]Column{
 		{Name: "closed_at", Type: "Nullable(DateTime64(3))"},
 		{Name: "parent_id", Type: "String"},
 		{Name: "url", Type: "String"},
+		{Name: "last_synced", Type: "DateTime64(3)"},
 		{Name: "org_id", Type: "String"},
 	},
 }
 
-// OrderBy is each table's LIVE sorting key, read from system.tables --
-// not authored.
+// EngineFull is each table's COMPLETE physical definition, exactly as
+// system.tables.engine_full reports it: engine, version column, PARTITION
+// BY, ORDER BY and SETTINGS in one string.
 //
-// CHAOS-3781 round-3 F3: these were hand-written at first and two of them
-// were simply wrong (estimate_coverage_metrics_daily and
-// capacity_forecasts), disagreeing with live AND with the in-repo comments
-// in readiness.go and workload.go that had it right all along. Guessing
-// metadata beside probed types reintroduces exactly the drift the probed
-// types exist to prevent, so every value here comes from the same query
-// the freshness check re-runs.
-var OrderBy = map[string]string{
-	"backfill_log":                            "(org_id, job_id, chunk_index)",
-	"capacity_forecasts":                      "(org_id, forecast_id)",
-	"ci_pipeline_runs":                        "(org_id, repo_id, run_id)",
-	"compounding_risk_daily":                  "(org_id, scope, scope_id, day, computed_at)",
-	"deployments":                             "(org_id, repo_id, deployment_id)",
-	"estimate_coverage_metrics_daily":         "(org_id, day, provider, work_scope_id, ifNull(team_id, ''))",
-	"git_pull_request_reviews":                "(org_id, repo_id, number, review_id)",
-	"git_pull_requests":                       "(org_id, repo_id, number)",
-	"investment_metrics_daily":                "(org_id, day, team_id, investment_area, project_stream)",
-	"operational_incidents":                   "(org_id, id)",
-	"operational_service_repository_mappings": "(org_id, id)",
-	"recommendations_daily":                   "(org_id, team_id, rule_id, window_end)",
-	"repo_metrics_daily":                      "(org_id, repo_id, day)",
-	"repos":                                   "(org_id, id)",
-	"work_graph_deployment_incident_edges":    "(org_id, deployment_id, incident_id, source)",
-	"work_item_dependencies":                  "(org_id, source_work_item_id, target_work_item_id, relationship_type)",
-	"work_items":                              "(org_id, repo_id, work_item_id)",
-}
-
-// Engines is each table's LIVE engine, read from system.tables (round-3
-// F3: probed, not authored -- see OrderBy).
-// The readers query the ReplacingMergeTree tables with FINAL, which is a
-// query error against a plain MergeTree, so this cannot be simplified.
-var Engines = map[string]string{
-	"backfill_log":                            "MergeTree",
-	"capacity_forecasts":                      "ReplacingMergeTree",
-	"ci_pipeline_runs":                        "ReplacingMergeTree",
-	"compounding_risk_daily":                  "MergeTree",
-	"deployments":                             "ReplacingMergeTree",
-	"estimate_coverage_metrics_daily":         "ReplacingMergeTree",
-	"git_pull_request_reviews":                "ReplacingMergeTree",
-	"git_pull_requests":                       "ReplacingMergeTree",
-	"investment_metrics_daily":                "MergeTree",
-	"operational_incidents":                   "ReplacingMergeTree",
-	"operational_service_repository_mappings": "ReplacingMergeTree",
-	"recommendations_daily":                   "ReplacingMergeTree",
-	"repo_metrics_daily":                      "MergeTree",
-	"repos":                                   "ReplacingMergeTree",
-	"work_graph_deployment_incident_edges":    "ReplacingMergeTree",
-	"work_item_dependencies":                  "ReplacingMergeTree",
-	"work_items":                              "ReplacingMergeTree",
+// CHAOS-3781 round-4 R4-1: this replaces separate hand-maintained Engines
+// and OrderBy maps that carried only the engine CLASS. Dropping
+// ReplacingMergeTree's VERSION column changed dedup semantics -- FINAL on
+// a versionless table keeps an arbitrary row among those sharing a sort
+// key, while production keeps the one with the highest version. Any
+// fixture built from the class alone was therefore proving the wrong
+// thing about exactly the FINAL behaviour several providers depend on.
+//
+// It is ONE field on purpose. The engine class, the version column and the
+// sorting key are all facets of a single physical definition, and the
+// three previous rounds each found a different hand-authored facet drifted
+// from live. A field that cannot be authored separately cannot drift
+// separately.
+var EngineFull = map[string]string{
+	"backfill_log":                            "MergeTree ORDER BY (org_id, job_id, chunk_index) SETTINGS index_granularity = 8192",
+	"capacity_forecasts":                      "ReplacingMergeTree(computed_at) ORDER BY (org_id, forecast_id) SETTINGS index_granularity = 8192",
+	"ci_pipeline_runs":                        "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id) SETTINGS index_granularity = 8192",
+	"compounding_risk_daily":                  "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, scope, scope_id, day, computed_at) SETTINGS index_granularity = 8192",
+	"deployments":                             "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, deployment_id) SETTINGS index_granularity = 8192",
+	"estimate_coverage_metrics_daily":         "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, '')) SETTINGS index_granularity = 8192",
+	"git_pull_request_reviews":                "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number, review_id) SETTINGS index_granularity = 8192",
+	"git_pull_requests":                       "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number) SETTINGS index_granularity = 8192",
+	"investment_metrics_daily":                "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, team_id, investment_area, project_stream) SETTINGS allow_nullable_key = 1, index_granularity = 8192",
+	"operational_incidents":                   "ReplacingMergeTree(source_version_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
+	"operational_service_repository_mappings": "ReplacingMergeTree(source_version_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
+	"recommendations_daily":                   "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(window_end) ORDER BY (org_id, team_id, rule_id, window_end) SETTINGS index_granularity = 8192",
+	"repo_metrics_daily":                      "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
+	"repos":                                   "ReplacingMergeTree(last_synced) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
+	"work_graph_deployment_incident_edges":    "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, deployment_id, incident_id, source) SETTINGS index_granularity = 8192",
+	"work_item_dependencies":                  "ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
+	"work_items":                              "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id) SETTINGS index_granularity = 8192",
 }
 
 // DDL renders CREATE TABLE statements for the named tables, in a
@@ -325,23 +314,28 @@ func DDL(tables ...string) []string {
 		for _, column := range columns {
 			rendered = append(rendered, column.Name+" "+column.Type)
 		}
-		orderBy, ok := OrderBy[table]
+		engine, ok := EngineFull[table]
 		if !ok {
-			orderBy = columns[0].Name
-		}
-		// allow_nullable_key: several production sort keys are Nullable
-		// (team_id, work_scope_id). The whole point of this fixture is
-		// to carry the DECLARED production types, so the setting is
-		// relaxed rather than the types being altered to fit the
-		// default -- altering them would silently rebuild the exact
-		// drift these guards exist to catch.
-		engine, ok := Engines[table]
-		if !ok {
-			engine = "MergeTree"
+			panic("devhealthschema: no declared engine for table " + table)
 		}
 		statements = append(statements, fmt.Sprintf(
-			"CREATE TABLE %s (%s) ENGINE = %s ORDER BY %s SETTINGS allow_nullable_key = 1",
-			table, strings.Join(rendered, ", "), engine, orderBy))
+			"CREATE TABLE %s (%s) ENGINE = %s",
+			table, strings.Join(rendered, ", "), withNullableKeySetting(engine)))
 	}
 	return statements
+}
+
+// withNullableKeySetting appends allow_nullable_key to a definition's
+// SETTINGS. Several production sort keys are Nullable (team_id,
+// work_scope_id); the fixture carries the DECLARED types rather than
+// altering them to satisfy the default, because altering them would
+// rebuild the exact drift these guards exist to catch.
+func withNullableKeySetting(engineFull string) string {
+	if strings.Contains(engineFull, "allow_nullable_key") {
+		return engineFull
+	}
+	if strings.Contains(engineFull, "SETTINGS") {
+		return engineFull + ", allow_nullable_key = 1"
+	}
+	return engineFull + " SETTINGS allow_nullable_key = 1"
 }

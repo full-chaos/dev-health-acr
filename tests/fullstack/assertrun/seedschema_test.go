@@ -1,5 +1,12 @@
 package main
 
+// devhealthschema:not-a-production-replica these CREATE TABLE statements
+// are INPUT to the migration replayer under test, not fixtures that any
+// Context Fabric reader queries. The table names are incidental -- the
+// test asserts how ALTER/DROP clauses are replayed, and would read the
+// same with any name. Rendering them from the shared declaration would
+// couple a parser test to production's real column set for no benefit.
+
 import (
 	"os"
 	"path/filepath"

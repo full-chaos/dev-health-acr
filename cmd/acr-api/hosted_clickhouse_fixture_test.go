@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"net"
 	"net/url"
 	"os"
@@ -223,19 +224,21 @@ func assertClickHouseServerRejectsMutation(t *testing.T, ctx context.Context, re
 
 func seedClickHouse(t *testing.T, ctx context.Context, request clickHouseSeedRequest) {
 	t.Helper()
-	statements := []string{
-		`CREATE TABLE repos (id UUID, org_id String, repo String, ref Nullable(String)) ENGINE = ReplacingMergeTree ORDER BY id`,
-		`CREATE TABLE ci_pipeline_runs (run_id String, repo_id UUID, branch String, status Nullable(String), started_at DateTime64(3, 'UTC'), finished_at Nullable(DateTime64(3, 'UTC'))) ENGINE = ReplacingMergeTree ORDER BY (repo_id, run_id)`,
-	}
-	for _, statement := range statements {
+	// Rendered from the shared declaration (CHAOS-3781 round-4 R4-3).
+	// These two were hand-written and diverged from production -- repos
+	// omitted most of its columns and both dropped the ReplacingMergeTree
+	// VERSION column, so FINAL here deduped differently than it does in
+	// production. The closure sweep in devhealthschema now fails the build
+	// if any test re-authors DDL for a declared table.
+	for _, statement := range devhealthschema.DDL("repos", "ci_pipeline_runs") {
 		if err := request.connection.Exec(ctx, statement); err != nil {
 			t.Fatalf("execute ClickHouse fixture statement: %v", err)
 		}
 	}
-	if err := request.connection.Exec(ctx, `INSERT INTO repos VALUES (?, ?, ?, ?)`, "00000000-0000-0000-0000-000000000001", hostedIntegrationOrg, hostedIntegrationRepository, "main"); err != nil {
+	if err := request.connection.Exec(ctx, `INSERT INTO repos (id, org_id, repo, ref) VALUES (?, ?, ?, ?)`, "00000000-0000-0000-0000-000000000001", hostedIntegrationOrg, hostedIntegrationRepository, "main"); err != nil {
 		t.Fatal(err)
 	}
-	if err := request.connection.Exec(ctx, `INSERT INTO ci_pipeline_runs VALUES (?, ?, ?, ?, now64(3), now64(3))`, "run-4821", "00000000-0000-0000-0000-000000000001", "main", "failure"); err != nil {
+	if err := request.connection.Exec(ctx, `INSERT INTO ci_pipeline_runs (run_id, repo_id, branch, status, started_at, finished_at) VALUES (?, ?, ?, ?, now64(3), now64(3))`, "run-4821", "00000000-0000-0000-0000-000000000001", "main", "failure"); err != nil {
 		t.Fatal(err)
 	}
 	if err := request.connection.Exec(ctx, `CREATE USER acr_readonly IDENTIFIED WITH plaintext_password BY {password:String}`, clickhousedriver.Named("password", request.readPassword)); err != nil {
