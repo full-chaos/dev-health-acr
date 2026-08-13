@@ -642,6 +642,66 @@ func TestClassifyModelErrorDistinguishesRateLimitUnavailableAndInvalidOutput(t *
 	}
 }
 
+// TestClassifyModelErrorAnchorsStatusExtractionToACRsOwnSanitizedToken is a
+// CHAOS-3770 follow-up probe. Found because a rebased PR's CI landed on an
+// ephemeral test port containing the digits "429" -- the flake WAS the
+// bug, not a race or test-state contamination: classifyModelError's
+// fallback did strings.Contains(lower, "429") against the WHOLE
+// unstructured error text, and since apierror.Error.Error() embeds the
+// full request URL verbatim, ANY substring in that URL (a test's
+// ephemeral port, or in production a BYO endpoint's own hostname, port,
+// or path segment) containing those three digits produced a false
+// rate-limit classification for a completely unrelated status. Confirmed
+// directly: feeding classifyModelError the literal string this shape
+// produces for a genuine 401 on port 55429 returned ErrModelRateLimited.
+//
+// classifyModelError now extracts the status code ONLY from the fixed,
+// ACR-controlled token sanitizeProviderErrorBody embeds in every
+// sanitized response ("provider response redacted by ACR (status <code>
+// <text>)") -- text no real provider ever supplies and no incidental URL
+// component can produce, so it cannot collide with anything else in the
+// error string.
+func TestClassifyModelErrorAnchorsStatusExtractionToACRsOwnSanitizedToken(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		err    error
+		wantIs error
+	}{
+		{
+			// The exact literal shape observed in CI: a 401 (unrelated to
+			// rate limiting) whose request URL happens to use an
+			// ephemeral port containing "429".
+			name:   "port_number_containing_429_digits_is_not_a_rate_limit_signal",
+			err:    errors.New(`failed to create completion: POST "http://127.0.0.1:55429/v1/chat/completions": 401 Unauthorized {"message":"provider response redacted by ACR (status 401 Unauthorized)","type":"acr_sanitized_error","param":null,"code":null}`),
+			wantIs: contextfabric.ErrModelUnavailable,
+		},
+		{
+			name:   "genuinely_sanitized_429_still_classifies_as_rate_limited",
+			err:    errors.New(`failed to create completion: POST "http://127.0.0.1:12345/v1/chat/completions": 429 Too Many Requests {"message":"provider response redacted by ACR (status 429 Too Many Requests)","type":"acr_sanitized_error","param":null,"code":null}`),
+			wantIs: contextfabric.ErrModelRateLimited,
+		},
+		{
+			// Adversarial: a port number that ALSO happens to contain
+			// "429" as a substring (4290 contains "429"), on a genuinely
+			// unrelated 503 -- proves the anchor, not mere avoidance of
+			// the exact 55429 case above.
+			name:   "port_number_4290_does_not_leak_into_a_503_classification",
+			err:    errors.New(`failed to create completion: POST "http://127.0.0.1:4290/v1/chat/completions": 503 Service Unavailable {"message":"provider response redacted by ACR (status 503 Service Unavailable)","type":"acr_sanitized_error","param":null,"code":null}`),
+			wantIs: contextfabric.ErrModelUnavailable,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := classifyModelError(tc.err)
+			if !errors.Is(got, tc.wantIs) {
+				t.Fatalf("classifyModelError(%v) = %v, want errors.Is match for %v", tc.err, got, tc.wantIs)
+			}
+		})
+	}
+}
+
 func TestClassifyModelErrorPreservesCancellationAndDeadline(t *testing.T) {
 	t.Parallel()
 	if got := classifyModelError(context.Canceled); !errors.Is(got, context.Canceled) {

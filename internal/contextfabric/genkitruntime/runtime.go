@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -550,6 +552,17 @@ func retryable(err error) bool {
 	return false
 }
 
+// contextFabricSanitizedStatusPattern matches ONLY the fixed, ACR-controlled
+// token sanitizeProviderErrorBody embeds in every sanitized non-2xx provider
+// response ("provider response redacted by ACR (status <code> <text>)"). No
+// real provider supplies this text, and no incidental error-string component
+// (a request URL, an ephemeral test port, a BYO endpoint's hostname or path)
+// can produce it, so a match here is a reliable anchor for the true HTTP
+// status -- unlike a bare digit scan over the whole error text, which can
+// collide with unrelated numbers embedded elsewhere in the string (see
+// classifyModelError).
+var contextFabricSanitizedStatusPattern = regexp.MustCompile(`provider response redacted by ACR \(status (\d{3})\b`)
+
 // classifyModelError maps a raw generation error into one of the ACR-owned
 // model runtime sentinels (ErrModelRateLimited, ErrModelOutput,
 // ErrModelUnavailable) so callers can apply distinct handling and alerting
@@ -586,9 +599,28 @@ func classifyModelError(err error) error {
 			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
 		}
 	}
-	lower := strings.ToLower(err.Error())
-	for _, token := range []string{"429", "rate limit", "too many requests", "quota exceeded"} {
-		if strings.Contains(lower, token) {
+	text := err.Error()
+	// Prefer the ACR-controlled sanitized-status token when present: it is
+	// the ONLY reliable signal in an unstructured error string, because
+	// nothing else can produce it. Never fall back to scanning the raw text
+	// for a bare "429" -- the OpenAI SDK's apierror.Error.Error() embeds the
+	// full request URL verbatim, so an ephemeral test port or a BYO
+	// endpoint's own hostname/port/path containing those digits would
+	// misclassify an unrelated status as rate-limited.
+	if m := contextFabricSanitizedStatusPattern.FindStringSubmatch(text); m != nil {
+		if code, convErr := strconv.Atoi(m[1]); convErr == nil && code == 429 {
+			return fmt.Errorf("%w: model generation failed", contextfabric.ErrModelRateLimited)
+		}
+		return fmt.Errorf("%w: model generation failed", contextfabric.ErrModelUnavailable)
+	}
+	// No sanitized status token means there was no HTTP response object at
+	// all (connection refused, DNS failure, etc.). Fall back to
+	// word-anchored phrase checks -- deliberately excluding a bare "429"
+	// digit check, which is not safe against incidental numbers elsewhere in
+	// the text.
+	lower := strings.ToLower(text)
+	for _, phrase := range []string{"rate limit", "too many requests", "quota exceeded"} {
+		if strings.Contains(lower, phrase) {
 			return fmt.Errorf("%w: model generation failed", contextfabric.ErrModelRateLimited)
 		}
 	}
