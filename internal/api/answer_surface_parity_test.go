@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -207,7 +208,7 @@ func callRealMCPInvestigateQuestion(t *testing.T, boot *acrmcp.Bootstrap, questi
 		t.Fatalf("investigate_question call: %v", err)
 	}
 	if called.IsError {
-		t.Fatalf("investigate_question reported an error: %+v", called.Content)
+		t.Fatalf("investigate_question reported an error: %s", mustRawJSON(t, called.Content))
 	}
 	var response contractsv1.MCPInvestigateQuestionResponse
 	if err := json.Unmarshal(mustRawJSON(t, called.StructuredContent), &response); err != nil {
@@ -275,6 +276,17 @@ func mustRawJSON(t *testing.T, value any) []byte {
 // handler actually advertises the answer tools.
 func newParityHostedApp(t *testing.T, investigator contextfabric.Investigator, results contextfabric.InvestigationResultStore) (*App, string) {
 	t.Helper()
+	return newParityHostedAppWithBudget(t, investigator, results,
+		limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20})
+}
+
+// newParityHostedAppWithBudget is newParityHostedApp with the per-request
+// resource budget exposed, for a fixture whose payload is legitimately large
+// (a legacy row carrying 100 full-length narratives serializes past the
+// default token allowance, and a 413 there would hide the behaviour under
+// test rather than exercise it).
+func newParityHostedAppWithBudget(t *testing.T, investigator contextfabric.Investigator, results contextfabric.InvestigationResultStore, resources limits.ResourceBudget) (*App, string) {
+	t.Helper()
 	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
 	credentials := newMemoryCredentialLifecycle(t, audit, now)
@@ -287,7 +299,7 @@ func newParityHostedApp(t *testing.T, investigator contextfabric.Investigator, r
 	entitlements := EntitlementFunc(func(context.Context, string, string) (bool, error) { return true, nil })
 	manager, err := limits.NewManager(limits.Options{Now: func() time.Time { return now }, PerOrgConcurrency: 4, Policies: limits.PolicySet{
 		Auth:     limits.AuthPolicy{Window: time.Minute, PerOrgLimit: 100},
-		Context:  limits.ContextPolicy{Window: time.Minute, PerOrgLimit: 100, Resources: limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}},
+		Context:  limits.ContextPolicy{Window: time.Minute, PerOrgLimit: 100, Resources: resources},
 		Evidence: limits.EvidencePolicy{Window: time.Minute, PerOrgLimit: 100},
 	}})
 	if err != nil {
@@ -400,4 +412,164 @@ func parityInvestigationResult() contractsv1.ContextFabricInvestigationResult {
 		DeterministicAnswer: "Two teams need attention because blockers and stalled reviews concentrate there.",
 		Warnings:            []string{},
 	}
+}
+
+// legacyResultStore serves a stored result WITHOUT re-validating it against
+// the write bounds.
+//
+// This models the only situation the narrative clamp path exists for. The
+// write bounds cap limitations at 100 entries of 2000 runes, and
+// memoryinvestigation.Save enforces exactly that, so no result saved today
+// can reach boundedNarrative's clamp or its cap. The stored-read bounds
+// still accept the historical 250 x 4000 (contextFabricLegacyBounds), which
+// is what a row written before CHAOS-3746 round 3 tightened them looks like.
+// Such a row is legitimately readable and must project correctly.
+type legacyResultStore struct {
+	result contractsv1.ContextFabricInvestigationResult
+}
+
+func (s legacyResultStore) Save(context.Context, storage.Principal, contextfabric.InvestigationResult, contextfabric.SourceWatermarkSnapshot, contextfabric.RebuildEpoch, string) error {
+	return nil
+}
+
+func (s legacyResultStore) Get(_ context.Context, _ storage.Principal, resultID string) (contextfabric.InvestigationResult, error) {
+	if resultID != s.result.ResultID {
+		return contractsv1.ContextFabricInvestigationResult{}, contextfabric.ErrInvestigationResultNotFound
+	}
+	return s.result, nil
+}
+
+// TestValuesClampedCountsOnlySurvivorsAtTheRealSurfaces is the surface-level
+// half of codex round-10 F1.
+//
+// The projection helper is shared, so one fix covers both surfaces -- but
+// "shared helper" is a claim about today's wiring, not a property, and the
+// wiring is exactly what round-1 F2 showed can be wrong. So the count is
+// checked where a consumer actually reads it.
+//
+// Reachability differs by surface, and that asymmetry is asserted rather
+// than assumed:
+//
+//   - The API projection view reads a STORED result, so it can be asked to
+//     project a legacy row and is where the clamp path is genuinely live.
+//   - investigate_question runs a NEW investigation, and the hosted write
+//     path rejects a result carrying legacy-shaped narratives, so the clamp
+//     is not reachable there. That is correct: a result produced today must
+//     satisfy today's bounds. The MCP case below pins the consequence
+//     without hard-coding today's error, so it still holds if that path
+//     ever starts succeeding.
+//
+// The fixture carries 101 distinct over-long limitations. The projection
+// keeps 100 and drops one, so a correct values_clamped is 100: the dropped
+// entry never reached the wire in any form, shortened or otherwise.
+func TestValuesClampedCountsOnlySurvivorsAtTheRealSurfaces(t *testing.T) {
+	const overflow = contractsv1.ContextFabricProjectedNarrativeMaxCount + 1
+
+	result := parityInvestigationResult()
+	limitations := make([]string, 0, overflow)
+	for i := 0; i < overflow; i++ {
+		limitations = append(limitations,
+			"legacy limitation "+strconv.Itoa(i)+" "+strings.Repeat("x", contractsv1.ContextFabricProjectedNarrativeMaxLength))
+	}
+	result.Limitations = limitations
+
+	// The fixture must be a legitimately READABLE stored row, or the test
+	// would prove the projection tolerates something the service would have
+	// rejected on the way in.
+	if err := result.ValidateStored(); err != nil {
+		t.Fatalf("the legacy fixture is not a valid stored result: %v", err)
+	}
+	if err := result.Validate(); err == nil {
+		t.Fatal("the fixture passes the WRITE bounds, so it does not model a legacy row and the clamp path would not be exercised")
+	}
+
+	store := legacyResultStore{result: result}
+	investigator := investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		return result, nil
+	})
+
+	app, token := newParityHostedAppWithBudget(t, investigator, store,
+		limits.ResourceBudget{MaxItems: 500, MaxTokens: 500_000, MaxBytes: 8 << 20})
+	server := httptest.NewTLSServer(app.Handler())
+	t.Cleanup(server.Close)
+	configureSidecarEnvironment(t, server, token)
+
+	t.Run("API projection view over a legacy stored row", func(t *testing.T) {
+		projection := getRealAPIProjection(t, server, token, result.ResultID, 3, 1, 10)
+		budget := projection.ProjectionBudget
+		if got := len(projection.Limitations); got != contractsv1.ContextFabricProjectedNarrativeMaxCount {
+			t.Fatalf("limitations on the wire = %d, want %d", got, contractsv1.ContextFabricProjectedNarrativeMaxCount)
+		}
+		if budget.LimitationsOmitted != 1 {
+			t.Errorf("limitations_omitted = %d, want 1", budget.LimitationsOmitted)
+		}
+		if budget.ValuesClamped != contractsv1.ContextFabricProjectedNarrativeMaxCount {
+			t.Errorf("values_clamped = %d, want %d: it must count only values this surface actually returned in shortened form, never one dropped by the count cap",
+				budget.ValuesClamped, contractsv1.ContextFabricProjectedNarrativeMaxCount)
+		}
+	})
+
+	t.Run("MCP investigate_question cannot mint a legacy-shaped answer", func(t *testing.T) {
+		boot, err := acrmcp.NewBootstrap(context.Background(), "1.2.5")
+		if err != nil {
+			t.Fatalf("sidecar bootstrap: %v", err)
+		}
+		assertAdvertised(t, boot.Capabilities.EnabledTools, "investigate_question", "investigation_result")
+
+		projection, ok := tryRealMCPInvestigateQuestion(t, boot, result.Question, 3, 1, 10)
+		if !ok {
+			// The hosted write path refused to emit a fresh result carrying
+			// legacy-shaped narratives. That is the correct outcome and the
+			// reason this surface cannot reach the clamp path at all.
+			return
+		}
+		// If it ever does succeed, the counter must obey the same rule.
+		if got := projection.ProjectionBudget.ValuesClamped; got > len(projection.Limitations) {
+			t.Errorf("values_clamped = %d exceeds the %d limitations actually returned, so it is counting values the caller never received",
+				got, len(projection.Limitations))
+		}
+	})
+}
+
+// tryRealMCPInvestigateQuestion is callRealMCPInvestigateQuestion without the
+// assertion that the call succeeded, for cases where a refusal is a valid --
+// indeed the expected -- outcome.
+func tryRealMCPInvestigateQuestion(t *testing.T, boot *acrmcp.Bootstrap, question string, maxDrivers, maxCohort, maxEvidence int) (contractsv1.ContextFabricAnswerProjection, bool) {
+	t.Helper()
+	ctx := context.Background()
+	server := acrmcp.NewServer(boot, "test-version")
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "clamp-client", Version: "0.0.1"}, nil)
+
+	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("mcp server connect: %v", err)
+	}
+	defer serverSession.Close()
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("mcp client connect: %v", err)
+	}
+	defer clientSession.Close()
+
+	arguments, err := json.Marshal(contractsv1.MCPInvestigateQuestionRequest{
+		Question: question,
+		Budget: &contractsv1.MCPInvestigationBudget{
+			MaxDrivers: maxDrivers, MaxCohortMembers: maxCohort, MaxEvidenceRefs: maxEvidence,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	called, err := clientSession.CallTool(ctx, &mcpsdk.CallToolParams{
+		Name: "investigate_question", Arguments: json.RawMessage(arguments),
+	})
+	if err != nil || called.IsError {
+		return contractsv1.ContextFabricAnswerProjection{}, false
+	}
+	var response contractsv1.MCPInvestigateQuestionResponse
+	if err := json.Unmarshal(mustRawJSON(t, called.StructuredContent), &response); err != nil {
+		t.Fatalf("decode tool response: %v", err)
+	}
+	return response.Structured, true
 }

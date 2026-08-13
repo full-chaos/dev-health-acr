@@ -529,11 +529,11 @@ func validSourceState(value ContextFabricSourceState) bool {
 	}
 }
 
-// validFactKind derives from ContextFabricFactKinds rather than restating
+// validFactKind derives from contextFabricFactKinds rather than restating
 // the vocabulary in a second switch, so the accepted set and the declared
 // set cannot drift apart.
 func validFactKind(value ContextFabricFactKind) bool {
-	for _, kind := range ContextFabricFactKinds {
+	for _, kind := range contextFabricFactKinds {
 		if kind == value {
 			return true
 		}

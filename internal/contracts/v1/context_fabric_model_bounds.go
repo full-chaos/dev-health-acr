@@ -138,7 +138,7 @@ const (
 	// when the service rejects every list past 20. Deriving the bound makes
 	// the published contract state the truth, and makes it follow the
 	// vocabulary automatically if a kind is ever added or pruned.
-	ContextFabricFactRequirementsMaxCount = len(ContextFabricFactKinds)
+	ContextFabricFactRequirementsMaxCount = ContextFabricFactKindCount
 	// Matches the published schema (was 1024, which the schema never
 	// admitted -- CHAOS-3746 round 4).
 	ContextFabricFactRequirementParameterValueMaxLength = 1000

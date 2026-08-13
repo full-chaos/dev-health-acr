@@ -2,8 +2,11 @@ package answerprojection
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // TestClampedCountMatchesTheSurvivorsActuallyShortened closes a miscount in
@@ -98,4 +101,84 @@ func TestClampedCountMatchesTheSurvivorsActuallyShortened(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestNarrativeClampCountMatchesTheSurvivorsActuallyShortened is the same
+// property as the table above, on the NARRATIVE path (codex round-10 F1).
+//
+// boundedNarrative clamped through clamper.text, which counts on every
+// input -- so it counted before dedup and before the projection's own
+// 100-entry cap. 101 distinct oversized limitations produced 100 values on
+// the wire and reported values_clamped: 101, a count of something the
+// consumer never received. The round-9 F4 fix established the mechanics;
+// this path simply was not covered by that table.
+func TestNarrativeClampCountMatchesTheSurvivorsActuallyShortened(t *testing.T) {
+	const maxLength = contractsv1.ContextFabricProjectedNarrativeMaxLength
+	const maxCount = contractsv1.ContextFabricProjectedNarrativeMaxCount
+
+	// oversized builds a distinct entry longer than the projection allows.
+	oversized := func(seed string) string {
+		return seed + "-" + strings.Repeat("x", maxLength)
+	}
+
+	t.Run("entries dropped by the count cap are not counted as clamped", func(t *testing.T) {
+		values := make([]string, 0, maxCount+1)
+		for i := 0; i < maxCount+1; i++ {
+			values = append(values, oversized("limitation"+strconv.Itoa(i)))
+		}
+		clamp := &clamper{}
+		got, omitted := boundedNarrative(values, clamp)
+		if len(got) != maxCount {
+			t.Fatalf("survivors = %d, want %d", len(got), maxCount)
+		}
+		if omitted != 1 {
+			t.Errorf("omitted = %d, want 1", omitted)
+		}
+		if clamp.count != maxCount {
+			t.Errorf("ValuesClamped counted %d, want %d: the %dst entry was dropped by the cap and never reached the wire, so it was not a value the consumer received in shortened form",
+				clamp.count, maxCount, maxCount+1)
+		}
+	})
+
+	t.Run("entries dropped by dedup are not counted as clamped", func(t *testing.T) {
+		// Two entries that are distinct until clamped, then collide.
+		shared := strings.Repeat("y", maxLength)
+		clamp := &clamper{}
+		got, omitted := boundedNarrative([]string{shared + "-first", shared + "-second"}, clamp)
+		if len(got) != 1 {
+			t.Fatalf("survivors = %d, want 1 (they collide once clamped)", len(got))
+		}
+		if omitted != 1 {
+			t.Errorf("omitted = %d, want 1", omitted)
+		}
+		if clamp.count != 1 {
+			t.Errorf("ValuesClamped counted %d, want 1: only one clamped value survived to the wire", clamp.count)
+		}
+	})
+
+	t.Run("interleaved short and oversized entries", func(t *testing.T) {
+		clamp := &clamper{}
+		short := "a short limitation"
+		got, omitted := boundedNarrative([]string{oversized("one"), short, oversized("two")}, clamp)
+		if len(got) != 3 || omitted != 0 {
+			t.Fatalf("survivors = %d, omitted = %d, want 3 and 0", len(got), omitted)
+		}
+		if got[1] != short {
+			t.Errorf("the short entry was rewritten: %q", got[1])
+		}
+		if clamp.count != 2 {
+			t.Errorf("ValuesClamped counted %d, want 2: both oversized entries survived shortened, the short one was verbatim", clamp.count)
+		}
+	})
+
+	t.Run("nothing oversized counts nothing", func(t *testing.T) {
+		clamp := &clamper{}
+		got, omitted := boundedNarrative([]string{"one", "two"}, clamp)
+		if len(got) != 2 || omitted != 0 {
+			t.Fatalf("survivors = %d, omitted = %d, want 2 and 0", len(got), omitted)
+		}
+		if clamp.count != 0 {
+			t.Errorf("ValuesClamped counted %d, want 0", clamp.count)
+		}
+	})
 }

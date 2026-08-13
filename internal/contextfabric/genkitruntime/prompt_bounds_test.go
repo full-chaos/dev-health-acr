@@ -429,7 +429,7 @@ func modelFacingBounds() []boundCase {
 			// The count bound is now DERIVED from the fact-kind vocabulary
 			// (codex round-9 F1), so it is exactly the achievable ceiling:
 			// ContextFabricInterpretedQuestion.Validate rejects a duplicate
-			// Kind, and there are only len(ContextFabricFactKinds) distinct
+			// Kind, and there are only ContextFabricFactKindCount distinct
 			// kinds to spend. atLimit builds that many distinct kinds and
 			// proves the bound does not block the real ceiling; over proves
 			// the bound is still the enforced ceiling, using cycled
@@ -1013,7 +1013,10 @@ func interpretationWithClarification(length int) contractsv1.ContextFabricInterp
 // interpretationWithDistinctFactRequirements and
 // interpretationWithCycledFactRequirements remain two constructors because
 // at-limit needs distinct kinds and over-limit cannot have them.
-var contextFabricAllFactKinds = contractsv1.ContextFabricFactKinds[:]
+var contextFabricAllFactKinds = func() []contractsv1.ContextFabricFactKind {
+	vocabulary := contractsv1.ContextFabricFactKindVocabulary()
+	return vocabulary[:]
+}()
 
 // interpretationWithDistinctFactRequirements builds count DISTINCT
 // fact_requirement kinds, and panics if count exceeds the vocabulary's

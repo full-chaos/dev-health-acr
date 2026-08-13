@@ -297,17 +297,26 @@ const (
 	ContextFabricFactEvidence                ContextFabricFactKind = "evidence"
 )
 
-// ContextFabricFactKinds is the closed fact-kind vocabulary in published
+// contextFabricFactKinds is the closed fact-kind vocabulary in published
 // order -- the SINGLE declaration every other check derives from:
 // validFactKind, the fact_requirements count bound, the interpretation
 // prompt's closed-set sentence, and the schema-parity proof.
 //
 // It is an ARRAY, not a slice, so len() is a compile-time constant and
-// ContextFabricFactRequirementsMaxCount below can be derived from it rather
-// than transcribed. Adding or removing a kind therefore moves the bound, the
+// ContextFabricFactRequirementsMaxCount can be derived from it rather than
+// transcribed. Adding or removing a kind therefore moves the bound, the
 // prompt, and the parity assertions together; the only thing left to update
 // by hand is the published schema, and a test fails until that happens.
-var ContextFabricFactKinds = [...]ContextFabricFactKind{
+//
+// It is UNEXPORTED, and that is load-bearing (codex round-10 F2). As an
+// exported array var its elements were assignable by any importing package:
+// validation reads the vocabulary live, while the interpretation prompt
+// snapshots it at init, so a single in-process write desynchronized them --
+// the validator would accept a kind the prompt never advertised and the
+// schema does not publish. Callers get ContextFabricFactKindVocabulary()
+// instead, which returns a COPY, so there is no writable path to the
+// declaration the validator actually consults.
+var contextFabricFactKinds = [...]ContextFabricFactKind{
 	ContextFabricFactIdentity,
 	ContextFabricFactMembership,
 	ContextFabricFactStatus,
@@ -328,6 +337,23 @@ var ContextFabricFactKinds = [...]ContextFabricFactKind{
 	ContextFabricFactOperationalDeficiencies,
 	ContextFabricFactSourceHealth,
 	ContextFabricFactEvidence,
+}
+
+// ContextFabricFactKindCount is the size of the closed fact-kind vocabulary,
+// as a compile-time constant.
+const ContextFabricFactKindCount = len(contextFabricFactKinds)
+
+// ContextFabricFactKindVocabulary returns the closed fact-kind vocabulary in
+// published order.
+//
+// The return type is an ARRAY, so the value is copied to the caller: writing
+// to it cannot reach the declaration validFactKind consults. A slice return
+// would hand back an alias and reintroduce exactly the mutable-vocabulary
+// defect this shape exists to prevent (codex round-10 F2), so it must stay
+// an array even though a slice would be marginally more convenient to range
+// over.
+func ContextFabricFactKindVocabulary() [ContextFabricFactKindCount]ContextFabricFactKind {
+	return contextFabricFactKinds
 }
 
 // ContextFabricDriverCategory is a closed vocabulary for

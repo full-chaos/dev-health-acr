@@ -516,16 +516,47 @@ func boundedNarrative(values []string, clamp *clamper) ([]string, int) {
 	// projection with duplicate entries that its own validator rejects --
 	// which the route then emitted unvalidated. Post-clamp collisions are
 	// real duplicates and are counted as omissions.
-	clamped := make([]string, 0, len(values))
+	//
+	// Shortening is recorded per entry and counted only for SURVIVORS
+	// (codex round-10 F1). Counting during the clamp -- through clamper.text,
+	// which increments on every input -- counted entries that dedup and the
+	// count cap then discarded: 101 distinct oversized limitations put 100
+	// values on the wire and reported values_clamped: 101. ValuesClamped
+	// describes what the consumer RECEIVED in shortened form, so an entry it
+	// never received cannot appear in it. Same mechanics as the round-9 F4
+	// fix on clamper.strings; this path was simply not covered by it.
+	type clampedNarrative struct {
+		value     string
+		shortened bool
+	}
+	clamped := make([]clampedNarrative, 0, len(values))
 	for _, value := range values {
-		clamped = append(clamped, clamp.text(value, contractsv1.ContextFabricProjectedNarrativeMaxLength))
+		cut := truncateRunes(value, contractsv1.ContextFabricProjectedNarrativeMaxLength)
+		clamped = append(clamped, clampedNarrative{value: cut, shortened: cut != value})
 	}
-	distinct := distinctStrings(clamped)
+	seen := make(map[string]struct{}, len(clamped))
+	// Allocated, never nil: these feed required array members.
+	distinct := make([]clampedNarrative, 0, len(clamped))
+	for _, entry := range clamped {
+		if _, exists := seen[entry.value]; exists {
+			continue
+		}
+		seen[entry.value] = struct{}{}
+		distinct = append(distinct, entry)
+	}
 	omitted := len(clamped) - len(distinct)
-	if len(distinct) <= contractsv1.ContextFabricProjectedNarrativeMaxCount {
-		return distinct, omitted
+	if len(distinct) > contractsv1.ContextFabricProjectedNarrativeMaxCount {
+		omitted += len(distinct) - contractsv1.ContextFabricProjectedNarrativeMaxCount
+		distinct = distinct[:contractsv1.ContextFabricProjectedNarrativeMaxCount]
 	}
-	return distinct[:contractsv1.ContextFabricProjectedNarrativeMaxCount], omitted + len(distinct) - contractsv1.ContextFabricProjectedNarrativeMaxCount
+	survivors := make([]string, 0, len(distinct))
+	for _, entry := range distinct {
+		if entry.shortened {
+			clamp.count++
+		}
+		survivors = append(survivors, entry.value)
+	}
+	return survivors, omitted
 }
 
 // clamper shortens oversize values and COUNTS how many it shortened.

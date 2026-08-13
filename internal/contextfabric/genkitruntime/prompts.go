@@ -45,8 +45,9 @@ Use clarification only when materially different authorized subjects or timefram
 // added or pruned in contracts/v1 cannot leave a stale list in the prompt
 // telling the model to avoid a family the service now accepts.
 var contextFabricFactKindList = func() string {
-	kinds := make([]string, 0, len(contractsv1.ContextFabricFactKinds))
-	for _, kind := range contractsv1.ContextFabricFactKinds {
+	vocabulary := contractsv1.ContextFabricFactKindVocabulary()
+	kinds := make([]string, 0, len(vocabulary))
+	for _, kind := range vocabulary {
 		kinds = append(kinds, string(kind))
 	}
 	return strings.Join(kinds, ", ")

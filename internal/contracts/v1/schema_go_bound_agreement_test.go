@@ -208,6 +208,7 @@ func TestFactRequirementsBoundDerivesFromTheVocabulary(t *testing.T) {
 	if !ok {
 		t.Fatal("common#$defs.FactRequirement.properties.kind declares no enum")
 	}
+	vocabulary := ContextFabricFactKindVocabulary()
 	published := make([]ContextFabricFactKind, 0, len(raw))
 	for _, value := range raw {
 		text, ok := value.(string)
@@ -216,8 +217,8 @@ func TestFactRequirementsBoundDerivesFromTheVocabulary(t *testing.T) {
 		}
 		published = append(published, ContextFabricFactKind(text))
 	}
-	if !slices.Equal(published, ContextFabricFactKinds[:]) {
-		t.Errorf("the published fact-kind enum and ContextFabricFactKinds disagree:\n  schema: %v\n  go:     %v", published, ContextFabricFactKinds)
+	if !slices.Equal(published, vocabulary[:]) {
+		t.Errorf("the published fact-kind enum and the Go vocabulary disagree:\n  schema: %v\n  go:     %v", published, vocabulary)
 	}
 
 	// Every published kind must actually validate, and nothing else may.
@@ -231,18 +232,18 @@ func TestFactRequirementsBoundDerivesFromTheVocabulary(t *testing.T) {
 	}
 
 	// And the count bound must be the vocabulary's size on both sides.
-	if ContextFabricFactRequirementsMaxCount != len(ContextFabricFactKinds) {
+	if ContextFabricFactRequirementsMaxCount != ContextFabricFactKindCount {
 		t.Errorf("ContextFabricFactRequirementsMaxCount is %d but the vocabulary holds %d kinds; a cap above the vocabulary can never be reached, and one below it silently forbids a legal interpretation",
-			ContextFabricFactRequirementsMaxCount, len(ContextFabricFactKinds))
+			ContextFabricFactRequirementsMaxCount, ContextFabricFactKindCount)
 	}
 	bound := schemaNodeAt(t, documents, "common#$defs.InterpretedQuestion.properties.fact_requirements")
 	value, ok := bound["maxItems"].(float64)
 	if !ok {
 		t.Fatal("fact_requirements declares no maxItems")
 	}
-	if int(value) != len(ContextFabricFactKinds) {
+	if int(value) != ContextFabricFactKindCount {
 		t.Errorf("the schema caps fact_requirements at %d but only %d distinct kinds exist, so the contract promises a document the service always rejects",
-			int(value), len(ContextFabricFactKinds))
+			int(value), ContextFabricFactKindCount)
 	}
 }
 
@@ -471,13 +472,13 @@ func uniquifyElement(value reflect.Value, index int) bool {
 		// BOTH N and N+1, so the length bound was never exercised and the
 		// 50-vs-64 schema/Go drift was concealed behind a green probe.
 		if value.Type() == reflect.TypeOf(ContextFabricFactRequirement{}) {
-			if index >= len(ContextFabricFactKinds) {
+			if index >= ContextFabricFactKindCount {
 				// Past the vocabulary there is no distinct kind left, so no
 				// valid document of this size exists at all.
 				return false
 			}
 			if field := fieldByJSONTag(value, "kind"); field.IsValid() && field.CanSet() {
-				field.Set(reflect.ValueOf(ContextFabricFactKinds[index]))
+				field.Set(reflect.ValueOf(ContextFabricFactKindVocabulary()[index]))
 				return true
 			}
 			return false
@@ -569,4 +570,53 @@ func schemaOnlyBoundReason(path string) string {
 		return "conditional restatement of a bound already mapped on the unconditional branch"
 	}
 	return ""
+}
+
+// TestFactKindVocabularyCannotBeMutatedByCallers closes codex round-10 F2.
+//
+// The vocabulary was an exported array VAR. An array var's elements are
+// assignable, so any importing package could write one -- and the two
+// consumers read it differently: validFactKind consults it live on every
+// call, while the interpretation prompt renders it once at init. A single
+// in-process write therefore desynchronized them, leaving the validator
+// accepting a kind the prompt never advertised and the published schema does
+// not contain. Demonstrated before the fix: assigning to element 0 made
+// ContextFabricInterpretedQuestion.Validate accept "forged_kind" while the
+// rendered prompt still listed "identity".
+//
+// The backing array is now unexported and reached only through
+// ContextFabricFactKindVocabulary, which returns an ARRAY -- copied on
+// return. The absence of a writable path is a COMPILE-TIME property, not a
+// runtime one, so it cannot be red-tested from outside this package: the
+// pre-fix expression `contractsv1.ContextFabricFactKinds[0] = x` no longer
+// compiles because the identifier does not exist, and no exported symbol
+// yields an alias to the backing array. What this test can and does check is
+// the other half of that guarantee -- that the accessor hands back a copy
+// rather than a window onto the declaration.
+func TestFactKindVocabularyCannotBeMutatedByCallers(t *testing.T) {
+	const forged = ContextFabricFactKind("forged_kind")
+
+	vocabulary := ContextFabricFactKindVocabulary()
+	if len(vocabulary) == 0 {
+		t.Fatal("the vocabulary is empty")
+	}
+	original := vocabulary[0]
+
+	// Write to the returned value the way a caller ranging over it might.
+	vocabulary[0] = forged
+
+	if validFactKind(forged) {
+		t.Error("mutating the value returned by ContextFabricFactKindVocabulary changed what the validator accepts; the accessor is handing out an alias, not a copy")
+	}
+	if !validFactKind(original) {
+		t.Errorf("mutating the returned value removed %q from the accepted set; the accessor is handing out an alias, not a copy", original)
+	}
+	if fresh := ContextFabricFactKindVocabulary(); fresh[0] != original {
+		t.Errorf("a second call returned the mutated vocabulary (%q); the copy is not fresh per call", fresh[0])
+	}
+
+	// And the derived count stays tied to the declaration.
+	if ContextFabricFactKindCount != len(ContextFabricFactKindVocabulary()) {
+		t.Errorf("ContextFabricFactKindCount is %d but the vocabulary holds %d", ContextFabricFactKindCount, len(ContextFabricFactKindVocabulary()))
+	}
 }
