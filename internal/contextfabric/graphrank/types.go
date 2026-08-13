@@ -36,6 +36,19 @@ type CandidateNode struct {
 	// shaped score, e.g. an unbounded lexical relevance score, must
 	// normalize into Relevance instead of relying on it).
 	Score *float64
+	// Mechanism is HOW the adapter found this node (CHAOS-3778 / AC-3778-6):
+	// contextfabric.MatchLexical for a full-text hit, contextfabric.MatchVector
+	// for an embedding-similarity hit, and so on. It travels on the candidate
+	// rather than on the Search call so ONE Search can return a mixed
+	// lexical-and-vector result set, which is what the hybrid retrieval path
+	// actually does.
+	//
+	// An empty value records no mechanism. That is legal (the field is
+	// additive-optional in the contract) and means only "this adapter did not
+	// say", never "no mechanism matched" -- NodeCandidate carries the absence
+	// through unchanged rather than guessing a default, so a candidate whose
+	// mechanism was never declared can never accidentally corroborate another.
+	Mechanism contextfabric.MatchMechanism
 }
 
 // CandidateEdge is the same idea for a relationship/edge result.

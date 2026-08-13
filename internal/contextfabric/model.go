@@ -60,6 +60,20 @@ const (
 	ResolutionUnresolved = contractsv1.ContextFabricResolutionUnresolved
 )
 
+// MatchMechanism names HOW a subject candidate was proposed (CHAOS-3778 /
+// AC-3778-6). The enum is closed -- see the contract type's doc comment for
+// why graphrank's corroboration band depends on that.
+type MatchMechanism = contractsv1.ContextFabricSubjectMatchMechanism
+
+const (
+	MatchExact           = contractsv1.ContextFabricMatchExact
+	MatchAlias           = contractsv1.ContextFabricMatchAlias
+	MatchProviderKey     = contractsv1.ContextFabricMatchProviderKey
+	MatchLexical         = contractsv1.ContextFabricMatchLexical
+	MatchVector          = contractsv1.ContextFabricMatchVector
+	MatchTraversalParent = contractsv1.ContextFabricMatchTraversalParent
+)
+
 type TemporalAxis = contractsv1.ContextFabricTemporalAxis
 
 const (

@@ -108,6 +108,21 @@ func TraverseObservationToSubject(
 		// directly.
 		candidate.Confidence *= 0.85
 		candidate.MatchReasons = []string{"Matched an associated document or episode that references this subject."}
+		// CHAOS-3778 / AC-3778-6: this subject was reached by walking a graph
+		// edge, which is its own mechanism -- distinct from whatever mechanism
+		// matched the OBSERVATION that started the walk. Recording it is what
+		// lets a subject that vector search proposed directly AND traversal
+		// proposed independently reach the corroborated band; that pairing is
+		// the main path by which an ambiguous question earns an auto-commit
+		// (see docs/design/context-fabric-vector-retrieval.md §4.4).
+		//
+		// MergeMechanisms is used rather than assignment so an exact label
+		// match on the PARENT (which NodeCandidate already recorded as
+		// MatchExact above) is not erased by the walk that found it.
+		candidate.MatchMechanisms = MergeMechanisms(
+			candidate.MatchMechanisms,
+			[]contextfabric.MatchMechanism{contextfabric.MatchTraversalParent},
+		)
 		return candidate, ObservationParentFound
 	}
 	if uncertain {

@@ -87,6 +87,12 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		candidate.Confidence = 1
 		candidate.State = contextfabric.ResolutionCommitted
 		candidate.MatchReasons = []string{"Exact canonical subject hint matched the organization graph."}
+		// An exact canonical hint IS the exact mechanism, whatever the
+		// ExactHint implementation did or did not declare on the node.
+		candidate.MatchMechanisms = MergeMechanisms(
+			candidate.MatchMechanisms,
+			[]contextfabric.MatchMechanism{contextfabric.MatchExact},
+		)
 		candidatesBySubject[SubjectKey(candidate.Subject)] = candidate
 	}
 	// A caller-explicit hint that resolved is authoritative and
@@ -135,7 +141,16 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 				continue
 			}
 			key := SubjectKey(candidate.Subject)
-			if current, exists := candidatesBySubject[key]; !exists || candidate.Confidence > current.Confidence {
+			// CHAOS-3778: MergeCandidates replaces a plain "keep the higher
+			// confidence" here. The higher-confidence finding still supplies
+			// the spine and the base confidence, so nothing about a
+			// single-mechanism candidate changes; what is new is that the
+			// loser's MECHANISMS survive instead of being discarded, which is
+			// the whole signal the corroborated band reads (see
+			// MergeCandidates and CorroboratedConfidence).
+			if current, exists := candidatesBySubject[key]; exists {
+				candidatesBySubject[key] = MergeCandidates(current, candidate)
+			} else {
 				candidatesBySubject[key] = candidate
 			}
 			// Observation-to-entity traversal: a hybrid match on a document
@@ -152,7 +167,13 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 					observationBlocked[key] = true
 					traversedKey := SubjectKey(traversed.Subject)
 					observationParentKey[key] = traversedKey
-					if current, exists := candidatesBySubject[traversedKey]; !exists || traversed.Confidence > current.Confidence {
+					// Same merge rule as the direct-hit path above: a parent
+					// that BOTH a direct search and a traversal proposed must
+					// keep both mechanisms, because that pairing is exactly
+					// what the corroborated band is meant to reward.
+					if current, exists := candidatesBySubject[traversedKey]; exists {
+						candidatesBySubject[traversedKey] = MergeCandidates(current, traversed)
+					} else {
 						candidatesBySubject[traversedKey] = traversed
 					}
 				case ObservationTraversalErrored:
