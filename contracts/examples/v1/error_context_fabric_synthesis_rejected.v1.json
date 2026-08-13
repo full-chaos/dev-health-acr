@@ -1,0 +1,11 @@
+{
+  "schema_version": "error.v1",
+  "request_id": "req_01J0ACR003",
+  "error": {
+    "code": "synthesis_rejected",
+    "message": "Context Fabric's synthesized answer violated a v1 bound",
+    "http_status": 422,
+    "retryable": true,
+    "details": {}
+  }
+}

@@ -39,6 +39,9 @@
             "rate_limited",
             "version_mismatch",
             "upstream_unavailable",
+            "interpretation_rejected",
+            "synthesis_rejected",
+            "provider_error",
             "internal_error"
           ]
         },

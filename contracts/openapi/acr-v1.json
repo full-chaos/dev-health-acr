@@ -467,6 +467,9 @@
           "413": {
             "$ref": "#/components/responses/Error"
           },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
           "426": {
             "$ref": "#/components/responses/Error"
           },
