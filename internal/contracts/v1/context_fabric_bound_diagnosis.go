@@ -414,7 +414,12 @@ func DiagnoseContextFabricClaimedFactBound(c ContextFabricClaimedFact) (bound st
 	// ContextFabricScalarValue.Validate(): only the String variant carries
 	// a length bound (validate_context_fabric_projection.go); Integer/
 	// Number/Boolean/Null carry none (Number is only checked for
-	// finiteness, a business rule).
+	// finiteness, a business rule), and "exactly one variant must be set"
+	// (Validate()'s final `set != 1` check) is a business rule too -- both
+	// need no explicit mirror here: whether Value has zero, multiple, or
+	// exactly one non-String-length-violating variant, none of those
+	// conditions is diagnosable, so this function already falls through to
+	// ok=false for all of them without checking "set" itself.
 	if c.Value.String != nil {
 		if bound, ok, passed := diagnoseLengthBound(*c.Value.String, 0, ContextFabricClaimedFactValueMaxLength, "synthesis.claimed_fact.value.max_length"); !passed {
 			return bound, ok

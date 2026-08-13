@@ -327,6 +327,15 @@ func validDiagnosisClaimedFact() ContextFabricClaimedFact {
 	return ContextFabricClaimedFact{
 		ClaimID: "claim_12345678", Kind: "status", Field: "release_ready",
 		Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_1", Label: "Project"},
+		// ContextFabricScalarValue.Validate() requires exactly one variant
+		// populated (validate_context_fabric_projection.go); Value's zero
+		// value (CHAOS-3784 round-5 R5-2) fails that, so this base would
+		// not actually pass ClaimedFact.Validate() -- every case that
+		// mutates a field checked before Value (ClaimID/Field/Subject)
+		// happened to still pass regardless, since Value is never reached,
+		// but that made this fixture an accidental, not honest, valid
+		// baseline.
+		Value: ContextFabricScalarValue{Null: true},
 	}
 }
 
@@ -539,6 +548,72 @@ func TestDiagnoseContextFabricFactRequirementBoundIsDeterministicAcrossMultipleV
 			t.Fatalf("iteration %d: bound = %q, want the same result as the previous iteration %q (non-deterministic)", i, bound, last)
 		}
 		last = bound
+	}
+}
+
+// TestDiagnoseContextFabricFactRequirementBoundMatchesValidateWithMultipleViolations
+// is the CHAOS-3784 round-5 R5-1 regression: TWO parameters, each
+// violating a DIFFERENT bound (one key too long, the other's value too
+// long). Before this fix, ContextFabricFactRequirement.Validate() ranged
+// r.Parameters via a bare map (randomized iteration order) while
+// DiagnoseContextFabricFactRequirementBound sorted keys -- so WHICH
+// violation Validate() actually rejected on, and which bound diagnosis
+// reported, could disagree. Both now sort identically. This asserts more
+// than repeated-content stability (which passes even if diagnosis
+// ignored order entirely, since it always sees the same two keys): it
+// swaps which key sorts FIRST between the two subtests and checks the
+// reported bound flips accordingly, proving the result is driven by sort
+// order, not by which violation happens to be present -- exactly the
+// property that must match Validate()'s own now-sorted iteration. Each
+// subtest loops, since Go randomizes map order on every range within a
+// single process, not just across process runs.
+func TestDiagnoseContextFabricFactRequirementBoundMatchesValidateWithMultipleViolations(t *testing.T) {
+	overlongKey := strings.Repeat("k", ContextFabricFactRequirementParameterKeyMaxLength+1)
+	overlongValue := strings.Repeat("v", ContextFabricFactRequirementParameterValueMaxLength+1)
+	cases := []struct {
+		name      string
+		keyPrefix string
+		wantBound string
+	}{
+		{
+			name:      "key violation sorts first",
+			keyPrefix: "a_", // "a_<overlong key>" < "z_short_value_key"
+			wantBound: "interpretation.fact_requirement.parameter_key.max_length",
+		},
+		{
+			name:      "value violation sorts first",
+			keyPrefix: "z_", // "a_short_key" < "z_<overlong key>"
+			wantBound: "interpretation.fact_requirement.parameter_value.max_length",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			// Exactly one entry carries the over-length key, and exactly
+			// one (the other) carries the over-length value; the "a_"/"z_"
+			// prefixes alone decide sort order, so which entry gets which
+			// violation is what this subtest flips.
+			parameters := map[string]string{}
+			if testCase.keyPrefix == "a_" {
+				parameters["a_"+overlongKey] = "short"
+				parameters["z_short_value_key"] = overlongValue
+			} else {
+				parameters["a_short_key"] = overlongValue
+				parameters["z_"+overlongKey] = "short"
+			}
+			requirement := ContextFabricFactRequirement{Kind: "status", Parameters: parameters}
+			for i := 0; i < 50; i++ {
+				if err := requirement.Validate(); err == nil {
+					t.Fatalf("iteration %d: Validate() = nil, want an error", i)
+				}
+				bound, ok := DiagnoseContextFabricFactRequirementBound(requirement)
+				if !ok {
+					t.Fatalf("iteration %d: ok = false, want true", i)
+				}
+				if bound != testCase.wantBound {
+					t.Fatalf("iteration %d: bound = %q, want %q", i, bound, testCase.wantBound)
+				}
+			}
+		})
 	}
 }
 

@@ -80,6 +80,20 @@ package v1
 // required field) yields NO violated_bound BY CONSTRUCTION -- the mirror
 // stops there and never reaches a later clause, registered or not -- not
 // because each case was individually reasoned about and found safe.
+//
+// CHAOS-3784 round-5: this guarantee holds only as long as each mirror's
+// clause order is kept in sync with its Validate()/ValidateAgainst()
+// counterpart by hand, since no mechanical check can compare two
+// independently-written control-flow bodies for order equality (unlike
+// ContextFabricModelFacingBounds itself, which IS mechanically checked
+// against Diagnose* by TestContextFabricModelFacingBoundRegistryDiagnosisCoverage);
+// this residual is accepted deliberately, not overlooked -- the shared
+// clause helpers (diagnoseLengthBound and friends) cover every length/
+// uniqueness clause BODY so only the call-site ORDER can drift, and the
+// paired regression tests alongside each mirror
+// (TestDiagnose*MatchesValidateStatementOrder/*StopsAtFirstFailingClause*)
+// exist specifically to catch that drift for every bound it would affect,
+// each time a Validate()/ValidateAgainst() clause order changes.
 //   - ContextFabricFactRequirement.Subjects: the model has no wire field to
 //     populate it through at all (factRequirementOutput in
 //     genkitruntime/runtime.go carries only kind/parameters) -- toDomain()
