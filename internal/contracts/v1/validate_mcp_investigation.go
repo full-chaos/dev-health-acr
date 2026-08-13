@@ -107,7 +107,10 @@ func (r MCPInvestigateQuestionResponse) Validate() error {
 		return fmt.Errorf("structured: %w", err)
 	}
 	if r.FullResult != nil {
-		if err := r.FullResult.Validate(); err != nil {
+		// Lenient: with CHAOS-3782 answer reuse a "fresh" answer can BE a
+		// stored row, so the attached canonical result may predate a
+		// bound correction even though the response itself is new.
+		if err := r.FullResult.ValidateStored(); err != nil {
 			return fmt.Errorf("full_result: %w", err)
 		}
 		// The two views must describe the same investigation. A response
@@ -134,7 +137,12 @@ func (r MCPInvestigationResultResponse) Validate() error {
 	if r.SchemaVersion != MCPInvestigationResultResponseSchema {
 		return fmt.Errorf("investigation_result response schema version must be %q", MCPInvestigationResultResponseSchema)
 	}
-	if err := r.Structured.Validate(); err != nil {
+	// This tool returns a RETRIEVED, immutable row, so it is validated
+	// leniently for the same reason the store and the client are: a result
+	// that predates a bound correction must stay reachable (codex round-4
+	// F1). The answer tool above stays strict, because its payload was
+	// produced now.
+	if err := r.Structured.ValidateStored(); err != nil {
 		return fmt.Errorf("structured: %w", err)
 	}
 	if err := validateUntrustedContent(r.UntrustedContent, MCPInvestigationResultUntrustedFields); err != nil {

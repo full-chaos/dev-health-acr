@@ -2,7 +2,6 @@ package v1
 
 import (
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -19,13 +18,21 @@ func (s ContextFabricSubjectRef) Validate() error {
 }
 
 func (c ContextFabricSubjectCandidate) Validate() error {
+	return c.validate(contextFabricWriteBounds)
+}
+
+func (c ContextFabricSubjectCandidate) validateStored() error {
+	return c.validate(contextFabricLegacyBounds)
+}
+
+func (c ContextFabricSubjectCandidate) validate(bounds contextFabricBounds) error {
 	if !stringLengthBetween(c.ReceiptID, 8, 256) || !validResolutionState(c.State) || c.Confidence < 0 || c.Confidence > 1 {
 		return fmt.Errorf("subject candidate identity, state, or confidence violates v1 bounds")
 	}
 	if err := c.Subject.Validate(); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
-	if len(c.MatchedTerms) > 100 || len(c.MatchReasons) < 1 || len(c.MatchReasons) > 100 || !uniqueTrimmedStrings(c.MatchedTerms, 512) || !uniqueTrimmedStrings(c.MatchReasons, 1024) {
+	if len(c.MatchedTerms) > bounds.matchedTerms || len(c.MatchReasons) < 1 || len(c.MatchReasons) > bounds.matchReasons || !uniqueTrimmedStrings(c.MatchedTerms, bounds.matchedTermLength) || !uniqueTrimmedStrings(c.MatchReasons, bounds.matchReasonLength) {
 		return fmt.Errorf("subject candidate match metadata violates v1 bounds")
 	}
 	if !validMatchMechanisms(c.MatchMechanisms) {
@@ -38,12 +45,16 @@ func (c ContextFabricSubjectCandidate) Validate() error {
 }
 
 func (r ContextFabricSubjectResolution) Validate() error {
+	return r.validate(contextFabricWriteBounds)
+}
+
+func (r ContextFabricSubjectResolution) validate(bounds contextFabricBounds) error {
 	if r.Candidates == nil || r.Committed == nil || len(r.Candidates) > 50 || len(r.Committed) > 250 {
 		return fmt.Errorf("subject resolution arrays violate v1 bounds")
 	}
 	seenReceipts := make(map[string]struct{}, len(r.Candidates))
 	for _, candidate := range r.Candidates {
-		if err := candidate.Validate(); err != nil {
+		if err := candidate.validate(bounds); err != nil {
 			return fmt.Errorf("candidates: %w", err)
 		}
 		if _, exists := seenReceipts[candidate.ReceiptID]; exists {
@@ -62,22 +73,22 @@ func (r ContextFabricSubjectResolution) Validate() error {
 
 // Validate enforces the current contract bounds (write path).
 func (c ContextFabricCohort) Validate() error {
-	return c.validate(ContextFabricCohortMember.Validate)
+	return c.validate(contextFabricWriteBounds)
 }
 
 // validateStored enforces the legacy bounds for an already-persisted row.
 func (c ContextFabricCohort) validateStored() error {
-	return c.validate(ContextFabricCohortMember.validateStored)
+	return c.validate(contextFabricLegacyBounds)
 }
 
-func (c ContextFabricCohort) validate(validateMember func(ContextFabricCohortMember) error) error {
+func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
 	if !validContextFabricSubjectKind(c.Kind) || (c.Kind != ContextFabricSubjectTeam && c.Kind != ContextFabricSubjectProject) || c.Members == nil || len(c.Members) > 250 || len(c.Exclusions) > 250 || !stringLengthBetween(strings.TrimSpace(c.Rationale), 1, 4000) || (c.Complete && c.Truncated) {
 		return fmt.Errorf("cohort violates v1 bounds")
 	}
 	seen := make(map[string]struct{}, len(c.Members))
 	lastRank := 0
 	for _, member := range c.Members {
-		if err := validateMember(member); err != nil {
+		if err := member.validate(bounds); err != nil {
 			return fmt.Errorf("members: %w", err)
 		}
 		if member.Subject.Kind != c.Kind || member.Rank <= lastRank {
@@ -104,59 +115,105 @@ func (c ContextFabricCohort) validate(validateMember func(ContextFabricCohortMem
 	return nil
 }
 
-// Cohort member inclusion-reason bounds.
+// contextFabricBounds carries every numeric bound where the Go validator
+// and the published JSON Schema disagreed historically.
 //
-// The CURRENT bounds match this shape's published JSON Schema, which is the
-// wire-contract source of truth. The LEGACY bounds are what the Go
-// validator alone used to accept, before CHAOS-3746 round 2 found it was
-// looser than the contract it claimed to enforce.
+// Two sets exist because investigation results are IMMUTABLE. The published
+// schema is the wire-contract source of truth, so WRITES must enforce it or
+// the service emits documents that violate its own contract. But a row
+// written by an older, looser binary cannot be rewritten, so a read path
+// enforcing the corrected bound would make that row permanently unreadable
+// -- an API 500 and an MCP retrieval failure for data that was correct when
+// it was written.
 //
-// Both exist because investigation results are IMMUTABLE and already
-// persisted. Tightening a validator that runs on the read path would have
-// made previously accepted rows unreadable after deploy -- API 500s and MCP
-// retrieval failures for data nobody can migrate, since the payloads cannot
-// be rewritten. So writes enforce the contract and reads tolerate the
-// history: a row written by an older binary stays readable, and no new row
-// can be created at the legacy size.
-const (
-	contextFabricCohortInclusionReasonsMaxCount    = 32
-	contextFabricCohortInclusionReasonMaxLength    = 1000
-	contextFabricLegacyCohortInclusionReasonsCount = 50
-	contextFabricLegacyCohortInclusionReasonLength = 1024
+// So: strict at write and at model-output acceptance, lenient at every read
+// of persisted data. The looseness cannot grow, because no NEW row can be
+// created at a legacy size.
+//
+// Every field here corresponds to a schema bound that TestSchemaAndGoBoundsAgree
+// checks, so this struct cannot quietly drift from the contract again.
+type contextFabricBounds struct {
+	cohortInclusionReasons      int
+	cohortInclusionReasonLength int
+	narrativeCount              int
+	narrativeLength             int
+	coverageEntries             int
+	matchedTerms                int
+	matchedTermLength           int
+	matchReasons                int
+	matchReasonLength           int
+	pathEvidenceRefs            int
+	pathWhyRelevantLength       int
+	factParameterValueLength    int
+	judgmentLength              int
+	deterministicAnswerLength   int
+	nestedEvidenceRefs          int
+}
 
-	// Limitations and warnings carry the same split, for the same reason
-	// and found the same way: the Go bound (250 x 4000) was looser than
-	// the published schema (100 x 2000), so a result could pass Go
-	// validation and still be a schema-invalid document on the wire. It
-	// surfaced only when the EMITTED JSON was validated against the
-	// published tool schema (codex round-3 P2-4) -- Go-side agreement is
-	// not the same as the wire document being valid.
-	contextFabricNarrativeMaxCount  = ContextFabricLimitationsMaxCount
-	contextFabricNarrativeMaxLength = ContextFabricLimitationMaxLength
-	// The historical Go-only maxima, kept solely so immutable rows written
-	// before the correction stay readable.
-	contextFabricLegacyNarrativeMaxCount  = 250
-	contextFabricLegacyNarrativeMaxLength = 4000
-)
+// contextFabricRelationshipPathMaxNodes is the Go-enforced ceiling on path
+// length. The published schema advertised 64 while Go rejected anything
+// above this, so the contract promised what the service refused; the schema
+// moved to this number rather than the reverse, because nothing the service
+// actually produces changes -- the contract simply becomes honest.
+const contextFabricRelationshipPathMaxNodes = 51
+
+// contextFabricWriteBounds matches the published JSON Schema exactly.
+var contextFabricWriteBounds = contextFabricBounds{
+	cohortInclusionReasons:      32,
+	cohortInclusionReasonLength: 1000,
+	narrativeCount:              ContextFabricLimitationsMaxCount,
+	narrativeLength:             ContextFabricLimitationMaxLength,
+	coverageEntries:             100,
+	matchedTerms:                32,
+	matchedTermLength:           512,
+	matchReasons:                32,
+	matchReasonLength:           1000,
+	pathEvidenceRefs:            200,
+	pathWhyRelevantLength:       2000,
+	factParameterValueLength:    ContextFabricFactRequirementParameterValueMaxLength,
+	judgmentLength:              4000,
+	deterministicAnswerLength:   12000,
+	nestedEvidenceRefs:          ContextFabricNestedEvidenceRefIDsMaxCount,
+}
+
+// contextFabricLegacyBounds is what the Go validator alone used to accept.
+// It exists ONLY so already-persisted rows stay readable.
+var contextFabricLegacyBounds = contextFabricBounds{
+	cohortInclusionReasons:      50,
+	cohortInclusionReasonLength: 1024,
+	narrativeCount:              250,
+	narrativeLength:             4000,
+	coverageEntries:             250,
+	matchedTerms:                100,
+	matchedTermLength:           512,
+	matchReasons:                100,
+	matchReasonLength:           1024,
+	pathEvidenceRefs:            500,
+	pathWhyRelevantLength:       4000,
+	factParameterValueLength:    1024,
+	judgmentLength:              8000,
+	deterministicAnswerLength:   16000,
+	nestedEvidenceRefs:          ContextFabricEvidenceRefIDsMaxCount,
+}
 
 // Validate enforces the CURRENT contract bounds. This is the write path and
 // the path every freshly produced result takes.
 func (m ContextFabricCohortMember) Validate() error {
-	return m.validate(contextFabricCohortInclusionReasonsMaxCount, contextFabricCohortInclusionReasonMaxLength)
+	return m.validate(contextFabricWriteBounds)
 }
 
 // validateStored enforces the LEGACY bounds, for revalidating a row that
 // was already persisted. See the bounds block above for why the read path
 // deliberately accepts more than the write path.
 func (m ContextFabricCohortMember) validateStored() error {
-	return m.validate(contextFabricLegacyCohortInclusionReasonsCount, contextFabricLegacyCohortInclusionReasonLength)
+	return m.validate(contextFabricLegacyBounds)
 }
 
-func (m ContextFabricCohortMember) validate(maxReasons, maxReasonLength int) error {
+func (m ContextFabricCohortMember) validate(bounds contextFabricBounds) error {
 	if err := m.Subject.Validate(); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
-	if m.Rank < 1 || len(m.InclusionReasons) < 1 || len(m.InclusionReasons) > maxReasons || !uniqueTrimmedStrings(m.InclusionReasons, maxReasonLength) || !optionalEvidenceRefs(m.EvidenceRefIDs, 500) {
+	if m.Rank < 1 || len(m.InclusionReasons) < 1 || len(m.InclusionReasons) > bounds.cohortInclusionReasons || !uniqueTrimmedStrings(m.InclusionReasons, bounds.cohortInclusionReasonLength) || !optionalEvidenceRefs(m.EvidenceRefIDs, 500) {
 		return fmt.Errorf("cohort member violates v1 bounds")
 	}
 	return nil
@@ -173,7 +230,15 @@ func (e ContextFabricCohortExclusion) Validate() error {
 }
 
 func (p ContextFabricRelationshipPath) Validate() error {
-	if !stringLengthBetween(p.PathID, 8, 256) || len(p.Nodes) < 2 || len(p.Nodes) > 51 || len(p.Edges) != len(p.Nodes)-1 || !stringLengthBetween(strings.TrimSpace(p.WhyRelevant), 1, 4000) || !boundedEvidenceRefs(p.EvidenceRefIDs, 500, false) {
+	return p.validate(contextFabricWriteBounds)
+}
+
+func (p ContextFabricRelationshipPath) validateStored() error {
+	return p.validate(contextFabricLegacyBounds)
+}
+
+func (p ContextFabricRelationshipPath) validate(bounds contextFabricBounds) error {
+	if !stringLengthBetween(p.PathID, 8, 256) || len(p.Nodes) < 2 || len(p.Nodes) > contextFabricRelationshipPathMaxNodes || len(p.Edges) != len(p.Nodes)-1 || !stringLengthBetween(strings.TrimSpace(p.WhyRelevant), 1, bounds.pathWhyRelevantLength) || !boundedEvidenceRefs(p.EvidenceRefIDs, bounds.pathEvidenceRefs, false) {
 		return fmt.Errorf("relationship path violates v1 bounds")
 	}
 	if !uniqueSubjects(p.Nodes) {
@@ -210,10 +275,14 @@ func (e ContextFabricRelationshipEdge) Validate() error {
 }
 
 func (d ContextFabricDriverJudgment) Validate() error {
+	return d.validate(contextFabricWriteBounds)
+}
+
+func (d ContextFabricDriverJudgment) validate(bounds contextFabricBounds) error {
 	if !stringLengthBetween(d.DriverID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !validDriverStanding(d.Standing) || !validDriverCategory(ContextFabricDriverCategory(d.Category)) || !stringLengthBetween(strings.TrimSpace(d.Title), 1, ContextFabricDriverTitleMaxLength) || !stringLengthBetween(strings.TrimSpace(d.Summary), 1, ContextFabricDriverSummaryMaxLength) || !validDerivationMethod(d.Derivation) || !validEpistemicStatus(d.EpistemicStatus) || d.Confidence < 0 || d.Confidence > 1 || !stringLengthBetween(d.Qualification, 0, ContextFabricDriverQualificationMaxLength) {
 		return fmt.Errorf("driver judgment violates v1 bounds")
 	}
-	if len(d.AffectedSubjects) < ContextFabricDriverAffectedSubjectsMinCount || len(d.AffectedSubjects) > ContextFabricDriverAffectedSubjectsMaxCount || !uniqueSubjects(d.AffectedSubjects) || len(d.PathIDs) > ContextFabricDriverPathIDsMaxCount || !uniqueTrimmedStrings(d.PathIDs, ContextFabricIdentifierRefMaxLength) || !boundedEvidenceRefs(d.EvidenceRefIDs, ContextFabricEvidenceRefIDsMaxCount, true) {
+	if len(d.AffectedSubjects) < ContextFabricDriverAffectedSubjectsMinCount || len(d.AffectedSubjects) > ContextFabricDriverAffectedSubjectsMaxCount || !uniqueSubjects(d.AffectedSubjects) || len(d.PathIDs) > ContextFabricDriverPathIDsMaxCount || !uniqueTrimmedStrings(d.PathIDs, ContextFabricIdentifierRefMaxLength) || !boundedEvidenceRefs(d.EvidenceRefIDs, bounds.nestedEvidenceRefs, true) {
 		return fmt.Errorf("driver subject, path, or evidence references violate v1 bounds")
 	}
 	if len(d.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount || !uniqueTrimmedStrings(d.ClaimedFactIDs, ContextFabricIdentifierRefMaxLength) {
@@ -242,7 +311,11 @@ func (d ContextFabricDriverJudgment) Validate() error {
 }
 
 func (f ContextFabricFinding) Validate() error {
-	if !stringLengthBetween(f.FindingID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !stringLengthBetween(strings.TrimSpace(f.Kind), 1, ContextFabricFindingKindMaxLength) || !stringLengthBetween(strings.TrimSpace(f.Summary), 1, ContextFabricFindingSummaryMaxLength) || len(f.Subjects) > ContextFabricFindingSubjectsMaxCount || !uniqueSubjects(f.Subjects) || !boundedEvidenceRefs(f.EvidenceRefIDs, ContextFabricEvidenceRefIDsMaxCount, false) {
+	return f.validate(contextFabricWriteBounds)
+}
+
+func (f ContextFabricFinding) validate(bounds contextFabricBounds) error {
+	if !stringLengthBetween(f.FindingID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !stringLengthBetween(strings.TrimSpace(f.Kind), 1, ContextFabricFindingKindMaxLength) || !stringLengthBetween(strings.TrimSpace(f.Summary), 1, ContextFabricFindingSummaryMaxLength) || len(f.Subjects) > ContextFabricFindingSubjectsMaxCount || !uniqueSubjects(f.Subjects) || !boundedEvidenceRefs(f.EvidenceRefIDs, bounds.nestedEvidenceRefs, false) {
 		return fmt.Errorf("finding violates v1 bounds")
 	}
 	if len(f.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount || !uniqueTrimmedStrings(f.ClaimedFactIDs, ContextFabricIdentifierRefMaxLength) {
@@ -284,17 +357,17 @@ func (o ContextFabricSourceObservation) Validate() error {
 
 // Validate enforces the current contract (write path).
 func (c ContextFabricCoverage) Validate() error {
-	return c.validate(contextFabricNarrativeMaxCount)
+	return c.validate(contextFabricWriteBounds)
 }
 
 // validateStored accepts the legacy source and degraded-reason counts for
 // an already-persisted row. Same immutability argument as the cohort and
 // narrative bounds.
 func (c ContextFabricCoverage) validateStored() error {
-	return c.validate(contextFabricLegacyNarrativeMaxCount)
+	return c.validate(contextFabricLegacyBounds)
 }
 
-func (c ContextFabricCoverage) validate(maxSourcesAndReasons int) error {
+func (c ContextFabricCoverage) validate(bounds contextFabricBounds) error {
 	// DegradedReasons has no non-nil requirement, unlike Sources: the JSON
 	// Schema's Coverage.required is ["sources", "partial"] only --
 	// degraded_reasons is genuinely optional there, and its Go tag is
@@ -305,7 +378,7 @@ func (c ContextFabricCoverage) validate(maxSourcesAndReasons int) error {
 	// JSON (as InvestigationResultStore implementations now do on every
 	// Get -- CHAOS-3755 finding M2) even though nothing was ever actually
 	// invalid.
-	if c.Sources == nil || len(c.Sources) > maxSourcesAndReasons || len(c.DegradedReasons) > maxSourcesAndReasons || !uniqueTrimmedStrings(c.DegradedReasons, 2000) {
+	if c.Sources == nil || len(c.Sources) > bounds.coverageEntries || len(c.DegradedReasons) > bounds.coverageEntries || !uniqueTrimmedStrings(c.DegradedReasons, 2000) {
 		return fmt.Errorf("coverage violates v1 bounds")
 	}
 	seen := make(map[string]struct{}, len(c.Sources))
@@ -351,6 +424,10 @@ func (v ContextFabricVersionSet) Validate() error {
 }
 
 func (q ContextFabricInterpretedQuestion) Validate() error {
+	return q.validate(contextFabricWriteBounds)
+}
+
+func (q ContextFabricInterpretedQuestion) validate(bounds contextFabricBounds) error {
 	if !validInvestigationShape(q.Shape) || !stringLengthBetween(strings.TrimSpace(q.RequestedJudgment), 1, ContextFabricRequestedJudgmentMaxLength) || len(q.SubjectTerms) > ContextFabricSubjectTermsMaxCount || len(q.ComparisonTerms) > ContextFabricComparisonTermsMaxCount || !uniqueTrimmedStrings(q.SubjectTerms, ContextFabricSubjectOrComparisonTermMaxLength) || !uniqueTrimmedStrings(q.ComparisonTerms, ContextFabricSubjectOrComparisonTermMaxLength) || len(q.FactRequirements) > ContextFabricFactRequirementsMaxCount || !stringLengthBetween(q.ClarificationReason, 0, ContextFabricClarificationReasonMaxLength) {
 		return fmt.Errorf("interpreted question violates v1 bounds")
 	}
@@ -359,7 +436,7 @@ func (q ContextFabricInterpretedQuestion) Validate() error {
 	}
 	seen := make(map[ContextFabricFactKind]struct{}, len(q.FactRequirements))
 	for _, requirement := range q.FactRequirements {
-		if err := requirement.Validate(); err != nil {
+		if err := requirement.validate(bounds); err != nil {
 			return fmt.Errorf("fact_requirements: %w", err)
 		}
 		if _, exists := seen[requirement.Kind]; exists {
@@ -374,6 +451,10 @@ func (q ContextFabricInterpretedQuestion) Validate() error {
 }
 
 func (r ContextFabricFactRequirement) Validate() error {
+	return r.validate(contextFabricWriteBounds)
+}
+
+func (r ContextFabricFactRequirement) validate(bounds contextFabricBounds) error {
 	if !validFactKind(r.Kind) || len(r.Subjects) > 250 || !uniqueSubjects(r.Subjects) || len(r.Parameters) > ContextFabricFactRequirementParametersMaxCount {
 		return fmt.Errorf("fact requirement violates v1 bounds")
 	}
@@ -394,26 +475,18 @@ func (r ContextFabricFactRequirement) Validate() error {
 	sort.Strings(keys)
 	for _, key := range keys {
 		value := r.Parameters[key]
-		if !stringLengthBetween(key, 1, ContextFabricFactRequirementParameterKeyMaxLength) || !stringLengthBetween(value, 0, ContextFabricFactRequirementParameterValueMaxLength) || strings.TrimSpace(key) != key || strings.TrimSpace(value) != value {
+		if !stringLengthBetween(key, 1, ContextFabricFactRequirementParameterKeyMaxLength) || !stringLengthBetween(value, 0, bounds.factParameterValueLength) || strings.TrimSpace(key) != key || strings.TrimSpace(value) != value {
 			return fmt.Errorf("fact requirement parameter violates v1 bounds")
 		}
 	}
 	return nil
 }
 
-// isStoredValidation reports whether the supplied cohort validator is the
-// lenient stored-read one. Deriving the narrative mode from it keeps a
-// single decision -- "is this a read of persisted data?" -- rather than
-// letting two independently-set flags disagree.
-func isStoredValidation(validateCohort func(ContextFabricCohort) error) bool {
-	return reflect.ValueOf(validateCohort).Pointer() == reflect.ValueOf(ContextFabricCohort.validateStored).Pointer()
-}
-
 // Validate enforces the CURRENT contract on a result being produced or
 // accepted. Use it for every write and for anything a caller is about to
 // receive fresh.
 func (r ContextFabricInvestigationResult) Validate() error {
-	return r.validate(ContextFabricCohort.Validate)
+	return r.validate(contextFabricWriteBounds)
 }
 
 // ValidateStored revalidates a result read back from durable storage.
@@ -429,28 +502,21 @@ func (r ContextFabricInvestigationResult) Validate() error {
 // created at the legacy size. See the cohort inclusion-reason bounds block
 // for the specific allowance and its origin.
 func (r ContextFabricInvestigationResult) ValidateStored() error {
-	return r.validate(ContextFabricCohort.validateStored)
+	return r.validate(contextFabricLegacyBounds)
 }
 
-func (r ContextFabricInvestigationResult) validate(validateCohort func(ContextFabricCohort) error) error {
-	// The narrative bounds follow the same strict-write / lenient-read
-	// split as the cohort bounds, keyed off which cohort validator was
-	// supplied so the two can never drift apart.
-	narrativeCount, narrativeLength := contextFabricNarrativeMaxCount, contextFabricNarrativeMaxLength
-	if isStoredValidation(validateCohort) {
-		narrativeCount, narrativeLength = contextFabricLegacyNarrativeMaxCount, contextFabricLegacyNarrativeMaxLength
-	}
+func (r ContextFabricInvestigationResult) validate(bounds contextFabricBounds) error {
 	if r.SchemaVersion != ContextFabricInvestigationResultSchema || !stringLengthBetween(r.ResultID, 8, 256) || !stringLengthBetween(r.RequestID, 8, 256) || r.GeneratedAt.IsZero() || !stringLengthBetween(strings.TrimSpace(r.Question), 1, 8000) || !validInvestigationStatus(r.Status) {
 		return fmt.Errorf("result identity or status violates v1 bounds")
 	}
-	if err := r.Interpretation.Validate(); err != nil {
+	if err := r.Interpretation.validate(bounds); err != nil {
 		return fmt.Errorf("interpretation: %w", err)
 	}
-	if err := r.SubjectResolution.Validate(); err != nil {
+	if err := r.SubjectResolution.validate(bounds); err != nil {
 		return fmt.Errorf("subject_resolution: %w", err)
 	}
 	if r.Cohort != nil {
-		if err := validateCohort(*r.Cohort); err != nil {
+		if err := r.Cohort.validate(bounds); err != nil {
 			return fmt.Errorf("cohort: %w", err)
 		}
 	}
@@ -462,16 +528,16 @@ func (r ContextFabricInvestigationResult) validate(validateCohort func(ContextFa
 	// model-facing registry (ContextFabricModelFacingBounds) this file
 	// otherwise draws from; likewise Paths, which ACR derives from the
 	// graph, not the model.
-	if !stringLengthBetween(r.DirectJudgment, 0, 8000) || !stringLengthBetween(r.CurrentState, 0, 8000) || !stringLengthBetween(r.DeterministicAnswer, 1, 16000) ||
+	if !stringLengthBetween(r.DirectJudgment, 0, bounds.judgmentLength) || !stringLengthBetween(r.CurrentState, 0, bounds.judgmentLength) || !stringLengthBetween(r.DeterministicAnswer, 1, bounds.deterministicAnswerLength) ||
 		r.StrongestPressures == nil || len(r.StrongestPressures) > ContextFabricStrongestPressuresMaxCount || !uniqueTrimmedStrings(r.StrongestPressures, ContextFabricStrongestPressureMaxLength) ||
 		r.Drivers == nil || len(r.Drivers) > ContextFabricDriversMaxCount ||
 		r.RemainingWork == nil || len(r.RemainingWork) > ContextFabricRemainingWorkMaxCount ||
 		r.ReadinessGaps == nil || len(r.ReadinessGaps) > ContextFabricReadinessGapsMaxCount ||
 		r.Paths == nil || len(r.Paths) > 250 ||
 		r.Conflicts == nil || len(r.Conflicts) > ContextFabricConflictsMaxCount ||
-		r.Limitations == nil || len(r.Limitations) > narrativeCount || !uniqueTrimmedStrings(r.Limitations, narrativeLength) ||
+		r.Limitations == nil || len(r.Limitations) > bounds.narrativeCount || !uniqueTrimmedStrings(r.Limitations, bounds.narrativeLength) ||
 		r.EvidenceRefIDs == nil || !boundedEvidenceRefs(r.EvidenceRefIDs, ContextFabricEvidenceRefIDsMaxCount, true) ||
-		r.Warnings == nil || len(r.Warnings) > narrativeCount || !uniqueTrimmedStrings(r.Warnings, narrativeLength) {
+		r.Warnings == nil || len(r.Warnings) > bounds.narrativeCount || !uniqueTrimmedStrings(r.Warnings, bounds.narrativeLength) {
 		return fmt.Errorf("result answer fields violate v1 bounds")
 	}
 	if r.Status == ContextFabricInvestigationComplete || r.Status == ContextFabricInvestigationPartial {
@@ -486,26 +552,22 @@ func (r ContextFabricInvestigationResult) validate(validateCohort func(ContextFa
 	if err != nil {
 		return err
 	}
-	if err := validateDrivers(r.Drivers, claimed); err != nil {
+	if err := validateDrivers(r.Drivers, claimed, bounds); err != nil {
 		return err
 	}
-	if err := validateFindings("remaining_work", r.RemainingWork, claimed); err != nil {
+	if err := validateFindings("remaining_work", r.RemainingWork, claimed, bounds); err != nil {
 		return err
 	}
-	if err := validateFindings("readiness_gaps", r.ReadinessGaps, claimed); err != nil {
+	if err := validateFindings("readiness_gaps", r.ReadinessGaps, claimed, bounds); err != nil {
 		return err
 	}
-	if err := validatePaths(r.Paths); err != nil {
+	if err := validatePaths(r.Paths, bounds); err != nil {
 		return err
 	}
-	if err := validateFindings("conflicts", r.Conflicts, claimed); err != nil {
+	if err := validateFindings("conflicts", r.Conflicts, claimed, bounds); err != nil {
 		return err
 	}
-	validateCoverage := ContextFabricCoverage.Validate
-	if isStoredValidation(validateCohort) {
-		validateCoverage = ContextFabricCoverage.validateStored
-	}
-	if err := validateCoverage(r.Coverage); err != nil {
+	if err := r.Coverage.validate(bounds); err != nil {
 		return fmt.Errorf("coverage: %w", err)
 	}
 	if err := r.Versions.Validate(); err != nil {

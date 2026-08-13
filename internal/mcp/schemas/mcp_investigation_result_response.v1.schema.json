@@ -965,7 +965,7 @@
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectRef"
               },
               "minItems": 2,
-              "maxItems": 64
+              "maxItems": 51
             },
             "edges": {
               "type": "array",
@@ -973,7 +973,7 @@
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/RelationshipEdge"
               },
               "minItems": 1,
-              "maxItems": 63
+              "maxItems": 50
             },
             "why_relevant": {
               "type": "string",

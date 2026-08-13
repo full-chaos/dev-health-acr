@@ -75,7 +75,7 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		}
 		for _, candidate := range projection.Clarification.Candidates {
 			line := fmt.Sprintf("- %s `%s` (receipt `%s`, confidence %.2f)",
-				safeInline(string(candidate.Subject.Kind)), safeInline(candidate.Subject.Label),
+				safeInline(string(candidate.Subject.Kind)), untrustedInline(candidate.Subject.Label),
 				safeInline(candidate.ReceiptID), candidate.Confidence)
 			if !b.writeLine(line) {
 				return b.finishWithTruncation()
@@ -90,7 +90,7 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		}
 		for _, driver := range projection.PrincipalDrivers {
 			header := fmt.Sprintf("### %s [%s / %s]",
-				safeInline(driver.Title), safeInline(string(driver.Standing)), safeInline(driver.Category))
+				untrustedInline(driver.Title), safeInline(string(driver.Standing)), safeInline(driver.Category))
 			if !b.writeLine(header) {
 				return b.finishWithTruncation()
 			}
@@ -118,7 +118,7 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		}
 		for _, member := range projection.Cohort.Members {
 			line := fmt.Sprintf("%s. %s `%s`", strconv.Itoa(member.Rank),
-				safeInline(string(member.Subject.Kind)), safeInline(member.Subject.Label))
+				safeInline(string(member.Subject.Kind)), untrustedInline(member.Subject.Label))
 			if !b.writeLine(line) {
 				return b.finishWithTruncation()
 			}
@@ -132,8 +132,8 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		}
 		for _, fact := range projection.KeyFacts {
 			line := fmt.Sprintf("- %s.%s = %s (`%s`)",
-				safeInline(fact.Subject.Label), safeInline(fact.Field),
-				safeInline(scalarValueText(fact.Value)), safeInline(string(fact.Kind)))
+				untrustedInline(fact.Subject.Label), safeInline(fact.Field),
+				untrustedInline(scalarValueText(fact.Value)), safeInline(string(fact.Kind)))
 			if !b.writeLine(line) {
 				return b.finishWithTruncation()
 			}
@@ -151,7 +151,7 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		for _, entry := range projection.CoverageSummary {
 			line := fmt.Sprintf("- %s: %s", safeInline(entry.Source), safeInline(string(entry.State)))
 			if entry.Reason != "" {
-				line += " (" + safeInline(entry.Reason) + ")"
+				line += " (" + untrustedInline(entry.Reason) + ")"
 			}
 			if !b.writeLine(line) {
 				return b.finishWithTruncation()
@@ -165,6 +165,21 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		}
 		for _, limitation := range projection.Limitations {
 			if !b.writeLines(untrustedBlock("limitation", limitation)) {
+				return b.finishWithTruncation()
+			}
+		}
+	}
+
+	// Warnings render alongside limitations. Dropping them entirely meant
+	// an answer could carry a warning the reader never saw (codex round-4
+	// F5) -- the opposite of what a warning is for.
+	if len(projection.Warnings) > 0 {
+		b.writeLine("")
+		if !b.writeLine(fmt.Sprintf("## Warnings (%s)", untrustedDataHeader)) {
+			return b.finishWithTruncation()
+		}
+		for _, warning := range projection.Warnings {
+			if !b.writeLines(untrustedBlock("warning", warning)) {
 				return b.finishWithTruncation()
 			}
 		}
@@ -235,6 +250,9 @@ func omittedSummary(budget contractsv1.ContextFabricProjectionBudget) string {
 	add(budget.FactsOmitted, "canonical facts")
 	add(budget.CandidatesOmitted, "clarification candidates")
 	add(budget.EvidenceRefsOmitted, "evidence references")
+	add(budget.LimitationsOmitted, "limitations")
+	add(budget.WarningsOmitted, "warnings")
+	add(budget.CoverageOmitted, "coverage entries")
 	if budget.FullResultOmitted {
 		parts = append(parts, "the full canonical result (it exceeded the byte budget)")
 	}

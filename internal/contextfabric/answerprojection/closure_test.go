@@ -223,3 +223,81 @@ func pad(prefix string, index, maxLength int) string {
 	}
 	return head + strings.Repeat("x", maxLength-len(head))
 }
+
+// TestProjectionIsClosedOverLegacyStoredResults is the codex round-4 F3
+// regression.
+//
+// Reads of persisted data accept the HISTORICAL bounds, so a stored result
+// can legitimately carry 50 inclusion reasons of 1024 characters, or
+// narrative entries of 4000. Copying those through unchanged produced a
+// projection that violated its own published schema -- from a stored row
+// that was entirely valid. The API route emits the projection without
+// revalidating, so that shipped as an invalid document rather than an
+// error.
+//
+// The projection is a VIEW: it clamps, counts the drop, and leaves the
+// canonical view to serve the untouched original.
+func TestProjectionIsClosedOverLegacyStoredResults(t *testing.T) {
+	result := legacyStoredResult(t)
+	// The premise: this result is NOT valid under the current write
+	// contract but IS valid as a stored row. If that stopped being true
+	// the test would prove nothing.
+	if err := result.Validate(); err == nil {
+		t.Fatal("the legacy fixture passes the write validator, so it does not exercise the lenient-read path")
+	}
+	if err := result.ValidateStored(); err != nil {
+		t.Fatalf("the legacy fixture is not readable as a stored row: %v", err)
+	}
+
+	for name, budget := range map[string]Budget{
+		"default": {},
+		"maximum": {
+			MaxDrivers:       contractsv1.ContextFabricProjectedDriversMaxCount,
+			MaxCohortMembers: contractsv1.ContextFabricProjectedCohortMaxCount,
+			MaxCandidates:    contractsv1.ContextFabricProjectedCandidatesMaxCount,
+			MaxFacts:         contractsv1.ContextFabricProjectedFactsMaxCount,
+			MaxEvidenceRefs:  contractsv1.ContextFabricProjectedEvidenceMaxCount,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			projection := Project(result, budget)
+			if err := projection.Validate(); err != nil {
+				t.Fatalf("a legacy stored result produced an INVALID projection: %v", err)
+			}
+			assertNoNullArrays(t, projection)
+
+			// Clamping is real, not accidental: the oversize values must
+			// actually have been cut to the projection's bounds.
+			if projection.Cohort != nil {
+				for _, member := range projection.Cohort.Members {
+					if len(member.InclusionReasons) > contractsv1.ContextFabricProjectedInclusionReasonsMaxCount {
+						t.Errorf("cohort member kept %d inclusion reasons", len(member.InclusionReasons))
+					}
+					for _, reason := range member.InclusionReasons {
+						if len([]rune(reason)) > contractsv1.ContextFabricProjectedInclusionReasonMaxLength {
+							t.Errorf("cohort inclusion reason was not clamped: %d runes", len([]rune(reason)))
+						}
+					}
+				}
+			}
+			for _, limitation := range projection.Limitations {
+				if len([]rune(limitation)) > contractsv1.ContextFabricProjectedNarrativeMaxLength {
+					t.Errorf("limitation was not clamped: %d runes", len([]rune(limitation)))
+				}
+			}
+		})
+	}
+}
+
+// legacyStoredResult builds a result at the HISTORICAL maxima: valid to
+// read back, invalid to write today.
+func legacyStoredResult(t *testing.T) contractsv1.ContextFabricInvestigationResult {
+	t.Helper()
+	result := richResult()
+	result.Limitations = filled(120, func(i int) string { return pad("legacy-limitation", i, 4000) })
+	result.Warnings = filled(120, func(i int) string { return pad("legacy-warning", i, 4000) })
+	result.Cohort.Members[0].InclusionReasons = filled(50, func(i int) string { return pad("legacy-reason", i, 1024) })
+	result.DirectJudgment = strings.Repeat("j", 8000)
+	result.CurrentState = strings.Repeat("c", 8000)
+	return result
+}

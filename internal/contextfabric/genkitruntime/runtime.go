@@ -60,7 +60,7 @@ const (
 	// cap on one fact_requirements[] item's parameters map, a bound this
 	// prompt never stated (a model could write 33 parameters on a single
 	// entry and lose the whole interpretation for it). v5 states it.
-	defaultInterpretationPromptVersion = "context-fabric-interpretation.v5"
+	defaultInterpretationPromptVersion = "context-fabric-interpretation.v6"
 	// defaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
@@ -147,7 +147,17 @@ const (
 	// cannot contradict -- see ContextFabricModelFacingBounds's doc
 	// comment in internal/contracts/v1/context_fabric_model_bounds.go for
 	// the complete, current exclusion list.
-	defaultSynthesisPromptVersion = "context-fabric-synthesis.v8"
+	//
+	// v9 (CHAOS-3746, resolved during the rebase onto CHAOS-3784's v8):
+	// two independent changes both landed on v8 -- CHAOS-3784's four added
+	// bound statements above, and this branch's bound CORRECTIONS (a nested
+	// evidence_ref_ids count of 200 distinct from the result-level 500, a
+	// fact-requirement parameter value of 1000 matching the published
+	// schema, and limitations/warnings at 100 entries of 2000 characters
+	// each). A prompt version names one exact text, so the merged text --
+	// which is neither branch's v8 -- takes the next number rather than
+	// leaving two different prompts sharing a version string.
+	defaultSynthesisPromptVersion = "context-fabric-synthesis.v9"
 	defaultSchemaVersion          = "context-fabric-model-output.v1"
 	defaultEvaluatorVersion       = "context-fabric-grounding.v1"
 )

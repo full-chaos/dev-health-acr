@@ -88,18 +88,34 @@ func (c *Client) InvestigationResult(ctx context.Context, resultID string) (cont
 	if err := c.call(ctx, http.MethodGet, subPath, nil, &result); err != nil {
 		return contractsv1.ContextFabricInvestigationResult{}, err
 	}
-	if err := validateInvestigationResult(result); err != nil {
+	if err := validateStoredInvestigationResult(result); err != nil {
 		return contractsv1.ContextFabricInvestigationResult{}, err
 	}
 	return result, nil
 }
 
-// validateInvestigationResult rejects a hosted response that does not meet
-// the v1 contract. The sidecar validates what it receives rather than
+// validateInvestigationResult rejects a FRESH hosted answer that does not
+// meet the v1 contract. The sidecar validates what it receives rather than
 // trusting it: an answer that failed its own contract must not be rendered
-// to an agent as though it were sound.
+// to an agent as though it were sound. Fresh output is held to the current
+// contract with no allowance -- it is being produced now.
 func validateInvestigationResult(result contractsv1.ContextFabricInvestigationResult) error {
 	if err := result.Validate(); err != nil {
+		return fmt.Errorf("%w: investigation result: %w", ErrInvalidResponse, err)
+	}
+	return nil
+}
+
+// validateStoredInvestigationResult rejects a retrieved result that is not
+// even readable under the historical bounds.
+//
+// Retrieval returns an IMMUTABLE row that may predate a bound correction,
+// so holding it to the current contract would make a legitimately stored
+// answer unreachable through MCP while the hosted store served it happily
+// (codex round-4 F1). Strict at write and at fresh model output; lenient at
+// every read of persisted data.
+func validateStoredInvestigationResult(result contractsv1.ContextFabricInvestigationResult) error {
+	if err := result.ValidateStored(); err != nil {
 		return fmt.Errorf("%w: investigation result: %w", ErrInvalidResponse, err)
 	}
 	return nil

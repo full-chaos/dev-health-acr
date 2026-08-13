@@ -513,10 +513,10 @@ func TestProjectionEmitsArraysNotNull(t *testing.T) {
 // legitimately written by an earlier binary and are immutable, so they must
 // stay readable forever.
 func legacyCohortMember() ContextFabricCohortMember {
-	reasons := make([]string, 0, contextFabricLegacyCohortInclusionReasonsCount)
-	for i := 0; i < contextFabricLegacyCohortInclusionReasonsCount; i++ {
+	reasons := make([]string, 0, contextFabricLegacyBounds.cohortInclusionReasons)
+	for i := 0; i < contextFabricLegacyBounds.cohortInclusionReasons; i++ {
 		head := "legacy-reason-" + strconv.Itoa(i) + "-"
-		reasons = append(reasons, head+strings.Repeat("x", contextFabricLegacyCohortInclusionReasonLength-len(head)))
+		reasons = append(reasons, head+strings.Repeat("x", contextFabricLegacyBounds.cohortInclusionReasonLength-len(head)))
 	}
 	return ContextFabricCohortMember{
 		Subject:          ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team_legacy", Label: "Team Legacy"},

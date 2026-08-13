@@ -138,6 +138,8 @@ func answerFixtureBootstrap(t *testing.T, result contractsv1.ContextFabricInvest
 	// payload. Note this ceiling is REAL: the canonical contract permits
 	// results larger than any sidecar can be configured to read, so the
 	// largest legal results are unreachable through MCP by construction.
+	// That contract-versus-deployment mismatch is tracked as CHAOS-3795;
+	// it predates this surface and is not resolved here.
 	// The wrapper proof therefore uses the largest TRANSPORTABLE result;
 	// the true contract-maximum closure is proven at the validator level
 	// in internal/contextfabric/answerprojection, where no transport is

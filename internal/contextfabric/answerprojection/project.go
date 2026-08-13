@@ -138,8 +138,8 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		Question:      result.Question,
 		Reused:        result.Reused,
 		// Verbatim. These two fields are the answer.
-		DirectJudgment:     result.DirectJudgment,
-		CurrentState:       result.CurrentState,
+		DirectJudgment:     truncateRunes(result.DirectJudgment, contractsv1.ContextFabricProjectedJudgmentMaxLength),
+		CurrentState:       truncateRunes(result.CurrentState, contractsv1.ContextFabricProjectedJudgmentMaxLength),
 		StrongestPressures: distinctStrings(result.StrongestPressures),
 		// Never truncated: a surface that reported a different set of
 		// committed subjects answered a different question.
@@ -362,14 +362,14 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 		members = append(members, contractsv1.ContextFabricProjectedCohortMember{
 			Subject:          member.Subject,
 			Rank:             member.Rank,
-			InclusionReasons: copyStrings(member.InclusionReasons),
+			InclusionReasons: clampStrings(member.InclusionReasons, contractsv1.ContextFabricProjectedInclusionReasonsMaxCount, contractsv1.ContextFabricProjectedInclusionReasonMaxLength),
 			EvidenceRefIDs:   append([]string(nil), member.EvidenceRefIDs...),
 		})
 	}
 	return &contractsv1.ContextFabricProjectedCohort{
 		Kind:      canonical.Kind,
 		Total:     len(canonical.Members),
-		Rationale: canonical.Rationale,
+		Rationale: truncateRunes(canonical.Rationale, contractsv1.ContextFabricProjectedCohortRationaleMaxLength),
 		Complete:  canonical.Complete,
 		Members:   members,
 	}, len(canonical.Members) - len(members)
@@ -392,11 +392,11 @@ func projectClarification(result contractsv1.ContextFabricInvestigationResult, b
 			Subject:      candidate.Subject,
 			State:        candidate.State,
 			Confidence:   candidate.Confidence,
-			MatchReasons: copyStrings(candidate.MatchReasons),
+			MatchReasons: clampStrings(candidate.MatchReasons, contractsv1.ContextFabricProjectedMatchReasonsMaxCount, contractsv1.ContextFabricProjectedMatchReasonMaxLength),
 		})
 	}
 	return &contractsv1.ContextFabricProjectedClarification{
-		Prompt:     result.SubjectResolution.ClarificationPrompt,
+		Prompt:     truncateRunes(result.SubjectResolution.ClarificationPrompt, contractsv1.ContextFabricProjectedClarificationPromptMaxLength),
 		Candidates: candidates,
 	}, len(canonical) - retain
 }
@@ -499,10 +499,43 @@ func countUnindexedEvidence(result contractsv1.ContextFabricInvestigationResult,
 // answer than the investigation actually gave.
 func boundedNarrative(values []string) ([]string, int) {
 	distinct := distinctStrings(values)
-	if len(distinct) <= contractsv1.ContextFabricProjectedNarrativeMaxCount {
-		return distinct, 0
+	// Clamp item LENGTH as well as count. A stored result may legitimately
+	// carry entries longer than the projection admits, because reads of
+	// persisted data accept the historical bounds; copying such an entry
+	// through unchanged would emit schema-invalid projection JSON from a
+	// perfectly valid stored row (codex round-4 F3).
+	clamped := make([]string, 0, len(distinct))
+	for _, value := range distinct {
+		clamped = append(clamped, truncateRunes(value, contractsv1.ContextFabricProjectedNarrativeMaxLength))
 	}
-	return distinct[:contractsv1.ContextFabricProjectedNarrativeMaxCount], len(distinct) - contractsv1.ContextFabricProjectedNarrativeMaxCount
+	if len(clamped) <= contractsv1.ContextFabricProjectedNarrativeMaxCount {
+		return clamped, 0
+	}
+	return clamped[:contractsv1.ContextFabricProjectedNarrativeMaxCount], len(clamped) - contractsv1.ContextFabricProjectedNarrativeMaxCount
+}
+
+// clampStrings bounds both the number of entries and the length of each,
+// so a legacy-sized stored value cannot produce an out-of-bounds
+// projection. It is a VIEW operation: the underlying result is unchanged
+// and remains reachable in full through the canonical view.
+func clampStrings(values []string, maxCount, maxLength int) []string {
+	retain := min(len(values), maxCount)
+	out := make([]string, 0, retain)
+	for _, value := range values[:retain] {
+		out = append(out, truncateRunes(value, maxLength))
+	}
+	return out
+}
+
+// truncateRunes cuts a string to maxLength RUNES, never bytes: cutting
+// mid-rune would emit invalid UTF-8, which is a worse failure than the
+// length violation it was meant to prevent.
+func truncateRunes(value string, maxLength int) string {
+	runes := []rune(value)
+	if len(runes) <= maxLength {
+		return value
+	}
+	return string(runes[:maxLength])
 }
 
 // projectCoverage reports each source's state once, bounded by the
@@ -527,9 +560,9 @@ func projectCoverage(result contractsv1.ContextFabricInvestigationResult) ([]con
 			continue
 		}
 		entries = append(entries, contractsv1.ContextFabricProjectedCoverage{
-			Source: source.Source,
+			Source: truncateRunes(source.Source, contractsv1.ContextFabricProjectedCoverageSourceMaxLength),
 			State:  source.State,
-			Reason: source.Reason,
+			Reason: truncateRunes(source.Reason, contractsv1.ContextFabricProjectedCoverageReasonMaxLength),
 		})
 	}
 	return entries, omitted

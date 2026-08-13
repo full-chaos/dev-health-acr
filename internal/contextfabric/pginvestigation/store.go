@@ -518,7 +518,10 @@ LIMIT 1`,
 	if err := json.Unmarshal(payload, &result); err != nil {
 		return contextfabric.InvestigationResult{}, false, fmt.Errorf("pginvestigation: decode investigation result: %w", err)
 	}
-	if err := result.Validate(); err != nil {
+	// Lenient: this is a READ of a persisted row, exactly like Get. A row
+	// written by an older, looser binary must stay reusable rather than
+	// turning into a hard failure nobody can migrate away from.
+	if err := result.ValidateStored(); err != nil {
 		return contextfabric.InvestigationResult{}, false, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
 	}
 	return result, true, nil

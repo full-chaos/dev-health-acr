@@ -2,6 +2,7 @@ package genkitruntime
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,17 @@ func TestPromptsStateEveryModelFacingBound(t *testing.T) {
 				if !strings.Contains(testCase.prompt, mention) {
 					t.Errorf("the prompt never states %q, so the model cannot honour this bound", mention)
 				}
+			}
+			// The NUMBER is derived from the validator-backed limit, never
+			// written into this table (codex round-4 F6). A literal here
+			// is the defect, not the safeguard: when the bound moved from
+			// 250 to 100 the prompt kept saying 250 and this proof stayed
+			// green, because it was searching for the stale string it had
+			// been told to expect. Deriving it means the proof can only
+			// pass when the prompt states what the validator enforces.
+			if !strings.Contains(testCase.prompt, strconv.Itoa(testCase.limit)) {
+				t.Errorf("the prompt never states the enforced limit %d for %s, so the model is told a different number than the validator applies",
+					testCase.limit, testCase.registryName)
 			}
 		})
 	}
@@ -118,7 +130,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/requested_judgment max length", registryName: "interpretation.requested_judgment.max_length",
 			limit: contractsv1.ContextFabricRequestedJudgmentMaxLength, prompt: interpretationSystemPrompt,
-			mentions: []string{"requested_judgment", "256"},
+			mentions: []string{"requested_judgment"},
 			atLimit: func() error {
 				return interpretationWithJudgment(contractsv1.ContextFabricRequestedJudgmentMaxLength).Validate()
 			},
@@ -129,7 +141,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/subject_terms max count", registryName: "interpretation.subject_terms.max_count",
 			limit: contractsv1.ContextFabricSubjectTermsMaxCount, prompt: interpretationSystemPrompt,
-			mentions: []string{"subject_terms", "100"},
+			mentions: []string{"subject_terms"},
 			atLimit: func() error {
 				return interpretationWithSubjectTerms(contractsv1.ContextFabricSubjectTermsMaxCount).Validate()
 			},
@@ -140,7 +152,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/subject term max length", registryName: "interpretation.subject_term.max_length",
 			limit: contractsv1.ContextFabricSubjectOrComparisonTermMaxLength, prompt: interpretationSystemPrompt,
-			mentions: []string{"512"},
+			mentions: []string{},
 			atLimit: func() error {
 				return interpretationWithTermLength(contractsv1.ContextFabricSubjectOrComparisonTermMaxLength).Validate()
 			},
@@ -151,7 +163,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/comparison_terms max count", registryName: "interpretation.comparison_terms.max_count",
 			limit: contractsv1.ContextFabricComparisonTermsMaxCount, prompt: interpretationSystemPrompt,
-			mentions: []string{"comparison_terms", "100"},
+			mentions: []string{"comparison_terms"},
 			atLimit: func() error {
 				return interpretationWithComparisonTerms(contractsv1.ContextFabricComparisonTermsMaxCount).Validate()
 			},
@@ -162,7 +174,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/clarification_reason max length", registryName: "interpretation.clarification_reason.max_length",
 			limit: contractsv1.ContextFabricClarificationReasonMaxLength, prompt: interpretationSystemPrompt,
-			mentions: []string{"clarification_reason", "2000"},
+			mentions: []string{"clarification_reason"},
 			atLimit: func() error {
 				return interpretationWithClarification(contractsv1.ContextFabricClarificationReasonMaxLength).Validate()
 			},
@@ -199,7 +211,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/fact requirement parameter value max length", registryName: "interpretation.fact_requirement.parameter_value.max_length",
 			limit: contractsv1.ContextFabricFactRequirementParameterValueMaxLength, prompt: interpretationSystemPrompt,
-			mentions: []string{"parameters", "1024"},
+			mentions: []string{"parameters"},
 			atLimit: func() error {
 				return interpretationWithParameterValue(contractsv1.ContextFabricFactRequirementParameterValueMaxLength).Validate()
 			},
@@ -210,7 +222,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/fact requirement parameter key max length", registryName: "interpretation.fact_requirement.parameter_key.max_length",
 			limit: contractsv1.ContextFabricFactRequirementParameterKeyMaxLength, prompt: interpretationSystemPrompt,
-			mentions: []string{"128"},
+			mentions: []string{},
 			atLimit: func() error {
 				return interpretationWithParameterKey(contractsv1.ContextFabricFactRequirementParameterKeyMaxLength).Validate()
 			},
@@ -224,7 +236,7 @@ func modelFacingBounds() []boundCase {
 			// parameter entries ONE fact_requirements[] item may carry.
 			name: "interpretation/fact requirement parameters max count", registryName: "interpretation.fact_requirement.parameters.max_count",
 			limit: contractsv1.ContextFabricFactRequirementParametersMaxCount, prompt: interpretationSystemPrompt,
-			mentions: []string{"parameters", "32"},
+			mentions: []string{"parameters"},
 			atLimit: func() error {
 				return interpretationWithParameterCount(contractsv1.ContextFabricFactRequirementParametersMaxCount).Validate()
 			},
@@ -235,28 +247,28 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/driver_id max length", registryName: "synthesis.driver.driver_id.max_length",
 			limit: contractsv1.ContextFabricModelMintedIDMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"driver_id", "256"},
+			mentions: []string{"driver_id"},
 			atLimit:  func() error { return driverWithID(contractsv1.ContextFabricModelMintedIDMaxLength).Validate() },
 			over:     func() error { return driverWithID(contractsv1.ContextFabricModelMintedIDMaxLength + 1).Validate() },
 		},
 		{
 			name: "synthesis/driver title max length", registryName: "synthesis.driver.title.max_length",
 			limit: contractsv1.ContextFabricDriverTitleMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"title", "512"},
+			mentions: []string{"title"},
 			atLimit:  func() error { return driverWithTitle(contractsv1.ContextFabricDriverTitleMaxLength).Validate() },
 			over:     func() error { return driverWithTitle(contractsv1.ContextFabricDriverTitleMaxLength + 1).Validate() },
 		},
 		{
 			name: "synthesis/driver summary max length", registryName: "synthesis.driver.summary.max_length",
 			limit: contractsv1.ContextFabricDriverSummaryMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"summary", "4000"},
+			mentions: []string{"summary"},
 			atLimit:  func() error { return driverWithSummary(contractsv1.ContextFabricDriverSummaryMaxLength).Validate() },
 			over:     func() error { return driverWithSummary(contractsv1.ContextFabricDriverSummaryMaxLength + 1).Validate() },
 		},
 		{
 			name: "synthesis/driver qualification max length", registryName: "synthesis.driver.qualification.max_length",
 			limit: contractsv1.ContextFabricDriverQualificationMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"qualification", "2000"},
+			mentions: []string{"qualification"},
 			atLimit: func() error {
 				return driverWithQualification(contractsv1.ContextFabricDriverQualificationMaxLength).Validate()
 			},
@@ -267,7 +279,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/driver affected_subjects max count", registryName: "synthesis.driver.affected_subjects.max_count",
 			limit: contractsv1.ContextFabricDriverAffectedSubjectsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"affected_subjects", "250"},
+			mentions: []string{"affected_subjects"},
 			atLimit: func() error {
 				return driverWithSubjects(contractsv1.ContextFabricDriverAffectedSubjectsMaxCount).Validate()
 			},
@@ -307,14 +319,14 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/driver path_ids max count", registryName: "synthesis.driver.path_ids.max_count",
 			limit: contractsv1.ContextFabricDriverPathIDsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"path_ids", "250"},
+			mentions: []string{"path_ids"},
 			atLimit:  func() error { return driverWithPathIDs(contractsv1.ContextFabricDriverPathIDsMaxCount).Validate() },
 			over:     func() error { return driverWithPathIDs(contractsv1.ContextFabricDriverPathIDsMaxCount + 1).Validate() },
 		},
 		{
 			name: "synthesis/driver claimed_fact_ids max count", registryName: "synthesis.driver.claimed_fact_ids.max_count",
 			limit: contractsv1.ContextFabricDriverClaimedFactIDsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"claimed_fact_ids", "250"},
+			mentions: []string{"claimed_fact_ids"},
 			atLimit: func() error {
 				return driverWithClaimedFactIDs(contractsv1.ContextFabricDriverClaimedFactIDsMaxCount).Validate()
 			},
@@ -351,13 +363,13 @@ func modelFacingBounds() []boundCase {
 		},
 		{
 			name: "synthesis/driver evidence_ref_ids max count", registryName: "synthesis.driver.evidence_ref_ids.max_count",
-			limit: contractsv1.ContextFabricEvidenceRefIDsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"evidence_ref_ids", "500"},
+			limit: contractsv1.ContextFabricNestedEvidenceRefIDsMaxCount, prompt: synthesisSystemPrompt,
+			mentions: []string{"evidence_ref_ids"},
 			atLimit: func() error {
-				return driverWithEvidenceRefIDs(contractsv1.ContextFabricEvidenceRefIDsMaxCount).Validate()
+				return driverWithEvidenceRefIDs(contractsv1.ContextFabricNestedEvidenceRefIDsMaxCount).Validate()
 			},
 			over: func() error {
-				return driverWithEvidenceRefIDs(contractsv1.ContextFabricEvidenceRefIDsMaxCount + 1).Validate()
+				return driverWithEvidenceRefIDs(contractsv1.ContextFabricNestedEvidenceRefIDsMaxCount + 1).Validate()
 			},
 		},
 		{
@@ -379,7 +391,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/finding_id max length", registryName: "synthesis.finding.finding_id.max_length",
 			limit: contractsv1.ContextFabricModelMintedIDMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"finding_id", "256"},
+			mentions: []string{"finding_id"},
 			atLimit:  func() error { return findingWithID(contractsv1.ContextFabricModelMintedIDMaxLength).Validate() },
 			over:     func() error { return findingWithID(contractsv1.ContextFabricModelMintedIDMaxLength + 1).Validate() },
 		},
@@ -393,7 +405,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/finding summary max length", registryName: "synthesis.finding.summary.max_length",
 			limit: contractsv1.ContextFabricFindingSummaryMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"summary", "4000"},
+			mentions: []string{"summary"},
 			atLimit:  func() error { return findingWithSummary(contractsv1.ContextFabricFindingSummaryMaxLength).Validate() },
 			over: func() error {
 				return findingWithSummary(contractsv1.ContextFabricFindingSummaryMaxLength + 1).Validate()
@@ -402,7 +414,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/finding subjects max count", registryName: "synthesis.finding.subjects.max_count",
 			limit: contractsv1.ContextFabricFindingSubjectsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"subjects", "250"},
+			mentions: []string{"subjects"},
 			atLimit:  func() error { return findingWithSubjects(contractsv1.ContextFabricFindingSubjectsMaxCount).Validate() },
 			over: func() error {
 				return findingWithSubjects(contractsv1.ContextFabricFindingSubjectsMaxCount + 1).Validate()
@@ -433,13 +445,13 @@ func modelFacingBounds() []boundCase {
 		},
 		{
 			name: "synthesis/finding evidence_ref_ids max count", registryName: "synthesis.finding.evidence_ref_ids.max_count",
-			limit: contractsv1.ContextFabricEvidenceRefIDsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"evidence_ref_ids", "500"},
+			limit: contractsv1.ContextFabricNestedEvidenceRefIDsMaxCount, prompt: synthesisSystemPrompt,
+			mentions: []string{"evidence_ref_ids"},
 			atLimit: func() error {
-				return findingWithEvidenceRefIDs(contractsv1.ContextFabricEvidenceRefIDsMaxCount).Validate()
+				return findingWithEvidenceRefIDs(contractsv1.ContextFabricNestedEvidenceRefIDsMaxCount).Validate()
 			},
 			over: func() error {
-				return findingWithEvidenceRefIDs(contractsv1.ContextFabricEvidenceRefIDsMaxCount + 1).Validate()
+				return findingWithEvidenceRefIDs(contractsv1.ContextFabricNestedEvidenceRefIDsMaxCount + 1).Validate()
 			},
 		},
 		{
@@ -457,7 +469,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/finding claimed_fact_ids max count", registryName: "synthesis.finding.claimed_fact_ids.max_count",
 			limit: contractsv1.ContextFabricDriverClaimedFactIDsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"claimed_fact_ids", "250"},
+			mentions: []string{"claimed_fact_ids"},
 			atLimit: func() error {
 				return findingWithClaimedFactIDs(contractsv1.ContextFabricDriverClaimedFactIDsMaxCount).Validate()
 			},
@@ -484,14 +496,14 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/claim_id max length", registryName: "synthesis.claimed_fact.claim_id.max_length",
 			limit: contractsv1.ContextFabricModelMintedIDMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"claim_id", "256"},
+			mentions: []string{"claim_id"},
 			atLimit:  func() error { return claimWithID(contractsv1.ContextFabricModelMintedIDMaxLength).Validate() },
 			over:     func() error { return claimWithID(contractsv1.ContextFabricModelMintedIDMaxLength + 1).Validate() },
 		},
 		{
 			name: "synthesis/claimed fact field max length", registryName: "synthesis.claimed_fact.field.max_length",
 			limit: contractsv1.ContextFabricClaimedFieldMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"field", "128"},
+			mentions: []string{"field"},
 			atLimit:  func() error { return claimWithField(contractsv1.ContextFabricClaimedFieldMaxLength).Validate() },
 			over:     func() error { return claimWithField(contractsv1.ContextFabricClaimedFieldMaxLength + 1).Validate() },
 		},
@@ -546,7 +558,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/strongest_pressures item max length", registryName: "synthesis.strongest_pressures.item_max_length",
 			limit: contractsv1.ContextFabricStrongestPressureMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"strongest_pressures", "2000"},
+			mentions: []string{"strongest_pressures"},
 			atLimit: func() error {
 				return resultWithStrongestPressureLength(contractsv1.ContextFabricStrongestPressureMaxLength).Validate()
 			},
@@ -564,7 +576,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/remaining_work max count", registryName: "synthesis.remaining_work.max_count",
 			limit: contractsv1.ContextFabricRemainingWorkMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"remaining_work", "250"},
+			mentions: []string{"remaining_work"},
 			atLimit: func() error {
 				return resultWithFindings("remaining_work", contractsv1.ContextFabricRemainingWorkMaxCount).Validate()
 			},
@@ -575,7 +587,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/readiness_gaps max count", registryName: "synthesis.readiness_gaps.max_count",
 			limit: contractsv1.ContextFabricReadinessGapsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"readiness_gaps", "250"},
+			mentions: []string{"readiness_gaps"},
 			atLimit: func() error {
 				return resultWithFindings("readiness_gaps", contractsv1.ContextFabricReadinessGapsMaxCount).Validate()
 			},
@@ -586,7 +598,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/conflicts max count", registryName: "synthesis.conflicts.max_count",
 			limit: contractsv1.ContextFabricConflictsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"conflicts", "250"},
+			mentions: []string{"conflicts"},
 			atLimit: func() error {
 				return resultWithFindings("conflicts", contractsv1.ContextFabricConflictsMaxCount).Validate()
 			},
@@ -597,7 +609,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/limitations max count", registryName: "synthesis.limitations.max_count",
 			limit: contractsv1.ContextFabricLimitationsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"limitations", "250"},
+			mentions: []string{"limitations"},
 			atLimit:  func() error { return resultWithLimitations(contractsv1.ContextFabricLimitationsMaxCount).Validate() },
 			over: func() error {
 				return resultWithLimitations(contractsv1.ContextFabricLimitationsMaxCount + 1).Validate()
@@ -606,7 +618,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/limitations item max length", registryName: "synthesis.limitations.item_max_length",
 			limit: contractsv1.ContextFabricLimitationMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"limitation", "4000"},
+			mentions: []string{"limitation"},
 			atLimit: func() error {
 				return resultWithLimitationLength(contractsv1.ContextFabricLimitationMaxLength).Validate()
 			},
@@ -617,21 +629,21 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/warnings max count", registryName: "synthesis.warnings.max_count",
 			limit: contractsv1.ContextFabricWarningsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"warnings", "250"},
+			mentions: []string{"warnings"},
 			atLimit:  func() error { return resultWithWarnings(contractsv1.ContextFabricWarningsMaxCount).Validate() },
 			over:     func() error { return resultWithWarnings(contractsv1.ContextFabricWarningsMaxCount + 1).Validate() },
 		},
 		{
 			name: "synthesis/warnings item max length", registryName: "synthesis.warnings.item_max_length",
 			limit: contractsv1.ContextFabricWarningMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"warning", "4000"},
+			mentions: []string{"warning"},
 			atLimit:  func() error { return resultWithWarningLength(contractsv1.ContextFabricWarningMaxLength).Validate() },
 			over:     func() error { return resultWithWarningLength(contractsv1.ContextFabricWarningMaxLength + 1).Validate() },
 		},
 		{
 			name: "synthesis/evidence_ref_ids (top-level) max count", registryName: "synthesis.evidence_ref_ids.max_count",
 			limit: contractsv1.ContextFabricEvidenceRefIDsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"evidence_ref_ids", "500"},
+			mentions: []string{"evidence_ref_ids"},
 			atLimit: func() error {
 				return resultWithEvidenceRefIDs(contractsv1.ContextFabricEvidenceRefIDsMaxCount).Validate()
 			},

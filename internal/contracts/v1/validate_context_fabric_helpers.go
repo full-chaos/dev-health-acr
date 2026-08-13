@@ -18,10 +18,10 @@ func validateScalarMap(values map[string]ContextFabricScalarValue) error {
 	return nil
 }
 
-func validateDrivers(values []ContextFabricDriverJudgment, claimed map[string]ContextFabricClaimedFact) error {
+func validateDrivers(values []ContextFabricDriverJudgment, claimed map[string]ContextFabricClaimedFact, bounds contextFabricBounds) error {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if err := value.Validate(); err != nil {
+		if err := value.validate(bounds); err != nil {
 			return fmt.Errorf("drivers: %w", err)
 		}
 		if _, exists := seen[value.DriverID]; exists {
@@ -35,10 +35,10 @@ func validateDrivers(values []ContextFabricDriverJudgment, claimed map[string]Co
 	return nil
 }
 
-func validateFindings(name string, values []ContextFabricFinding, claimed map[string]ContextFabricClaimedFact) error {
+func validateFindings(name string, values []ContextFabricFinding, claimed map[string]ContextFabricClaimedFact, bounds contextFabricBounds) error {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if err := value.Validate(); err != nil {
+		if err := value.validate(bounds); err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
 		if _, exists := seen[value.FindingID]; exists {
@@ -100,10 +100,10 @@ func validateClaimedFactReferences(name string, claimIDs []string, category stri
 	return nil
 }
 
-func validatePaths(values []ContextFabricRelationshipPath) error {
+func validatePaths(values []ContextFabricRelationshipPath, bounds contextFabricBounds) error {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if err := value.Validate(); err != nil {
+		if err := value.validate(bounds); err != nil {
 			return fmt.Errorf("paths: %w", err)
 		}
 		if _, exists := seen[value.PathID]; exists {

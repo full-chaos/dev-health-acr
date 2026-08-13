@@ -117,13 +117,15 @@ package v1
 //     in Validate()'s own order, purely to know WHERE to stop.
 const (
 	// Interpretation (ContextFabricInterpretedQuestion, ContextFabricFactRequirement).
-	ContextFabricRequestedJudgmentMaxLength             = 256
-	ContextFabricSubjectTermsMaxCount                   = 100
-	ContextFabricSubjectOrComparisonTermMaxLength       = 512
-	ContextFabricComparisonTermsMaxCount                = 100
-	ContextFabricClarificationReasonMaxLength           = 2000
-	ContextFabricFactRequirementsMaxCount               = 64
-	ContextFabricFactRequirementParameterValueMaxLength = 1024
+	ContextFabricRequestedJudgmentMaxLength       = 256
+	ContextFabricSubjectTermsMaxCount             = 100
+	ContextFabricSubjectOrComparisonTermMaxLength = 512
+	ContextFabricComparisonTermsMaxCount          = 100
+	ContextFabricClarificationReasonMaxLength     = 2000
+	ContextFabricFactRequirementsMaxCount         = 64
+	// Matches the published schema (was 1024, which the schema never
+	// admitted -- CHAOS-3746 round 4).
+	ContextFabricFactRequirementParameterValueMaxLength = 1000
 	ContextFabricFactRequirementParameterKeyMaxLength   = 128
 	// ContextFabricFactRequirementParametersMaxCount bounds how many
 	// key/value entries the model may attach to ONE fact_requirements[]
@@ -159,6 +161,7 @@ const (
 	ContextFabricIdentifierRefMaxLength = 256
 	// ContextFabricEvidenceRefIDsMaxCount bounds evidence_ref_ids wherever a
 	// model populates it directly: per-driver and per-finding.
+	// The RESULT-LEVEL evidence index; the published schema allows 500 here.
 	ContextFabricEvidenceRefIDsMaxCount = 500
 	// ContextFabricEvidenceRefIDMaxLength bounds each individual
 	// evidence_ref_id string (as opposed to the COUNT bound above), matching
@@ -168,6 +171,11 @@ const (
 	// bound was order-contradicted, same as path_id/claimed_fact_id item
 	// length was before round-2 R2-2.
 	ContextFabricEvidenceRefIDMaxLength = 256
+	// Evidence references nested inside a driver, finding, or relationship
+	// path. The published schema bounds these at 200 while Go enforced the
+	// result-level 500, so a document could pass validation and still
+	// violate the contract (CHAOS-3746 round 4).
+	ContextFabricNestedEvidenceRefIDsMaxCount = 200
 
 	// Synthesis: finding (ContextFabricFinding).
 	ContextFabricFindingKindMaxLength    = 128
@@ -261,7 +269,7 @@ var ContextFabricModelFacingBounds = []ContextFabricModelFacingBound{
 	{"synthesis.driver.affected_subjects.item_label_max_length", ContextFabricSubjectRefLabelMaxLength},
 	{"synthesis.driver.path_ids.max_count", ContextFabricDriverPathIDsMaxCount},
 	{"synthesis.driver.path_ids.item_max_length", ContextFabricIdentifierRefMaxLength},
-	{"synthesis.driver.evidence_ref_ids.max_count", ContextFabricEvidenceRefIDsMaxCount},
+	{"synthesis.driver.evidence_ref_ids.max_count", ContextFabricNestedEvidenceRefIDsMaxCount},
 	{"synthesis.driver.evidence_ref_ids.item_max_length", ContextFabricEvidenceRefIDMaxLength},
 	{"synthesis.driver.claimed_fact_ids.max_count", ContextFabricDriverClaimedFactIDsMaxCount},
 	{"synthesis.driver.claimed_fact_ids.item_max_length", ContextFabricIdentifierRefMaxLength},
@@ -272,7 +280,7 @@ var ContextFabricModelFacingBounds = []ContextFabricModelFacingBound{
 	{"synthesis.finding.subjects.max_count", ContextFabricFindingSubjectsMaxCount},
 	{"synthesis.finding.subjects.item_canonical_id_max_length", ContextFabricSubjectRefCanonicalIDMaxLength},
 	{"synthesis.finding.subjects.item_label_max_length", ContextFabricSubjectRefLabelMaxLength},
-	{"synthesis.finding.evidence_ref_ids.max_count", ContextFabricEvidenceRefIDsMaxCount},
+	{"synthesis.finding.evidence_ref_ids.max_count", ContextFabricNestedEvidenceRefIDsMaxCount},
 	{"synthesis.finding.evidence_ref_ids.item_max_length", ContextFabricEvidenceRefIDMaxLength},
 	{"synthesis.finding.claimed_fact_ids.max_count", ContextFabricDriverClaimedFactIDsMaxCount},
 	{"synthesis.finding.claimed_fact_ids.item_max_length", ContextFabricIdentifierRefMaxLength},

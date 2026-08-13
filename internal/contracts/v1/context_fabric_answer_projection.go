@@ -222,3 +222,27 @@ type ContextFabricProjectionBudget struct {
 	CoverageOmitted    int  `json:"coverage_omitted"`
 	FullResultOmitted  bool `json:"full_result_omitted"`
 }
+
+// Projection field-length bounds.
+//
+// These exist because reads of persisted data accept the HISTORICAL maxima
+// (see ValidateStored): a stored result can legitimately carry text longer
+// than the projection schema admits. The projection is a VIEW, so it clamps
+// such values rather than refusing to render them or emitting a
+// schema-invalid document -- the canonical view still serves the untouched
+// original.
+const (
+	ContextFabricProjectedJudgmentMaxLength            = 4000
+	ContextFabricProjectedNarrativeMaxLength           = 2000
+	ContextFabricProjectedDriverTitleMaxLength         = 512
+	ContextFabricProjectedDriverSummaryMaxLength       = 4000
+	ContextFabricProjectedDriverQualificationMaxLength = 2000
+	ContextFabricProjectedCohortRationaleMaxLength     = 4000
+	ContextFabricProjectedInclusionReasonsMaxCount     = 32
+	ContextFabricProjectedInclusionReasonMaxLength     = 1000
+	ContextFabricProjectedMatchReasonsMaxCount         = 100
+	ContextFabricProjectedMatchReasonMaxLength         = 1024
+	ContextFabricProjectedCoverageSourceMaxLength      = 128
+	ContextFabricProjectedCoverageReasonMaxLength      = 2000
+	ContextFabricProjectedClarificationPromptMaxLength = 2000
+)
