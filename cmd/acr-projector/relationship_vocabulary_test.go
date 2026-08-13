@@ -26,10 +26,20 @@ import (
 // depend on contextfabric; graphrank does too), but this package already
 // depends on all three.
 func TestEveryRecognizedRelationshipTypeHasAProducer(t *testing.T) {
+	recognized := graphrank.RecognizedRelationshipTypes()
+	// L4 (CHAOS-3779 codex round-1): an empty recognized-types list would
+	// make the loop below a no-op that still reports PASS -- a vacuously
+	// true test proves nothing. At least BLOCKS must always be recognized.
+	if len(recognized) == 0 {
+		t.Fatal("graphrank.RecognizedRelationshipTypes() is empty -- this test would pass vacuously with nothing to check")
+	}
 	produced := producedRelationshipTypeSet()
-	for _, recognized := range graphrank.RecognizedRelationshipTypes() {
-		if !produced[contractsv1.ContextFabricRelationshipType(recognized)] {
-			t.Fatalf("graphrank recognizes relationship type %q for driver admission, but no projection producer writes it -- a recognizer entry with no producer is a defect, not a placeholder (TRD §19.5.5/AC-3779-9)", recognized)
+	if len(produced) == 0 {
+		t.Fatal("producedRelationshipTypeSet() is empty -- this test would pass vacuously with nothing to check against")
+	}
+	for _, name := range recognized {
+		if !produced[contractsv1.ContextFabricRelationshipType(name)] {
+			t.Fatalf("graphrank recognizes relationship type %q for driver admission, but no projection producer writes it -- a recognizer entry with no producer is a defect, not a placeholder (TRD §19.5.5/AC-3779-9)", name)
 		}
 	}
 }
@@ -43,7 +53,11 @@ func TestEveryRecognizedRelationshipTypeHasAProducer(t *testing.T) {
 // test catches that at build/test time instead, for every type either
 // producer package claims to emit.
 func TestEveryProducedRelationshipTypeIsAClosedVocabularyMember(t *testing.T) {
-	for produced := range producedRelationshipTypeSet() {
+	types := producedRelationshipTypeSet()
+	if len(types) == 0 {
+		t.Fatal("producedRelationshipTypeSet() is empty -- this test would pass vacuously with nothing to check")
+	}
+	for produced := range types {
 		if !contractsv1.ValidContextFabricRelationshipType(produced) {
 			t.Fatalf("relationship type %q is claimed as produced but is not a member of the closed ContextFabricRelationshipType vocabulary", produced)
 		}

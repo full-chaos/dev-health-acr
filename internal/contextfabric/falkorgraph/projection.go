@@ -15,6 +15,19 @@ import (
 
 const propRelationType = "relation_type"
 
+// documentedByRelationType and hasEpisodeRelationType (CHAOS-3779 codex
+// round-1 finding L4) are the ONE place these two literal type strings are
+// spelled. projectContent and projectEpisode below set propRelationType
+// from these constants (not an inline string literal), and
+// ProducedRelationshipTypes returns exactly these same constants -- so the
+// AC-3779-9 cross-check in cmd/acr-projector reads a value that is
+// compiler-tied to what the write path actually emits, not a hand-list
+// that could silently drift from it.
+const (
+	documentedByRelationType = "DOCUMENTED_BY"
+	hasEpisodeRelationType   = "HAS_EPISODE"
+)
+
 // ProducedRelationshipTypes lists every ContextFabricRelationshipType this
 // package writes as an edge property OTHER than through
 // ContextFabricRelationshipProjection.Type (CHAOS-3779, AC-3779-9's second
@@ -27,8 +40,8 @@ const propRelationType = "relation_type"
 // caller today.
 func ProducedRelationshipTypes() []contextfabric.RelationshipType {
 	return []contextfabric.RelationshipType{
-		contextfabric.RelationshipType("DOCUMENTED_BY"),
-		contextfabric.RelationshipType("HAS_EPISODE"),
+		contextfabric.RelationshipType(documentedByRelationType),
+		contextfabric.RelationshipType(hasEpisodeRelationType),
 	}
 }
 
@@ -216,7 +229,7 @@ func (a *Adapter) projectContent(ctx context.Context, key, orgID string, content
 	// inherits the content's own projected scope: the DOCUMENTED_BY fact
 	// is exactly as authorized as the document it attributes.
 	edgeAttrs := map[string]interface{}{
-		propRelationType: "DOCUMENTED_BY", propEvidenceRefs: graphrank.UniqueSorted(content.EvidenceRefIDs),
+		propRelationType: documentedByRelationType, propEvidenceRefs: graphrank.UniqueSorted(content.EvidenceRefIDs),
 		propAuthzRepos: authorizationValue(content.Authorization.RepositorySlugs), propAuthzProjects: authorizationValue(content.Authorization.ProjectIDs),
 		propAuthzTeams: authorizationValue(content.Authorization.TeamIDs),
 	}
@@ -246,7 +259,7 @@ func (a *Adapter) projectEpisode(ctx context.Context, key, orgID string, episode
 	// Codex P1: same reasoning as projectContent's DOCUMENTED_BY edge --
 	// this attribution edge inherits the episode's own projected scope.
 	edgeAttrs := map[string]interface{}{
-		propRelationType: "HAS_EPISODE", propEvidenceRefs: graphrank.UniqueSorted(episode.EvidenceRefIDs),
+		propRelationType: hasEpisodeRelationType, propEvidenceRefs: graphrank.UniqueSorted(episode.EvidenceRefIDs),
 		propAuthzRepos: authorizationValue(episode.Authorization.RepositorySlugs), propAuthzProjects: authorizationValue(episode.Authorization.ProjectIDs),
 		propAuthzTeams: authorizationValue(episode.Authorization.TeamIDs),
 	}
