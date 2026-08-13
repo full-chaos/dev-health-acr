@@ -153,6 +153,8 @@ func (s *fakeScanner) Scan(dest ...any) error {
 			*value = row[index].(string)
 		case *int64:
 			*value = row[index].(int64)
+		case *uint32:
+			*value = row[index].(uint32)
 		case *uint8:
 			*value = row[index].(uint8)
 		case *time.Time:
@@ -181,7 +183,7 @@ func baseTables(at time.Time) []fakeTable {
 	return []fakeTable{
 		repoRow("repo-1", "example-org/widget-service", "synthetic", at),
 		{match: "FROM work_items AS w", rows: [][]any{{"WIDGET-101", "repo-1", "example-org/widget-service", "Investigate checkout flake", "in_progress", "", at}}},
-		{match: "FROM git_pull_requests AS p", rows: [][]any{{"repo-1", "example-org/widget-service", int64(1042), "Typed session tokens", "open", at}}},
+		{match: "FROM git_pull_requests AS p", rows: [][]any{{"repo-1", "example-org/widget-service", uint32(1042), "Typed session tokens", "open", at}}},
 		{match: "FROM deployments AS d", rows: [][]any{{"repo-1", "example-org/widget-service", "deploy-1", "success", "production", at}}},
 		{match: "FROM operational_incidents AS i", rows: [][]any{{"incident-1", "repo-1", "example-org/widget-service", "Widget incident", "open", "low", at, uint8(0)}}},
 		{match: "FROM work_item_dependencies AS d", rows: [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at}}},
@@ -351,7 +353,7 @@ func TestClickHouseProjectionSourceProjectsPullRequestReviewsAndCIRuns(t *testin
 	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
 	tables := baseTables(at)
 	tables = append(tables,
-		fakeTable{match: "FROM git_pull_request_reviews AS r", rows: [][]any{{"review-1", "repo-1", int64(1042), "approved", at, "example-org/widget-service"}}},
+		fakeTable{match: "FROM git_pull_request_reviews AS r", rows: [][]any{{"review-1", "repo-1", uint32(1042), "approved", at, "example-org/widget-service"}}},
 		fakeTable{match: "FROM ci_pipeline_runs AS c", rows: [][]any{{"run-1", "repo-1", "main", "success", "example-org/widget-service", at}}},
 	)
 	client := &fakeClient{tables: tables}
@@ -459,7 +461,7 @@ func everyRelationshipTypeFixtureTables(at time.Time) []fakeTable {
 		}
 	}
 	return append(tables,
-		fakeTable{match: "FROM git_pull_request_reviews AS r", rows: [][]any{{"review-1", "repo-1", int64(1042), "approved", at, "example-org/widget-service"}}},
+		fakeTable{match: "FROM git_pull_request_reviews AS r", rows: [][]any{{"review-1", "repo-1", uint32(1042), "approved", at, "example-org/widget-service"}}},
 		// FROM work_items AS c is queryWorkItemHierarchy's child-side
 		// alias -- distinct from baseTables' "FROM work_items AS w"
 		// (queryWorkItems' entity query), so this does not collide with
@@ -782,10 +784,10 @@ func TestClickHouseProjectionSourceFullSnapshotPagesWhenAggregateEntitiesExceedT
 		id := fmt.Sprintf("%03d", i)
 		repoRows = append(repoRows, []any{"repo-" + id, "example-org/repo-" + id, "synthetic", at})
 		workItemRows = append(workItemRows, []any{"WIDGET-" + id, "repo-1", "example-org/widget-service", "task " + id, "in_progress", "", at})
-		pullRequestRows = append(pullRequestRows, []any{"repo-1", "example-org/widget-service", int64(i), "PR " + id, "open", at})
+		pullRequestRows = append(pullRequestRows, []any{"repo-1", "example-org/widget-service", uint32(i), "PR " + id, "open", at})
 		deploymentRows = append(deploymentRows, []any{"repo-1", "example-org/widget-service", "deploy-" + id, "success", "production", at})
 		incidentRows = append(incidentRows, []any{"incident-" + id, "repo-1", "example-org/widget-service", "incident " + id, "open", "low", at, uint8(0)})
-		reviewRows = append(reviewRows, []any{"review-" + id, "repo-1", int64(i), "approved", at, "example-org/widget-service"})
+		reviewRows = append(reviewRows, []any{"review-" + id, "repo-1", uint32(i), "approved", at, "example-org/widget-service"})
 		ciRunRows = append(ciRunRows, []any{"run-" + id, "repo-1", "main", "success", "example-org/widget-service", at})
 	}
 	tables := baseTables(at)

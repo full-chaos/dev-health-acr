@@ -116,7 +116,7 @@ func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection 
 		// type's zero value, matching the "no parent" real-world case this
 		// fixture doesn't otherwise need to exercise.
 		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC'), parent_id String DEFAULT '') ENGINE = ReplacingMergeTree ORDER BY work_item_id`,
-		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number Int64, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
+		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number UInt32, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
 		`CREATE TABLE deployments (repo_id String, org_id String, deployment_id String, status Nullable(String), environment Nullable(String), deployed_at Nullable(DateTime64(6, 'UTC')), started_at Nullable(DateTime64(6, 'UTC')), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY deployment_id`,
 		`CREATE TABLE operational_incidents (id String, org_id String, service_id String, title Nullable(String), normalized_status Nullable(String), raw_status Nullable(String), normalized_severity Nullable(String), raw_severity Nullable(String), started_at Nullable(DateTime64(6, 'UTC')), source_event_at Nullable(DateTime64(6, 'UTC')), observed_at DateTime64(6, 'UTC'), is_deleted UInt8) ENGINE = ReplacingMergeTree ORDER BY id`,
 		`CREATE TABLE operational_service_repository_mappings (org_id String, service_id String, repo_id String, is_active UInt8) ENGINE = ReplacingMergeTree ORDER BY (org_id, service_id, repo_id)`,
@@ -126,7 +126,7 @@ func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection 
 		// 027_add_org_id_to_sorting_keys.py) -- codex round-2 finding K1: the
 		// first version of this fixture omitted it here, matching the bug it
 		// was meant to catch.
-		`CREATE TABLE git_pull_request_reviews (review_id String, repo_id String, org_id String, number Int64, state Nullable(String), submitted_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, review_id)`,
+		`CREATE TABLE git_pull_request_reviews (review_id String, repo_id String, org_id String, number UInt32, state Nullable(String), submitted_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, review_id)`,
 		`CREATE TABLE ci_pipeline_runs (run_id String, repo_id String, org_id String, branch Nullable(String), status Nullable(String), started_at DateTime64(6, 'UTC'), finished_at Nullable(DateTime64(6, 'UTC'))) ENGINE = ReplacingMergeTree ORDER BY (org_id, run_id)`,
 	}
 	for _, statement := range statements {
@@ -148,17 +148,17 @@ func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection 
 	// same (repo_id, number) key -- the collision codex round-2 finding K1
 	// warns about for the reviews->PR join, distinct from the repos-join
 	// collision above.
-	if err := connection.Exec(ctx, `INSERT INTO git_pull_requests VALUES (?, ?, ?, ?, ?, ?)`, collidingRepoID, "org-a", int64(1042), "Typed session tokens", "open", at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO git_pull_requests VALUES (?, ?, ?, ?, ?, ?)`, collidingRepoID, "org-a", uint32(1042), "Typed session tokens", "open", at); err != nil {
 		t.Fatalf("seed org-a pull request: %v", err)
 	}
-	if err := connection.Exec(ctx, `INSERT INTO git_pull_requests VALUES (?, ?, ?, ?, ?, ?)`, collidingRepoID, "org-b", int64(1042), "Other org's PR", "open", at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO git_pull_requests VALUES (?, ?, ?, ?, ?, ?)`, collidingRepoID, "org-b", uint32(1042), "Other org's PR", "open", at); err != nil {
 		t.Fatalf("seed org-b pull request: %v", err)
 	}
 	// A single org-a review: if either the reviews->PR join or the PR/review
 	// ->repos join is missing its org_id predicate, this row can fan out
 	// across org-b's colliding PR/repo rows too (a duplicate-subject
 	// contract violation) or silently pick up org-b's slug.
-	if err := connection.Exec(ctx, `INSERT INTO git_pull_request_reviews VALUES (?, ?, ?, ?, ?, ?)`, "review-1", collidingRepoID, "org-a", int64(1042), "approved", at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO git_pull_request_reviews VALUES (?, ?, ?, ?, ?, ?)`, "review-1", collidingRepoID, "org-a", uint32(1042), "approved", at); err != nil {
 		t.Fatalf("seed org-a pull request review: %v", err)
 	}
 
@@ -291,7 +291,7 @@ func seedTwoTenantLinearWorkItems(t *testing.T, ctx context.Context, connection 
 		// collision seedTwoTenantRepoIDCollision's repos ORDER BY comment
 		// warns about.
 		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC'), parent_id String DEFAULT '') ENGINE = ReplacingMergeTree ORDER BY (org_id, work_item_id)`,
-		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number Int64, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
+		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number UInt32, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
 		`CREATE TABLE deployments (repo_id String, org_id String, deployment_id String, status Nullable(String), environment Nullable(String), deployed_at Nullable(DateTime64(6, 'UTC')), started_at Nullable(DateTime64(6, 'UTC')), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY deployment_id`,
 		`CREATE TABLE operational_incidents (id String, org_id String, service_id String, title Nullable(String), normalized_status Nullable(String), raw_status Nullable(String), normalized_severity Nullable(String), raw_severity Nullable(String), started_at Nullable(DateTime64(6, 'UTC')), source_event_at Nullable(DateTime64(6, 'UTC')), observed_at DateTime64(6, 'UTC'), is_deleted UInt8) ENGINE = ReplacingMergeTree ORDER BY id`,
 		`CREATE TABLE operational_service_repository_mappings (org_id String, service_id String, repo_id String, is_active UInt8) ENGINE = ReplacingMergeTree ORDER BY (org_id, service_id, repo_id)`,
@@ -302,7 +302,7 @@ func seedTwoTenantLinearWorkItems(t *testing.T, ctx context.Context, connection 
 		// testdata/fullstack/v1/README.md:96).
 		`CREATE TABLE work_item_dependencies (source_work_item_id String, target_work_item_id String, relationship_type Nullable(String), org_id String, last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, source_work_item_id, target_work_item_id)`,
 		`CREATE TABLE work_graph_deployment_incident_edges (edge_id String, deployment_id String, incident_id String, repo_id String, org_id UUID, observed_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY edge_id`,
-		`CREATE TABLE git_pull_request_reviews (review_id String, repo_id String, org_id String, number Int64, state Nullable(String), submitted_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, review_id)`,
+		`CREATE TABLE git_pull_request_reviews (review_id String, repo_id String, org_id String, number UInt32, state Nullable(String), submitted_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, review_id)`,
 		`CREATE TABLE ci_pipeline_runs (run_id String, repo_id String, org_id String, branch Nullable(String), status Nullable(String), started_at DateTime64(6, 'UTC'), finished_at Nullable(DateTime64(6, 'UTC'))) ENGINE = ReplacingMergeTree ORDER BY (org_id, run_id)`,
 	}
 	for _, statement := range statements {
@@ -462,13 +462,13 @@ func TestClickHouseProjectionSourceFiltersSelfReferentialParentID(t *testing.T) 
 	statements := []string{
 		`CREATE TABLE repos (id String, org_id String, repo String, provider Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
 		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC'), parent_id String DEFAULT '') ENGINE = ReplacingMergeTree ORDER BY work_item_id`,
-		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number Int64, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
+		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number UInt32, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
 		`CREATE TABLE deployments (repo_id String, org_id String, deployment_id String, status Nullable(String), environment Nullable(String), deployed_at Nullable(DateTime64(6, 'UTC')), started_at Nullable(DateTime64(6, 'UTC')), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY deployment_id`,
 		`CREATE TABLE operational_incidents (id String, org_id String, service_id String, title Nullable(String), normalized_status Nullable(String), raw_status Nullable(String), normalized_severity Nullable(String), raw_severity Nullable(String), started_at Nullable(DateTime64(6, 'UTC')), source_event_at Nullable(DateTime64(6, 'UTC')), observed_at DateTime64(6, 'UTC'), is_deleted UInt8) ENGINE = ReplacingMergeTree ORDER BY id`,
 		`CREATE TABLE operational_service_repository_mappings (org_id String, service_id String, repo_id String, is_active UInt8) ENGINE = ReplacingMergeTree ORDER BY (org_id, service_id, repo_id)`,
 		`CREATE TABLE work_item_dependencies (source_work_item_id String, target_work_item_id String, relationship_type Nullable(String), org_id String, last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (source_work_item_id, target_work_item_id)`,
 		`CREATE TABLE work_graph_deployment_incident_edges (edge_id String, deployment_id String, incident_id String, repo_id String, org_id UUID, observed_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY edge_id`,
-		`CREATE TABLE git_pull_request_reviews (review_id String, repo_id String, org_id String, number Int64, state Nullable(String), submitted_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, review_id)`,
+		`CREATE TABLE git_pull_request_reviews (review_id String, repo_id String, org_id String, number UInt32, state Nullable(String), submitted_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, review_id)`,
 		`CREATE TABLE ci_pipeline_runs (run_id String, repo_id String, org_id String, branch Nullable(String), status Nullable(String), started_at DateTime64(6, 'UTC'), finished_at Nullable(DateTime64(6, 'UTC'))) ENGINE = ReplacingMergeTree ORDER BY (org_id, run_id)`,
 	}
 	for _, statement := range statements {
