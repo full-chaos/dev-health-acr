@@ -181,7 +181,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		Versions:   map[FactKind]string{},
 		Watermarks: map[FactKind]string{},
 	}
-	allowedSubjects := canonicalFactSubjectSet(request.Subjects, request.Cohort)
+	allowedSubjects := investigationScopeSubjectSet(request)
 	// CHAOS-3783: decide the whole fan-out up front, before any provider is
 	// touched, so a capability that provably cannot contribute is never
 	// queried and never silently missing. See planFactReads for the rule and
@@ -491,7 +491,7 @@ func validateCanonicalFactRequest(request CanonicalFactRequest) error {
 	if len(request.Requirements) == 0 || len(request.Requirements) > 64 {
 		return errors.New("canonical fact request requires bounded fact requirements")
 	}
-	allowed := canonicalFactSubjectSet(request.Subjects, request.Cohort)
+	allowed := investigationScopeSubjectSet(request)
 	if len(allowed) == 0 {
 		return errors.New("canonical fact request requires discovered subjects or a cohort")
 	}
@@ -528,19 +528,6 @@ func validateCanonicalFactRequest(request CanonicalFactRequest) error {
 		}
 	}
 	return nil
-}
-
-func canonicalFactSubjectSet(subjects []SubjectRef, cohort *Cohort) map[string]SubjectRef {
-	result := make(map[string]SubjectRef, len(subjects))
-	for _, subject := range subjects {
-		result[canonicalFactSubjectKey(subject)] = subject
-	}
-	if cohort != nil {
-		for _, member := range cohort.Members {
-			result[canonicalFactSubjectKey(member.Subject)] = member.Subject
-		}
-	}
-	return result
 }
 
 func canonicalFactSubjectKey(subject SubjectRef) string {

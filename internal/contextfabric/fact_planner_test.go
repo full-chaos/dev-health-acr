@@ -1004,3 +1004,131 @@ func TestReadFactsRejectsOutOfScopeExplicitSubjects(t *testing.T) {
 		}
 	})
 }
+
+// TestScopePrecedenceIsSharedBetweenPlannerAndRegistry is the codex round-6
+// F1 regression.
+//
+// "In scope" was defined twice and the two disagreed. The planner applied
+// request.Subjects ELSE cohort members -- a FALLBACK -- while the registry
+// keyed its allowed-subject map on the UNION of both. A request naming both,
+// with an explicit requirement subject drawn from the cohort, therefore
+// passed the pre-planner scope check on the union and was then pruned by a
+// planner that had already scoped it out. Worse, a capability that DID
+// support that subject kind would have been queried against a subject the
+// request scoped away.
+//
+// The round-5 test could not catch this: it never set a Cohort, so the union
+// and the fallback agreed for every case it exercised. This one is built
+// specifically on the disagreement.
+func TestScopePrecedenceIsSharedBetweenPlannerAndRegistry(t *testing.T) {
+	t.Parallel()
+
+	repository := subject(SubjectRepository, "repo_api")
+	cohortOnlyProject := subject(SubjectProject, "project_titan")
+	// request.Subjects is NON-EMPTY, so the fallback scope is exactly
+	// [repo_api] and the cohort member is deliberately out of scope.
+	mixedScope := func(requirements ...FactRequirement) CanonicalFactRequest {
+		return CanonicalFactRequest{
+			Subjects: []SubjectRef{repository},
+			Cohort: &Cohort{Kind: SubjectProject, Members: []CohortMember{
+				{Subject: cohortOnlyProject, Rank: 1},
+			}},
+			Requirements: requirements,
+		}
+	}
+
+	t.Run("a cohort-only explicit subject is out of scope and must error", func(t *testing.T) {
+		t.Parallel()
+		// Repository-only capability: under the old union scope this was
+		// pruned instead of rejected.
+		metrics := &factProviderStub{
+			capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+			result:     FactProviderResult{State: SourceAvailable},
+		}
+		registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{})
+		if err != nil {
+			t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+		}
+		_, err = registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+			mixedScope(FactRequirement{Kind: FactMetrics, Subjects: []SubjectRef{cohortOnlyProject}}))
+		if err == nil {
+			t.Fatal("ReadFacts() error = nil, want a cohort-only subject rejected when request.Subjects scopes it out")
+		}
+		if !strings.Contains(err.Error(), "outside the discovered investigation set") {
+			t.Fatalf("ReadFacts() error = %v, want the scope violation named", err)
+		}
+	})
+
+	t.Run("a capable provider is never queried against an out-of-scope subject", func(t *testing.T) {
+		t.Parallel()
+		// This capability DOES support project subjects, so under the old
+		// union scope it would have been queried against a subject the
+		// request had scoped away -- the more serious half of the finding.
+		health := &factProviderStub{
+			capability: planCapability(FactHealth, "health", SubjectProject, SubjectRepository),
+			result:     FactProviderResult{State: SourceAvailable},
+		}
+		registry, err := NewFactCapabilityRegistry([]FactProvider{health}, FactRegistryOptions{})
+		if err != nil {
+			t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+		}
+		_, err = registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+			mixedScope(FactRequirement{Kind: FactHealth, Subjects: []SubjectRef{cohortOnlyProject}}))
+		if err == nil {
+			t.Fatal("ReadFacts() error = nil, want the out-of-scope subject rejected even for a capability that supports its kind")
+		}
+		if len(health.queries) != 0 {
+			t.Fatalf("provider was queried %d time(s) against an out-of-scope subject", len(health.queries))
+		}
+	})
+
+	t.Run("implicit fan-out is untouched by the precedence fix", func(t *testing.T) {
+		t.Parallel()
+		// No explicit requirement.Subjects: the planner fans out over the
+		// fallback scope (request.Subjects), exactly as before.
+		metrics := &factProviderStub{
+			capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+			result:     FactProviderResult{State: SourceAvailable},
+		}
+		registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{})
+		if err != nil {
+			t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+		}
+		if _, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+			mixedScope(FactRequirement{Kind: FactMetrics})); err != nil {
+			t.Fatalf("ReadFacts() error = %v, want implicit fan-out unaffected", err)
+		}
+		if len(metrics.queries) != 1 {
+			t.Fatalf("provider queried %d time(s), want 1", len(metrics.queries))
+		}
+		asked := metrics.queries[0].Subjects
+		if len(asked) != 1 || asked[0].CanonicalID != "repo_api" {
+			t.Fatalf("provider was asked about %+v, want only the request-scoped repository", asked)
+		}
+	})
+
+	t.Run("a cohort-only request still scopes to its members", func(t *testing.T) {
+		t.Parallel()
+		// request.Subjects empty: the fallback selects the cohort, so its
+		// members ARE in scope. The precedence fix must not break this.
+		health := &factProviderStub{
+			capability: planCapability(FactHealth, "health", SubjectProject),
+			result:     FactProviderResult{State: SourceAvailable},
+		}
+		registry, err := NewFactCapabilityRegistry([]FactProvider{health}, FactRegistryOptions{})
+		if err != nil {
+			t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+		}
+		if _, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			Cohort: &Cohort{Kind: SubjectProject, Members: []CohortMember{{Subject: cohortOnlyProject, Rank: 1}}},
+			Requirements: []FactRequirement{
+				{Kind: FactHealth, Subjects: []SubjectRef{cohortOnlyProject}},
+			},
+		}); err != nil {
+			t.Fatalf("ReadFacts() error = %v, want cohort members in scope when the request names no subjects", err)
+		}
+		if len(health.queries) != 1 {
+			t.Fatalf("provider queried %d time(s), want 1", len(health.queries))
+		}
+	})
+}

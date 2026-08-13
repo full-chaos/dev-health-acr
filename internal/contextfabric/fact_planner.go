@@ -198,6 +198,29 @@ func planFactReads(input factPlanInput, capabilities map[FactKind]FactCapability
 // definition shared by newFactPlanInput and buildFactQuery, because the
 // planner narrows the very list buildFactQuery goes on to validate and the
 // two must not diverge.
+// investigationScopeSubjectSet is the SAME scope as investigationScopeSubjects,
+// keyed for membership tests. It is derived from that function rather than
+// rebuilt, so the planner's notion of scope and the registry's cannot drift
+// (codex round-6 F1).
+//
+// They previously did drift, and it mattered. The registry keyed its
+// allowed-subject map on the UNION of request.Subjects and the cohort's
+// members while the planner applied request.Subjects ELSE cohort as a
+// FALLBACK. For a request naming both -- say request.Subjects=[repo_api] with
+// a cohort of [project_titan] -- the union accepted project_titan as in
+// scope even though the planner had scoped it out, so an explicit
+// requirement naming it was pruned (or, for a project-capable capability,
+// actually QUERIED) instead of being rejected as out of scope. One
+// derivation, used everywhere, is the only fix that stays fixed.
+func investigationScopeSubjectSet(request CanonicalFactRequest) map[string]SubjectRef {
+	subjects := investigationScopeSubjects(request)
+	scope := make(map[string]SubjectRef, len(subjects))
+	for _, subject := range subjects {
+		scope[canonicalFactSubjectKey(subject)] = subject
+	}
+	return scope
+}
+
 func investigationScopeSubjects(request CanonicalFactRequest) []SubjectRef {
 	if len(request.Subjects) > 0 {
 		return request.Subjects

@@ -113,7 +113,16 @@ the fact kind, and asserting the plans are identical.
 
 Everything else.
 
-- A requirement naming its own `Subjects` is honored as given.
+- A requirement naming its own `Subjects` is honored as given -- including
+  its errors. An explicit list is a caller *assertion*, so naming a subject
+  outside the investigation scope is a scope violation, checked in
+  `validateCanonicalFactRequest` BEFORE the planner runs so pruning can never
+  swallow it. In-scope-but-unsupported still prunes; out-of-scope errors.
+  Scope itself has ONE derivation, `investigationScopeSubjectSet`, shared by
+  that check, `buildFactQuery`, and the planner: it is `request.Subjects` else
+  the cohort's members, a fallback and not a union. The registry once keyed a
+  union while the planner applied the fallback, so a cohort member could pass
+  the scope check for a request that had scoped it out.
 - A capability supporting even one resolved subject runs.
 - An ambiguous or low-confidence interpretation prunes **nothing extra**,
   because none of that reaches the planner. Ambiguity widens the requirement
