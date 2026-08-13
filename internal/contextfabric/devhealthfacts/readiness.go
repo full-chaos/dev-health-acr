@@ -58,7 +58,11 @@ func (p *ReadinessProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	// M1): estimate_coverage_metrics_daily has no per-row unique id beyond
 	// this partition's own key, so two rows could share both. cityHash64
 	// of the value columns is the final tiebreaker -- arbitrary among an
-	// exact tie, but stable.
+	// exact tie, but stable. Its ifNull(ratio, -1) sentinel is only
+	// unambiguous while -1 is outside ratio's real domain: ratio is
+	// estimated_count/backlog_size, a fraction; live data ranges [0, 1],
+	// never negative. There is no ClickHouse-level CHECK constraint
+	// enforcing this -- it is a domain assumption, not a type guarantee.
 	statement := withRowLimit(`SELECT team_id, work_scope_id, provider, toString(day), toInt64(estimated_count), toInt64(unestimated_count), toInt64(backlog_size), toUInt8(isNotNull(ratio)), toFloat64(ifNull(ratio, 0))
 FROM (
 	SELECT ifNull(team_id, '') AS team_id, work_scope_id, provider, day, estimated_count, unestimated_count, backlog_size, ratio,

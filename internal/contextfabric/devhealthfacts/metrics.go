@@ -58,6 +58,12 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	}
 	ids, bySubject := subjectIndex(query.Subjects, repositoryPrefix)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
+	// The hash tiebreak's ifNull(mttr_hours, -1) sentinel is only
+	// unambiguous while -1 is outside mttr_hours' real domain. mttr_hours
+	// is a mean-time-to-recovery DURATION in hours, so it is semantically
+	// always >= 0 (verified against live data: no negative value
+	// observed). There is no ClickHouse-level UInt/CHECK constraint
+	// enforcing this -- it is a domain assumption, not a type guarantee.
 	statement := withRowLimit(`SELECT toString(repo_id), toString(day), toInt64(commits_count), toInt64(prs_merged), toFloat64(median_pr_cycle_hours), toFloat64(change_failure_rate), toUInt8(isNotNull(mttr_hours)), toFloat64(ifNull(mttr_hours, 0)), toInt64(bus_factor), toFloat64(code_ownership_gini)
 FROM (
 	SELECT repo_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini,

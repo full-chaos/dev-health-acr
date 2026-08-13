@@ -85,6 +85,12 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 // inline into the statement the same way withRowLimit's maxFactRowsPerQuery
 // is.
 func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids []string, bySubject map[string]contextfabric.SubjectRef, evidenceEntityType string, facts *[]contextfabric.CanonicalFact) (int, error) {
+	// The hash tiebreak's ifNull(compounding_risk, -1) sentinel is only
+	// unambiguous while -1 is outside compounding_risk's real domain.
+	// compounding_risk is a normalized risk SCORE; live data ranges
+	// [0.0000127, 0.58], never negative. There is no ClickHouse-level
+	// UInt/CHECK constraint enforcing this -- it is a domain assumption,
+	// not a type guarantee.
 	statement := withRowLimit(`SELECT scope_id, toString(severity), toUInt8(isNotNull(compounding_risk)), toFloat64(ifNull(compounding_risk, 0)), toString(computed_at)
 FROM (
 	SELECT scope_id, severity, compounding_risk, computed_at,

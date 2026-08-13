@@ -63,12 +63,17 @@ func (p *OperationalDeficienciesProvider) ReadFacts(ctx context.Context, princip
 	// finding M1): without a further tiebreaker, a tie could let an
 	// arbitrary fired value win between executions of the identical
 	// query -- exactly the bug F1 fixed, reintroduced by a different
-	// route. cityHash64 of the value columns (fired included) is the
-	// final tiebreaker -- arbitrary among an exact tie, but stable.
+	// route. cityHash64 of the value columns is the final tiebreaker --
+	// arbitrary among an exact tie, but stable. The hash must cover
+	// EVERY column this query actually outputs (Codex round-3 finding):
+	// rule_version and window_start are both selected fields, and were
+	// missing from the first version of this tuple -- two rows tied on
+	// (window_end, computed_at) but differing only in rule_version or
+	// window_start would still have been unordered.
 	statement := withRowLimit(`SELECT team_id, rule_id, rule_version, severity, title, rationale, success_criterion, toString(window_start), toString(window_end)
 FROM (
 	SELECT team_id, rule_id, rule_version, severity, title, rationale, success_criterion, window_start, window_end, fired,
-		row_number() OVER (PARTITION BY team_id, rule_id ORDER BY window_end DESC, computed_at DESC, cityHash64(tuple(fired, severity, title, rationale, success_criterion)) DESC) AS rn
+		row_number() OVER (PARTITION BY team_id, rule_id ORDER BY window_end DESC, computed_at DESC, cityHash64(tuple(fired, severity, title, rationale, success_criterion, rule_version, window_start)) DESC) AS rn
 	FROM recommendations_daily FINAL
 	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}
 )
