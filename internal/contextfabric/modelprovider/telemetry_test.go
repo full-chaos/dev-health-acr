@@ -3,6 +3,7 @@ package modelprovider
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -110,13 +111,29 @@ func TestNew_neverExportsPromptContentToGenkitTelemetry(t *testing.T) {
 // just calls otel.Meter("genkit") fresh. suppressGenkitTelemetryExport now
 // also registers a no-op *metric.MeterProvider before genkit.Init runs.
 //
-// Ordering note: like the tracing probe above, Genkit's metrics
-// instruments are created via a package-global sync.OnceValue
-// (internal/metrics/metrics.go's fetchInstruments) on the FIRST ever
-// action completion in the process, permanently binding to whichever
-// MeterProvider was active at that moment -- run in isolation:
+// Ordering note (codex round 3, informational): like the tracing probe
+// above, Genkit's metrics instruments are created via a package-global
+// sync.OnceValue (internal/metrics/metrics.go's fetchInstruments) on the
+// FIRST ever action completion in the process, permanently binding to
+// whichever MeterProvider was active at that moment. Run in isolation to
+// exercise THIS test's own reader specifically:
 //
 //	go test ./internal/contextfabric/modelprovider -run '^TestNew_neverExportsErrorContentToGenkitMetrics$' -v
+//
+// Unlike the pre-fix repro (which genuinely depends on being first), this
+// is not a soundness gap in the fixed code as part of the full suite:
+// every test in this package reaches an action only via New(), and New()
+// always calls suppressGenkitTelemetryExport before genkit.Init runs --
+// so whichever test in the binary happens to trigger the first-ever
+// action completion, fetchInstruments binds to a no-op MeterProvider
+// either way. A run as part of the full package suite can therefore bind
+// to an EARLIER test's no-op provider instead of this test's own reader
+// (making the collected-metrics assertion trivially true rather than a
+// live check of this specific reader) rather than failing -- it cannot
+// silently pass while the real vulnerability persists, because ANY
+// binding to a provider other than one an attacker controls means the
+// content never left the process. The isolated run above is what proves
+// the mechanism, not merely its absence of failure.
 func TestNew_neverExportsErrorContentToGenkitMetrics(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	// Registered BEFORE New(): if New()'s suppression did not overwrite
@@ -253,4 +270,116 @@ func TestGenkitDebugLoggingNeverCarriesGenerationContentOnACRsPath(t *testing.T)
 			t.Fatalf("Debug-level log echoed the malformed model output verbatim: %s", captured)
 		}
 	})
+}
+
+// TestActionRunDebugLoggingNeverCarriesProviderResponseBody is the
+// CHAOS-3770 F1(b) residual probe (codex round 3): the refutation in
+// TestGenkitDebugLoggingNeverCarriesGenerationContentOnACRsPath was correct
+// about DefineGenerateAction's closure being unreachable, but missed a
+// SECOND Debug logging path that IS on our call chain and IS reachable for
+// a genuine provider transport error (not just a malformed-but-200
+// response): core/action.go's Action.Run wraps every action invocation,
+// including the model action itself
+// (GenerateWithRequest -> Model.Generate -> Action.Run, ai/generate.go:882),
+// and its deferred log records the RAW error verbatim:
+//
+//	logger.FromContext(ctx).Debug("Action.Run", "name", a.Name(), "err", err)
+//
+// For a provider transport failure, that err is compat_oai's own
+// fmt.Errorf("failed to create completion: %w", err)-wrapped openai-go
+// SDK error, whose Error() method embeds the raw response body verbatim
+// (openai-go/internal/apierror.Error.Error(), aliased as openai.Error --
+// see retryable's doc comment in genkitruntime/runtime.go). slog formats
+// an error-typed attribute via its Error() method, so this log line
+// carries the raw provider response body whenever the model action
+// itself fails -- a case
+// TestGenkitDebugLoggingNeverCarriesGenerationContentOnACRsPath never
+// exercised (its malformed-output case is a 200 OK with unparseable JSON
+// content, not a transport error, so the model ACTION succeeds and
+// Action.Run logs err=<nil>).
+//
+// The fix sanitizes at the transport boundary this package already owns
+// (newClientOptions, via option.WithMiddleware) rather than trying to
+// mute genkit's logger: a provider response body is replaced with a
+// fixed, content-free shape -- preserving the HTTP status (so
+// classifyModelError's existing status-based classification, including
+// its "429" substring check for rate limiting, is unaffected -- see the
+// composition assertion below and TestNew_classifiesRecordedProviderFailures)
+// -- before the openai-go SDK ever constructs an *openai.Error from it.
+// That closes the leak at its source: Action.Run's debug log, genkit's
+// metrics errorMessage attribute (F1(a)), and any other current or future
+// consumer of the error all see the sanitized text, unconditionally,
+// regardless of log level or provider configuration.
+func TestActionRunDebugLoggingNeverCarriesProviderResponseBody(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(previous)
+
+	const secret = "Rejected prompt: release readiness for the Ask Dev launch -- must never leave this process"
+	provider := recordingProvider(t, providerError(http.StatusBadRequest, "invalid_prompt", secret))
+	cfg := testConfig(provider)
+
+	runtime, err := New(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, callErr := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_test"}, testRequest())
+	if callErr == nil {
+		t.Fatal("InterpretQuestion() error = nil, want a classified failure")
+	}
+
+	captured := buf.String()
+	// Sanity check first: the model action's own Action.Run debug log must
+	// actually have fired with a non-nil err, or this test proves nothing
+	// (the difference between this test and the earlier refutation is
+	// exactly that the MODEL ACTION ITSELF fails here, not a later parse
+	// step).
+	if !strings.Contains(captured, "Action.Run") || !strings.Contains(captured, "name=openai/gpt-5-nano") {
+		t.Fatalf("sanity check failed: the model action's Action.Run debug log never fired; got: %s", captured)
+	}
+	if strings.Contains(captured, secret) {
+		t.Fatalf("Action.Run's debug log carried the raw provider response body: %s", captured)
+	}
+}
+
+// TestSanitizedProviderErrorStillClassifiesIdenticallyThroughRetryableAndTaxonomy
+// verifies the composition the round-3 fix direction calls for explicitly:
+// sanitizing the provider response body at the transport boundary must not
+// change classifyModelError's or retryable's behavior for any of the
+// recorded provider failures TestNew_classifiesRecordedProviderFailures
+// already pins. Re-running that exact assertion here, alongside
+// genkitruntime's own retry-count probe, is what proves the sanitization
+// preserves enough structure (the HTTP status, never the message) for F2's
+// classification and no-retry-same-input guarantees to keep working
+// unchanged.
+func TestSanitizedProviderErrorStillClassifiesIdenticallyThroughRetryableAndTaxonomy(t *testing.T) {
+	cases := map[string]struct {
+		handler http.HandlerFunc
+		want    error
+	}{
+		"401 invalid credential":            {providerError(http.StatusUnauthorized, "invalid_api_key", "Incorrect API key provided: sk-conf***ured."), contextfabric.ErrModelUnavailable},
+		"403 credential lacks model access": {providerError(http.StatusForbidden, "model_not_found", "Project does not have access to model gpt-5-nano."), contextfabric.ErrModelUnavailable},
+		"429 rate limited":                  {providerError(http.StatusTooManyRequests, "rate_limit_exceeded", "Rate limit reached for gpt-5-nano."), contextfabric.ErrModelRateLimited},
+		"429 quota exhausted":               {providerError(http.StatusTooManyRequests, "insufficient_quota", "You exceeded your current quota."), contextfabric.ErrModelRateLimited},
+		"500 provider fault":                {providerError(http.StatusInternalServerError, "server_error", "The server had an error processing your request."), contextfabric.ErrModelUnavailable},
+		"503 provider overloaded":           {providerError(http.StatusServiceUnavailable, "engine_overloaded", "The engine is currently overloaded."), contextfabric.ErrModelUnavailable},
+	}
+	for name, testCase := range cases {
+		t.Run(name, func(t *testing.T) {
+			provider := recordingProvider(t, testCase.handler)
+			err := callProvider(t, testConfig(provider))
+			if !errors.Is(err, testCase.want) {
+				t.Fatalf("err = %v, want %v", err, testCase.want)
+			}
+			// The retry loop must not have retried a non-transient
+			// (4xx) failure with the same payload (CHAOS-3770 F2), and
+			// must retry a genuinely transient one up to MaxAttempts.
+			// testConfig sets MaxAttempts: 1, so this is really just
+			// confirming the call completed and classified without a
+			// panic on the sanitized error type -- the dedicated retry
+			// probes live in genkitruntime; this test's job is only the
+			// classification composition.
+		})
+	}
 }

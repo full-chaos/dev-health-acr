@@ -3,7 +3,10 @@ package modelprovider
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"strings"
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
@@ -97,7 +100,67 @@ func newClientOptions(cfg Config) []option.RequestOption {
 		credential,
 		option.WithBaseURL(baseURL),
 		option.WithMaxRetries(cfg.MaxTransportRetries),
+		option.WithMiddleware(sanitizeProviderErrorBody),
 	}
+}
+
+// sanitizeProviderErrorBody is an OpenAI SDK request middleware
+// (CHAOS-3770 F1(b) residual, codex round 3) that replaces a non-2xx
+// provider response body with a fixed, content-free shape before the SDK
+// itself ever reads it.
+//
+// Without this, the openai-go SDK constructs an *openai.Error
+// (internal/apierror.Error) directly from the response body for every
+// non-2xx status, and that type's Error() method formats as
+// "%s %q: %d %s %s" with the RAW BODY as the last component -- so
+// whatever the provider returned (which can echo request content, e.g. a
+// gateway's "rejected prompt: ..." message) becomes part of the error's
+// own string representation. That string then flows, unmodified, into
+// every consumer of the error: retryable/classifyModelError in
+// genkitruntime (already provider-content-safe on its own merits, per
+// their own doc comments), Genkit's internal/metrics errorMessage
+// attribute (F1(a)), and -- what round 3 of this review actually caught
+// -- core/action.go's Action.Run, which logs the raw err verbatim at
+// Debug level on every action failure, INCLUDING the model action itself
+// (ai/generate.go:882's Model.Generate calls m.Action.Run directly).
+// Muting Genkit's logger only helps for log levels ACR chooses; the
+// provider's own response body is content this service must never hold
+// as free text at all, at any log level, so it is sanitized here, once,
+// at the one place ACR constructs the transport that ever sees it.
+//
+// This intentionally preserves the HTTP status code (both in the
+// response's own StatusCode field, untouched, and spelled out in the
+// replacement message) and discards everything else. That is enough for
+// every existing consumer that classifies on status: shouldRetry (the
+// SDK's own retry decision, internal/requestconfig) reads only
+// res.StatusCode and response headers, never the body, so retry behavior
+// is unaffected; classifyModelError's substring fallback for rate
+// limiting keys off the literal digits "429", which the replacement
+// message still contains for a 429 response
+// (TestSanitizedProviderErrorStillClassifiesIdenticallyThroughRetryableAndTaxonomy
+// pins this against every case
+// TestNew_classifiesRecordedProviderFailures already covers). It
+// deliberately does NOT try to preserve or reconstruct a provider error
+// "code" or "type" field -- inventing plausible-looking values for those
+// would be worse than omitting them, and nothing in this codebase
+// classifies on them.
+func sanitizeProviderErrorBody(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+	resp, err := next(req)
+	if err != nil || resp == nil || resp.StatusCode < 400 {
+		return resp, err
+	}
+	if resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	sanitized := fmt.Sprintf(
+		`{"error":{"message":"provider response redacted by ACR (status %d %s)","type":"acr_sanitized_error","param":null,"code":null}}`,
+		resp.StatusCode, strings.ReplaceAll(http.StatusText(resp.StatusCode), `"`, ""),
+	)
+	resp.Body = io.NopCloser(strings.NewReader(sanitized))
+	resp.ContentLength = int64(len(sanitized))
+	resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(sanitized)))
+	resp.Header.Set("Content-Type", "application/json")
+	return resp, nil
 }
 
 // suppressGenkitTelemetryExport prevents Genkit's own tracing AND metrics

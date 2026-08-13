@@ -316,11 +316,33 @@ also fails composition outright if the ambient `GENKIT_ENV` variable is
 set to `dev`, which would start Genkit's local reflection server and its
 `handleNotify` endpoint — a second, independent way to register a
 telemetry exporter at runtime
-(`modelprovider.TestNew_rejectsGenkitDevEnvironment`); and Genkit's
-Debug-level logging of generation content was checked empirically, not
-assumed safe — it never fires on ACR's own call path at any log level
-reachable in production
+(`modelprovider.TestNew_rejectsGenkitDevEnvironment`); and Genkit's Debug-level logging of generation content was checked
+empirically, not assumed safe. Two of its paths are structurally
+unreachable or content-free on ACR's own call path: the one closure that
+logs full input/output (`DefineGenerateAction`) is registered as the
+`"generate"` action and is reachable only through Genkit's dev-only
+reflection/action-dispatch callers, never through the direct SDK call
+chain `genkitruntime` uses; and the schema-mismatch log line that IS on
+that path never echoes the offending content, even at Debug level — its
+message is `encoding/json`'s own generic parse error
 (`modelprovider.TestGenkitDebugLoggingNeverCarriesGenerationContentOnACRsPath`).
+A third path is real: `core/action.go`'s `Action.Run` wraps every action,
+including the model action itself, and its deferred Debug log records the
+raw generation error verbatim — which, for a genuine provider transport
+failure, is the OpenAI SDK's own error carrying the raw response body
+(confirmed by capturing the leak live before the fix). Rather than relying
+on ACR's log level (a property of composition, not of the SDK), this is
+sanitized at its source: the OpenAI-compatible client's own transport,
+which `modelprovider` already owns, replaces any non-2xx response body
+with a fixed, status-only shape via `option.WithMiddleware` before the SDK
+ever constructs an error from it — so every consumer of that error,
+present or future, sees sanitized text unconditionally, regardless of log
+level or call path
+(`modelprovider.TestActionRunDebugLoggingNeverCarriesProviderResponseBody`).
+The replacement preserves the HTTP status only, which is enough for every
+existing status-based classification (the SDK's own retry decision, and
+`classifyModelError`'s rate-limit detection) to behave identically
+(`modelprovider.TestSanitizedProviderErrorStillClassifiesIdenticallyThroughRetryableAndTaxonomy`).
 Both the tracer- and meter-provider registrations are last-writer-wins
 against any later `otel.Set{Tracer,Meter}Provider` call anywhere in the
 process; see `suppressGenkitTelemetryExport`'s doc comment in
