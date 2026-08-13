@@ -307,10 +307,10 @@ func driverWithClaimedFactIDs(count int) contractsv1.ContextFabricDriverJudgment
 
 func baseFinding() contractsv1.ContextFabricFinding {
 	return contractsv1.ContextFabricFinding{
-		FindingID:      "finding_00000001",
-		Kind:           string(contractsv1.ContextFabricDriverCategoryNarrative),
-		Summary:        "Release acceptance remains open.",
-		Subjects: []contractsv1.ContextFabricSubjectRef{boundsSubject(0)},
+		FindingID: "finding_00000001",
+		Kind:      string(contractsv1.ContextFabricDriverCategoryNarrative),
+		Summary:   "Release acceptance remains open.",
+		Subjects:  []contractsv1.ContextFabricSubjectRef{boundsSubject(0)},
 		// Unlike a driver, a finding may not have an empty evidence list:
 		// boundedEvidenceRefs is called with allowEmpty=false for findings
 		// and allowEmpty=true for drivers.

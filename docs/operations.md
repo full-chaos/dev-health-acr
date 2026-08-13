@@ -340,6 +340,31 @@ The fallback raises the answer rate; it does not make it 1.0. One of those
 fallback configured — do not build a client that assumes an investigation
 always returns an answer on the first call.
 
+#### Measured model matrix
+
+| Configuration | Usable answers | Typical latency | Dominant failure mode |
+| --- | --- | --- | --- |
+| `gpt-5-nano` alone | 2 / 33 | 52–95s | Synthesis value-level closure — a driver cites no claimed fact restating a canonical value |
+| `gpt-5-nano` + `gpt-5.6-luna` fallback | 16 / 17 | 45–95s | One residual synthesis rejection |
+| `gpt-5-mini` alone | 4 / 12 | 17–88s | **5 of 8 failures were the omitted 256-character `requested_judgment` cap, since fixed**; the other 3 were synthesis closure, a finding bounds violation, and one provider `INTERNAL` |
+
+Read the `gpt-5-mini` row with care: it was measured on interpretation prompt
+v3, which did not state the `requested_judgment` limit the validator enforces.
+Mini writes a longer judgment than nano and was rejected for it on 5 of 12
+attempts before reaching synthesis at all — a prompt omission, not a model
+weakness. Interpretation v4 and synthesis v5 now state every bound
+(`genkitruntime.TestPromptsStateEveryModelFacingBound`), so mini's true rate
+on current prompts is **unmeasured and expected to be materially better than
+4 of 12**. The nano and fallback rows were also measured on v3.
+
+So the standing recommendation is unchanged for now — `gpt-5-nano` with the
+`gpt-5.6-luna` fallback is the only combination measured to answer reliably —
+but `gpt-5-mini` is the open question worth settling before treating that as
+final, because a primary that answers on its own would remove the second
+billable call the fallback costs. Re-run
+`go test ./internal/api -run LiveEndpoint` with `ACR_TEST_MODEL=gpt-5-mini`
+on the current prompts to settle it.
+
 ### Helm
 
 Render the private chart offline before a release promotion. The values schema
