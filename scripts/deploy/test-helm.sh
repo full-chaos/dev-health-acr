@@ -464,6 +464,44 @@ grep -q 'ACR_POSTGRES_POOLER_ADMIN_DSN' <<<"$pgb" || fail_gate "pgbouncer: runti
 grep -q 'ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN' <<<"$pgb" || fail_gate "pgbouncer: migration ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN not wired in pgbouncer mode"
 pass "pgbouncer: connection kind pgbouncer wires runtime + migration pooler admin DSNs"
 
+# Gate 18: contextFabric.falkor.* wires ACR_CONTEXT_FABRIC_FALKOR_* into
+# acr-api (CHAOS-3774), both with and without an existingSecret password.
+if grep -q 'ACR_CONTEXT_FABRIC_FALKOR' "$rendered"; then
+  fail_gate "falkor-env: contextFabric.falkor.addr is empty in these values but ACR_CONTEXT_FABRIC_FALKOR_* rendered anyway"
+fi
+pass "falkor-env: unset contextFabric.falkor.addr renders no ACR_CONTEXT_FABRIC_FALKOR_* (never fails closed)"
+
+extract_container_block() {
+  # Same extraction as container_block()/assert_restricted_container(), but
+  # over an arbitrary rendered doc read from stdin rather than $rendered.
+  local name="$1"
+  awk -v name="$name" '
+    $0 == "        - name: " name { inside = 1 }
+    inside && $0 ~ /^        - name: / && $0 != "        - name: " name { exit }
+    inside { print }
+  '
+}
+
+falkor_no_secret="$(render \
+  --set-string contextFabric.falkor.addr=falkordb.internal:6379 \
+  --set-string contextFabric.falkor.graphPrefix=acr-cf)"
+falkor_no_secret_api="$(extract_container_block acr-api <<<"$falkor_no_secret")"
+for key in 'ACR_CONTEXT_FABRIC_FALKOR_ADDR' 'ACR_CONTEXT_FABRIC_FALKOR_TLS' 'ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE' 'ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX'; do
+  grep -qF "$key" <<<"$falkor_no_secret_api" || fail_gate "falkor-env: $key missing from acr-api with no existingSecret configured"
+done
+grep -q 'ACR_CONTEXT_FABRIC_FALKOR_PASSWORD' <<<"$falkor_no_secret_api" && fail_gate "falkor-env: ACR_CONTEXT_FABRIC_FALKOR_PASSWORD rendered without an existingSecret"
+pass "falkor-env: no-secret FalkorDB values render addr/tls/allowInsecure/graphPrefix into acr-api, no password ref"
+
+falkor_with_secret="$(render \
+  --set-string contextFabric.falkor.addr=falkordb.internal:6379 \
+  --set-string contextFabric.falkor.existingSecret=acr-falkor-credentials \
+  --set-string contextFabric.falkor.passwordKey=ACR_CONTEXT_FABRIC_FALKOR_PASSWORD)"
+falkor_with_secret_api="$(extract_container_block acr-api <<<"$falkor_with_secret")"
+grep -q 'ACR_CONTEXT_FABRIC_FALKOR_PASSWORD' <<<"$falkor_with_secret_api" || fail_gate "falkor-env: ACR_CONTEXT_FABRIC_FALKOR_PASSWORD missing from acr-api with existingSecret configured"
+grep -A3 'ACR_CONTEXT_FABRIC_FALKOR_PASSWORD' <<<"$falkor_with_secret_api" | grep -q 'name: "acr-falkor-credentials"' \
+  || fail_gate "falkor-env: ACR_CONTEXT_FABRIC_FALKOR_PASSWORD does not reference contextFabric.falkor.existingSecret"
+pass "falkor-env: existingSecret FalkorDB values render ACR_CONTEXT_FABRIC_FALKOR_PASSWORD as a secretKeyRef in acr-api"
+
 if grep -q '/var/run/acr/postgres-ca' "$rendered"; then
   fail_gate "postgres-transport: ordinary development render must not require a PostgreSQL CA bundle"
 fi

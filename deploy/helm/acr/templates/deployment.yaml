@@ -139,6 +139,23 @@ spec:
                   name: {{ .Values.credentials.runtime.existingSecret | quote }}
                   key: {{ .Values.credentials.runtime.poolerAdminDsnKey | quote }}
             {{- end }}
+            {{- if .Values.contextFabric.falkor.addr }}
+            - name: ACR_CONTEXT_FABRIC_FALKOR_ADDR
+              value: {{ .Values.contextFabric.falkor.addr | quote }}
+            - name: ACR_CONTEXT_FABRIC_FALKOR_TLS
+              value: {{ .Values.contextFabric.falkor.tls | quote }}
+            - name: ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE
+              value: {{ .Values.contextFabric.falkor.allowInsecure | quote }}
+            - name: ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX
+              value: {{ .Values.contextFabric.falkor.graphPrefix | quote }}
+            {{- if .Values.contextFabric.falkor.existingSecret }}
+            - name: ACR_CONTEXT_FABRIC_FALKOR_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.contextFabric.falkor.existingSecret | quote }}
+                  key: {{ .Values.contextFabric.falkor.passwordKey | default "ACR_CONTEXT_FABRIC_FALKOR_PASSWORD" | quote }}
+            {{- end }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
