@@ -108,7 +108,12 @@ func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection 
 		// ORDER BY id alone would let ClickHouse collapse the two tenants'
 		// rows into one under FINAL, before the query under test even runs.
 		`CREATE TABLE repos (id String, org_id String, repo String, provider Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
-		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY work_item_id`,
+		// parent_id (CHAOS-3779, queryWorkItemHierarchy's PART_OF source)
+		// defaults to '' via the trailing column omitted from every INSERT
+		// below -- ClickHouse fills an un-listed String column with its
+		// type's zero value, matching the "no parent" real-world case this
+		// fixture doesn't otherwise need to exercise.
+		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC'), parent_id String DEFAULT '') ENGINE = ReplacingMergeTree ORDER BY work_item_id`,
 		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number Int64, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
 		`CREATE TABLE deployments (repo_id String, org_id String, deployment_id String, status Nullable(String), environment Nullable(String), deployed_at Nullable(DateTime64(6, 'UTC')), started_at Nullable(DateTime64(6, 'UTC')), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY deployment_id`,
 		`CREATE TABLE operational_incidents (id String, org_id String, service_id String, title Nullable(String), normalized_status Nullable(String), raw_status Nullable(String), normalized_severity Nullable(String), raw_severity Nullable(String), started_at Nullable(DateTime64(6, 'UTC')), source_event_at Nullable(DateTime64(6, 'UTC')), observed_at DateTime64(6, 'UTC'), is_deleted UInt8) ENGINE = ReplacingMergeTree ORDER BY id`,
@@ -133,7 +138,7 @@ func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection 
 	if err := connection.Exec(ctx, `INSERT INTO repos VALUES (?, ?, ?, ?, ?)`, collidingRepoID, "org-b", "org-b/other-service", "github", at); err != nil {
 		t.Fatalf("seed org-b repo: %v", err)
 	}
-	if err := connection.Exec(ctx, `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?)`, "WI-1", collidingRepoID, "org-a", "Org A task", "open", "", at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "WI-1", collidingRepoID, "org-a", "Org A task", "open", "", at, ""); err != nil {
 		t.Fatalf("seed org-a work item: %v", err)
 	}
 

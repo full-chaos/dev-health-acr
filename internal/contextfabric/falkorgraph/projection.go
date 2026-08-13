@@ -15,6 +15,23 @@ import (
 
 const propRelationType = "relation_type"
 
+// ProducedRelationshipTypes lists every ContextFabricRelationshipType this
+// package writes as an edge property OTHER than through
+// ContextFabricRelationshipProjection.Type (CHAOS-3779, AC-3779-9's second
+// direction). DOCUMENTED_BY and HAS_EPISODE are synthesized directly here
+// -- projectContent and projectEpisode below -- from a ContentProjection /
+// EpisodeProjection's implicit attribution to its Subject, never from a
+// caller-supplied RelationshipProjection.Type; devhealthsource.
+// ProducedRelationshipTypes covers every type produced that way instead.
+// See the AC-3779-9 cross-wiring test in cmd/acr-projector, the only
+// caller today.
+func ProducedRelationshipTypes() []contextfabric.RelationshipType {
+	return []contextfabric.RelationshipType{
+		contextfabric.RelationshipType("DOCUMENTED_BY"),
+		contextfabric.RelationshipType("HAS_EPISODE"),
+	}
+}
+
 func (a *Adapter) ApplyProjectionBatch(ctx context.Context, batch contextfabric.ProjectionBatch) (contextfabric.ProjectionReceipt, error) {
 	if err := batch.Validate(); err != nil {
 		return contextfabric.ProjectionReceipt{}, fmt.Errorf("projection batch: %w", err)
@@ -152,7 +169,7 @@ func (a *Adapter) projectRelationship(ctx context.Context, key, orgID string, re
 	fromAttrs := subjectMergeAttrs(relationship.From, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion, nil)
 	toAttrs := subjectMergeAttrs(relationship.To, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion, nil)
 	edgeAttrs := map[string]interface{}{
-		propRelationshipID: relationship.RelationshipID, propRelationType: graphrank.NormalizeRelation(relationship.Type),
+		propRelationshipID: relationship.RelationshipID, propRelationType: graphrank.NormalizeRelation(string(relationship.Type)),
 		"derivation": string(relationship.Derivation), "epistemic_status": string(relationship.EpistemicStatus),
 		propAuthzRepos: authorizationValue(relationship.Authorization.RepositorySlugs), propAuthzProjects: authorizationValue(relationship.Authorization.ProjectIDs),
 		propAuthzTeams: authorizationValue(relationship.Authorization.TeamIDs), propEvidenceRefs: graphrank.UniqueSorted(relationship.EvidenceRefIDs),
@@ -341,7 +358,7 @@ func relationshipFact(relationship contextfabric.RelationshipProjection) string 
 			return text
 		}
 	}
-	return relationship.From.Label + " " + strings.ToLower(strings.ReplaceAll(relationship.Type, "_", " ")) + " " + relationship.To.Label
+	return relationship.From.Label + " " + strings.ToLower(strings.ReplaceAll(string(relationship.Type), "_", " ")) + " " + relationship.To.Label
 }
 
 func entitySearchText(entity contextfabric.EntityProjection) string {

@@ -127,8 +127,11 @@ func (p ContextFabricRelationshipPath) Validate() error {
 }
 
 func (e ContextFabricRelationshipEdge) Validate() error {
-	if !stringLengthBetween(strings.TrimSpace(e.Type), 1, 128) || !validDerivationMethod(e.Derivation) || !validEpistemicStatus(e.EpistemicStatus) || !boundedEvidenceRefs(e.EvidenceRefIDs, 500, false) {
+	if !validDerivationMethod(e.Derivation) || !validEpistemicStatus(e.EpistemicStatus) || !boundedEvidenceRefs(e.EvidenceRefIDs, 500, false) {
 		return fmt.Errorf("relationship edge violates v1 bounds")
+	}
+	if !validContextFabricRelationshipType(e.Type) {
+		return fmt.Errorf("%w: %q", ErrContextFabricUnknownRelationshipType, e.Type)
 	}
 	if err := e.From.Validate(); err != nil {
 		return fmt.Errorf("from: %w", err)

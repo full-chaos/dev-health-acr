@@ -118,8 +118,11 @@ func (e ContextFabricEntityProjection) Validate() error {
 }
 
 func (r ContextFabricRelationshipProjection) Validate() error {
-	if !stringLengthBetween(r.RelationshipID, 8, 256) || !stringLengthBetween(strings.TrimSpace(r.Type), 1, 128) || len(r.Properties) > 100 || !validDerivationMethod(r.Derivation) || !validEpistemicStatus(r.EpistemicStatus) || !boundedEvidenceRefs(r.EvidenceRefIDs, 500, false) || r.ObservedAt.IsZero() || !validVersion(r.SourceVersion) {
+	if !stringLengthBetween(r.RelationshipID, 8, 256) || len(r.Properties) > 100 || !validDerivationMethod(r.Derivation) || !validEpistemicStatus(r.EpistemicStatus) || !boundedEvidenceRefs(r.EvidenceRefIDs, 500, false) || r.ObservedAt.IsZero() || !validVersion(r.SourceVersion) {
 		return fmt.Errorf("relationship projection violates v1 bounds")
+	}
+	if !validContextFabricRelationshipType(r.Type) {
+		return fmt.Errorf("%w: %q", ErrContextFabricUnknownRelationshipType, r.Type)
 	}
 	if err := r.From.Validate(); err != nil {
 		return fmt.Errorf("from: %w", err)

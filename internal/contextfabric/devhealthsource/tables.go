@@ -27,7 +27,9 @@ type entityTable struct {
 // reviews and CI runs are core work-graph signal, and both are already read
 // for context packets (source_queries.go's pull_request_reviews.v1 /
 // ci_pipeline_runs.v1), so this reuses that same join shape rather than
-// inventing a new one.
+// inventing a new one. work_items_hierarchy (CHAOS-3779) is not a distinct
+// ClickHouse table -- it self-joins work_items on parent_id, a column
+// work_item_dependencies never carries, to project the PART_OF edge type.
 var entityTables = []entityTable{
 	{name: "repos", query: queryRepositories},
 	{name: "work_items", query: queryWorkItems},
@@ -35,6 +37,7 @@ var entityTables = []entityTable{
 	{name: "deployments", query: queryDeployments},
 	{name: "operational_incidents", query: queryIncidents},
 	{name: "work_item_dependencies", query: queryWorkItemDependencies},
+	{name: "work_items_hierarchy", query: queryWorkItemHierarchy},
 	{name: "work_graph_deployment_incident_edges", query: queryDeploymentIncidentEdges},
 	{name: "git_pull_request_reviews", query: queryPullRequestReviews},
 	{name: "ci_pipeline_runs", query: queryCIRuns},
@@ -306,7 +309,7 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 		observedAt = observedAt.UTC()
 		relationshipID := "relationship:work_item_dependency:" + sourceID + ":" + targetID
 		relationship := contractsv1.ContextFabricRelationshipProjection{
-			RelationshipID: relationshipID, Type: strings.ToUpper(relationshipType),
+			RelationshipID: relationshipID, Type: contractsv1.ContextFabricRelationshipType(strings.ToUpper(relationshipType)),
 			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + sourceID, Label: sourceID},
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + targetID, Label: targetID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
@@ -314,6 +317,42 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 			ObservedAt: observedAt, SourceVersion: sourceVersion,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: sourceID + ":" + targetID, relationship: &relationship}}, nil
+	})
+}
+
+// queryWorkItemHierarchy (CHAOS-3779, §19.5.3 PART_OF) projects
+// work_items.parent_id -- a distinct column from work_item_dependencies,
+// carrying real hierarchy data (verified live: 2082 of 3282 work_items
+// rows have a non-empty parent_id, and every one of those resolves to a
+// real work_items row in the same organization). The INNER JOIN to a
+// second work_items instance for the parent enforces that resolvability at
+// query time: a child row whose parent_id names a work item that does not
+// exist (a different organization, or a row deleted out from under it) is
+// never projected as a dangling PART_OF edge.
+func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+	const rowKey = "c.work_item_id"
+	statement := `SELECT c.work_item_id, c.parent_id, r.repo, c.updated_at
+FROM work_items AS c FINAL
+INNER JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = c.parent_id
+INNER JOIN repos AS r FINAL ON r.id = c.repo_id AND r.org_id = c.org_id
+WHERE c.org_id = {org_id:String} AND c.parent_id != ''` + sincePredicate(cursor, "c.updated_at", rowKey) + orderBy("c.updated_at", rowKey)
+	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+		var childID, parentID, repoSlug string
+		var observedAt time.Time
+		if err := r.Scan(&childID, &parentID, &repoSlug, &observedAt); err != nil {
+			return nil, err
+		}
+		observedAt = observedAt.UTC()
+		relationshipID := "relationship:work_item_hierarchy:" + childID + ":" + parentID
+		relationship := contractsv1.ContextFabricRelationshipProjection{
+			RelationshipID: relationshipID, Type: contractsv1.ContextFabricRelationshipPartOf,
+			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + childID, Label: childID},
+			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + parentID, Label: parentID},
+			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
+			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-hierarchy:" + childID + ":" + parentID},
+			ObservedAt: observedAt, SourceVersion: sourceVersion,
+		}
+		return []candidate{{observedAt: observedAt, sortKey: childID, relationship: &relationship}}, nil
 	})
 }
 

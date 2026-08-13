@@ -97,7 +97,7 @@ func AdmitEdges(orgID string, edges []ResolvedEdge, options contextfabric.Invest
 			}
 		}
 		relationship := contextfabric.RelationshipEdge{
-			Type: NormalizeRelation(edge.Name), From: edge.From, To: edge.To,
+			Type: contextfabric.RelationshipType(NormalizeRelation(edge.Name)), From: edge.From, To: edge.To,
 			Derivation: contextfabric.DerivationGraphAssociated, EpistemicStatus: edgeEpistemicStatus(edge),
 			ObservedAt: ParseOptionalTime(edge.CreatedAt), ValidFrom: ParseOptionalTimePtr(edge.ValidAt), ValidTo: edgeValidTo(edge),
 			EvidenceRefIDs: evidence,
@@ -280,18 +280,61 @@ func edgeFact(edge ResolvedEdge) string {
 // by edge type and is used only to request that FactKind from the
 // canonical fact registry (requirements[factKind]), which is a request,
 // not a claim.
+// relationMeaningTable is THE driver-admission table (AC-3779-2: this is
+// the only edge-type -> standing/category/factKind mapping in the
+// repository -- grep-verified during CHAOS-3779; a duplicate is a defect,
+// because a rebase silently reintroduced the pre-H4 strings from a
+// duplicated copy once already). It is also the AC-3779-9 producer
+// cross-check: every key here MUST have a real projection producer,
+// verified by TestEveryRecognizedRelationshipTypeHasAProducer in
+// cmd/acr-projector.
+//
+// Before CHAOS-3779 this table recognized nine types
+// (BLOCKS/BLOCKED_BY/REQUIRES/DEPENDS_ON/CAUSES/CONTRIBUTES_TO/PRESSURES/
+// INDICATES/SYMPTOM_OF) but only BLOCKS had a producer -- the other eight
+// were dead code (drift item D12), silently falling every one of those
+// edge types to the default context standing forever, because nothing
+// ever wrote them. CHAOS-3779 prunes the eight unproducable entries
+// instead of inventing producers with no deterministic source (§19.5.3
+// lists no source for CAUSES/CONTRIBUTES_TO/PRESSURES/INDICATES/
+// SYMPTOM_OF, and BLOCKED_BY/REQUIRES/DEPENDS_ON are inverse-direction or
+// synonym spellings work_item_dependencies never emits). A recognizer
+// entry with no producer is a defect, not a placeholder -- see
+// ContextFabricRelationshipType's doc comment for the closed vocabulary
+// this table draws its keys from.
+//
+// PART_OF (the other CHAOS-3779 producer, work_items.parent_id hierarchy)
+// is intentionally absent: it is structural (a work-item hierarchy fact),
+// not itself a driver signal the way a blocker is, so it stays a plain
+// graph-associated path relationship without a DriverJudgment -- exactly
+// like BELONGS_TO_REPOSITORY, CORRELATED_WITH_INCIDENT, RELATED_TO,
+// RELATES_TO, and DUPLICATES.
+var relationMeaningTable = map[string]struct {
+	standing contextfabric.DriverStanding
+	category string
+	factKind contextfabric.FactKind
+}{
+	"BLOCKS": {contextfabric.DriverPrincipal, "relationship", contextfabric.FactBlockers},
+}
+
+// RecognizedRelationshipTypes returns relationMeaningTable's keys -- see
+// its doc comment. Exported for the AC-3779-9 cross-wiring test in
+// cmd/acr-projector, which is the only caller today.
+func RecognizedRelationshipTypes() []string {
+	types := make([]string, 0, len(relationMeaningTable))
+	for name := range relationMeaningTable {
+		types = append(types, name)
+	}
+	sort.Strings(types)
+	return types
+}
+
 func relationMeaning(name string) (contextfabric.DriverStanding, string, contextfabric.FactKind, bool) {
-	normalized := NormalizeRelation(name)
-	switch normalized {
-	case "BLOCKS", "BLOCKED_BY", "REQUIRES", "DEPENDS_ON":
-		return contextfabric.DriverPrincipal, "relationship", contextfabric.FactBlockers, true
-	case "CAUSES", "CONTRIBUTES_TO", "PRESSURES":
-		return contextfabric.DriverContributing, "relationship", contextfabric.FactHealth, true
-	case "INDICATES", "SYMPTOM_OF":
-		return contextfabric.DriverSymptom, "relationship", contextfabric.FactMetrics, true
-	default:
+	entry, ok := relationMeaningTable[NormalizeRelation(name)]
+	if !ok {
 		return contextfabric.DriverContext, "relationship", contextfabric.FactEvidence, false
 	}
+	return entry.standing, entry.category, entry.factKind, true
 }
 
 func relationTitle(name, target string) string {

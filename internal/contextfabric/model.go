@@ -162,6 +162,7 @@ type CohortMember = contractsv1.ContextFabricCohortMember
 type CohortExclusion = contractsv1.ContextFabricCohortExclusion
 type RelationshipPath = contractsv1.ContextFabricRelationshipPath
 type RelationshipEdge = contractsv1.ContextFabricRelationshipEdge
+type RelationshipType = contractsv1.ContextFabricRelationshipType
 type DriverJudgment = contractsv1.ContextFabricDriverJudgment
 type Finding = contractsv1.ContextFabricFinding
 type ClaimedFact = contractsv1.ContextFabricClaimedFact

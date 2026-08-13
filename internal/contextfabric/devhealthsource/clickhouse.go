@@ -32,6 +32,32 @@ const (
 // organization entity uses; see the comment where it's applied.
 var organizationAnchorTime = time.Unix(1, 0).UTC()
 
+// ProducedRelationshipTypes lists every ContextFabricRelationshipType this
+// package's queries can write into a ContextFabricRelationshipProjection
+// (CHAOS-3779, AC-3779-9's second direction: every produced type must be a
+// member of the closed vocabulary). RELATED_TO/RELATES_TO/BLOCKS/DUPLICATES
+// come from queryWorkItemDependencies (work_item_dependencies.
+// relationship_type, uppercased -- TRD §19.13 Correction 1's three live
+// values plus the ifNull default); BELONGS_TO_REPOSITORY from
+// belongsToRepository (queryWorkItems/queryPullRequests/queryDeployments/
+// queryIncidents/queryCIRuns); BELONGS_TO_PULL_REQUEST from
+// queryPullRequestReviews; CORRELATED_WITH_INCIDENT from
+// queryDeploymentIncidentEdges; PART_OF from queryWorkItemHierarchy. See
+// the AC-3779-9 cross-wiring test in cmd/acr-projector, the only caller
+// today.
+func ProducedRelationshipTypes() []contractsv1.ContextFabricRelationshipType {
+	return []contractsv1.ContextFabricRelationshipType{
+		contractsv1.ContextFabricRelationshipBelongsToRepository,
+		contractsv1.ContextFabricRelationshipBelongsToPullRequest,
+		contractsv1.ContextFabricRelationshipCorrelatedWithIncident,
+		contractsv1.ContextFabricRelationshipRelatedTo,
+		contractsv1.ContextFabricRelationshipBlocks,
+		contractsv1.ContextFabricRelationshipPartOf,
+		contractsv1.ContextFabricRelationshipRelatesTo,
+		contractsv1.ContextFabricRelationshipDuplicates,
+	}
+}
+
 // ClickHouseProjectionSource is the production contextfabric.ProjectionSource
 // for canonical Dev Health repository, work item, pull request, deployment,
 // and incident data. It reuses internal/contextpacket's existing ClickHouse

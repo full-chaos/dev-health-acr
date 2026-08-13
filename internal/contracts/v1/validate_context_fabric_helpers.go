@@ -374,6 +374,32 @@ func validDerivationMethod(value ContextFabricDerivationMethod) bool {
 	}
 }
 
+// ValidContextFabricRelationshipType reports whether value is one of the
+// closed ContextFabricRelationshipType vocabulary members. Exported so a
+// producer package (e.g. devhealthsource, falkorgraph) can self-verify the
+// types it claims to produce without duplicating this switch -- see the
+// AC-3779-9 cross-wiring test in cmd/acr-projector, which is the only
+// caller today.
+func ValidContextFabricRelationshipType(value ContextFabricRelationshipType) bool {
+	return validContextFabricRelationshipType(value)
+}
+
+// validContextFabricRelationshipType reports whether value is one of the
+// closed ContextFabricRelationshipType vocabulary members. See that type's
+// doc comment (CHAOS-3779, closing drift item D9 / the H4 lesson).
+func validContextFabricRelationshipType(value ContextFabricRelationshipType) bool {
+	switch value {
+	case ContextFabricRelationshipBelongsToRepository, ContextFabricRelationshipBelongsToPullRequest,
+		ContextFabricRelationshipCorrelatedWithIncident, ContextFabricRelationshipRelatedTo,
+		ContextFabricRelationshipDocumentedBy, ContextFabricRelationshipHasEpisode,
+		ContextFabricRelationshipBlocks, ContextFabricRelationshipPartOf,
+		ContextFabricRelationshipRelatesTo, ContextFabricRelationshipDuplicates:
+		return true
+	default:
+		return false
+	}
+}
+
 func validEpistemicStatus(value ContextFabricEpistemicStatus) bool {
 	switch value {
 	case ContextFabricEpistemicObserved, ContextFabricEpistemicSourceAsserted, ContextFabricEpistemicInferred, ContextFabricEpistemicDisputed, ContextFabricEpistemicSuperseded, ContextFabricEpistemicUnknown:

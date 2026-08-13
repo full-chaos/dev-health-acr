@@ -31,33 +31,34 @@ func TestAdmitEdgesAssignsClosedVocabularyRelationshipCategory(t *testing.T) {
 		MaxSubjectCandidates: 10, MaxCohortMembers: 10, MaxRelationshipPaths: 10,
 		MaxDrivers: 10, MaxEvidenceRefs: 50, MaxSerializedBytes: 262144,
 	}
-	// One relation name per relationMeaning branch -- BLOCKS (principal),
-	// CAUSES (contributing), INDICATES (symptom) -- plus a name matching no
-	// branch (context, driver=false, excluded from Drivers) to prove the
-	// closed category applies uniformly, not only to the branches that
-	// happen to produce a driver.
-	relations := []string{"BLOCKS", "CAUSES", "INDICATES"}
-	edges := make([]ResolvedEdge, 0, len(relations))
-	for i, name := range relations {
-		edges = append(edges, ResolvedEdge{
-			UUID: "edge_" + name, Name: name, Fact: "test fact",
-			From: from, To: to, Attributes: map[string]interface{}{"evidence_refs": []string{"evidence_" + name}},
-			CreatedAt: "2026-01-01T00:00:00Z",
-		})
-		_ = i
-	}
+	// BLOCKS is the one relationMeaning branch CHAOS-3779 kept a producer
+	// for. Before CHAOS-3779 this test also exercised CAUSES (contributing)
+	// and INDICATES (symptom), but relationMeaning's doc comment now
+	// records why those branches -- and five others -- were pruned as dead
+	// code (drift item D12, AC-3779-9): they recognized a relation name no
+	// projection ever produced. A recognizer entry with no producer is a
+	// defect, not a placeholder, so the test roster shrank with the
+	// production switch rather than keeping an untestable placeholder
+	// branch alive.
+	edges := []ResolvedEdge{{
+		UUID: "edge_BLOCKS", Name: "BLOCKS", Fact: "test fact",
+		From: from, To: to, Attributes: map[string]interface{}{"evidence_refs": []string{"evidence_BLOCKS"}},
+		CreatedAt: "2026-01-01T00:00:00Z",
+	}}
 
 	result := AdmitEdges("org-1", edges, options, func(contextfabric.SubjectRef) bool { return false })
-	if len(result.Drivers) != len(relations) {
-		t.Fatalf("AdmitEdges() produced %d drivers, want %d: %#v", len(result.Drivers), len(relations), result.Drivers)
+	if len(result.Drivers) != 1 {
+		t.Fatalf("AdmitEdges() produced %d drivers, want 1: %#v", len(result.Drivers), result.Drivers)
 	}
-	for _, driver := range result.Drivers {
-		if driver.Category != "relationship" {
-			t.Fatalf("driver.Category = %q, want \"relationship\" (the closed-vocabulary category every graph-discovered driver must use)", driver.Category)
-		}
-		if err := driver.Validate(); err != nil {
-			t.Fatalf("driver.Validate() error = %v, want a graph-discovered driver to validate against the closed category enum: %#v", err, driver)
-		}
+	driver := result.Drivers[0]
+	if driver.Category != "relationship" {
+		t.Fatalf("driver.Category = %q, want \"relationship\" (the closed-vocabulary category every graph-discovered driver must use)", driver.Category)
+	}
+	if driver.Standing != contextfabric.DriverPrincipal {
+		t.Fatalf("driver.Standing = %q, want %q", driver.Standing, contextfabric.DriverPrincipal)
+	}
+	if err := driver.Validate(); err != nil {
+		t.Fatalf("driver.Validate() error = %v, want a graph-discovered driver to validate against the closed category enum: %#v", err, driver)
 	}
 }
 
@@ -217,6 +218,79 @@ func TestAdmitEdgesTieBreaksDeterministicallyOnEqualRelevance(t *testing.T) {
 // an edge touching a subject the isInternal predicate flags as
 // adapter-internal bookkeeping must never surface as a public relationship
 // path, even if it carries evidence.
+// TestAdmitEdgesAnswersBlocksAndPartOfInOneHopWithEvidence binds AC-3779-5
+// (retrieval half: "one test proves retrieval returns the edge with its
+// evidence reference") and AC-3779-6 (one-hop) for CHAOS-3779's two
+// implemented types.
+//
+// BLOCKS: before CHAOS-3779 the type field was a free string and the
+// recognizer's own vocabulary was undocumented/untested (TRD §19.13
+// Correction 1: the row was already flowing accidentally). Answering "what
+// blocks work item B" had no test proving a single graph edge -- as
+// opposed to a separate FactBlockers canonical-fact round trip, or a
+// generic RELATED_TO edge a reader has to reinterpret -- carried the
+// answer with its own evidence. This test proves it now does, in one hop,
+// with a recognized driver standing.
+//
+// PART_OF: before CHAOS-3779 there was no producer for work_items.
+// parent_id at all (see queryWorkItemHierarchy). "What is the parent of
+// work item C" had no graph path whatsoever -- the only route was a
+// bespoke ClickHouse query outside Context Fabric entirely. This test
+// proves a single PART_OF edge now answers it in one hop, still carrying
+// its own evidence reference even though (unlike BLOCKS) it is not a
+// recognized driver -- see relationMeaning's doc comment for why PART_OF
+// stays a plain structural path relationship.
+func TestAdmitEdgesAnswersBlocksAndPartOfInOneHopWithEvidence(t *testing.T) {
+	t.Parallel()
+
+	workA := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_a", Label: "Work A"}
+	workB := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_b", Label: "Work B"}
+	blocksResult := AdmitEdges("org_1", []ResolvedEdge{
+		testResolvedEdge("edge-blocks", "BLOCKS", workA, workB, 1, "evidence_blocks_1"),
+	}, discoverOptions(), func(contextfabric.SubjectRef) bool { return false })
+	if len(blocksResult.Paths) != 1 {
+		t.Fatalf("BLOCKS: len(Paths) = %d, want 1: %#v", len(blocksResult.Paths), blocksResult.Paths)
+	}
+	blocksPath := blocksResult.Paths[0]
+	if len(blocksPath.Nodes) != 2 || len(blocksPath.Edges) != 1 {
+		t.Fatalf("BLOCKS: path is not one hop: %d nodes, %d edges: %#v", len(blocksPath.Nodes), len(blocksPath.Edges), blocksPath)
+	}
+	if blocksPath.Edges[0].Type != contextfabric.RelationshipType("BLOCKS") {
+		t.Fatalf("BLOCKS: edge type = %q, want BLOCKS", blocksPath.Edges[0].Type)
+	}
+	if blocksPath.Edges[0].From != workA || blocksPath.Edges[0].To != workB {
+		t.Fatalf("BLOCKS: edge does not connect work_a directly to work_b: %#v", blocksPath.Edges[0])
+	}
+	if len(blocksPath.Edges[0].EvidenceRefIDs) == 0 || blocksPath.Edges[0].EvidenceRefIDs[0] != "evidence_blocks_1" {
+		t.Fatalf("BLOCKS: edge evidence = %#v, want [evidence_blocks_1]", blocksPath.Edges[0].EvidenceRefIDs)
+	}
+	if len(blocksResult.Drivers) != 1 || blocksResult.Drivers[0].Standing != contextfabric.DriverPrincipal {
+		t.Fatalf("BLOCKS: drivers = %#v, want exactly one principal-standing driver", blocksResult.Drivers)
+	}
+
+	workC := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_c", Label: "Work C"}
+	workParent := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_parent", Label: "Work Parent"}
+	partOfResult := AdmitEdges("org_1", []ResolvedEdge{
+		testResolvedEdge("edge-part-of", "PART_OF", workC, workParent, 1, "evidence_part_of_1"),
+	}, discoverOptions(), func(contextfabric.SubjectRef) bool { return false })
+	if len(partOfResult.Paths) != 1 {
+		t.Fatalf("PART_OF: len(Paths) = %d, want 1: %#v", len(partOfResult.Paths), partOfResult.Paths)
+	}
+	partOfPath := partOfResult.Paths[0]
+	if len(partOfPath.Nodes) != 2 || len(partOfPath.Edges) != 1 {
+		t.Fatalf("PART_OF: path is not one hop: %d nodes, %d edges: %#v", len(partOfPath.Nodes), len(partOfPath.Edges), partOfPath)
+	}
+	if partOfPath.Edges[0].Type != contextfabric.RelationshipType("PART_OF") {
+		t.Fatalf("PART_OF: edge type = %q, want PART_OF", partOfPath.Edges[0].Type)
+	}
+	if partOfPath.Edges[0].From != workC || partOfPath.Edges[0].To != workParent {
+		t.Fatalf("PART_OF: edge does not connect work_c directly to work_parent: %#v", partOfPath.Edges[0])
+	}
+	if len(partOfPath.Edges[0].EvidenceRefIDs) == 0 || partOfPath.Edges[0].EvidenceRefIDs[0] != "evidence_part_of_1" {
+		t.Fatalf("PART_OF: edge evidence = %#v, want [evidence_part_of_1]", partOfPath.Edges[0].EvidenceRefIDs)
+	}
+}
+
 func TestAdmitEdgesExcludesInternalBookkeepingRelationships(t *testing.T) {
 	t.Parallel()
 	root := contextfabric.SubjectRef{Kind: contextfabric.SubjectOrganization, CanonicalID: "organization-root", Label: "Organization"}

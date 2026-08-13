@@ -600,8 +600,18 @@
       "properties": {
         "type": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 128
+          "enum": [
+            "BELONGS_TO_REPOSITORY",
+            "BELONGS_TO_PULL_REQUEST",
+            "CORRELATED_WITH_INCIDENT",
+            "RELATED_TO",
+            "DOCUMENTED_BY",
+            "HAS_EPISODE",
+            "BLOCKS",
+            "PART_OF",
+            "RELATES_TO",
+            "DUPLICATES"
+          ]
         },
         "from": {
           "$ref": "#/$defs/SubjectRef"
@@ -1557,8 +1567,18 @@
         },
         "type": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 128
+          "enum": [
+            "BELONGS_TO_REPOSITORY",
+            "BELONGS_TO_PULL_REQUEST",
+            "CORRELATED_WITH_INCIDENT",
+            "RELATED_TO",
+            "DOCUMENTED_BY",
+            "HAS_EPISODE",
+            "BLOCKS",
+            "PART_OF",
+            "RELATES_TO",
+            "DUPLICATES"
+          ]
         },
         "from": {
           "$ref": "#/$defs/SubjectRef"
