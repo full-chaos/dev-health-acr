@@ -797,3 +797,113 @@ func TestClampCoverageTextIsRuneSafeAndNeverEmpty(t *testing.T) {
 		t.Fatal("clamped value is empty -- an empty reason on a non-available source is itself invalid")
 	}
 }
+
+// TestPruningIsInvisibleToTruncationAndCaps is the codex round-3 regression,
+// stated at the level the finding was really about.
+//
+// The measurement harness compares two bundles to prove pruning removes work
+// and not answer. That claim is only meaningful if both bundles come from the
+// SAME pipeline: the registry rewrites a truncated result's state, enforces
+// maxCanonicalFactsPerBundle across all providers, stamps omitted per-fact
+// fields, and sorts. A hand-assembled "naive" bundle re-implements those
+// semantics and diverges from them one detail at a time -- which is exactly
+// what happened, three review rounds running.
+//
+// This pins the property the harness now relies on instead: for a provider
+// pushed past the aggregate fact cap, asking for {supported, pruned-kind}
+// yields byte-identical facts to asking for {supported} alone. It fails
+// against any implementation where the two sides do not share the real
+// truncation and cap handling.
+func TestPruningIsInvisibleToTruncationAndCaps(t *testing.T) {
+	t.Parallel()
+
+	repository := subject(SubjectRepository, "repo_api")
+	// Deliberately over maxCanonicalFactsPerBundle so the registry's
+	// aggregate cap trims the result and rewrites its state to
+	// SourceTruncated -- the exact semantics a re-implemented baseline missed.
+	overCap := make([]CanonicalFact, 0, maxCanonicalFactsPerBundle+250)
+	for i := 0; i < maxCanonicalFactsPerBundle+250; i++ {
+		overCap = append(overCap, CanonicalFact{
+			Kind: FactMetrics, Subject: repository,
+			Fields:         map[string]FactValue{"commits": IntegerFactValue(int64(i))},
+			EvidenceRefIDs: []string{"evidence_metrics_0001"},
+			Source:         "metrics", SourceVersion: "v1",
+		})
+	}
+
+	newRegistry := func(t *testing.T) *FactCapabilityRegistry {
+		t.Helper()
+		metrics := &factProviderStub{
+			capability: FactCapability{
+				Kind: FactMetrics, Name: "metrics", Version: "v1",
+				SupportedSubjectKinds: []SubjectKind{SubjectRepository}, RequiresEvidence: true,
+			},
+			result: FactProviderResult{State: SourceAvailable, Facts: overCap},
+		}
+		// Team-only, so a repository investigation prunes it.
+		workload := &factProviderStub{
+			capability: FactCapability{
+				Kind: FactWorkload, Name: "workload", Version: "v1",
+				SupportedSubjectKinds: []SubjectKind{SubjectTeam},
+			},
+			result: FactProviderResult{State: SourceAvailable},
+		}
+		registry, err := NewFactCapabilityRegistry([]FactProvider{metrics, workload}, FactRegistryOptions{})
+		if err != nil {
+			t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+		}
+		return registry
+	}
+
+	read := func(t *testing.T, kinds ...FactKind) CanonicalFactBundle {
+		t.Helper()
+		requirements := make([]FactRequirement, 0, len(kinds))
+		for _, kind := range kinds {
+			requirements = append(requirements, FactRequirement{Kind: kind})
+		}
+		bundle, err := newRegistry(t).ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			Subjects: []SubjectRef{repository}, Requirements: requirements,
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts(%v) error = %v", kinds, err)
+		}
+		return bundle
+	}
+
+	withPruned := read(t, FactMetrics, FactWorkload)
+	withoutPruned := read(t, FactMetrics)
+
+	// Sanity: the cap really did fire, or this test proves nothing.
+	if len(withPruned.Facts) != maxCanonicalFactsPerBundle {
+		t.Fatalf("facts = %d, want the aggregate cap (%d) to have trimmed the result", len(withPruned.Facts), maxCanonicalFactsPerBundle)
+	}
+	truncated := false
+	for _, source := range withPruned.Coverage.Sources {
+		if source.Source == "canonical_fact:metrics" && source.State == SourceTruncated {
+			truncated = true
+		}
+	}
+	if !truncated {
+		t.Fatal("want the metrics source recorded as truncated -- the cap rewrite is the semantic under test")
+	}
+
+	if len(withPruned.Facts) != len(withoutPruned.Facts) {
+		t.Fatalf("fact counts differ with the pruned kind present: %d vs %d", len(withPruned.Facts), len(withoutPruned.Facts))
+	}
+	for i := range withPruned.Facts {
+		if !reflect.DeepEqual(withPruned.Facts[i], withoutPruned.Facts[i]) {
+			t.Fatalf("fact %d differs with the pruned kind present:\n with = %+v\n without = %+v", i, withPruned.Facts[i], withoutPruned.Facts[i])
+		}
+	}
+
+	// And the pruned kind is still explained, not merely absent.
+	prunedRecorded := false
+	for _, source := range withPruned.Coverage.Sources {
+		if source.Source == "canonical_fact:workload" && source.State == SourcePruned {
+			prunedRecorded = true
+		}
+	}
+	if !prunedRecorded {
+		t.Fatal("want the pruned capability recorded in coverage even when the answer is unchanged")
+	}
+}

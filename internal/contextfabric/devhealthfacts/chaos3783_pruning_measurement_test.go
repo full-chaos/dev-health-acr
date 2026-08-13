@@ -36,14 +36,44 @@ import (
 //
 // Every statement it issues is a SELECT; it never writes.
 //
-// What it compares. The "before" is NOT current production behavior --
-// before this change a mismatched requirement union failed the whole
-// investigation rather than running slowly, so there is no slow baseline to
-// measure. The baseline here is the COUNTERFACTUAL naive fix: run every
-// requested capability against every resolved subject and let providers come
-// back empty. That is the design coverage-driven pruning argues against, and
-// it is the only honest apples-to-apples comparison. Results are labelled
-// accordingly and must not be quoted as "production before".
+// # Why there is no second bundle-building path here
+//
+// An earlier version of this harness assembled a "naive fan-out" bundle
+// itself, by calling providers directly and stamping the fields the registry
+// stamps. That was a parallel re-implementation of the registry pipeline, and
+// every semantic the registry applies -- per-fact state rewrites, the
+// aggregate fact cap, ordering, serialization -- was a divergence waiting to
+// be found one review round at a time. Three rounds found three. A
+// re-implemented baseline measures its own divergence from the real code, not
+// pruning.
+//
+// Every bundle compared below now comes from the REAL
+// FactCapabilityRegistry.ReadFacts, so truncation, caps, state stamping, and
+// serialization are shared by construction and cannot diverge.
+//
+// # What the counterfactual is, and why it is counted rather than run
+//
+// The naive fan-out cannot be executed through the production path at all,
+// and that is not an oversight: buildFactQuery refuses to ask a provider
+// about a subject kind its capability does not support, and refuses an empty
+// subject list. Forcing a plan-everything mode through ReadFacts would
+// therefore not produce a naive baseline -- it would reproduce the
+// pre-CHAOS-3783 whole-bundle failure this ticket exists to fix.
+//
+// So the naive numbers are COUNTED, never executed: a planner-free
+// implementation issues one round-trip per registered requirement and binds
+// every investigation subject to each. That is a count of work not done --
+// no bundle, no stamping, no serialization -- so it carries none of the
+// divergence risk the deleted baseline did.
+//
+// # What proves pruning did not change the answer
+//
+// A second REAL ReadFacts call with the pruned fact kinds removed from the
+// request. If pruning is sound, asking for {A, B, C} where C is pruned must
+// produce exactly the facts of asking for {A, B}: same pipeline, same caps,
+// same truncation, same ordering. That is a falsifiable property comparing
+// two production runs to each other, which is the shape the deleted baseline
+// only appeared to have.
 const (
 	chaos3783DSNEnv = "ACR_CHAOS3783_CLICKHOUSE_DSN"
 	chaos3783OrgEnv = "ACR_CHAOS3783_ORG_ID"
@@ -62,13 +92,14 @@ type chaos3783Case struct {
 type chaos3783Measurement struct {
 	providersQueried int
 	subjectBindings  int
+	prunedSources    int
+	prunedKinds      []contextfabric.FactKind
 	facts            int
 	bundleBytes      int
 	bundleDigest     string
 	elapsed          time.Duration
 	failed           bool
 	failure          string
-	prunedSources    int
 }
 
 func TestCHAOS3783PruningMeasurement(t *testing.T) {
@@ -92,10 +123,13 @@ func TestCHAOS3783PruningMeasurement(t *testing.T) {
 	})
 
 	principal := storage.Principal{OrgID: orgID}
-	providers := devhealthfacts.NewProviders(client)
-	registry, err := contextfabric.NewFactCapabilityRegistry(providers, contextfabric.FactRegistryOptions{})
+	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(client), contextfabric.FactRegistryOptions{})
 	if err != nil {
 		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+	}
+	registered := make(map[contextfabric.FactKind]contextfabric.FactCapability)
+	for _, capability := range registry.Capabilities() {
+		registered[capability.Kind] = capability
 	}
 
 	repositories := chaos3783Subjects(t, ctx, client, orgID, "repos", "toString(id)", contextfabric.SubjectRepository, "repository:", 3)
@@ -140,74 +174,98 @@ func TestCHAOS3783PruningMeasurement(t *testing.T) {
 	}
 
 	type row struct {
-		name              string
-		baseline, planned chaos3783Measurement
+		name             string
+		naiveRoundTrips  int
+		naiveBindings    int
+		planned          chaos3783Measurement
+		reduced          chaos3783Measurement
+		identityIsTested bool
 	}
 	rows := make([]row, 0, len(cases))
-	baselineFailures, plannedFailures := 0, 0
+	plannedFailures := 0
 
 	for _, testCase := range cases {
 		if len(testCase.subjects) == 0 {
 			t.Logf("skipping %q: no subjects of that kind in this organization", testCase.name)
 			continue
 		}
-		baseline := chaos3783MeasureNaiveFanout(ctx, principal, providers, testCase)
-		planned := chaos3783MeasurePlanned(ctx, principal, registry, testCase)
-		if baseline.failed {
-			baselineFailures++
-		}
+		naiveRoundTrips, naiveBindings := chaos3783NaiveCost(testCase, registered)
+		planned := chaos3783Run(ctx, principal, registry, registered, testCase.subjects, testCase.requirements)
 		if planned.failed {
 			plannedFailures++
 		}
-		rows = append(rows, row{name: testCase.name, baseline: baseline, planned: planned})
+		current := row{name: testCase.name, naiveRoundTrips: naiveRoundTrips, naiveBindings: naiveBindings, planned: planned}
+		// The identity check: the same production path, asked only for the
+		// kinds the planner did not prune.
+		if !planned.failed && len(planned.prunedKinds) > 0 {
+			if remaining := chaos3783Without(testCase.requirements, planned.prunedKinds); len(remaining) > 0 {
+				current.reduced = chaos3783Run(ctx, principal, registry, registered, testCase.subjects, remaining)
+				current.identityIsTested = true
+			}
+		}
+		rows = append(rows, current)
 	}
 
 	t.Log("")
-	t.Log("CHAOS-3783 pruning measurement -- baseline is the COUNTERFACTUAL naive fan-out, not production before")
+	t.Log("CHAOS-3783 pruning measurement")
+	t.Log("  naive    = COUNTED counterfactual (one round-trip per registered requirement, every subject bound); never executed")
+	t.Log("  planner  = real FactCapabilityRegistry.ReadFacts")
+	t.Log("  identity = the same real ReadFacts with the pruned kinds removed from the request")
 	t.Log("")
 	for _, r := range rows {
 		t.Logf("case: %s", r.name)
-		t.Logf("  naive fan-out : providers=%2d subject-bindings=%3d facts=%4d bundle-bytes=%7d elapsed=%v%s",
-			r.baseline.providersQueried, r.baseline.subjectBindings, r.baseline.facts, r.baseline.bundleBytes, r.baseline.elapsed.Round(time.Millisecond), chaos3783FailureNote(r.baseline))
-		t.Logf("  planner       : providers=%2d subject-bindings=%3d facts=%4d bundle-bytes=%7d elapsed=%v pruned-sources=%d%s",
-			r.planned.providersQueried, r.planned.subjectBindings, r.planned.facts, r.planned.bundleBytes, r.planned.elapsed.Round(time.Millisecond), r.planned.prunedSources, chaos3783FailureNote(r.planned))
-		t.Logf("  saved         : %d provider round-trips (%.0f%%), %d subject-bindings, %d bundle bytes",
-			r.baseline.providersQueried-r.planned.providersQueried,
-			chaos3783Percent(r.baseline.providersQueried-r.planned.providersQueried, r.baseline.providersQueried),
-			r.baseline.subjectBindings-r.planned.subjectBindings,
-			r.baseline.bundleBytes-r.planned.bundleBytes)
+		t.Logf("  naive (counted): round-trips=%2d subject-bindings=%3d", r.naiveRoundTrips, r.naiveBindings)
+		t.Logf("  planner        : round-trips=%2d subject-bindings=%3d facts=%4d bundle-bytes=%7d pruned=%2d elapsed=%v%s",
+			r.planned.providersQueried, r.planned.subjectBindings, r.planned.facts, r.planned.bundleBytes,
+			r.planned.prunedSources, r.planned.elapsed.Round(time.Millisecond), chaos3783FailureNote(r.planned))
+		t.Logf("  saved          : %d round-trips (%.0f%%), %d subject-bindings",
+			r.naiveRoundTrips-r.planned.providersQueried,
+			chaos3783Percent(r.naiveRoundTrips-r.planned.providersQueried, r.naiveRoundTrips),
+			r.naiveBindings-r.planned.subjectBindings)
+		if r.identityIsTested {
+			t.Logf("  identity       : facts=%d digest-match=%v", r.reduced.facts, r.reduced.bundleDigest == r.planned.bundleDigest)
+		}
 	}
 	t.Logf("planned-path failures: %d of %d cases", plannedFailures, len(rows))
 
-	// The acceptance assertions. Everything above is reported; these are the
-	// properties that must hold.
 	if plannedFailures != 0 {
 		t.Fatalf("%d planned investigation(s) failed, want 0 -- pruning exists so a wide union stays answerable", plannedFailures)
 	}
 	for _, r := range rows {
-		if r.planned.providersQueried > r.baseline.providersQueried {
-			t.Fatalf("case %q queried MORE providers with the planner (%d > %d)", r.name, r.planned.providersQueried, r.baseline.providersQueried)
+		if r.planned.providersQueried > r.naiveRoundTrips {
+			t.Fatalf("case %q issued MORE round-trips than a planner-free run would (%d > %d)", r.name, r.planned.providersQueried, r.naiveRoundTrips)
 		}
-		if r.planned.subjectBindings > r.baseline.subjectBindings {
-			t.Fatalf("case %q bound MORE subjects with the planner (%d > %d)", r.name, r.planned.subjectBindings, r.baseline.subjectBindings)
+		if r.planned.subjectBindings > r.naiveBindings {
+			t.Fatalf("case %q bound MORE subjects than a planner-free run would (%d > %d)", r.name, r.planned.subjectBindings, r.naiveBindings)
 		}
-		// The strongest guarantee this harness can give, and the reason the
+		if !r.identityIsTested {
+			continue
+		}
+		if r.reduced.failed {
+			t.Fatalf("case %q: the pruned-kinds-removed run failed: %s", r.name, r.reduced.failure)
+		}
+		// The strongest guarantee this harness gives, and the reason the
 		// pruning rule was built as a proof rather than a heuristic: pruning
-		// removes WORK, never ANSWER. A pruned capability could not have
-		// produced a fact -- it filters on its own ID column, which no
-		// subject of an unsupported kind matches -- so the fact bundle must
-		// come out byte-identical. A difference here means the planner
-		// dropped something real and the rule is wrong.
-		if r.planned.facts != r.baseline.facts || r.planned.bundleDigest != r.baseline.bundleDigest {
+		// removes WORK, never ANSWER. Both sides are real ReadFacts calls, so
+		// a difference cannot be an artifact of how the test assembled a
+		// bundle -- it can only mean the planner dropped something real.
+		if r.planned.facts != r.reduced.facts || r.planned.bundleDigest != r.reduced.bundleDigest {
 			t.Fatalf("case %q: pruning changed the fact bundle (facts %d vs %d, digest %s vs %s) -- it must only skip work that could not have produced facts",
-				r.name, r.planned.facts, r.baseline.facts, r.planned.bundleDigest, r.baseline.bundleDigest)
+				r.name, r.planned.facts, r.reduced.facts, r.planned.bundleDigest, r.reduced.bundleDigest)
 		}
 	}
 }
 
-// chaos3783MeasurePlanned runs the real registry path -- planner included --
-// and reads the saving straight out of the coverage the caller would receive.
-func chaos3783MeasurePlanned(ctx context.Context, principal storage.Principal, registry *contextfabric.FactCapabilityRegistry, testCase chaos3783Case) chaos3783Measurement {
+// chaos3783Run executes ONE real investigation fact read and measures it from
+// the coverage the caller would actually receive.
+func chaos3783Run(
+	ctx context.Context,
+	principal storage.Principal,
+	registry *contextfabric.FactCapabilityRegistry,
+	registered map[contextfabric.FactKind]contextfabric.FactCapability,
+	subjects []contextfabric.SubjectRef,
+	kinds []contextfabric.FactKind,
+) chaos3783Measurement {
 	request := contextfabric.CanonicalFactRequest{
 		// Engine refuses any axis but current before it ever reaches the
 		// fact layer (requireCurrentTimeAxis, twice), so a current axis is
@@ -216,8 +274,8 @@ func chaos3783MeasurePlanned(ctx context.Context, principal storage.Principal, r
 		// checkCurrentTimeOnly, which would make pruning look like a 100%
 		// saving for the wrong reason.
 		Question:     contextfabric.InterpretedQuestion{TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}},
-		Subjects:     testCase.subjects,
-		Requirements: chaos3783Requirements(testCase.requirements),
+		Subjects:     subjects,
+		Requirements: chaos3783Requirements(kinds),
 	}
 	started := time.Now()
 	bundle, err := registry.ReadFacts(ctx, principal, request)
@@ -226,116 +284,64 @@ func chaos3783MeasurePlanned(ctx context.Context, principal storage.Principal, r
 		return chaos3783Measurement{elapsed: elapsed, failed: true, failure: err.Error()}
 	}
 
-	measurement := chaos3783Measurement{elapsed: elapsed, facts: len(bundle.Facts)}
+	measurement := chaos3783Measurement{
+		elapsed: elapsed, facts: len(bundle.Facts),
+		bundleBytes: chaos3783BundleBytes(bundle.Facts), bundleDigest: chaos3783BundleDigest(bundle.Facts),
+	}
 	for _, source := range bundle.Coverage.Sources {
+		kind := contextfabric.FactKind(strings.TrimPrefix(source.Source, "canonical_fact:"))
 		switch source.State {
 		case contextfabric.SourcePruned:
 			measurement.prunedSources++
+			measurement.prunedKinds = append(measurement.prunedKinds, kind)
 		case contextfabric.SourceUnconfigured:
 			// Never registered, so it was not a round-trip either way.
 		default:
 			measurement.providersQueried++
-			measurement.subjectBindings += chaos3783SupportedSubjectCount(registry, source.Source, testCase.subjects)
+			measurement.subjectBindings += chaos3783SupportedSubjectCount(registered[kind], subjects)
 		}
 	}
-	measurement.bundleBytes = chaos3783BundleBytes(bundle.Facts)
-	measurement.bundleDigest = chaos3783BundleDigest(bundle.Facts)
 	return measurement
 }
 
-// chaos3783MeasureNaiveFanout is the counterfactual: call every requested
-// capability directly, with every resolved subject, exactly as a planner-free
-// implementation would. It goes to the providers rather than the registry
-// precisely so it cannot pick up the planner -- there is no production knob
-// that turns pruning off, and adding one only to measure it would be a seam
-// with no other reason to exist.
-func chaos3783MeasureNaiveFanout(ctx context.Context, principal storage.Principal, providers []contextfabric.FactProvider, testCase chaos3783Case) chaos3783Measurement {
-	byKind := make(map[contextfabric.FactKind]contextfabric.FactProvider, len(providers))
-	for _, provider := range providers {
-		byKind[provider.Capability().Kind] = provider
-	}
-
-	measurement := chaos3783Measurement{}
-	facts := make([]contextfabric.CanonicalFact, 0)
-	started := time.Now()
+// chaos3783NaiveCost counts -- never executes -- what a planner-free
+// implementation would have spent: one provider round-trip per registered
+// requirement, with every investigation subject bound to each.
+//
+// It deliberately builds no bundle. The naive fan-out cannot be run through
+// the production path (buildFactQuery refuses an unsupported subject kind),
+// and re-implementing it here is exactly the mistake that produced three
+// rounds of divergence findings. A count has no state stamping, no caps, and
+// no serialization, so there is nothing for it to diverge on.
+func chaos3783NaiveCost(testCase chaos3783Case, registered map[contextfabric.FactKind]contextfabric.FactCapability) (roundTrips, bindings int) {
 	for _, kind := range testCase.requirements {
-		provider, registered := byKind[kind]
-		if !registered {
+		if _, ok := registered[kind]; !ok {
 			continue
 		}
-		measurement.providersQueried++
-		measurement.subjectBindings += len(testCase.subjects)
-		result, err := provider.ReadFacts(ctx, principal, contextfabric.FactQuery{
-			Kind:     kind,
-			Subjects: testCase.subjects,
-			Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-		})
-		if err != nil {
-			// A naive fan-out swallows a provider error the same way the
-			// registry does -- it is coverage, not a failed investigation.
-			continue
-		}
-		// mergeFactProviderResult stamps Source/SourceVersion/SourceState
-		// onto every fact the registry merges. Comparing raw provider facts
-		// against stamped ones would report a byte difference that has
-		// nothing to do with pruning, so stamp the baseline identically.
-		capability := provider.Capability()
-		for _, fact := range result.Facts {
-			if fact.Source == "" {
-				fact.Source = capability.Name
-			}
-			if fact.SourceVersion == "" {
-				fact.SourceVersion = capability.Version
-			}
-			if fact.SourceState == "" {
-				fact.SourceState = result.State
-			}
-			facts = append(facts, fact)
-		}
+		roundTrips++
+		bindings += len(testCase.subjects)
 	}
-	measurement.elapsed = time.Since(started)
-	measurement.facts = len(facts)
-	measurement.bundleBytes = chaos3783BundleBytes(facts)
-	measurement.bundleDigest = chaos3783BundleDigest(facts)
-	return measurement
+	return roundTrips, bindings
 }
 
 // chaos3783SupportedSubjectCount reports how many of this investigation's
-// subjects the named capability was actually asked about, which is what the
-// planner narrows. The capability is found by the coverage source name the
-// registry emits ("canonical_fact:<kind>").
-func chaos3783SupportedSubjectCount(registry *contextfabric.FactCapabilityRegistry, coverageSource string, subjects []contextfabric.SubjectRef) int {
-	kind := contextfabric.FactKind(strings.TrimPrefix(coverageSource, "canonical_fact:"))
-	for _, capability := range registry.Capabilities() {
-		if capability.Kind != kind {
-			continue
-		}
-		count := 0
-		for _, subject := range subjects {
-			for _, supported := range capability.SupportedSubjectKinds {
-				if supported == subject.Kind {
-					count++
-					break
-				}
+// subjects the capability was actually asked about, which is what the planner
+// narrows.
+func chaos3783SupportedSubjectCount(capability contextfabric.FactCapability, subjects []contextfabric.SubjectRef) int {
+	count := 0
+	for _, subject := range subjects {
+		for _, supported := range capability.SupportedSubjectKinds {
+			if supported == subject.Kind {
+				count++
+				break
 			}
 		}
-		return count
 	}
-	return 0
+	return count
 }
 
-// chaos3783BundleBytes measures what actually reaches the model: the
-// serialized facts. Fact COUNT alone understates the difference, because
-// families differ by an order of magnitude in how wide each fact is.
-//
-// Codex round-1 F4: it canonicalizes ORDER first. The registry sorts its
-// bundle (sortCanonicalFacts) while the naive baseline accumulates in
-// requirement order, and no provider SELECT carries an outer ORDER BY, so
-// two runs holding the identical SET of facts can serialize differently for
-// reasons that have nothing to do with pruning. Comparing those bytes
-// directly would make the byte-identity assertion flaky, and a flaky
-// assertion about correctness is worse than no assertion. Both sides go
-// through this one function, so both are ordered the same way.
+// chaos3783BundleBytes is the human-readable size of what reaches the model.
+// It is reported, never asserted on -- see chaos3783BundleDigest.
 func chaos3783BundleBytes(facts []contextfabric.CanonicalFact) int {
 	return len(chaos3783CanonicalEncoding(facts))
 }
@@ -363,11 +369,11 @@ func chaos3783CanonicalEncoding(facts []contextfabric.CanonicalFact) []byte {
 	return encoded
 }
 
-// chaos3783Canonical returns a stably-ordered copy. The sort key ends with
-// the fact's own serialization so that two facts identical in kind, subject,
-// and source -- which a provider may legitimately return, e.g. one row per
-// day -- still order deterministically instead of relying on the order the
-// database happened to return them in.
+// chaos3783Canonical returns a stably-ordered copy. Both compared bundles now
+// come from the same registry and are already sorted by it, so this is
+// belt-and-braces rather than the load-bearing fix it was when a
+// hand-assembled baseline was in play -- but it costs nothing and keeps the
+// digest meaningful if either side's ordering ever changes.
 func chaos3783Canonical(facts []contextfabric.CanonicalFact) []contextfabric.CanonicalFact {
 	// The key travels WITH its fact. Computing keys into a position-indexed
 	// side table and sorting the facts separately would leave the comparator
@@ -403,6 +409,21 @@ func chaos3783Requirements(kinds []contextfabric.FactKind) []contextfabric.FactR
 		requirements = append(requirements, contextfabric.FactRequirement{Kind: kind})
 	}
 	return requirements
+}
+
+func chaos3783Without(kinds, remove []contextfabric.FactKind) []contextfabric.FactKind {
+	excluded := make(map[contextfabric.FactKind]struct{}, len(remove))
+	for _, kind := range remove {
+		excluded[kind] = struct{}{}
+	}
+	kept := make([]contextfabric.FactKind, 0, len(kinds))
+	for _, kind := range kinds {
+		if _, skip := excluded[kind]; skip {
+			continue
+		}
+		kept = append(kept, kind)
+	}
+	return kept
 }
 
 // chaos3783Subjects discovers real subject IDs from the live database rather
@@ -460,13 +481,10 @@ func chaos3783Percent(part, whole int) float64 {
 	return float64(part) / float64(whole) * 100
 }
 
-// TestCHAOS3783BundleBytesIsOrderInsensitive proves the F4 fix without
-// needing a database, so it runs in ordinary CI rather than only under the
-// opt-in measurement. The byte-identity assertion is only meaningful if two
-// identical fact SETS measure identically regardless of the order they were
-// accumulated in -- the registry sorts its bundle, the naive baseline does
-// not, and no provider SELECT has an outer ORDER BY.
-func TestCHAOS3783BundleBytesIsOrderInsensitive(t *testing.T) {
+// TestCHAOS3783BundleDigestIsOrderInsensitiveAndContentSensitive guards the
+// shared serializer both compared bundles go through. It needs no database,
+// so it runs in ordinary CI rather than only under the opt-in measurement.
+func TestCHAOS3783BundleDigestIsOrderInsensitiveAndContentSensitive(t *testing.T) {
 	t.Parallel()
 
 	facts := []contextfabric.CanonicalFact{

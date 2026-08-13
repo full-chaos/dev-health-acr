@@ -254,11 +254,33 @@ skipped sources off the state alone.
 
 `TestCHAOS3783PruningMeasurement`
 (`internal/contextfabric/devhealthfacts/`) is opt-in and skips unless
-`ACR_CHAOS3783_CLICKHOUSE_DSN` and `ACR_CHAOS3783_ORG_ID` are set. Its
-baseline is a **counterfactual**: the naive fix pruning argues against (run
-every requested capability against every subject, let providers come back
-empty), built in the test by calling providers directly. It is not production
-"before" -- §1 explains why no slow before exists.
+`ACR_CHAOS3783_CLICKHOUSE_DSN` and `ACR_CHAOS3783_ORG_ID` are set.
+
+**Every bundle it compares comes from the real
+`FactCapabilityRegistry.ReadFacts`.** A re-implemented baseline measures its
+own divergence from the production pipeline, not pruning: an earlier version
+assembled a "naive fan-out" bundle by calling providers directly and stamping
+what the registry stamps, and each registry semantic it failed to mirror --
+per-fact state rewrites, the aggregate fact cap, ordering, serialization --
+surfaced as a separate review finding, three rounds running. Sharing the
+production path makes those semantics identical by construction rather than
+by transcription.
+
+The naive counterfactual is therefore **counted, never executed**: one
+round-trip per registered requirement, every subject bound to each. It cannot
+be executed, and that is not an oversight -- `buildFactQuery` refuses to ask a
+provider about an unsupported subject kind and refuses an empty subject list,
+so forcing a plan-everything mode through `ReadFacts` would reproduce the
+pre-CHAOS-3783 whole-bundle failure (§1) rather than a naive baseline. A count
+has no bundle, no stamping, and no serialization, so it has nothing to diverge
+on. It is not production "before" -- §1 explains why no slow before exists.
+
+What proves pruning did not change the answer is a **second real `ReadFacts`
+call with the pruned kinds removed from the request**: asking for
+`{A, B, C}` where `C` is pruned must produce exactly the facts of asking for
+`{A, B}`. `TestPruningIsInvisibleToTruncationAndCaps` pins the same property
+package-locally, with a provider pushed past the aggregate cap so the
+truncation rewrite and the cap are both live.
 
 On the live dev corpus (3 repositories, 3 work items, 1 team):
 
