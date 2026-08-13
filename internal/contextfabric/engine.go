@@ -346,6 +346,24 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	result.Question = request.Question
 	result.Interpretation = interpretation
 	result.SubjectResolution = resolution
+	// Codex round-1 F4, per the orchestrator's ruling: a retrieval mechanism
+	// that was unavailable for THIS resolution is folded into the answer here,
+	// at the engine, rather than by inventing a path from ResolveSubjects into
+	// the graph adapter's own Coverage construction. ResolveSubjects reports
+	// the request-scoped marker; the engine owns what an answer says about
+	// itself.
+	//
+	// The limitation string is FIXED and non-interpolated. It names no
+	// mechanism, no provider, no model, and no error text: a limitation is
+	// answer-facing prose, and every cause here (an embed timeout, an
+	// unreachable embedder, a server that served the wrong model, a fenced-off
+	// stale index) has the same consequence for a reader -- retrieval saw less
+	// than it should have. The operator-facing detail belongs in telemetry,
+	// which already receives it.
+	if resolution.RetrievalDegraded {
+		result.Limitations = appendLimitation(result.Limitations, retrievalDegradedLimitation)
+		result.Coverage.Partial = true
+	}
 	if result.Cohort == nil {
 		result.Cohort = graphContext.Cohort
 	}
@@ -495,4 +513,22 @@ func mergeFactRequirements(groups ...[]FactRequirement) []FactRequirement {
 		}
 	}
 	return result
+}
+
+// retrievalDegradedLimitation is the fixed, non-interpolated limitation added
+// when a retrieval mechanism was unavailable for a resolution (codex round-1
+// F4). Deliberately a constant rather than a format string -- see the fold in
+// Investigate for why it names no cause.
+const retrievalDegradedLimitation = "One retrieval mechanism was unavailable for this investigation, so fewer candidate subjects may have been considered than usual."
+
+// appendLimitation adds a limitation unless it is already present, so a
+// synthesizer that independently reported the same limitation does not
+// produce a duplicate.
+func appendLimitation(limitations []string, limitation string) []string {
+	for _, existing := range limitations {
+		if existing == limitation {
+			return limitations
+		}
+	}
+	return append(limitations, limitation)
 }

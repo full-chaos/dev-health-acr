@@ -17,6 +17,15 @@ type ResolveDeps struct {
 	// found" -- a safe non-match, not an error.
 	ExactHint func(ctx context.Context, subject contextfabric.SubjectRef) (node CandidateNode, ok bool, err error)
 	// Search performs bounded node-scoped hybrid search for term.
+	//
+	// degraded reports that a retrieval MECHANISM was unavailable for this
+	// call -- e.g. CHAOS-3778's vector step timed out, errored, or was fenced
+	// off -- so the candidate set may be narrower than a healthy run would
+	// produce. It is distinct from truncated: truncated means "there were
+	// more results than the budget could show", degraded means "one way of
+	// finding results did not run at all". A backend with no optional
+	// mechanism always reports false.
+	//
 	// truncated reports whether the backend's own bound on this result set
 	// (e.g. a server-side row LIMIT) means genuinely competing candidates
 	// could have been left out before ResolveSubjects ever saw them -- see
@@ -24,7 +33,7 @@ type ResolveDeps struct {
 	// means for auto-commit eligibility. A backend with no such bound (or
 	// one that fetched a generous superset with no risk of missing a real
 	// competitor) always reports false.
-	Search func(ctx context.Context, term string, limit int) (candidates []CandidateNode, truncated bool, err error)
+	Search func(ctx context.Context, term string, limit int) (candidates []CandidateNode, truncated bool, degraded bool, err error)
 	// Traverse implements observation-to-entity traversal for a matched
 	// document/episode node -- see TraverseObservationToSubject, which a
 	// backend's own Traverse implementation should call with its own
@@ -127,13 +136,22 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// ResolveFromMergedCandidates treat truncation as a property of the
 	// WHOLE resolution (Codex round 3 review of the D11/AC-3778-0 fix).
 	searchTruncated := false
+	// retrievalDegraded is true if ANY of this invocation's Search() calls
+	// reported that a retrieval mechanism was unavailable (codex round-1 F4).
+	// Like searchTruncated it is a property of the WHOLE resolution, not of
+	// any one candidate -- a mechanism that failed for one term leaves the
+	// resolution as a whole narrower than it should have been.
+	retrievalDegraded := false
 	for _, term := range terms {
-		results, truncated, err := deps.Search(ctx, term, request.Options.MaxSubjectCandidates)
+		results, truncated, degraded, err := deps.Search(ctx, term, request.Options.MaxSubjectCandidates)
 		if err != nil {
 			return contextfabric.SubjectResolution{}, err
 		}
 		if truncated {
 			searchTruncated = true
+		}
+		if degraded {
+			retrievalDegraded = true
 		}
 		for _, node := range results {
 			candidate, ok := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal)
@@ -188,5 +206,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if traversalDegraded > 0 && deps.TraversalDegraded != nil {
 		deps.TraversalDegraded(ctx, principal.OrgID, traversalDegraded)
 	}
-	return ResolveFromMergedCandidates(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated), nil
+	resolution := ResolveFromMergedCandidates(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated)
+	resolution.RetrievalDegraded = retrievalDegraded
+	return resolution, nil
 }

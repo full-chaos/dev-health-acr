@@ -373,12 +373,17 @@ for*. Nothing downstream can detect that, and no rebuild fixes it without first
 fixing the server.
 
 **Degradation is visible in the answer, not only in logs.** When vector
-retrieval drops out — an embed timeout, an unreachable embedder, a wrong
-serving model, or a fence mismatch — the investigation result reports
-`coverage.partial` with a `vector_retrieval_degraded` reason. That signal is
-scoped to the organization over a short window rather than to a single request,
-so it can mark a request partial whose own retrieval was complete; it never does
-the reverse.
+retrieval drops out for a request — an embed timeout, an unreachable embedder,
+a wrong serving model, or a fence mismatch — that investigation's result reports
+`coverage.partial` and carries a fixed limitation stating that one retrieval
+mechanism was unavailable. The signal is request-scoped: it describes that
+answer, not the organization's recent health.
+
+The limitation names no mechanism, provider, model, or error text. It is
+answer-facing prose, and every cause has the same consequence for a reader —
+retrieval saw less than it should have. The operator-facing detail is in
+telemetry (`RecordVectorRetrievalDegraded`), which is where you diagnose *which*
+of the causes above fired.
 
 **Degradation is expected and safe.** An embedder that is unreachable, cold, or
 slow degrades the request to lexical-only rather than failing it; a cold local

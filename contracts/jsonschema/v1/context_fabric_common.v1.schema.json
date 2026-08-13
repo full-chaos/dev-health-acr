@@ -475,6 +475,9 @@
         "clarification_prompt": {
           "type": "string",
           "maxLength": 2000
+        },
+        "retrieval_degraded": {
+          "type": "boolean"
         }
       },
       "required": [

@@ -39,7 +39,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			}
 			return toCandidateNode(n), true, nil
 		},
-		Search: func(ctx context.Context, term string, limit int) ([]graphrank.CandidateNode, bool, error) {
+		Search: func(ctx context.Context, term string, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
 			return a.hybridSearchNodes(ctx, key, principal.OrgID, term, limit)
 		},
 		Traverse: func(ctx context.Context, term string, observation graphrank.CandidateNode) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
@@ -231,17 +231,8 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// the first; per-call aggregation stays bounded (never one log line
 	// per dropped edge) without ever going silent on a call that has
 	// something to report.
-	// Codex round-1 F4: vector retrieval dropping out is a real reduction in
-	// what the investigation could see, so it belongs in Coverage rather than
-	// only in telemetry. See recordVectorDegraded for why this signal is
-	// organization-and-window scoped rather than request scoped, and why that
-	// errs toward over-reporting partial.
-	vectorDegraded := a.vectorRecentlyDegraded(principal.OrgID)
-	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || vectorDegraded
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0
 	var degradedReasons []string
-	if vectorDegraded {
-		degradedReasons = append(degradedReasons, "vector_retrieval_degraded")
-	}
 	if failedLookups > 0 {
 		degradedReasons = append(degradedReasons, fmt.Sprintf("endpoint_lookup_failed:%d", failedLookups))
 	}

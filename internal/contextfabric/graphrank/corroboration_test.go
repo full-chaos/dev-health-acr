@@ -1,9 +1,11 @@
 package graphrank
 
 import (
+	"context"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // vectorBandCeiling mirrors falkorgraph.vectorRelevanceCeiling. It is
@@ -308,5 +310,54 @@ func TestF1_AStrongLexicalCommitSurvivesAVectorSearchThatFoundNothing(t *testing
 	if len(truncated.Committed) != 0 {
 		t.Fatal("this test no longer demonstrates the cost it exists to pin: " +
 			"searchTruncated must still short-circuit the commit decision")
+	}
+}
+
+// Codex round-1 F4, per the orchestrator's ruling: the degradation marker is
+// REQUEST-SCOPED and travels out of ResolveSubjects on the resolution, so the
+// engine can fold it into the answer. It must not be conflated with
+// truncation, which has entirely different consequences.
+func TestF4_ResolveSubjectsReportsRetrievalDegradationOnTheResolution(t *testing.T) {
+	backend := &fakeGraphBackend{
+		searchResults:  map[string][]CandidateNode{},
+		searchDegraded: true,
+	}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(),
+		contextfabric.InterpretedQuestion{SubjectTerms: []string{"the auth work"}}, backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects: %v", err)
+	}
+	if !resolution.RetrievalDegraded {
+		t.Fatal("a Search that reported a missing mechanism must surface on the resolution")
+	}
+}
+
+// Degradation and truncation are independent signals with different
+// consequences: truncation blocks auto-commit, degradation does not (it only
+// tells the reader the candidate set may be narrower). Conflating them would
+// either block commits that should stand or hide missing mechanisms.
+func TestF4_DegradationDoesNotBlockAnAutoCommitTheWayTruncationDoes(t *testing.T) {
+	strong := corroborationCandidate("auth", 0.75, contextfabric.MatchLexical)
+	bySubject := map[string]contextfabric.SubjectCandidate{SubjectKey(strong.Subject): strong}
+
+	// Degradation is NOT an input to ResolveFromMergedCandidates at all --
+	// only truncation is -- so a degraded-but-untruncated resolution still
+	// commits.
+	resolution := ResolveFromMergedCandidates(bySubject, map[string]string{}, map[string]bool{}, 10, true, false)
+	if len(resolution.Committed) != 1 {
+		t.Fatalf("degradation must not block an unopposed strong commit, got %v", resolution.Committed)
+	}
+}
+
+// A healthy search must never mark the answer degraded.
+func TestF4_HealthySearchReportsNoDegradation(t *testing.T) {
+	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{}}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(),
+		contextfabric.InterpretedQuestion{SubjectTerms: []string{"anything"}}, backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects: %v", err)
+	}
+	if resolution.RetrievalDegraded {
+		t.Fatal("a healthy search must not mark the resolution degraded")
 	}
 }

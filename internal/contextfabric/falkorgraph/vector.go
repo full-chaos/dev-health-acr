@@ -3,7 +3,6 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
@@ -256,10 +255,16 @@ func (a *Adapter) vectorSearchNodes(ctx context.Context, key, orgID string, vect
 // own candidatesBySubject merge (MergeCandidates) is the single place that
 // unions two findings of one subject, and routing both mechanisms through it
 // is precisely how a subject found BOTH ways ends up carrying both mechanisms.
-func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string, limit int) ([]graphrank.CandidateNode, bool, error) {
+//
+// The third return value reports whether the VECTOR mechanism was unavailable
+// for this call (codex round-1 F4). It is request-scoped by construction --
+// derived from what happened during this one search, never from the
+// organization's recent history -- which is what makes it usable as the
+// engine's input for a coverage/limitation decision about THIS answer.
+func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
 	lexical, truncated, err := a.fulltextSearchNodes(ctx, key, orgID, term, limit)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	for i := range lexical {
 		lexical[i].Mechanism = contextfabric.MatchLexical
@@ -270,80 +275,47 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 	// dimension nor the stored embedder identity. The verdict is cached per
 	// organization (see ensureVectorReadable), so this is one bounded probe
 	// per organization per process, not per request.
+	if a.embedder == nil {
+		// Vector retrieval is not configured for this deployment. That is not
+		// a degradation -- nothing was expected to be available -- so it must
+		// not mark the answer.
+		return lexical, truncated, false, nil
+	}
 	if !a.ensureVectorReadable(ctx, key, orgID) {
-		// No embedder, or the graph holds vectors this embedder did not
-		// produce. Lexical retrieval proceeds; the degradation is recorded.
+		// The graph holds vectors this embedder did not produce, or the fence
+		// could not be verified. Lexical retrieval proceeds, and the answer
+		// records that a mechanism was missing.
 		a.recordVectorDegraded(ctx, orgID)
-		return lexical, truncated, nil
+		return lexical, truncated, true, nil
 	}
 	vectors, embedErr := a.embedder.Embed(ctx, []string{term})
 	if embedErr != nil || len(vectors) != 1 {
 		a.recordVectorDegraded(ctx, orgID)
-		return lexical, truncated, nil
+		return lexical, truncated, true, nil
 	}
 	vectorCandidates, vectorTruncated, err := a.vectorSearchNodes(ctx, key, orgID, vectors[0], a.similarityFloor, limit)
 	if err != nil {
 		// A graph-side failure of the vector step degrades the same way an
 		// embedder failure does. The lexical answer is still a real answer.
 		a.recordVectorDegraded(ctx, orgID)
-		return lexical, truncated, nil
+		return lexical, truncated, true, nil
 	}
-	return append(lexical, vectorCandidates...), truncated || vectorTruncated, nil
+	return append(lexical, vectorCandidates...), truncated || vectorTruncated, false, nil
 }
 
-// recordVectorDegraded marks vector retrieval as degraded for an organization
-// and reports it to telemetry.
+// recordVectorDegraded reports a vector-retrieval degradation to telemetry.
 //
-// Codex round-1 F4: the design promised Coverage.Partial on vector
-// degradation and the implementation only emitted telemetry, so an embed
-// timeout was visible in logs but not in the answer. This records the
-// degradation somewhere DiscoverContext can read it.
-//
-// THE SCOPE IS ORGANIZATION AND TIME, NOT REQUEST -- stated plainly because it
-// matters. Vector degradation happens during ResolveSubjects, while Coverage
-// is built during a later DiscoverContext call, and there is no request-scoped
-// carrier between the two (GraphReader's two methods take independent
-// contexts, and the only value threaded between them, SubjectResolution, is a
-// contract type this change does not own). So the marker is per-organization
-// with a short window instead.
-//
-// The consequence, precisely: within vectorDegradationWindow this can mark a
-// request partial whose OWN retrieval was complete, because a different
-// concurrent request for the same organization degraded. It cannot do the
-// reverse. Over-reporting partial is the safe direction -- an answer that
-// says "possibly incomplete" when it was complete costs a reader some
-// caution; one that says "complete" when vector retrieval silently dropped out
-// is the failure F4 is about. A narrower, genuinely request-scoped signal
-// needs a carrier through GraphReader that does not exist today.
+// The ANSWER-facing half of this signal does not live here: it is carried
+// out of ResolveSubjects on SubjectResolution.RetrievalDegraded, per the
+// orchestrator's ruling on codex F4. See hybridSearchNodes' degraded return
+// value and reader.go's ResolveSubjects.
 func (a *Adapter) recordVectorDegraded(ctx context.Context, orgID string) {
-	a.bootstrapMu.Lock()
-	if a.vectorDegradedAt == nil {
-		a.vectorDegradedAt = make(map[string]time.Time)
-	}
-	a.vectorDegradedAt[orgID] = a.now()
-	a.bootstrapMu.Unlock()
 	if a.config.Telemetry == nil {
 		return
 	}
 	if recorder, ok := a.config.Telemetry.(VectorTelemetry); ok {
 		recorder.RecordVectorRetrievalDegraded(ctx, orgID)
 	}
-}
-
-// vectorRecentlyDegraded reports whether vector retrieval degraded for this
-// organization inside vectorDegradationWindow. See recordVectorDegraded for
-// the scope caveat.
-func (a *Adapter) vectorRecentlyDegraded(orgID string) bool {
-	if a.embedder == nil {
-		return false
-	}
-	a.bootstrapMu.RLock()
-	defer a.bootstrapMu.RUnlock()
-	at, ok := a.vectorDegradedAt[orgID]
-	if !ok {
-		return false
-	}
-	return a.now().Sub(at) < vectorDegradationWindow
 }
 
 // VectorTelemetry is an OPTIONAL extension of GraphTelemetry. An

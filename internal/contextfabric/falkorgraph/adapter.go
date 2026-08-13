@@ -39,10 +39,6 @@ type Adapter struct {
 	// configured embedder. See ensureVectorReadable for the caching rules and
 	// why a DISABLED verdict expires while an ENABLED one does not.
 	vectorFence map[string]vectorFenceEntry
-	// vectorDegradedAt records, per organization, when vector retrieval last
-	// degraded (codex round-1 F4). See recordVectorDegraded and
-	// vectorRecentlyDegraded for what this can and cannot claim.
-	vectorDegradedAt map[string]time.Time
 }
 
 // vectorFenceEntry is one organization's cached fence verdict.
@@ -57,11 +53,6 @@ type vectorFenceEntry struct {
 // graph with `acr-projector rebuild --org` would also have to restart acr-api
 // to get vector retrieval back -- turning a recoverable state into a deploy.
 const vectorFenceRecheckInterval = 5 * time.Minute
-
-// vectorDegradationWindow bounds how long a vector degradation is reported in
-// Coverage. Deliberately short -- it is a "this is happening now" signal, not
-// a durable state.
-const vectorDegradationWindow = 30 * time.Second
 
 // EmbedderOptions carries the optional vector-retrieval dependencies
 // (CHAOS-3778). A zero value, or a nil Embedder, leaves vector retrieval off.

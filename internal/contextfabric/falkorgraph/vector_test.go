@@ -176,7 +176,7 @@ func TestHybridSearchFailsOpenToLexicalWhenTheEmbedderErrors(t *testing.T) {
 		return nil, nil
 	}}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{err: errors.New("connection refused")}, 0.55)
-	candidates, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5)
+	candidates, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5)
 	if err != nil {
 		t.Fatalf("an embedder failure must not fail the request: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestHybridSearchIsLexicalOnlyWithoutAnEmbedder(t *testing.T) {
 		return nil, nil
 	}}
 	adapter := newFakeAdapter(t, fake)
-	if _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5); err != nil {
+	if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5); err != nil {
 		t.Fatalf("hybridSearchNodes: %v", err)
 	}
 	if vectorQueried {
@@ -415,7 +415,7 @@ func TestWrongServingModelDegradesTheReadPathToLexical(t *testing.T) {
 	}}
 	adapter := vectorAdapter(t, fake, wrongModelEmbedder(t, server.URL), 0.55)
 
-	candidates, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5)
+	candidates, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5)
 	if err != nil {
 		t.Fatalf("a serving-model mismatch must not fail the request: %v", err)
 	}
@@ -554,9 +554,12 @@ func TestF2_ReadPathVerifiesTheStoredEmbedderIdentity(t *testing.T) {
 	}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
 
-	candidates, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5)
+	candidates, _, degraded, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5)
 	if err != nil {
 		t.Fatalf("a stale-identity graph must degrade, not fail: %v", err)
+	}
+	if !degraded {
+		t.Fatal("a fenced-off vector mechanism must report degradation to the caller")
 	}
 	if !identityChecked {
 		t.Fatal("the read path must verify the stored embedder identity")
@@ -566,10 +569,6 @@ func TestF2_ReadPathVerifiesTheStoredEmbedderIdentity(t *testing.T) {
 	}
 	if len(candidates) != 1 || candidates[0].Mechanism != contextfabric.MatchLexical {
 		t.Fatalf("lexical retrieval must proceed, got %#v", candidates)
-	}
-	// And the degradation is visible in coverage, not only in logs (F4).
-	if !adapter.vectorRecentlyDegraded("org") {
-		t.Fatal("the degradation must be recorded for Coverage")
 	}
 }
 
@@ -587,7 +586,7 @@ func TestF2_MatchingStoredIdentityPassesTheReadFence(t *testing.T) {
 		return []indexStatus{operationalVectorIndex(8)}, nil
 	}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
-	if _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5); err != nil {
+	if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5); err != nil {
 		t.Fatalf("hybridSearchNodes: %v", err)
 	}
 	if !vectorQueried {

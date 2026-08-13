@@ -26,7 +26,13 @@ type fakeGraphBackend struct {
 	// ResolveFromMergedCandidates' searchTruncated parameter. Defaults to
 	// false, so every existing test in this file that does not set it is
 	// unaffected.
-	searchTruncated   bool
+	searchTruncated bool
+	// searchDegraded, when true, makes every Search() call report that a
+	// retrieval MECHANISM was unavailable (codex round-1 F4). Distinct from
+	// searchTruncated: degraded means "one way of finding results did not run
+	// at all", truncated means "there were more results than the budget could
+	// show". Defaults to false.
+	searchDegraded    bool
 	traverse          func(ctx context.Context, term string, observation CandidateNode) (contextfabric.SubjectCandidate, ObservationTraversal)
 	isInternal        func(contextfabric.SubjectRef) bool
 	traversalDegraded []int
@@ -48,12 +54,12 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 			node, ok := f.exactHints[SubjectKey(subject)]
 			return node, ok, nil
 		},
-		Search: func(ctx context.Context, term string, limit int) ([]CandidateNode, bool, error) {
+		Search: func(ctx context.Context, term string, limit int) ([]CandidateNode, bool, bool, error) {
 			f.searchCalls = append(f.searchCalls, term)
 			if f.searchErr != nil {
-				return nil, false, f.searchErr
+				return nil, false, false, f.searchErr
 			}
-			return f.searchResults[term], f.searchTruncated, nil
+			return f.searchResults[term], f.searchTruncated, f.searchDegraded, nil
 		},
 		Traverse:   traverse,
 		IsInternal: isInternal,
@@ -310,7 +316,7 @@ func TestResolveSubjectsExactHintPropagatesBackendError(t *testing.T) {
 		ExactHint: func(context.Context, contextfabric.SubjectRef) (CandidateNode, bool, error) {
 			return CandidateNode{}, false, errors.New("transient backend failure")
 		},
-		Search: func(context.Context, string, int) ([]CandidateNode, bool, error) { return nil, false, nil },
+		Search: func(context.Context, string, int) ([]CandidateNode, bool, bool, error) { return nil, false, false, nil },
 		Traverse: func(context.Context, string, CandidateNode) (contextfabric.SubjectCandidate, ObservationTraversal) {
 			return contextfabric.SubjectCandidate{}, ObservationNoParent
 		},

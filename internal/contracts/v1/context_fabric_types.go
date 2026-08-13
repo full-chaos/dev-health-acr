@@ -457,6 +457,24 @@ type ContextFabricSubjectResolution struct {
 	Candidates          []ContextFabricSubjectCandidate `json:"candidates"`
 	Committed           []ContextFabricSubjectRef       `json:"committed"`
 	ClarificationPrompt string                          `json:"clarification_prompt,omitempty"`
+	// RetrievalDegraded reports that a retrieval MECHANISM was unavailable
+	// for this resolution -- CHAOS-3778's vector step timed out, errored, or
+	// was fenced off -- so the candidate set may be narrower than a healthy
+	// run would produce (codex round-1 F4).
+	//
+	// It is a single boolean, not a taxonomy, on purpose: every cause has the
+	// same consequence for a reader ("retrieval saw less than it should"),
+	// and naming causes here would leak retrieval internals into an
+	// answer-facing contract. The operator-facing detail lives in telemetry.
+	//
+	// REQUEST-SCOPED. It describes THIS resolution, not the organization's
+	// recent health, which is what makes it usable as an input to the
+	// engine's own coverage and limitation handling.
+	//
+	// Additive-optional in v1: absent means "not reported", never "healthy".
+	// Every result persisted before CHAOS-3778 lacks it and must still
+	// validate on replay.
+	RetrievalDegraded bool `json:"retrieval_degraded,omitempty"`
 }
 
 type ContextFabricCohort struct {
