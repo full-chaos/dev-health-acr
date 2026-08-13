@@ -8,6 +8,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
 // The ownership aggregation is the one producer in this issue whose
@@ -29,9 +30,7 @@ import (
 // team_project_ownership), so this is a latent defect rather than an active
 // one. That is exactly why it needs a test: nothing in the schema prevents
 // the collision, and the failure is silent fabrication rather than an error.
-func TestOwnershipCollapseDoesNotMergeAcrossProviders(t *testing.T) {
-	ctx := context.Background()
-	fixture := newOwnershipFixture(t, ctx)
+func subOwnershipCollapseDoesNotMergeAcrossProviders(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 
 	batch := fixture.project(t, ctx)
 	for _, forbidden := range []struct{ project, team string }{
@@ -68,9 +67,7 @@ func TestOwnershipCollapseDoesNotMergeAcrossProviders(t *testing.T) {
 //     plain argMax(valid_to, valid_from) SKIPS the NULL and returns the older
 //     row's date, holding a closed edge open. argMax(tuple(valid_to),
 //     valid_from).1 preserves it.
-func TestOwnershipWindowTakesTheLatestAssertion(t *testing.T) {
-	ctx := context.Background()
-	fixture := newOwnershipFixture(t, ctx)
+func subOwnershipWindowTakesTheLatestAssertion(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 
 	batch := fixture.project(t, ctx)
 
@@ -106,15 +103,48 @@ type ownershipFixture struct {
 	direct clickhousedriver.Conn
 }
 
-func newOwnershipFixture(t *testing.T, ctx context.Context) *ownershipFixture {
-	t.Helper()
-	const orgID = "30000000-0000-4000-8000-000000000003"
+// TestOwnershipProducerAgainstRealClickHouse is the single entry point for
+// every ownership assertion that needs real SQL, and it exists in this shape
+// for a measured reason: these started as six separate top-level tests, each
+// spawning its own ClickHouse container. Six extra containers under `-race`
+// starved the Postgres-backed packages in the same run -- pginvestigation and
+// storage/postgres both blew past their deadlines in `make verify` while
+// passing comfortably in isolation. One container, one schema, and a distinct
+// ORGANIZATION per subtest gives the same isolation the source itself
+// guarantees, at a fraction of the cost.
+func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
+	ctx := context.Background()
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
 	for _, statement := range productionSchemaDDL() {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
 	}
+	cases := []struct {
+		name  string
+		orgID string
+		run   func(*testing.T, context.Context, *ownershipFixture)
+	}{
+		{"collapse does not merge across providers", "30000000-0000-4000-8000-000000000001", subOwnershipCollapseDoesNotMergeAcrossProviders},
+		{"window takes the latest assertion", "30000000-0000-4000-8000-000000000002", subOwnershipWindowTakesTheLatestAssertion},
+		{"ambiguous project key omits the edge", "30000000-0000-4000-8000-000000000003", subAmbiguousProjectKeyOmitsTheEdgeRatherThanGuessing},
+		{"ambiguous rows do not stall pagination", "30000000-0000-4000-8000-000000000004", subAmbiguousRowsDoNotStallPagination},
+		{"tied assertions resolve deterministically", "30000000-0000-4000-8000-000000000005", subTiedOwnershipAssertionsResolveDeterministically},
+		{"ambiguity guard is scoped to one organization", "30000000-0000-4000-8000-000000000006", subAmbiguityGuardIsScopedToOneOrganization},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			testCase.run(t, ctx, newOwnershipFixture(t, ctx, query, direct, testCase.orgID))
+		})
+	}
+}
+
+// newOwnershipFixture seeds one organization's baseline rows into the SHARED
+// schema. Organization scoping is what keeps the subtests independent, which
+// is the same boundary the producer enforces -- so a leak between subtests
+// would itself be a real finding.
+func newOwnershipFixture(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, orgID string) *ownershipFixture {
+	t.Helper()
 	at := ownershipLaterAssertion
 	mustSeed := func(label, statement string, args ...any) {
 		t.Helper()
@@ -226,9 +256,7 @@ func assertUniqueRelationshipIDs(t *testing.T, batch contextfabric.ProjectionBat
 // fail the batch: one ambiguous key must not take an organization's whole
 // projection down, and guessing between two projects is exactly the
 // "discoveries may not mint canonical truth" line.
-func TestAmbiguousProjectKeyOmitsTheEdgeRatherThanGuessing(t *testing.T) {
-	ctx := context.Background()
-	fixture := newOwnershipFixture(t, ctx)
+func subAmbiguousProjectKeyOmitsTheEdgeRatherThanGuessing(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 
 	batch := fixture.project(t, ctx)
 	for _, projectID := range []string{"PROJ-AMBIG-A", "PROJ-AMBIG-B"} {
@@ -264,9 +292,7 @@ func TestAmbiguousProjectKeyOmitsTheEdgeRatherThanGuessing(t *testing.T) {
 // Cursor advancement has to be driven by RAW ROWS CONSUMED, not by candidates
 // emitted. This seeds a full page of ambiguous rows ahead of a valid edge and
 // asserts the walk both reaches the edge and terminates.
-func TestAmbiguousRowsDoNotStallPagination(t *testing.T) {
-	ctx := context.Background()
-	fixture := newOwnershipFixture(t, ctx)
+func subAmbiguousRowsDoNotStallPagination(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 	fixture.seedAmbiguousBlockThenValidEdge(t, ctx)
 
 	const wantEdge = "relationship:project_team:PROJ-BEYOND:TEAM-GITHUB:native"
@@ -360,9 +386,7 @@ func mustExec(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, s
 // emitted a closed ownership row at all (0 of 618 carry a valid_to). A
 // same-instant assertion of ongoing ownership outranks a same-instant
 // closure, so a live owner is never hidden by a simultaneous close.
-func TestTiedOwnershipAssertionsResolveDeterministically(t *testing.T) {
-	ctx := context.Background()
-	fixture := newOwnershipFixture(t, ctx)
+func subTiedOwnershipAssertionsResolveDeterministically(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 	at := ownershipLaterAssertion
 	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', 'TIE-KEY', 'tie', 1, 'started', '', ?)`,
 		"PROJ-TIE", fixture.orgID, at)
@@ -396,9 +420,7 @@ func TestTiedOwnershipAssertionsResolveDeterministically(t *testing.T) {
 // neither is ambiguous, and both edges must project. Flatten the filter and
 // the window counts across organizations, both keys look ambiguous, and both
 // valid edges silently vanish.
-func TestAmbiguityGuardIsScopedToOneOrganization(t *testing.T) {
-	ctx := context.Background()
-	fixture := newOwnershipFixture(t, ctx)
+func subAmbiguityGuardIsScopedToOneOrganization(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 	const otherOrg = "40000000-0000-4000-8000-000000000004"
 	at := ownershipLaterAssertion
 
