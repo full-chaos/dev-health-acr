@@ -252,8 +252,21 @@ func (c *Coordinator) resetAllCheckpoints(ctx context.Context, orgID string) err
 			resetErrs = append(resetErrs, fmt.Errorf("load checkpoint for %s: %w", source, err))
 			continue
 		}
-		if current.Cursor == "" {
-			continue // never projected, or already reset
+		// CHAOS-3779 codex round-4 M2: Cursor == "" alone no longer means
+		// "nothing to reset" -- the H2-residual claim mechanism
+		// (ProjectionWorker.RunOnce, internal/contextfabric/projector.go)
+		// can durably persist a checkpoint with Cursor == "" but a
+		// non-empty SourceVersion (zero progress claimed under a version
+		// that then failed to apply). Skipping that checkpoint here would
+		// leave the claimed SourceVersion in place forever: the very
+		// mismatch guard the claim exists to protect would then refuse
+		// EVERY future batch for this organization, including the ones
+		// this rebuild is supposed to unblock -- a permanent wedge, not
+		// merely a missed reset. Only skip when BOTH fields are already
+		// empty; that is the sole state that is genuinely "never
+		// projected, or already reset."
+		if current.Cursor == "" && current.SourceVersion == "" {
+			continue
 		}
 		reset := contextfabric.ProjectionCheckpoint{OrgID: orgID, Source: source, UpdatedAt: c.now().UTC()}
 		if err := c.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, current, reset); err != nil {
