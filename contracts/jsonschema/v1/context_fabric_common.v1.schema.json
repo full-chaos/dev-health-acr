@@ -1173,6 +1173,12 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256
+        },
+        "model_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "CHAOS-3782: the provider/model that produced this result's synthesis, e.g. \"openai-compatible/gpt-5-nano\". Never a bare vendor name."
         }
       },
       "required": [
@@ -1183,7 +1189,8 @@
         "query_version",
         "interpretation_version",
         "synthesis_version",
-        "canonical_service_version"
+        "canonical_service_version",
+        "model_identity"
       ]
     },
     "FactRequirement": {

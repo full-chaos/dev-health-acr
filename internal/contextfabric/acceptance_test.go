@@ -516,7 +516,7 @@ func bootstrapDraftToResult(project SubjectRef) InvestigationResult {
 		Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{},
 		Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{},
 		Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
-		Versions:            VersionSet{ServiceVersion: "test", ContractVersion: InvestigationResultSchemaV1, Backend: "test", ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1"},
+		Versions:            VersionSet{ServiceVersion: "test", ContractVersion: InvestigationResultSchemaV1, Backend: "test", ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1", ModelIdentity: "test/model-v1"},
 		DeterministicAnswer: "prior answer", Warnings: []string{},
 	}
 }

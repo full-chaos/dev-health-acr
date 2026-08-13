@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/api"
@@ -15,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgmodelconfig"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -196,7 +198,11 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialize canonical fact registry: %w", err)
 	}
-	investigationStore, err := pginvestigation.NewStore(postgres.db)
+	// CHAOS-3782: WithAnswerReuse turns on Save's reuse-column bookkeeping
+	// and FindReusable/InvalidateOrganizationReuse. request.config.AnswerReuseMaxAge
+	// is condition 4's staleness window -- see its doc comment (D15
+	// hazard) for why it must stay conservative.
+	investigationStore, err := pginvestigation.NewStore(postgres.db, pginvestigation.WithAnswerReuse(request.config.AnswerReuseMaxAge))
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialize investigation result store: %w", err)
 	}
@@ -222,9 +228,27 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			ServiceVersion: request.options.ServiceVersion,
 			Backend:        "graph",
 		}},
-		Results: investigationStore,
+		Results:   investigationStore,
+		ReuseGate: investigationStore,
+		// CHAOS-3782 AC-3782-8: the first production EngineTelemetry
+		// wiring (previously always nil -- see SlogEngineTelemetry's doc
+		// comment). Also covers the pre-existing
+		// RecordPriorSubjectReceiptsSkipped counter, which had a port and
+		// a call site but no production implementation until now.
+		Telemetry: contextfabric.NewSlogEngineTelemetry(request.options.Logger),
 	}, contextfabric.EngineOptions{
 		ServiceVersion: request.options.ServiceVersion, Now: request.options.Now, NewResultID: newInvestigationResultID,
+		// ReuseProjectionVersion mirrors RuntimeAnswerSynthesizerOptions
+		// above verbatim (both left unset -- neither call site configures
+		// a real ProjectionVersion yet, a pre-existing gap this issue
+		// does not close), and ReuseModelIdentity mirrors what
+		// RuntimeAnswerSynthesizer.Synthesize itself computes from the
+		// configured provider/model (model_runtime.go's modelIdentity
+		// helper) -- see contextFabricReuseModelIdentity's doc comment
+		// for the one place these two are deliberately allowed to
+		// diverge (a fallback-model answer).
+		ReuseProjectionVersion: "unwired",
+		ReuseModelIdentity:     contextFabricReuseModelIdentity(os.LookupEnv),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialize context fabric engine: %w", err)
@@ -238,6 +262,42 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		return engine, nil, nil
 	}
 	return engine, evictor, nil
+}
+
+// contextFabricReuseModelIdentity computes the CURRENT PRIMARY configured
+// model's identity, in the exact "<provider>/<model>" shape
+// model_runtime.go's modelIdentity helper produces from a receipt, for
+// EngineOptions.ReuseProjectionVersion's sibling ReuseModelIdentity. It
+// reads modelprovider.ConfigFromEnv a second time (newContextFabricModelRuntime
+// already read it once, to build the runtime itself) rather than
+// threading the config out through that function's return value, to avoid
+// changing a signature other call sites and tests depend on for what is
+// a purely additive, optional reuse concern.
+//
+// KNOWN LIMITATION: this is always the PRIMARY model, never the fallback.
+// A result actually synthesized by the fallback model (§19.3.4 records
+// this happening often -- 16 of 17 successful investigations needed it in
+// the measured batch) is stored with a DIFFERENT ModelIdentity than this
+// function returns, so a later identical question computes a ReuseKey
+// that will not match it and reuse simply misses -- never wrongly hits.
+// Binding the reuse key to "primary or fallback" is a real, valuable
+// follow-up but is out of CHAOS-3782's scope: it would require deciding
+// AHEAD of a model call which model will answer, which is exactly what
+// cannot be known before the call completes.
+func contextFabricReuseModelIdentity(lookup func(string) (string, bool)) string {
+	if !modelprovider.Configured(lookup) {
+		return "unwired"
+	}
+	modelConfig, err := modelprovider.ConfigFromEnv(lookup)
+	if err != nil {
+		return "unwired"
+	}
+	provider := strings.TrimSpace(modelConfig.Provider)
+	model := strings.TrimSpace(modelConfig.Model)
+	if provider == "" || model == "" {
+		return "unwired"
+	}
+	return provider + "/" + model
 }
 
 func newInvestigationResultID() string {

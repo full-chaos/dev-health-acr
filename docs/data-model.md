@@ -27,9 +27,10 @@ No HTTP handler embeds raw ClickHouse SQL. Versioned adapters return typed evide
 | `acr.audit_events` | Credential, read, denial, write, redaction, and purge audit trail | Policy-defined |
 | `acr.context_fabric_projection_checkpoints` (`0006`) | Per-organization, per-source graph projection cursor | Mutable operational state, no retention |
 | `acr.context_fabric_projection_rebuild_markers` (`0007`) | Crash-resumable marker for an in-progress graph rebuild | Deleted when the rebuild completes |
-| `acr.context_fabric_investigation_results` (`0009`) | Immutable persisted `context_fabric_investigation_result.v1` snapshots (`internal/contextfabric/pginvestigation`), read back for `PriorSubjectReceipts` follow-up binding | Immutable; no purge path yet |
+| `acr.context_fabric_investigation_results` (`0009`) | Immutable persisted `context_fabric_investigation_result.v1` snapshots (`internal/contextfabric/pginvestigation`), read back for `PriorSubjectReceipts` follow-up binding. `0010` adds indexed, save-time-only reuse-key columns (`question_hash`, `contract_version`, `projection_version`, `model_identity`, `source_watermarks`) alongside the immutable `payload` -- CHAOS-3782 answer reuse | Immutable; no purge path yet |
 | `acr.context_fabric_org_model_config` (`0010`) | One row per organization: BYO LLM provider/base URL/model/fallback plus an AES-256-GCM sealed credential (`internal/contextfabric/modelconfigcrypto`, `internal/contextfabric/pgmodelconfig`) | Mutable; replaced on the next `PUT`, removed on `DELETE` |
 | `acr.context_fabric_model_execution_receipts` (`0010`) | Insert-only `ModelExecutionReceipt` durable sink (`internal/contextfabric/pgmodelreceipts`), one row per model call | Append-only; no purge path yet |
+| `acr.context_fabric_reuse_invalidations` (`0010`) | One row per organization: the completion time of its most recent projection rebuild. CHAOS-3782 answer reuse rejects any stored result generated before this timestamp, since a rebuild's `backend_watermark` is not guaranteed to differ from what it purged (D15) | Mutable operational state, no retention |
 
 The database does not hold plaintext bearer secrets or raw transcripts; `credential_ciphertext` is AES-256-GCM sealed, never plaintext.
 

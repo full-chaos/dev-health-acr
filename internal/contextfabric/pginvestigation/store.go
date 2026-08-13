@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -30,16 +31,71 @@ var ErrNotFound = errors.New("pginvestigation: investigation result not found")
 // Store is the production contextfabric.InvestigationResultStore. The
 // caller owns database construction; this package never parses or logs
 // DSNs (repository convention, internal/storage/AGENTS.md).
+//
+// Store also implements contextfabric.AnswerReuseGate and
+// contextfabric.ReuseInvalidator (CHAOS-3782): the reuse-key columns
+// migration 0010 added live on this same table, alongside the immutable
+// payload, so the write and read sides of answer reuse belong with the
+// store that already owns Save/Get's first-insert-wins and org-scoping
+// invariants rather than in a separate package.
 type Store struct {
 	db *sql.DB
+
+	// reuseEnabled and reuseMaxAge are set together by WithAnswerReuse, or
+	// both left zero. reuseEnabled==false is Store's signal that answer
+	// reuse was never turned on: Save then leaves every reuse column
+	// NULL, and FindReusable always reports an ordinary, safe miss
+	// (ok=false, no error) rather than reusing anything -- the same
+	// "optional dependency, absent means degrade, never fail" shape
+	// every other Context Fabric optional dependency (ModelRuntime,
+	// EngineTelemetry, ...) already uses.
+	//
+	// Deliberately NOT a separate ProjectionCheckpointStore dependency:
+	// Save/FindReusable read acr.context_fabric_projection_checkpoints
+	// directly, with plain SQL, over the SAME *sql.DB this Store already
+	// owns -- both tables live in the identical Postgres schema (see
+	// migrations/postgres/0006 and 0010). This also means Store discovers
+	// whichever sources currently have a checkpoint row for an
+	// organization at query time, rather than needing a statically
+	// injected source-name list that composition would otherwise have to
+	// keep in sync with acr-projector's own configured source set.
+	reuseEnabled bool
+	reuseMaxAge  time.Duration
 }
 
-// NewStore builds a Store around a caller-owned *sql.DB.
-func NewStore(db *sql.DB) (*Store, error) {
+// StoreOption configures optional Store behavior. See WithAnswerReuse.
+type StoreOption func(*Store)
+
+// WithAnswerReuse enables CHAOS-3782 answer reuse on Store: Save
+// additionally snapshots, at insert time, the CURRENT backend_watermark of
+// EVERY source that currently has a checkpoint row for the organization --
+// not only the sources a given question happened to touch (see
+// migrations/postgres/0010_context_fabric_answer_reuse.sql's header
+// comment for why binding to the full configured set is the conservative,
+// fail-closed reading of TRD §19.7.3 condition 3). maxAge is the
+// staleness window condition 4 enforces; it must be configured
+// conservatively per drift item D15 (TRD §19.2/§19.7.3, and see
+// config.Config.AnswerReuseMaxAge's doc comment) -- the watermark alone
+// cannot prove freshness against a backfilled or corrected source row, so
+// this window is the second, independent bound.
+func WithAnswerReuse(maxAge time.Duration) StoreOption {
+	return func(s *Store) {
+		s.reuseEnabled = true
+		s.reuseMaxAge = maxAge
+	}
+}
+
+// NewStore builds a Store around a caller-owned *sql.DB. Answer reuse
+// (CHAOS-3782) is disabled unless WithAnswerReuse is passed.
+func NewStore(db *sql.DB, opts ...StoreOption) (*Store, error) {
 	if db == nil {
 		return nil, errors.New("pginvestigation: store requires a database")
 	}
-	return &Store{db: db}, nil
+	s := &Store{db: db}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s, nil
 }
 
 // Save persists an immutable InvestigationResult snapshot. It never issues
@@ -67,12 +123,15 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	if err != nil {
 		return fmt.Errorf("pginvestigation: marshal investigation result: %w", err)
 	}
+	questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks := s.reuseColumnsFor(ctx, orgID, result)
 
 	insertResult, err := s.db.ExecContext(ctx, `
-INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at)
-VALUES ($1, $2, $3, $4)
+INSERT INTO acr.context_fabric_investigation_results
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (result_id) DO NOTHING`,
-		resultID, orgID, payload, result.GeneratedAt)
+		resultID, orgID, payload, result.GeneratedAt,
+		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks)
 	if err != nil {
 		return fmt.Errorf("save investigation result: %w", sanitizeError(err))
 	}
@@ -175,6 +234,197 @@ SELECT payload FROM acr.context_fabric_investigation_results WHERE result_id = $
 		return contextfabric.InvestigationResult{}, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
 	}
 	return result, nil
+}
+
+// reuseColumnsFor computes the CHAOS-3782 reuse-key column values Save
+// should write alongside result's immutable payload, or four zero
+// sql.NullString values and a nil watermark blob when answer reuse is not
+// enabled on this Store (s.reuseEnabled == false) -- Save's INSERT then
+// writes SQL NULL into every reuse column, exactly as if this were the
+// pre-CHAOS-3782 schema.
+//
+// A failure reading the CURRENT per-source watermarks (e.g. a transient
+// query error) fails OPEN here specifically: it degrades to "this row
+// never participates in reuse" (source_watermarks stays NULL), never to
+// losing the investigation result itself. Save's own immutable-write
+// guarantee must not depend on a dependency this optional.
+func (s *Store) reuseColumnsFor(ctx context.Context, orgID string, result contextfabric.InvestigationResult) (questionHash, contractVersion, projectionVersion, modelIdentity sql.NullString, sourceWatermarks []byte) {
+	if !s.reuseEnabled {
+		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil
+	}
+	questionHash = sql.NullString{String: contextfabric.QuestionHash(result.Question), Valid: true}
+	contractVersion = sql.NullString{String: result.Versions.ContractVersion, Valid: true}
+	projectionVersion = sql.NullString{String: result.Versions.ProjectionVersion, Valid: true}
+	modelIdentity = sql.NullString{String: result.Versions.ModelIdentity, Valid: true}
+	snapshot, err := s.currentSourceWatermarks(ctx, orgID)
+	if err != nil {
+		return questionHash, contractVersion, projectionVersion, modelIdentity, nil
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return questionHash, contractVersion, projectionVersion, modelIdentity, nil
+	}
+	return questionHash, contractVersion, projectionVersion, modelIdentity, encoded
+}
+
+// currentSourceWatermarks reads the CURRENT backend_watermark of every
+// source that has a checkpoint row for orgID, keyed by source name. Reads
+// straight from acr.context_fabric_projection_checkpoints over the same
+// *sql.DB this Store already owns -- see the Store.reuseEnabled field
+// comment for why this is deliberately not routed through
+// contextfabric.ProjectionCheckpointStore.
+func (s *Store) currentSourceWatermarks(ctx context.Context, orgID string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT source, backend_watermark FROM acr.context_fabric_projection_checkpoints WHERE org_id = $1`, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("query projection checkpoints: %w", sanitizeError(err))
+	}
+	defer rows.Close()
+	snapshot := make(map[string]string)
+	for rows.Next() {
+		var source, watermark string
+		if err := rows.Scan(&source, &watermark); err != nil {
+			return nil, fmt.Errorf("scan projection checkpoint: %w", err)
+		}
+		snapshot[source] = watermark
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate projection checkpoints: %w", err)
+	}
+	return snapshot, nil
+}
+
+// FindReusable implements contextfabric.AnswerReuseGate. It proves TRD
+// §19.7.3 conditions 1, 2, 5, and 7 with the SQL predicate below (an exact
+// match on org/question-hash/contract/projection/model-identity, ordered
+// to prefer the most recently generated candidate), condition 4 with the
+// same query's staleness-window and rebuild-invalidation predicates, and
+// condition 3 (per-source watermark equality) afterward in Go via
+// watermarksStillMatch. It never checks condition 6 (current
+// authorization) -- see the interface doc comment on why that stays
+// Engine's job.
+//
+// Only the single most recent matching row is ever considered. That is
+// sufficient, not merely convenient: condition 4's staleness window only
+// gets harder to satisfy for an older row, and condition 3 checks CURRENT
+// watermarks independent of which candidate row is being asked about --
+// so if the newest matching row fails, no older one can pass either.
+func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, key contextfabric.ReuseKey) (contextfabric.InvestigationResult, bool, error) {
+	if s == nil || s.db == nil {
+		return contextfabric.InvestigationResult{}, false, errors.New("pginvestigation: store is not configured")
+	}
+	if !s.reuseEnabled {
+		// Answer reuse was never enabled on this Store (WithAnswerReuse not
+		// passed to NewStore). An ordinary, safe miss -- not an error.
+		return contextfabric.InvestigationResult{}, false, nil
+	}
+	orgID := strings.TrimSpace(principal.OrgID)
+	questionHash := strings.TrimSpace(key.QuestionHash)
+	if orgID == "" || questionHash == "" {
+		return contextfabric.InvestigationResult{}, false, nil
+	}
+
+	row := s.db.QueryRowContext(ctx, `
+SELECT payload, source_watermarks
+FROM acr.context_fabric_investigation_results
+WHERE org_id = $1
+  AND question_hash = $2
+  AND contract_version = $3
+  AND projection_version = $4
+  AND model_identity = $5
+  AND generated_at > now() - ($6 * INTERVAL '1 second')
+  AND generated_at > COALESCE(
+        (SELECT invalidated_at FROM acr.context_fabric_reuse_invalidations WHERE org_id = $1),
+        '-infinity'::timestamptz)
+ORDER BY generated_at DESC
+LIMIT 1`,
+		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentity, s.reuseMaxAge.Seconds())
+	var payload, sourceWatermarks []byte
+	switch err := row.Scan(&payload, &sourceWatermarks); {
+	case errors.Is(err, sql.ErrNoRows):
+		return contextfabric.InvestigationResult{}, false, nil
+	case err != nil:
+		return contextfabric.InvestigationResult{}, false, fmt.Errorf("find reusable investigation result: %w", sanitizeError(err))
+	}
+
+	// Condition 3. Fail closed on any error or mismatch: a candidate this
+	// check cannot fully confirm fresh is never served.
+	fresh, err := s.watermarksStillMatch(ctx, orgID, sourceWatermarks)
+	if err != nil || !fresh {
+		return contextfabric.InvestigationResult{}, false, nil
+	}
+
+	// Same defense in depth Get applies (CHAOS-3755 P2/M2 findings): never
+	// trust a stored row blind, even one this package itself wrote.
+	if err := rejectExplicitNullDegradedReasons(payload); err != nil {
+		return contextfabric.InvestigationResult{}, false, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
+	}
+	var result contextfabric.InvestigationResult
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return contextfabric.InvestigationResult{}, false, fmt.Errorf("pginvestigation: decode investigation result: %w", err)
+	}
+	if err := result.Validate(); err != nil {
+		return contextfabric.InvestigationResult{}, false, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
+	}
+	return result, true, nil
+}
+
+// watermarksStillMatch reports whether the CURRENT set of (source,
+// backend_watermark) pairs for orgID is byte-for-byte identical to
+// snapshotJSON, the set Save recorded when the candidate was generated.
+// Identical means the same set of source names AND the same watermark for
+// each -- a source added or removed since generation, exactly like a
+// changed watermark on an existing source, counts as a mismatch, not a
+// pass. TRD §19.7.3 fails closed: an ambiguous "did anything change"
+// answer is treated as "yes".
+func (s *Store) watermarksStillMatch(ctx context.Context, orgID string, snapshotJSON []byte) (bool, error) {
+	var snapshot map[string]string
+	if len(snapshotJSON) > 0 {
+		if err := json.Unmarshal(snapshotJSON, &snapshot); err != nil {
+			return false, fmt.Errorf("decode source watermark snapshot: %w", err)
+		}
+	}
+	current, err := s.currentSourceWatermarks(ctx, orgID)
+	if err != nil {
+		return false, fmt.Errorf("read current source watermarks: %w", err)
+	}
+	if len(snapshot) != len(current) {
+		return false, nil
+	}
+	for source, watermark := range snapshot {
+		if current[source] != watermark {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// InvalidateOrganizationReuse implements contextfabric.ReuseInvalidator.
+// It records the invalidation as a row in the separate, mutable
+// acr.context_fabric_reuse_invalidations table -- never by rewriting
+// anything in the immutable investigation-results table -- and is safe to
+// call whether or not answer reuse is enabled on this Store. The ON
+// CONFLICT clause is guarded to never move invalidated_at backward, so a
+// rare out-of-order concurrent call cannot un-invalidate an
+// already-recorded, later rebuild.
+func (s *Store) InvalidateOrganizationReuse(ctx context.Context, orgID string) error {
+	if s == nil || s.db == nil {
+		return errors.New("pginvestigation: store is not configured")
+	}
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return errors.New("pginvestigation: organization is required")
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_reuse_invalidations (org_id, invalidated_at)
+VALUES ($1, clock_timestamp())
+ON CONFLICT (org_id) DO UPDATE
+    SET invalidated_at = EXCLUDED.invalidated_at
+    WHERE acr.context_fabric_reuse_invalidations.invalidated_at < EXCLUDED.invalidated_at`, orgID)
+	if err != nil {
+		return fmt.Errorf("invalidate organization reuse: %w", sanitizeError(err))
+	}
+	return nil
 }
 
 // equivalentPayloads reports whether two JSONB payloads decode to the same

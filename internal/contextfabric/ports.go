@@ -139,6 +139,55 @@ type InvestigationResultStore interface {
 	Get(context.Context, storage.Principal, string) (InvestigationResult, error)
 }
 
+// ReuseKey is the CHAOS-3782 answer-reuse lookup key (TRD §19.7.2): the
+// canonicalized question hash plus the three version dimensions AC-3782-7
+// binds reuse to. The organization is deliberately NOT part of this type --
+// every AnswerReuseGate method takes the caller's storage.Principal and
+// must scope by principal.OrgID, mirroring InvestigationResultStore's own
+// convention (see its doc comment on why Get's org scoping is a binding
+// precondition, not optional).
+type ReuseKey struct {
+	QuestionHash      string
+	ContractVersion   string
+	ProjectionVersion string
+	ModelIdentity     string
+}
+
+// AnswerReuseGate finds a stored InvestigationResult eligible for reuse
+// under the TRD §19.7.3 watermark-bound staleness policy -- but only FIVE
+// of its six conditions: the lookup itself proves 1 (question hash), 2
+// (organization), 5, and 7 (contract/projection/model identity all
+// match); the implementation independently proves 3 (every configured
+// projection source's backend_watermark is unchanged since the candidate
+// was generated) and 4 (the candidate is inside the staleness window AND
+// was generated after the organization's most recent rebuild
+// invalidation, if any).
+//
+// It deliberately does NOT check condition 6 (current authorization for
+// every subject and evidence reference in the stored result) -- that
+// recheck needs GraphReader, which lives in Engine's composition, not
+// here, so Engine performs it itself immediately before serving whatever
+// this returns. ok=false is an ordinary cache miss (no matching row, or a
+// matching row failed 3/4), never an error: a caller must always be able
+// to fall back to running a fresh investigation.
+type AnswerReuseGate interface {
+	FindReusable(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error)
+}
+
+// ReuseInvalidator is notified when an organization's projected graph
+// state has just been rebuilt from scratch (CHAOS-3782, TRD §19.7.3's
+// "known hazard, drift item D15": a rebuild's backend_watermark is not
+// guaranteed to differ from what it purged, so watermark equality alone
+// cannot prove a stored result survived a rebuild). Implementations must
+// record the invalidation as a separate, mutable fact -- never by
+// rewriting a row in the immutable investigation-results table -- so that
+// InvalidateOrganizationReuse(orgID) followed immediately by
+// AnswerReuseGate.FindReusable(orgID, ...) never returns a result
+// generated before the call to InvalidateOrganizationReuse.
+type ReuseInvalidator interface {
+	InvalidateOrganizationReuse(ctx context.Context, orgID string) error
+}
+
 // ProjectionBackend is the write-side graph/index boundary. Applying a batch
 // must be idempotent for the same batch ID and source version.
 //

@@ -26,6 +26,13 @@ const (
 	defaultMaxOutputTokens    = 4000
 	defaultMaxSerializedBytes = 262144
 	defaultRequestsPerMinute  = 60
+	// defaultAnswerReuseMaxAge (CHAOS-3782) is deliberately short relative
+	// to how long a result COULD legally be reused for -- see
+	// Config.AnswerReuseMaxAge's D15 hazard doc comment for why erring
+	// conservative here matters more than maximizing the reuse rate.
+	defaultAnswerReuseMaxAge = 15 * time.Minute
+	minAnswerReuseMaxAge     = time.Minute
+	maxAnswerReuseMaxAge     = 24 * time.Hour
 )
 
 // Config contains only process-level configuration. Credentials and request
@@ -63,7 +70,27 @@ type Config struct {
 	// fails closed over an unconfigured optional dependency, matching the
 	// convention ADR 0007 established (and ADR 0009 carries forward) for
 	// the projection worker.
-	EnableContextFabricInvestigations    bool
+	EnableContextFabricInvestigations bool
+	// AnswerReuseMaxAge (CHAOS-3782, ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE)
+	// is the staleness window TRD §19.7.3 condition 4 enforces: a stored
+	// investigation result older than this is never reused, regardless of
+	// whether every other reuse condition holds.
+	//
+	// D15 HAZARD (TRD §19.2/§19.7.3), read before changing this: the
+	// projection cursor is event-time based, so a backfilled or corrected
+	// source row does NOT advance backend_watermark and is not
+	// re-observed until a full rebuild. Watermark equality (condition 3)
+	// therefore CANNOT by itself prove a stored answer is still accurate
+	// -- a source row could change underneath an unchanged watermark.
+	// This window is the second, independent bound that limits how long
+	// a result can be served without that guarantee, and rebuild
+	// invalidation (AC-3782-4, wired through
+	// contextfabric.ReuseInvalidator) is the other one. Set this
+	// conservatively: it must be short enough that a plausible backfill
+	// lag in your deployment's canonical sources is very unlikely to fall
+	// entirely inside one window, because nothing else catches that case
+	// between rebuilds.
+	AnswerReuseMaxAge                    time.Duration
 	MinimumSidecarVersion                string
 	RevokedClientVersions                []string
 	EntitlementKey                       string
@@ -165,6 +192,9 @@ func load(lookup lookupEnv) (Config, error) {
 	if cfg.DevHealthEntitlementTimeout, err = durationValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT", 5*time.Second); err != nil {
 		return Config{}, err
 	}
+	if cfg.AnswerReuseMaxAge, err = durationValue(lookup, "ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE", defaultAnswerReuseMaxAge); err != nil {
+		return Config{}, err
+	}
 	devHealthEntitlementMaxResponseBytes, err := intValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_MAX_RESPONSE_BYTES", 16<<10)
 	if err != nil {
 		return Config{}, err
@@ -226,6 +256,9 @@ func (c Config) Validate() error {
 	}
 	if c.RequestsPerMinute < 1 {
 		return errors.New("ACR_REQUESTS_PER_MINUTE must be positive")
+	}
+	if c.AnswerReuseMaxAge < minAnswerReuseMaxAge || c.AnswerReuseMaxAge > maxAnswerReuseMaxAge {
+		return fmt.Errorf("ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE must be between %s and %s", minAnswerReuseMaxAge, maxAnswerReuseMaxAge)
 	}
 	if err := c.RequestControls.validate(); err != nil {
 		return err

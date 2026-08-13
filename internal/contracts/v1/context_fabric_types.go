@@ -526,6 +526,15 @@ type ContextFabricVersionSet struct {
 	InterpretationVersion   string `json:"interpretation_version"`
 	SynthesisVersion        string `json:"synthesis_version"`
 	CanonicalServiceVersion string `json:"canonical_service_version"`
+	// ModelIdentity names the provider and model that produced this
+	// result's synthesis (e.g. "openai-compatible/gpt-5-nano"), never a
+	// bare vendor name on its own -- the same provider-shaped rule
+	// §19.3.6 applies to configuration applies here. It is one of the
+	// dimensions CHAOS-3782 answer reuse binds to (TRD §19.7.2, AC-3782-7):
+	// a result generated under one model identity is never reused once the
+	// organization's configured model changes, even if the prompt/model
+	// version strings captured in SynthesisVersion happen to collide.
+	ModelIdentity string `json:"model_identity"`
 }
 
 type ContextFabricInterpretedQuestion struct {
@@ -576,6 +585,14 @@ type ContextFabricInvestigationResult struct {
 	Versions            ContextFabricVersionSet    `json:"versions"`
 	DeterministicAnswer string                     `json:"deterministic_answer"`
 	Warnings            []string                   `json:"warnings"`
+	// Reused marks whether this result was served from the immutable
+	// result store instead of a fresh investigation (CHAOS-3782, TRD
+	// §19.7, AC-3782-2). When true, ResultID and GeneratedAt above are NOT
+	// this request's own identifier and timestamp -- they are the
+	// identifier and generation time of the reused result, unchanged from
+	// when it was first produced. A caller can always tell a reused answer
+	// from a fresh one by this field alone.
+	Reused bool `json:"reused"`
 }
 
 // ContextFabricScalarValue is the only free-form value admitted by the public

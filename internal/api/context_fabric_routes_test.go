@@ -131,7 +131,7 @@ func validContextFabricInvestigationResult() contractsv1.ContextFabricInvestigat
 		Coverage:     contractsv1.ContextFabricCoverage{Sources: []contractsv1.ContextFabricSourceObservation{}, DegradedReasons: []string{}},
 		Versions: contractsv1.ContextFabricVersionSet{
 			ServiceVersion: "test", ContractVersion: contractsv1.ContextFabricInvestigationResultSchema, Backend: "graph",
-			ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1",
+			ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1", ModelIdentity: "test/model-v1",
 		},
 		DeterministicAnswer: "Ask Dev is on track based on available context.", Warnings: []string{},
 	}

@@ -246,7 +246,7 @@ func (c ContextFabricCoverage) Validate() error {
 }
 
 func (v ContextFabricVersionSet) Validate() error {
-	values := []string{v.ServiceVersion, v.ContractVersion, v.Backend, v.ProjectionVersion, v.QueryVersion, v.InterpretationVersion, v.SynthesisVersion, v.CanonicalServiceVersion}
+	values := []string{v.ServiceVersion, v.ContractVersion, v.Backend, v.ProjectionVersion, v.QueryVersion, v.InterpretationVersion, v.SynthesisVersion, v.CanonicalServiceVersion, v.ModelIdentity}
 	for _, value := range values {
 		if !validVersion(value) {
 			return fmt.Errorf("version metadata violates v1 bounds")

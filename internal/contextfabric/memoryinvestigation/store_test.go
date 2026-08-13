@@ -56,7 +56,7 @@ func TestStore_getDefensiveCopyDoesNotLeakStoredState(t *testing.T) {
 		Coverage:            contextfabric.Coverage{Sources: []contextfabric.SourceObservation{}},
 		Versions: contextfabric.VersionSet{
 			ServiceVersion: "test", ContractVersion: contextfabric.InvestigationResultSchemaV1, Backend: "test",
-			ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1",
+			ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1", ModelIdentity: "test/model-v1",
 		},
 		Warnings: []string{},
 	}

@@ -74,11 +74,20 @@ type Config struct {
 	RebuildMarkers RebuildMarker // required -- see RebuildMarker's doc comment
 	Locker         OrgLocker     // nil -> NoopOrgLocker (in-process mutex only)
 	Observer       Observer      // nil -> discarded
-	PollInterval   time.Duration
-	Concurrency    int
-	MaxBackoff     time.Duration
-	Now            func() time.Time
-	Logger         *slog.Logger
+	// ReuseInvalidator is optional (CHAOS-3782). When set, Coordinator
+	// calls InvalidateOrganizationReuse for orgID immediately after a
+	// rebuild (explicit or crash-resumed) completes -- see
+	// performRebuild's call site for why watermark equality alone cannot
+	// be trusted to catch a rebuild (TRD §19.7.3's drift item D15
+	// hazard). Nil disables this hook entirely; answer reuse then relies
+	// solely on watermark comparison, which is a known, accepted gap
+	// until this is wired in production composition.
+	ReuseInvalidator contextfabric.ReuseInvalidator
+	PollInterval     time.Duration
+	Concurrency      int
+	MaxBackoff       time.Duration
+	Now              func() time.Time
+	Logger           *slog.Logger
 }
 
 // Coordinator schedules contextfabric.ProjectionWorker.RunOnce across every
@@ -87,19 +96,20 @@ type Config struct {
 // (org, source) pair, cancellation, and failure isolation: one pair's error
 // never blocks another org or source.
 type Coordinator struct {
-	orgIDs         []string
-	sourceNames    []string
-	workers        map[string]*contextfabric.ProjectionWorker
-	backend        contextfabric.ProjectionBackend
-	checkpoints    contextfabric.ProjectionCheckpointStore
-	rebuildMarkers RebuildMarker
-	locker         OrgLocker
-	observer       Observer
-	poll           time.Duration
-	concurrency    int
-	maxBackoff     time.Duration
-	now            func() time.Time
-	logger         *slog.Logger
+	orgIDs           []string
+	sourceNames      []string
+	workers          map[string]*contextfabric.ProjectionWorker
+	backend          contextfabric.ProjectionBackend
+	checkpoints      contextfabric.ProjectionCheckpointStore
+	rebuildMarkers   RebuildMarker
+	locker           OrgLocker
+	observer         Observer
+	reuseInvalidator contextfabric.ReuseInvalidator
+	poll             time.Duration
+	concurrency      int
+	maxBackoff       time.Duration
+	now              func() time.Time
+	logger           *slog.Logger
 
 	orgMu sync.Map // orgID -> *sync.Mutex, in-process first line of defense
 
@@ -178,7 +188,8 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	return &Coordinator{
 		orgIDs: append([]string(nil), cfg.OrgIDs...), sourceNames: sourceNames, workers: workers,
 		backend: cfg.Backend, checkpoints: cfg.Checkpoints, rebuildMarkers: cfg.RebuildMarkers,
-		locker: cfg.Locker, observer: cfg.Observer, poll: cfg.PollInterval, concurrency: cfg.Concurrency,
+		locker: cfg.Locker, observer: cfg.Observer, reuseInvalidator: cfg.ReuseInvalidator,
+		poll: cfg.PollInterval, concurrency: cfg.Concurrency,
 		maxBackoff: cfg.MaxBackoff, now: cfg.Now, logger: cfg.Logger, backoff: make(map[string]*pairBackoff),
 	}, nil
 }
@@ -241,6 +252,28 @@ func (c *Coordinator) performRebuild(ctx context.Context, orgID string) error {
 		return fmt.Errorf("projectionrun: clear rebuild marker: %w", err)
 	}
 	c.logger.InfoContext(ctx, "projection organization rebuilt", "org_id", orgID)
+	// CHAOS-3782, AC-3782-4: a completed rebuild invalidates every
+	// reusable stored result for this organization. This runs AFTER the
+	// marker clears, deliberately -- the rebuild sequence above is
+	// exactly what performRebuild reruns on a crash resume, so firing
+	// the invalidation only once it is confirmed complete means a
+	// crash-and-resume can never skip it, and a normal completion never
+	// double-fires it in a way that matters (InvalidateOrganizationReuse
+	// is idempotent).
+	//
+	// Deliberately best-effort: a failure here must never turn a
+	// successful rebuild into a reported failure (the rebuild itself
+	// fully succeeded), and must never block the projector's next tick.
+	// The cost of a missed invalidation is a stale answer possibly
+	// served past a rebuild until the staleness window or a watermark
+	// change independently catches it (TRD §19.7.3's D15 hazard note:
+	// the window is the conservative second bound for exactly this kind
+	// of gap) -- never a wedged organization.
+	if c.reuseInvalidator != nil {
+		if err := c.reuseInvalidator.InvalidateOrganizationReuse(ctx, orgID); err != nil {
+			c.logger.WarnContext(ctx, "answer-reuse invalidation failed after rebuild; stale results may be served until the staleness window or a watermark change catches them", "org_id", orgID, "error", err)
+		}
+	}
 	return nil
 }
 

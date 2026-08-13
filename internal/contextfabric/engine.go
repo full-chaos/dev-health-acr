@@ -14,6 +14,22 @@ type EngineOptions struct {
 	ServiceVersion string
 	Now            func() time.Time
 	NewResultID    func() string
+	// ReuseProjectionVersion and ReuseModelIdentity (CHAOS-3782) are the
+	// CURRENT values a fresh investigation's Versions.ProjectionVersion and
+	// Versions.ModelIdentity would carry -- composition must wire both
+	// from the exact same configuration RuntimeAnswerSynthesizerOptions
+	// and the model runtime already use (see
+	// RuntimeAnswerSynthesizerOptions.ProjectionVersion and
+	// modelIdentity(receipt.Provider, receipt.Model) in
+	// model_runtime.go), so they can never drift from what a fresh answer
+	// would actually stamp. Engine needs these BEFORE running a fresh
+	// investigation -- that is the entire point of reuse -- so they must
+	// be known statically at composition time, not read off a result
+	// Engine has not produced yet. Both may be left empty; Dependencies.ReuseGate
+	// being nil (or FindReusable never matching an empty ModelIdentity/
+	// ProjectionVersion) is what actually disables reuse.
+	ReuseProjectionVersion string
+	ReuseModelIdentity     string
 }
 
 type EngineDependencies struct {
@@ -25,6 +41,12 @@ type EngineDependencies struct {
 	// Telemetry is optional. When set, Engine reports content-safe
 	// operational counters through it -- see EngineTelemetry.
 	Telemetry EngineTelemetry
+	// ReuseGate is optional (CHAOS-3782). When nil, Engine never attempts
+	// answer reuse and behaves exactly as it did before this field
+	// existed -- every Investigate call runs a fresh investigation. See
+	// AnswerReuseGate's doc comment for the six-condition policy it and
+	// Engine jointly enforce.
+	ReuseGate AnswerReuseGate
 }
 
 // EngineTelemetry receives content-safe operational counters from Engine.
@@ -43,20 +65,34 @@ type EngineTelemetry interface {
 	// silently), so this count is the only operator-visible signal that it
 	// happened.
 	RecordPriorSubjectReceiptsSkipped(ctx context.Context, principal storage.Principal, skipped int)
+	// RecordAnswerReuse reports the outcome of ONE Investigate call's
+	// reuse attempt (CHAOS-3782, AC-3782-8): reused=true when a stored
+	// result was served with zero model calls, reused=false when the
+	// call ran a fresh investigation (whether because ReuseGate is nil,
+	// no candidate matched, or the candidate failed a §19.7.3 condition).
+	// The reuse rate and the saved model-call count are both derived
+	// entirely from this one boolean stream -- no separate call is
+	// needed for "saved calls": that is just the count of reused=true
+	// events, each one representing exactly the interpret+synthesize
+	// model calls a fresh investigation would otherwise have made.
+	RecordAnswerReuse(ctx context.Context, principal storage.Principal, reused bool)
 }
 
 // Engine coordinates one open-ended investigation. It deliberately composes
 // capabilities rather than matching the question against a route/plan table.
 type Engine struct {
-	interpreter    QuestionInterpreter
-	graph          GraphReader
-	facts          CanonicalFactReader
-	synthesizer    AnswerSynthesizer
-	results        InvestigationResultStore
-	telemetry      EngineTelemetry
-	serviceVersion string
-	now            func() time.Time
-	newResultID    func() string
+	interpreter            QuestionInterpreter
+	graph                  GraphReader
+	facts                  CanonicalFactReader
+	synthesizer            AnswerSynthesizer
+	results                InvestigationResultStore
+	telemetry              EngineTelemetry
+	reuseGate              AnswerReuseGate
+	reuseProjectionVersion string
+	reuseModelIdentity     string
+	serviceVersion         string
+	now                    func() time.Time
+	newResultID            func() string
 }
 
 func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine, error) {
@@ -75,6 +111,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 	return &Engine{
 		interpreter: dependencies.Interpreter, graph: dependencies.Graph, facts: dependencies.Facts,
 		synthesizer: dependencies.Synthesizer, results: dependencies.Results, telemetry: dependencies.Telemetry,
+		reuseGate: dependencies.ReuseGate, reuseProjectionVersion: options.ReuseProjectionVersion, reuseModelIdentity: options.ReuseModelIdentity,
 		serviceVersion: options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
 	}, nil
 }
@@ -101,6 +138,17 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	if err := ctx.Err(); err != nil {
 		return InvestigationResult{}, err
+	}
+
+	// CHAOS-3782 answer reuse. This MUST run before Interpret -- that
+	// ordering is the entire mechanism behind AC-3782-1's zero-model-call
+	// guarantee for a reuse hit. tryReuse itself only ever returns
+	// ok=false on anything it cannot fully confirm (TRD §19.7.3 fails
+	// closed); Investigate always falls through to a fresh investigation
+	// in that case, so a reuse-path failure is never visible to the
+	// caller as anything other than normal, slightly slower success.
+	if reused, ok := e.tryReuse(ctx, principal, request); ok {
+		return reused, nil
 	}
 
 	interpretation, err := e.interpreter.Interpret(ctx, principal, request)
@@ -217,6 +265,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	if strings.TrimSpace(result.Versions.CanonicalServiceVersion) == "" {
 		result.Versions.CanonicalServiceVersion = facts.Version
+	}
+	if strings.TrimSpace(result.Versions.ModelIdentity) == "" {
+		result.Versions.ModelIdentity = "unwired"
 	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, fmt.Errorf("%w: %v", ErrInvalidResult, err)
