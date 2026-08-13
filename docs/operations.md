@@ -311,12 +311,58 @@ defaults to **15s**, and it bounds the whole HTTP request. A real
 investigation is two sequential model calls (interpret, then synthesise) and
 was measured end-to-end through the endpoint at **45–95s** against
 `gpt-5-nano`. Left at the default, every investigation returns 504 before
-the model answers, regardless of how well the model is doing. Size it above
-`ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` × `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS`
-× 2 (the two operations), plus headroom — with the defaults (45s × 2 × 2)
-that is a worst case of 180s. The timeout is global to the API, not
-per-route, so raising it also loosens the bound on every other route; a
-per-route timeout is the cleaner fix and is not implemented yet.
+the model answers, regardless of how well the model is doing.
+
+**The 180s figure this section previously gave was wrong** (CHAOS-3770 F6):
+it counted only `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` × `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS`
+× 2 operations, and ignored three factors the actual retry topology has:
+
+- **The fallback leg runs its own full retry loop, synchronously, after the
+  primary's is exhausted.** `genkitruntime.Runtime.InterpretQuestion`/
+  `SynthesizeAnswer` invoke `Config.Fallback` (built with the SAME
+  `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`/`_MAX_ATTEMPTS` as the primary — see
+  `modelprovider.runtimeConfig`) only after every primary attempt has
+  failed, and wait for it in-line before returning. With a fallback
+  configured — the standing recommendation above — this roughly DOUBLES
+  the worst case per operation, not zero: primary attempts, then fallback
+  attempts.
+- **`ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES` adds real wall-clock
+  time beyond `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`, not inside it.** The
+  OpenAI SDK's own retry loop
+  (`openai-go/internal/requestconfig.RequestConfig.Execute`) sleeps
+  between retries with a plain `time.Sleep`, which is NOT bounded by the
+  request's context deadline — so a transport retry's backoff can run
+  past the moment `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` would otherwise have
+  fired. Ordinarily that backoff is capped at 8s per retry (exponential,
+  jittered), but the SDK honors a provider's `Retry-After` header up to
+  just under 60s per retry when present, so a provider that returns long
+  `Retry-After` values can push this considerably higher than the 8s
+  figure below.
+- **Genuinely transient failures repeat this at every one of
+  `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS` genkitruntime-level attempts**,
+  each of which gets its own fresh `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`
+  budget plus its own transport-retry backoff on top.
+
+The honest worst case, per leg (primary or fallback) per operation:
+
+```text
+per_attempt  = ACR_CONTEXT_FABRIC_MODEL_TIMEOUT + ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES × 8s
+per_leg      = ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS × per_attempt
+per_operation = per_leg × (2 if a fallback is configured, else 1)
+worst_case    = per_operation × 2   # interpret, then synthesize, sequentially
+```
+
+With the documented defaults (`45s` timeout, `2` attempts, `2` transport
+retries) and the standing fallback recommendation: `per_attempt` = 45 + 2×8
+= 61s, `per_leg` = 2×61 = 122s, `per_operation` = 122×2 = 244s, `worst_case`
+= 244×2 = **~490s**. Without a fallback configured, halve `per_operation`
+to **~245s**. Size `ACR_REQUEST_TIMEOUT` above whichever applies to the
+deployment's actual configuration, plus headroom, and treat the 8s
+per-transport-retry term as a floor, not a ceiling, if the configured
+provider is known to return long `Retry-After` values. The timeout is
+global to the API, not per-route, so raising it also loosens the bound on
+every other route; a per-route timeout is the cleaner fix and is not
+implemented yet.
 
 **Model choice matters, and `gpt-5-nano` alone is not enough.** Measured
 live against `gpt-5-nano` (the CHAOS-3770 acceptance probes, both skipped
