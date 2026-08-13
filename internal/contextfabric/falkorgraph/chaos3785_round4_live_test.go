@@ -159,7 +159,7 @@ func TestLiveRelationshipStubCreationDoesNotSwapEndpointLabels(t *testing.T) {
 		t.Fatalf("ApplyProjectionBatch() error = %v", err)
 	}
 
-	fromNode, err := adapter.nodeByKindID(ctx, key, orgID, string(from.Kind), from.CanonicalID)
+	fromNode, err := adapter.nodeByKindID(ctx, key, orgID, string(from.Kind), from.CanonicalID, temporalFilter{})
 	if err != nil {
 		t.Fatalf("nodeByKindID(from) error = %v", err)
 	}
@@ -170,7 +170,7 @@ func TestLiveRelationshipStubCreationDoesNotSwapEndpointLabels(t *testing.T) {
 		t.Fatalf("From endpoint's ON-CREATE-seeded label = %v, want %q (fromAttrs/toAttrs swapped?)", got, from.Label)
 	}
 
-	toNode, err := adapter.nodeByKindID(ctx, key, orgID, string(to.Kind), to.CanonicalID)
+	toNode, err := adapter.nodeByKindID(ctx, key, orgID, string(to.Kind), to.CanonicalID, temporalFilter{})
 	if err != nil {
 		t.Fatalf("nodeByKindID(to) error = %v", err)
 	}
@@ -244,7 +244,7 @@ func TestLiveContentReferencedWriteNeverOverwritesTheAttachedSubjectsOwnLabelOrT
 		t.Fatalf("content ApplyProjectionBatch() error = %v", err)
 	}
 
-	after, err := adapter.nodeByKindID(ctx, key, orgID, string(target.Kind), target.CanonicalID)
+	after, err := adapter.nodeByKindID(ctx, key, orgID, string(target.Kind), target.CanonicalID, temporalFilter{})
 	if err != nil {
 		t.Fatalf("nodeByKindID() after content write error = %v", err)
 	}

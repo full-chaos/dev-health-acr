@@ -176,7 +176,7 @@ func TestHybridSearchFailsOpenToLexicalWhenTheEmbedderErrors(t *testing.T) {
 		return nil, nil
 	}}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{err: errors.New("connection refused")}, 0.55)
-	candidates, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5, &resolutionFence{})
+	candidates, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5, &resolutionFence{}, temporalFilter{})
 	if err != nil {
 		t.Fatalf("an embedder failure must not fail the request: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestHybridSearchIsLexicalOnlyWithoutAnEmbedder(t *testing.T) {
 		return nil, nil
 	}}
 	adapter := newFakeAdapter(t, fake)
-	if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5, &resolutionFence{}); err != nil {
+	if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5, &resolutionFence{}, temporalFilter{}); err != nil {
 		t.Fatalf("hybridSearchNodes: %v", err)
 	}
 	if vectorQueried {
@@ -404,7 +404,7 @@ func TestWrongServingModelDegradesTheReadPathToLexical(t *testing.T) {
 	}}
 	adapter := vectorAdapter(t, fake, wrongModelEmbedder(t, server.URL), 0.55)
 
-	candidates, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5, &resolutionFence{})
+	candidates, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5, &resolutionFence{}, temporalFilter{})
 	if err != nil {
 		t.Fatalf("a serving-model mismatch must not fail the request: %v", err)
 	}
@@ -549,7 +549,7 @@ func TestF2_ReadPathVerifiesTheStoredEmbedderIdentity(t *testing.T) {
 	}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
 
-	candidates, _, degraded, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5, &resolutionFence{})
+	candidates, _, degraded, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5, &resolutionFence{}, temporalFilter{})
 	if err != nil {
 		t.Fatalf("a stale-identity graph must degrade, not fail: %v", err)
 	}
@@ -581,7 +581,7 @@ func TestF2_MatchingStoredIdentityPassesTheReadFence(t *testing.T) {
 		return []indexStatus{operationalVectorIndex(8)}, nil
 	}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
-	if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5, &resolutionFence{}); err != nil {
+	if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5, &resolutionFence{}, temporalFilter{}); err != nil {
 		t.Fatalf("hybridSearchNodes: %v", err)
 	}
 	if !vectorQueried {
@@ -855,7 +855,7 @@ func TestR2_1_ResolutionFenceProbesOncePerResolutionNotPerTerm(t *testing.T) {
 
 	fence := &resolutionFence{}
 	for _, term := range []string{"the auth work", "authentication", "login"} {
-		if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", term, 5, fence); err != nil {
+		if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", term, 5, fence, temporalFilter{}); err != nil {
 			t.Fatalf("hybridSearchNodes(%q): %v", term, err)
 		}
 	}
@@ -864,7 +864,7 @@ func TestR2_1_ResolutionFenceProbesOncePerResolutionNotPerTerm(t *testing.T) {
 	}
 
 	// A NEW resolution gets a new fence and therefore a new probe.
-	if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "again", 5, &resolutionFence{}); err != nil {
+	if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "again", 5, &resolutionFence{}, temporalFilter{}); err != nil {
 		t.Fatalf("hybridSearchNodes: %v", err)
 	}
 	if identityProbes != 2 {
@@ -1398,5 +1398,148 @@ func TestR4_F2_BatchWithNoEmbeddingTargetsStillReportsZeroCounts(t *testing.T) {
 	}
 	if telemetry.embedded != 0 || telemetry.cleared != 0 {
 		t.Fatalf("the record must be zero-count, got embedded=%d cleared=%d", telemetry.embedded, telemetry.cleared)
+	}
+}
+
+// historicalFilter is an active window, built the way production builds one
+// rather than by hand-setting fields.
+func historicalFilter(t *testing.T) temporalFilter {
+	t.Helper()
+	asOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	filter := newTemporalFilter(contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &asOf})
+	if !filter.active {
+		t.Fatal("the fixture filter is inactive, so every historical case below would silently test the current axis")
+	}
+	return filter
+}
+
+// TestCHAOS3781_HistoricalAxisSkipsVectorRetrievalAndReportsIt is the
+// CHAOS-3781 x CHAOS-3778 integration, under the orchestrator's ruling (a).
+//
+// The vector index has no notion of a validity window, and a temporal
+// predicate cannot be bolted on: db.idx.vector.queryNodes returns the top-k
+// by distance and the org predicate is a POST-FILTER over that k. A window
+// applied the same way eliminates most of the k, which produces under-recall
+// that reads as absence, and it breaks the truncation argument, which holds
+// only because results are distance-ordered.
+//
+// So a historical axis skips the vector step and SAYS so. Silence would be
+// the failure: an answer that quietly considered fewer candidates is the
+// shape this whole branch exists to prevent.
+func TestCHAOS3781_HistoricalAxisSkipsVectorRetrievalAndReportsIt(t *testing.T) {
+	var vectorQueried bool
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			vectorQueried = true
+		}
+		return nil, nil
+	}}
+	// An OPERATIONAL fence and a matching embedder: the vector step is
+	// fully available here, so the axis is the only reason it is skipped.
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+
+	_, _, degraded, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5, &resolutionFence{}, historicalFilter(t))
+	if err != nil {
+		t.Fatalf("hybridSearchNodes: %v", err)
+	}
+	if vectorQueried {
+		t.Fatal("a vector query was issued on a historical axis; the index cannot honour a validity window, so its candidates may not have existed at the as-of time")
+	}
+	if !degraded {
+		t.Fatal("the skip was not reported as degraded; a mechanism WAS expected here and was unavailable, and an answer that silently considered fewer candidates is exactly the failure this branch exists to prevent")
+	}
+}
+
+// TestCHAOS3781_NilEmbedderStaysUndegradedOnAHistoricalAxis proves the
+// COMPOSITION, rather than asserting it in a comment.
+//
+// The historical skip sits after 3778's embedder-nil branch, so the two
+// rules compose by ORDER: with no embedder configured nothing was expected,
+// which is not a degradation, and 3778's rule must survive untouched even
+// on a historical axis. Placement is the whole argument, so it gets a test
+// that fails alone if the branches are ever reordered.
+func TestCHAOS3781_NilEmbedderStaysUndegradedOnAHistoricalAxis(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		return nil, nil
+	}}
+	adapter := newFakeAdapter(t, fake)
+
+	if _, _, degraded, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5, &resolutionFence{}, historicalFilter(t)); err != nil {
+		t.Fatalf("hybridSearchNodes: %v", err)
+	} else if degraded {
+		t.Fatal("a historical axis with NO embedder configured reported degraded; nothing was expected here, so nothing was lost -- CHAOS-3778's rule must dominate, which it does only while the nil check precedes the historical skip")
+	}
+}
+
+// TestCHAOS3781_CurrentAxisRetrievalIsUnchanged pins ZERO behaviour delta
+// for every question that is not historical -- the overwhelming majority.
+func TestCHAOS3781_CurrentAxisRetrievalIsUnchanged(t *testing.T) {
+	var vectorQueried bool
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			vectorQueried = true
+		}
+		return nil, nil
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+
+	_, _, degraded, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5, &resolutionFence{}, temporalFilter{})
+	if err != nil {
+		t.Fatalf("hybridSearchNodes: %v", err)
+	}
+	if !vectorQueried {
+		t.Fatal("no vector query was issued on the CURRENT axis; the historical skip has leaked into ordinary questions")
+	}
+	if degraded {
+		t.Fatal("a current-axis question reported degraded; nothing about it changed")
+	}
+}
+
+// TestCHAOS3781_AnOutOfWindowSubjectReachableOnlyByVectorIsNotAdmitted is
+// the case NEITHER lane could write alone.
+//
+// CHAOS-3778's tests run with no time axis; CHAOS-3781's exercise the
+// lexical path. A subject that is outside the validity window and matches
+// only semantically sits precisely in the gap: the lexical path excludes it
+// correctly, and before this integration the vector path admitted it.
+func TestCHAOS3781_AnOutOfWindowSubjectReachableOnlyByVectorIsNotAdmitted(t *testing.T) {
+	var issued []string
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		issued = append(issued, cypher)
+		// The lexical query is temporally bounded, so it returns nothing:
+		// the subject did not exist at the as-of time. Only the vector
+		// index would surface it, because it cannot filter by window.
+		return nil, nil
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+
+	candidates, _, degraded, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "checkout service", 5, &resolutionFence{}, historicalFilter(t))
+	if err != nil {
+		t.Fatalf("hybridSearchNodes: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("candidates surfaced on a historical axis: %+v -- an out-of-window subject reachable only by vector must not be admitted", candidates)
+	}
+	for _, cypher := range issued {
+		if strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			t.Fatal("the vector index was consulted, so an out-of-window subject could have entered the candidate set through a path that cannot see the window")
+		}
+	}
+	// The lexical query MUST still have run and MUST carry the window --
+	// otherwise this test would pass on a code path that queried nothing.
+	if len(issued) == 0 {
+		t.Fatal("no query was issued at all, so this proves nothing about which path admitted what")
+	}
+	if !degraded {
+		t.Fatal("the answer did not record that a retrieval mechanism was unavailable")
 	}
 }

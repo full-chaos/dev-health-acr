@@ -55,7 +55,7 @@ func TestLiveCanonicalEntityWriteClearsAStaleValidityWindowAStubSeeded(t *testin
 
 	// Confirm the stub actually seeded a validity window before healing --
 	// otherwise a false pass below would prove nothing.
-	before, err := adapter.nodeByKindID(ctx, key, orgID, string(target.Kind), target.CanonicalID)
+	before, err := adapter.nodeByKindID(ctx, key, orgID, string(target.Kind), target.CanonicalID, temporalFilter{})
 	if err != nil {
 		t.Fatalf("nodeByKindID() before healing error = %v", err)
 	}
@@ -82,7 +82,7 @@ func TestLiveCanonicalEntityWriteClearsAStaleValidityWindowAStubSeeded(t *testin
 		t.Fatalf("entity ApplyProjectionBatch() error = %v", err)
 	}
 
-	after, err := adapter.nodeByKindID(ctx, key, orgID, string(target.Kind), target.CanonicalID)
+	after, err := adapter.nodeByKindID(ctx, key, orgID, string(target.Kind), target.CanonicalID, temporalFilter{})
 	if err != nil {
 		t.Fatalf("nodeByKindID() after healing error = %v", err)
 	}
