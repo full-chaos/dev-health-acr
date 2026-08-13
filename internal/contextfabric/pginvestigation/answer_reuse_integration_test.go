@@ -61,6 +61,9 @@ func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKe
 		// key that was actually stored still matches" case; CHAOS-3786
 		// tests below build a wider chain explicitly.
 		ModelIdentities: []string{result.Versions.ModelIdentity},
+		// CHAOS-3781: derived from the result's own interpreted axis, the
+		// same way Save derives the column it is matched against.
+		TimeAxisKey: contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext),
 	}
 }
 

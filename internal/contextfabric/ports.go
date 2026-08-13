@@ -214,11 +214,28 @@ type SourceWatermarkSnapshot map[string]string
 // the primary was untouched. AnswerReuseGate.FindReusable implements the
 // membership test (e.g. `model_identity = ANY(...)`); this type only
 // carries the chain to test membership against.
+//
+// TimeAxisKey is the CHAOS-3781 fifth dimension. Before it, QuestionHash
+// -- which hashes the question TEXT only -- was a sound key because every
+// stored result was implicitly a current-axis answer: non-current axes
+// were refused outright, so no historical answer could ever be stored.
+// The moment historical answers became storable, the identical question
+// text asked "as of March" and "as of June" collapsed onto ONE key, and a
+// June answer would be served for a March question -- a silent wrong
+// answer, strictly worse than the refusal CHAOS-3781 removed.
+//
+// It is deliberately NOT folded into QuestionHash. That hash's contract
+// is "the SHA-256 of the canonicalized question text" (see
+// CanonicalizeQuestion), and conflating two independent things into one
+// opaque digest would destroy the per-condition diagnosability the
+// six-condition policy depends on -- a reuse miss must stay attributable
+// to a specific condition.
 type ReuseKey struct {
 	QuestionHash      string
 	ContractVersion   string
 	ProjectionVersion string
 	ModelIdentities   []string
+	TimeAxisKey       string
 }
 
 // AnswerReuseGate finds a stored InvestigationResult eligible for reuse

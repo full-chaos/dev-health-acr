@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -96,6 +97,59 @@ func stripTrailingPunctuation(s string) string {
 			return next
 		}
 		s = next
+	}
+}
+
+// reuseCurrentAxisKey is the TimeAxisKey value for a current-axis
+// question. It is a FIXED LITERAL, and that is load-bearing.
+//
+// The tempting alternative -- deriving the key from the current wall clock
+// so a "now" question is keyed to its own instant -- would make every
+// current-axis key unique, so no two requests could ever share one. Answer
+// reuse would silently drop to a zero hit rate while every CHAOS-3782 test
+// kept passing, because each of those reuses within a single key it
+// computed once. The failure would surface only as an unexplained cost and
+// latency regression in production.
+//
+// A current-axis question means "as of whenever you answer this", and the
+// staleness window (condition 4) plus the watermark check (condition 3)
+// already bound how old that answer may be. The time axis contributes no
+// additional identity here, so it must contribute a constant.
+const reuseCurrentAxisKey = "current"
+
+// TimeAxisKeyFor canonicalizes a time context into the ReuseKey dimension
+// that keeps two different as-of questions apart (CHAOS-3781). See
+// ReuseKey.TimeAxisKey for why this exists and why it is not folded into
+// QuestionHash.
+//
+// Instants are rendered as epoch NANOSECONDS, never as a formatted
+// timestamp: the same instant must produce the same key byte-for-byte, and
+// a formatted string does not guarantee that (time.Format trims trailing
+// zeros, so one instant has several textual renderings). It also matches
+// the `_ns` convention AC-3781-7 requires for every other temporal
+// comparison in this system.
+//
+// A historical context missing the bounds its own axis requires yields the
+// empty string, which callers treat as "never reusable" -- fail closed,
+// exactly like a punctuation-only question.
+func TimeAxisKeyFor(timeContext TimeContext) string {
+	switch timeContext.Axis {
+	case TemporalCurrent:
+		return reuseCurrentAxisKey
+	case TemporalValidTime, TemporalObservedTime:
+		if timeContext.AsOf == nil {
+			return ""
+		}
+		return string(timeContext.Axis) + ":" + strconv.FormatInt(timeContext.AsOf.UTC().UnixNano(), 10)
+	case TemporalRange:
+		if timeContext.Start == nil || timeContext.End == nil {
+			return ""
+		}
+		return string(timeContext.Axis) + ":" +
+			strconv.FormatInt(timeContext.Start.UTC().UnixNano(), 10) + ":" +
+			strconv.FormatInt(timeContext.End.UTC().UnixNano(), 10)
+	default:
+		return ""
 	}
 }
 
@@ -206,11 +260,31 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		}
 		modelIdentities = resolved
 	}
+	// CHAOS-3781: the axis key is taken from the WIRE request, not from
+	// an interpretation -- tryReuse runs BEFORE Interpret, which is the
+	// whole mechanism behind AC-3782-1's zero-model-call guarantee, so no
+	// interpreted axis exists yet.
+	//
+	// That is sound but narrower than it looks, and the narrowness is the
+	// safe direction: a question whose TEXT is historical while its wire
+	// axis says current keys as current, so it can only ever reuse
+	// another answer to that same text under that same wire axis, whose
+	// interpretation would have reached the same historical axis. It can
+	// never cross-serve a differently-bounded question, which is the
+	// collision this dimension exists to prevent.
+	timeAxisKey := TimeAxisKeyFor(request.TimeContext)
+	if timeAxisKey == "" {
+		// A historical context missing its own required bounds. Fail
+		// closed rather than key it as anything -- see TimeAxisKeyFor.
+		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
+		return InvestigationResult{}, false
+	}
 	key := ReuseKey{
 		QuestionHash:      QuestionHash(request.Question),
 		ContractVersion:   InvestigationResultSchemaV1,
 		ProjectionVersion: e.reuseProjectionVersion,
 		ModelIdentities:   modelIdentities,
+		TimeAxisKey:       timeAxisKey,
 	}
 	candidate, ok, err := e.reuseGate.FindReusable(ctx, principal, key)
 	if err != nil || !ok {
