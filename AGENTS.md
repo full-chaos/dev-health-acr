@@ -45,6 +45,7 @@ docs/adr/                  # Owned architecture decisions
 | Context Fabric fact providers | `internal/contextfabric/devhealthfacts` | ClickHouse-backed `FactProvider`s; 8 fact kinds gated off (no canonical source) |
 | Context Fabric result persistence | `internal/contextfabric/pginvestigation`, `internal/contextfabric/memoryinvestigation` | Immutable `InvestigationResultStore`; org-scoped `Get` is a binding precondition |
 | Context Fabric investigation endpoint | `internal/api/context_fabric_routes.go`, `internal/runtime/hosted` | `POST /api/v1/context-fabric/investigations`; `ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED`; see `docs/design/context-fabric-result-semantics.md` |
+| Context Fabric model provider | `internal/contextfabric/modelprovider`, `internal/contextfabric/genkitruntime` | BYO-LLM provider/base-URL/model/credential surface (`ACR_CONTEXT_FABRIC_MODEL_*`); only production `genkit.Genkit` construction; unconfigured means a clean per-request 503 |
 
 ## CODE MAP
 

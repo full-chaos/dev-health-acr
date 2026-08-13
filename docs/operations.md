@@ -168,14 +168,8 @@ wired by CHAOS-3755's hosted composition
 alongside the same graph backend configuration above to register `POST
 /api/v1/context-fabric/investigations`; leave it `false` (the default) and
 the route stays registered but returns 503 (`api.handleRuntimeUnavailable`)
-for every request. Note that even with both flags true, the endpoint cannot
-produce an answer yet: no production `genkit.Genkit` model provider is
-constructed anywhere in this repository (provider choice, credentials, and
-plugin selection are a decision for a follow-up change), so
-`RuntimeQuestionInterpreter`/`RuntimeAnswerSynthesizer` are wired with a nil
-`ModelRuntime` and degrade every request to 503 `upstream_unavailable`
-(`ErrModelUnavailable`) until that provider is configured -- the graph and
-canonical-fact layers are real and live in the meantime.
+for every request. Answering also needs a model provider, which is a third
+independent enablement — see the next section.
 
 **Single-flight per organization** (the CHAOS-3753 acceptance amendment):
 the coordinator holds a PostgreSQL advisory lock
@@ -239,6 +233,250 @@ checkpoint store
 single-flight/failure-isolation/backoff behavior are proved against real
 PostgreSQL (`testcontainers`) and fakes standing in for the graph backend
 and canonical source, following the same pattern.
+
+### Context Fabric model provider (BYO LLM, CHAOS-3770)
+
+The investigation endpoint interprets the question and synthesises the
+answer through `internal/contextfabric.ModelRuntime`. Hosted composition
+builds it in `internal/runtime/hosted.newContextFabricModelRuntime` from
+`internal/contextfabric/modelprovider`, which is the only place in this
+repository that constructs a production `genkit.Genkit` instance.
+
+**BYO LLM is the supported shape**, so the configuration surface names a
+provider, not a vendor: a provider kind, a base URL, a model id, and a
+credential. Pointing it at any OpenAI-compatible endpoint — a customer's
+own OpenAI key, a corporate gateway, or a self-hosted vLLM/Ollama/llama.cpp
+server — is a pure configuration change. No code change, no new plugin, no
+new build.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ACR_CONTEXT_FABRIC_MODEL_API_KEY` / `_FILE` | *(unset)* | Bearer credential, `KEY`/`KEY_FILE` convention (`config.SecretValue`). Required unless a base URL is set. |
+| `ACR_CONTEXT_FABRIC_MODEL_BASE_URL` | `https://api.openai.com/v1/` | OpenAI-compatible API root. Set this for BYO. |
+| `ACR_CONTEXT_FABRIC_MODEL_PROVIDER` | `openai` | Plugin namespace, recorded verbatim as `ModelExecutionReceipt.Provider`. Give a BYO endpoint its own stable name so replay can tell receipts apart. |
+| `ACR_CONTEXT_FABRIC_MODEL` | `gpt-5-nano` | Bare model id (no provider prefix). Ids containing `/`, e.g. `meta-llama/Llama-3.1-8B-Instruct`, are supported. |
+| `ACR_CONTEXT_FABRIC_MODEL_FALLBACK` | *(unset)* | Second, stronger model on the same provider, tried when the primary call fails or returns output that does not validate. Unset by default (a fallback is a second billable call), but **effectively required in practice — set it to `gpt-5.6-luna` alongside the `gpt-5-nano` default.** See the measurements below. |
+| `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` | `45s` | Bounds one generation attempt (1s–2m). |
+| `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS` | `2` | Attempts `genkitruntime` makes per operation (1–3). |
+| `ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES` | `2` | The OpenAI SDK's own retry loop *within* one attempt (0–5). Set `0` to make `genkitruntime` the single retry owner — the right choice for a local BYO server. |
+| `ACR_CONTEXT_FABRIC_MODEL_ALLOW_INSECURE_BASE_URL` | `false` | Permits a plaintext `http://` base URL. Only for a loopback or private-network BYO server: the credential travels as a bearer token on every request. |
+
+Two behaviours matter operationally, and they are opposites on purpose:
+
+- **No provider configured is a supported state, not an error.**
+  `modelprovider.Configured` returns false, the model runtime stays nil,
+  and `RuntimeQuestionInterpreter`/`RuntimeAnswerSynthesizer` degrade every
+  request to a clean 503 `upstream_unavailable` (`ErrModelUnavailable`).
+  The route stays registered, authorized and audited, and the graph and
+  canonical-fact layers stay real and live. This is the CHAOS-3755
+  behaviour, and it is regression-tested
+  (`hosted.TestNewContextFabricModelRuntime_keepsTheCleanFiveOhThreeWithoutACredential`).
+- **A provider configured but mis-specified fails startup.** A bad URL, an
+  out-of-band timeout, a conflicting `KEY`/`KEY_FILE` pair, or an
+  unreadable secret file aborts composition with an error naming the
+  variable. An operator who asked for a provider must find out at startup,
+  not one 503 at a time.
+
+Ambient `OPENAI_API_KEY` / `OPENAI_BASE_URL` are deliberately **not**
+consulted, and cannot leak in: the OpenAI SDK seeds itself from them, so
+`modelprovider` always passes the credential and base URL explicitly to
+override that. Opting this service into a paid provider is an ACR
+configuration decision, never something inherited from the process
+environment.
+
+Provider failures are classified into the `ErrModelRateLimited` /
+`ErrModelOutput` / `ErrModelUnavailable` taxonomy that alerting keys off,
+and the classification is proved against the real plugin and the real SDK
+transport replaying recorded provider responses
+(`modelprovider.TestNew_classifiesRecordedProviderFailures`): 429 and quota
+exhaustion map to `ErrModelRateLimited`; 401, 403 and 5xx map to
+`ErrModelUnavailable`; output that violates the response schema, or is not
+JSON at all, maps to `ErrModelOutput`. The classified error carries only a
+class and a fixed message — no provider response body, prompt fragment, or
+endpoint ever travels into logs, receipts, or telemetry built from it.
+
+Separately, Genkit's own tracing records a generation's full request and
+response (including the system prompt and the model's answer) as span
+attributes on every call, and would export them to an HTTP telemetry
+server if the ambient `GENKIT_TELEMETRY_SERVER` environment variable were
+ever set in this process — a variable ACR does not set but also does not
+control. `modelprovider.New` preempts this before constructing the Genkit
+instance, registering its own no-op OpenTelemetry tracer provider so
+Genkit's lazy telemetry wiring never activates and never consults that
+variable, regardless of the ambient environment
+(`modelprovider.TestNew_neverExportsPromptContentToGenkitTelemetry`).
+
+The same construction point closes three related paths: Genkit's action
+metrics also embed a failed generation's raw error text (which can carry a
+provider response body) as a metric attribute on the global
+`otel.Meter("genkit")`, so `modelprovider.New` registers a no-op
+`MeterProvider` alongside the no-op tracer provider
+(`modelprovider.TestNew_neverExportsErrorContentToGenkitMetrics`); `New`
+also fails composition outright if the ambient `GENKIT_ENV` variable is
+set to `dev`, which would start Genkit's local reflection server and its
+`handleNotify` endpoint — a second, independent way to register a
+telemetry exporter at runtime
+(`modelprovider.TestNew_rejectsGenkitDevEnvironment`); and Genkit's Debug-level logging of generation content was checked
+empirically, not assumed safe. Two of its paths are structurally
+unreachable or content-free on ACR's own call path: the one closure that
+logs full input/output (`DefineGenerateAction`) is registered as the
+`"generate"` action and is reachable only through Genkit's dev-only
+reflection/action-dispatch callers, never through the direct SDK call
+chain `genkitruntime` uses; and the schema-mismatch log line that IS on
+that path never echoes the offending content, even at Debug level — its
+message is `encoding/json`'s own generic parse error
+(`modelprovider.TestGenkitDebugLoggingNeverCarriesGenerationContentOnACRsPath`).
+A third path is real: `core/action.go`'s `Action.Run` wraps every action,
+including the model action itself, and its deferred Debug log records the
+raw generation error verbatim — which, for a genuine provider transport
+failure, is the OpenAI SDK's own error carrying the raw response body
+(confirmed by capturing the leak live before the fix). Rather than relying
+on ACR's log level (a property of composition, not of the SDK), this is
+sanitized at its source: the OpenAI-compatible client's own transport,
+which `modelprovider` already owns, replaces any non-2xx response body
+with a fixed, status-only shape via `option.WithMiddleware` before the SDK
+ever constructs an error from it — so every consumer of that error,
+present or future, sees sanitized text unconditionally, regardless of log
+level or call path
+(`modelprovider.TestActionRunDebugLoggingNeverCarriesProviderResponseBody`).
+The replacement preserves the HTTP status only, which is enough for every
+existing status-based classification (the SDK's own retry decision, and
+`classifyModelError`'s rate-limit detection) to behave identically
+(`modelprovider.TestSanitizedProviderErrorStillClassifiesIdenticallyThroughRetryableAndTaxonomy`).
+Both the tracer- and meter-provider registrations are last-writer-wins
+against any later `otel.Set{Tracer,Meter}Provider` call anywhere in the
+process; see `suppressGenkitTelemetryExport`'s doc comment in
+`internal/contextfabric/modelprovider/provider.go` for why that is a
+durable guarantee for this codebase specifically, and what a future change
+adding real OpenTelemetry export to ACR must account for.
+
+**`ACR_REQUEST_TIMEOUT` must be raised before enabling investigations.** It
+defaults to **15s**, and it bounds the whole HTTP request. A real
+investigation is two sequential model calls (interpret, then synthesise) and
+was measured end-to-end through the endpoint at **45–95s** against
+`gpt-5-nano`. Left at the default, every investigation returns 504 before
+the model answers, regardless of how well the model is doing.
+
+**The 180s figure this section previously gave was wrong** (CHAOS-3770 F6):
+it counted only `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` × `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS`
+× 2 operations, and ignored three factors the actual retry topology has:
+
+- **The fallback leg runs its own full retry loop, synchronously, after the
+  primary's is exhausted.** `genkitruntime.Runtime.InterpretQuestion`/
+  `SynthesizeAnswer` invoke `Config.Fallback` (built with the SAME
+  `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`/`_MAX_ATTEMPTS` as the primary — see
+  `modelprovider.runtimeConfig`) only after every primary attempt has
+  failed, and wait for it in-line before returning. With a fallback
+  configured — the standing recommendation above — this roughly DOUBLES
+  the worst case per operation, not zero: primary attempts, then fallback
+  attempts.
+- **`ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES` adds real wall-clock
+  time beyond `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`, not inside it.** The
+  OpenAI SDK's own retry loop
+  (`openai-go/internal/requestconfig.RequestConfig.Execute`) sleeps
+  between retries with a plain `time.Sleep`, which is NOT bounded by the
+  request's context deadline — so a transport retry's backoff can run
+  past the moment `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` would otherwise have
+  fired. Ordinarily that backoff is capped at 8s per retry (exponential,
+  jittered), but the SDK honors a provider's `Retry-After` header up to
+  just under 60s per retry when present, so a provider that returns long
+  `Retry-After` values can push this considerably higher than the 8s
+  figure below.
+- **Genuinely transient failures repeat this at every one of
+  `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS` genkitruntime-level attempts**,
+  each of which gets its own fresh `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`
+  budget plus its own transport-retry backoff on top.
+
+The honest worst case, per leg (primary or fallback) per operation:
+
+```text
+per_attempt  = ACR_CONTEXT_FABRIC_MODEL_TIMEOUT + ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES × 8s
+per_leg      = ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS × per_attempt
+per_operation = per_leg × (2 if a fallback is configured, else 1)
+worst_case    = per_operation × 2   # interpret, then synthesize, sequentially
+```
+
+With the documented defaults (`45s` timeout, `2` attempts, `2` transport
+retries) and the standing fallback recommendation: `per_attempt` = 45 + 2×8
+= 61s, `per_leg` = 2×61 = 122s, `per_operation` = 122×2 = 244s, `worst_case`
+= 244×2 = **~490s**. Without a fallback configured, halve `per_operation`
+to **~245s**. Size `ACR_REQUEST_TIMEOUT` above whichever applies to the
+deployment's actual configuration, plus headroom, and treat the 8s
+per-transport-retry term as a floor, not a ceiling, if the configured
+provider is known to return long `Retry-After` values. The timeout is
+global to the API, not per-route, so raising it also loosens the bound on
+every other route; a per-route timeout is the cleaner fix and is not
+implemented yet.
+
+**Model choice matters, and `gpt-5-nano` alone is not enough.** Measured
+live against `gpt-5-nano` (the CHAOS-3770 acceptance probes, both skipped
+unless `ACR_TEST_MODEL_API_KEY` is set —
+`go test ./internal/contextfabric/modelprovider -run Live` for the runtime
+and `go test ./internal/api -run LiveEndpoint` for the endpoint):
+interpretation passed ACR's validator on every run, but synthesis — the
+strictest validator in the pipeline — did not. `gpt-5-nano` alone answered
+**2 of 33** endpoint attempts; the richer the synthesis input (graph paths
+plus several canonical facts), the worse it did, so the runtime-level rate of
+roughly one in three overstates it for real traffic.
+
+Every failure was a clean, correctly classified 502
+`upstream_invalid_output`, never a wrong answer: value-level closure rejects
+what it cannot bind to a canonical fact. So the failure mode is availability,
+not correctness — but at 2 in 33 the endpoint is unusable.
+
+**The fallback is required, not optional.** Invalid output is deliberately
+**not** retried (`genkitruntime` fails closed on a schema-shaped failure
+rather than re-rolling the same input); the fallback model is the only
+mitigation, and `genkitruntime` invokes it on invalid output as well as on
+transport failure. With `ACR_CONTEXT_FABRIC_MODEL_FALLBACK=gpt-5.6-luna` the
+same endpoint answered **16 of 17**, at 45–95s per request. Set it in every
+deployment expected to answer. Each fallback is a second billable call and is
+recorded as `fallback_used` on the receipt; tracking that rate per model is
+the `ModelReceiptSink` evaluator's job (CHAOS-3756), and a sustained high
+rate is the signal to promote the fallback to primary.
+
+The fallback raises the answer rate; it does not make it 1.0. One of those
+17 attempts still failed, so a caller must treat a 502
+`upstream_invalid_output` as an expected, retryable outcome even with the
+fallback configured — do not build a client that assumes an investigation
+always returns an answer on the first call.
+
+#### Measured model matrix
+
+| Configuration | Usable answers | Typical latency | Dominant failure mode |
+| --- | --- | --- | --- |
+| `gpt-5-nano` alone | 2 / 33 | 52–95s | Synthesis value-level closure — a driver cites no claimed fact restating a canonical value |
+| `gpt-5-nano` + `gpt-5.6-luna` fallback | 16 / 17 | 45–95s | One residual synthesis rejection |
+| `gpt-5-mini` alone | 4 / 12 | 17–88s | **5 of 8 failures were the omitted 256-character `requested_judgment` cap, since fixed**; the other 3 were synthesis closure, a finding bounds violation, and one provider `INTERNAL` |
+
+Read the `gpt-5-mini` row with care: it was measured on interpretation prompt
+v3, which did not state the `requested_judgment` limit the validator enforces.
+Mini writes a longer judgment than nano and was rejected for it on 5 of 12
+attempts before reaching synthesis at all — a prompt omission, not a model
+weakness. Interpretation v4 and synthesis v6 now state every bound in
+`contracts/v1.ContextFabricModelFacingBounds` — the model-facing subset of
+`ContextFabricInvestigationResult.Validate()`'s bounds (excluding
+`direct_judgment`/`current_state`/`deterministic_answer`, which ACR
+server-composes and truncates to fit rather than ever validating the
+model's own text against). `genkitruntime.TestPromptsStateEveryModelFacingBound`
+proves every one of that registry's entries is both stated in the prompt
+and pinned to the validator's exact limit;
+`genkitruntime.TestModelFacingBoundRegistryIsFullyCovered` proves the test
+itself cannot silently omit a registry entry, which is what let the
+top-level `strongest_pressures`/`drivers`/`remaining_work`/`readiness_gaps`/
+`conflicts`/`limitations`/`evidence_ref_ids` collection caps go untested
+(and `warnings` go entirely unstated in the prompt) even after v5. So
+mini's true rate on current prompts is **unmeasured and expected to be
+materially better than 4 of 12**. The nano and fallback rows were also
+measured on v3.
+
+So the standing recommendation is unchanged for now — `gpt-5-nano` with the
+`gpt-5.6-luna` fallback is the only combination measured to answer reliably —
+but `gpt-5-mini` is the open question worth settling before treating that as
+final, because a primary that answers on its own would remove the second
+billable call the fallback costs. Re-run
+`go test ./internal/api -run LiveEndpoint` with `ACR_TEST_MODEL=gpt-5-mini`
+on the current prompts to settle it.
 
 ### Helm
 
