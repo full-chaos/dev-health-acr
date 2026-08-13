@@ -132,7 +132,7 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		}
 		for _, fact := range projection.KeyFacts {
 			line := fmt.Sprintf("- %s.%s = %s (`%s`)",
-				untrustedInline(fact.Subject.Label), safeInline(fact.Field),
+				untrustedInline(fact.Subject.Label), untrustedInline(fact.Field),
 				untrustedInline(scalarValueText(fact.Value)), safeInline(string(fact.Kind)))
 			if !b.writeLine(line) {
 				return b.finishWithTruncation()
@@ -253,6 +253,7 @@ func omittedSummary(budget contractsv1.ContextFabricProjectionBudget) string {
 	add(budget.LimitationsOmitted, "limitations")
 	add(budget.WarningsOmitted, "warnings")
 	add(budget.CoverageOmitted, "coverage entries")
+	add(budget.ValuesClamped, "shortened values")
 	if budget.FullResultOmitted {
 		parts = append(parts, "the full canonical result (it exceeded the byte budget)")
 	}

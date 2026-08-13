@@ -217,10 +217,16 @@ type ContextFabricProjectionBudget struct {
 	// produce an INVALID projection, and silently cutting them would have
 	// hidden exactly the caveats a reader needs most: a shortened
 	// limitations list reads as more confident than the investigation was.
-	LimitationsOmitted int  `json:"limitations_omitted"`
-	WarningsOmitted    int  `json:"warnings_omitted"`
-	CoverageOmitted    int  `json:"coverage_omitted"`
-	FullResultOmitted  bool `json:"full_result_omitted"`
+	LimitationsOmitted int `json:"limitations_omitted"`
+	WarningsOmitted    int `json:"warnings_omitted"`
+	CoverageOmitted    int `json:"coverage_omitted"`
+	// ValuesClamped counts individual values the projection SHORTENED
+	// rather than dropped. Clamping was silent (codex round-5 R5-3): an
+	// 8000-rune legacy judgment became 4000 runes with truncated=false and
+	// no count, so a consumer could not tell it was reading a cut value.
+	// Shortening a value is a form of omission and is disclosed like one.
+	ValuesClamped     int  `json:"values_clamped"`
+	FullResultOmitted bool `json:"full_result_omitted"`
 }
 
 // Projection field-length bounds.

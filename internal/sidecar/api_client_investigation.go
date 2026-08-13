@@ -63,7 +63,11 @@ func (c *Client) Investigate(ctx context.Context, request contractsv1.ContextFab
 	if err := c.call(ctx, http.MethodPost, investigationsPath, encoded, &result); err != nil {
 		return contractsv1.ContextFabricInvestigationResult{}, err
 	}
-	if err := validateInvestigationResult(result); err != nil {
+	// Lenient, even though this is the "fresh answer" call: with CHAOS-3782
+	// answer reuse the server may legitimately serve a STORED row here, so
+	// a strict client gate would reject an answer the hosted side was right
+	// to return (codex round-5 R5-1).
+	if err := validateStoredInvestigationResult(result); err != nil {
 		return contractsv1.ContextFabricInvestigationResult{}, err
 	}
 	return result, nil
@@ -94,26 +98,15 @@ func (c *Client) InvestigationResult(ctx context.Context, resultID string) (cont
 	return result, nil
 }
 
-// validateInvestigationResult rejects a FRESH hosted answer that does not
-// meet the v1 contract. The sidecar validates what it receives rather than
-// trusting it: an answer that failed its own contract must not be rendered
-// to an agent as though it were sound. Fresh output is held to the current
-// contract with no allowance -- it is being produced now.
-func validateInvestigationResult(result contractsv1.ContextFabricInvestigationResult) error {
-	if err := result.Validate(); err != nil {
-		return fmt.Errorf("%w: investigation result: %w", ErrInvalidResponse, err)
-	}
-	return nil
-}
-
-// validateStoredInvestigationResult rejects a retrieved result that is not
+// validateStoredInvestigationResult rejects a hosted result that is not
 // even readable under the historical bounds.
 //
-// Retrieval returns an IMMUTABLE row that may predate a bound correction,
-// so holding it to the current contract would make a legitimately stored
-// answer unreachable through MCP while the hosted store served it happily
-// (codex round-4 F1). Strict at write and at fresh model output; lenient at
-// every read of persisted data.
+// BOTH client calls use this. The sidecar's validation is transport
+// defense-in-depth, not the authoritative gate: the strict gates are the
+// engine's own check on fresh model output and the store's check on Save.
+// A client stricter than what the server legitimately serves rejects valid
+// answers -- and with answer reuse, even the "fresh" POST can return an
+// immutable row that predates a bound correction (codex round-5 R5-1).
 func validateStoredInvestigationResult(result contractsv1.ContextFabricInvestigationResult) error {
 	if err := result.ValidateStored(); err != nil {
 		return fmt.Errorf("%w: investigation result: %w", ErrInvalidResponse, err)

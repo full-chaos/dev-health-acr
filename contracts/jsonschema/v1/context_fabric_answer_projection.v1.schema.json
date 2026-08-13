@@ -725,6 +725,10 @@
           "type": "integer",
           "minimum": 0
         },
+        "values_clamped": {
+          "type": "integer",
+          "minimum": 0
+        },
         "full_result_omitted": {
           "type": "boolean"
         }
@@ -740,6 +744,7 @@
         "limitations_omitted",
         "warnings_omitted",
         "coverage_omitted",
+        "values_clamped",
         "full_result_omitted"
       ]
     }

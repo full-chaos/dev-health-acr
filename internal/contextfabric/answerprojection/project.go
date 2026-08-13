@@ -22,6 +22,7 @@ package answerprojection
 
 import (
 	"sort"
+	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -119,13 +120,14 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	// its references. Drivers are offered first because they carry the
 	// judgment; a tight evidence budget should cost cohort tail, not the
 	// reasons behind the answer.
+	clamp := &clamper{}
 	index := newEvidenceIndex(bounds.MaxEvidenceRefs)
-	drivers, driversOmitted, withheldOmitted, facts, factsOmitted := projectDrivers(result, bounds, index)
-	cohort, cohortOmitted := projectCohort(result, bounds, index)
-	clarification, candidatesOmitted := projectClarification(result, bounds)
-	limitations, limitationsOmitted := boundedNarrative(result.Limitations)
-	warnings, warningsOmitted := boundedNarrative(result.Warnings)
-	coverage, coverageOmitted := projectCoverage(result)
+	drivers, driversOmitted, withheldOmitted, facts, factsOmitted := projectDrivers(result, bounds, index, clamp)
+	cohort, cohortOmitted := projectCohort(result, bounds, index, clamp)
+	clarification, candidatesOmitted := projectClarification(result, bounds, clamp)
+	limitations, limitationsOmitted := boundedNarrative(result.Limitations, clamp)
+	warnings, warningsOmitted := boundedNarrative(result.Warnings, clamp)
+	coverage, coverageOmitted := projectCoverage(result, clamp)
 	evidence := index.ids()
 	evidenceOmitted := countUnindexedEvidence(result, index)
 
@@ -138,8 +140,8 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		Question:      result.Question,
 		Reused:        result.Reused,
 		// Verbatim. These two fields are the answer.
-		DirectJudgment:     truncateRunes(result.DirectJudgment, contractsv1.ContextFabricProjectedJudgmentMaxLength),
-		CurrentState:       truncateRunes(result.CurrentState, contractsv1.ContextFabricProjectedJudgmentMaxLength),
+		DirectJudgment:     clamp.text(result.DirectJudgment, contractsv1.ContextFabricProjectedJudgmentMaxLength),
+		CurrentState:       clamp.text(result.CurrentState, contractsv1.ContextFabricProjectedJudgmentMaxLength),
 		StrongestPressures: distinctStrings(result.StrongestPressures),
 		// Never truncated: a surface that reported a different set of
 		// committed subjects answered a different question.
@@ -163,6 +165,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		FactsOmitted:           factsOmitted,
 		CandidatesOmitted:      candidatesOmitted,
 		EvidenceRefsOmitted:    evidenceOmitted,
+		ValuesClamped:          clamp.count,
 		LimitationsOmitted:     limitationsOmitted,
 		WarningsOmitted:        warningsOmitted,
 		CoverageOmitted:        coverageOmitted,
@@ -200,7 +203,8 @@ func declaresDrop(budget contractsv1.ContextFabricProjectionBudget) bool {
 		budget.EvidenceRefsOmitted > 0 ||
 		budget.LimitationsOmitted > 0 ||
 		budget.WarningsOmitted > 0 ||
-		budget.CoverageOmitted > 0
+		budget.CoverageOmitted > 0 ||
+		budget.ValuesClamped > 0
 }
 
 // projectDrivers selects the drivers that survive the budget and the
@@ -215,7 +219,7 @@ func declaresDrop(budget contractsv1.ContextFabricProjectionBudget) bool {
 // drivers are admitted one at a time, and a driver whose claims would push
 // the fact set past the budget is dropped instead -- counted as an omitted
 // driver, which is the honest description of what happened.
-func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds Budget, index *evidenceIndex) (drivers []contractsv1.ContextFabricProjectedDriver, driversOmitted, withheldOmitted int, facts []contractsv1.ContextFabricProjectedFact, factsOmitted int) {
+func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds Budget, index *evidenceIndex, clamp *clamper) (drivers []contractsv1.ContextFabricProjectedDriver, driversOmitted, withheldOmitted int, facts []contractsv1.ContextFabricProjectedFact, factsOmitted int) {
 	claims := make(map[string]contractsv1.ContextFabricClaimedFact, len(result.ClaimedFacts))
 	for _, fact := range result.ClaimedFacts {
 		claims[fact.ClaimID] = fact
@@ -342,7 +346,7 @@ func countUncitedClaims(result contractsv1.ContextFabricInvestigationResult, ret
 // cohort it discovered, not a statement about this projection. Projection
 // truncation shows up in Total versus len(Members) and in the declared
 // budget, never by silently flipping the engine's own claim.
-func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds Budget, index *evidenceIndex) (*contractsv1.ContextFabricProjectedCohort, int) {
+func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds Budget, index *evidenceIndex, clamp *clamper) (*contractsv1.ContextFabricProjectedCohort, int) {
 	if result.Cohort == nil {
 		return nil, 0
 	}
@@ -362,14 +366,14 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 		members = append(members, contractsv1.ContextFabricProjectedCohortMember{
 			Subject:          member.Subject,
 			Rank:             member.Rank,
-			InclusionReasons: clampStrings(member.InclusionReasons, contractsv1.ContextFabricProjectedInclusionReasonsMaxCount, contractsv1.ContextFabricProjectedInclusionReasonMaxLength),
+			InclusionReasons: clamp.strings(member.InclusionReasons, contractsv1.ContextFabricProjectedInclusionReasonsMaxCount, contractsv1.ContextFabricProjectedInclusionReasonMaxLength),
 			EvidenceRefIDs:   append([]string(nil), member.EvidenceRefIDs...),
 		})
 	}
 	return &contractsv1.ContextFabricProjectedCohort{
 		Kind:      canonical.Kind,
 		Total:     len(canonical.Members),
-		Rationale: truncateRunes(canonical.Rationale, contractsv1.ContextFabricProjectedCohortRationaleMaxLength),
+		Rationale: clamp.text(canonical.Rationale, contractsv1.ContextFabricProjectedCohortRationaleMaxLength),
 		Complete:  canonical.Complete,
 		Members:   members,
 	}, len(canonical.Members) - len(members)
@@ -379,7 +383,7 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 // emitted only when the engine actually asked for clarification: attaching
 // candidate lists to a confident answer would invite a consumer to treat a
 // settled subject as still open.
-func projectClarification(result contractsv1.ContextFabricInvestigationResult, bounds Budget) (*contractsv1.ContextFabricProjectedClarification, int) {
+func projectClarification(result contractsv1.ContextFabricInvestigationResult, bounds Budget, clamp *clamper) (*contractsv1.ContextFabricProjectedClarification, int) {
 	if result.Status != contractsv1.ContextFabricInvestigationClarificationRequired {
 		return nil, 0
 	}
@@ -392,11 +396,11 @@ func projectClarification(result contractsv1.ContextFabricInvestigationResult, b
 			Subject:      candidate.Subject,
 			State:        candidate.State,
 			Confidence:   candidate.Confidence,
-			MatchReasons: clampStrings(candidate.MatchReasons, contractsv1.ContextFabricProjectedMatchReasonsMaxCount, contractsv1.ContextFabricProjectedMatchReasonMaxLength),
+			MatchReasons: clamp.strings(candidate.MatchReasons, contractsv1.ContextFabricProjectedMatchReasonsMaxCount, contractsv1.ContextFabricProjectedMatchReasonMaxLength),
 		})
 	}
 	return &contractsv1.ContextFabricProjectedClarification{
-		Prompt:     truncateRunes(result.SubjectResolution.ClarificationPrompt, contractsv1.ContextFabricProjectedClarificationPromptMaxLength),
+		Prompt:     clamp.text(result.SubjectResolution.ClarificationPrompt, contractsv1.ContextFabricProjectedClarificationPromptMaxLength),
 		Candidates: candidates,
 	}, len(canonical) - retain
 }
@@ -497,45 +501,54 @@ func countUnindexedEvidence(result contractsv1.ContextFabricInvestigationResult,
 // projection (codex round-1 F4). Truncating silently would have been worse
 // than the crash: a shortened limitations list reads as a more confident
 // answer than the investigation actually gave.
-func boundedNarrative(values []string) ([]string, int) {
-	distinct := distinctStrings(values)
-	// Clamp item LENGTH as well as count. A stored result may legitimately
-	// carry entries longer than the projection admits, because reads of
-	// persisted data accept the historical bounds; copying such an entry
-	// through unchanged would emit schema-invalid projection JSON from a
-	// perfectly valid stored row (codex round-4 F3).
-	clamped := make([]string, 0, len(distinct))
-	for _, value := range distinct {
-		clamped = append(clamped, truncateRunes(value, contractsv1.ContextFabricProjectedNarrativeMaxLength))
+func boundedNarrative(values []string, clamp *clamper) ([]string, int) {
+	// Clamp FIRST, then dedupe (codex round-5 R5-4). Deduping first let two
+	// distinct legacy entries sharing a long prefix survive as separate
+	// values, collide once clamped to the same prefix, and produce a
+	// projection with duplicate entries that its own validator rejects --
+	// which the route then emitted unvalidated. Post-clamp collisions are
+	// real duplicates and are counted as omissions.
+	clamped := make([]string, 0, len(values))
+	for _, value := range values {
+		clamped = append(clamped, clamp.text(value, contractsv1.ContextFabricProjectedNarrativeMaxLength))
 	}
-	if len(clamped) <= contractsv1.ContextFabricProjectedNarrativeMaxCount {
-		return clamped, 0
+	distinct := distinctStrings(clamped)
+	omitted := len(clamped) - len(distinct)
+	if len(distinct) <= contractsv1.ContextFabricProjectedNarrativeMaxCount {
+		return distinct, omitted
 	}
-	return clamped[:contractsv1.ContextFabricProjectedNarrativeMaxCount], len(clamped) - contractsv1.ContextFabricProjectedNarrativeMaxCount
+	return distinct[:contractsv1.ContextFabricProjectedNarrativeMaxCount], omitted + len(distinct) - contractsv1.ContextFabricProjectedNarrativeMaxCount
 }
 
-// clampStrings bounds both the number of entries and the length of each,
-// so a legacy-sized stored value cannot produce an out-of-bounds
-// projection. It is a VIEW operation: the underlying result is unchanged
-// and remains reachable in full through the canonical view.
-func clampStrings(values []string, maxCount, maxLength int) []string {
-	retain := min(len(values), maxCount)
-	out := make([]string, 0, retain)
-	for _, value := range values[:retain] {
-		out = append(out, truncateRunes(value, maxLength))
-	}
-	return out
-}
+// clamper shortens oversize values and COUNTS how many it shortened.
+//
+// Clamping used to be silent (codex round-5 R5-3): a legacy judgment twice
+// the projection's length came back cut with truncated=false and no count,
+// so a consumer had no way to know it was reading a shortened value.
+// Shortening is a form of omission and is disclosed like one.
+type clamper struct{ count int }
 
-// truncateRunes cuts a string to maxLength RUNES, never bytes: cutting
-// mid-rune would emit invalid UTF-8, which is a worse failure than the
-// length violation it was meant to prevent.
-func truncateRunes(value string, maxLength int) string {
+// text cuts a string to maxLength RUNES, never bytes: cutting mid-rune
+// would emit invalid UTF-8, a worse failure than the length violation it
+// prevents.
+func (c *clamper) text(value string, maxLength int) string {
 	runes := []rune(value)
 	if len(runes) <= maxLength {
 		return value
 	}
+	c.count++
 	return string(runes[:maxLength])
+}
+
+// strings clamps a list's length and each entry, counting every shortened
+// entry.
+func (c *clamper) strings(values []string, maxCount, maxLength int) []string {
+	retain := min(len(values), maxCount)
+	out := make([]string, 0, retain)
+	for _, value := range values[:retain] {
+		out = append(out, c.text(value, maxLength))
+	}
+	return out
 }
 
 // projectCoverage reports each source's state once, bounded by the
@@ -546,23 +559,24 @@ func truncateRunes(value string, maxLength int) string {
 // answer -- but the canonical result allows 250 sources against the
 // projection's 100, so the overflow is truncated and DECLARED rather than
 // dropped in silence (codex round-1 F5).
-func projectCoverage(result contractsv1.ContextFabricInvestigationResult) ([]contractsv1.ContextFabricProjectedCoverage, int) {
+func projectCoverage(result contractsv1.ContextFabricInvestigationResult, clamp *clamper) ([]contractsv1.ContextFabricProjectedCoverage, int) {
 	seen := make(map[string]struct{}, len(result.Coverage.Sources))
 	entries := make([]contractsv1.ContextFabricProjectedCoverage, 0, len(result.Coverage.Sources))
 	omitted := 0
 	for _, source := range result.Coverage.Sources {
-		if _, exists := seen[source.Source]; exists {
+		name := strings.TrimSpace(source.Source)
+		if _, exists := seen[name]; exists {
 			continue
 		}
-		seen[source.Source] = struct{}{}
+		seen[name] = struct{}{}
 		if len(entries) >= contractsv1.ContextFabricProjectedCoverageMaxCount {
 			omitted++
 			continue
 		}
 		entries = append(entries, contractsv1.ContextFabricProjectedCoverage{
-			Source: truncateRunes(source.Source, contractsv1.ContextFabricProjectedCoverageSourceMaxLength),
+			Source: clamp.text(name, contractsv1.ContextFabricProjectedCoverageSourceMaxLength),
 			State:  source.State,
-			Reason: truncateRunes(source.Reason, contractsv1.ContextFabricProjectedCoverageReasonMaxLength),
+			Reason: clamp.text(source.Reason, contractsv1.ContextFabricProjectedCoverageReasonMaxLength),
 		})
 	}
 	return entries, omitted

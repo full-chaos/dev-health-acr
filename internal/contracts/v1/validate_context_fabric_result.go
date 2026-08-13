@@ -38,7 +38,7 @@ func (c ContextFabricSubjectCandidate) validate(bounds contextFabricBounds) erro
 	if !validMatchMechanisms(c.MatchMechanisms) {
 		return fmt.Errorf("subject candidate match mechanisms violate v1 bounds")
 	}
-	if !optionalEvidenceRefs(c.EvidenceRefIDs, 500) {
+	if !optionalEvidenceRefs(c.EvidenceRefIDs, bounds.candidateEvidenceRefs) {
 		return fmt.Errorf("subject candidate evidence references violate v1 bounds")
 	}
 	return nil
@@ -102,7 +102,7 @@ func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
 		lastRank = member.Rank
 	}
 	for _, exclusion := range c.Exclusions {
-		if err := exclusion.Validate(); err != nil {
+		if err := exclusion.validate(bounds); err != nil {
 			return fmt.Errorf("exclusions: %w", err)
 		}
 		if exclusion.Subject.Kind != c.Kind {
@@ -148,6 +148,9 @@ type contextFabricBounds struct {
 	judgmentLength              int
 	deterministicAnswerLength   int
 	nestedEvidenceRefs          int
+	interpretationTerms         int
+	candidateEvidenceRefs       int
+	cohortExclusionReasonLength int
 }
 
 // contextFabricRelationshipPathMaxNodes is the Go-enforced ceiling on path
@@ -174,6 +177,9 @@ var contextFabricWriteBounds = contextFabricBounds{
 	judgmentLength:              4000,
 	deterministicAnswerLength:   12000,
 	nestedEvidenceRefs:          ContextFabricNestedEvidenceRefIDsMaxCount,
+	interpretationTerms:         ContextFabricSubjectTermsMaxCount,
+	candidateEvidenceRefs:       100,
+	cohortExclusionReasonLength: 1000,
 }
 
 // contextFabricLegacyBounds is what the Go validator alone used to accept.
@@ -194,6 +200,9 @@ var contextFabricLegacyBounds = contextFabricBounds{
 	judgmentLength:              8000,
 	deterministicAnswerLength:   16000,
 	nestedEvidenceRefs:          ContextFabricEvidenceRefIDsMaxCount,
+	interpretationTerms:         100,
+	candidateEvidenceRefs:       500,
+	cohortExclusionReasonLength: 2000,
 }
 
 // Validate enforces the CURRENT contract bounds. This is the write path and
@@ -220,10 +229,14 @@ func (m ContextFabricCohortMember) validate(bounds contextFabricBounds) error {
 }
 
 func (e ContextFabricCohortExclusion) Validate() error {
+	return e.validate(contextFabricWriteBounds)
+}
+
+func (e ContextFabricCohortExclusion) validate(bounds contextFabricBounds) error {
 	if err := e.Subject.Validate(); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
-	if !stringLengthBetween(strings.TrimSpace(e.Reason), 1, 2000) {
+	if !stringLengthBetween(strings.TrimSpace(e.Reason), 1, bounds.cohortExclusionReasonLength) {
 		return fmt.Errorf("cohort exclusion reason violates v1 bounds")
 	}
 	return nil
@@ -343,6 +356,24 @@ func (c ContextFabricClaimedFact) Validate() error {
 }
 
 func (o ContextFabricSourceObservation) Validate() error {
+	return o.validate(true)
+}
+
+func (o ContextFabricSourceObservation) validateStored() error {
+	return o.validate(false)
+}
+
+// validate optionally requires the source name to be exactly trimmed.
+//
+// The canonical validator only trimmed FOR LENGTH, so " work_items " passed
+// while the projection -- which requires an exactly-trimmed name -- rejected
+// it (codex round-5 R5-5). Writes now reject the padding; stored rows keep
+// being accepted, and the projection trims on copy, so a legacy padded row
+// stays readable and projectable.
+func (o ContextFabricSourceObservation) validate(requireTrimmed bool) error {
+	if requireTrimmed && strings.TrimSpace(o.Source) != o.Source {
+		return fmt.Errorf("source observation name must be trimmed")
+	}
 	if !stringLengthBetween(strings.TrimSpace(o.Source), 1, 128) || !validSourceState(o.State) || !stringLengthBetween(o.Watermark, 0, 512) || !stringLengthBetween(o.Reason, 0, 2000) {
 		return fmt.Errorf("source observation violates v1 bounds")
 	}
@@ -383,7 +414,11 @@ func (c ContextFabricCoverage) validate(bounds contextFabricBounds) error {
 	}
 	seen := make(map[string]struct{}, len(c.Sources))
 	for _, source := range c.Sources {
-		if err := source.Validate(); err != nil {
+		validateSource := source.Validate
+		if bounds.coverageEntries != contextFabricWriteBounds.coverageEntries {
+			validateSource = source.validateStored
+		}
+		if err := validateSource(); err != nil {
 			return fmt.Errorf("sources: %w", err)
 		}
 		if _, exists := seen[source.Source]; exists {
@@ -428,7 +463,7 @@ func (q ContextFabricInterpretedQuestion) Validate() error {
 }
 
 func (q ContextFabricInterpretedQuestion) validate(bounds contextFabricBounds) error {
-	if !validInvestigationShape(q.Shape) || !stringLengthBetween(strings.TrimSpace(q.RequestedJudgment), 1, ContextFabricRequestedJudgmentMaxLength) || len(q.SubjectTerms) > ContextFabricSubjectTermsMaxCount || len(q.ComparisonTerms) > ContextFabricComparisonTermsMaxCount || !uniqueTrimmedStrings(q.SubjectTerms, ContextFabricSubjectOrComparisonTermMaxLength) || !uniqueTrimmedStrings(q.ComparisonTerms, ContextFabricSubjectOrComparisonTermMaxLength) || len(q.FactRequirements) > ContextFabricFactRequirementsMaxCount || !stringLengthBetween(q.ClarificationReason, 0, ContextFabricClarificationReasonMaxLength) {
+	if !validInvestigationShape(q.Shape) || !stringLengthBetween(strings.TrimSpace(q.RequestedJudgment), 1, ContextFabricRequestedJudgmentMaxLength) || len(q.SubjectTerms) > bounds.interpretationTerms || len(q.ComparisonTerms) > bounds.interpretationTerms || !uniqueTrimmedStrings(q.SubjectTerms, ContextFabricSubjectOrComparisonTermMaxLength) || !uniqueTrimmedStrings(q.ComparisonTerms, ContextFabricSubjectOrComparisonTermMaxLength) || len(q.FactRequirements) > ContextFabricFactRequirementsMaxCount || !stringLengthBetween(q.ClarificationReason, 0, ContextFabricClarificationReasonMaxLength) {
 		return fmt.Errorf("interpreted question violates v1 bounds")
 	}
 	if err := q.TimeContext.Validate(); err != nil {

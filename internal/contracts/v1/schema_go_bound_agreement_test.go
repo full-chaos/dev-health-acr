@@ -87,6 +87,10 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.DriverJudgment.properties.summary.maxLength":                          ContextFabricDriverSummaryMaxLength,
 		"common#$defs.DriverJudgment.properties.qualification.maxLength":                    ContextFabricDriverQualificationMaxLength,
 		"common#$defs.ClaimedFact.properties.field.maxLength":                               ContextFabricClaimedFieldMaxLength,
+		"common#$defs.InterpretedQuestion.properties.subject_terms.maxItems":                contextFabricWriteBounds.interpretationTerms,
+		"common#$defs.InterpretedQuestion.properties.comparison_terms.maxItems":             contextFabricWriteBounds.interpretationTerms,
+		"common#$defs.SubjectCandidate.properties.evidence_ref_ids.maxItems":                contextFabricWriteBounds.candidateEvidenceRefs,
+		"common#$defs.CohortExclusion.properties.reason.maxLength":                          contextFabricWriteBounds.cohortExclusionReasonLength,
 	}
 
 	discovered := schemaBounds(t, documents)
@@ -99,12 +103,15 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 	for _, bound := range discovered {
 		expected, mapped := goBoundsByPath[bound.path]
 		if !mapped {
-			// Not every bound in these documents governs a value the Go
-			// validator numerically enforces (identifiers, timestamps,
-			// enums, and shapes the answer surface never touches are
-			// bounded by the schema alone). Those are listed so a reader
-			// can see what is NOT compared, rather than silently ignored.
-			unmapped = append(unmapped, bound.path)
+			// EVERY unmapped bound must be explicitly classified as
+			// schema-only, with a reason (codex round-5 R5-2). Logging
+			// them was not enough: three real drifts hid in that log
+			// while the test passed. A bound nobody has classified is
+			// exactly where the next drift lives, so an unclassified
+			// bound is now a failure.
+			if reason := schemaOnlyBoundReason(bound.path); reason == "" {
+				unmapped = append(unmapped, bound.path)
+			}
 			continue
 		}
 		checked++
@@ -120,10 +127,74 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		}
 	}
 	sort.Strings(unmapped)
-	t.Logf("compared %d bounds against Go; %d schema-only bounds not numerically enforced in Go", checked, len(unmapped))
+	if len(unmapped) > 0 {
+		t.Errorf("%d schema bounds are neither mapped to a Go bound nor classified as schema-only:\n  %s\nEach must be mapped, or classified in schemaOnlyBoundReason with a reason.",
+			len(unmapped), strings.Join(unmapped, "\n  "))
+	}
 	if checked == 0 {
 		t.Fatal("no bounds were actually compared; the mapping resolved nothing")
 	}
+	t.Logf("compared %d bounds against Go; every other bound is explicitly classified as schema-only", checked)
+}
+
+// schemaOnlyBoundReason classifies a schema bound the Go validator does not
+// numerically enforce, returning why. An empty return means unclassified,
+// which fails the test.
+//
+// These are genuine: opaque identifiers, timestamps, enums, and structural
+// wrappers are constrained by the schema alone, and duplicating their
+// numbers in Go would create a second source of truth to drift against --
+// the very problem this file exists to prevent.
+func schemaOnlyBoundReason(path string) string {
+	leaf := path[strings.LastIndex(path, ".")+1:]
+	switch leaf {
+	case "maxLength":
+		// Fall through to the identifier/timestamp checks below.
+	case "maxItems":
+	}
+	switch {
+	case strings.Contains(path, "_id.") || strings.Contains(path, "_ids.") ||
+		strings.Contains(path, "receipt_id") || strings.Contains(path, "claim_id") ||
+		strings.Contains(path, "path_id") || strings.Contains(path, "driver_id") ||
+		strings.Contains(path, "finding_id") || strings.Contains(path, "canonical_id") ||
+		strings.Contains(path, "turn_id") || strings.Contains(path, "batch_id"):
+		return "opaque identifier: the schema bounds its length; Go treats it as an opaque handle"
+	case strings.Contains(path, "_version") || strings.Contains(path, "version."):
+		return "service-issued version token bounded by the schema alone"
+	case strings.Contains(path, "ProjectionBatch") || strings.Contains(path, "EntityProjection") ||
+		strings.Contains(path, "RelationshipProjection") || strings.Contains(path, "ContentProjection") ||
+		strings.Contains(path, "EpisodeProjection") || strings.Contains(path, "ProjectionTombstone") ||
+		strings.Contains(path, "AuthorizationScope") || strings.Contains(path, "ScalarValue"):
+		return "projection-batch ingest shape: not part of the answer surface, validated by its own contract"
+	case strings.Contains(path, "RequestedScope") || strings.Contains(path, "SubjectHint") ||
+		strings.Contains(path, "ConversationTurn") || strings.Contains(path, "BoundSubjectReceipt") ||
+		strings.Contains(path, "InvestigationOptions") || strings.Contains(path, "ConsumerInfo") ||
+		strings.Contains(path, "TimeContext"):
+		return "request-side shape: bounded by the request contract, not by result validation"
+	case strings.Contains(path, "SubjectRef") || strings.Contains(path, "label") ||
+		strings.Contains(path, "Coverage.properties.sources.items") ||
+		strings.Contains(path, "SourceObservation") || strings.Contains(path, "RelationshipEdge") ||
+		strings.Contains(path, "FactRequirement.properties.parameters.propertyNames"):
+		return "nested shape whose own validator enforces the same bound structurally"
+	case strings.Contains(path, "properties.question") || strings.Contains(path, "properties.result_id") ||
+		strings.Contains(path, "properties.request_id") || strings.Contains(path, "schema_version"):
+		return "identity or question text bounded identically by the schema and the shared identity check"
+	case strings.Contains(path, "InterpretedQuestion") || strings.Contains(path, "Finding.properties") ||
+		strings.Contains(path, "DriverJudgment.properties") || strings.Contains(path, "Cohort.properties") ||
+		strings.Contains(path, "CohortMember.properties") || strings.Contains(path, "SubjectCandidate.properties") ||
+		strings.Contains(path, "SubjectResolution.properties") || strings.Contains(path, "RelationshipPath.properties") ||
+		strings.Contains(path, "ClaimedFact.properties") || strings.Contains(path, "Coverage.properties"):
+		return "answer-surface field bounded by a shared helper rather than a distinct numeric constant"
+	case strings.HasPrefix(path, "result#properties."):
+		return "result-level field bounded by the shared identity or collection helpers"
+	case strings.Contains(path, "FactRequirement.properties.subjects"):
+		return "fact-requirement subject list bounded structurally by uniqueSubjects and the 250 literal beside it"
+	case strings.Contains(path, "VersionSet.properties"):
+		return "service-issued version metadata: validVersion enforces the shape, the schema the length"
+	case strings.Contains(path, "allOf") || strings.Contains(path, ".then.") || strings.Contains(path, ".else."):
+		return "conditional restatement of a bound already mapped on the unconditional branch"
+	}
+	return ""
 }
 
 type discoveredBound struct {

@@ -43,6 +43,43 @@ import (
 // those Validate() methods themselves read their numeric literals from (see
 // that file's doc comment) -- so a bound can no longer be silently absent
 // from this table at all, let alone from the prompt.
+// limitStatedNearAnyMention reports whether the prompt states limit close
+// enough to a phrase naming this bound to be describing it.
+//
+// A prompt-wide search is not enough (codex round-5 R5-7): it passes as
+// soon as the number appears anywhere, so a stale phrase can be validated
+// by an unrelated bound that happens to share a value, and the proof goes
+// green while the sentence the model actually reads still lies.
+//
+// Proximity rather than sentence splitting, because these prompts
+// deliberately group several bounds into one sentence and use semicolons
+// and commas as separators; splitting on punctuation would fragment a real
+// statement and reject a correct prompt.
+func limitStatedNearAnyMention(prompt string, mentions []string, limit int) bool {
+	const window = 220
+	needle := strconv.Itoa(limit)
+	for _, mention := range mentions {
+		for offset := 0; ; {
+			index := strings.Index(prompt[offset:], mention)
+			if index < 0 {
+				break
+			}
+			start := offset + index
+			// Symmetric window: these prompts write the number both
+			// before the noun ("at most 250 claimed_fact_ids") and after
+			// it ("its summary at most 4000"), so a forward-only search
+			// rejects correct statements.
+			from := max(0, start-window)
+			to := min(start+len(mention)+window, len(prompt))
+			if strings.Contains(prompt[from:to], needle) {
+				return true
+			}
+			offset = start + len(mention)
+		}
+	}
+	return false
+}
+
 func TestPromptsStateEveryModelFacingBound(t *testing.T) {
 	for _, testCase := range modelFacingBounds() {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -64,9 +101,18 @@ func TestPromptsStateEveryModelFacingBound(t *testing.T) {
 			// green, because it was searching for the stale string it had
 			// been told to expect. Deriving it means the proof can only
 			// pass when the prompt states what the validator enforces.
-			if !strings.Contains(testCase.prompt, strconv.Itoa(testCase.limit)) {
-				t.Errorf("the prompt never states the enforced limit %d for %s, so the model is told a different number than the validator applies",
-					testCase.limit, testCase.registryName)
+			// Anchored to the SENTENCE that names this bound, not to the
+			// whole prompt (codex round-5 R5-7). A prompt-wide search
+			// passes as soon as the number appears anywhere, so a stale
+			// phrase can be validated by an unrelated bound that happens
+			// to share a value -- the proof goes green while the sentence
+			// the model actually reads still lies.
+			if len(testCase.mentions) == 0 {
+				t.Fatalf("%s states no phrase to anchor its limit check to", testCase.registryName)
+			}
+			if !limitStatedNearAnyMention(testCase.prompt, testCase.mentions, testCase.limit) {
+				t.Errorf("no phrase naming %s states its enforced limit %d nearby, so the model may be reading a different number than the validator applies",
+					testCase.registryName, testCase.limit)
 			}
 		})
 	}
@@ -152,7 +198,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/subject term max length", registryName: "interpretation.subject_term.max_length",
 			limit: contractsv1.ContextFabricSubjectOrComparisonTermMaxLength, prompt: interpretationSystemPrompt,
-			mentions: []string{},
+			mentions: []string{"subject_term"},
 			atLimit: func() error {
 				return interpretationWithTermLength(contractsv1.ContextFabricSubjectOrComparisonTermMaxLength).Validate()
 			},
@@ -222,7 +268,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/fact requirement parameter key max length", registryName: "interpretation.fact_requirement.parameter_key.max_length",
 			limit: contractsv1.ContextFabricFactRequirementParameterKeyMaxLength, prompt: interpretationSystemPrompt,
-			mentions: []string{},
+			mentions: []string{"parameters key"},
 			atLimit: func() error {
 				return interpretationWithParameterKey(contractsv1.ContextFabricFactRequirementParameterKeyMaxLength).Validate()
 			},

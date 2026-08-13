@@ -290,7 +290,7 @@ func (p ContextFabricAnswerProjection) validateReceipts() error {
 // answers; one that dropped content without saying so is the silent
 // truncation this contract exists to prevent.
 func (b ContextFabricProjectionBudget) Validate() error {
-	counts := []int{b.DriversOmitted, b.WithheldDriversOmitted, b.CohortMembersOmitted, b.FactsOmitted, b.CandidatesOmitted, b.EvidenceRefsOmitted, b.LimitationsOmitted, b.WarningsOmitted, b.CoverageOmitted}
+	counts := []int{b.DriversOmitted, b.WithheldDriversOmitted, b.CohortMembersOmitted, b.FactsOmitted, b.CandidatesOmitted, b.EvidenceRefsOmitted, b.LimitationsOmitted, b.WarningsOmitted, b.CoverageOmitted, b.ValuesClamped}
 	dropped := b.FullResultOmitted
 	for _, count := range counts {
 		if count < 0 {

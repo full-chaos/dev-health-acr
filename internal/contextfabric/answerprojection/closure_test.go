@@ -301,3 +301,81 @@ func legacyStoredResult(t *testing.T) contractsv1.ContextFabricInvestigationResu
 	result.CurrentState = strings.Repeat("c", 8000)
 	return result
 }
+
+// TestClampingIsDisclosed is the codex round-5 R5-3 regression. Shortening
+// a value is a form of omission: a consumer reading a cut judgment with
+// truncated=false has no way to know it is reading half an answer.
+func TestClampingIsDisclosed(t *testing.T) {
+	result := richResult()
+	result.Drivers = result.Drivers[1:2] // no withheld driver, so nothing else truncates
+	result.Cohort = nil
+	result.DirectJudgment = strings.Repeat("j", 8000) // legal as a stored row, twice the projection bound
+
+	projection := Project(result, Budget{})
+	if len([]rune(projection.DirectJudgment)) != contractsv1.ContextFabricProjectedJudgmentMaxLength {
+		t.Fatalf("judgment was not clamped: %d runes", len([]rune(projection.DirectJudgment)))
+	}
+	if projection.ProjectionBudget.ValuesClamped == 0 {
+		t.Error("a clamped value was not counted")
+	}
+	if !projection.ProjectionBudget.Truncated {
+		t.Error("clamping a value must set truncated; a silently shortened answer reads as a complete one")
+	}
+	if err := projection.Validate(); err != nil {
+		t.Fatalf("projection invalid: %v", err)
+	}
+}
+
+// TestSharedPrefixLegacyNarrativesDoNotCollide is the codex round-5 R5-4
+// regression. Deduping BEFORE clamping let two distinct legacy entries
+// sharing a long prefix survive as separate values and then collide once
+// clamped, producing duplicate entries the projection's own validator
+// rejects -- emitted unvalidated by the route.
+func TestSharedPrefixLegacyNarrativesDoNotCollide(t *testing.T) {
+	prefix := strings.Repeat("p", contractsv1.ContextFabricProjectedNarrativeMaxLength)
+	result := richResult()
+	result.Drivers = result.Drivers[1:2]
+	result.Cohort = nil
+	result.Limitations = []string{prefix + "-first-distinct-tail", prefix + "-second-distinct-tail"}
+
+	// The premise: both are legal in a stored row and genuinely distinct.
+	if err := result.ValidateStored(); err != nil {
+		t.Fatalf("legacy fixture is not readable as a stored row: %v", err)
+	}
+
+	projection := Project(result, Budget{})
+	if err := projection.Validate(); err != nil {
+		t.Fatalf("shared-prefix legacy limitations produced an INVALID projection: %v", err)
+	}
+	if len(projection.Limitations) != 1 {
+		t.Errorf("expected the collided entries to become one, got %d", len(projection.Limitations))
+	}
+	if projection.ProjectionBudget.LimitationsOmitted != 1 {
+		t.Errorf("the collision was not counted as an omission: %d", projection.ProjectionBudget.LimitationsOmitted)
+	}
+}
+
+// TestPaddedCoverageSourceNamesProject is the codex round-5 R5-5
+// regression: the canonical validator trimmed only for LENGTH, so a padded
+// source name was storable, while the projection required an exactly
+// trimmed name and rejected it.
+func TestPaddedCoverageSourceNamesProject(t *testing.T) {
+	result := richResult()
+	result.Coverage.Sources[0].Source = "  work_items  "
+
+	if err := result.Validate(); err == nil {
+		t.Error("the write path accepted an untrimmed source name")
+	}
+	if err := result.ValidateStored(); err != nil {
+		t.Fatalf("a stored row with a padded source name is unreadable: %v", err)
+	}
+	projection := Project(result, Budget{})
+	if err := projection.Validate(); err != nil {
+		t.Fatalf("a padded stored source name produced an invalid projection: %v", err)
+	}
+	for _, entry := range projection.CoverageSummary {
+		if strings.TrimSpace(entry.Source) != entry.Source {
+			t.Errorf("projection did not normalize the source name: %q", entry.Source)
+		}
+	}
+}

@@ -117,10 +117,12 @@ package v1
 //     in Validate()'s own order, purely to know WHERE to stop.
 const (
 	// Interpretation (ContextFabricInterpretedQuestion, ContextFabricFactRequirement).
-	ContextFabricRequestedJudgmentMaxLength       = 256
-	ContextFabricSubjectTermsMaxCount             = 100
+	ContextFabricRequestedJudgmentMaxLength = 256
+	// The published schema bounds subject_terms and comparison_terms at 50
+	// each; Go said 100 (CHAOS-3746 round 5).
+	ContextFabricSubjectTermsMaxCount             = 50
 	ContextFabricSubjectOrComparisonTermMaxLength = 512
-	ContextFabricComparisonTermsMaxCount          = 100
+	ContextFabricComparisonTermsMaxCount          = 50
 	ContextFabricClarificationReasonMaxLength     = 2000
 	ContextFabricFactRequirementsMaxCount         = 64
 	// Matches the published schema (was 1024, which the schema never

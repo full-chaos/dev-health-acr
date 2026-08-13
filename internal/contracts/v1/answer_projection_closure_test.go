@@ -286,7 +286,7 @@ func trustedBecauseClosed(path string) bool {
 	// Service-issued identifier vocabularies: ACR chooses these, not a
 	// model and not a retrieved document. "source" names a configured
 	// Dev Health source; "field" names a canonical fact-provider field.
-	case "source", "field":
+	case "source":
 		return true
 	// Service-issued version tokens.
 	case "service_version", "contract_version", "backend", "backend_version",

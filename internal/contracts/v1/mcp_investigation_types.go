@@ -128,6 +128,10 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	"structured.principal_drivers[].summary",
 	"structured.principal_drivers[].qualification",
 	"structured.key_facts[].subject.label",
+	// The model names the fact FIELD alongside its value (the synthesis
+	// prompt bounds claimed_fact.field), so it is model-facing text, not a
+	// service-issued vocabulary (codex round-5 R5-6).
+	"structured.key_facts[].field",
 	"structured.key_facts[].value.string",
 	"structured.coverage_summary[].reason",
 	"structured.limitations[]",
@@ -154,6 +158,7 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.cohort.members[].inclusion_reasons[]",
 	"structured.subject_resolution.clarification_prompt",
 	"structured.subject_resolution.candidates[].match_reasons[]",
+	"structured.claimed_facts[].field",
 	"structured.claimed_facts[].value.string",
 	"structured.coverage.degraded_reasons[]",
 	"structured.limitations[]",
