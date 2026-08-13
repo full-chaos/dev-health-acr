@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
@@ -128,20 +129,78 @@ func fulltextRelevanceFromMatchedTerms(matchedTermCount, termCount int) float64 
 	return fulltextRelevanceFloor + (fulltextRelevanceCeiling-fulltextRelevanceFloor)*proportion
 }
 
-// fulltextMatchedTermCount reports how many of terms appear as whole,
-// case-insensitive words in text -- see fulltextRelevanceFromMatchedTerms'
-// doc comment for why this is computed client-side from the candidate's own
-// already-fetched search_text, rather than via additional per-term
-// full-text queries against FalkorDB. Tokenizing text with the same
-// tokenizeForFulltext function the query terms themselves come from is what
-// makes the comparison exact: both sides agree on what counts as a "word".
-func fulltextMatchedTermCount(text string, terms []string) int {
+// isFulltextWordRune reports whether r counts as part of a "word" for
+// LOCAL matched-term coverage purposes (fulltextWords/fulltextMatchedTermCount)
+// -- every Unicode letter or digit, not merely ASCII a-z0-9. This is
+// deliberately MORE aggressive than tokenizeForFulltext (which strips only
+// RediSearch's own query-syntax punctuation, for building the literal
+// query string RediSearch itself parses): Codex R2-2 found that
+// tokenizeForFulltext's narrower strip set left an underscore, period, or
+// unicode punctuation mark glued to its neighboring letters on ONE side of
+// the local coverage comparison, so e.g. a query term "gateway" would never
+// be found inside a candidate's "payment.gateway" even though both sides
+// plainly share the word "gateway". unicode.IsLetter/IsDigit (not a
+// hand-picked ASCII set) is what keeps a genuine non-ASCII word like "café"
+// intact as one token while still treating a unicode punctuation mark as a
+// separator.
+func isFulltextWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+// fulltextWords splits text into lowercased whole words using
+// isFulltextWordRune, for LOCAL matched-term coverage purposes only --
+// never for building the Cypher query string sent to FalkorDB (that stays
+// tokenizeForFulltext, which must preserve RediSearch's own query-syntax
+// meaning for characters like "|" and "@"). Applying this SAME, more
+// aggressive splitter to BOTH sides of the comparison (the query's own
+// words, via fulltextSearchNodes' matchTerms, and each candidate's
+// search_text, via fulltextMatchedTermCount) is what makes the two sides
+// symmetric.
+func fulltextWords(text string) []string {
+	fields := strings.FieldsFunc(text, func(r rune) bool { return !isFulltextWordRune(r) })
+	words := make([]string, 0, len(fields))
+	for _, field := range fields {
+		words = append(words, strings.ToLower(field))
+	}
+	return words
+}
+
+// fulltextMatchedTermCount reports how many of matchTerms appear as whole
+// words in text, both sides already split with the identical
+// fulltextWords splitter (matchTerms is fulltextWords(question) --
+// see fulltextSearchNodes -- and text is tokenized again here with the
+// same function) -- see fulltextRelevanceFromMatchedTerms' doc comment for
+// why this is computed client-side from the candidate's own already-fetched
+// search_text, rather than via additional per-term full-text queries
+// against FalkorDB.
+//
+// Residual-divergence policy (Codex R2-2): with both sides parsed by the
+// identical splitter, a literal word-for-word mismatch can only ever be a
+// FALSE NEGATIVE (a real word that FalkorDB's own analyzer would recognize
+// as equivalent under stemming/fuzzy matching -- e.g. "running" vs "run" --
+// but this literal comparison does not), never a false positive: this
+// function does not invent word boundaries or word equivalences the
+// splitter itself did not produce, so it can never report a match neither
+// side's tokenization actually contains. A false negative demotes a
+// candidate's confidence (conservative -- the candidate can still surface
+// as a lower-confidence result, just not an auto-committed one); it can
+// never promote one. That asymmetry is the same one
+// fulltextRelevanceFromMatchedTerms' clamping and the truncation handling
+// in fulltextSearchNodes both lean on: every failure mode this adapter's
+// confidence computation has is a failure toward LESS confidence, never
+// more.
+func fulltextMatchedTermCount(text string, matchTerms []string) int {
 	words := make(map[string]struct{}, 8)
-	for _, w := range tokenizeForFulltext(text) {
-		words[strings.ToLower(w)] = struct{}{}
+	for _, w := range fulltextWords(text) {
+		words[w] = struct{}{}
 	}
 	matched := 0
-	for _, term := range terms {
+	for _, term := range matchTerms {
+		// fulltextWords already lowercases, but matchTerms is not always
+		// its own output (fulltextSearchNodes' matchTerms is, but this
+		// function is also called and unit-tested directly with raw-case
+		// terms) -- lowercase defensively here too rather than relying on
+		// every caller to have already normalized case.
 		if _, ok := words[strings.ToLower(term)]; ok {
 			matched++
 		}
@@ -163,14 +222,10 @@ func fulltextMatchedTermCount(text string, terms []string) int {
 // claims this as defense-in-depth even though the graph key already scopes
 // the whole database to one organization -- a second, cheap check that
 // costs nothing and catches a graphKey derivation bug or a stray
-// cross-tenant write before it can ever surface). The result LIMIT is
-// applied server-side, in the Cypher itself, rather than by fetching every
-// match and breaking client-side after the desired count -- unlike the
-// former client-side break, this bounds the actual query cost, not just the
-// slice the caller sees. limit is always this adapter's own bounded int
-// (clamped to a.config.MaxResults below), never caller text, so inlining it
-// as a literal into the query string is safe -- see safeParams' doc for why
-// untrusted values never take this path.
+// cross-tenant write before it can ever surface). limit is always this
+// adapter's own bounded int (clamped to a.config.MaxResults below), never
+// caller text, so inlining it as a literal into the query string is safe
+// -- see safeParams' doc for why untrusted values never take this path.
 //
 // D11 / AC-3778-0: the raw score RediSearch returns is unbounded above and
 // not directly usable as a confidence (see
@@ -183,6 +238,25 @@ func fulltextMatchedTermCount(text string, terms []string) int {
 // Score is still populated alongside Relevance, for diagnostics/telemetry
 // only: any caller computing confidence uses ResultConfidence, which
 // always prefers a set Relevance.
+//
+// Codex R2-1 (truncation trap, round 2): the result LIMIT is still applied
+// server-side, in the Cypher itself -- bounding actual query cost, not just
+// the slice the caller sees -- but ONE MORE row than the caller's own
+// budget (queryLimit = limit+1) is requested, purely to detect whether the
+// corpus had more matches than the budget can show. If it did (more than
+// `limit` rows come back), the extra row is discarded immediately -- it
+// never becomes a candidate -- but every SURVIVING row from that call is
+// capped at fulltextRelevanceFloor, structurally below
+// graphrank.ResolveFromMergedCandidates' >= 0.72 lone-candidate gate.
+// fulltextRelevanceFromMatchedTerms is a pure, per-candidate function BY
+// DESIGN (Codex P1/P3) -- it cannot see a candidate the LIMIT dropped
+// before it ever ran, so "was this batch truncated" has to be answered one
+// level up, here, where the LIMIT is actually applied. This is the same
+// "fail toward ambiguous under genuine uncertainty" principle
+// TraverseObservationToSubject already applies to an errored traversal
+// (never toward "confirmed no parent") -- a truncated result set can never
+// tell auto-commit machinery "this candidate is genuinely unopposed",
+// because it might not be.
 func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text string, limit int) ([]graphrank.CandidateNode, error) {
 	terms := tokenizeForFulltext(text)
 	if len(terms) == 0 {
@@ -191,18 +265,32 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 	if limit <= 0 || limit > a.config.MaxResults {
 		limit = a.config.MaxResults
 	}
+	// matchTerms drives matched-term coverage/termCount -- fulltextWords'
+	// more aggressive splitter applied directly to the ORIGINAL question
+	// text (Codex R2-2), independently of terms (which stays
+	// RediSearch-query-syntax-safe, for the Cypher query string below).
+	matchTerms := fulltextWords(text)
+	termCount := len(matchTerms)
 	query := strings.Join(terms, "|")
+	// Codex R2-1: request one more row than the caller's budget so a
+	// truncated result set can be told apart from a genuinely complete one
+	// (see this function's doc comment).
 	cypher := fmt.Sprintf(
 		"CALL db.idx.fulltext.queryNodes('%s', $query) YIELD node, score "+
 			"WHERE node.%s = $org "+
 			"RETURN node, score ORDER BY score DESC LIMIT %d",
-		labelSubject, propOrgID, limit,
+		labelSubject, propOrgID, limit+1,
 	)
 	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"query": query, "org": orgID}, true)
 	if err != nil {
 		return nil, safeDependencyError("search context graph", err)
 	}
-	termCount := len(terms)
+	// truncated reports whether the corpus actually had MORE than `limit`
+	// matches -- never whether it merely equaled it.
+	truncated := len(rows) > limit
+	if truncated {
+		rows = rows[:limit]
+	}
 	candidates := make([]graphrank.CandidateNode, 0, len(rows))
 	for _, row := range rows {
 		n, ok := row["node"].(*node)
@@ -213,8 +301,11 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 		if score, ok := row["score"].(float64); ok {
 			candidate.Score = &score
 		}
-		matched := fulltextMatchedTermCount(graphrank.StringAttribute(candidate.Attributes, propSearchText), terms)
-		relevance := fulltextRelevanceFromMatchedTerms(matched, termCount)
+		relevance := fulltextRelevanceFloor
+		if !truncated {
+			matched := fulltextMatchedTermCount(graphrank.StringAttribute(candidate.Attributes, propSearchText), matchTerms)
+			relevance = fulltextRelevanceFromMatchedTerms(matched, termCount)
+		}
 		candidate.Relevance = &relevance
 		candidates = append(candidates, candidate)
 	}

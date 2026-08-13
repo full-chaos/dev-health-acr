@@ -110,3 +110,34 @@ func TestResolveSubjectsUntruncatedFullCoverageLoneHitStillAutoCommits(t *testin
 		t.Fatalf("ResolveSubjects() committed %#v, want the genuinely-unopposed, full-coverage lone hit auto-committed (truncation detection must not false-positive when nothing was actually truncated)", resolution.Committed)
 	}
 }
+
+// TestFulltextMatchedTermCountTokenizerParity is the Codex R2-2 probe: a
+// query term must be found inside a candidate's search_text whenever the
+// two literally share that word, regardless of what punctuation happens to
+// sit next to it on either side. Before the fix, fulltextMatchedTermCount
+// tokenized with tokenizeForFulltext, which strips only RediSearch's own
+// query-syntax punctuation ("|%@\"'*-():") -- an underscore or period left
+// a compound token glued together on whichever side had one, silently
+// UNDER-counting a real match (never over-counting: see
+// fulltextMatchedTermCount's doc comment for why promotion cannot happen).
+func TestFulltextMatchedTermCountTokenizerParity(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		term string
+		want int
+	}{
+		{"hyphen-compound splits on both sides (already worked pre-fix)", "payment-gateway status", "gateway", 1},
+		{"underscore-compound splits (Codex R2-2: was 0 pre-fix)", "user_id lookup", "id", 1},
+		{"period-compound splits (Codex R2-2: was 0 pre-fix)", "payment.gateway timeout", "gateway", 1},
+		{"unicode letter stays one word, is not treated as punctuation", "café status page", "café", 1},
+		{"unicode punctuation still separates (ideographic full stop)", "incident。outage report", "outage", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := fulltextMatchedTermCount(tc.text, []string{tc.term}); got != tc.want {
+				t.Fatalf("fulltextMatchedTermCount(%q, [%q]) = %d, want %d", tc.text, tc.term, got, tc.want)
+			}
+		})
+	}
+}
