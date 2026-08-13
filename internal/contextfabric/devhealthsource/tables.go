@@ -188,6 +188,14 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", "w.wo
 	})
 }
 
+// queryPullRequests scans git_pull_requests.number into a uint32 (CHAOS-3789):
+// the column is UInt32 in production, and clickhouse-go's native driver
+// rejects scanning a UInt32 column into an int64 destination outright
+// ("converting UInt32 to *int64 is unsupported") -- this was never caught by
+// a test because the package's fixtures modeled the column as int64, a
+// different type than the real backend. The int64 conversion happens right
+// after Scan, once the value is safely in Go, so every downstream use
+// (canonicalID, label, sort key) is unchanged.
 func queryPullRequests(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const rowKey = "concat(toString(p.repo_id), ':', toString(p.number))"
 	statement := `SELECT toString(p.repo_id), r.repo, p.number, ifNull(p.title, ''), ifNull(p.state, ''), p.last_synced
@@ -195,12 +203,13 @@ FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_i
 WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowKey) + orderBy("p.last_synced", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var repoID, repoSlug, state string
-		var number int64
+		var rawNumber uint32
 		var title string
 		var observedAt time.Time
-		if err := r.Scan(&repoID, &repoSlug, &number, &title, &state, &observedAt); err != nil {
+		if err := r.Scan(&repoID, &repoSlug, &rawNumber, &title, &state, &observedAt); err != nil {
 			return nil, err
 		}
+		number := int64(rawNumber)
 		observedAt = observedAt.UTC()
 		canonicalID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
 		rowSortKey := fmt.Sprintf("%s:%d", repoID, number)
@@ -446,6 +455,11 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 	})
 }
 
+// queryPullRequestReviews scans git_pull_request_reviews.number into a
+// uint32 (CHAOS-3789), the same UInt32-vs-int64 class as queryPullRequests
+// above -- this table carries its own copy of the PR number, and the fix
+// found by the schema-parity sweep this issue added.
+//
 // queryPullRequestReviews and queryCIRuns (CHAOS-3753 codex finding C7,
 // corrected for codex round-2 finding K1) reuse the JOIN shape
 // internal/contextpacket/source_queries.go already uses for
@@ -469,11 +483,12 @@ INNER JOIN repos AS repo FINAL ON repo.id = r.repo_id AND repo.org_id = r.org_id
 WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.submitted_at", rowKey) + orderBy("r.submitted_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var reviewID, repoID, state, repoSlug string
-		var number int64
+		var rawNumber uint32
 		var observedAt time.Time
-		if err := r.Scan(&reviewID, &repoID, &number, &state, &observedAt, &repoSlug); err != nil {
+		if err := r.Scan(&reviewID, &repoID, &rawNumber, &state, &observedAt, &repoSlug); err != nil {
 			return nil, err
 		}
+		number := int64(rawNumber)
 		observedAt = observedAt.UTC()
 		canonicalID := "pull_request_review:" + reviewID
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequestReview, CanonicalID: canonicalID, Label: fmt.Sprintf("PR #%d review", number)}
