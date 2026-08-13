@@ -1367,7 +1367,7 @@
           "items": {
             "$ref": "#/$defs/FactRequirement"
           },
-          "maxItems": 50
+          "maxItems": 20
         },
         "clarification_needed": {
           "type": "boolean"

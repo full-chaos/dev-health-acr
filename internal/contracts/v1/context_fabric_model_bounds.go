@@ -124,7 +124,21 @@ const (
 	ContextFabricSubjectOrComparisonTermMaxLength = 512
 	ContextFabricComparisonTermsMaxCount          = 50
 	ContextFabricClarificationReasonMaxLength     = 2000
-	ContextFabricFactRequirementsMaxCount         = 64
+	// ContextFabricFactRequirementsMaxCount is DERIVED from the fact-kind
+	// vocabulary, because that vocabulary is what actually caps the list:
+	// ContextFabricInterpretedQuestion.validate rejects a duplicate Kind, so
+	// no valid interpretation can carry more requirements than there are
+	// legal kinds. The schema said 50 and Go said 64 (codex round-9 F1) --
+	// two different numbers, neither of them reachable, and the disagreement
+	// stayed invisible because a probe that duplicated requirements was
+	// rejected for uniqueness at BOTH N and N+1 and scored as a pass.
+	//
+	// A number above the vocabulary size is not a loose bound, it is a
+	// FALSE PROMISE: the schema told a client a 50-entry list was acceptable
+	// when the service rejects every list past 20. Deriving the bound makes
+	// the published contract state the truth, and makes it follow the
+	// vocabulary automatically if a kind is ever added or pruned.
+	ContextFabricFactRequirementsMaxCount = len(ContextFabricFactKinds)
 	// Matches the published schema (was 1024, which the schema never
 	// admitted -- CHAOS-3746 round 4).
 	ContextFabricFactRequirementParameterValueMaxLength = 1000

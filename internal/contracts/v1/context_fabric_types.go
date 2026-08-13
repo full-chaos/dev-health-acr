@@ -297,6 +297,39 @@ const (
 	ContextFabricFactEvidence                ContextFabricFactKind = "evidence"
 )
 
+// ContextFabricFactKinds is the closed fact-kind vocabulary in published
+// order -- the SINGLE declaration every other check derives from:
+// validFactKind, the fact_requirements count bound, the interpretation
+// prompt's closed-set sentence, and the schema-parity proof.
+//
+// It is an ARRAY, not a slice, so len() is a compile-time constant and
+// ContextFabricFactRequirementsMaxCount below can be derived from it rather
+// than transcribed. Adding or removing a kind therefore moves the bound, the
+// prompt, and the parity assertions together; the only thing left to update
+// by hand is the published schema, and a test fails until that happens.
+var ContextFabricFactKinds = [...]ContextFabricFactKind{
+	ContextFabricFactIdentity,
+	ContextFabricFactMembership,
+	ContextFabricFactStatus,
+	ContextFabricFactActualCompletion,
+	ContextFabricFactWork,
+	ContextFabricFactBlockers,
+	ContextFabricFactRequiredChildren,
+	ContextFabricFactPullRequests,
+	ContextFabricFactReviews,
+	ContextFabricFactContinuousIntegration,
+	ContextFabricFactDeployments,
+	ContextFabricFactIncidents,
+	ContextFabricFactMetrics,
+	ContextFabricFactHealth,
+	ContextFabricFactWorkload,
+	ContextFabricFactInvestment,
+	ContextFabricFactReadiness,
+	ContextFabricFactOperationalDeficiencies,
+	ContextFabricFactSourceHealth,
+	ContextFabricFactEvidence,
+}
+
 // ContextFabricDriverCategory is a closed vocabulary for
 // ContextFabricDriverJudgment.Category / ContextFabricFinding.Kind values
 // that assert something canonical-fact-shaped (as opposed to a

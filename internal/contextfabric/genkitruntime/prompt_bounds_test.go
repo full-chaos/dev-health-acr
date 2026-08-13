@@ -77,7 +77,7 @@ var boundPhrases = map[string]string{
 	"synthesis.driver.path_ids.max_count":           "carries at most {N} path_ids",
 	"synthesis.driver.claimed_fact_ids.max_count":   "at most {N} claimed_fact_ids",
 	"synthesis.finding.claimed_fact_ids.max_count":  "at most {N} claimed_fact_ids",
-	"synthesis.claimed_fact.claim_id.max_length":    "each at most {N} characters, and at most",
+	"synthesis.claimed_fact.claim_id.max_length":    identifierLengthPhrase,
 	"synthesis.driver.evidence_ref_ids.max_count":   "at most {N} evidence_ref_ids each",
 	"synthesis.finding.evidence_ref_ids.max_count":  "at most {N} evidence_ref_ids each",
 	"synthesis.evidence_ref_ids.max_count":          "result-level evidence_ref_ids list holds at most {N}",
@@ -95,8 +95,175 @@ var boundPhrases = map[string]string{
 	"synthesis.direct_judgment.max_length":          "direct_judgment and current_state are at most {N} characters each",
 	"synthesis.current_state.max_length":            "direct_judgment and current_state are at most {N} characters each",
 	"synthesis.deterministic_answer.max_length":     "deterministic_answer at most {N}",
-	"synthesis.driver.driver_id.max_length":         "each at most {N} characters, and at most",
-	"synthesis.finding.finding_id.max_length":       "each at most {N} characters, and at most",
+	"synthesis.driver.driver_id.max_length":         identifierLengthPhrase,
+	"synthesis.finding.finding_id.max_length":       identifierLengthPhrase,
+}
+
+// identifierLengthPhrase is the ONE sentence that states the model-minted
+// identifier length, shared by driver_id, finding_id and claim_id because
+// the prompt genuinely states them together (codex round-9 F3).
+//
+// They previously anchored to "each at most {N} characters, and at most",
+// which is the path_ids/claimed_fact_ids clause: it carries the same number
+// 256 for an unrelated reason and never names an identifier, so all three
+// identifier bounds were being "proved" by a sentence about something else.
+const identifierLengthPhrase = "every driver_id, finding_id, and claim_id MUST be at least 8 and at most {N} characters"
+
+// boundFields names the JSON field each bound actually governs, so an anchor
+// can be checked STRUCTURALLY instead of trusted (codex round-9 F3, the
+// third round this same class returned).
+//
+// A phrase can carry the right number, be unique, and still be attached to
+// the wrong sentence: driver_id, finding_id and claim_id anchored to the
+// path_ids/claimed_fact_ids clause, which states 256 for a different reason
+// and never names an identifier at all. Uniqueness and value checks both
+// passed, because neither asks the only question that catches it -- does the
+// sentence the model reads for this bound actually mention this field?
+//
+// TestEveryPromptAnchorNamesTheFieldItBounds answers it mechanically, and
+// TestBoundFieldsAreRealContractFields keeps this column honest by requiring
+// every value to be a JSON field name contracts/v1 actually declares, so a
+// mis-anchored bound cannot be rescued by inventing a word for it.
+var boundFields = map[string]string{
+	"interpretation.requested_judgment.max_length":               "requested_judgment",
+	"interpretation.subject_terms.max_count":                     "subject_terms",
+	"interpretation.comparison_terms.max_count":                  "comparison_terms",
+	"interpretation.subject_term.max_length":                     "subject_terms",
+	"interpretation.fact_requirements.max_count":                 "fact_requirements",
+	"interpretation.fact_requirement.parameter_key.max_length":   "parameters",
+	"interpretation.fact_requirement.parameter_value.max_length": "parameters",
+	"interpretation.fact_requirement.parameters.max_count":       "parameters",
+	"interpretation.clarification_reason.max_length":             "clarification_reason",
+
+	"synthesis.driver.title.max_length":             "title",
+	"synthesis.driver.summary.max_length":           "summary",
+	"synthesis.driver.qualification.max_length":     "qualification",
+	"synthesis.driver.affected_subjects.max_count":  "affected_subjects",
+	"synthesis.finding.kind.max_length":             "kind",
+	"synthesis.finding.summary.max_length":          "summary",
+	"synthesis.finding.subjects.max_count":          "subjects",
+	"synthesis.claimed_fact.field.max_length":       "field",
+	"synthesis.driver.path_ids.max_count":           "path_ids",
+	"synthesis.driver.claimed_fact_ids.max_count":   "claimed_fact_ids",
+	"synthesis.finding.claimed_fact_ids.max_count":  "claimed_fact_ids",
+	"synthesis.claimed_fact.claim_id.max_length":    "claim_id",
+	"synthesis.driver.evidence_ref_ids.max_count":   "evidence_ref_ids",
+	"synthesis.finding.evidence_ref_ids.max_count":  "evidence_ref_ids",
+	"synthesis.evidence_ref_ids.max_count":          "evidence_ref_ids",
+	"synthesis.drivers.max_count":                   "drivers",
+	"synthesis.strongest_pressures.max_count":       "strongest_pressures",
+	"synthesis.strongest_pressures.item_max_length": "strongest_pressures",
+	"synthesis.remaining_work.max_count":            "remaining_work",
+	"synthesis.readiness_gaps.max_count":            "readiness_gaps",
+	"synthesis.conflicts.max_count":                 "conflicts",
+	"synthesis.limitations.max_count":               "limitations",
+	"synthesis.limitations.item_max_length":         "limitations",
+	"synthesis.warnings.max_count":                  "warnings",
+	"synthesis.warnings.item_max_length":            "warnings",
+	"synthesis.claimed_facts.max_count":             "claimed_facts",
+	"synthesis.direct_judgment.max_length":          "direct_judgment",
+	"synthesis.current_state.max_length":            "current_state",
+	"synthesis.deterministic_answer.max_length":     "deterministic_answer",
+	"synthesis.driver.driver_id.max_length":         "driver_id",
+	"synthesis.finding.finding_id.max_length":       "finding_id",
+}
+
+// promptClause returns the sentence or semicolon-delimited clause of prompt
+// that contains phrase -- the span of text a reader takes as one statement,
+// which is the unit an anchor is either right or wrong about.
+func promptClause(prompt, phrase string) (string, bool) {
+	start := strings.Index(prompt, phrase)
+	if start < 0 {
+		return "", false
+	}
+	end := start + len(phrase)
+	// Walk outward to the nearest clause boundary on each side. The phrase
+	// itself may contain a boundary (one anchor ends in ";"), so the search
+	// starts from the phrase's own edges.
+	left := 0
+	for _, delimiter := range []string{". ", "; ", "\n"} {
+		if index := strings.LastIndex(prompt[:start], delimiter); index >= 0 && index+len(delimiter) > left {
+			left = index + len(delimiter)
+		}
+	}
+	right := len(prompt)
+	for _, delimiter := range []string{". ", "; ", "\n"} {
+		if index := strings.Index(prompt[end:], delimiter); index >= 0 && end+index < right {
+			right = end + index
+		}
+	}
+	return prompt[left:right], true
+}
+
+// TestEveryPromptAnchorNamesTheFieldItBounds requires each bound's anchor to
+// sit in a clause that names the field it bounds.
+//
+// This is the check that catches a correctly-valued, unique anchor pinned to
+// the wrong sentence -- the shape that survived two previous rounds.
+func TestEveryPromptAnchorNamesTheFieldItBounds(t *testing.T) {
+	for _, testCase := range modelFacingBounds() {
+		t.Run(testCase.registryName, func(t *testing.T) {
+			field, ok := boundFields[testCase.registryName]
+			if !ok {
+				t.Fatalf("%s declares no field, so its anchor cannot be checked structurally", testCase.registryName)
+			}
+			phrase, ok := boundPhrases[testCase.registryName]
+			if !ok {
+				t.Fatalf("%s has no prompt phrase", testCase.registryName)
+			}
+			resolved := strings.ReplaceAll(phrase, "{N}", strconv.Itoa(testCase.limit))
+			clause, found := promptClause(testCase.prompt, resolved)
+			if !found {
+				t.Fatalf("the prompt does not contain %q", resolved)
+			}
+			if !strings.Contains(clause, field) {
+				t.Errorf("%s anchors to a clause that never names %q, so the number is pinned to the wrong statement:\n  anchor: %q\n  clause: %q",
+					testCase.registryName, field, resolved, clause)
+			}
+		})
+	}
+}
+
+// TestBoundFieldsAreRealContractFields keeps boundFields from becoming free
+// text: every field named there must be a JSON field contracts/v1 actually
+// declares on a model-facing shape.
+func TestBoundFieldsAreRealContractFields(t *testing.T) {
+	declared := map[string]struct{}{}
+	for _, shape := range []any{
+		contractsv1.ContextFabricInterpretedQuestion{},
+		contractsv1.ContextFabricFactRequirement{},
+		contractsv1.ContextFabricDriverJudgment{},
+		contractsv1.ContextFabricFinding{},
+		contractsv1.ContextFabricClaimedFact{},
+		contractsv1.ContextFabricInvestigationResult{},
+	} {
+		shapeType := reflect.TypeOf(shape)
+		for i := 0; i < shapeType.NumField(); i++ {
+			if name := strings.Split(shapeType.Field(i).Tag.Get("json"), ",")[0]; name != "" && name != "-" {
+				declared[name] = struct{}{}
+			}
+		}
+	}
+	for registryName, field := range boundFields {
+		if _, ok := declared[field]; !ok {
+			t.Errorf("boundFields[%q] names %q, which is not a JSON field any model-facing contracts/v1 shape declares", registryName, field)
+		}
+	}
+}
+
+// TestEveryRegistryBoundDeclaresItsField is the completeness half: a bound
+// with no declared field would silently skip the structural check above.
+func TestEveryRegistryBoundDeclaresItsField(t *testing.T) {
+	for _, bound := range contractsv1.ContextFabricModelFacingBounds {
+		if _, ok := boundFields[bound.Name]; !ok {
+			t.Errorf("registry bound %q declares no entry in boundFields, so its anchor is unchecked", bound.Name)
+		}
+	}
+	for registryName := range boundFields {
+		if _, ok := boundPhrases[registryName]; !ok {
+			t.Errorf("boundFields declares %q, which has no prompt phrase", registryName)
+		}
+	}
 }
 
 func TestPromptsStateEveryModelFacingBound(t *testing.T) {
@@ -259,24 +426,27 @@ func modelFacingBounds() []boundCase {
 			},
 		},
 		{
-			// The registered fact-kind vocabulary has only 20 members
-			// (contracts/v1's closed ContextFabricFactKind set), so a
-			// FactRequirements list of exactly ContextFabricFactRequirementsMaxCount
-			// (64) with every Kind distinct -- required, since
-			// ContextFabricInterpretedQuestion.Validate rejects a
-			// duplicate Kind -- cannot be constructed at all; 20 distinct
-			// kinds is the real achievable ceiling. atLimit therefore
-			// proves the count bound does not block that real ceiling (a
-			// tightened bound below 20 would still fail this assertion);
-			// over proves the documented 64 is still the enforced count
-			// ceiling, using cycled (duplicate) kinds -- valid here only
-			// because the length check in
-			// ContextFabricInterpretedQuestion.Validate short-circuits
-			// before the per-Kind uniqueness loop ever runs once the
-			// count itself already exceeds the bound.
+			// The count bound is now DERIVED from the fact-kind vocabulary
+			// (codex round-9 F1), so it is exactly the achievable ceiling:
+			// ContextFabricInterpretedQuestion.Validate rejects a duplicate
+			// Kind, and there are only len(ContextFabricFactKinds) distinct
+			// kinds to spend. atLimit builds that many distinct kinds and
+			// proves the bound does not block the real ceiling; over proves
+			// the bound is still the enforced ceiling, using cycled
+			// (duplicate) kinds -- valid here only because the length check
+			// short-circuits the whole boolean expression before the
+			// per-Kind uniqueness loop ever runs once the count itself
+			// already exceeds the bound.
+			//
+			// mentions carries NO number (self-found while fixing F6): a
+			// literal here is the same defect the derived phrase check
+			// exists to prevent -- it said "At most 64 fact_requirements"
+			// and would have gone on passing against a prompt stating a
+			// bound nothing enforced. The number is asserted by
+			// boundPhrases, which substitutes the validator-backed limit.
 			name: "interpretation/fact_requirements max count", registryName: "interpretation.fact_requirements.max_count",
 			limit: contractsv1.ContextFabricFactRequirementsMaxCount, prompt: interpretationSystemPrompt,
-			mentions: []string{"At most 64 fact_requirements"},
+			mentions: []string{"fact_requirements"},
 			atLimit: func() error {
 				return interpretationWithDistinctFactRequirements(len(contextFabricAllFactKinds)).Validate()
 			},
@@ -833,21 +1003,17 @@ func interpretationWithClarification(length int) contractsv1.ContextFabricInterp
 	return question
 }
 
-// contextFabricAllFactKinds is every kind in contracts/v1's closed
-// ContextFabricFactKind vocabulary -- 20 as of this writing, deliberately
-// fewer than ContextFabricFactRequirementsMaxCount (64), which is why
+// contextFabricAllFactKinds derives from contracts/v1's exported closed
+// vocabulary instead of restating it (codex round-9 F1). The restated copy
+// was a second list to drift against, and it carried the claim that the
+// vocabulary is "deliberately fewer" than the count bound -- which was
+// exactly the confusion: the bound is now DERIVED from this vocabulary, so
+// the two can no longer disagree.
+//
 // interpretationWithDistinctFactRequirements and
-// interpretationWithCycledFactRequirements below are two different
-// constructors rather than one.
-var contextFabricAllFactKinds = []contractsv1.ContextFabricFactKind{
-	contractsv1.ContextFabricFactIdentity, contractsv1.ContextFabricFactMembership, contractsv1.ContextFabricFactStatus,
-	contractsv1.ContextFabricFactActualCompletion, contractsv1.ContextFabricFactWork, contractsv1.ContextFabricFactBlockers,
-	contractsv1.ContextFabricFactRequiredChildren, contractsv1.ContextFabricFactPullRequests, contractsv1.ContextFabricFactReviews,
-	contractsv1.ContextFabricFactContinuousIntegration, contractsv1.ContextFabricFactDeployments, contractsv1.ContextFabricFactIncidents,
-	contractsv1.ContextFabricFactMetrics, contractsv1.ContextFabricFactHealth, contractsv1.ContextFabricFactWorkload,
-	contractsv1.ContextFabricFactInvestment, contractsv1.ContextFabricFactReadiness, contractsv1.ContextFabricFactOperationalDeficiencies,
-	contractsv1.ContextFabricFactSourceHealth, contractsv1.ContextFabricFactEvidence,
-}
+// interpretationWithCycledFactRequirements remain two constructors because
+// at-limit needs distinct kinds and over-limit cannot have them.
+var contextFabricAllFactKinds = contractsv1.ContextFabricFactKinds[:]
 
 // interpretationWithDistinctFactRequirements builds count DISTINCT
 // fact_requirement kinds, and panics if count exceeds the vocabulary's

@@ -712,10 +712,18 @@ func maximalStrings(count int, prefix string, length int) []string {
 // them from the bounded view stays a review judgment: pinning a conclusion
 // would dress judgment as proof.
 func TestMatchReasonsAreReachableThroughTheFullResult(t *testing.T) {
+	// A DISTINCTIVE reason, not merely a non-empty one (codex round-9 F5).
+	// Asserting "some candidate carries some reason" passed even if the
+	// surfaced text were a placeholder, a different candidate's reason, or
+	// any other substitute -- so it never actually proved that THIS reason
+	// is reachable, which is the claim the exemption makes.
+	const canonicalReason = "chaos3746-round9-match-reason-sentinel: matched on the former team name"
+
 	result := parityResult()
 	result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
 	result.SubjectResolution.ClarificationPrompt = "Which team did you mean?"
-	result.SubjectResolution.Candidates[0].MatchReasons = []string{"a match reason only the full result carries"}
+	result.SubjectResolution.Candidates[0].MatchReasons = []string{canonicalReason}
+	wantReceiptID := result.SubjectResolution.Candidates[0].ReceiptID
 	boot := answerFixtureBootstrap(t, result, nil)
 
 	args, err := json.Marshal(contractsv1.MCPInvestigationResultRequest{ResultID: result.ResultID})
@@ -732,10 +740,22 @@ func TestMatchReasonsAreReachableThroughTheFullResult(t *testing.T) {
 	if err := json.Unmarshal(toolResult.StructuredContent.(json.RawMessage), &response); err != nil {
 		t.Fatal(err)
 	}
+	// The exemption's claim is that THIS candidate's own reason text arrives
+	// verbatim, so that is what gets checked: the right candidate, carrying
+	// the exact string that was stored. Anything weaker (any candidate, any
+	// non-empty reason) also passes when the text is replaced or when
+	// another candidate's reasons are what surfaced.
 	for _, candidate := range response.Structured.SubjectResolution.Candidates {
-		if len(candidate.MatchReasons) > 0 {
-			return // reachable, as the exemption claims
+		if candidate.ReceiptID != wantReceiptID {
+			continue
 		}
+		for _, reason := range candidate.MatchReasons {
+			if reason == canonicalReason {
+				return // reachable verbatim, as the exemption claims
+			}
+		}
+		t.Fatalf("candidate %q surfaced match reasons %q, which do not include the stored reason %q; the render exemption's stated reason is false",
+			wantReceiptID, candidate.MatchReasons, canonicalReason)
 	}
-	t.Error("candidate match reasons are NOT reachable through the full result, so the render exemption's stated reason is false")
+	t.Fatalf("candidate %q did not surface at all through the full result, so its match reasons are not reachable", wantReceiptID)
 }

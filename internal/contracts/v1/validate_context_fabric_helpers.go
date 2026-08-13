@@ -529,11 +529,14 @@ func validSourceState(value ContextFabricSourceState) bool {
 	}
 }
 
+// validFactKind derives from ContextFabricFactKinds rather than restating
+// the vocabulary in a second switch, so the accepted set and the declared
+// set cannot drift apart.
 func validFactKind(value ContextFabricFactKind) bool {
-	switch value {
-	case ContextFabricFactIdentity, ContextFabricFactMembership, ContextFabricFactStatus, ContextFabricFactActualCompletion, ContextFabricFactWork, ContextFabricFactBlockers, ContextFabricFactRequiredChildren, ContextFabricFactPullRequests, ContextFabricFactReviews, ContextFabricFactContinuousIntegration, ContextFabricFactDeployments, ContextFabricFactIncidents, ContextFabricFactMetrics, ContextFabricFactHealth, ContextFabricFactWorkload, ContextFabricFactInvestment, ContextFabricFactReadiness, ContextFabricFactOperationalDeficiencies, ContextFabricFactSourceHealth, ContextFabricFactEvidence:
-		return true
-	default:
-		return false
+	for _, kind := range ContextFabricFactKinds {
+		if kind == value {
+			return true
+		}
 	}
+	return false
 }

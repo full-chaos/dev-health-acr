@@ -2,21 +2,55 @@ package genkitruntime
 
 import (
 	"fmt"
+	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-const interpretationSystemPrompt = `You are the bounded interpretation layer for FullChaos Context Fabric.
+// interpretationSystemPrompt interpolates every bound and the closed
+// fact-kind vocabulary from contracts/v1, exactly as synthesisSystemPrompt
+// already did (codex round-9 F6).
+//
+// While these were literals the prompt could state a number the validator
+// did not enforce and nothing would notice until a live acceptance run
+// failed -- which is how it came to advertise "at most 64 fact_requirements"
+// against a schema that said 50 and a vocabulary that permits 20.
+// Interpolation makes the statement and the enforcement the same fact.
+var interpretationSystemPrompt = fmt.Sprintf(`You are the bounded interpretation layer for FullChaos Context Fabric.
 Interpret any authorized natural-language engineering question. Questions are open-ended and are not matched to a finite allowlist.
 Return only the requested structured output. Infer the investigation shape, requested judgment, subject terms, comparison terms, time context, and canonical fact families that may be needed.
-Each fact_requirements[].kind MUST be exactly one of this closed set -- no other spelling, no invented family, no free text: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence. Choose only the families the question actually needs, and never emit the same kind twice. If a needed family is not in this set, omit it rather than inventing a name for it.
-Length and count limits, all enforced -- an interpretation that exceeds any of them is rejected in full, so respect them even when a longer answer would be more thorough. requested_judgment MUST be at most 256 characters: name the judgment being asked for, do not enumerate the fact families or evidence you plan to gather (fact_requirements is where that belongs). At most 50 subject_terms and 50 comparison_terms, each at most 512 characters. At most 64 fact_requirements. Each fact_requirements[].parameters key is at most 128 characters and each value at most 1000, and each fact_requirements[] entry has at most 32 parameters. clarification_reason is at most 2000 characters.
+Each fact_requirements[].kind MUST be exactly one of this closed set -- no other spelling, no invented family, no free text: %s. Choose only the families the question actually needs, and never emit the same kind twice. If a needed family is not in this set, omit it rather than inventing a name for it.
+Length and count limits, all enforced -- an interpretation that exceeds any of them is rejected in full, so respect them even when a longer answer would be more thorough. requested_judgment MUST be at most %d characters: name the judgment being asked for, do not enumerate the fact families or evidence you plan to gather (fact_requirements is where that belongs). At most %d subject_terms and %d comparison_terms, each at most %d characters. At most %d fact_requirements. Each fact_requirements[].parameters key is at most %d characters and each value at most %d, and each fact_requirements[] entry has at most %d parameters. clarification_reason is at most %d characters.
 Subject terms may be exact names, aliases, acronyms, previous names, or provider identifiers -- extract whatever the question actually uses, without normalizing to a single canonical spelling.
 When conversation turns or prior subject receipts are supplied, resolve conversational references ("it", "that team", "the other one", "what about now") against whichever subject those turns and receipts actually indicate for that specific reference -- a reference like "it" or "what about now" usually points to the most recently discussed subject, but a contrastive reference like "the other one" or "the previous one" points away from it, to a different subject those turns also established. Prefer the shape (single subject, explicit cohort, or open) implied by the resolved reference over guessing a new one.
 When the question names no specific subject but describes a team- or project-level condition shared across the organization ("which teams are under the most pressure", "what projects are behind"), interpret it as a discovered cohort within the caller's authorized scope rather than asking which single subject was meant.
 Do not invent canonical entity IDs, measurements, relationships, evidence, staffing, status, health, or authorization.
 Do not produce SQL, GraphQL, Cypher, graph IDs, credentials, or tool calls.
-Use clarification only when materially different authorized subjects or timeframes remain plausible and proceeding would make the answer unreliable.`
+Use clarification only when materially different authorized subjects or timeframes remain plausible and proceeding would make the answer unreliable.`,
+	contextFabricFactKindList,
+	contractsv1.ContextFabricRequestedJudgmentMaxLength,
+	contractsv1.ContextFabricSubjectTermsMaxCount,
+	contractsv1.ContextFabricComparisonTermsMaxCount,
+	contractsv1.ContextFabricSubjectOrComparisonTermMaxLength,
+	contractsv1.ContextFabricFactRequirementsMaxCount,
+	contractsv1.ContextFabricFactRequirementParameterKeyMaxLength,
+	contractsv1.ContextFabricFactRequirementParameterValueMaxLength,
+	contractsv1.ContextFabricFactRequirementParametersMaxCount,
+	contractsv1.ContextFabricClarificationReasonMaxLength,
+)
+
+// contextFabricFactKindList renders the closed fact-kind vocabulary in
+// published order. The prompt's closed set is therefore the SAME
+// declaration the validator accepts and the schema publishes -- a kind
+// added or pruned in contracts/v1 cannot leave a stale list in the prompt
+// telling the model to avoid a family the service now accepts.
+var contextFabricFactKindList = func() string {
+	kinds := make([]string, 0, len(contractsv1.ContextFabricFactKinds))
+	for _, kind := range contractsv1.ContextFabricFactKinds {
+		kinds = append(kinds, string(kind))
+	}
+	return strings.Join(kinds, ", ")
+}()
 
 var synthesisSystemPrompt = fmt.Sprintf(`You are the bounded synthesis layer for FullChaos Context Fabric.
 Return a direct, useful engineering answer grounded only in the supplied subject resolution, graph paths, canonical facts, coverage, and evidence references.

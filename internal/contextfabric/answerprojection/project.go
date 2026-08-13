@@ -566,23 +566,49 @@ func (c *clamper) strings(values []string, maxCount, maxLength int) ([]string, i
 	// survived deduplication, and clamping before truncation counted
 	// shortened values the caller never received. Counting must describe
 	// what reached the wire, not what the algorithm touched on the way.
-	shortened := make([]string, 0, len(values))
-	for _, value := range values {
-		shortened = append(shortened, truncateRunes(value, maxLength))
+	//
+	// Each entry carries whether IT was shortened, so the count survives
+	// dedup and truncation (codex round-9 F4). The previous version indexed
+	// the ORIGINAL slice by SURVIVOR position; once dedup dropped an entry
+	// every later survivor was compared against an unrelated original, and a
+	// survivor that had been shortened went uncounted. ValuesClamped
+	// under-reported, and a consumer reads that field to decide whether what
+	// it received is verbatim -- so under-reporting is the one direction
+	// this count may never fail in.
+	type clampedValue struct {
+		value     string
+		shortened bool
 	}
-	deduped := distinctStrings(shortened)
+	shortened := make([]clampedValue, 0, len(values))
+	for _, value := range values {
+		cut := truncateRunes(value, maxLength)
+		shortened = append(shortened, clampedValue{value: cut, shortened: cut != value})
+	}
+	seen := make(map[string]struct{}, len(shortened))
+	// Allocated, never nil: these feed required array members.
+	deduped := make([]clampedValue, 0, len(shortened))
+	for _, entry := range shortened {
+		if _, exists := seen[entry.value]; exists {
+			continue
+		}
+		seen[entry.value] = struct{}{}
+		deduped = append(deduped, entry)
+	}
 	dropped := len(shortened) - len(deduped)
 	if len(deduped) > maxCount {
 		dropped += len(deduped) - maxCount
 		deduped = deduped[:maxCount]
 	}
-	// Count only survivors that were actually shortened.
-	for i, value := range deduped {
-		if len([]rune(value)) == maxLength && len([]rune(values[min(i, len(values)-1)])) > maxLength {
+	survivors := make([]string, 0, len(deduped))
+	for _, entry := range deduped {
+		// Count only survivors that were actually shortened: entries cut by
+		// maxCount never reached the wire, and an entry that fit is verbatim.
+		if entry.shortened {
 			c.count++
 		}
+		survivors = append(survivors, entry.value)
 	}
-	return deduped, dropped
+	return survivors, dropped
 }
 
 // truncateRunes cuts to maxLength RUNES, never bytes: a mid-rune cut emits

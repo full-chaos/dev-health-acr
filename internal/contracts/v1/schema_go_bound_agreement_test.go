@@ -1,8 +1,10 @@
 package v1
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -92,8 +94,16 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.ClaimedFact.properties.field.maxLength":                               ContextFabricClaimedFieldMaxLength,
 		"common#$defs.InterpretedQuestion.properties.subject_terms.maxItems":                contextFabricWriteBounds.interpretationTerms,
 		"common#$defs.InterpretedQuestion.properties.comparison_terms.maxItems":             contextFabricWriteBounds.interpretationTerms,
-		"common#$defs.SubjectCandidate.properties.evidence_ref_ids.maxItems":                contextFabricWriteBounds.candidateEvidenceRefs,
-		"common#$defs.CohortExclusion.properties.reason.maxLength":                          contextFabricWriteBounds.cohortExclusionReasonLength,
+		// Not probeable, and honestly so (codex round-9 F1): no valid
+		// document can carry more fact_requirements than there are distinct
+		// kinds, so the probe cannot build a control past the vocabulary and
+		// reports unreachable instead of a rejection. Mapped explicitly here
+		// rather than left to the result-level catch-all classification,
+		// which is what let the 50-vs-64 drift sit unnoticed.
+		"common#$defs.InterpretedQuestion.properties.fact_requirements.maxItems": ContextFabricFactRequirementsMaxCount,
+		"common#$defs.FactRequirement.properties.parameters.maxProperties":       ContextFabricFactRequirementParametersMaxCount,
+		"common#$defs.SubjectCandidate.properties.evidence_ref_ids.maxItems":     contextFabricWriteBounds.candidateEvidenceRefs,
+		"common#$defs.CohortExclusion.properties.reason.maxLength":               contextFabricWriteBounds.cohortExclusionReasonLength,
 		// Disproved as "schema-only" by boundProbes below: the validator
 		// rejects a value one past each of these, so they are compared
 		// numerically rather than excused (codex round-6 F1).
@@ -122,6 +132,17 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 			atBound := probe.apply(bound.value)
 			pastBound := probe.apply(bound.value + 1)
 			switch {
+			case errors.Is(atBound, errProbeUnreachable) || errors.Is(pastBound, errProbeUnreachable):
+				// UNREACHABLE IS NOT A REJECTION. A probe that cannot build
+				// the control document returns an error indistinguishable
+				// from a validator rejection, so treating it as one would
+				// score "I could not test this" as "Go rejects N+1" -- the
+				// same false green this file exists to prevent, one level up.
+				//
+				// It is a real case: fact_requirements cannot be driven past
+				// the fact-kind vocabulary, because every entry needs a
+				// distinct kind. Fall through to the declarative comparison
+				// rather than claiming a proof the probe did not make.
 			case atBound == nil && pastBound != nil:
 				proved++
 				continue
@@ -157,13 +178,82 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 	if proved == 0 {
 		t.Fatal("no bound was proved behaviourally; the prober is not reaching anything")
 	}
-	t.Logf("proved %d bounds behaviourally, compared %d declaratively, classified the rest", proved, checked)
+	// The denominator is reported explicitly: "classified the rest" hid how
+	// large the residual bucket actually is, and that bucket is where the
+	// round-9 fact_requirements drift was sitting.
+	t.Logf("%d schema bounds: %d proved behaviourally, %d compared declaratively, %d classified by pattern",
+		len(discovered), proved, checked, len(discovered)-proved-checked)
+}
+
+// TestFactRequirementsBoundDerivesFromTheVocabulary pins the derivation
+// itself (codex round-9 F1).
+//
+// fact_requirements is capped by the fact-kind vocabulary, because
+// ContextFabricInterpretedQuestion.validate rejects a duplicate kind. That
+// makes the count bound a CONSEQUENCE of the vocabulary, not an independent
+// policy number -- so the published schema, the Go constant, and the enum
+// must all move together. They did not: the schema said 50, Go said 64, and
+// the vocabulary permitted 20.
+//
+// This is a declarative check by necessity. The behavioural prober cannot
+// reach past the vocabulary to reject at N+1, and a probe that "proved" the
+// bound by hitting the uniqueness rule instead would be measuring the wrong
+// invariant -- which is exactly how the drift stayed green for nine rounds.
+func TestFactRequirementsBoundDerivesFromTheVocabulary(t *testing.T) {
+	documents := schemaDocuments(t)
+
+	// The schema's own enum must be the vocabulary, in order.
+	node := schemaNodeAt(t, documents, "common#$defs.FactRequirement.properties.kind")
+	raw, ok := node["enum"].([]any)
+	if !ok {
+		t.Fatal("common#$defs.FactRequirement.properties.kind declares no enum")
+	}
+	published := make([]ContextFabricFactKind, 0, len(raw))
+	for _, value := range raw {
+		text, ok := value.(string)
+		if !ok {
+			t.Fatalf("fact kind enum holds a non-string member %v", value)
+		}
+		published = append(published, ContextFabricFactKind(text))
+	}
+	if !slices.Equal(published, ContextFabricFactKinds[:]) {
+		t.Errorf("the published fact-kind enum and ContextFabricFactKinds disagree:\n  schema: %v\n  go:     %v", published, ContextFabricFactKinds)
+	}
+
+	// Every published kind must actually validate, and nothing else may.
+	for _, kind := range published {
+		if !validFactKind(kind) {
+			t.Errorf("the schema publishes fact kind %q, which the validator rejects", kind)
+		}
+	}
+	if validFactKind(ContextFabricFactKind("not_a_fact_kind")) {
+		t.Error("validFactKind accepts a kind outside the closed vocabulary")
+	}
+
+	// And the count bound must be the vocabulary's size on both sides.
+	if ContextFabricFactRequirementsMaxCount != len(ContextFabricFactKinds) {
+		t.Errorf("ContextFabricFactRequirementsMaxCount is %d but the vocabulary holds %d kinds; a cap above the vocabulary can never be reached, and one below it silently forbids a legal interpretation",
+			ContextFabricFactRequirementsMaxCount, len(ContextFabricFactKinds))
+	}
+	bound := schemaNodeAt(t, documents, "common#$defs.InterpretedQuestion.properties.fact_requirements")
+	value, ok := bound["maxItems"].(float64)
+	if !ok {
+		t.Fatal("fact_requirements declares no maxItems")
+	}
+	if int(value) != len(ContextFabricFactKinds) {
+		t.Errorf("the schema caps fact_requirements at %d but only %d distinct kinds exist, so the contract promises a document the service always rejects",
+			int(value), len(ContextFabricFactKinds))
+	}
 }
 
 type discoveredBound struct {
 	path  string
 	value int
 }
+
+// boundKeywords are the schema keywords that state a size the Go write path
+// must agree with.
+var boundKeywords = []string{"maxItems", "maxLength", "maxProperties"}
 
 // schemaBounds enumerates every maxItems/maxLength in both canonical
 // documents, as "<document>#<dotted path>.<keyword>".
@@ -174,14 +264,18 @@ func schemaBounds(t *testing.T, documents map[string]map[string]any) []discovere
 	walk = func(document string, node any, path string) {
 		switch value := node.(type) {
 		case map[string]any:
-			for _, keyword := range []string{"maxItems", "maxLength"} {
+			// maxProperties counts too (codex round-9 F2). Enumerating only
+			// maxItems/maxLength left every object-size bound invisible --
+			// FactRequirement.parameters caps at 32 and nothing checked that
+			// Go agreed, which is precisely the drift this file exists for.
+			for _, keyword := range boundKeywords {
 				if raw, ok := value[keyword].(float64); ok {
 					found = append(found, discoveredBound{path: document + "#" + strings.TrimPrefix(path, ".") + "." + keyword, value: int(raw)})
 				}
 			}
 			for key, child := range value {
 				switch key {
-				case "maxItems", "maxLength", "description", "title", "$comment", "$schema", "$id":
+				case "maxItems", "maxLength", "maxProperties", "description", "title", "$comment", "$schema", "$id":
 					continue
 				}
 				walk(document, child, path+"."+key)
@@ -254,7 +348,7 @@ func genericProbe(path string) (boundProbe, bool) {
 		return boundProbe{}, false
 	}
 	keyword := rest[strings.LastIndex(rest, ".")+1:]
-	if keyword != "maxLength" && keyword != "maxItems" {
+	if !slices.Contains(boundKeywords, keyword) {
 		return boundProbe{}, false
 	}
 	rest = rest[:strings.LastIndex(rest, ".")]
@@ -318,13 +412,34 @@ func driveField(value reflect.Value, path string, size int, keyword string) bool
 			field.Set(reflect.MakeSlice(field.Type(), 1, 1))
 		}
 		return driveScalar(field.Index(0), size)
+	case field.Kind() == reflect.Map && keyword == "maxProperties":
+		// Object-size bounds are driven by filling the map with distinct
+		// keys (codex round-9 F2). Keys and values stay short so the probe
+		// measures the PROPERTY COUNT and not a key/value length bound that
+		// happens to sit on the same object.
+		grown := reflect.MakeMapWithSize(field.Type(), size)
+		for i := 0; i < size; i++ {
+			key := reflect.ValueOf("p" + strconv.Itoa(i))
+			value := reflect.ValueOf("probevalue")
+			if !key.Type().AssignableTo(field.Type().Key()) || !value.Type().AssignableTo(field.Type().Elem()) {
+				return false
+			}
+			grown.SetMapIndex(key, value)
+		}
+		field.Set(grown)
+		return true
 	case field.Kind() == reflect.Slice && keyword == "maxItems":
 		grown := reflect.MakeSlice(field.Type(), size, size)
 		for i := 0; i < size; i++ {
 			if field.Len() > 0 {
 				grown.Index(i).Set(field.Index(0))
 			}
-			uniquifyElement(grown.Index(i), i)
+			if !uniquifyElement(grown.Index(i), i) {
+				// The probe cannot build a valid element at this index, so
+				// it cannot make a control document at this size. Reported
+				// as unreachable, never as a rejection.
+				return false
+			}
 		}
 		field.Set(grown)
 		return true
@@ -342,13 +457,31 @@ func driveScalar(value reflect.Value, size int) bool {
 }
 
 // uniquifyElement makes a duplicated slice element distinct, so a maxItems
-// probe is rejected for LENGTH rather than for duplication.
-func uniquifyElement(value reflect.Value, index int) {
+// probe is rejected for LENGTH rather than for duplication. It reports
+// whether a distinct element could be built at this index.
+func uniquifyElement(value reflect.Value, index int) bool {
 	suffix := strconv.Itoa(index)
 	switch value.Kind() {
 	case reflect.String:
 		value.SetString("probevalue" + suffix)
 	case reflect.Struct:
+		// A fact requirement is made distinct by its KIND, not by an
+		// identifier -- it has none (codex round-9 F1). Duplicating the same
+		// requirement made the document fail the kind-uniqueness invariant at
+		// BOTH N and N+1, so the length bound was never exercised and the
+		// 50-vs-64 schema/Go drift was concealed behind a green probe.
+		if value.Type() == reflect.TypeOf(ContextFabricFactRequirement{}) {
+			if index >= len(ContextFabricFactKinds) {
+				// Past the vocabulary there is no distinct kind left, so no
+				// valid document of this size exists at all.
+				return false
+			}
+			if field := fieldByJSONTag(value, "kind"); field.IsValid() && field.CanSet() {
+				field.Set(reflect.ValueOf(ContextFabricFactKinds[index]))
+				return true
+			}
+			return false
+		}
 		for _, name := range []string{"canonical_id", "receipt_id", "driver_id", "finding_id", "path_id", "claim_id", "source"} {
 			if field := fieldByJSONTag(value, name); field.IsValid() && field.Kind() == reflect.String && field.CanSet() {
 				field.SetString("probevalue" + suffix)
@@ -359,6 +492,7 @@ func uniquifyElement(value reflect.Value, index int) {
 			field.SetInt(int64(index + 1))
 		}
 	}
+	return true
 }
 
 func fieldByJSONTag(value reflect.Value, name string) reflect.Value {
