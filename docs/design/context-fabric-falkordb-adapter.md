@@ -518,6 +518,39 @@ real data rather than assumed:
 Without the 0.75 rung, a single relevant lexical hit never reaches 0.72 and
 every such question degrades to a clarification prompt — a visible regression.
 
+**Shipped (D11 / AC-3778-0, precondition of CHAOS-3778):** the field-level
+ladder above was not reproducible as written — the fulltext index covers one
+merged `search_text` property (§4.1), with no separate label/alias/body
+fields to key a match reason on. What shipped instead is a coverage-based
+ladder in the same `[0.50, 0.75]` band: `queries.go`'s
+`fulltextRelevanceFromMatchedTerms` maps how many of a query's OR-tokenized
+terms a candidate's own `search_text` contains (`fulltextMatchedTermCount`,
+computed client-side, in Go, from the candidate's own already-fetched
+`search_text` attribute — not via RediSearch's score, and not via additional
+per-term FalkorDB queries; see that function's doc comment for two
+calibration-based designs that were tried against a live server and
+falsified: a fixed score-per-matched-term constant, defeated by real
+per-corpus idf variance, and exact per-term coverage via single-term
+sub-queries, defeated by a live FalkorDB tokenizer inconsistency on an
+otherwise-present term). A full match (every query term present) lands at
+the 0.75 ceiling, exactly reproducing this table's "sole full-text hit"
+rung's intent; a partial match scales down toward the 0.50 floor. This is an
+ABSOLUTE, per-candidate function — never relative to what else came back in
+the same query's result set, and never relative to which of possibly
+several independent `Search()` calls produced it (Codex round-2 review,
+CHAOS-3778 fix: an earlier per-call-relative max-normalization both let a
+weak or truncation-artifact lone hit read as the ceiling regardless of its
+real strength, and produced confidences that were only meaningful within
+one call, then compared apples-to-oranges against another call's own
+differently-scaled ceiling).
+
+**Accepted, not a regression:** because the ceiling (0.75) is always below
+the top-of-two auto-commit gate (`>= 0.88`), two competing non-exact fulltext
+hits can never auto-commit against each other — they always fall to
+clarification. Codex ruled this correct: two competing lexical hits are
+genuinely ambiguous, and clarification is the right outcome, not a gap to
+close.
+
 ### 6.3 Second-hop verification disappears
 
 `zepgraph` needs `verifiedNodeSubject`, `fetchSecondHop` and the
