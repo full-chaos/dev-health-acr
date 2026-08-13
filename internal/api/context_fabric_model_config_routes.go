@@ -43,6 +43,20 @@ func (a *App) orgModelRuntimeEvictor() contextfabric.OrgModelRuntimeEvictor {
 	return a.runtime.OrgModelRuntimeEvictor
 }
 
+// reuseInvalidator returns the configured contextfabric.ReuseInvalidator,
+// or nil if none is wired (CHAOS-3786, codex round-1 P1(b)). Mirrors
+// orgModelRuntimeEvictor() exactly: a nil invalidator is a valid,
+// non-error state (answer reuse itself may be disabled, or no
+// reuse-capable investigation-result store was ever composed), not a
+// misconfiguration -- see RuntimeDependencies.ReuseInvalidator's doc
+// comment.
+func (a *App) reuseInvalidator() contextfabric.ReuseInvalidator {
+	if a.runtime == nil {
+		return nil
+	}
+	return a.runtime.ReuseInvalidator
+}
+
 // ContextFabricOrgModelConfigGetHandler returns the organization's BYO LLM
 // configuration with a masked credential (AC-3775-4), or 404 if the
 // organization has none configured (in which case the deployment default
@@ -88,7 +102,15 @@ func (a *App) ContextFabricOrgModelConfigGetHandler(store contextfabric.OrgModel
 // LLM configuration (full replace, not a partial patch). The credential
 // field is required on every write and is never echoed back in the
 // response.
-func (a *App) ContextFabricOrgModelConfigPutHandler(store contextfabric.OrgModelConfigStore) http.Handler {
+//
+// invalidator may be nil (see (*App).reuseInvalidator). When non-nil, it
+// is called immediately after a successful upsert (CHAOS-3786, codex
+// round-1 P1(b)): a primary or fallback model change must invalidate
+// reuse for this organization going forward, the same way a projection
+// rebuild does -- a stored candidate's chain-membership match is
+// authorized by the org's CURRENT chain, and this write is what just
+// changed it.
+func (a *App) ContextFabricOrgModelConfigPutHandler(store contextfabric.OrgModelConfigStore, invalidator contextfabric.ReuseInvalidator) http.Handler {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if store == nil {
 			a.handleRuntimeUnavailable(w, r)
@@ -117,6 +139,16 @@ func (a *App) ContextFabricOrgModelConfigPutHandler(store contextfabric.OrgModel
 		if err != nil {
 			a.writeContextFabricOrgModelConfigError(w, r, err)
 			return
+		}
+		if invalidator != nil {
+			// A failed invalidation must not be treated as a failed write --
+			// the configuration write itself already succeeded and is not
+			// rolled back. It is logged so an operator can see reuse was
+			// left un-invalidated for this organization, but the request
+			// still reports its own success to the caller.
+			if err := invalidator.InvalidateOrganizationReuse(r.Context(), principal.OrgID); err != nil {
+				a.logger.ErrorContext(r.Context(), "context fabric answer reuse invalidation failed after model config write", "request_id", RequestID(r.Context()), "failure_class", "context_fabric_reuse_invalidation")
+			}
 		}
 		encoded, err := encodeBounded(config, int64(a.config.MaxSerializedBytes))
 		if err != nil {
@@ -147,7 +179,14 @@ func (a *App) ContextFabricOrgModelConfigPutHandler(store contextfabric.OrgModel
 // in process memory (Codex round-1 finding F4) -- the Generation-keyed
 // cache comparison already prevents it from ever being SERVED again after
 // a delete-then-recreate, but eviction is what actually frees it.
-func (a *App) ContextFabricOrgModelConfigDeleteHandler(store contextfabric.OrgModelConfigStore, evictor contextfabric.OrgModelRuntimeEvictor) http.Handler {
+//
+// invalidator may be nil (see (*App).reuseInvalidator). When non-nil, it
+// is called immediately after a successful delete for the same CHAOS-3786
+// reason ContextFabricOrgModelConfigPutHandler calls it: deleting the
+// organization's BYO configuration changes its effective chain back to
+// the deployment default, and reuse must not keep matching candidates
+// against the chain that just stopped applying.
+func (a *App) ContextFabricOrgModelConfigDeleteHandler(store contextfabric.OrgModelConfigStore, evictor contextfabric.OrgModelRuntimeEvictor, invalidator contextfabric.ReuseInvalidator) http.Handler {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if store == nil {
 			a.handleRuntimeUnavailable(w, r)
@@ -164,6 +203,13 @@ func (a *App) ContextFabricOrgModelConfigDeleteHandler(store contextfabric.OrgMo
 		}
 		if evictor != nil {
 			evictor.EvictOrgModelRuntime(principal.OrgID)
+		}
+		if invalidator != nil {
+			// See the matching comment in ContextFabricOrgModelConfigPutHandler:
+			// a failed invalidation must not be treated as a failed delete.
+			if err := invalidator.InvalidateOrganizationReuse(r.Context(), principal.OrgID); err != nil {
+				a.logger.ErrorContext(r.Context(), "context fabric answer reuse invalidation failed after model config delete", "request_id", RequestID(r.Context()), "failure_class", "context_fabric_reuse_invalidation")
+			}
 		}
 		a.recordReadAudit(r.Context(), principal, "context_fabric_org_model_config_deleted", "context_fabric_org_model_config", principal.OrgID, "success", nil)
 		w.WriteHeader(http.StatusNoContent)

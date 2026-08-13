@@ -199,11 +199,26 @@ type SourceWatermarkSnapshot map[string]string
 // window from both ends. See TestAC_3782_4_RebuildBetweenSnapshotAndSaveIsCaughtByEpochNotTimestamp
 // / TestAC_3782_4_CompletedRebuildInvalidatesReuseForTheOrganization for
 // the binding proof.
+//
+// ModelIdentities (CHAOS-3786; was the single-valued ModelIdentity) is the
+// org's CURRENT effective model CHAIN, primary first and then the fallback
+// if one is configured -- never a single static identity. A stored
+// candidate matches on this dimension if its OWN identity (the single
+// model that actually produced it -- see VersionSet.ModelIdentity) is a
+// MEMBER of this chain, not only if it equals the primary. This closes two
+// defects a primary-only key had: (a) hit-rate -- a candidate the fallback
+// produced never matched a primary-only key, so it could never be reused;
+// (b) correctness -- the key was blind to the fallback dimension changing
+// at all, so a candidate produced by an OLD fallback stayed reusable
+// forever even after the org reconfigured its fallback model, as long as
+// the primary was untouched. AnswerReuseGate.FindReusable implements the
+// membership test (e.g. `model_identity = ANY(...)`); this type only
+// carries the chain to test membership against.
 type ReuseKey struct {
 	QuestionHash      string
 	ContractVersion   string
 	ProjectionVersion string
-	ModelIdentity     string
+	ModelIdentities   []string
 }
 
 // AnswerReuseGate finds a stored InvestigationResult eligible for reuse
@@ -308,40 +323,72 @@ type RebuildEpochSnapshotter interface {
 }
 
 // ReuseModelIdentityResolver resolves the CURRENT org-effective model
-// identity a reuse lookup's ReuseKey.ModelIdentity must use (CHAOS-3782,
-// Codex round-2 finding #3). Engine calls this itself, explicitly, from
-// tryReuse -- BEFORE building the ReuseKey and calling
-// AnswerReuseGate.FindReusable -- never a value captured once at
-// engine-construction time and reused for every organization thereafter.
+// CHAIN a reuse lookup's ReuseKey.ModelIdentities must use (CHAOS-3782,
+// Codex round-2 finding #3; widened from a single identity to a chain by
+// CHAOS-3786). Engine calls this itself, explicitly, from tryReuse --
+// BEFORE building the ReuseKey and calling AnswerReuseGate.FindReusable --
+// never a value captured once at engine-construction time and reused for
+// every organization thereafter.
 //
-// Why a static identity is wrong (the bug this closes): a fresh
-// investigation's SAVED Versions.ModelIdentity already correctly reflects
-// whichever model actually answered it (RuntimeAnswerSynthesizer derives
-// it from the execution receipt, which for a CHAOS-3775 BYO-configured
-// organization is that organization's own provider/model, not the
-// deployment default). But a LOOKUP built from a single static identity
-// fixed at startup never changes when an organization's own configuration
-// does -- so after an organization reconfigures its model (or is
-// configured for the first time, diverging from the deployment default),
-// tryReuse keeps querying for the OLD identity, which still matches the
-// row saved before the change, and keeps serving it. Condition 7 (model
-// identity match) exists specifically to invalidate reuse across a model
-// change; a static lookup key defeats it silently for every organization
-// whose effective identity differs from the deployment default, without
-// ever producing an error or a miss that would surface the problem.
+// Why a static identity is wrong (the bug this closes): a LOOKUP built
+// from a single static identity fixed at startup never changes when an
+// organization's own configuration does -- so after an organization
+// reconfigures its model (or is configured for the first time, diverging
+// from the deployment default), tryReuse keeps querying for the OLD
+// identity, which still matches the row saved before the change, and
+// keeps serving it. Condition 7 (model identity match) exists specifically
+// to invalidate reuse across a model change; a static lookup key defeats
+// it silently for every organization whose effective identity differs
+// from the deployment default, without ever producing an error or a miss
+// that would surface the problem.
 //
-// Implementations MUST resolve the same organization-effective identity
-// that would actually answer a fresh investigation for orgID right now
+// Why a CHAIN, not one identity (CHAOS-3786): a fresh investigation's
+// SAVED Versions.ModelIdentity names whichever ONE model actually answered
+// it (RuntimeAnswerSynthesizer derives it from the execution receipt --
+// see genkitruntime.mergeFallbackReceipt, fixed by CHAOS-3786 to carry the
+// FALLBACK leg's own Provider/Model/ModelVersion when the fallback is what
+// produced the result, not the primary's). Which of primary or fallback
+// will answer a given fresh call is unknowable ahead of the call -- §19.3.4
+// records the fallback answering often, not as a rare edge case -- so a
+// lookup that only ever tries the primary's identity can never match a
+// fallback-produced candidate. Implementations must therefore return the
+// FULL current chain (primary, then fallback if one is configured) and let
+// AnswerReuseGate.FindReusable test chain MEMBERSHIP (the stored
+// candidate's own single identity must be an element of this slice), not
+// equality against one value.
+//
+// NOTE on rows saved before this fix: a fallback-produced investigation
+// saved before CHAOS-3786 shipped is persisted under the PRIMARY's
+// identity (the genkitruntime bug this fix also closes), not the
+// fallback's -- and, being an immutable row, can never be retroactively
+// relabeled. Left alone, such a row would keep matching whenever the
+// primary is in the current chain, indistinguishable from a row the
+// primary genuinely produced. It is NOT left alone: migration 0012 is a
+// one-time cutover that bumps every existing organization's
+// reuse-invalidation epoch exactly once, at deploy, which quarantines
+// every row saved before that migration ran via the same epoch mechanism
+// a projection rebuild uses (see RebuildEpoch's doc comment) -- no
+// payload touched, no manual per-organization action required. A FRESH
+// investigation saved after the cutover captures the CURRENT (bumped)
+// epoch as its own invalidation_epoch, so it is unaffected going forward.
+// An operator who additionally wants to invalidate a SPECIFIC
+// organization at any later point (e.g. after a configuration change --
+// see internal/api/context_fabric_model_config_routes.go's PUT/DELETE
+// handlers, which already do this automatically on every write) can call
+// ReuseInvalidator.InvalidateOrganizationReuse directly.
+//
+// Implementations MUST resolve the same organization-effective chain that
+// would actually be tried for a fresh investigation for orgID right now
 // (mirroring modelruntimeresolver.Resolver's own config-then-default
-// fallthrough) so the lookup key can never diverge from what Save would
-// have written for an equivalent fresh call. Returning an error means the
-// identity could not be determined for this organization right now (e.g.
-// its stored BYO configuration exists but fails to decrypt) -- tryReuse
-// treats that exactly like "no candidate found" and falls through to a
-// fresh investigation; it must never fall back to a different, possibly
-// wrong identity as a substitute.
+// fallthrough, including its FallbackModel) so the lookup key can never
+// diverge from what Save would have written for an equivalent fresh call.
+// Returning an error means the chain could not be determined for this
+// organization right now (e.g. its stored BYO configuration exists but
+// fails to decrypt) -- tryReuse treats that exactly like "no candidate
+// found" and falls through to a fresh investigation; it must never fall
+// back to a different, possibly wrong chain as a substitute.
 type ReuseModelIdentityResolver interface {
-	ResolveReuseModelIdentity(ctx context.Context, orgID string) (string, error)
+	ResolveReuseModelIdentity(ctx context.Context, orgID string) ([]string, error)
 }
 
 // ProjectionBackend is the write-side graph/index boundary. Applying a batch

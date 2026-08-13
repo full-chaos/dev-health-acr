@@ -182,13 +182,13 @@ func (f orgModelConfigResolverFunc) ResolveOrgModelConfig(ctx context.Context, o
 // identity must be the deployment-default fallback, matching pre-CHAOS-3775
 // behavior exactly.
 func TestContextFabricReuseModelIdentityResolver_nilConfigsAlwaysUsesFallback(t *testing.T) {
-	resolver := contextFabricReuseModelIdentityResolver{fallback: "deployment/default"}
+	resolver := contextFabricReuseModelIdentityResolver{fallback: []string{"deployment/default"}}
 	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
 	if err != nil {
 		t.Fatalf("ResolveReuseModelIdentity() error = %v", err)
 	}
-	if got != "deployment/default" {
-		t.Fatalf("ResolveReuseModelIdentity() = %q, want the fallback", got)
+	if len(got) != 1 || got[0] != "deployment/default" {
+		t.Fatalf("ResolveReuseModelIdentity() = %v, want the fallback chain", got)
 	}
 }
 
@@ -201,14 +201,14 @@ func TestContextFabricReuseModelIdentityResolver_noConfigurationUsesFallback(t *
 		configs: orgModelConfigResolverFunc(func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
 			return contextfabric.ResolvedOrgModelConfig{}, false, nil
 		}),
-		fallback: "deployment/default",
+		fallback: []string{"deployment/default"},
 	}
 	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
 	if err != nil {
 		t.Fatalf("ResolveReuseModelIdentity() error = %v", err)
 	}
-	if got != "deployment/default" {
-		t.Fatalf("ResolveReuseModelIdentity() = %q, want the fallback", got)
+	if len(got) != 1 || got[0] != "deployment/default" {
+		t.Fatalf("ResolveReuseModelIdentity() = %v, want the fallback chain", got)
 	}
 }
 
@@ -222,14 +222,36 @@ func TestContextFabricReuseModelIdentityResolver_configuredOrgUsesItsOwnIdentity
 		configs: orgModelConfigResolverFunc(func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
 			return contextfabric.ResolvedOrgModelConfig{Provider: "anthropic", Model: "claude-x"}, true, nil
 		}),
-		fallback: "deployment/default",
+		fallback: []string{"deployment/default"},
 	}
 	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
 	if err != nil {
 		t.Fatalf("ResolveReuseModelIdentity() error = %v", err)
 	}
-	if got != "anthropic/claude-x" {
-		t.Fatalf("ResolveReuseModelIdentity() = %q, want %q", got, "anthropic/claude-x")
+	if len(got) != 1 || got[0] != "anthropic/claude-x" {
+		t.Fatalf("ResolveReuseModelIdentity() = %v, want [%q]", got, "anthropic/claude-x")
+	}
+}
+
+// TestChaos3786_ContextFabricReuseModelIdentityResolver_configuredOrgIncludesItsOwnFallback
+// is the CHAOS-3786 fix's core assertion: an organization with BOTH a
+// primary AND a FallbackModel configured resolves to a TWO-entry chain,
+// primary first -- the reuse lookup must be able to match a candidate the
+// fallback produced, not only one the primary produced.
+func TestChaos3786_ContextFabricReuseModelIdentityResolver_configuredOrgIncludesItsOwnFallback(t *testing.T) {
+	resolver := contextFabricReuseModelIdentityResolver{
+		configs: orgModelConfigResolverFunc(func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
+			return contextfabric.ResolvedOrgModelConfig{Provider: "anthropic", Model: "claude-x", FallbackModel: "claude-y"}, true, nil
+		}),
+		fallback: []string{"deployment/default"},
+	}
+	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
+	if err != nil {
+		t.Fatalf("ResolveReuseModelIdentity() error = %v", err)
+	}
+	want := []string{"anthropic/claude-x", "anthropic/claude-y"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("ResolveReuseModelIdentity() = %v, want %v", got, want)
 	}
 }
 
@@ -246,13 +268,54 @@ func TestContextFabricReuseModelIdentityResolver_resolveErrorNeverFallsBack(t *t
 		configs: orgModelConfigResolverFunc(func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
 			return contextfabric.ResolvedOrgModelConfig{}, false, sentinel
 		}),
-		fallback: "deployment/default",
+		fallback: []string{"deployment/default"},
 	}
 	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("ResolveReuseModelIdentity() error = %v, want %v", err, sentinel)
 	}
-	if got != "" {
-		t.Fatalf("ResolveReuseModelIdentity() = %q, want empty on error (never the fallback)", got)
+	if len(got) != 0 {
+		t.Fatalf("ResolveReuseModelIdentity() = %v, want empty on error (never the fallback)", got)
+	}
+}
+
+// TestChaos3786_ContextFabricReuseModelIdentityResolver_dedupesEqualFallback
+// is the codex round-1 P2 probe: pgmodelconfig reads a stored row back
+// WITHOUT revalidation (see pgmodelconfig/store.go's decode path), so a
+// row with FallbackModel == Model -- a shape the request-time
+// modelprovider.Config.Validate() rejects, but that could still reach
+// storage from a row written before that rule existed, or by a
+// future/older binary -- can still reach this resolver. The resolved
+// chain must contain the identity exactly once, not twice.
+func TestChaos3786_ContextFabricReuseModelIdentityResolver_dedupesEqualFallback(t *testing.T) {
+	resolver := contextFabricReuseModelIdentityResolver{
+		configs: orgModelConfigResolverFunc(func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
+			return contextfabric.ResolvedOrgModelConfig{Provider: "anthropic", Model: "claude-x", FallbackModel: "claude-x"}, true, nil
+		}),
+		fallback: []string{"deployment/default"},
+	}
+	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
+	if err != nil {
+		t.Fatalf("ResolveReuseModelIdentity() error = %v", err)
+	}
+	want := []string{"anthropic/claude-x"}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("ResolveReuseModelIdentity() = %v, want %v (deduplicated)", got, want)
+	}
+}
+
+// TestAppendReuseIdentity_dedupesPreservingOrder is the direct unit probe
+// for the codex round-1 P2 helper both contextFabricReuseModelIdentities
+// (open.go) and contextFabricReuseModelIdentityResolver (this file) share.
+func TestAppendReuseIdentity_dedupesPreservingOrder(t *testing.T) {
+	got := appendReuseIdentity([]string{"a", "b"}, "a")
+	want := []string{"a", "b"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("appendReuseIdentity() = %v, want %v (no duplicate appended)", got, want)
+	}
+	got = appendReuseIdentity([]string{"a"}, "b")
+	want = []string{"a", "b"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("appendReuseIdentity() = %v, want %v (distinct candidate appended)", got, want)
 	}
 }

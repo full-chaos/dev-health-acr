@@ -71,20 +71,27 @@ func wrapWithOrgModelRuntimeResolver(deploymentDefault contextfabric.ModelRuntim
 
 // contextFabricReuseModelIdentityResolver implements
 // contextfabric.ReuseModelIdentityResolver (CHAOS-3782, Codex round-2
-// finding #3) by resolving the SAME organization-effective configuration
-// modelruntimeresolver.Resolver.runtimeFor would (configs, falling
-// through to fallback when the organization has none) -- without
-// building a contextfabric.ModelRuntime, since a reuse lookup only needs
-// the identity string, never a genkit instance. configs may be nil (no
-// per-organization support wired at all), in which case every
-// organization's resolved identity is simply fallback, matching pre-
-// CHAOS-3782 (and pre-CHAOS-3775) behavior.
+// finding #3; chain-widened by CHAOS-3786) by resolving the SAME
+// organization-effective configuration modelruntimeresolver.Resolver.
+// runtimeFor would (configs, falling through to fallback when the
+// organization has none) -- without building a contextfabric.ModelRuntime,
+// since a reuse lookup only needs the identity strings, never a genkit
+// instance. configs may be nil (no per-organization support wired at
+// all), in which case every organization's resolved chain is simply
+// fallback, matching pre-CHAOS-3782 (and pre-CHAOS-3775) behavior.
+//
+// fallback (CHAOS-3786) is itself already a full chain -- the
+// deployment-default's own [primary, fallback-if-configured], computed by
+// contextFabricReuseModelIdentities -- not a single identity, so an
+// organization with no BYO configuration of its own still gets the
+// deployment default's FALLBACK model as a valid reuse match, exactly
+// mirroring what modelruntimeresolver actually runs for it.
 type contextFabricReuseModelIdentityResolver struct {
 	configs  contextfabric.OrgModelConfigResolver
-	fallback string
+	fallback []string
 }
 
-func (r contextFabricReuseModelIdentityResolver) ResolveReuseModelIdentity(ctx context.Context, orgID string) (string, error) {
+func (r contextFabricReuseModelIdentityResolver) ResolveReuseModelIdentity(ctx context.Context, orgID string) ([]string, error) {
 	if r.configs == nil || strings.TrimSpace(orgID) == "" {
 		return r.fallback, nil
 	}
@@ -92,11 +99,11 @@ func (r contextFabricReuseModelIdentityResolver) ResolveReuseModelIdentity(ctx c
 	if err != nil {
 		// AC-3775-3's prohibition applies here too: an organization whose
 		// configuration exists but cannot be read must never fall back to
-		// the deployment-default identity as a substitute -- that could
+		// the deployment-default chain as a substitute -- that could
 		// wrongly match (and reuse) a row this organization's ACTUAL
 		// current configuration would never have produced. The caller
 		// (Engine.tryReuse) treats this error as a plain cache miss.
-		return "", err
+		return nil, err
 	}
 	if !ok {
 		return r.fallback, nil
@@ -106,7 +113,35 @@ func (r contextFabricReuseModelIdentityResolver) ResolveReuseModelIdentity(ctx c
 	if provider == "" || model == "" {
 		return r.fallback, nil
 	}
-	return provider + "/" + model, nil
+	// CHAOS-3786: include the org's OWN fallback model too, not only its
+	// primary -- a candidate that organization's fallback actually
+	// produced must be able to match.
+	identities := []string{provider + "/" + model}
+	if fallbackModel := strings.TrimSpace(resolved.FallbackModel); fallbackModel != "" {
+		identities = appendReuseIdentity(identities, provider+"/"+fallbackModel)
+	}
+	return identities, nil
+}
+
+// appendReuseIdentity appends candidate to identities unless it is already
+// present, preserving order (CHAOS-3786, codex round-1 P2). A configured
+// FallbackModel equal to the primary Model is rejected by
+// modelprovider.Config.Validate() on the request path, but a row already
+// persisted in pgmodelconfig is read back WITHOUT revalidation
+// (pgmodelconfig/store.go's decode path), so a stored row that predates a
+// tightened validation rule -- or one written by a future/older binary --
+// can still reach here with FallbackModel == Model. Without this guard,
+// such a chain would carry the same identity twice; harmless for
+// FindReusable's `= ANY(...)` correctness, but it wastes a comparison and
+// makes a debug dump of the resolved chain misleadingly imply two distinct
+// models are in play.
+func appendReuseIdentity(identities []string, candidate string) []string {
+	for _, existing := range identities {
+		if existing == candidate {
+			return identities
+		}
+	}
+	return append(identities, candidate)
 }
 
 // contextFabricModelDefaults returns the Timeout/MaxAttempts/

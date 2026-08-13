@@ -670,8 +670,26 @@ func classifyModelError(err error) error {
 	return fmt.Errorf("%w: model generation failed", contextfabric.ErrModelUnavailable)
 }
 
+// mergeFallbackReceipt builds the receipt returned for a SUCCESSFUL
+// fallback call: started from primary (the failed/rejected leg's own
+// receipt, for its timing/attempts/input digest), but with Provider/Model/
+// ModelVersion overwritten from fallback -- the leg that actually produced
+// the returned output (CHAOS-3786 Bug A). Before this fix, those three
+// fields stayed the PRIMARY's, so every fallback-answered
+// InterpretQuestion/SynthesizeAnswer call reported (and
+// RuntimeAnswerSynthesizer.Synthesize then PERSISTED, as
+// Versions.ModelIdentity) an identity that never produced the content --
+// silently mislabeling every fallback answer as if the primary had
+// produced it. Provider is expected to already be equal between the two
+// legs (modelprovider.Config/ResolvedOrgModelConfig share one Provider
+// field across Model and FallbackModel), but it is copied here too rather
+// than assumed, so this stays correct even if that constraint ever
+// loosens.
 func mergeFallbackReceipt(primary, fallback contextfabric.ModelExecutionReceipt) contextfabric.ModelExecutionReceipt {
 	primary.FallbackUsed = true
+	primary.Provider = fallback.Provider
+	primary.Model = fallback.Model
+	primary.ModelVersion = fallback.ModelVersion
 	if fallback.OutputDigest != "" {
 		primary.OutputDigest = fallback.OutputDigest
 	}

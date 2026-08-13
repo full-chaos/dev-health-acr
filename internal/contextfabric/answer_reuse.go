@@ -188,27 +188,29 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
 		return InvestigationResult{}, false
 	}
-	modelIdentity := e.reuseModelIdentity
+	modelIdentities := e.reuseModelIdentities
 	if e.reuseModelIdentityResolver != nil {
-		// Codex round-2 finding #3: resolve the org-EFFECTIVE identity now,
-		// not the single static identity fixed at engine-construction time
-		// -- see ReuseModelIdentityResolver's doc comment for the
-		// per-organization staleness bug a static identity causes. A
-		// resolve failure (e.g. a BYO configuration that exists but no
-		// longer decrypts) is treated exactly like "no candidate found":
-		// fail closed, fall through to a fresh investigation, never guess.
+		// Codex round-2 finding #3 (chain widened by CHAOS-3786): resolve
+		// the org-EFFECTIVE chain now, not the single static chain fixed
+		// at engine-construction time -- see ReuseModelIdentityResolver's
+		// doc comment for the per-organization staleness bug a static
+		// chain causes, and for why this is a chain (primary + fallback)
+		// rather than one identity. A resolve failure (e.g. a BYO
+		// configuration that exists but no longer decrypts) is treated
+		// exactly like "no candidate found": fail closed, fall through to
+		// a fresh investigation, never guess.
 		resolved, err := e.reuseModelIdentityResolver.ResolveReuseModelIdentity(ctx, principal.OrgID)
 		if err != nil {
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
 			return InvestigationResult{}, false
 		}
-		modelIdentity = resolved
+		modelIdentities = resolved
 	}
 	key := ReuseKey{
 		QuestionHash:      QuestionHash(request.Question),
 		ContractVersion:   InvestigationResultSchemaV1,
 		ProjectionVersion: e.reuseProjectionVersion,
-		ModelIdentity:     modelIdentity,
+		ModelIdentities:   modelIdentities,
 	}
 	candidate, ok, err := e.reuseGate.FindReusable(ctx, principal, key)
 	if err != nil || !ok {

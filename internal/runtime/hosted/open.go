@@ -118,7 +118,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric org model config store: %w", err))
 	}
-	investigator, runtimeEvictor, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigStore)
+	investigator, runtimeEvictor, resultReuseInvalidator, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigStore)
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric investigator: %w", err))
 	}
@@ -148,6 +148,12 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			Investigator:               investigator,
 			OrgModelConfigs:            orgModelConfigs,
 			OrgModelRuntimeEvictor:     orgModelRuntimeEvictor,
+			// CHAOS-3786, codex round-1 P1(b): resultReuseInvalidator is
+			// already nil-or-a-real-*pginvestigation.Store as an interface
+			// value (buildContextFabricInvestigator's own reuseEnabled
+			// guard decides that before returning it), so it needs no
+			// second typed-nil check here.
+			ReuseInvalidator: resultReuseInvalidator,
 		},
 	}
 	return runtime, nil
@@ -180,24 +186,24 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 // contextfabric.OrgModelRuntimeEvictor -- open() wires it into
 // api.RuntimeDependencies.OrgModelRuntimeEvictor so the DELETE model-config
 // route can purge a cached runtime immediately (Codex round-1 finding F4).
-func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigStore *pgmodelconfig.Store) (contextfabric.Investigator, contextfabric.OrgModelRuntimeEvictor, error) {
+func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigStore *pgmodelconfig.Store) (contextfabric.Investigator, contextfabric.OrgModelRuntimeEvictor, contextfabric.ReuseInvalidator, error) {
 	if !request.config.EnableContextFabricInvestigations || !falkorgraph.Configured(os.LookupEnv) {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	graphConfig, err := falkorgraph.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load context fabric graph configuration: %w", err)
+		return nil, nil, nil, fmt.Errorf("load context fabric graph configuration: %w", err)
 	}
 	graphReader, err := falkorgraph.New(graphConfig)
 	if err != nil {
-		return nil, nil, fmt.Errorf("initialize context fabric graph adapter: %w", err)
+		return nil, nil, nil, fmt.Errorf("initialize context fabric graph adapter: %w", err)
 	}
 	factRegistry, err := contextfabric.NewFactCapabilityRegistry(
 		devhealthfacts.NewProviders(clickhouse.queryClient),
 		contextfabric.FactRegistryOptions{Now: request.options.Now},
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("initialize canonical fact registry: %w", err)
+		return nil, nil, nil, fmt.Errorf("initialize canonical fact registry: %w", err)
 	}
 	// CHAOS-3782: WithAnswerReuse turns on Save's reuse-column bookkeeping
 	// and FindReusable/InvalidateOrganizationReuse. request.config.AnswerReuseMaxAge
@@ -213,13 +219,20 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	}
 	investigationStore, err := pginvestigation.NewStore(postgres.db, storeOpts...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("initialize investigation result store: %w", err)
+		return nil, nil, nil, fmt.Errorf("initialize investigation result store: %w", err)
 	}
-	// reuseSnapshotter and reuseEpochSnapshotter both stay nil when reuse
-	// is disabled -- Engine then never queries checkpoints for a
-	// snapshot it would immediately discard (reuseColumnsFor
-	// short-circuits on !s.reuseEnabled before ever consulting one).
-	//
+	// reuseSnapshotter, reuseEpochSnapshotter, and reuseInvalidator all
+	// stay nil when reuse is disabled -- Engine then never queries
+	// checkpoints for a snapshot it would immediately discard
+	// (reuseColumnsFor short-circuits on !s.reuseEnabled before ever
+	// consulting one), and the model-config PUT/DELETE routes
+	// (CHAOS-3786, codex round-1 P1(b)) skip invalidation entirely --
+	// there is nothing to invalidate for a store that never wrote a
+	// reuse column in the first place.
+	var reuseInvalidator contextfabric.ReuseInvalidator
+	if reuseEnabled {
+		reuseInvalidator = investigationStore
+	}
 	// CHAOS-3782 Codex round-3 finding 1: these two MUST be wired
 	// together, from the same reuseEnabled switch -- the same
 	// *pginvestigation.Store satisfies both SourceWatermarkSnapshotter
@@ -239,15 +252,15 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// comment and newContextFabricModelRuntime.
 	deploymentDefaultRuntime, err := newContextFabricModelRuntime(ctx, os.LookupEnv)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	modelRuntime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefaultRuntime, orgModelConfigStore, os.LookupEnv)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	receiptSink, err := buildModelReceiptSink(postgres)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// orgModelConfigStore is a concrete *pgmodelconfig.Store, possibly nil
 	// -- the same typed-nil-interface trap open()'s own conversion guards
@@ -293,7 +306,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// per-organization divergence possible -- to wire unconditionally.
 		ReuseModelIdentityResolver: contextFabricReuseModelIdentityResolver{
 			configs:  reuseModelIdentityConfigs,
-			fallback: contextFabricReuseModelIdentity(os.LookupEnv),
+			fallback: contextFabricReuseModelIdentities(os.LookupEnv),
 		},
 		// CHAOS-3782 AC-3782-8: the first production EngineTelemetry
 		// wiring (previously always nil -- see SlogEngineTelemetry's doc
@@ -306,27 +319,29 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// ReuseProjectionVersion mirrors RuntimeAnswerSynthesizerOptions
 		// above verbatim (contextFabricProjectionVersion, so a fresh
 		// answer's Versions.ProjectionVersion and what reuse compares
-		// against can never drift apart), and ReuseModelIdentity mirrors
-		// what RuntimeAnswerSynthesizer.Synthesize itself computes from
-		// the configured provider/model (model_runtime.go's
-		// modelIdentity helper) -- see contextFabricReuseModelIdentity's
-		// doc comment for the one place these two are deliberately
-		// allowed to diverge (a fallback-model answer).
+		// against can never drift apart), and ReuseModelIdentities (CHAOS-3786)
+		// mirrors the FULL chain (primary, then fallback) the configured
+		// provider/model(s) can produce via model_runtime.go's
+		// modelIdentity helper -- see contextFabricReuseModelIdentities'
+		// doc comment for why this is a chain, not a single value.
 		ReuseProjectionVersion: contextFabricProjectionVersion,
-		ReuseModelIdentity:     contextFabricReuseModelIdentity(os.LookupEnv),
+		ReuseModelIdentities:   contextFabricReuseModelIdentities(os.LookupEnv),
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("initialize context fabric engine: %w", err)
+		return nil, nil, nil, fmt.Errorf("initialize context fabric engine: %w", err)
 	}
 	// evictor is a concrete *modelruntimeresolver.Resolver, possibly nil
 	// (when orgModelConfigStore was nil) -- guard the typed-nil-interface
 	// trap here too, same as open()'s conversion, so a nil *Resolver can
 	// never reach the caller wrapped in a non-nil
-	// contextfabric.OrgModelRuntimeEvictor.
+	// contextfabric.OrgModelRuntimeEvictor. reuseInvalidator is already
+	// either nil or a concrete *pginvestigation.Store assigned above
+	// through the same interface-typed local, so it needs no separate
+	// guard here.
 	if evictor == nil {
-		return engine, nil, nil
+		return engine, nil, reuseInvalidator, nil
 	}
-	return engine, evictor, nil
+	return engine, evictor, reuseInvalidator, nil
 }
 
 // contextFabricProjectionVersion is Versions.ProjectionVersion for every
@@ -354,41 +369,44 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 // and is intentionally omitted.
 const contextFabricProjectionVersion = devhealthsource.ClickHouseSourceVersion + "+" + devhealthsource.EpisodesSourceVersion
 
-// contextFabricReuseModelIdentity computes the CURRENT PRIMARY configured
-// model's identity, in the exact "<provider>/<model>" shape
-// model_runtime.go's modelIdentity helper produces from a receipt, for
-// EngineOptions.ReuseProjectionVersion's sibling ReuseModelIdentity. It
-// reads modelprovider.ConfigFromEnv a second time (newContextFabricModelRuntime
-// already read it once, to build the runtime itself) rather than
-// threading the config out through that function's return value, to avoid
-// changing a signature other call sites and tests depend on for what is
-// a purely additive, optional reuse concern.
+// contextFabricReuseModelIdentities computes the CURRENT deployment-default
+// model CHAIN's identities, primary first and then the fallback (if
+// modelprovider.EnvFallbackModel is configured), each in the exact
+// "<provider>/<model>" shape model_runtime.go's modelIdentity helper
+// produces from a receipt, for EngineOptions.ReuseProjectionVersion's
+// sibling ReuseModelIdentities. It reads modelprovider.ConfigFromEnv a
+// second time (newContextFabricModelRuntime already read it once, to
+// build the runtime itself) rather than threading the config out through
+// that function's return value, to avoid changing a signature other call
+// sites and tests depend on for what is a purely additive, optional reuse
+// concern.
 //
-// KNOWN LIMITATION (tracked as CHAOS-3786): this is always the PRIMARY
-// model, never the fallback. A result actually synthesized by the
-// fallback model (§19.3.4 records this happening often -- 16 of 17
-// successful investigations needed it in the measured batch) is stored
-// with a DIFFERENT ModelIdentity than this function returns, so a later
-// identical question computes a ReuseKey that will not match it and
-// reuse simply misses -- never wrongly hits. Binding the reuse key to
-// "primary or fallback" is a real, valuable follow-up but is out of
-// CHAOS-3782's scope: it would require deciding AHEAD of a model call
-// which model will answer, which is exactly what cannot be known before
-// the call completes. See CHAOS-3786 for the fix.
-func contextFabricReuseModelIdentity(lookup func(string) (string, bool)) string {
+// CHAOS-3786: previously returned only the primary's identity, so a
+// result actually synthesized by the fallback model (§19.3.4 records this
+// happening often -- 16 of 17 successful investigations needed it in the
+// measured batch) computed a ReuseKey that never matched it -- reuse
+// simply missed for every fallback-produced answer. Returning the whole
+// chain and matching on chain MEMBERSHIP (see
+// ReuseKey.ModelIdentities' doc comment) fixes that without needing to
+// predict ahead of a model call which of the two will answer.
+func contextFabricReuseModelIdentities(lookup func(string) (string, bool)) []string {
 	if !modelprovider.Configured(lookup) {
-		return "unwired"
+		return nil
 	}
 	modelConfig, err := modelprovider.ConfigFromEnv(lookup)
 	if err != nil {
-		return "unwired"
+		return nil
 	}
 	provider := strings.TrimSpace(modelConfig.Provider)
 	model := strings.TrimSpace(modelConfig.Model)
 	if provider == "" || model == "" {
-		return "unwired"
+		return nil
 	}
-	return provider + "/" + model
+	identities := []string{provider + "/" + model}
+	if fallbackModel := strings.TrimSpace(modelConfig.FallbackModel); fallbackModel != "" {
+		identities = appendReuseIdentity(identities, provider+"/"+fallbackModel)
+	}
+	return identities
 }
 
 func newInvestigationResultID() string {

@@ -310,11 +310,20 @@ func TestNew_fallsBackToTheStrongerModelWhenThePrimaryFails(t *testing.T) {
 	if !receipt.FallbackUsed || receipt.Outcome != "fallback" {
 		t.Fatalf("receipt = %#v, want a recorded fallback", receipt)
 	}
-	// The receipt keeps the PRIMARY model's identity: the fallback is an
-	// attribute of the primary's execution, and receipt.FallbackUsed is what
-	// tells replay that a second model produced the output.
-	if receipt.Model != DefaultModel {
-		t.Fatalf("receipt model = %q, want the primary %q", receipt.Model, DefaultModel)
+	// CHAOS-3786 (reverses the CHAOS-3770 design this test originally
+	// pinned): the receipt now names the FALLBACK model's own identity,
+	// not the primary's -- receipt.FallbackUsed alone told replay a
+	// second model produced the output, but left Provider/Model naming
+	// the model that DIDN'T, which is what actually answered the
+	// question, its own execution timing, or its own token usage. That
+	// mismatch is also what CHAOS-3782's persisted
+	// Versions.ModelIdentity (derived from this receipt) inherited: a
+	// fallback-produced investigation result was saved under the
+	// primary's identity, mislabeling every fallback answer and
+	// defeating CHAOS-3786's reuse-chain fix at the source. See
+	// genkitruntime.mergeFallbackReceipt.
+	if receipt.Model != cfg.FallbackModel {
+		t.Fatalf("receipt model = %q, want the FALLBACK's own %q", receipt.Model, cfg.FallbackModel)
 	}
 	mu.Lock()
 	defer mu.Unlock()

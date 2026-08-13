@@ -76,7 +76,11 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 
 	// Then
 	require.NoError(t, firstErr)
-	require.Equal(t, "applied 11 migrations\n", first.String())
+	// CHAOS-3786 added migration 0012 (embedded set now has 12 files); a
+	// future migration file must bump this literal too -- see
+	// migrations/postgres/runner_integration_test.go's own head-pinned
+	// []int64{1..N} assertions for the same convention.
+	require.Equal(t, "applied 12 migrations\n", first.String())
 	require.NoError(t, secondErr)
 	require.Equal(t, "no migrations applied\n", second.String())
 }
