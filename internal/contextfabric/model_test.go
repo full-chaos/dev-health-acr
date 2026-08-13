@@ -126,7 +126,7 @@ func validInvestigationResult() InvestigationResult {
 		EvidenceRefIDs:      []string{},
 		ClaimedFacts:        []ClaimedFact{},
 		Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
-		Versions:            VersionSet{ServiceVersion: "test-v1", ContractVersion: InvestigationResultSchemaV1, Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1", CanonicalServiceVersion: "ops-v1"},
+		Versions:            VersionSet{ServiceVersion: "test-v1", ContractVersion: InvestigationResultSchemaV1, Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1", CanonicalServiceVersion: "ops-v1", ModelIdentity: "test/model-v1"},
 		DeterministicAnswer: "Ask Dev is not release-ready because required acceptance work remains open.",
 		Warnings:            []string{},
 	}

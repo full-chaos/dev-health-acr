@@ -45,7 +45,7 @@ type hostileResultStore struct {
 	alwaysReturn contextfabric.InvestigationResult
 }
 
-func (s hostileResultStore) Save(context.Context, storage.Principal, contextfabric.InvestigationResult) error {
+func (s hostileResultStore) Save(context.Context, storage.Principal, contextfabric.InvestigationResult, contextfabric.SourceWatermarkSnapshot, contextfabric.RebuildEpoch) error {
 	return nil
 }
 

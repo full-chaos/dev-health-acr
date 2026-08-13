@@ -509,6 +509,13 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 			InterpretationVersion:   receipt.SchemaVersion,
 			SynthesisVersion:        receipt.PromptVersion + "+" + receipt.ModelVersion,
 			CanonicalServiceVersion: nonEmptyVersion(r.Options.CanonicalServiceVersion, input.Facts.Version),
+			// ModelIdentity (CHAOS-3782) names the provider and model that
+			// produced THIS synthesis -- receipt.Provider/receipt.Model,
+			// not receipt.ModelVersion (already captured above inside
+			// SynthesisVersion). Answer reuse binds on this so a model
+			// swap (even one that coincidentally shares a model_version
+			// string) never reuses a result the new model never produced.
+			ModelIdentity: nonEmptyVersion(modelIdentity(receipt.Provider, receipt.Model), "unwired"),
 		},
 	}
 	return result, nil
@@ -780,6 +787,19 @@ func nonEmptyVersion(primary, fallback string) string {
 		return value
 	}
 	return "unwired"
+}
+
+// modelIdentity combines a receipt's provider and model into the single
+// opaque token VersionSet.ModelIdentity carries (CHAOS-3782). Either half
+// missing yields an empty string, which nonEmptyVersion then falls back to
+// "unwired" for -- matching every other VersionSet field's convention.
+func modelIdentity(provider, model string) string {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider == "" || model == "" {
+		return ""
+	}
+	return provider + "/" + model
 }
 
 func DigestModelValue(value []byte) string {

@@ -47,6 +47,7 @@ docs/adr/                  # Owned architecture decisions
 | Context Fabric investigation endpoint | `internal/api/context_fabric_routes.go`, `internal/runtime/hosted` | `POST /api/v1/context-fabric/investigations`; `ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED`; see `docs/design/context-fabric-result-semantics.md` |
 | Context Fabric model provider | `internal/contextfabric/modelprovider`, `internal/contextfabric/genkitruntime` | BYO-LLM provider/base-URL/model/credential surface (`ACR_CONTEXT_FABRIC_MODEL_*`); only production `genkit.Genkit` construction; unconfigured means a clean per-request 503 |
 | Context Fabric per-organization model config | `internal/contextfabric/modelconfigcrypto`, `internal/contextfabric/pgmodelconfig`, `internal/contextfabric/modelruntimeresolver`, `internal/contextfabric/pgmodelreceipts` | CHAOS-3775: org-scoped BYO LLM config, AES-256-GCM sealed credential, invalidatable per-request runtime cache, durable `ModelExecutionReceipt` sink; migration `0010` |
+| Context Fabric answer reuse | `internal/contextfabric/answer_reuse.go`, `internal/contextfabric/pginvestigation`, `internal/contextfabric/projectionrun` | CHAOS-3782: six-condition, fail-closed watermark-bound staleness policy (TRD §19.7); question canonicalization/hash; `AnswerReuseGate`/`ReuseInvalidator` ports; migration `0011`; disabled unless `ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE` is set |
 
 ## CODE MAP
 

@@ -167,3 +167,92 @@ func TestContextFabricModelDefaults_fallsBackToPackageDefaults_whenUnconfigured(
 		t.Fatalf("defaults = %+v, want the package defaults", defaults)
 	}
 }
+
+// orgModelConfigResolverFunc is a fake contextfabric.OrgModelConfigResolver
+// driven by a plain function.
+type orgModelConfigResolverFunc func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error)
+
+func (f orgModelConfigResolverFunc) ResolveOrgModelConfig(ctx context.Context, orgID string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
+	return f(ctx, orgID)
+}
+
+// TestContextFabricReuseModelIdentityResolver_nilConfigsAlwaysUsesFallback
+// covers the "no per-organization support wired at all" composition shape
+// (buildOrgModelConfigStore returned nil): every organization's resolved
+// identity must be the deployment-default fallback, matching pre-CHAOS-3775
+// behavior exactly.
+func TestContextFabricReuseModelIdentityResolver_nilConfigsAlwaysUsesFallback(t *testing.T) {
+	resolver := contextFabricReuseModelIdentityResolver{fallback: "deployment/default"}
+	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
+	if err != nil {
+		t.Fatalf("ResolveReuseModelIdentity() error = %v", err)
+	}
+	if got != "deployment/default" {
+		t.Fatalf("ResolveReuseModelIdentity() = %q, want the fallback", got)
+	}
+}
+
+// TestContextFabricReuseModelIdentityResolver_noConfigurationUsesFallback
+// covers the AC-3775-3 "no configuration at all" shape (Configs is wired,
+// but this specific organization has never set one): fallback, not an
+// error.
+func TestContextFabricReuseModelIdentityResolver_noConfigurationUsesFallback(t *testing.T) {
+	resolver := contextFabricReuseModelIdentityResolver{
+		configs: orgModelConfigResolverFunc(func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
+			return contextfabric.ResolvedOrgModelConfig{}, false, nil
+		}),
+		fallback: "deployment/default",
+	}
+	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
+	if err != nil {
+		t.Fatalf("ResolveReuseModelIdentity() error = %v", err)
+	}
+	if got != "deployment/default" {
+		t.Fatalf("ResolveReuseModelIdentity() = %q, want the fallback", got)
+	}
+}
+
+// TestContextFabricReuseModelIdentityResolver_configuredOrgUsesItsOwnIdentity
+// is the CHAOS-3782 finding #3 fix's core assertion: an organization WITH
+// a BYO configuration resolves to ITS OWN provider/model, not the
+// deployment fallback -- proving the reuse lookup key can diverge
+// per-organization, which a static identity never could.
+func TestContextFabricReuseModelIdentityResolver_configuredOrgUsesItsOwnIdentity(t *testing.T) {
+	resolver := contextFabricReuseModelIdentityResolver{
+		configs: orgModelConfigResolverFunc(func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
+			return contextfabric.ResolvedOrgModelConfig{Provider: "anthropic", Model: "claude-x"}, true, nil
+		}),
+		fallback: "deployment/default",
+	}
+	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
+	if err != nil {
+		t.Fatalf("ResolveReuseModelIdentity() error = %v", err)
+	}
+	if got != "anthropic/claude-x" {
+		t.Fatalf("ResolveReuseModelIdentity() = %q, want %q", got, "anthropic/claude-x")
+	}
+}
+
+// TestContextFabricReuseModelIdentityResolver_resolveErrorNeverFallsBack is
+// the AC-3775-3 prohibition applied to reuse: an organization whose
+// configuration exists but cannot be read (e.g. an undecryptable
+// credential) must get an error, never a silent fallback to the
+// deployment-default identity -- falling back could wrongly match (and
+// reuse) a stored row this organization's actual current configuration
+// would never have produced.
+func TestContextFabricReuseModelIdentityResolver_resolveErrorNeverFallsBack(t *testing.T) {
+	sentinel := errors.New("credential no longer decrypts")
+	resolver := contextFabricReuseModelIdentityResolver{
+		configs: orgModelConfigResolverFunc(func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
+			return contextfabric.ResolvedOrgModelConfig{}, false, sentinel
+		}),
+		fallback: "deployment/default",
+	}
+	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("ResolveReuseModelIdentity() error = %v, want %v", err, sentinel)
+	}
+	if got != "" {
+		t.Fatalf("ResolveReuseModelIdentity() = %q, want empty on error (never the fallback)", got)
+	}
+}

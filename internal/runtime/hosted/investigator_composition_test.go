@@ -5,8 +5,11 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"reflect"
 	"testing"
+	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
 )
@@ -111,6 +114,47 @@ func TestBuildContextFabricInvestigator_staysUnbuiltWithoutTheGraphBackend(t *te
 	}
 	if investigator != nil {
 		t.Fatal("investigator was composed without a graph backend")
+	}
+}
+
+// TestBuildContextFabricInvestigator_wiresBothReuseSnapshottersWhenReuseIsEnabled
+// is CHAOS-3782 Codex round-3 finding 1: engine.go only captures the
+// rebuild-epoch snapshot when EngineDependencies.ReuseEpochSnapshotter is
+// set, but this composition wired only the watermark snapshotter, leaving
+// ReuseEpochSnapshotter nil in production. Saved rows then always carry a
+// nil invalidation_epoch, and store.go's FindReusable requires a non-nil
+// epoch to reuse -- so hosted answer reuse silently never fires for any
+// new result, even with ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE set.
+//
+// This reaches through the unexported Engine fields via reflect --
+// FieldByName + IsNil never call Interface(), so this does not need
+// Engine to expose new production surface purely for this test -- because
+// that unexported-field wiring is exactly the seam that silently broke.
+func TestBuildContextFabricInvestigator_wiresBothReuseSnapshottersWhenReuseIsEnabled(t *testing.T) {
+	// Given the graph backend configured and answer reuse turned on.
+	configureGraph(t)
+	request, postgres, clickhouse := investigatorBuildRequest(t)
+	request.config.AnswerReuseMaxAge = time.Hour
+
+	// When
+	investigator, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	if err != nil {
+		t.Fatalf("buildContextFabricInvestigator() = %v, want a composed investigator", err)
+	}
+	engine, ok := investigator.(*contextfabric.Engine)
+	if !ok {
+		t.Fatalf("investigator is a %T, want *contextfabric.Engine", investigator)
+	}
+
+	// Then BOTH snapshotters Engine captures immediately before a fresh
+	// graph read must be wired -- one without the other silently disables
+	// reuse for every new result.
+	engineValue := reflect.ValueOf(engine).Elem()
+	if field := engineValue.FieldByName("reuseSnapshotter"); field.IsNil() {
+		t.Error("reuseSnapshotter is nil with answer reuse enabled; watermark snapshots will never be captured")
+	}
+	if field := engineValue.FieldByName("reuseEpochSnapshotter"); field.IsNil() {
+		t.Error("reuseEpochSnapshotter is nil with answer reuse enabled; saved results will never carry an invalidation epoch, so FindReusable can never reuse them (CHAOS-3782 round-3 finding 1)")
 	}
 }
 

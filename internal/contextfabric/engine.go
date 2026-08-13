@@ -14,6 +14,22 @@ type EngineOptions struct {
 	ServiceVersion string
 	Now            func() time.Time
 	NewResultID    func() string
+	// ReuseProjectionVersion and ReuseModelIdentity (CHAOS-3782) are the
+	// CURRENT values a fresh investigation's Versions.ProjectionVersion and
+	// Versions.ModelIdentity would carry -- composition must wire both
+	// from the exact same configuration RuntimeAnswerSynthesizerOptions
+	// and the model runtime already use (see
+	// RuntimeAnswerSynthesizerOptions.ProjectionVersion and
+	// modelIdentity(receipt.Provider, receipt.Model) in
+	// model_runtime.go), so they can never drift from what a fresh answer
+	// would actually stamp. Engine needs these BEFORE running a fresh
+	// investigation -- that is the entire point of reuse -- so they must
+	// be known statically at composition time, not read off a result
+	// Engine has not produced yet. Both may be left empty; Dependencies.ReuseGate
+	// being nil (or FindReusable never matching an empty ModelIdentity/
+	// ProjectionVersion) is what actually disables reuse.
+	ReuseProjectionVersion string
+	ReuseModelIdentity     string
 }
 
 type EngineDependencies struct {
@@ -25,6 +41,41 @@ type EngineDependencies struct {
 	// Telemetry is optional. When set, Engine reports content-safe
 	// operational counters through it -- see EngineTelemetry.
 	Telemetry EngineTelemetry
+	// ReuseGate is optional (CHAOS-3782). When nil, Engine never attempts
+	// answer reuse and behaves exactly as it did before this field
+	// existed -- every Investigate call runs a fresh investigation. See
+	// AnswerReuseGate's doc comment for the six-condition policy it and
+	// Engine jointly enforce.
+	ReuseGate AnswerReuseGate
+	// ReuseSnapshotter is optional (CHAOS-3782, Codex round-1 F1). When
+	// set, Engine captures a source-watermark snapshot itself,
+	// immediately before the graph is read for a fresh investigation,
+	// and threads it to Save -- see SourceWatermarkSnapshotter's doc
+	// comment for why the timing matters. Leaving this nil means a fresh
+	// result never carries a snapshot and so never becomes reusable,
+	// exactly as if ReuseGate were also nil.
+	ReuseSnapshotter SourceWatermarkSnapshotter
+	// ReuseEpochSnapshotter is optional (CHAOS-3782, Codex round-2
+	// finding #7). When set, Engine captures the organization's current
+	// rebuild-invalidation epoch itself, at the same moment as the
+	// watermark snapshot (immediately before the graph is read for a
+	// fresh investigation), and threads it to Save alongside that
+	// snapshot -- see RebuildEpoch's doc comment for why this closes a
+	// race the watermark snapshot and timestamp comparison alone could
+	// not. Leaving this nil means a fresh result never carries an epoch
+	// and so never becomes reusable, exactly as if ReuseGate were also
+	// nil.
+	ReuseEpochSnapshotter RebuildEpochSnapshotter
+	// ReuseModelIdentityResolver is optional (CHAOS-3782, Codex round-2
+	// finding #3). When set, tryReuse resolves the CURRENT org-effective
+	// model identity through it, per call, instead of using
+	// EngineOptions.ReuseModelIdentity's single static value for every
+	// organization -- see ReuseModelIdentityResolver's doc comment for
+	// the staleness bug a static identity causes. Leaving this nil keeps
+	// pre-existing behavior (EngineOptions.ReuseModelIdentity for every
+	// organization) -- the correct choice only for a deployment that has
+	// no per-organization model configuration at all.
+	ReuseModelIdentityResolver ReuseModelIdentityResolver
 }
 
 // EngineTelemetry receives content-safe operational counters from Engine.
@@ -43,20 +94,41 @@ type EngineTelemetry interface {
 	// silently), so this count is the only operator-visible signal that it
 	// happened.
 	RecordPriorSubjectReceiptsSkipped(ctx context.Context, principal storage.Principal, skipped int)
+	// RecordAnswerReuse reports the outcome of ONE Investigate call's
+	// reuse attempt (CHAOS-3782, AC-3782-8) as a closed AnswerReuseOutcome
+	// label -- AnswerReuseHit when a stored result was served with zero
+	// model calls, or one of the specific miss reasons when the call ran
+	// a fresh investigation instead. The reuse rate and the saved
+	// model-call count are both derived from this one stream (rate =
+	// hits / total; saved calls = count of hits, each one representing
+	// exactly the interpret+synthesize model calls a fresh investigation
+	// would otherwise have made); the miss reasons exist so a cratered
+	// reuse rate is diagnosable from telemetry (e.g.
+	// miss_evidence_containment dominating usually means the recheck's
+	// own bounds are the problem, not real staleness) rather than an
+	// operator only ever seeing "reuse rarely happens" with no way to
+	// tell why.
+	RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome)
 }
 
 // Engine coordinates one open-ended investigation. It deliberately composes
 // capabilities rather than matching the question against a route/plan table.
 type Engine struct {
-	interpreter    QuestionInterpreter
-	graph          GraphReader
-	facts          CanonicalFactReader
-	synthesizer    AnswerSynthesizer
-	results        InvestigationResultStore
-	telemetry      EngineTelemetry
-	serviceVersion string
-	now            func() time.Time
-	newResultID    func() string
+	interpreter                QuestionInterpreter
+	graph                      GraphReader
+	facts                      CanonicalFactReader
+	synthesizer                AnswerSynthesizer
+	results                    InvestigationResultStore
+	telemetry                  EngineTelemetry
+	reuseGate                  AnswerReuseGate
+	reuseSnapshotter           SourceWatermarkSnapshotter
+	reuseEpochSnapshotter      RebuildEpochSnapshotter
+	reuseModelIdentityResolver ReuseModelIdentityResolver
+	reuseProjectionVersion     string
+	reuseModelIdentity         string
+	serviceVersion             string
+	now                        func() time.Time
+	newResultID                func() string
 }
 
 func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine, error) {
@@ -75,6 +147,10 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 	return &Engine{
 		interpreter: dependencies.Interpreter, graph: dependencies.Graph, facts: dependencies.Facts,
 		synthesizer: dependencies.Synthesizer, results: dependencies.Results, telemetry: dependencies.Telemetry,
+		reuseGate: dependencies.ReuseGate, reuseSnapshotter: dependencies.ReuseSnapshotter,
+		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
+		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
+		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentity: options.ReuseModelIdentity,
 		serviceVersion: options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
 	}, nil
 }
@@ -101,6 +177,17 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	if err := ctx.Err(); err != nil {
 		return InvestigationResult{}, err
+	}
+
+	// CHAOS-3782 answer reuse. This MUST run before Interpret -- that
+	// ordering is the entire mechanism behind AC-3782-1's zero-model-call
+	// guarantee for a reuse hit. tryReuse itself only ever returns
+	// ok=false on anything it cannot fully confirm (TRD §19.7.3 fails
+	// closed); Investigate always falls through to a fresh investigation
+	// in that case, so a reuse-path failure is never visible to the
+	// caller as anything other than normal, slightly slower success.
+	if reused, ok := e.tryReuse(ctx, principal, request); ok {
+		return reused, nil
 	}
 
 	interpretation, err := e.interpreter.Interpret(ctx, principal, request)
@@ -167,6 +254,44 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			)
 		}
 	}
+	// CHAOS-3782 Codex round-1 F1: capture the reuse watermark snapshot
+	// HERE, immediately before the graph is read for this fresh
+	// investigation -- not later, at Save. A snapshot taken at Save time
+	// could describe data fresher than what ResolveSubjects/
+	// DiscoverContext below actually used (a projection could advance in
+	// between), which would let a later identical question reuse this
+	// stale answer under a watermark that merely looks unchanged.
+	// reuseWatermarkSnapshot is threaded EXPLICITLY to Save below, as its
+	// own parameter -- never through ctx (team-lead veto: load-bearing
+	// data belongs in the signature, where a caller who forgets it fails
+	// to compile, not in a context value a caller can silently omit).
+	//
+	// Fails OPEN on the snapshot read itself (never blocks the
+	// investigation over an optional dependency); reuseWatermarkSnapshot
+	// simply stays nil, and Save (per SourceWatermarkSnapshot's doc
+	// comment) must treat nil as "this row never becomes reusable" --
+	// the fail-CLOSED outcome for reuse specifically.
+	var reuseWatermarkSnapshot SourceWatermarkSnapshot
+	if e.reuseSnapshotter != nil {
+		if snapshot, snapErr := e.reuseSnapshotter.SnapshotSourceWatermarks(ctx, principal.OrgID); snapErr == nil {
+			reuseWatermarkSnapshot = snapshot
+		}
+	}
+	// Codex round-2 finding #7: captured at the SAME point as the
+	// watermark snapshot above, for the same reason (see RebuildEpoch's
+	// doc comment) -- a value read later, at Save, could describe an
+	// invalidation that happened AFTER the graph read this investigation
+	// actually used, wrongly clearing this result to reuse under an epoch
+	// that no longer describes what it was built from. Fails open on the
+	// read itself (reuseEpoch simply stays nil); Save must treat nil as
+	// "this row never becomes reusable," the fail-CLOSED outcome for
+	// reuse specifically -- same convention as reuseWatermarkSnapshot.
+	var reuseEpoch RebuildEpoch
+	if e.reuseEpochSnapshotter != nil {
+		if epoch, epochErr := e.reuseEpochSnapshotter.SnapshotRebuildEpoch(ctx, principal.OrgID); epochErr == nil {
+			reuseEpoch = &epoch
+		}
+	}
 	resolution, err := e.graph.ResolveSubjects(ctx, principal, graphRequest, interpretation)
 	if err != nil {
 		return InvestigationResult{}, fmt.Errorf("resolve subjects: %w", err)
@@ -203,6 +328,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	result.ResultID = e.newResultID()
 	result.RequestID = request.RequestID
 	result.GeneratedAt = e.now().UTC()
+	// Codex round-1 F8: explicit, not merely the zero value -- a
+	// Synthesizer implementation that (incorrectly) set Reused=true on
+	// its returned draft must not have that survive into a genuinely
+	// fresh result. Reused=true is ONLY ever valid on the exact object
+	// tryReuse returns.
+	result.Reused = false
 	result.Question = request.Question
 	result.Interpretation = interpretation
 	result.SubjectResolution = resolution
@@ -218,11 +349,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if strings.TrimSpace(result.Versions.CanonicalServiceVersion) == "" {
 		result.Versions.CanonicalServiceVersion = facts.Version
 	}
+	if strings.TrimSpace(result.Versions.ModelIdentity) == "" {
+		result.Versions.ModelIdentity = "unwired"
+	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, fmt.Errorf("%w: %v", ErrInvalidResult, err)
 	}
 	if e.results != nil {
-		if err := e.results.Save(ctx, principal, result); err != nil {
+		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch); err != nil {
 			return InvestigationResult{}, fmt.Errorf("save investigation result: %w", err)
 		}
 	}

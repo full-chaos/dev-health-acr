@@ -599,8 +599,10 @@
     "query_version": "query-v1",
     "interpretation_version": "interpretation-v1",
     "synthesis_version": "synthesis-v1",
-    "canonical_service_version": "ops-v1"
+    "canonical_service_version": "ops-v1",
+    "model_identity": "openai-compatible/gpt-5-nano"
   },
   "deterministic_answer": "Ask Dev is not release-ready. The principal current driver is incomplete release acceptance, despite most tracked implementation work being closed.",
-  "warnings": []
+  "warnings": [],
+  "reused": false
 }

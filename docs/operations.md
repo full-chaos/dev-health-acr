@@ -292,6 +292,35 @@ set exactly like `ACR_EVIDENCE_ID_KEYS`/`ACR_EVIDENCE_ID_ACTIVE_KID`:
 Reading a configuration back never returns the credential: the response
 carries `credential_masked` only (last 4 characters, e.g. `********wxyz`).
 
+### Answer reuse (CHAOS-3782)
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE` | *(unset — disabled)* | Staleness window (1m–24h when set). A stored investigation result older than this is never reused, regardless of whether every other reuse condition holds. Leaving this unset disables answer reuse entirely: every Investigate call runs fresh, exactly as if `pginvestigation.WithAnswerReuse` were never passed. |
+
+Answer reuse is **opt-in**: an operator turns it on by setting a window.
+This is deliberate, not merely conservative-by-default -- reuse changes
+what a request can be served from (a prior turn's stored answer, not a
+fresh graph/fact read), and that is a deployment decision, not something
+composing the investigator should silently switch on. Once opted in, the
+six-condition policy (TRD §19.7.3) fails closed on its own -- an
+unauthorized subject, a changed watermark, a stale generation time, or a
+version mismatch all fall through to an ordinary fresh investigation,
+never a wrong answer.
+
+**D15 hazard, restated (TRD §19.2/§19.7.3):** the projection cursor is
+event-time based, so a backfilled or corrected source row does not
+advance `backend_watermark` and is not re-observed until a full rebuild.
+Watermark equality alone cannot prove a stored answer is still accurate.
+This env var is the first of the two independent bounds that cover that
+gap -- set it conservatively for your deployment's plausible backfill lag.
+The second bound is rebuild invalidation: `acr-projector`'s
+`ReuseInvalidator` hook (`projectionrun.Coordinator`, wired in
+`cmd/acr-projector/runtime.go`) marks every stored result for an
+organization unreusable the moment that organization's rebuild completes,
+independent of whether the rebuild happened to produce a different
+watermark string.
+
 Two behaviours matter operationally, and they are opposites on purpose:
 
 - **No provider configured is a supported state, not an error.**

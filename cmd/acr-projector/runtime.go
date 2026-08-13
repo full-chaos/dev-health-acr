@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgprojection"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
 	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
@@ -104,6 +105,16 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
+	// CHAOS-3782: reuses pginvestigation.Store purely as a
+	// contextfabric.ReuseInvalidator here -- acr-projector never saves or
+	// reads investigation results itself, so WithAnswerReuse is
+	// deliberately not passed (InvalidateOrganizationReuse works
+	// regardless of whether reuse is "enabled" on a Store; only
+	// Save/FindReusable's reuse bookkeeping needs that option).
+	reuseInvalidator, err := pginvestigation.NewStore(db)
+	if err != nil {
+		return nil, errors.Join(err, runtime.Close())
+	}
 
 	clickhouseSource, err := devhealthsource.NewClickHouseProjectionSource(clickhouseClient)
 	if err != nil {
@@ -123,7 +134,8 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 			{Name: devhealthsource.TeamsProjectsSourceName, Source: teamsProjectsSource},
 		},
 		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: rebuildMarkers, Locker: locker,
-		PollInterval: cfg.PollInterval, Concurrency: cfg.Concurrency, Logger: logger,
+		ReuseInvalidator: reuseInvalidator,
+		PollInterval:     cfg.PollInterval, Concurrency: cfg.Concurrency, Logger: logger,
 	})
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("build projection coordinator: %w", err), runtime.Close())

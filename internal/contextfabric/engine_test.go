@@ -44,11 +44,15 @@ func (f synthesizerFunc) Synthesize(ctx context.Context, principal storage.Princ
 }
 
 type resultStoreStub struct {
-	saved InvestigationResult
+	saved         InvestigationResult
+	savedSnapshot SourceWatermarkSnapshot
+	savedEpoch    RebuildEpoch
 }
 
-func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult) error {
+func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch) error {
 	s.saved = result
+	s.savedSnapshot = reuseSnapshot
+	s.savedEpoch = reuseEpoch
 	return nil
 }
 
@@ -64,7 +68,7 @@ type staticResultStore struct {
 	getErr  error
 }
 
-func (s *staticResultStore) Save(context.Context, storage.Principal, InvestigationResult) error {
+func (s *staticResultStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch) error {
 	return nil
 }
 
@@ -198,6 +202,11 @@ func TestNewEngineRequiresAllCoreCapabilities(t *testing.T) {
 // through.
 type recordingTelemetry struct {
 	priorSubjectReceiptsSkipped []int
+	answerReuseOutcomes         []AnswerReuseOutcome
+}
+
+func (r *recordingTelemetry) RecordAnswerReuse(_ context.Context, _ storage.Principal, outcome AnswerReuseOutcome) {
+	r.answerReuseOutcomes = append(r.answerReuseOutcomes, outcome)
 }
 
 func (r *recordingTelemetry) RecordPriorSubjectReceiptsSkipped(_ context.Context, _ storage.Principal, skipped int) {

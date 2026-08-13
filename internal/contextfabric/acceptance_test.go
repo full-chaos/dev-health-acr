@@ -40,7 +40,7 @@ func newMapResultStore() *mapResultStore {
 	return &mapResultStore{byOrg: map[string]map[string]InvestigationResult{}}
 }
 
-func (s *mapResultStore) Save(_ context.Context, principal storage.Principal, result InvestigationResult) error {
+func (s *mapResultStore) Save(_ context.Context, principal storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.byOrg[principal.OrgID] == nil {
@@ -484,7 +484,7 @@ func TestAcceptanceUnauthorizedSubjectDegradesSilentlyWithoutLeaking(t *testing.
 	priorPrincipal := storage.Principal{OrgID: "org_other_tenant"}
 	priorResult := bootstrapDraftToResult(project)
 	priorResult.ResultID = "result_prior_unauth1"
-	if err := results.Save(context.Background(), priorPrincipal, priorResult); err != nil {
+	if err := results.Save(context.Background(), priorPrincipal, priorResult, nil, nil); err != nil {
 		t.Fatalf("seed Save() error = %v", err)
 	}
 	engine := buildAcceptanceEngine(t, graph, facts, bootstrapInterpretation(), bootstrapDraft(project), results)
@@ -516,7 +516,7 @@ func bootstrapDraftToResult(project SubjectRef) InvestigationResult {
 		Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{},
 		Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{},
 		Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
-		Versions:            VersionSet{ServiceVersion: "test", ContractVersion: InvestigationResultSchemaV1, Backend: "test", ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1"},
+		Versions:            VersionSet{ServiceVersion: "test", ContractVersion: InvestigationResultSchemaV1, Backend: "test", ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1", ModelIdentity: "test/model-v1"},
 		DeterministicAnswer: "prior answer", Warnings: []string{},
 	}
 }

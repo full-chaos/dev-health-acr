@@ -57,7 +57,7 @@ func validResult(resultID string) contextfabric.InvestigationResult {
 		Coverage:            contextfabric.Coverage{Sources: []contextfabric.SourceObservation{}},
 		Versions: contextfabric.VersionSet{
 			ServiceVersion: "test", ContractVersion: contextfabric.InvestigationResultSchemaV1, Backend: "test",
-			ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1",
+			ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1", ModelIdentity: "test/model-v1",
 		},
 		Warnings: []string{},
 	}
@@ -113,13 +113,13 @@ func TestStore_saveAndGetReturnContextCanceledWithoutWrappingAsUnavailable(t *te
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 
-	saveErr := store.Save(cancelled, storage.Principal{OrgID: "org-1"}, validResult("result-cancelled-save"))
+	saveErr := store.Save(cancelled, storage.Principal{OrgID: "org-1"}, validResult("result-cancelled-save"), nil, nil)
 	require.Error(t, saveErr)
 	require.True(t, errors.Is(saveErr, context.Canceled), "save error should be context.Canceled, got %v", saveErr)
 	require.False(t, errors.Is(saveErr, contextfabric.ErrUnavailable), "a canceled context is not a bounded dependency failure")
 
 	// Seed a row (with a live context) so Get has something to reach for.
-	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-cancelled-get")))
+	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-cancelled-get"), nil, nil))
 
 	_, getErr := store.Get(cancelled, storage.Principal{OrgID: "org-1"}, "result-cancelled-get")
 	require.Error(t, getErr)
@@ -132,13 +132,13 @@ func TestStore_saveAndGetReturnUnavailableOnDeadlineExceeded(t *testing.T) {
 	db := newInvestigationTestDatabase(t, ctx)
 	store, err := pginvestigation.NewStore(db)
 	require.NoError(t, err)
-	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-deadline-seed")))
+	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-deadline-seed"), nil, nil))
 
 	expired, cancel := context.WithTimeout(ctx, time.Nanosecond)
 	defer cancel()
 	time.Sleep(time.Millisecond)
 
-	saveErr := store.Save(expired, storage.Principal{OrgID: "org-1"}, validResult("result-deadline-save"))
+	saveErr := store.Save(expired, storage.Principal{OrgID: "org-1"}, validResult("result-deadline-save"), nil, nil)
 	require.Error(t, saveErr)
 	require.True(t, errors.Is(saveErr, context.DeadlineExceeded), "save error should be context.DeadlineExceeded, got %v", saveErr)
 
@@ -152,7 +152,7 @@ func TestStore_getUnknownResultIDIsIndistinguishableFromWrongOrg(t *testing.T) {
 	db := newInvestigationTestDatabase(t, ctx)
 	store, err := pginvestigation.NewStore(db)
 	require.NoError(t, err)
-	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-non-enumerating")))
+	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-non-enumerating"), nil, nil))
 
 	_, wrongOrgErr := store.Get(ctx, storage.Principal{OrgID: "org-2"}, "result-non-enumerating")
 	_, unknownIDErr := store.Get(ctx, storage.Principal{OrgID: "org-2"}, "result-does-not-exist")

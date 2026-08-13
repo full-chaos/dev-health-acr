@@ -252,6 +252,22 @@ func (v ContextFabricVersionSet) Validate() error {
 			return fmt.Errorf("version metadata violates v1 bounds")
 		}
 	}
+	// ModelIdentity (CHAOS-3782) is OPTIONAL, unlike every sibling above --
+	// Codex round-2 finding #2: a row persisted before this field existed
+	// (migration 0009, pre-0011) has no model identity captured at all,
+	// and the immutable store must keep reading it back regardless --
+	// Get() calls Validate() on every read, so a REQUIRED field here would
+	// permanently break every pre-CHAOS-3782 stored result. Empty means
+	// "unknown," distinct from "unwired" (the placeholder a FRESH
+	// investigation gets when no model ran -- see Engine.Investigate --
+	// which is itself a non-empty string and so still validates here).
+	// This also has no reuse-eligibility consequence to special-case: a
+	// row with no ModelIdentity also has no question_hash (it predates
+	// answer reuse entirely, or was saved with reuse disabled), and
+	// FindReusable already excludes every such row on that basis alone.
+	if v.ModelIdentity != "" && !validModelIdentity(v.ModelIdentity) {
+		return fmt.Errorf("version metadata violates v1 bounds")
+	}
 	if !stringLengthBetween(v.BackendVersion, 0, 256) || strings.TrimSpace(v.BackendVersion) != v.BackendVersion {
 		return fmt.Errorf("backend_version violates v1 bounds")
 	}

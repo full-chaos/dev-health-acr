@@ -18,7 +18,7 @@ import (
 // onto every batch it produces. Checkpoints and telemetry are keyed by it.
 const SourceName = "dev_health_clickhouse"
 
-// sourceVersion is bumped to v2 by CHAOS-3779 (codex round-2 H2 residual):
+// ClickHouseSourceVersion is bumped to v2 by CHAOS-3779 (codex round-2 H2 residual):
 // queryWorkItemDependencies' RelationshipID now embeds relationship_type
 // (previously (source, target) only), and queryWorkItemHierarchy is a new
 // producer. The bump is deliberate, not cosmetic: ProjectionWorker.RunOnce
@@ -27,7 +27,7 @@ const SourceName = "dev_health_clickhouse"
 // already-projected organization through an explicit rebuild instead of
 // silently double-writing edges under the old, now-collapsed identity
 // scheme beside the new one.
-const sourceVersion = "devhealthsource.clickhouse.v2"
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v2"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and
@@ -165,7 +165,7 @@ func (s *ClickHouseProjectionSource) fullSnapshot(ctx context.Context, orgID str
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	sortCandidates(all)
-	batch, err := buildBatch(orgID, SourceName, sourceVersion, "", all, true, true, s.clock())
+	batch, err := buildBatch(orgID, SourceName, ClickHouseSourceVersion, "", all, true, true, s.clock())
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
@@ -205,7 +205,7 @@ func (s *ClickHouseProjectionSource) pagedBatch(ctx context.Context, orgID, curs
 	if len(all) == 0 {
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
-	batch, err := buildBatch(orgID, SourceName, sourceVersion, cursor, all, false, false, s.clock())
+	batch, err := buildBatch(orgID, SourceName, ClickHouseSourceVersion, cursor, all, false, false, s.clock())
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
@@ -369,7 +369,7 @@ func organizationCandidate(orgID string, observedAt time.Time) candidate {
 		// (see docs/design/context-fabric-projection-worker.md); the org ID
 		// is the best available label until Dev Health Ops exposes one.
 		Authorization:  contractsv1.ContextFabricAuthorizationScope{ProjectIDs: []string{organizationScopeID(orgID)}},
-		EvidenceRefIDs: []string{"acr:v1:organization:" + orgID}, ObservedAt: observedAt, SourceVersion: sourceVersion,
+		EvidenceRefIDs: []string{"acr:v1:organization:" + orgID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 	}
 	return candidate{observedAt: observedAt, sortKey: entity.Subject.CanonicalID, entity: &entity}
 }
@@ -400,7 +400,7 @@ func belongsToRepository(from contractsv1.ContextFabricSubjectRef, repoSlug, rep
 	relationship := contractsv1.ContextFabricRelationshipProjection{
 		RelationshipID: "relationship:belongs_to_repository:" + from.CanonicalID, Type: "BELONGS_TO_REPOSITORY", From: from, To: to,
 		Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
-		Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt, SourceVersion: sourceVersion,
+		Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 	}
 	return candidate{observedAt: observedAt, sortKey: rowKey, relationship: &relationship}
 }

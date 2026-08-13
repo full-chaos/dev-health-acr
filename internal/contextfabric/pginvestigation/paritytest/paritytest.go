@@ -101,7 +101,7 @@ func result(resultID, question string) contextfabric.InvestigationResult {
 		Coverage:            contextfabric.Coverage{Sources: []contextfabric.SourceObservation{}, DegradedReasons: []string{}},
 		Versions: contextfabric.VersionSet{
 			ServiceVersion: "test", ContractVersion: contextfabric.InvestigationResultSchemaV1, Backend: "test",
-			ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1",
+			ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1", ModelIdentity: "test/model-v1",
 		},
 		Warnings: []string{},
 	}
@@ -213,7 +213,7 @@ func RunSuite(t *testing.T, newStore func(t *testing.T) contextfabric.Investigat
 			ctx := context.Background()
 
 			for index, step := range testCase.Save {
-				err := store.Save(ctx, step.Principal, step.Result)
+				err := store.Save(ctx, step.Principal, step.Result, nil, nil)
 				if step.WantErr {
 					if err == nil {
 						t.Fatalf("save[%d] %q: want error, got nil", index, step.Result.ResultID)
@@ -323,7 +323,7 @@ func RunExplicitNullDegradedReasonsSuite(t *testing.T, newStore func(t *testing.
 		// successful idempotent replay: doing so would report success
 		// while leaving the invalid stored row in place forever, since
 		// these stores never overwrite.
-		err := store.Save(context.Background(), orgA, valid)
+		err := store.Save(context.Background(), orgA, valid, nil, nil)
 		if err == nil {
 			t.Fatal("Save() error = nil, want a replay against a stored explicit-null row to be rejected, not treated as an idempotent success")
 		}
