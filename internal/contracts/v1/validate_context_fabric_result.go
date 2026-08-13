@@ -97,7 +97,13 @@ func (m ContextFabricCohortMember) Validate() error {
 	if err := m.Subject.Validate(); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
-	if m.Rank < 1 || len(m.InclusionReasons) < 1 || len(m.InclusionReasons) > 50 || !uniqueTrimmedStrings(m.InclusionReasons, 1024) || !optionalEvidenceRefs(m.EvidenceRefIDs, 500) {
+	// 32 items of at most 1000 characters, matching this shape's PUBLISHED
+	// schema. The Go bound used to be 50/1024 -- looser than the contract
+	// it claims to enforce -- so a cohort member could pass Go validation
+	// while violating the schema, and then fail projection (codex round-2
+	// F2). JSON Schema is the wire-contract source of truth here, so the
+	// Go bound moves to it, not the reverse.
+	if m.Rank < 1 || len(m.InclusionReasons) < 1 || len(m.InclusionReasons) > 32 || !uniqueTrimmedStrings(m.InclusionReasons, 1000) || !optionalEvidenceRefs(m.EvidenceRefIDs, 500) {
 		return fmt.Errorf("cohort member violates v1 bounds")
 	}
 	return nil

@@ -1,7 +1,10 @@
 package mcp
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -242,6 +245,54 @@ func TestOurSchemaVersionsIncludesConsumedHostedResponseSchemas(t *testing.T) {
 	for _, want := range consumed {
 		if !slices.Contains(ourSchemaVersions, want) {
 			t.Fatalf("ourSchemaVersions is missing consumed hosted response schema %q", want)
+		}
+	}
+}
+
+// TestGoldenCapabilitiesExamplePassesTheRealStartupGate is the codex
+// round-2 F6 regression.
+//
+// The published capabilities example advertised the answer tools while
+// omitting the schema versions checkCompatibility requires, so the document
+// the repository holds up as canonical would have been REJECTED by the real
+// sidecar at boot. Validating it against its schema did not catch that:
+// schema validity and startup compatibility are different properties, and
+// only the second one decides whether a deployment works.
+//
+// This runs the ACTUAL gate against the golden document rather than a
+// hand-built fixture, so an example that could not boot a sidecar fails
+// here instead of in someone's terminal.
+func TestGoldenCapabilitiesExamplePassesTheRealStartupGate(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "contracts", "examples", "v1", "capabilities.v1.json"))
+	if err != nil {
+		t.Fatalf("read golden capabilities example: %v", err)
+	}
+	var capabilities contractsv1.Capabilities
+	if err := json.Unmarshal(raw, &capabilities); err != nil {
+		t.Fatalf("decode golden capabilities example: %v", err)
+	}
+	if err := capabilities.Validate(); err != nil {
+		t.Fatalf("golden capabilities example is not contract-valid: %v", err)
+	}
+
+	// The example must be a document a real sidecar accepts in its default
+	// read-only mode.
+	if err := checkCompatibility(capabilities, "1.0.0", false); err != nil {
+		t.Fatalf("the golden capabilities example fails the real startup gate: %v", err)
+	}
+
+	// And it must actually advertise the answer surface, or this test
+	// would pass for a document that simply never claimed it.
+	for _, tool := range []string{toolInvestigateQuestion, toolInvestigationResult} {
+		if !slices.Contains(capabilities.EnabledTools, tool) {
+			t.Errorf("golden capabilities example does not advertise %q", tool)
+		}
+	}
+	// Every schema the sidecar requires must be advertised, including the
+	// answer contracts it decodes.
+	for _, required := range ourSchemaVersions {
+		if !slices.Contains(capabilities.SupportedSchemaVersions, required) {
+			t.Errorf("golden capabilities example omits required schema %q", required)
 		}
 	}
 }

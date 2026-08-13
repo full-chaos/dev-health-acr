@@ -636,7 +636,26 @@
    "structured.claimed_facts[].value.string",
    "structured.coverage.degraded_reasons[]",
    "structured.limitations[]",
-   "structured.warnings[]"
+   "structured.warnings[]",
+   "structured.claimed_facts[].subject.label",
+   "structured.cohort.exclusions[].reason",
+   "structured.cohort.exclusions[].subject.label",
+   "structured.cohort.members[].subject.label",
+   "structured.conflicts[].subjects[].label",
+   "structured.coverage.sources[].reason",
+   "structured.drivers[].affected_subjects[].label",
+   "structured.interpretation.clarification_reason",
+   "structured.interpretation.comparison_terms[]",
+   "structured.interpretation.fact_requirements[].subjects[].label",
+   "structured.interpretation.subject_terms[]",
+   "structured.paths[].edges[].from.label",
+   "structured.paths[].edges[].to.label",
+   "structured.paths[].nodes[].label",
+   "structured.readiness_gaps[].subjects[].label",
+   "structured.remaining_work[].subjects[].label",
+   "structured.subject_resolution.candidates[].matched_terms[]",
+   "structured.subject_resolution.candidates[].subject.label",
+   "structured.subject_resolution.committed[].label"
   ]
  }
 }

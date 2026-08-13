@@ -173,7 +173,7 @@ func (p ContextFabricAnswerProjection) validateFacts() (map[string]struct{}, err
 		if !stringLengthBetween(fact.ClaimID, 8, 256) || !validFactKind(fact.Kind) {
 			return nil, fmt.Errorf("answer projection key fact identity violates v1 bounds")
 		}
-		if !stringLengthBetween(fact.Field, 1, 256) || strings.TrimSpace(fact.Field) != fact.Field {
+		if !stringLengthBetween(fact.Field, 1, ContextFabricClaimedFieldMaxLength) || strings.TrimSpace(fact.Field) != fact.Field {
 			return nil, fmt.Errorf("answer projection key fact field violates v1 bounds")
 		}
 		if err := fact.Subject.Validate(); err != nil {
@@ -243,7 +243,12 @@ func (p ContextFabricAnswerProjection) validateCoverage() error {
 		if !validSourceState(entry.State) {
 			return fmt.Errorf("answer projection coverage state is not a member of the closed vocabulary")
 		}
-		if !stringLengthBetween(entry.Reason, 0, 1000) {
+		// Matches the canonical SourceObservation.reason bound. A tighter
+		// bound here would reject a legitimate canonical result: the
+		// explanation for a missing source is precisely what a reader
+		// needs to judge a partial answer, so it is not agent-noise to
+		// be trimmed.
+		if !stringLengthBetween(entry.Reason, 0, 2000) {
 			return fmt.Errorf("answer projection coverage reason violates v1 bounds")
 		}
 		if _, exists := seen[entry.Source]; exists {

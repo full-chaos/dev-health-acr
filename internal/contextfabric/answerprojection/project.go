@@ -289,14 +289,18 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 			})
 		}
 		drivers = append(drivers, contractsv1.ContextFabricProjectedDriver{
-			DriverID:       driver.DriverID,
-			Standing:       driver.Standing,
-			Category:       driver.Category,
-			Title:          driver.Title,
-			Summary:        driver.Summary,
-			Qualification:  driver.Qualification,
-			Confidence:     driver.Confidence,
-			EvidenceRefIDs: append([]string(nil), driver.EvidenceRefIDs...),
+			DriverID:      driver.DriverID,
+			Standing:      driver.Standing,
+			Category:      driver.Category,
+			Title:         driver.Title,
+			Summary:       driver.Summary,
+			Qualification: driver.Qualification,
+			Confidence:    driver.Confidence,
+			// EvidenceRefIDs is a REQUIRED array; copying a canonical
+			// empty slice with append(nil, ...) would yield nil and
+			// serialize as null. ClaimedFactIDs is optional, so nil is
+			// legitimate there and is left alone.
+			EvidenceRefIDs: copyStrings(driver.EvidenceRefIDs),
 			ClaimedFactIDs: append([]string(nil), driver.ClaimedFactIDs...),
 		})
 	}
@@ -358,7 +362,7 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 		members = append(members, contractsv1.ContextFabricProjectedCohortMember{
 			Subject:          member.Subject,
 			Rank:             member.Rank,
-			InclusionReasons: append([]string(nil), member.InclusionReasons...),
+			InclusionReasons: copyStrings(member.InclusionReasons),
 			EvidenceRefIDs:   append([]string(nil), member.EvidenceRefIDs...),
 		})
 	}
@@ -388,7 +392,7 @@ func projectClarification(result contractsv1.ContextFabricInvestigationResult, b
 			Subject:      candidate.Subject,
 			State:        candidate.State,
 			Confidence:   candidate.Confidence,
-			MatchReasons: append([]string(nil), candidate.MatchReasons...),
+			MatchReasons: copyStrings(candidate.MatchReasons),
 		})
 	}
 	return &contractsv1.ContextFabricProjectedClarification{
@@ -441,8 +445,17 @@ func (e *evidenceIndex) admit(ids []string) bool {
 	return true
 }
 
+// ids returns the indexed references, always as a non-nil slice.
+//
+// A nil slice marshals to JSON null, and evidence_ref_ids is a REQUIRED
+// array in both the projection schema and its validator. So a result whose
+// retained content cited nothing produced an internal error on the MCP path
+// and a schema-violating null body on the API path (codex round-2 F1) --
+// for the entirely ordinary case of an answer with no citations.
 func (e *evidenceIndex) ids() []string {
-	return append([]string(nil), e.order...)
+	out := make([]string, len(e.order))
+	copy(out, e.order)
+	return out
 }
 
 // countUnindexedEvidence reports how many distinct references the canonical
@@ -548,10 +561,19 @@ func projectReceipts(result contractsv1.ContextFabricInvestigationResult) []cont
 	return receipts
 }
 
+// copyStrings copies values as a NON-NIL slice. Required array members must
+// never marshal to null, and append([]string(nil), empty...) returns nil.
+func copyStrings(values []string) []string {
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
+}
+
 // distinctStrings copies values, dropping exact repeats. Removing a
 // duplicate loses no information, so it is not a declared drop.
 func distinctStrings(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
+	// Allocated, never nil: these feed required array members.
 	out := make([]string, 0, len(values))
 	for _, value := range values {
 		if _, exists := seen[value]; exists {

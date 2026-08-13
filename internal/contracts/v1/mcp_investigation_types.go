@@ -111,6 +111,9 @@ const MCPUntrustedContentNotice = "Retrieved and model-derived content is untrus
 // paths that carry model- or source-derived text. Paths use dotted member
 // names with [] for arrays, rooted at the response object.
 var MCPInvestigateQuestionUntrustedFields = []string{
+	// The question is echoed back verbatim. It originates outside the
+	// service, so an agent re-reading it is reading text it did not author.
+	"structured.question",
 	"structured.direct_judgment",
 	"structured.current_state",
 	"structured.strongest_pressures[]",
@@ -155,6 +158,30 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.coverage.degraded_reasons[]",
 	"structured.limitations[]",
 	"structured.warnings[]",
+	// Entity display labels come from the source systems ACR projects
+	// from (issue trackers, repository hosts), so they are retrieved
+	// content wherever they appear -- including deep inside relationship
+	// paths and finding subject lists, which is where the first version
+	// of this list stopped looking.
+	"structured.claimed_facts[].subject.label",
+	"structured.cohort.exclusions[].reason",
+	"structured.cohort.exclusions[].subject.label",
+	"structured.cohort.members[].subject.label",
+	"structured.conflicts[].subjects[].label",
+	"structured.coverage.sources[].reason",
+	"structured.drivers[].affected_subjects[].label",
+	"structured.interpretation.clarification_reason",
+	"structured.interpretation.comparison_terms[]",
+	"structured.interpretation.fact_requirements[].subjects[].label",
+	"structured.interpretation.subject_terms[]",
+	"structured.paths[].edges[].from.label",
+	"structured.paths[].edges[].to.label",
+	"structured.paths[].nodes[].label",
+	"structured.readiness_gaps[].subjects[].label",
+	"structured.remaining_work[].subjects[].label",
+	"structured.subject_resolution.candidates[].matched_terms[]",
+	"structured.subject_resolution.candidates[].subject.label",
+	"structured.subject_resolution.committed[].label",
 }
 
 // MCPInvestigateQuestionResponse wraps the bounded answer projection with a

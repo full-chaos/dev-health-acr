@@ -1,8 +1,29 @@
 {
+ "enabled_tools": [
+  "context_for_task",
+  "source_evidence",
+  "investigate_question",
+  "investigation_result"
+ ],
+ "entitlements": {
+  "agent_context_runtime": true
+ },
+ "generated_at": "2026-07-10T14:00:00Z",
+ "limits": {
+  "max_items": 30,
+  "max_output_tokens": 4000,
+  "max_serialized_bytes": 262144,
+  "requests_per_minute": 60
+ },
+ "minimum_sidecar_version": "0.1.0",
+ "permissions": {
+  "context_read": true,
+  "episode_write": false,
+  "evidence_read": true
+ },
  "schema_version": "capabilities.v1",
  "service": "dev-health-acr",
  "service_version": "0.1.0",
- "minimum_sidecar_version": "0.1.0",
  "supported_schema_versions": [
   "context_packet_request.v1",
   "context_packet.v1",
@@ -16,33 +37,19 @@
   "error.v1",
   "context_fabric_investigation_request.v1",
   "context_fabric_investigation_result.v1",
+  "context_fabric_answer_projection.v1",
   "context_fabric_projection_batch.v1",
+  "context_fabric_org_model_config.v1",
+  "context_fabric_org_model_config_write_request.v1",
   "mcp_context_for_task_request.v1",
   "mcp_context_for_task_response.v1",
   "mcp_source_evidence_request.v1",
   "mcp_source_evidence_response.v1",
+  "mcp_investigate_question_request.v1",
+  "mcp_investigate_question_response.v1",
+  "mcp_investigation_result_request.v1",
+  "mcp_investigation_result_response.v1",
   "mcp_record_episode_request.v1",
   "mcp_record_episode_response.v1"
- ],
- "enabled_tools": [
-  "context_for_task",
-  "source_evidence",
-  "investigate_question",
-  "investigation_result"
- ],
- "entitlements": {
-  "agent_context_runtime": true
- },
- "limits": {
-  "max_items": 30,
-  "max_output_tokens": 4000,
-  "max_serialized_bytes": 262144,
-  "requests_per_minute": 60
- },
- "generated_at": "2026-07-10T14:00:00Z",
- "permissions": {
-  "context_read": true,
-  "evidence_read": true,
-  "episode_write": false
- }
+ ]
 }

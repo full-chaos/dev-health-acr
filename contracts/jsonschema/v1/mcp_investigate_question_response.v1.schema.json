@@ -690,7 +690,7 @@
             "field": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 256
+              "maxLength": 128
             },
             "value": {
               "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ScalarValue"
@@ -729,7 +729,7 @@
             },
             "reason": {
               "type": "string",
-              "maxLength": 1000
+              "maxLength": 2000
             }
           },
           "required": [

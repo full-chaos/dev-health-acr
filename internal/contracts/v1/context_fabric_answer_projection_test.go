@@ -385,10 +385,15 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 	}
 	sort.Strings(shared)
 
-	// A vacuous pass would be worse than a failure: if the intersection
-	// ever came back empty the gate would silently stop guarding anything.
-	if len(shared) == 0 {
-		t.Fatal("no shared $defs found; the enumeration is not working")
+	// The intersection is PINNED, not merely non-empty (codex round-2 F5).
+	// Enumerating alone still false-passes on a rename: the shape simply
+	// vanishes from the intersection and nothing notices it stopped being
+	// checked. Pinning makes both directions fail loudly -- a rename
+	// shrinks the set, a newly reused shape grows it -- and each forces a
+	// deliberate update rather than silent drift.
+	expected := []string{"BoundSubjectReceipt", "ScalarValue", "SubjectRef", "VersionSet"}
+	if !reflect.DeepEqual(shared, expected) {
+		t.Fatalf("the set of reused shapes changed: got %v, pinned %v.\nA shape that vanished was renamed or stopped being reused; a new one must be added deliberately.", shared, expected)
 	}
 	t.Logf("verifying %d reused shapes: %v", len(shared), shared)
 	for _, name := range shared {
