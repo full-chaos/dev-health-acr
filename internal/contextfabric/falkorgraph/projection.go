@@ -115,45 +115,52 @@ func subjectMergeParams(alias string, subject contextfabric.SubjectRef, orgID st
 	return map[string]interface{}{alias + "Kind": string(subject.Kind), alias + "Id": subject.CanonicalID, "org": orgID}
 }
 
-// subjectStubMergeCypher is subjectMergeCypher's counterpart for an endpoint
-// node a relationship merely POINTS AT rather than owns (CHAOS-3785 codex
-// round-1 finding F1). ON CREATE sets attrsParam in full, including
-// authorization, since nothing else has ever described this node yet. ON
-// MATCH sets onMatchAttrsParam only -- callers must build that map with
-// withoutAuthorizationKeys -- because same-batch ordering
-// (ApplyProjectionBatch: relationships/contents/episodes before entities)
-// only protects a subject's own authoritative authorization from an
-// implicit endpoint-stub write within the SAME batch; a paged/incremental
-// batch can easily land a subject's real entity write and an edge that
-// references it in two different batches (devhealthsource's
-// sortCandidates/truncateToCompleteRows sort and cap every producer
-// table's candidates together by (observedAt, sortKey), not grouped by
-// subject). Without this split, a later edge whose own Authorization
-// differs from the endpoint's real scope -- e.g. CHAOS-3785's no-repository
-// sentinel on an edge from a repo-less Linear work item to a genuinely
-// repo-backed subject -- would silently replace that subject's real
-// authorization_* attributes, making it invisible to a principal correctly
-// scoped to its actual repository.
-func subjectStubMergeCypher(alias, kindLabelValue, attrsParam, onMatchAttrsParam string) string {
+// subjectStubMergeCypher is subjectMergeCypher's counterpart for a subject
+// node a writer references but does not OWN -- a relationship's From/To
+// endpoint, or the canonical subject a content/episode record attaches to
+// (CHAOS-3785 codex round-1 finding F1, widened to every such writer by
+// codex round-2 finding R2-1). The class this closes: every subject-node
+// write in this file falls into exactly one of two roles --
+//
+//   - OWNED (subjectMergeCypher, unconditional "SET += $attrs" both ways):
+//     the ONE producer authoritative for this exact node -- projectEntity
+//     for its own entity subject, projectContent/projectEpisode for the
+//     document/episode node they themselves synthesize (content:ID /
+//     episode:ID; nothing else in this package ever writes those). An
+//     authoritative write must always win, including on match: it is the
+//     single source of truth for that node's canonical data.
+//   - REFERENCED (subjectStubMergeCypher, this function): a writer that
+//     merely points at a subject some OTHER, unrelated producer owns --
+//     projectRelationship's From/To, projectContent/projectEpisode's own
+//     attachment subject. ON CREATE seeds attrsParam in full (nothing else
+//     has ever described this node yet, so it is the only data available).
+//     ON MATCH sets NOTHING beyond the kind label (idempotent, carries no
+//     canonical information) -- not authorization (round-1 F1: a
+//     mismatched edge/content/episode scope must never replace an
+//     endpoint's own, independently-projected authorization_* attributes),
+//     and not label/evidence/source_version/temporal fields either (round-2
+//     R2-2: devhealthsource's dependency/hierarchy producers set a
+//     relationship endpoint's Label to the bare work-item ID, not its
+//     title -- ON MATCH SET-ing that onto an already-canonical node would
+//     silently replace a real title with an ID). Same-batch ordering
+//     (ApplyProjectionBatch: relationships/contents/episodes before
+//     entities) only protects an OWNED write within the SAME batch; a
+//     paged/incremental batch can easily land a subject's real entity write
+//     and a REFERENCED write in two different batches (devhealthsource's
+//     sortCandidates/truncateToCompleteRows sort and cap every producer
+//     table's candidates together by (observedAt, sortKey), not grouped by
+//     subject), so cross-batch protection has to live here, not there.
+//
+// A fourth writer added later cannot reintroduce this class by construction
+// -- it inherits whichever of the two builders its role calls for -- rather
+// than by every author remembering the invariant independently.
+func subjectStubMergeCypher(alias, kindLabelValue, attrsParam string) string {
 	return fmt.Sprintf(
-		"MERGE (%s:%s {%s:$org, %s:$%sKind, %s:$%sId}) ON CREATE SET %s += $%s, %s:%s ON MATCH SET %s += $%s, %s:%s",
+		"MERGE (%s:%s {%s:$org, %s:$%sKind, %s:$%sId}) ON CREATE SET %s += $%s, %s:%s ON MATCH SET %s:%s",
 		alias, labelSubject, propOrgID, propKind, alias, propCanonicalID, alias,
 		alias, attrsParam, alias, kindLabelValue,
-		alias, onMatchAttrsParam, alias, kindLabelValue,
+		alias, kindLabelValue,
 	)
-}
-
-// withoutAuthorizationKeys returns a copy of attrs with the three
-// authorization_* keys removed -- see subjectStubMergeCypher's doc comment.
-func withoutAuthorizationKeys(attrs map[string]interface{}) map[string]interface{} {
-	onMatch := make(map[string]interface{}, len(attrs))
-	for k, v := range attrs {
-		if k == propAuthzRepos || k == propAuthzProjects || k == propAuthzTeams {
-			continue
-		}
-		onMatch[k] = v
-	}
-	return onMatch
 }
 
 // subjectMergeAttrs builds the SET n += $attrs payload for a subject node.
@@ -222,10 +229,6 @@ func (a *Adapter) projectEntity(ctx context.Context, key, orgID string, entity c
 func (a *Adapter) projectRelationship(ctx context.Context, key, orgID string, relationship contextfabric.RelationshipProjection) error {
 	fromAttrs := subjectMergeAttrs(relationship.From, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion, nil)
 	toAttrs := subjectMergeAttrs(relationship.To, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion, nil)
-	// F1: an endpoint that already exists keeps its own authorization; the
-	// edge's Authorization only seeds a brand-new stub node's ON CREATE.
-	fromAttrsOnMatch := withoutAuthorizationKeys(fromAttrs)
-	toAttrsOnMatch := withoutAuthorizationKeys(toAttrs)
 	edgeAttrs := map[string]interface{}{
 		propRelationshipID: relationship.RelationshipID, propRelationType: graphrank.NormalizeRelation(string(relationship.Type)),
 		"derivation": string(relationship.Derivation), "epistemic_status": string(relationship.EpistemicStatus),
@@ -242,13 +245,10 @@ func (a *Adapter) projectRelationship(ctx context.Context, key, orgID string, re
 		edgeAttrs[propValidTo] = relationship.ValidTo.UTC().Format(time.RFC3339Nano)
 		edgeAttrs[propValidToNs] = nsTimestamp(*relationship.ValidTo)
 	}
-	cypher := subjectStubMergeCypher("a", kindLabel(relationship.From.Kind), "fromAttrs", "fromAttrsOnMatch") + " " +
-		subjectStubMergeCypher("b", kindLabel(relationship.To.Kind), "toAttrs", "toAttrsOnMatch") + " " +
+	cypher := subjectStubMergeCypher("a", kindLabel(relationship.From.Kind), "fromAttrs") + " " +
+		subjectStubMergeCypher("b", kindLabel(relationship.To.Kind), "toAttrs") + " " +
 		fmt.Sprintf("MERGE (a)-[r:%s {%s:$rid}]->(b) SET r += $edgeAttrs", labelRelation, propRelationshipID)
-	params := map[string]interface{}{
-		"rid": relationship.RelationshipID, "fromAttrs": fromAttrs, "fromAttrsOnMatch": fromAttrsOnMatch,
-		"toAttrs": toAttrs, "toAttrsOnMatch": toAttrsOnMatch, "edgeAttrs": edgeAttrs,
-	}
+	params := map[string]interface{}{"rid": relationship.RelationshipID, "fromAttrs": fromAttrs, "toAttrs": toAttrs, "edgeAttrs": edgeAttrs}
 	mergeMaps(params, subjectMergeParams("a", relationship.From, orgID))
 	mergeMaps(params, subjectMergeParams("b", relationship.To, orgID))
 	_, err := a.api.query(ctx, key, cypher, params, false)
@@ -266,7 +266,14 @@ func (a *Adapter) projectContent(ctx context.Context, key, orgID string, content
 		"content_digest": content.ContentDigest, "body": content.Body, "untrusted": true,
 		propSearchText: strings.TrimSpace(content.Title + "\n" + content.Body),
 	}
-	cypher := subjectMergeCypher("a", kindLabel(content.Subject.Kind)) + " SET a += $subjectAttrs " +
+	// a (content.Subject) is REFERENCED, not owned -- see
+	// subjectStubMergeCypher's doc comment (round-2 R2-1): projectContent
+	// does not own whatever real entity this content attaches to, so a
+	// later content write with a different scope must not clobber that
+	// entity's own authorization or canonical metadata. b (documentSubject)
+	// IS owned: this is the only producer that ever writes a content:ID
+	// node, so its write stays authoritative.
+	cypher := subjectStubMergeCypher("a", kindLabel(content.Subject.Kind), "subjectAttrs") + " " +
 		subjectMergeCypher("b", kindLabel(documentSubject.Kind)) + " SET b += $docAttrs " +
 		fmt.Sprintf("MERGE (a)-[r:%s {%s:$rid}]->(b) SET r += $edgeAttrs", labelRelation, propRelationshipID)
 	// Codex P1: the attribution edge itself must carry authorization, or a
@@ -301,7 +308,10 @@ func (a *Adapter) projectEpisode(ctx context.Context, key, orgID string, episode
 		propValidTo: episode.EndedAt.UTC().Format(time.RFC3339Nano), propValidToNs: nsTimestamp(episode.EndedAt),
 		"goal": episode.Goal, "outcome": episode.Outcome, propSearchText: summary,
 	}
-	cypher := subjectMergeCypher("a", kindLabel(episode.Subject.Kind)) + " SET a += $subjectAttrs " +
+	// Same OWNED/REFERENCED split as projectContent above: a (episode.Subject)
+	// is referenced, not owned; b (episodeSubject) is this producer's own
+	// episode:ID node and stays authoritative.
+	cypher := subjectStubMergeCypher("a", kindLabel(episode.Subject.Kind), "subjectAttrs") + " " +
 		subjectMergeCypher("b", kindLabel(episodeSubject.Kind)) + " SET b += $episodeAttrs " +
 		fmt.Sprintf("MERGE (a)-[r:%s {%s:$rid}]->(b) SET r += $edgeAttrs", labelRelation, propRelationshipID)
 	// Codex P1: same reasoning as projectContent's DOCUMENTED_BY edge --

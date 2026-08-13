@@ -120,6 +120,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
+	clickhouseSource.WithLogger(logger)
 	episodesSource, err := devhealthsource.NewEpisodesProjectionSource(episodeRows)
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())

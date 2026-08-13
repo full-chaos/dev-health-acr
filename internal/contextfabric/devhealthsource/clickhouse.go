@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -86,13 +87,31 @@ func ProducedRelationshipTypes() []contractsv1.ContextFabricRelationshipType {
 type ClickHouseProjectionSource struct {
 	client contextpacket.ClickHouseQueryClient
 	now    func() time.Time
+	logger *slog.Logger
 }
 
 func NewClickHouseProjectionSource(client contextpacket.ClickHouseQueryClient) (*ClickHouseProjectionSource, error) {
 	if client == nil {
 		return nil, fmt.Errorf("devhealthsource: clickhouse query client is required")
 	}
-	return &ClickHouseProjectionSource{client: client, now: time.Now}, nil
+	return &ClickHouseProjectionSource{client: client, now: time.Now, logger: slog.Default()}, nil
+}
+
+// WithLogger overrides the default logger (slog.Default()) with one the
+// caller actually wires to its output (CHAOS-3785 codex round-2 finding
+// R2-3): logOrphanedWorkItems needs somewhere to surface a per-batch
+// orphaned-work-item count, or that data-quality signal requires graph
+// spelunking to notice. Optional and additive on purpose -- every existing
+// call site keeps building a source exactly as before; only
+// cmd/acr-projector wires a real logger in, matching how
+// projectionrun.Coordinator's own Logger field works (a real logger from
+// the caller, slog.Default() otherwise). Returns s for chaining; a nil
+// logger is a no-op, not a panic.
+func (s *ClickHouseProjectionSource) WithLogger(logger *slog.Logger) *ClickHouseProjectionSource {
+	if logger != nil {
+		s.logger = logger
+	}
+	return s
 }
 
 // candidate is a sortable, already-built projection item. Exactly one of
@@ -181,6 +200,7 @@ func (s *ClickHouseProjectionSource) fullSnapshot(ctx context.Context, orgID str
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
+	s.logOrphanedWorkItems(ctx, orgID, all)
 	return batch, true, nil
 }
 
@@ -221,6 +241,7 @@ func (s *ClickHouseProjectionSource) pagedBatch(ctx context.Context, orgID, curs
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
+	s.logOrphanedWorkItems(ctx, orgID, all)
 	return batch, true, nil
 }
 
@@ -242,6 +263,51 @@ func candidateCounts(all []candidate) (entities, relationships, tombstones int) 
 		}
 	}
 	return entities, relationships, tombstones
+}
+
+// orphanedWorkItemCount counts candidates workItemAuthorization marked
+// orphaned -- a genuine, nonzero repo_id that never resolved against repos
+// (CHAOS-3785 codex round-2 finding R2-3), as opposed to noRepositorySentinel's
+// "never had one by design." It inspects both entities (queryWorkItems) and
+// relationships (queryWorkItemDependencies/queryWorkItemHierarchy), since a
+// dependency/hierarchy edge rooted at an orphaned work item carries the same
+// sentinel. RepositorySlugs is checked as an exact single-element match
+// (never a substring or prefix test): orphanedRepositorySentinel can only
+// ever appear as workItemAuthorization's sole entry, so anything looser
+// would risk matching a real repository slug that happened to contain the
+// same text.
+func orphanedWorkItemCount(all []candidate) int {
+	isOrphaned := func(scope contractsv1.ContextFabricAuthorizationScope) bool {
+		return len(scope.RepositorySlugs) == 1 && scope.RepositorySlugs[0] == orphanedRepositorySentinel
+	}
+	count := 0
+	for _, c := range all {
+		switch {
+		case c.entity != nil && isOrphaned(c.entity.Authorization):
+			count++
+		case c.relationship != nil && isOrphaned(c.relationship.Authorization):
+			count++
+		}
+	}
+	return count
+}
+
+// logOrphanedWorkItems surfaces orphanedWorkItemCount as a per-batch log
+// line -- CHAOS-3785 codex round-2 finding R2-3: without this, an orphaned
+// work item (a nonzero repo_id that never resolved -- a sync race, a
+// deleted repository, stale seed data) is indistinguishable from any other
+// projected row unless someone goes looking for the sentinel value directly
+// in the graph. Logged only when the count is positive, matching this
+// signal's actual purpose (surfacing something worth investigating), not as
+// an always-on per-tick line for the common all-zero case.
+func (s *ClickHouseProjectionSource) logOrphanedWorkItems(ctx context.Context, orgID string, all []candidate) {
+	if s.logger == nil {
+		return
+	}
+	if count := orphanedWorkItemCount(all); count > 0 {
+		s.logger.WarnContext(ctx, "devhealthsource projection batch contains orphaned work items",
+			"org_id", redactOrg(orgID), "orphaned_work_items", count)
+	}
 }
 
 func (s *ClickHouseProjectionSource) clock() time.Time {

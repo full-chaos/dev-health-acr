@@ -1,11 +1,13 @@
 package devhealthsource_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"testing"
@@ -255,6 +257,60 @@ func TestQueryWorkItemsDistinguishesRepolessFromOrphanedAuthorization(t *testing
 		if relationship.From.CanonicalID == "work_item:WIDGET-ORPHAN" && relationship.Type == "BELONGS_TO_REPOSITORY" {
 			t.Fatalf("WIDGET-ORPHAN unexpectedly carries a BELONGS_TO_REPOSITORY edge: %+v", relationship)
 		}
+	}
+}
+
+// TestNextProjectionBatchLogsOrphanedWorkItemCount is CHAOS-3785 codex
+// round-2 finding R2-3: an orphaned work item is otherwise indistinguishable
+// from any other projected row unless someone goes looking for the sentinel
+// value directly in the graph. A batch containing one must surface the
+// count through the source's logger; a batch containing none must stay
+// quiet (this signal exists to flag something worth investigating, not to
+// add an always-on line to every ordinary tick).
+func TestNextProjectionBatchLogsOrphanedWorkItemCount(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+
+	orphanTables := baseTables(at)
+	for i, table := range orphanTables {
+		if table.match == "FROM work_items AS w" {
+			orphanTables[i] = fakeTable{match: table.match, rows: [][]any{
+				{"WIDGET-101", "repo-1", "example-org/widget-service", "Investigate checkout flake", "in_progress", "", at},
+				{"WIDGET-ORPHAN", "99999999-9999-9999-9999-999999999999", "", "Orphaned repo_id", "open", "", at},
+			}}
+		}
+	}
+	orphanSource, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: orphanTables})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	var orphanLogs bytes.Buffer
+	orphanSource.WithLogger(slog.New(slog.NewJSONHandler(&orphanLogs, nil)))
+	batch, available, err := orphanSource.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName})
+	if err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if !available {
+		t.Fatal("expected a batch to be available")
+	}
+	if err := batch.Validate(); err != nil {
+		t.Fatalf("batch failed contract validation: %v", err)
+	}
+	if !strings.Contains(orphanLogs.String(), `"orphaned_work_items":1`) {
+		t.Fatalf("expected the orphan count to be logged, got: %s", orphanLogs.String())
+	}
+
+	cleanSource, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: baseTables(at)})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	var cleanLogs bytes.Buffer
+	cleanSource.WithLogger(slog.New(slog.NewJSONHandler(&cleanLogs, nil)))
+	if _, _, err := cleanSource.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName}); err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if cleanLogs.Len() != 0 {
+		t.Fatalf("expected no log output for a batch with zero orphaned work items, got: %s", cleanLogs.String())
 	}
 }
 
