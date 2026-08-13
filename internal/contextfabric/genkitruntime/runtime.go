@@ -108,23 +108,46 @@ const (
 	// synthesis draft's own top-level claimed_facts list (distinct from
 	// the already-stated per-driver/per-finding claimed_fact_ids
 	// REFERENCE count) had no registry entry and no prompt statement. v7
-	// adds it. Every other literal the sweep found belongs to one of two
-	// excluded classes, now documented at the call site or in
-	// ContextFabricModelFacingBounds's own doc comment rather than left
-	// implicit: (a) fields the model only ECHOES verbatim from data ACR
-	// already supplied and independently bounded (SubjectRef.CanonicalID/
-	// Label, an evidence ref ID's own string length, a claimed fact's
-	// Value) -- SynthesisDraft.ValidateAgainst's allowedSubjects/
-	// canonicalLabels/allowedEvidence/factValueEqualsScalar checks already
-	// reject anything the model didn't copy verbatim, before a length
-	// bound would ever be the operative failure reason, so stating it
-	// would not change what the model needs to do; and (b) fields a
-	// different subsystem populates, never the interpretation/synthesis
-	// model (SubjectCandidate, SubjectResolution, Cohort, RelationshipPath/
-	// Edge, SourceObservation, Coverage, VersionSet -- all ACR's own graph/
-	// canonical-fact layer; ContextFabricEntityProjection and siblings --
-	// CHAOS-3753's projection worker, an unrelated write path).
-	defaultSynthesisPromptVersion = "context-fabric-synthesis.v7"
+	// adds it. At the time, every OTHER literal the sweep found was
+	// believed to belong to one of two excluded classes: (a) fields the
+	// model only ECHOES verbatim from data ACR already supplied and
+	// independently bounded (SubjectRef.CanonicalID/Label, an evidence ref
+	// ID's own string length, a claimed fact's Value) -- reasoned to be
+	// safe because SynthesisDraft.ValidateAgainst's allowedSubjects/
+	// canonicalLabels/allowedEvidence/factValueEqualsScalar checks would
+	// reject anything the model didn't copy verbatim before a length bound
+	// was ever the operative failure reason; and (b) fields a different
+	// subsystem populates, never the interpretation/synthesis model
+	// (SubjectCandidate, SubjectResolution, Cohort, RelationshipPath/Edge,
+	// SourceObservation, Coverage, VersionSet -- ACR's own graph/canonical-
+	// fact layer; ContextFabricEntityProjection and siblings -- CHAOS-3753's
+	// projection worker, an unrelated write path). Class (b) held up; class
+	// (a) did not -- see v8.
+	//
+	// v8 (CHAOS-3784 round-3 R3-1) found class (a)'s reasoning was
+	// order-contradicted: every one of this codebase's per-item loops
+	// (internal/contextfabric/model_runtime.go's SynthesisDraft.ValidateAgainst)
+	// calls the model-facing struct's own Validate() method BEFORE its
+	// membership/grounding check runs (driver.Validate()/finding.Validate()/
+	// claim.Validate() first, THEN the allowedSubjects/allowedEvidence/
+	// factValueEqualsScalar check on the same loop iteration), so a length
+	// bound enforced INSIDE Validate() always wins the race against a
+	// grounding check enforced OUTSIDE it -- the reverse of what class (a)
+	// assumed. A model value that is SIMULTANEOUSLY too long and
+	// ungrounded is rejected on the length violation, unreported, exactly
+	// the CHAOS-3770 F3 defect class one layer over: this file already
+	// stated evidence_ref_id's/SubjectRef's/ClaimedFact.Value's other
+	// bounds correctly (see prompts.go's driver_id/finding_id/claim_id and
+	// path_id/claimed_fact_id statements), it just never stated THESE
+	// four. v8 states them: each evidence_ref_id is at most 256
+	// characters; every subject reference's canonical ID is at most 256
+	// characters and label at most 512; a claimed fact's string value is
+	// at most 4000 characters. FactRequirement.Subjects and every MINIMUM-
+	// side bound remain correctly excluded for reasons validation order
+	// cannot contradict -- see ContextFabricModelFacingBounds's doc
+	// comment in internal/contracts/v1/context_fabric_model_bounds.go for
+	// the complete, current exclusion list.
+	defaultSynthesisPromptVersion = "context-fabric-synthesis.v8"
 	defaultSchemaVersion          = "context-fabric-model-output.v1"
 	defaultEvaluatorVersion       = "context-fabric-grounding.v1"
 )

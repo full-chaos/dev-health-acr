@@ -369,6 +369,53 @@ func TestRuntimeAnswerSynthesizerClassifiesBoundViolationAsSynthesisRejected(t *
 	}
 }
 
+// TestRuntimeAnswerSynthesizerReportsTheSectionValidateAgainstActuallyRejectedOn
+// is the CHAOS-3784 round-3 R3-2 regression. Two DIFFERENT finding
+// sections (remaining_work, readiness_gaps) each carry a DIFFERENT genuine
+// bound violation. Before this fix, ValidateAgainst walked sections via a
+// Go map -- iteration order randomized per range, so which section's
+// error (and therefore which bound a caller sees) surfaced was
+// nondeterministic, even though diagnoseSynthesisDraftBound always
+// diagnoses in the same fixed order (remaining_work, readiness_gaps,
+// conflicts) -- the two could disagree. Both now walk sections in that
+// identical fixed order, so remaining_work's violation must be the one
+// that rejects, and its bound the one reported, on EVERY call -- looped
+// many times, since Go randomizes map iteration order on every range, not
+// just across process runs, so a real regression would show up within a
+// single test run.
+func TestRuntimeAnswerSynthesizerReportsTheSectionValidateAgainstActuallyRejectedOn(t *testing.T) {
+	t.Parallel()
+	input := validSynthesisInputFixture()
+	base := validSynthesisDraftFixture(input)
+	base.RemainingWork = []Finding{{
+		FindingID: "finding_12345678", Kind: "narrative",
+		Summary:        strings.Repeat("a", contractsv1.ContextFabricFindingSummaryMaxLength+1),
+		EvidenceRefIDs: []string{"evidence_release_1234"},
+	}}
+	base.ReadinessGaps = []Finding{{
+		FindingID: "finding_87654321", Kind: strings.Repeat("k", contractsv1.ContextFabricFindingKindMaxLength+1),
+		Summary:        "Readiness gap summary.",
+		EvidenceRefIDs: []string{"evidence_release_1234"},
+	}}
+	for i := 0; i < 50; i++ {
+		synthesizer := RuntimeAnswerSynthesizer{
+			Runtime: fakeModelRuntime{draft: base, receipt: validModelReceiptFixture(ModelOperationSynthesize)},
+			Sink:    &fakeReceiptSink{},
+		}
+		_, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
+		if !strings.Contains(err.Error(), "remaining_work:") {
+			t.Fatalf("iteration %d: error = %v, want the remaining_work section to be the one ValidateAgainst rejected on", i, err)
+		}
+		var violation *ModelBoundViolation
+		if !errors.As(err, &violation) {
+			t.Fatalf("iteration %d: error = %v, want a ModelBoundViolation", i, err)
+		}
+		if violation.Bound != "synthesis.finding.summary.max_length" {
+			t.Fatalf("iteration %d: violation.Bound = %q, want synthesis.finding.summary.max_length (remaining_work's violation, not readiness_gaps')", i, violation.Bound)
+		}
+	}
+}
+
 // TestRuntimeAnswerSynthesizerCorrectsReceiptOutcomeToInvalidOutputOnRejection
 // guards against a regression where the receipt was recorded with whatever
 // Outcome the ModelRuntime returned (here "success") BEFORE this adapter's

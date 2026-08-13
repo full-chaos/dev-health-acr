@@ -116,14 +116,41 @@ func DiagnoseContextFabricFactRequirementBound(r ContextFabricFactRequirement) (
 	return "", false
 }
 
+// diagnoseSubjectRefBound checks s's CanonicalID/Label against the shared
+// ContextFabricSubjectRef length bounds (SubjectRef.Validate(),
+// validate_context_fabric_result.go), returning the CALLER's own registry
+// name for whichever is violated -- driver.affected_subjects,
+// finding.subjects, and claimed_fact.subject each name their own entry
+// even though all three enforce the identical
+// ContextFabricSubjectRefCanonicalIDMaxLength/LabelMaxLength shape
+// (CHAOS-3784 round-3 R3-1), matching this registry's established
+// one-entry-per-(struct,field) convention.
+func diagnoseSubjectRefBound(s ContextFabricSubjectRef, canonicalIDBound, labelBound string) (bound string, ok bool) {
+	if runeLongerThan(s.CanonicalID, ContextFabricSubjectRefCanonicalIDMaxLength) {
+		return canonicalIDBound, true
+	}
+	if runeLongerThan(s.Label, ContextFabricSubjectRefLabelMaxLength) {
+		return labelBound, true
+	}
+	return "", false
+}
+
 // DiagnoseContextFabricDriverJudgmentBound is the ContextFabricDriverJudgment
-// counterpart, checked in the same field order
-// ContextFabricDriverJudgment.Validate does. Only the length/count bounds
-// are diagnosed here -- an invalid Standing/Category/Derivation/
-// EpistemicStatus enum, a missing evidence closure, or a category->claimed
-// fact requirement is a business rule, not a registry bound, and returns
-// ok=false.
+// counterpart, checked in the same STATEMENT order
+// ContextFabricDriverJudgment.Validate does -- not just the same field
+// order within one statement, but the same order across its three
+// sequential OR-expressions (identity/title/summary/qualification, THEN
+// subject/path/evidence references, THEN claimed-fact references): Go
+// evaluates and returns on the FIRST statement that fails, so a
+// diagnosis checking a LATER statement's field before an EARLIER
+// statement's violated field would misattribute the rejection to a bound
+// Validate() never actually reached (CHAOS-3784 round-3 R3-1/R3-2 class).
+// Only the length/count bounds are diagnosed here -- an invalid Standing/
+// Category/Derivation/EpistemicStatus enum, a missing evidence closure, or
+// a category->claimed fact requirement is a business rule, not a registry
+// bound, and returns ok=false.
 func DiagnoseContextFabricDriverJudgmentBound(d ContextFabricDriverJudgment) (bound string, ok bool) {
+	// Statement 1: identity/title/summary/qualification.
 	if runeLongerThan(d.DriverID, ContextFabricModelMintedIDMaxLength) {
 		return "synthesis.driver.driver_id.max_length", true
 	}
@@ -136,8 +163,17 @@ func DiagnoseContextFabricDriverJudgmentBound(d ContextFabricDriverJudgment) (bo
 	if runeLongerThan(d.Qualification, ContextFabricDriverQualificationMaxLength) {
 		return "synthesis.driver.qualification.max_length", true
 	}
+	// Statement 2: affected_subjects, path_ids, evidence_ref_ids -- ONE
+	// OR-expression in Validate(), so order among these three fields does
+	// not matter for fidelity (they share one rejection), but ALL of them
+	// must be checked before statement 3 below.
 	if len(d.AffectedSubjects) > ContextFabricDriverAffectedSubjectsMaxCount {
 		return "synthesis.driver.affected_subjects.max_count", true
+	}
+	for _, subject := range d.AffectedSubjects {
+		if bound, ok := diagnoseSubjectRefBound(subject, "synthesis.driver.affected_subjects.item_canonical_id_max_length", "synthesis.driver.affected_subjects.item_label_max_length"); ok {
+			return bound, true
+		}
 	}
 	if len(d.PathIDs) > ContextFabricDriverPathIDsMaxCount {
 		return "synthesis.driver.path_ids.max_count", true
@@ -147,6 +183,16 @@ func DiagnoseContextFabricDriverJudgmentBound(d ContextFabricDriverJudgment) (bo
 			return "synthesis.driver.path_ids.item_max_length", true
 		}
 	}
+	if len(d.EvidenceRefIDs) > ContextFabricEvidenceRefIDsMaxCount {
+		return "synthesis.driver.evidence_ref_ids.max_count", true
+	}
+	for _, evidenceRefID := range d.EvidenceRefIDs {
+		if runeLongerThan(evidenceRefID, ContextFabricEvidenceRefIDMaxLength) {
+			return "synthesis.driver.evidence_ref_ids.item_max_length", true
+		}
+	}
+	// Statement 3: claimed_fact_ids -- must be checked LAST, after every
+	// statement-2 field above.
 	if len(d.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount {
 		return "synthesis.driver.claimed_fact_ids.max_count", true
 	}
@@ -155,14 +201,16 @@ func DiagnoseContextFabricDriverJudgmentBound(d ContextFabricDriverJudgment) (bo
 			return "synthesis.driver.claimed_fact_ids.item_max_length", true
 		}
 	}
-	if len(d.EvidenceRefIDs) > ContextFabricEvidenceRefIDsMaxCount {
-		return "synthesis.driver.evidence_ref_ids.max_count", true
-	}
 	return "", false
 }
 
 // DiagnoseContextFabricFindingBound is the ContextFabricFinding counterpart.
+// See DiagnoseContextFabricDriverJudgmentBound's doc comment: statement
+// order (identity/kind/summary/subjects/evidence_ref_ids, THEN
+// claimed_fact_ids) matches ContextFabricFinding.Validate()'s exactly.
 func DiagnoseContextFabricFindingBound(f ContextFabricFinding) (bound string, ok bool) {
+	// Statement 1: identity, kind, summary, subjects, evidence_ref_ids --
+	// ONE OR-expression in Validate().
 	if runeLongerThan(f.FindingID, ContextFabricModelMintedIDMaxLength) {
 		return "synthesis.finding.finding_id.max_length", true
 	}
@@ -175,9 +223,20 @@ func DiagnoseContextFabricFindingBound(f ContextFabricFinding) (bound string, ok
 	if len(f.Subjects) > ContextFabricFindingSubjectsMaxCount {
 		return "synthesis.finding.subjects.max_count", true
 	}
+	for _, subject := range f.Subjects {
+		if bound, ok := diagnoseSubjectRefBound(subject, "synthesis.finding.subjects.item_canonical_id_max_length", "synthesis.finding.subjects.item_label_max_length"); ok {
+			return bound, true
+		}
+	}
 	if len(f.EvidenceRefIDs) > ContextFabricEvidenceRefIDsMaxCount {
 		return "synthesis.finding.evidence_ref_ids.max_count", true
 	}
+	for _, evidenceRefID := range f.EvidenceRefIDs {
+		if runeLongerThan(evidenceRefID, ContextFabricEvidenceRefIDMaxLength) {
+			return "synthesis.finding.evidence_ref_ids.item_max_length", true
+		}
+	}
+	// Statement 2: claimed_fact_ids -- must be checked LAST.
 	if len(f.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount {
 		return "synthesis.finding.claimed_fact_ids.max_count", true
 	}
@@ -190,13 +249,23 @@ func DiagnoseContextFabricFindingBound(f ContextFabricFinding) (bound string, ok
 }
 
 // DiagnoseContextFabricClaimedFactBound is the ContextFabricClaimedFact
-// counterpart.
+// counterpart. See DiagnoseContextFabricDriverJudgmentBound's doc comment:
+// statement order (claim_id/field, THEN subject, THEN value) matches
+// ContextFabricClaimedFact.Validate()'s three sequential statements
+// exactly (identity block, then c.Subject.Validate(), then
+// c.Value.Validate()).
 func DiagnoseContextFabricClaimedFactBound(c ContextFabricClaimedFact) (bound string, ok bool) {
 	if runeLongerThan(c.ClaimID, ContextFabricModelMintedIDMaxLength) {
 		return "synthesis.claimed_fact.claim_id.max_length", true
 	}
 	if runeLongerThan(c.Field, ContextFabricClaimedFieldMaxLength) {
 		return "synthesis.claimed_fact.field.max_length", true
+	}
+	if bound, ok := diagnoseSubjectRefBound(c.Subject, "synthesis.claimed_fact.subject.canonical_id_max_length", "synthesis.claimed_fact.subject.label_max_length"); ok {
+		return bound, true
+	}
+	if c.Value.String != nil && runeLongerThan(*c.Value.String, ContextFabricClaimedFactValueMaxLength) {
+		return "synthesis.claimed_fact.value.max_length", true
 	}
 	return "", false
 }

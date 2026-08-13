@@ -160,6 +160,18 @@ func driverJudgmentDiagnosisCases() []diagnosisCase[ContextFabricDriverJudgment]
 			d.AffectedSubjects = subjects
 			return d
 		}, "synthesis.driver.affected_subjects.max_count"},
+		{"affected_subjects item canonical_id length", func(d ContextFabricDriverJudgment) ContextFabricDriverJudgment {
+			d.AffectedSubjects = []ContextFabricSubjectRef{{
+				Kind: ContextFabricSubjectProject, CanonicalID: strings.Repeat("p", ContextFabricSubjectRefCanonicalIDMaxLength+1), Label: "P",
+			}}
+			return d
+		}, "synthesis.driver.affected_subjects.item_canonical_id_max_length"},
+		{"affected_subjects item label length", func(d ContextFabricDriverJudgment) ContextFabricDriverJudgment {
+			d.AffectedSubjects = []ContextFabricSubjectRef{{
+				Kind: ContextFabricSubjectProject, CanonicalID: "project_1", Label: strings.Repeat("p", ContextFabricSubjectRefLabelMaxLength+1),
+			}}
+			return d
+		}, "synthesis.driver.affected_subjects.item_label_max_length"},
 		{"path_ids count", func(d ContextFabricDriverJudgment) ContextFabricDriverJudgment {
 			d.PathIDs = make([]string, ContextFabricDriverPathIDsMaxCount+1)
 			for i := range d.PathIDs {
@@ -189,6 +201,10 @@ func driverJudgmentDiagnosisCases() []diagnosisCase[ContextFabricDriverJudgment]
 			}
 			return d
 		}, "synthesis.driver.evidence_ref_ids.max_count"},
+		{"evidence_ref_id item length", func(d ContextFabricDriverJudgment) ContextFabricDriverJudgment {
+			d.EvidenceRefIDs = []string{strings.Repeat("e", ContextFabricEvidenceRefIDMaxLength+1)}
+			return d
+		}, "synthesis.driver.evidence_ref_ids.item_max_length"},
 	}
 }
 
@@ -241,6 +257,18 @@ func findingDiagnosisCases() []diagnosisCase[ContextFabricFinding] {
 			f.Subjects = subjects
 			return f
 		}, "synthesis.finding.subjects.max_count"},
+		{"subjects item canonical_id length", func(f ContextFabricFinding) ContextFabricFinding {
+			f.Subjects = []ContextFabricSubjectRef{{
+				Kind: ContextFabricSubjectProject, CanonicalID: strings.Repeat("p", ContextFabricSubjectRefCanonicalIDMaxLength+1), Label: "P",
+			}}
+			return f
+		}, "synthesis.finding.subjects.item_canonical_id_max_length"},
+		{"subjects item label length", func(f ContextFabricFinding) ContextFabricFinding {
+			f.Subjects = []ContextFabricSubjectRef{{
+				Kind: ContextFabricSubjectProject, CanonicalID: "project_1", Label: strings.Repeat("p", ContextFabricSubjectRefLabelMaxLength+1),
+			}}
+			return f
+		}, "synthesis.finding.subjects.item_label_max_length"},
 		{"evidence_ref_ids count", func(f ContextFabricFinding) ContextFabricFinding {
 			f.EvidenceRefIDs = make([]string, ContextFabricEvidenceRefIDsMaxCount+1)
 			for i := range f.EvidenceRefIDs {
@@ -248,6 +276,10 @@ func findingDiagnosisCases() []diagnosisCase[ContextFabricFinding] {
 			}
 			return f
 		}, "synthesis.finding.evidence_ref_ids.max_count"},
+		{"evidence_ref_id item length", func(f ContextFabricFinding) ContextFabricFinding {
+			f.EvidenceRefIDs = []string{strings.Repeat("e", ContextFabricEvidenceRefIDMaxLength+1)}
+			return f
+		}, "synthesis.finding.evidence_ref_ids.item_max_length"},
 		{"claimed_fact_ids count", func(f ContextFabricFinding) ContextFabricFinding {
 			f.ClaimedFactIDs = make([]string, ContextFabricDriverClaimedFactIDsMaxCount+1)
 			for i := range f.ClaimedFactIDs {
@@ -291,6 +323,19 @@ func claimedFactDiagnosisCases() []diagnosisCase[ContextFabricClaimedFact] {
 			c.Field = strings.Repeat("a", ContextFabricClaimedFieldMaxLength+1)
 			return c
 		}, "synthesis.claimed_fact.field.max_length"},
+		{"subject canonical_id length", func(c ContextFabricClaimedFact) ContextFabricClaimedFact {
+			c.Subject = ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: strings.Repeat("p", ContextFabricSubjectRefCanonicalIDMaxLength+1), Label: "P"}
+			return c
+		}, "synthesis.claimed_fact.subject.canonical_id_max_length"},
+		{"subject label length", func(c ContextFabricClaimedFact) ContextFabricClaimedFact {
+			c.Subject = ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_1", Label: strings.Repeat("p", ContextFabricSubjectRefLabelMaxLength+1)}
+			return c
+		}, "synthesis.claimed_fact.subject.label_max_length"},
+		{"value string length", func(c ContextFabricClaimedFact) ContextFabricClaimedFact {
+			value := strings.Repeat("v", ContextFabricClaimedFactValueMaxLength+1)
+			c.Value = ContextFabricScalarValue{String: &value}
+			return c
+		}, "synthesis.claimed_fact.value.max_length"},
 	}
 }
 
@@ -477,5 +522,31 @@ func TestDiagnoseContextFabricFactRequirementBoundIsDeterministicAcrossMultipleV
 			t.Fatalf("iteration %d: bound = %q, want the same result as the previous iteration %q (non-deterministic)", i, bound, last)
 		}
 		last = bound
+	}
+}
+
+// TestDiagnoseContextFabricDriverJudgmentBoundMatchesValidateStatementOrder
+// is the CHAOS-3784 round-3 R3-1/R3-2 class regression: driver has BOTH an
+// evidence_ref_ids violation (part of Validate()'s SECOND statement,
+// alongside affected_subjects/path_ids) and a claimed_fact_ids violation
+// (Validate()'s THIRD, separate, later statement). ContextFabricDriverJudgment.Validate
+// evaluates statement 2 before statement 3 and returns on the first
+// failure, so it rejects on evidence_ref_ids, never reaching
+// claimed_fact_ids -- Diagnose must report the SAME bound (evidence_ref_ids),
+// not claimed_fact_ids', or it names a bound Validate() never actually
+// rejected on.
+func TestDiagnoseContextFabricDriverJudgmentBoundMatchesValidateStatementOrder(t *testing.T) {
+	driver := validDiagnosisDriverJudgment()
+	driver.EvidenceRefIDs = []string{strings.Repeat("e", ContextFabricEvidenceRefIDMaxLength+1)}
+	driver.ClaimedFactIDs = []string{strings.Repeat("c", ContextFabricIdentifierRefMaxLength+1)}
+	if err := driver.Validate(); err == nil || !strings.Contains(err.Error(), "subject, path, or evidence") {
+		t.Fatalf("driver.Validate() error = %v, want the statement-2 (subject/path/evidence) rejection", err)
+	}
+	bound, ok := DiagnoseContextFabricDriverJudgmentBound(driver)
+	if !ok {
+		t.Fatalf("DiagnoseContextFabricDriverJudgmentBound() ok = false, want true")
+	}
+	if bound != "synthesis.driver.evidence_ref_ids.item_max_length" {
+		t.Fatalf("bound = %q, want synthesis.driver.evidence_ref_ids.item_max_length (the violation Validate() actually rejected on, not claimed_fact_ids')", bound)
 	}
 }

@@ -275,11 +275,25 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 			return err
 		}
 	}
-	for name, findings := range map[string][]Finding{
-		"remaining_work": d.RemainingWork,
-		"readiness_gaps": d.ReadinessGaps,
-		"conflicts":      d.Conflicts,
+	// Fixed slice, NOT a map: a map's iteration order is randomized per
+	// run, so returning the first-rejected section's error from a map
+	// range would make WHICH violation surfaces (when more than one
+	// section has one) nondeterministic across runs -- and
+	// diagnoseSynthesisDraftBound (bound_diagnosis.go) diagnoses in a
+	// fixed order, so a random validation order could report a
+	// violated_bound naming a section ValidateAgainst did NOT actually
+	// reject (CHAOS-3784 round-3 R3-2). This order (remaining_work,
+	// readiness_gaps, conflicts) matches diagnoseSynthesisDraftBound's
+	// exactly, so the two can never disagree.
+	for _, section := range []struct {
+		name     string
+		findings []Finding
+	}{
+		{"remaining_work", d.RemainingWork},
+		{"readiness_gaps", d.ReadinessGaps},
+		{"conflicts", d.Conflicts},
 	} {
+		name, findings := section.name, section.findings
 		for _, finding := range findings {
 			if err := finding.Validate(); err != nil {
 				return fmt.Errorf("%s: %w", name, err)
