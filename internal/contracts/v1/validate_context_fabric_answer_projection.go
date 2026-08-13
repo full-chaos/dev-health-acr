@@ -146,7 +146,11 @@ func (c ContextFabricProjectedCohort) Validate() error {
 		if len(member.InclusionReasons) < 1 || len(member.InclusionReasons) > 32 || !uniqueTrimmedStrings(member.InclusionReasons, 1000) {
 			return fmt.Errorf("projected cohort member inclusion reasons violate v1 bounds")
 		}
-		if !boundedEvidenceRefs(member.EvidenceRefIDs, ContextFabricProjectedEvidenceMaxCount, true) {
+		// Optional and omitempty, exactly like the canonical
+		// CohortMember.EvidenceRefIDs it mirrors: nil and empty both mean
+		// "none", and demanding non-nil would make the projection
+		// unable to survive its own round trip.
+		if !optionalEvidenceRefs(member.EvidenceRefIDs, ContextFabricProjectedEvidenceMaxCount) {
 			return fmt.Errorf("projected cohort member evidence references violate v1 bounds")
 		}
 		key := subjectKey(member.Subject)
