@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -129,8 +130,17 @@ func TestLiveFulltextSearchNormalizesRealRediSearchScores(t *testing.T) {
 	}
 	strongScore, midScore, weakScore := rawScore(strongCandidate), rawScore(midCandidate), rawScore(weakCandidate)
 	t.Logf("live RediSearch raw scores: strong(3-term match)=%v mid(2-term match)=%v weak(1-term match)=%v", strongScore, midScore, weakScore)
-	if !(strongScore >= midScore && midScore >= weakScore) {
-		t.Skipf("live RediSearch scoring did not produce strong >= mid >= weak (%v, %v, %v) on this server run -- cannot exercise ordering with this fixture; the fake-conn probe (score_normalization_test.go) already covers the >1 inversion deterministically", strongScore, midScore, weakScore)
+
+	// Codex P4: this must be a hard assertion, not a t.Skipf escape hatch --
+	// a skip on an unexpected live measurement is a PASSING outcome, which
+	// silently stops proving anything on the exact axis (real, > 1,
+	// meaningfully unbounded RediSearch scores) this fix exists to handle.
+	// Fixed-round-2's raw scores are consistently > 1 on the pinned FalkorDB
+	// image for this fixture (verified repeatedly against a live
+	// container); if that ever stops holding, this test SHOULD fail loudly,
+	// not quietly downgrade to a skip.
+	if strongScore <= 1 || midScore <= 1 || weakScore <= 1 {
+		t.Fatalf("live RediSearch raw scores were not all > 1 (strong=%v mid=%v weak=%v) -- this test requires realistic, unbounded-above scores to exercise the D11 defect's exact range", strongScore, midScore, weakScore)
 	}
 
 	strongConfidence := graphrank.ResultConfidence(strongCandidate.Relevance, strongCandidate.Score)
@@ -138,11 +148,100 @@ func TestLiveFulltextSearchNormalizesRealRediSearchScores(t *testing.T) {
 	weakConfidence := graphrank.ResultConfidence(weakCandidate.Relevance, weakCandidate.Score)
 	t.Logf("normalized confidence: strong=%v mid=%v weak=%v", strongConfidence, midConfidence, weakConfidence)
 
+	// Fix round 2 (Codex P1/P3): confidence is now computed client-side from
+	// each candidate's own search_text word coverage (queries.go's
+	// fulltextMatchedTermCount), not from the live RediSearch score at all
+	// -- so this ordering is guaranteed BY CONSTRUCTION (strong's label
+	// contains all 3 query words, mid 2, weak 1), not merely "usually true
+	// on this server run". A violation here means fulltextMatchedTermCount
+	// itself is broken against a real server's decoded node/attribute
+	// shape, not that the live scorer produced an unlucky sample.
 	if strongConfidence < midConfidence || midConfidence < weakConfidence {
-		t.Fatalf("confidence order did not track real relevance order: strong(score %v)=%v, mid(score %v)=%v, weak(score %v)=%v -- want strong >= mid >= weak",
+		t.Fatalf("confidence order did not track real word-coverage order: strong(score %v)=%v, mid(score %v)=%v, weak(score %v)=%v -- want strong >= mid >= weak",
 			strongScore, strongConfidence, midScore, midConfidence, weakScore, weakConfidence)
 	}
-	if strongConfidence > fulltextRelevanceCeiling || weakConfidence < fulltextRelevanceFloor {
-		t.Fatalf("confidence out of documented band [%v, %v]: strong=%v weak=%v", fulltextRelevanceFloor, fulltextRelevanceCeiling, strongConfidence, weakConfidence)
+	if strongConfidence != fulltextRelevanceCeiling {
+		t.Fatalf("strong (3-of-3 term match) confidence = %v, want exactly the ceiling %v", strongConfidence, fulltextRelevanceCeiling)
+	}
+	if weakConfidence < fulltextRelevanceFloor || weakConfidence > fulltextRelevanceCeiling {
+		t.Fatalf("confidence out of documented band [%v, %v]: weak=%v", fulltextRelevanceFloor, fulltextRelevanceCeiling, weakConfidence)
+	}
+}
+
+// TestLiveResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit is the live
+// counterpart of TestResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit
+// (score_normalization_round2_test.go's fake-conn probe): against a real
+// FalkorDB server, a lone fulltext hit whose own indexed text matches only
+// 1 of 4 query terms must not auto-commit (Codex P1 / AC-3778-4: a weak
+// single lexical match must not silently read as a confident answer).
+func TestLiveResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
+	ctx := context.Background()
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image: scoreLiveTestImage, ExposedPorts: []string{"6379/tcp"},
+			WaitingFor: wait.ForListeningPort("6379/tcp").WithStartupTimeout(2 * time.Minute),
+		},
+		Started: true,
+	})
+	if err != nil {
+		t.Fatalf("start FalkorDB container: %v", err)
+	}
+	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
+	host, err := container.Host(ctx)
+	if err != nil {
+		t.Fatalf("container.Host() error = %v", err)
+	}
+	port, err := container.MappedPort(ctx, "6379/tcp")
+	if err != nil {
+		t.Fatalf("container.MappedPort() error = %v", err)
+	}
+	adapter, err := New(Config{
+		Addr: host + ":" + port.Port(), GraphPrefix: "acr-cf-live-weak-lone-test", RequestTimeout: 15 * time.Second,
+		MaxAttempts: 1, MaxResults: 25, PoolSize: 10, AllowInsecure: true, TLS: false,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	orgID := "live-weak-lone-" + time.Now().UTC().Format("20060102T150405.000000000")
+	observed := time.Now().UTC()
+	// Only "outage" from the 4-term question below appears in this
+	// project's label -- a genuinely weak, 1-of-4 lexical match, and the
+	// ONLY subject projected into this organization's graph (so it is a
+	// real "lone hit", not an artifact of truncation).
+	weak := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_weak", Label: "Unrelated Outage Tracker"}
+	batch := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_live_weak_00000001", OrgID: orgID, Source: "live-score-test",
+		SourceVersion: "v1", Cursor: "cursor-1", NextCursor: "cursor-2", GeneratedAt: observed,
+		Entities: []contextfabric.EntityProjection{
+			{Subject: weak, Authorization: contextfabric.AuthorizationScope{RepositorySlugs: []string{"*"}}, EvidenceRefIDs: []string{"evidence_weak"}, ObservedAt: observed, SourceVersion: "v1"},
+		},
+		Relationships: []contextfabric.RelationshipProjection{}, Contents: []contextfabric.ContentProjection{},
+		Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+	if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
+		t.Fatalf("ApplyProjectionBatch() error = %v", err)
+	}
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
+
+	principal := storage.Principal{OrgID: orgID}
+	request := contextfabric.InvestigationRequest{
+		Question: "incident outage payment gateway",
+		Options: contextfabric.InvestigationOptions{
+			MaxSubjectCandidates: 10, MaxCohortMembers: 10, MaxRelationshipPaths: 10,
+			MaxDrivers: 10, MaxEvidenceRefs: 50, MaxSerializedBytes: 262144, AllowClarification: true,
+		},
+	}
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status",
+		SubjectTerms: []string{"incident outage payment gateway"},
+		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+	}
+	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("ResolveSubjects() committed %#v against a real FalkorDB server for a lone hit matching only 1 of 4 query terms -- want no auto-commit", resolution.Committed)
 	}
 }
