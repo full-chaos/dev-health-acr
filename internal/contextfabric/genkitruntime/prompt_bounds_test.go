@@ -2,6 +2,8 @@ package genkitruntime
 
 import (
 	"fmt"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -43,41 +45,55 @@ import (
 // those Validate() methods themselves read their numeric literals from (see
 // that file's doc comment) -- so a bound can no longer be silently absent
 // from this table at all, let alone from the prompt.
-// limitStatedNearAnyMention reports whether the prompt states limit close
-// enough to a phrase naming this bound to be describing it.
+
+// boundPhrases gives each bound a phrase that is UNIQUE to it and carries
+// its number, where {N} is substituted with the validator-enforced limit.
 //
-// A prompt-wide search is not enough (codex round-5 R5-7): it passes as
-// soon as the number appears anywhere, so a stale phrase can be validated
-// by an unrelated bound that happens to share a value, and the proof goes
-// green while the sentence the model actually reads still lies.
-//
-// Proximity rather than sentence splitting, because these prompts
-// deliberately group several bounds into one sentence and use semicolons
-// and commas as separators; splitting on punctuation would fragment a real
-// statement and reject a correct prompt.
-func limitStatedNearAnyMention(prompt string, mentions []string, limit int) bool {
-	const window = 220
-	needle := strconv.Itoa(limit)
-	for _, mention := range mentions {
-		for offset := 0; ; {
-			index := strings.Index(prompt[offset:], mention)
-			if index < 0 {
-				break
-			}
-			start := offset + index
-			// Symmetric window: these prompts write the number both
-			// before the noun ("at most 250 claimed_fact_ids") and after
-			// it ("its summary at most 4000"), so a forward-only search
-			// rejects correct statements.
-			from := max(0, start-window)
-			to := min(start+len(mention)+window, len(prompt))
-			if strings.Contains(prompt[from:to], needle) {
-				return true
-			}
-			offset = start + len(mention)
-		}
-	}
-	return false
+// Proximity was not enough (codex round-6 F5): the interpretation prompt
+// states 128, 1000 and 32 in a single clause about parameters, so a stale
+// parameter count could be satisfied by the key-length number beside it.
+// An exact phrase ties each assertion to the words the model actually
+// reads for that bound, and TestChangingOnePromptNumberFailsExactlyOneBound
+// proves the ties are one-to-one.
+var boundPhrases = map[string]string{
+	"interpretation.requested_judgment.max_length":               "requested_judgment MUST be at most {N} characters",
+	"interpretation.subject_terms.max_count":                     "At most {N} subject_terms",
+	"interpretation.comparison_terms.max_count":                  "{N} comparison_terms",
+	"interpretation.subject_term.max_length":                     "comparison_terms, each at most {N} characters",
+	"interpretation.fact_requirements.max_count":                 "At most {N} fact_requirements.",
+	"interpretation.fact_requirement.parameter_key.max_length":   "parameters key is at most {N} characters",
+	"interpretation.fact_requirement.parameter_value.max_length": "each value at most {N}",
+	"interpretation.fact_requirement.parameters.max_count":       "entry has at most {N} parameters",
+	"interpretation.clarification_reason.max_length":             "clarification_reason is at most {N} characters",
+
+	"synthesis.driver.title.max_length":             "A driver's title is at most {N} characters",
+	"synthesis.driver.summary.max_length":           "its summary at most {N};",
+	"synthesis.driver.qualification.max_length":     "a driver's qualification is at most {N}",
+	"synthesis.driver.affected_subjects.max_count":  "at most {N} affected_subjects",
+	"synthesis.finding.kind.max_length":             "A finding's kind is at most {N} characters",
+	"synthesis.finding.summary.max_length":          "its summary at most {N}, with at most",
+	"synthesis.finding.subjects.max_count":          "with at most {N} subjects",
+	"synthesis.claimed_fact.field.max_length":       "A claimed fact's field is at most {N} characters",
+	"synthesis.driver.path_ids.max_count":           "carries at most {N} path_ids",
+	"synthesis.driver.claimed_fact_ids.max_count":   "at most {N} claimed_fact_ids",
+	"synthesis.finding.claimed_fact_ids.max_count":  "at most {N} claimed_fact_ids",
+	"synthesis.claimed_fact.claim_id.max_length":    "each at most {N} characters, and at most",
+	"synthesis.driver.evidence_ref_ids.max_count":   "at most {N} evidence_ref_ids each",
+	"synthesis.finding.evidence_ref_ids.max_count":  "at most {N} evidence_ref_ids each",
+	"synthesis.evidence_ref_ids.max_count":          "result-level evidence_ref_ids list holds at most {N}",
+	"synthesis.drivers.max_count":                   "Return at most {N} drivers",
+	"synthesis.strongest_pressures.max_count":       "at most {N} strongest_pressures",
+	"synthesis.strongest_pressures.item_max_length": "strongest_pressures (each at most {N} characters)",
+	"synthesis.remaining_work.max_count":            "at most {N} each of remaining_work",
+	"synthesis.readiness_gaps.max_count":            "at most {N} each of remaining_work",
+	"synthesis.conflicts.max_count":                 "at most {N} each of remaining_work",
+	"synthesis.limitations.max_count":               "at most {N} limitations",
+	"synthesis.limitations.item_max_length":         "each limitation at most {N} characters",
+	"synthesis.warnings.max_count":                  "at most {N} warnings",
+	"synthesis.warnings.item_max_length":            "each warning at most {N} characters",
+	"synthesis.claimed_facts.max_count":             "restate at most {N} claimed_facts",
+	"synthesis.driver.driver_id.max_length":         "each at most {N} characters, and at most",
+	"synthesis.finding.finding_id.max_length":       "each at most {N} characters, and at most",
 }
 
 func TestPromptsStateEveryModelFacingBound(t *testing.T) {
@@ -110,9 +126,20 @@ func TestPromptsStateEveryModelFacingBound(t *testing.T) {
 			if len(testCase.mentions) == 0 {
 				t.Fatalf("%s states no phrase to anchor its limit check to", testCase.registryName)
 			}
-			if !limitStatedNearAnyMention(testCase.prompt, testCase.mentions, testCase.limit) {
-				t.Errorf("no phrase naming %s states its enforced limit %d nearby, so the model may be reading a different number than the validator applies",
-					testCase.registryName, testCase.limit)
+			// The prompt must contain a phrase that is unique to THIS
+			// bound and carries its number (codex round-6 F5). A
+			// proximity window still let a neighbour satisfy the check:
+			// the interpretation prompt holds 128, 1000 and 32 in one
+			// clause about parameters, so a stale parameter-count could
+			// be "proved" by the key-length number sitting beside it.
+			phrase, ok := boundPhrases[testCase.registryName]
+			if !ok {
+				t.Fatalf("%s has no unique prompt phrase registered", testCase.registryName)
+			}
+			want := strings.ReplaceAll(phrase, "{N}", strconv.Itoa(testCase.limit))
+			if !strings.Contains(testCase.prompt, want) {
+				t.Errorf("the prompt does not contain the phrase that states %s:\n  want: %q\nThe number must appear in a phrase unique to this bound, not merely somewhere nearby.",
+					testCase.registryName, want)
 			}
 		})
 	}
@@ -1278,4 +1305,72 @@ func resultWithClaimedFacts(count int) contractsv1.ContextFabricInvestigationRes
 	}
 	result.ClaimedFacts = claims
 	return result
+}
+
+// TestChangingOnePromptNumberFailsExactlyOneBound is the codex round-6 F5
+// mutation check.
+//
+// The phrase map is only trustworthy if each phrase is genuinely unique to
+// its bound. This mutates ONE number in a prompt and requires exactly the
+// assertions tied to that phrase to stop matching. If a mutation broke
+// nothing, that bound's phrase was not actually pinned; if it broke an
+// unrelated bound, two bounds share a phrase and one is being proved by the
+// other's number -- which is the defect this replaced.
+func TestChangingOnePromptNumberFailsExactlyOneBound(t *testing.T) {
+	for _, mutation := range []struct {
+		name         string
+		prompt       string
+		from, to     string
+		wantAffected []string
+	}{
+		{
+			name: "driver title length", prompt: synthesisSystemPrompt,
+			from: "A driver's title is at most 512 characters", to: "A driver's title is at most 999 characters",
+			wantAffected: []string{"synthesis.driver.title.max_length"},
+		},
+		{
+			name: "limitations count", prompt: synthesisSystemPrompt,
+			from: "at most 100 limitations", to: "at most 999 limitations",
+			wantAffected: []string{"synthesis.limitations.max_count"},
+		},
+		{
+			name: "parameter value length", prompt: interpretationSystemPrompt,
+			from: "each value at most 1000", to: "each value at most 999",
+			wantAffected: []string{"interpretation.fact_requirement.parameter_value.max_length"},
+		},
+		{
+			name: "subject terms count", prompt: interpretationSystemPrompt,
+			from: "At most 50 subject_terms", to: "At most 999 subject_terms",
+			wantAffected: []string{"interpretation.subject_terms.max_count"},
+		},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			if !strings.Contains(mutation.prompt, mutation.from) {
+				t.Fatalf("the prompt does not contain %q, so this mutation proves nothing", mutation.from)
+			}
+			mutated := strings.Replace(mutation.prompt, mutation.from, mutation.to, 1)
+
+			affected := make([]string, 0, 2)
+			for _, testCase := range modelFacingBounds() {
+				if testCase.prompt != mutation.prompt {
+					continue
+				}
+				phrase, ok := boundPhrases[testCase.registryName]
+				if !ok {
+					continue
+				}
+				want := strings.ReplaceAll(phrase, "{N}", strconv.Itoa(testCase.limit))
+				if !strings.Contains(mutated, want) {
+					affected = append(affected, testCase.registryName)
+				}
+			}
+			sort.Strings(affected)
+			expected := append([]string(nil), mutation.wantAffected...)
+			sort.Strings(expected)
+			if !reflect.DeepEqual(affected, expected) {
+				t.Errorf("mutating %q broke %v, want exactly %v.\nA bound broken by an unrelated mutation shares a phrase; a bound broken by nothing is not pinned.",
+					mutation.from, affected, expected)
+			}
+		})
+	}
 }

@@ -351,6 +351,7 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 		return nil, 0
 	}
 	canonical := *result.Cohort
+	nestedOmitted := 0
 	members := make([]contractsv1.ContextFabricProjectedCohortMember, 0, min(len(canonical.Members), bounds.MaxCohortMembers))
 	for _, member := range canonical.Members {
 		if len(members) >= bounds.MaxCohortMembers {
@@ -363,10 +364,12 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 		if !index.admit(member.EvidenceRefIDs) {
 			break
 		}
+		reasons, reasonsDropped := clamp.strings(member.InclusionReasons, contractsv1.ContextFabricProjectedInclusionReasonsMaxCount, contractsv1.ContextFabricProjectedInclusionReasonMaxLength)
+		nestedOmitted += reasonsDropped
 		members = append(members, contractsv1.ContextFabricProjectedCohortMember{
 			Subject:          member.Subject,
 			Rank:             member.Rank,
-			InclusionReasons: clamp.strings(member.InclusionReasons, contractsv1.ContextFabricProjectedInclusionReasonsMaxCount, contractsv1.ContextFabricProjectedInclusionReasonMaxLength),
+			InclusionReasons: reasons,
 			EvidenceRefIDs:   append([]string(nil), member.EvidenceRefIDs...),
 		})
 	}
@@ -376,7 +379,7 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 		Rationale: clamp.text(canonical.Rationale, contractsv1.ContextFabricProjectedCohortRationaleMaxLength),
 		Complete:  canonical.Complete,
 		Members:   members,
-	}, len(canonical.Members) - len(members)
+	}, len(canonical.Members) - len(members) + nestedOmitted
 }
 
 // projectClarification carries the ambiguity a caller must resolve. It is
@@ -390,19 +393,22 @@ func projectClarification(result contractsv1.ContextFabricInvestigationResult, b
 	canonical := result.SubjectResolution.Candidates
 	retain := min(len(canonical), bounds.MaxCandidates)
 	candidates := make([]contractsv1.ContextFabricProjectedCandidate, 0, retain)
+	nestedOmitted := 0
 	for _, candidate := range canonical[:retain] {
+		reasons, reasonsDropped := clamp.strings(candidate.MatchReasons, contractsv1.ContextFabricProjectedMatchReasonsMaxCount, contractsv1.ContextFabricProjectedMatchReasonMaxLength)
+		nestedOmitted += reasonsDropped
 		candidates = append(candidates, contractsv1.ContextFabricProjectedCandidate{
 			ReceiptID:    candidate.ReceiptID,
 			Subject:      candidate.Subject,
 			State:        candidate.State,
 			Confidence:   candidate.Confidence,
-			MatchReasons: clamp.strings(candidate.MatchReasons, contractsv1.ContextFabricProjectedMatchReasonsMaxCount, contractsv1.ContextFabricProjectedMatchReasonMaxLength),
+			MatchReasons: reasons,
 		})
 	}
 	return &contractsv1.ContextFabricProjectedClarification{
 		Prompt:     clamp.text(result.SubjectResolution.ClarificationPrompt, contractsv1.ContextFabricProjectedClarificationPromptMaxLength),
 		Candidates: candidates,
-	}, len(canonical) - retain
+	}, len(canonical) - retain + nestedOmitted
 }
 
 // evidenceIndex accumulates the evidence references retained content
@@ -540,15 +546,29 @@ func (c *clamper) text(value string, maxLength int) string {
 	return string(runes[:maxLength])
 }
 
-// strings clamps a list's length and each entry, counting every shortened
-// entry.
-func (c *clamper) strings(values []string, maxCount, maxLength int) []string {
-	retain := min(len(values), maxCount)
-	out := make([]string, 0, retain)
-	for _, value := range values[:retain] {
-		out = append(out, c.text(value, maxLength))
+// strings clamps a list's entries and its length, deduping AFTER the
+// clamp, and reports how many entries were dropped.
+//
+// Post-clamp dedup is not optional (codex round-6 F2): two distinct legacy
+// entries sharing a long prefix become identical once clamped, and the
+// projection validator rejects duplicates -- so a valid stored row produced
+// an invalid projection. Clamping first and deduping after makes the
+// collision visible as what it is, a dropped entry.
+//
+// Dropping entries is disclosed too. A 50-entry legacy list silently
+// becoming 32 left ProjectionBudget untruncated, so a consumer could not
+// tell the list was cut.
+func (c *clamper) strings(values []string, maxCount, maxLength int) ([]string, int) {
+	clamped := make([]string, 0, len(values))
+	for _, value := range values {
+		clamped = append(clamped, c.text(value, maxLength))
 	}
-	return out
+	distinct := distinctStrings(clamped)
+	dropped := len(clamped) - len(distinct)
+	if len(distinct) <= maxCount {
+		return distinct, dropped
+	}
+	return distinct[:maxCount], dropped + len(distinct) - maxCount
 }
 
 // projectCoverage reports each source's state once, bounded by the
@@ -564,8 +584,15 @@ func projectCoverage(result contractsv1.ContextFabricInvestigationResult, clamp 
 	entries := make([]contractsv1.ContextFabricProjectedCoverage, 0, len(result.Coverage.Sources))
 	omitted := 0
 	for _, source := range result.Coverage.Sources {
+		// Trimming can collapse two stored entries onto one name:
+		// canonical uniqueness is checked BEFORE trimming, so a legacy
+		// row can legitimately hold both " work_items " and "work_items"
+		// with different states. Collapsing drops one source's state and
+		// reason, so it is counted as an omission rather than vanishing
+		// (codex round-6 F3).
 		name := strings.TrimSpace(source.Source)
 		if _, exists := seen[name]; exists {
+			omitted++
 			continue
 		}
 		seen[name] = struct{}{}

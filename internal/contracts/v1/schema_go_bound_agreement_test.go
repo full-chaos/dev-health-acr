@@ -91,6 +91,14 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.InterpretedQuestion.properties.comparison_terms.maxItems":             contextFabricWriteBounds.interpretationTerms,
 		"common#$defs.SubjectCandidate.properties.evidence_ref_ids.maxItems":                contextFabricWriteBounds.candidateEvidenceRefs,
 		"common#$defs.CohortExclusion.properties.reason.maxLength":                          contextFabricWriteBounds.cohortExclusionReasonLength,
+		// Disproved as "schema-only" by boundProbes below: the validator
+		// rejects a value one past each of these, so they are compared
+		// numerically rather than excused (codex round-6 F1).
+		"result#properties.result_id.maxLength":                     256,
+		"result#properties.request_id.maxLength":                    256,
+		"result#properties.question.maxLength":                      8000,
+		"common#$defs.SubjectRef.properties.label.maxLength":        512,
+		"common#$defs.SubjectRef.properties.canonical_id.maxLength": 256,
 	}
 
 	discovered := schemaBounds(t, documents)
@@ -109,8 +117,22 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 			// while the test passed. A bound nobody has classified is
 			// exactly where the next drift lives, so an unclassified
 			// bound is now a failure.
-			if reason := schemaOnlyBoundReason(bound.path); reason == "" {
+			reason := schemaOnlyBoundReason(bound.path)
+			if reason == "" {
 				unmapped = append(unmapped, bound.path)
+				continue
+			}
+			// The claim "Go does not numerically enforce this" must be
+			// FALSIFIABLE (codex round-6 F1). Several classifications were
+			// simply wrong -- result_id was called schema-only while the
+			// validator enforces its 256-character bound -- so schema
+			// drift on those paths passed the classified gate without any
+			// comparison. A path whose Go validator demonstrably rejects
+			// a value one past the schema bound is enforced in Go, and
+			// must be mapped rather than excused.
+			if enforced, probe := goEnforcesBound(bound); enforced {
+				t.Errorf("%s is classified schema-only (%q) but Go DOES enforce it: %s.\nMap it in goBoundsByPath so the numbers are compared.",
+					bound.path, reason, probe)
 			}
 			continue
 		}
@@ -135,6 +157,61 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		t.Fatal("no bounds were actually compared; the mapping resolved nothing")
 	}
 	t.Logf("compared %d bounds against Go; every other bound is explicitly classified as schema-only", checked)
+}
+
+// goEnforcesBound probes whether the Go validator actually enforces a
+// numeric bound on this path, so a schema-only CLASSIFICATION can be
+// falsified rather than believed.
+//
+// It builds a valid result, drives the named field one past the schema
+// bound, and reports whether validation rejects it. Only paths with a
+// registered prober are checked; an unprobed path is not treated as proof
+// of absence, and the prober list is what a reviewer extends when they
+// suspect a classification is wrong.
+func goEnforcesBound(bound discoveredBound) (bool, string) {
+	probe, ok := boundProbes[bound.path]
+	if !ok {
+		return false, ""
+	}
+	if err := probe(bound.value + 1); err != nil {
+		return true, "a value one past the schema bound is rejected: " + err.Error()
+	}
+	return false, ""
+}
+
+// boundProbes exercises paths whose schema-only classification is
+// suspicious enough to be worth disproving mechanically. Each drives its
+// field one past the schema bound and returns the validation error.
+var boundProbes = map[string]func(int) error{
+	"result#properties.result_id.maxLength": func(length int) error {
+		value := probeResult()
+		value.ResultID = strings.Repeat("r", length)
+		return value.Validate()
+	},
+	"result#properties.request_id.maxLength": func(length int) error {
+		value := probeResult()
+		value.RequestID = strings.Repeat("q", length)
+		return value.Validate()
+	},
+	"result#properties.question.maxLength": func(length int) error {
+		value := probeResult()
+		value.Question = strings.Repeat("u", length)
+		return value.Validate()
+	},
+	"common#$defs.SubjectRef.properties.label.maxLength": func(length int) error {
+		value := probeResult()
+		value.SubjectResolution.Committed[0].Label = strings.Repeat("l", length)
+		return value.Validate()
+	},
+	"common#$defs.SubjectRef.properties.canonical_id.maxLength": func(length int) error {
+		value := probeResult()
+		value.SubjectResolution.Committed[0].CanonicalID = strings.Repeat("c", length)
+		return value.Validate()
+	},
+}
+
+func probeResult() ContextFabricInvestigationResult {
+	return closureResult()
 }
 
 // schemaOnlyBoundReason classifies a schema bound the Go validator does not

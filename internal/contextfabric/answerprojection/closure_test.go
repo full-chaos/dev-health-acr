@@ -379,3 +379,84 @@ func TestPaddedCoverageSourceNamesProject(t *testing.T) {
 		}
 	}
 }
+
+// TestLegacyCohortInclusionReasonsProjectAndAreCounted is the codex
+// round-6 F2 regression.
+//
+// A stored cohort member can legitimately hold 50 inclusion reasons of 1024
+// runes. Clamping them to 32 x 1000 without deduping afterwards let two
+// distinct entries sharing a 1000-rune prefix become identical, which the
+// projection validator rejects -- so a valid stored row produced an invalid
+// projection. The count-based drop (50 to 32) was silent too.
+func TestLegacyCohortInclusionReasonsProjectAndAreCounted(t *testing.T) {
+	prefix := strings.Repeat("r", contractsv1.ContextFabricProjectedInclusionReasonMaxLength)
+	result := richResult()
+	result.Drivers = result.Drivers[1:2]
+	// Two entries that are distinct at the legacy length and identical
+	// once clamped, plus enough others to exceed the projection's count.
+	reasons := []string{prefix + "-first-tail", prefix + "-second-tail"}
+	for i := 0; i < 48; i++ {
+		reasons = append(reasons, "distinct reason "+strconv.Itoa(i))
+	}
+	result.Cohort.Members[0].InclusionReasons = reasons
+
+	if err := result.ValidateStored(); err != nil {
+		t.Fatalf("legacy fixture is not readable as a stored row: %v", err)
+	}
+
+	projection := Project(result, Budget{})
+	if err := projection.Validate(); err != nil {
+		t.Fatalf("legacy inclusion reasons produced an INVALID projection: %v", err)
+	}
+	if projection.Cohort == nil || len(projection.Cohort.Members) == 0 {
+		t.Fatal("cohort was dropped entirely")
+	}
+	kept := projection.Cohort.Members[0].InclusionReasons
+	if len(kept) > contractsv1.ContextFabricProjectedInclusionReasonsMaxCount {
+		t.Errorf("kept %d inclusion reasons", len(kept))
+	}
+	seen := map[string]bool{}
+	for _, reason := range kept {
+		if seen[reason] {
+			t.Errorf("clamping produced a duplicate inclusion reason")
+		}
+		seen[reason] = true
+	}
+	if projection.ProjectionBudget.CohortMembersOmitted == 0 {
+		t.Error("dropped inclusion reasons were not counted")
+	}
+	if !projection.ProjectionBudget.Truncated {
+		t.Error("dropping inclusion reasons must set truncated")
+	}
+}
+
+// TestCollapsedCoverageSourcesAreCounted is the codex round-6 F3
+// regression. Canonical uniqueness is checked BEFORE trimming, so a stored
+// row can hold both " work_items " and "work_items" with different states.
+// Trimming then collapses them, dropping one source's state and reason.
+func TestCollapsedCoverageSourcesAreCounted(t *testing.T) {
+	result := richResult()
+	result.Drivers = result.Drivers[1:2]
+	result.Cohort = nil
+	result.Coverage.Sources = []contractsv1.ContextFabricSourceObservation{
+		{Source: "work_items", State: contractsv1.ContextFabricSourceAvailable},
+		{Source: " work_items ", State: contractsv1.ContextFabricSourceUnavailable, Reason: "a state that would vanish"},
+	}
+	if err := result.ValidateStored(); err != nil {
+		t.Fatalf("legacy padded coverage is not readable as a stored row: %v", err)
+	}
+
+	projection := Project(result, Budget{})
+	if err := projection.Validate(); err != nil {
+		t.Fatalf("collapsed coverage produced an invalid projection: %v", err)
+	}
+	if len(projection.CoverageSummary) != 1 {
+		t.Fatalf("expected the padded duplicate to collapse, got %d entries", len(projection.CoverageSummary))
+	}
+	if projection.ProjectionBudget.CoverageOmitted == 0 {
+		t.Error("the collapsed source's state was dropped without being counted")
+	}
+	if !projection.ProjectionBudget.Truncated {
+		t.Error("collapsing a coverage entry must set truncated")
+	}
+}

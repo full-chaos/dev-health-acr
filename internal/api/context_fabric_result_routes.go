@@ -95,7 +95,21 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 		}
 		var payload any = result
 		if view == investigationViewProjection {
-			payload = answerprojection.Project(result, budget)
+			projection := answerprojection.Project(result, budget)
+			// Validate before emitting (codex round-6 F2). The route
+			// serves a DERIVED document, and the derivation runs over
+			// stored rows that are validated leniently -- so a projection
+			// bug shows up here as a schema-invalid body a client cannot
+			// parse, with nothing server-side having noticed. The
+			// canonical view needs no equivalent check: it re-serves a
+			// document the store already validated on read.
+			if err := projection.Validate(); err != nil {
+				a.logger.ErrorContext(r.Context(), "context fabric projection failed contract validation",
+					"request_id", RequestID(r.Context()), "failure_class", "context_fabric_projection")
+				writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric answer projection could not be produced", false, nil)
+				return
+			}
+			payload = projection
 		}
 		encoded, err := encodeBounded(payload, int64(a.config.MaxSerializedBytes))
 		if err != nil {
