@@ -29,6 +29,18 @@ That placement is deliberate, and it is what makes the acceptance criterion
   which would force `ErrProjectionSourceVersionChanged` and a full rebuild on
   every already-projected org for content none of them asked for.
 
+One shared-code note (added during implementation): the paging behavior
+`ClickHouseProjectionSource` already had is not simple — it carries CHAOS-3753's
+C6 (refusing an oversized org leaves it permanently stuck), K4 (an aggregate
+candidate count can exceed the contract bound with no single table truncated),
+and K2 (a page boundary must never split one source row's candidates) fixes.
+Rather than re-derive those in a second source, both sources now instantiate one
+`sourcePlan` (`assemble.go`); the only per-source variation is data — table set,
+batch identity, an optional once-per-from-scratch seed, an optional observer.
+This is the one structural change in an otherwise additive issue, taken because
+duplicating three hard-won pagination fixes is a worse risk than the rebase
+surface of three small function bodies.
+
 The graph write path needs no changes at all. `falkorgraph`'s
 `ownedSubjectMergeCypher` / `subjectMergeAttrs` / `entitySearchText` /
 `kindLabel` are all generic over `SubjectKind`; `team` and `project` land as

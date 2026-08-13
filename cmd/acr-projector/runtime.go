@@ -125,15 +125,14 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
-	teamsProjectsSource := devhealthsource.NewTeamsProjectsSource(cfg.TeamsProjectsEnabled)
+	teamsProjectsSource, err := devhealthsource.NewTeamsProjectsSource(clickhouseClient, cfg.TeamsProjectsEnabled)
+	if err != nil {
+		return nil, errors.Join(err, runtime.Close())
+	}
 
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
-		OrgIDs: cfg.OrgIDs,
-		Sources: []projectionrun.SourcePair{
-			{Name: devhealthsource.SourceName, Source: clickhouseSource},
-			{Name: devhealthsource.EpisodesSourceName, Source: episodesSource},
-			{Name: devhealthsource.TeamsProjectsSourceName, Source: teamsProjectsSource},
-		},
+		OrgIDs:  cfg.OrgIDs,
+		Sources: projectionSources(clickhouseSource, episodesSource, teamsProjectsSource),
 		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: rebuildMarkers, Locker: locker,
 		ReuseInvalidator: reuseInvalidator,
 		PollInterval:     cfg.PollInterval, Concurrency: cfg.Concurrency, Logger: logger,
@@ -208,4 +207,26 @@ func openProjectionBackend() (contextfabric.ProjectionBackend, func(context.Cont
 		return err
 	}
 	return adapter, check, nil
+}
+
+// projectionSources is the composition root's registered ProjectionSource
+// list. It is a named function rather than an inline literal so the
+// registration itself is testable without a live Postgres/ClickHouse
+// (relationship_vocabulary_test.go's sibling,
+// TestTeamsProjectsSourceIsRegisteredRegardlessOfItsFeatureFlag).
+//
+// Every source is registered UNCONDITIONALLY, including the teams/projects
+// one. That is the point: ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED
+// is handed to the source's constructor and gates only whether that source
+// yields batches -- it must never decide whether the source appears here.
+// Dropping a source from this list on a false flag would strand its
+// (org_id, source) projection checkpoint rather than simply idling it, so
+// flipping the flag back on would silently resume from a stale watermark
+// instead of the full snapshot a never-registered source gets.
+func projectionSources(clickhouse, episodes, teamsProjects contextfabric.ProjectionSource) []projectionrun.SourcePair {
+	return []projectionrun.SourcePair{
+		{Name: devhealthsource.SourceName, Source: clickhouse},
+		{Name: devhealthsource.EpisodesSourceName, Source: episodes},
+		{Name: devhealthsource.TeamsProjectsSourceName, Source: teamsProjects},
+	}
 }
