@@ -54,9 +54,9 @@ trivy_cache="${work_root}/trivy-cache"
 # run are pruned here rather than accumulating forever on a long-lived
 # machine; a successful run's own directory is moved away by the
 # publication step below, so only failed attempts ever linger. Pruning is
-# age-based (CHAOS-3772 R3): a run takes minutes, so anything older than
-# the 6h default is safely stale, and two scan.sh invocations sharing this
-# .tmp root can never race each other's brand-new directory.
+# age-based (CHAOS-3772 R3/R4-2): a run takes minutes, so anything older
+# than the 24h default is safely stale, and two scan.sh invocations
+# sharing this .tmp root can never race each other's brand-new directory.
 report_root="$(mktemp -d "${tmp_root}/container-scan-attempt.XXXXXX")"
 prune_stale_attempt_dirs "$tmp_root" 'container-scan-attempt.' "$report_root"
 mkdir -p "$scan_root" "$report_root" "$trivy_cache"

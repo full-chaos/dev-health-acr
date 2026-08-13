@@ -18,7 +18,7 @@ trap 'rm -rf "$fixture"' EXIT
 pass=0
 fail=0
 now=1755000000
-max_age=21600 # 6 hours, matches the production default
+max_age=86400 # 24 hours, matches the production default (CHAOS-3772 R4-2)
 
 set_mtime() {
   # touch -t interprets its timestamp argument in LOCAL time (unlike the
@@ -79,6 +79,27 @@ expect_survives 'a young sibling' "$young_sibling"
 expect_removed 'an old sibling well past the threshold' "$old_sibling"
 expect_survives 'a sibling exactly at the threshold (age == max_age)' "$boundary_exact"
 expect_removed 'a sibling one second past the threshold' "$boundary_over"
+
+
+# CHAOS-3772 R4-2: garbage max_age_seconds must fail loudly, not silently
+# misbehave (e.g. a negative or non-numeric value making every directory
+# "too old" or making the comparison never trigger). The ancient kept dir
+# must still be untouched, and nothing else should be pruned either --
+# the function must fail closed before it ever reaches the loop.
+garbage_probe="${fixture}/attempt.garbage-probe"
+mkdir -p "$garbage_probe"
+set_mtime "$garbage_probe" $((now - max_age - 3600))
+for garbage_max_age in 'not-a-number' -1 0; do
+  if prune_stale_attempt_dirs "$fixture" 'attempt.' "$keep_dir" "$garbage_max_age" "$now" 2>/dev/null; then
+    printf 'FAIL: prune_stale_attempt_dirs accepted garbage max_age_seconds=%s instead of rejecting it\n' \
+      "$garbage_max_age" >&2
+    fail=$((fail + 1))
+  else
+    printf 'ok: garbage max_age_seconds=%s was rejected\n' "$garbage_max_age"
+    pass=$((pass + 1))
+  fi
+done
+expect_survives 'a directory left alone because max_age validation failed first' "$garbage_probe"
 
 test "$fail" -eq 0 || {
   printf '%s prune assertions failed, %s passed\n' "$fail" "$pass" >&2

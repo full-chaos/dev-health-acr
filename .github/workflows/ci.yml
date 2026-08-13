@@ -214,10 +214,11 @@ jobs:
           name: container-reports
           # container-reports/ is the atomically-published known-good
           # generation (populated only on a fully successful scan).
-          # container-scan-attempt*/ is scan.sh's own, never-cleaned-up
-          # work-in-progress report dir (CHAOS-3772 F2): it carries
-          # whatever the run managed to write -- including a resolved but
-          # rejected trivy-db snapshot -- even when the job failed before
+          # container-scan-attempt*/ is scan.sh's own work-in-progress
+          # report dir (CHAOS-3772 F2), aged out after 24h rather than
+          # cleaned up immediately (R4-2): it carries whatever the run
+          # managed to write -- including a resolved but rejected
+          # trivy-db snapshot -- even when the job failed before
           # publication.
           path: |
             .tmp/container-reports/

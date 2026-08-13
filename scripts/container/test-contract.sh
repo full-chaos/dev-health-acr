@@ -273,15 +273,19 @@ scan_script="${repo_root}/scripts/container/scan.sh"
 trivy_scanner_pin_pattern="^trivy_image='aquasec/trivy:[^'\"]+@sha256:[0-9a-f]{64}'"
 trivy_db_static_pin_pattern='trivy-db[^@]*@sha256:[0-9a-f]{64}|sha256:[0-9a-f]{64}[^@]*trivy-db'
 
-# CHAOS-3772 R2-2 / R3 F3: a pinned assignment followed by a later,
-# unpinned reassignment would satisfy a plain "does a pinned line exist"
-# grep while the live value at runtime is whatever assignment ran last --
-# including two assignments packed onto one physical line with a `;`,
-# which a `^`-anchored per-line count would miss entirely. Count
-# assignment occurrences by statement position (start of line, or right
-# after a `;`), not physical lines, and require exactly one.
-trivy_image_assignment_pattern='(^|;[[:space:]]*)trivy_image='
-trivy_image_assignment_count="$(grep -oE "$trivy_image_assignment_pattern" "$scan_script" | wc -l | tr -d ' ')"
+# CHAOS-3772 R2-2 / R3 F3 / R4-1: a pinned assignment followed by a
+# later, unpinned reassignment would satisfy a plain "does a pinned line
+# exist" grep while the live value at runtime is whatever assignment ran
+# last -- including two assignments packed onto one physical line, joined
+# by `;`, `&&`, `||`, `|`, or whatever shell composes next. Enumerating
+# separators is an arms race; instead strip comments (so a comment
+# mentioning trivy_image= can't inflate the count) and count every
+# remaining word-boundary occurrence of the assignment, anywhere in the
+# line, however it's joined to what precedes it.
+count_trivy_image_assignments() {
+  sed 's/#.*//' "$1" | grep -oE '\btrivy_image=' | wc -l | tr -d ' '
+}
+trivy_image_assignment_count="$(count_trivy_image_assignments "$scan_script")"
 test "$trivy_image_assignment_count" -eq 1 || {
   printf 'scan.sh must assign trivy_image exactly once (found %s) -- a later reassignment could override the pinned value at runtime (CHAOS-3772 R2-2)\n' \
     "$trivy_image_assignment_count" >&2
@@ -350,37 +354,47 @@ grep -Eiq "$trivy_db_static_pin_pattern" "$tag_and_digest_evasion" || {
   exit 1
 }
 
+# The comment deliberately mentions the literal text "trivy_image=" --
+# proving comment-stripping actually excludes prose, not merely that this
+# particular comment happens not to contain the string (CHAOS-3772 R4-1).
 comment_only_evasion="${pin_fixture}/comment-only.sh"
 {
-  printf '# pinned scanner: aquasec/trivy:0.69.3@sha256:%s\n' \
-    "$(printf 'a%.0s' $(seq 1 64))"
+  printf '# trivy_image=would-be-double-counted-if-comment-stripping-were-broken\n'
   printf "trivy_image='aquasec/trivy:latest'\n"
 } >"$comment_only_evasion"
 if grep -Eq "$trivy_scanner_pin_pattern" "$comment_only_evasion"; then
   printf 'trivy scanner pin regex was satisfied by a comment instead of the live assignment (CHAOS-3772 F3)\n' >&2
   exit 1
 fi
+test "$(count_trivy_image_assignments "$comment_only_evasion")" -eq 1 || {
+  printf 'comment-stripping failed: a comment mentioning trivy_image= inflated the assignment count (CHAOS-3772 R4-1)\n' >&2
+  exit 1
+}
 
-duplicate_assignment_evasion="${pin_fixture}/duplicate-assignment.sh"
+two_line_duplicate_evasion="${pin_fixture}/two-line-duplicate.sh"
 {
   printf "trivy_image='aquasec/trivy:0.69.3@sha256:%s'\n" "$(printf 'b%.0s' $(seq 1 64))"
   printf "trivy_image='aquasec/trivy:latest'\n"
-} >"$duplicate_assignment_evasion"
-if [[ "$(grep -oE "$trivy_image_assignment_pattern" "$duplicate_assignment_evasion" | wc -l | tr -d ' ')" -eq 1 ]]; then
+} >"$two_line_duplicate_evasion"
+if [[ "$(count_trivy_image_assignments "$two_line_duplicate_evasion")" -eq 1 ]]; then
   printf 'trivy_image assignment-count check failed to catch a two-line duplicate assignment (CHAOS-3772 R2-2)\n' >&2
   exit 1
 fi
 
-# CHAOS-3772 R3 F3: the exact evasion codex demonstrated -- both
-# assignments packed onto ONE physical line via `;`, which a `^`-anchored
-# per-line grep -c would count as a single line and miss entirely.
-single_line_duplicate_evasion="${pin_fixture}/single-line-duplicate.sh"
-printf "trivy_image='aquasec/trivy:0.69.3@sha256:%s' ; trivy_image='aquasec/trivy:latest'\n" \
-  "$(printf 'c%.0s' $(seq 1 64))" >"$single_line_duplicate_evasion"
-if [[ "$(grep -oE "$trivy_image_assignment_pattern" "$single_line_duplicate_evasion" | wc -l | tr -d ' ')" -eq 1 ]]; then
-  printf 'trivy_image assignment-count check failed to catch a single-line, semicolon-separated duplicate assignment (CHAOS-3772 R3 F3)\n' >&2
-  exit 1
-fi
+# CHAOS-3772 R3 F3 / R4-1: rather than enumerate every separator a
+# duplicate could hide behind, prove the structural (comment-stripped,
+# word-boundary) count catches both `;` and `&&` composition without the
+# check itself needing to know either separator exists.
+for separator in ' ; ' ' && '; do
+  separator_evasion="${pin_fixture}/separator-duplicate.sh"
+  printf "trivy_image='aquasec/trivy:0.69.3@sha256:%s'%strivy_image='aquasec/trivy:latest'\n" \
+    "$(printf 'c%.0s' $(seq 1 64))" "$separator" >"$separator_evasion"
+  if [[ "$(count_trivy_image_assignments "$separator_evasion")" -eq 1 ]]; then
+    printf 'trivy_image assignment-count check failed to catch a duplicate assignment joined by %s (CHAOS-3772 R4-1)\n' \
+      "$(printf '%q' "$separator")" >&2
+    exit 1
+  fi
+done
 
 rm -rf "$pin_fixture"
 
