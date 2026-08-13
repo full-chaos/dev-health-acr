@@ -146,13 +146,13 @@ func (e ContextFabricRelationshipEdge) Validate() error {
 }
 
 func (d ContextFabricDriverJudgment) Validate() error {
-	if !stringLengthBetween(d.DriverID, 8, 256) || !validDriverStanding(d.Standing) || !validDriverCategory(ContextFabricDriverCategory(d.Category)) || !stringLengthBetween(strings.TrimSpace(d.Title), 1, 512) || !stringLengthBetween(strings.TrimSpace(d.Summary), 1, 4000) || !validDerivationMethod(d.Derivation) || !validEpistemicStatus(d.EpistemicStatus) || d.Confidence < 0 || d.Confidence > 1 || !stringLengthBetween(d.Qualification, 0, 2000) {
+	if !stringLengthBetween(d.DriverID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !validDriverStanding(d.Standing) || !validDriverCategory(ContextFabricDriverCategory(d.Category)) || !stringLengthBetween(strings.TrimSpace(d.Title), 1, ContextFabricDriverTitleMaxLength) || !stringLengthBetween(strings.TrimSpace(d.Summary), 1, ContextFabricDriverSummaryMaxLength) || !validDerivationMethod(d.Derivation) || !validEpistemicStatus(d.EpistemicStatus) || d.Confidence < 0 || d.Confidence > 1 || !stringLengthBetween(d.Qualification, 0, ContextFabricDriverQualificationMaxLength) {
 		return fmt.Errorf("driver judgment violates v1 bounds")
 	}
-	if len(d.AffectedSubjects) < 1 || len(d.AffectedSubjects) > 250 || !uniqueSubjects(d.AffectedSubjects) || len(d.PathIDs) > 250 || !uniqueTrimmedStrings(d.PathIDs, 256) || !boundedEvidenceRefs(d.EvidenceRefIDs, 500, true) {
+	if len(d.AffectedSubjects) < ContextFabricDriverAffectedSubjectsMinCount || len(d.AffectedSubjects) > ContextFabricDriverAffectedSubjectsMaxCount || !uniqueSubjects(d.AffectedSubjects) || len(d.PathIDs) > ContextFabricDriverPathIDsMaxCount || !uniqueTrimmedStrings(d.PathIDs, ContextFabricIdentifierRefMaxLength) || !boundedEvidenceRefs(d.EvidenceRefIDs, ContextFabricEvidenceRefIDsMaxCount, true) {
 		return fmt.Errorf("driver subject, path, or evidence references violate v1 bounds")
 	}
-	if len(d.ClaimedFactIDs) > 250 || !uniqueTrimmedStrings(d.ClaimedFactIDs, 256) {
+	if len(d.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount || !uniqueTrimmedStrings(d.ClaimedFactIDs, ContextFabricIdentifierRefMaxLength) {
 		return fmt.Errorf("driver claimed fact references violate v1 bounds")
 	}
 	if d.Standing != ContextFabricDriverWithheld && len(d.PathIDs) == 0 && len(d.EvidenceRefIDs) == 0 {
@@ -178,10 +178,10 @@ func (d ContextFabricDriverJudgment) Validate() error {
 }
 
 func (f ContextFabricFinding) Validate() error {
-	if !stringLengthBetween(f.FindingID, 8, 256) || !stringLengthBetween(strings.TrimSpace(f.Kind), 1, 128) || !stringLengthBetween(strings.TrimSpace(f.Summary), 1, 4000) || len(f.Subjects) > 250 || !uniqueSubjects(f.Subjects) || !boundedEvidenceRefs(f.EvidenceRefIDs, 500, false) {
+	if !stringLengthBetween(f.FindingID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !stringLengthBetween(strings.TrimSpace(f.Kind), 1, ContextFabricFindingKindMaxLength) || !stringLengthBetween(strings.TrimSpace(f.Summary), 1, ContextFabricFindingSummaryMaxLength) || len(f.Subjects) > ContextFabricFindingSubjectsMaxCount || !uniqueSubjects(f.Subjects) || !boundedEvidenceRefs(f.EvidenceRefIDs, ContextFabricEvidenceRefIDsMaxCount, false) {
 		return fmt.Errorf("finding violates v1 bounds")
 	}
-	if len(f.ClaimedFactIDs) > 250 || !uniqueTrimmedStrings(f.ClaimedFactIDs, 256) {
+	if len(f.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount || !uniqueTrimmedStrings(f.ClaimedFactIDs, ContextFabricIdentifierRefMaxLength) {
 		return fmt.Errorf("finding claimed fact references violate v1 bounds")
 	}
 	// See the matching comment in ContextFabricDriverJudgment.Validate --
@@ -193,7 +193,7 @@ func (f ContextFabricFinding) Validate() error {
 }
 
 func (c ContextFabricClaimedFact) Validate() error {
-	if !stringLengthBetween(c.ClaimID, 8, 256) || !validFactKind(c.Kind) || !stringLengthBetween(c.Field, 1, 128) || strings.TrimSpace(c.Field) != c.Field {
+	if !stringLengthBetween(c.ClaimID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !validFactKind(c.Kind) || !stringLengthBetween(c.Field, 1, ContextFabricClaimedFieldMaxLength) || strings.TrimSpace(c.Field) != c.Field {
 		return fmt.Errorf("claimed fact identity violates v1 bounds")
 	}
 	if err := c.Subject.Validate(); err != nil {
@@ -259,7 +259,7 @@ func (v ContextFabricVersionSet) Validate() error {
 }
 
 func (q ContextFabricInterpretedQuestion) Validate() error {
-	if !validInvestigationShape(q.Shape) || !stringLengthBetween(strings.TrimSpace(q.RequestedJudgment), 1, 256) || len(q.SubjectTerms) > 100 || len(q.ComparisonTerms) > 100 || !uniqueTrimmedStrings(q.SubjectTerms, 512) || !uniqueTrimmedStrings(q.ComparisonTerms, 512) || len(q.FactRequirements) > 64 || !stringLengthBetween(q.ClarificationReason, 0, 2000) {
+	if !validInvestigationShape(q.Shape) || !stringLengthBetween(strings.TrimSpace(q.RequestedJudgment), 1, ContextFabricRequestedJudgmentMaxLength) || len(q.SubjectTerms) > ContextFabricSubjectTermsMaxCount || len(q.ComparisonTerms) > ContextFabricComparisonTermsMaxCount || !uniqueTrimmedStrings(q.SubjectTerms, ContextFabricSubjectOrComparisonTermMaxLength) || !uniqueTrimmedStrings(q.ComparisonTerms, ContextFabricSubjectOrComparisonTermMaxLength) || len(q.FactRequirements) > ContextFabricFactRequirementsMaxCount || !stringLengthBetween(q.ClarificationReason, 0, ContextFabricClarificationReasonMaxLength) {
 		return fmt.Errorf("interpreted question violates v1 bounds")
 	}
 	if err := q.TimeContext.Validate(); err != nil {
@@ -282,11 +282,11 @@ func (q ContextFabricInterpretedQuestion) Validate() error {
 }
 
 func (r ContextFabricFactRequirement) Validate() error {
-	if !validFactKind(r.Kind) || len(r.Subjects) > 250 || !uniqueSubjects(r.Subjects) || len(r.Parameters) > 32 {
+	if !validFactKind(r.Kind) || len(r.Subjects) > 250 || !uniqueSubjects(r.Subjects) || len(r.Parameters) > ContextFabricFactRequirementParametersMaxCount {
 		return fmt.Errorf("fact requirement violates v1 bounds")
 	}
 	for key, value := range r.Parameters {
-		if !stringLengthBetween(key, 1, 128) || !stringLengthBetween(value, 0, 1024) || strings.TrimSpace(key) != key || strings.TrimSpace(value) != value {
+		if !stringLengthBetween(key, 1, ContextFabricFactRequirementParameterKeyMaxLength) || !stringLengthBetween(value, 0, ContextFabricFactRequirementParameterValueMaxLength) || strings.TrimSpace(key) != key || strings.TrimSpace(value) != value {
 			return fmt.Errorf("fact requirement parameter violates v1 bounds")
 		}
 	}
@@ -308,7 +308,24 @@ func (r ContextFabricInvestigationResult) Validate() error {
 			return fmt.Errorf("cohort: %w", err)
 		}
 	}
-	if !stringLengthBetween(r.DirectJudgment, 0, 8000) || !stringLengthBetween(r.CurrentState, 0, 8000) || !stringLengthBetween(r.DeterministicAnswer, 1, 16000) || r.StrongestPressures == nil || len(r.StrongestPressures) > 50 || !uniqueTrimmedStrings(r.StrongestPressures, 2000) || r.Drivers == nil || len(r.Drivers) > 50 || r.RemainingWork == nil || len(r.RemainingWork) > 250 || r.ReadinessGaps == nil || len(r.ReadinessGaps) > 250 || r.Paths == nil || len(r.Paths) > 250 || r.Conflicts == nil || len(r.Conflicts) > 250 || r.Limitations == nil || len(r.Limitations) > 250 || !uniqueTrimmedStrings(r.Limitations, 4000) || r.EvidenceRefIDs == nil || !boundedEvidenceRefs(r.EvidenceRefIDs, 500, true) || r.Warnings == nil || len(r.Warnings) > 250 || !uniqueTrimmedStrings(r.Warnings, 4000) {
+	// DirectJudgment/CurrentState/DeterministicAnswer are server-composed
+	// (RuntimeAnswerSynthesizer.Synthesize's compose* functions render and
+	// truncate them to fit these exact lengths -- see
+	// internal/contextfabric/model_runtime.go), never validated against the
+	// model's own raw prose, so their bounds are not part of the
+	// model-facing registry (ContextFabricModelFacingBounds) this file
+	// otherwise draws from; likewise Paths, which ACR derives from the
+	// graph, not the model.
+	if !stringLengthBetween(r.DirectJudgment, 0, 8000) || !stringLengthBetween(r.CurrentState, 0, 8000) || !stringLengthBetween(r.DeterministicAnswer, 1, 16000) ||
+		r.StrongestPressures == nil || len(r.StrongestPressures) > ContextFabricStrongestPressuresMaxCount || !uniqueTrimmedStrings(r.StrongestPressures, ContextFabricStrongestPressureMaxLength) ||
+		r.Drivers == nil || len(r.Drivers) > ContextFabricDriversMaxCount ||
+		r.RemainingWork == nil || len(r.RemainingWork) > ContextFabricRemainingWorkMaxCount ||
+		r.ReadinessGaps == nil || len(r.ReadinessGaps) > ContextFabricReadinessGapsMaxCount ||
+		r.Paths == nil || len(r.Paths) > 250 ||
+		r.Conflicts == nil || len(r.Conflicts) > ContextFabricConflictsMaxCount ||
+		r.Limitations == nil || len(r.Limitations) > ContextFabricLimitationsMaxCount || !uniqueTrimmedStrings(r.Limitations, ContextFabricLimitationMaxLength) ||
+		r.EvidenceRefIDs == nil || !boundedEvidenceRefs(r.EvidenceRefIDs, ContextFabricEvidenceRefIDsMaxCount, true) ||
+		r.Warnings == nil || len(r.Warnings) > ContextFabricWarningsMaxCount || !uniqueTrimmedStrings(r.Warnings, ContextFabricWarningMaxLength) {
 		return fmt.Errorf("result answer fields violate v1 bounds")
 	}
 	if r.Status == ContextFabricInvestigationComplete || r.Status == ContextFabricInvestigationPartial {

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,15 +21,46 @@ import (
 const SDKVersion = "v1.11.0"
 
 const (
-	// defaultInterpretationPromptVersion is v2 as of CHAOS-3754: the
-	// interpretation system prompt (prompts.go) was extended to cover
-	// conversational-reference resolution, alias/acronym/previous-name
-	// subject terms, and subjectless team/project cohort framing. A
-	// receipt's PromptVersion is part of what a replay/evaluation
-	// pipeline uses to interpret ModelExecutionReceipt content (ADR
-	// 0008), so a prompt content change must bump this even though the
-	// interpretationOutput schema itself is unchanged.
-	defaultInterpretationPromptVersion = "context-fabric-interpretation.v2"
+	// defaultInterpretationPromptVersion is v3 as of CHAOS-3770's live
+	// acceptance: v2 (CHAOS-3754) extended the interpretation system
+	// prompt (prompts.go) to cover conversational-reference resolution,
+	// alias/acronym/previous-name subject terms, and subjectless
+	// team/project cohort framing; v3 closes the canonical fact-kind
+	// vocabulary in the prompt itself. Against a real provider, v2
+	// invented fact-kind names on ordinary questions
+	// (InterpretedQuestion.Validate then rejected every interpretation
+	// with "fact requirement violates v1 bounds"), because
+	// factRequirementOutput.Kind deliberately carries NO jsonschema enum
+	// -- the layering is that Genkit parses permissively and the
+	// ACR-owned semantic validator owns the registry. Closing the
+	// vocabulary in the prompt is the fix that keeps that layering,
+	// mirroring what v3 of the synthesis prompt did for driver
+	// categories. A receipt's PromptVersion is part of what a
+	// replay/evaluation pipeline uses to interpret
+	// ModelExecutionReceipt content (ADR 0008), so a prompt content
+	// change must bump this even though the interpretationOutput schema
+	// itself is unchanged.
+	//
+	// v4 is the same defect one layer over: the prompt stated no length or
+	// count limit, but InterpretedQuestion.Validate caps
+	// requested_judgment at 256 characters and rejects the interpretation
+	// in full when it is longer. Measured live, that single omission was
+	// the entire difference between a usable and an unusable model:
+	// gpt-5-mini failed 5 of 12 investigations on it alone, every one with
+	// a requested_judgment of 259-294 characters, because it writes a more
+	// thorough judgment than gpt-5-nano and nothing told it not to. The
+	// cap itself is a contracts/v1 bound and is deliberately NOT relaxed
+	// here; v4 states it, along with the other bounds a model cannot
+	// infer, and tells the model where that detail belongs instead
+	// (fact_requirements).
+	//
+	// v5 is the interpretation side of the same mechanical-oracle sweep
+	// that produced synthesis v7 below (CHAOS-3770 F3 residual, codex
+	// round 2): ContextFabricFactRequirement.Validate enforces a 32-entry
+	// cap on one fact_requirements[] item's parameters map, a bound this
+	// prompt never stated (a model could write 33 parameters on a single
+	// entry and lose the whole interpretation for it). v5 states it.
+	defaultInterpretationPromptVersion = "context-fabric-interpretation.v5"
 	// defaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
@@ -35,16 +68,80 @@ const (
 	// citing driver/finding actually names, requires subject labels to
 	// match the input verbatim, and marks direct_judgment/current_state/
 	// deterministic_answer as advisory-only (ACR recomposes them
-	// server-side and never returns the model's own text for them).
-	defaultSynthesisPromptVersion = "context-fabric-synthesis.v3"
+	// server-side and never returns the model's own text for them). v4 is
+	// CHAOS-3770's live-acceptance fix, the synthesis counterpart of
+	// interpretation v3 above: driver standing, derivation method,
+	// epistemic status and claimed-fact kind are closed vocabularies with
+	// no jsonschema enum on the shared contracts types, and driver_id /
+	// finding_id / claim_id carry a minimum length and a
+	// claimed_fact_ids-must-resolve rule that a model cannot infer. v3
+	// stated none of them, so a real provider failed
+	// SynthesisDraft.ValidateAgainst on ordinary inputs; v4 states them.
+	//
+	// v5 closes the class the first three fixes each patched one instance
+	// of: a bound the validator enforces that the prompt never states. It
+	// adds the length and count limits (title, summary, qualification,
+	// affected_subjects, per-item and per-collection caps, identifier
+	// upper bound) that v4 left unstated, and TestPromptsStateEveryModelFacingBound
+	// aimed to make a fourth instance of the class unable to ship silently
+	// -- but the table behind that test was itself hand-maintained and
+	// incomplete (CHAOS-3770 F3 codex review): it never covered
+	// warnings, strongest_pressures/drivers/remaining_work/readiness_gaps/
+	// conflicts/limitations collection caps, or the top-level
+	// evidence_ref_ids cap, so a bound could still be silently dropped
+	// from the prompt without the test noticing. The oracle is now
+	// mechanical (contracts/v1.ContextFabricModelFacingBounds, the single
+	// source both this prompt's authors and the validator's numeric
+	// literals must agree with -- see that file's doc comment), and
+	// applying it here surfaced exactly the predicted class of gap: this
+	// prompt's own text never stated the warnings bound at all, even
+	// though ContextFabricInvestigationResult.Validate() has enforced it
+	// (250 items, 4000 characters each) unchanged since v2. v6 adds that
+	// one missing statement; nothing else in this prompt changes.
+	//
+	// v7 is the result of a full sweep of every remaining numeric literal
+	// in internal/contracts/v1/validate_context_fabric_result.go and
+	// validate_context_fabric_helpers.go (CHAOS-3770 F3 residual, codex
+	// round 2's structural question: "are there any OTHER inline literals
+	// left in the validate path that model output can trip?"). It found
+	// one more real gap: validateClaimedFacts's 250-entry cap on the
+	// synthesis draft's own top-level claimed_facts list (distinct from
+	// the already-stated per-driver/per-finding claimed_fact_ids
+	// REFERENCE count) had no registry entry and no prompt statement. v7
+	// adds it. Every other literal the sweep found belongs to one of two
+	// excluded classes, now documented at the call site or in
+	// ContextFabricModelFacingBounds's own doc comment rather than left
+	// implicit: (a) fields the model only ECHOES verbatim from data ACR
+	// already supplied and independently bounded (SubjectRef.CanonicalID/
+	// Label, an evidence ref ID's own string length, a claimed fact's
+	// Value) -- SynthesisDraft.ValidateAgainst's allowedSubjects/
+	// canonicalLabels/allowedEvidence/factValueEqualsScalar checks already
+	// reject anything the model didn't copy verbatim, before a length
+	// bound would ever be the operative failure reason, so stating it
+	// would not change what the model needs to do; and (b) fields a
+	// different subsystem populates, never the interpretation/synthesis
+	// model (SubjectCandidate, SubjectResolution, Cohort, RelationshipPath/
+	// Edge, SourceObservation, Coverage, VersionSet -- all ACR's own graph/
+	// canonical-fact layer; ContextFabricEntityProjection and siblings --
+	// CHAOS-3753's projection worker, an unrelated write path).
+	defaultSynthesisPromptVersion = "context-fabric-synthesis.v7"
 	defaultSchemaVersion          = "context-fabric-model-output.v1"
 	defaultEvaluatorVersion       = "context-fabric-grounding.v1"
 )
 
 type Config struct {
-	Genkit                      *genkit.Genkit
-	Provider                    string
-	Model                       string
+	Genkit   *genkit.Genkit
+	Provider string
+	Model    string
+	// ModelRef is the fully qualified Genkit action name used to select the
+	// model at generation time -- "<plugin provider>/<model id>", e.g.
+	// "openai/gpt-5-nano". Genkit resolves a model only by that namespaced
+	// key (an unqualified name parses to an empty provider and matches no
+	// plugin), while Provider and Model stay the plain, replay-facing
+	// values recorded in every ModelExecutionReceipt. Defaults to Model
+	// when empty, which is what a test double or an already-qualified
+	// caller wants.
+	ModelRef                    string
 	ModelVersion                string
 	InterpretationPromptVersion string
 	SynthesisPromptVersion      string
@@ -139,6 +236,9 @@ func newWithGenerator(config Config, gen generator) (*Runtime, error) {
 			return nil, fmt.Errorf("%s is required and must be bounded", name)
 		}
 	}
+	if strings.TrimSpace(config.ModelRef) == "" {
+		config.ModelRef = config.Model
+	}
 	if strings.TrimSpace(config.ModelVersion) == "" {
 		config.ModelVersion = config.Model
 	}
@@ -200,7 +300,7 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 	attempts, generationErr := r.withRetry(ctx, func(callCtx context.Context) error {
 		var err error
 		output, usage, err = r.generator.Interpret(callCtx, generationRequest{
-			Model: r.config.Model, System: interpretationSystemPrompt, Prompt: string(encoded),
+			Model: r.config.ModelRef, System: interpretationSystemPrompt, Prompt: string(encoded),
 		})
 		return err
 	})
@@ -213,11 +313,23 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 	if generationErr != nil {
 		if r.config.Fallback != nil {
 			interpreted, fallbackReceipt, fallbackErr := r.config.Fallback.InterpretQuestion(ctx, principal, request)
-			receipt.FallbackUsed = true
-			receipt.Outcome = "fallback"
 			if fallbackErr == nil {
+				receipt.FallbackUsed = true
+				receipt.Outcome = "fallback"
 				return interpreted, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
+			// Both the primary and the fallback failed (CHAOS-3770 F4): the
+			// receipt must not claim FallbackUsed/Outcome="fallback", which
+			// means the fallback produced usable output -- it did not -- and
+			// the caller must see the FINAL (fallback) leg's own
+			// classification, not the primary's. fallbackReceipt.Outcome is
+			// already the fallback's own receiptOutcomeForError result (the
+			// fallback is itself a ModelRuntime that builds and returns a
+			// receipt on every call, success or failure), so reusing it here
+			// keeps the outcome vocabulary consistent with a direct call to
+			// that same fallback.
+			receipt.Outcome = fallbackReceipt.Outcome
+			return contextfabric.InterpretedQuestion{}, receipt, fallbackErr
 		}
 		return contextfabric.InterpretedQuestion{}, receipt, classifiedErr
 	}
@@ -231,6 +343,13 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 				receipt.Outcome = "fallback"
 				return fallback, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
+			// Both legs failed -- CHAOS-3770 F4 residual: this branch (the
+			// primary's output was parseable but semantically invalid) had
+			// the same bug as the generation-error branch above. See its
+			// comment: report the fallback's own outcome/classification,
+			// not the primary's stale invalid_output/ErrModelOutput.
+			receipt.Outcome = fallbackReceipt.Outcome
+			return contextfabric.InterpretedQuestion{}, receipt, fallbackErr
 		}
 		return contextfabric.InterpretedQuestion{}, receipt, fmt.Errorf("%w: %v", contextfabric.ErrModelOutput, err)
 	}
@@ -255,7 +374,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	attempts, generationErr := r.withRetry(ctx, func(callCtx context.Context) error {
 		var err error
 		output, usage, err = r.generator.Synthesize(callCtx, generationRequest{
-			Model: r.config.Model, System: synthesisSystemPrompt, Prompt: string(encoded),
+			Model: r.config.ModelRef, System: synthesisSystemPrompt, Prompt: string(encoded),
 		})
 		return err
 	})
@@ -268,11 +387,17 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	if generationErr != nil {
 		if r.config.Fallback != nil {
 			draft, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
-			receipt.FallbackUsed = true
-			receipt.Outcome = "fallback"
 			if fallbackErr == nil {
+				receipt.FallbackUsed = true
+				receipt.Outcome = "fallback"
 				return draft, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
+			// See the matching comment in InterpretQuestion: both legs
+			// failed, so the receipt must reflect the fallback's own
+			// (final) outcome and the caller must see its classification,
+			// not the primary's.
+			receipt.Outcome = fallbackReceipt.Outcome
+			return contextfabric.SynthesisDraft{}, receipt, fallbackErr
 		}
 		return contextfabric.SynthesisDraft{}, receipt, classifiedErr
 	}
@@ -289,6 +414,11 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 				receipt.Outcome = "fallback"
 				return fallback, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
+			// Both legs failed -- see the matching comment in
+			// InterpretQuestion's semantic-invalid-output branch (CHAOS-3770
+			// F4 residual).
+			receipt.Outcome = fallbackReceipt.Outcome
+			return contextfabric.SynthesisDraft{}, receipt, fallbackErr
 		}
 		return contextfabric.SynthesisDraft{}, receipt, fmt.Errorf("%w: %v", contextfabric.ErrModelOutput, err)
 	}
@@ -370,6 +500,27 @@ func boundedJSON(value any, maximum int) ([]byte, error) {
 	return encoded, nil
 }
 
+// retryable decides whether a generation failure may be retried with the
+// EXACT SAME encoded payload. It classifies ONLY on structured status/code
+// (a Genkit gRPC-style status, or context.DeadlineExceeded) -- never by
+// sniffing an error's message text (CHAOS-3770 F2).
+//
+// That restriction is deliberate, not merely cautious: the OpenAI SDK's own
+// error type (openai-go/internal/apierror.Error, aliased as openai.Error)
+// formats Error() as "%s %q: %d %s %s" with the raw provider response body
+// as the last verbatim component, and compat_oai/generate.go wraps that
+// error with a plain fmt.Errorf rather than a *core.GenkitError. So by the
+// time an error from the real production transport reaches this function,
+// it is routinely UNSTRUCTURED, and its message can legitimately be a
+// non-transient validation failure whose body happens to contain a word
+// like "timeout" or the digits "502" -- retrying that with the identical
+// payload would resubmit a request that can never succeed, violating the
+// no-retry-same-input rule (operations.md) for no benefit. An unstructured
+// error is therefore never retried by this function, full stop; genuinely
+// transient transport conditions (connection resets, 429/5xx, provider
+// timeouts) remain covered by the OpenAI SDK's own transport-level retry
+// loop (ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES), which runs BEFORE
+// its terminal error ever reaches genkitruntime.
 func retryable(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
@@ -379,28 +530,38 @@ func retryable(err error) bool {
 	}
 	// Genkit (and well-behaved plugins) surface transport and provider
 	// failures as *core.GenkitError with a gRPC-style status. Prefer that
-	// structured signal over string sniffing when it is present.
+	// structured signal over string sniffing when it is present -- and once
+	// present, trust it completely: an unmatched status (e.g. INTERNAL, or
+	// anything else Genkit's own validation paths raise) is not retryable
+	// either, never falling through to string matching on its own Message.
 	var genkitErr *core.GenkitError
 	if errors.As(err, &genkitErr) {
 		switch genkitErr.Status {
 		case core.RESOURCE_EXHAUSTED, core.UNAVAILABLE, core.DEADLINE_EXCEEDED, core.ABORTED:
 			return true
-		case core.INVALID_ARGUMENT:
-			// Malformed request or schema-incompatible output; the model is
-			// not going to succeed against the same input, so this fails
-			// closed instead of retrying (ADR 0008: invalid output fails
-			// closed).
+		default:
+			// Includes INVALID_ARGUMENT (malformed request or
+			// schema-incompatible output; the model is not going to
+			// succeed against the same input, so this fails closed
+			// instead of retrying -- ADR 0008: invalid output fails
+			// closed) and every other structured status.
 			return false
 		}
 	}
-	lower := strings.ToLower(err.Error())
-	for _, token := range []string{"429", "rate limit", "temporarily unavailable", "timeout", "deadline", "connection reset", "502", "503", "504"} {
-		if strings.Contains(lower, token) {
-			return true
-		}
-	}
+	// No structured signal: not retryable. See the function doc comment.
 	return false
 }
+
+// contextFabricSanitizedStatusPattern matches ONLY the fixed, ACR-controlled
+// token sanitizeProviderErrorBody embeds in every sanitized non-2xx provider
+// response ("provider response redacted by ACR (status <code> <text>)"). No
+// real provider supplies this text, and no incidental error-string component
+// (a request URL, an ephemeral test port, a BYO endpoint's hostname or path)
+// can produce it, so a match here is a reliable anchor for the true HTTP
+// status -- unlike a bare digit scan over the whole error text, which can
+// collide with unrelated numbers embedded elsewhere in the string (see
+// classifyModelError).
+var contextFabricSanitizedStatusPattern = regexp.MustCompile(`provider response redacted by ACR \(status (\d{3})\b`)
 
 // classifyModelError maps a raw generation error into one of the ACR-owned
 // model runtime sentinels (ErrModelRateLimited, ErrModelOutput,
@@ -438,9 +599,35 @@ func classifyModelError(err error) error {
 			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
 		}
 	}
-	lower := strings.ToLower(err.Error())
-	for _, token := range []string{"429", "rate limit", "too many requests", "quota exceeded"} {
-		if strings.Contains(lower, token) {
+	text := err.Error()
+	// Prefer the ACR-controlled sanitized-status token when present: it is
+	// the ONLY reliable signal in an unstructured error string, because
+	// nothing else can produce it. Never fall back to scanning the raw text
+	// for a bare "429" -- the OpenAI SDK's apierror.Error.Error() embeds the
+	// full request URL verbatim, so an ephemeral test port or a BYO
+	// endpoint's own hostname/port/path containing those digits would
+	// misclassify an unrelated status as rate-limited.
+	//
+	// Take the LAST match, not the first: the request URL precedes the
+	// response body in the SDK's error format, so a BYO endpoint whose URL
+	// happens to embed the literal token text (an adversarial or coincidental
+	// path segment) must not shadow the real sanitized token that always
+	// follows it.
+	if all := contextFabricSanitizedStatusPattern.FindAllStringSubmatch(text, -1); len(all) > 0 {
+		m := all[len(all)-1]
+		if code, convErr := strconv.Atoi(m[1]); convErr == nil && code == 429 {
+			return fmt.Errorf("%w: model generation failed", contextfabric.ErrModelRateLimited)
+		}
+		return fmt.Errorf("%w: model generation failed", contextfabric.ErrModelUnavailable)
+	}
+	// No sanitized status token means there was no HTTP response object at
+	// all (connection refused, DNS failure, etc.). Fall back to
+	// word-anchored phrase checks -- deliberately excluding a bare "429"
+	// digit check, which is not safe against incidental numbers elsewhere in
+	// the text.
+	lower := strings.ToLower(text)
+	for _, phrase := range []string{"rate limit", "too many requests", "quota exceeded"} {
+		if strings.Contains(lower, phrase) {
 			return fmt.Errorf("%w: model generation failed", contextfabric.ErrModelRateLimited)
 		}
 	}

@@ -17,10 +17,16 @@ import (
 // graphrank.ResolveSubjects directly, never through zepgraph's or
 // falkorgraph's adapter wrapper.
 type fakeGraphBackend struct {
-	exactHints        map[string]CandidateNode // keyed by graphrank.SubjectKey
-	searchResults     map[string][]CandidateNode
-	searchCalls       []string
-	searchErr         error
+	exactHints    map[string]CandidateNode // keyed by graphrank.SubjectKey
+	searchResults map[string][]CandidateNode
+	searchCalls   []string
+	searchErr     error
+	// searchTruncated, when true, makes every Search() call report
+	// truncated=true -- see ResolveDeps.Search and
+	// ResolveFromMergedCandidates' searchTruncated parameter. Defaults to
+	// false, so every existing test in this file that does not set it is
+	// unaffected.
+	searchTruncated   bool
 	traverse          func(ctx context.Context, term string, observation CandidateNode) (contextfabric.SubjectCandidate, ObservationTraversal)
 	isInternal        func(contextfabric.SubjectRef) bool
 	traversalDegraded []int
@@ -42,12 +48,12 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 			node, ok := f.exactHints[SubjectKey(subject)]
 			return node, ok, nil
 		},
-		Search: func(ctx context.Context, term string, limit int) ([]CandidateNode, error) {
+		Search: func(ctx context.Context, term string, limit int) ([]CandidateNode, bool, error) {
 			f.searchCalls = append(f.searchCalls, term)
 			if f.searchErr != nil {
-				return nil, f.searchErr
+				return nil, false, f.searchErr
 			}
-			return f.searchResults[term], nil
+			return f.searchResults[term], f.searchTruncated, nil
 		},
 		Traverse:   traverse,
 		IsInternal: isInternal,
@@ -304,7 +310,7 @@ func TestResolveSubjectsExactHintPropagatesBackendError(t *testing.T) {
 		ExactHint: func(context.Context, contextfabric.SubjectRef) (CandidateNode, bool, error) {
 			return CandidateNode{}, false, errors.New("transient backend failure")
 		},
-		Search: func(context.Context, string, int) ([]CandidateNode, error) { return nil, nil },
+		Search: func(context.Context, string, int) ([]CandidateNode, bool, error) { return nil, false, nil },
 		Traverse: func(context.Context, string, CandidateNode) (contextfabric.SubjectCandidate, ObservationTraversal) {
 			return contextfabric.SubjectCandidate{}, ObservationNoParent
 		},

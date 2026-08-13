@@ -57,7 +57,7 @@ func validateFindings(name string, values []ContextFabricFinding, claimed map[st
 // validateClaimedFactReferences to cross-check driver/finding references
 // against.
 func validateClaimedFacts(values []ContextFabricClaimedFact) (map[string]ContextFabricClaimedFact, error) {
-	if values == nil || len(values) > 250 {
+	if values == nil || len(values) > ContextFabricClaimedFactsMaxCount {
 		return nil, fmt.Errorf("claimed facts violate v1 bounds")
 	}
 	seen := make(map[string]ContextFabricClaimedFact, len(values))
