@@ -47,7 +47,7 @@ func TestLiveRelationshipProjectionPreservesPriorCanonicalEntityMetadata(t *test
 	relBatch.NextCursor = "cursor-2"
 	relBatch.Entities = []contextfabric.EntityProjection{}
 	relBatch.Relationships = []contextfabric.RelationshipProjection{{
-		RelationshipID: "relationship_merge_1", Type: "DEPENDS_ON", From: project, To: work,
+		RelationshipID: "relationship_merge_1", Type: "BLOCKS", From: project, To: work,
 		Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
 		Authorization: contextfabric.AuthorizationScope{RepositorySlugs: []string{"full-chaos/dev-health-acr"}}, EvidenceRefIDs: []string{"evidence_dependency_1"},
 		ObservedAt: observed.Add(time.Minute), SourceVersion: "v1",
@@ -236,12 +236,12 @@ func TestLiveDiscoverContextEnforcesAuthorizationOnPathsAndAttributionEdges(t *t
 		},
 		Relationships: []contextfabric.RelationshipProjection{
 			{
-				RelationshipID: "rel_visible", Type: "DEPENDS_ON", From: project, To: visibleWork,
+				RelationshipID: "rel_visible", Type: "BLOCKS", From: project, To: visibleWork,
 				Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
 				Authorization: allowedScope, EvidenceRefIDs: []string{"evidence_dep_visible"}, ObservedAt: observed, SourceVersion: "v1",
 			},
 			{
-				RelationshipID: "rel_restricted", Type: "DEPENDS_ON", From: project, To: restrictedWork,
+				RelationshipID: "rel_restricted", Type: "BLOCKS", From: project, To: restrictedWork,
 				Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
 				Authorization: privateScope, EvidenceRefIDs: []string{"evidence_dep_restricted"}, ObservedAt: observed, SourceVersion: "v1",
 			},
@@ -282,10 +282,10 @@ func TestLiveDiscoverContextEnforcesAuthorizationOnPathsAndAttributionEdges(t *t
 	for pathIndex := range result.Paths {
 		for edgeIndex := range result.Paths[pathIndex].Edges {
 			edge := result.Paths[pathIndex].Edges[edgeIndex]
-			if edge.Type == "DEPENDS_ON" && edge.To == restrictedWork {
+			if edge.Type == "BLOCKS" && edge.To == restrictedWork {
 				t.Fatalf("unauthorized relationship leaked into the result despite both endpoints being individually visible: %#v", edge)
 			}
-			if edge.Type == "DEPENDS_ON" && edge.To == visibleWork {
+			if edge.Type == "BLOCKS" && edge.To == visibleWork {
 				sawVisibleDependency = true
 			}
 			if edge.Type == "DOCUMENTED_BY" {
@@ -294,6 +294,6 @@ func TestLiveDiscoverContextEnforcesAuthorizationOnPathsAndAttributionEdges(t *t
 		}
 	}
 	if !sawVisibleDependency {
-		t.Fatalf("authorized DEPENDS_ON relationship missing -- authorization filtering must not exclude paths the principal IS scoped to see: %#v", result.Paths)
+		t.Fatalf("authorized BLOCKS relationship missing -- authorization filtering must not exclude paths the principal IS scoped to see: %#v", result.Paths)
 	}
 }

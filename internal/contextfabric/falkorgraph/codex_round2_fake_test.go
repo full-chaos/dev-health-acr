@@ -58,7 +58,7 @@ func TestDiscoverContextReportsPartialOnHopWalkNeighborBookkeepingLookupFailure(
 				return nil, nil
 			}
 			return []row{{
-				"r":       &edge{Properties: map[string]interface{}{propRelationType: "DEPENDS_ON", propRelationshipID: "relationship_1", propEvidenceRefs: []string{"evidence_1"}}},
+				"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "relationship_1", propEvidenceRefs: []string{"evidence_1"}}},
 				"srcKind": "project", "srcId": "p1", "dstKind": "work_item", "dstId": "work_target",
 			}}, nil
 		default: // nodeByKindID
@@ -86,8 +86,8 @@ func TestDiscoverContextReportsPartialOnHopWalkNeighborBookkeepingLookupFailure(
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v, want a degraded-but-successful result", err)
 	}
-	if edge := findFakeEdge(result.Paths, "DEPENDS_ON"); edge == nil {
-		t.Fatalf("the admitted edge itself must still surface (resolveEdge succeeded) -- got no DEPENDS_ON path: %#v", result.Paths)
+	if edge := findFakeEdge(result.Paths, "BLOCKS"); edge == nil {
+		t.Fatalf("the admitted edge itself must still surface (resolveEdge succeeded) -- got no BLOCKS path: %#v", result.Paths)
 	}
 	if !result.Coverage.Partial {
 		t.Fatalf("Coverage = %#v, want Partial=true -- the hop-walk's own neighbor-bookkeeping fetch failed, so a further hop from work_target was never explored", result.Coverage)
@@ -127,7 +127,7 @@ func TestDiscoverContextRanksWithinASingleNodesNeighborListBeforeTruncating(t *t
 			for _, relID := range relIDs {
 				target := targets[relID]
 				rows = append(rows, row{
-					"r":       &edge{Properties: map[string]interface{}{propRelationType: "DEPENDS_ON", propRelationshipID: relID, propEvidenceRefs: []string{"evidence_" + relID}}},
+					"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: relID, propEvidenceRefs: []string{"evidence_" + relID}}},
 					"srcKind": "project", "srcId": "p1", "dstKind": "work_item", "dstId": target,
 				})
 			}

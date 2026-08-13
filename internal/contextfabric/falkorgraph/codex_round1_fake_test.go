@@ -65,7 +65,7 @@ func fakeSubjectNodeRow(kind, canonicalID, label string) row {
 	return row{"n": &node{Properties: map[string]interface{}{propKind: kind, propCanonicalID: canonicalID, propLabel: label}}}
 }
 
-func findFakeEdge(paths []contextfabric.RelationshipPath, relationType string) *contextfabric.RelationshipEdge {
+func findFakeEdge(paths []contextfabric.RelationshipPath, relationType contextfabric.RelationshipType) *contextfabric.RelationshipEdge {
 	for pathIndex := range paths {
 		for edgeIndex := range paths[pathIndex].Edges {
 			if paths[pathIndex].Edges[edgeIndex].Type == relationType {
@@ -180,7 +180,7 @@ func TestDiscoverContextReportsPartialOnEndpointLookupFailure(t *testing.T) {
 				return nil, nil
 			}
 			return []row{{
-				"r":       &edge{Properties: map[string]interface{}{propRelationType: "DEPENDS_ON", propRelationshipID: "relationship_1"}},
+				"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "relationship_1"}},
 				"srcKind": "project", "srcId": "p1", "dstKind": "work_item", "dstId": "work_target",
 			}}, nil
 		default: // nodeByKindID
@@ -207,7 +207,7 @@ func TestDiscoverContextReportsPartialOnEndpointLookupFailure(t *testing.T) {
 	if len(result.Coverage.DegradedReasons) == 0 {
 		t.Fatal("Coverage.DegradedReasons is empty, want a reason recorded for the failed lookup")
 	}
-	if edge := findFakeEdge(result.Paths, "DEPENDS_ON"); edge != nil {
+	if edge := findFakeEdge(result.Paths, "BLOCKS"); edge != nil {
 		t.Fatalf("result surfaced a path built from an edge whose endpoint lookup failed: %#v", edge)
 	}
 }
@@ -238,11 +238,11 @@ func TestDiscoverContextRanksBeforeTruncatingCollectedEdges(t *testing.T) {
 			}
 			return []row{
 				{
-					"r":       &edge{Properties: map[string]interface{}{propRelationType: "DEPENDS_ON", propRelationshipID: "rel_zzz", propEvidenceRefs: []string{"evidence_zzz"}}},
+					"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_zzz", propEvidenceRefs: []string{"evidence_zzz"}}},
 					"srcKind": "project", "srcId": "p1", "dstKind": "work_item", "dstId": "work_zzz",
 				},
 				{
-					"r":       &edge{Properties: map[string]interface{}{propRelationType: "DEPENDS_ON", propRelationshipID: "rel_aaa", propEvidenceRefs: []string{"evidence_aaa"}}},
+					"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_aaa", propEvidenceRefs: []string{"evidence_aaa"}}},
 					"srcKind": "project", "srcId": "p1", "dstKind": "work_item", "dstId": "work_aaa",
 				},
 			}, nil
@@ -269,7 +269,7 @@ func TestDiscoverContextRanksBeforeTruncatingCollectedEdges(t *testing.T) {
 	if len(result.Paths) != 1 {
 		t.Fatalf("len(Paths) = %d, want exactly 1 (MaxRelationshipPaths=1): %#v", len(result.Paths), result.Paths)
 	}
-	edge := findFakeEdge(result.Paths, "DEPENDS_ON")
+	edge := findFakeEdge(result.Paths, "BLOCKS")
 	if edge == nil || edge.To.CanonicalID != "work_aaa" {
 		t.Fatalf("admitted edge = %#v, want the relationship to work_aaa (rel_aaa sorts first; the tight-collection bug would instead have kept rel_zzz, the edge physically encountered first)", edge)
 	}

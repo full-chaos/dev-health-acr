@@ -476,7 +476,7 @@ func validSynthesisInputFixture() SynthesisInput {
 	path := RelationshipPath{
 		PathID: "path_12345678", Nodes: []SubjectRef{project, workItem},
 		Edges: []RelationshipEdge{{
-			Type: "REQUIRES", From: project, To: workItem,
+			Type: "BLOCKS", From: project, To: workItem,
 			Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved,
 			EvidenceRefIDs: []string{"evidence_release_1234"},
 		}},
