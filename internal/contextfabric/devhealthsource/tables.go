@@ -173,7 +173,7 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", "w.wo
 			properties["status"] = stringScalar(status)
 		}
 		entity := contractsv1.ContextFabricEntityProjection{
-			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
+			Subject: subject, Properties: properties, Authorization: workItemAuthorization(repoID, repoSlug),
 			EvidenceRefIDs: []string{"acr:v1:work-item:" + workItemID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 		}
 		_ = url
@@ -338,15 +338,15 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id"
 func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const relationshipTypeExpr = "ifNull(d.relationship_type, 'related_to')"
 	const rowKey = "concat(d.source_work_item_id, ':', d.target_work_item_id, ':', " + relationshipTypeExpr + ")"
-	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ` + relationshipTypeExpr + `, ifNull(r.repo, ''), d.last_synced
+	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ` + relationshipTypeExpr + `, toString(w.repo_id), ifNull(r.repo, ''), d.last_synced
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS w FINAL ON w.org_id = d.org_id AND w.work_item_id = d.source_work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
 WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowKey) + orderBy("d.last_synced", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var sourceID, targetID, relationshipType, repoSlug string
+		var sourceID, targetID, relationshipType, repoID, repoSlug string
 		var observedAt time.Time
-		if err := r.Scan(&sourceID, &targetID, &relationshipType, &repoSlug, &observedAt); err != nil {
+		if err := r.Scan(&sourceID, &targetID, &relationshipType, &repoID, &repoSlug, &observedAt); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
@@ -356,7 +356,7 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + sourceID, Label: sourceID},
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + targetID, Label: targetID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
-			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-dependency:" + sourceID + ":" + targetID + ":" + relationshipType},
+			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-dependency:" + sourceID + ":" + targetID + ":" + relationshipType},
 			ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: sourceID + ":" + targetID + ":" + relationshipType, relationship: &relationship}}, nil
@@ -396,15 +396,15 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 // does -- a Linear-sourced child work item's repo_id is the zero UUID.
 func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const rowKey = "c.work_item_id"
-	statement := `SELECT c.work_item_id, c.parent_id, ifNull(r.repo, ''), c.updated_at
+	statement := `SELECT c.work_item_id, c.parent_id, toString(c.repo_id), ifNull(r.repo, ''), c.updated_at
 FROM work_items AS c FINAL
 INNER JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = c.parent_id
 LEFT JOIN repos AS r FINAL ON r.id = c.repo_id AND r.org_id = c.org_id
 WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work_item_id` + sincePredicate(cursor, "c.updated_at", rowKey) + orderBy("c.updated_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var childID, parentID, repoSlug string
+		var childID, parentID, repoID, repoSlug string
 		var observedAt time.Time
-		if err := r.Scan(&childID, &parentID, &repoSlug, &observedAt); err != nil {
+		if err := r.Scan(&childID, &parentID, &repoID, &repoSlug, &observedAt); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
@@ -414,7 +414,7 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + childID, Label: childID},
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + parentID, Label: parentID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
-			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-hierarchy:" + childID + ":" + parentID},
+			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-hierarchy:" + childID + ":" + parentID},
 			ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: childID, relationship: &relationship}}, nil

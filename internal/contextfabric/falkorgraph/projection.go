@@ -115,6 +115,47 @@ func subjectMergeParams(alias string, subject contextfabric.SubjectRef, orgID st
 	return map[string]interface{}{alias + "Kind": string(subject.Kind), alias + "Id": subject.CanonicalID, "org": orgID}
 }
 
+// subjectStubMergeCypher is subjectMergeCypher's counterpart for an endpoint
+// node a relationship merely POINTS AT rather than owns (CHAOS-3785 codex
+// round-1 finding F1). ON CREATE sets attrsParam in full, including
+// authorization, since nothing else has ever described this node yet. ON
+// MATCH sets onMatchAttrsParam only -- callers must build that map with
+// withoutAuthorizationKeys -- because same-batch ordering
+// (ApplyProjectionBatch: relationships/contents/episodes before entities)
+// only protects a subject's own authoritative authorization from an
+// implicit endpoint-stub write within the SAME batch; a paged/incremental
+// batch can easily land a subject's real entity write and an edge that
+// references it in two different batches (devhealthsource's
+// sortCandidates/truncateToCompleteRows sort and cap every producer
+// table's candidates together by (observedAt, sortKey), not grouped by
+// subject). Without this split, a later edge whose own Authorization
+// differs from the endpoint's real scope -- e.g. CHAOS-3785's no-repository
+// sentinel on an edge from a repo-less Linear work item to a genuinely
+// repo-backed subject -- would silently replace that subject's real
+// authorization_* attributes, making it invisible to a principal correctly
+// scoped to its actual repository.
+func subjectStubMergeCypher(alias, kindLabelValue, attrsParam, onMatchAttrsParam string) string {
+	return fmt.Sprintf(
+		"MERGE (%s:%s {%s:$org, %s:$%sKind, %s:$%sId}) ON CREATE SET %s += $%s, %s:%s ON MATCH SET %s += $%s, %s:%s",
+		alias, labelSubject, propOrgID, propKind, alias, propCanonicalID, alias,
+		alias, attrsParam, alias, kindLabelValue,
+		alias, onMatchAttrsParam, alias, kindLabelValue,
+	)
+}
+
+// withoutAuthorizationKeys returns a copy of attrs with the three
+// authorization_* keys removed -- see subjectStubMergeCypher's doc comment.
+func withoutAuthorizationKeys(attrs map[string]interface{}) map[string]interface{} {
+	onMatch := make(map[string]interface{}, len(attrs))
+	for k, v := range attrs {
+		if k == propAuthzRepos || k == propAuthzProjects || k == propAuthzTeams {
+			continue
+		}
+		onMatch[k] = v
+	}
+	return onMatch
+}
+
 // subjectMergeAttrs builds the SET n += $attrs payload for a subject node.
 // Cypher's SET n += $map only ever touches the keys present in $map (verified
 // live: docs/design/context-fabric-falkordb-adapter.md §4.3), so "does this
@@ -181,6 +222,10 @@ func (a *Adapter) projectEntity(ctx context.Context, key, orgID string, entity c
 func (a *Adapter) projectRelationship(ctx context.Context, key, orgID string, relationship contextfabric.RelationshipProjection) error {
 	fromAttrs := subjectMergeAttrs(relationship.From, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion, nil)
 	toAttrs := subjectMergeAttrs(relationship.To, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion, nil)
+	// F1: an endpoint that already exists keeps its own authorization; the
+	// edge's Authorization only seeds a brand-new stub node's ON CREATE.
+	fromAttrsOnMatch := withoutAuthorizationKeys(fromAttrs)
+	toAttrsOnMatch := withoutAuthorizationKeys(toAttrs)
 	edgeAttrs := map[string]interface{}{
 		propRelationshipID: relationship.RelationshipID, propRelationType: graphrank.NormalizeRelation(string(relationship.Type)),
 		"derivation": string(relationship.Derivation), "epistemic_status": string(relationship.EpistemicStatus),
@@ -197,10 +242,13 @@ func (a *Adapter) projectRelationship(ctx context.Context, key, orgID string, re
 		edgeAttrs[propValidTo] = relationship.ValidTo.UTC().Format(time.RFC3339Nano)
 		edgeAttrs[propValidToNs] = nsTimestamp(*relationship.ValidTo)
 	}
-	cypher := subjectMergeCypher("a", kindLabel(relationship.From.Kind)) + " SET a += $fromAttrs " +
-		subjectMergeCypher("b", kindLabel(relationship.To.Kind)) + " SET b += $toAttrs " +
+	cypher := subjectStubMergeCypher("a", kindLabel(relationship.From.Kind), "fromAttrs", "fromAttrsOnMatch") + " " +
+		subjectStubMergeCypher("b", kindLabel(relationship.To.Kind), "toAttrs", "toAttrsOnMatch") + " " +
 		fmt.Sprintf("MERGE (a)-[r:%s {%s:$rid}]->(b) SET r += $edgeAttrs", labelRelation, propRelationshipID)
-	params := map[string]interface{}{"rid": relationship.RelationshipID, "fromAttrs": fromAttrs, "toAttrs": toAttrs, "edgeAttrs": edgeAttrs}
+	params := map[string]interface{}{
+		"rid": relationship.RelationshipID, "fromAttrs": fromAttrs, "fromAttrsOnMatch": fromAttrsOnMatch,
+		"toAttrs": toAttrs, "toAttrsOnMatch": toAttrsOnMatch, "edgeAttrs": edgeAttrs,
+	}
 	mergeMaps(params, subjectMergeParams("a", relationship.From, orgID))
 	mergeMaps(params, subjectMergeParams("b", relationship.To, orgID))
 	_, err := a.api.query(ctx, key, cypher, params, false)

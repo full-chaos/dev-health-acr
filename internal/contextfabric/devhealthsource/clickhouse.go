@@ -395,34 +395,76 @@ func stringScalar(value string) contractsv1.ContextFabricScalarValue {
 	return contractsv1.ContextFabricScalarValue{String: &value}
 }
 
-// noRepositorySentinel (CHAOS-3785) is the RepositorySlugs value for a
-// source row that carries no real repository -- a Linear-sourced work item
-// (and any dependency/hierarchy edge rooted at one), whose repo_id lands as
-// the zero UUID at ingest. ContextFabricAuthorizationScope.Validate()
-// rejects an empty scope outright ("authorization scope must not be
-// empty"), so repoAuthorization("") cannot return a bare empty scope --
-// early testing against real ClickHouse output confirmed this would fail
+// zeroRepositoryID is the placeholder work_items.repo_id carries for a
+// source row that is repo-less BY DESIGN (CHAOS-3785) -- a Linear issue is
+// not tied to a single git repo, so Linear ingest writes this exact value
+// rather than leaving repo_id null. It is what distinguishes
+// workItemAuthorization's two non-repo cases from each other: this value
+// means "never had a repository," anything else means "named one that
+// didn't resolve" (see orphanedRepositorySentinel).
+const zeroRepositoryID = "00000000-0000-0000-0000-000000000000"
+
+// noRepositorySentinel and orphanedRepositorySentinel (CHAOS-3785;
+// orphanedRepositorySentinel is codex round-1 finding F2) are the
+// RepositorySlugs values workItemAuthorization uses for a work item whose
+// LEFT JOIN to repos found no match. ContextFabricAuthorizationScope.
+// Validate() rejects an empty scope outright ("authorization scope must not
+// be empty"), so neither case can fall back to a bare empty scope --
+// confirmed early against real ClickHouse output that doing so would fail
 // batch.Validate() and take down projection for the whole organization, not
-// just the repo-less rows. The reserved organization-scope ProjectIDs
+// just the affected rows. The reserved organization-scope ProjectIDs
 // namespace (organizationScopePrefix) is not an option either: it is
 // exclusively for the synthesized Organization entity --
 // TestOnlyTheOrganizationEntityPopulatesProjectIDs proves nothing else may
-// populate it. This sentinel keeps repo-less rows on the same
-// RepositorySlugs vocabulary every other producer uses, with a deliberate
-// authorization consequence: a principal scoped to specific repositories
-// (storage.Principal.RepositoryScopes) never matches this value and so
-// never sees these rows, while an org-wide/unrestricted principal does
-// (graphrank.AuthorizedAttributes only gates on RepositorySlugs when the
-// principal or the request actually names one). The value can never
-// collide with a real Dev Health repo slug ("owner/repo" shaped, always
-// contains '/').
-const noRepositorySentinel = "acr-context-fabric:no-repository"
+// populate it.
+//
+// The two sentinels stay DISTINCT rather than collapsing to one "no repo"
+// value: work_items.repo_id = zeroRepositoryID is repo-less by design
+// (every Linear-sourced row), but a work item can also carry a genuine,
+// nonzero repo_id that simply never resolves against repos -- a sync race,
+// a deleted repository, or (live-verified: 5 such rows across 5
+// organizations in dev ClickHouse today, all pre-existing CHAOS-2698 test
+// fixture data) stale seed data. That second case is a data-quality signal
+// worth surfacing and counting on its own, not one that should silently
+// masquerade as an intentionally repo-less Linear item.
+//
+// Both sentinels share the same authorization consequence: a principal
+// scoped to specific repositories (storage.Principal.RepositoryScopes)
+// never matches either value and so never sees these rows, while an
+// org-wide/unrestricted principal does (graphrank.AuthorizedAttributes only
+// gates on RepositorySlugs when the principal or the request actually names
+// one). Neither value can collide with a real Dev Health repo slug
+// ("owner/repo" shaped, always contains '/').
+const (
+	noRepositorySentinel       = "acr-context-fabric:no-repository"
+	orphanedRepositorySentinel = "acr-context-fabric:orphaned-repository"
+)
 
+// repoAuthorization is every OTHER producer's authorization builder
+// (queryPullRequests, queryDeployments, queryIncidents,
+// queryPullRequestReviews, queryCIRuns, queryDeploymentIncidentEdges): each
+// still INNER JOINs repos, so repoSlug is always non-empty here. CHAOS-3785's
+// three work-item producers (queryWorkItems, queryWorkItemDependencies,
+// queryWorkItemHierarchy), whose LEFT JOIN can legitimately find no repos
+// match, route through workItemAuthorization below instead.
 func repoAuthorization(repoSlug string) contractsv1.ContextFabricAuthorizationScope {
-	if repoSlug == "" {
+	return contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{repoSlug}}
+}
+
+// workItemAuthorization is queryWorkItems / queryWorkItemDependencies /
+// queryWorkItemHierarchy's authorization builder -- see the sentinel
+// constants' doc comment above for why the zeroRepositoryID/orphan split
+// exists. repoID is the row's own (or, for a dependency/hierarchy edge, its
+// source/child work item's own) work_items.repo_id; repoSlug is what the
+// LEFT JOIN to repos actually resolved, ” when it found no match.
+func workItemAuthorization(repoID, repoSlug string) contractsv1.ContextFabricAuthorizationScope {
+	if repoSlug != "" {
+		return repoAuthorization(repoSlug)
+	}
+	if repoID == zeroRepositoryID {
 		return contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{noRepositorySentinel}}
 	}
-	return contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{repoSlug}}
+	return contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{orphanedRepositorySentinel}}
 }
 
 // belongsToRepository's rowKey must equal the exact same value the entity

@@ -82,6 +82,131 @@ func TestLiveRelationshipProjectionPreservesPriorCanonicalEntityMetadata(t *test
 	}
 }
 
+// TestLiveRelationshipProjectionNeverDowngradesAnEndpointsOwnAuthorization is
+// CHAOS-3785 codex round-1 finding F1: projectRelationship writes BOTH
+// endpoint stubs using the RELATIONSHIP's own Authorization, not either
+// endpoint's own. Same-batch ordering (ApplyProjectionBatch's doc comment:
+// relationships before entities) protects same-batch writes, but a
+// paged/incremental batch can easily land a subject's real entity write and
+// an edge that references it in two DIFFERENT batches -- entity/relationship
+// candidates are sorted and capped by (observedAt, sortKey) across every
+// producer table (devhealthsource's sortCandidates/truncateToCompleteRows),
+// not kept together. When that happens, this proves the earlier batch's
+// authoritative authorization must survive the later edge write, not be
+// silently replaced by whatever (possibly narrower, possibly mismatched)
+// scope the edge itself carries -- exactly the risk CHAOS-3785 introduced by
+// giving repo-less work items a non-repository sentinel RepositorySlugs
+// value distinct from any real repo scope: an edge from such a work item to
+// a genuinely repo-backed subject must never erase that subject's real
+// repository authorization.
+func TestLiveRelationshipProjectionNeverDowngradesAnEndpointsOwnAuthorization(t *testing.T) {
+	adapter := newLiveAdapter(t, context.Background())
+	ctx := context.Background()
+	orgID := "live-authz-downgrade-" + time.Now().UTC().Format("20060102T150405.000000000")
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
+
+	observed := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	repoBacked := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_repo_backed", Label: "Repo-backed work item"}
+	repoLess := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_repo_less", Label: "Repo-less work item"}
+	repoBackedScope := contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/allowed"}}
+	// noRepositorySentinelValue is devhealthsource's exact
+	// noRepositorySentinel constant, pinned here as a literal (codex round-1
+	// finding F3) rather than this package importing devhealthsource's
+	// unexported value: this proves the LITERAL string CHAOS-3785 actually
+	// writes, not merely "some non-empty, non-matching scope" -- a drift
+	// between the two would mean this test keeps passing while the real
+	// producer's authorization value silently changed underneath it.
+	noRepositorySentinelValue := "acr-context-fabric:no-repository"
+	edgeScope := contextfabric.AuthorizationScope{RepositorySlugs: []string{noRepositorySentinelValue}}
+
+	entityBatch := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_downgrade_1", OrgID: orgID, Source: "live-test",
+		SourceVersion: "v1", Cursor: "", NextCursor: "cursor-1", GeneratedAt: observed,
+		Entities: []contextfabric.EntityProjection{
+			{Subject: repoBacked, Authorization: repoBackedScope, EvidenceRefIDs: []string{"evidence_repo_backed"}, ObservedAt: observed, SourceVersion: "v1"},
+			// repoLess is projected with the SAME sentinel scope
+			// workItemAuthorization would give a real Linear work item --
+			// F3's second half: a repo-scoped principal must never see it,
+			// while an org-wide principal must.
+			{Subject: repoLess, Authorization: edgeScope, EvidenceRefIDs: []string{"evidence_repo_less"}, ObservedAt: observed, SourceVersion: "v1"},
+		},
+		Relationships: []contextfabric.RelationshipProjection{}, Contents: []contextfabric.ContentProjection{}, Episodes: []contextfabric.EpisodeProjection{},
+		Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+	if _, err := adapter.ApplyProjectionBatch(ctx, entityBatch); err != nil {
+		t.Fatalf("entity ApplyProjectionBatch() error = %v", err)
+	}
+
+	// A LATER batch (a later projection tick, exactly the paging scenario
+	// the doc comment above describes) carries only the edge -- repoBacked's
+	// own entity is not re-asserted in this batch, matching a real
+	// incremental page where the edge's row sorts after the entity's row
+	// from an earlier tick.
+	relBatch := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_downgrade_2", OrgID: orgID, Source: "live-test",
+		SourceVersion: "v1", Cursor: "cursor-1", NextCursor: "cursor-2", GeneratedAt: observed.Add(time.Minute),
+		Entities: []contextfabric.EntityProjection{},
+		Relationships: []contextfabric.RelationshipProjection{{
+			RelationshipID: "relationship_downgrade_1", Type: "BLOCKS", From: repoLess, To: repoBacked,
+			Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
+			Authorization: edgeScope, EvidenceRefIDs: []string{"evidence_downgrade_edge"}, ObservedAt: observed.Add(time.Minute), SourceVersion: "v1",
+		}},
+		Contents: []contextfabric.ContentProjection{}, Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+	if _, err := adapter.ApplyProjectionBatch(ctx, relBatch); err != nil {
+		t.Fatalf("relationship ApplyProjectionBatch() error = %v", err)
+	}
+
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{repoBacked.Label},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	request := liveInvestigationRequest()
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: repoBacked.Kind, ID: repoBacked.CanonicalID, Label: repoBacked.Label, Source: "live-test"}}
+
+	// The critical assertion: a principal scoped to repoBacked's OWN
+	// repository must still see it after the edge write, even though the
+	// edge itself carried a completely different scope.
+	scopedPrincipal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/allowed"}}
+	resolution, err := adapter.ResolveSubjects(ctx, scopedPrincipal, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0] != repoBacked {
+		t.Fatalf("resolution for a principal scoped to the work item's OWN repository = %#v, want it still admitted -- the later edge write must not have downgraded its authorization from %q to the edge's own scope",
+			resolution, repoBackedScope.RepositorySlugs)
+	}
+
+	// F3 (codex round-1): the SAME repo-scoped principal must never see the
+	// sentinel-scoped repoLess work item -- a real Linear item, unrestricted
+	// only for an org-wide principal, must not leak to someone scoped to a
+	// specific repository merely because it shares an edge with something
+	// that repository DOES own.
+	repoLessInterpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{repoLess.Label},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+	}
+	repoLessRequest := liveInvestigationRequest()
+	repoLessRequest.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: repoLess.Kind, ID: repoLess.CanonicalID, Label: repoLess.Label, Source: "live-test"}}
+
+	deniedResolution, err := adapter.ResolveSubjects(ctx, scopedPrincipal, repoLessRequest, repoLessInterpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() for repoLess with a repo-scoped principal error = %v", err)
+	}
+	if len(deniedResolution.Committed) != 0 {
+		t.Fatalf("repo-scoped principal resolution for the sentinel-scoped work item = %#v, want it denied", deniedResolution)
+	}
+
+	orgWidePrincipal := storage.Principal{OrgID: orgID}
+	admittedResolution, err := adapter.ResolveSubjects(ctx, orgWidePrincipal, repoLessRequest, repoLessInterpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() for repoLess with an org-wide principal error = %v", err)
+	}
+	if len(admittedResolution.Committed) != 1 || admittedResolution.Committed[0] != repoLess {
+		t.Fatalf("org-wide principal resolution for the sentinel-scoped work item = %#v, want it admitted", admittedResolution)
+	}
+}
+
 // TestLiveApplyProjectionBatchSkipsStaleOutOfOrderTombstone proves the
 // tombstone staleness check applied.go's DELETE ... WHERE observed_at_ns
 // IS NULL OR observed_at_ns <= $effective implements: a tombstone whose

@@ -387,11 +387,14 @@ func TestClickHouseProjectionSourceRelaxedRepoJoinStaysOrganizationScoped(t *tes
 	if linear1.Subject.Label != "org-a task (child)" {
 		t.Fatalf("LINEAR-1 label = %q, want org-a's title, not org-b's", linear1.Subject.Label)
 	}
-	if len(linear1.Authorization.RepositorySlugs) == 0 {
-		t.Fatalf("LINEAR-1 authorization = %+v, want a non-empty RepositorySlugs sentinel (an empty scope fails contract validation)", linear1.Authorization)
-	}
-	if linear1.Authorization.RepositorySlugs[0] == "org-b/other-service" {
-		t.Fatalf("LINEAR-1 authorization picked up org-b's repository slug: %+v", linear1.Authorization)
+	// Pinned to the exact literal value (codex round-1 finding F3), not
+	// merely "non-empty and not org-b's slug": a drift in the sentinel
+	// devhealthsource actually writes would otherwise pass this assertion
+	// silently while breaking anything (this file's own
+	// TestLiveRelationshipProjectionNeverDowngradesAnEndpointsOwnAuthorization
+	// included) that pins the same literal on the read side.
+	if len(linear1.Authorization.RepositorySlugs) != 1 || linear1.Authorization.RepositorySlugs[0] != "acr-context-fabric:no-repository" {
+		t.Fatalf("LINEAR-1 authorization = %+v, want exactly [\"acr-context-fabric:no-repository\"]", linear1.Authorization)
 	}
 
 	repo1, ok := entitiesByID["work_item:REPO-1"]
