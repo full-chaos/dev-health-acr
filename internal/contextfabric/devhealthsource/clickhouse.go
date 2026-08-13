@@ -18,16 +18,28 @@ import (
 // onto every batch it produces. Checkpoints and telemetry are keyed by it.
 const SourceName = "dev_health_clickhouse"
 
-// ClickHouseSourceVersion is bumped to v2 by CHAOS-3779 (codex round-2 H2 residual):
-// queryWorkItemDependencies' RelationshipID now embeds relationship_type
-// (previously (source, target) only), and queryWorkItemHierarchy is a new
-// producer. The bump is deliberate, not cosmetic: ProjectionWorker.RunOnce
-// (internal/contextfabric/projector.go) refuses to advance a checkpoint
-// whose stored SourceVersion differs from the current one, forcing every
-// already-projected organization through an explicit rebuild instead of
-// silently double-writing edges under the old, now-collapsed identity
-// scheme beside the new one.
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v2"
+// ClickHouseSourceVersion is bumped to v3 by CHAOS-3785: queryWorkItems,
+// queryWorkItemDependencies, and queryWorkItemHierarchy relax their repos
+// join from INNER to LEFT so a Linear-sourced work item (repo_id = the zero
+// UUID at ingest) projects instead of being silently dropped. The bump is
+// deliberate here too, for a reason distinct from v2's identity-scheme
+// change: this cursor is an event-time watermark
+// (docs/design/context-fabric-projection-worker.md, "Honest limitation:
+// event-time watermarks miss backfilled/corrected rows") -- an
+// already-projected organization's checkpoint may have advanced past many
+// Linear work items' updated_at values on the strength of OTHER tables'
+// rows sharing the same checkpoint, long before those work items could ever
+// satisfy the old INNER JOIN. Left unversioned, ordinary incremental
+// catch-up would never revisit them; only a full rebuild does. Forcing
+// ErrProjectionSourceVersionChanged on every already-projected organization
+// makes that rebuild happen deliberately (acr-projector rebuild --org)
+// instead of leaving a silent, permanent gap for exactly the organizations
+// this fix exists to help.
+//
+// (v2, CHAOS-3779 codex round-2 H2 residual: queryWorkItemDependencies'
+// RelationshipID began embedding relationship_type (previously (source,
+// target) only), and queryWorkItemHierarchy was a new producer.)
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v3"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and
@@ -383,7 +395,33 @@ func stringScalar(value string) contractsv1.ContextFabricScalarValue {
 	return contractsv1.ContextFabricScalarValue{String: &value}
 }
 
+// noRepositorySentinel (CHAOS-3785) is the RepositorySlugs value for a
+// source row that carries no real repository -- a Linear-sourced work item
+// (and any dependency/hierarchy edge rooted at one), whose repo_id lands as
+// the zero UUID at ingest. ContextFabricAuthorizationScope.Validate()
+// rejects an empty scope outright ("authorization scope must not be
+// empty"), so repoAuthorization("") cannot return a bare empty scope --
+// early testing against real ClickHouse output confirmed this would fail
+// batch.Validate() and take down projection for the whole organization, not
+// just the repo-less rows. The reserved organization-scope ProjectIDs
+// namespace (organizationScopePrefix) is not an option either: it is
+// exclusively for the synthesized Organization entity --
+// TestOnlyTheOrganizationEntityPopulatesProjectIDs proves nothing else may
+// populate it. This sentinel keeps repo-less rows on the same
+// RepositorySlugs vocabulary every other producer uses, with a deliberate
+// authorization consequence: a principal scoped to specific repositories
+// (storage.Principal.RepositoryScopes) never matches this value and so
+// never sees these rows, while an org-wide/unrestricted principal does
+// (graphrank.AuthorizedAttributes only gates on RepositorySlugs when the
+// principal or the request actually names one). The value can never
+// collide with a real Dev Health repo slug ("owner/repo" shaped, always
+// contains '/').
+const noRepositorySentinel = "acr-context-fabric:no-repository"
+
 func repoAuthorization(repoSlug string) contractsv1.ContextFabricAuthorizationScope {
+	if repoSlug == "" {
+		return contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{noRepositorySentinel}}
+	}
 	return contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{repoSlug}}
 }
 

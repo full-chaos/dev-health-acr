@@ -138,9 +138,23 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + 
 	})
 }
 
+// queryWorkItems LEFT JOINs repos (CHAOS-3785; was INNER JOIN): Linear-sourced
+// work items carry repo_id = the zero UUID at ingest (Linear issues are not
+// tied to a single git repo), which never matches any repos row. An INNER
+// JOIN therefore silently dropped ~every row for a Linear-only or
+// Linear-dominant organization -- live-verified against org
+// 70d529e0-3c06-4597-8480-794fd02328b6: 3282 of 3288 work items carried the
+// zero repo_id and never projected. w.org_id = {org_id:String} in the WHERE
+// clause is already the organization-scope guard (it does not depend on the
+// repos join); the repos join now does one thing only -- resolve optional
+// repo attributes (slug, BELONGS_TO_REPOSITORY) when a real repository
+// exists. ifNull(r.repo, ”) covers a backend with join_use_nulls enabled;
+// this deployment's repos.repo is a non-Nullable String, so an unmatched
+// LEFT JOIN already yields ” by default, but every other optional column
+// in this file guards the same way.
 func queryWorkItems(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	statement := `SELECT w.work_item_id, toString(w.repo_id), r.repo, ifNull(w.title, ''), ifNull(w.status, ''), ifNull(w.url, ''), w.updated_at
-FROM work_items AS w FINAL INNER JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
+	statement := `SELECT w.work_item_id, toString(w.repo_id), ifNull(r.repo, ''), ifNull(w.title, ''), ifNull(w.status, ''), ifNull(w.url, ''), w.updated_at
+FROM work_items AS w FINAL LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
 WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", "w.work_item_id") + orderBy("w.updated_at", "w.work_item_id")
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var workItemID, repoID, repoSlug, title, status, url string
@@ -163,10 +177,14 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", "w.wo
 			EvidenceRefIDs: []string{"acr:v1:work-item:" + workItemID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 		}
 		_ = url
-		return []candidate{
-			{observedAt: observedAt, sortKey: workItemID, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:work-item:"+workItemID, workItemID),
-		}, nil
+		candidates := []candidate{{observedAt: observedAt, sortKey: workItemID, entity: &entity}}
+		// repoSlug is '' exactly when the LEFT JOIN found no repos match --
+		// there is no real repository entity to point a BELONGS_TO_REPOSITORY
+		// edge at, so this row emits an entity candidate only.
+		if repoSlug != "" {
+			candidates = append(candidates, belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:work-item:"+workItemID, workItemID))
+		}
+		return candidates, nil
 	})
 }
 
@@ -309,13 +327,21 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id"
 // keyset-pagination predicate (sincePredicate's own doc comment, C5) could
 // skip one row entirely, or a later write could silently overwrite the
 // earlier edge's Type in the graph via relationship_id-keyed MERGE.
+// The INNER JOIN to work_items stays INNER (CHAOS-3785 does not touch it):
+// it proves source_work_item_id resolves to a real work item in this
+// organization, which live data shows is not guaranteed -- some
+// work_item_dependencies rows carry a cross-system PR reference
+// ("ghpr:owner/repo#N") in source_work_item_id instead of a work item id,
+// and those are correctly not this producer's concern. Only the repos join
+// (resolving the source work item's optional repo attributes) relaxes to
+// LEFT, for the same zero-UUID reason queryWorkItems does.
 func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const relationshipTypeExpr = "ifNull(d.relationship_type, 'related_to')"
 	const rowKey = "concat(d.source_work_item_id, ':', d.target_work_item_id, ':', " + relationshipTypeExpr + ")"
-	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ` + relationshipTypeExpr + `, r.repo, d.last_synced
+	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ` + relationshipTypeExpr + `, ifNull(r.repo, ''), d.last_synced
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS w FINAL ON w.org_id = d.org_id AND w.work_item_id = d.source_work_item_id
-INNER JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
+LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
 WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowKey) + orderBy("d.last_synced", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var sourceID, targetID, relationshipType, repoSlug string
@@ -363,12 +389,17 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 // one bad row. Filtering it at the SQL boundary, before it ever becomes a
 // candidate, is cheap and permanent; live ClickHouse holds zero such rows
 // today (verified), but the filter guards against a future one.
+// The INNER JOIN to the parent work_items row stays INNER (CHAOS-3785 does
+// not touch it): it is the resolvability guarantee the doc comment above
+// describes, unrelated to which table owns the repo attribute. Only the
+// repos join relaxes to LEFT, for the same zero-UUID reason queryWorkItems
+// does -- a Linear-sourced child work item's repo_id is the zero UUID.
 func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const rowKey = "c.work_item_id"
-	statement := `SELECT c.work_item_id, c.parent_id, r.repo, c.updated_at
+	statement := `SELECT c.work_item_id, c.parent_id, ifNull(r.repo, ''), c.updated_at
 FROM work_items AS c FINAL
 INNER JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = c.parent_id
-INNER JOIN repos AS r FINAL ON r.id = c.repo_id AND r.org_id = c.org_id
+LEFT JOIN repos AS r FINAL ON r.id = c.repo_id AND r.org_id = c.org_id
 WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work_item_id` + sincePredicate(cursor, "c.updated_at", rowKey) + orderBy("c.updated_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var childID, parentID, repoSlug string
