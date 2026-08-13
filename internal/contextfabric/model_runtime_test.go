@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -177,6 +178,52 @@ func TestRuntimeQuestionInterpreterWrapsInvalidStructuredOutput(t *testing.T) {
 	if !errors.Is(err, ErrModelOutput) {
 		t.Fatalf("Interpret() error = %v, want ErrModelOutput", err)
 	}
+	// CHAOS-3784: an invalid enum is still an interpretation-side
+	// rejection (ErrInterpretationRejected), but it is a business rule,
+	// not a registry bound -- no ModelBoundViolation in the chain.
+	if !errors.Is(err, ErrInterpretationRejected) {
+		t.Fatalf("Interpret() error = %v, want ErrInterpretationRejected", err)
+	}
+	var violation *ModelBoundViolation
+	if errors.As(err, &violation) {
+		t.Fatalf("Interpret() error = %v, want no ModelBoundViolation for an invalid enum", err)
+	}
+}
+
+// TestRuntimeQuestionInterpreterClassifiesBoundViolationAsInterpretationRejected
+// is the CHAOS-3784 probe reproducing the CHAOS-3770 live-acceptance
+// evidence exactly: a 259-character requested_judgment, one character past
+// the 256-character cap (validate_context_fabric_result.go,
+// ContextFabricRequestedJudgmentMaxLength) -- 5 of 8 real failures in that
+// batch had this shape, and every one surfaced identically to a synthesis
+// rejection or a provider error at the API layer. This pins that the
+// runtime layer now carries enough information (ErrInterpretationRejected
+// plus a ModelBoundViolation naming the exact bound) to tell them apart.
+func TestRuntimeQuestionInterpreterClassifiesBoundViolationAsInterpretationRejected(t *testing.T) {
+	t.Parallel()
+	sink := &fakeReceiptSink{}
+	invalid := InterpretedQuestion{
+		Shape: ShapeOpen, RequestedJudgment: strings.Repeat("a", 259),
+		TimeContext: TimeContext{Axis: TemporalCurrent},
+	}
+	interpreter := RuntimeQuestionInterpreter{
+		Runtime: fakeModelRuntime{interpreted: invalid, receipt: validModelReceiptFixture(ModelOperationInterpret)},
+		Sink:    sink,
+	}
+	_, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	if !errors.Is(err, ErrInterpretationRejected) || !errors.Is(err, ErrModelOutput) {
+		t.Fatalf("Interpret() error = %v, want both ErrInterpretationRejected and ErrModelOutput", err)
+	}
+	if errors.Is(err, ErrSynthesisRejected) {
+		t.Fatalf("Interpret() error = %v, must not also classify as ErrSynthesisRejected", err)
+	}
+	var violation *ModelBoundViolation
+	if !errors.As(err, &violation) {
+		t.Fatalf("Interpret() error = %v, want a ModelBoundViolation", err)
+	}
+	if violation.Bound != "interpretation.requested_judgment.max_length" {
+		t.Fatalf("violation.Bound = %q, want interpretation.requested_judgment.max_length", violation.Bound)
+	}
 }
 
 // TestRuntimeQuestionInterpreterCorrectsReceiptOutcomeToInvalidOutputOnRejection
@@ -275,6 +322,50 @@ func TestRuntimeAnswerSynthesizerRejectsDraftThatInventsEvidence(t *testing.T) {
 	_, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
 	if !errors.Is(err, ErrModelOutput) {
 		t.Fatalf("Synthesize() error = %v, want ErrModelOutput", err)
+	}
+	// CHAOS-3784: inventing evidence is a claim-binding/grounding business
+	// rule, not a registry bound -- ErrSynthesisRejected without a
+	// ModelBoundViolation.
+	if !errors.Is(err, ErrSynthesisRejected) {
+		t.Fatalf("Synthesize() error = %v, want ErrSynthesisRejected", err)
+	}
+	var violation *ModelBoundViolation
+	if errors.As(err, &violation) {
+		t.Fatalf("Synthesize() error = %v, want no ModelBoundViolation for invented evidence", err)
+	}
+}
+
+// TestRuntimeAnswerSynthesizerClassifiesBoundViolationAsSynthesisRejected is
+// the synthesis-side counterpart of
+// TestRuntimeQuestionInterpreterClassifiesBoundViolationAsInterpretationRejected
+// (CHAOS-3784): an over-length driver title is a registry bound
+// (synthesis.driver.title.max_length), so the runtime must report
+// ErrSynthesisRejected AND the exact violated bound, distinct from both
+// ErrInterpretationRejected and a claim-binding/grounding rejection with no
+// bound.
+func TestRuntimeAnswerSynthesizerClassifiesBoundViolationAsSynthesisRejected(t *testing.T) {
+	t.Parallel()
+	sink := &fakeReceiptSink{}
+	input := validSynthesisInputFixture()
+	draft := validSynthesisDraftFixture(input)
+	draft.Drivers[0].Title = strings.Repeat("a", contractsv1.ContextFabricDriverTitleMaxLength+1)
+	synthesizer := RuntimeAnswerSynthesizer{
+		Runtime: fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)},
+		Sink:    sink,
+	}
+	_, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
+	if !errors.Is(err, ErrSynthesisRejected) || !errors.Is(err, ErrModelOutput) {
+		t.Fatalf("Synthesize() error = %v, want both ErrSynthesisRejected and ErrModelOutput", err)
+	}
+	if errors.Is(err, ErrInterpretationRejected) {
+		t.Fatalf("Synthesize() error = %v, must not also classify as ErrInterpretationRejected", err)
+	}
+	var violation *ModelBoundViolation
+	if !errors.As(err, &violation) {
+		t.Fatalf("Synthesize() error = %v, want a ModelBoundViolation", err)
+	}
+	if violation.Bound != "synthesis.driver.title.max_length" {
+		t.Fatalf("violation.Bound = %q, want synthesis.driver.title.max_length", violation.Bound)
 	}
 }
 
@@ -906,6 +997,48 @@ func TestTruncateAtSentenceBoundaryOneRuneOverCurrentStateBoundaryIsTruncated(t 
 // (validate_context_fabric_result.go's ContextFabricInvestigationResult.Validate)
 // so a bound changing on one side without the other fails loudly here
 // instead of silently drifting.
+// TestErrInterpretationRejectedAndErrSynthesisRejectedAreDistinctFromEachOther
+// is the CHAOS-3784 probe at the runtime layer: before this change, both an
+// interpretation-side rejection and a genuinely different synthesis-side
+// rejection classified identically (errors.Is(err, ErrModelOutput) alone),
+// giving a caller no way to tell the two failure classes apart. This pins
+// that the two are now mutually exclusive.
+func TestErrInterpretationRejectedAndErrSynthesisRejectedAreDistinctFromEachOther(t *testing.T) {
+	t.Parallel()
+	interpreter := RuntimeQuestionInterpreter{
+		Runtime: fakeModelRuntime{
+			interpreted: InterpretedQuestion{
+				Shape: ShapeOpen, RequestedJudgment: strings.Repeat("a", 259),
+				TimeContext: TimeContext{Axis: TemporalCurrent},
+			},
+			receipt: validModelReceiptFixture(ModelOperationInterpret),
+		},
+		Sink: &fakeReceiptSink{},
+	}
+	_, interpretErr := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+
+	input := validSynthesisInputFixture()
+	draft := validSynthesisDraftFixture(input)
+	draft.EvidenceRefIDs = []string{"evidence_invented_by_model"}
+	synthesizer := RuntimeAnswerSynthesizer{
+		Runtime: fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)},
+		Sink:    &fakeReceiptSink{},
+	}
+	_, synthesizeErr := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
+
+	for _, err := range []error{interpretErr, synthesizeErr} {
+		if !errors.Is(err, ErrModelOutput) {
+			t.Fatalf("error = %v, want ErrModelOutput (both still classify as model-output-invalid)", err)
+		}
+	}
+	if !errors.Is(interpretErr, ErrInterpretationRejected) || errors.Is(interpretErr, ErrSynthesisRejected) {
+		t.Fatalf("interpretErr = %v, want ErrInterpretationRejected only", interpretErr)
+	}
+	if !errors.Is(synthesizeErr, ErrSynthesisRejected) || errors.Is(synthesizeErr, ErrInterpretationRejected) {
+		t.Fatalf("synthesizeErr = %v, want ErrSynthesisRejected only", synthesizeErr)
+	}
+}
+
 func TestComposeFieldConstantsMatchContractBounds(t *testing.T) {
 	t.Parallel()
 	if directJudgmentMaxLength != 8000 {

@@ -23,7 +23,59 @@ var (
 	// classification from ErrModelUnavailable so callers can apply different
 	// backoff or alerting policy to throttling versus outages.
 	ErrModelRateLimited = errors.New("context fabric model runtime rate limited")
+	// ErrInterpretationRejected classifies an InterpretQuestion failure
+	// caused by ACR's OWN model-facing bound validation
+	// (InterpretedQuestion.Validate, contracts/v1) rejecting the model's
+	// structured interpretation -- as opposed to a provider/transport/
+	// schema-level failure (genkitruntime.classifyModelError), which stays
+	// a bare ErrModelOutput. It always wraps ErrModelOutput too (see
+	// RuntimeQuestionInterpreter.Interpret), so every existing
+	// errors.Is(err, ErrModelOutput) caller (e.g. receiptOutcomeForError)
+	// is unaffected; this is a strictly more specific classification a
+	// caller can check FIRST to tell the two apart (CHAOS-3784: the
+	// investigations route previously reported the identical opaque
+	// response for both).
+	ErrInterpretationRejected = errors.New("context fabric interpretation rejected")
+	// ErrSynthesisRejected is ErrInterpretationRejected's synthesis-side
+	// counterpart: SynthesisDraft.ValidateAgainst rejected the model's
+	// synthesis draft, whether for a length/count bound or a claim-
+	// binding/grounding rule.
+	ErrSynthesisRejected = errors.New("context fabric synthesis rejected")
 )
+
+// ModelBoundViolation carries the specific contracts/v1
+// ContextFabricModelFacingBounds entry a rejected interpretation or
+// synthesis draft violated, when the rejection is attributable to one
+// (contractsv1.DiagnoseContextFabric*Bound). It is never constructed for a
+// business-rule rejection (an invalid enum, a missing claim binding) --
+// those carry ErrInterpretationRejected/ErrSynthesisRejected alone, with no
+// ModelBoundViolation in the chain, since there is no single bound name to
+// report. Bound is always one of the fixed, ACR-owned registry names; it
+// never contains model output.
+type ModelBoundViolation struct {
+	Bound string
+	err   error
+}
+
+func (e *ModelBoundViolation) Error() string { return e.err.Error() }
+func (e *ModelBoundViolation) Unwrap() error { return e.err }
+
+// NewModelBoundViolation constructs a *ModelBoundViolation wrapping err with
+// the given registry bound name. Exported so a caller that already knows
+// the violated bound -- or a test simulating one -- can attach it without
+// reaching into an unexported field.
+func NewModelBoundViolation(bound string, err error) *ModelBoundViolation {
+	return &ModelBoundViolation{Bound: bound, err: err}
+}
+
+// withBoundViolation wraps err in a *ModelBoundViolation carrying bound when
+// diagnosed is true, or returns err unchanged otherwise.
+func withBoundViolation(err error, bound string, diagnosed bool) error {
+	if !diagnosed {
+		return err
+	}
+	return NewModelBoundViolation(bound, err)
+}
 
 type ModelOperation string
 
@@ -399,7 +451,9 @@ func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal sto
 	if err == nil {
 		if validateErr := question.Validate(); validateErr != nil {
 			receipt.Outcome = "invalid_output"
-			err = fmt.Errorf("%w: %v", ErrModelOutput, validateErr)
+			wrapped := fmt.Errorf("%w: %w: %v", ErrInterpretationRejected, ErrModelOutput, validateErr)
+			bound, diagnosed := contractsv1.DiagnoseContextFabricInterpretedQuestionBound(question)
+			err = withBoundViolation(wrapped, bound, diagnosed)
 		} else if receipt.Outcome == "pending_validation" {
 			receipt.Outcome = "success"
 		}
@@ -449,7 +503,9 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	if err == nil {
 		if validateErr := draft.ValidateAgainst(input); validateErr != nil {
 			receipt.Outcome = "invalid_output"
-			err = fmt.Errorf("%w: %v", ErrModelOutput, validateErr)
+			wrapped := fmt.Errorf("%w: %w: %v", ErrSynthesisRejected, ErrModelOutput, validateErr)
+			bound, diagnosed := diagnoseSynthesisDraftBound(draft)
+			err = withBoundViolation(wrapped, bound, diagnosed)
 		} else if receipt.Outcome == "pending_validation" {
 			receipt.Outcome = "success"
 		}

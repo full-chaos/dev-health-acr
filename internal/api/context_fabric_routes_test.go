@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -171,7 +172,9 @@ func TestContextFabricInvestigationRouteMapsErrorsToStatus(t *testing.T) {
 		{"graph rate limited", contextfabric.ErrRateLimited, http.StatusTooManyRequests},
 		{"graph unavailable", contextfabric.ErrUnavailable, http.StatusServiceUnavailable},
 		{"model unavailable", contextfabric.ErrModelUnavailable, http.StatusServiceUnavailable},
-		{"invalid model output", contextfabric.ErrModelOutput, http.StatusBadGateway},
+		{"provider error", contextfabric.ErrModelOutput, http.StatusBadGateway},
+		{"interpretation rejected", contextfabric.ErrInterpretationRejected, http.StatusUnprocessableEntity},
+		{"synthesis rejected", contextfabric.ErrSynthesisRejected, http.StatusUnprocessableEntity},
 		{"deadline exceeded", context.DeadlineExceeded, http.StatusGatewayTimeout},
 		{"unclassified", errors.New("something unexpected broke"), http.StatusInternalServerError},
 	}
@@ -186,6 +189,86 @@ func TestContextFabricInvestigationRouteMapsErrorsToStatus(t *testing.T) {
 
 			if response.Code != testCase.want {
 				t.Fatalf("status = %d, want %d body=%s", response.Code, testCase.want, response.Body.String())
+			}
+		})
+	}
+}
+
+// TestContextFabricInvestigationRouteReportsDistinctCodesAndBoundNames is
+// the CHAOS-3784 probe: interpretation rejections, synthesis rejections,
+// and provider errors must report distinct machine-readable `code` values,
+// and a bound violation (as opposed to a business-rule rejection) must
+// carry the violated bound's name in `details.violated_bound` -- never raw
+// model output.
+func TestContextFabricInvestigationRouteReportsDistinctCodesAndBoundNames(t *testing.T) {
+	cases := []struct {
+		name        string
+		err         error
+		wantStatus  int
+		wantCode    string
+		wantBound   string
+		wantNoBound bool
+	}{
+		{
+			name:       "interpretation bound violation names the bound",
+			err:        fmt.Errorf("%w: %v", contextfabric.ErrInterpretationRejected, errors.New("interpreted question violates v1 bounds")),
+			wantStatus: http.StatusUnprocessableEntity, wantCode: "interpretation_rejected",
+			wantBound: "interpretation.requested_judgment.max_length",
+		},
+		{
+			name:       "interpretation business rule carries no bound",
+			err:        contextfabric.ErrInterpretationRejected,
+			wantStatus: http.StatusUnprocessableEntity, wantCode: "interpretation_rejected", wantNoBound: true,
+		},
+		{
+			name:       "synthesis bound violation names the bound",
+			err:        fmt.Errorf("%w: %v", contextfabric.ErrSynthesisRejected, errors.New("driver judgment violates v1 bounds")),
+			wantStatus: http.StatusUnprocessableEntity, wantCode: "synthesis_rejected",
+			wantBound: "synthesis.driver.title.max_length",
+		},
+		{
+			name:       "synthesis claim-binding rejection carries no bound",
+			err:        contextfabric.ErrSynthesisRejected,
+			wantStatus: http.StatusUnprocessableEntity, wantCode: "synthesis_rejected", wantNoBound: true,
+		},
+		{
+			name:       "provider error carries no bound",
+			err:        contextfabric.ErrModelOutput,
+			wantStatus: http.StatusBadGateway, wantCode: "provider_error", wantNoBound: true,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := testCase.err
+			if testCase.wantBound != "" {
+				err = contextfabric.NewModelBoundViolation(testCase.wantBound, err)
+			}
+			app, token := newContextFabricTestApp(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+				return contextfabric.InvestigationResult{}, err
+			}))
+			response := httptest.NewRecorder()
+
+			app.Handler().ServeHTTP(response, investigationRequest(t, token))
+
+			if response.Code != testCase.wantStatus {
+				t.Fatalf("status = %d, want %d body=%s", response.Code, testCase.wantStatus, response.Body.String())
+			}
+			var body contractsv1.ErrorEnvelope
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode error body: %v (body=%s)", err, response.Body.String())
+			}
+			if body.Error.Code != testCase.wantCode {
+				t.Fatalf("code = %q, want %q", body.Error.Code, testCase.wantCode)
+			}
+			gotBound, _ := body.Error.Details["violated_bound"].(string)
+			if testCase.wantNoBound {
+				if _, present := body.Error.Details["violated_bound"]; present {
+					t.Fatalf("details.violated_bound = %q, want absent", gotBound)
+				}
+				return
+			}
+			if gotBound != testCase.wantBound {
+				t.Fatalf("details.violated_bound = %q, want %q", gotBound, testCase.wantBound)
 			}
 		})
 	}
