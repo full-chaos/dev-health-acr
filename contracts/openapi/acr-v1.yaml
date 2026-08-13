@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: e4aa6afffdd8851778aaaa71940264523db31a33251704ad2d684e6c5d72067d
+# canonical-content-sha256: a453170208069a137cf995ab283b9c096ef102a3acaf8bfb3ede19599d34c93c
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -351,6 +351,56 @@ paths:
           bearerAuth: []
         -
           webAssertionAuth: []
+      x-required-entitlement: "agent_context_runtime"
+      x-required-scope: "context:read"
+  "/api/v1/context-fabric/investigations/{result_id}":
+    get:
+      description: "Returns the canonical result a prior investigation persisted. A bounded consumer that received an answer projection uses this to fetch the full detail behind a claim, so every answer does not have to be inflated for the rare caller that wants everything; replay and diagnostics read the same way. Strictly read-only: no graph, canonical fact, or model work happens. result_id is a frozen, opaque handle and must not be parsed. An unknown result_id, a malformed one, and one belonging to another organization are indistinguishable: all three answer 404, so result_id can never act as a cross-tenant existence oracle."
+      operationId: "getContextFabricInvestigation"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+        -
+          in: "path"
+          name: "result_id"
+          required: true
+          schema:
+            maxLength: 256
+            minLength: 8
+            type: "string"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/context_fabric_investigation_result.v1.schema.json"
+          description: "Persisted immutable investigation result snapshot"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "413":
+          "$ref": "#/components/responses/Error"
+        "426":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+        "504":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+        -
+          webAssertionAuth: []
+      summary: "Re-read one immutable investigation result by its opaque result_id."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
   "/api/v1/context-fabric/model-config":

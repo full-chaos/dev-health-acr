@@ -26,7 +26,13 @@ import (
 // contextfabric.InvestigationResultStore's Get doc comment). This is
 // deliberately not contextfabric.ErrUnavailable: a missing/foreign result
 // is a 404, not a transient 503.
-var ErrNotFound = errors.New("pginvestigation: investigation result not found")
+//
+// It wraps contextfabric.ErrInvestigationResultNotFound (CHAOS-3746) so a
+// caller holding only the InvestigationResultStore interface -- the
+// result-retrieval route does -- classifies not-found through the port
+// rather than through this package. errors.Is against either sentinel
+// still matches.
+var ErrNotFound = fmt.Errorf("pginvestigation: investigation result not found: %w", contextfabric.ErrInvestigationResultNotFound)
 
 // Store is the production contextfabric.InvestigationResultStore. The
 // caller owns database construction; this package never parses or logs

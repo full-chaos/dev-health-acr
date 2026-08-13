@@ -34,6 +34,14 @@ func (f investigatorFunc) Investigate(ctx context.Context, principal storage.Pri
 // RuntimeDependencies, which that shared helper does not expose.
 func newContextFabricTestApp(t *testing.T, investigator contextfabric.Investigator) (*App, string) {
 	t.Helper()
+	return newContextFabricTestAppWithResults(t, investigator, nil)
+}
+
+// newContextFabricTestAppWithResults additionally wires the CHAOS-3746
+// investigation result store the retrieval route reads. A nil store is the
+// "not configured" case that route degrades to a 503 for.
+func newContextFabricTestAppWithResults(t *testing.T, investigator contextfabric.Investigator, results contextfabric.InvestigationResultStore) (*App, string) {
+	t.Helper()
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
 	credentials := newMemoryCredentialLifecycle(t, audit, now)
@@ -60,6 +68,7 @@ func newContextFabricTestApp(t *testing.T, investigator contextfabric.Investigat
 			DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(func() time.Time { return now })),
 			ReadinessChecks:            exactRuntimeChecks(),
 			Investigator:               investigator,
+			InvestigationResults:       results,
 		},
 	}, testLogger(&bytes.Buffer{}))
 	if err != nil {

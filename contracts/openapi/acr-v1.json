@@ -491,6 +491,80 @@
         }
       }
     },
+    "/api/v1/context-fabric/investigations/{result_id}": {
+      "get": {
+        "operationId": "getContextFabricInvestigation",
+        "summary": "Re-read one immutable investigation result by its opaque result_id.",
+        "description": "Returns the canonical result a prior investigation persisted. A bounded consumer that received an answer projection uses this to fetch the full detail behind a claim, so every answer does not have to be inflated for the rare caller that wants everything; replay and diagnostics read the same way. Strictly read-only: no graph, canonical fact, or model work happens. result_id is a frozen, opaque handle and must not be parsed. An unknown result_id, a malformed one, and one belonging to another organization are indistinguishable: all three answer 404, so result_id can never act as a cross-tenant existence oracle.",
+        "x-required-scope": "context:read",
+        "x-required-entitlement": "agent_context_runtime",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "webAssertionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestID"
+          },
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          },
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Persisted immutable investigation result snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../jsonschema/v1/context_fabric_investigation_result.v1.schema.json"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "426": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/oauth/device_authorization": {
       "post": {
         "security": [],

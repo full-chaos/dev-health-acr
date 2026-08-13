@@ -76,6 +76,7 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("GET /api/v1/agent-context/evidence/{evidence_ref_id}", a.protectedRuntimeHandler(limits.RequestClassEvidence, auth.ScopeEvidenceRead, true, true, http.HandlerFunc(a.handleEvidence)))
 	mux.Handle("POST /api/v1/agent-context/episodes", a.protectedRuntimeHandler(limits.RequestClassEpisode, auth.ScopeEpisodeWrite, true, false, http.HandlerFunc(a.handleEpisode)))
 	mux.Handle("POST "+ContextFabricInvestigationsPath, a.ContextFabricInvestigationHandler(a.investigator()))
+	mux.Handle("GET "+ContextFabricInvestigationResultPath, a.ContextFabricInvestigationResultHandler(a.investigationResults()))
 	mux.Handle("GET "+ContextFabricOrgModelConfigPath, a.ContextFabricOrgModelConfigGetHandler(a.orgModelConfigs()))
 	mux.Handle("PUT "+ContextFabricOrgModelConfigPath, a.ContextFabricOrgModelConfigPutHandler(a.orgModelConfigs(), a.reuseInvalidator()))
 	mux.Handle("DELETE "+ContextFabricOrgModelConfigPath, a.ContextFabricOrgModelConfigDeleteHandler(a.orgModelConfigs(), a.orgModelRuntimeEvictor(), a.reuseInvalidator()))

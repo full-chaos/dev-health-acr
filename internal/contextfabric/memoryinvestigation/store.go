@@ -23,7 +23,12 @@ import (
 // (org_id, result_id). It fires identically whether result_id is genuinely
 // unknown or belongs to a different organization, matching
 // pginvestigation.ErrNotFound's non-enumerating-404 behavior.
-var ErrNotFound = errors.New("memoryinvestigation: investigation result not found")
+//
+// It wraps contextfabric.ErrInvestigationResultNotFound (CHAOS-3746) for
+// the same reason pginvestigation.ErrNotFound does: a caller holding the
+// interface classifies not-found through the port, not through an
+// adapter. errors.Is against either sentinel still matches.
+var ErrNotFound = fmt.Errorf("memoryinvestigation: investigation result not found: %w", contextfabric.ErrInvestigationResultNotFound)
 
 // entry holds an immutable, already-serialized snapshot. Storing the JSON
 // form (rather than the Go struct) keeps Save's idempotent-replay

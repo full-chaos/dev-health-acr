@@ -118,7 +118,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric org model config store: %w", err))
 	}
-	investigator, runtimeEvictor, resultReuseInvalidator, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigStore)
+	investigator, investigationResultStore, runtimeEvictor, resultReuseInvalidator, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigStore)
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric investigator: %w", err))
 	}
@@ -137,6 +137,13 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if runtimeEvictor != nil {
 		orgModelRuntimeEvictor = runtimeEvictor
 	}
+	// Same typed-nil guard: investigationResultStore is a concrete
+	// *pginvestigation.Store and is nil whenever the investigator itself
+	// was not composed.
+	var investigationResults contextfabric.InvestigationResultStore
+	if investigationResultStore != nil {
+		investigationResults = investigationResultStore
+	}
 	runtime.Dependencies = api.Dependencies{
 		Capabilities: capabilities, Now: request.options.Now, Observability: &hooks, Limits: manager, AuthAttempts: authAttempts,
 		EvidenceStoreFactory: clickhouse.factory, ClientIP: clientIP, UsageTelemetry: usageTelemetry,
@@ -146,6 +153,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			DeviceAuthorizations: postgres.devices, DeviceVerificationURL: request.config.DeviceVerificationURL,
 			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(request.options.Now)),
 			Investigator:               investigator,
+			InvestigationResults:       investigationResults,
 			OrgModelConfigs:            orgModelConfigs,
 			OrgModelRuntimeEvictor:     orgModelRuntimeEvictor,
 			// CHAOS-3786, codex round-1 P1(b): resultReuseInvalidator is
@@ -163,8 +171,8 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 // (CHAOS-3755) when the operator opted in AND the graph backend is
 // separately configured. It never fails composition over an unconfigured
 // optional dependency (ADR 0007's convention): if either condition is
-// false, it returns (nil, nil, nil) and the investigations route degrades
-// to a static 503 (see api.App.investigator / handleRuntimeUnavailable).
+// false, it returns all-nil and the investigations route degrades to a
+// static 503 (see api.App.investigator / handleRuntimeUnavailable).
 //
 // The model runtime is a third, INDEPENDENT enablement (CHAOS-3770): it is
 // constructed by newContextFabricModelRuntime only when a provider is
@@ -182,17 +190,24 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 // deployment-default runtime is used completely unwrapped, unchanged from
 // pre-CHAOS-3775 behavior, and the returned evictor is nil too.
 //
-// The second return value is that same Resolver, exposed only as
+// The second return value is the immutable result store this engine already
+// writes every answer through. open() wires it into
+// api.RuntimeDependencies.InvestigationResults so the retrieval route
+// (CHAOS-3746) reads back exactly what the investigation persisted, rather
+// than composing a second store over the same table that could drift from
+// it.
+//
+// The third return value is that same Resolver, exposed only as
 // contextfabric.OrgModelRuntimeEvictor -- open() wires it into
 // api.RuntimeDependencies.OrgModelRuntimeEvictor so the DELETE model-config
 // route can purge a cached runtime immediately (Codex round-1 finding F4).
-func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigStore *pgmodelconfig.Store) (contextfabric.Investigator, contextfabric.OrgModelRuntimeEvictor, contextfabric.ReuseInvalidator, error) {
+func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigStore *pgmodelconfig.Store) (contextfabric.Investigator, *pginvestigation.Store, contextfabric.OrgModelRuntimeEvictor, contextfabric.ReuseInvalidator, error) {
 	if !request.config.EnableContextFabricInvestigations || !falkorgraph.Configured(os.LookupEnv) {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	graphConfig, err := falkorgraph.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("load context fabric graph configuration: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("load context fabric graph configuration: %w", err)
 	}
 	// Codex round-3 F2: supply a real telemetry sink. Left nil, every graph
 	// signal -- including the per-request vector-degradation signal -- was
@@ -202,18 +217,18 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// leaves the lexical retrieval path exactly as it was.
 	embedderOptions, err := falkorgraph.EmbedderFromEnv(os.LookupEnv)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("load context fabric embedder configuration: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("load context fabric embedder configuration: %w", err)
 	}
 	graphReader, err := falkorgraph.NewWithEmbedder(graphConfig, embedderOptions)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("initialize context fabric graph adapter: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("initialize context fabric graph adapter: %w", err)
 	}
 	factRegistry, err := contextfabric.NewFactCapabilityRegistry(
 		devhealthfacts.NewProviders(clickhouse.queryClient),
 		contextfabric.FactRegistryOptions{Now: request.options.Now},
 	)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("initialize canonical fact registry: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("initialize canonical fact registry: %w", err)
 	}
 	// CHAOS-3782: WithAnswerReuse turns on Save's reuse-column bookkeeping
 	// and FindReusable/InvalidateOrganizationReuse. request.config.AnswerReuseMaxAge
@@ -229,7 +244,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	}
 	investigationStore, err := pginvestigation.NewStore(postgres.db, storeOpts...)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("initialize investigation result store: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("initialize investigation result store: %w", err)
 	}
 	// reuseSnapshotter, reuseEpochSnapshotter, and reuseInvalidator all
 	// stay nil when reuse is disabled -- Engine then never queries
@@ -262,15 +277,15 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// comment and newContextFabricModelRuntime.
 	deploymentDefaultRuntime, err := newContextFabricModelRuntime(ctx, os.LookupEnv)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	modelRuntime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefaultRuntime, orgModelConfigStore, os.LookupEnv)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	receiptSink, err := buildModelReceiptSink(postgres)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	// orgModelConfigStore is a concrete *pgmodelconfig.Store, possibly nil
 	// -- the same typed-nil-interface trap open()'s own conversion guards
@@ -338,7 +353,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		ReuseModelIdentities:   contextFabricReuseModelIdentities(os.LookupEnv),
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("initialize context fabric engine: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("initialize context fabric engine: %w", err)
 	}
 	// evictor is a concrete *modelruntimeresolver.Resolver, possibly nil
 	// (when orgModelConfigStore was nil) -- guard the typed-nil-interface
@@ -349,9 +364,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// through the same interface-typed local, so it needs no separate
 	// guard here.
 	if evictor == nil {
-		return engine, nil, reuseInvalidator, nil
+		return engine, investigationStore, nil, reuseInvalidator, nil
 	}
-	return engine, evictor, reuseInvalidator, nil
+	return engine, investigationStore, evictor, reuseInvalidator, nil
 }
 
 // contextFabricProjectionVersion is Versions.ProjectionVersion for every
