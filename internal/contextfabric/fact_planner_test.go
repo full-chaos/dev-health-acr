@@ -805,15 +805,15 @@ func TestClampCoverageTextIsRuneSafeAndNeverEmpty(t *testing.T) {
 // and not answer. That claim is only meaningful if both bundles come from the
 // SAME pipeline: the registry rewrites a truncated result's state, enforces
 // maxCanonicalFactsPerBundle across all providers, stamps omitted per-fact
-// fields, and sorts. A hand-assembled "naive" bundle re-implements those
-// semantics and diverges from them one detail at a time -- which is exactly
+// fields, and sorts. A comparison bundle assembled by hand re-implements
+// those semantics and diverges from them one detail at a time -- which is
 // what happened, three review rounds running.
 //
 // This pins the property the harness now relies on instead: for a provider
 // pushed past the aggregate fact cap, asking for {supported, pruned-kind}
-// yields byte-identical facts to asking for {supported} alone. It fails
-// against any implementation where the two sides do not share the real
-// truncation and cap handling.
+// yields identical facts to asking for {supported} alone. It fails against
+// any implementation where the two sides do not share the real truncation and
+// cap handling.
 func TestPruningIsInvisibleToTruncationAndCaps(t *testing.T) {
 	t.Parallel()
 
@@ -906,4 +906,101 @@ func TestPruningIsInvisibleToTruncationAndCaps(t *testing.T) {
 	if !prunedRecorded {
 		t.Fatal("want the pruned capability recorded in coverage even when the answer is unchanged")
 	}
+}
+
+// TestReadFactsRejectsOutOfScopeExplicitSubjects is the codex round-5 R5-1
+// regression.
+//
+// An explicit requirement.Subjects list is a caller ASSERTION -- "read this
+// kind for exactly these subjects" -- so naming a subject outside the
+// investigation set is an error about the request, not a statement about what
+// a capability can answer. buildFactQuery has always rejected it, but once
+// pruning was introduced a wholly-unsupported explicit list got pruned BEFORE
+// that check could run, and an out-of-scope request quietly became a success
+// with zero facts and a pruned coverage entry.
+//
+// The distinction this pins: out-of-scope is an ERROR, in-scope-but-the-
+// capability-does-not-support-that-kind is a PRUNE.
+func TestReadFactsRejectsOutOfScopeExplicitSubjects(t *testing.T) {
+	t.Parallel()
+
+	repository := subject(SubjectRepository, "repo_api")
+	outOfScopeProject := subject(SubjectProject, "project_titan")
+	inScopeTeam := subject(SubjectTeam, "team_platform")
+
+	newRegistry := func(t *testing.T) (*FactCapabilityRegistry, *factProviderStub) {
+		t.Helper()
+		// Repository-only, so neither a project nor a team subject fits it.
+		metrics := &factProviderStub{
+			capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+			result:     FactProviderResult{State: SourceAvailable},
+		}
+		registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{})
+		if err != nil {
+			t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+		}
+		return registry, metrics
+	}
+
+	t.Run("out-of-scope explicit subjects error rather than being pruned", func(t *testing.T) {
+		t.Parallel()
+		registry, metrics := newRegistry(t)
+		_, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			Subjects: []SubjectRef{repository},
+			Requirements: []FactRequirement{
+				// project_titan is in NO part of this investigation's scope.
+				{Kind: FactMetrics, Subjects: []SubjectRef{outOfScopeProject}},
+			},
+		})
+		if err == nil {
+			t.Fatal("ReadFacts() error = nil, want an out-of-scope explicit subject rejected -- pruning must not swallow a scope violation")
+		}
+		if !strings.Contains(err.Error(), "outside the discovered investigation set") {
+			t.Fatalf("ReadFacts() error = %v, want the scope violation named", err)
+		}
+		if len(metrics.queries) != 0 {
+			t.Fatal("the provider must not be queried for an out-of-scope request")
+		}
+	})
+
+	t.Run("in-scope explicit subjects of an unsupported kind are still pruned", func(t *testing.T) {
+		t.Parallel()
+		registry, metrics := newRegistry(t)
+		bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			// The team IS part of the investigation, so naming it is a
+			// legitimate assertion -- the capability simply cannot serve it.
+			Subjects: []SubjectRef{repository, inScopeTeam},
+			Requirements: []FactRequirement{
+				{Kind: FactMetrics, Subjects: []SubjectRef{inScopeTeam}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() error = %v, want an in-scope but unsupported kind pruned, not failed", err)
+		}
+		if len(metrics.queries) != 0 {
+			t.Fatal("a pruned capability must never be queried")
+		}
+		if len(bundle.Coverage.Sources) != 1 || bundle.Coverage.Sources[0].State != SourcePruned {
+			t.Fatalf("coverage = %+v, want a single pruned observation", bundle.Coverage.Sources)
+		}
+	})
+
+	t.Run("in-scope explicit subjects of a supported kind still run", func(t *testing.T) {
+		t.Parallel()
+		registry, metrics := newRegistry(t)
+		if _, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			Subjects: []SubjectRef{repository, inScopeTeam},
+			Requirements: []FactRequirement{
+				{Kind: FactMetrics, Subjects: []SubjectRef{repository}},
+			},
+		}); err != nil {
+			t.Fatalf("ReadFacts() error = %v, want a valid scoped requirement honored", err)
+		}
+		if len(metrics.queries) != 1 {
+			t.Fatalf("provider queried %d time(s), want 1", len(metrics.queries))
+		}
+		if len(metrics.queries[0].Subjects) != 1 || metrics.queries[0].Subjects[0].CanonicalID != "repo_api" {
+			t.Fatalf("provider was asked about %+v, want only the requirement's own subject", metrics.queries[0].Subjects)
+		}
+	})
 }

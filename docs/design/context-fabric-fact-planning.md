@@ -258,23 +258,28 @@ skipped sources off the state alone.
 `ACR_CHAOS3783_CLICKHOUSE_DSN` and `ACR_CHAOS3783_ORG_ID` are set.
 
 **Every bundle it compares comes from the real
-`FactCapabilityRegistry.ReadFacts`.** A re-implemented baseline measures its
-own divergence from the production pipeline, not pruning: an earlier version
-assembled a "naive fan-out" bundle by calling providers directly and stamping
-what the registry stamps, and each registry semantic it failed to mirror --
-per-fact state rewrites, the aggregate fact cap, ordering, serialization --
-surfaced as a separate review finding, three rounds running. Sharing the
-production path makes those semantics identical by construction rather than
-by transcription.
+`FactCapabilityRegistry.ReadFacts`.** The harness never assembles a fact
+bundle of its own (see "Rejected: a second bundle-building path" below).
 
-The naive counterfactual is therefore **counted, never executed**: one
+The counterfactual it compares against is **counted, never executed**: one
 round-trip per registered requirement, every subject bound to each. It cannot
 be executed, and that is not an oversight -- `buildFactQuery` refuses to ask a
 provider about an unsupported subject kind and refuses an empty subject list,
 so forcing a plan-everything mode through `ReadFacts` would reproduce the
-pre-CHAOS-3783 whole-bundle failure (§1) rather than a naive baseline. A count
-has no bundle, no stamping, and no serialization, so it has nothing to diverge
-on. It is not production "before" -- §1 explains why no slow before exists.
+pre-CHAOS-3783 whole-bundle failure (§1) rather than a fan-out. A count has no
+bundle, no stamping, and no serialization, so it has nothing to diverge on. It
+is not production "before" -- §1 explains why no slow before exists.
+
+### Rejected: a second bundle-building path
+
+Do not reintroduce this. An earlier harness built its own comparison bundle by
+calling providers directly and stamping the fields the registry stamps. That
+made it a transcription of the registry pipeline, and every semantic it failed
+to mirror -- per-fact state rewrites, the aggregate fact cap, ordering,
+serialization -- surfaced as a separate review finding, three rounds running.
+A re-implemented comparison measures its own divergence from production, not
+pruning. Sharing the production path makes those semantics identical by
+construction instead of by transcription.
 
 What proves pruning did not change the answer is a **second real `ReadFacts`
 call with the pruned kinds removed from the request**: asking for

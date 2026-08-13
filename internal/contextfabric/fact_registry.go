@@ -504,6 +504,28 @@ func validateCanonicalFactRequest(request CanonicalFactRequest) error {
 			return fmt.Errorf("duplicate fact requirement %q", requirement.Kind)
 		}
 		seenKinds[requirement.Kind] = struct{}{}
+		// Codex round-5 R5-1: an explicit requirement.Subjects list is
+		// checked for SCOPE here, before the planner runs.
+		//
+		// The list is a caller ASSERTION -- "read this kind for exactly
+		// these subjects" -- and naming a subject outside the investigation
+		// set is an error about the caller's request, not a statement about
+		// what a capability can answer. buildFactQuery has always rejected
+		// it; but once pruning was introduced, a wholly-unsupported explicit
+		// list was pruned BEFORE that check could run, so an out-of-scope
+		// request quietly became a success with zero facts and a pruned
+		// coverage entry. Pruning must never swallow a scope violation.
+		//
+		// The ordering is the fix: validate the assertion, then plan. The
+		// planner's fail-open rule already says an explicit Subjects list is
+		// honored unchanged, and honoring a list includes honoring its
+		// errors. buildFactQuery keeps its own identical check as the
+		// defensive invariant behind this one.
+		for _, subject := range requirement.Subjects {
+			if _, ok := allowed[canonicalFactSubjectKey(subject)]; !ok {
+				return fmt.Errorf("fact capability %s: subject %q is outside the discovered investigation set", requirement.Kind, subject.CanonicalID)
+			}
+		}
 	}
 	return nil
 }

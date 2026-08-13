@@ -36,35 +36,35 @@ import (
 //
 // Every statement it issues is a SELECT; it never writes.
 //
-// # Why there is no second bundle-building path here
+// # Every compared bundle comes from the real registry
 //
-// An earlier version of this harness assembled a "naive fan-out" bundle
-// itself, by calling providers directly and stamping the fields the registry
-// stamps. That was a parallel re-implementation of the registry pipeline, and
-// every semantic the registry applies -- per-fact state rewrites, the
-// aggregate fact cap, ordering, serialization -- was a divergence waiting to
-// be found one review round at a time. Three rounds found three. A
-// re-implemented baseline measures its own divergence from the real code, not
-// pruning.
+// This harness never assembles a fact bundle of its own. REJECTED, do not
+// reintroduce: an earlier version built its own comparison bundle by calling
+// providers directly and stamping the fields the registry stamps, which made
+// it a transcription of the registry pipeline. Every semantic it failed to
+// mirror -- per-fact state rewrites, the aggregate fact cap, ordering,
+// serialization -- surfaced as a separate review finding, three rounds
+// running. A re-implemented comparison measures its own divergence from
+// production, not pruning.
 //
-// Every bundle compared below now comes from the REAL
+// Both bundles compared below come from the REAL
 // FactCapabilityRegistry.ReadFacts, so truncation, caps, state stamping, and
 // serialization are shared by construction and cannot diverge.
 //
 // # What the counterfactual is, and why it is counted rather than run
 //
-// The naive fan-out cannot be executed through the production path at all,
-// and that is not an oversight: buildFactQuery refuses to ask a provider
+// The planner-free fan-out cannot be executed through the production path at
+// all, and that is not an oversight: buildFactQuery refuses to ask a provider
 // about a subject kind its capability does not support, and refuses an empty
 // subject list. Forcing a plan-everything mode through ReadFacts would
-// therefore not produce a naive baseline -- it would reproduce the
-// pre-CHAOS-3783 whole-bundle failure this ticket exists to fix.
+// therefore not produce a fan-out -- it would reproduce the pre-CHAOS-3783
+// whole-bundle failure this ticket exists to fix.
 //
-// So the naive numbers are COUNTED, never executed: a planner-free
+// So the counterfactual numbers are COUNTED, never executed: a planner-free
 // implementation issues one round-trip per registered requirement and binds
 // every investigation subject to each. That is a count of work not done --
-// no bundle, no stamping, no serialization -- so it carries none of the
-// divergence risk the deleted baseline did.
+// no bundle, no stamping, no serialization -- so it has nothing to diverge
+// on.
 //
 // # What proves pruning did not change the answer
 //
@@ -399,11 +399,11 @@ func chaos3783Run(
 // implementation would have spent: one provider round-trip per registered
 // requirement, with every investigation subject bound to each.
 //
-// It deliberately builds no bundle. The naive fan-out cannot be run through
-// the production path (buildFactQuery refuses an unsupported subject kind),
-// and re-implementing it here is exactly the mistake that produced three
-// rounds of divergence findings. A count has no state stamping, no caps, and
-// no serialization, so there is nothing for it to diverge on.
+// It deliberately builds no bundle. The planner-free fan-out cannot be run
+// through the production path (buildFactQuery refuses an unsupported subject
+// kind), and re-implementing it here is exactly the mistake that produced
+// three rounds of divergence findings. A count has no state stamping, no
+// caps, and no serialization, so there is nothing for it to diverge on.
 func chaos3783NaiveCost(testCase chaos3783Case, registered map[contextfabric.FactKind]contextfabric.FactCapability) (roundTrips, bindings int) {
 	for _, kind := range testCase.requirements {
 		if _, ok := registered[kind]; !ok {
