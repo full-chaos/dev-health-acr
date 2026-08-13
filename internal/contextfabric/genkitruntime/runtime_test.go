@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,27 @@ func (f fallbackRuntime) InterpretQuestion(context.Context, storage.Principal, c
 
 func (f fallbackRuntime) SynthesizeAnswer(context.Context, storage.Principal, contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {
 	return f.draft, validReceipt(contextfabric.ModelOperationSynthesize), nil
+}
+
+// erroringFallbackRuntime is a fallback ModelRuntime whose own call also
+// fails, always returning err alongside its own already-classified receipt
+// -- exactly what a real fallback genkitruntime.Runtime returns on its own
+// terminal failure (receipt built, Outcome set via receiptOutcomeForError,
+// paired with the classified error). It exists to prove CHAOS-3770 F4: when
+// BOTH the primary and the fallback fail, the primary's receipt must not
+// claim a successful fallback, and the caller must see the fallback's own
+// (final leg) classification.
+type erroringFallbackRuntime struct {
+	err     error
+	receipt contextfabric.ModelExecutionReceipt
+}
+
+func (f erroringFallbackRuntime) InterpretQuestion(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
+	return contextfabric.InterpretedQuestion{}, f.receipt, f.err
+}
+
+func (f erroringFallbackRuntime) SynthesizeAnswer(context.Context, storage.Principal, contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {
+	return contextfabric.SynthesisDraft{}, f.receipt, f.err
 }
 
 func TestSDKGeneratorUsesGenkitStructuredOutputAndUsage(t *testing.T) {
@@ -306,6 +328,141 @@ func TestRuntimeUsesBoundedFallbackWhenModelUnavailable(t *testing.T) {
 	}
 }
 
+// TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationFallbackAlsoFails is
+// the CHAOS-3770 F4 probe: when the primary fails and the configured
+// fallback ALSO fails, the receipt must not claim FallbackUsed/"fallback"
+// (that outcome means the fallback produced usable output, which it did
+// not), and the caller must see the fallback's own -- the final leg's --
+// classification, not the primary's. Getting this wrong means a caller
+// reading the primary's classification (e.g. a transient rate limit) could
+// treat a case as retryable when the fallback's own failure was actually
+// terminal, or vice versa.
+func TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationFallbackAlsoFails(t *testing.T) {
+	t.Parallel()
+	fallbackErr := fmt.Errorf("%w: fallback provider down", contextfabric.ErrModelUnavailable)
+	fallbackReceipt := validReceipt(contextfabric.ModelOperationInterpret)
+	fallbackReceipt.Outcome = "unavailable"
+	runtime := mustRuntime(t, &generatorStub{
+		interpretErr: core.NewError(core.RESOURCE_EXHAUSTED, "primary quota exhausted"),
+	}, Config{
+		MaxAttempts: 1,
+		Fallback:    erroringFallbackRuntime{err: fallbackErr, receipt: fallbackReceipt},
+	})
+
+	_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+
+	if !errors.Is(err, contextfabric.ErrModelUnavailable) {
+		t.Fatalf("InterpretQuestion() error = %v, want the FALLBACK leg's own classification (ErrModelUnavailable)", err)
+	}
+	if errors.Is(err, contextfabric.ErrModelRateLimited) {
+		t.Fatalf("InterpretQuestion() error = %v, must not carry the PRIMARY leg's classification once the fallback also ran and failed", err)
+	}
+	if receipt.FallbackUsed {
+		t.Fatalf("receipt.FallbackUsed = true, want false: the fallback call never produced usable output, so the receipt must not claim fallback use")
+	}
+	if receipt.Outcome != "unavailable" {
+		t.Fatalf("receipt.Outcome = %q, want the fallback leg's own outcome %q, not \"fallback\" (which means the fallback succeeded)", receipt.Outcome, "unavailable")
+	}
+}
+
+// TestRuntimeRecordsTheFinalLegsFailureWhenSynthesisFallbackAlsoFails is the
+// SynthesizeAnswer counterpart -- see
+// TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationFallbackAlsoFails.
+func TestRuntimeRecordsTheFinalLegsFailureWhenSynthesisFallbackAlsoFails(t *testing.T) {
+	t.Parallel()
+	fallbackErr := fmt.Errorf("%w: fallback output failed validation", contextfabric.ErrModelOutput)
+	fallbackReceipt := validReceipt(contextfabric.ModelOperationSynthesize)
+	fallbackReceipt.Outcome = "invalid_output"
+	runtime := mustRuntime(t, &generatorStub{
+		synthesisErr: core.NewError(core.RESOURCE_EXHAUSTED, "primary quota exhausted"),
+	}, Config{
+		MaxAttempts: 1,
+		Fallback:    erroringFallbackRuntime{err: fallbackErr, receipt: fallbackReceipt},
+	})
+
+	_, receipt, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+
+	if !errors.Is(err, contextfabric.ErrModelOutput) {
+		t.Fatalf("SynthesizeAnswer() error = %v, want the FALLBACK leg's own classification (ErrModelOutput)", err)
+	}
+	if errors.Is(err, contextfabric.ErrModelRateLimited) {
+		t.Fatalf("SynthesizeAnswer() error = %v, must not carry the PRIMARY leg's classification once the fallback also ran and failed", err)
+	}
+	if receipt.FallbackUsed {
+		t.Fatalf("receipt.FallbackUsed = true, want false: the fallback call never produced usable output, so the receipt must not claim fallback use")
+	}
+	if receipt.Outcome != "invalid_output" {
+		t.Fatalf("receipt.Outcome = %q, want the fallback leg's own outcome %q, not \"fallback\" (which means the fallback succeeded)", receipt.Outcome, "invalid_output")
+	}
+}
+
+// TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationIsSemanticallyInvalidAndFallbackAlsoFails
+// is the CHAOS-3770 F4 residual probe: the SAME receipt-corruption/wrong-
+// classification bug as TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationFallbackAlsoFails,
+// but triggered via the OTHER fallback branch -- the primary's output was
+// parseable but SEMANTICALLY invalid (fails toDomain/Validate, not a
+// generation error), and the fallback that's then tried also fails. The
+// caller must still see the fallback's own (final) classification and
+// receipt.Outcome, not the primary's stale "invalid_output"/ErrModelOutput.
+func TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationIsSemanticallyInvalidAndFallbackAlsoFails(t *testing.T) {
+	t.Parallel()
+	invalidOutput := validInterpretationOutput()
+	invalidOutput.Shape = "registered_plan_only" // not a member of the closed shape vocabulary
+	fallbackErr := fmt.Errorf("%w: fallback provider down", contextfabric.ErrModelUnavailable)
+	fallbackReceipt := validReceipt(contextfabric.ModelOperationInterpret)
+	fallbackReceipt.Outcome = "unavailable"
+	runtime := mustRuntime(t, &generatorStub{interpretation: invalidOutput}, Config{
+		MaxAttempts: 1,
+		Fallback:    erroringFallbackRuntime{err: fallbackErr, receipt: fallbackReceipt},
+	})
+
+	_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+
+	if !errors.Is(err, contextfabric.ErrModelUnavailable) {
+		t.Fatalf("InterpretQuestion() error = %v, want the FALLBACK leg's own classification (ErrModelUnavailable)", err)
+	}
+	if errors.Is(err, contextfabric.ErrModelOutput) {
+		t.Fatalf("InterpretQuestion() error = %v, must not carry the PRIMARY leg's stale invalid_output/ErrModelOutput classification once the fallback also ran and failed", err)
+	}
+	if receipt.FallbackUsed {
+		t.Fatalf("receipt.FallbackUsed = true, want false: the fallback call never produced usable output, so the receipt must not claim fallback use")
+	}
+	if receipt.Outcome != "unavailable" {
+		t.Fatalf("receipt.Outcome = %q, want the fallback leg's own outcome %q, not the primary's stale \"invalid_output\"", receipt.Outcome, "unavailable")
+	}
+}
+
+// TestRuntimeRecordsTheFinalLegsFailureWhenSynthesisIsSemanticallyInvalidAndFallbackAlsoFails
+// is the SynthesizeAnswer counterpart -- see
+// TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationIsSemanticallyInvalidAndFallbackAlsoFails.
+func TestRuntimeRecordsTheFinalLegsFailureWhenSynthesisIsSemanticallyInvalidAndFallbackAlsoFails(t *testing.T) {
+	t.Parallel()
+	invalidOutput := validSynthesisOutput()
+	invalidOutput.EvidenceRefIDs = []string{"evidence_not_in_input"} // fails ValidateAgainst grounding
+	fallbackErr := fmt.Errorf("%w: fallback provider down", contextfabric.ErrModelRateLimited)
+	fallbackReceipt := validReceipt(contextfabric.ModelOperationSynthesize)
+	fallbackReceipt.Outcome = "rate_limited"
+	runtime := mustRuntime(t, &generatorStub{synthesis: invalidOutput}, Config{
+		MaxAttempts: 1,
+		Fallback:    erroringFallbackRuntime{err: fallbackErr, receipt: fallbackReceipt},
+	})
+
+	_, receipt, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+
+	if !errors.Is(err, contextfabric.ErrModelRateLimited) {
+		t.Fatalf("SynthesizeAnswer() error = %v, want the FALLBACK leg's own classification (ErrModelRateLimited)", err)
+	}
+	if errors.Is(err, contextfabric.ErrModelOutput) {
+		t.Fatalf("SynthesizeAnswer() error = %v, must not carry the PRIMARY leg's stale invalid_output/ErrModelOutput classification once the fallback also ran and failed", err)
+	}
+	if receipt.FallbackUsed {
+		t.Fatalf("receipt.FallbackUsed = true, want false: the fallback call never produced usable output, so the receipt must not claim fallback use")
+	}
+	if receipt.Outcome != "rate_limited" {
+		t.Fatalf("receipt.Outcome = %q, want the fallback leg's own outcome %q, not the primary's stale \"invalid_output\"", receipt.Outcome, "rate_limited")
+	}
+}
+
 func TestRuntimeBoundsModelDeadline(t *testing.T) {
 	stub := &generatorStub{wait: true}
 	runtime := mustRuntime(t, stub, Config{Timeout: time.Second, MaxAttempts: 1})
@@ -507,8 +664,23 @@ func TestRetryableUsesStructuredGenkitStatusOverStringHeuristics(t *testing.T) {
 		{"deadline_exceeded_status_retryable", core.NewError(core.DEADLINE_EXCEEDED, "slow"), true},
 		{"aborted_retryable", core.NewError(core.ABORTED, "aborted"), true},
 		{"invalid_argument_not_retryable", core.NewError(core.INVALID_ARGUMENT, "bad schema: invented_kind value present in response"), false},
+		{"internal_not_retryable_even_with_transient_wording", core.NewError(core.INTERNAL, "unexpected panic: connection reset while parsing"), false},
 		{"context_canceled_not_retryable", context.Canceled, false},
-		{"plain_502_retryable", errors.New("upstream returned 502"), true},
+		// CHAOS-3770 F2: an UNSTRUCTURED error (not *core.GenkitError -- what
+		// the real OpenAI SDK returns, since compat_oai/generate.go wraps the
+		// SDK's own error with plain fmt.Errorf rather than producing a
+		// GenkitError) must never be retried by sniffing its message for a
+		// transient-sounding substring. The OpenAI SDK's error Error() method
+		// embeds the raw provider response body verbatim
+		// (openai-go/internal/apierror.Error.Error()), so a NON-transient
+		// validation failure whose body happens to quote a word like
+		// "timeout" or contain "502" would otherwise be retried with the
+		// identical payload, violating the no-retry-same-input rule
+		// (operations.md). These two cases replace the old
+		// "plain_502_retryable=true" expectation, which encoded exactly that
+		// defect.
+		{"plain_502_not_retryable_unstructured", errors.New("upstream returned 502"), false},
+		{"unstructured_error_embedding_transient_word_not_retried", errors.New(`400 Bad Request: {"error":{"message":"Rejected prompt: request timeout budget of 30s exceeded for this input","type":"invalid_request_error","code":"invalid_prompt"}}`), false},
 		{"plain_opaque_not_retryable", errors.New("boom"), false},
 	}
 	for _, tc := range cases {
@@ -518,6 +690,32 @@ func TestRetryableUsesStructuredGenkitStatusOverStringHeuristics(t *testing.T) {
 				t.Fatalf("retryable(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRuntimeDoesNotRetryAnUnstructuredNonTransientErrorWithTheSamePayload is
+// the CHAOS-3770 F2 end-to-end probe: it drives the retry loop itself
+// (rather than calling retryable() directly) to prove that an unstructured,
+// non-transient generation failure whose message happens to contain a
+// transient-sounding word is called exactly once, never resubmitted with the
+// same encoded payload.
+func TestRuntimeDoesNotRetryAnUnstructuredNonTransientErrorWithTheSamePayload(t *testing.T) {
+	t.Parallel()
+	stub := &generatorStub{
+		interpretErr: errors.New(`400 Bad Request: {"error":{"message":"Rejected prompt: request timeout budget of 30s exceeded for this input","type":"invalid_request_error"}}`),
+	}
+	runtime := mustRuntime(t, stub, Config{MaxAttempts: 3})
+
+	_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+
+	if err == nil {
+		t.Fatal("InterpretQuestion() error = nil, want the classified generation failure")
+	}
+	if len(stub.requests) != 1 {
+		t.Fatalf("generator was called %d times, want exactly 1 -- a non-transient unstructured error must not be retried with the same payload", len(stub.requests))
+	}
+	if receipt.Attempts != 1 {
+		t.Fatalf("receipt.Attempts = %d, want 1", receipt.Attempts)
 	}
 }
 

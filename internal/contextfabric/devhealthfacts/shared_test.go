@@ -34,6 +34,13 @@ func timeAxisCases() []timeAxisCase {
 		{"continuous_integration", contextfabric.FactContinuousIntegration, ciRunSubject("run-1")},
 		{"deployments", contextfabric.FactDeployments, deploymentSubject("deploy-1")},
 		{"incidents", contextfabric.FactIncidents, incidentSubject("incident-1")},
+		{"metrics", contextfabric.FactMetrics, repoSubject("repo-1")},
+		{"health", contextfabric.FactHealth, repoSubject("repo-1")},
+		{"workload", contextfabric.FactWorkload, teamSubject("CHAOS")},
+		{"investment", contextfabric.FactInvestment, teamSubject("CHAOS")},
+		{"readiness", contextfabric.FactReadiness, teamSubject("CHAOS")},
+		{"operational_deficiencies", contextfabric.FactOperationalDeficiencies, teamSubject("CHAOS")},
+		{"source_health", contextfabric.FactSourceHealth, organizationSubject("org-1")},
 	}
 }
 

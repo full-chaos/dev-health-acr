@@ -106,7 +106,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		Window: request.config.RequestControls.Auth.Window, AttemptLimit: request.config.RequestControls.Auth.Requests,
 		FailureLimit: request.config.RequestControls.AuthFailures, MaxTrackedKeys: request.config.RequestControls.AuthTrackedKeys,
 	})
-	investigator, err := buildContextFabricInvestigator(request, postgres, clickhouse)
+	investigator, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse)
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric investigator: %w", err))
 	}
@@ -131,16 +131,13 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 // false, it returns (nil, nil) and the investigations route degrades to a
 // static 503 (see api.App.investigator / handleRuntimeUnavailable).
 //
-// The model runtime is deliberately left unwired here: no production
-// genkit.Genkit construction exists anywhere in this repo yet (provider
-// choice, credentials, and plugin selection are a decision for a follow-up
-// change, not this one). contextfabric.RuntimeQuestionInterpreter and
-// RuntimeAnswerSynthesizer both degrade gracefully to ErrModelUnavailable
-// per request when their Runtime field is nil, so the endpoint is still
-// registered, authorized, audited, and persists nothing incorrectly -- it
-// just cannot answer until a model provider is configured. That is the
-// same "safely degrades" contract the graph and canonical-fact layers use.
-func buildContextFabricInvestigator(request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents) (contextfabric.Investigator, error) {
+// The model runtime is a third, INDEPENDENT enablement (CHAOS-3770): it is
+// constructed by newContextFabricModelRuntime only when a provider is
+// configured, and stays nil otherwise. A nil model runtime does not stop
+// the investigator from being composed -- the graph and canonical-fact
+// layers are real and live either way, and every request degrades to a
+// clean ErrModelUnavailable 503 instead. See newContextFabricModelRuntime.
+func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents) (contextfabric.Investigator, error) {
 	if !request.config.EnableContextFabricInvestigations || !falkorgraph.Configured(os.LookupEnv) {
 		return nil, nil
 	}
@@ -163,9 +160,12 @@ func buildContextFabricInvestigator(request buildRequest, postgres postgresCompo
 	if err != nil {
 		return nil, fmt.Errorf("initialize investigation result store: %w", err)
 	}
-	// See the function doc comment: nil Runtime is intentional until a
-	// model provider is wired.
-	var modelRuntime contextfabric.ModelRuntime
+	// nil when no model provider is configured; see the function doc
+	// comment and newContextFabricModelRuntime.
+	modelRuntime, err := newContextFabricModelRuntime(ctx, os.LookupEnv)
+	if err != nil {
+		return nil, err
+	}
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime},
 		Graph:       graphReader,
