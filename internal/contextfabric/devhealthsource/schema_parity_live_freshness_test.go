@@ -55,7 +55,7 @@ func TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse(t *testing.T) {
 	}
 
 	rows, err := query.Query(ctx,
-		"SELECT table, name, type FROM system.columns WHERE database = currentDatabase() AND table IN {tables:Array(String)}",
+		"SELECT table, name, type, position FROM system.columns WHERE database = currentDatabase() AND table IN {tables:Array(String)}",
 		[]contextpacket.ClickHouseBinding{{Name: "tables", Value: tables}})
 	if err != nil {
 		t.Fatalf("query live system.columns: %v", err)
@@ -63,15 +63,19 @@ func TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse(t *testing.T) {
 	defer rows.Close()
 
 	liveTypes := map[string]map[string]string{}
+	livePositions := map[string]map[string]uint64{}
 	for rows.Next() {
 		var table, name, chType string
-		if err := rows.Scan(&table, &name, &chType); err != nil {
+		var position uint64
+		if err := rows.Scan(&table, &name, &chType, &position); err != nil {
 			t.Fatalf("scan system.columns row: %v", err)
 		}
 		if liveTypes[table] == nil {
 			liveTypes[table] = map[string]string{}
+			livePositions[table] = map[string]uint64{}
 		}
 		liveTypes[table][name] = chType
+		livePositions[table][name] = position
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate system.columns rows: %v", err)
@@ -90,8 +94,80 @@ func TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse(t *testing.T) {
 				continue
 			}
 			if actual != column.Type {
-				t.Errorf("live %s.%s is %q but productionColumns (schema_parity_integration_test.go) still says %q -- regenerate the snapshot, then check every devhealthsource producer's Scan() destination for %s.%s against the new type", table, column.Name, actual, column.Type, table, column.Name)
+				t.Errorf("live %s.%s is %q but devhealthschema still says %q -- regenerate the snapshot, then check every Scan() destination for %s.%s against the new type", table, column.Name, actual, column.Type, table, column.Name)
 			}
 		}
+		// CHAOS-3781 round-3 F3: POSITION as well as type. The
+		// declaration is stored in production position order so a
+		// rendered fixture is a positional replica; a column reordered
+		// upstream would silently make every positional seed land in the
+		// wrong column while every type still matched.
+		assertDeclaredOrderMatchesLive(t, table, columns, livePositions[table])
+	}
+
+	assertEngineAndSortingKeyAreFresh(t, ctx, query)
+}
+
+// assertDeclaredOrderMatchesLive checks the declaration lists a table's
+// columns in the same relative order production does.
+//
+// Relative, not absolute: the declaration deliberately carries only the
+// columns the readers use, so its positions are a subsequence of live's,
+// never equal to them.
+func assertDeclaredOrderMatchesLive(t *testing.T, table string, declared []devhealthschema.Column, livePositions map[string]uint64) {
+	t.Helper()
+	previous := uint64(0)
+	previousName := ""
+	for _, column := range declared {
+		position, ok := livePositions[column.Name]
+		if !ok {
+			continue // absence is already reported by the caller
+		}
+		if previousName != "" && position < previous {
+			t.Errorf("devhealthschema lists %s.%s before %s.%s, but live has them the other way round -- regenerate the snapshot in production position order, or every positional seed rendered from it lands in the wrong column",
+				table, previousName, table, column.Name)
+		}
+		previous, previousName = position, column.Name
+	}
+}
+
+// assertEngineAndSortingKeyAreFresh verifies the metadata that is NOT a
+// column type (round-3 F3).
+//
+// This exists because that metadata was originally hand-authored beside
+// probed types, and two entries were simply wrong -- disagreeing with live
+// and with in-repo comments that had it right. Guessing metadata beside
+// probed types reintroduces the drift the probed types exist to prevent,
+// so it is now verified by the same check.
+func assertEngineAndSortingKeyAreFresh(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client) {
+	t.Helper()
+	tables := make([]string, 0, len(devhealthschema.ProductionColumns))
+	for table := range devhealthschema.ProductionColumns {
+		tables = append(tables, table)
+	}
+	rows, err := query.Query(ctx,
+		"SELECT name, engine, sorting_key FROM system.tables WHERE database = currentDatabase() AND name IN {tables:Array(String)}",
+		[]contextpacket.ClickHouseBinding{{Name: "tables", Value: tables}})
+	if err != nil {
+		t.Fatalf("query live system.tables: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name, engine, sortingKey string
+		if err := rows.Scan(&name, &engine, &sortingKey); err != nil {
+			t.Fatalf("scan system.tables row: %v", err)
+		}
+		if declared, ok := devhealthschema.Engines[name]; ok && declared != engine {
+			t.Errorf("live %s is ENGINE %q but devhealthschema says %q -- a fixture with the wrong engine either rejects FINAL or dedups rows a test seeded", name, engine, declared)
+		}
+		if declared, ok := devhealthschema.OrderBy[name]; ok {
+			if want := "(" + sortingKey + ")"; declared != want {
+				t.Errorf("live %s sorts on %s but devhealthschema says %s -- regenerate from system.tables rather than authoring it", name, want, declared)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate system.tables rows: %v", err)
 	}
 }

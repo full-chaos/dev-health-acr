@@ -172,6 +172,7 @@ var ProductionColumns = map[string][]Column{
 	},
 	"operational_service_repository_mappings": {
 		{Name: "org_id", Type: "String"},
+		{Name: "id", Type: "String"},
 		{Name: "service_id", Type: "String"},
 		{Name: "repo_id", Type: "Nullable(UUID)"},
 		{Name: "is_active", Type: "UInt8"},
@@ -217,6 +218,7 @@ var ProductionColumns = map[string][]Column{
 		{Name: "deployment_id", Type: "String"},
 		{Name: "incident_id", Type: "String"},
 		{Name: "repo_id", Type: "Nullable(UUID)"},
+		{Name: "source", Type: "LowCardinality(String)"},
 		{Name: "observed_at", Type: "DateTime64(3, 'UTC')"},
 	},
 	"work_item_dependencies": {
@@ -241,50 +243,58 @@ var ProductionColumns = map[string][]Column{
 	},
 }
 
-// OrderBy gives each table a sort key for its CREATE TABLE. Tables absent
-// here fall back to the first declared column, which is enough for a
-// fixture that only needs to accept and return rows.
+// OrderBy is each table's LIVE sorting key, read from system.tables --
+// not authored.
+//
+// CHAOS-3781 round-3 F3: these were hand-written at first and two of them
+// were simply wrong (estimate_coverage_metrics_daily and
+// capacity_forecasts), disagreeing with live AND with the in-repo comments
+// in readiness.go and workload.go that had it right all along. Guessing
+// metadata beside probed types reintroduces exactly the drift the probed
+// types exist to prevent, so every value here comes from the same query
+// the freshness check re-runs.
 var OrderBy = map[string]string{
-	"repos":                                   "(org_id, id)",
-	"work_items":                              "(org_id, work_item_id)",
+	"backfill_log":                            "(org_id, job_id, chunk_index)",
+	"capacity_forecasts":                      "(org_id, forecast_id)",
+	"ci_pipeline_runs":                        "(org_id, repo_id, run_id)",
+	"compounding_risk_daily":                  "(org_id, scope, scope_id, day, computed_at)",
+	"deployments":                             "(org_id, repo_id, deployment_id)",
+	"estimate_coverage_metrics_daily":         "(org_id, day, provider, work_scope_id, ifNull(team_id, ''))",
+	"git_pull_request_reviews":                "(org_id, repo_id, number, review_id)",
 	"git_pull_requests":                       "(org_id, repo_id, number)",
-	"git_pull_request_reviews":                "(org_id, review_id)",
-	"ci_pipeline_runs":                        "(org_id, run_id)",
-	"deployments":                             "(org_id, deployment_id)",
+	"investment_metrics_daily":                "(org_id, day, team_id, investment_area, project_stream)",
 	"operational_incidents":                   "(org_id, id)",
-	"work_item_dependencies":                  "(org_id, source_work_item_id, target_work_item_id)",
-	"repo_metrics_daily":                      "(org_id, repo_id, day)",
-	"compounding_risk_daily":                  "(org_id, scope, scope_id, day)",
-	"estimate_coverage_metrics_daily":         "(org_id, team_id, day)",
-	"capacity_forecasts":                      "(org_id, team_id, forecast_id)",
-	"investment_metrics_daily":                "(org_id, team_id, day)",
+	"operational_service_repository_mappings": "(org_id, id)",
 	"recommendations_daily":                   "(org_id, team_id, rule_id, window_end)",
-	"backfill_log":                            "(org_id, job_id)",
-	"operational_service_repository_mappings": "(org_id, service_id, repo_id)",
-	"work_graph_deployment_incident_edges":    "(org_id, edge_id)",
+	"repo_metrics_daily":                      "(org_id, repo_id, day)",
+	"repos":                                   "(org_id, id)",
+	"work_graph_deployment_incident_edges":    "(org_id, deployment_id, incident_id, source)",
+	"work_item_dependencies":                  "(org_id, source_work_item_id, target_work_item_id, relationship_type)",
+	"work_items":                              "(org_id, repo_id, work_item_id)",
 }
 
-// Engines is each table's production engine, read from system.tables.
+// Engines is each table's LIVE engine, read from system.tables (round-3
+// F3: probed, not authored -- see OrderBy).
 // The readers query the ReplacingMergeTree tables with FINAL, which is a
 // query error against a plain MergeTree, so this cannot be simplified.
 var Engines = map[string]string{
-	"repos":                                   "ReplacingMergeTree",
-	"work_items":                              "ReplacingMergeTree",
-	"git_pull_requests":                       "ReplacingMergeTree",
-	"git_pull_request_reviews":                "ReplacingMergeTree",
-	"ci_pipeline_runs":                        "ReplacingMergeTree",
-	"deployments":                             "ReplacingMergeTree",
-	"operational_incidents":                   "ReplacingMergeTree",
-	"work_item_dependencies":                  "ReplacingMergeTree",
-	"estimate_coverage_metrics_daily":         "ReplacingMergeTree",
+	"backfill_log":                            "MergeTree",
 	"capacity_forecasts":                      "ReplacingMergeTree",
+	"ci_pipeline_runs":                        "ReplacingMergeTree",
+	"compounding_risk_daily":                  "MergeTree",
+	"deployments":                             "ReplacingMergeTree",
+	"estimate_coverage_metrics_daily":         "ReplacingMergeTree",
+	"git_pull_request_reviews":                "ReplacingMergeTree",
+	"git_pull_requests":                       "ReplacingMergeTree",
+	"investment_metrics_daily":                "MergeTree",
+	"operational_incidents":                   "ReplacingMergeTree",
+	"operational_service_repository_mappings": "ReplacingMergeTree",
 	"recommendations_daily":                   "ReplacingMergeTree",
 	"repo_metrics_daily":                      "MergeTree",
-	"compounding_risk_daily":                  "MergeTree",
-	"investment_metrics_daily":                "MergeTree",
-	"backfill_log":                            "MergeTree",
-	"operational_service_repository_mappings": "ReplacingMergeTree",
+	"repos":                                   "ReplacingMergeTree",
 	"work_graph_deployment_incident_edges":    "ReplacingMergeTree",
+	"work_item_dependencies":                  "ReplacingMergeTree",
+	"work_items":                              "ReplacingMergeTree",
 }
 
 // DDL renders CREATE TABLE statements for the named tables, in a

@@ -57,7 +57,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	// M1): investment_metrics_daily has no per-row unique id, so two rows
 	// could share both. cityHash64 of the value columns is the final
 	// tiebreaker -- arbitrary among an exact tie, but stable.
-	statement := withRowLimit(`SELECT team_id, investment_area, project_stream, toString(day), toInt64(delivery_units), toInt64(work_items_completed), toInt64(prs_merged), toInt64(churn_loc), cycle_p50_hours
+	statement := withRowLimit(`SELECT team_id, investment_area, project_stream, toString(day), toInt64(delivery_units), toInt64(work_items_completed), toInt64(prs_merged), churn_loc, cycle_p50_hours
 FROM (
 	SELECT team_id, investment_area, project_stream, day, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours,
 		row_number() OVER (PARTITION BY team_id, investment_area, project_stream ORDER BY day DESC, computed_at DESC, cityHash64(tuple(delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours)) DESC) AS rn
@@ -66,13 +66,24 @@ FROM (
 )
 WHERE rn = 1`)
 	rowCount := 0
+	omittedUnrepresentable := false
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var teamID, investmentArea, projectStream, day string
-		var deliveryUnits, workItemsCompleted, prsMerged, churnLOC int64
+		var deliveryUnits, workItemsCompleted, prsMerged int64
+		// churn_loc is UInt64 and is NOT wrapped with toInt64 in SQL
+		// (round-3 F2): the wrap turned a value above MaxInt64 negative,
+		// and FactValue accepts negatives, so it would have reached a
+		// public answer as a wrong number. Range-checked here instead.
+		var rawChurnLOC uint64
 		var cycleP50Hours float64
-		if err := row.Scan(&teamID, &investmentArea, &projectStream, &day, &deliveryUnits, &workItemsCompleted, &prsMerged, &churnLOC, &cycleP50Hours); err != nil {
+		if err := row.Scan(&teamID, &investmentArea, &projectStream, &day, &deliveryUnits, &workItemsCompleted, &prsMerged, &rawChurnLOC, &cycleP50Hours); err != nil {
 			return err
+		}
+		churnLOC, representable := representableInt64(rawChurnLOC)
+		if !representable {
+			omittedUnrepresentable = true
+			return nil
 		}
 		subject, ok := bySubject[teamID]
 		if !ok {
@@ -100,5 +111,8 @@ WHERE rn = 1`)
 		return contextfabric.FactProviderResult{}, readFailure("query team investment", scanErr)
 	}
 	state, retentionReason := timeBound.retentionState(rowCount)
+	if omittedUnrepresentable && retentionReason == "" {
+		retentionReason = unrepresentableValueReason
+	}
 	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

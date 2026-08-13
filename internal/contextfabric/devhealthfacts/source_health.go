@@ -80,7 +80,7 @@ func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.
 	// scan shape stays independent of each column's exact source width --
 	// the same convention every other numeric projection in this package
 	// already uses (toInt64(commits_count), toInt64(backlog_size)).
-	statement := withRowLimit(`SELECT provider, status, toInt64(items_synced), toInt64(duration_ms), error_message, toString(created_at)
+	statement := withRowLimit(`SELECT provider, status, toInt64(items_synced), duration_ms, error_message, toString(created_at)
 FROM (
 	SELECT provider, status, items_synced, duration_ms, error_message, created_at,
 		row_number() OVER (PARTITION BY provider ORDER BY created_at DESC, job_id DESC, chunk_index DESC) AS rn
@@ -89,12 +89,22 @@ FROM (
 )
 WHERE rn = 1`)
 	rowCount := 0
+	omittedUnrepresentable := false
 	scanErr := p.facts.query(ctx, statement, orgID, orgSubjectIDs, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var provider, status, errorMessage, createdAt string
-		var itemsSynced, durationMS int64
-		if err := row.Scan(&provider, &status, &itemsSynced, &durationMS, &errorMessage, &createdAt); err != nil {
+		var itemsSynced int64
+		// duration_ms is UInt64 and is NOT wrapped with toInt64 in SQL
+		// (round-3 F2): the wrap is what silently turned a value above
+		// MaxInt64 negative. Scanned raw and range-checked here instead.
+		var rawDurationMS uint64
+		if err := row.Scan(&provider, &status, &itemsSynced, &rawDurationMS, &errorMessage, &createdAt); err != nil {
 			return err
+		}
+		durationMS, representable := representableInt64(rawDurationMS)
+		if !representable {
+			omittedUnrepresentable = true
+			return nil
 		}
 		fields := map[string]contextfabric.FactValue{
 			"provider":       stringOrNull(provider),
@@ -116,5 +126,8 @@ WHERE rn = 1`)
 		return contextfabric.FactProviderResult{}, readFailure("query source health", scanErr)
 	}
 	state, retentionReason := timeBound.retentionState(rowCount)
+	if omittedUnrepresentable && retentionReason == "" {
+		retentionReason = unrepresentableValueReason
+	}
 	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

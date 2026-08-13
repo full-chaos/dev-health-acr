@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -98,6 +99,35 @@ func (b factTimeBound) retentionState(rowCount int) (contextfabric.SourceState, 
 		return contextfabric.SourceAvailable, ""
 	}
 	return contextfabric.SourceNoData, outOfRetentionReason
+}
+
+// unrepresentableValueReason names a fact omitted because a source column
+// held a value this reader cannot represent (CHAOS-3781 round-3 F2).
+//
+// Two columns are UInt64 -- backfill_log.duration_ms and
+// investment_metrics_daily.churn_loc -- and every other numeric column
+// these providers read is UInt32, which fits int64 by construction. A
+// UInt64 above MaxInt64 wrapped NEGATIVE through toInt64, and
+// FactValue.Validate accepts negatives, so it would have reached a public
+// answer as a silently wrong value. The schema parity guard cannot catch
+// this: it proves a scan does not FAIL, not that a value is right.
+//
+// "A duration cannot exceed 292 million years" is a domain assumption, not
+// a type guarantee -- the same distinction health.go already draws about
+// its own sentinel -- so the value is range-checked rather than assumed,
+// and an out-of-range row is OMITTED rather than reported wrong. The rest
+// of the answer survives, as §8.6 requires.
+//
+// A fixed literal, never interpolating the offending value.
+const unrepresentableValueReason = "devhealthfacts: a source value exceeded the representable range and its fact was omitted rather than reported wrong"
+
+// representableInt64 converts an unsigned source value, reporting false
+// when it cannot be represented as a signed int64.
+func representableInt64(value uint64) (int64, bool) {
+	if value > math.MaxInt64 {
+		return 0, false
+	}
+	return int64(value), true
 }
 
 // factTimeBound is a resolved valid-time window for one provider query.
