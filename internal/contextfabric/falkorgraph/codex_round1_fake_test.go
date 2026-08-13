@@ -246,6 +246,18 @@ func TestDiscoverContextFromBlockedSideStillSurfacesBLOCKSNotAnInvertedName(t *t
 			if params["id"] != "work_target" {
 				return nil, nil
 			}
+			// L5 (CHAOS-3779 codex round-1): assert the query text itself,
+			// not just serve a canned response -- without this, the test
+			// would still pass even if edgesOfNode's real Cypher regressed
+			// to the outgoing-only branch and dropped the incoming
+			// "(other)-[r]->(n)" branch entirely, since the fake never
+			// executes real Cypher and would happily serve this row for
+			// ANY query containing the literal substring "UNION". This
+			// binds the test to the actual query shape, not just its
+			// keyword.
+			if !strings.Contains(cypher, ")-[r:"+labelRelation+"]->(n:"+labelSubject) {
+				t.Fatalf("edgesOfNode's query text does not contain the incoming UNION branch (other)-[r]->(n) -- this test cannot prove direction safety against a query that dropped it: %s", cypher)
+			}
 			// The real edgesOfNode UNION's second branch --
 			// (other)-[r]->(n) where n is the queried node -- reports
 			// srcKind/srcId/dstKind/dstId from the edge's TRUE stored
@@ -284,6 +296,76 @@ func TestDiscoverContextFromBlockedSideStillSurfacesBLOCKSNotAnInvertedName(t *t
 	}
 	if len(result.DriverCandidates) != 1 || result.DriverCandidates[0].Standing != contextfabric.DriverPrincipal {
 		t.Fatalf("DriverCandidates = %#v, want exactly one principal-standing driver -- BLOCKS must still be recognized when discovered from the blocked side", result.DriverCandidates)
+	}
+}
+
+// TestDiscoverContextMarksCoveragePartialOnUnknownRelationshipType is
+// CHAOS-3779 codex round-1 finding H1's regression test: before this,
+// AdmitEdges dropped an edge whose Type failed the closed
+// ContextFabricRelationshipType vocabulary with the same silent `continue`
+// as any other malformed edge -- no metric, no degraded-coverage signal.
+// That is the H4 failure shape (silent admission failure) relocated to the
+// READ path: a write-path producer bug, a partial rollback leaving legacy
+// free-form data, or a future contract downgrade could all put an
+// out-of-vocabulary type in the graph, and a caller would have no way to
+// tell "this investigation is honestly complete" from "this investigation
+// silently lost material."
+//
+// This plants one edge with relation_type "LEGACY_UNKNOWN_TYPE" (never a
+// member of the closed vocabulary) reachable from the origin, alongside no
+// other edges, and proves DiscoverContext returns a Partial=true result
+// with a named "unknown_relationship_type:1" degraded reason -- not a
+// clean, empty-but-successful result indistinguishable from "the graph
+// genuinely has nothing to say here."
+func TestDiscoverContextMarksCoveragePartialOnUnknownRelationshipType(t *testing.T) {
+	origin := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_legacy", Label: "Legacy Work"}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			if params["id"] != "work_legacy" {
+				return nil, nil
+			}
+			return []row{{
+				"r": &edge{Properties: map[string]interface{}{
+					propRelationType: "LEGACY_UNKNOWN_TYPE", propRelationshipID: "relationship_legacy_1",
+					propEvidenceRefs: []string{"evidence_legacy_1"},
+				}},
+				"srcKind": "work_item", "srcId": "work_legacy", "dstKind": "work_item", "dstId": "work_other",
+			}}, nil
+		default: // nodeByKindID
+			switch params["id"] {
+			case "work_legacy":
+				return []row{fakeSubjectNodeRow("work_item", "work_legacy", "Legacy Work")}, nil
+			case "work_other":
+				return []row{fakeSubjectNodeRow("work_item", "work_other", "Other Work")}, nil
+			default:
+				return nil, nil
+			}
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1"}
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, fakeDiscoveryRequest(origin, 10))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v, want a degraded-but-successful result", err)
+	}
+	if len(result.Paths) != 0 {
+		t.Fatalf("result.Paths = %#v, want the out-of-vocabulary edge excluded from the admitted paths", result.Paths)
+	}
+	if !result.Coverage.Partial {
+		t.Fatalf("Coverage = %#v, want Partial=true -- an unknown relationship type must not present as clean, complete coverage", result.Coverage)
+	}
+	found := false
+	for _, reason := range result.Coverage.DegradedReasons {
+		if reason == "unknown_relationship_type:1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Coverage.DegradedReasons = %#v, want \"unknown_relationship_type:1\"", result.Coverage.DegradedReasons)
 	}
 }
 

@@ -1,11 +1,13 @@
 package graphrank
 
 import (
+	"errors"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -47,6 +49,24 @@ type AdmitEdgesResult struct {
 	Drivers          []contextfabric.DriverJudgment
 	EvidenceRefIDs   []string
 	FactRequirements []contextfabric.FactRequirement
+	// DroppedUnknownRelationshipTypeCount and
+	// DroppedUnknownRelationshipTypeNames record every candidate edge
+	// AdmitEdges excluded because its Type failed
+	// ContextFabricRelationshipType's closed vocabulary (CHAOS-3779 codex
+	// round-1 finding H1). Before this, such an edge was dropped by the
+	// same generic `path.Validate() != nil` continue as any other
+	// malformed edge -- no metric, no degraded-coverage signal -- which is
+	// the H4 silent-admission-failure shape, just relocated to the READ
+	// path (a write-path producer bug, a partial rollback leaving legacy
+	// data, or a future contract downgrade could all put an
+	// out-of-vocabulary type in the graph). AdmitEdges stays pure (no I/O,
+	// per its own doc comment): it only counts and names the dropped
+	// types, deduplicated and sorted for determinism. The caller (e.g.
+	// falkorgraph.DiscoverContext, the only I/O boundary in this call
+	// chain) is responsible for marking Coverage.Partial/DegradedReasons
+	// and for logging -- see that function's doc comment.
+	DroppedUnknownRelationshipTypeCount int
+	DroppedUnknownRelationshipTypeNames []string
 }
 
 // AdmitEdges applies the evidence-budget-bounded admission decision to an
@@ -69,6 +89,8 @@ func AdmitEdges(orgID string, edges []ResolvedEdge, options contextfabric.Invest
 	drivers := make([]contextfabric.DriverJudgment, 0, len(edges))
 	evidenceSet := make(map[string]struct{})
 	requirements := make(map[contextfabric.FactKind]contextfabric.FactRequirement)
+	droppedUnknownCount := 0
+	droppedUnknownSeen := make(map[string]struct{})
 	for _, edge := range edges {
 		if edge.From == edge.To || isInternal(edge.From) || isInternal(edge.To) {
 			continue
@@ -108,6 +130,18 @@ func AdmitEdges(orgID string, edges []ResolvedEdge, options contextfabric.Invest
 			WhyRelevant: edgeFact(edge), EvidenceRefIDs: evidence, Truncated: false,
 		}
 		if err := path.Validate(); err != nil {
+			// H1 (CHAOS-3779 codex round-1): an edge whose Type is outside
+			// the closed relationship-type vocabulary must not vanish
+			// silently -- count it and remember its (normalized) name so
+			// the caller can mark Coverage.Partial and log it, exactly
+			// like a failed endpoint lookup already does. Every OTHER
+			// path.Validate() failure (a malformed subject, an oversized
+			// field, ...) still just continues, unrecorded -- unknown
+			// relationship type is the one call-out this issue owns.
+			if errors.Is(err, contractsv1.ErrContextFabricUnknownRelationshipType) {
+				droppedUnknownCount++
+				droppedUnknownSeen[NormalizeRelation(edge.Name)] = struct{}{}
+			}
 			continue
 		}
 		// N3: the shared evidence set is only mutated once the path this
@@ -152,7 +186,15 @@ func AdmitEdges(orgID string, edges []ResolvedEdge, options contextfabric.Invest
 		evidence = append(evidence, id)
 	}
 	sort.Strings(evidence)
-	return AdmitEdgesResult{Paths: paths, Drivers: drivers, EvidenceRefIDs: evidence, FactRequirements: factRequirements}
+	droppedUnknownNames := make([]string, 0, len(droppedUnknownSeen))
+	for name := range droppedUnknownSeen {
+		droppedUnknownNames = append(droppedUnknownNames, name)
+	}
+	sort.Strings(droppedUnknownNames)
+	return AdmitEdgesResult{
+		Paths: paths, Drivers: drivers, EvidenceRefIDs: evidence, FactRequirements: factRequirements,
+		DroppedUnknownRelationshipTypeCount: droppedUnknownCount, DroppedUnknownRelationshipTypeNames: droppedUnknownNames,
+	}
 }
 
 // SortEdgesByRelevance sorts edges descending by ResultConfidence, tie-broken
