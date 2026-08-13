@@ -54,6 +54,31 @@ func TestResolveSubjectsTruncatedExactLabelMatchDoesNotAutoCommit(t *testing.T) 
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("ResolveSubjects() committed %#v -- an exact label match surviving a TRUNCATED search must not auto-commit at Confidence=1.0 just because its name happened to equal the search term (Codex round-3 review, escape path a)", resolution.Committed)
 	}
+	// Positive assertion (Codex round-4 review): "nothing committed" alone
+	// passes vacuously if the truncated survivor never became a candidate
+	// at all (e.g. a fake-conn bug silently returning nothing). The
+	// truncation-surviving "widget_subject" -- with NodeCandidate's exact
+	// label-match override still forcing its Confidence to 1.0 (this fix
+	// deliberately does NOT suppress that override; it only stops the
+	// RESOLUTION from trusting an inflated confidence under truncation) --
+	// must actually be PRESENT, in the ambiguous state, not silently
+	// dropped.
+	var widgetCandidate *contextfabric.SubjectCandidate
+	for i := range resolution.Candidates {
+		if resolution.Candidates[i].Subject.CanonicalID == "widget_subject" {
+			widgetCandidate = &resolution.Candidates[i]
+			break
+		}
+	}
+	if widgetCandidate == nil {
+		t.Fatalf("ResolveSubjects() candidates = %#v, want the truncation-surviving widget_subject present -- \"nothing committed\" must not pass vacuously because no candidate was found at all", resolution.Candidates)
+	}
+	if widgetCandidate.Confidence != 1 {
+		t.Fatalf("widget_subject confidence = %v, want exactly 1 (NodeCandidate's exact label-match override still fires -- this fix gates the COMMIT decision, not the override itself)", widgetCandidate.Confidence)
+	}
+	if widgetCandidate.State != contextfabric.ResolutionAmbiguous {
+		t.Fatalf("widget_subject State = %v, want ResolutionAmbiguous", widgetCandidate.State)
+	}
 }
 
 // TestResolveSubjectsTruncatedThenMergedCandidateDoesNotAutoCommit is the
@@ -101,5 +126,33 @@ func TestResolveSubjectsTruncatedThenMergedCandidateDoesNotAutoCommit(t *testing
 	}
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("ResolveSubjects() committed %#v -- a subject whose higher-confidence entry came from an UNtruncated call must not auto-commit when a DIFFERENT call in the SAME resolution was truncated (Codex round-3 review, escape path b: truncation is a property of the resolution, not of one candidate's score)", resolution.Committed)
+	}
+	// Positive assertion (Codex round-4 review): "nothing committed" alone
+	// passes vacuously if the merge never actually happened (e.g. a fake
+	// bug returning empty pools for both queries). merged_subject must
+	// actually be PRESENT -- confirming the merge DID keep call 2's
+	// higher-confidence (0.75, untruncated, full 2-of-2 coverage) entry,
+	// which is exactly what makes escape path (b) a real bug to guard
+	// against: this candidate's OWN confidence gives no hint that a
+	// sibling call was truncated. other_subject (call 1's competitor,
+	// dropped by the LIMIT trim) must NOT appear as a candidate at all --
+	// confirming it was truly cut, not merely outranked.
+	var mergedCandidate *contextfabric.SubjectCandidate
+	for i := range resolution.Candidates {
+		if resolution.Candidates[i].Subject.CanonicalID == "other_subject" {
+			t.Fatalf("ResolveSubjects() candidates = %#v, want other_subject (dropped by the LIMIT trim) absent, not merely un-committed", resolution.Candidates)
+		}
+		if resolution.Candidates[i].Subject.CanonicalID == "merged_subject" {
+			mergedCandidate = &resolution.Candidates[i]
+		}
+	}
+	if mergedCandidate == nil {
+		t.Fatalf("ResolveSubjects() candidates = %#v, want merged_subject present -- \"nothing committed\" must not pass vacuously because the merge produced no candidate at all", resolution.Candidates)
+	}
+	if mergedCandidate.Confidence != 0.75 {
+		t.Fatalf("merged_subject confidence = %v, want exactly 0.75 (call 2's untruncated, full-coverage entry -- confirming the merge kept it over call 1's floor-capped 0.50 entry, which is the exact condition escape path (b) needs)", mergedCandidate.Confidence)
+	}
+	if mergedCandidate.State != contextfabric.ResolutionAmbiguous {
+		t.Fatalf("merged_subject State = %v, want ResolutionAmbiguous", mergedCandidate.State)
 	}
 }
