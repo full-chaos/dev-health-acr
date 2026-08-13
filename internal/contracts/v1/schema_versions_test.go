@@ -41,6 +41,10 @@ func TestAllSchemaVersionsIncludesEveryDeclaredSchemaConstant(t *testing.T) {
 		MCPContextForTaskResponseSchema,
 		MCPSourceEvidenceRequestSchema,
 		MCPSourceEvidenceResponseSchema,
+		MCPInvestigateQuestionRequestSchema,
+		MCPInvestigateQuestionResponseSchema,
+		MCPInvestigationResultRequestSchema,
+		MCPInvestigationResultResponseSchema,
 		MCPRecordEpisodeRequestSchema,
 		MCPRecordEpisodeResponseSchema,
 	}

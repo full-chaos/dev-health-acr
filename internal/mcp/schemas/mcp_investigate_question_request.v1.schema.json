@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_investigate_question_request.v1.schema.json",
+  "title": "ACR MCP investigate_question Request v1",
+  "description": "Input for the investigate_question MCP tool. Only question is required; scope, budget, conversation, and prior_subject_receipts are optional. No schema_version is required (tool identity is established by the MCP call itself). There is deliberately NO time-axis field: the engine answers only about current state today, and an option that is silently ignored is a lie told in a schema. There are deliberately no subject hints: scope narrows the search by identifier without asserting what any subject is. include_full_result is bounded by the same byte budget as the rest of the response -- when the canonical result does not fit, it is DROPPED and projection_budget.full_result_omitted is set, rather than any document being truncated into invalid JSON; the projection stays complete and result_id remains available through the investigation_result tool.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "question"
+  ],
+  "properties": {
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8000
+    },
+    "conversation": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ConversationTurn"
+      },
+      "maxItems": 50
+    },
+    "prior_subject_receipts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/BoundSubjectReceipt"
+      },
+      "maxItems": 20
+    },
+    "scope": {
+      "$ref": "#/$defs/InvestigationScope"
+    },
+    "budget": {
+      "$ref": "#/$defs/InvestigationBudget"
+    },
+    "allow_clarification": {
+      "type": "boolean"
+    },
+    "include_full_result": {
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "ConversationTurn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "turn_id",
+        "role",
+        "content",
+        "created_at"
+      ],
+      "properties": {
+        "turn_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "user",
+            "assistant"
+          ]
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 12000
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "BoundSubjectReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result_id",
+        "receipt_id"
+      ],
+      "properties": {
+        "result_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        }
+      }
+    },
+    "InvestigationScope": {
+      "description": "Bounds the search by identifier. It narrows what may be considered without asserting what any subject is.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository_slugs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^[^|]*$"
+          },
+          "maxItems": 200,
+          "uniqueItems": true
+        },
+        "project_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^|]*$"
+          },
+          "maxItems": 200,
+          "uniqueItems": true
+        },
+        "team_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^|]*$"
+          },
+          "maxItems": 200,
+          "uniqueItems": true
+        }
+      }
+    },
+    "InvestigationBudget": {
+      "description": "Optionally narrows the answer budget. Any omitted field takes the sidecar's agent-appropriate default, and every field is then clamped to what the hosted API advertises for this credential, so a caller can never request more than the service grants.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_drivers": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "max_cohort_members": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 250
+        },
+        "max_evidence_refs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "max_serialized_bytes": {
+          "type": "integer",
+          "minimum": 8192,
+          "maximum": 1048576
+        }
+      }
+    }
+  }
+}

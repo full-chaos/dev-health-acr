@@ -31,6 +31,10 @@ var AllSchemaVersions = []string{
 	MCPContextForTaskResponseSchema,
 	MCPSourceEvidenceRequestSchema,
 	MCPSourceEvidenceResponseSchema,
+	MCPInvestigateQuestionRequestSchema,
+	MCPInvestigateQuestionResponseSchema,
+	MCPInvestigationResultRequestSchema,
+	MCPInvestigationResultResponseSchema,
 	MCPRecordEpisodeRequestSchema,
 	MCPRecordEpisodeResponseSchema,
 }

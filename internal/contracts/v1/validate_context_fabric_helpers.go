@@ -236,6 +236,31 @@ func validateTimeRange(observed, validFrom, validTo *time.Time) error {
 	return nil
 }
 
+// optionalEvidenceRefs validates an evidence reference list on a field the
+// JSON Schema does NOT mark required and that carries `omitempty` in Go.
+// For those fields nil and empty mean the same thing: "none".
+//
+// This exists because boundedEvidenceRefs rejects nil outright, which is
+// correct for a required field and wrong for an optional one. An optional
+// empty slice serializes to an OMITTED field and decodes back as nil, so a
+// validator demanding non-nil would reject the service's own valid output
+// the moment anything re-read it -- and InvestigationResultStore.Get
+// re-validates on every read, so a stored result carrying a candidate with
+// no evidence refs would fail to load. That is the same defect already
+// recorded for Coverage.DegradedReasons (CHAOS-3755 finding M2), reached
+// through a different field.
+//
+// Kept separate from boundedEvidenceRefs deliberately: the REQUIRED
+// evidence fields (DriverJudgment, Finding, RelationshipPath, and the edge
+// shapes) must keep rejecting nil, because for them a missing list really
+// is invalid.
+func optionalEvidenceRefs(values []string, maximum int) bool {
+	if values == nil {
+		return true
+	}
+	return boundedEvidenceRefs(values, maximum, true)
+}
+
 func boundedEvidenceRefs(values []string, maximum int, allowEmpty bool) bool {
 	if values == nil || len(values) > maximum || (!allowEmpty && len(values) == 0) {
 		return false

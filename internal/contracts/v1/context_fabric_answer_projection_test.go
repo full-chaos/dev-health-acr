@@ -258,3 +258,87 @@ func TestProjectionBudgetTruncationIsIfAndOnlyIf(t *testing.T) {
 		t.Errorf("validator rejected an honestly declared truncation: %v", err)
 	}
 }
+
+// TestOptionalEvidenceRefsSurviveJSONRoundTripRevalidation is the probe for
+// a validator/schema mismatch found while wiring the CHAOS-3746 answer
+// surface.
+//
+// SubjectCandidate.EvidenceRefIDs and CohortMember.EvidenceRefIDs are
+// OPTIONAL in the JSON Schema (absent from each shape's required list) and
+// carry `omitempty` in Go. A legitimately empty, non-nil slice therefore
+// serializes to an omitted field and decodes back as nil. The Go validator
+// used to demand non-nil for both, so the service's own valid output failed
+// revalidation the moment anything re-read it -- and
+// InvestigationResultStore.Get revalidates on EVERY read, which means a
+// stored result carrying a candidate or cohort member with no evidence
+// references could not be loaded back at all.
+//
+// This is the same class of defect already recorded for
+// Coverage.DegradedReasons (CHAOS-3755 finding M2), reached through two
+// different fields.
+func TestOptionalEvidenceRefsSurviveJSONRoundTripRevalidation(t *testing.T) {
+	project := ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	team := ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team_a", Label: "Team A"}
+
+	candidate := ContextFabricSubjectCandidate{
+		ReceiptID: "receipt_12345678", Subject: project, State: ContextFabricResolutionCommitted,
+		MatchReasons: []string{"exact label"}, Confidence: 1, EvidenceRefIDs: []string{},
+	}
+	member := ContextFabricCohortMember{
+		Subject: team, Rank: 1, InclusionReasons: []string{"highest load"}, EvidenceRefIDs: []string{},
+	}
+	for name, value := range map[string]any{"subject_candidate": candidate, "cohort_member": member} {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			switch value.(type) {
+			case ContextFabricSubjectCandidate:
+				var back ContextFabricSubjectCandidate
+				if err := json.Unmarshal(encoded, &back); err != nil {
+					t.Fatalf("unmarshal: %v", err)
+				}
+				if back.EvidenceRefIDs != nil {
+					t.Fatalf("expected the omitted field to decode as nil, got %v", back.EvidenceRefIDs)
+				}
+				if err := back.Validate(); err != nil {
+					t.Errorf("valid candidate rejected after a JSON round trip: %v", err)
+				}
+			case ContextFabricCohortMember:
+				var back ContextFabricCohortMember
+				if err := json.Unmarshal(encoded, &back); err != nil {
+					t.Fatalf("unmarshal: %v", err)
+				}
+				if back.EvidenceRefIDs != nil {
+					t.Fatalf("expected the omitted field to decode as nil, got %v", back.EvidenceRefIDs)
+				}
+				if err := back.Validate(); err != nil {
+					t.Errorf("valid cohort member rejected after a JSON round trip: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestRequiredEvidenceRefsStillRejectNil guards the other side of that fix:
+// relaxing the OPTIONAL fields must not have relaxed the required ones,
+// where a missing evidence list really is invalid.
+func TestRequiredEvidenceRefsStillRejectNil(t *testing.T) {
+	project := ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	driver := ContextFabricDriverJudgment{
+		DriverID: "driver_12345678", Standing: ContextFabricDriverPrincipal, Category: "narrative",
+		Title: "Title", Summary: "Summary.", AffectedSubjects: []ContextFabricSubjectRef{project},
+		EvidenceRefIDs: nil, Derivation: ContextFabricDerivationRuleInferred,
+		EpistemicStatus: ContextFabricEpistemicInferred, Confidence: 0.5, Current: true,
+	}
+	if err := driver.Validate(); err == nil {
+		t.Error("driver with nil required evidence references was accepted")
+	}
+	finding := ContextFabricFinding{
+		FindingID: "finding_12345678", Kind: "required_acceptance", Summary: "Summary.", EvidenceRefIDs: nil,
+	}
+	if err := finding.Validate(); err == nil {
+		t.Error("finding with nil required evidence references was accepted")
+	}
+}

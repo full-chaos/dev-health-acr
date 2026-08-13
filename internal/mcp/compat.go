@@ -30,6 +30,19 @@ var ourSchemaVersions = []string{
 	contractsv1.ContextPacketItemSchema,
 	contractsv1.EvidenceRefSchema,
 	contractsv1.ExpandedEvidenceSchema,
+	// CHAOS-3746 answer surface. The investigation contracts belong in
+	// this negotiated set for exactly the reason the consumed shapes
+	// above do: the sidecar decodes a ContextFabricInvestigationResult
+	// and re-serves a ContextFabricAnswerProjection derived from it, so
+	// a hosted API that regressed support for either must fail this
+	// startup gate rather than failing opaquely on the first answer.
+	contractsv1.MCPInvestigateQuestionRequestSchema,
+	contractsv1.MCPInvestigateQuestionResponseSchema,
+	contractsv1.MCPInvestigationResultRequestSchema,
+	contractsv1.MCPInvestigationResultResponseSchema,
+	contractsv1.ContextFabricInvestigationRequestSchema,
+	contractsv1.ContextFabricInvestigationResultSchema,
+	contractsv1.ContextFabricAnswerProjectionSchema,
 }
 
 var writebackSchemaVersions = []string{

@@ -1,0 +1,16 @@
+{
+ "question": "Most of the work is closed, so why is Ask Dev still not ready to ship?",
+ "scope": {
+  "project_ids": [
+   "project_ask_dev"
+  ]
+ },
+ "budget": {
+  "max_drivers": 5,
+  "max_cohort_members": 20,
+  "max_evidence_refs": 25,
+  "max_serialized_bytes": 65536
+ },
+ "allow_clarification": true,
+ "include_full_result": false
+}

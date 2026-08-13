@@ -30,7 +30,7 @@ func (c ContextFabricSubjectCandidate) Validate() error {
 	if !validMatchMechanisms(c.MatchMechanisms) {
 		return fmt.Errorf("subject candidate match mechanisms violate v1 bounds")
 	}
-	if !boundedEvidenceRefs(c.EvidenceRefIDs, 500, true) {
+	if !optionalEvidenceRefs(c.EvidenceRefIDs, 500) {
 		return fmt.Errorf("subject candidate evidence references violate v1 bounds")
 	}
 	return nil
@@ -97,7 +97,7 @@ func (m ContextFabricCohortMember) Validate() error {
 	if err := m.Subject.Validate(); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
-	if m.Rank < 1 || len(m.InclusionReasons) < 1 || len(m.InclusionReasons) > 50 || !uniqueTrimmedStrings(m.InclusionReasons, 1024) || !boundedEvidenceRefs(m.EvidenceRefIDs, 500, true) {
+	if m.Rank < 1 || len(m.InclusionReasons) < 1 || len(m.InclusionReasons) > 50 || !uniqueTrimmedStrings(m.InclusionReasons, 1024) || !optionalEvidenceRefs(m.EvidenceRefIDs, 500) {
 		return fmt.Errorf("cohort member violates v1 bounds")
 	}
 	return nil

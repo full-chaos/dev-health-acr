@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_investigation_result_request.v1.schema.json",
+  "title": "ACR MCP investigation_result Request v1",
+  "description": "Input for the investigation_result MCP tool. Accepts exactly result_id, an opaque handle a prior answer returned; no schema_version is required (tool identity is established by the MCP call itself). result_id is frozen and opaque and must not be parsed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "result_id"
+  ],
+  "properties": {
+    "result_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256
+    }
+  }
+}
