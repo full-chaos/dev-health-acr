@@ -145,6 +145,12 @@ func (a *Adapter) bootstrapSchema(ctx context.Context, key string) error {
 	if err := a.createFulltextIndex(ctx, key); err != nil {
 		return err
 	}
+	// CHAOS-3778: conditional on an embedder being configured. An
+	// organization graph bootstrapped before vector retrieval was enabled is
+	// valid and must not be treated as broken.
+	if err := a.ensureVectorIndex(ctx, key); err != nil {
+		return err
+	}
 	return a.pollConstraintsOperational(ctx, key)
 }
 

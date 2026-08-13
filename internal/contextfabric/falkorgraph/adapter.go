@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 )
 
 // Adapter implements contextfabric.ProjectionBackend and
@@ -18,8 +19,34 @@ type Adapter struct {
 	config Config
 	now    func() time.Time
 
+	// embedder is OPTIONAL (CHAOS-3778). A nil embedder means vector
+	// retrieval is not configured for this deployment: the adapter runs the
+	// lexical path exactly as it did before, creates no vector index, and
+	// writes no embeddings. Nothing about the adapter fails closed over an
+	// embedder a deployment did not choose.
+	embedder contextfabric.Embedder
+	// similarityFloor is tau -- the ABSOLUTE cosine similarity below which a
+	// vector neighbor is dropped rather than scored (AC-3778-4). It is
+	// captured from the embedder's configuration at construction because it
+	// is a property of the embedding MODEL's similarity distribution, not of
+	// the database.
+	similarityFloor float64
+
 	bootstrapMu   sync.RWMutex
 	bootstrapDone map[string]bool
+}
+
+// EmbedderOptions carries the optional vector-retrieval dependencies
+// (CHAOS-3778). A zero value, or a nil Embedder, leaves vector retrieval off.
+//
+// SimilarityFloor must be in (0, 1); a value outside that range is replaced by
+// embedprovider.DefaultSimilarityFloor rather than accepted, because a floor
+// of 0 would silently disable the AC-3778-4 no-match guard -- the highest
+// severity failure in this issue -- and that must not be reachable through a
+// zero-valued struct field.
+type EmbedderOptions struct {
+	Embedder        contextfabric.Embedder
+	SimilarityFloor float64
 }
 
 func New(config Config) (*Adapter, error) {
@@ -28,6 +55,31 @@ func New(config Config) (*Adapter, error) {
 		return nil, err
 	}
 	return newWithAPI(config, client)
+}
+
+// NewWithEmbedder builds an adapter with vector retrieval enabled
+// (CHAOS-3778). It is a separate constructor rather than a Config field so
+// that a deployment without an embedder cannot accidentally half-configure
+// one, and so Config stays a pure value type with no port in it.
+func NewWithEmbedder(config Config, options EmbedderOptions) (*Adapter, error) {
+	adapter, err := New(config)
+	if err != nil {
+		return nil, err
+	}
+	adapter.attachEmbedder(options)
+	return adapter, nil
+}
+
+func (a *Adapter) attachEmbedder(options EmbedderOptions) {
+	if options.Embedder == nil {
+		return
+	}
+	floor := options.SimilarityFloor
+	if floor <= 0 || floor >= 1 {
+		floor = embedprovider.DefaultSimilarityFloor
+	}
+	a.embedder = options.Embedder
+	a.similarityFloor = floor
 }
 
 func newWithAPI(config Config, client conn) (*Adapter, error) {

@@ -84,6 +84,12 @@ func (a *Adapter) ApplyProjectionBatch(ctx context.Context, batch contextfabric.
 			return contextfabric.ProjectionReceipt{}, err
 		}
 	}
+	// CHAOS-3778: attach vectors AFTER every node write in this batch, so a
+	// vector only ever lands on a node that already carries the search text
+	// it was derived from. Deliberately not error-returning -- see
+	// embedProjectionBatch's doc comment for why a missing vector degrades
+	// retrieval rather than stalling the projection pipeline.
+	a.embedProjectionBatch(ctx, key, batch)
 	watermark := projectionWatermark(batch)
 	if err := a.writeWatermark(ctx, key, batch, watermark); err != nil {
 		return contextfabric.ProjectionReceipt{}, err
@@ -315,7 +321,7 @@ func (a *Adapter) projectContent(ctx context.Context, key, orgID string, content
 		propEvidenceRefs: graphrank.UniqueSorted(content.EvidenceRefIDs), propSourceVersion: content.SourceVersion,
 		propObservedAt: content.ObservedAt.UTC().Format(time.RFC3339Nano), propObservedAtNs: nsTimestamp(content.ObservedAt),
 		"content_digest": content.ContentDigest, "body": content.Body, "untrusted": true,
-		propSearchText: strings.TrimSpace(content.Title + "\n" + content.Body),
+		propSearchText: contentSearchText(content),
 	}
 	// a (content.Subject) is REFERENCED, not owned -- see
 	// referencedSubjectStubMergeCypher's doc comment (round-2 R2-1): projectContent
@@ -349,7 +355,7 @@ func (a *Adapter) projectContent(ctx context.Context, key, orgID string, content
 func (a *Adapter) projectEpisode(ctx context.Context, key, orgID string, episode contextfabric.EpisodeProjection) error {
 	subjectAttrs := subjectMergeAttrs(episode.Subject, episode.Authorization, episode.EvidenceRefIDs, episode.EndedAt, &episode.StartedAt, &episode.EndedAt, episode.SourceVersion, nil)
 	episodeSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectEpisode, CanonicalID: "episode:" + episode.EpisodeID, Label: episode.EpisodeID}
-	summary := strings.TrimSpace(episode.Goal + "\nOutcome: " + episode.Outcome + "\n" + episode.Summary)
+	summary := episodeSearchText(episode)
 	episodeAttrs := map[string]interface{}{
 		propLabel: episode.EpisodeID, propAuthzRepos: authorizationValue(episode.Authorization.RepositorySlugs),
 		propAuthzProjects: authorizationValue(episode.Authorization.ProjectIDs), propAuthzTeams: authorizationValue(episode.Authorization.TeamIDs),
@@ -481,6 +487,21 @@ func relationshipFact(relationship contextfabric.RelationshipProjection) string 
 		}
 	}
 	return relationship.From.Label + " " + strings.ToLower(strings.ReplaceAll(string(relationship.Type), "_", " ")) + " " + relationship.To.Label
+}
+
+// contentSearchText and episodeSearchText exist so the projection write path
+// and CHAOS-3778's embedding pass derive their text from ONE expression rather
+// than two identical-looking ones. The lexical index and the vector index must
+// search byte-identical corpora -- that is what makes their agreement a
+// statement about MECHANISM rather than about which text each happened to see
+// (see graphrank.DistinctMechanismCount). Two copies of the concatenation
+// would be one edit away from silently breaking that.
+func contentSearchText(content contextfabric.ContentProjection) string {
+	return strings.TrimSpace(content.Title + "\n" + content.Body)
+}
+
+func episodeSearchText(episode contextfabric.EpisodeProjection) string {
+	return strings.TrimSpace(episode.Goal + "\nOutcome: " + episode.Outcome + "\n" + episode.Summary)
 }
 
 func entitySearchText(entity contextfabric.EntityProjection) string {

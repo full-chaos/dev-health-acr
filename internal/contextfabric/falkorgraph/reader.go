@@ -40,7 +40,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			return toCandidateNode(n), true, nil
 		},
 		Search: func(ctx context.Context, term string, limit int) ([]graphrank.CandidateNode, bool, error) {
-			return a.fulltextSearchNodes(ctx, key, principal.OrgID, term, limit)
+			return a.hybridSearchNodes(ctx, key, principal.OrgID, term, limit)
 		},
 		Traverse: func(ctx context.Context, term string, observation graphrank.CandidateNode) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
 			return graphrank.TraverseObservationToSubject(ctx, principal, request.RequestedScope, term, observation, isInternalSubject,
