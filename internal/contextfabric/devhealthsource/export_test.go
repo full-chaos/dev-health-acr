@@ -13,3 +13,17 @@ func EntityTableNamesForTest() []string {
 	}
 	return names
 }
+
+// TeamsProjectsTableNamesForTest exposes teamsProjectsTables' table names
+// (teams_projects.go) for the same CHAOS-3789 F2 reason
+// EntityTableNamesForTest exists: the schema-parity sweep derives its table
+// inventory from the producer list itself, so a producer added without a
+// matching seed row and expectation fails loudly instead of going silently
+// unasserted.
+func TeamsProjectsTableNamesForTest() []string {
+	names := make([]string, len(teamsProjectsTables))
+	for i, table := range teamsProjectsTables {
+		names[i] = table.name
+	}
+	return names
+}

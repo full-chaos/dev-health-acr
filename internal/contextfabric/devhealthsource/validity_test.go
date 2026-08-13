@@ -46,7 +46,15 @@ func entityByCanonicalID(t *testing.T, batch contextfabric.ProjectionBatch, cano
 			return entity
 		}
 	}
-	t.Fatalf("no entity %q in batch", canonicalID)
+	// CHAOS-3802 carried a second copy of this helper whose failure listed
+	// what the batch DID hold. Merging the copies kept that: a producer
+	// that projects the wrong canonical ID is the common failure, and
+	// naming only the id that was absent does not say which one it got.
+	ids := make([]string, 0, len(batch.Entities))
+	for _, entity := range batch.Entities {
+		ids = append(ids, entity.Subject.CanonicalID)
+	}
+	t.Fatalf("no entity %q in batch; got %v", canonicalID, ids)
 	return contractsv1.ContextFabricEntityProjection{}
 }
 
@@ -57,7 +65,11 @@ func relationshipByID(t *testing.T, batch contextfabric.ProjectionBatch, relatio
 			return relationship
 		}
 	}
-	t.Fatalf("no relationship %q in batch", relationshipID)
+	ids := make([]string, 0, len(batch.Relationships))
+	for _, relationship := range batch.Relationships {
+		ids = append(ids, relationship.RelationshipID)
+	}
+	t.Fatalf("no relationship %q in batch; got %v", relationshipID, ids)
 	return contractsv1.ContextFabricRelationshipProjection{}
 }
 

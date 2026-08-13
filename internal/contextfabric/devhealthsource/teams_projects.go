@@ -44,6 +44,12 @@ const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v1"
 //     Linear projects carry ca148f86-…, while that team's teams.id is CHAOS
 //     and its teams.team_uuid is 3d89b2cf-… -- the array matches NEITHER, so
 //     it cannot carry a project->team edge.
+//
+// devhealthschema:not-a-production-replica this is the PRODUCER REGISTRY for the CHAOS-3802
+// subjects -- the same table-to-query pairing tables.go holds for the
+// original producers. It mirrors no column type, engine or sort key, so it
+// cannot drift from production the way a rival schema declaration would;
+// devhealthschema stays the only physical source for these four tables.
 var teamsProjectsTables = []entityTable{
 	{name: "teams", query: queryTeams},
 	{name: "projects", query: queryProjects},

@@ -8,6 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
 // The production column snapshot this file used to hold inline now lives
@@ -38,6 +39,9 @@ var sourceSchemaTables = []string{
 	"ci_pipeline_runs", "deployments", "operational_incidents",
 	"operational_service_repository_mappings", "work_item_dependencies",
 	"work_graph_deployment_incident_edges",
+	// CHAOS-3802's producers read these four; assertTeamsProjectsSchemaParity
+	// runs against the same fixture rather than a second testcontainer.
+	"teams", "projects", "work_item_team_attributions", "team_project_ownership",
 }
 
 // TestLiveSchemaParityAcrossEveryProducer seeds one real ClickHouse
@@ -52,6 +56,8 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 	const orgID = "10000000-0000-4000-8000-000000000001"
 	const repoID = "20000000-0000-4000-8000-000000000002"
 	const repoSlug = "acme/parity-service"
+	const projectID = "PROJ-PARITY"
+	const teamID = "TEAM-PARITY"
 
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
 	for _, statement := range productionSchemaDDL() {
@@ -72,10 +78,13 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 	// selecting where the row goes. No schema is declared here.
 	mustSeed("repos", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
 		repoID, orgID, repoSlug, "github", at)
-	mustSeed("work_items parent", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		"WI-PARENT", repoID, orgID, "Parent work item", "open", "", "", at)
-	mustSeed("work_items child", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		"WI-CHILD", repoID, orgID, "Child work item", "open", "", "WI-PARENT", at)
+	// The parent carries an EMPTY project_id and the child a real one, so
+	// queryWorkItemProjects' `project_id != ''` filter is exercised in both
+	// directions by the same fixture (CHAOS-3802).
+	mustSeed("work_items parent", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"WI-PARENT", repoID, orgID, "Parent work item", "open", "", "", "", at)
+	mustSeed("work_items child", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"WI-CHILD", repoID, orgID, "Child work item", "open", "", "WI-PARENT", projectID, at)
 	mustSeed("git_pull_requests", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) VALUES (?, ?, ?, ?, ?, ?)`,
 		repoID, orgID, uint32(4242), "Parity PR", "open", at)
 	mustSeed("deployments", `INSERT INTO deployments (repo_id, org_id, deployment_id, status, environment, deployed_at, started_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -92,6 +101,25 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 		"review-parity-1", repoID, orgID, uint32(4242), "approved", at)
 	mustSeed("ci_pipeline_runs", `INSERT INTO ci_pipeline_runs (run_id, repo_id, org_id, branch, status, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"run-parity-1", repoID, orgID, "main", "success", at, at)
+	// devhealthschema:not-a-production-replica the seeding block continues here, past the reach of
+	// the marker above it. Same INSERT-into-an-already-created-table shape:
+	// devhealthschema.DDL created every table named below, and here the name
+	// only selects a destination for a row. No schema is declared.
+	mustSeed("teams", `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		teamID, "Parity Team", "Parity team description", at, orgID, "github", "parity-team", uint8(1))
+	mustSeed("projects", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		projectID, orgID, "github", "PARITY", "Parity Project", uint8(1), "started", "https://example.invalid/parity", at)
+	mustSeed("work_item_team_attributions", `INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		orgID, repoID, "WI-CHILD", teamID, "native_team", uint8(1), "high", at)
+	// TWO ownership rows for ONE edge, differing only in valid_from -- the
+	// live shape queryProjectTeams exists to survive (616 rows, 3 edges).
+	// FINAL cannot collapse them because valid_from is in the ORDER BY, so
+	// this fixture fails the batch's relationship-uniqueness rule unless the
+	// producer's GROUP BY is doing its job.
+	mustSeed("team_project_ownership first window", `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		orgID, "github", teamID, projectID, "PARITY", "native", at.Add(-48*time.Hour), nil, at)
+	mustSeed("team_project_ownership second window", `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		orgID, "github", teamID, projectID, "PARITY", "native", at.Add(-24*time.Hour), nil, at)
 
 	source, err := devhealthsource.NewClickHouseProjectionSource(query)
 	if err != nil {
@@ -163,6 +191,79 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 	for table := range wantCanonicalID {
 		if !matched[table] {
 			t.Errorf("wantCanonicalID has entry %q but entityTables (tables.go) no longer lists it -- remove the stale entry", table)
+		}
+	}
+
+	assertTeamsProjectsSchemaParity(t, ctx, query, orgID, projectID, teamID)
+}
+
+// assertTeamsProjectsSchemaParity is CHAOS-3802's half of the same guarantee,
+// run against the same production-typed fixture rather than a second
+// testcontainer. It matters more here than for any producer above, because
+// this source scans shapes the package's fake cannot vouch for at all: Enum8
+// through toString(), Nullable(String) through ifNull, a
+// Nullable(DateTime64) collapsed by max(valid_to IS NULL) into a UInt8, and
+// teams.updated_at's DateTime64(6) with no timezone qualifier compared
+// against a DateTime64(6,'UTC') bind parameter. A Scan mismatch in any of
+// those is the CHAOS-3789 class of bug, invisible to every fake-backed test.
+func assertTeamsProjectsSchemaParity(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, orgID, projectID, teamID string) {
+	t.Helper()
+	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	if err != nil {
+		t.Fatalf("new teams/projects source: %v", err)
+	}
+	batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: orgID, Source: devhealthsource.TeamsProjectsSourceName})
+	if err != nil {
+		t.Fatalf("teams/projects batch against production-typed schema: %v", err)
+	}
+	if !available {
+		t.Fatal("expected a teams/projects batch to be available")
+	}
+
+	wantCanonicalID := map[string]string{
+		// devhealthschema:not-a-production-replica this maps each table to the canonical ID its row is
+		// expected to project to. Keyed BY table on purpose, and it mirrors no
+		// column type, engine or sort key -- it is an assertion about output.
+		"teams":                       "team:" + teamID,
+		"projects":                    "project:" + projectID,
+		"work_items_projects":         "relationship:work_item_project:WI-CHILD:" + projectID,
+		"work_item_team_attributions": "relationship:work_item_team:WI-CHILD:" + teamID,
+		"team_project_ownership":      "relationship:project_team:" + projectID + ":" + teamID + ":native",
+	}
+	seen := map[string]bool{}
+	for _, entity := range batch.Entities {
+		for table, canonicalID := range wantCanonicalID {
+			if entity.Subject.CanonicalID == canonicalID {
+				seen[table] = true
+			}
+		}
+	}
+	for _, relationship := range batch.Relationships {
+		for table, canonicalID := range wantCanonicalID {
+			if relationship.RelationshipID == canonicalID {
+				seen[table] = true
+			}
+		}
+	}
+
+	// Same F2 discipline as above: derive the inventory from
+	// teamsProjectsTables itself so a producer added without a seed row and
+	// expectation here fails loudly instead of going unasserted.
+	matched := map[string]bool{}
+	for _, table := range devhealthsource.TeamsProjectsTableNamesForTest() {
+		canonicalID, ok := wantCanonicalID[table]
+		if !ok {
+			t.Errorf("teamsProjectsTables lists table %q with no matching entry here -- add a seed row and an expected canonical/relationship ID", table)
+			continue
+		}
+		matched[table] = true
+		if !seen[table] {
+			t.Errorf("teams/projects producer for table %q never contributed its expected candidate (%q); entities=%+v relationships=%+v", table, canonicalID, batch.Entities, batch.Relationships)
+		}
+	}
+	for table := range wantCanonicalID {
+		if !matched[table] {
+			t.Errorf("this test expects table %q but teamsProjectsTables no longer lists it -- remove the stale entry", table)
 		}
 	}
 }

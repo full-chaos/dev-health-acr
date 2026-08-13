@@ -84,21 +84,6 @@ func teamsProjectsBatch(t *testing.T, client *fakeClient) contextfabric.Projecti
 	return batch
 }
 
-func entityByCanonicalID(t *testing.T, batch contextfabric.ProjectionBatch, canonicalID string) contractsv1.ContextFabricEntityProjection {
-	t.Helper()
-	for _, entity := range batch.Entities {
-		if entity.Subject.CanonicalID == canonicalID {
-			return entity
-		}
-	}
-	ids := make([]string, 0, len(batch.Entities))
-	for _, entity := range batch.Entities {
-		ids = append(ids, entity.Subject.CanonicalID)
-	}
-	t.Fatalf("no entity with canonical id %q in batch; got %v", canonicalID, ids)
-	return contractsv1.ContextFabricEntityProjection{}
-}
-
 // TestTeamSubjectsProjectAtTheFactProviderIdentity pins the one part of this
 // producer that is NOT a free choice. devhealthfacts minted
 // teamPrefix = "team:" (workload.go) and its subjectIndex strips exactly that
@@ -318,21 +303,6 @@ func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug st
 
 func projectTeamRow(projectID, teamID, source string, validFrom time.Time, hasOpenWindow uint8, maxValidTo, updatedAt time.Time) []any {
 	return []any{projectID, teamID, source, validFrom, hasOpenWindow, maxValidTo, updatedAt}
-}
-
-func relationshipByID(t *testing.T, batch contextfabric.ProjectionBatch, relationshipID string) contractsv1.ContextFabricRelationshipProjection {
-	t.Helper()
-	for _, relationship := range batch.Relationships {
-		if relationship.RelationshipID == relationshipID {
-			return relationship
-		}
-	}
-	ids := make([]string, 0, len(batch.Relationships))
-	for _, relationship := range batch.Relationships {
-		ids = append(ids, relationship.RelationshipID)
-	}
-	t.Fatalf("no relationship %q in batch; got %v", relationshipID, ids)
-	return contractsv1.ContextFabricRelationshipProjection{}
 }
 
 // liveShapedEdgeClient replays the ground-truth org's real edge row shapes:
