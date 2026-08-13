@@ -70,10 +70,17 @@ type CandidateEdge struct {
 // full-text score: a HIGHER such score means MORE relevant, not further
 // away, so this arm inverts it. falkorgraph's fulltextSearchNodes therefore
 // never leaves this arm to interpret its raw score -- it normalizes into
-// Relevance itself (max-normalized within one query's result set, into the
-// documented [0.50, 0.75] band; see queries.go's normalizeFulltextScores)
-// before a CandidateNode ever reaches this function, so the preferred
-// Relevance branch above is always the one taken for a lexical hit.
+// Relevance itself (an absolute, per-candidate function of that candidate's
+// own exact matched-query-term coverage, into the documented [0.50, 0.75]
+// band; see queries.go's fulltextRelevanceFromMatchedTerms) before a
+// CandidateNode ever reaches this function, so the preferred Relevance
+// branch above is always the one taken for a lexical hit. Round 2 of this
+// fix (Codex P1/P3) replaced an earlier per-call-relative (max-min)
+// version of that normalization specifically because it produced
+// confidence values that were only meaningful relative to whatever else
+// came back in the SAME query's result set -- comparing two such values
+// from two different queries (exactly what ResolveSubjects' merge/sort
+// does) compared numbers from two different, incompatible scales.
 //
 // This arm is left in place, unchanged, for a hypothetical backend whose
 // score genuinely IS a bounded-above-1 distance. It is graphrank's

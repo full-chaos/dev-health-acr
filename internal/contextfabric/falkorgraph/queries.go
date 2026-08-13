@@ -3,7 +3,6 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -15,9 +14,10 @@ import (
 // band a RediSearch full-text hit can ever normalize into (D11 / AC-3778-0).
 // Chosen so the shipped commit thresholds in
 // graphrank.ResolveFromMergedCandidates -- lone candidate >= 0.72; top-of-two
-// >= 0.88 with gap >= 0.12 -- keep their intended meaning: the strongest hit
-// in a result set (the ceiling) clears the lone-candidate gate exactly the
-// way docs/design/context-fabric-falkordb-adapter.md §6.2's proposed "sole
+// >= 0.88 with gap >= 0.12 -- keep their intended meaning: a hit that fully
+// satisfies its own query (every OR-tokenized term matched -- the ceiling)
+// clears the lone-candidate gate exactly the way
+// docs/design/context-fabric-falkordb-adapter.md §6.2's proposed "sole
 // full-text hit, label-field match" rung (0.75) was chosen to, and the floor
 // matches that same table's "body-only hit (today's default)" rung (0.50) --
 // a genuine hit never reads as "no signal" (0), nor as more confident than
@@ -27,56 +27,126 @@ import (
 // cannot reproduce that today because the fulltext index covers one merged
 // search_text property (identity.go's createFulltextIndex) with no separate
 // fields to distinguish a match by. This is the coarsest faithful
-// approximation available: a hit's RELATIVE standing within its own query's
-// result set, not its raw magnitude -- RediSearch scores are unbounded above
-// and not comparable across different queries/terms (§6.2), so only
-// within-set relative order is a meaningful signal.
+// approximation available -- see fulltextRelevanceFromMatchedTerms's doc
+// comment for what signal is used instead, and why (Codex P1/P3, fix round
+// 2: this band was originally reached by max-min normalizing within one
+// query's own result set, which round-2 review found two things wrong
+// with: (1) a singleton or all-tied result set always read as the ceiling
+// regardless of how weak that lone hit actually was, indistinguishable
+// from a server-side-truncated result set that could have had stronger
+// candidates cut off before normalization ever ran; (2) two DIFFERENT
+// queries' independently-relative-normalized confidences were then
+// compared directly against each other by ResolveSubjects' merge/sort
+// (resolve.go, resolution.go) as if they shared one scale, when each one's
+// ceiling only ever meant "best of its own, unrelated result set").
 const (
 	fulltextRelevanceFloor   = 0.50
 	fulltextRelevanceCeiling = 0.75
 )
 
-// normalizeFulltextScores maps one query's raw, unbounded RediSearch scores
-// into graphrank's documented [fulltextRelevanceFloor, fulltextRelevanceCeiling]
-// confidence band by max-min normalization within that set -- the "max-
-// normalize within a result set" option docs/design/context-fabric-falkordb-adapter.md
-// §6.2 names as the fix for feeding an unbounded score through
-// graphrank.ResultConfidence's distance-shaped fallback arm.
+// fulltextRelevanceFromMatchedTerms maps ONE candidate's own matched-term
+// coverage -- how many of the query's termCount OR-tokenized terms this
+// specific candidate's OWN indexed text actually contains -- into
+// graphrank's documented [fulltextRelevanceFloor, fulltextRelevanceCeiling]
+// band (D11 / AC-3778-0, Codex P1/P3 fix round 2):
 //
-// This is the seam AC-3778-0 requires: the adapter declares the score's
-// meaning explicitly -- an already-normalized, bounded, monotonic relevance
-// -- BEFORE any CandidateNode reaches graphrank, rather than handing over a
-// raw score and letting ResultConfidence guess (see its doc comment). The
-// transform is strictly order-preserving (a higher raw score in the same
-// set never produces a lower band value, equal scores produce equal band
-// values), which is exactly what AC-3778-0's monotonicity test proves. A
-// lone hit, or a set where every hit ties, normalizes to the ceiling: there
-// is no weaker hit in that set to relatively outrank it.
-func normalizeFulltextScores(scores []float64) []float64 {
-	out := make([]float64, len(scores))
-	if len(scores) == 0 {
-		return out
+//	proportion := clamp(matchedTermCount / termCount, 0, 1)
+//	confidence := floor + (ceiling-floor) * proportion
+//
+// This is an ABSOLUTE, per-candidate, EXACT function -- it depends on
+// nothing but that one candidate's own (matchedTermCount, termCount) pair,
+// never on what else came back in the same query's result set, and never on
+// which particular query call produced it. A hit that only satisfies 1 of 4
+// OR-tokenized query terms scores low regardless of how weak or strong its
+// raw RediSearch score looks in isolation, because it is being measured
+// against what a hit that satisfied all 4 terms would look like, not
+// against whatever else happened to be in this particular result set (Codex
+// P1). This also fixes the truncation trap an earlier version of this fix
+// had: queries.go's Cypher LIMIT can shrink a result set to size 1 BEFORE
+// normalization ever runs, but since this function never looks at the batch
+// at all, a lone-but-weak hit is scored identically whether or not stronger
+// competitors existed and were truncated away.
+//
+// Because the formula is fixed and identical for every call, its output is
+// directly comparable across calls with different termCount, different
+// underlying corpora, or different result-set sizes (Codex P3) -- there is
+// exactly one normalization domain, not one per query.
+//
+// Two earlier designs for matchedTermCount, both falsified by a live
+// FalkorDB server before landing here:
+//
+//  1. score/termCount against a fixed reference constant, calibrated and
+//     live-validated against one corpus (a 3-of-3-term OR match scoring 6,
+//     2-of-3 scoring 4, 1-of-3 scoring 2 -- exactly 2 points per matched
+//     term). A SECOND live corpus
+//     (TestLiveRelationshipProjectionPreservesPriorCanonicalEntityMetadata's
+//     "Dev Agent" previous-name, a genuine 2-of-2-term full match) scored
+//     only 1.0 total -- four times weaker -- and would have been WRONGLY
+//     demoted below the lone-candidate gate. RediSearch's real
+//     per-matched-term score contribution depends on corpus-wide term
+//     rarity/idf, which this adapter cannot query, so no fixed score-based
+//     constant is safe.
+//  2. Exact term coverage via one single-term db.idx.fulltext.queryNodes
+//     sub-query per term, counting literal server-side membership. This
+//     failed on the SAME live corpus for a different reason: FalkorDB's
+//     fulltext tokenizer failed to match a bare single-term query for
+//     "Dev" even though "Dev" is genuinely present in that candidate's own
+//     search_text (confirmed independently via a raw Cypher query, no org
+//     filter, still 0 rows) -- the same family of compound-token-adjacent
+//     indexing quirk this adapter's own live tests already document for
+//     "AskDev" (see adapter_live_invariants_test.go), just triggered by a
+//     different token. A per-term Cypher round-trip inherits FalkorDB's
+//     own indexing inconsistencies; this adapter has no way to work around
+//     them from outside the server.
+//
+// matchedTermCount is therefore computed entirely in Go, from the SAME
+// search_text property value this candidate's own row already carries
+// (projection.go writes it onto every entity/content/episode Subject node;
+// toCandidateNode's Attributes carries it through unchanged) -- see
+// fulltextSearchNodes. Tokenizing that text with the exact same
+// tokenizeForFulltext function used to build the query means "does this
+// candidate contain term X" is answered identically to how the terms
+// themselves were derived, with zero additional queries and zero
+// dependency on RediSearch's own per-term matching behavior.
+//
+// NaN-safe / defensive: a non-positive termCount normalizes to the floor
+// rather than dividing by zero; matchedTermCount is clamped into [0,
+// termCount] before the ratio, so an over- or under-count from a caller
+// bug still returns a value inside the documented band rather than
+// propagating out of range.
+func fulltextRelevanceFromMatchedTerms(matchedTermCount, termCount int) float64 {
+	if termCount <= 0 {
+		return fulltextRelevanceFloor
 	}
-	min, max := scores[0], scores[0]
-	for _, s := range scores {
-		if s < min {
-			min = s
+	if matchedTermCount < 0 {
+		matchedTermCount = 0
+	}
+	if matchedTermCount > termCount {
+		matchedTermCount = termCount
+	}
+	proportion := float64(matchedTermCount) / float64(termCount)
+	return fulltextRelevanceFloor + (fulltextRelevanceCeiling-fulltextRelevanceFloor)*proportion
+}
+
+// fulltextMatchedTermCount reports how many of terms appear as whole,
+// case-insensitive words in text -- see fulltextRelevanceFromMatchedTerms'
+// doc comment for why this is computed client-side from the candidate's own
+// already-fetched search_text, rather than via additional per-term
+// full-text queries against FalkorDB. Tokenizing text with the same
+// tokenizeForFulltext function the query terms themselves come from is what
+// makes the comparison exact: both sides agree on what counts as a "word".
+func fulltextMatchedTermCount(text string, terms []string) int {
+	words := make(map[string]struct{}, 8)
+	for _, w := range tokenizeForFulltext(text) {
+		words[strings.ToLower(w)] = struct{}{}
+	}
+	matched := 0
+	for _, term := range terms {
+		if _, ok := words[strings.ToLower(term)]; ok {
+			matched++
 		}
-		if s > max {
-			max = s
-		}
 	}
-	if max <= min {
-		for i := range out {
-			out[i] = fulltextRelevanceCeiling
-		}
-		return out
-	}
-	span := fulltextRelevanceCeiling - fulltextRelevanceFloor
-	for i, s := range scores {
-		out[i] = fulltextRelevanceFloor + span*(s-min)/(max-min)
-	}
-	return out
+	return matched
 }
 
 // fulltextSearchNodes runs a lexical full-text search over Subject nodes'
@@ -103,13 +173,16 @@ func normalizeFulltextScores(scores []float64) []float64 {
 // untrusted values never take this path.
 //
 // D11 / AC-3778-0: the raw score RediSearch returns is unbounded above and
-// not directly usable as a confidence (see normalizeFulltextScores' doc
-// comment). Every row's raw score is collected first, normalized together
-// as one set via normalizeFulltextScores, and written into each
-// CandidateNode's Relevance -- never left in Score for
-// graphrank.ResultConfidence to interpret raw. Score is still populated
-// alongside Relevance, for diagnostics/telemetry only: any caller computing
-// confidence uses ResultConfidence, which always prefers a set Relevance.
+// not directly usable as a confidence (see
+// fulltextRelevanceFromMatchedTerms' doc comment). Every candidate's
+// confidence is instead computed from exact matched-term coverage against
+// that SAME candidate's own search_text property, already present in this
+// query's own result row (see fulltextMatchedTermCount) -- no additional
+// queries. That coverage is written into each CandidateNode's Relevance,
+// never left in Score for graphrank.ResultConfidence to interpret raw.
+// Score is still populated alongside Relevance, for diagnostics/telemetry
+// only: any caller computing confidence uses ResultConfidence, which
+// always prefers a set Relevance.
 func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text string, limit int) ([]graphrank.CandidateNode, error) {
 	terms := tokenizeForFulltext(text)
 	if len(terms) == 0 {
@@ -129,32 +202,21 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 	if err != nil {
 		return nil, safeDependencyError("search context graph", err)
 	}
+	termCount := len(terms)
 	candidates := make([]graphrank.CandidateNode, 0, len(rows))
-	// rawScores tracks, in parallel with candidates, the raw score for each
-	// candidate that had a usable one -- a NaN/Inf score (never observed
-	// live, but not a contract RediSearch makes either) is excluded from the
-	// normalization set entirely rather than corrupting its min/max, exactly
-	// like graphrank.ResultConfidence already excludes such values from its
-	// own preferred branch.
-	rawScores := make([]float64, 0, len(rows))
-	scoreIndex := make([]int, 0, len(rows))
 	for _, row := range rows {
 		n, ok := row["node"].(*node)
 		if !ok || n == nil {
 			continue
 		}
 		candidate := toCandidateNode(n)
-		if score, ok := row["score"].(float64); ok && !math.IsNaN(score) && !math.IsInf(score, 0) {
+		if score, ok := row["score"].(float64); ok {
 			candidate.Score = &score
-			scoreIndex = append(scoreIndex, len(candidates))
-			rawScores = append(rawScores, score)
 		}
+		matched := fulltextMatchedTermCount(graphrank.StringAttribute(candidate.Attributes, propSearchText), terms)
+		relevance := fulltextRelevanceFromMatchedTerms(matched, termCount)
+		candidate.Relevance = &relevance
 		candidates = append(candidates, candidate)
-	}
-	normalized := normalizeFulltextScores(rawScores)
-	for i, relevance := range normalized {
-		relevance := relevance
-		candidates[scoreIndex[i]].Relevance = &relevance
 	}
 	return candidates, nil
 }
