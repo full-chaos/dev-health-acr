@@ -144,6 +144,20 @@ func newClientOptions(cfg Config) []option.RequestOption {
 // "code" or "type" field -- inventing plausible-looking values for those
 // would be worse than omitting them, and nothing in this codebase
 // classifies on them.
+// SanitizeProviderErrorBody exports sanitizeProviderErrorBody for the sibling
+// provider packages that build their own OpenAI-compatible transport --
+// currently internal/contextfabric/embedprovider (CHAOS-3778).
+//
+// It is shared rather than copied on purpose. The reasoning below is
+// security-critical and non-obvious, and two copies would drift: the next
+// person to discover a new status class that leaks a provider body would fix
+// one of them. Any package in this repository that constructs a transport
+// which can receive a provider response body must install THIS middleware, not
+// its own equivalent.
+func SanitizeProviderErrorBody(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+	return sanitizeProviderErrorBody(req, next)
+}
+
 func sanitizeProviderErrorBody(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 	resp, err := next(req)
 	// A 2xx allowlist, not a >=400 threshold (CHAOS-3770 F1(b) round-4
