@@ -26,6 +26,9 @@ func (c ContextFabricSubjectCandidate) Validate() error {
 	if len(c.MatchedTerms) > 100 || len(c.MatchReasons) < 1 || len(c.MatchReasons) > 100 || !uniqueTrimmedStrings(c.MatchedTerms, 512) || !uniqueTrimmedStrings(c.MatchReasons, 1024) {
 		return fmt.Errorf("subject candidate match metadata violates v1 bounds")
 	}
+	if !validMatchMechanisms(c.MatchMechanisms) {
+		return fmt.Errorf("subject candidate match mechanisms violate v1 bounds")
+	}
 	if !boundedEvidenceRefs(c.EvidenceRefIDs, 500, true) {
 		return fmt.Errorf("subject candidate evidence references violate v1 bounds")
 	}

@@ -346,6 +346,29 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	result.Question = request.Question
 	result.Interpretation = interpretation
 	result.SubjectResolution = resolution
+	// Codex round-1 F4, per the orchestrator's ruling: a retrieval mechanism
+	// that was unavailable for THIS resolution is folded into the answer here,
+	// at the engine, rather than by inventing a path from ResolveSubjects into
+	// the graph adapter's own Coverage construction. ResolveSubjects reports
+	// the request-scoped marker; the engine owns what an answer says about
+	// itself.
+	//
+	// The limitation string is FIXED and non-interpolated. It names no
+	// mechanism, no provider, no model, and no error text: a limitation is
+	// answer-facing prose, and every cause here (an embed timeout, an
+	// unreachable embedder, a server that served the wrong model, a fenced-off
+	// stale index) has the same consequence for a reader -- retrieval saw less
+	// than it should have. The operator-facing detail belongs in telemetry,
+	// which already receives it.
+	if resolution.RetrievalDegraded {
+		// Deduplicated across BOTH spellings, not by exact equality: a draft
+		// that already carries either form must not gain a second, differently
+		// worded copy of the same statement.
+		if !hasRetrievalDegradedLimitation(result.Limitations) {
+			result.Limitations = append(result.Limitations, retrievalDegradedLimitation)
+		}
+		result.Coverage.Partial = true
+	}
 	if result.Cohort == nil {
 		result.Cohort = graphContext.Cohort
 	}
@@ -495,4 +518,58 @@ func mergeFactRequirements(groups ...[]FactRequirement) []FactRequirement {
 		}
 	}
 	return result
+}
+
+// retrievalDegradedLimitation is the fixed, non-interpolated limitation added
+// when a retrieval mechanism was unavailable for a resolution (codex round-1
+// F4). Deliberately a constant rather than a format string -- see the fold in
+// Investigate for why it names no cause.
+//
+// It describes the ANSWER'S PROVENANCE ("when this answer was produced"),
+// not the current request. That phrasing is load-bearing rather than
+// stylistic: a REUSED answer carries this limitation forward verbatim from
+// the run that produced it (orchestrator ruling on codex round-1 F4 --
+// stripping it would hide known degradation behind a clean-looking serve),
+// and the earlier wording, "for this investigation", pointed ambiguously at
+// the current request in exactly that case.
+const retrievalDegradedLimitation = "One retrieval mechanism was unavailable when this answer was produced, so fewer candidate subjects may have been considered than usual."
+
+// retrievalDegradedLimitationLegacy is the wording used before the phrasing
+// above replaced it.
+//
+// BOTH STRINGS EXIST IN THE WILD, permanently. An InvestigationResult is
+// immutable and CHAOS-3782's answer reuse keys on its stored bytes, so results
+// written before the change keep this spelling verbatim -- nothing rewrites a
+// stored row, and nothing may treat one as malformed. Every check for "is this
+// the retrieval-degradation limitation" must therefore accept either form; see
+// isRetrievalDegradedLimitation, which is the single place that knows both
+// spellings.
+const retrievalDegradedLimitationLegacy = "One retrieval mechanism was unavailable for this investigation, so fewer candidate subjects may have been considered than usual."
+
+// REBASE-TIME OBLIGATION (CHAOS-3778, carried deliberately): a REUSED answer
+// must carry its stored limitation forward VERBATIM -- including the legacy
+// spelling -- and must not have one synthesized for it. That behavior lives on
+// CHAOS-3786's reuse path, which this branch's base predates, so its pinning
+// test lands with the ship-time rebase rather than being guessed at here. The
+// ordering it relies on is already traced: Engine.tryReuse returns before
+// ResolveSubjects runs, so a reuse hit computes no marker of its own.
+//
+// isRetrievalDegradedLimitation reports whether a limitation string is either
+// spelling of the retrieval-degradation limitation.
+//
+// Exists so no caller compares against ONE constant and silently stops
+// recognizing answers written by the other -- the anchor/alias drift class.
+func isRetrievalDegradedLimitation(limitation string) bool {
+	return limitation == retrievalDegradedLimitation || limitation == retrievalDegradedLimitationLegacy
+}
+
+// hasRetrievalDegradedLimitation reports whether any limitation in the slice
+// is one of the two spellings.
+func hasRetrievalDegradedLimitation(limitations []string) bool {
+	for _, limitation := range limitations {
+		if isRetrievalDegradedLimitation(limitation) {
+			return true
+		}
+	}
+	return false
 }

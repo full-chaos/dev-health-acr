@@ -298,6 +298,171 @@ carries `credential_masked` only (last 4 characters, e.g. `********wxyz`).
 | --- | --- | --- |
 | `ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE` | *(unset — disabled)* | Staleness window (1m–24h when set). A stored investigation result older than this is never reused, regardless of whether every other reuse condition holds. Leaving this unset disables answer reuse entirely: every Investigate call runs fresh, exactly as if `pginvestigation.WithAnswerReuse` were never passed. |
 
+### Vector and semantic retrieval (CHAOS-3778)
+
+Vector retrieval is **opt-in and off by default**. It is enabled by setting a
+base URL; with none set, ACR never constructs an embedder, never creates a
+vector index, never writes an embedding, and the lexical retrieval path is
+byte-for-byte what it was before.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ACR_CONTEXT_FABRIC_EMBED_BASE_URL` | *(unset — disabled)* | OpenAI-compatible API root, e.g. `http://localhost:1234/v1/`. **Setting this is what enables vector retrieval.** There is no default: no vendor endpoint is ever implied. |
+| `ACR_CONTEXT_FABRIC_EMBED_PROVIDER` | *(required when enabled)* | A stable name for the endpoint, recorded verbatim in the embedder identity so a rebuild can tell vectors apart. Never checked for a specific vendor. |
+| `ACR_CONTEXT_FABRIC_EMBED_MODEL` | *(required when enabled)* | Bare embedding model id. |
+| `ACR_CONTEXT_FABRIC_EMBED_DIMENSION` | *(required when enabled)* | Vector width. Must match what the server returns **and** what the graph's vector index was built with — see the rebuild note below. |
+| `ACR_CONTEXT_FABRIC_EMBED_API_KEY` / `_FILE` | *(empty)* | Optional bearer credential. A loopback embedder needs none; the shape accommodates one so a hosted embedder is a configuration change only. |
+| `ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR` | `0.55` | Absolute cosine similarity below which a neighbour is **dropped, not scored**. See the hazard note below. |
+| `ACR_CONTEXT_FABRIC_EMBED_TIMEOUT` | `250ms` | Bounds one embeddings call. |
+| `ACR_CONTEXT_FABRIC_EMBED_MAX_BATCH` | `64` | Texts per request at projection time. |
+| `ACR_CONTEXT_FABRIC_EMBED_MAX_TEXT_RUNES` | `2000` | Runes of one node's search text that are embedded. |
+| `ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES` | `0` | The SDK's own in-client retry loop. |
+| `ACR_CONTEXT_FABRIC_EMBED_EXPECT_RESPONSE_MODEL` | *(unset)* | The model id the **server reports**, when it legitimately differs from the id sent. This *retargets* the serving-model check; it cannot disable it. Leave unset unless a provider is known to rename its own id. |
+| `ACR_CONTEXT_FABRIC_EMBED_ALLOW_INSECURE_BASE_URL` | `false` | Permits a plaintext `http://` base URL. Required for a loopback embedder. **Never set this for a base URL that leaves the trust boundary** — the credential travels as a bearer token. |
+
+Both `acr-api` and `acr-projector` read these. **Configure them identically for
+both.** A projector writing vectors the reader never queries is wasted work; a
+reader querying an index the projector never fills is silently degraded
+retrieval.
+
+**Similarity floor — the honest-no-match guard.** A nearest-neighbour query
+always returns *k* rows when *k* rows exist; it has no notion of "nothing is
+close enough". Without an absolute floor, a question about a subject that does
+not exist comes back with *k* confident-looking neighbours. Lowering this value
+toward 0 progressively disables that guard and is the single most dangerous
+change available in this table. The default suits a general-purpose sentence
+embedder; retune it against the ambiguity corpus when changing embedder, not by
+feel.
+
+**Changing the embedder or its dimension requires a rebuild.** Vectors are
+projection artifacts stamped with the embedder identity and dimension that
+produced them. If the configured dimension stops matching the organization's
+existing vector index, ACR **disables vector retrieval for that organization**
+and answers lexically — it does not fail the request, and it does not silently
+drop and recreate the index. Recovery is the existing
+`acr-projector rebuild --org <org>`, which resets every source checkpoint and
+bumps the rebuild epoch (which also invalidates answer reuse). Until that runs,
+the organization is simply back to the pre-CHAOS-3778 lexical behaviour.
+
+**Load exactly one embedding model on the embedder — this is a hard operational
+requirement, not a recommendation.** An OpenAI-compatible server is not obliged
+to honour the request's `model` field, and at least one in active use does not:
+LM Studio with more than one embedding model loaded silently ignores `model` and
+serves whichever it prefers, with no error. This was reproduced repeatedly,
+returning 768-dimension nomic vectors for requests explicitly naming a
+1024-dimension qwen3-embedding model.
+
+ACR defends against this by verifying the `model` the response reports against
+the configured model on **every** embeddings call, and failing closed on any
+mismatch — including a response that does not say which model served it, which
+is treated as a mismatch rather than as a pass. A failure here degrades to
+lexical-only retrieval (read side) and persists no vector (write side).
+
+Do not rely on that check as a substitute for the operational requirement. It
+protects against ingesting wrong vectors; it does not make a
+multiple-model-loaded embedder usable. If the check is firing, the symptom is
+that vector retrieval silently stops contributing — verify with the embedder's
+own `GET /v1/models` and unload the extra models.
+
+The dimension check does **not** cover this on its own: it only catches a
+substitution when the widths differ. Two same-width models (embeddinggemma at
+768 and nomic at 768) would otherwise produce silent mixed-vector corruption — a
+graph holding vectors from two models whose similarities are meaningless against
+each other, every node stamped with the identity of the model that was *asked
+for*. Nothing downstream can detect that, and no rebuild fixes it without first
+fixing the server.
+
+**Degradation is visible in the answer, not only in logs.** When vector
+retrieval drops out for a request — an embed timeout, an unreachable embedder,
+a wrong serving model, or a fence mismatch — that investigation's result reports
+`coverage.partial` and carries a fixed limitation stating that one retrieval
+mechanism was unavailable. The signal is request-scoped: it describes that
+answer, not the organization's recent health.
+
+The limitation names no mechanism, provider, model, or error text. It is
+answer-facing prose, and every cause has the same consequence for a reader —
+retrieval saw less than it should have. The operator-facing detail is in
+telemetry (`RecordVectorRetrievalDegraded`), which is where you diagnose *which*
+of the causes above fired.
+
+**What it does *not* report, deliberately: nodes that simply have no vector.**
+A projection batch whose embedding step failed clears the affected nodes'
+vectors, so those nodes are absent from vector search until a later batch or a
+rebuild re-embeds them. A subsequent query runs the vector mechanism
+successfully over the remaining corpus and reports **no** degradation — which is
+correct, and worth stating because it looks like a gap.
+
+The distinction the marker draws is *mechanism availability*, not *corpus
+completeness*:
+
+- A vector-less node is a **data gap**. It is still fully reachable
+  lexically — both retrieval paths index the same `search_text` — so the subject
+  has not disappeared, it is merely findable one way instead of two. This is the
+  same class as a subject the projection has not caught up to yet, which the
+  answer has never claimed to report.
+- A degraded mechanism means the query **could not run one of its retrieval
+  strategies at all**, so every subject in the organization was searched one way
+  short.
+
+Reporting data gaps through this marker would make it fire on essentially every
+answer during any backlog, which would train readers to ignore it — and a
+partial-coverage signal that is always on carries no information.
+
+### Observing vector retrieval
+
+Everything listed here is wired and emitted. Nothing else about vector
+retrieval is currently observable — if a signal is not in this table, it does
+not exist.
+
+All signals go through `log/slog` (`falkorgraph.SlogTelemetry`, supplied by both
+`acr-api` and `acr-projector`). They carry organization IDs, counts, and
+durations only — never text, vectors, model output, or provider response bodies.
+
+| Signal | Level | Emitted when | What it tells you |
+| --- | --- | --- | --- |
+| `context_fabric: vector retrieval unavailable for a request` | WARN | A query could not run the vector mechanism (embed failure/timeout, wrong serving model, fence mismatch) | The read path degraded to lexical for that request. Sustained = the embedder or the fence needs attention. |
+| `context_fabric: projection batch cleared stale vectors` | WARN | A projection batch cleared vectors it had invalidated (`embedded`, `cleared` counts) | **This is the mass-clear signal.** A sustained nonzero `cleared` count means a growing fraction of the corpus is vectorless. |
+| `context_fabric: projection batch embedded nodes` | DEBUG | Every healthy batch (`embedded`, `cleared` counts) | Steady-state progress; raise to DEBUG to measure re-embedding throughput. |
+| `context_fabric: projection tick failed; checkpoint held for replay` | ERROR | A projection tick failed, including one that failed to keep vector state reconcilable | The checkpoint is deliberately held. Sustained = an organization is stalled. Carries a bounded `failure_class`, never the underlying error text — see below. |
+| `context_fabric: observation traversal degraded` | WARN | Observation-to-entity traversal failed for some candidates | Unrelated to vectors; listed because it shares the sink. |
+
+**No log line in this subsystem carries an error's own text.** The bounded
+`failure_class` is the only failure detail emitted, and that holds at every log
+site — the observer, the coordinator's own lock, rebuild-marker and pair-failure
+records, and the projector binary's lifecycle logs — not merely at the observer.
+A sanitized log beside an unsanitized one provides no guarantee at all.
+
+**Tick failures report a class, not an error string.** `failure_class` is one
+of `canceled`, `checkpoint_conflict`, `organization_locked`,
+`rebuild_required`, `dependency_unavailable`, `dependency_rate_limited`,
+`invalid_result`, or `unclassified`. The underlying error's own text is never
+logged, at any level: a source or checkpoint-store error is unbounded
+dependency output, and a guarantee that held only at some log levels would make
+leaking depend on deployment configuration. For dependency-specific detail,
+read that dependency's own logs. `unclassified` is a real answer — it means a
+failure arrived that this vocabulary does not yet name, which is itself the
+signal that the vocabulary needs extending.
+
+**Known limitation — no backlog ratio.** These signals report *events*, not a
+*proportion*. Summing `cleared` against `embedded` over time approximates how
+much of a corpus is vectorless, but nothing computes "N% of this organization's
+nodes currently have no vector" or raises an alert when that fraction makes
+vector retrieval effectively useless. Concretely: after a mass clear followed by
+embedder recovery, queries succeed over the *remaining* vectorized nodes and
+correctly report no mechanism degradation, while the missing fraction is visible
+only by reading the accumulated `cleared` counts. That detector is deliberately
+out of scope for CHAOS-3778 and is filed as follow-up work; until it exists,
+watch the `cleared` counts and the projection tick failures.
+
+**Degradation is expected and safe.** An embedder that is unreachable, cold, or
+slow degrades the request to lexical-only rather than failing it; a cold local
+model was measured at 9.3 s against 10–17 ms warm, which is exactly why the
+per-call timeout is small and the failure is open. The same applies on the
+write side: a projection batch whose embedding call fails still commits its
+canonical projection and advances its checkpoint. A node without a vector is
+invisible to vector search and fully reachable lexically — degraded retrieval,
+never lost data — and the next rebuild re-embeds it.
+
 Answer reuse is **opt-in**: an operator turns it on by setting a window.
 This is deliberate, not merely conservative-by-default -- reuse changes
 what a request can be served from (a prior turn's stored answer, not a

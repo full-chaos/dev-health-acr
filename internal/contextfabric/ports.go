@@ -418,6 +418,49 @@ type ProjectionBackend interface {
 	PurgeOrganization(context.Context, string) error
 }
 
+// EmbedderIdentity names WHICH embedder produced a vector, and at what
+// dimension (CHAOS-3778 / AC-3778-7). It is recorded alongside every stored
+// vector and compared before any vector index is queried, so that changing the
+// embedder or its dimension is DETECTABLE rather than silently producing
+// nonsense similarities against vectors from a different model.
+//
+// Provider and Model are recorded verbatim from configuration and never
+// interpreted -- no code path checks them for a specific vendor.
+type EmbedderIdentity struct {
+	Provider  string `json:"provider"`
+	Model     string `json:"model"`
+	Dimension int    `json:"dimension"`
+}
+
+// String renders the identity in the stable form written onto graph nodes.
+// Deliberately excludes Dimension, which is stored as its own typed property
+// so a mismatch can be detected numerically rather than by string comparison.
+func (i EmbedderIdentity) String() string {
+	return i.Provider + "/" + i.Model
+}
+
+// Embedder is the ACR-owned embedding port (TRD §19.4.7: "the embedder is an
+// ACR-owned port; the vendor client stays inside the adapter"). Note this is a
+// NEW port, not a change to GraphReader -- §19.4's "no port change is
+// expected" refers to GraphReader, whose signature CHAOS-3778 leaves alone.
+//
+// Embed returns one vector per input text, in the SAME ORDER as the input.
+// Implementations must reject a response that does not preserve order or
+// count, rather than silently mis-pairing a vector with the wrong text -- a
+// mis-paired vector is not a degraded result, it is a wrong one, and nothing
+// downstream could detect it.
+//
+// Embed is called with a BATCH at projection time (one call per projection
+// batch, not one per node) and with a single text on the read path (the
+// question). Implementations must be safe for concurrent use.
+//
+// Identity is separate from Embed because it is configuration-derived and is
+// needed at index-bootstrap and projection time WITHOUT making a model call.
+type Embedder interface {
+	Embed(ctx context.Context, texts []string) ([][]float32, error)
+	Identity() EmbedderIdentity
+}
+
 // ProjectionSource reads canonical projection batches from a bounded adapter,
 // such as a Dev Health outbox or typed canonical read service.
 type ProjectionSource interface {

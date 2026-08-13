@@ -111,6 +111,30 @@ const (
 	ContextFabricResolutionUnresolved ContextFabricResolutionState = "unresolved"
 )
 
+// ContextFabricSubjectMatchMechanism names HOW a subject candidate was
+// proposed (CHAOS-3778 / AC-3778-6): a reader can tell a vector match from an
+// exact match, an alias match, and a graph match. This is a CLOSED enum --
+// adding a member is a contract change, not an implementation detail, because
+// the corroboration band in graphrank counts DISTINCT members (see
+// ValidContextFabricSubjectMatchMechanism and graphrank.CorroboratedConfidence).
+type ContextFabricSubjectMatchMechanism string
+
+const (
+	// ContextFabricMatchExact is an exact canonical identity or label match.
+	ContextFabricMatchExact ContextFabricSubjectMatchMechanism = "exact"
+	// ContextFabricMatchAlias is a match on an approved alias or previous name.
+	ContextFabricMatchAlias ContextFabricSubjectMatchMechanism = "alias"
+	// ContextFabricMatchProviderKey is a match on an upstream provider key.
+	ContextFabricMatchProviderKey ContextFabricSubjectMatchMechanism = "provider_key"
+	// ContextFabricMatchLexical is a full-text/keyword retrieval match.
+	ContextFabricMatchLexical ContextFabricSubjectMatchMechanism = "lexical"
+	// ContextFabricMatchVector is an embedding-similarity retrieval match.
+	ContextFabricMatchVector ContextFabricSubjectMatchMechanism = "vector"
+	// ContextFabricMatchTraversalParent is a match reached by walking from a
+	// matched observation (document/episode) to its canonical parent entity.
+	ContextFabricMatchTraversalParent ContextFabricSubjectMatchMechanism = "traversal_parent"
+)
+
 type ContextFabricTemporalAxis string
 
 const (
@@ -419,12 +443,51 @@ type ContextFabricSubjectCandidate struct {
 	MatchReasons   []string                     `json:"match_reasons"`
 	Confidence     float64                      `json:"confidence"`
 	EvidenceRefIDs []string                     `json:"evidence_ref_ids,omitempty"`
+	// MatchMechanisms records WHICH retrieval mechanisms proposed this
+	// candidate (CHAOS-3778 / AC-3778-6). Additive and optional in v1: every
+	// InvestigationResult persisted before CHAOS-3778 was serialized without
+	// it, and those snapshots must still validate on replay, so this field is
+	// never required and an empty value is never an error. A reader that finds
+	// it empty learns only "this result predates mechanism recording", never
+	// "no mechanism matched".
+	MatchMechanisms []ContextFabricSubjectMatchMechanism `json:"match_mechanisms,omitempty"`
 }
 
 type ContextFabricSubjectResolution struct {
 	Candidates          []ContextFabricSubjectCandidate `json:"candidates"`
 	Committed           []ContextFabricSubjectRef       `json:"committed"`
 	ClarificationPrompt string                          `json:"clarification_prompt,omitempty"`
+	// RetrievalDegraded reports that a retrieval MECHANISM was unavailable
+	// for this resolution -- CHAOS-3778's vector step timed out, errored, or
+	// was fenced off -- so the candidate set may be narrower than a healthy
+	// run would produce (codex round-1 F4).
+	//
+	// It is a single boolean, not a taxonomy, on purpose: every cause has the
+	// same consequence for a reader ("retrieval saw less than it should"),
+	// and naming causes here would leak retrieval internals into an
+	// answer-facing contract. The operator-facing detail lives in telemetry.
+	//
+	// REQUEST-SCOPED. It describes THIS resolution, not the organization's
+	// recent health, which is what makes it usable as an input to the
+	// engine's own coverage and limitation handling.
+	//
+	// IT REPORTS MECHANISM AVAILABILITY, NOT CORPUS COMPLETENESS (codex
+	// round-2 R2-4). A node that carries no vector -- because a projection
+	// batch's embedding step failed and cleared it, or because projection has
+	// not reached it yet -- is a DATA GAP, and a later query that runs the
+	// vector mechanism successfully over the rest of the corpus reports no
+	// degradation. That is intended: such a node is still fully reachable
+	// lexically, since both retrieval paths index the same text, so it is
+	// findable one way instead of two rather than lost. Degradation means the
+	// query could not run one of its retrieval strategies AT ALL, so every
+	// subject was searched one way short. Reporting data gaps here would make
+	// the field fire on nearly every answer during any re-embedding backlog,
+	// and a partial-coverage signal that is always on carries no information.
+	//
+	// Additive-optional in v1: absent means "not reported", never "healthy".
+	// Every result persisted before CHAOS-3778 lacks it and must still
+	// validate on replay.
+	RetrievalDegraded bool `json:"retrieval_degraded,omitempty"`
 }
 
 type ContextFabricCohort struct {

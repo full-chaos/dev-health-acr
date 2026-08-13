@@ -48,8 +48,41 @@ type constraintStatus struct {
 type indexStatus struct {
 	Label      string
 	Properties []string
-	Types      map[string][]string // property -> index types (e.g. "RANGE", "FULLTEXT")
+	Types      map[string][]string // property -> index types (e.g. "RANGE", "FULLTEXT", "VECTOR")
 	EntityType string
+	// Status is the index's own readiness, e.g. "OPERATIONAL". Decoded so the
+	// vector fence can fail closed on anything else (codex round-1 F5) rather
+	// than querying an index that is still building.
+	Status string
+	// Options carries the per-property index options FalkorDB echoes back.
+	// For a vector index this is where the dimension lives -- verified live
+	// against graph module 42002, which reports
+	// {embedding: {dimension: 4, similarityFunction: cosine, M: 16, ...}}.
+	// Decoded as an opaque map rather than a typed struct because the option
+	// set is server-version-specific and this adapter reads exactly one key
+	// from it (CHAOS-3778 / AC-3778-7).
+	Options map[string]interface{}
+}
+
+// Dimension reports the width an existing vector index on propEmbedding was
+// built with. ok=false means the server did not report one, which is treated
+// as UNKNOWN rather than as a match -- guessing a match is precisely the
+// failure AC-3778-7 exists to prevent.
+func (i indexStatus) Dimension() (int, bool) {
+	property, ok := i.Options[propEmbedding].(map[string]interface{})
+	if !ok {
+		return 0, false
+	}
+	switch value := property["dimension"].(type) {
+	case int64:
+		return int(value), true
+	case int:
+		return value, true
+	case float64:
+		return int(value), true
+	default:
+		return 0, false
+	}
 }
 
 // conn is the seam between falkorgraph's Cypher-construction logic and

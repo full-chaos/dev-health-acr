@@ -38,6 +38,20 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 	for _, candidate := range candidatesBySubject {
 		candidates = append(candidates, candidate)
 	}
+	// Phase 2.5 (CHAOS-3778): apply the corroborated band EXACTLY ONCE, here
+	// -- after the caller has finished assembling the full candidate set, and
+	// before both the ranking sort and the phase-3 commit decision that read
+	// Confidence. Order matters twice over: applying it after the sort would
+	// leave the ranking computed from stale base confidences, and applying it
+	// incrementally during the merge would feed an already-corroborated value
+	// back in as a base (see CorroboratedConfidence's doc comment).
+	//
+	// Every candidate goes through it, not just the multi-mechanism ones: the
+	// function returns a single-mechanism base unchanged, so a uniform pass is
+	// both simpler and impossible to forget for a new candidate source.
+	for index := range candidates {
+		candidates[index].Confidence = CorroboratedConfidence(candidates[index].MatchMechanisms, candidates[index].Confidence)
+	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].Confidence == candidates[j].Confidence {
 			return SubjectKey(candidates[i].Subject) < SubjectKey(candidates[j].Subject)

@@ -137,6 +137,10 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: rebuildMarkers, Locker: locker,
 		ReuseInvalidator: reuseInvalidator,
 		PollInterval:     cfg.PollInterval, Concurrency: cfg.Concurrency, Logger: logger,
+		// Codex round-3 F2: a real observer, not the no-op default. A tick
+		// that fails and holds its checkpoint is correct behavior, but only
+		// safe behavior if it is visible.
+		Observer: projectionrun.SlogObserver{Logger: logger},
 	})
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("build projection coordinator: %w", err), runtime.Close())
@@ -180,7 +184,19 @@ func openProjectionBackend() (contextfabric.ProjectionBackend, func(context.Cont
 	if err != nil {
 		return nil, nil, fmt.Errorf("falkordb configuration: %w", err)
 	}
-	adapter, err := falkorgraph.New(falkorConfig)
+	// Codex round-3 F2: supply a real telemetry sink. Left nil, every graph
+	// signal -- including the vector cleared/embedded counts that make a
+	// re-embedding backlog visible -- was discarded.
+	falkorConfig.Telemetry = falkorgraph.SlogTelemetry{}
+	// CHAOS-3778: the projector writes embeddings only when an embedder is
+	// configured. It must agree with the hosted reader (both use
+	// EmbedderFromEnv) -- writing vectors nothing queries is wasted work, and
+	// querying an index nothing fills is silently degraded retrieval.
+	embedderOptions, err := falkorgraph.EmbedderFromEnv(os.LookupEnv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("context fabric embedder configuration: %w", err)
+	}
+	adapter, err := falkorgraph.NewWithEmbedder(falkorConfig, embedderOptions)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open falkordb graph backend: %w", err)
 	}

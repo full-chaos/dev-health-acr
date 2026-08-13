@@ -384,6 +384,41 @@ func validResolutionState(value ContextFabricResolutionState) bool {
 	}
 }
 
+// ValidContextFabricSubjectMatchMechanism reports whether value is one of the
+// six closed enum members (CHAOS-3778 / AC-3778-6). Exported because
+// graphrank's corroboration band counts DISTINCT mechanisms and must reject an
+// unrecognized one at the boundary rather than counting it toward a commit.
+func ValidContextFabricSubjectMatchMechanism(value ContextFabricSubjectMatchMechanism) bool {
+	switch value {
+	case ContextFabricMatchExact, ContextFabricMatchAlias, ContextFabricMatchProviderKey,
+		ContextFabricMatchLexical, ContextFabricMatchVector, ContextFabricMatchTraversalParent:
+		return true
+	default:
+		return false
+	}
+}
+
+// validMatchMechanisms bounds the recorded mechanism set: at most one entry per
+// enum member (six), every entry a recognized member, and no duplicates. An
+// EMPTY set is valid -- see ContextFabricSubjectCandidate.MatchMechanisms for
+// why absence must stay legal in v1.
+func validMatchMechanisms(values []ContextFabricSubjectMatchMechanism) bool {
+	if len(values) > 6 {
+		return false
+	}
+	seen := make(map[ContextFabricSubjectMatchMechanism]struct{}, len(values))
+	for _, value := range values {
+		if !ValidContextFabricSubjectMatchMechanism(value) {
+			return false
+		}
+		if _, exists := seen[value]; exists {
+			return false
+		}
+		seen[value] = struct{}{}
+	}
+	return true
+}
+
 func validDriverStanding(value ContextFabricDriverStanding) bool {
 	switch value {
 	case ContextFabricDriverPrincipal, ContextFabricDriverContributing, ContextFabricDriverSymptom, ContextFabricDriverContext, ContextFabricDriverWithheld:

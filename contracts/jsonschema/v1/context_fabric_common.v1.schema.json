@@ -417,6 +417,22 @@
           "minimum": 0,
           "maximum": 1
         },
+        "match_mechanisms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "exact",
+              "alias",
+              "provider_key",
+              "lexical",
+              "vector",
+              "traversal_parent"
+            ]
+          },
+          "maxItems": 6,
+          "uniqueItems": true
+        },
         "evidence_ref_ids": {
           "type": "array",
           "items": {
@@ -459,6 +475,9 @@
         "clarification_prompt": {
           "type": "string",
           "maxLength": 2000
+        },
+        "retrieval_degraded": {
+          "type": "boolean"
         }
       },
       "required": [

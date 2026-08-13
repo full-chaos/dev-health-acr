@@ -35,11 +35,24 @@ func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedSco
 	if matched {
 		reason = "Exact canonical subject label match."
 	}
+	// CHAOS-3778 / AC-3778-6: record the retrieval mechanism the adapter
+	// declared. An exact label/name match is recorded as MatchExact IN
+	// ADDITION to (not instead of) the adapter's own mechanism, because both
+	// statements are true and both are useful to a reader: the full-text index
+	// is what surfaced this node, and the term is what matched its label
+	// exactly. Recording both cannot demote the candidate -- an exact match
+	// carries confidence 1, and CorroboratedConfidence returns 1 unchanged for
+	// any base of 1 precisely so that being found a second way never costs an
+	// exact match its certainty.
+	mechanisms := MergeMechanisms([]contextfabric.MatchMechanism{node.Mechanism})
+	if matched {
+		mechanisms = MergeMechanisms(mechanisms, []contextfabric.MatchMechanism{contextfabric.MatchExact})
+	}
 	return contextfabric.SubjectCandidate{
 		ReceiptID: DeterministicUUID("context-fabric-subject-receipt", node.UUID, strings.ToLower(term)),
 		Subject:   subject, State: contextfabric.ResolutionProposed,
 		MatchedTerms: []string{term}, MatchReasons: []string{reason}, Confidence: confidence,
-		EvidenceRefIDs: EvidenceRefs(node.Attributes),
+		EvidenceRefIDs: EvidenceRefs(node.Attributes), MatchMechanisms: mechanisms,
 	}, true
 }
 

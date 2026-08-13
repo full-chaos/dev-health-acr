@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
@@ -97,7 +98,7 @@ func rebuild(args []string) error {
 	}
 	defer func() {
 		if closeErr := runtime.Close(); closeErr != nil {
-			logger.Error("error closing runtime", "error", closeErr)
+			logger.Error("error closing runtime", "failure_class", projectionrun.ClassifyFailure(closeErr))
 		}
 	}()
 	if runtime.Coordinator == nil {
@@ -139,7 +140,7 @@ func serve(args []string) error {
 	}
 	defer func() {
 		if closeErr := runtime.Close(); closeErr != nil {
-			logger.Error("error closing runtime", "error", closeErr)
+			logger.Error("error closing runtime", "failure_class", projectionrun.ClassifyFailure(closeErr))
 		}
 	}()
 

@@ -41,6 +41,49 @@ type noopObserver struct{}
 
 func (noopObserver) ObserveProjectionOutcome(Outcome) {}
 
+// SlogObserver logs every tick outcome through log/slog (codex round-3 F2).
+//
+// The projector previously defaulted to noopObserver and no production
+// construction supplied anything else, so a projection tick that failed --
+// including one failing because vector state could not be reconciled (R2-3,
+// round-3 F1) -- produced no operational signal at all. A failing tick that
+// holds its checkpoint is the correct behavior, but it is only SAFE behavior
+// if someone can see it happening; otherwise a stalled organization is
+// indistinguishable from an idle one.
+//
+// Content-safe by the same rule Observer documents: counts, IDs, durations,
+// and error text only.
+type SlogObserver struct{ Logger *slog.Logger }
+
+func (o SlogObserver) ObserveProjectionOutcome(outcome Outcome) {
+	logger := o.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	attrs := []any{
+		"org_id", outcome.OrgID, "source", outcome.Source,
+		"duration_ms", outcome.Duration.Milliseconds(),
+	}
+	if outcome.Err != nil {
+		// Codex round-4 F3: a CLASSIFICATION, never the error's own text.
+		//
+		// Outcome.Err is whatever a source, checkpoint store, or backend
+		// returned. The graph adapter sanitizes its own errors
+		// (safeDependencyError), but a ClickHouse driver error or a Postgres
+		// checkpoint error arrives here unbounded, and logging it verbatim
+		// would put raw dependency text into production telemetry -- breaking
+		// the guarantee this observer's own doc comment and
+		// docs/operations.md both make.
+		//
+		// Same discipline as the embedder's model-identity error: name the
+		// classified thing, never the received text.
+		logger.Error("context_fabric: projection tick failed; checkpoint held for replay",
+			append(attrs, "failure_class", classifyOutcomeError(outcome.Err))...)
+		return
+	}
+	logger.Debug("context_fabric: projection tick completed", attrs...)
+}
+
 // RebuildMarker enforces the CHAOS-3753 codex finding C2 invariant: no code
 // path may run incremental projection against a purged-but-not-reset
 // graph. PurgeOrganization and resetting every source's checkpoint are two
@@ -218,7 +261,7 @@ func (c *Coordinator) Rebuild(ctx context.Context, orgID string) error {
 	}
 	defer func() {
 		if unlockErr := unlock(); unlockErr != nil {
-			c.logger.WarnContext(ctx, "projection organization unlock failed after rebuild", "org_id", orgID, "error", unlockErr)
+			c.logger.WarnContext(ctx, "projection organization unlock failed after rebuild", "org_id", orgID, "failure_class", classifyOutcomeError(unlockErr))
 		}
 	}()
 	return c.performRebuild(ctx, orgID)
@@ -368,13 +411,13 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string) {
 	unlock, err := c.locker.Lock(ctx, orgID)
 	if err != nil {
 		if !errors.Is(err, ErrOrgLocked) {
-			c.logger.WarnContext(ctx, "projection organization lock failed", "org_id", orgID, "error", err)
+			c.logger.WarnContext(ctx, "projection organization lock failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		}
 		return
 	}
 	defer func() {
 		if unlockErr := unlock(); unlockErr != nil {
-			c.logger.WarnContext(ctx, "projection organization unlock failed", "org_id", orgID, "error", unlockErr)
+			c.logger.WarnContext(ctx, "projection organization unlock failed", "org_id", orgID, "failure_class", classifyOutcomeError(unlockErr))
 		}
 	}()
 
@@ -386,11 +429,11 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string) {
 	// projection for this org this tick regardless of outcome (the marker
 	// state, not a stale checkpoint, is the true source of truth right now).
 	if inProgress, err := c.rebuildMarkers.IsRebuildInProgress(ctx, orgID); err != nil {
-		c.logger.WarnContext(ctx, "check rebuild marker failed; skipping tick", "org_id", orgID, "error", err)
+		c.logger.WarnContext(ctx, "check rebuild marker failed; skipping tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		return
 	} else if inProgress {
 		if err := c.performRebuild(ctx, orgID); err != nil {
-			c.logger.WarnContext(ctx, "resume interrupted rebuild failed; will retry next tick", "org_id", orgID, "error", err)
+			c.logger.WarnContext(ctx, "resume interrupted rebuild failed; will retry next tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		} else {
 			c.logger.InfoContext(ctx, "resumed an interrupted rebuild", "org_id", orgID)
 		}
@@ -417,7 +460,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string) {
 	c.observer.ObserveProjectionOutcome(outcome)
 	switch {
 	case err != nil:
-		c.logger.WarnContext(ctx, "projection pair failed", "org_id", orgID, "source", source, "error", err, "duration_ms", outcome.Duration.Milliseconds())
+		c.logger.WarnContext(ctx, "projection pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(err), "duration_ms", outcome.Duration.Milliseconds())
 	case run.Applied:
 		c.logger.InfoContext(ctx, "projection batch applied", "org_id", orgID, "source", source, "batch_id", run.BatchID, "backend_watermark", run.BackendWatermark, "duration_ms", outcome.Duration.Milliseconds())
 	}
@@ -453,4 +496,84 @@ func (c *Coordinator) recordBackoff(key string, err error) {
 	}
 	jitter := time.Duration(rand.Int63n(int64(baseBackoff))) //nolint:gosec // scheduling jitter, not security-sensitive
 	state.nextAttempt = c.now().Add(delay + jitter)
+}
+
+// Outcome failure classes. A closed, bounded vocabulary: an unrecognized error
+// reports failureClassUnclassified rather than leaking anything about itself.
+const (
+	failureClassCanceled      = "canceled"
+	failureClassConflict      = "checkpoint_conflict"
+	failureClassLocked        = "organization_locked"
+	failureClassRebuildNeeded = "rebuild_required"
+	failureClassUnavailable   = "dependency_unavailable"
+	failureClassRateLimited   = "dependency_rate_limited"
+	failureClassInvalidResult = "invalid_result"
+	failureClassUnclassified  = "unclassified"
+)
+
+// ClassifyFailure is classifyOutcomeError exported for the projector binary,
+// which logs its own lifecycle failures and must use the SAME bounded
+// vocabulary. Codex round-5: a second logging site with its own error
+// formatting is how the first sanitized one gets bypassed.
+//
+// ADD SENTINELS TO failureClasses, NOT HERE AND NOT AS AN INLINE CHECK. The
+// probe test enumerates that table, so a sentinel added to it is automatically
+// covered; a check written inline -- above the loop, or in this function -- is
+// invisible to the probes and reintroduces exactly the gap the table exists to
+// close.
+func ClassifyFailure(err error) string { return classifyOutcomeError(err) }
+
+// failureClasses is THE single place a sentinel-to-class pairing lives.
+//
+// ORDERED: the first errors.Is match wins, so entries that must share a class
+// (cancellation and deadline) sit adjacent and both resolve to it. Reordering
+// changes classification, so treat the order as part of the contract.
+//
+// classifyOutcomeError loops over this table, and the probe test in
+// observer_test.go RANGES OVER THE SAME TABLE. That is the point of it being a
+// table at all (codex round 7): the previous form kept the classifier's
+// sentinels as inline switch arms and the probes as a separate hand-written
+// list, so adding a branch without adding a probe left the new branch
+// untested while every existing probe stayed green. Deriving both from one
+// declaration makes that mistake structurally impossible rather than merely
+// less likely.
+var failureClasses = []struct {
+	sentinel error
+	class    string
+}{
+	// Cancellation and deadline share a class; adjacency plus first-match
+	// ordering is what expresses that.
+	{context.Canceled, failureClassCanceled},
+	{context.DeadlineExceeded, failureClassCanceled},
+	{contextfabric.ErrProjectionConflict, failureClassConflict},
+	{ErrOrgLocked, failureClassLocked},
+	{contextfabric.ErrProjectionSourceVersionChanged, failureClassRebuildNeeded},
+	{contextfabric.ErrRateLimited, failureClassRateLimited},
+	{contextfabric.ErrUnavailable, failureClassUnavailable},
+	{contextfabric.ErrInvalidResult, failureClassInvalidResult},
+}
+
+// classifyOutcomeError maps a tick failure onto the closed vocabulary above.
+//
+// It deliberately offers NO escape hatch to the raw text -- not even at debug
+// level. A guarantee that holds only at some log levels is not a guarantee: it
+// makes leak-or-not depend on deployment configuration, which is precisely how
+// this class of defect recurs. Operators who need dependency-specific detail
+// have it at the dependency, which logs its own errors with its own
+// sanitization; what this signal is FOR is answering "is this organization
+// stalled, and roughly why", which the class answers.
+//
+// failureClassUnclassified is a real answer, not a shrug: it means a failure
+// arrived that this vocabulary does not yet name, which is itself the signal
+// that the vocabulary needs extending.
+func classifyOutcomeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	for _, entry := range failureClasses {
+		if errors.Is(err, entry.sentinel) {
+			return entry.class
+		}
+	}
+	return failureClassUnclassified
 }

@@ -26,7 +26,7 @@ func candidateNode(kind contextfabric.SubjectKind, canonicalID, label string, re
 		attrs["authorization_repositories"] = repos
 	}
 	r := relevance
-	return CandidateNode{UUID: "node-" + canonicalID, Name: label, Relevance: &r, Attributes: attrs}
+	return CandidateNode{UUID: "node-" + canonicalID, Name: label, Relevance: Normalized(r), Attributes: attrs}
 }
 
 // TestNodeCandidateFiltersUnauthorizedNodesBeforeCandidates is the direct
