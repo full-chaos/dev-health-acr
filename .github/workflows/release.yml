@@ -220,6 +220,10 @@ jobs:
         with:
           driver-opts: image=moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1
           cache-binary: false
+      # CodeQL flags this step for cache poisoning (alert #11) — dismissed as a false
+      # positive: no cache sink exists in this job (qemu cache-image and buildx
+      # cache-binary are both false; no actions/cache or setup-go). Job-level
+      # hardening for this workflow is tracked in CHAOS-3794.
       - name: Build, validate, scan, and SBOM exact multi-architecture OCI archives
         env:
           CONTAINER_VERSION: ${{ needs.preflight.outputs.version }}
