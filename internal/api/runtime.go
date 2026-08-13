@@ -55,8 +55,21 @@ type RuntimeDependencies struct {
 	// investigations route is not registered at all (see Handler()),
 	// mirroring how Episodes being nil leaves the episode route
 	// unregistered.
-	Investigator    contextfabric.Investigator
-	ReadinessChecks []ReadinessCheck
+	Investigator contextfabric.Investigator
+	// OrgModelConfigs is optional (CHAOS-3775) -- same convention as
+	// Investigator. When nil (no ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS
+	// configured), the model-config routes stay registered, authorized, and
+	// audited, and answer a clean 503 for every request, exactly like the
+	// investigations route does with a nil Investigator.
+	OrgModelConfigs contextfabric.OrgModelConfigStore
+	// OrgModelRuntimeEvictor is optional and may be nil even when
+	// OrgModelConfigs is non-nil (e.g. investigations disabled, so no
+	// modelruntimeresolver.Resolver was ever constructed to evict from --
+	// see internal/runtime/hosted's buildContextFabricInvestigator). When
+	// nil, the DELETE model-config handler skips eviction entirely: there
+	// is no cached runtime anywhere to purge if no resolver exists.
+	OrgModelRuntimeEvictor contextfabric.OrgModelRuntimeEvictor
+	ReadinessChecks        []ReadinessCheck
 }
 
 func (r *RuntimeDependencies) validate() error {

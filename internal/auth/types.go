@@ -17,6 +17,13 @@ const (
 	ScopeContextRead  = "context:read"
 	ScopeEvidenceRead = "evidence:read"
 	ScopeEpisodeWrite = "episode:write"
+	// ScopeContextAdmin gates the per-organization BYO LLM configuration
+	// surface (CHAOS-3775): reading (masked) or writing an organization's
+	// provider, base URL, model, fallback, and credential. Deliberately
+	// distinct from ScopeContextRead -- reading investigation results and
+	// administering the model provider an organization pays for are
+	// different privilege levels.
+	ScopeContextAdmin = "context:admin"
 )
 
 var (
@@ -34,6 +41,7 @@ var knownScopes = map[string]struct{}{
 	ScopeContextRead:  {},
 	ScopeEvidenceRead: {},
 	ScopeEpisodeWrite: {},
+	ScopeContextAdmin: {},
 }
 
 type CreateCredentialRequest struct {

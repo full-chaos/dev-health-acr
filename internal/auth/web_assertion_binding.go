@@ -65,7 +65,18 @@ func validWebPermissions(permissions []string) bool {
 	}
 	seen := make(map[string]struct{}, len(permissions))
 	for _, permission := range permissions {
-		if permission != ScopeContextRead && permission != ScopeEvidenceRead && permission != WebAssertionPermissionCredentialIssue {
+		// ScopeContextAdmin (Codex round-1 finding F5, decided): a web
+		// assertion may carry it for a READ of an organization's own BYO
+		// LLM configuration -- GET /api/v1/context-fabric/model-config is
+		// the product's own settings UI reading its own organization's
+		// (masked) configuration, the same shape context:read already
+		// covers for investigation results. The write/delete routes on
+		// that same resource stay bearer-only regardless (they carry the
+		// plaintext credential on the wire; see
+		// ContextFabricOrgModelConfigPutHandler's doc comment) -- this
+		// widens what a web assertion can READ, never what it can DO to a
+		// stored credential.
+		if permission != ScopeContextRead && permission != ScopeEvidenceRead && permission != WebAssertionPermissionCredentialIssue && permission != ScopeContextAdmin {
 			return false
 		}
 		if _, duplicate := seen[permission]; duplicate {

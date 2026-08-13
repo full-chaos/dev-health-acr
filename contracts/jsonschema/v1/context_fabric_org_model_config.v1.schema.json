@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Context Fabric Organization Model Configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "org_id",
+    "provider",
+    "model",
+    "credential_masked",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "context_fabric_org_model_config.v1"
+    },
+    "org_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "base_url": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "fallback_model": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "credential_masked": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "$id": "https://contracts.fullchaos.dev/acr/v1/context_fabric_org_model_config.v1.schema.json"
+}

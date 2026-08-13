@@ -102,7 +102,10 @@ func validOpenAPIPath(path string) bool {
 		// under the /api/v1/agent-context/ prefix wildcard above because
 		// it is a distinct consumer-neutral surface (ADR 0006), so it is
 		// listed explicitly like the oauth/credential-self routes above.
-		"/api/v1/context-fabric/investigations":
+		"/api/v1/context-fabric/investigations",
+		// CHAOS-3775: per-organization BYO LLM provider configuration.
+		// Same distinct surface as the investigation endpoint above.
+		"/api/v1/context-fabric/model-config":
 		return true
 	default:
 		return false

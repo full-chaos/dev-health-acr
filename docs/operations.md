@@ -261,6 +261,36 @@ new build.
 | `ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES` | `2` | The OpenAI SDK's own retry loop *within* one attempt (0–5). Set `0` to make `genkitruntime` the single retry owner — the right choice for a local BYO server. |
 | `ACR_CONTEXT_FABRIC_MODEL_ALLOW_INSECURE_BASE_URL` | `false` | Permits a plaintext `http://` base URL. Only for a loopback or private-network BYO server: the credential travels as a bearer token on every request. |
 
+### Per-organization BYO LLM (CHAOS-3775)
+
+The variables above configure the **deployment-default** provider. An
+organization may additionally configure its own provider/base URL/model/
+fallback/credential through `PUT /api/v1/context-fabric/model-config`
+(`context:admin` scope; org derived from the authenticated principal, never
+from the request body). Per-request resolution: an organization with a
+stored configuration gets its own runtime; an organization with none falls
+through to the deployment default; an organization whose stored credential
+is broken (401/403 from its provider) gets a 503 scoped to that
+organization only — it never silently falls back to the deployment
+credential (explicit prohibition; see the TRD). A configuration change
+takes effect on the organization's next request, no restart needed
+(`internal/contextfabric/modelruntimeresolver` caches a constructed runtime
+keyed by the config's `generation` -- a monotonic Postgres-sequence column,
+not `updated_at`; two upserts landing in the same clock tick would be
+indistinguishable under a timestamp key -- and rebuilds when it changes).
+
+The stored credential is sealed with AES-256-GCM
+(`internal/contextfabric/modelconfigcrypto`) under a deployment master key
+set exactly like `ACR_EVIDENCE_ID_KEYS`/`ACR_EVIDENCE_ID_ACTIVE_KID`:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS` / `_FILE` | *(unset)* | Comma-separated `KID=base64key` pairs; each key must decode to exactly 32 bytes (AES-256). Required before any organization can save a BYO LLM configuration. |
+| `ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_ACTIVE_KID` / `_FILE` | *(unset)* | Which configured key id new writes are sealed under. Rotate by adding a new key, repointing this at it, and letting organizations re-save over time — ciphertext sealed under a retired key id still decrypts as long as that key id stays configured. |
+
+Reading a configuration back never returns the credential: the response
+carries `credential_masked` only (last 4 characters, e.g. `********wxyz`).
+
 Two behaviours matter operationally, and they are opposites on purpose:
 
 - **No provider configured is a supported state, not an error.**

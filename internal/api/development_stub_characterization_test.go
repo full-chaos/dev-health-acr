@@ -21,6 +21,9 @@ func TestDevelopmentStub_protected_routes_fail_closed_without_runtime(t *testing
 		{method: http.MethodGet, path: "/api/v1/agent-context/evidence/ev1_characterization"},
 		{method: http.MethodPost, path: "/api/v1/agent-context/episodes"},
 		{method: http.MethodPost, path: "/api/v1/context-fabric/investigations"},
+		{method: http.MethodGet, path: "/api/v1/context-fabric/model-config"},
+		{method: http.MethodPut, path: "/api/v1/context-fabric/model-config"},
+		{method: http.MethodDelete, path: "/api/v1/context-fabric/model-config"},
 	}
 
 	for _, route := range routes {
