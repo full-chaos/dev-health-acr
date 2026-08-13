@@ -585,6 +585,11 @@
         "state": "available",
         "observed_at": "2026-08-11T16:00:02Z",
         "watermark": "readiness-wm-17"
+      },
+      {
+        "source": "canonical_fact:workload",
+        "state": "pruned",
+        "reason": "pruned:subject_kind_unsupported: no resolved subject has a kind this capability supports"
       }
     ],
     "partial": false,

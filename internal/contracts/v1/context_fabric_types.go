@@ -213,6 +213,32 @@ const (
 	ContextFabricSourceTruncated     ContextFabricSourceState = "truncated"
 	ContextFabricSourceConflicted    ContextFabricSourceState = "conflicted"
 	ContextFabricSourceNotApplicable ContextFabricSourceState = "not_applicable"
+	// ContextFabricSourcePruned (CHAOS-3783) means the fact-read planner
+	// decided, before any fan-out, that this source could not contribute to
+	// this investigation, and therefore never ran it. It is an additive v1
+	// enum value -- a new value a producer may emit, not a change in
+	// meaning for any existing one -- exactly like
+	// ContextFabricSubjectPullRequestReview/ContextFabricSubjectCIRun
+	// (CHAOS-3753 codex finding C7); a widening stays v1 per
+	// contracts/AGENTS.md.
+	//
+	// It is deliberately DISTINCT from not_applicable, which consumers
+	// already switch on. not_applicable is a statement the provider itself
+	// made after running ("I do not apply here"); pruned is a statement the
+	// PLANNER made instead of running it ("you could not have applied
+	// here"). The two carry different diagnostic meaning: a wrong
+	// not_applicable is a provider bug, a wrong pruned is a planner bug,
+	// and only the latter is findable by auditing pruning decisions. A
+	// consumer that wants the count of skipped-without-running sources --
+	// CHAOS-3746's in-flight surface among them -- reads this state rather
+	// than parsing the free-text Reason.
+	//
+	// A pruned source carries NO facts and is NOT a degradation: the
+	// absence is fully explained by the accompanying Reason, so it must
+	// never set Coverage.Partial or add a degraded reason. See
+	// contextfabric.factStateDegrades/stateRejectsFacts and
+	// docs/design/context-fabric-fact-planning.md.
+	ContextFabricSourcePruned ContextFabricSourceState = "pruned"
 )
 
 type ContextFabricConversationRole string

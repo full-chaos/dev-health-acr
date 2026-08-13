@@ -593,3 +593,135 @@ func TestContextFabricCoverageSourcesStillRequiresNonNil(t *testing.T) {
 		t.Fatal("Validate() error = nil, want nil sources to remain invalid -- it is a required field")
 	}
 }
+
+// TestContextFabricSourceStatePrunedIsAcceptedAndParityHolds guards the
+// CHAOS-3783 enum widening from both sides. The Go validator must accept
+// "pruned" (or the fact planner's coverage entries never survive
+// InvestigationResult.Validate), and the JSON Schema enum must list exactly
+// the same closed set (or a payload the Go side accepts is rejected on the
+// wire, which is the parity break contract-first exists to prevent). The
+// schema side is read from the file rather than restated here so a value
+// added to only one of the two cannot pass.
+func TestContextFabricSourceStatePrunedIsAcceptedAndParityHolds(t *testing.T) {
+	t.Parallel()
+
+	goStates := []ContextFabricSourceState{
+		ContextFabricSourceAvailable, ContextFabricSourceStale, ContextFabricSourceUnavailable,
+		ContextFabricSourceUnconfigured, ContextFabricSourceUnauthorized, ContextFabricSourceNoData,
+		ContextFabricSourceTruncated, ContextFabricSourceConflicted, ContextFabricSourceNotApplicable,
+		ContextFabricSourcePruned,
+	}
+	// Every non-available state already has to carry a reason -- the
+	// contract's own form of the empty-states rule. pruned is no exception,
+	// which is exactly what CHAOS-3783 needs: a pruned source can never be
+	// an unexplained absence.
+	for _, state := range goStates {
+		coverage := ContextFabricCoverage{
+			Sources:         []ContextFabricSourceObservation{{Source: "canonical_fact:workload", State: state, Reason: "reason"}},
+			DegradedReasons: []string{},
+		}
+		if err := coverage.Validate(); err != nil {
+			t.Fatalf("Validate() error = %v, want source state %q accepted", err, state)
+		}
+	}
+	reasonless := ContextFabricCoverage{
+		Sources:         []ContextFabricSourceObservation{{Source: "canonical_fact:workload", State: ContextFabricSourcePruned}},
+		DegradedReasons: []string{},
+	}
+	if err := reasonless.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want a reasonless pruned source rejected -- a prune must always be explainable")
+	}
+
+	invalid := ContextFabricCoverage{
+		Sources:         []ContextFabricSourceObservation{{Source: "canonical_fact:workload", State: "skipped", Reason: "reason"}},
+		DegradedReasons: []string{},
+	}
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want an unknown source state to stay rejected -- the enum is closed")
+	}
+
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "contracts", "jsonschema", "v1", "context_fabric_common.v1.schema.json"))
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("decode schema: %v", err)
+	}
+	want := make(map[string]struct{}, len(goStates))
+	for _, state := range goStates {
+		want[string(state)] = struct{}{}
+	}
+	enums := collectSourceStateEnums(schema)
+	if len(enums) == 0 {
+		t.Fatal("found no source-state enum in the schema -- the parity check would silently pass")
+	}
+	// Exact set equality, asserted in BOTH directions, plus explicit
+	// duplicate rejection (codex round-7 F1).
+	//
+	// Checking length plus "every schema value is Go-known" is not parity: it
+	// passes for a schema that DUPLICATES one value and drops another. Swap
+	// "pruned" for a second copy of "available" and the count still matches
+	// and every value is still Go-known -- while the schema silently no
+	// longer admits the planner's own state, so JSON Schema validation
+	// rejects real coverage output at runtime. Set equality both ways is what
+	// closes it; the duplicate check is what keeps the SET comparison from
+	// hiding a multiset difference.
+	for _, enum := range enums {
+		seen := make(map[string]struct{}, len(enum))
+		for _, value := range enum {
+			if _, duplicate := seen[value]; duplicate {
+				t.Fatalf("schema source-state enum repeats %q -- a duplicate can mask a missing value from any count-based check", value)
+			}
+			seen[value] = struct{}{}
+			if _, ok := want[value]; !ok {
+				t.Fatalf("schema source-state enum has %q, which Go's validSourceState does not accept", value)
+			}
+		}
+		// The direction the old assertion never covered: every Go-accepted
+		// state must actually appear in the schema.
+		for state := range want {
+			if _, present := seen[state]; !present {
+				t.Fatalf("Go accepts source state %q but the schema enum %v omits it -- the wire would reject a payload the Go side produces", state, enum)
+			}
+		}
+	}
+}
+
+// collectSourceStateEnums walks the schema for every enum that looks like the
+// source-state vocabulary (identified by a value only it carries), so the
+// parity assertion covers ALL copies of it -- SourceObservation defines it
+// once and Coverage inlines it again, and an edit to only one is exactly the
+// drift this guards.
+func collectSourceStateEnums(node any) [][]string {
+	var found [][]string
+	switch typed := node.(type) {
+	case map[string]any:
+		if rawEnum, ok := typed["enum"].([]any); ok {
+			values := make([]string, 0, len(rawEnum))
+			isSourceState := false
+			for _, item := range rawEnum {
+				value, ok := item.(string)
+				if !ok {
+					values = nil
+					break
+				}
+				if value == "not_applicable" {
+					isSourceState = true
+				}
+				values = append(values, value)
+			}
+			if isSourceState && values != nil {
+				found = append(found, values)
+			}
+		}
+		for _, child := range typed {
+			found = append(found, collectSourceStateEnums(child)...)
+		}
+	case []any:
+		for _, child := range typed {
+			found = append(found, collectSourceStateEnums(child)...)
+		}
+	}
+	return found
+}

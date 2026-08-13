@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -145,6 +147,19 @@ func (r *FactCapabilityRegistry) Capabilities() []FactCapability {
 	return capabilities
 }
 
+// capabilityIndex exposes the registered capabilities to the fact planner
+// keyed by kind. It returns the declared FactCapability values directly
+// rather than the registeredFactProvider wrappers, so the planner can only
+// read what a provider DECLARES about itself and can never reach the
+// provider to call it -- planning stays pure by construction.
+func (r *FactCapabilityRegistry) capabilityIndex() map[FactKind]FactCapability {
+	index := make(map[FactKind]FactCapability, len(r.providers))
+	for kind, registered := range r.providers {
+		index[kind] = registered.capability
+	}
+	return index
+}
+
 func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
 	if r == nil {
 		return CanonicalFactBundle{}, errors.New("fact capability registry is required")
@@ -166,16 +181,70 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		Versions:   map[FactKind]string{},
 		Watermarks: map[FactKind]string{},
 	}
-	allowedSubjects := canonicalFactSubjectSet(request.Subjects, request.Cohort)
+	allowedSubjects := investigationScopeSubjectSet(request)
+	// CHAOS-3783: decide the whole fan-out up front, before any provider is
+	// touched, so a capability that provably cannot contribute is never
+	// queried and never silently missing. See planFactReads for the rule and
+	// for why an empty subject-kind intersection is a proof rather than a
+	// guess.
+	// Requirements are unique by kind (validateCanonicalFactRequest), so
+	// this index is a lossless way to get back from a plan entry -- which
+	// deliberately carries only a kind, never the request's prose -- to the
+	// requirement's provider Parameters.
+	// Self-found, same class as codex round-8 F1: the parameter allowlist
+	// was the LAST buildFactQuery check reachable only when a capability is
+	// not pruned. A requirement carrying a disallowed parameter key whose
+	// capability then prunes never reached buildFactQuery, so an invalid
+	// request returned success with pruned coverage.
+	//
+	// It runs as a pre-pass here, before the plan loop, rather than inside
+	// it: validity must be decided before ANY short-circuit, and a check
+	// placed ahead of the loop cannot be skipped by a future branch added
+	// inside it. It lives in ReadFacts rather than
+	// validateCanonicalFactRequest because AllowedParameters is declared by
+	// the capability, which only the registry knows.
+	//
+	// An unregistered kind is deliberately not validated here: there is no
+	// capability to declare an allowlist against, and that kind already
+	// degrades to SourceUnconfigured without ever building a query. This
+	// check governs exactly the requests buildFactQuery would have judged.
+	capabilities := r.capabilityIndex()
 	for _, requirement := range request.Requirements {
-		registered, ok := r.providers[requirement.Kind]
-		if !ok {
-			appendFactCoverage(&bundle, requirement.Kind, SourceUnconfigured, nil, "", "canonical fact capability is not configured")
+		capability, registered := capabilities[requirement.Kind]
+		if !registered {
 			continue
 		}
-		query, err := buildFactQuery(request, requirement, registered.capability, allowedSubjects)
+		for key := range requirement.Parameters {
+			if !containsString(capability.AllowedParameters, key) {
+				return CanonicalFactBundle{}, fmt.Errorf("fact capability %s: parameter %q is not allowed", requirement.Kind, key)
+			}
+		}
+	}
+	requirementsByKind := make(map[FactKind]FactRequirement, len(request.Requirements))
+	for _, requirement := range request.Requirements {
+		requirementsByKind[requirement.Kind] = requirement
+	}
+	for _, planned := range planFactReads(newFactPlanInput(request), capabilities) {
+		requirement := requirementsByKind[planned.Kind]
+		registered, ok := r.providers[planned.Kind]
+		if !ok {
+			appendFactCoverage(&bundle, planned.Kind, SourceUnconfigured, nil, "", "canonical fact capability is not configured")
+			continue
+		}
+		if planned.Pruned {
+			// The whole point of the issue's "record every pruning decision"
+			// constraint: a pruned capability is visible in Coverage with a
+			// reason, exactly like one that ran and failed. It contributes
+			// no facts and -- unlike every degrading state -- does not mark
+			// the bundle partial, because nothing is actually missing from
+			// the answer. factStateDegrades(SourcePruned) is false for that
+			// reason.
+			appendFactCoverage(&bundle, planned.Kind, SourcePruned, nil, "", planned.Reason)
+			continue
+		}
+		query, err := buildFactQuery(request, requirement, registered.capability, allowedSubjects, planned.Subjects)
 		if err != nil {
-			return CanonicalFactBundle{}, fmt.Errorf("fact capability %s: %w", requirement.Kind, err)
+			return CanonicalFactBundle{}, fmt.Errorf("fact capability %s: %w", planned.Kind, err)
 		}
 		result, err := r.readProvider(ctx, principal, registered, query)
 		if err != nil {
@@ -183,11 +252,23 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 				return CanonicalFactBundle{}, context.Canceled
 			}
 			state, reason := classifyFactReadError(err)
-			appendFactCoverage(&bundle, requirement.Kind, state, nil, "", reason)
+			// Codex round-1 F2: a narrowed capability that then FAILS still
+			// had its subject list cut, and the observation has to say both
+			// things. Recording only the failure would silently drop the
+			// record that subjects were dropped -- the unexplained absence
+			// the empty-states rule forbids.
+			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(planned, reason))
 			continue
 		}
+		// Coverage source names must be unique
+		// (ContextFabricCoverage.Validate), so the subjects this capability
+		// could not be asked about cannot get an observation of their own --
+		// the narrowing rides on the capability's own observation instead.
+		// Prefixed, never replacing: whatever the provider said about its
+		// own read still has to survive.
+		result.Reason = withNarrowingNote(planned, result.Reason)
 		if err := mergeFactProviderResult(&bundle, registered.capability, query, result, allowedSubjects); err != nil {
-			return CanonicalFactBundle{}, fmt.Errorf("fact capability %s: %w", requirement.Kind, err)
+			return CanonicalFactBundle{}, fmt.Errorf("fact capability %s: %w", planned.Kind, err)
 		}
 	}
 	sortCanonicalFacts(bundle.Facts)
@@ -211,16 +292,21 @@ func (r *FactCapabilityRegistry) readProvider(ctx context.Context, principal sto
 	return result, nil
 }
 
-func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, capability FactCapability, allowed map[string]SubjectRef) (FactQuery, error) {
-	subjects := requirement.Subjects
+// buildFactQuery turns one planned read into the query a provider receives.
+//
+// planned is the subject list planFactReads already narrowed to the kinds
+// this capability declares it supports; it is nil only for a requirement the
+// planner passed through untouched (an unregistered kind, or an
+// investigation with no subjects at all). The subject-kind check below is
+// therefore no longer reachable in the ordinary path -- the planner prunes
+// or narrows first -- but it stays as the invariant that proves it: if a
+// planning bug ever let an unsupported subject through, failing here is
+// correct, because a provider must never be asked a question its capability
+// says it cannot answer.
+func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, capability FactCapability, allowed map[string]SubjectRef, planned []SubjectRef) (FactQuery, error) {
+	subjects := planned
 	if len(subjects) == 0 {
-		subjects = request.Subjects
-	}
-	if len(subjects) == 0 && request.Cohort != nil {
-		subjects = make([]SubjectRef, 0, len(request.Cohort.Members))
-		for _, member := range request.Cohort.Members {
-			subjects = append(subjects, member.Subject)
-		}
+		subjects = factQuerySubjects(request, requirement)
 	}
 	if len(subjects) == 0 {
 		return FactQuery{}, errors.New("fact capability requires at least one discovered subject")
@@ -312,7 +398,44 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 		if fact.SourceState == "" {
 			fact.SourceState = result.State
 		}
-		if err := fact.Validate(capability.RequiresEvidence && (fact.SourceState == SourceAvailable || fact.SourceState == SourceStale)); err != nil {
+		// Codex round-1 F3: the RESULT state was validated above, but until
+		// now an individual fact's own SourceState was not. That gap is not
+		// cosmetic -- the evidence requirement immediately below is keyed on
+		// this exact field, so a fact carrying any state other than
+		// available/stale silently skips the RequiresEvidence check. A
+		// provider could therefore return an evidence-free fact inside a
+		// perfectly ordinary available result just by stamping the fact
+		// itself with an impossible state.
+		//
+		// Two things are rejected. A state outside the provider-legal set
+		// catches SourcePruned, which is a planner verdict a provider must
+		// never mint (a provider claiming to have pruned itself has by
+		// definition already run). A state that rejects facts catches the
+		// rest of the bypass: no_data, unavailable, unconfigured,
+		// unauthorized, conflicted, and not_applicable all mean "there is no
+		// fact here", so a fact wearing one is self-contradicting.
+		if !validFactSourceState(fact.SourceState) {
+			return fmt.Errorf("provider returned fact with invalid source state %q", fact.SourceState)
+		}
+		if stateRejectsFacts(fact.SourceState) {
+			return fmt.Errorf("provider returned fact with source state %q, which cannot carry facts", fact.SourceState)
+		}
+		// Codex round-2 R2-1: the evidence requirement is now keyed on the
+		// capability ALONE, not on the fact's state.
+		//
+		// The old form excluded SourceTruncated, which is legitimately
+		// fact-bearing -- the registry itself mints that state when the
+		// bundle cap trims a result -- so an evidence-requiring provider
+		// could return an evidence-FREE truncated fact and have it accepted.
+		// Truncation says "there are more facts than these", never "these
+		// facts need less grounding".
+		//
+		// Naming states here is also redundant now: the two guards above
+		// leave exactly available, stale, and truncated reachable
+		// (validFactSourceState minus stateRejectsFacts), and all three are
+		// fact-bearing. So the state test could only ever weaken the
+		// requirement, never strengthen it.
+		if err := fact.Validate(capability.RequiresEvidence); err != nil {
 			return fmt.Errorf("provider fact: %w", err)
 		}
 		bundle.Facts = append(bundle.Facts, fact)
@@ -325,26 +448,109 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 	return nil
 }
 
+// maxCoverageReasonLength mirrors ContextFabricSourceObservation's own
+// 2000-character bound on Reason. Every coverage reason this package emits
+// funnels through appendFactCoverage, so clamping here is what keeps a
+// long provider reason -- or, since CHAOS-3783, a provider reason with a
+// planner narrowing note prefixed onto it -- from pushing the finished
+// result past its own contract and failing validation for the whole
+// investigation. Truncating an explanation is strictly better than losing
+// the answer that carried it.
+const maxCoverageReasonLength = 2000
+
+// maxCoverageDegradedReasonLength is ContextFabricCoverage's own bound on one
+// DegradedReasons entry. It happens to equal the Reason bound, but they are
+// separate contract limits on separate strings and a degraded entry is a
+// LONGER string than the reason it is built from (it carries a "<kind>: "
+// prefix), so they are clamped independently rather than sharing one
+// constant by coincidence.
+const maxCoverageDegradedReasonLength = 2000
+
 func appendFactCoverage(bundle *CanonicalFactBundle, kind FactKind, state SourceState, observedAt *time.Time, watermark, reason string) {
 	if strings.TrimSpace(reason) == "" && state != SourceAvailable {
 		reason = "canonical fact capability returned " + string(state)
 	}
 	bundle.Coverage.Sources = append(bundle.Coverage.Sources, SourceObservation{
-		Source: "canonical_fact:" + string(kind), State: state, ObservedAt: observedAt, Watermark: watermark, Reason: reason,
+		Source: "canonical_fact:" + string(kind), State: state, ObservedAt: observedAt, Watermark: watermark,
+		Reason: clampCoverageText(reason, maxCoverageReasonLength),
 	})
 	if factStateDegrades(state) {
 		bundle.Coverage.Partial = true
-		bundle.Coverage.DegradedReasons = append(bundle.Coverage.DegradedReasons, string(kind)+": "+reason)
+		// Codex round-2 R2-3: clamp the COMPOSED string, not its ingredients.
+		// Clamping reason first and then prefixing "<kind>: " pushed the
+		// result back over the bound by exactly the prefix length, producing
+		// a DegradedReasons entry the contract validator rejects -- which
+		// fails the whole investigation, the outcome this clamping exists to
+		// prevent. A narrowed provider that fails with a long reason is the
+		// live path: the narrowing note and the failure reason are
+		// concatenated before they ever reach here.
+		bundle.Coverage.DegradedReasons = append(
+			bundle.Coverage.DegradedReasons,
+			clampCoverageText(string(kind)+": "+reason, maxCoverageDegradedReasonLength),
+		)
 	}
+}
+
+// clampCoverageText bounds one coverage string to the contract's limit.
+//
+// The bound is a RUNE count (contractsv1.stringLengthBetween uses
+// utf8.RuneCountInString), so this truncates by runes -- a byte slice would
+// both mis-measure multi-byte text and be able to cut a rune in half.
+//
+// It also normalizes whitespace, because DegradedReasons entries must
+// satisfy strings.TrimSpace(value) == value: truncating mid-string can
+// easily land on a space, which would fail validation for a reason that has
+// nothing to do with length.
+//
+// Leading whitespace is removed BEFORE truncating, which is what makes the
+// result provably non-empty: the retained prefix then starts with a
+// non-space rune, so trimming its tail can never empty it. Trimming only
+// after truncating would leave a value whose first `maximum` runes are all
+// spaces collapsing to "", and an empty reason on a non-available source is
+// itself a contract violation.
+func clampCoverageText(value string, maximum int) string {
+	value = strings.TrimSpace(value)
+	if maximum <= 0 || utf8.RuneCountInString(value) <= maximum {
+		return value
+	}
+	return strings.TrimRightFunc(string([]rune(value)[:maximum]), unicode.IsSpace)
 }
 
 func validateCanonicalFactRequest(request CanonicalFactRequest) error {
 	if len(request.Requirements) == 0 || len(request.Requirements) > 64 {
 		return errors.New("canonical fact request requires bounded fact requirements")
 	}
-	allowed := canonicalFactSubjectSet(request.Subjects, request.Cohort)
+	allowed := investigationScopeSubjectSet(request)
 	if len(allowed) == 0 {
 		return errors.New("canonical fact request requires discovered subjects or a cohort")
+	}
+	// Codex round-8 F1: subject UNIQUENESS is decided here too, before any
+	// pruning short-circuit -- the same family as the round-5 scope fix.
+	//
+	// buildFactQuery has always rejected a duplicated subject, and both the
+	// v1 schema (uniqueItems) and ContextFabricSubjectResolution's validator
+	// reject one on the wire. But when every requirement prunes, no provider
+	// is queried, so buildFactQuery never runs and its rejection never
+	// fires: an invalid request returned SUCCESS with pruned coverage. An
+	// invalid request is an error even when nothing would have run --
+	// validity is a property of the request, not of how much work it happens
+	// to imply.
+	//
+	// Checked in two places because those are the two lists that can carry a
+	// duplicate: the investigation-wide scope (used whenever a requirement
+	// names no subjects of its own) and each explicit requirement list.
+	//
+	// Relationship to buildFactQuery's own uniqueness check, stated
+	// precisely: this is equivalent for every request buildFactQuery would
+	// have judged, and STRICTER for a duplicate confined to subjects that
+	// narrowing drops. buildFactQuery sees the narrowed list; this sees the
+	// raw one. Duplicates share a kind, so narrowing keeps or drops both
+	// together and the two agree whenever the duplicate is among supported
+	// subjects. Being stricter is the contract-correct direction: the v1
+	// schema's uniqueItems forbids a duplicate outright, whether or not any
+	// capability would have queried it.
+	if duplicate, found := firstDuplicateSubject(investigationScopeSubjects(request)); found {
+		return fmt.Errorf("canonical fact request subjects must be unique: %q appears more than once", duplicate.CanonicalID)
 	}
 	seenKinds := make(map[FactKind]struct{}, len(request.Requirements))
 	for _, requirement := range request.Requirements {
@@ -355,21 +561,48 @@ func validateCanonicalFactRequest(request CanonicalFactRequest) error {
 			return fmt.Errorf("duplicate fact requirement %q", requirement.Kind)
 		}
 		seenKinds[requirement.Kind] = struct{}{}
+		// Codex round-5 R5-1: an explicit requirement.Subjects list is
+		// checked for SCOPE here, before the planner runs.
+		//
+		// The list is a caller ASSERTION -- "read this kind for exactly
+		// these subjects" -- and naming a subject outside the investigation
+		// set is an error about the caller's request, not a statement about
+		// what a capability can answer. buildFactQuery has always rejected
+		// it; but once pruning was introduced, a wholly-unsupported explicit
+		// list was pruned BEFORE that check could run, so an out-of-scope
+		// request quietly became a success with zero facts and a pruned
+		// coverage entry. Pruning must never swallow a scope violation.
+		//
+		// The ordering is the fix: validate the assertion, then plan. The
+		// planner's fail-open rule already says an explicit Subjects list is
+		// honored unchanged, and honoring a list includes honoring its
+		// errors. buildFactQuery keeps its own identical check as the
+		// defensive invariant behind this one.
+		for _, subject := range requirement.Subjects {
+			if _, ok := allowed[canonicalFactSubjectKey(subject)]; !ok {
+				return fmt.Errorf("fact capability %s: subject %q is outside the discovered investigation set", requirement.Kind, subject.CanonicalID)
+			}
+		}
+		if duplicate, found := firstDuplicateSubject(requirement.Subjects); found {
+			return fmt.Errorf("fact capability %s: fact query subjects must be unique: %q appears more than once", requirement.Kind, duplicate.CanonicalID)
+		}
 	}
 	return nil
 }
 
-func canonicalFactSubjectSet(subjects []SubjectRef, cohort *Cohort) map[string]SubjectRef {
-	result := make(map[string]SubjectRef, len(subjects))
+// firstDuplicateSubject reports the first subject that appears twice in
+// subjects, keyed the same way scope membership is (kind + canonical ID), so
+// "duplicate" means exactly what "in scope" means and the two cannot drift.
+func firstDuplicateSubject(subjects []SubjectRef) (SubjectRef, bool) {
+	seen := make(map[string]struct{}, len(subjects))
 	for _, subject := range subjects {
-		result[canonicalFactSubjectKey(subject)] = subject
-	}
-	if cohort != nil {
-		for _, member := range cohort.Members {
-			result[canonicalFactSubjectKey(member.Subject)] = member.Subject
+		key := canonicalFactSubjectKey(subject)
+		if _, exists := seen[key]; exists {
+			return subject, true
 		}
+		seen[key] = struct{}{}
 	}
-	return result
+	return SubjectRef{}, false
 }
 
 func canonicalFactSubjectKey(subject SubjectRef) string {
@@ -417,15 +650,28 @@ func factKindOrder(kind FactKind) int {
 	return len(order)
 }
 
+// stateRejectsFacts lists the states that cannot coexist with facts.
+// SourcePruned joins them (CHAOS-3783): the provider was never called, so a
+// fact attributed to a pruned capability would have no origin at all.
 func stateRejectsFacts(state SourceState) bool {
 	switch state {
-	case SourceUnavailable, SourceUnconfigured, SourceUnauthorized, SourceNoData, SourceConflicted, SourceNotApplicable:
+	case SourceUnavailable, SourceUnconfigured, SourceUnauthorized, SourceNoData, SourceConflicted, SourceNotApplicable, SourcePruned:
 		return true
 	default:
 		return false
 	}
 }
 
+// factStateDegrades lists the states that make an answer partial.
+//
+// SourcePruned is deliberately NOT among them (CHAOS-3783). Every other
+// non-available state means something the answer wanted is missing -- the
+// source was unreachable, unconfigured, truncated, or in conflict. A prune
+// means the planner proved the source had nothing to contribute to THIS
+// question, so nothing is missing and the answer is not degraded. Marking it
+// partial would train every consumer to treat a correctly-scoped
+// investigation as a compromised one, and would make Coverage.Partial
+// useless as a signal exactly as pruning became routine.
 func factStateDegrades(state SourceState) bool {
 	switch state {
 	case SourceStale, SourceUnavailable, SourceUnconfigured, SourceUnauthorized, SourceTruncated, SourceConflicted:
@@ -435,6 +681,9 @@ func factStateDegrades(state SourceState) bool {
 	}
 }
 
+// validFactSourceState bounds what a PROVIDER may return. SourcePruned is
+// absent on purpose: it is a planner verdict, minted only by ReadFacts, and
+// a provider claiming to have pruned itself has by definition already run.
 func validFactSourceState(state SourceState) bool {
 	switch state {
 	case SourceAvailable, SourceStale, SourceUnavailable, SourceUnconfigured, SourceUnauthorized, SourceNoData, SourceTruncated, SourceConflicted, SourceNotApplicable:
