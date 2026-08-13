@@ -108,6 +108,28 @@ func composeTemporalLabel(interpretation InterpretedQuestion, coverage Coverage)
 		return nil
 	}
 	grain, complete := temporalCoverage(coverage)
+	if requested.Axis == TemporalObservedTime {
+		// No source in this system retains observation history: the
+		// canonical rollups' computed_at is a recompute stamp and the
+		// entity tables are ReplacingMergeTree (see devhealthfacts'
+		// observedTimeUnsupportedReason), while the graph's own
+		// observed_at is reset by any rebuild, which is why the graph
+		// admits on the VALID-time window on this axis too.
+		//
+		// That approximation is defensible -- a valid-time window is far
+		// closer to the truth than no filtering at all -- but it must
+		// never be presented AS observed time. So the label reports what
+		// is actually true of this answer: no source spoke on the
+		// requested axis, and coverage is incomplete, whatever the graph
+		// returned. temporalLimitationsFor states the substitution in
+		// words alongside it.
+		return &TemporalLabel{
+			Requested:        requested,
+			Effective:        effectiveTimeContext(requested, GrainNone),
+			Grain:            GrainNone,
+			CoverageComplete: false,
+		}
+	}
 	return &TemporalLabel{
 		Requested:        requested,
 		Effective:        effectiveTimeContext(requested, grain),
@@ -192,17 +214,32 @@ func effectiveTimeContext(requested TimeContext, grain TemporalGrain) TimeContex
 	case TemporalRange:
 		start, end := *requested.Start, *requested.End
 		if grain == GrainDay {
-			// The start moves FORWARD and the end BACKWARD, so the
+			// The start moves FORWARD to the first day the window covers
+			// in full, and the end BACKWARD to the last one, so the
 			// effective window stays inside the requested one at both
-			// ends. A window narrower than a day collapses to its own
-			// start rather than inverting.
-			start = truncateToDay(start).Add(24 * time.Hour)
+			// ends.
+			//
+			// A start already ON a day boundary does NOT move: that day
+			// is covered in full, and rounding it up anyway would
+			// under-report a whole day of coverage the answer genuinely
+			// has. Only a start partway through a day rounds up, because
+			// that day is not covered in full.
+			start = ceilToDay(start)
 			end = truncateToDay(end)
+			// A window spanning less than one whole day covers no full
+			// day at all -- rounding then leaves start after end.
+			//
+			// Collapsing to the rounded `end` would be WRONG here, and
+			// not merely imprecise: truncateToDay can push that end
+			// EARLIER than the requested start (09:00-17:00 on one day
+			// truncates to 00:00 that day), producing an effective window
+			// that starts before the caller asked about. Effective must
+			// only ever narrow, so collapse to the requested END instead
+			// -- a zero-width window that is inside the requested one by
+			// construction, and the honest statement that no day-grain
+			// source could speak for this span.
 			if start.After(end) {
-				start = end
-			}
-			if start.Before(*requested.Start) {
-				start = *requested.Start
+				start, end = *requested.End, *requested.End
 			}
 		}
 		effective.Start = &start
@@ -214,6 +251,17 @@ func effectiveTimeContext(requested TimeContext, grain TemporalGrain) TimeContex
 func truncateToDay(value time.Time) time.Time {
 	utc := value.UTC()
 	return time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// ceilToDay rounds up to the next day boundary, leaving a value already ON
+// one unchanged -- see effectiveTimeContext for why that distinction
+// matters.
+func ceilToDay(value time.Time) time.Time {
+	truncated := truncateToDay(value)
+	if truncated.Equal(value.UTC()) {
+		return truncated
+	}
+	return truncated.Add(24 * time.Hour)
 }
 
 // temporalLimitations are the standing disclosures every historical answer
@@ -228,19 +276,46 @@ var temporalLimitations = []string{
 	"Subjects deleted at source since the requested time are not recoverable from the projected graph.",
 }
 
+// observedTimeLimitation states, in the answer itself, that the
+// observed-time axis was not answered on its own terms.
+//
+// Without this the substitution is invisible: the caller asked what was
+// KNOWN at a past instant, the graph answered from what was TRUE then, and
+// nothing in the response would distinguish the two. That is the same
+// shape of quiet mislabel the H6 refusal existed to prevent, one axis
+// down, so it is disclosed rather than reasoned about only in code
+// comments.
+const observedTimeLimitation = "Observed-time questions cannot be answered on their own terms: no canonical source retains observation history, so this answer reflects what was TRUE at the requested time, not what was KNOWN then."
+
+// temporalLimitationsFor returns the standing disclosures for one
+// historical axis. They describe limits of the SYSTEM, not of one request,
+// so they are stated on every historical answer rather than inferred from
+// coverage.
+func temporalLimitationsFor(axis TemporalAxis) []string {
+	if axis == TemporalCurrent {
+		return nil
+	}
+	limitations := append([]string(nil), temporalLimitations...)
+	if axis == TemporalObservedTime {
+		limitations = append(limitations, observedTimeLimitation)
+	}
+	return limitations
+}
+
 // appendTemporalLimitations adds the standing historical disclosures to a
 // result's own limitations, skipping any already present so a re-composed
 // result never accumulates duplicates (Limitations is bounded and required
 // to be unique by the result contract).
 func appendTemporalLimitations(limitations []string, interpretation InterpretedQuestion) []string {
-	if interpretation.TimeContext.Axis == TemporalCurrent {
+	axis := interpretation.TimeContext.Axis
+	if axis == TemporalCurrent {
 		return limitations
 	}
 	existing := make(map[string]struct{}, len(limitations))
 	for _, limitation := range limitations {
 		existing[limitation] = struct{}{}
 	}
-	for _, limitation := range temporalLimitations {
+	for _, limitation := range temporalLimitationsFor(axis) {
 		if _, ok := existing[limitation]; ok {
 			continue
 		}

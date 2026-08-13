@@ -310,3 +310,87 @@ func TestHistoricalAnswersDiscloseTheDeletedSubjectLimitation(t *testing.T) {
 		}
 	}
 }
+
+// TestObservedTimeAnswersDoNotClaimToBeObservedTime covers the axis
+// substitution honestly.
+//
+// No source retains observation history, so the graph admits on the
+// VALID-time window even when the caller asked about observed time. That
+// approximation is better than no filtering, but presenting it AS observed
+// time would be the same quiet mislabel the H6 refusal existed to prevent,
+// one axis down. The answer must therefore report a grain of none,
+// incomplete coverage, and say in words what it substituted.
+func TestObservedTimeAnswersDoNotClaimToBeObservedTime(t *testing.T) {
+	t.Parallel()
+	asOf := historicalAsOf()
+	project := acceptanceProject()
+	result := runHistoricalAcceptance(t, TimeContext{Axis: TemporalObservedTime, AsOf: &asOf}, bootstrapFactBundle(project))
+
+	if result.Temporal == nil {
+		t.Fatal("no temporal label on an observed-time answer")
+	}
+	if result.Temporal.Grain != GrainNone {
+		t.Fatalf("grain = %q, want %q: no source can speak on the observed-time axis", result.Temporal.Grain, GrainNone)
+	}
+	if result.Temporal.CoverageComplete {
+		t.Fatal("coverage_complete = true on an observed-time answer, but no source answered on that axis")
+	}
+	var disclosed bool
+	for _, limitation := range result.Limitations {
+		if strings.Contains(limitation, "not what was KNOWN then") {
+			disclosed = true
+		}
+	}
+	if !disclosed {
+		t.Fatalf("Limitations = %#v, want the observed-time substitution stated in words", result.Limitations)
+	}
+
+	// A valid-time answer must NOT carry that disclosure -- it is not
+	// substituting anything.
+	validTime := runHistoricalAcceptance(t, TimeContext{Axis: TemporalValidTime, AsOf: &asOf}, bootstrapFactBundle(project))
+	for _, limitation := range validTime.Limitations {
+		if strings.Contains(limitation, "not what was KNOWN then") {
+			t.Fatal("a valid-time answer must not carry the observed-time substitution disclosure")
+		}
+	}
+}
+
+// TestEffectiveRangeNarrowsToWholeDaysWithoutOverNarrowing pins the
+// day-boundary rule: a range already starting ON a day boundary covers
+// that day in full, so rounding it up anyway would under-report a whole
+// day of coverage the answer genuinely has.
+func TestEffectiveRangeNarrowsToWholeDaysWithoutOverNarrowing(t *testing.T) {
+	t.Parallel()
+	onBoundary := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+
+	effective := effectiveTimeContext(TimeContext{Axis: TemporalRange, Start: &onBoundary, End: &end}, GrainDay)
+	if !effective.Start.Equal(onBoundary) {
+		t.Fatalf("effective start = %v, want the requested %v unchanged: it is already a whole day", effective.Start, onBoundary)
+	}
+
+	// A start partway through a day does round up, because that day is
+	// not covered in full.
+	midDay := time.Date(2026, 6, 1, 13, 30, 0, 0, time.UTC)
+	effective = effectiveTimeContext(TimeContext{Axis: TemporalRange, Start: &midDay, End: &end}, GrainDay)
+	want := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
+	if !effective.Start.Equal(want) {
+		t.Fatalf("effective start = %v, want %v", effective.Start, want)
+	}
+
+	// Narrowing must never invert, and must never widen past what was
+	// asked for -- the direction the contract validates.
+	narrow := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	narrowEnd := time.Date(2026, 6, 1, 17, 0, 0, 0, time.UTC)
+	effective = effectiveTimeContext(TimeContext{Axis: TemporalRange, Start: &narrow, End: &narrowEnd}, GrainDay)
+	if effective.Start.After(*effective.End) {
+		t.Fatalf("effective window inverted: %v..%v", effective.Start, effective.End)
+	}
+	label := TemporalLabel{
+		Requested: TimeContext{Axis: TemporalRange, Start: &narrow, End: &narrowEnd},
+		Effective: effective, Grain: GrainDay,
+	}
+	if err := label.Validate(); err != nil {
+		t.Fatalf("a sub-day range produced a label the contract rejects: %v", err)
+	}
+}
