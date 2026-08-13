@@ -111,6 +111,8 @@ func (s *fakeScanner) Scan(dest ...any) error {
 			*value = row[index].(uint8)
 		case *time.Time:
 			*value = row[index].(time.Time)
+		case *float64:
+			*value = row[index].(float64)
 		default:
 			return errors.New("devhealthfacts_test: unsupported scan destination")
 		}
@@ -121,3 +123,21 @@ func (s *fakeScanner) Scan(dest ...any) error {
 
 func (s *fakeScanner) Err() error   { return nil }
 func (s *fakeScanner) Close() error { return nil }
+
+// assertQueryScopedToOrgAndSubjects is the guard-sensitive structural check
+// AC-3780-5 needs: it fails not only if the org_id/ids binding values are
+// wrong, but if the SQL statement itself stops filtering by them -- e.g. if
+// a future edit deletes "WHERE ... org_id = {org_id:String}" while still
+// passing the org_id binding through clickhouseFacts.query, the org_id
+// binding assertions alone would keep passing (the binding is always sent
+// regardless of whether the statement uses it) even though the guard is
+// gone. Checking the statement text closes that gap.
+func assertQueryScopedToOrgAndSubjects(t *testing.T, statement string) {
+	t.Helper()
+	if !strings.Contains(statement, "org_id = {org_id:String}") {
+		t.Fatalf("statement = %q, want it to filter by org_id = {org_id:String}", statement)
+	}
+	if !strings.Contains(statement, "IN {ids:Array(String)}") {
+		t.Fatalf("statement = %q, want it to filter by ids IN {ids:Array(String)}", statement)
+	}
+}

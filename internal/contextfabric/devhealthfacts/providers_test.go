@@ -10,8 +10,8 @@ import (
 // TestNewProvidersRegistersExactlyTheCoveredKinds proves NewProviders
 // returns one provider per canonical-table-backed FactKind, that each
 // registers cleanly with the real contextfabric.NewFactCapabilityRegistry
-// (which rejects duplicate kinds), and that none of the eight kinds with no
-// canonical Ops adapter (doc.go) are present.
+// (which rejects duplicate kinds), and that FactEvidence -- the one kind
+// with no canonical Ops adapter (doc.go) -- is not present.
 func TestNewProvidersRegistersExactlyTheCoveredKinds(t *testing.T) {
 	t.Parallel()
 	providers := devhealthfacts.NewProviders(&fakeClient{})
@@ -22,26 +22,33 @@ func TestNewProvidersRegistersExactlyTheCoveredKinds(t *testing.T) {
 	capabilities := registry.Capabilities()
 
 	want := map[contextfabric.FactKind]bool{
-		contextfabric.FactIdentity:              true,
-		contextfabric.FactMembership:            true,
-		contextfabric.FactStatus:                true,
-		contextfabric.FactActualCompletion:      true,
-		contextfabric.FactWork:                  true,
-		contextfabric.FactBlockers:              true,
-		contextfabric.FactRequiredChildren:      true,
-		contextfabric.FactPullRequests:          true,
-		contextfabric.FactReviews:               true,
-		contextfabric.FactContinuousIntegration: true,
-		contextfabric.FactDeployments:           true,
-		contextfabric.FactIncidents:             true,
+		contextfabric.FactIdentity:                true,
+		contextfabric.FactMembership:              true,
+		contextfabric.FactStatus:                  true,
+		contextfabric.FactActualCompletion:        true,
+		contextfabric.FactWork:                    true,
+		contextfabric.FactBlockers:                true,
+		contextfabric.FactRequiredChildren:        true,
+		contextfabric.FactPullRequests:            true,
+		contextfabric.FactReviews:                 true,
+		contextfabric.FactContinuousIntegration:   true,
+		contextfabric.FactDeployments:             true,
+		contextfabric.FactIncidents:               true,
+		contextfabric.FactMetrics:                 true,
+		contextfabric.FactHealth:                  true,
+		contextfabric.FactWorkload:                true,
+		contextfabric.FactInvestment:              true,
+		contextfabric.FactReadiness:               true,
+		contextfabric.FactOperationalDeficiencies: true,
+		contextfabric.FactSourceHealth:            true,
 	}
 	if len(capabilities) != len(want) {
 		t.Fatalf("capabilities = %d, want %d: %+v", len(capabilities), len(want), capabilities)
 	}
+	// FactEvidence stays gated: no ClickHouse table maps honestly to it
+	// (see doc.go). Every other CHAOS-3780 kind is now live.
 	gated := []contextfabric.FactKind{
-		contextfabric.FactMetrics, contextfabric.FactHealth, contextfabric.FactWorkload,
-		contextfabric.FactInvestment, contextfabric.FactReadiness, contextfabric.FactOperationalDeficiencies,
-		contextfabric.FactSourceHealth, contextfabric.FactEvidence,
+		contextfabric.FactEvidence,
 	}
 	for _, capability := range capabilities {
 		if !want[capability.Kind] {
