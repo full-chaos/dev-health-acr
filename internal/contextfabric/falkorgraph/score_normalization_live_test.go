@@ -244,4 +244,23 @@ func TestLiveResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("ResolveSubjects() committed %#v against a real FalkorDB server for a lone hit matching only 1 of 4 query terms -- want no auto-commit", resolution.Committed)
 	}
+	// Codex R2-3: asserting only "nothing committed" passes vacuously if
+	// the search found nothing at all (e.g. a query/index regression that
+	// silently drops every candidate) -- that is not the scenario this test
+	// exists to prove. The planted weak hit must actually be PRESENT, as a
+	// candidate, at a confidence below the lone-candidate gate -- proving
+	// the weak match was found and correctly demoted, not merely absent.
+	var weakCandidate *contextfabric.SubjectCandidate
+	for i := range resolution.Candidates {
+		if resolution.Candidates[i].Subject.CanonicalID == weak.CanonicalID {
+			weakCandidate = &resolution.Candidates[i]
+			break
+		}
+	}
+	if weakCandidate == nil {
+		t.Fatalf("ResolveSubjects() candidates = %#v, want the planted weak hit (%s) present -- \"nothing committed\" must not pass vacuously because nothing was found at all", resolution.Candidates, weak.CanonicalID)
+	}
+	if weakCandidate.Confidence >= 0.72 {
+		t.Fatalf("planted weak hit confidence = %v, want < 0.72 (the lone-candidate auto-commit gate) for a 1-of-4-term match", weakCandidate.Confidence)
+	}
 }

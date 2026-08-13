@@ -72,12 +72,15 @@ func openQuestionRequest(question string) (contextfabric.InvestigationRequest, c
 // committed a subject on its own.
 //
 // The query here has 4 OR-tokenized terms ("incident outage payment
-// gateway"); the fake candidate's search_text is "Unrelated Incident
-// outage" -- only "outage" overlaps. After the fix, this must normalize to
-// a confidence well below the lone-candidate gate, leaving the subject
-// uncommitted (ambiguous/no-match), not auto-committed.
+// gateway"); the fake candidate's search_text is "Unrelated outage Status"
+// -- only "outage" overlaps (Codex R2-4: an earlier fixture's search_text
+// also contained the literal word "Incident", so it actually proved a
+// 2-of-4 match, not the 1-of-4 this test's name and comments claimed --
+// fixed so the stated edge is the proven edge). After the fix, this must
+// normalize to a confidence well below the lone-candidate gate, leaving
+// the subject uncommitted (ambiguous/no-match), not auto-committed.
 func TestResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
-	weakHit := fulltextRow("incident", "weak_hit", "Unrelated Incident", "Unrelated Incident outage", nil)
+	weakHit := fulltextRow("incident", "weak_hit", "Unrelated Status", "Unrelated outage Status", nil)
 	fake := fixedRowsFulltextConn([]row{weakHit})
 	adapter := newFakeAdapter(t, fake)
 	request, interpreted := openQuestionRequest("incident outage payment gateway")
@@ -88,6 +91,17 @@ func TestResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 	}
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("ResolveSubjects() committed %#v from a lone hit matching only 1 of 4 query terms -- want no auto-commit (drift D11/P1: a weak or truncated lone hit must not read as an unambiguous match)", resolution.Committed)
+	}
+	// Codex R2-4: pin the exact confidence, not just "didn't commit" -- a
+	// 2-of-4 match would also stay under the 0.72 gate (0.625), so
+	// "nothing committed" alone cannot distinguish the claimed 1-of-4 edge
+	// from a different, weaker claim.
+	if len(resolution.Candidates) != 1 {
+		t.Fatalf("ResolveSubjects() candidates = %#v, want exactly 1", resolution.Candidates)
+	}
+	const want1of4 = 0.50 + 0.25*0.25 // fulltextRelevanceFloor + span*(1/4)
+	if got := resolution.Candidates[0].Confidence; got != want1of4 {
+		t.Fatalf("weak hit confidence = %v, want %v (exactly a 1-of-4-term match)", got, want1of4)
 	}
 }
 
