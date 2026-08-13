@@ -363,10 +363,22 @@ Read the `gpt-5-mini` row with care: it was measured on interpretation prompt
 v3, which did not state the `requested_judgment` limit the validator enforces.
 Mini writes a longer judgment than nano and was rejected for it on 5 of 12
 attempts before reaching synthesis at all — a prompt omission, not a model
-weakness. Interpretation v4 and synthesis v5 now state every bound
-(`genkitruntime.TestPromptsStateEveryModelFacingBound`), so mini's true rate
-on current prompts is **unmeasured and expected to be materially better than
-4 of 12**. The nano and fallback rows were also measured on v3.
+weakness. Interpretation v4 and synthesis v6 now state every bound in
+`contracts/v1.ContextFabricModelFacingBounds` — the model-facing subset of
+`ContextFabricInvestigationResult.Validate()`'s bounds (excluding
+`direct_judgment`/`current_state`/`deterministic_answer`, which ACR
+server-composes and truncates to fit rather than ever validating the
+model's own text against). `genkitruntime.TestPromptsStateEveryModelFacingBound`
+proves every one of that registry's entries is both stated in the prompt
+and pinned to the validator's exact limit;
+`genkitruntime.TestModelFacingBoundRegistryIsFullyCovered` proves the test
+itself cannot silently omit a registry entry, which is what let the
+top-level `strongest_pressures`/`drivers`/`remaining_work`/`readiness_gaps`/
+`conflicts`/`limitations`/`evidence_ref_ids` collection caps go untested
+(and `warnings` go entirely unstated in the prompt) even after v5. So
+mini's true rate on current prompts is **unmeasured and expected to be
+materially better than 4 of 12**. The nano and fallback rows were also
+measured on v3.
 
 So the standing recommendation is unchanged for now — `gpt-5-nano` with the
 `gpt-5.6-luna` fallback is the only combination measured to answer reliably —

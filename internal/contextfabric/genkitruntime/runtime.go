@@ -74,10 +74,22 @@ const (
 	// adds the length and count limits (title, summary, qualification,
 	// affected_subjects, per-item and per-collection caps, identifier
 	// upper bound) that v4 left unstated, and TestPromptsStateEveryModelFacingBound
-	// now fails if a bound is added or changed in contracts/v1 without the
-	// prompt being updated to match, so a fourth instance cannot ship
-	// silently.
-	defaultSynthesisPromptVersion = "context-fabric-synthesis.v5"
+	// aimed to make a fourth instance of the class unable to ship silently
+	// -- but the table behind that test was itself hand-maintained and
+	// incomplete (CHAOS-3770 F3 codex review): it never covered
+	// warnings, strongest_pressures/drivers/remaining_work/readiness_gaps/
+	// conflicts/limitations collection caps, or the top-level
+	// evidence_ref_ids cap, so a bound could still be silently dropped
+	// from the prompt without the test noticing. The oracle is now
+	// mechanical (contracts/v1.ContextFabricModelFacingBounds, the single
+	// source both this prompt's authors and the validator's numeric
+	// literals must agree with -- see that file's doc comment), and
+	// applying it here surfaced exactly the predicted class of gap: this
+	// prompt's own text never stated the warnings bound at all, even
+	// though ContextFabricInvestigationResult.Validate() has enforced it
+	// (250 items, 4000 characters each) unchanged since v2. v6 adds that
+	// one missing statement; nothing else in this prompt changes.
+	defaultSynthesisPromptVersion = "context-fabric-synthesis.v6"
 	defaultSchemaVersion          = "context-fabric-model-output.v1"
 	defaultEvaluatorVersion       = "context-fabric-grounding.v1"
 )
