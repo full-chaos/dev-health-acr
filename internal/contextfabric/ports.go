@@ -135,9 +135,37 @@ type AnswerSynthesizer interface {
 // the caller's own org graph, where it does not exist, and the receipt is
 // silently skipped exactly like any other unresolvable one.
 type InvestigationResultStore interface {
-	Save(context.Context, storage.Principal, InvestigationResult) error
+	// Save's fourth parameter is the CHAOS-3782 answer-reuse watermark
+	// snapshot -- see SourceWatermarkSnapshot's doc comment. Every
+	// implementation and every test fake must accept it explicitly, even
+	// one that ignores it entirely (e.g. memoryinvestigation, which
+	// doesn't implement answer reuse): the parameter's presence in the
+	// signature is deliberate, not incidental, so a caller cannot forget
+	// to pass it and silently reproduce answer reuse's own fail-open
+	// hazard (Codex round-1 findings F1/F2) the way a context.Context
+	// value could.
+	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot) error
 	Get(context.Context, storage.Principal, string) (InvestigationResult, error)
 }
+
+// SourceWatermarkSnapshot is the CHAOS-3782 answer-reuse watermark
+// snapshot (TRD §19.7.3 condition 3): the CURRENT backend_watermark of
+// every source checkpointed for an organization, keyed by source name,
+// captured by Engine itself via SourceWatermarkSnapshotter immediately
+// before the graph is read for a fresh investigation -- see that
+// interface's doc comment for why the timing matters (Codex round-1
+// finding F1: a snapshot taken later, at Save, could describe data
+// fresher than what the graph read actually used).
+//
+// nil (the zero value) means no snapshot was captured -- answer reuse is
+// disabled for this Engine, or the snapshot read itself failed. An
+// InvestigationResultStore.Save implementation that supports answer
+// reuse MUST treat nil as "this result never becomes reusable" and MUST
+// NOT substitute a live query of its own as a fallback -- that would
+// silently reopen the exact race this type's existence, as an explicit
+// parameter rather than a context value, is meant to make impossible to
+// forget.
+type SourceWatermarkSnapshot map[string]string
 
 // ReuseKey is the CHAOS-3782 answer-reuse lookup key (TRD §19.7.2): the
 // canonicalized question hash plus the three version dimensions AC-3782-7
@@ -186,6 +214,22 @@ type AnswerReuseGate interface {
 // generated before the call to InvalidateOrganizationReuse.
 type ReuseInvalidator interface {
 	InvalidateOrganizationReuse(ctx context.Context, orgID string) error
+}
+
+// SourceWatermarkSnapshotter reads the CURRENT backend_watermark of every
+// source checkpointed for an organization, keyed by source name
+// (CHAOS-3782, Codex round-1 finding F1). Engine calls this itself, once,
+// at (or immediately before) the graph read for a FRESH investigation --
+// never at Save time, which is too late: a projection could advance
+// between the graph read and Save, and a snapshot taken then would
+// describe data possibly fresher than what the graph read actually used,
+// silently letting a later identical question reuse a stale answer under
+// a watermark that looks unchanged. The captured snapshot is passed
+// explicitly to Save as its SourceWatermarkSnapshot parameter -- Save
+// implementations must NOT take their own later snapshot as a substitute
+// when Engine passes nil.
+type SourceWatermarkSnapshotter interface {
+	SnapshotSourceWatermarks(ctx context.Context, orgID string) (SourceWatermarkSnapshot, error)
 }
 
 // ProjectionBackend is the write-side graph/index boundary. Applying a batch

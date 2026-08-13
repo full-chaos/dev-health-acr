@@ -63,6 +63,40 @@ func TestCanonicalizeQuestion_preservesInternalPunctuationAndWordBoundaries(t *t
 	}
 }
 
+// TestAC_3782_5_OnlyClosedTerminalPunctuationSetIsStripped is the Codex
+// round-1 F7 regression: unicode.IsPunct also matches '#', '@', '&', '%',
+// '*', '_', and '-', so the prior implementation silently stripped them
+// too and merged materially different questions ("is this C#?" and "is
+// this C" canonicalized identically). Only [. ? ! , ; :] may be treated
+// as trailing punctuation; every other character, even at the very end
+// of the string, must survive untouched.
+func TestAC_3782_5_OnlyClosedTerminalPunctuationSetIsStripped(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"is this c#", "is this c#"},
+		{"is this c#?", "is this c#"}, // trailing '?' stripped, '#' preserved
+		{"ping @support", "ping @support"},
+		{"ping @support.", "ping @support"}, // trailing '.' stripped, '@' preserved
+		{"discount is 10%", "discount is 10%"},
+		{"what changed in v2*", "what changed in v2*"},
+		{"see appendix a_1", "see appendix a_1"},
+		{"status: blocked-", "status: blocked-"},
+	}
+	for _, tc := range cases {
+		if got := CanonicalizeQuestion(tc.in); got != tc.want {
+			t.Errorf("CanonicalizeQuestion(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	// The closed set itself still strips and still merges across it.
+	closedSetVariants := []string{"done", "done.", "done?", "done!", "done,", "done;", "done:"}
+	want := QuestionHash(closedSetVariants[0])
+	for _, variant := range closedSetVariants[1:] {
+		if got := QuestionHash(variant); got != want {
+			t.Errorf("QuestionHash(%q) = %q, want %q (same as %q)", variant, got, want, closedSetVariants[0])
+		}
+	}
+}
+
 func TestQuestionHash_isSHA256HexOfCanonicalForm(t *testing.T) {
 	got := QuestionHash("Hello?")
 	if len(got) != 64 {

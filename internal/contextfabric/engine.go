@@ -47,6 +47,14 @@ type EngineDependencies struct {
 	// AnswerReuseGate's doc comment for the six-condition policy it and
 	// Engine jointly enforce.
 	ReuseGate AnswerReuseGate
+	// ReuseSnapshotter is optional (CHAOS-3782, Codex round-1 F1). When
+	// set, Engine captures a source-watermark snapshot itself,
+	// immediately before the graph is read for a fresh investigation,
+	// and threads it to Save -- see SourceWatermarkSnapshotter's doc
+	// comment for why the timing matters. Leaving this nil means a fresh
+	// result never carries a snapshot and so never becomes reusable,
+	// exactly as if ReuseGate were also nil.
+	ReuseSnapshotter SourceWatermarkSnapshotter
 }
 
 // EngineTelemetry receives content-safe operational counters from Engine.
@@ -92,6 +100,7 @@ type Engine struct {
 	results                InvestigationResultStore
 	telemetry              EngineTelemetry
 	reuseGate              AnswerReuseGate
+	reuseSnapshotter       SourceWatermarkSnapshotter
 	reuseProjectionVersion string
 	reuseModelIdentity     string
 	serviceVersion         string
@@ -115,7 +124,8 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 	return &Engine{
 		interpreter: dependencies.Interpreter, graph: dependencies.Graph, facts: dependencies.Facts,
 		synthesizer: dependencies.Synthesizer, results: dependencies.Results, telemetry: dependencies.Telemetry,
-		reuseGate: dependencies.ReuseGate, reuseProjectionVersion: options.ReuseProjectionVersion, reuseModelIdentity: options.ReuseModelIdentity,
+		reuseGate: dependencies.ReuseGate, reuseSnapshotter: dependencies.ReuseSnapshotter,
+		reuseProjectionVersion: options.ReuseProjectionVersion, reuseModelIdentity: options.ReuseModelIdentity,
 		serviceVersion: options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
 	}, nil
 }
@@ -219,6 +229,29 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			)
 		}
 	}
+	// CHAOS-3782 Codex round-1 F1: capture the reuse watermark snapshot
+	// HERE, immediately before the graph is read for this fresh
+	// investigation -- not later, at Save. A snapshot taken at Save time
+	// could describe data fresher than what ResolveSubjects/
+	// DiscoverContext below actually used (a projection could advance in
+	// between), which would let a later identical question reuse this
+	// stale answer under a watermark that merely looks unchanged.
+	// reuseWatermarkSnapshot is threaded EXPLICITLY to Save below, as its
+	// own parameter -- never through ctx (team-lead veto: load-bearing
+	// data belongs in the signature, where a caller who forgets it fails
+	// to compile, not in a context value a caller can silently omit).
+	//
+	// Fails OPEN on the snapshot read itself (never blocks the
+	// investigation over an optional dependency); reuseWatermarkSnapshot
+	// simply stays nil, and Save (per SourceWatermarkSnapshot's doc
+	// comment) must treat nil as "this row never becomes reusable" --
+	// the fail-CLOSED outcome for reuse specifically.
+	var reuseWatermarkSnapshot SourceWatermarkSnapshot
+	if e.reuseSnapshotter != nil {
+		if snapshot, snapErr := e.reuseSnapshotter.SnapshotSourceWatermarks(ctx, principal.OrgID); snapErr == nil {
+			reuseWatermarkSnapshot = snapshot
+		}
+	}
 	resolution, err := e.graph.ResolveSubjects(ctx, principal, graphRequest, interpretation)
 	if err != nil {
 		return InvestigationResult{}, fmt.Errorf("resolve subjects: %w", err)
@@ -255,6 +288,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	result.ResultID = e.newResultID()
 	result.RequestID = request.RequestID
 	result.GeneratedAt = e.now().UTC()
+	// Codex round-1 F8: explicit, not merely the zero value -- a
+	// Synthesizer implementation that (incorrectly) set Reused=true on
+	// its returned draft must not have that survive into a genuinely
+	// fresh result. Reused=true is ONLY ever valid on the exact object
+	// tryReuse returns.
+	result.Reused = false
 	result.Question = request.Question
 	result.Interpretation = interpretation
 	result.SubjectResolution = resolution
@@ -277,7 +316,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return InvestigationResult{}, fmt.Errorf("%w: %v", ErrInvalidResult, err)
 	}
 	if e.results != nil {
-		if err := e.results.Save(ctx, principal, result); err != nil {
+		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot); err != nil {
 			return InvestigationResult{}, fmt.Errorf("save investigation result: %w", err)
 		}
 	}

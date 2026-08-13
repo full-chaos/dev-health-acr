@@ -44,11 +44,13 @@ func (f synthesizerFunc) Synthesize(ctx context.Context, principal storage.Princ
 }
 
 type resultStoreStub struct {
-	saved InvestigationResult
+	saved         InvestigationResult
+	savedSnapshot SourceWatermarkSnapshot
 }
 
-func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult) error {
+func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult, reuseSnapshot SourceWatermarkSnapshot) error {
 	s.saved = result
+	s.savedSnapshot = reuseSnapshot
 	return nil
 }
 
@@ -64,7 +66,7 @@ type staticResultStore struct {
 	getErr  error
 }
 
-func (s *staticResultStore) Save(context.Context, storage.Principal, InvestigationResult) error {
+func (s *staticResultStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot) error {
 	return nil
 }
 

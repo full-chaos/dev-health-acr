@@ -129,7 +129,7 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + 
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository:" + id, Label: slug}
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Authorization: repoAuthorization(slug), EvidenceRefIDs: []string{"acr:v1:repository:" + id},
-			ObservedAt: observedAt, SourceVersion: sourceVersion,
+			ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 		}
 		if provider != "" {
 			entity.ProviderIDs = map[string]string{provider: id}
@@ -160,7 +160,7 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", "w.wo
 		}
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:work-item:" + workItemID}, ObservedAt: observedAt, SourceVersion: sourceVersion,
+			EvidenceRefIDs: []string{"acr:v1:work-item:" + workItemID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 		}
 		_ = url
 		return []candidate{
@@ -197,7 +197,7 @@ WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowK
 		}
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:pull-request:" + repoID + ":" + fmt.Sprint(number)}, ObservedAt: observedAt, SourceVersion: sourceVersion,
+			EvidenceRefIDs: []string{"acr:v1:pull-request:" + repoID + ":" + fmt.Sprint(number)}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
 			{observedAt: observedAt, sortKey: rowSortKey, entity: &entity},
@@ -232,7 +232,7 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "d.dep
 		}
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:deployment:" + deploymentID}, ObservedAt: observedAt, SourceVersion: sourceVersion,
+			EvidenceRefIDs: []string{"acr:v1:deployment:" + deploymentID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
 			{observedAt: observedAt, sortKey: deploymentID, entity: &entity},
@@ -266,7 +266,7 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id"
 		canonicalID := "incident:" + incidentID
 		if isDeleted != 0 {
 			tombstone := contractsv1.ContextFabricProjectionTombstone{
-				Kind: "incident", CanonicalID: canonicalID, Reason: "source_deleted", EffectiveAt: observedAt, SourceVersion: sourceVersion,
+				Kind: "incident", CanonicalID: canonicalID, Reason: "source_deleted", EffectiveAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 			}
 			return []candidate{{observedAt: observedAt, sortKey: incidentID, tombstone: &tombstone}}, nil
 		}
@@ -284,7 +284,7 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id"
 		}
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:incident:" + incidentID}, ObservedAt: observedAt, SourceVersion: sourceVersion,
+			EvidenceRefIDs: []string{"acr:v1:incident:" + incidentID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
 			{observedAt: observedAt, sortKey: incidentID, entity: &entity},
@@ -331,7 +331,7 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + targetID, Label: targetID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
 			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-dependency:" + sourceID + ":" + targetID + ":" + relationshipType},
-			ObservedAt: observedAt, SourceVersion: sourceVersion,
+			ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: sourceID + ":" + targetID + ":" + relationshipType, relationship: &relationship}}, nil
 	})
@@ -384,7 +384,7 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + parentID, Label: parentID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
 			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-hierarchy:" + childID + ":" + parentID},
-			ObservedAt: observedAt, SourceVersion: sourceVersion,
+			ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: childID, relationship: &relationship}}, nil
 	})
@@ -409,7 +409,7 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectIncident, CanonicalID: "incident:" + incidentID, Label: incidentID},
 			Derivation: contractsv1.ContextFabricDerivationRuleInferred, EpistemicStatus: contractsv1.ContextFabricEpistemicSourceAsserted,
 			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:deployment-incident:" + edgeID},
-			ObservedAt: observedAt, SourceVersion: sourceVersion,
+			ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: edgeID, relationship: &relationship}}, nil
 	})
@@ -452,7 +452,7 @@ WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.submitted_at", row
 		}
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:review:" + reviewID}, ObservedAt: observedAt, SourceVersion: sourceVersion,
+			EvidenceRefIDs: []string{"acr:v1:review:" + reviewID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 		}
 		pullRequestID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
 		relationship := contractsv1.ContextFabricRelationshipProjection{
@@ -461,7 +461,7 @@ WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.submitted_at", row
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: pullRequestID, Label: pullRequestID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
 			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:review:" + reviewID},
-			ObservedAt: observedAt, SourceVersion: sourceVersion,
+			ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
 			{observedAt: observedAt, sortKey: reviewID, entity: &entity},
@@ -494,7 +494,7 @@ WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, rowKey
 		}
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:ci:" + runID}, ObservedAt: observedAt, SourceVersion: sourceVersion,
+			EvidenceRefIDs: []string{"acr:v1:ci:" + runID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
 			{observedAt: observedAt, sortKey: runID, entity: &entity},

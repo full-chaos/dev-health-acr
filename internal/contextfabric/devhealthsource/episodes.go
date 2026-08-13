@@ -14,7 +14,7 @@ import (
 // EpisodesSourceName is the Source value EpisodesProjectionSource writes.
 const EpisodesSourceName = "dev_health_episodes"
 
-const episodesSourceVersion = "devhealthsource.episodes.v1"
+const EpisodesSourceVersion = "devhealthsource.episodes.v1"
 
 const (
 	episodesIncrementalBatchCap = 200
@@ -96,7 +96,7 @@ func (s *EpisodesProjectionSource) NextProjectionBatch(ctx context.Context, chec
 	// A batch may only claim FullSnapshot+CompleteEnumeration when it
 	// genuinely enumerated everything: fromScratch AND not truncated.
 	complete := fromScratch && !truncated
-	batch, err := buildBatch(orgID, EpisodesSourceName, episodesSourceVersion, checkpoint.Cursor, all, complete, complete, s.clock())
+	batch, err := buildBatch(orgID, EpisodesSourceName, EpisodesSourceVersion, checkpoint.Cursor, all, complete, complete, s.clock())
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
@@ -124,7 +124,7 @@ func episodeCandidate(row storage.EpisodeProjectionRecord) candidate {
 	canonicalID := "episode:" + row.EpisodeID
 	if row.RedactionState != "active" {
 		tombstone := contractsv1.ContextFabricProjectionTombstone{
-			Kind: "episode", CanonicalID: canonicalID, Reason: row.RedactionState, EffectiveAt: row.UpdatedAt, SourceVersion: episodesSourceVersion,
+			Kind: "episode", CanonicalID: canonicalID, Reason: row.RedactionState, EffectiveAt: row.UpdatedAt, SourceVersion: EpisodesSourceVersion,
 		}
 		return candidate{observedAt: row.UpdatedAt, sortKey: row.EpisodeID, tombstone: &tombstone}
 	}
@@ -145,7 +145,7 @@ func episodeCandidate(row storage.EpisodeProjectionRecord) candidate {
 		Subject:   contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectEpisode, CanonicalID: canonicalID, Label: label},
 		Goal:      goal, Outcome: row.Outcome, Summary: summary,
 		Authorization: repoAuthorization(row.RepoSlug), EvidenceRefIDs: []string{"acr:v1:episode:" + row.EpisodeID},
-		StartedAt: row.StartedAt, EndedAt: row.EndedAt, SourceVersion: episodesSourceVersion,
+		StartedAt: row.StartedAt, EndedAt: row.EndedAt, SourceVersion: EpisodesSourceVersion,
 	}
 	return candidate{observedAt: row.UpdatedAt, sortKey: row.EpisodeID, episode: &episode}
 }

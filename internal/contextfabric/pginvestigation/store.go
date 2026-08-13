@@ -103,7 +103,7 @@ func NewStore(db *sql.DB, opts ...StoreOption) (*Store, error) {
 // identical payload is treated as success (idempotent retry); a replay
 // under the same result_id with a DIFFERENT payload is rejected, since that
 // would silently overwrite an immutable record.
-func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult) error {
+func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot) error {
 	if s == nil || s.db == nil {
 		return errors.New("pginvestigation: store is not configured")
 	}
@@ -123,7 +123,7 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	if err != nil {
 		return fmt.Errorf("pginvestigation: marshal investigation result: %w", err)
 	}
-	questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks := s.reuseColumnsFor(ctx, orgID, result)
+	questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks := s.reuseColumnsFor(result, reuseSnapshot)
 
 	insertResult, err := s.db.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_investigation_results
@@ -243,28 +243,44 @@ SELECT payload FROM acr.context_fabric_investigation_results WHERE result_id = $
 // writes SQL NULL into every reuse column, exactly as if this were the
 // pre-CHAOS-3782 schema.
 //
-// A failure reading the CURRENT per-source watermarks (e.g. a transient
-// query error) fails OPEN here specifically: it degrades to "this row
-// never participates in reuse" (source_watermarks stays NULL), never to
-// losing the investigation result itself. Save's own immutable-write
-// guarantee must not depend on a dependency this optional.
-func (s *Store) reuseColumnsFor(ctx context.Context, orgID string, result contextfabric.InvestigationResult) (questionHash, contractVersion, projectionVersion, modelIdentity sql.NullString, sourceWatermarks []byte) {
-	if !s.reuseEnabled {
+// Codex round-1 F1 (and team-lead's veto of threading this through
+// context.Context): reuseSnapshot is Save's own explicit parameter,
+// captured by Engine itself, before the graph read that produced result
+// -- never queried live here. Querying "current" watermarks at Save time
+// (now, after synthesis has finished) would describe data possibly
+// fresher than what actually went into this result, letting a later
+// identical question reuse a stale answer under a watermark that only
+// looks unchanged. reuseSnapshot == nil (reuse disabled for this Engine,
+// or the Engine-side snapshot read failed) means this row simply never
+// participates in reuse -- exactly like Save's other own-query failures,
+// this fails OPEN on the write (the investigation result itself is never
+// lost) and CLOSED on reuse participation (nothing here falls back to a
+// live query, which would silently reopen the same race).
+func (s *Store) reuseColumnsFor(result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot) (questionHash, contractVersion, projectionVersion, modelIdentity sql.NullString, sourceWatermarks []byte) {
+	if !s.reuseEnabled || reuseSnapshot == nil {
+		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil
+	}
+	encoded, err := json.Marshal(reuseSnapshot)
+	if err != nil {
 		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil
 	}
 	questionHash = sql.NullString{String: contextfabric.QuestionHash(result.Question), Valid: true}
 	contractVersion = sql.NullString{String: result.Versions.ContractVersion, Valid: true}
 	projectionVersion = sql.NullString{String: result.Versions.ProjectionVersion, Valid: true}
 	modelIdentity = sql.NullString{String: result.Versions.ModelIdentity, Valid: true}
+	return questionHash, contractVersion, projectionVersion, modelIdentity, encoded
+}
+
+// SnapshotSourceWatermarks implements contextfabric.SourceWatermarkSnapshotter.
+// Engine calls this directly (not through Save) immediately before
+// reading the graph for a fresh investigation -- see that interface's doc
+// comment and reuseColumnsFor's F1 note for why the timing matters.
+func (s *Store) SnapshotSourceWatermarks(ctx context.Context, orgID string) (contextfabric.SourceWatermarkSnapshot, error) {
 	snapshot, err := s.currentSourceWatermarks(ctx, orgID)
 	if err != nil {
-		return questionHash, contractVersion, projectionVersion, modelIdentity, nil
+		return nil, err
 	}
-	encoded, err := json.Marshal(snapshot)
-	if err != nil {
-		return questionHash, contractVersion, projectionVersion, modelIdentity, nil
-	}
-	return questionHash, contractVersion, projectionVersion, modelIdentity, encoded
+	return contextfabric.SourceWatermarkSnapshot(snapshot), nil
 }
 
 // currentSourceWatermarks reads the CURRENT backend_watermark of every
@@ -272,7 +288,11 @@ func (s *Store) reuseColumnsFor(ctx context.Context, orgID string, result contex
 // straight from acr.context_fabric_projection_checkpoints over the same
 // *sql.DB this Store already owns -- see the Store.reuseEnabled field
 // comment for why this is deliberately not routed through
-// contextfabric.ProjectionCheckpointStore.
+// contextfabric.ProjectionCheckpointStore. Used both by
+// SnapshotSourceWatermarks (Engine's pre-graph-read call) and by
+// watermarksStillMatch (FindReusable's condition-3 check, which
+// legitimately wants the watermark AT LOOKUP TIME, not any earlier
+// snapshot).
 func (s *Store) currentSourceWatermarks(ctx context.Context, orgID string) (map[string]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT source, backend_watermark FROM acr.context_fabric_projection_checkpoints WHERE org_id = $1`, orgID)
@@ -324,6 +344,20 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 		return contextfabric.InvestigationResult{}, false, nil
 	}
 
+	// Codex round-1 F6: condition 4's staleness window and the rebuild-
+	// invalidation comparison both use created_at (DB clock_timestamp(),
+	// migration 0009) against DB now() -- NEVER generated_at, which is
+	// app-clock metadata a caller's own process supplies and this store
+	// must not trust as an authority for a security/correctness-bearing
+	// comparison. generated_at stays purely a display field on the
+	// returned result (AC-3782-2's "generation time of the reused
+	// result"); it plays no role in deciding reuse eligibility here.
+	//
+	// F2: source_watermarks IS NOT NULL excludes any row where the
+	// Engine-side snapshot was never captured (reuse disabled at save
+	// time, or the snapshot read failed) -- such a row must never be
+	// treated as reusable no matter what watermarksStillMatch would
+	// otherwise conclude from a NULL/empty value.
 	row := s.db.QueryRowContext(ctx, `
 SELECT payload, source_watermarks
 FROM acr.context_fabric_investigation_results
@@ -332,11 +366,12 @@ WHERE org_id = $1
   AND contract_version = $3
   AND projection_version = $4
   AND model_identity = $5
-  AND generated_at > now() - ($6 * INTERVAL '1 second')
-  AND generated_at > COALESCE(
+  AND source_watermarks IS NOT NULL
+  AND created_at > now() - ($6 * INTERVAL '1 second')
+  AND created_at > COALESCE(
         (SELECT invalidated_at FROM acr.context_fabric_reuse_invalidations WHERE org_id = $1),
         '-infinity'::timestamptz)
-ORDER BY generated_at DESC
+ORDER BY created_at DESC
 LIMIT 1`,
 		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentity, s.reuseMaxAge.Seconds())
 	var payload, sourceWatermarks []byte
@@ -378,11 +413,25 @@ LIMIT 1`,
 // pass. TRD §19.7.3 fails closed: an ambiguous "did anything change"
 // answer is treated as "yes".
 func (s *Store) watermarksStillMatch(ctx context.Context, orgID string, snapshotJSON []byte) (bool, error) {
+	// Codex round-1 F2: an empty/missing stored snapshot is NEVER a
+	// match, regardless of what the organization's current checkpoint
+	// set looks like. The FindReusable SQL already excludes
+	// source_watermarks IS NULL, so a nil snapshotJSON should not reach
+	// here in production, but this stays a direct, explicit guard rather
+	// than relying solely on the caller's WHERE clause: without it, a
+	// genuinely empty snapshot (e.g. json.Marshal(nil) -> "null") decodes
+	// to a nil/empty map that VACUOUSLY equals an organization with zero
+	// current checkpoints -- silently treating "we never recorded
+	// anything" as "nothing changed."
+	if len(snapshotJSON) == 0 || string(snapshotJSON) == "null" {
+		return false, nil
+	}
 	var snapshot map[string]string
-	if len(snapshotJSON) > 0 {
-		if err := json.Unmarshal(snapshotJSON, &snapshot); err != nil {
-			return false, fmt.Errorf("decode source watermark snapshot: %w", err)
-		}
+	if err := json.Unmarshal(snapshotJSON, &snapshot); err != nil {
+		return false, fmt.Errorf("decode source watermark snapshot: %w", err)
+	}
+	if len(snapshot) == 0 {
+		return false, nil
 	}
 	current, err := s.currentSourceWatermarks(ctx, orgID)
 	if err != nil {
@@ -391,8 +440,16 @@ func (s *Store) watermarksStillMatch(ctx context.Context, orgID string, snapshot
 	if len(snapshot) != len(current) {
 		return false, nil
 	}
+	// Codex round-1 F3: explicit key PRESENCE, not just value equality --
+	// current[source] returns the empty string for a source missing from
+	// current, which would incorrectly equal a stored empty-string
+	// watermark (a real, valid value: migration 0006's
+	// backend_watermark column defaults to '') and let a REPLACED source
+	// (one name removed, a different one added, net length unchanged)
+	// slip past the length check above.
 	for source, watermark := range snapshot {
-		if current[source] != watermark {
+		currentWatermark, ok := current[source]
+		if !ok || currentWatermark != watermark {
 			return false, nil
 		}
 	}

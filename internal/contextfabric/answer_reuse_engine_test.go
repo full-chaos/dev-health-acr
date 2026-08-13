@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -270,6 +271,66 @@ func TestAC_3782_6_LostEvidenceVisibilityFailsReuseRecheck(t *testing.T) {
 	}
 }
 
+// TestAC_3782_6_LostEdgeLevelEvidenceVisibilityFailsReuseRecheck is the
+// Codex round-1 F4 regression: a stored result whose evidence is cited
+// ONLY at the relationship-edge level (never in the path's own
+// EvidenceRefIDs, nor anywhere else) must still be rechecked -- before
+// the fix, reuseEvidenceRefsToRecheck walked Paths[].EvidenceRefIDs but
+// never Paths[].Edges[].EvidenceRefIDs, so a candidate shaped exactly
+// like this one skipped the containment check entirely and would have
+// been (wrongly) served.
+func TestAC_3782_6_LostEdgeLevelEvidenceVisibilityFailsReuseRecheck(t *testing.T) {
+	t.Parallel()
+
+	project, candidate := reusableCandidate()
+	other := SubjectRef{Kind: SubjectProject, CanonicalID: "project_other", Label: "Other"}
+	candidate.EvidenceRefIDs = []string{} // nothing at the top level
+	candidate.Paths = []RelationshipPath{{
+		PathID:      "path_edgeonly_0001",
+		Nodes:       []SubjectRef{project, other},
+		WhyRelevant: "connected work",
+		Edges: []RelationshipEdge{{
+			Type: RelationshipType("RELATED_TO"), From: project, To: other,
+			Derivation: DerivationRuleInferred, EpistemicStatus: EpistemicInferred,
+			EvidenceRefIDs: []string{"acr:v1:evidence:edge_only_0001"}, // ONLY here
+		}},
+		EvidenceRefIDs: []string{}, // deliberately empty at path level
+	}}
+	freshResult := validInvestigationResult()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+			// The fresh evidence set does NOT contain the edge-only ref.
+			context: GraphContext{EvidenceRefIDs: []string{}},
+		},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: &resultStoreStub{},
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return candidate, true, nil
+		}),
+	})
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Reused {
+		t.Fatal("result.Reused = true, want a fresh investigation once the candidate's edge-level evidence reference is no longer visible")
+	}
+	if result.ResultID != freshTestResultID {
+		t.Errorf("result.ResultID = %q, want the fresh result %q", result.ResultID, freshTestResultID)
+	}
+}
+
 // TestAC_3782_8_RecordsReuseOutcomeForHitAndMiss binds AC-3782-8: the
 // reuse rate and the saved model-call count are both derived from
 // EngineTelemetry.RecordAnswerReuse's outcome stream (see that method's
@@ -431,5 +492,178 @@ func TestEngineFallsThroughToFreshInvestigationWhenReuseGateErrors(t *testing.T)
 	}
 	if result.ResultID != freshTestResultID {
 		t.Errorf("result.ResultID = %q, want %q", result.ResultID, freshTestResultID)
+	}
+}
+
+// TestAC_3782_2_FreshInvestigationAlwaysOverridesReusedToFalse is the
+// Codex round-1 F8 regression: a Synthesizer that (incorrectly) returns
+// Reused=true on its draft must not have that survive into a genuinely
+// fresh result -- Reused=true is valid ONLY on the exact object tryReuse
+// itself returns. Engine.Investigate must set it explicitly, not rely on
+// the synthesizer never setting it.
+func TestAC_3782_2_FreshInvestigationAlwaysOverridesReusedToFalse(t *testing.T) {
+	t.Parallel()
+
+	misbehavingResult := validInvestigationResult()
+	misbehavingResult.ResultID = "result_should_be_overwritten"
+	misbehavingResult.Reused = true // a buggy/malicious Synthesizer's draft
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return misbehavingResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: &resultStoreStub{},
+		// No ReuseGate -- this is a plain fresh-investigation path,
+		// isolating the assertion to Engine's own post-synthesis
+		// override rather than anything reuse-gate-related.
+	})
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Reused {
+		t.Fatal("result.Reused = true, want Engine to have overridden the synthesizer's draft to false")
+	}
+	if result.ResultID != freshTestResultID {
+		t.Errorf("result.ResultID = %q, want %q", result.ResultID, freshTestResultID)
+	}
+}
+
+// orderTrackingSnapshotter is a fake SourceWatermarkSnapshotter that
+// appends "snapshot" to a shared, ordered event log and returns a fixed
+// snapshot -- used with orderTrackingGraphReader to prove CALL ORDER
+// (Codex round-1 F1), not just that both were called.
+type orderTrackingSnapshotter struct {
+	events   *[]string
+	snapshot SourceWatermarkSnapshot
+}
+
+func (s orderTrackingSnapshotter) SnapshotSourceWatermarks(context.Context, string) (SourceWatermarkSnapshot, error) {
+	*s.events = append(*s.events, "snapshot")
+	return s.snapshot, nil
+}
+
+// orderTrackingGraphReader appends "resolve_subjects" to the SAME shared
+// event log on ResolveSubjects -- the first actual graph read in
+// Investigate's flow.
+type orderTrackingGraphReader struct {
+	events     *[]string
+	resolution SubjectResolution
+}
+
+func (g orderTrackingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion) (SubjectResolution, error) {
+	*g.events = append(*g.events, "resolve_subjects")
+	return g.resolution, nil
+}
+
+func (g orderTrackingGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
+	return GraphContext{Coverage: Coverage{Sources: []SourceObservation{}}}, nil
+}
+
+// snapshotCapturingResultStore is a fake InvestigationResultStore that
+// records the exact SourceWatermarkSnapshot Save was called with -- the
+// explicit fourth parameter, not anything threaded through context
+// (team-lead vetoed context-smuggling this: load-bearing data belongs in
+// the signature, where a forgetful caller fails to compile).
+type snapshotCapturingResultStore struct {
+	saveCalled    bool
+	savedSnapshot SourceWatermarkSnapshot
+}
+
+func (s *snapshotCapturingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, reuseSnapshot SourceWatermarkSnapshot) error {
+	s.saveCalled = true
+	s.savedSnapshot = reuseSnapshot
+	return nil
+}
+
+func (s *snapshotCapturingResultStore) Get(context.Context, storage.Principal, string) (InvestigationResult, error) {
+	return InvestigationResult{}, nil
+}
+
+// TestF1_SnapshotCapturedBeforeGraphReadAndPassedExplicitlyToSave is the
+// Codex round-1 F1 regression, proved directly rather than inferred: the
+// watermark snapshot must be captured BEFORE the graph is read (not
+// later, at Save, which could describe data fresher than what the graph
+// read actually used), and the exact snapshot captured must be the one
+// Save receives as its explicit SourceWatermarkSnapshot parameter.
+func TestF1_SnapshotCapturedBeforeGraphReadAndPassedExplicitlyToSave(t *testing.T) {
+	t.Parallel()
+
+	var events []string
+	snapshot := SourceWatermarkSnapshot{"linear": "wm-1", "github": "wm-7"}
+	store := &snapshotCapturingResultStore{}
+	freshResult := validInvestigationResult()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: orderTrackingGraphReader{events: &events, resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results:          store,
+		ReuseSnapshotter: orderTrackingSnapshotter{events: &events, snapshot: snapshot},
+	})
+
+	if _, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest()); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+
+	if want := []string{"snapshot", "resolve_subjects"}; !reflect.DeepEqual(events, want) {
+		t.Fatalf("call order = %v, want %v (snapshot must be captured BEFORE the graph is read)", events, want)
+	}
+	if !store.saveCalled {
+		t.Fatal("Save was never called")
+	}
+	if !reflect.DeepEqual(store.savedSnapshot, snapshot) {
+		t.Errorf("snapshot passed to Save = %v, want %v", store.savedSnapshot, snapshot)
+	}
+}
+
+// TestF1_NilSnapshotPassedToSaveWhenReuseSnapshotterIsNil proves the safe
+// default: with no ReuseSnapshotter configured, Save is called with a nil
+// SourceWatermarkSnapshot -- never a stale/empty one substituted in its
+// place.
+func TestF1_NilSnapshotPassedToSaveWhenReuseSnapshotterIsNil(t *testing.T) {
+	t.Parallel()
+
+	store := &snapshotCapturingResultStore{}
+	freshResult := validInvestigationResult()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: store,
+		// ReuseSnapshotter left nil.
+	})
+
+	if _, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest()); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !store.saveCalled {
+		t.Fatal("Save was never called")
+	}
+	if store.savedSnapshot != nil {
+		t.Errorf("snapshot passed to Save = %v, want nil", store.savedSnapshot)
 	}
 }

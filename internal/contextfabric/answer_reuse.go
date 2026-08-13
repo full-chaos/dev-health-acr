@@ -64,13 +64,33 @@ func collapseInternalWhitespace(s string) string {
 	return b.String()
 }
 
-// stripTrailingPunctuation removes trailing Unicode punctuation and any
-// whitespace it exposes, to a fixed point, so multiple trailing marks
-// (optionally interspersed with whitespace, e.g. "done ? !") reduce the
-// same as one ("done?!") or none ("done").
+// isReuseTerminalPunctuation is the CLOSED set stripTrailingPunctuation
+// removes: the ASCII sentence/clause terminators a caller's own keyboard
+// naturally ends a question with. Codex round-1 F7: the prior
+// implementation used unicode.IsPunct, which also matches '#', '@', '&',
+// '%', '*', '_', and '-' -- so "is this C#?" and "is this C" canonicalized
+// identically, silently merging materially different questions. Only
+// widen this set with a corresponding AC-3782-5 test case proving the
+// new character still only affects a genuinely-equivalent trailing
+// position, never a word boundary.
+func isReuseTerminalPunctuation(r rune) bool {
+	switch r {
+	case '.', '?', '!', ',', ';', ':':
+		return true
+	default:
+		return false
+	}
+}
+
+// stripTrailingPunctuation removes trailing terminal punctuation (see
+// isReuseTerminalPunctuation) and any whitespace it exposes, to a fixed
+// point, so multiple trailing marks (optionally interspersed with
+// whitespace, e.g. "done ? !") reduce the same as one ("done?!") or none
+// ("done"). Punctuation outside the closed set (e.g. a trailing '#' or
+// '@mention') is never touched.
 func stripTrailingPunctuation(s string) string {
 	for {
-		next := strings.TrimRightFunc(s, unicode.IsPunct)
+		next := strings.TrimRightFunc(s, isReuseTerminalPunctuation)
 		next = strings.TrimRightFunc(next, unicode.IsSpace)
 		if next == s {
 			return next
@@ -361,6 +381,13 @@ func reuseEvidenceRefsToRecheck(candidate InvestigationResult) []string {
 	}
 	for _, path := range candidate.Paths {
 		add(path.EvidenceRefIDs)
+		// Codex round-1 F4: a path's own EvidenceRefIDs is not
+		// guaranteed to be a superset of its edges' -- a stored result
+		// with evidence cited ONLY at edge level would otherwise skip
+		// the containment recheck for those refs entirely.
+		for _, edge := range path.Edges {
+			add(edge.EvidenceRefIDs)
+		}
 	}
 	return refs
 }

@@ -248,32 +248,35 @@ func (c *Coordinator) performRebuild(ctx context.Context, orgID string) error {
 	if err := c.resetAllCheckpoints(ctx, orgID); err != nil {
 		return err
 	}
+	// CHAOS-3782, AC-3782-4 (Codex round-1 F5): invalidate answer reuse
+	// for this organization BEFORE clearing the rebuild marker, and treat
+	// a failure here as a rebuild failure (the marker stays set, so the
+	// NEXT tick's crash-resume path -- runOrg's IsRebuildInProgress check
+	// -- reruns this entire idempotent sequence, including this call,
+	// until it succeeds).
+	//
+	// This order matters. The prior order (invalidate AFTER
+	// CompleteRebuild, best-effort/log-and-continue on failure) had a
+	// silent crash window: a crash or a failure between clearing the
+	// marker and recording the invalidation left the marker gone --
+	// runOrg would then see IsRebuildInProgress == false and never retry
+	// -- with AC-3782-4's guarantee permanently unmet for that
+	// organization and nothing surfacing it beyond a log line (D15's
+	// watermark/window bounds are the OTHER, independent safety net, not
+	// a substitute for this one actually firing). Invalidate-then-complete
+	// closes that window: InvalidateOrganizationReuse is idempotent (its
+	// ON CONFLICT clause only ever moves invalidated_at forward), so a
+	// crash between the two steps, or a resumed retry after a transient
+	// failure, safely re-invalidates rather than skipping it.
+	if c.reuseInvalidator != nil {
+		if err := c.reuseInvalidator.InvalidateOrganizationReuse(ctx, orgID); err != nil {
+			return fmt.Errorf("projectionrun: invalidate answer reuse: %w", err)
+		}
+	}
 	if err := c.rebuildMarkers.CompleteRebuild(ctx, orgID); err != nil {
 		return fmt.Errorf("projectionrun: clear rebuild marker: %w", err)
 	}
 	c.logger.InfoContext(ctx, "projection organization rebuilt", "org_id", orgID)
-	// CHAOS-3782, AC-3782-4: a completed rebuild invalidates every
-	// reusable stored result for this organization. This runs AFTER the
-	// marker clears, deliberately -- the rebuild sequence above is
-	// exactly what performRebuild reruns on a crash resume, so firing
-	// the invalidation only once it is confirmed complete means a
-	// crash-and-resume can never skip it, and a normal completion never
-	// double-fires it in a way that matters (InvalidateOrganizationReuse
-	// is idempotent).
-	//
-	// Deliberately best-effort: a failure here must never turn a
-	// successful rebuild into a reported failure (the rebuild itself
-	// fully succeeded), and must never block the projector's next tick.
-	// The cost of a missed invalidation is a stale answer possibly
-	// served past a rebuild until the staleness window or a watermark
-	// change independently catches it (TRD §19.7.3's D15 hazard note:
-	// the window is the conservative second bound for exactly this kind
-	// of gap) -- never a wedged organization.
-	if c.reuseInvalidator != nil {
-		if err := c.reuseInvalidator.InvalidateOrganizationReuse(ctx, orgID); err != nil {
-			c.logger.WarnContext(ctx, "answer-reuse invalidation failed after rebuild; stale results may be served until the staleness window or a watermark change catches them", "org_id", orgID, "error", err)
-		}
-	}
 	return nil
 }
 
