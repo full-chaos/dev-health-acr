@@ -185,6 +185,10 @@
             "maxLength": 2000
           },
           "maxItems": 100
+        },
+        "reused": {
+          "type": "boolean",
+          "description": "CHAOS-3782: true when this result was served from the immutable result store rather than a fresh investigation. When true, result_id and generated_at name the reused result's own identifier and generation time, not this request's."
         }
       },
       "required": [
@@ -210,7 +214,8 @@
         "coverage",
         "versions",
         "deterministic_answer",
-        "warnings"
+        "warnings",
+        "reused"
       ],
       "allOf": [
         {
@@ -1412,6 +1417,12 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 256
+            },
+            "model_identity": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 513,
+              "description": "CHAOS-3782: the provider/model that produced this result's synthesis, e.g. \"openai-compatible/gpt-5-nano\". Never a bare vendor name. Optional: rows persisted before this field existed (or by any writer with answer reuse disabled) omit it entirely; absence never blocks reading an existing result, and never makes that result reuse-eligible either (reuse also requires question_hash, absent on the same rows for the same reason). maxLength is provider (<=256) + \"/\" + model (<=256) = 513, not the 256 shared by every other field here -- those are short deployment/prompt version tokens ACR itself controls."
             }
           },
           "required": [

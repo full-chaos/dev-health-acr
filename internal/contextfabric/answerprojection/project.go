@@ -124,6 +124,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		GeneratedAt:   result.GeneratedAt,
 		Status:        result.Status,
 		Question:      result.Question,
+		Reused:        result.Reused,
 		// Verbatim. These two fields are the answer.
 		DirectJudgment:     result.DirectJudgment,
 		CurrentState:       result.CurrentState,

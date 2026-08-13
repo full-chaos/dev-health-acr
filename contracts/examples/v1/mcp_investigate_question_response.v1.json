@@ -7,6 +7,7 @@
   "generated_at": "2026-08-11T16:00:03Z",
   "status": "complete",
   "question": "Most of the work is closed, so why is Ask Dev still not ready to ship?",
+  "reused": false,
   "direct_judgment": "Ask Dev is not release-ready even though most tracked implementation work is closed.",
   "current_state": "Implementation completion and release readiness diverge because required product acceptance remains open.",
   "strongest_pressures": [
@@ -84,7 +85,8 @@
    "query_version": "query-v1",
    "interpretation_version": "interpretation-v1",
    "synthesis_version": "synthesis-v1",
-   "canonical_service_version": "ops-v1"
+   "canonical_service_version": "ops-v1",
+   "model_identity": "openai-compatible/gpt-5-nano"
   },
   "projection_budget": {
    "truncated": false,

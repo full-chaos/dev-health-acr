@@ -67,6 +67,13 @@ type ContextFabricAnswerProjection struct {
 	GeneratedAt   time.Time                        `json:"generated_at"`
 	Status        ContextFabricInvestigationStatus `json:"status"`
 	Question      string                           `json:"question"`
+	// Reused mirrors the canonical result's CHAOS-3782 flag: true when the
+	// answer came from the immutable result store rather than a fresh
+	// investigation. A bounded consumer that could not tell a reused answer
+	// from a freshly computed one would lose a real diagnostic signal, and
+	// would also misread result_id and generated_at, which then name the
+	// REUSED result rather than this request.
+	Reused bool `json:"reused"`
 	// DirectJudgment and CurrentState are copied verbatim. They are the
 	// answer. A projection that reworded either would be answering a
 	// different question than the API did.

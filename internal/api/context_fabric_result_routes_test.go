@@ -39,6 +39,10 @@ func seedResult(t *testing.T, store *memoryinvestigation.Store, orgID, resultID 
 	t.Helper()
 	result := validContextFabricInvestigationResult()
 	result.ResultID = resultID
+	// An empty snapshot and a nil epoch are the CHAOS-3782 "answer reuse is
+	// off" values, and the current-axis key is CHAOS-3781's fixed literal.
+	// These tests seed results to exercise RETRIEVAL, which does not depend
+	// on reuse bookkeeping either way.
 	if err := store.Save(context.Background(), storage.Principal{OrgID: orgID}, result, contextfabric.SourceWatermarkSnapshot{}, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})); err != nil {
 		t.Fatalf("seed result: %v", err)
 	}
