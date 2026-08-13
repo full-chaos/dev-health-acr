@@ -41,6 +41,22 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		b.writeLine("- This answer is shortened; see the omitted counts below.")
 	}
 
+	if len(projection.CommittedSubjects) > 0 {
+		b.writeLine("")
+		if !b.writeLine("## Subjects") {
+			return b.finishWithTruncation()
+		}
+		// The answer must be able to say STRUCTURALLY what it is about.
+		// Without this the reader had only the model's prose to identify
+		// the subject, which is the rely-on-prose pattern this surface
+		// rejects everywhere else (CHAOS-3746 round 8).
+		for _, subject := range projection.CommittedSubjects {
+			if !b.writeLine(fmt.Sprintf("- %s `%s`", safeInline(string(subject.Kind)), untrustedInline(subject.Label))) {
+				return b.finishWithTruncation()
+			}
+		}
+	}
+
 	if projection.DirectJudgment != "" {
 		b.writeLine("")
 		if !b.writeLine(fmt.Sprintf("## Judgment (%s)", untrustedDataHeader)) {

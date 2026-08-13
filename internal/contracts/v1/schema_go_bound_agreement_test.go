@@ -1,7 +1,10 @@
 package v1
 
 import (
+	"fmt"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -106,108 +109,268 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		t.Fatal("no schema bounds discovered; the enumeration is not working")
 	}
 
-	checked := 0
+	checked, proved := 0, 0
 	unmapped := make([]string, 0, len(discovered))
 	for _, bound := range discovered {
-		expected, mapped := goBoundsByPath[bound.path]
-		if !mapped {
-			// EVERY unmapped bound must be explicitly classified as
-			// schema-only, with a reason (codex round-5 R5-2). Logging
-			// them was not enough: three real drifts hid in that log
-			// while the test passed. A bound nobody has classified is
-			// exactly where the next drift lives, so an unclassified
-			// bound is now a failure.
-			reason := schemaOnlyBoundReason(bound.path)
-			if reason == "" {
-				unmapped = append(unmapped, bound.path)
+		// PREFERRED: prove agreement behaviourally. A probe that accepts a
+		// value AT the schema bound and rejects one past it has measured
+		// Go's bound and shown it equals the schema's -- which is the
+		// comparison, done without anyone transcribing a number (codex
+		// round-8 F1). This is what makes the check derive from the
+		// declaration rather than from a hand-maintained table.
+		if probe, probeable := genericProbe(bound.path); probeable {
+			atBound := probe.apply(bound.value)
+			pastBound := probe.apply(bound.value + 1)
+			switch {
+			case atBound == nil && pastBound != nil:
+				proved++
 				continue
+			case atBound == nil && pastBound == nil:
+				// Go accepts beyond the schema: the service can emit a
+				// document violating its own contract.
+				t.Errorf("%s: schema says %d but Go accepts %d; the service can emit a document that violates its own contract",
+					bound.path, bound.value, bound.value+1)
+				continue
+			case atBound != nil:
+				// The probe cannot isolate this bound (a cross-field
+				// invariant rejects the control). Fall through to the
+				// declarative checks rather than claiming either result.
 			}
-			// The claim "Go does not numerically enforce this" must be
-			// FALSIFIABLE (codex round-6 F1). Several classifications were
-			// simply wrong -- result_id was called schema-only while the
-			// validator enforces its 256-character bound -- so schema
-			// drift on those paths passed the classified gate without any
-			// comparison. A path whose Go validator demonstrably rejects
-			// a value one past the schema bound is enforced in Go, and
-			// must be mapped rather than excused.
-			if enforced, probe := goEnforcesBound(bound); enforced {
-				t.Errorf("%s is classified schema-only (%q) but Go DOES enforce it: %s.\nMap it in goBoundsByPath so the numbers are compared.",
-					bound.path, reason, probe)
+		}
+		expected, mapped := goBoundsByPath[bound.path]
+		if mapped {
+			checked++
+			if bound.value != expected {
+				t.Errorf("%s: schema says %d, the Go write path enforces %d", bound.path, bound.value, expected)
 			}
 			continue
 		}
-		checked++
-		if asymmetric, ok := asymmetricBounds[bound.path]; ok {
-			if strings.TrimSpace(asymmetric.why) == "" {
-				t.Errorf("%s is declared asymmetric with no reason", bound.path)
-			}
-			continue
-		}
-		if bound.value != expected {
-			t.Errorf("%s: schema says %d, the Go write path enforces %d.\nA looser Go bound lets the service emit a document that violates its own contract; a stricter one makes the contract promise something the service rejects.",
-				bound.path, bound.value, expected)
+		if reason := schemaOnlyBoundReason(bound.path); reason == "" {
+			unmapped = append(unmapped, bound.path)
 		}
 	}
 	sort.Strings(unmapped)
 	if len(unmapped) > 0 {
-		t.Errorf("%d schema bounds are neither mapped to a Go bound nor classified as schema-only:\n  %s\nEach must be mapped, or classified in schemaOnlyBoundReason with a reason.",
+		t.Errorf("%d schema bounds are neither proved by probe, mapped, nor classified as schema-only:\n  %s",
 			len(unmapped), strings.Join(unmapped, "\n  "))
 	}
-	if checked == 0 {
-		t.Fatal("no bounds were actually compared; the mapping resolved nothing")
+	if proved == 0 {
+		t.Fatal("no bound was proved behaviourally; the prober is not reaching anything")
 	}
-	t.Logf("compared %d bounds against Go; every other bound is explicitly classified as schema-only", checked)
+	t.Logf("proved %d bounds behaviourally, compared %d declaratively, classified the rest", proved, checked)
 }
 
-// goEnforcesBound probes whether the Go validator actually enforces a
-// numeric bound on this path, so a schema-only CLASSIFICATION can be
-// falsified rather than believed.
+type discoveredBound struct {
+	path  string
+	value int
+}
+
+// schemaBounds enumerates every maxItems/maxLength in both canonical
+// documents, as "<document>#<dotted path>.<keyword>".
+func schemaBounds(t *testing.T, documents map[string]map[string]any) []discoveredBound {
+	t.Helper()
+	var found []discoveredBound
+	var walk func(document string, node any, path string)
+	walk = func(document string, node any, path string) {
+		switch value := node.(type) {
+		case map[string]any:
+			for _, keyword := range []string{"maxItems", "maxLength"} {
+				if raw, ok := value[keyword].(float64); ok {
+					found = append(found, discoveredBound{path: document + "#" + strings.TrimPrefix(path, ".") + "." + keyword, value: int(raw)})
+				}
+			}
+			for key, child := range value {
+				switch key {
+				case "maxItems", "maxLength", "description", "title", "$comment", "$schema", "$id":
+					continue
+				}
+				walk(document, child, path+"."+key)
+			}
+		case []any:
+			for i, child := range value {
+				walk(document, child, path+"."+itoa(i))
+			}
+		}
+	}
+	for _, document := range []string{"result", "common"} {
+		walk(document, documents[document], "")
+	}
+	sort.Slice(found, func(i, j int) bool { return found[i].path < found[j].path })
+	return found
+}
+
+func itoa(value int) string {
+	if value == 0 {
+		return "0"
+	}
+	digits := ""
+	for value > 0 {
+		digits = string(rune('0'+value%10)) + digits
+		value /= 10
+	}
+	return digits
+}
+
+// boundProbe tests one claim about a path by driving the field to a size
+// and validating.
+type boundProbe struct {
+	apply func(size int) error
+}
+
+// shapeLocators maps a schema $defs name to a live instance of that shape
+// inside a valid result document, so ONE generic prober can drive any bound
+// on any of these shapes.
 //
-// It builds a valid result, drives the named field one past the schema
-// bound, and reports whether validation rejects it. Only paths with a
-// registered prober are checked; an unprobed path is not treated as proof
-// of absence, and the prober list is what a reviewer extends when they
-// suspect a classification is wrong.
-func goEnforcesBound(bound discoveredBound) (bool, string) {
-	probe, ok := boundProbes[bound.path]
-	if !ok {
-		return false, ""
-	}
-	if err := probe(bound.value + 1); err != nil {
-		return true, "a value one past the schema bound is rejected: " + err.Error()
-	}
-	return false, ""
+// A handful of locators instead of a bespoke closure per bound (codex
+// round-8 F1): a new bound on an existing shape needs no new probe code,
+// which is the difference between a mechanism and another hand-enumeration.
+// Only a genuinely NEW shape requires an entry here.
+var shapeLocators = map[string]func(*ContextFabricInvestigationResult) any{
+	"SubjectRef":          func(r *ContextFabricInvestigationResult) any { return &r.SubjectResolution.Committed[0] },
+	"SubjectCandidate":    func(r *ContextFabricInvestigationResult) any { return &r.SubjectResolution.Candidates[0] },
+	"SubjectResolution":   func(r *ContextFabricInvestigationResult) any { return &r.SubjectResolution },
+	"Cohort":              func(r *ContextFabricInvestigationResult) any { return r.Cohort },
+	"CohortMember":        func(r *ContextFabricInvestigationResult) any { return &r.Cohort.Members[0] },
+	"CohortExclusion":     func(r *ContextFabricInvestigationResult) any { return &r.Cohort.Exclusions[0] },
+	"DriverJudgment":      func(r *ContextFabricInvestigationResult) any { return &r.Drivers[0] },
+	"Finding":             func(r *ContextFabricInvestigationResult) any { return &r.RemainingWork[0] },
+	"RelationshipPath":    func(r *ContextFabricInvestigationResult) any { return &r.Paths[0] },
+	"RelationshipEdge":    func(r *ContextFabricInvestigationResult) any { return &r.Paths[0].Edges[0] },
+	"ClaimedFact":         func(r *ContextFabricInvestigationResult) any { return &r.ClaimedFacts[0] },
+	"SourceObservation":   func(r *ContextFabricInvestigationResult) any { return &r.Coverage.Sources[0] },
+	"Coverage":            func(r *ContextFabricInvestigationResult) any { return &r.Coverage },
+	"VersionSet":          func(r *ContextFabricInvestigationResult) any { return &r.Versions },
+	"InterpretedQuestion": func(r *ContextFabricInvestigationResult) any { return &r.Interpretation },
+	"FactRequirement":     func(r *ContextFabricInvestigationResult) any { return &r.Interpretation.FactRequirements[0] },
+	"ScalarValue":         func(r *ContextFabricInvestigationResult) any { return &r.ClaimedFacts[0].Value },
 }
 
-// boundProbes exercises paths whose schema-only classification is
-// suspicious enough to be worth disproving mechanically. Each drives its
-// field one past the schema bound and returns the validation error.
-var boundProbes = map[string]func(int) error{
-	"result#properties.result_id.maxLength": func(length int) error {
+// genericProbe builds a probe for any schema bound whose path names a shape
+// in shapeLocators or the result root, navigating the Go document with the
+// same property names the schema uses.
+func genericProbe(path string) (boundProbe, bool) {
+	document, rest, found := strings.Cut(path, "#")
+	if !found {
+		return boundProbe{}, false
+	}
+	keyword := rest[strings.LastIndex(rest, ".")+1:]
+	if keyword != "maxLength" && keyword != "maxItems" {
+		return boundProbe{}, false
+	}
+	rest = rest[:strings.LastIndex(rest, ".")]
+
+	locate := func(r *ContextFabricInvestigationResult) any { return r }
+	if document == "common" {
+		trimmed, ok := strings.CutPrefix(rest, "$defs.")
+		if !ok {
+			return boundProbe{}, false
+		}
+		name, tail, _ := strings.Cut(trimmed, ".")
+		locator, known := shapeLocators[name]
+		if !known {
+			return boundProbe{}, false
+		}
+		locate, rest = locator, tail
+	}
+	fieldPath := strings.ReplaceAll(rest, "properties.", "")
+	fieldPath = strings.ReplaceAll(fieldPath, ".items", "[]")
+	if fieldPath == "" {
+		return boundProbe{}, false
+	}
+	return boundProbe{apply: func(size int) error {
 		value := probeResult()
-		value.ResultID = strings.Repeat("r", length)
+		if !driveField(reflect.ValueOf(locate(&value)), fieldPath, size, keyword) {
+			return errProbeUnreachable
+		}
 		return value.Validate()
-	},
-	"result#properties.request_id.maxLength": func(length int) error {
-		value := probeResult()
-		value.RequestID = strings.Repeat("q", length)
-		return value.Validate()
-	},
-	"result#properties.question.maxLength": func(length int) error {
-		value := probeResult()
-		value.Question = strings.Repeat("u", length)
-		return value.Validate()
-	},
-	"common#$defs.SubjectRef.properties.label.maxLength": func(length int) error {
-		value := probeResult()
-		value.SubjectResolution.Committed[0].Label = strings.Repeat("l", length)
-		return value.Validate()
-	},
-	"common#$defs.SubjectRef.properties.canonical_id.maxLength": func(length int) error {
-		value := probeResult()
-		value.SubjectResolution.Committed[0].CanonicalID = strings.Repeat("c", length)
-		return value.Validate()
-	},
+	}}, true
+}
+
+var errProbeUnreachable = fmt.Errorf("probe could not reach the field")
+
+// driveField sets the named field to a value of the requested size: a
+// string of that many runes, or a slice of that many unique entries.
+func driveField(value reflect.Value, path string, size int, keyword string) bool {
+	for value.Kind() == reflect.Pointer || value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return false
+		}
+		value = value.Elem()
+	}
+	segment, rest, _ := strings.Cut(path, ".")
+	name, isElement := strings.CutSuffix(segment, "[]")
+	field := fieldByJSONTag(value, name)
+	if !field.IsValid() || !field.CanSet() {
+		return false
+	}
+	if rest != "" {
+		if field.Kind() == reflect.Slice {
+			if field.Len() == 0 {
+				return false
+			}
+			return driveField(field.Index(0), rest, size, keyword)
+		}
+		return driveField(field, rest, size, keyword)
+	}
+	switch {
+	case isElement && field.Kind() == reflect.Slice:
+		if field.Len() == 0 {
+			field.Set(reflect.MakeSlice(field.Type(), 1, 1))
+		}
+		return driveScalar(field.Index(0), size)
+	case field.Kind() == reflect.Slice && keyword == "maxItems":
+		grown := reflect.MakeSlice(field.Type(), size, size)
+		for i := 0; i < size; i++ {
+			if field.Len() > 0 {
+				grown.Index(i).Set(field.Index(0))
+			}
+			uniquifyElement(grown.Index(i), i)
+		}
+		field.Set(grown)
+		return true
+	default:
+		return driveScalar(field, size)
+	}
+}
+
+func driveScalar(value reflect.Value, size int) bool {
+	if value.Kind() != reflect.String || !value.CanSet() {
+		return false
+	}
+	value.SetString(strings.Repeat("x", size))
+	return true
+}
+
+// uniquifyElement makes a duplicated slice element distinct, so a maxItems
+// probe is rejected for LENGTH rather than for duplication.
+func uniquifyElement(value reflect.Value, index int) {
+	suffix := strconv.Itoa(index)
+	switch value.Kind() {
+	case reflect.String:
+		value.SetString("probevalue" + suffix)
+	case reflect.Struct:
+		for _, name := range []string{"canonical_id", "receipt_id", "driver_id", "finding_id", "path_id", "claim_id", "source"} {
+			if field := fieldByJSONTag(value, name); field.IsValid() && field.Kind() == reflect.String && field.CanSet() {
+				field.SetString("probevalue" + suffix)
+				break
+			}
+		}
+		if field := fieldByJSONTag(value, "rank"); field.IsValid() && field.CanSet() && field.Kind() == reflect.Int {
+			field.SetInt(int64(index + 1))
+		}
+	}
+}
+
+func fieldByJSONTag(value reflect.Value, name string) reflect.Value {
+	if value.Kind() != reflect.Struct {
+		return reflect.Value{}
+	}
+	for i := 0; i < value.NumField(); i++ {
+		if strings.Split(value.Type().Field(i).Tag.Get("json"), ",")[0] == name {
+			return value.Field(i)
+		}
+	}
+	return reflect.Value{}
 }
 
 func probeResult() ContextFabricInvestigationResult {
@@ -272,55 +435,4 @@ func schemaOnlyBoundReason(path string) string {
 		return "conditional restatement of a bound already mapped on the unconditional branch"
 	}
 	return ""
-}
-
-type discoveredBound struct {
-	path  string
-	value int
-}
-
-// schemaBounds enumerates every maxItems/maxLength in both canonical
-// documents, as "<document>#<dotted path>.<keyword>".
-func schemaBounds(t *testing.T, documents map[string]map[string]any) []discoveredBound {
-	t.Helper()
-	var found []discoveredBound
-	var walk func(document string, node any, path string)
-	walk = func(document string, node any, path string) {
-		switch value := node.(type) {
-		case map[string]any:
-			for _, keyword := range []string{"maxItems", "maxLength"} {
-				if raw, ok := value[keyword].(float64); ok {
-					found = append(found, discoveredBound{path: document + "#" + strings.TrimPrefix(path, ".") + "." + keyword, value: int(raw)})
-				}
-			}
-			for key, child := range value {
-				switch key {
-				case "maxItems", "maxLength", "description", "title", "$comment", "$schema", "$id":
-					continue
-				}
-				walk(document, child, path+"."+key)
-			}
-		case []any:
-			for i, child := range value {
-				walk(document, child, path+"."+itoa(i))
-			}
-		}
-	}
-	for _, document := range []string{"result", "common"} {
-		walk(document, documents[document], "")
-	}
-	sort.Slice(found, func(i, j int) bool { return found[i].path < found[j].path })
-	return found
-}
-
-func itoa(value int) string {
-	if value == 0 {
-		return "0"
-	}
-	digits := ""
-	for value > 0 {
-		digits = string(rune('0'+value%10)) + digits
-		value /= 10
-	}
-	return digits
 }

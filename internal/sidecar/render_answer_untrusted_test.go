@@ -77,8 +77,7 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 	// Fields the renderer deliberately does not show. Named, so a field
 	// silently vanishing from the rendering cannot pass as "not rendered".
 	notRendered := map[string]string{
-		"structured.question":                                   "the caller already holds the question it asked; echoing it adds nothing to a bounded answer",
-		"structured.committed_subjects[].label":                 "subjects appear through the drivers and cohort that reference them, not as a standalone list",
+		"structured.question": "the caller already holds the question it asked; echoing it adds nothing to a bounded answer",
 		"structured.clarification.candidates[].match_reasons[]": "the candidate line carries the subject and receipt an agent needs to choose; match reasoning is inspection detail, available through the full result",
 	}
 	for _, declared := range planted {
@@ -106,12 +105,24 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 // field. It keeps the attack wording so the test still demonstrates the
 // threat, and appends the path so each field is individually traceable.
 func sentinelFor(declared string) string {
-	// Letters and spaces only. safeInline escapes markdown-active
+	// Letters and spaces only: safeInline escapes markdown-active
 	// characters, so a sentinel containing "_" or "." comes back as "\_"
 	// and a literal Contains check misses it -- which would look exactly
 	// like the field never rendering.
+	//
+	// Stripping punctuation collides distinct paths (structured.foo_bar and
+	// structured.foo.bar both became "structuredfoobar"), which would let
+	// one field's sentinel mask another's disappearance (codex round-8 F7).
+	// Distinct separators keep the mapping injective: "." and "_" survive
+	// as different words rather than both vanishing.
+	replaced := strings.NewReplacer(
+		".", " dot ",
+		"_", " underscore ",
+		"[]", " list ",
+		"{}", " map ",
+	).Replace(declared)
 	var safe strings.Builder
-	for _, r := range declared {
+	for _, r := range replaced {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
 			safe.WriteRune(r)
@@ -120,6 +131,25 @@ func sentinelFor(declared string) string {
 		}
 	}
 	return injection + " via " + strings.Join(strings.Fields(safe.String()), " ")
+}
+
+// TestSentinelDerivationIsCollisionFree pins the property F7 depends on: if
+// two declared paths shared a sentinel, one field could vanish from the
+// rendering while the other kept the closure test green.
+func TestSentinelDerivationIsCollisionFree(t *testing.T) {
+	seen := make(map[string]string, len(contractsv1.MCPInvestigateQuestionUntrustedFields))
+	for _, declared := range contractsv1.MCPInvestigateQuestionUntrustedFields {
+		sentinel := sentinelFor(declared)
+		if other, clash := seen[sentinel]; clash {
+			t.Errorf("%q and %q derive the same sentinel; one field could mask the other's disappearance", declared, other)
+		}
+		seen[sentinel] = declared
+	}
+	// A targeted pair that the old punctuation-stripping derivation
+	// collapsed, so the guard is proven rather than merely asserted.
+	if sentinelFor("structured.foo_bar") == sentinelFor("structured.foo.bar") {
+		t.Error("the derivation still collapses distinct punctuation")
+	}
 }
 
 // setStringsAtPath walks a dotted/"[]" path against the struct's json tags

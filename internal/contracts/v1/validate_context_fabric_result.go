@@ -151,6 +151,7 @@ type contextFabricBounds struct {
 	interpretationTerms         int
 	candidateEvidenceRefs       int
 	cohortExclusionReasonLength int
+	memberEvidenceRefs          int
 }
 
 // contextFabricRelationshipPathMaxNodes is the Go-enforced ceiling on path
@@ -180,6 +181,7 @@ var contextFabricWriteBounds = contextFabricBounds{
 	interpretationTerms:         ContextFabricSubjectTermsMaxCount,
 	candidateEvidenceRefs:       100,
 	cohortExclusionReasonLength: 1000,
+	memberEvidenceRefs:          100,
 }
 
 // contextFabricLegacyBounds is what the Go validator alone used to accept.
@@ -203,6 +205,7 @@ var contextFabricLegacyBounds = contextFabricBounds{
 	interpretationTerms:         100,
 	candidateEvidenceRefs:       500,
 	cohortExclusionReasonLength: 2000,
+	memberEvidenceRefs:          500,
 }
 
 // Validate enforces the CURRENT contract bounds. This is the write path and
@@ -222,7 +225,7 @@ func (m ContextFabricCohortMember) validate(bounds contextFabricBounds) error {
 	if err := m.Subject.Validate(); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
-	if m.Rank < 1 || len(m.InclusionReasons) < 1 || len(m.InclusionReasons) > bounds.cohortInclusionReasons || !uniqueTrimmedStrings(m.InclusionReasons, bounds.cohortInclusionReasonLength) || !optionalEvidenceRefs(m.EvidenceRefIDs, 500) {
+	if m.Rank < 1 || len(m.InclusionReasons) < 1 || len(m.InclusionReasons) > bounds.cohortInclusionReasons || !uniqueTrimmedStrings(m.InclusionReasons, bounds.cohortInclusionReasonLength) || !optionalEvidenceRefs(m.EvidenceRefIDs, bounds.memberEvidenceRefs) {
 		return fmt.Errorf("cohort member violates v1 bounds")
 	}
 	return nil
@@ -258,7 +261,7 @@ func (p ContextFabricRelationshipPath) validate(bounds contextFabricBounds) erro
 		return fmt.Errorf("relationship path nodes must be valid and unique")
 	}
 	for index, edge := range p.Edges {
-		if err := edge.Validate(); err != nil {
+		if err := edge.validate(bounds); err != nil {
 			return fmt.Errorf("edges: %w", err)
 		}
 		if edge.From != p.Nodes[index] || edge.To != p.Nodes[index+1] {
@@ -269,7 +272,11 @@ func (p ContextFabricRelationshipPath) validate(bounds contextFabricBounds) erro
 }
 
 func (e ContextFabricRelationshipEdge) Validate() error {
-	if !validDerivationMethod(e.Derivation) || !validEpistemicStatus(e.EpistemicStatus) || !boundedEvidenceRefs(e.EvidenceRefIDs, 500, false) {
+	return e.validate(contextFabricWriteBounds)
+}
+
+func (e ContextFabricRelationshipEdge) validate(bounds contextFabricBounds) error {
+	if !validDerivationMethod(e.Derivation) || !validEpistemicStatus(e.EpistemicStatus) || !boundedEvidenceRefs(e.EvidenceRefIDs, bounds.memberEvidenceRefs, false) {
 		return fmt.Errorf("relationship edge violates v1 bounds")
 	}
 	if !validContextFabricRelationshipType(e.Type) {

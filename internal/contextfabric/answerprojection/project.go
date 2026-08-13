@@ -561,30 +561,38 @@ func (c *clamper) text(value string, maxLength int) string {
 // becoming 32 left ProjectionBudget untruncated, so a consumer could not
 // tell the list was cut.
 func (c *clamper) strings(values []string, maxCount, maxLength int) ([]string, int) {
-	// Dedupe on the RAW values first: entries already identical before any
-	// clamp are duplicates of the source, not of our shortening.
-	distinct := distinctStrings(values)
-	dropped := len(distinct) - len(values)
-	if dropped < 0 {
-		dropped = -dropped
+	// Canonical order: shorten, then dedupe, then truncate (codex round-8
+	// F6). Truncating first threw away a later entry that would have
+	// survived deduplication, and clamping before truncation counted
+	// shortened values the caller never received. Counting must describe
+	// what reached the wire, not what the algorithm touched on the way.
+	shortened := make([]string, 0, len(values))
+	for _, value := range values {
+		shortened = append(shortened, truncateRunes(value, maxLength))
 	}
-	// Truncate to the count BEFORE clamping lengths, so ValuesClamped
-	// counts only values the caller actually received. Clamping first made
-	// 50 long reasons report 50 shortened values when 32 survived (codex
-	// round-7 F4).
-	overflow := 0
-	if len(distinct) > maxCount {
-		overflow = len(distinct) - maxCount
-		distinct = distinct[:maxCount]
+	deduped := distinctStrings(shortened)
+	dropped := len(shortened) - len(deduped)
+	if len(deduped) > maxCount {
+		dropped += len(deduped) - maxCount
+		deduped = deduped[:maxCount]
 	}
-	clamped := make([]string, 0, len(distinct))
-	for _, value := range distinct {
-		clamped = append(clamped, c.text(value, maxLength))
+	// Count only survivors that were actually shortened.
+	for i, value := range deduped {
+		if len([]rune(value)) == maxLength && len([]rune(values[min(i, len(values)-1)])) > maxLength {
+			c.count++
+		}
 	}
-	// Clamping can collide two survivors that differed only past the
-	// bound; those collisions are real drops from what the caller sees.
-	deduped := distinctStrings(clamped)
-	return deduped, dropped + overflow + len(clamped) - len(deduped)
+	return deduped, dropped
+}
+
+// truncateRunes cuts to maxLength RUNES, never bytes: a mid-rune cut emits
+// invalid UTF-8, a worse failure than the length violation it prevents.
+func truncateRunes(value string, maxLength int) string {
+	runes := []rune(value)
+	if len(runes) <= maxLength {
+		return value
+	}
+	return string(runes[:maxLength])
 }
 
 // projectCoverage reports each source's state once, bounded by the

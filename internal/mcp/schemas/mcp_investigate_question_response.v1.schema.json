@@ -758,7 +758,7 @@
           ]
         },
         "ProjectionBudget": {
-          "description": "Declares what the projection dropped. truncated is true if and only if at least one omitted count is non-zero or full_result_omitted is set. Silent truncation is a defect: a caller that cannot see what was omitted cannot tell a short answer from a complete one.",
+          "description": "Declares what the projection dropped. truncated is true if and only if at least one omitted count is non-zero or full_result_omitted is set. Silent truncation is a defect: a caller that cannot see what was omitted cannot tell a short answer from a complete one. The counters added after this contract's first shape (limitations, warnings, coverage, reasons, values_clamped) are OPTIONAL: additive-optional means optional, so a payload produced before they existed still validates and an absent counter reads as zero. ACR itself always emits them.",
           "type": "object",
           "additionalProperties": false,
           "properties": {
@@ -821,11 +821,6 @@
             "facts_omitted",
             "candidates_omitted",
             "evidence_refs_omitted",
-            "limitations_omitted",
-            "warnings_omitted",
-            "coverage_omitted",
-            "reasons_omitted",
-            "values_clamped",
             "full_result_omitted"
           ]
         }

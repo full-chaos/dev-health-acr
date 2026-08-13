@@ -1436,10 +1436,18 @@ func TestChangingOnePromptNumberFailsExactlyOneBound(t *testing.T) {
 // An exemption is a claim that the number is not a validated bound. It is
 // deliberately awkward to add, because the failure this test exists to
 // catch is exactly a bound hiding as prose (codex round-7 F5).
-var exemptPromptNumerals = map[int]string{
-	8: "identifier MINIMUM length, a floor rather than a bound the registry caps",
-	1: "affected_subjects minimum: the model must name at least one, a floor not a cap",
-	0: "confidence range floor",
+// exemptPromptNumerals ties each exemption to the exact PHRASE it appears
+// in, not to its bare value (codex round-8 F4). Exempting the value 1
+// globally meant any new "at most 1" cap anywhere was silently accepted; an
+// occurrence-anchored exemption only excuses the clause it was written for,
+// so a new occurrence of the same number is unclassified until claimed.
+var exemptPromptNumerals = []struct {
+	phrase string
+	why    string
+}{
+	{"at least 8 and at most", "identifier MINIMUM length: a floor, not a cap the registry governs"},
+	{"at least 1 and at most 250 affected_subjects", "affected_subjects minimum: the model must name at least one"},
+	{"confidence MUST be a number between 0 and 1 inclusive", "confidence range: a fixed unit interval, not a sized bound"},
 }
 
 // TestEveryPromptNumeralIsAccounted ships the enumeration that was
@@ -1465,7 +1473,7 @@ func TestEveryPromptNumeralIsAccounted(t *testing.T) {
 				if registryValues[numeral] {
 					continue
 				}
-				if _, exempt := exemptPromptNumerals[numeral]; exempt {
+				if exemptedByPhrase(prompt, numeral) {
 					continue
 				}
 				unaccounted = append(unaccounted, numeral)
@@ -1475,6 +1483,35 @@ func TestEveryPromptNumeralIsAccounted(t *testing.T) {
 			}
 		})
 	}
+}
+
+// exemptedByPhrase reports whether every occurrence of numeral in the
+// prompt sits inside a phrase claimed by an exemption. A numeral that also
+// appears somewhere unclaimed is NOT exempt.
+func exemptedByPhrase(prompt string, numeral int) bool {
+	needle := strconv.Itoa(numeral)
+	claimed := false
+	for _, exemption := range exemptPromptNumerals {
+		if strings.Contains(exemption.phrase, needle) && strings.Contains(prompt, exemption.phrase) {
+			claimed = true
+			break
+		}
+	}
+	if !claimed {
+		return false
+	}
+	// Count occurrences outside the claimed phrases; any leftover means a
+	// new, unclaimed use of the same number.
+	stripped := prompt
+	for _, exemption := range exemptPromptNumerals {
+		stripped = strings.ReplaceAll(stripped, exemption.phrase, "")
+	}
+	for _, field := range strings.FieldsFunc(stripped, func(r rune) bool { return r < '0' || r > '9' }) {
+		if field == needle {
+			return false
+		}
+	}
+	return true
 }
 
 func promptNumerals(prompt string) []int {

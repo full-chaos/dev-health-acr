@@ -697,3 +697,45 @@ func maximalStrings(count int, prefix string, length int) []string {
 	}
 	return out
 }
+
+// TestMatchReasonsAreReachableThroughTheFullResult pins the FACT half of a
+// render exemption (CHAOS-3746 round 8).
+//
+// The answer view omits candidate match reasons, justified by "reachable
+// through the full result". That reason asserts a code fact, and the last
+// exemption whose reason asserted a code fact turned out to be false --
+// drivers had stopped carrying subjects, so "subjects appear through the
+// drivers" was wrong for two rounds. A reason that makes a checkable claim
+// gets the claim checked.
+//
+// Only the fact is pinned. Whether that reachability JUSTIFIES omitting
+// them from the bounded view stays a review judgment: pinning a conclusion
+// would dress judgment as proof.
+func TestMatchReasonsAreReachableThroughTheFullResult(t *testing.T) {
+	result := parityResult()
+	result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
+	result.SubjectResolution.ClarificationPrompt = "Which team did you mean?"
+	result.SubjectResolution.Candidates[0].MatchReasons = []string{"a match reason only the full result carries"}
+	boot := answerFixtureBootstrap(t, result, nil)
+
+	args, err := json.Marshal(contractsv1.MCPInvestigationResultRequest{ResultID: result.ResultID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolResult, err := handleInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{
+		Params: &mcpsdk.CallToolParamsRaw{Arguments: args},
+	})
+	if err != nil || toolResult.IsError {
+		t.Fatalf("investigation_result failed: %v", err)
+	}
+	var response contractsv1.MCPInvestigationResultResponse
+	if err := json.Unmarshal(toolResult.StructuredContent.(json.RawMessage), &response); err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range response.Structured.SubjectResolution.Candidates {
+		if len(candidate.MatchReasons) > 0 {
+			return // reachable, as the exemption claims
+		}
+	}
+	t.Error("candidate match reasons are NOT reachable through the full result, so the render exemption's stated reason is false")
+}
