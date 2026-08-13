@@ -47,6 +47,9 @@ const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v1"
 var teamsProjectsTables = []entityTable{
 	{name: "teams", query: queryTeams},
 	{name: "projects", query: queryProjects},
+	{name: "work_items_projects", query: queryWorkItemProjects},
+	{name: "work_item_team_attributions", query: queryWorkItemTeams},
+	{name: "team_project_ownership", query: queryProjectTeams},
 }
 
 // TeamsProjectsSource is the canonical Dev Health ProjectionSource for Team

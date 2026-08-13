@@ -51,12 +51,12 @@ func liveShapedTeamsProjectsClient() *fakeClient {
 	teamsUpdated := time.Date(2026, 8, 13, 19, 0, 3, 742975000, time.UTC)
 	projectsUpdated := time.Date(2026, 8, 13, 19, 0, 2, 504000000, time.UTC)
 	return &fakeClient{tables: []fakeTable{
-		{match: "FROM teams", rows: [][]any{
+		{match: "FROM teams FINAL\nWHERE", rows: [][]any{
 			teamRow("gh:ops-team", "Ops Team", "Ops Team", "github", "ops-team", 1, teamsUpdated),
 			teamRow("gl:full.chaos", "fullchaos", "", "gitlab", "full.chaos", 1, teamsUpdated.Add(-time.Hour)),
 			teamRow("CHAOS", "Fullchaos", "", "linear", "CHAOS", 1, teamsUpdated.Add(-2*time.Hour)),
 		}},
-		{match: "FROM projects", rows: [][]any{
+		{match: "FROM projects FINAL\nWHERE", rows: [][]any{
 			projectRow("70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891", "chaos-ops", "full.chaos/chaos-ops", "gitlab", "", "https://gitlab.com/full.chaos/chaos-ops", 1, projectsUpdated),
 			projectRow("631fcb5f-c3e9-49ff-b17c-07877aaac9b7", "Chaos Draw", "", "linear", "backlog", "https://linear.app/fullchaos/project/chaos-draw-0d9bd4168c10", 1, projectsUpdated.Add(-time.Minute)),
 		}},
@@ -203,7 +203,7 @@ func TestInactiveRowsCloseTheirValidityWindowInsteadOfTombstoning(t *testing.T) 
 	t.Parallel()
 	retiredAt := time.Date(2026, 8, 13, 19, 0, 2, 504000000, time.UTC)
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM projects", rows: [][]any{
+		{match: "FROM projects FINAL\nWHERE", rows: [][]any{
 			projectRow("c040b7df-5488-4ddc-adf2-858bcf45ae0b", "Sync observability UX", "", "linear", "completed", "", 0, retiredAt),
 		}},
 	}}
@@ -248,7 +248,7 @@ func TestProjectsInTheReservedOrganizationScopeNamespaceAreRejected(t *testing.T
 	t.Parallel()
 	reserved := contractsv1.ContextFabricReservedOrganizationScopePrefix + liveOrgID
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM projects", rows: [][]any{
+		{match: "FROM projects FINAL\nWHERE", rows: [][]any{
 			projectRow(reserved, "Impersonator", "", "linear", "backlog", "", 1, time.Unix(1700000000, 0).UTC()),
 		}},
 	}}
@@ -305,5 +305,198 @@ func TestTeamsProjectsFullSnapshotClaimsCompleteEnumeration(t *testing.T) {
 	}
 	if len(batch.Entities) != 5 {
 		t.Fatalf("batch entities = %d, want 3 teams + 2 projects", len(batch.Entities))
+	}
+}
+
+func workItemProjectRow(workItemID, projectID, repoID, repoSlug string, updatedAt time.Time) []any {
+	return []any{workItemID, projectID, repoID, repoSlug, updatedAt}
+}
+
+func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug string, computedAt time.Time) []any {
+	return []any{workItemID, teamID, source, confidence, repoID, repoSlug, computedAt}
+}
+
+func projectTeamRow(projectID, teamID, source string, validFrom time.Time, hasOpenWindow uint8, maxValidTo, updatedAt time.Time) []any {
+	return []any{projectID, teamID, source, validFrom, hasOpenWindow, maxValidTo, updatedAt}
+}
+
+func relationshipByID(t *testing.T, batch contextfabric.ProjectionBatch, relationshipID string) contractsv1.ContextFabricRelationshipProjection {
+	t.Helper()
+	for _, relationship := range batch.Relationships {
+		if relationship.RelationshipID == relationshipID {
+			return relationship
+		}
+	}
+	ids := make([]string, 0, len(batch.Relationships))
+	for _, relationship := range batch.Relationships {
+		ids = append(ids, relationship.RelationshipID)
+	}
+	t.Fatalf("no relationship %q in batch; got %v", relationshipID, ids)
+	return contractsv1.ContextFabricRelationshipProjection{}
+}
+
+// liveShapedEdgeClient replays the ground-truth org's real edge row shapes:
+// a Linear work item whose repo_id is the zero UUID (3298 of that org's 3304
+// primary attributions), a gitlab work item with a real repo, and the
+// collapsed ownership row the Trap C GROUP BY produces.
+func liveShapedEdgeClient() *fakeClient {
+	at := time.Date(2026, 8, 13, 19, 0, 2, 504000000, time.UTC)
+	client := liveShapedTeamsProjectsClient()
+	client.tables = append(client.tables,
+		fakeTable{match: "FROM work_items AS w FINAL", rows: [][]any{
+			workItemProjectRow("linear:CHAOS-3802", "631fcb5f-c3e9-49ff-b17c-07877aaac9b7", zeroRepositoryUUID, "", at),
+		}},
+		fakeTable{match: "FROM work_item_team_attributions AS a FINAL", rows: [][]any{
+			workItemTeamRow("linear:CHAOS-3802", "CHAOS", "native_team", "high", zeroRepositoryUUID, "", at),
+			workItemTeamRow("gl:42", "gl:full.chaos", "project_ownership", "medium", "cd620f84-2602-8dea-7809-8d1f11825cf4", "full.chaos/dev-health-ops", at),
+		}},
+		fakeTable{match: "FROM team_project_ownership FINAL", rows: [][]any{
+			projectTeamRow("70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891", "gl:full.chaos", "native",
+				time.Date(2026, 8, 12, 13, 8, 20, 79000000, time.UTC), 1, time.Unix(0, 0).UTC(), at),
+		}},
+	)
+	return client
+}
+
+// zeroRepositoryUUID mirrors devhealthsource's own zeroRepositoryID: the
+// placeholder repo_id a Linear-sourced work item carries by design.
+const zeroRepositoryUUID = "00000000-0000-0000-0000-000000000000"
+
+// TestWorkItemProjectEdgeUsesTheCanonicalStructuredColumn pins the
+// work_item -> project edge to work_items.project_id and to the id space the
+// project subject itself is projected at, so the edge's To endpoint actually
+// lands on a real projected node rather than a dangling stub.
+func TestWorkItemProjectEdgeUsesTheCanonicalStructuredColumn(t *testing.T) {
+	t.Parallel()
+	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
+	edge := relationshipByID(t, batch, "relationship:work_item_project:linear:CHAOS-3802:631fcb5f-c3e9-49ff-b17c-07877aaac9b7")
+	if edge.Type != contractsv1.ContextFabricRelationshipBelongsToProject {
+		t.Fatalf("edge type = %q, want BELONGS_TO_PROJECT", edge.Type)
+	}
+	if edge.To.CanonicalID != "project:631fcb5f-c3e9-49ff-b17c-07877aaac9b7" || edge.To.Kind != contractsv1.ContextFabricSubjectProject {
+		t.Fatalf("edge To = %+v, want the projected project subject identity", edge.To)
+	}
+	// A direct canonical column, unlike the two attribution-derived edges.
+	if edge.Derivation != contractsv1.ContextFabricDerivationCanonicalStructured || edge.EpistemicStatus != contractsv1.ContextFabricEpistemicObserved {
+		t.Fatalf("edge derivation/status = %q/%q, want canonical_structured/observed", edge.Derivation, edge.EpistemicStatus)
+	}
+}
+
+// TestAttributionDerivedEdgesAreNotLabelledCanonicalTruth is the
+// "graph discoveries may not mint canonical truth" rule (this package's
+// AGENTS.md) applied to the two Ops-COMPUTED attribution tables. Both carry a
+// source enum spanning native through manual_fallback/inferred; presenting a
+// manual_fallback attribution as observed canonical structure would be a lie
+// a consumer cannot detect. The enums must ride along so it can.
+func TestAttributionDerivedEdgesAreNotLabelledCanonicalTruth(t *testing.T) {
+	t.Parallel()
+	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
+	for _, id := range []string{
+		"relationship:work_item_team:gl:42:gl:full.chaos",
+		"relationship:project_team:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos:native",
+	} {
+		edge := relationshipByID(t, batch, id)
+		if edge.Derivation == contractsv1.ContextFabricDerivationCanonicalStructured {
+			t.Fatalf("%s: an Ops-computed attribution must not be labelled canonical_structured", id)
+		}
+		if edge.EpistemicStatus != contractsv1.ContextFabricEpistemicSourceAsserted {
+			t.Fatalf("%s: epistemic status = %q, want source_asserted", id, edge.EpistemicStatus)
+		}
+		if edge.Properties["attribution_source"].String == nil {
+			t.Fatalf("%s: the attribution's own source enum must ride along, got %+v", id, edge.Properties)
+		}
+	}
+	confidence := relationshipByID(t, batch, "relationship:work_item_team:gl:42:gl:full.chaos").Properties["attribution_confidence"]
+	if confidence.String == nil || *confidence.String != "medium" {
+		t.Fatalf("work-item attribution confidence = %+v, want medium", confidence)
+	}
+}
+
+// TestWorkItemTeamEdgeScopesOnTheWorkItemsOwnRepository is the CHAOS-3785
+// zero-UUID trap for the new producer. work_item_team_attributions carries
+// its own repo_id column, but 5077 of that org's 5089 rows hold the zero
+// UUID, so authorization must come from work_items via LEFT JOIN repos. A
+// Linear work item is repo-less BY DESIGN and must get the no-repository
+// sentinel, never the orphan one -- the distinction CHAOS-3785 exists to keep.
+func TestWorkItemTeamEdgeScopesOnTheWorkItemsOwnRepository(t *testing.T) {
+	t.Parallel()
+	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
+	linear := relationshipByID(t, batch, "relationship:work_item_team:linear:CHAOS-3802:CHAOS")
+	if got := linear.Authorization.RepositorySlugs; len(got) != 1 || got[0] != "acr-context-fabric:no-repository" {
+		t.Fatalf("repo-less-by-design work item scoped as %v, want the no-repository sentinel (not the orphan one)", got)
+	}
+	gitlab := relationshipByID(t, batch, "relationship:work_item_team:gl:42:gl:full.chaos")
+	if got := gitlab.Authorization.RepositorySlugs; len(got) != 1 || got[0] != "full.chaos/dev-health-ops" {
+		t.Fatalf("work item with a real repository scoped as %v, want its repo slug", got)
+	}
+}
+
+// TestProjectTeamEdgeStatesAnOpenOwnershipWindow pins the one edge in this
+// issue with real validity data. team_project_ownership's windows are
+// collapsed per edge before they ever reach here (see queryProjectTeams'
+// Trap C note); an edge with any still-open window is currently owned and
+// must carry no end, or a temporal read would report live ownership as
+// historical.
+func TestProjectTeamEdgeStatesAnOpenOwnershipWindow(t *testing.T) {
+	t.Parallel()
+	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
+	edge := relationshipByID(t, batch, "relationship:project_team:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos:native")
+	if edge.ValidFrom == nil {
+		t.Fatal("a collapsed ownership edge must state when ownership began")
+	}
+	if !edge.ValidFrom.Equal(time.Date(2026, 8, 12, 13, 8, 20, 79000000, time.UTC)) {
+		t.Fatalf("ValidFrom = %v, want the earliest observed valid_from", edge.ValidFrom)
+	}
+	if edge.ValidTo != nil {
+		t.Fatalf("ValidTo = %v, want nil while any ownership window is still open", edge.ValidTo)
+	}
+	if got := edge.Authorization; len(got.ProjectIDs) != 1 || len(got.TeamIDs) != 1 {
+		t.Fatalf("project->team edge authorization = %+v, want both endpoints' scopes", got)
+	}
+}
+
+// TestClosedOwnershipWindowEndsTheEdge is the companion that makes
+// has_open_window the DISCRIMINATOR rather than one branch that happens to be
+// taken: a producer returning nil either way passes the test above.
+func TestClosedOwnershipWindowEndsTheEdge(t *testing.T) {
+	t.Parallel()
+	began := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	ended := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", rows: [][]any{
+			projectTeamRow("project-x", "team-y", "manual", began, 0, ended, ended),
+		}},
+	}}
+	edge := relationshipByID(t, teamsProjectsBatch(t, client), "relationship:project_team:project-x:team-y:manual")
+	if edge.ValidTo == nil || !edge.ValidTo.Equal(ended) {
+		t.Fatalf("ValidTo = %v, want the latest closed window %v", edge.ValidTo, ended)
+	}
+	if edge.ValidFrom == nil || !edge.ValidFrom.Equal(began) {
+		t.Fatalf("ValidFrom = %v, want %v", edge.ValidFrom, began)
+	}
+}
+
+// TestEveryTeamsProjectsEdgeTypeIsDeclared keeps
+// TeamsProjectsRelationshipTypes honest against what the producers actually
+// emit -- the list cmd/acr-projector's AC-3779-9 cross-wiring test trusts. A
+// declared-but-unproduced type, or a produced-but-undeclared one, is the
+// exact drift AC-3779-9 exists to prevent.
+func TestEveryTeamsProjectsEdgeTypeIsDeclared(t *testing.T) {
+	t.Parallel()
+	declared := map[contractsv1.ContextFabricRelationshipType]bool{}
+	for _, kind := range devhealthsource.TeamsProjectsRelationshipTypes() {
+		declared[kind] = true
+	}
+	emitted := map[contractsv1.ContextFabricRelationshipType]bool{}
+	for _, relationship := range teamsProjectsBatch(t, liveShapedEdgeClient()).Relationships {
+		emitted[relationship.Type] = true
+		if !declared[relationship.Type] {
+			t.Fatalf("producer emitted %q but TeamsProjectsRelationshipTypes does not declare it", relationship.Type)
+		}
+	}
+	for kind := range declared {
+		if !emitted[kind] {
+			t.Fatalf("TeamsProjectsRelationshipTypes declares %q but no producer emitted it against live-shaped rows", kind)
+		}
 	}
 }

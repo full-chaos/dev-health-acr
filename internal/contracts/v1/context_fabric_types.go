@@ -223,6 +223,24 @@ const (
 	// rather than mapped onto ContextFabricRelationshipRelatedTo.
 	ContextFabricRelationshipRelatesTo  ContextFabricRelationshipType = "RELATES_TO"
 	ContextFabricRelationshipDuplicates ContextFabricRelationshipType = "DUPLICATES"
+	// ContextFabricRelationshipBelongsToProject and
+	// ContextFabricRelationshipOwnedByTeam (CHAOS-3802): the two containment
+	// edges the newly-projected team and project subject kinds need --
+	// work_item -> project (work_items.project_id) and both work_item ->
+	// team (work_item_team_attributions) and project -> team
+	// (team_project_ownership). Additive v1 members, following the same
+	// precedent as CHAOS-3779's four above.
+	//
+	// Overloading the existing PART_OF for containment was considered and
+	// rejected: the closed vocabulary exists so semantics stay distinct, and
+	// graphrank's traversal corroboration must be able to tell a work-item
+	// HIERARCHY (PART_OF) from ownership/containment. Like PART_OF, neither
+	// member belongs in graphrank's relationMeaningTable -- both are
+	// structural facts, not driver signals (see that table's doc comment for
+	// why PART_OF, BELONGS_TO_REPOSITORY, CORRELATED_WITH_INCIDENT,
+	// RELATED_TO, RELATES_TO and DUPLICATES are all absent from it too).
+	ContextFabricRelationshipBelongsToProject ContextFabricRelationshipType = "BELONGS_TO_PROJECT"
+	ContextFabricRelationshipOwnedByTeam      ContextFabricRelationshipType = "OWNED_BY_TEAM"
 )
 
 type ContextFabricSourceState string

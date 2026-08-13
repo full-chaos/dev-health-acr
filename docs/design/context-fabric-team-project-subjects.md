@@ -246,6 +246,30 @@ either direction.
 (§6). Completed is finished, not deleted; a tombstone would erase exactly the
 history the CHAOS-3781 temporal axis exists to answer over.
 
+## 8b. Implementation record
+
+- **Edge counts, live, through the real Go driver** (`TestTeamsProjectsSourceAgainstLiveClickHouse`,
+  gated on `ACR_CLICKHOUSE_INTEGRATION_DSN`): projecting org 70d529e0 end to end
+  yields `entities=map[project:20 team:3]`,
+  `relationships=map[BELONGS_TO_PROJECT:3080 OWNED_BY_TEAM:3307]` — 3307 being
+  3304 work-item attributions plus the 3 collapsed ownership edges. Every count
+  predicted in §1–§3 matched exactly.
+- That live test exists because the package's fake cannot catch a `Scan`
+  type mismatch (it hands Go values straight to `Scan`) — the CHAOS-3789 class.
+  These producers scan `is_active UInt8`, `source`/`confidence` `Enum8` through
+  `toString()`, `team_id Nullable(String)` through `ifNull`, a
+  `Nullable(DateTime64)` collapsed by `max(valid_to IS NULL)` into a `UInt8`,
+  and `teams.updated_at`'s `DateTime64(6)` with no timezone qualifier against a
+  `DateTime64(6,'UTC')` bind parameter. None of that is provable with a fake.
+- **Golden fixtures are generated from the producer**, never hand-authored:
+  `TestGenerateGoldenRelationshipFixtures` emits the two CHAOS-3802 entries in
+  `contracts/examples/v1/context_fabric_projection_batch.v1.json`.
+  `context_fabric_investigation_result.v1.json` is deliberately NOT extended —
+  its entries are read-side `ContextFabricRelationshipEdge` values produced by
+  `graphrank`, and since these two members are structural rather than
+  driver-admission signals (no `relationMeaningTable` entry), adding entries
+  there would mean hand-authoring JSON that asserts behavior no producer emits.
+
 ## 9. What this issue does NOT do
 
 - **No new fact providers, no new `FactKind`.** `project` gets **zero**

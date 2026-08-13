@@ -258,6 +258,67 @@
       ],
       "observed_at": "2026-08-11T15:59:00Z",
       "source_version": "ops-projection-v1"
+    },
+    {
+      "relationship_id": "relationship:work_item_project:linear:CHAOS-3802:631fcb5f-c3e9-49ff-b17c-07877aaac9b7",
+      "type": "BELONGS_TO_PROJECT",
+      "from": {
+        "kind": "work_item",
+        "canonical_id": "work_item:linear:CHAOS-3802",
+        "label": "linear:CHAOS-3802"
+      },
+      "to": {
+        "kind": "project",
+        "canonical_id": "project:631fcb5f-c3e9-49ff-b17c-07877aaac9b7",
+        "label": "631fcb5f-c3e9-49ff-b17c-07877aaac9b7"
+      },
+      "derivation": "canonical_structured",
+      "epistemic_status": "observed",
+      "authorization": {
+        "repository_slugs": [
+          "acr-context-fabric:no-repository"
+        ]
+      },
+      "evidence_ref_ids": [
+        "acr:v1:work-item:linear:CHAOS-3802"
+      ],
+      "observed_at": "2026-08-13T19:00:02.504Z",
+      "source_version": "devhealthsource.teams_projects.v1"
+    },
+    {
+      "relationship_id": "relationship:project_team:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos:native",
+      "type": "OWNED_BY_TEAM",
+      "from": {
+        "kind": "project",
+        "canonical_id": "project:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891",
+        "label": "70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891"
+      },
+      "to": {
+        "kind": "team",
+        "canonical_id": "team:gl:full.chaos",
+        "label": "gl:full.chaos"
+      },
+      "properties": {
+        "attribution_source": {
+          "string": "native"
+        }
+      },
+      "derivation": "rule_inferred",
+      "epistemic_status": "source_asserted",
+      "authorization": {
+        "project_ids": [
+          "70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891"
+        ],
+        "team_ids": [
+          "gl:full.chaos"
+        ]
+      },
+      "evidence_ref_ids": [
+        "acr:v1:project-team:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos"
+      ],
+      "observed_at": "2026-08-13T19:00:02.504Z",
+      "valid_from": "2026-08-12T13:08:20.079Z",
+      "source_version": "devhealthsource.teams_projects.v1"
     }
   ],
   "contents": [],
