@@ -80,6 +80,15 @@ func handleInvestigateQuestion(ctx context.Context, boot *Bootstrap, req *mcpsdk
 	response := contractsv1.MCPInvestigateQuestionResponse{
 		SchemaVersion: contractsv1.MCPInvestigateQuestionResponseSchema,
 		Structured:    projection,
+		// The structured payload carries the same untrusted signal the
+		// markdown rendering does, machine-readably. A consumer reading
+		// Structured must not have to infer safety from the absence of a
+		// warning it only ever saw in prose.
+		UntrustedContent: contractsv1.MCPUntrustedContent{
+			Untrusted: true,
+			Notice:    contractsv1.MCPUntrustedContentNotice,
+			Fields:    contractsv1.MCPInvestigateQuestionUntrustedFields,
+		},
 	}
 	if input.IncludeFullResult {
 		attachFullResult(&response, result, budget.MaxSerializedBytes)

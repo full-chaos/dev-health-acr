@@ -3,6 +3,7 @@ package answerprojection
 import (
 	"encoding/json"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -462,5 +463,164 @@ func TestMarkFullResultOmittedKeepsTheBudgetCoherent(t *testing.T) {
 	}
 	if err := projection.Validate(); err != nil {
 		t.Fatalf("projection failed validation after marking full-result omission: %v", err)
+	}
+}
+
+// TestNarrativeArraysAreBoundedAndDeclared is the codex round-1 F4
+// regression. The canonical result allows 250 limitations and warnings
+// while the projection allows 100, so copying them wholesale turned a valid
+// result into an invalid projection -- which surfaced as an internal 500,
+// not as a shortened answer.
+func TestNarrativeArraysAreBoundedAndDeclared(t *testing.T) {
+	result := richResult()
+	result.Limitations = nil
+	result.Warnings = nil
+	for i := 0; i < 130; i++ {
+		result.Limitations = append(result.Limitations, "limitation number "+strconv.Itoa(i))
+		result.Warnings = append(result.Warnings, "warning number "+strconv.Itoa(i))
+	}
+
+	projection := Project(result, Budget{})
+	if err := projection.Validate(); err != nil {
+		t.Fatalf("projection of an overflowing result is invalid: %v", err)
+	}
+	if len(projection.Limitations) != contractsv1.ContextFabricProjectedNarrativeMaxCount {
+		t.Errorf("limitations = %d, want the contract maximum %d", len(projection.Limitations), contractsv1.ContextFabricProjectedNarrativeMaxCount)
+	}
+	if projection.ProjectionBudget.LimitationsOmitted != 30 {
+		t.Errorf("limitations_omitted = %d, want 30", projection.ProjectionBudget.LimitationsOmitted)
+	}
+	if projection.ProjectionBudget.WarningsOmitted != 30 {
+		t.Errorf("warnings_omitted = %d, want 30", projection.ProjectionBudget.WarningsOmitted)
+	}
+	if !projection.ProjectionBudget.Truncated {
+		t.Error("dropping limitations must set truncated")
+	}
+}
+
+// TestCoverageIsBoundedAndDeclared is the codex round-1 F5 regression.
+// Coverage was silently cut from the canonical 250 to the projection's 100
+// with truncated left false, so a reader could not tell that sources were
+// missing from the list of missing sources.
+func TestCoverageIsBoundedAndDeclared(t *testing.T) {
+	result := richResult()
+	// Drop the withheld driver so nothing unrelated sets truncated.
+	result.Drivers = result.Drivers[1:2]
+	result.Coverage.Sources = nil
+	for i := 0; i < 130; i++ {
+		result.Coverage.Sources = append(result.Coverage.Sources, contractsv1.ContextFabricSourceObservation{
+			Source: "source_" + strconv.Itoa(i), State: contractsv1.ContextFabricSourceAvailable,
+		})
+	}
+
+	projection := Project(result, Budget{})
+	if err := projection.Validate(); err != nil {
+		t.Fatalf("projection is invalid: %v", err)
+	}
+	if projection.ProjectionBudget.CoverageOmitted != 30 {
+		t.Errorf("coverage_omitted = %d, want 30", projection.ProjectionBudget.CoverageOmitted)
+	}
+	if !projection.ProjectionBudget.Truncated {
+		t.Error("dropping coverage entries must set truncated")
+	}
+}
+
+// TestEvidenceIndexCarriesEveryCitationOfRetainedContent is the codex
+// round-1 F6 regression, using the exact budget shape codex reported: an
+// evidence budget of one against a retained driver citing two references.
+//
+// The old selection order chose content first and truncated the index
+// second, so a retained driver could cite an ID the caller could not find.
+// The rule is now the reverse: if a citation set does not fit, the CITING
+// ITEM is dropped and declared.
+func TestEvidenceIndexCarriesEveryCitationOfRetainedContent(t *testing.T) {
+	base := richResult()
+	base.Drivers = base.Drivers[1:2]
+	base.Drivers[0].EvidenceRefIDs = []string{"evidence_first_0001", "evidence_second_001"}
+
+	for _, maxRefs := range []int{1, 2, 3, 25} {
+		t.Run("max_evidence_refs_"+strconv.Itoa(maxRefs), func(t *testing.T) {
+			projection := Project(base, Budget{MaxEvidenceRefs: maxRefs})
+			if err := projection.Validate(); err != nil {
+				t.Fatalf("projection is invalid: %v", err)
+			}
+			indexed := make(map[string]struct{}, len(projection.EvidenceRefIDs))
+			for _, id := range projection.EvidenceRefIDs {
+				indexed[id] = struct{}{}
+			}
+			for _, driver := range projection.PrincipalDrivers {
+				for _, id := range driver.EvidenceRefIDs {
+					if _, ok := indexed[id]; !ok {
+						t.Errorf("retained driver %q cites %q, absent from the index", driver.DriverID, id)
+					}
+				}
+			}
+			for _, member := range cohortMembers(projection) {
+				for _, id := range member.EvidenceRefIDs {
+					if _, ok := indexed[id]; !ok {
+						t.Errorf("retained cohort member cites %q, absent from the index", id)
+					}
+				}
+			}
+			// A budget too small for the driver's citations must drop the
+			// driver and say so, not keep it with dangling references.
+			if maxRefs == 1 && len(projection.PrincipalDrivers) != 0 {
+				t.Errorf("driver was retained under an impossible evidence budget")
+			}
+			if maxRefs == 1 && projection.ProjectionBudget.DriversOmitted == 0 {
+				t.Errorf("dropping a driver for the evidence budget was not declared")
+			}
+		})
+	}
+}
+
+func cohortMembers(projection contractsv1.ContextFabricAnswerProjection) []contractsv1.ContextFabricProjectedCohortMember {
+	if projection.Cohort == nil {
+		return nil
+	}
+	return projection.Cohort.Members
+}
+
+// TestDriverSelectionIsOrderIndependent is the codex round-1 F7
+// regression. Equal-standing drivers previously kept their canonical array
+// order, so the same answer arriving with drivers shuffled produced a
+// different retained set under a limiting budget -- which would make the
+// differential parity check unfalsifiable in exactly the case it polices.
+func TestDriverSelectionIsOrderIndependent(t *testing.T) {
+	project := subject(contractsv1.ContextFabricSubjectProject, "project_ask_dev", "Ask Dev")
+	ids := []string{"driver_aaaaaaaa1", "driver_bbbbbbbb2", "driver_cccccccc3", "driver_dddddddd4"}
+
+	build := func(order []string) contractsv1.ContextFabricInvestigationResult {
+		result := richResult()
+		result.Drivers = nil
+		for _, id := range order {
+			result.Drivers = append(result.Drivers, driver(id, contractsv1.ContextFabricDriverPrincipal, "narrative", "Title "+id, nil, project))
+		}
+		return result
+	}
+	permutations := [][]string{
+		{ids[0], ids[1], ids[2], ids[3]},
+		{ids[3], ids[2], ids[1], ids[0]},
+		{ids[2], ids[0], ids[3], ids[1]},
+		{ids[1], ids[3], ids[0], ids[2]},
+	}
+	var want []string
+	for i, order := range permutations {
+		projection := Project(build(order), Budget{MaxDrivers: 2})
+		got := make([]string, 0, len(projection.PrincipalDrivers))
+		for _, d := range projection.PrincipalDrivers {
+			got = append(got, d.DriverID)
+		}
+		if i == 0 {
+			want = got
+			continue
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("permutation %d retained %v, want %v regardless of input order", i, got, want)
+		}
+	}
+	// And the tie-break is the stated one: lowest driver_id wins.
+	if len(want) != 2 || want[0] != ids[0] || want[1] != ids[1] {
+		t.Errorf("retained %v, want the two lowest driver IDs %v", want, ids[:2])
 	}
 }

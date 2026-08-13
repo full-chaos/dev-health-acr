@@ -713,6 +713,18 @@
           "type": "integer",
           "minimum": 0
         },
+        "limitations_omitted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "warnings_omitted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "coverage_omitted": {
+          "type": "integer",
+          "minimum": 0
+        },
         "full_result_omitted": {
           "type": "boolean"
         }
@@ -725,6 +737,9 @@
         "facts_omitted",
         "candidates_omitted",
         "evidence_refs_omitted",
+        "limitations_omitted",
+        "warnings_omitted",
+        "coverage_omitted",
         "full_result_omitted"
       ]
     }

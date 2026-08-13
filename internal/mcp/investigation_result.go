@@ -45,6 +45,14 @@ func handleInvestigationResult(ctx context.Context, boot *Bootstrap, req *mcpsdk
 			Untrusted: true,
 			Truncated: truncated,
 		},
+		// Same machine-readable declaration the answer tool emits: this
+		// payload is the FULL canonical result, so it carries strictly
+		// more untrusted text, not less.
+		UntrustedContent: contractsv1.MCPUntrustedContent{
+			Untrusted: true,
+			Notice:    contractsv1.MCPUntrustedContentNotice,
+			Fields:    contractsv1.MCPInvestigationResultUntrustedFields,
+		},
 	}
 	if err := response.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "internal", message: "the assembled response failed contract validation"}), nil

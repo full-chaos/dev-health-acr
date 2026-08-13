@@ -112,10 +112,22 @@ func standingRank(standing contractsv1.ContextFabricDriverStanding) int {
 func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget) contractsv1.ContextFabricAnswerProjection {
 	bounds := budget.withDefaults()
 
-	drivers, driversOmitted, withheldOmitted, facts, factsOmitted := projectDrivers(result, bounds)
-	cohort, cohortOmitted := projectCohort(result, bounds)
+	// The evidence index is built AS content is admitted, not filtered
+	// afterwards. Every retained driver or cohort member must have all of
+	// its citations present in the index, so when a citation set does not
+	// fit the remaining budget the CITING ITEM is dropped -- never one of
+	// its references. Drivers are offered first because they carry the
+	// judgment; a tight evidence budget should cost cohort tail, not the
+	// reasons behind the answer.
+	index := newEvidenceIndex(bounds.MaxEvidenceRefs)
+	drivers, driversOmitted, withheldOmitted, facts, factsOmitted := projectDrivers(result, bounds, index)
+	cohort, cohortOmitted := projectCohort(result, bounds, index)
 	clarification, candidatesOmitted := projectClarification(result, bounds)
-	evidence, evidenceOmitted := projectEvidence(result, drivers, cohort, bounds)
+	limitations, limitationsOmitted := boundedNarrative(result.Limitations)
+	warnings, warningsOmitted := boundedNarrative(result.Warnings)
+	coverage, coverageOmitted := projectCoverage(result)
+	evidence := index.ids()
+	evidenceOmitted := countUnindexedEvidence(result, index)
 
 	projection := contractsv1.ContextFabricAnswerProjection{
 		SchemaVersion: contractsv1.ContextFabricAnswerProjectionSchema,
@@ -136,10 +148,10 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		Cohort:            cohort,
 		PrincipalDrivers:  drivers,
 		KeyFacts:          facts,
-		CoverageSummary:   projectCoverage(result),
+		CoverageSummary:   coverage,
 		CoveragePartial:   result.Coverage.Partial,
-		Limitations:       distinctStrings(result.Limitations),
-		Warnings:          distinctStrings(result.Warnings),
+		Limitations:       limitations,
+		Warnings:          warnings,
 		EvidenceRefIDs:    evidence,
 		SubjectReceipts:   projectReceipts(result),
 		Versions:          result.Versions,
@@ -151,6 +163,9 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		FactsOmitted:           factsOmitted,
 		CandidatesOmitted:      candidatesOmitted,
 		EvidenceRefsOmitted:    evidenceOmitted,
+		LimitationsOmitted:     limitationsOmitted,
+		WarningsOmitted:        warningsOmitted,
+		CoverageOmitted:        coverageOmitted,
 	}
 	projection.ProjectionBudget.Truncated = declaresDrop(projection.ProjectionBudget)
 	if projection.CommittedSubjects == nil {
@@ -182,7 +197,10 @@ func declaresDrop(budget contractsv1.ContextFabricProjectionBudget) bool {
 		budget.CohortMembersOmitted > 0 ||
 		budget.FactsOmitted > 0 ||
 		budget.CandidatesOmitted > 0 ||
-		budget.EvidenceRefsOmitted > 0
+		budget.EvidenceRefsOmitted > 0 ||
+		budget.LimitationsOmitted > 0 ||
+		budget.WarningsOmitted > 0 ||
+		budget.CoverageOmitted > 0
 }
 
 // projectDrivers selects the drivers that survive the budget and the
@@ -197,7 +215,7 @@ func declaresDrop(budget contractsv1.ContextFabricProjectionBudget) bool {
 // drivers are admitted one at a time, and a driver whose claims would push
 // the fact set past the budget is dropped instead -- counted as an omitted
 // driver, which is the honest description of what happened.
-func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds Budget) (drivers []contractsv1.ContextFabricProjectedDriver, driversOmitted, withheldOmitted int, facts []contractsv1.ContextFabricProjectedFact, factsOmitted int) {
+func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds Budget, index *evidenceIndex) (drivers []contractsv1.ContextFabricProjectedDriver, driversOmitted, withheldOmitted int, facts []contractsv1.ContextFabricProjectedFact, factsOmitted int) {
 	claims := make(map[string]contractsv1.ContextFabricClaimedFact, len(result.ClaimedFacts))
 	for _, fact := range result.ClaimedFacts {
 		claims[fact.ClaimID] = fact
@@ -211,8 +229,18 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 		}
 		ordered = append(ordered, driver)
 	}
+	// Standing first, then DriverID as a total tie-break. Without the
+	// second key, two drivers of equal standing kept their canonical array
+	// order, so the SAME answer arriving with its drivers in a different
+	// order produced a different retained set under a limiting budget --
+	// which makes the differential parity check unfalsifiable in exactly
+	// the case it exists to police (codex round-1 F7).
 	sort.SliceStable(ordered, func(i, j int) bool {
-		return standingRank(ordered[i].Standing) < standingRank(ordered[j].Standing)
+		left, right := standingRank(ordered[i].Standing), standingRank(ordered[j].Standing)
+		if left != right {
+			return left < right
+		}
+		return ordered[i].DriverID < ordered[j].DriverID
 	})
 
 	drivers = make([]contractsv1.ContextFabricProjectedDriver, 0, min(len(ordered), bounds.MaxDrivers))
@@ -238,6 +266,15 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 			additional = append(additional, fact)
 		}
 		if len(facts)+len(additional) > bounds.MaxFacts {
+			driversOmitted++
+			continue
+		}
+		// The evidence index must be able to carry every reference this
+		// driver cites. If it cannot, the DRIVER goes, not a reference:
+		// a retained driver citing an ID the caller cannot find in the
+		// index would be unverifiable, which is worse than a shorter
+		// answer that is honest about being shorter.
+		if !index.admit(driver.EvidenceRefIDs) {
 			driversOmitted++
 			continue
 		}
@@ -301,14 +338,23 @@ func countUncitedClaims(result contractsv1.ContextFabricInvestigationResult, ret
 // cohort it discovered, not a statement about this projection. Projection
 // truncation shows up in Total versus len(Members) and in the declared
 // budget, never by silently flipping the engine's own claim.
-func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds Budget) (*contractsv1.ContextFabricProjectedCohort, int) {
+func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds Budget, index *evidenceIndex) (*contractsv1.ContextFabricProjectedCohort, int) {
 	if result.Cohort == nil {
 		return nil, 0
 	}
 	canonical := *result.Cohort
-	retain := min(len(canonical.Members), bounds.MaxCohortMembers)
-	members := make([]contractsv1.ContextFabricProjectedCohortMember, 0, retain)
-	for _, member := range canonical.Members[:retain] {
+	members := make([]contractsv1.ContextFabricProjectedCohortMember, 0, min(len(canonical.Members), bounds.MaxCohortMembers))
+	for _, member := range canonical.Members {
+		if len(members) >= bounds.MaxCohortMembers {
+			break
+		}
+		// Same rule as drivers: a member whose citations do not fit the
+		// evidence index is dropped whole rather than kept with dangling
+		// references. Ranks stay strictly increasing because members are
+		// only ever dropped from consideration, never reordered.
+		if !index.admit(member.EvidenceRefIDs) {
+			break
+		}
 		members = append(members, contractsv1.ContextFabricProjectedCohortMember{
 			Subject:          member.Subject,
 			Rank:             member.Rank,
@@ -322,7 +368,7 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 		Rationale: canonical.Rationale,
 		Complete:  canonical.Complete,
 		Members:   members,
-	}, len(canonical.Members) - retain
+	}, len(canonical.Members) - len(members)
 }
 
 // projectClarification carries the ambiguity a caller must resolve. It is
@@ -351,49 +397,121 @@ func projectClarification(result contractsv1.ContextFabricInvestigationResult, b
 	}, len(canonical) - retain
 }
 
-// projectEvidence collects the evidence references the retained content
-// cites. It is an index over what the projection actually asserts, not a
-// copy of the canonical result's whole reference set: a reference no
-// retained driver or cohort member cites would be unusable context.
-func projectEvidence(result contractsv1.ContextFabricInvestigationResult, drivers []contractsv1.ContextFabricProjectedDriver, cohort *contractsv1.ContextFabricProjectedCohort, bounds Budget) ([]string, int) {
-	seen := make(map[string]struct{})
-	ordered := make([]string, 0, bounds.MaxEvidenceRefs)
-	add := func(ids []string) {
-		for _, id := range ids {
-			if _, exists := seen[id]; exists {
-				continue
-			}
-			seen[id] = struct{}{}
-			ordered = append(ordered, id)
-		}
-	}
-	for _, driver := range drivers {
-		add(driver.EvidenceRefIDs)
-	}
-	if cohort != nil {
-		for _, member := range cohort.Members {
-			add(member.EvidenceRefIDs)
-		}
-	}
-	if len(ordered) <= bounds.MaxEvidenceRefs {
-		return ordered, 0
-	}
-	return ordered[:bounds.MaxEvidenceRefs], len(ordered) - bounds.MaxEvidenceRefs
+// evidenceIndex accumulates the evidence references retained content
+// cites, under a hard cap.
+//
+// It exists so the "index contains every reference retained content cites"
+// invariant is enforced by CONSTRUCTION rather than checked afterwards.
+// The previous shape selected content first and truncated the index second,
+// which could leave a retained driver citing an ID the caller could not
+// resolve (codex round-1 F6).
+type evidenceIndex struct {
+	limit int
+	seen  map[string]struct{}
+	order []string
 }
 
-// projectCoverage reports each source's state once. Coverage is never
-// budget-truncated: a bounded consumer must always be able to see which
-// sources were missing when it judges an answer.
-func projectCoverage(result contractsv1.ContextFabricInvestigationResult) []contractsv1.ContextFabricProjectedCoverage {
+func newEvidenceIndex(limit int) *evidenceIndex {
+	return &evidenceIndex{limit: limit, seen: make(map[string]struct{}, limit), order: make([]string, 0, limit)}
+}
+
+// admit adds every reference in ids, or none of them. It reports whether
+// the citing item may be retained: all-or-nothing is the point, since a
+// partially indexed citation set is exactly the dangling-reference state
+// this type prevents. Already-indexed references cost nothing, so an item
+// citing only references a previous item already brought always fits.
+func (e *evidenceIndex) admit(ids []string) bool {
+	additional := 0
+	for _, id := range ids {
+		if _, exists := e.seen[id]; exists {
+			continue
+		}
+		additional++
+	}
+	if len(e.order)+additional > e.limit {
+		return false
+	}
+	for _, id := range ids {
+		if _, exists := e.seen[id]; exists {
+			continue
+		}
+		e.seen[id] = struct{}{}
+		e.order = append(e.order, id)
+	}
+	return true
+}
+
+func (e *evidenceIndex) ids() []string {
+	return append([]string(nil), e.order...)
+}
+
+// countUnindexedEvidence reports how many distinct references the canonical
+// result's non-withheld drivers and cohort members cite that the index does
+// not carry. That is the count a caller can act on: it names what the
+// evidence budget cost, not merely how many references existed.
+func countUnindexedEvidence(result contractsv1.ContextFabricInvestigationResult, index *evidenceIndex) int {
+	cited := make(map[string]struct{})
+	for _, driver := range result.Drivers {
+		if driver.Standing == contractsv1.ContextFabricDriverWithheld {
+			continue
+		}
+		for _, id := range driver.EvidenceRefIDs {
+			cited[id] = struct{}{}
+		}
+	}
+	if result.Cohort != nil {
+		for _, member := range result.Cohort.Members {
+			for _, id := range member.EvidenceRefIDs {
+				cited[id] = struct{}{}
+			}
+		}
+	}
+	omitted := 0
+	for id := range cited {
+		if _, ok := index.seen[id]; !ok {
+			omitted++
+		}
+	}
+	return omitted
+}
+
+// boundedNarrative bounds a free-text array (limitations, warnings) to the
+// projection's own contract maximum and reports how many entries were
+// dropped.
+//
+// The canonical result allows 250 of these while the projection allows 100,
+// so copying them wholesale turned a valid result into an invalid
+// projection (codex round-1 F4). Truncating silently would have been worse
+// than the crash: a shortened limitations list reads as a more confident
+// answer than the investigation actually gave.
+func boundedNarrative(values []string) ([]string, int) {
+	distinct := distinctStrings(values)
+	if len(distinct) <= contractsv1.ContextFabricProjectedNarrativeMaxCount {
+		return distinct, 0
+	}
+	return distinct[:contractsv1.ContextFabricProjectedNarrativeMaxCount], len(distinct) - contractsv1.ContextFabricProjectedNarrativeMaxCount
+}
+
+// projectCoverage reports each source's state once, bounded by the
+// projection's own contract maximum.
+//
+// Coverage is never narrowed by the caller's budget -- a bounded consumer
+// must always be able to see which sources were missing when it judges an
+// answer -- but the canonical result allows 250 sources against the
+// projection's 100, so the overflow is truncated and DECLARED rather than
+// dropped in silence (codex round-1 F5).
+func projectCoverage(result contractsv1.ContextFabricInvestigationResult) ([]contractsv1.ContextFabricProjectedCoverage, int) {
 	seen := make(map[string]struct{}, len(result.Coverage.Sources))
 	entries := make([]contractsv1.ContextFabricProjectedCoverage, 0, len(result.Coverage.Sources))
+	omitted := 0
 	for _, source := range result.Coverage.Sources {
 		if _, exists := seen[source.Source]; exists {
 			continue
 		}
 		seen[source.Source] = struct{}{}
 		if len(entries) >= contractsv1.ContextFabricProjectedCoverageMaxCount {
-			break
+			omitted++
+			continue
 		}
 		entries = append(entries, contractsv1.ContextFabricProjectedCoverage{
 			Source: source.Source,
@@ -401,7 +519,7 @@ func projectCoverage(result contractsv1.ContextFabricInvestigationResult) []cont
 			Reason: source.Reason,
 		})
 	}
-	return entries
+	return entries, omitted
 }
 
 // projectReceipts emits a continuation handle for every subject this result

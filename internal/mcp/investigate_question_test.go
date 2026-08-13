@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/answerprojection"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -162,49 +161,14 @@ func callInvestigateQuestion(t *testing.T, boot *Bootstrap, input contractsv1.MC
 	return response
 }
 
-// TestInvestigateQuestionMatchesTheAPIProjectionExactly is the CHAOS-3746
-// differential parity check.
-//
-// It answers one question through the MCP tool, then computes the
-// projection the hosted API would return for the same result and the same
-// budget, and requires the two to be IDENTICAL -- not merely compatible.
-//
-// Byte equality is the right bar here precisely because both surfaces call
-// answerprojection.Project. If someone later gives MCP its own narrowing
-// path, this fails immediately rather than the two surfaces drifting into
-// subtly different answers that nobody notices until a user compares them.
-func TestInvestigateQuestionMatchesTheAPIProjectionExactly(t *testing.T) {
-	result := parityResult()
-	if err := result.Validate(); err != nil {
-		t.Fatalf("parity fixture is not a valid canonical result: %v", err)
-	}
-	boot := answerFixtureBootstrap(t, result, nil)
-
-	budget := contractsv1.MCPInvestigationBudget{MaxDrivers: 3, MaxCohortMembers: 1, MaxEvidenceRefs: 10}
-	response := callInvestigateQuestion(t, boot, contractsv1.MCPInvestigateQuestionRequest{
-		Question: result.Question,
-		Budget:   &budget,
-	})
-
-	// What the hosted API surface would project from the same result.
-	apiSide := answerprojection.Project(result, answerprojection.Budget{
-		MaxDrivers:       budget.MaxDrivers,
-		MaxCohortMembers: budget.MaxCohortMembers,
-		MaxEvidenceRefs:  budget.MaxEvidenceRefs,
-	})
-
-	mcpEncoded, err := json.Marshal(response.Structured)
-	if err != nil {
-		t.Fatal(err)
-	}
-	apiEncoded, err := json.Marshal(apiSide)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(mcpEncoded) != string(apiEncoded) {
-		t.Fatalf("MCP and API projections differ.\n MCP = %s\n API = %s", mcpEncoded, apiEncoded)
-	}
-}
+// The API-versus-MCP differential parity check does NOT live here. It needs
+// both REAL surfaces -- the hosted route and this tool -- wired against one
+// another, so it lives in internal/api as
+// TestAnswerSurfaceParityBetweenRealAPIAndRealMCP, where a real api.App can
+// be constructed. A version of it that lived here could only ever compare
+// this tool against a direct call to the projection helper, which proves
+// the helper is deterministic rather than that the two surfaces agree
+// (codex round-1 F2).
 
 // TestInvestigateQuestionPreservesJudgmentFromTheCanonicalResult states the
 // parity requirement in the issue's own terms, independently of the shared
@@ -475,5 +439,93 @@ func TestAnswerToolsAppearOnlyWhenHostedAdvertisesThem(t *testing.T) {
 		if tool.Name == toolInvestigateQuestion || tool.Name == toolInvestigationResult {
 			t.Errorf("answer tool %q was offered without hosted support", tool.Name)
 		}
+	}
+}
+
+// TestStructuredPayloadsCarryTheUntrustedDeclaration is the codex round-1
+// F3 regression.
+//
+// RenderedMarkdown was always marked untrusted, but Structured and
+// FullResult carried model- and source-derived text with no machine-readable
+// signal at all -- so a consumer reading the structured payload, which is
+// the whole point of a structured payload, got nothing. The declaration
+// must be in the PAYLOAD, not only in the documentation.
+func TestStructuredPayloadsCarryTheUntrustedDeclaration(t *testing.T) {
+	result := parityResult()
+	boot := answerFixtureBootstrap(t, result, nil)
+
+	generous := contractsv1.MCPInvestigationBudget{MaxSerializedBytes: 1048576}
+	answer := callInvestigateQuestion(t, boot, contractsv1.MCPInvestigateQuestionRequest{
+		Question:          result.Question,
+		IncludeFullResult: true,
+		Budget:            &generous,
+	})
+
+	if !answer.UntrustedContent.Untrusted {
+		t.Error("investigate_question structured payload did not declare itself untrusted")
+	}
+	if answer.UntrustedContent.Notice == "" {
+		t.Error("untrusted declaration carries no notice")
+	}
+	if !reflect.DeepEqual(answer.UntrustedContent.Fields, contractsv1.MCPInvestigateQuestionUntrustedFields) {
+		t.Errorf("declared fields = %v, want the contract list", answer.UntrustedContent.Fields)
+	}
+
+	// The declaration must cover the fields that are actually populated.
+	// A list that omitted a live field would be worse than no list: a
+	// consumer would read it as an exhaustive safe/unsafe partition.
+	declared := map[string]bool{}
+	for _, field := range answer.UntrustedContent.Fields {
+		declared[field] = true
+	}
+	if answer.Structured.DirectJudgment != "" && !declared["structured.direct_judgment"] {
+		t.Error("direct_judgment is populated but not declared untrusted")
+	}
+	if len(answer.Structured.PrincipalDrivers) > 0 && !declared["structured.principal_drivers[].summary"] {
+		t.Error("driver summaries are populated but not declared untrusted")
+	}
+	if answer.FullResult != nil && !declared["full_result"] {
+		t.Error("full_result is present but not declared untrusted")
+	}
+
+	// The deep-inspection tool carries the same signal for the canonical
+	// document, which contains strictly more untrusted text.
+	args, err := json.Marshal(contractsv1.MCPInvestigationResultRequest{ResultID: result.ResultID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolResult, err := handleInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{
+		Params: &mcpsdk.CallToolParamsRaw{Arguments: args},
+	})
+	if err != nil || toolResult.IsError {
+		t.Fatalf("investigation_result failed: %v", err)
+	}
+	var full contractsv1.MCPInvestigationResultResponse
+	if err := json.Unmarshal(toolResult.StructuredContent.(json.RawMessage), &full); err != nil {
+		t.Fatal(err)
+	}
+	if !full.UntrustedContent.Untrusted || len(full.UntrustedContent.Fields) == 0 {
+		t.Error("investigation_result structured payload did not declare itself untrusted")
+	}
+}
+
+// TestUntrustedDeclarationCannotBeWeakened proves the declaration is
+// validated exactly, not merely for presence: a response that shortened the
+// field list would let a consumer treat model-derived text as safe.
+func TestUntrustedDeclarationCannotBeWeakened(t *testing.T) {
+	result := parityResult()
+	boot := answerFixtureBootstrap(t, result, nil)
+	answer := callInvestigateQuestion(t, boot, contractsv1.MCPInvestigateQuestionRequest{Question: result.Question})
+
+	weakened := answer
+	weakened.UntrustedContent.Fields = answer.UntrustedContent.Fields[:2]
+	if err := weakened.Validate(); err == nil {
+		t.Error("a shortened untrusted field list was accepted")
+	}
+
+	denied := answer
+	denied.UntrustedContent.Untrusted = false
+	if err := denied.Validate(); err == nil {
+		t.Error("a payload denying it is untrusted was accepted")
 	}
 }

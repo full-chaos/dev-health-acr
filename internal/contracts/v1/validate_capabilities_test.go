@@ -52,3 +52,35 @@ func TestCapabilitiesValidateRejectsOtherwiseEmptyValue(t *testing.T) {
 		t.Fatal("validator accepted an otherwise-empty capabilities value")
 	}
 }
+
+// TestCapabilitiesAcceptsTheAnswerToolNames is the CHAOS-3746 codex round-1
+// F1 regression.
+//
+// enabled_tools is a CLOSED set, and acr-mcp validates the hosted
+// capabilities response on its STARTUP path (sidecar.validateCapabilities,
+// before any tool call). So a tool name the hosted API legitimately
+// advertises but this set omits does not degrade gracefully -- it refuses
+// to boot the sidecar at all. An entitled deployment with the answer
+// surface composed would have been bricked by exactly that gap.
+//
+// The test asserts the full closed set rather than only the two new names,
+// so removing an existing name is caught here too.
+func TestCapabilitiesAcceptsTheAnswerToolNames(t *testing.T) {
+	for _, name := range []string{"context_for_task", "source_evidence", "investigate_question", "investigation_result", "record_episode"} {
+		if !validEnabledTool(name) {
+			t.Errorf("enabled_tools rejects %q, which the hosted API can advertise", name)
+		}
+	}
+	if validEnabledTool("cypher_query") {
+		t.Error("enabled_tools accepted a name outside the closed set")
+	}
+
+	// The startup path proves it end to end: a capabilities document
+	// carrying the answer tools must validate.
+	capabilities := loadFixture[Capabilities](t, "capabilities.v1.json")
+	capabilities.EnabledTools = []string{"context_for_task", "source_evidence", "investigate_question", "investigation_result"}
+	if err := capabilities.Validate(); err != nil {
+		t.Fatalf("capabilities advertising the answer surface failed validation: %v", err)
+	}
+	assertSchemaParity(t, "capabilities.v1.schema.json", capabilities)
+}

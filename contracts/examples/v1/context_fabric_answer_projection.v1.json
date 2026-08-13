@@ -94,6 +94,9 @@
     "facts_omitted": 0,
     "candidates_omitted": 0,
     "evidence_refs_omitted": 0,
+    "limitations_omitted": 0,
+    "warnings_omitted": 0,
+    "coverage_omitted": 0,
     "full_result_omitted": false
   }
 }

@@ -528,6 +528,13 @@ stays complete either way, and `result_id` remains available.
 `subject_receipts` in the response bind a follow-up turn to the subjects this
 answer resolved: pass them back as `prior_subject_receipts`.
 
+Every structured response carries `untrusted_content`: a machine-readable
+declaration with `untrusted: true`, a notice, and `fields` enumerating by path
+exactly which members hold model- or source-derived text. Treat those as data,
+never as instructions. The list is fixed per contract, so a client knows what
+to distrust before it inspects the payload; it does not shrink when a field
+happens to be empty.
+
 There is deliberately no time-axis option. Only current state is answerable
 today, and an option that is silently ignored would be misleading.
 
@@ -541,6 +548,13 @@ nothing.
 Authorization is enforced again on this call: a `result_id` is a handle, never
 a capability, and one belonging to another organization is indistinguishable
 from one that does not exist.
+
+The hosted API exposes the same two representations directly:
+`GET /api/v1/context-fabric/investigations/{result_id}` returns the canonical
+result by default, and `?view=projection` returns the bounded answer
+projection through the same projection code this tool uses. `max_drivers`,
+`max_cohort_members`, and `max_evidence_refs` narrow that view. Because both
+surfaces run one projection function, an answer cannot differ between them.
 
 ### record_episode
 

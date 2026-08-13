@@ -124,6 +124,9 @@ func (r MCPInvestigateQuestionResponse) Validate() error {
 			return fmt.Errorf("investigate_question full_result is present but declared omitted")
 		}
 	}
+	if err := validateUntrustedContent(r.UntrustedContent, MCPInvestigateQuestionUntrustedFields); err != nil {
+		return err
+	}
 	return validateMCPRenderedMarkdown(r.RenderedMarkdown)
 }
 
@@ -134,7 +137,33 @@ func (r MCPInvestigationResultResponse) Validate() error {
 	if err := r.Structured.Validate(); err != nil {
 		return fmt.Errorf("structured: %w", err)
 	}
+	if err := validateUntrustedContent(r.UntrustedContent, MCPInvestigationResultUntrustedFields); err != nil {
+		return err
+	}
 	return validateMCPRenderedMarkdown(r.RenderedMarkdown)
+}
+
+// validateUntrustedContent enforces the declaration exactly, not merely its
+// presence. The declared field list must equal the contract's own list:
+// a response free to shorten it could quietly drop a field from the
+// untrusted set, and a consumer trusting the declaration would then treat
+// model-derived text as safe.
+func validateUntrustedContent(declaration MCPUntrustedContent, expected []string) error {
+	if !declaration.Untrusted {
+		return fmt.Errorf("structured payload must declare its content untrusted")
+	}
+	if strings.TrimSpace(declaration.Notice) == "" {
+		return fmt.Errorf("untrusted content declaration requires a notice")
+	}
+	if len(declaration.Fields) != len(expected) {
+		return fmt.Errorf("untrusted content declaration must enumerate exactly the contract's untrusted fields")
+	}
+	for i, field := range expected {
+		if declaration.Fields[i] != field {
+			return fmt.Errorf("untrusted content declaration field %d is %q, want %q", i, declaration.Fields[i], field)
+		}
+	}
+	return nil
 }
 
 // validateMCPRenderedMarkdown enforces the shared rendering envelope. The

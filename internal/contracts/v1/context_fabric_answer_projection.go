@@ -210,5 +210,15 @@ type ContextFabricProjectionBudget struct {
 	FactsOmitted           int  `json:"facts_omitted"`
 	CandidatesOmitted      int  `json:"candidates_omitted"`
 	EvidenceRefsOmitted    int  `json:"evidence_refs_omitted"`
-	FullResultOmitted      bool `json:"full_result_omitted"`
+	// LimitationsOmitted, WarningsOmitted, and CoverageOmitted exist
+	// because the canonical result bounds these arrays at 250 while the
+	// projection bounds them at 100 (see the Max*Count constants above).
+	// Copying them wholesale therefore made a valid canonical result
+	// produce an INVALID projection, and silently cutting them would have
+	// hidden exactly the caveats a reader needs most: a shortened
+	// limitations list reads as more confident than the investigation was.
+	LimitationsOmitted int  `json:"limitations_omitted"`
+	WarningsOmitted    int  `json:"warnings_omitted"`
+	CoverageOmitted    int  `json:"coverage_omitted"`
+	FullResultOmitted  bool `json:"full_result_omitted"`
 }

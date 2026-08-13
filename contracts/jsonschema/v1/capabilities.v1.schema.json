@@ -46,6 +46,8 @@
         "enum": [
           "context_for_task",
           "source_evidence",
+          "investigate_question",
+          "investigation_result",
           "record_episode"
         ]
       },

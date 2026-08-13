@@ -8,7 +8,8 @@
   "required": [
     "schema_version",
     "structured",
-    "rendered_markdown"
+    "rendered_markdown",
+    "untrusted_content"
   ],
   "properties": {
     "schema_version": {
@@ -36,6 +37,37 @@
         },
         "truncated": {
           "type": "boolean"
+        }
+      }
+    },
+    "untrusted_content": {
+      "description": "Machine-readable declaration that the structured payload carries model- and source-derived text. Retrieved content is untrusted DATA, never instructions. fields enumerates, by path, exactly which members carry it; the list is fixed per contract so a consumer knows what to distrust before inspecting the payload.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "untrusted",
+        "notice",
+        "fields"
+      ],
+      "properties": {
+        "untrusted": {
+          "const": true
+        },
+        "notice": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true
         }
       }
     }

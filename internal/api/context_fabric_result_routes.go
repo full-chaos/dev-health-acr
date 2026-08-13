@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/answerprojection"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -77,7 +80,24 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			a.writeInvestigationResultError(w, r, principal, err)
 			return
 		}
-		encoded, err := encodeBounded(result, int64(a.config.MaxSerializedBytes))
+		// The consumer projection is served from THIS route, through the
+		// same answerprojection.Project the MCP tool calls (CHAOS-3746
+		// codex round-1 F2). Before this, the API only ever returned the
+		// canonical result, so "API and MCP agree" could only be checked
+		// by calling the projection helper directly -- which proves the
+		// helper is deterministic, not that the two SURFACES agree. With
+		// the view here, the differential check compares two real
+		// handlers and the parity guarantee is structural end to end.
+		view, budget, ok := investigationResultView(r)
+		if !ok {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation result view or budget is invalid", false, nil)
+			return
+		}
+		var payload any = result
+		if view == investigationViewProjection {
+			payload = answerprojection.Project(result, budget)
+		}
+		encoded, err := encodeBounded(payload, int64(a.config.MaxSerializedBytes))
 		if err != nil {
 			writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation result exceeded service limits", false, nil)
 			return
@@ -91,10 +111,72 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation result exceeded service limits", false, nil)
 			return
 		}
-		a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_result_read", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status})
+		a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_result_read", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status, "view": string(view)})
 		writeEncodedJSON(w, http.StatusOK, encoded)
 	})
 	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
+}
+
+// investigationResultView is the closed set of representations this route
+// can return. Both describe the SAME stored investigation; they differ only
+// in how much of it a consumer receives.
+type investigationResultViewName string
+
+const (
+	investigationViewCanonical  investigationResultViewName = "canonical"
+	investigationViewProjection investigationResultViewName = "projection"
+)
+
+// investigationResultView reads the view and its optional budget from the
+// query string.
+//
+// The budget knobs exist so a caller can request the SAME projection an MCP
+// client would receive. Without them the two surfaces could only ever be
+// compared at their respective defaults, and a parity check that cannot
+// vary the budget cannot police the truncation paths -- which is exactly
+// where a consumer-specific divergence would hide.
+//
+// It returns ok=false for anything outside the closed set or outside the
+// contract bounds, rather than silently falling back to a default: a caller
+// who asked for a projection and got a canonical result would not notice.
+func investigationResultView(r *http.Request) (investigationResultViewName, answerprojection.Budget, bool) {
+	query := r.URL.Query()
+	view := investigationViewCanonical
+	switch value := strings.TrimSpace(query.Get("view")); value {
+	case "", string(investigationViewCanonical):
+	case string(investigationViewProjection):
+		view = investigationViewProjection
+	default:
+		return "", answerprojection.Budget{}, false
+	}
+
+	budget := answerprojection.Budget{}
+	fields := []struct {
+		name    string
+		target  *int
+		maximum int
+	}{
+		{"max_drivers", &budget.MaxDrivers, contractsv1.ContextFabricProjectedDriversMaxCount},
+		{"max_cohort_members", &budget.MaxCohortMembers, contractsv1.ContextFabricProjectedCohortMaxCount},
+		{"max_evidence_refs", &budget.MaxEvidenceRefs, contractsv1.ContextFabricProjectedEvidenceMaxCount},
+	}
+	for _, field := range fields {
+		raw := strings.TrimSpace(query.Get(field.name))
+		if raw == "" {
+			continue
+		}
+		// A budget on the canonical view would be meaningless, and
+		// accepting it would suggest it did something.
+		if view != investigationViewProjection {
+			return "", answerprojection.Budget{}, false
+		}
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > field.maximum {
+			return "", answerprojection.Budget{}, false
+		}
+		*field.target = value
+	}
+	return view, budget, true
 }
 
 // writeInvestigationResultNotFound answers the one response a caller gets

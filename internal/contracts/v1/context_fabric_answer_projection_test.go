@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 )
@@ -343,21 +344,26 @@ func TestRequiredEvidenceRefsStillRejectNil(t *testing.T) {
 	}
 }
 
-// TestAnswerProjectionReusedShapesMatchTheCanonicalOnes closes the second
-// half of the self-contained-schema tradeoff.
+// TestAnswerProjectionReusedShapesMatchTheCanonicalOnes closes the
+// structural half of the self-contained-schema tradeoff.
 //
 // TestAnswerProjectionVocabulariesMatchTheCanonicalOnes guards the closed
-// ENUMS. This guards the three whole SHAPES the projection reuses rather
-// than narrows: VersionSet, SubjectRef, and ScalarValue. The Go DTO uses the
-// canonical Go types for all three directly, so the schema copies must stay
-// byte-identical or the schema would describe something the Go type cannot
-// produce.
+// ENUMS. This guards every whole SHAPE the projection reuses rather than
+// narrows. The Go DTO uses the canonical Go types for those, so the schema
+// copies must stay byte-identical or the schema would describe something
+// the Go type cannot produce.
 //
-// This test was added after exactly that drift occurred: CHAOS-3782 widened
-// the canonical VersionSet with model_identity, and the projection's copy
-// silently kept the older shape. The Go side was automatically correct
-// (same type), so only the published schema was wrong -- the quietest
-// possible failure, and the reason this is a gate rather than a convention.
+// It ENUMERATES the shapes rather than listing them: any $defs name present
+// in BOTH documents is, by definition, one the projection reuses, so a
+// future reused shape is covered without anyone remembering to add it here.
+// The first version of this test hardcoded three names and silently missed
+// BoundSubjectReceipt (codex round-1 F8) -- a sampled list is exactly the
+// wrong instrument for a drift gate.
+//
+// Its own reason to exist is a real drift: CHAOS-3782 widened the canonical
+// VersionSet with model_identity and the projection's copy kept the older
+// shape. The Go side was automatically correct (same type), so only the
+// published schema was wrong -- the quietest possible failure.
 func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 	projection := loadSchemaDocument(t, "context_fabric_answer_projection.v1.schema.json")
 	common := loadSchemaDocument(t, "context_fabric_common.v1.schema.json")
@@ -370,10 +376,22 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 	if !ok {
 		t.Fatal("common schema has no $defs")
 	}
-	// Only shapes the projection REUSES wholesale belong here. Its narrowed
-	// shapes (ProjectedDriver, ProjectedCohort, ...) are deliberately
-	// different and must not be compared.
-	for _, name := range []string{"VersionSet", "SubjectRef", "ScalarValue"} {
+
+	shared := make([]string, 0, len(projectionDefs))
+	for name := range projectionDefs {
+		if _, reused := commonDefs[name]; reused {
+			shared = append(shared, name)
+		}
+	}
+	sort.Strings(shared)
+
+	// A vacuous pass would be worse than a failure: if the intersection
+	// ever came back empty the gate would silently stop guarding anything.
+	if len(shared) == 0 {
+		t.Fatal("no shared $defs found; the enumeration is not working")
+	}
+	t.Logf("verifying %d reused shapes: %v", len(shared), shared)
+	for _, name := range shared {
 		t.Run(name, func(t *testing.T) {
 			if !reflect.DeepEqual(projectionDefs[name], commonDefs[name]) {
 				t.Errorf("projected %s has drifted from the canonical definition:\n projected = %v\n canonical = %v",
