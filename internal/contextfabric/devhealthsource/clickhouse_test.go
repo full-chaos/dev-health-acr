@@ -270,13 +270,25 @@ func TestQueryWorkItemsDistinguishesRepolessFromOrphanedAuthorization(t *testing
 func TestNextProjectionBatchLogsOrphanedWorkItemCount(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+	const orphanRepoID = "99999999-9999-9999-9999-999999999999"
 
 	orphanTables := baseTables(at)
 	for i, table := range orphanTables {
-		if table.match == "FROM work_items AS w" {
+		switch table.match {
+		case "FROM work_items AS w":
 			orphanTables[i] = fakeTable{match: table.match, rows: [][]any{
 				{"WIDGET-101", "repo-1", "example-org/widget-service", "Investigate checkout flake", "in_progress", "", at},
-				{"WIDGET-ORPHAN", "99999999-9999-9999-9999-999999999999", "", "Orphaned repo_id", "open", "", at},
+				{"WIDGET-ORPHAN", orphanRepoID, "", "Orphaned repo_id", "open", "", at},
+			}}
+		case "FROM work_item_dependencies AS d":
+			// WIDGET-ORPHAN carries TWO orphan-scoped candidates (its own
+			// entity, plus this dependency edge rooted at it) -- codex
+			// round-3 finding R3-4: the log must still report exactly ONE
+			// orphaned work item, not two, proving the count is over
+			// DISTINCT work-item IDs, not raw candidates.
+			orphanTables[i] = fakeTable{match: table.match, rows: [][]any{
+				{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at},
+				{"WIDGET-ORPHAN", "WIDGET-101", "blocks", orphanRepoID, "", at},
 			}}
 		}
 	}
@@ -296,8 +308,23 @@ func TestNextProjectionBatchLogsOrphanedWorkItemCount(t *testing.T) {
 	if err := batch.Validate(); err != nil {
 		t.Fatalf("batch failed contract validation: %v", err)
 	}
-	if !strings.Contains(orphanLogs.String(), `"orphaned_work_items":1`) {
-		t.Fatalf("expected the orphan count to be logged, got: %s", orphanLogs.String())
+	logged := orphanLogs.String()
+	if !strings.Contains(logged, `"orphaned_work_items":1`) {
+		t.Fatalf("expected the orphan count to report 1 DISTINCT work item (not 2 candidates), got: %s", logged)
+	}
+	// R3-3: the warning must carry the same batch-identity vocabulary
+	// coordinator.go's own per-run "projection batch applied" log uses, so
+	// an operator can correlate the two (or notice this batch never reached
+	// that later line at all).
+	for _, want := range []string{
+		`"source":"` + devhealthsource.SourceName + `"`,
+		`"batch_id":"` + batch.BatchID + `"`,
+		`"cursor":"` + batch.Cursor + `"`,
+		`"next_cursor":"` + batch.NextCursor + `"`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("expected the orphan warning to carry %s, got: %s", want, logged)
+		}
 	}
 
 	cleanSource, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: baseTables(at)})

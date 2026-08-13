@@ -96,7 +96,7 @@ func (a *Adapter) ApplyProjectionBatch(ctx context.Context, batch contextfabric.
 	}, nil
 }
 
-// subjectMergeCypher returns the MERGE clause for one subject node alias:
+// ownedSubjectMergeCypher returns the MERGE clause for one subject node alias:
 // matched/created by (org_id, subject_kind, canonical_id) -- canonical_id
 // alone is not globally unique across kinds, matching zepgraph's nodeUUID,
 // which hashes kind together with canonical_id for the same reason -- with
@@ -106,7 +106,7 @@ func (a *Adapter) ApplyProjectionBatch(ctx context.Context, batch contextfabric.
 // (identity.go) rather than one per kind, since the kind-specific label is
 // never part of the uniqueness key, only an additional label for
 // kind-scoped reads.
-func subjectMergeCypher(alias, kindLabelValue string) string {
+func ownedSubjectMergeCypher(alias, kindLabelValue string) string {
 	return fmt.Sprintf("MERGE (%s:%s {%s:$org, %s:$%sKind, %s:$%sId}) SET %s:%s",
 		alias, labelSubject, propOrgID, propKind, alias, propCanonicalID, alias, alias, kindLabelValue)
 }
@@ -115,21 +115,21 @@ func subjectMergeParams(alias string, subject contextfabric.SubjectRef, orgID st
 	return map[string]interface{}{alias + "Kind": string(subject.Kind), alias + "Id": subject.CanonicalID, "org": orgID}
 }
 
-// subjectStubMergeCypher is subjectMergeCypher's counterpart for a subject
+// referencedSubjectStubMergeCypher is ownedSubjectMergeCypher's counterpart for a subject
 // node a writer references but does not OWN -- a relationship's From/To
 // endpoint, or the canonical subject a content/episode record attaches to
 // (CHAOS-3785 codex round-1 finding F1, widened to every such writer by
 // codex round-2 finding R2-1). The class this closes: every subject-node
 // write in this file falls into exactly one of two roles --
 //
-//   - OWNED (subjectMergeCypher, unconditional "SET += $attrs" both ways):
+//   - OWNED (ownedSubjectMergeCypher, unconditional "SET += $attrs" both ways):
 //     the ONE producer authoritative for this exact node -- projectEntity
 //     for its own entity subject, projectContent/projectEpisode for the
 //     document/episode node they themselves synthesize (content:ID /
 //     episode:ID; nothing else in this package ever writes those). An
 //     authoritative write must always win, including on match: it is the
 //     single source of truth for that node's canonical data.
-//   - REFERENCED (subjectStubMergeCypher, this function): a writer that
+//   - REFERENCED (referencedSubjectStubMergeCypher, this function): a writer that
 //     merely points at a subject some OTHER, unrelated producer owns --
 //     projectRelationship's From/To, projectContent/projectEpisode's own
 //     attachment subject. ON CREATE seeds attrsParam in full (nothing else
@@ -153,8 +153,16 @@ func subjectMergeParams(alias string, subject contextfabric.SubjectRef, orgID st
 //
 // A fourth writer added later cannot reintroduce this class by construction
 // -- it inherits whichever of the two builders its role calls for -- rather
-// than by every author remembering the invariant independently.
-func subjectStubMergeCypher(alias, kindLabelValue, attrsParam string) string {
+// than by every author remembering the invariant independently. The names
+// themselves carry the decision (CHAOS-3785 codex round-3 finding R3-2:
+// "subjectMergeCypher"/"subjectStubMergeCypher" read as interchangeable
+// helpers, not as an ownership contract), and
+// chaos3785_round3_fake_test.go's TestOwnedSubjectMergeCypherCallSitesArePinned
+// / TestReferencedSubjectStubMergeCypherCallSitesArePinned pin every call
+// site of both by (enclosing function, line): a new call site anywhere else
+// fails those tests with a "which side are you on" message instead of
+// silently compiling.
+func referencedSubjectStubMergeCypher(alias, kindLabelValue, attrsParam string) string {
 	return fmt.Sprintf(
 		"MERGE (%s:%s {%s:$org, %s:$%sKind, %s:$%sId}) ON CREATE SET %s += $%s, %s:%s ON MATCH SET %s:%s",
 		alias, labelSubject, propOrgID, propKind, alias, propCanonicalID, alias,
@@ -183,13 +191,36 @@ func subjectMergeAttrs(subject contextfabric.SubjectRef, authorization contextfa
 		attrs[propObservedAt] = observedAt.UTC().Format(time.RFC3339Nano)
 		attrs[propObservedAtNs] = nsTimestamp(observedAt)
 	}
-	if validFrom != nil {
-		attrs[propValidFrom] = validFrom.UTC().Format(time.RFC3339Nano)
-		attrs[propValidFromNs] = nsTimestamp(*validFrom)
-	}
-	if validTo != nil {
-		attrs[propValidTo] = validTo.UTC().Format(time.RFC3339Nano)
-		attrs[propValidToNs] = nsTimestamp(*validTo)
+	if entityOwned != nil {
+		// R3-1 (CHAOS-3785 codex round 3): the OWNED/authoritative write
+		// must assert valid_from/valid_to either way, not merely add them
+		// when present. `SET n += $map` only touches keys the map contains
+		// (subjectMergeAttrs' own doc comment) -- omitting a key when
+		// validFrom/validTo is nil, as the referenced/stub branch below
+		// still does, would leave a STALE validity window in place forever
+		// if some earlier referenced write (e.g. an episode's own
+		// StartedAt/EndedAt, seeded into this same node via
+		// referencedSubjectStubMergeCypher's ON CREATE before the canonical entity
+		// ever arrived) had set one. A canonical entity with no validity
+		// window of its own must actively clear whatever a stub happened to
+		// seed, not just leave it stacked underneath the real data.
+		// Verified live against FalkorDB: `SET n += {k: null}` REMOVES key
+		// k (confirmed via GRAPH.QUERY, not assumed from generic Cypher
+		// semantics -- this FalkorDB version's exact "Properties removed"
+		// counters bore it out). safeParamValue explicitly allows a nil
+		// parameter value (client.go), so this reaches FalkorDB as a real
+		// Cypher null, not a marshaling error.
+		attrs[propValidFrom], attrs[propValidFromNs] = validTimeAttrs(validFrom)
+		attrs[propValidTo], attrs[propValidToNs] = validTimeAttrs(validTo)
+	} else {
+		if validFrom != nil {
+			attrs[propValidFrom] = validFrom.UTC().Format(time.RFC3339Nano)
+			attrs[propValidFromNs] = nsTimestamp(*validFrom)
+		}
+		if validTo != nil {
+			attrs[propValidTo] = validTo.UTC().Format(time.RFC3339Nano)
+			attrs[propValidToNs] = nsTimestamp(*validTo)
+		}
 	}
 	if entityOwned != nil {
 		attrs[propAliases] = graphrank.UniqueSorted(entityOwned.Aliases)
@@ -203,6 +234,18 @@ func subjectMergeAttrs(subject contextfabric.SubjectRef, authorization contextfa
 		attrs[propSearchText] = entitySearchText(*entityOwned)
 	}
 	return attrs
+}
+
+// validTimeAttrs returns (formatted RFC3339Nano string, nanosecond int64)
+// for t, or (nil, nil) when t is nil -- the pair subjectMergeAttrs' OWNED
+// branch assigns directly to attrs[propValidFrom]/attrs[propValidFromNs] (or
+// the propValidTo equivalents) so the key is always present, letting a nil
+// actively clear a stale value on write (see that branch's doc comment).
+func validTimeAttrs(t *time.Time) (interface{}, interface{}) {
+	if t == nil {
+		return nil, nil
+	}
+	return t.UTC().Format(time.RFC3339Nano), nsTimestamp(*t)
 }
 
 // authorizationValue produces graphrank's shared attribute-value convention
@@ -219,7 +262,7 @@ func authorizationValue(values []string) interface{} {
 
 func (a *Adapter) projectEntity(ctx context.Context, key, orgID string, entity contextfabric.EntityProjection) error {
 	attrs := subjectMergeAttrs(entity.Subject, entity.Authorization, entity.EvidenceRefIDs, entity.ObservedAt, entity.ValidFrom, entity.ValidTo, entity.SourceVersion, &entity)
-	cypher := subjectMergeCypher("n", kindLabel(entity.Subject.Kind)) + " SET n += $attrs"
+	cypher := ownedSubjectMergeCypher("n", kindLabel(entity.Subject.Kind)) + " SET n += $attrs"
 	params := subjectMergeParams("n", entity.Subject, orgID)
 	params["attrs"] = attrs
 	_, err := a.api.query(ctx, key, cypher, params, false)
@@ -245,8 +288,8 @@ func (a *Adapter) projectRelationship(ctx context.Context, key, orgID string, re
 		edgeAttrs[propValidTo] = relationship.ValidTo.UTC().Format(time.RFC3339Nano)
 		edgeAttrs[propValidToNs] = nsTimestamp(*relationship.ValidTo)
 	}
-	cypher := subjectStubMergeCypher("a", kindLabel(relationship.From.Kind), "fromAttrs") + " " +
-		subjectStubMergeCypher("b", kindLabel(relationship.To.Kind), "toAttrs") + " " +
+	cypher := referencedSubjectStubMergeCypher("a", kindLabel(relationship.From.Kind), "fromAttrs") + " " +
+		referencedSubjectStubMergeCypher("b", kindLabel(relationship.To.Kind), "toAttrs") + " " +
 		fmt.Sprintf("MERGE (a)-[r:%s {%s:$rid}]->(b) SET r += $edgeAttrs", labelRelation, propRelationshipID)
 	params := map[string]interface{}{"rid": relationship.RelationshipID, "fromAttrs": fromAttrs, "toAttrs": toAttrs, "edgeAttrs": edgeAttrs}
 	mergeMaps(params, subjectMergeParams("a", relationship.From, orgID))
@@ -267,14 +310,14 @@ func (a *Adapter) projectContent(ctx context.Context, key, orgID string, content
 		propSearchText: strings.TrimSpace(content.Title + "\n" + content.Body),
 	}
 	// a (content.Subject) is REFERENCED, not owned -- see
-	// subjectStubMergeCypher's doc comment (round-2 R2-1): projectContent
+	// referencedSubjectStubMergeCypher's doc comment (round-2 R2-1): projectContent
 	// does not own whatever real entity this content attaches to, so a
 	// later content write with a different scope must not clobber that
 	// entity's own authorization or canonical metadata. b (documentSubject)
 	// IS owned: this is the only producer that ever writes a content:ID
 	// node, so its write stays authoritative.
-	cypher := subjectStubMergeCypher("a", kindLabel(content.Subject.Kind), "subjectAttrs") + " " +
-		subjectMergeCypher("b", kindLabel(documentSubject.Kind)) + " SET b += $docAttrs " +
+	cypher := referencedSubjectStubMergeCypher("a", kindLabel(content.Subject.Kind), "subjectAttrs") + " " +
+		ownedSubjectMergeCypher("b", kindLabel(documentSubject.Kind)) + " SET b += $docAttrs " +
 		fmt.Sprintf("MERGE (a)-[r:%s {%s:$rid}]->(b) SET r += $edgeAttrs", labelRelation, propRelationshipID)
 	// Codex P1: the attribution edge itself must carry authorization, or a
 	// scoped principal's edge-level authorization check (DiscoverContext)
@@ -311,8 +354,8 @@ func (a *Adapter) projectEpisode(ctx context.Context, key, orgID string, episode
 	// Same OWNED/REFERENCED split as projectContent above: a (episode.Subject)
 	// is referenced, not owned; b (episodeSubject) is this producer's own
 	// episode:ID node and stays authoritative.
-	cypher := subjectStubMergeCypher("a", kindLabel(episode.Subject.Kind), "subjectAttrs") + " " +
-		subjectMergeCypher("b", kindLabel(episodeSubject.Kind)) + " SET b += $episodeAttrs " +
+	cypher := referencedSubjectStubMergeCypher("a", kindLabel(episode.Subject.Kind), "subjectAttrs") + " " +
+		ownedSubjectMergeCypher("b", kindLabel(episodeSubject.Kind)) + " SET b += $episodeAttrs " +
 		fmt.Sprintf("MERGE (a)-[r:%s {%s:$rid}]->(b) SET r += $edgeAttrs", labelRelation, propRelationshipID)
 	// Codex P1: same reasoning as projectContent's DOCUMENTED_BY edge --
 	// this attribution edge inherits the episode's own projected scope.

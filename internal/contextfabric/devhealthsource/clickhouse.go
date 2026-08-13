@@ -200,7 +200,7 @@ func (s *ClickHouseProjectionSource) fullSnapshot(ctx context.Context, orgID str
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
-	s.logOrphanedWorkItems(ctx, orgID, all)
+	s.logOrphanedWorkItems(ctx, batch, all)
 	return batch, true, nil
 }
 
@@ -241,7 +241,7 @@ func (s *ClickHouseProjectionSource) pagedBatch(ctx context.Context, orgID, curs
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
-	s.logOrphanedWorkItems(ctx, orgID, all)
+	s.logOrphanedWorkItems(ctx, batch, all)
 	return batch, true, nil
 }
 
@@ -265,48 +265,62 @@ func candidateCounts(all []candidate) (entities, relationships, tombstones int) 
 	return entities, relationships, tombstones
 }
 
-// orphanedWorkItemCount counts candidates workItemAuthorization marked
-// orphaned -- a genuine, nonzero repo_id that never resolved against repos
-// (CHAOS-3785 codex round-2 finding R2-3), as opposed to noRepositorySentinel's
-// "never had one by design." It inspects both entities (queryWorkItems) and
-// relationships (queryWorkItemDependencies/queryWorkItemHierarchy), since a
-// dependency/hierarchy edge rooted at an orphaned work item carries the same
-// sentinel. RepositorySlugs is checked as an exact single-element match
-// (never a substring or prefix test): orphanedRepositorySentinel can only
-// ever appear as workItemAuthorization's sole entry, so anything looser
-// would risk matching a real repository slug that happened to contain the
-// same text.
-func orphanedWorkItemCount(all []candidate) int {
+// orphanedWorkItemIDs returns the DISTINCT work_item canonical IDs
+// workItemAuthorization marked orphaned in this batch -- a genuine, nonzero
+// repo_id that never resolved against repos (CHAOS-3785 codex round-2
+// finding R2-3), as opposed to noRepositorySentinel's "never had one by
+// design." CHAOS-3785 codex round-3 finding R3-4: this counts WORK ITEMS,
+// not candidates -- one orphaned item can carry any number of
+// queryWorkItemDependencies/queryWorkItemHierarchy edges (its own entity
+// candidate plus one relationship candidate per edge), and counting
+// candidates would report that single item as however many edges it
+// happens to have. Every orphan-scoped relationship's From endpoint is the
+// orphaned work item that produced it (queryWorkItemDependencies derives a
+// dependency edge's scope from its source_work_item_id's own repo;
+// queryWorkItemHierarchy derives a PART_OF edge's scope from its child's),
+// so entity and relationship candidates both resolve to the same ID space
+// and de-duplicate against each other correctly. RepositorySlugs is checked
+// as an exact single-element match (never a substring or prefix test):
+// orphanedRepositorySentinel can only ever appear as workItemAuthorization's
+// sole entry, so anything looser would risk matching a real repository slug
+// that happened to contain the same text.
+func orphanedWorkItemIDs(all []candidate) map[string]struct{} {
 	isOrphaned := func(scope contractsv1.ContextFabricAuthorizationScope) bool {
 		return len(scope.RepositorySlugs) == 1 && scope.RepositorySlugs[0] == orphanedRepositorySentinel
 	}
-	count := 0
+	ids := map[string]struct{}{}
 	for _, c := range all {
 		switch {
 		case c.entity != nil && isOrphaned(c.entity.Authorization):
-			count++
+			ids[c.entity.Subject.CanonicalID] = struct{}{}
 		case c.relationship != nil && isOrphaned(c.relationship.Authorization):
-			count++
+			ids[c.relationship.From.CanonicalID] = struct{}{}
 		}
 	}
-	return count
+	return ids
 }
 
-// logOrphanedWorkItems surfaces orphanedWorkItemCount as a per-batch log
-// line -- CHAOS-3785 codex round-2 finding R2-3: without this, an orphaned
-// work item (a nonzero repo_id that never resolved -- a sync race, a
-// deleted repository, stale seed data) is indistinguishable from any other
+// logOrphanedWorkItems surfaces orphanedWorkItemIDs as a per-batch log line
+// -- CHAOS-3785 codex round-2 finding R2-3: without this, an orphaned work
+// item (a nonzero repo_id that never resolved -- a sync race, a deleted
+// repository, stale seed data) is indistinguishable from any other
 // projected row unless someone goes looking for the sentinel value directly
 // in the graph. Logged only when the count is positive, matching this
 // signal's actual purpose (surfacing something worth investigating), not as
-// an always-on per-tick line for the common all-zero case.
-func (s *ClickHouseProjectionSource) logOrphanedWorkItems(ctx context.Context, orgID string, all []candidate) {
+// an always-on per-tick line for the common all-zero case. batch_id/source/
+// cursor (codex round-3 finding R3-3) match the vocabulary
+// projectionrun.Coordinator's own per-run "projection batch applied" log
+// already uses (coordinator.go), so an operator can correlate this WARN --
+// emitted here, before the coordinator's Apply step even runs -- with that
+// later line by batch_id, or notice its batch never reached one at all.
+func (s *ClickHouseProjectionSource) logOrphanedWorkItems(ctx context.Context, batch contextfabric.ProjectionBatch, all []candidate) {
 	if s.logger == nil {
 		return
 	}
-	if count := orphanedWorkItemCount(all); count > 0 {
+	if ids := orphanedWorkItemIDs(all); len(ids) > 0 {
 		s.logger.WarnContext(ctx, "devhealthsource projection batch contains orphaned work items",
-			"org_id", redactOrg(orgID), "orphaned_work_items", count)
+			"org_id", redactOrg(batch.OrgID), "source", batch.Source, "batch_id", batch.BatchID,
+			"cursor", batch.Cursor, "next_cursor", batch.NextCursor, "orphaned_work_items", len(ids))
 	}
 }
 
