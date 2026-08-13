@@ -280,14 +280,22 @@ func (a *Adapter) projectRelationship(ctx context.Context, key, orgID string, re
 		propSourceVersion: relationship.SourceVersion, propObservedAt: relationship.ObservedAt.UTC().Format(time.RFC3339Nano), propObservedAtNs: nsTimestamp(relationship.ObservedAt),
 		"fact": relationshipFact(relationship),
 	}
-	if relationship.ValidFrom != nil {
-		edgeAttrs[propValidFrom] = relationship.ValidFrom.UTC().Format(time.RFC3339Nano)
-		edgeAttrs[propValidFromNs] = nsTimestamp(*relationship.ValidFrom)
-	}
-	if relationship.ValidTo != nil {
-		edgeAttrs[propValidTo] = relationship.ValidTo.UTC().Format(time.RFC3339Nano)
-		edgeAttrs[propValidToNs] = nsTimestamp(*relationship.ValidTo)
-	}
+	// R4-1 (CHAOS-3785 codex round 4): same class as R3-1, on the edge
+	// itself rather than an endpoint node. The edge write IS this
+	// relationship_id's one authoritative/owned writer (no other producer
+	// legitimately shares it), but "owned" still means the write must
+	// assert the WHOLE attribute set on every re-projection, not merely add
+	// what's present -- a relationship_id re-projected on a later tick with
+	// no validity window this time (the source data's temporal info became
+	// unavailable, or never had one to begin with on a later pass) must
+	// actively clear a window an earlier projection set, not leave it
+	// stacked underneath. Read side confirms this is live-connected, not
+	// cosmetic: queries.go's toCandidateEdge feeds valid_from/valid_to
+	// straight into graphrank.CandidateEdge.ValidAt/InvalidAt. Reuses
+	// validTimeAttrs (R3-1), whose null-removal semantics were already
+	// live-verified against FalkorDB.
+	edgeAttrs[propValidFrom], edgeAttrs[propValidFromNs] = validTimeAttrs(relationship.ValidFrom)
+	edgeAttrs[propValidTo], edgeAttrs[propValidToNs] = validTimeAttrs(relationship.ValidTo)
 	cypher := referencedSubjectStubMergeCypher("a", kindLabel(relationship.From.Kind), "fromAttrs") + " " +
 		referencedSubjectStubMergeCypher("b", kindLabel(relationship.To.Kind), "toAttrs") + " " +
 		fmt.Sprintf("MERGE (a)-[r:%s {%s:$rid}]->(b) SET r += $edgeAttrs", labelRelation, propRelationshipID)
