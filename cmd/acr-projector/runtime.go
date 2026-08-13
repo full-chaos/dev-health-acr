@@ -180,7 +180,15 @@ func openProjectionBackend() (contextfabric.ProjectionBackend, func(context.Cont
 	if err != nil {
 		return nil, nil, fmt.Errorf("falkordb configuration: %w", err)
 	}
-	adapter, err := falkorgraph.New(falkorConfig)
+	// CHAOS-3778: the projector writes embeddings only when an embedder is
+	// configured. It must agree with the hosted reader (both use
+	// EmbedderFromEnv) -- writing vectors nothing queries is wasted work, and
+	// querying an index nothing fills is silently degraded retrieval.
+	embedderOptions, err := falkorgraph.EmbedderFromEnv(os.LookupEnv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("context fabric embedder configuration: %w", err)
+	}
+	adapter, err := falkorgraph.NewWithEmbedder(falkorConfig, embedderOptions)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open falkordb graph backend: %w", err)
 	}

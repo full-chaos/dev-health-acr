@@ -272,3 +272,34 @@ func (a *Adapter) recordVectorDegraded(ctx context.Context, orgID string) {
 type VectorTelemetry interface {
 	RecordVectorRetrievalDegraded(ctx context.Context, orgID string)
 }
+
+// EmbedderFromEnv builds the optional vector-retrieval dependencies from the
+// environment (CHAOS-3778).
+//
+// A deployment that has not set ACR_CONTEXT_FABRIC_EMBED_BASE_URL gets a zero
+// EmbedderOptions and a nil error: vector retrieval is OFF, which is a
+// supported steady state, not a misconfiguration. Every other error IS a
+// misconfiguration (an unparseable dimension, a plaintext base URL without the
+// explicit insecure opt-in) and is returned, because silently running without
+// vector retrieval because a value failed to parse would be indistinguishable
+// from having chosen not to enable it.
+//
+// It exists so the two construction sites -- the hosted API's graph reader and
+// acr-projector's projection backend -- cannot drift. Both must agree on
+// whether embeddings are written and queried: a projector writing vectors the
+// reader never queries is wasted work, and a reader querying an index the
+// projector never fills is silently degraded retrieval.
+func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error) {
+	if !embedprovider.Configured(lookup) {
+		return EmbedderOptions{}, nil
+	}
+	cfg, err := embedprovider.ConfigFromEnv(lookup)
+	if err != nil {
+		return EmbedderOptions{}, err
+	}
+	embedder, err := embedprovider.New(cfg)
+	if err != nil {
+		return EmbedderOptions{}, err
+	}
+	return EmbedderOptions{Embedder: embedder, SimilarityFloor: embedder.SimilarityFloor()}, nil
+}

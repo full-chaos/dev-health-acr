@@ -194,7 +194,13 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("load context fabric graph configuration: %w", err)
 	}
-	graphReader, err := falkorgraph.New(graphConfig)
+	// CHAOS-3778: vector retrieval is optional. An unconfigured embedder
+	// leaves the lexical retrieval path exactly as it was.
+	embedderOptions, err := falkorgraph.EmbedderFromEnv(os.LookupEnv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load context fabric embedder configuration: %w", err)
+	}
+	graphReader, err := falkorgraph.NewWithEmbedder(graphConfig, embedderOptions)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("initialize context fabric graph adapter: %w", err)
 	}

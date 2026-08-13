@@ -1,6 +1,23 @@
 # Context Fabric vector and semantic retrieval (CHAOS-3778)
 
-Status: DESIGN — not implemented. Awaiting orchestrator GO.
+Status: IMPLEMENTED. Orchestrator GO received 2026-08-13, including the item-4
+corroboration ruling. Everything below describes shipped behavior except where
+marked.
+
+Deviations from the design as approved: none in substance. Two things the
+design under-specified and the implementation had to settle:
+
+* The never-demote guard in `CorroboratedConfidence` is REACHABLE, not merely
+  defensive — an exact label match reached through traversal carries base 0.85
+  with two mechanisms, whose corroborated value (0.7795) is lower. The design
+  note called it unreachable; that was wrong. Consequence: the function's output
+  is bounded by `max(base, CorroboratedCeiling)`, not by the ceiling alone, so
+  the pinned invariant is "corroboration never LIFTS a candidate to the
+  top-of-two gate" rather than "the output is always below it".
+* `contracts/openapi/acr-v1.json` `$ref`s the JSON Schema file directly and
+  carries no duplicate `SubjectCandidate` definition, so the schema edit IS the
+  OpenAPI change and `make contract-write` regenerated the YAML mirror with no
+  diff.
 
 Scope: TRD §19.4. Acceptance bars AC-3778-0 through AC-3778-7.
 Precondition AC-3778-0 (lexical score-ladder normalization) is MERGED on `main`

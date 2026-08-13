@@ -298,6 +298,60 @@ carries `credential_masked` only (last 4 characters, e.g. `********wxyz`).
 | --- | --- | --- |
 | `ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE` | *(unset — disabled)* | Staleness window (1m–24h when set). A stored investigation result older than this is never reused, regardless of whether every other reuse condition holds. Leaving this unset disables answer reuse entirely: every Investigate call runs fresh, exactly as if `pginvestigation.WithAnswerReuse` were never passed. |
 
+### Vector and semantic retrieval (CHAOS-3778)
+
+Vector retrieval is **opt-in and off by default**. It is enabled by setting a
+base URL; with none set, ACR never constructs an embedder, never creates a
+vector index, never writes an embedding, and the lexical retrieval path is
+byte-for-byte what it was before.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ACR_CONTEXT_FABRIC_EMBED_BASE_URL` | *(unset — disabled)* | OpenAI-compatible API root, e.g. `http://localhost:1234/v1/`. **Setting this is what enables vector retrieval.** There is no default: no vendor endpoint is ever implied. |
+| `ACR_CONTEXT_FABRIC_EMBED_PROVIDER` | *(required when enabled)* | A stable name for the endpoint, recorded verbatim in the embedder identity so a rebuild can tell vectors apart. Never checked for a specific vendor. |
+| `ACR_CONTEXT_FABRIC_EMBED_MODEL` | *(required when enabled)* | Bare embedding model id. |
+| `ACR_CONTEXT_FABRIC_EMBED_DIMENSION` | *(required when enabled)* | Vector width. Must match what the server returns **and** what the graph's vector index was built with — see the rebuild note below. |
+| `ACR_CONTEXT_FABRIC_EMBED_API_KEY` / `_FILE` | *(empty)* | Optional bearer credential. A loopback embedder needs none; the shape accommodates one so a hosted embedder is a configuration change only. |
+| `ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR` | `0.55` | Absolute cosine similarity below which a neighbour is **dropped, not scored**. See the hazard note below. |
+| `ACR_CONTEXT_FABRIC_EMBED_TIMEOUT` | `250ms` | Bounds one embeddings call. |
+| `ACR_CONTEXT_FABRIC_EMBED_MAX_BATCH` | `64` | Texts per request at projection time. |
+| `ACR_CONTEXT_FABRIC_EMBED_MAX_TEXT_RUNES` | `2000` | Runes of one node's search text that are embedded. |
+| `ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES` | `0` | The SDK's own in-client retry loop. |
+| `ACR_CONTEXT_FABRIC_EMBED_ALLOW_INSECURE_BASE_URL` | `false` | Permits a plaintext `http://` base URL. Required for a loopback embedder. **Never set this for a base URL that leaves the trust boundary** — the credential travels as a bearer token. |
+
+Both `acr-api` and `acr-projector` read these. **Configure them identically for
+both.** A projector writing vectors the reader never queries is wasted work; a
+reader querying an index the projector never fills is silently degraded
+retrieval.
+
+**Similarity floor — the honest-no-match guard.** A nearest-neighbour query
+always returns *k* rows when *k* rows exist; it has no notion of "nothing is
+close enough". Without an absolute floor, a question about a subject that does
+not exist comes back with *k* confident-looking neighbours. Lowering this value
+toward 0 progressively disables that guard and is the single most dangerous
+change available in this table. The default suits a general-purpose sentence
+embedder; retune it against the ambiguity corpus when changing embedder, not by
+feel.
+
+**Changing the embedder or its dimension requires a rebuild.** Vectors are
+projection artifacts stamped with the embedder identity and dimension that
+produced them. If the configured dimension stops matching the organization's
+existing vector index, ACR **disables vector retrieval for that organization**
+and answers lexically — it does not fail the request, and it does not silently
+drop and recreate the index. Recovery is the existing
+`acr-projector rebuild --org <org>`, which resets every source checkpoint and
+bumps the rebuild epoch (which also invalidates answer reuse). Until that runs,
+the organization is simply back to the pre-CHAOS-3778 lexical behaviour.
+
+**Degradation is expected and safe.** An embedder that is unreachable, cold, or
+slow degrades the request to lexical-only rather than failing it; a cold local
+model was measured at 9.3 s against 10–17 ms warm, which is exactly why the
+per-call timeout is small and the failure is open. The same applies on the
+write side: a projection batch whose embedding call fails still commits its
+canonical projection and advances its checkpoint. A node without a vector is
+invisible to vector search and fully reachable lexically — degraded retrieval,
+never lost data — and the next rebuild re-embeds it.
+
 Answer reuse is **opt-in**: an operator turns it on by setting a window.
 This is deliberate, not merely conservative-by-default -- reuse changes
 what a request can be served from (a prior turn's stored answer, not a
