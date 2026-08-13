@@ -219,6 +219,20 @@ func modelFacingBounds() []boundCase {
 			},
 		},
 		{
+			// CHAOS-3770 F3 residual (codex round 2): distinct from the
+			// per-key/per-value LENGTH bounds above -- this is how many
+			// parameter entries ONE fact_requirements[] item may carry.
+			name: "interpretation/fact requirement parameters max count", registryName: "interpretation.fact_requirement.parameters.max_count",
+			limit: contractsv1.ContextFabricFactRequirementParametersMaxCount, prompt: interpretationSystemPrompt,
+			mentions: []string{"parameters", "32"},
+			atLimit: func() error {
+				return interpretationWithParameterCount(contractsv1.ContextFabricFactRequirementParametersMaxCount).Validate()
+			},
+			over: func() error {
+				return interpretationWithParameterCount(contractsv1.ContextFabricFactRequirementParametersMaxCount + 1).Validate()
+			},
+		},
+		{
 			name: "synthesis/driver_id max length", registryName: "synthesis.driver.driver_id.max_length",
 			limit: contractsv1.ContextFabricModelMintedIDMaxLength, prompt: synthesisSystemPrompt,
 			mentions: []string{"driver_id", "256"},
@@ -465,6 +479,26 @@ func modelFacingBounds() []boundCase {
 				return resultWithEvidenceRefIDs(contractsv1.ContextFabricEvidenceRefIDsMaxCount + 1).Validate()
 			},
 		},
+		{
+			// CHAOS-3770 F3 residual (codex round 2): the model decides how
+			// MANY claimed facts to write (unlike claimed_fact_ids on a
+			// driver/finding, which only reference entries in this list and
+			// are already covered above).
+			name: "synthesis/claimed_facts max count", registryName: "synthesis.claimed_facts.max_count",
+			limit: contractsv1.ContextFabricClaimedFactsMaxCount, prompt: synthesisSystemPrompt,
+			// A single precise phrase, not independent "claimed_facts"/"250"
+			// substrings: both already appear elsewhere in this prompt for
+			// unrelated reasons (the claimed_fact_ids reference bound, the
+			// closed-vocabulary sentence), so loose substrings alone would
+			// pass without an actual dedicated statement of THIS bound.
+			mentions: []string{"at most 250 claimed_facts"},
+			atLimit: func() error {
+				return resultWithClaimedFacts(contractsv1.ContextFabricClaimedFactsMaxCount).Validate()
+			},
+			over: func() error {
+				return resultWithClaimedFacts(contractsv1.ContextFabricClaimedFactsMaxCount + 1).Validate()
+			},
+		},
 	}
 }
 
@@ -583,6 +617,22 @@ func interpretationWithParameterKey(length int) contractsv1.ContextFabricInterpr
 	question.FactRequirements = []contractsv1.ContextFabricFactRequirement{{
 		Kind:       contractsv1.ContextFabricFactStatus,
 		Parameters: map[string]string{filler(length): "scope"},
+	}}
+	return question
+}
+
+// interpretationWithParameterCount builds ONE fact_requirements[] entry
+// carrying count distinct parameter keys -- see
+// "interpretation/fact requirement parameters max count".
+func interpretationWithParameterCount(count int) contractsv1.ContextFabricInterpretedQuestion {
+	question := baseInterpretation()
+	params := make(map[string]string, count)
+	for i := 0; i < count; i++ {
+		params[fmt.Sprintf("key_%04d", i)] = "value"
+	}
+	question.FactRequirements = []contractsv1.ContextFabricFactRequirement{{
+		Kind:       contractsv1.ContextFabricFactStatus,
+		Parameters: params,
 	}}
 	return question
 }
@@ -878,5 +928,30 @@ func resultWithWarningLength(length int) contractsv1.ContextFabricInvestigationR
 func resultWithEvidenceRefIDs(count int) contractsv1.ContextFabricInvestigationResult {
 	result := baseResult()
 	result.EvidenceRefIDs = evidenceRefs(count)
+	return result
+}
+
+// claimN returns a valid claimed fact identical in shape to claimWithField's
+// baseline except for a unique ClaimID -- for exercising the RESULT-level
+// claimed_facts count bound, where every entry must independently validate
+// AND all ClaimIDs in the list must be unique (validateClaimedFacts).
+func claimN(index int) contractsv1.ContextFabricClaimedFact {
+	value := "in_progress"
+	return contractsv1.ContextFabricClaimedFact{
+		ClaimID: fmt.Sprintf("claim_%08d", index),
+		Kind:    contractsv1.ContextFabricFactStatus,
+		Subject: boundsSubject(0),
+		Field:   "status",
+		Value:   contractsv1.ContextFabricScalarValue{String: &value},
+	}
+}
+
+func resultWithClaimedFacts(count int) contractsv1.ContextFabricInvestigationResult {
+	result := baseResult()
+	claims := make([]contractsv1.ContextFabricClaimedFact, 0, count)
+	for i := 0; i < count; i++ {
+		claims = append(claims, claimN(i))
+	}
+	result.ClaimedFacts = claims
 	return result
 }

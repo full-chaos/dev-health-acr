@@ -279,7 +279,7 @@ func (q ContextFabricInterpretedQuestion) Validate() error {
 }
 
 func (r ContextFabricFactRequirement) Validate() error {
-	if !validFactKind(r.Kind) || len(r.Subjects) > 250 || !uniqueSubjects(r.Subjects) || len(r.Parameters) > 32 {
+	if !validFactKind(r.Kind) || len(r.Subjects) > 250 || !uniqueSubjects(r.Subjects) || len(r.Parameters) > ContextFabricFactRequirementParametersMaxCount {
 		return fmt.Errorf("fact requirement violates v1 bounds")
 	}
 	for key, value := range r.Parameters {

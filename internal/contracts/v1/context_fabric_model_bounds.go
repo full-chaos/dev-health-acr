@@ -43,6 +43,12 @@ const (
 	ContextFabricFactRequirementsMaxCount               = 64
 	ContextFabricFactRequirementParameterValueMaxLength = 1024
 	ContextFabricFactRequirementParameterKeyMaxLength   = 128
+	// ContextFabricFactRequirementParametersMaxCount bounds how many
+	// key/value entries the model may attach to ONE fact_requirements[]
+	// entry's parameters object -- distinct from the per-key/per-value
+	// LENGTH bounds above (CHAOS-3770 F3 residual, codex round 2: this was
+	// an inline literal with no registry entry and no prompt statement).
+	ContextFabricFactRequirementParametersMaxCount = 32
 
 	// Synthesis: identifiers a model mints itself -- driver_id, finding_id,
 	// and claim_id all share the same [min,max] shape (prompts.go states
@@ -88,6 +94,14 @@ const (
 	ContextFabricLimitationMaxLength        = 4000
 	ContextFabricWarningsMaxCount           = 250
 	ContextFabricWarningMaxLength           = 4000
+	// ContextFabricClaimedFactsMaxCount bounds the synthesis draft's own
+	// top-level claimed_facts list -- the model decides how many claims to
+	// write (unlike driver/finding claimed_fact_ids, which only REFERENCE
+	// entries in this list and are already covered above). Enforced by
+	// validateClaimedFacts in validate_context_fabric_helpers.go (CHAOS-3770
+	// F3 residual, codex round 2: inline literal, no registry entry, no
+	// prompt statement).
+	ContextFabricClaimedFactsMaxCount = 250
 )
 
 // ContextFabricModelFacingBound names one entry in the registry below.
@@ -115,6 +129,7 @@ var ContextFabricModelFacingBounds = []ContextFabricModelFacingBound{
 	{"interpretation.fact_requirements.max_count", ContextFabricFactRequirementsMaxCount},
 	{"interpretation.fact_requirement.parameter_value.max_length", ContextFabricFactRequirementParameterValueMaxLength},
 	{"interpretation.fact_requirement.parameter_key.max_length", ContextFabricFactRequirementParameterKeyMaxLength},
+	{"interpretation.fact_requirement.parameters.max_count", ContextFabricFactRequirementParametersMaxCount},
 
 	{"synthesis.driver.driver_id.max_length", ContextFabricModelMintedIDMaxLength},
 	{"synthesis.driver.title.max_length", ContextFabricDriverTitleMaxLength},
@@ -151,4 +166,5 @@ var ContextFabricModelFacingBounds = []ContextFabricModelFacingBound{
 	// ContextFabricDriverJudgment.Validate()/ContextFabricFinding.Validate())
 	// even though it shares the same numeric bound.
 	{"synthesis.evidence_ref_ids.max_count", ContextFabricEvidenceRefIDsMaxCount},
+	{"synthesis.claimed_facts.max_count", ContextFabricClaimedFactsMaxCount},
 }

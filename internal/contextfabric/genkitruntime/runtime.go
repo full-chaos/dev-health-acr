@@ -51,7 +51,14 @@ const (
 	// here; v4 states it, along with the other bounds a model cannot
 	// infer, and tells the model where that detail belongs instead
 	// (fact_requirements).
-	defaultInterpretationPromptVersion = "context-fabric-interpretation.v4"
+	//
+	// v5 is the interpretation side of the same mechanical-oracle sweep
+	// that produced synthesis v7 below (CHAOS-3770 F3 residual, codex
+	// round 2): ContextFabricFactRequirement.Validate enforces a 32-entry
+	// cap on one fact_requirements[] item's parameters map, a bound this
+	// prompt never stated (a model could write 33 parameters on a single
+	// entry and lose the whole interpretation for it). v5 states it.
+	defaultInterpretationPromptVersion = "context-fabric-interpretation.v5"
 	// defaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
@@ -89,7 +96,33 @@ const (
 	// though ContextFabricInvestigationResult.Validate() has enforced it
 	// (250 items, 4000 characters each) unchanged since v2. v6 adds that
 	// one missing statement; nothing else in this prompt changes.
-	defaultSynthesisPromptVersion = "context-fabric-synthesis.v6"
+	//
+	// v7 is the result of a full sweep of every remaining numeric literal
+	// in internal/contracts/v1/validate_context_fabric_result.go and
+	// validate_context_fabric_helpers.go (CHAOS-3770 F3 residual, codex
+	// round 2's structural question: "are there any OTHER inline literals
+	// left in the validate path that model output can trip?"). It found
+	// one more real gap: validateClaimedFacts's 250-entry cap on the
+	// synthesis draft's own top-level claimed_facts list (distinct from
+	// the already-stated per-driver/per-finding claimed_fact_ids
+	// REFERENCE count) had no registry entry and no prompt statement. v7
+	// adds it. Every other literal the sweep found belongs to one of two
+	// excluded classes, now documented at the call site or in
+	// ContextFabricModelFacingBounds's own doc comment rather than left
+	// implicit: (a) fields the model only ECHOES verbatim from data ACR
+	// already supplied and independently bounded (SubjectRef.CanonicalID/
+	// Label, an evidence ref ID's own string length, a claimed fact's
+	// Value) -- SynthesisDraft.ValidateAgainst's allowedSubjects/
+	// canonicalLabels/allowedEvidence/factValueEqualsScalar checks already
+	// reject anything the model didn't copy verbatim, before a length
+	// bound would ever be the operative failure reason, so stating it
+	// would not change what the model needs to do; and (b) fields a
+	// different subsystem populates, never the interpretation/synthesis
+	// model (SubjectCandidate, SubjectResolution, Cohort, RelationshipPath/
+	// Edge, SourceObservation, Coverage, VersionSet -- all ACR's own graph/
+	// canonical-fact layer; ContextFabricEntityProjection and siblings --
+	// CHAOS-3753's projection worker, an unrelated write path).
+	defaultSynthesisPromptVersion = "context-fabric-synthesis.v7"
 	defaultSchemaVersion          = "context-fabric-model-output.v1"
 	defaultEvaluatorVersion       = "context-fabric-grounding.v1"
 )
