@@ -109,16 +109,16 @@ func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection 
 		// with an identical sorting key as versions of the same logical row --
 		// ORDER BY id alone would let ClickHouse collapse the two tenants'
 		// rows into one under FINAL, before the query under test even runs.
-		`CREATE TABLE repos (id String, org_id String, repo String, provider Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
+		`CREATE TABLE repos (id String, org_id String, repo String, provider Nullable(String), last_synced DateTime64(6, 'UTC'), created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
 		// parent_id (CHAOS-3779, queryWorkItemHierarchy's PART_OF source)
 		// defaults to '' via the trailing column omitted from every INSERT
 		// below -- ClickHouse fills an un-listed String column with its
 		// type's zero value, matching the "no parent" real-world case this
 		// fixture doesn't otherwise need to exercise.
-		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC'), parent_id String DEFAULT '') ENGINE = ReplacingMergeTree ORDER BY work_item_id`,
-		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number UInt32, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
-		`CREATE TABLE deployments (repo_id String, org_id String, deployment_id String, status Nullable(String), environment Nullable(String), deployed_at Nullable(DateTime64(6, 'UTC')), started_at Nullable(DateTime64(6, 'UTC')), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY deployment_id`,
-		`CREATE TABLE operational_incidents (id String, org_id String, service_id String, title Nullable(String), normalized_status Nullable(String), raw_status Nullable(String), normalized_severity Nullable(String), raw_severity Nullable(String), started_at Nullable(DateTime64(6, 'UTC')), source_event_at Nullable(DateTime64(6, 'UTC')), observed_at DateTime64(6, 'UTC'), is_deleted UInt8) ENGINE = ReplacingMergeTree ORDER BY id`,
+		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC'), parent_id String DEFAULT '', created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC'), completed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, closed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY work_item_id`,
+		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number UInt32, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC'), created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC'), merged_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, closed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
+		`CREATE TABLE deployments (repo_id String, org_id String, deployment_id String, status Nullable(String), environment Nullable(String), deployed_at Nullable(DateTime64(6, 'UTC')), started_at Nullable(DateTime64(6, 'UTC')), last_synced DateTime64(6, 'UTC'), finished_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY deployment_id`,
+		`CREATE TABLE operational_incidents (id String, org_id String, service_id String, title Nullable(String), normalized_status Nullable(String), raw_status Nullable(String), normalized_severity Nullable(String), raw_severity Nullable(String), started_at Nullable(DateTime64(6, 'UTC')), source_event_at Nullable(DateTime64(6, 'UTC')), observed_at DateTime64(6, 'UTC'), is_deleted UInt8, resolved_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, deleted_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY id`,
 		`CREATE TABLE operational_service_repository_mappings (org_id String, service_id String, repo_id String, is_active UInt8) ENGINE = ReplacingMergeTree ORDER BY (org_id, service_id, repo_id)`,
 		`CREATE TABLE work_item_dependencies (source_work_item_id String, target_work_item_id String, relationship_type Nullable(String), org_id String, last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (source_work_item_id, target_work_item_id)`,
 		`CREATE TABLE work_graph_deployment_incident_edges (edge_id String, deployment_id String, incident_id String, repo_id String, org_id UUID, observed_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY edge_id`,
@@ -134,13 +134,13 @@ func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection 
 			t.Fatalf("create table: %v", err)
 		}
 	}
-	if err := connection.Exec(ctx, `INSERT INTO repos VALUES (?, ?, ?, ?, ?)`, collidingRepoID, "org-a", "org-a/service", "github", at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, collidingRepoID, "org-a", "org-a/service", "github", at); err != nil {
 		t.Fatalf("seed org-a repo: %v", err)
 	}
-	if err := connection.Exec(ctx, `INSERT INTO repos VALUES (?, ?, ?, ?, ?)`, collidingRepoID, "org-b", "org-b/other-service", "github", at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, collidingRepoID, "org-b", "org-b/other-service", "github", at); err != nil {
 		t.Fatalf("seed org-b repo: %v", err)
 	}
-	if err := connection.Exec(ctx, `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "WI-1", collidingRepoID, "org-a", "Org A task", "open", "", at, ""); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "WI-1", collidingRepoID, "org-a", "Org A task", "open", "", at, ""); err != nil {
 		t.Fatalf("seed org-a work item: %v", err)
 	}
 
@@ -148,24 +148,24 @@ func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection 
 	// same (repo_id, number) key -- the collision codex round-2 finding K1
 	// warns about for the reviews->PR join, distinct from the repos-join
 	// collision above.
-	if err := connection.Exec(ctx, `INSERT INTO git_pull_requests VALUES (?, ?, ?, ?, ?, ?)`, collidingRepoID, "org-a", uint32(1042), "Typed session tokens", "open", at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, collidingRepoID, "org-a", uint32(1042), "Typed session tokens", "open", at); err != nil {
 		t.Fatalf("seed org-a pull request: %v", err)
 	}
-	if err := connection.Exec(ctx, `INSERT INTO git_pull_requests VALUES (?, ?, ?, ?, ?, ?)`, collidingRepoID, "org-b", uint32(1042), "Other org's PR", "open", at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, collidingRepoID, "org-b", uint32(1042), "Other org's PR", "open", at); err != nil {
 		t.Fatalf("seed org-b pull request: %v", err)
 	}
 	// A single org-a review: if either the reviews->PR join or the PR/review
 	// ->repos join is missing its org_id predicate, this row can fan out
 	// across org-b's colliding PR/repo rows too (a duplicate-subject
 	// contract violation) or silently pick up org-b's slug.
-	if err := connection.Exec(ctx, `INSERT INTO git_pull_request_reviews VALUES (?, ?, ?, ?, ?, ?)`, "review-1", collidingRepoID, "org-a", uint32(1042), "approved", at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO git_pull_request_reviews (review_id, repo_id, org_id, number, state, submitted_at) VALUES (?, ?, ?, ?, ?, ?)`, "review-1", collidingRepoID, "org-a", uint32(1042), "approved", at); err != nil {
 		t.Fatalf("seed org-a pull request review: %v", err)
 	}
 
 	// ci_pipeline_runs: a single org-a run against the colliding repo_id,
 	// proving its repos join stays scoped to org-a even though org-b has a
 	// repos row with the same id.
-	if err := connection.Exec(ctx, `INSERT INTO ci_pipeline_runs VALUES (?, ?, ?, ?, ?, ?, ?)`, "run-1", collidingRepoID, "org-a", "main", "success", at, at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO ci_pipeline_runs (run_id, repo_id, org_id, branch, status, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, "run-1", collidingRepoID, "org-a", "main", "success", at, at); err != nil {
 		t.Fatalf("seed org-a ci run: %v", err)
 	}
 }
@@ -277,7 +277,7 @@ const zeroRepoID = "00000000-0000-0000-0000-000000000000"
 func seedTwoTenantLinearWorkItems(t *testing.T, ctx context.Context, connection clickhousedriver.Conn, at time.Time) {
 	t.Helper()
 	statements := []string{
-		`CREATE TABLE repos (id String, org_id String, repo String, provider Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
+		`CREATE TABLE repos (id String, org_id String, repo String, provider Nullable(String), last_synced DateTime64(6, 'UTC'), created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
 		// ORDER BY (org_id, work_item_id), not work_item_id alone (unlike this
 		// file's other CREATE TABLE work_items statements, which never seed a
 		// colliding work_item_id across organizations): this fixture
@@ -290,10 +290,10 @@ func seedTwoTenantLinearWorkItems(t *testing.T, ctx context.Context, connection 
 		// the query under test even runs -- the same class of self-inflicted
 		// collision seedTwoTenantRepoIDCollision's repos ORDER BY comment
 		// warns about.
-		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC'), parent_id String DEFAULT '') ENGINE = ReplacingMergeTree ORDER BY (org_id, work_item_id)`,
-		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number UInt32, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
-		`CREATE TABLE deployments (repo_id String, org_id String, deployment_id String, status Nullable(String), environment Nullable(String), deployed_at Nullable(DateTime64(6, 'UTC')), started_at Nullable(DateTime64(6, 'UTC')), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY deployment_id`,
-		`CREATE TABLE operational_incidents (id String, org_id String, service_id String, title Nullable(String), normalized_status Nullable(String), raw_status Nullable(String), normalized_severity Nullable(String), raw_severity Nullable(String), started_at Nullable(DateTime64(6, 'UTC')), source_event_at Nullable(DateTime64(6, 'UTC')), observed_at DateTime64(6, 'UTC'), is_deleted UInt8) ENGINE = ReplacingMergeTree ORDER BY id`,
+		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC'), parent_id String DEFAULT '', created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC'), completed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, closed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY (org_id, work_item_id)`,
+		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number UInt32, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC'), created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC'), merged_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, closed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
+		`CREATE TABLE deployments (repo_id String, org_id String, deployment_id String, status Nullable(String), environment Nullable(String), deployed_at Nullable(DateTime64(6, 'UTC')), started_at Nullable(DateTime64(6, 'UTC')), last_synced DateTime64(6, 'UTC'), finished_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY deployment_id`,
+		`CREATE TABLE operational_incidents (id String, org_id String, service_id String, title Nullable(String), normalized_status Nullable(String), raw_status Nullable(String), normalized_severity Nullable(String), raw_severity Nullable(String), started_at Nullable(DateTime64(6, 'UTC')), source_event_at Nullable(DateTime64(6, 'UTC')), observed_at DateTime64(6, 'UTC'), is_deleted UInt8, resolved_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, deleted_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY id`,
 		`CREATE TABLE operational_service_repository_mappings (org_id String, service_id String, repo_id String, is_active UInt8) ENGINE = ReplacingMergeTree ORDER BY (org_id, service_id, repo_id)`,
 		// ORDER BY (org_id, source_work_item_id, target_work_item_id): same
 		// reasoning as work_items above -- this fixture's org-a and org-b both
@@ -315,26 +315,26 @@ func seedTwoTenantLinearWorkItems(t *testing.T, ctx context.Context, connection 
 		{"org-a", "org-a/service", "org-a task"},
 		{"org-b", "org-b/other-service", "org-b task"},
 	} {
-		if err := connection.Exec(ctx, `INSERT INTO repos VALUES (?, ?, ?, ?, ?)`, collidingRepoID, org.id, org.repoSlug, "github", at); err != nil {
+		if err := connection.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, collidingRepoID, org.id, org.repoSlug, "github", at); err != nil {
 			t.Fatalf("seed %s repo: %v", org.id, err)
 		}
 		// REPO-1: repo-backed, using the colliding repos id -- proves the
 		// LEFT JOIN still resolves to THIS org's repos row, never the other
 		// org's, exactly like seedTwoTenantRepoIDCollision's INNER JOIN case.
-		if err := connection.Exec(ctx, `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "REPO-1", collidingRepoID, org.id, org.title+" (repo-backed)", "open", "", at, ""); err != nil {
+		if err := connection.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "REPO-1", collidingRepoID, org.id, org.title+" (repo-backed)", "open", "", at, ""); err != nil {
 			t.Fatalf("seed %s repo-backed work item: %v", org.id, err)
 		}
 		// LINEAR-1/LINEAR-2: Linear-shaped, repo_id = zeroRepoID. LINEAR-2 is
 		// LINEAR-1's parent (PART_OF); a work_item_dependencies row also
 		// BLOCKS LINEAR-1 on LINEAR-2, so the same pair exercises both
 		// relaxed-join producers.
-		if err := connection.Exec(ctx, `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "LINEAR-2", zeroRepoID, org.id, org.title+" (parent)", "open", "", at, ""); err != nil {
+		if err := connection.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "LINEAR-2", zeroRepoID, org.id, org.title+" (parent)", "open", "", at, ""); err != nil {
 			t.Fatalf("seed %s LINEAR-2: %v", org.id, err)
 		}
-		if err := connection.Exec(ctx, `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "LINEAR-1", zeroRepoID, org.id, org.title+" (child)", "open", "", at, "LINEAR-2"); err != nil {
+		if err := connection.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "LINEAR-1", zeroRepoID, org.id, org.title+" (child)", "open", "", at, "LINEAR-2"); err != nil {
 			t.Fatalf("seed %s LINEAR-1: %v", org.id, err)
 		}
-		if err := connection.Exec(ctx, `INSERT INTO work_item_dependencies VALUES (?, ?, ?, ?, ?)`, "LINEAR-1", "LINEAR-2", "blocks", org.id, at); err != nil {
+		if err := connection.Exec(ctx, `INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, org_id, last_synced) VALUES (?, ?, ?, ?, ?)`, "LINEAR-1", "LINEAR-2", "blocks", org.id, at); err != nil {
 			t.Fatalf("seed %s work item dependency: %v", org.id, err)
 		}
 	}
@@ -460,11 +460,11 @@ func TestClickHouseProjectionSourceFiltersSelfReferentialParentID(t *testing.T) 
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
 
 	statements := []string{
-		`CREATE TABLE repos (id String, org_id String, repo String, provider Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
-		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC'), parent_id String DEFAULT '') ENGINE = ReplacingMergeTree ORDER BY work_item_id`,
-		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number UInt32, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
-		`CREATE TABLE deployments (repo_id String, org_id String, deployment_id String, status Nullable(String), environment Nullable(String), deployed_at Nullable(DateTime64(6, 'UTC')), started_at Nullable(DateTime64(6, 'UTC')), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY deployment_id`,
-		`CREATE TABLE operational_incidents (id String, org_id String, service_id String, title Nullable(String), normalized_status Nullable(String), raw_status Nullable(String), normalized_severity Nullable(String), raw_severity Nullable(String), started_at Nullable(DateTime64(6, 'UTC')), source_event_at Nullable(DateTime64(6, 'UTC')), observed_at DateTime64(6, 'UTC'), is_deleted UInt8) ENGINE = ReplacingMergeTree ORDER BY id`,
+		`CREATE TABLE repos (id String, org_id String, repo String, provider Nullable(String), last_synced DateTime64(6, 'UTC'), created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
+		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC'), parent_id String DEFAULT '', created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC'), completed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, closed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY work_item_id`,
+		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number UInt32, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC'), created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC'), merged_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, closed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
+		`CREATE TABLE deployments (repo_id String, org_id String, deployment_id String, status Nullable(String), environment Nullable(String), deployed_at Nullable(DateTime64(6, 'UTC')), started_at Nullable(DateTime64(6, 'UTC')), last_synced DateTime64(6, 'UTC'), finished_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY deployment_id`,
+		`CREATE TABLE operational_incidents (id String, org_id String, service_id String, title Nullable(String), normalized_status Nullable(String), raw_status Nullable(String), normalized_severity Nullable(String), raw_severity Nullable(String), started_at Nullable(DateTime64(6, 'UTC')), source_event_at Nullable(DateTime64(6, 'UTC')), observed_at DateTime64(6, 'UTC'), is_deleted UInt8, resolved_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, deleted_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY id`,
 		`CREATE TABLE operational_service_repository_mappings (org_id String, service_id String, repo_id String, is_active UInt8) ENGINE = ReplacingMergeTree ORDER BY (org_id, service_id, repo_id)`,
 		`CREATE TABLE work_item_dependencies (source_work_item_id String, target_work_item_id String, relationship_type Nullable(String), org_id String, last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (source_work_item_id, target_work_item_id)`,
 		`CREATE TABLE work_graph_deployment_incident_edges (edge_id String, deployment_id String, incident_id String, repo_id String, org_id UUID, observed_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY edge_id`,
@@ -477,19 +477,19 @@ func TestClickHouseProjectionSourceFiltersSelfReferentialParentID(t *testing.T) 
 		}
 	}
 	repoID := "22222222-2222-2222-2222-222222222222"
-	if err := direct.Exec(ctx, `INSERT INTO repos VALUES (?, ?, ?, ?, ?)`, repoID, "org-m3", "org-m3/service", "github", at); err != nil {
+	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repoID, "org-m3", "org-m3/service", "github", at); err != nil {
 		t.Fatalf("seed repo: %v", err)
 	}
 	// PARENT-1: no parent (root). CHILD-1: legitimately parented by
 	// PARENT-1. POISON-1: parent_id equals its own work_item_id -- the
 	// self-reference this test exists to prove gets filtered.
-	if err := direct.Exec(ctx, `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "PARENT-1", repoID, "org-m3", "Parent", "open", "", at, ""); err != nil {
+	if err := direct.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "PARENT-1", repoID, "org-m3", "Parent", "open", "", at, ""); err != nil {
 		t.Fatalf("seed parent work item: %v", err)
 	}
-	if err := direct.Exec(ctx, `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "CHILD-1", repoID, "org-m3", "Child", "open", "", at, "PARENT-1"); err != nil {
+	if err := direct.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "CHILD-1", repoID, "org-m3", "Child", "open", "", at, "PARENT-1"); err != nil {
 		t.Fatalf("seed legitimately-parented work item: %v", err)
 	}
-	if err := direct.Exec(ctx, `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "POISON-1", repoID, "org-m3", "Poison", "open", "", at, "POISON-1"); err != nil {
+	if err := direct.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "POISON-1", repoID, "org-m3", "Poison", "open", "", at, "POISON-1"); err != nil {
 		t.Fatalf("seed self-referencing work item: %v", err)
 	}
 

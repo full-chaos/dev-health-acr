@@ -175,18 +175,25 @@ func (s *fakeScanner) Close() error { return nil }
 // last_synced, column 0 is id.
 func repoCursorOf(row []any) (time.Time, string) { return row[3].(time.Time), row[0].(string) }
 
+// zeroTime is what nullableTimestamp's ifNull fallback selects when the
+// underlying column is NULL (validity.go). Every fake row pairing it with
+// a uint8(0) presence flag models an OPEN interval -- an unfinished CI
+// run, an unmerged pull request, an unresolved incident -- which
+// optionalTime turns back into a nil bound, never a 1970 timestamp.
+var zeroTime = time.Unix(0, 0).UTC()
+
 func repoRow(id, slug, provider string, at time.Time) fakeTable {
-	return fakeTable{match: "FROM repos", rows: [][]any{{id, slug, provider, at}}, cursorOf: repoCursorOf}
+	return fakeTable{match: "FROM repos", rows: [][]any{{id, slug, provider, at, at}}, cursorOf: repoCursorOf}
 }
 
 func baseTables(at time.Time) []fakeTable {
 	return []fakeTable{
 		repoRow("repo-1", "example-org/widget-service", "synthetic", at),
-		{match: "FROM work_items AS w", rows: [][]any{{"WIDGET-101", "repo-1", "example-org/widget-service", "Investigate checkout flake", "in_progress", "", at}}},
-		{match: "FROM git_pull_requests AS p", rows: [][]any{{"repo-1", "example-org/widget-service", uint32(1042), "Typed session tokens", "open", at}}},
-		{match: "FROM deployments AS d", rows: [][]any{{"repo-1", "example-org/widget-service", "deploy-1", "success", "production", at}}},
-		{match: "FROM operational_incidents AS i", rows: [][]any{{"incident-1", "repo-1", "example-org/widget-service", "Widget incident", "open", "low", at, uint8(0)}}},
-		{match: "FROM work_item_dependencies AS d", rows: [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at}}},
+		{match: "FROM work_items AS w", rows: [][]any{{"WIDGET-101", "repo-1", "example-org/widget-service", "Investigate checkout flake", "in_progress", "", at, at, uint8(0), zeroTime}}},
+		{match: "FROM git_pull_requests AS p", rows: [][]any{{"repo-1", "example-org/widget-service", uint32(1042), "Typed session tokens", "open", at, at, uint8(0), zeroTime}}},
+		{match: "FROM deployments AS d", rows: [][]any{{"repo-1", "example-org/widget-service", "deploy-1", "success", "production", at, uint8(1), at, uint8(0), zeroTime}}},
+		{match: "FROM operational_incidents AS i", rows: [][]any{{"incident-1", "repo-1", "example-org/widget-service", "Widget incident", "open", "low", at, uint8(0), uint8(1), at, uint8(0), zeroTime}}},
+		{match: "FROM work_item_dependencies AS d", rows: [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime}}},
 		{match: "FROM work_graph_deployment_incident_edges AS e", rows: [][]any{{"edge-1", "deploy-1", "incident-1", "example-org/widget-service", at}}},
 	}
 }
@@ -208,9 +215,9 @@ func TestQueryWorkItemsDistinguishesRepolessFromOrphanedAuthorization(t *testing
 	for i, table := range tables {
 		if table.match == "FROM work_items AS w" {
 			tables[i] = fakeTable{match: table.match, rows: [][]any{
-				{"WIDGET-101", "repo-1", "example-org/widget-service", "Investigate checkout flake", "in_progress", "", at},
-				{"WIDGET-LINEAR", "00000000-0000-0000-0000-000000000000", "", "Linear-sourced item", "open", "", at},
-				{"WIDGET-ORPHAN", "99999999-9999-9999-9999-999999999999", "", "Orphaned repo_id", "open", "", at},
+				{"WIDGET-101", "repo-1", "example-org/widget-service", "Investigate checkout flake", "in_progress", "", at, at, uint8(0), zeroTime},
+				{"WIDGET-LINEAR", "00000000-0000-0000-0000-000000000000", "", "Linear-sourced item", "open", "", at, at, uint8(0), zeroTime},
+				{"WIDGET-ORPHAN", "99999999-9999-9999-9999-999999999999", "", "Orphaned repo_id", "open", "", at, at, uint8(0), zeroTime},
 			}}
 		}
 	}
@@ -279,8 +286,8 @@ func TestNextProjectionBatchLogsOrphanedWorkItemCount(t *testing.T) {
 		switch table.match {
 		case "FROM work_items AS w":
 			orphanTables[i] = fakeTable{match: table.match, rows: [][]any{
-				{"WIDGET-101", "repo-1", "example-org/widget-service", "Investigate checkout flake", "in_progress", "", at},
-				{"WIDGET-ORPHAN", orphanRepoID, "", "Orphaned repo_id", "open", "", at},
+				{"WIDGET-101", "repo-1", "example-org/widget-service", "Investigate checkout flake", "in_progress", "", at, at, uint8(0), zeroTime},
+				{"WIDGET-ORPHAN", orphanRepoID, "", "Orphaned repo_id", "open", "", at, at, uint8(0), zeroTime},
 			}}
 		case "FROM work_item_dependencies AS d":
 			// WIDGET-ORPHAN carries TWO orphan-scoped candidates (its own
@@ -289,8 +296,8 @@ func TestNextProjectionBatchLogsOrphanedWorkItemCount(t *testing.T) {
 			// orphaned work item, not two, proving the count is over
 			// DISTINCT work-item IDs, not raw candidates.
 			orphanTables[i] = fakeTable{match: table.match, rows: [][]any{
-				{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at},
-				{"WIDGET-ORPHAN", "WIDGET-101", "blocks", orphanRepoID, "", at},
+				{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime},
+				{"WIDGET-ORPHAN", "WIDGET-101", "blocks", orphanRepoID, "", at, at, uint8(0), zeroTime},
 			}}
 		}
 	}
@@ -353,8 +360,8 @@ func TestClickHouseProjectionSourceProjectsPullRequestReviewsAndCIRuns(t *testin
 	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
 	tables := baseTables(at)
 	tables = append(tables,
-		fakeTable{match: "FROM git_pull_request_reviews AS r", rows: [][]any{{"review-1", "repo-1", uint32(1042), "approved", at, "example-org/widget-service"}}},
-		fakeTable{match: "FROM ci_pipeline_runs AS c", rows: [][]any{{"run-1", "repo-1", "main", "success", "example-org/widget-service", at}}},
+		fakeTable{match: "FROM git_pull_request_reviews AS r", rows: [][]any{{"review-1", "repo-1", uint32(1042), "approved", at, "example-org/widget-service", at, uint8(0), zeroTime}}},
+		fakeTable{match: "FROM ci_pipeline_runs AS c", rows: [][]any{{"run-1", "repo-1", "main", "success", "example-org/widget-service", at, at, uint8(1), at}}},
 	)
 	client := &fakeClient{tables: tables}
 	source, err := devhealthsource.NewClickHouseProjectionSource(client)
@@ -453,20 +460,20 @@ func everyRelationshipTypeFixtureTables(at time.Time) []fakeTable {
 			// NULL relationship_type -- already collapsed to a non-null
 			// string by the real SQL's ifNull before Go ever scans it.
 			tables[i] = fakeTable{match: table.match, rows: [][]any{
-				{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at},
-				{"WIDGET-101", "WIDGET-098", "relates_to", "repo-1", "example-org/widget-service", at},
-				{"WIDGET-101", "WIDGET-097", "duplicates", "repo-1", "example-org/widget-service", at},
-				{"WIDGET-101", "WIDGET-096", "related_to", "repo-1", "example-org/widget-service", at},
+				{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime},
+				{"WIDGET-101", "WIDGET-098", "relates_to", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime},
+				{"WIDGET-101", "WIDGET-097", "duplicates", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime},
+				{"WIDGET-101", "WIDGET-096", "related_to", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime},
 			}}
 		}
 	}
 	return append(tables,
-		fakeTable{match: "FROM git_pull_request_reviews AS r", rows: [][]any{{"review-1", "repo-1", uint32(1042), "approved", at, "example-org/widget-service"}}},
+		fakeTable{match: "FROM git_pull_request_reviews AS r", rows: [][]any{{"review-1", "repo-1", uint32(1042), "approved", at, "example-org/widget-service", at, uint8(0), zeroTime}}},
 		// FROM work_items AS c is queryWorkItemHierarchy's child-side
 		// alias -- distinct from baseTables' "FROM work_items AS w"
 		// (queryWorkItems' entity query), so this does not collide with
 		// it in fakeClient's substring match.
-		fakeTable{match: "FROM work_items AS c", rows: [][]any{{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at}}},
+		fakeTable{match: "FROM work_items AS c", rows: [][]any{{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, at, uint8(0), zeroTime}}},
 	)
 }
 
@@ -643,8 +650,8 @@ func TestClickHouseProjectionSourceKeepsBothEdgesForASourceTargetPairWithTwoRela
 	for i, table := range tables {
 		if table.match == "FROM work_item_dependencies AS d" {
 			tables[i] = fakeTable{match: table.match, rows: [][]any{
-				{"WIDGET-101", "WIDGET-050", "blocks", "repo-1", "example-org/widget-service", at},
-				{"WIDGET-101", "WIDGET-050", "relates_to", "repo-1", "example-org/widget-service", at},
+				{"WIDGET-101", "WIDGET-050", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime},
+				{"WIDGET-101", "WIDGET-050", "relates_to", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime},
 			}}
 		}
 	}
@@ -731,7 +738,7 @@ func TestClickHouseProjectionSourceIncidentTombstoneOnSoftDelete(t *testing.T) {
 	tables := baseTables(at)
 	for index, table := range tables {
 		if table.match == "FROM operational_incidents AS i" {
-			tables[index].rows = [][]any{{"incident-1", "repo-1", "example-org/widget-service", "Widget incident", "open", "low", at, uint8(1)}}
+			tables[index].rows = [][]any{{"incident-1", "repo-1", "example-org/widget-service", "Widget incident", "open", "low", at, uint8(1), uint8(1), at, uint8(0), zeroTime}}
 		}
 	}
 	client := &fakeClient{tables: tables}
@@ -782,13 +789,13 @@ func TestClickHouseProjectionSourceFullSnapshotPagesWhenAggregateEntitiesExceedT
 		make([][]any, 0, perTable), make([][]any, 0, perTable), make([][]any, 0, perTable), make([][]any, 0, perTable), make([][]any, 0, perTable), make([][]any, 0, perTable), make([][]any, 0, perTable)
 	for i := 0; i < perTable; i++ {
 		id := fmt.Sprintf("%03d", i)
-		repoRows = append(repoRows, []any{"repo-" + id, "example-org/repo-" + id, "synthetic", at})
-		workItemRows = append(workItemRows, []any{"WIDGET-" + id, "repo-1", "example-org/widget-service", "task " + id, "in_progress", "", at})
-		pullRequestRows = append(pullRequestRows, []any{"repo-1", "example-org/widget-service", uint32(i), "PR " + id, "open", at})
-		deploymentRows = append(deploymentRows, []any{"repo-1", "example-org/widget-service", "deploy-" + id, "success", "production", at})
-		incidentRows = append(incidentRows, []any{"incident-" + id, "repo-1", "example-org/widget-service", "incident " + id, "open", "low", at, uint8(0)})
-		reviewRows = append(reviewRows, []any{"review-" + id, "repo-1", uint32(i), "approved", at, "example-org/widget-service"})
-		ciRunRows = append(ciRunRows, []any{"run-" + id, "repo-1", "main", "success", "example-org/widget-service", at})
+		repoRows = append(repoRows, []any{"repo-" + id, "example-org/repo-" + id, "synthetic", at, at})
+		workItemRows = append(workItemRows, []any{"WIDGET-" + id, "repo-1", "example-org/widget-service", "task " + id, "in_progress", "", at, at, uint8(0), zeroTime})
+		pullRequestRows = append(pullRequestRows, []any{"repo-1", "example-org/widget-service", uint32(i), "PR " + id, "open", at, at, uint8(0), zeroTime})
+		deploymentRows = append(deploymentRows, []any{"repo-1", "example-org/widget-service", "deploy-" + id, "success", "production", at, uint8(1), at, uint8(0), zeroTime})
+		incidentRows = append(incidentRows, []any{"incident-" + id, "repo-1", "example-org/widget-service", "incident " + id, "open", "low", at, uint8(0), uint8(1), at, uint8(0), zeroTime})
+		reviewRows = append(reviewRows, []any{"review-" + id, "repo-1", uint32(i), "approved", at, "example-org/widget-service", at, uint8(0), zeroTime})
+		ciRunRows = append(ciRunRows, []any{"run-" + id, "repo-1", "main", "success", "example-org/widget-service", at, at, uint8(1), at})
 	}
 	tables := baseTables(at)
 	for index, table := range tables {
@@ -865,7 +872,7 @@ func TestClickHouseProjectionSourcePagedBatchNeverSplitsARowsCandidatesAcrossAPa
 
 	repoRows := make([][]any, 0, incrementalBatchCap-1)
 	for i := 0; i < incrementalBatchCap-1; i++ {
-		repoRows = append(repoRows, []any{fmt.Sprintf("repo-%03d", i), fmt.Sprintf("example-org/repo-%03d", i), "synthetic", at.Add(time.Duration(i) * time.Second)})
+		repoRows = append(repoRows, []any{fmt.Sprintf("repo-%03d", i), fmt.Sprintf("example-org/repo-%03d", i), "synthetic", at.Add(time.Duration(i) * time.Second), at})
 	}
 	workItemAt := at.Add(incrementalBatchCap * time.Second) // strictly after every repos row
 	tables := baseTables(at)
@@ -874,7 +881,7 @@ func TestClickHouseProjectionSourcePagedBatchNeverSplitsARowsCandidatesAcrossAPa
 		case "FROM repos":
 			tables[index].rows = repoRows
 		case "FROM work_items AS w":
-			tables[index].rows = [][]any{{"WIDGET-1", "repo-000", "example-org/repo-000", "Investigate checkout flake", "in_progress", "", workItemAt}}
+			tables[index].rows = [][]any{{"WIDGET-1", "repo-000", "example-org/repo-000", "Investigate checkout flake", "in_progress", "", workItemAt, workItemAt, uint8(0), zeroTime}}
 			tables[index].cursorOf = workItemCursorOf
 		default:
 			tables[index].rows = nil
@@ -934,7 +941,7 @@ func TestClickHouseProjectionSourceFullSnapshotPagesToCompletionWhenOversized(t 
 	const workItemCount = 200
 	repoRows := make([][]any, 0, repoCount)
 	for i := 0; i < repoCount; i++ {
-		repoRows = append(repoRows, []any{fmt.Sprintf("repo-%03d", i), fmt.Sprintf("example-org/repo-%03d", i), "synthetic", at.Add(time.Duration(i) * time.Second)})
+		repoRows = append(repoRows, []any{fmt.Sprintf("repo-%03d", i), fmt.Sprintf("example-org/repo-%03d", i), "synthetic", at.Add(time.Duration(i) * time.Second), at})
 	}
 	// Interleaved with the single-candidate repos rows above (same
 	// timestamp range) rather than segregated into their own time window:
@@ -949,7 +956,7 @@ func TestClickHouseProjectionSourceFullSnapshotPagesToCompletionWhenOversized(t 
 	workItemRows := make([][]any, 0, workItemCount)
 	for i := 0; i < workItemCount; i++ {
 		id := fmt.Sprintf("WIDGET-%03d", i)
-		workItemRows = append(workItemRows, []any{id, "repo-000", "example-org/repo-000", "task " + id, "in_progress", "", at.Add(time.Duration(i)*time.Second + 500*time.Millisecond)})
+		workItemRows = append(workItemRows, []any{id, "repo-000", "example-org/repo-000", "task " + id, "in_progress", "", at.Add(time.Duration(i)*time.Second + 500*time.Millisecond), at, uint8(0), zeroTime})
 	}
 	tables := baseTables(at)
 	for index, table := range tables {
@@ -1067,7 +1074,7 @@ func TestClickHouseProjectionSourceKeysetPaginationSurvivesTiedTimestamps(t *tes
 	rows := make([][]any, 0, workItemCount)
 	for i := 0; i < workItemCount; i++ {
 		id := fmt.Sprintf("WIDGET-%03d", i)
-		rows = append(rows, []any{id, "repo-1", "example-org/widget-service", "task " + id, "in_progress", "", at})
+		rows = append(rows, []any{id, "repo-1", "example-org/widget-service", "task " + id, "in_progress", "", at, at, uint8(0), zeroTime})
 	}
 	tables := baseTables(at)
 	for index, table := range tables {
