@@ -44,8 +44,9 @@ func (p *OperationalDeficienciesProvider) Capability() contextfabric.FactCapabil
 }
 
 func (p *OperationalDeficienciesProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
-		return result, nil
+	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
+	if unsupported {
+		return unsupportedResult, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
@@ -75,7 +76,7 @@ FROM (
 	SELECT team_id, rule_id, rule_version, severity, title, rationale, success_criterion, window_start, window_end, fired,
 		row_number() OVER (PARTITION BY team_id, rule_id ORDER BY window_end DESC, computed_at DESC, cityHash64(tuple(fired, severity, title, rationale, success_criterion, rule_version, window_start)) DESC) AS rn
 	FROM recommendations_daily FINAL
-	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}
+	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}` + timeBound.timestampPredicate("window_end") + `
 )
 WHERE rn = 1 AND fired = 1`)
 	rowCount := 0
@@ -104,7 +105,7 @@ WHERE rn = 1 AND fired = 1`)
 			EvidenceRefIDs: []string{evidenceRefID("team", teamID)},
 		})
 		return nil
-	})
+	}, timeBound.bindings()...)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query team operational deficiencies", scanErr)
 	}

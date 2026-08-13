@@ -49,8 +49,9 @@ func (p *MetricsProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
-		return result, nil
+	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
+	if unsupported {
+		return unsupportedResult, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
@@ -69,7 +70,7 @@ FROM (
 	SELECT repo_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini,
 		row_number() OVER (PARTITION BY repo_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, ifNull(mttr_hours, -1), bus_factor, code_ownership_gini)) DESC) AS rn
 	FROM repo_metrics_daily
-	WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}
+	WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )
 WHERE rn = 1`)
 	rowCount := 0
@@ -103,7 +104,7 @@ WHERE rn = 1`)
 			EvidenceRefIDs: []string{evidenceRefID("repository", repoID)},
 		})
 		return nil
-	})
+	}, timeBound.bindings()...)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query repository metrics", scanErr)
 	}

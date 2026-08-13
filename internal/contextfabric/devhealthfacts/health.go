@@ -48,8 +48,9 @@ func (p *HealthProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
-		return result, nil
+	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
+	if unsupported {
+		return unsupportedResult, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
@@ -60,7 +61,7 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 
 	repoIDs, repoBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), repositoryPrefix)
 	if len(repoIDs) > 0 {
-		rowCount, scanErr := p.readScope(ctx, orgID, "repo", repoIDs, repoBySubject, "repository", &facts)
+		rowCount, scanErr := p.readScope(ctx, orgID, "repo", repoIDs, repoBySubject, "repository", &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query repository health", scanErr)
 		}
@@ -69,7 +70,7 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 
 	teamIDs, teamBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectTeam), teamPrefix)
 	if len(teamIDs) > 0 {
-		rowCount, scanErr := p.readScope(ctx, orgID, "team", teamIDs, teamBySubject, "team", &facts)
+		rowCount, scanErr := p.readScope(ctx, orgID, "team", teamIDs, teamBySubject, "team", &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team health", scanErr)
 		}
@@ -84,7 +85,7 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 // an internal Go string literal (never caller-supplied), so it is safe to
 // inline into the statement the same way withRowLimit's maxFactRowsPerQuery
 // is.
-func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids []string, bySubject map[string]contextfabric.SubjectRef, evidenceEntityType string, facts *[]contextfabric.CanonicalFact) (int, error) {
+func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids []string, bySubject map[string]contextfabric.SubjectRef, evidenceEntityType string, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
 	// The hash tiebreak's ifNull(compounding_risk, -1) sentinel is only
 	// unambiguous while -1 is outside compounding_risk's real domain.
 	// compounding_risk is a normalized risk SCORE; live data ranges
@@ -96,7 +97,7 @@ FROM (
 	SELECT scope_id, severity, compounding_risk, computed_at,
 		row_number() OVER (PARTITION BY scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
 	FROM compounding_risk_daily
-	WHERE org_id = {org_id:String} AND scope = '` + scope + `' AND scope_id IN {ids:Array(String)}
+	WHERE org_id = {org_id:String} AND scope = '` + scope + `' AND scope_id IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )
 WHERE rn = 1`)
 	rowCount := 0
@@ -124,6 +125,6 @@ WHERE rn = 1`)
 			EvidenceRefIDs: []string{evidenceRefID(evidenceEntityType, scopeID)},
 		})
 		return nil
-	})
+	}, timeBound.bindings()...)
 	return rowCount, scanErr
 }

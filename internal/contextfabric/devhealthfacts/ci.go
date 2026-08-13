@@ -23,8 +23,9 @@ func (p *ContinuousIntegrationProvider) Capability() contextfabric.FactCapabilit
 }
 
 func (p *ContinuousIntegrationProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
-		return result, nil
+	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
+	if unsupported {
+		return unsupportedResult, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
@@ -32,9 +33,19 @@ func (p *ContinuousIntegrationProvider) ReadFacts(ctx context.Context, principal
 	}
 	ids, bySubject := subjectIndex(query.Subjects, "ci_pipeline_run:")
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	statement := withRowLimit(`SELECT c.run_id, ifNull(c.status, '')
+	// CHAOS-3781 Tier B: a run's FINAL status only becomes true when the
+	// run finishes. Reporting it for an instant while the run was still
+	// executing would report an outcome that had not happened yet, so a
+	// run unfinished at the requested time reports 'running' instead.
+	// A run that had not started is excluded outright (AC-3781-3).
+	statusExpression := "ifNull(c.status, '')"
+	if timeBound.active {
+		statusExpression = "if(c.finished_at IS NOT NULL AND c.finished_at <= " + timeBound.asOfExpression() +
+			", ifNull(c.status, ''), 'running')"
+	}
+	statement := withRowLimit(`SELECT c.run_id, ` + statusExpression + `
 FROM ci_pipeline_runs AS c FINAL
-WHERE c.org_id = {org_id:String} AND c.run_id IN {ids:Array(String)}`)
+WHERE c.org_id = {org_id:String} AND c.run_id IN {ids:Array(String)}` + timeBound.existencePredicate("c.started_at"))
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
@@ -52,7 +63,7 @@ WHERE c.org_id = {org_id:String} AND c.run_id IN {ids:Array(String)}`)
 			EvidenceRefIDs: []string{evidenceRefID("ci", runID)},
 		})
 		return nil
-	})
+	}, timeBound.bindings()...)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query ci pipeline runs", scanErr)
 	}

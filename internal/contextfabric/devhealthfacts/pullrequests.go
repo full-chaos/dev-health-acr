@@ -36,8 +36,9 @@ func (p *PullRequestsProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
-		return result, nil
+	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
+	if unsupported {
+		return unsupportedResult, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
@@ -45,9 +46,26 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 	}
 	ids, bySubject := pullRequestSubjectIndex(query.Subjects)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	statement := withRowLimit(`SELECT toString(p.repo_id), p.number, ifNull(p.state, '')
+	// CHAOS-3781 Tier B: a pull request's state at a past instant is a
+	// pure function of the immutable event timestamps the row already
+	// carries, so this is a reconstruction of a RECORDED fact, not of an
+	// unrecorded one (§19.8.3). Order matters -- merged wins over closed,
+	// because a merged pull request is also closed.
+	//
+	// The existence guard is the outer WHERE: a pull request created
+	// after the requested time is not returned at all, so the subject
+	// reports no fact rather than a current-state one (AC-3781-3).
+	stateExpression := "ifNull(p.state, '')"
+	if timeBound.active {
+		asOf := timeBound.asOfExpression()
+		stateExpression = "multiIf(" +
+			"p.merged_at IS NOT NULL AND p.merged_at <= " + asOf + ", 'merged', " +
+			"p.closed_at IS NOT NULL AND p.closed_at <= " + asOf + ", 'closed', " +
+			"'open')"
+	}
+	statement := withRowLimit(`SELECT toString(p.repo_id), p.number, ` + stateExpression + `
 FROM git_pull_requests AS p FINAL
-WHERE p.org_id = {org_id:String} AND concat(toString(p.repo_id), ':', toString(p.number)) IN {ids:Array(String)}`)
+WHERE p.org_id = {org_id:String} AND concat(toString(p.repo_id), ':', toString(p.number)) IN {ids:Array(String)}` + timeBound.existencePredicate("p.created_at"))
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
@@ -68,7 +86,7 @@ WHERE p.org_id = {org_id:String} AND concat(toString(p.repo_id), ':', toString(p
 			EvidenceRefIDs: []string{evidenceRefID("pull-request", repoID+":"+strconv.FormatInt(number, 10))},
 		})
 		return nil
-	})
+	}, timeBound.bindings()...)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query pull requests", scanErr)
 	}
@@ -89,8 +107,9 @@ func (p *ReviewsProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *ReviewsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
-		return result, nil
+	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
+	if unsupported {
+		return unsupportedResult, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
@@ -98,9 +117,12 @@ func (p *ReviewsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	}
 	ids, bySubject := subjectIndex(query.Subjects, "pull_request_review:")
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
+	// CHAOS-3781 Tier B: a review is an immutable point event -- its state
+	// is decided when it is submitted and is never revised -- so the only
+	// temporal question is whether it had been submitted yet.
 	statement := withRowLimit(`SELECT r.review_id, ifNull(r.state, '')
 FROM git_pull_request_reviews AS r FINAL
-WHERE r.org_id = {org_id:String} AND r.review_id IN {ids:Array(String)}`)
+WHERE r.org_id = {org_id:String} AND r.review_id IN {ids:Array(String)}` + timeBound.existencePredicate("r.submitted_at"))
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
@@ -118,7 +140,7 @@ WHERE r.org_id = {org_id:String} AND r.review_id IN {ids:Array(String)}`)
 			EvidenceRefIDs: []string{evidenceRefID("review", reviewID)},
 		})
 		return nil
-	})
+	}, timeBound.bindings()...)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query pull request reviews", scanErr)
 	}

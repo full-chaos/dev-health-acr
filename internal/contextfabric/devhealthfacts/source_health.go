@@ -34,8 +34,9 @@ func (p *SourceHealthProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
-		return result, nil
+	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
+	if unsupported {
+		return unsupportedResult, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
@@ -72,7 +73,7 @@ FROM (
 	SELECT provider, status, items_synced, duration_ms, error_message, created_at,
 		row_number() OVER (PARTITION BY provider ORDER BY created_at DESC, job_id DESC, chunk_index DESC) AS rn
 	FROM backfill_log
-	WHERE org_id = {org_id:String}
+	WHERE org_id = {org_id:String}` + timeBound.timestampPredicate("created_at") + `
 )
 WHERE rn = 1`)
 	rowCount := 0
@@ -98,7 +99,7 @@ WHERE rn = 1`)
 			EvidenceRefIDs: []string{evidenceRefID("organization", orgID)},
 		})
 		return nil
-	})
+	}, timeBound.bindings()...)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query source health", scanErr)
 	}

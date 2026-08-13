@@ -22,8 +22,9 @@ func (p *DeploymentsProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
-		return result, nil
+	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
+	if unsupported {
+		return unsupportedResult, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
@@ -31,9 +32,17 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 	}
 	ids, bySubject := subjectIndex(query.Subjects, "deployment:")
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	statement := withRowLimit(`SELECT d.deployment_id, ifNull(d.status, ''), ifNull(d.environment, '')
+	// CHAOS-3781 Tier B: same shape as a CI run -- a deployment's final
+	// status is only true once it finished. environment is an immutable
+	// attribute of the deployment, so it needs no temporal treatment.
+	statusExpression := "ifNull(d.status, '')"
+	if timeBound.active {
+		statusExpression = "if(d.finished_at IS NOT NULL AND d.finished_at <= " + timeBound.asOfExpression() +
+			", ifNull(d.status, ''), 'in_progress')"
+	}
+	statement := withRowLimit(`SELECT d.deployment_id, ` + statusExpression + `, ifNull(d.environment, '')
 FROM deployments AS d FINAL
-WHERE d.org_id = {org_id:String} AND d.deployment_id IN {ids:Array(String)}`)
+WHERE d.org_id = {org_id:String} AND d.deployment_id IN {ids:Array(String)}` + timeBound.existencePredicate("coalesce(d.started_at, d.deployed_at)"))
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
@@ -54,7 +63,7 @@ WHERE d.org_id = {org_id:String} AND d.deployment_id IN {ids:Array(String)}`)
 			EvidenceRefIDs: []string{evidenceRefID("deployment", deploymentID)},
 		})
 		return nil
-	})
+	}, timeBound.bindings()...)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query deployments", scanErr)
 	}

@@ -37,8 +37,9 @@ func (p *InvestmentProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
-		return result, nil
+	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
+	if unsupported {
+		return unsupportedResult, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
@@ -61,7 +62,7 @@ FROM (
 	SELECT team_id, investment_area, project_stream, day, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours,
 		row_number() OVER (PARTITION BY team_id, investment_area, project_stream ORDER BY day DESC, computed_at DESC, cityHash64(tuple(delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours)) DESC) AS rn
 	FROM investment_metrics_daily
-	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}
+	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )
 WHERE rn = 1`)
 	rowCount := 0
@@ -94,7 +95,7 @@ WHERE rn = 1`)
 			EvidenceRefIDs: []string{evidenceRefID("team", teamID)},
 		})
 		return nil
-	})
+	}, timeBound.bindings()...)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query team investment", scanErr)
 	}
