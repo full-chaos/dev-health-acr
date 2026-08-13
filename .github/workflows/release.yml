@@ -248,7 +248,15 @@ jobs:
             --version "$VERSION" \
             --commit "$COMMIT" \
             --date "$DATE"
-          cp .tmp/container-reports/*.spdx.json container-release/
+          # CHAOS-3772 F1: stage Trivy provenance (resolved DB digest, its
+          # metadata, and the four per-image scan reports) alongside the
+          # SBOMs, not only the SBOMs -- otherwise a release cannot prove
+          # which trivy-db snapshot actually scanned it.
+          cp .tmp/container-reports/*.spdx.json \
+            .tmp/container-reports/*-trivy.json \
+            .tmp/container-reports/trivy-db-metadata.json \
+            .tmp/container-reports/trivy-db-snapshot.txt \
+            container-release/
           (
             cd container-release
             find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort \

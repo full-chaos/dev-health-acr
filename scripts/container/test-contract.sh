@@ -263,13 +263,22 @@ fi
 # vulnerability DB carries no committed digest anywhere in source -- it is
 # always resolved fresh from the mirror tag at scan time, so wall-clock
 # passage against an unmoving pin can never turn this gate red again.
+# The positive/negative pin checks below are regex-anchored, not
+# whole-file greps: a whole-file grep is satisfied by a decorative comment
+# even if the live assignment is unpinned or a digest sneaks back in under
+# a different tag+digest shape. Both patterns are exercised against
+# synthetic evasion fixtures further down, so the checks' own logic is
+# tested, not just today's scan.sh content (CHAOS-3772 F3).
 scan_script="${repo_root}/scripts/container/scan.sh"
-grep -q 'aquasec/trivy:0.69.3@sha256:' "$scan_script" || {
-  printf 'scan.sh must pin the Trivy scanner image by digest\n' >&2
+trivy_scanner_pin_pattern="^trivy_image='aquasec/trivy:[^'\"]+@sha256:[0-9a-f]{64}'"
+trivy_db_static_pin_pattern='trivy-db[^@]*@sha256:[0-9a-f]{64}|sha256:[0-9a-f]{64}[^@]*trivy-db'
+
+grep -Eq "$trivy_scanner_pin_pattern" "$scan_script" || {
+  printf 'scan.sh trivy_image assignment must be pinned by digest, not merely documented in a comment\n' >&2
   exit 1
 }
-if grep -Eq 'aquasecurity/trivy-db@sha256:[0-9a-f]{64}' "$scan_script"; then
-  printf 'scan.sh must not commit a static trivy-db digest -- it must resolve one at scan time (CHAOS-3772)\n' >&2
+if grep -Eiq "$trivy_db_static_pin_pattern" "$scan_script"; then
+  printf 'scan.sh must not commit a static trivy-db digest in any tag+digest or digest+tag form -- it must resolve one at scan time (CHAOS-3772)\n' >&2
   exit 1
 fi
 grep -q "trivy_db_mirror='ghcr.io/aquasecurity/trivy-db:2'" "$scan_script" || {
@@ -293,8 +302,79 @@ grep -qF 'source "${repo_root}/scripts/container/lib/trivy-db-freshness.sh"' "$s
   printf 'scan.sh must use the shared, unit-tested freshness check\n' >&2
   exit 1
 }
+grep -qF 'source "${repo_root}/scripts/container/lib/trivy-report-classify.sh"' "$scan_script" || {
+  printf 'scan.sh must use the shared, unit-tested report classifier\n' >&2
+  exit 1
+}
 require scripts/container/lib/trivy-db-freshness.sh
 require scripts/container/test-trivy-db-freshness.sh
+require scripts/container/lib/trivy-report-classify.sh
+require scripts/container/test-trivy-report-classify.sh
+
+# CHAOS-3772 F3: prove the two pin-check patterns above actually catch the
+# evasions they were tightened for, against synthetic fixtures -- not just
+# today's compliant scan.sh.
+pin_fixture="$(mktemp -d)"
+
+tag_and_digest_evasion="${pin_fixture}/tag-and-digest.sh"
+printf 'trivy_db_ref="ghcr.io/aquasecurity/trivy-db:2@sha256:%s"\n' \
+  "$(printf '0%.0s' $(seq 1 64))" >"$tag_and_digest_evasion"
+grep -Eiq "$trivy_db_static_pin_pattern" "$tag_and_digest_evasion" || {
+  printf 'trivy-db pin regex failed to catch a tag+digest evasion (CHAOS-3772 F3)\n' >&2
+  exit 1
+}
+
+comment_only_evasion="${pin_fixture}/comment-only.sh"
+{
+  printf '# pinned scanner: aquasec/trivy:0.69.3@sha256:%s\n' \
+    "$(printf 'a%.0s' $(seq 1 64))"
+  printf "trivy_image='aquasec/trivy:latest'\n"
+} >"$comment_only_evasion"
+if grep -Eq "$trivy_scanner_pin_pattern" "$comment_only_evasion"; then
+  printf 'trivy scanner pin regex was satisfied by a comment instead of the live assignment (CHAOS-3772 F3)\n' >&2
+  exit 1
+fi
+rm -rf "$pin_fixture"
+
+# CHAOS-3772 F1: a release must be able to prove which trivy-db snapshot
+# and which per-image scan results it shipped with, not only its SBOMs.
+release_workflow="${repo_root}/.github/workflows/release.yml"
+for staged_artifact in '*.spdx.json' '*-trivy.json' 'trivy-db-metadata.json' 'trivy-db-snapshot.txt'; do
+  grep -qF "$staged_artifact" "$release_workflow" || {
+    printf 'release.yml must stage container-reports/%s alongside the SBOMs\n' "$staged_artifact" >&2
+    exit 1
+  }
+done
+
+# CHAOS-3772 F2: report_root must live outside work_root (which cleanup()
+# unconditionally rm -rf's on every exit), and the DB snapshot/metadata
+# must be recorded before the freshness gate can exit -- otherwise a
+# tripped stale-DB alarm ships no evidence of what was stale.
+if grep -qE '^report_root="\$\{work_root\}' "$scan_script"; then
+  printf 'report_root must not live inside work_root -- a failed run would delete its own evidence before upload (CHAOS-3772 F2)\n' >&2
+  exit 1
+fi
+record_line="$(grep -n 'cp "\$metadata" "\${report_root}/trivy-db-metadata.json"' "$scan_script" | cut -d: -f1)"
+judge_line="$(grep -n 'check_trivy_db_freshness "\$metadata"' "$scan_script" | cut -d: -f1)"
+test -n "$record_line" && test -n "$judge_line" || {
+  printf 'expected trivy-db provenance recording and freshness judgment lines were not found\n' >&2
+  exit 1
+}
+test "$record_line" -lt "$judge_line" || {
+  printf 'trivy-db provenance must be recorded before the freshness gate judges it, so a rejection ships its own evidence (CHAOS-3772 F2)\n' >&2
+  exit 1
+}
+attempt_path_line="$(grep -n '\.tmp/container-scan-attempt' "$ci_workflow" | tail -1 | cut -d: -f1)"
+[[ -n "$attempt_path_line" ]] || {
+  printf 'ci.yml must upload .tmp/container-scan-attempt*/, or a failed run never surfaces its own evidence (CHAOS-3772 F2)\n' >&2
+  exit 1
+}
+step_start_line="$(head -n "$attempt_path_line" "$ci_workflow" | grep -nE '^\s*- (uses|name):' | tail -1 | cut -d: -f1)"
+step_start_line="${step_start_line:-1}"
+sed -n "${step_start_line},${attempt_path_line}p" "$ci_workflow" | grep -q 'if: always()' || {
+  printf 'ci.yml must upload .tmp/container-scan-attempt*/ from an if: always() step, or it never surfaces on a failed run (CHAOS-3772 F2)\n' >&2
+  exit 1
+}
 grep -q 'anchore/syft:v1.46.0@sha256:' "$scan_script"
 grep -q 'container-scan.work.XXXXXX' "$scan_script"
 grep -qF "scanner_uid=\"\$(id -u)\"" "$scan_script" || {
@@ -327,6 +407,7 @@ if grep -q "rm -rf \"\$scan_root\" \"\$report_root\" \"\$trivy_cache\"" "$scan_s
 fi
 
 bash "${repo_root}/scripts/container/test-trivy-db-freshness.sh"
+bash "${repo_root}/scripts/container/test-trivy-report-classify.sh"
 
 # 18. The MCP runtime must contain Git but no shell at all; build-only shell
 # use is pruned before the final scratch target.

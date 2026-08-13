@@ -13,7 +13,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-# shellcheck source=scripts/container/lib/trivy-db-freshness.sh
+# shellcheck source=lib/trivy-db-freshness.sh
 source "${repo_root}/scripts/container/lib/trivy-db-freshness.sh"
 
 fixture="$(mktemp -d)"

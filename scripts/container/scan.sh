@@ -9,8 +9,10 @@ lock_timeout="${CONTAINER_PUBLISH_LOCK_TIMEOUT:-60}"
 work_root=""
 exact_archives=false
 
-# shellcheck source=scripts/container/lib/trivy-db-freshness.sh
+# shellcheck source=lib/trivy-db-freshness.sh
 source "${repo_root}/scripts/container/lib/trivy-db-freshness.sh"
+# shellcheck source=lib/trivy-report-classify.sh
+source "${repo_root}/scripts/container/lib/trivy-report-classify.sh"
 
 trivy_image='aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c'
 syft_image='anchore/syft:v1.46.0@sha256:473a60e3a58e29aca3aedb3e99e787bb4ef273917e44d10fcbea4330a07320bb'
@@ -39,8 +41,19 @@ scanner_gid="$(id -g)"
 mkdir -p "$tmp_root"
 work_root="$(mktemp -d "${tmp_root}/container-scan.work.XXXXXX")"
 scan_root="${work_root}/layouts"
-report_root="${work_root}/reports"
 trivy_cache="${work_root}/trivy-cache"
+# report_root deliberately lives OUTSIDE work_root, so cleanup()'s rm -rf on
+# any exit path never touches it: a run that fails before publication
+# (mirror unreachable, stale DB, real findings) still leaves whatever
+# reports it managed to write on disk for ci.yml's always() artifact
+# upload (CHAOS-3772 F2). Stale attempt directories from a previous failed
+# run are pruned here rather than accumulating forever on a long-lived
+# machine; a successful run's own directory is moved away by the
+# publication step below, so only failed attempts ever linger.
+report_root="$(mktemp -d "${tmp_root}/container-scan-attempt.XXXXXX")"
+for stale_attempt in "${tmp_root}"/container-scan-attempt.*; do
+  [[ -d "$stale_attempt" && "$stale_attempt" != "$report_root" ]] && rm -rf "$stale_attempt"
+done
 mkdir -p "$scan_root" "$report_root" "$trivy_cache"
 if [[ -n "$source_oci_root" ]]; then
   source_oci_root="$(cd "$source_oci_root" && pwd -P)"
@@ -152,11 +165,14 @@ docker run --rm --pull=never \
 metadata="${trivy_cache}/db/metadata.json"
 test -f "$metadata" || { printf 'trivy-db metadata was not downloaded\n' >&2; exit 1; }
 now="$(date -u +%s)"
-check_trivy_db_freshness "$metadata" "$max_db_age_hours" "$now" || exit 1
-cp "$metadata" "${report_root}/trivy-db-metadata.json"
 resolved_at="$(date -u -d "@${now}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$now" +%Y-%m-%dT%H:%M:%SZ)"
+# Record before judging (CHAOS-3772 F2): if the freshness check below
+# rejects this snapshot, the run still needs to show what it rejected. A
+# tripped alarm without its own evidence is unauditable.
+cp "$metadata" "${report_root}/trivy-db-metadata.json"
 printf 'mirror=%s\nresolved_at=%s\ndigest=%s\n' "$trivy_db_mirror" "$resolved_at" "$trivy_db_ref" \
   >"${report_root}/trivy-db-snapshot.txt"
+check_trivy_db_freshness "$metadata" "$max_db_age_hours" "$now" || exit 1
 
 failures=0
 for name in acr-api-amd64 acr-api-arm64 acr-mcp-amd64 acr-mcp-arm64; do
@@ -182,18 +198,15 @@ for name in acr-api-amd64 acr-api-arm64 acr-mcp-amd64 acr-mcp-arm64; do
     --output "/reports/${name}-trivy.json"; then
     # Lead the failure with exactly what changed, not a generic exit code,
     # so this can never be mistaken for an infra failure or the removed
-    # pin-expiry bug. A valid report with entries means real, newly
-    # surfaced HIGH/CRITICAL findings -- an unreadable report means the
-    # scanner itself failed to run.
-    if jq -e '.Results != null' "$trivy_report" >/dev/null 2>&1; then
+    # pin-expiry bug. trivy_scan_findings only succeeds for a report that
+    # is valid AND has at least one HIGH/CRITICAL entry (CHAOS-3772 F4): a
+    # syntactically valid but empty or sub-threshold report is an
+    # execution failure, not a finding, and must not be printed as one.
+    if scan_findings="$(trivy_scan_findings "$trivy_report")"; then
       printf 'HIGH/CRITICAL vulnerabilities in %s:\n' "$name" >&2
-      jq -r '
-        [.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH" or .Severity == "CRITICAL")] |
-        .[] |
-        "  \(.VulnerabilityID)\t\(.PkgName)\tinstalled=\(.InstalledVersion)\tfixed=\(.FixedVersion // "none")\tseverity=\(.Severity)"
-      ' "$trivy_report" >&2
+      printf '%s\n' "$scan_findings" | sed 's/^/  /' >&2
     else
-      printf 'trivy scan failed to execute for %s (no valid report produced) -- scanner/infra failure, not a vulnerability finding\n' "$name" >&2
+      printf 'trivy scan failed to execute for %s (no valid report, or a nonzero exit with no HIGH/CRITICAL findings) -- scanner/infra failure, not a vulnerability finding\n' "$name" >&2
     fi
     failures=1
   fi
