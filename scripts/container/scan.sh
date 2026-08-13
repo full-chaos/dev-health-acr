@@ -9,25 +9,39 @@ lock_timeout="${CONTAINER_PUBLISH_LOCK_TIMEOUT:-60}"
 work_root=""
 exact_archives=false
 
+# shellcheck source=scripts/container/lib/trivy-db-freshness.sh
+source "${repo_root}/scripts/container/lib/trivy-db-freshness.sh"
+
+trivy_image='aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c'
 syft_image='anchore/syft:v1.46.0@sha256:473a60e3a58e29aca3aedb3e99e787bb4ef273917e44d10fcbea4330a07320bb'
+# CHAOS-3772: the vulnerability DB is deliberately NOT pinned by digest in
+# source. It is resolved fresh from this moving mirror tag on every run
+# below, so no committed value can ever go stale by wall-clock alone -- only
+# the scanner binary above is pinned. Code is pinned; threat-intel data that
+# must stay current floats and is recorded for provenance instead.
+trivy_db_mirror='ghcr.io/aquasecurity/trivy-db:2'
+max_db_age_hours="${TRIVY_DB_MAX_AGE_HOURS:-168}"
 
 require() { command -v "$1" >/dev/null || { printf '%s is required\n' "$1" >&2; exit 1; }; }
+require awk
 require date
 require docker
 require id
 require jq
 require tar
+[[ "$max_db_age_hours" =~ ^[1-9][0-9]*$ ]] || { printf 'TRIVY_DB_MAX_AGE_HOURS must be a positive integer\n' >&2; exit 2; }
 [[ "$lock_timeout" =~ ^[1-9][0-9]*$ ]] || { printf 'CONTAINER_PUBLISH_LOCK_TIMEOUT must be a positive integer\n' >&2; exit 2; }
 scanner_uid="$(id -u)"
 scanner_gid="$(id -g)"
-[[ "$scanner_uid" =~ ^[1-9][0-9]*$ ]] || { printf 'container SBOM generation requires a non-root invoking user\n' >&2; exit 2; }
-[[ "$scanner_gid" =~ ^[0-9]+$ ]] || { printf 'container SBOM generation requires a numeric invoking group\n' >&2; exit 2; }
+[[ "$scanner_uid" =~ ^[1-9][0-9]*$ ]] || { printf 'container scanning requires a non-root invoking user\n' >&2; exit 2; }
+[[ "$scanner_gid" =~ ^[0-9]+$ ]] || { printf 'container scanning requires a numeric invoking group\n' >&2; exit 2; }
 
 mkdir -p "$tmp_root"
 work_root="$(mktemp -d "${tmp_root}/container-scan.work.XXXXXX")"
 scan_root="${work_root}/layouts"
 report_root="${work_root}/reports"
-mkdir -p "$scan_root" "$report_root"
+trivy_cache="${work_root}/trivy-cache"
+mkdir -p "$scan_root" "$report_root" "$trivy_cache"
 if [[ -n "$source_oci_root" ]]; then
   source_oci_root="$(cd "$source_oci_root" && pwd -P)"
   test -f "$source_oci_root/acr-api.tar"
@@ -100,11 +114,90 @@ else
   build_layout acr-mcp arm64
 fi
 
+docker pull "$trivy_image" >/dev/null || {
+  printf 'trivy scanner image unreachable: could not pull %s -- transient registry outage, retry the job (not a vulnerability finding)\n' "$trivy_image" >&2
+  exit 1
+}
 docker pull "$syft_image" >/dev/null
+
+# Resolve the moving trivy-db mirror tag to one immutable digest up front,
+# so the download below and the provenance record both act on the exact
+# same snapshot instead of racing a tag that can move mid-run.
+trivy_db_inspection="$(docker buildx imagetools inspect "$trivy_db_mirror" 2>/dev/null)" || {
+  printf 'trivy-db mirror unreachable: could not resolve %s -- transient registry/mirror outage, retry the job (this is not a vulnerability finding and not a stale pin)\n' "$trivy_db_mirror" >&2
+  exit 1
+}
+trivy_db_digest="$(awk '$1 == "Digest:" { digest = $2 } END { print digest }' <<<"$trivy_db_inspection")"
+[[ -n "$trivy_db_digest" ]] || {
+  printf 'trivy-db mirror returned no digest for %s\n' "$trivy_db_mirror" >&2
+  exit 1
+}
+trivy_db_ref="${trivy_db_mirror%%:*}@${trivy_db_digest}"
+
+docker run --rm --pull=never \
+  --user "${scanner_uid}:${scanner_gid}" \
+  --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777 \
+  --cap-drop ALL --security-opt no-new-privileges \
+  -e HOME=/tmp \
+  -v "${trivy_cache}:/tmp/trivy-cache" \
+  "$trivy_image" image \
+  --cache-dir /tmp/trivy-cache \
+  --db-repository "$trivy_db_ref" \
+  --download-db-only \
+  --no-progress || {
+  printf 'trivy-db download failed for resolved snapshot %s -- transient registry/mirror outage, retry the job\n' "$trivy_db_ref" >&2
+  exit 1
+}
+
+metadata="${trivy_cache}/db/metadata.json"
+test -f "$metadata" || { printf 'trivy-db metadata was not downloaded\n' >&2; exit 1; }
+now="$(date -u +%s)"
+check_trivy_db_freshness "$metadata" "$max_db_age_hours" "$now" || exit 1
+cp "$metadata" "${report_root}/trivy-db-metadata.json"
+resolved_at="$(date -u -d "@${now}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$now" +%Y-%m-%dT%H:%M:%SZ)"
+printf 'mirror=%s\nresolved_at=%s\ndigest=%s\n' "$trivy_db_mirror" "$resolved_at" "$trivy_db_ref" \
+  >"${report_root}/trivy-db-snapshot.txt"
 
 failures=0
 for name in acr-api-amd64 acr-api-arm64 acr-mcp-amd64 acr-mcp-arm64; do
+  trivy_input="/scan/$name"
   syft_source="oci-dir:/scan/$name"
+  trivy_report="${report_root}/${name}-trivy.json"
+  if ! docker run --rm --pull=never --network none \
+    --user "${scanner_uid}:${scanner_gid}" \
+    --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777 \
+    --cap-drop ALL --security-opt no-new-privileges \
+    -e HOME=/tmp \
+    -v "${scan_root}:/scan:ro" \
+    -v "${report_root}:/reports" \
+    -v "${trivy_cache}:/tmp/trivy-cache" \
+    "$trivy_image" image \
+    --cache-dir /tmp/trivy-cache \
+    --skip-db-update \
+    --skip-version-check \
+    --input "$trivy_input" \
+    --severity HIGH,CRITICAL \
+    --exit-code 1 \
+    --format json \
+    --output "/reports/${name}-trivy.json"; then
+    # Lead the failure with exactly what changed, not a generic exit code,
+    # so this can never be mistaken for an infra failure or the removed
+    # pin-expiry bug. A valid report with entries means real, newly
+    # surfaced HIGH/CRITICAL findings -- an unreadable report means the
+    # scanner itself failed to run.
+    if jq -e '.Results != null' "$trivy_report" >/dev/null 2>&1; then
+      printf 'HIGH/CRITICAL vulnerabilities in %s:\n' "$name" >&2
+      jq -r '
+        [.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH" or .Severity == "CRITICAL")] |
+        .[] |
+        "  \(.VulnerabilityID)\t\(.PkgName)\tinstalled=\(.InstalledVersion)\tfixed=\(.FixedVersion // "none")\tseverity=\(.Severity)"
+      ' "$trivy_report" >&2
+    else
+      printf 'trivy scan failed to execute for %s (no valid report produced) -- scanner/infra failure, not a vulnerability finding\n' "$name" >&2
+    fi
+    failures=1
+  fi
+
   if ! docker run --rm --pull=never --network none \
     --user "${scanner_uid}:${scanner_gid}" \
     --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777 \
@@ -126,11 +219,11 @@ for name in acr-api-amd64 acr-api-arm64 acr-mcp-amd64 acr-mcp-arm64; do
   fi
 done
 
-test "$failures" -eq 0 || { printf 'one or more SBOM gates failed\n' >&2; exit 1; }
+test "$failures" -eq 0 || { printf 'one or more image scan or SBOM gates failed\n' >&2; exit 1; }
 bash "${repo_root}/scripts/container/publish-directory.sh" "$stable_report_root" "$report_root" "$lock_timeout"
 report_root=""
 if "$exact_archives"; then
-  printf 'four exact-archive immutable Syft SBOMs passed\n'
+  printf 'four exact-archive scans and four immutable Syft SBOMs passed\n'
 else
-  printf 'four freshly built immutable Syft SBOMs passed\n'
+  printf 'four offline image scans and four immutable Syft SBOMs passed\n'
 fi
