@@ -3,12 +3,81 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
+
+// fulltextRelevanceFloor and fulltextRelevanceCeiling bound the confidence
+// band a RediSearch full-text hit can ever normalize into (D11 / AC-3778-0).
+// Chosen so the shipped commit thresholds in
+// graphrank.ResolveFromMergedCandidates -- lone candidate >= 0.72; top-of-two
+// >= 0.88 with gap >= 0.12 -- keep their intended meaning: the strongest hit
+// in a result set (the ceiling) clears the lone-candidate gate exactly the
+// way docs/design/context-fabric-falkordb-adapter.md §6.2's proposed "sole
+// full-text hit, label-field match" rung (0.75) was chosen to, and the floor
+// matches that same table's "body-only hit (today's default)" rung (0.50) --
+// a genuine hit never reads as "no signal" (0), nor as more confident than
+// an exact canonical/alias match (1.0, unchanged, set in candidate.go).
+//
+// The design doc's ladder is field-level (label/alias/body); this adapter
+// cannot reproduce that today because the fulltext index covers one merged
+// search_text property (identity.go's createFulltextIndex) with no separate
+// fields to distinguish a match by. This is the coarsest faithful
+// approximation available: a hit's RELATIVE standing within its own query's
+// result set, not its raw magnitude -- RediSearch scores are unbounded above
+// and not comparable across different queries/terms (§6.2), so only
+// within-set relative order is a meaningful signal.
+const (
+	fulltextRelevanceFloor   = 0.50
+	fulltextRelevanceCeiling = 0.75
+)
+
+// normalizeFulltextScores maps one query's raw, unbounded RediSearch scores
+// into graphrank's documented [fulltextRelevanceFloor, fulltextRelevanceCeiling]
+// confidence band by max-min normalization within that set -- the "max-
+// normalize within a result set" option docs/design/context-fabric-falkordb-adapter.md
+// §6.2 names as the fix for feeding an unbounded score through
+// graphrank.ResultConfidence's distance-shaped fallback arm.
+//
+// This is the seam AC-3778-0 requires: the adapter declares the score's
+// meaning explicitly -- an already-normalized, bounded, monotonic relevance
+// -- BEFORE any CandidateNode reaches graphrank, rather than handing over a
+// raw score and letting ResultConfidence guess (see its doc comment). The
+// transform is strictly order-preserving (a higher raw score in the same
+// set never produces a lower band value, equal scores produce equal band
+// values), which is exactly what AC-3778-0's monotonicity test proves. A
+// lone hit, or a set where every hit ties, normalizes to the ceiling: there
+// is no weaker hit in that set to relatively outrank it.
+func normalizeFulltextScores(scores []float64) []float64 {
+	out := make([]float64, len(scores))
+	if len(scores) == 0 {
+		return out
+	}
+	min, max := scores[0], scores[0]
+	for _, s := range scores {
+		if s < min {
+			min = s
+		}
+		if s > max {
+			max = s
+		}
+	}
+	if max <= min {
+		for i := range out {
+			out[i] = fulltextRelevanceCeiling
+		}
+		return out
+	}
+	span := fulltextRelevanceCeiling - fulltextRelevanceFloor
+	for i, s := range scores {
+		out[i] = fulltextRelevanceFloor + span*(s-min)/(max-min)
+	}
+	return out
+}
 
 // fulltextSearchNodes runs a lexical full-text search over Subject nodes'
 // search_text property, returning matches as CandidateNode with a real
@@ -32,6 +101,15 @@ import (
 // (clamped to a.config.MaxResults below), never caller text, so inlining it
 // as a literal into the query string is safe -- see safeParams' doc for why
 // untrusted values never take this path.
+//
+// D11 / AC-3778-0: the raw score RediSearch returns is unbounded above and
+// not directly usable as a confidence (see normalizeFulltextScores' doc
+// comment). Every row's raw score is collected first, normalized together
+// as one set via normalizeFulltextScores, and written into each
+// CandidateNode's Relevance -- never left in Score for
+// graphrank.ResultConfidence to interpret raw. Score is still populated
+// alongside Relevance, for diagnostics/telemetry only: any caller computing
+// confidence uses ResultConfidence, which always prefers a set Relevance.
 func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text string, limit int) ([]graphrank.CandidateNode, error) {
 	terms := tokenizeForFulltext(text)
 	if len(terms) == 0 {
@@ -51,19 +129,34 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 	if err != nil {
 		return nil, safeDependencyError("search context graph", err)
 	}
-	results := make([]graphrank.CandidateNode, 0, len(rows))
+	candidates := make([]graphrank.CandidateNode, 0, len(rows))
+	// rawScores tracks, in parallel with candidates, the raw score for each
+	// candidate that had a usable one -- a NaN/Inf score (never observed
+	// live, but not a contract RediSearch makes either) is excluded from the
+	// normalization set entirely rather than corrupting its min/max, exactly
+	// like graphrank.ResultConfidence already excludes such values from its
+	// own preferred branch.
+	rawScores := make([]float64, 0, len(rows))
+	scoreIndex := make([]int, 0, len(rows))
 	for _, row := range rows {
 		n, ok := row["node"].(*node)
 		if !ok || n == nil {
 			continue
 		}
 		candidate := toCandidateNode(n)
-		if score, ok := row["score"].(float64); ok {
+		if score, ok := row["score"].(float64); ok && !math.IsNaN(score) && !math.IsInf(score, 0) {
 			candidate.Score = &score
+			scoreIndex = append(scoreIndex, len(candidates))
+			rawScores = append(rawScores, score)
 		}
-		results = append(results, candidate)
+		candidates = append(candidates, candidate)
 	}
-	return results, nil
+	normalized := normalizeFulltextScores(rawScores)
+	for i, relevance := range normalized {
+		relevance := relevance
+		candidates[scoreIndex[i]].Relevance = &relevance
+	}
+	return candidates, nil
 }
 
 // tokenizeForFulltext splits free text into RediSearch-safe search terms.

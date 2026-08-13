@@ -24,8 +24,18 @@ type CandidateNode struct {
 	// canonical "label" attribute.
 	Name       string
 	Attributes map[string]interface{}
-	Relevance  *float64
-	Score      *float64
+	// Relevance is an already-bounded [0,1] confidence value the ADAPTER
+	// itself declares, not a raw backend score -- see ResultConfidence.
+	// Setting this is how a backend states "I have already normalized my
+	// own retrieval score into a documented, bounded band" (AC-3778-0).
+	Relevance *float64
+	// Score is the backend's own raw, unnormalized retrieval value, with a
+	// meaning that is backend-specific and NOT interpreted by this package
+	// beyond ResultConfidence's fallback heuristic (see its doc comment for
+	// what that heuristic assumes and why an adapter with a differently-
+	// shaped score, e.g. an unbounded lexical relevance score, must
+	// normalize into Relevance instead of relying on it).
+	Score *float64
 }
 
 // CandidateEdge is the same idea for a relationship/edge result.
@@ -51,6 +61,31 @@ type CandidateEdge struct {
 // confidence, preferring relevance when it is a usable finite number and
 // falling back to score (itself normalized if it looks like a distance
 // rather than a similarity). Ported unchanged from zepgraph.resultConfidence.
+//
+// D11 / AC-3778-0: the `score > 1 -> Clamp(1/score)` fallback arm assumes
+// score behaves like a DISTANCE -- 0 means identical, and confidence should
+// fall as the number grows without bound. That assumption is correct for
+// some similarity metrics (e.g. an L2/Euclidean distance) but is actively
+// WRONG for an open-ended lexical relevance score such as RediSearch's
+// full-text score: a HIGHER such score means MORE relevant, not further
+// away, so this arm inverts it. falkorgraph's fulltextSearchNodes therefore
+// never leaves this arm to interpret its raw score -- it normalizes into
+// Relevance itself (max-normalized within one query's result set, into the
+// documented [0.50, 0.75] band; see queries.go's normalizeFulltextScores)
+// before a CandidateNode ever reaches this function, so the preferred
+// Relevance branch above is always the one taken for a lexical hit.
+//
+// This arm is left in place, unchanged, for a hypothetical backend whose
+// score genuinely IS a bounded-above-1 distance. It is graphrank's
+// documented, backend-neutral default for "I got a raw score and nothing
+// else" -- graphrank cannot itself know whether a given backend's score
+// means "closer" or "more relevant" (that decision belongs at the adapter
+// boundary, not inside this shared helper). Any future backend, including a
+// vector-similarity one (CHAOS-3778), MUST make the same explicit choice
+// falkorgraph made here about what its own score means, and normalize into
+// Relevance if that meaning does not match this arm's distance assumption
+// -- merging a vector score that doesn't fit this arm straight into Score
+// and letting it fall through here is exactly the bug this fixes.
 func ResultConfidence(relevance, score *float64) float64 {
 	if relevance != nil && !math.IsNaN(*relevance) && !math.IsInf(*relevance, 0) {
 		return Clamp(*relevance)
