@@ -80,8 +80,11 @@ func TestLiveProviderInterpretsARealQuestion(t *testing.T) {
 	if receipt.Outcome != "success" || receipt.Usage.TotalTokens == 0 {
 		t.Fatalf("receipt = %#v, want a successful receipt with real token usage", receipt)
 	}
-	t.Logf("live interpretation: model=%s shape=%s judgment=%q requirements=%d attempts=%d tokens=%d",
-		receipt.Model, interpreted.Shape, interpreted.RequestedJudgment,
+	// judgment length only, never the model-derived text itself -- a live
+	// test log must not become a place prompt/answer content leaks into
+	// (CHAOS-3770 F1; AC-3770-5).
+	t.Logf("live interpretation: model=%s shape=%s judgment_length=%d requirements=%d attempts=%d tokens=%d",
+		receipt.Model, interpreted.Shape, len(interpreted.RequestedJudgment),
 		len(interpreted.FactRequirements), receipt.Attempts, receipt.Usage.TotalTokens)
 }
 
@@ -119,8 +122,10 @@ func TestLiveProviderSynthesizesARealAnswer(t *testing.T) {
 	if err := draft.ValidateAgainst(liveSynthesisInput()); err != nil {
 		t.Fatalf("returned draft does not validate against its own input: %v", err)
 	}
-	t.Logf("live synthesis: model=%s status=%s drivers=%d answer=%q tokens=%d",
-		receipt.Model, draft.Status, len(draft.Drivers), draft.DeterministicAnswer, receipt.Usage.TotalTokens)
+	// answer length only, never the model-derived text itself -- see the
+	// matching comment in TestLiveProviderInterpretsARealQuestion.
+	t.Logf("live synthesis: model=%s status=%s drivers=%d answer_length=%d tokens=%d",
+		receipt.Model, draft.Status, len(draft.Drivers), len(draft.DeterministicAnswer), receipt.Usage.TotalTokens)
 }
 
 func liveSynthesisInput() contextfabric.SynthesisInput {

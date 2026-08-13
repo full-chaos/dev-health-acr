@@ -295,6 +295,17 @@ JSON at all, maps to `ErrModelOutput`. The classified error carries only a
 class and a fixed message — no provider response body, prompt fragment, or
 endpoint ever travels into logs, receipts, or telemetry built from it.
 
+Separately, Genkit's own tracing records a generation's full request and
+response (including the system prompt and the model's answer) as span
+attributes on every call, and would export them to an HTTP telemetry
+server if the ambient `GENKIT_TELEMETRY_SERVER` environment variable were
+ever set in this process — a variable ACR does not set but also does not
+control. `modelprovider.New` preempts this before constructing the Genkit
+instance, registering its own no-op OpenTelemetry tracer provider so
+Genkit's lazy telemetry wiring never activates and never consults that
+variable, regardless of the ambient environment
+(`modelprovider.TestNew_neverExportsPromptContentToGenkitTelemetry`).
+
 **`ACR_REQUEST_TIMEOUT` must be raised before enabling investigations.** It
 defaults to **15s**, and it bounds the whole HTTP request. A real
 investigation is two sequential model calls (interpret, then synthesise) and

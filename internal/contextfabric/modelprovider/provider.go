@@ -10,6 +10,8 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
 	"github.com/openai/openai-go/option"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // New builds the Context Fabric model runtime for cfg. On success the
@@ -93,6 +95,64 @@ func newClientOptions(cfg Config) []option.RequestOption {
 	}
 }
 
+// suppressGenkitTelemetryExport prevents Genkit's own tracing package from
+// ever exporting a generation's prompt/response content off this process
+// (CHAOS-3770 F1).
+//
+// Every Genkit generate call runs inside tracing.RunInNewSpan
+// (core/tracing/tracing.go), which unconditionally records the full
+// request -- including the system prompt and the encoded question -- as
+// the "genkit:input" span attribute, and the model's response as
+// "genkit:output" (spanMetadata.attributes(), set via a deferred
+// span.SetAttributes on every span, success or failure). That alone is
+// harmless: an attribute on an unexported span goes nowhere. What makes it
+// a live risk is tracing.TracerProvider()'s lazy, package-global
+// initialization: the FIRST call anywhere in the process to Genkit's
+// Tracer() checks the ambient GENKIT_TELEMETRY_SERVER environment
+// variable and, if it is non-empty, wires up an HTTP exporter
+// (WriteTelemetryImmediate) that ships every finished span -- prompt and
+// response content included -- to that URL SYNCHRONOUSLY, in the same
+// goroutine as span.End(). ACR does not set that variable and has no
+// other OpenTelemetry usage of its own (it is otherwise only an indirect
+// dependency, pulled in by Genkit), but nothing stops it from being
+// present in a shared process environment -- a leftover from `genkit
+// start` tooling, a container image that bakes in dev-oriented env vars,
+// or simple operator error -- and Genkit's own check runs regardless of
+// GENKIT_ENV (dev vs prod).
+//
+// The fix does not (and cannot, from here) touch that environment
+// variable; it preempts the decision entirely. tracing.TracerProvider()
+// only consults GENKIT_TELEMETRY_SERVER when otel.GetTracerProvider()
+// does not already return a *sdktrace.TracerProvider:
+//
+//	func TracerProvider() *sdktrace.TracerProvider {
+//		if tp := otel.GetTracerProvider(); tp != nil {
+//			if sdkTP, ok := tp.(*sdktrace.TracerProvider); ok {
+//				return sdkTP
+//			}
+//		}
+//		providerInitOnce.Do(func() { ... reads GENKIT_TELEMETRY_SERVER ... })
+//		...
+//	}
+//
+// So registering our own bare *sdktrace.TracerProvider -- with no span
+// processors, meaning every span it creates is simply discarded when it
+// ends -- before Genkit ever calls Tracer() makes that check succeed and
+// the env-var-gated branch dead code for this process, no matter what the
+// ambient environment contains. This is the only OTel tracer-provider
+// registration anywhere in ACR (modelprovider is the only package that
+// constructs a genkit.Genkit instance at all), so it cannot clobber any
+// other legitimate tracing setup.
+//
+// Called on every initGenkit invocation rather than gated by a sync.Once
+// of its own: otel.SetTracerProvider is a cheap, idempotent pointer swap,
+// and always winning this race -- regardless of which caller happens to
+// construct the first genkit.Genkit instance in the process -- is what
+// makes the guarantee independent of call order.
+func suppressGenkitTelemetryExport() {
+	otel.SetTracerProvider(sdktrace.NewTracerProvider())
+}
+
 // initGenkit wraps genkit.Init, which reports every failure by panicking
 // (an unrecoverable plugin error, an invalid option, an unloadable prompt
 // directory) because it has no error return. Hosted composition must fail
@@ -104,6 +164,7 @@ func newClientOptions(cfg Config) []option.RequestOption {
 // point beyond the option values themselves, which genkit never formats
 // into a panic message.
 func initGenkit(ctx context.Context, plugin api.Plugin) (instance *genkit.Genkit, err error) {
+	suppressGenkitTelemetryExport()
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			instance = nil

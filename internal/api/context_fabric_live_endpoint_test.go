@@ -135,9 +135,12 @@ func TestLiveEndpointAnswersARealInvestigation(t *testing.T) {
 	if cited == 0 {
 		t.Fatal("no driver cites a claimed fact; the answer is not closed to canonical values")
 	}
-	t.Logf("live endpoint acceptance: model=%s status=%s latency=%s drivers=%d claimed_facts=%d bytes=%d answer=%q",
+	// answer_length only, never the answer text itself -- a live test log
+	// must not become a place answer content leaks into (CHAOS-3770 F1;
+	// AC-3770-5).
+	t.Logf("live endpoint acceptance: model=%s status=%s latency=%s drivers=%d claimed_facts=%d bytes=%d answer_length=%d",
 		modelConfig.Model, result.Status, latency.Round(time.Millisecond), len(result.Drivers),
-		len(result.ClaimedFacts), recorder.Body.Len(), result.DeterministicAnswer)
+		len(result.ClaimedFacts), recorder.Body.Len(), len(result.DeterministicAnswer))
 }
 
 // TestLiveEndpointReturnsCleanFiveOhThreeWithoutAModelRuntime exercises the
