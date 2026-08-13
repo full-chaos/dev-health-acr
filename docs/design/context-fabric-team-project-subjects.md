@@ -195,32 +195,44 @@ exists", this note's §6 is the only thing that changes.
   zero UUID, exactly the CHAOS-3785 trap.
 - Every join carries `org_id` equality. No exceptions.
 
-## 8. Open decisions for the orchestrator
+## 8. Decisions (ruled 2026-08-13)
 
-**D1 — relationship vocabulary (blocking the edge work, not the subject work).**
-`ContextFabricRelationshipType` is a closed enum with no team/project containment
-member. Two options:
+**D1 — relationship vocabulary. RULED: add the members.**
+`ContextFabricRelationshipType` is a closed enum with no team/project
+containment member, so `BELONGS_TO_PROJECT` and `OWNED_BY_TEAM` are added as
+additive v1 values, following CHAOS-3779's precedent (`BLOCKS` / `PART_OF` /
+`RELATES_TO` / `DUPLICATES` went in the same way). This costs the full
+contract-first unit: Go types, JSON Schema, OpenAPI + YAML mirror, MCP copies,
+golden fixtures, parity tests.
 
-- *(recommended)* Add `BELONGS_TO_PROJECT` and `OWNED_BY_TEAM` as additive v1
-  enum values, following CHAOS-3779's precedent (`BLOCKS` / `PART_OF` /
-  `RELATES_TO` / `DUPLICATES` were added to v1 the same way). Costs the full
-  contract-first unit: Go types, JSON Schema, OpenAPI + YAML mirror, MCP copies,
-  golden fixtures, parity tests.
-- Overload the existing `PART_OF` for both containment edges. Zero contract
-  churn, but `PART_OF` currently means work-item hierarchy only, and `graphrank`
-  would no longer be able to tell the two apart.
+Overloading the existing `PART_OF` was considered and **rejected**: the closed
+vocabulary exists so semantics stay distinct, and `graphrank`'s traversal
+corroboration must be able to tell hierarchy from containment. Saving contract
+churn by blurring that is the wrong trade.
 
-Subject nodes do not depend on this. If D1 stalls, kinds (1) and (2) of the
-mission still ship in full and the edges follow.
+Two declared contact points this creates:
 
-**D2 — flag default.** `ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED`
-defaults to `false`. With a real implementation behind it, the fail-loud guard
-that justified the default is gone, and the acceptance criterion ("a rebuild
-picks the new kinds up") is only met when it is on. Recommend flipping the
-default to `true` in the same change.
+- **CHAOS-3746** (ships before this issue) carries a vocabulary parity test that
+  compares the enum member-for-member. This branch re-pins that test when it
+  rebases onto 3746's merged state. **That failure is intended behavior**, not a
+  regression — budget for it.
+- **dev-health-web** picks up the two new enum members at its next ACR contract
+  pin bump, through the CHAOS-3791 codegen machinery. Nothing to do here; named
+  so nobody is surprised.
 
-**D3 — `is_active = 0` → `ValidTo`** (§6) rather than a tombstone. Calling it
-out because it is a semantic choice, not a derivation.
+**D2 — flag default. RULED: flip to `true` in this change.**
+The fail-loud stub was the only justification for `false`; once the source is
+implemented, a default-off feature whose acceptance criterion requires it on is
+a dead guard.
+
+Carried requirement (composition-root reachability, a prior wave's lesson): the
+flag must be verified to gate **only** this source at the composition root, with
+no short-circuit upstream of the flag check that would make the flag dead in
+either direction.
+
+**D3 — `is_active = 0` → `ValidTo = updated_at`. CONFIRMED**, not a tombstone
+(§6). Completed is finished, not deleted; a tombstone would erase exactly the
+history the CHAOS-3781 temporal axis exists to answer over.
 
 ## 9. What this issue does NOT do
 

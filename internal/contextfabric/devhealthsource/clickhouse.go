@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -143,123 +142,35 @@ type candidate struct {
 }
 
 func (s *ClickHouseProjectionSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
-	if s == nil || s.client == nil {
+	if s == nil {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("devhealthsource: source is not configured")
 	}
-	orgID := strings.TrimSpace(checkpoint.OrgID)
-	if orgID == "" {
-		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("devhealthsource: organization is required")
-	}
-	if checkpoint.Cursor == "" {
-		return s.fullSnapshot(ctx, orgID)
-	}
-	return s.incremental(ctx, orgID, checkpoint.Cursor)
+	return s.plan().nextBatch(ctx, checkpoint)
 }
 
-// fullSnapshot attempts one complete-enumeration batch (FullSnapshot: true,
-// CompleteEnumeration: true -- ContextFabricProjectionBatch.Validate()
-// requires both together). When the organization is too large for that
-// single bounded batch, it falls back to pagedBatch from the same zero
-// cursor instead of erroring -- CHAOS-3753 codex finding C6: refusing left
-// any organization above the per-table cap permanently stuck (every
-// subsequent tick re-attempted the same oversized single-batch snapshot
-// and failed the same way; initial projection never completed). The
-// fallback produces an ordinary bounded incremental-shaped batch per tick
-// until caught up, exactly like any other incremental catch-up.
-//
-// "Too large" is detected two ways (codex round-2 finding K4): a single
-// table individually truncated at snapshotPerQueryCap, OR the aggregate
-// candidate count across every table exceeding the v1 contract's own
-// per-batch bounds even when no single table was truncated -- N tables
-// each just under their own per-table cap can still sum past the
-// contract's aggregate entity/relationship bound (e.g. seven tables at
-// 149 rows apiece is 1043 entities, over the 1000 cap). Checking only the
-// per-table signal let that case reach buildBatch and fail contract
-// validation instead of paging -- the same "stuck forever" shape C6 fixed
-// for the per-table case, just triggered by an aggregate rather than a
-// single oversized table.
-func (s *ClickHouseProjectionSource) fullSnapshot(ctx context.Context, orgID string) (contextfabric.ProjectionBatch, bool, error) {
-	var all []candidate
-	oversized := false
-	for _, table := range entityTables {
-		rows, truncated, err := table.query(ctx, s.client, orgID, cursorState{}, snapshotPerQueryCap)
-		if err != nil {
-			return contextfabric.ProjectionBatch{}, false, fmt.Errorf("%w: read %s: %v", contextfabric.ErrUnavailable, table.name, err)
-		}
-		if truncated {
-			oversized = true
-		}
-		all = append(all, rows...)
+// plan binds this source's data (its table set, batch identity, the
+// synthesized Organization seed, and the orphaned-work-item observer) to the
+// shared assembly engine in assemble.go. The paging/truncation/oversized
+// rules themselves live there and are shared verbatim with
+// TeamsProjectsSource -- see sourcePlan's doc comment for why they are not
+// re-derived per source.
+func (s *ClickHouseProjectionSource) plan() sourcePlan {
+	return sourcePlan{
+		client:  s.client,
+		source:  SourceName,
+		version: ClickHouseSourceVersion,
+		tables:  entityTables,
+		now:     s.now,
+		seed: func(orgID string) []candidate {
+			// A fixed anchor, not the wall clock: the organization candidate
+			// must sort identically across replays of the same underlying
+			// data so that deterministicBatchID stays idempotent
+			// (ApplyProjectionBatch's idempotency contract). It sorts before
+			// every real Dev Health timestamp we ever project.
+			return []candidate{organizationCandidate(orgID, organizationAnchorTime)}
+		},
+		observe: s.logOrphanedWorkItems,
 	}
-	if !oversized {
-		entities, relationships, tombstones := candidateCounts(all)
-		// +1: every non-oversized path below adds one organization entity
-		// candidate before calling buildBatch: this checks against exactly
-		// what buildBatch is about to validate, not what's in all right now.
-		if entities+1 > contractsv1.ContextFabricProjectionBatchMaxEntities || relationships > contractsv1.ContextFabricProjectionBatchMaxRelationships || tombstones > contractsv1.ContextFabricProjectionBatchMaxTombstones {
-			oversized = true
-		}
-	}
-	if oversized {
-		return s.pagedBatch(ctx, orgID, "", cursorState{}, true)
-	}
-	// A fixed anchor, not the wall clock: the organization candidate must
-	// sort identically across replays of the same underlying data so that
-	// deterministicBatchID stays idempotent (ApplyProjectionBatch's
-	// idempotency contract). It sorts before every real Dev Health
-	// timestamp we ever project.
-	all = append(all, organizationCandidate(orgID, organizationAnchorTime))
-	if len(all) == 0 {
-		return contextfabric.ProjectionBatch{}, false, nil
-	}
-	sortCandidates(all)
-	batch, err := buildBatch(orgID, SourceName, ClickHouseSourceVersion, "", all, true, true, s.clock())
-	if err != nil {
-		return contextfabric.ProjectionBatch{}, false, err
-	}
-	s.logOrphanedWorkItems(ctx, batch, all)
-	return batch, true, nil
-}
-
-func (s *ClickHouseProjectionSource) incremental(ctx context.Context, orgID, cursor string) (contextfabric.ProjectionBatch, bool, error) {
-	state, err := decodeCursor(cursor)
-	if err != nil {
-		return contextfabric.ProjectionBatch{}, false, err
-	}
-	return s.pagedBatch(ctx, orgID, cursor, state, false)
-}
-
-// pagedBatch is the shared bounded-per-tick paging path for both ordinary
-// incremental catch-up and the fullSnapshot oversized-organization
-// fallback (C6). includeOrganization is true only for the very first page
-// of a from-scratch catch-up (cursor == ""), so the synthesized
-// Organization entity is projected exactly once, not on every page.
-func (s *ClickHouseProjectionSource) pagedBatch(ctx context.Context, orgID, cursor string, state cursorState, includeOrganization bool) (contextfabric.ProjectionBatch, bool, error) {
-	var all []candidate
-	for _, table := range entityTables {
-		rows, _, err := table.query(ctx, s.client, orgID, state, incrementalBatchCap)
-		if err != nil {
-			return contextfabric.ProjectionBatch{}, false, fmt.Errorf("%w: read %s: %v", contextfabric.ErrUnavailable, table.name, err)
-		}
-		all = append(all, rows...)
-	}
-	if includeOrganization {
-		all = append(all, organizationCandidate(orgID, organizationAnchorTime))
-	}
-	if len(all) == 0 {
-		return contextfabric.ProjectionBatch{}, false, nil
-	}
-	sortCandidates(all)
-	all = truncateToCompleteRows(all, incrementalBatchCap)
-	if len(all) == 0 {
-		return contextfabric.ProjectionBatch{}, false, nil
-	}
-	batch, err := buildBatch(orgID, SourceName, ClickHouseSourceVersion, cursor, all, false, false, s.clock())
-	if err != nil {
-		return contextfabric.ProjectionBatch{}, false, err
-	}
-	s.logOrphanedWorkItems(ctx, batch, all)
-	return batch, true, nil
 }
 
 // candidateCounts tallies candidates by kind -- CHAOS-3753 codex round-2
@@ -339,13 +250,6 @@ func (s *ClickHouseProjectionSource) logOrphanedWorkItems(ctx context.Context, b
 			"org_id", redactOrg(batch.OrgID), "source", batch.Source, "batch_id", batch.BatchID,
 			"cursor", batch.Cursor, "next_cursor", batch.NextCursor, "orphaned_work_items", len(ids))
 	}
-}
-
-func (s *ClickHouseProjectionSource) clock() time.Time {
-	if s.now == nil {
-		return time.Now().UTC()
-	}
-	return s.now().UTC()
 }
 
 func sortCandidates(all []candidate) {
