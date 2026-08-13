@@ -128,7 +128,15 @@ func (e *Embedder) embedChunk(ctx context.Context, texts []string) ([][]float32,
 		// classify on this package's own sentinel surface.
 		return nil, fmt.Errorf("embed request failed: %w", err)
 	}
-	if response == nil || len(response.Data) != len(inputs) {
+	if response == nil {
+		return nil, fmt.Errorf("%w: empty response", ErrResponseShape)
+	}
+	// The response-model check runs BEFORE any vector is read, on EVERY chunk,
+	// so a server that switches models mid-batch cannot slip one chunk through.
+	if err := e.verifyServingModel(response.Model); err != nil {
+		return nil, err
+	}
+	if len(response.Data) != len(inputs) {
 		return nil, fmt.Errorf("%w: expected %d vectors", ErrResponseShape, len(inputs))
 	}
 	ordered := make([][]float32, len(inputs))
@@ -155,6 +163,72 @@ func (e *Embedder) embedChunk(ctx context.Context, texts []string) ([][]float32,
 		}
 	}
 	return ordered, nil
+}
+
+// verifyServingModel checks that the server reported serving the model this
+// deployment configured, and FAILS CLOSED otherwise.
+//
+// WHY THIS EXISTS. An OpenAI-compatible server is not obliged to honor the
+// request's `model` field, and at least one in active use does not:
+// reproduced repeatedly against LM Studio with more than one embedding model
+// loaded, /v1/embeddings silently ignores `model` and serves whichever it
+// prefers -- observed returning 768-dimension nomic vectors for requests
+// explicitly naming a 1024-dimension qwen3-embedding model, with no error and
+// no warning. It is not specific to one runtime or backend.
+//
+// The dimension check alone is NOT sufficient cover. It catches that pair only
+// because the widths differ. Two same-width models -- embeddinggemma at 768
+// and nomic at 768 -- pass it cleanly, and the outcome is silent mixed-vector
+// corruption: a graph holding vectors from two different models, whose cosine
+// similarities are meaningless against each other, with every node stamped
+// with the identity of the model we ASKED for rather than the one that ran.
+// Nothing downstream could detect that. The AC-3778-7 rebuild fence cannot
+// either, because the recorded identity looks correct. So the response's own
+// statement of what served it is the only signal that closes this, and it must
+// be checked rather than assumed.
+//
+// FAIL CLOSED, then fail open. This returns an error, which rides the existing
+// degradation path: the read side drops to lexical-only retrieval for that
+// request, and the write side persists no vector for that batch and lets the
+// next rebuild retry. The answer degrades honestly instead of ingesting
+// vectors from a model it cannot identify.
+//
+// AN EMPTY MODEL FIELD IS A MISMATCH, not a pass. A provider that does not say
+// what served the request leaves this unknowable, and "unknowable" must not
+// resolve to "fine" -- that is the whole failure mode above. An operator whose
+// provider omits the field must load exactly one embedding model on that
+// server, which is the documented operational requirement (see
+// docs/operations.md); there is no switch to turn this check off.
+//
+// NORMALIZATION IS DELIBERATELY MINIMAL. Exactly two transformations are
+// tolerated, both nameable: surrounding whitespace is trimmed, and comparison
+// is ASCII case-insensitive. Nothing else -- no prefix stripping, no suffix
+// matching, no substring containment -- because every one of those would also
+// match a genuinely different model whose id merely resembles the configured
+// one, which is precisely the case this must catch. A provider that
+// legitimately reports a different id is handled by naming that id explicitly
+// in Config.ExpectResponseModel, which RETARGETS the comparison rather than
+// weakening it.
+//
+// The served id is deliberately NOT included in the returned error. It is a
+// field of a provider response body, and this package's standing rule is that
+// a provider response body is never held as free text (see
+// modelprovider.SanitizeProviderErrorBody). The error names the EXPECTED id --
+// which is this deployment's own configuration, not provider output -- and an
+// operator diagnosing it reads the server's own GET /v1/models.
+func (e *Embedder) verifyServingModel(served string) error {
+	expected := strings.TrimSpace(e.config.ExpectResponseModel)
+	if expected == "" {
+		expected = strings.TrimSpace(e.config.Model)
+	}
+	served = strings.TrimSpace(served)
+	if served == "" {
+		return fmt.Errorf("%w: server did not report a serving model, expected %q", ErrModelIdentityMismatch, expected)
+	}
+	if !strings.EqualFold(served, expected) {
+		return fmt.Errorf("%w: expected %q", ErrModelIdentityMismatch, expected)
+	}
+	return nil
 }
 
 // newClientOptions builds the OpenAI-compatible client options.

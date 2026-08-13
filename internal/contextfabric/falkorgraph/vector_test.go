@@ -2,11 +2,16 @@ package falkorgraph
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
 
@@ -328,5 +333,116 @@ func TestAC_3778_7_UnreportedDimensionIsNotTreatedAsAMatch(t *testing.T) {
 	}
 	if _, ok := (indexStatus{}).Dimension(); ok {
 		t.Fatal("an index with no options must report ok=false")
+	}
+}
+
+// wrongModelEmbedServer serves structurally PERFECT embeddings that report a
+// different serving model -- the LM Studio failure mode, where the request's
+// model field is silently ignored.
+func wrongModelEmbedServer(t *testing.T, servedModel string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Input []string `json:"input"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		data := make([]map[string]any, 0, len(body.Input))
+		for i := range body.Input {
+			data = append(data, map[string]any{
+				"object": "embedding", "index": i, "embedding": make([]float64, 8),
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"object": "list", "model": servedModel, "data": data,
+			"usage": map[string]any{"prompt_tokens": 0, "total_tokens": 0},
+		})
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func wrongModelEmbedder(t *testing.T, baseURL string) *embedprovider.Embedder {
+	t.Helper()
+	embedder, err := embedprovider.New(embedprovider.Config{
+		Provider: "lmstudio", BaseURL: baseURL,
+		// We ASK for one model; the server serves another.
+		Model: "text-embedding-nomic-embed-text-v1.5", Dimension: 8,
+		SimilarityFloor: 0.55, Timeout: 5 * time.Second,
+		MaxBatch: 8, MaxTextRunes: 2000, AllowInsecureBaseURL: true,
+	})
+	if err != nil {
+		t.Fatalf("embedprovider.New: %v", err)
+	}
+	return embedder
+}
+
+// End to end for the LM Studio finding on the READ side: a server that serves
+// a different model must degrade the request to lexical-only, and the vector
+// index must never be queried with vectors from an unidentified model.
+func TestWrongServingModelDegradesTheReadPathToLexical(t *testing.T) {
+	// Same width as configured, so the dimension check cannot catch it.
+	server := wrongModelEmbedServer(t, "text-embedding-embeddinggemma")
+	lexicalRows := []row{{
+		"node": &node{Properties: map[string]interface{}{
+			propKind: "project", propCanonicalID: "p1", propLabel: "Auth", propSearchText: "auth service",
+		}},
+		"score": 2.0,
+	}}
+	var vectorQueried bool
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			vectorQueried = true
+			return nil, nil
+		}
+		if strings.Contains(cypher, "db.idx.fulltext.queryNodes") {
+			return lexicalRows, nil
+		}
+		return nil, nil
+	}}
+	adapter := vectorAdapter(t, fake, wrongModelEmbedder(t, server.URL), 0.55)
+
+	candidates, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5)
+	if err != nil {
+		t.Fatalf("a serving-model mismatch must not fail the request: %v", err)
+	}
+	if vectorQueried {
+		t.Fatal("the vector index must never be queried with a vector from an unidentified model")
+	}
+	if len(candidates) != 1 || candidates[0].Mechanism != contextfabric.MatchLexical {
+		t.Fatalf("expected the lexical candidate to survive alone, got %#v", candidates)
+	}
+}
+
+// End to end on the WRITE side: no vector may be persisted when the serving
+// model cannot be confirmed. Silent mixed-vector corruption is unrecoverable
+// without a rebuild, so refusing to write is the only safe outcome.
+func TestWrongServingModelPersistsNoVector(t *testing.T) {
+	server := wrongModelEmbedServer(t, "text-embedding-embeddinggemma")
+	var embeddingWritten bool
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "vecf32($vec)") && strings.Contains(cypher, "SET n.") {
+			embeddingWritten = true
+		}
+		return nil, nil
+	}}
+	adapter := vectorAdapter(t, fake, wrongModelEmbedder(t, server.URL), 0.55)
+
+	observed := time.Now().UTC()
+	batch := contextfabric.ProjectionBatch{
+		OrgID: "org",
+		Entities: []contextfabric.EntityProjection{{
+			Subject: contextfabric.SubjectRef{
+				Kind: contextfabric.SubjectProject, CanonicalID: "p1", Label: "Authentication Service",
+			},
+			ObservedAt: observed, SourceVersion: "v1",
+		}},
+	}
+	// embedProjectionBatch degrades rather than erroring -- the canonical
+	// projection already succeeded and must not be rolled back over a missing
+	// vector.
+	adapter.embedProjectionBatch(context.Background(), "k", batch)
+	if embeddingWritten {
+		t.Fatal("no embedding may be persisted when the serving model is not the configured one")
 	}
 }

@@ -317,6 +317,7 @@ byte-for-byte what it was before.
 | `ACR_CONTEXT_FABRIC_EMBED_MAX_BATCH` | `64` | Texts per request at projection time. |
 | `ACR_CONTEXT_FABRIC_EMBED_MAX_TEXT_RUNES` | `2000` | Runes of one node's search text that are embedded. |
 | `ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES` | `0` | The SDK's own in-client retry loop. |
+| `ACR_CONTEXT_FABRIC_EMBED_EXPECT_RESPONSE_MODEL` | *(unset)* | The model id the **server reports**, when it legitimately differs from the id sent. This *retargets* the serving-model check; it cannot disable it. Leave unset unless a provider is known to rename its own id. |
 | `ACR_CONTEXT_FABRIC_EMBED_ALLOW_INSECURE_BASE_URL` | `false` | Permits a plaintext `http://` base URL. Required for a loopback embedder. **Never set this for a base URL that leaves the trust boundary** — the credential travels as a bearer token. |
 
 Both `acr-api` and `acr-projector` read these. **Configure them identically for
@@ -342,6 +343,34 @@ drop and recreate the index. Recovery is the existing
 `acr-projector rebuild --org <org>`, which resets every source checkpoint and
 bumps the rebuild epoch (which also invalidates answer reuse). Until that runs,
 the organization is simply back to the pre-CHAOS-3778 lexical behaviour.
+
+**Load exactly one embedding model on the embedder — this is a hard operational
+requirement, not a recommendation.** An OpenAI-compatible server is not obliged
+to honour the request's `model` field, and at least one in active use does not:
+LM Studio with more than one embedding model loaded silently ignores `model` and
+serves whichever it prefers, with no error. This was reproduced repeatedly,
+returning 768-dimension nomic vectors for requests explicitly naming a
+1024-dimension qwen3-embedding model.
+
+ACR defends against this by verifying the `model` the response reports against
+the configured model on **every** embeddings call, and failing closed on any
+mismatch — including a response that does not say which model served it, which
+is treated as a mismatch rather than as a pass. A failure here degrades to
+lexical-only retrieval (read side) and persists no vector (write side).
+
+Do not rely on that check as a substitute for the operational requirement. It
+protects against ingesting wrong vectors; it does not make a
+multiple-model-loaded embedder usable. If the check is firing, the symptom is
+that vector retrieval silently stops contributing — verify with the embedder's
+own `GET /v1/models` and unload the extra models.
+
+The dimension check does **not** cover this on its own: it only catches a
+substitution when the widths differ. Two same-width models (embeddinggemma at
+768 and nomic at 768) would otherwise produce silent mixed-vector corruption — a
+graph holding vectors from two models whose similarities are meaningless against
+each other, every node stamped with the identity of the model that was *asked
+for*. Nothing downstream can detect that, and no rebuild fixes it without first
+fixing the server.
 
 **Degradation is expected and safe.** An embedder that is unreachable, cold, or
 slow degrades the request to lexical-only rather than failing it; a cold local

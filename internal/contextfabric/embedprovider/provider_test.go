@@ -232,3 +232,135 @@ func TestTruncateRunesCutsOnRuneBoundaries(t *testing.T) {
 		}
 	}
 }
+
+// The LM Studio finding: a server that silently ignores the request's model
+// field and serves a different one must be caught, because the dimension check
+// cannot see a same-width substitution.
+func TestEmbedFailsClosedWhenTheServerServesADifferentModel(t *testing.T) {
+	server := embeddingsServer(t, func(inputs []string) (int, any) {
+		payload := okResponse(embeddingItem(0, 1))
+		// Correct width, correct count, correct order -- ONLY the model
+		// differs. This is the same-dimension substitution nothing else
+		// catches.
+		payload["model"] = "text-embedding-embeddinggemma"
+		return http.StatusOK, payload
+	})
+	cfg := testConfig(server.URL)
+	cfg.Model = "text-embedding-nomic-embed-text-v1.5"
+	embedder, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	vectors, err := embedder.Embed(context.Background(), []string{"the auth work"})
+	if !errors.Is(err, ErrModelIdentityMismatch) {
+		t.Fatalf("Embed error = %v, want ErrModelIdentityMismatch", err)
+	}
+	if vectors != nil {
+		t.Fatalf("no vector may be returned when the serving model is wrong, got %d", len(vectors))
+	}
+	// The served id is provider response content and must not appear in the
+	// error; the EXPECTED id (our own configuration) may.
+	if strings.Contains(err.Error(), "embeddinggemma") {
+		t.Fatalf("the served model id leaked into the error string: %v", err)
+	}
+	if !strings.Contains(err.Error(), "nomic") {
+		t.Fatalf("the error should name the expected model for operability: %v", err)
+	}
+}
+
+// "Unknowable" must not resolve to "fine": a provider that does not say what
+// served the request is treated as a mismatch.
+func TestEmbedFailsClosedWhenTheServerReportsNoModel(t *testing.T) {
+	for _, name := range []string{"", "   "} {
+		server := embeddingsServer(t, func(inputs []string) (int, any) {
+			payload := okResponse(embeddingItem(0, 1))
+			payload["model"] = name
+			return http.StatusOK, payload
+		})
+		embedder, err := New(testConfig(server.URL))
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if _, err := embedder.Embed(context.Background(), []string{"a"}); !errors.Is(err, ErrModelIdentityMismatch) {
+			t.Fatalf("a missing serving model must fail closed, got %v", err)
+		}
+	}
+}
+
+// The two nameable normalizations, and nothing else.
+func TestServingModelNormalizationIsExactlyTrimAndCaseFold(t *testing.T) {
+	embedder, err := New(testConfig("http://localhost:1"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	embedder.config.Model = "probe-embed"
+
+	for _, accepted := range []string{"probe-embed", "  probe-embed  ", "PROBE-EMBED", "Probe-Embed"} {
+		if err := embedder.verifyServingModel(accepted); err != nil {
+			t.Fatalf("verifyServingModel(%q) = %v, want accepted", accepted, err)
+		}
+	}
+	// Every one of these RESEMBLES the configured id and is a different model.
+	// A prefix, suffix, or substring rule would wrongly accept them.
+	for _, rejected := range []string{
+		"probe-embed-v2", "v2-probe-embed", "probe-embed-large",
+		"openai/probe-embed", "probe", "probe embed", "probe_embed",
+	} {
+		if err := embedder.verifyServingModel(rejected); !errors.Is(err, ErrModelIdentityMismatch) {
+			t.Fatalf("verifyServingModel(%q) = %v, want ErrModelIdentityMismatch", rejected, err)
+		}
+	}
+}
+
+// ExpectResponseModel retargets the comparison; it cannot disable it.
+func TestExpectResponseModelRetargetsTheCheckWithoutWeakeningIt(t *testing.T) {
+	embedder, err := New(testConfig("http://localhost:1"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	embedder.config.Model = "text-embedding-ada-002"
+	embedder.config.ExpectResponseModel = "text-embedding-ada-002-v2"
+
+	if err := embedder.verifyServingModel("text-embedding-ada-002-v2"); err != nil {
+		t.Fatalf("the retargeted id must be accepted: %v", err)
+	}
+	// The originally-configured id is now NOT what the server should report,
+	// so it must be rejected -- proving this retargets rather than widens.
+	if err := embedder.verifyServingModel("text-embedding-ada-002"); !errors.Is(err, ErrModelIdentityMismatch) {
+		t.Fatalf("retargeting must not accept both ids, got %v", err)
+	}
+	// And it still cannot be used to wave anything through.
+	if err := embedder.verifyServingModel("some-other-model"); !errors.Is(err, ErrModelIdentityMismatch) {
+		t.Fatalf("retargeting must not disable the check, got %v", err)
+	}
+	if err := embedder.verifyServingModel(""); !errors.Is(err, ErrModelIdentityMismatch) {
+		t.Fatalf("retargeting must not make an empty model acceptable, got %v", err)
+	}
+}
+
+// A server that switches models partway through a batch must not slip the
+// earlier chunks through: the check runs on EVERY chunk.
+func TestEmbedVerifiesTheServingModelOnEveryChunk(t *testing.T) {
+	cfg := testConfig("")
+	cfg.MaxBatch = 1
+	call := 0
+	server := embeddingsServer(t, func(inputs []string) (int, any) {
+		payload := okResponse(embeddingItem(0, 1))
+		call++
+		if call > 1 {
+			payload["model"] = "a-different-model"
+		}
+		return http.StatusOK, payload
+	})
+	cfg.BaseURL = server.URL
+	embedder, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := embedder.Embed(context.Background(), []string{"a", "b"}); !errors.Is(err, ErrModelIdentityMismatch) {
+		t.Fatalf("a mid-batch model switch must fail closed, got %v", err)
+	}
+	if call < 2 {
+		t.Fatal("the second chunk was never issued; this test is not exercising what it claims")
+	}
+}

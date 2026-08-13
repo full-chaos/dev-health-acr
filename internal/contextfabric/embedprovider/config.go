@@ -91,6 +91,12 @@ const (
 	EnvTimeout         = "ACR_CONTEXT_FABRIC_EMBED_TIMEOUT"
 	EnvMaxBatch        = "ACR_CONTEXT_FABRIC_EMBED_MAX_BATCH"
 	EnvMaxTextRunes    = "ACR_CONTEXT_FABRIC_EMBED_MAX_TEXT_RUNES"
+	// EnvExpectResponseModel names the model id the SERVER reports, when it
+	// legitimately differs from the id we send. It RETARGETS the
+	// response-model check; it cannot disable it. Leave it unset unless a
+	// provider is known to rename its own id (some hosted providers append a
+	// revision suffix to the id they echo back).
+	EnvExpectResponseModel = "ACR_CONTEXT_FABRIC_EMBED_EXPECT_RESPONSE_MODEL"
 	// EnvMaxTransportRetries bounds the SDK's own in-client retry loop.
 	EnvMaxTransportRetries = "ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES"
 	// EnvAllowInsecureBaseURL permits a plaintext http:// base URL. It exists
@@ -126,6 +132,10 @@ type Config struct {
 	SimilarityFloor float64
 	// Timeout bounds one embeddings call.
 	Timeout time.Duration
+	// ExpectResponseModel is the model id the server is expected to report in
+	// its response, when that legitimately differs from Model. Empty means
+	// "the server must report exactly Model". See EnvExpectResponseModel.
+	ExpectResponseModel string
 	// MaxBatch bounds texts per request; MaxTextRunes bounds runes per text.
 	MaxBatch     int
 	MaxTextRunes int
@@ -145,6 +155,25 @@ var (
 	// ErrResponseShape reports a response that does not pair one vector with
 	// each input, in order.
 	ErrResponseShape = errors.New("context fabric embedder returned a malformed response")
+	// ErrModelIdentityMismatch reports that the server answered with a
+	// DIFFERENT model than the one this deployment configured, or did not say
+	// which model it used.
+	//
+	// This is not a hypothetical. Reproduced repeatedly against LM Studio with
+	// more than one embedding model loaded: /v1/embeddings SILENTLY IGNORES
+	// the request's `model` field and serves whichever model it prefers, with
+	// no error -- observed returning 768-dimension nomic vectors for requests
+	// explicitly naming a 1024-dimension qwen3-embedding model.
+	//
+	// The dimension check catches that particular pair, but ONLY because the
+	// widths differ. Two same-width models (embeddinggemma at 768 and nomic at
+	// 768) would sail straight through it, and the result is silent mixed-
+	// vector corruption: a graph whose vectors were produced by two different
+	// models, whose cosine similarities are meaningless against each other,
+	// with every node stamped with the identity of the model we ASKED for.
+	// Nothing downstream could detect that, and no rebuild would fix it
+	// without first fixing the server.
+	ErrModelIdentityMismatch = errors.New("context fabric embedder served a different model than configured")
 )
 
 // Configured reports whether a base URL is set at all, so a deployment that
@@ -178,6 +207,9 @@ func (c Config) validate() error {
 	}
 	if !stringBounded(c.Model) {
 		return errors.New("embedder model is required and must be bounded")
+	}
+	if strings.TrimSpace(c.ExpectResponseModel) != "" && !stringBounded(c.ExpectResponseModel) {
+		return errors.New("embedder expected response model must be bounded")
 	}
 	// The upper bound is generous rather than tight: it exists to catch a
 	// misconfiguration (a token count pasted into the dimension field), not
@@ -250,6 +282,7 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		Provider:             envString(lookup, EnvProvider, ""),
 		BaseURL:              envString(lookup, EnvBaseURL, ""),
 		Model:                envString(lookup, EnvModel, ""),
+		ExpectResponseModel:  envString(lookup, EnvExpectResponseModel, ""),
 		Dimension:            dimension,
 		APIKey:               apiKey,
 		SimilarityFloor:      floor,
