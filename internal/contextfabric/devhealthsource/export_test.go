@@ -27,3 +27,17 @@ func TeamsProjectsTableNamesForTest() []string {
 	}
 	return names
 }
+
+// ProjectAuthorizationScopeForTest exposes queryProjects' reserved-namespace
+// decision directly (CHAOS-3802 codex round-1 F4), so a test can prove the
+// PRODUCER refuses a colliding project id without routing through
+// ContextFabricEntityProjection.Validate(). Testing it end-to-end cannot
+// distinguish the two: the contract rejects the same row either way, which is
+// exactly how an earlier producer-side guard here went unverifiable and was
+// removed. Both layers are wanted -- the producer fails fast and
+// attributably, the contract is the unforgettable backstop -- so the producer
+// half needs its own reachable seam.
+func ProjectAuthorizationScopeForTest(projectID string) error {
+	_, err := projectAuthorizationScope(projectID)
+	return err
+}

@@ -229,6 +229,22 @@ func TestInactiveRowsCloseTheirValidityWindowInsteadOfTombstoning(t *testing.T) 
 // must not be a silent rename, because a renamed project would look
 // projected while being unjoinable to every work item referencing its real
 // id.
+// TestProjectProducerItselfRefusesTheReservedNamespace is codex round-1 F4's
+// direct half: it calls the producer's own scope decision, so it proves THIS
+// guard runs rather than observing a rejection the contract would have made
+// anyway. The end-to-end test below covers the other half -- that nothing
+// reaches the graph either way.
+func TestProjectProducerItselfRefusesTheReservedNamespace(t *testing.T) {
+	t.Parallel()
+	reserved := contractsv1.ContextFabricReservedOrganizationScopePrefix + liveOrgID
+	if err := devhealthsource.ProjectAuthorizationScopeForTest(reserved); err == nil {
+		t.Fatal("the producer must refuse a project id inside the reserved organization-scope namespace, not defer to the batch validator")
+	}
+	if err := devhealthsource.ProjectAuthorizationScopeForTest("631fcb5f-c3e9-49ff-b17c-07877aaac9b7"); err != nil {
+		t.Fatalf("an ordinary project id must be accepted, got %v", err)
+	}
+}
+
 func TestProjectsInTheReservedOrganizationScopeNamespaceAreRejected(t *testing.T) {
 	t.Parallel()
 	reserved := contractsv1.ContextFabricReservedOrganizationScopePrefix + liveOrgID

@@ -168,35 +168,62 @@ WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') 
 // reason -- it carries the provider's own native team UUID, matching neither
 // teams.id nor teams.team_uuid.)
 //
-// Validity is the one place in this issue with real windows to state: the
-// edge is valid from the EARLIEST valid_from observed for it, and open-ended
-// while any of its windows is still open. has_open_window is computed rather
-// than argMax'd so a NULL valid_to means what it says -- "still owned" --
-// instead of depending on aggregate NULL-skipping semantics.
+// THIRD -- provider scoping (codex round-1 F1). project_key is only unique
+// WITHIN a provider, so both the aggregation and the projects join carry
+// provider. Without it, two providers' independent ownership assertions merge
+// on a shared key and the join fabricates cross-provider project->team edges
+// -- asserting an ownership nobody recorded -- and can emit two rows
+// resolving to one projects.id, duplicating a RelationshipID and wedging the
+// batch. Live today there are zero such collisions (0 keys under >1 provider
+// in either table, across every organization), so this is latent rather than
+// active; it is guarded because nothing in the schema prevents it and the
+// failure mode is silent fabrication, not an error.
+//
+// The GROUP BY deliberately does NOT include this table's own project_id,
+// though it is part of the source's natural key. The projected identity is
+// built from projects.id, so two rows differing only in project_id would
+// resolve to the SAME projects.id and duplicate a RelationshipID -- the exact
+// wedge this producer exists to avoid. Grouping on (provider, project_key)
+// instead cannot do that, because (org, provider, project_key) resolves to
+// exactly one projects.id (verified across every organization), and no
+// information is lost: zero groups map to more than one project_id.
+//
+// FOURTH -- validity, and a ClickHouse NULL trap (codex round-1 F2). The
+// window runs from the EARLIEST assertion ever observed to whatever the
+// LATEST assertion says, keyed on valid_from. Neither obvious spelling works:
+// max(valid_to) reports the largest date rather than the newest assertion, so
+// an ownership superseded by an earlier close looks live for months longer;
+// and plain argMax(valid_to, valid_from) SKIPS a NULL, so a newer OPEN
+// assertion loses to an older closed one and a live ownership reads as ended.
+// Both were verified directly against this ClickHouse version.
+// argMax(tuple(valid_to), valid_from).1 preserves the NULL, which is why the
+// tuple wrapper is load-bearing rather than decorative -- see
+// TestOwnershipWindowTakesTheLatestAssertion, which asserts both directions
+// because each spelling passes one and fails the other.
 func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const rowKey = "concat(p.id, ':', o.team_id, ':', o.source_name)"
-	statement := `SELECT p.id, o.team_id, o.source_name, o.valid_from, o.has_open_window, o.max_valid_to, o.updated_at
+	statement := `SELECT p.id, o.team_id, o.source_name, o.first_valid_from, o.latest_is_open, o.latest_valid_to, o.updated_at
 FROM (
-  SELECT ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name,
-         min(valid_from) AS valid_from,
-         max(valid_to IS NULL) AS has_open_window,
-         max(ifNull(valid_to, toDateTime64(0, 3, 'UTC'))) AS max_valid_to,
+  SELECT provider, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name,
+         min(valid_from) AS first_valid_from,
+         argMax(tuple(valid_to), valid_from).1 IS NULL AS latest_is_open,
+         ifNull(argMax(tuple(valid_to), valid_from).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
          max(updated_at) AS updated_at
   FROM team_project_ownership FINAL
   WHERE org_id = {org_id:String}
-  GROUP BY project_key, team_id, source_name
+  GROUP BY provider, project_key, team_id, source_name
 ) AS o
-INNER JOIN (SELECT id, ifNull(project_key, '') AS project_key FROM projects FINAL WHERE org_id = {org_id:String}) AS p USING (project_key)
+INNER JOIN (SELECT id, provider, ifNull(project_key, '') AS project_key FROM projects FINAL WHERE org_id = {org_id:String}) AS p USING (provider, project_key)
 INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id
 WHERE o.project_key != ''` + sincePredicate(cursor, "o.updated_at", rowKey) + orderBy("o.updated_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var projectID, teamID, source string
-		var validFrom, maxValidTo, observedAt time.Time
-		var hasOpenWindow uint8
-		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &hasOpenWindow, &maxValidTo, &observedAt); err != nil {
+		var validFrom, latestValidTo, observedAt time.Time
+		var latestIsOpen uint8
+		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt); err != nil {
 			return nil, err
 		}
-		observedAt, validFrom, maxValidTo = observedAt.UTC(), validFrom.UTC(), maxValidTo.UTC()
+		observedAt, validFrom, latestValidTo = observedAt.UTC(), validFrom.UTC(), latestValidTo.UTC()
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: "relationship:project_team:" + projectID + ":" + teamID + ":" + source,
 			Type:           contractsv1.ContextFabricRelationshipOwnedByTeam,
@@ -213,21 +240,21 @@ WHERE o.project_key != ''` + sincePredicate(cursor, "o.updated_at", rowKey) + or
 			ObservedAt:      observedAt,
 			SourceVersion:   TeamsProjectsSourceVersion,
 		}
-		relationship.ValidFrom, relationship.ValidTo = ownershipValidity(validFrom, hasOpenWindow, maxValidTo)
+		relationship.ValidFrom, relationship.ValidTo = ownershipValidity(validFrom, latestIsOpen, latestValidTo)
 		return []candidate{{observedAt: observedAt, sortKey: projectID + ":" + teamID + ":" + source, relationship: &relationship}}, nil
 	})
 }
 
 // ownershipValidity states a project->team edge's window explicitly in both
 // directions, the same owned-write discipline queryTeams/queryProjects apply
-// to entities (CHAOS-3785 R3-1). An edge with any still-open window is
-// currently owned and carries no end; one whose every window has closed ends
-// at the latest of them.
-func ownershipValidity(validFrom time.Time, hasOpenWindow uint8, maxValidTo time.Time) (*time.Time, *time.Time) {
+// to entities (CHAOS-3785 R3-1). Ownership begins at the earliest assertion
+// ever observed for the edge and ends per the LATEST assertion -- open if that
+// assertion left it open, otherwise at its valid_to.
+func ownershipValidity(validFrom time.Time, latestIsOpen uint8, latestValidTo time.Time) (*time.Time, *time.Time) {
 	from := validFrom
-	if hasOpenWindow != 0 {
+	if latestIsOpen != 0 {
 		return &from, nil
 	}
-	to := maxValidTo
+	to := latestValidTo
 	return &from, &to
 }

@@ -2,6 +2,7 @@ package devhealthsource
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -92,7 +93,7 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 	for _, table := range p.tables {
 		rows, truncated, err := table.query(ctx, p.client, orgID, cursorState{}, snapshotPerQueryCap)
 		if err != nil {
-			return contextfabric.ProjectionBatch{}, false, fmt.Errorf("%w: read %s: %v", contextfabric.ErrUnavailable, table.name, err)
+			return contextfabric.ProjectionBatch{}, false, &tableReadError{table: table.name, cause: err}
 		}
 		if truncated {
 			oversized = true
@@ -139,7 +140,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 	for _, table := range p.tables {
 		rows, _, err := table.query(ctx, p.client, orgID, state, incrementalBatchCap)
 		if err != nil {
-			return contextfabric.ProjectionBatch{}, false, fmt.Errorf("%w: read %s: %v", contextfabric.ErrUnavailable, table.name, err)
+			return contextfabric.ProjectionBatch{}, false, &tableReadError{table: table.name, cause: err}
 		}
 		all = append(all, rows...)
 	}
@@ -161,6 +162,57 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 	p.observeBatch(ctx, batch, all)
 	return batch, true, nil
 }
+
+// ProducerRejection is a producer's own bounded refusal of a source row -- a
+// data condition this package detected and named, as opposed to a failure
+// arriving from the driver. Its Reason is always a fixed string authored
+// here, which is what makes it safe for tableReadError to include in an
+// operator-visible message while still discarding every driver cause.
+type ProducerRejection struct{ Reason string }
+
+func (e *ProducerRejection) Error() string { return e.Reason }
+
+// tableReadError classifies a per-table read failure for the projection
+// coordinator, which logs this error verbatim.
+//
+// The previous form was fmt.Errorf("%w: read %s: %v", ErrUnavailable, table,
+// err), and %v flattened the cause into the message. internal/runtime/
+// clickhouse's operationError is already bounded ("ClickHouse query failed"),
+// but it is not the only error reaching this path: rows.Scan and rows.Err
+// surface driver text verbatim, so a failing statement's full SELECT list,
+// column types and bound literals landed in coordinator logs -- against the
+// rule that error strings and logs carry bounded classifications only.
+// Flattening also DISCARDED the cause for programmatic use: errors.Is against
+// the underlying error returned false, because %v copies text rather than
+// preserving the chain.
+//
+// This mirrors operationError's shape (bounded Error(), real Unwrap()) rather
+// than inventing a second convention: the message names only the
+// classification and which table failed, while Unwrap keeps both
+// ErrUnavailable -- the coordinator's retry signal -- and the original cause
+// inspectable.
+type tableReadError struct {
+	table string
+	cause error
+}
+
+func (e *tableReadError) Error() string {
+	message := contextfabric.ErrUnavailable.Error() + ": read " + e.table
+	// A producer-authored refusal is safe to surface and is the one thing an
+	// operator can actually act on -- ProducerRejection's text is a fixed
+	// string this package wrote, never driver output, query text, or row
+	// data. Bounding the message must not mean making a data-quality
+	// condition indistinguishable from a connection failure.
+	var rejection *ProducerRejection
+	if errors.As(e.cause, &rejection) {
+		return message + ": " + rejection.Reason
+	}
+	return message
+}
+
+// Unwrap returns both so errors.Is answers for the classification AND the
+// cause; a single-error Unwrap could only preserve one of them.
+func (e *tableReadError) Unwrap() []error { return []error{contextfabric.ErrUnavailable, e.cause} }
 
 func (p sourcePlan) seedCandidates(orgID string) []candidate {
 	if p.seed == nil {

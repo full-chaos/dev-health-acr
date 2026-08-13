@@ -207,6 +207,10 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) +
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		authorization, err := projectAuthorizationScope(id)
+		if err != nil {
+			return nil, err
+		}
 		label := name
 		if label == "" {
 			label = id
@@ -224,7 +228,7 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) +
 			Aliases:        distinctNonEmpty(projectKey),
 			ProviderIDs:    providerID(provider, id),
 			Properties:     properties,
-			Authorization:  contractsv1.ContextFabricAuthorizationScope{ProjectIDs: []string{id}},
+			Authorization:  authorization,
 			EvidenceRefIDs: []string{"acr:v1:project:" + id},
 			ObservedAt:     observedAt,
 			SourceVersion:  TeamsProjectsSourceVersion,
@@ -243,6 +247,34 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) +
 // teams.id). Any other shape leaves all five existing team fact providers
 // dark while still looking like a working projection.
 func teamCanonicalID(teamID string) string { return "team:" + teamID }
+
+// projectAuthorizationScope builds a project's authorization scope and is the
+// producer-side half of the reserved-namespace obligation
+// organizationScopePrefix (clickhouse.go) has carried since CHAOS-3753.
+// queryProjects is the first producer ever to populate real ProjectIDs -- the
+// same ContextFabricAuthorizationScope field the synthesized Organization
+// entity uses for its organization-wide scope -- so a project id equal to that
+// reserved namespace would silently inherit organization-wide authorization.
+//
+// The contract enforces this too (ContextFabricEntityProjection.Validate),
+// and that backstop is the stronger of the two because it cannot be forgotten
+// by a future producer. This guard is not redundant with it: it refuses the
+// row at the producer, before a batch is built, so the failure is attributable
+// to this table and this id instead of surfacing as a whole-batch validation
+// error. A rejection, never a silent rename -- a renamed project would look
+// projected while being unjoinable to every work item referencing its real id.
+//
+// An earlier version of this guard was written inline and then removed after
+// mutation-testing showed no test could tell whether it ran, because the
+// contract rejected the row either way. The lesson taken was the wrong one:
+// the fix is a seam the guard can be tested through
+// (ProjectAuthorizationScopeForTest), not deletion of the guard.
+func projectAuthorizationScope(projectID string) (contractsv1.ContextFabricAuthorizationScope, error) {
+	if IsReservedAuthorizationScopeID(projectID) {
+		return contractsv1.ContextFabricAuthorizationScope{}, &ProducerRejection{Reason: "project id falls inside the reserved organization-scope namespace"}
+	}
+	return contractsv1.ContextFabricAuthorizationScope{ProjectIDs: []string{projectID}}, nil
+}
 
 // projectCanonicalID follows teamCanonicalID's convention. No prefix
 // precedent existed for projects (nothing reads project-scoped facts), so
