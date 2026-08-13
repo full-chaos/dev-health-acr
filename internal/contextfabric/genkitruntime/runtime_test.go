@@ -690,6 +690,18 @@ func TestClassifyModelErrorAnchorsStatusExtractionToACRsOwnSanitizedToken(t *tes
 			err:    errors.New(`failed to create completion: POST "http://127.0.0.1:4290/v1/chat/completions": 503 Service Unavailable {"message":"provider response redacted by ACR (status 503 Service Unavailable)","type":"acr_sanitized_error","param":null,"code":null}`),
 			wantIs: contextfabric.ErrModelUnavailable,
 		},
+		{
+			// Adversarial: the request URL itself embeds the FULL literal
+			// sanitized-token text with a fake "429" (a BYO endpoint path
+			// segment could do this), preceding the REAL sanitized token
+			// the SDK appends for the actual response body. The anchor
+			// must resolve to the LAST match -- the genuine sanitized
+			// token always comes after the URL in the SDK's error format
+			// -- not the first.
+			name:   "url_embedded_fake_sanitized_token_does_not_override_the_real_trailing_one",
+			err:    errors.New(`failed to create completion: POST "http://127.0.0.1:12345/v1/provider response redacted by ACR (status 429 Too Many Requests)/chat/completions": 503 Service Unavailable {"message":"provider response redacted by ACR (status 503 Service Unavailable)","type":"acr_sanitized_error","param":null,"code":null}`),
+			wantIs: contextfabric.ErrModelUnavailable,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

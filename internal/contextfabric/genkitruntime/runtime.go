@@ -607,7 +607,14 @@ func classifyModelError(err error) error {
 	// full request URL verbatim, so an ephemeral test port or a BYO
 	// endpoint's own hostname/port/path containing those digits would
 	// misclassify an unrelated status as rate-limited.
-	if m := contextFabricSanitizedStatusPattern.FindStringSubmatch(text); m != nil {
+	//
+	// Take the LAST match, not the first: the request URL precedes the
+	// response body in the SDK's error format, so a BYO endpoint whose URL
+	// happens to embed the literal token text (an adversarial or coincidental
+	// path segment) must not shadow the real sanitized token that always
+	// follows it.
+	if all := contextFabricSanitizedStatusPattern.FindAllStringSubmatch(text, -1); len(all) > 0 {
+		m := all[len(all)-1]
 		if code, convErr := strconv.Atoi(m[1]); convErr == nil && code == 429 {
 			return fmt.Errorf("%w: model generation failed", contextfabric.ErrModelRateLimited)
 		}
