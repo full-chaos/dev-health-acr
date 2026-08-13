@@ -56,7 +56,11 @@ func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKe
 		QuestionHash:      contextfabric.QuestionHash(result.Question),
 		ContractVersion:   result.Versions.ContractVersion,
 		ProjectionVersion: result.Versions.ProjectionVersion,
-		ModelIdentity:     result.Versions.ModelIdentity,
+		// A single-member chain: the exact identity this result was
+		// stored under. Most tests in this file want the baseline "the
+		// key that was actually stored still matches" case; CHAOS-3786
+		// tests below build a wider chain explicitly.
+		ModelIdentities: []string{result.Versions.ModelIdentity},
 	}
 }
 
@@ -294,7 +298,7 @@ func TestAC_3782_7_VersionMismatchNeverReused(t *testing.T) {
 	})
 	t.Run("model_identity", func(t *testing.T) {
 		key := baseline
-		key.ModelIdentity = "openai-compatible/gpt-5-mini"
+		key.ModelIdentities = []string{"openai-compatible/gpt-5-mini"}
 		_, ok, err := store.FindReusable(ctx, principal, key)
 		require.NoError(t, err)
 		require.False(t, ok)
@@ -304,6 +308,57 @@ func TestAC_3782_7_VersionMismatchNeverReused(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, ok, "sanity: the unmodified key must still match")
 	})
+}
+
+// TestChaos3786_FindReusableMatchesAnyIdentityInTheCurrentChain is the
+// hit-rate probe: a result stored under the FALLBACK model's identity must
+// be found when the lookup key's ModelIdentities chain contains BOTH the
+// primary and the fallback -- proving the predicate is chain membership
+// (`model_identity = ANY(...)`), not a single equality.
+func TestChaos3786_FindReusableMatchesAnyIdentityInTheCurrentChain(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-chain-hit"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_chain01", principal.OrgID, "Did the fallback model answer this?")
+	result.Versions.ModelIdentity = "openai/gpt-5-fallback"
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	key := reuseKeyFor(result)
+	key.ModelIdentities = []string{"openai/gpt-5-nano", "openai/gpt-5-fallback"}
+
+	found, ok, err := store.FindReusable(ctx, principal, key)
+	require.NoError(t, err)
+	require.True(t, ok, "expected the fallback-produced result to be reusable while the fallback is still in the current chain")
+	require.Equal(t, result.ResultID, found.ResultID)
+}
+
+// TestChaos3786_FindReusableMissesWhenChainNoLongerNamesTheStoredIdentity is
+// the correctness probe: a result stored under an OLD fallback identity
+// must stop matching once the lookup chain no longer names it -- even
+// though the primary identity in the chain is completely unchanged. This
+// is defect (b) from the CHAOS-3786 issue: a fallback reconfiguration must
+// invalidate reuse for what the OLD fallback produced.
+func TestChaos3786_FindReusableMissesWhenChainNoLongerNamesTheStoredIdentity(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-chain-miss"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_chain02", principal.OrgID, "Did the OLD fallback model answer this?")
+	result.Versions.ModelIdentity = "openai/gpt-5-fallback-old"
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	key := reuseKeyFor(result)
+	// Primary unchanged; the org reconfigured its fallback model.
+	key.ModelIdentities = []string{"openai/gpt-5-nano", "openai/gpt-5-fallback-new"}
+
+	_, ok, err := store.FindReusable(ctx, principal, key)
+	require.NoError(t, err)
+	require.False(t, ok, "expected a miss: the stored result's producing model is no longer in the current chain")
 }
 
 // TestFindReusable_OutsideStalenessWindowIsAMiss proves condition 4's age

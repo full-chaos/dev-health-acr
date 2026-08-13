@@ -182,13 +182,13 @@ func (f orgModelConfigResolverFunc) ResolveOrgModelConfig(ctx context.Context, o
 // identity must be the deployment-default fallback, matching pre-CHAOS-3775
 // behavior exactly.
 func TestContextFabricReuseModelIdentityResolver_nilConfigsAlwaysUsesFallback(t *testing.T) {
-	resolver := contextFabricReuseModelIdentityResolver{fallback: "deployment/default"}
+	resolver := contextFabricReuseModelIdentityResolver{fallback: []string{"deployment/default"}}
 	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
 	if err != nil {
 		t.Fatalf("ResolveReuseModelIdentity() error = %v", err)
 	}
-	if got != "deployment/default" {
-		t.Fatalf("ResolveReuseModelIdentity() = %q, want the fallback", got)
+	if len(got) != 1 || got[0] != "deployment/default" {
+		t.Fatalf("ResolveReuseModelIdentity() = %v, want the fallback chain", got)
 	}
 }
 
@@ -201,14 +201,14 @@ func TestContextFabricReuseModelIdentityResolver_noConfigurationUsesFallback(t *
 		configs: orgModelConfigResolverFunc(func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
 			return contextfabric.ResolvedOrgModelConfig{}, false, nil
 		}),
-		fallback: "deployment/default",
+		fallback: []string{"deployment/default"},
 	}
 	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
 	if err != nil {
 		t.Fatalf("ResolveReuseModelIdentity() error = %v", err)
 	}
-	if got != "deployment/default" {
-		t.Fatalf("ResolveReuseModelIdentity() = %q, want the fallback", got)
+	if len(got) != 1 || got[0] != "deployment/default" {
+		t.Fatalf("ResolveReuseModelIdentity() = %v, want the fallback chain", got)
 	}
 }
 
@@ -222,14 +222,36 @@ func TestContextFabricReuseModelIdentityResolver_configuredOrgUsesItsOwnIdentity
 		configs: orgModelConfigResolverFunc(func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
 			return contextfabric.ResolvedOrgModelConfig{Provider: "anthropic", Model: "claude-x"}, true, nil
 		}),
-		fallback: "deployment/default",
+		fallback: []string{"deployment/default"},
 	}
 	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
 	if err != nil {
 		t.Fatalf("ResolveReuseModelIdentity() error = %v", err)
 	}
-	if got != "anthropic/claude-x" {
-		t.Fatalf("ResolveReuseModelIdentity() = %q, want %q", got, "anthropic/claude-x")
+	if len(got) != 1 || got[0] != "anthropic/claude-x" {
+		t.Fatalf("ResolveReuseModelIdentity() = %v, want [%q]", got, "anthropic/claude-x")
+	}
+}
+
+// TestChaos3786_ContextFabricReuseModelIdentityResolver_configuredOrgIncludesItsOwnFallback
+// is the CHAOS-3786 fix's core assertion: an organization with BOTH a
+// primary AND a FallbackModel configured resolves to a TWO-entry chain,
+// primary first -- the reuse lookup must be able to match a candidate the
+// fallback produced, not only one the primary produced.
+func TestChaos3786_ContextFabricReuseModelIdentityResolver_configuredOrgIncludesItsOwnFallback(t *testing.T) {
+	resolver := contextFabricReuseModelIdentityResolver{
+		configs: orgModelConfigResolverFunc(func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
+			return contextfabric.ResolvedOrgModelConfig{Provider: "anthropic", Model: "claude-x", FallbackModel: "claude-y"}, true, nil
+		}),
+		fallback: []string{"deployment/default"},
+	}
+	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
+	if err != nil {
+		t.Fatalf("ResolveReuseModelIdentity() error = %v", err)
+	}
+	want := []string{"anthropic/claude-x", "anthropic/claude-y"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("ResolveReuseModelIdentity() = %v, want %v", got, want)
 	}
 }
 
@@ -246,13 +268,13 @@ func TestContextFabricReuseModelIdentityResolver_resolveErrorNeverFallsBack(t *t
 		configs: orgModelConfigResolverFunc(func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
 			return contextfabric.ResolvedOrgModelConfig{}, false, sentinel
 		}),
-		fallback: "deployment/default",
+		fallback: []string{"deployment/default"},
 	}
 	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("ResolveReuseModelIdentity() error = %v, want %v", err, sentinel)
 	}
-	if got != "" {
-		t.Fatalf("ResolveReuseModelIdentity() = %q, want empty on error (never the fallback)", got)
+	if len(got) != 0 {
+		t.Fatalf("ResolveReuseModelIdentity() = %v, want empty on error (never the fallback)", got)
 	}
 }

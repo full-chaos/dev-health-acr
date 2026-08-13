@@ -459,11 +459,27 @@ func reuseOutcomeSlicesEqual(a, b []AnswerReuseOutcome) bool {
 }
 
 // reuseModelIdentityResolverFunc is a fake ReuseModelIdentityResolver
-// driven by a plain function, mirroring reuseGateFunc above.
-type reuseModelIdentityResolverFunc func(context.Context, string) (string, error)
+// driven by a plain function, mirroring reuseGateFunc above. Returns the
+// CURRENT effective chain (CHAOS-3786): primary first, then fallback (if
+// any) -- never a single static identity.
+type reuseModelIdentityResolverFunc func(context.Context, string) ([]string, error)
 
-func (f reuseModelIdentityResolverFunc) ResolveReuseModelIdentity(ctx context.Context, orgID string) (string, error) {
+func (f reuseModelIdentityResolverFunc) ResolveReuseModelIdentity(ctx context.Context, orgID string) ([]string, error) {
 	return f(ctx, orgID)
+}
+
+// containsIdentity reports whether identities contains want -- the
+// CHAOS-3786 chain-membership predicate ReuseKey.ModelIdentities exists
+// for, mirrored here so fake ReuseGates can reproduce
+// pginvestigation.Store.FindReusable's `model_identity = ANY(...)`
+// semantics without a database.
+func containsIdentity(identities []string, want string) bool {
+	for _, identity := range identities {
+		if identity == want {
+			return true
+		}
+	}
+	return false
 }
 
 // TestAC_3782_7_ReuseKeyUsesCurrentOrgEffectiveModelIdentityNotAStaticOne is
@@ -472,7 +488,7 @@ func (f reuseModelIdentityResolverFunc) ResolveReuseModelIdentity(ctx context.Co
 // flipped between them (simulating a CHAOS-3775 BYO reconfiguration),
 // must NOT both reuse the same stored candidate. Before the fix, Engine's
 // lookup key came from a single value fixed at engine-construction time
-// (EngineOptions.ReuseModelIdentity), so a per-organization config change
+// (EngineOptions.ReuseModelIdentities), so a per-organization config change
 // between calls was invisible to it and both calls would have kept
 // matching -- and reusing -- the same stale-model row.
 func TestAC_3782_7_ReuseKeyUsesCurrentOrgEffectiveModelIdentityNotAStaticOne(t *testing.T) {
@@ -497,16 +513,16 @@ func TestAC_3782_7_ReuseKeyUsesCurrentOrgEffectiveModelIdentityNotAStaticOne(t *
 		}),
 		Results:   &resultStoreStub{},
 		Telemetry: telemetry,
-		ReuseModelIdentityResolver: reuseModelIdentityResolverFunc(func(context.Context, string) (string, error) {
-			return currentIdentity, nil
+		ReuseModelIdentityResolver: reuseModelIdentityResolverFunc(func(context.Context, string) ([]string, error) {
+			return []string{currentIdentity}, nil
 		}),
 		// The candidate was saved under "org-a/model-v1" -- a real store's
-		// FindReusable only returns it when the LOOKUP key's ModelIdentity
-		// still matches (its own WHERE model_identity = $N), which this
-		// fake reproduces directly.
+		// FindReusable only returns it when the LOOKUP key's chain still
+		// contains that identity (its own WHERE model_identity =
+		// ANY($N)), which this fake reproduces directly.
 		ReuseGate: reuseGateFunc(func(_ context.Context, _ storage.Principal, key ReuseKey) (InvestigationResult, bool, error) {
 			capturedKeys = append(capturedKeys, key)
-			if key.ModelIdentity == "org-a/model-v1" {
+			if containsIdentity(key.ModelIdentities, "org-a/model-v1") {
 				return candidate, true, nil
 			}
 			return InvestigationResult{}, false, nil
@@ -534,9 +550,9 @@ func TestAC_3782_7_ReuseKeyUsesCurrentOrgEffectiveModelIdentityNotAStaticOne(t *
 	if len(capturedKeys) != 2 {
 		t.Fatalf("FindReusable called %d times, want 2", len(capturedKeys))
 	}
-	if capturedKeys[0].ModelIdentity != "org-a/model-v1" || capturedKeys[1].ModelIdentity != "org-a/model-v2" {
-		t.Fatalf("captured ModelIdentity per call = [%q, %q], want [%q, %q]",
-			capturedKeys[0].ModelIdentity, capturedKeys[1].ModelIdentity, "org-a/model-v1", "org-a/model-v2")
+	if !reflect.DeepEqual(capturedKeys[0].ModelIdentities, []string{"org-a/model-v1"}) || !reflect.DeepEqual(capturedKeys[1].ModelIdentities, []string{"org-a/model-v2"}) {
+		t.Fatalf("captured ModelIdentities per call = [%v, %v], want [%v, %v]",
+			capturedKeys[0].ModelIdentities, capturedKeys[1].ModelIdentities, []string{"org-a/model-v1"}, []string{"org-a/model-v2"})
 	}
 	want := []AnswerReuseOutcome{AnswerReuseHit, AnswerReuseMissNoCandidate}
 	if got := telemetry.answerReuseOutcomes; !reuseOutcomeSlicesEqual(got, want) {
@@ -567,8 +583,8 @@ func TestReuseModelIdentityResolverErrorFailsClosed(t *testing.T) {
 		}),
 		Results:   &resultStoreStub{},
 		Telemetry: telemetry,
-		ReuseModelIdentityResolver: reuseModelIdentityResolverFunc(func(context.Context, string) (string, error) {
-			return "", errors.New("credential no longer decrypts")
+		ReuseModelIdentityResolver: reuseModelIdentityResolverFunc(func(context.Context, string) ([]string, error) {
+			return nil, errors.New("credential no longer decrypts")
 		}),
 		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
 			t.Fatal("FindReusable must not be called when the model identity could not be resolved")
@@ -582,6 +598,110 @@ func TestReuseModelIdentityResolverErrorFailsClosed(t *testing.T) {
 	}
 	if result.Reused {
 		t.Fatal("result.Reused = true, want false")
+	}
+	want := []AnswerReuseOutcome{AnswerReuseMissNoCandidate}
+	if got := telemetry.answerReuseOutcomes; !reuseOutcomeSlicesEqual(got, want) {
+		t.Fatalf("answerReuseOutcomes = %v, want %v", got, want)
+	}
+}
+
+// TestChaos3786_ReuseHitsOnACandidateProducedByTheFallbackModel is the
+// hit-rate probe for CHAOS-3786: a candidate whose stored identity is the
+// FALLBACK model's (not the primary's) must still be reusable, as long as
+// the fallback is still a member of the org's CURRENT effective chain. Pre-
+// fix, ReuseKey carried a single ModelIdentity built from the primary alone
+// -- a fallback-produced candidate's own identity never matched it, and
+// this call would always fall through to a fresh (avoidable) investigation.
+func TestChaos3786_ReuseHitsOnACandidateProducedByTheFallbackModel(t *testing.T) {
+	t.Parallel()
+
+	project, candidate := reusableCandidate()
+	candidate.Versions.ModelIdentity = "org-a/model-fallback"
+
+	var capturedKeys []ReuseKey
+	telemetry := &recordingTelemetry{}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		ReuseModelIdentityResolver: reuseModelIdentityResolverFunc(func(context.Context, string) ([]string, error) {
+			// The org's current chain: primary first, fallback second --
+			// mirroring what contextFabricReuseModelIdentityResolver
+			// resolves from ResolvedOrgModelConfig{Model, FallbackModel}.
+			return []string{"org-a/model-primary", "org-a/model-fallback"}, nil
+		}),
+		ReuseGate: reuseGateFunc(func(_ context.Context, _ storage.Principal, key ReuseKey) (InvestigationResult, bool, error) {
+			capturedKeys = append(capturedKeys, key)
+			// Reproduces pginvestigation.Store.FindReusable's
+			// `model_identity = ANY($N)`: the candidate's single stored
+			// identity need only be A MEMBER of the looked-up chain.
+			if containsIdentity(key.ModelIdentities, candidate.Versions.ModelIdentity) {
+				return candidate, true, nil
+			}
+			return InvestigationResult{}, false, nil
+		}),
+		Telemetry: telemetry,
+	})
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !result.Reused {
+		t.Fatal("result.Reused = false, want true: a fallback-produced candidate must be reusable while the fallback is still in the org's current chain")
+	}
+	if len(capturedKeys) != 1 || !reflect.DeepEqual(capturedKeys[0].ModelIdentities, []string{"org-a/model-primary", "org-a/model-fallback"}) {
+		t.Fatalf("captured ModelIdentities = %v, want exactly one call with [org-a/model-primary org-a/model-fallback]", capturedKeys)
+	}
+}
+
+// TestChaos3786_StaleFallbackCandidateMissesOnceTheChainNoLongerNamesIt is
+// the correctness probe for CHAOS-3786 defect (b): a candidate produced by
+// an OLD fallback model must stop being reusable once the org's current
+// chain no longer includes that identity (the fallback was reconfigured to
+// a different model, or removed) -- even though the PRIMARY identity is
+// completely unchanged. Before this fix, the reuse key was blind to the
+// fallback dimension entirely, so a chain-only change like this would never
+// have invalidated anything, silently serving a candidate whose answering
+// model the org's chain can no longer produce.
+func TestChaos3786_StaleFallbackCandidateMissesOnceTheChainNoLongerNamesIt(t *testing.T) {
+	t.Parallel()
+
+	project, candidate := reusableCandidate()
+	candidate.Versions.ModelIdentity = "org-a/model-fallback-old"
+	freshResult := validInvestigationResult()
+
+	telemetry := &recordingTelemetry{}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: &resultStoreStub{},
+		ReuseModelIdentityResolver: reuseModelIdentityResolverFunc(func(context.Context, string) ([]string, error) {
+			// Primary unchanged; fallback reconfigured to a different
+			// model. "org-a/model-fallback-old" is no longer a member.
+			return []string{"org-a/model-primary", "org-a/model-fallback-new"}, nil
+		}),
+		ReuseGate: reuseGateFunc(func(_ context.Context, _ storage.Principal, key ReuseKey) (InvestigationResult, bool, error) {
+			if containsIdentity(key.ModelIdentities, candidate.Versions.ModelIdentity) {
+				return candidate, true, nil
+			}
+			return InvestigationResult{}, false, nil
+		}),
+		Telemetry: telemetry,
+	})
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Reused {
+		t.Fatal("result.Reused = true, want false: the candidate's producing model is no longer in the org's current chain")
 	}
 	want := []AnswerReuseOutcome{AnswerReuseMissNoCandidate}
 	if got := telemetry.answerReuseOutcomes; !reuseOutcomeSlicesEqual(got, want) {

@@ -378,10 +378,15 @@ SELECT source, backend_watermark FROM acr.context_fabric_projection_checkpoints 
 
 // FindReusable implements contextfabric.AnswerReuseGate. It proves TRD
 // §19.7.3 conditions 1, 2, 5, and 7 with the SQL predicate below (an exact
-// match on org/question-hash/contract/projection/model-identity, ordered
-// to prefer the most recently generated candidate), condition 4 with the
-// same query's staleness-window and rebuild-invalidation predicates, and
-// condition 3 (per-source watermark equality) afterward in Go via
+// match on org/question-hash/contract/projection, and -- CHAOS-3786 --
+// model-identity CHAIN MEMBERSHIP via `model_identity = ANY($5)` rather
+// than equality, since key.ModelIdentities is the org's current effective
+// chain (primary + fallback) and a stored row's single model_identity
+// need only be ONE element of it; see ReuseKey.ModelIdentities' doc
+// comment for why. Results are ordered to prefer the most recently
+// generated candidate. Condition 4 is proved by the same query's
+// staleness-window and rebuild-invalidation predicates, and condition 3
+// (per-source watermark equality) afterward in Go via
 // watermarksStillMatch. It never checks condition 6 (current
 // authorization) -- see the interface doc comment on why that stays
 // Engine's job.
@@ -402,7 +407,7 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	}
 	orgID := strings.TrimSpace(principal.OrgID)
 	questionHash := strings.TrimSpace(key.QuestionHash)
-	if orgID == "" || questionHash == "" {
+	if orgID == "" || questionHash == "" || len(key.ModelIdentities) == 0 {
 		return contextfabric.InvestigationResult{}, false, nil
 	}
 
@@ -430,6 +435,13 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	// captured, exactly mirroring the source_watermarks guard just above
 	// it. The COALESCE(..., 0) matches SnapshotRebuildEpoch's own
 	// baseline for an organization with no invalidations row at all.
+	//
+	// CHAOS-3786: model_identity = ANY($5) -- $5 is the org's current
+	// effective CHAIN (key.ModelIdentities), passed as a native []string
+	// parameter (pgx v5 encodes it as text[]). A stored row's single
+	// model_identity value matches if it is ANY element of the chain, not
+	// only if it equals a single primary identity -- see
+	// ReuseKey.ModelIdentities' doc comment.
 	row := s.db.QueryRowContext(ctx, `
 SELECT payload, source_watermarks
 FROM acr.context_fabric_investigation_results
@@ -437,7 +449,7 @@ WHERE org_id = $1
   AND question_hash = $2
   AND contract_version = $3
   AND projection_version = $4
-  AND model_identity = $5
+  AND model_identity = ANY($5)
   AND source_watermarks IS NOT NULL
   AND invalidation_epoch IS NOT NULL
   AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -452,7 +464,7 @@ WHERE org_id = $1
 -- SELECTION deterministic; it carries no freshness meaning of its own.
 ORDER BY created_at DESC, result_id DESC
 LIMIT 1`,
-		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentity, s.reuseMaxAge.Seconds())
+		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds())
 	var payload, sourceWatermarks []byte
 	switch err := row.Scan(&payload, &sourceWatermarks); {
 	case errors.Is(err, sql.ErrNoRows):

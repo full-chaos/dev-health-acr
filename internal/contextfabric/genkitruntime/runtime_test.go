@@ -456,6 +456,42 @@ func TestRuntimeUsesBoundedFallbackWhenModelUnavailable(t *testing.T) {
 	if interpreted.RequestedJudgment != fallbackQuestion.RequestedJudgment || !receipt.FallbackUsed || receipt.Outcome != "fallback" {
 		t.Fatalf("interpreted = %#v receipt = %#v", interpreted, receipt)
 	}
+	// CHAOS-3786 Bug A: a receipt from a SUCCESSFUL fallback call must name
+	// the FALLBACK's own Provider/Model/ModelVersion, not the primary's
+	// (mustRuntime's "test-provider"/"test/model"/"test-model-v1" vs
+	// validReceipt's "fallback"/"deterministic"/"v1"). CHAOS-3782's saved
+	// Versions.ModelIdentity, and CHAOS-3786's reuse-key chain, both derive
+	// from this receipt -- if it still names the primary, every
+	// fallback-produced answer is persisted (and later looked up) under an
+	// identity that never actually produced it.
+	if receipt.Provider != "fallback" || receipt.Model != "deterministic" || receipt.ModelVersion != "v1" {
+		t.Fatalf("receipt.{Provider,Model,ModelVersion} = %q/%q/%q, want the FALLBACK leg's own identity %q/%q/%q, not the primary's",
+			receipt.Provider, receipt.Model, receipt.ModelVersion, "fallback", "deterministic", "v1")
+	}
+}
+
+// TestRuntimeSynthesisFallbackSuccessCarriesFallbacksOwnModelIdentity is the
+// SynthesizeAnswer counterpart of the Bug A assertion in
+// TestRuntimeUsesBoundedFallbackWhenModelUnavailable -- no prior test
+// covered the synthesis fallback-SUCCESS path at all.
+func TestRuntimeSynthesisFallbackSuccessCarriesFallbacksOwnModelIdentity(t *testing.T) {
+	t.Parallel()
+	fallbackDraft := validDraft()
+	runtime := mustRuntime(t, &generatorStub{synthesisErr: errors.New("503 unavailable")}, Config{
+		MaxAttempts: 1,
+		Fallback:    fallbackRuntime{draft: fallbackDraft},
+	})
+	draft, receipt, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v", err)
+	}
+	if !receipt.FallbackUsed || receipt.Outcome != "fallback" {
+		t.Fatalf("draft = %#v receipt = %#v", draft, receipt)
+	}
+	if receipt.Provider != "fallback" || receipt.Model != "deterministic" || receipt.ModelVersion != "v1" {
+		t.Fatalf("receipt.{Provider,Model,ModelVersion} = %q/%q/%q, want the FALLBACK leg's own identity %q/%q/%q, not the primary's",
+			receipt.Provider, receipt.Model, receipt.ModelVersion, "fallback", "deterministic", "v1")
+	}
 }
 
 // TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationFallbackAlsoFails is

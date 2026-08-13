@@ -293,7 +293,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// per-organization divergence possible -- to wire unconditionally.
 		ReuseModelIdentityResolver: contextFabricReuseModelIdentityResolver{
 			configs:  reuseModelIdentityConfigs,
-			fallback: contextFabricReuseModelIdentity(os.LookupEnv),
+			fallback: contextFabricReuseModelIdentities(os.LookupEnv),
 		},
 		// CHAOS-3782 AC-3782-8: the first production EngineTelemetry
 		// wiring (previously always nil -- see SlogEngineTelemetry's doc
@@ -306,14 +306,13 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// ReuseProjectionVersion mirrors RuntimeAnswerSynthesizerOptions
 		// above verbatim (contextFabricProjectionVersion, so a fresh
 		// answer's Versions.ProjectionVersion and what reuse compares
-		// against can never drift apart), and ReuseModelIdentity mirrors
-		// what RuntimeAnswerSynthesizer.Synthesize itself computes from
-		// the configured provider/model (model_runtime.go's
-		// modelIdentity helper) -- see contextFabricReuseModelIdentity's
-		// doc comment for the one place these two are deliberately
-		// allowed to diverge (a fallback-model answer).
+		// against can never drift apart), and ReuseModelIdentities (CHAOS-3786)
+		// mirrors the FULL chain (primary, then fallback) the configured
+		// provider/model(s) can produce via model_runtime.go's
+		// modelIdentity helper -- see contextFabricReuseModelIdentities'
+		// doc comment for why this is a chain, not a single value.
 		ReuseProjectionVersion: contextFabricProjectionVersion,
-		ReuseModelIdentity:     contextFabricReuseModelIdentity(os.LookupEnv),
+		ReuseModelIdentities:   contextFabricReuseModelIdentities(os.LookupEnv),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialize context fabric engine: %w", err)
@@ -354,41 +353,44 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 // and is intentionally omitted.
 const contextFabricProjectionVersion = devhealthsource.ClickHouseSourceVersion + "+" + devhealthsource.EpisodesSourceVersion
 
-// contextFabricReuseModelIdentity computes the CURRENT PRIMARY configured
-// model's identity, in the exact "<provider>/<model>" shape
-// model_runtime.go's modelIdentity helper produces from a receipt, for
-// EngineOptions.ReuseProjectionVersion's sibling ReuseModelIdentity. It
-// reads modelprovider.ConfigFromEnv a second time (newContextFabricModelRuntime
-// already read it once, to build the runtime itself) rather than
-// threading the config out through that function's return value, to avoid
-// changing a signature other call sites and tests depend on for what is
-// a purely additive, optional reuse concern.
+// contextFabricReuseModelIdentities computes the CURRENT deployment-default
+// model CHAIN's identities, primary first and then the fallback (if
+// modelprovider.EnvFallbackModel is configured), each in the exact
+// "<provider>/<model>" shape model_runtime.go's modelIdentity helper
+// produces from a receipt, for EngineOptions.ReuseProjectionVersion's
+// sibling ReuseModelIdentities. It reads modelprovider.ConfigFromEnv a
+// second time (newContextFabricModelRuntime already read it once, to
+// build the runtime itself) rather than threading the config out through
+// that function's return value, to avoid changing a signature other call
+// sites and tests depend on for what is a purely additive, optional reuse
+// concern.
 //
-// KNOWN LIMITATION (tracked as CHAOS-3786): this is always the PRIMARY
-// model, never the fallback. A result actually synthesized by the
-// fallback model (§19.3.4 records this happening often -- 16 of 17
-// successful investigations needed it in the measured batch) is stored
-// with a DIFFERENT ModelIdentity than this function returns, so a later
-// identical question computes a ReuseKey that will not match it and
-// reuse simply misses -- never wrongly hits. Binding the reuse key to
-// "primary or fallback" is a real, valuable follow-up but is out of
-// CHAOS-3782's scope: it would require deciding AHEAD of a model call
-// which model will answer, which is exactly what cannot be known before
-// the call completes. See CHAOS-3786 for the fix.
-func contextFabricReuseModelIdentity(lookup func(string) (string, bool)) string {
+// CHAOS-3786: previously returned only the primary's identity, so a
+// result actually synthesized by the fallback model (§19.3.4 records this
+// happening often -- 16 of 17 successful investigations needed it in the
+// measured batch) computed a ReuseKey that never matched it -- reuse
+// simply missed for every fallback-produced answer. Returning the whole
+// chain and matching on chain MEMBERSHIP (see
+// ReuseKey.ModelIdentities' doc comment) fixes that without needing to
+// predict ahead of a model call which of the two will answer.
+func contextFabricReuseModelIdentities(lookup func(string) (string, bool)) []string {
 	if !modelprovider.Configured(lookup) {
-		return "unwired"
+		return nil
 	}
 	modelConfig, err := modelprovider.ConfigFromEnv(lookup)
 	if err != nil {
-		return "unwired"
+		return nil
 	}
 	provider := strings.TrimSpace(modelConfig.Provider)
 	model := strings.TrimSpace(modelConfig.Model)
 	if provider == "" || model == "" {
-		return "unwired"
+		return nil
 	}
-	return provider + "/" + model
+	identities := []string{provider + "/" + model}
+	if fallbackModel := strings.TrimSpace(modelConfig.FallbackModel); fallbackModel != "" {
+		identities = append(identities, provider+"/"+fallbackModel)
+	}
+	return identities
 }
 
 func newInvestigationResultID() string {

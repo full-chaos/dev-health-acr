@@ -14,22 +14,30 @@ type EngineOptions struct {
 	ServiceVersion string
 	Now            func() time.Time
 	NewResultID    func() string
-	// ReuseProjectionVersion and ReuseModelIdentity (CHAOS-3782) are the
-	// CURRENT values a fresh investigation's Versions.ProjectionVersion and
-	// Versions.ModelIdentity would carry -- composition must wire both
-	// from the exact same configuration RuntimeAnswerSynthesizerOptions
-	// and the model runtime already use (see
-	// RuntimeAnswerSynthesizerOptions.ProjectionVersion and
-	// modelIdentity(receipt.Provider, receipt.Model) in
-	// model_runtime.go), so they can never drift from what a fresh answer
-	// would actually stamp. Engine needs these BEFORE running a fresh
-	// investigation -- that is the entire point of reuse -- so they must
-	// be known statically at composition time, not read off a result
-	// Engine has not produced yet. Both may be left empty; Dependencies.ReuseGate
-	// being nil (or FindReusable never matching an empty ModelIdentity/
-	// ProjectionVersion) is what actually disables reuse.
+	// ReuseProjectionVersion (CHAOS-3782) is the CURRENT value a fresh
+	// investigation's Versions.ProjectionVersion would carry -- composition
+	// must wire it from the exact same configuration
+	// RuntimeAnswerSynthesizerOptions.ProjectionVersion uses, so it can
+	// never drift from what a fresh answer would actually stamp. Engine
+	// needs this BEFORE running a fresh investigation -- that is the
+	// entire point of reuse -- so it must be known statically at
+	// composition time, not read off a result Engine has not produced
+	// yet. May be left empty; Dependencies.ReuseGate being nil (or
+	// FindReusable never matching an empty ProjectionVersion) is what
+	// actually disables reuse.
 	ReuseProjectionVersion string
-	ReuseModelIdentity     string
+	// ReuseModelIdentities (CHAOS-3782; widened from a single
+	// ReuseModelIdentity string to a chain by CHAOS-3786) is the static
+	// fallback chain tryReuse uses ONLY when Dependencies.
+	// ReuseModelIdentityResolver is nil -- see that field's doc comment.
+	// A real per-organization or per-BYO-config deployment should wire
+	// the resolver instead; this exists for a deployment with no
+	// per-organization model configuration support at all, where the
+	// deployment-default's own chain (primary, then fallback if
+	// configured) is every organization's effective chain. May be left
+	// empty, same "reuse effectively disabled" convention as
+	// ReuseProjectionVersion.
+	ReuseModelIdentities []string
 }
 
 type EngineDependencies struct {
@@ -67,14 +75,15 @@ type EngineDependencies struct {
 	// nil.
 	ReuseEpochSnapshotter RebuildEpochSnapshotter
 	// ReuseModelIdentityResolver is optional (CHAOS-3782, Codex round-2
-	// finding #3). When set, tryReuse resolves the CURRENT org-effective
-	// model identity through it, per call, instead of using
-	// EngineOptions.ReuseModelIdentity's single static value for every
+	// finding #3; CHAOS-3786). When set, tryReuse resolves the CURRENT
+	// org-effective model CHAIN through it, per call, instead of using
+	// EngineOptions.ReuseModelIdentities' single static chain for every
 	// organization -- see ReuseModelIdentityResolver's doc comment for
-	// the staleness bug a static identity causes. Leaving this nil keeps
-	// pre-existing behavior (EngineOptions.ReuseModelIdentity for every
-	// organization) -- the correct choice only for a deployment that has
-	// no per-organization model configuration at all.
+	// the staleness bug a static chain causes, and for why it is a chain
+	// (primary + fallback) rather than one identity. Leaving this nil
+	// keeps pre-existing behavior (EngineOptions.ReuseModelIdentities for
+	// every organization) -- the correct choice only for a deployment
+	// that has no per-organization model configuration at all.
 	ReuseModelIdentityResolver ReuseModelIdentityResolver
 }
 
@@ -125,7 +134,7 @@ type Engine struct {
 	reuseEpochSnapshotter      RebuildEpochSnapshotter
 	reuseModelIdentityResolver ReuseModelIdentityResolver
 	reuseProjectionVersion     string
-	reuseModelIdentity         string
+	reuseModelIdentities       []string
 	serviceVersion             string
 	now                        func() time.Time
 	newResultID                func() string
@@ -150,7 +159,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		reuseGate: dependencies.ReuseGate, reuseSnapshotter: dependencies.ReuseSnapshotter,
 		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
 		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
-		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentity: options.ReuseModelIdentity,
+		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
 		serviceVersion: options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
 	}, nil
 }
