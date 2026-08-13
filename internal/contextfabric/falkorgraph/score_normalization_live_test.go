@@ -97,9 +97,12 @@ func TestLiveFulltextSearchNormalizesRealRediSearchScores(t *testing.T) {
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
 
 	key := graphKey(adapter.config.GraphPrefix, orgID)
-	candidates, err := adapter.fulltextSearchNodes(ctx, key, orgID, "incident outage payment", 10)
+	candidates, truncated, err := adapter.fulltextSearchNodes(ctx, key, orgID, "incident outage payment", 10)
 	if err != nil {
 		t.Fatalf("fulltextSearchNodes() error = %v", err)
+	}
+	if truncated {
+		t.Fatalf("fulltextSearchNodes() reported truncated=true for a 3-row result well under the limit=10 budget")
 	}
 	if len(candidates) != 3 {
 		t.Fatalf("fulltextSearchNodes() returned %d candidates, want 3: %#v", len(candidates), candidates)

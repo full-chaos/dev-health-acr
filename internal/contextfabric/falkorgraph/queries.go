@@ -105,8 +105,10 @@ const (
 // (projection.go writes it onto every entity/content/episode Subject node;
 // toCandidateNode's Attributes carries it through unchanged) -- see
 // fulltextSearchNodes. Tokenizing that text with the exact same
-// tokenizeForFulltext function used to build the query means "does this
-// candidate contain term X" is answered identically to how the terms
+// fulltextWords function used to derive the query's own matchTerms (Codex
+// R2-2 -- tokenizeForFulltext itself stays reserved for building the
+// RediSearch query string, see fulltextWords' doc comment) means "does
+// this candidate contain term X" is answered identically to how the terms
 // themselves were derived, with zero additional queries and zero
 // dependency on RediSearch's own per-term matching behavior.
 //
@@ -257,10 +259,23 @@ func fulltextMatchedTermCount(text string, matchTerms []string) int {
 // (never toward "confirmed no parent") -- a truncated result set can never
 // tell auto-commit machinery "this candidate is genuinely unopposed",
 // because it might not be.
-func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text string, limit int) ([]graphrank.CandidateNode, error) {
+//
+// The returned truncated bool is this function's own half of that contract
+// (ResolveDeps.Search's second return value): it does NOT itself decide
+// anything here (the per-row floor-capping above already handles the
+// simple case) -- it exists because a floor-capped candidate's cap can
+// still be erased downstream, either by graphrank.NodeCandidate's exact
+// label/name match override (which sets Confidence to 1.0 regardless of
+// Relevance) or by ResolveSubjects' own candidatesBySubject merge (an
+// untruncated call's full-strength entry for the SAME subject can replace
+// a truncated call's floor-capped one). Codex round-3 review of this fix
+// concluded truncation has to be tracked as a property of the whole
+// resolution, in graphrank.ResolveFromMergedCandidates, not patched away
+// per-candidate here -- see that function's searchTruncated parameter.
+func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text string, limit int) ([]graphrank.CandidateNode, bool, error) {
 	terms := tokenizeForFulltext(text)
 	if len(terms) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	if limit <= 0 || limit > a.config.MaxResults {
 		limit = a.config.MaxResults
@@ -283,7 +298,7 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 	)
 	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"query": query, "org": orgID}, true)
 	if err != nil {
-		return nil, safeDependencyError("search context graph", err)
+		return nil, false, safeDependencyError("search context graph", err)
 	}
 	// truncated reports whether the corpus actually had MORE than `limit`
 	// matches -- never whether it merely equaled it.
@@ -309,7 +324,7 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 		candidate.Relevance = &relevance
 		candidates = append(candidates, candidate)
 	}
-	return candidates, nil
+	return candidates, truncated, nil
 }
 
 // tokenizeForFulltext splits free text into RediSearch-safe search terms.
