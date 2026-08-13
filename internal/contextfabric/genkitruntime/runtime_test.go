@@ -396,6 +396,73 @@ func TestRuntimeRecordsTheFinalLegsFailureWhenSynthesisFallbackAlsoFails(t *test
 	}
 }
 
+// TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationIsSemanticallyInvalidAndFallbackAlsoFails
+// is the CHAOS-3770 F4 residual probe: the SAME receipt-corruption/wrong-
+// classification bug as TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationFallbackAlsoFails,
+// but triggered via the OTHER fallback branch -- the primary's output was
+// parseable but SEMANTICALLY invalid (fails toDomain/Validate, not a
+// generation error), and the fallback that's then tried also fails. The
+// caller must still see the fallback's own (final) classification and
+// receipt.Outcome, not the primary's stale "invalid_output"/ErrModelOutput.
+func TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationIsSemanticallyInvalidAndFallbackAlsoFails(t *testing.T) {
+	t.Parallel()
+	invalidOutput := validInterpretationOutput()
+	invalidOutput.Shape = "registered_plan_only" // not a member of the closed shape vocabulary
+	fallbackErr := fmt.Errorf("%w: fallback provider down", contextfabric.ErrModelUnavailable)
+	fallbackReceipt := validReceipt(contextfabric.ModelOperationInterpret)
+	fallbackReceipt.Outcome = "unavailable"
+	runtime := mustRuntime(t, &generatorStub{interpretation: invalidOutput}, Config{
+		MaxAttempts: 1,
+		Fallback:    erroringFallbackRuntime{err: fallbackErr, receipt: fallbackReceipt},
+	})
+
+	_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+
+	if !errors.Is(err, contextfabric.ErrModelUnavailable) {
+		t.Fatalf("InterpretQuestion() error = %v, want the FALLBACK leg's own classification (ErrModelUnavailable)", err)
+	}
+	if errors.Is(err, contextfabric.ErrModelOutput) {
+		t.Fatalf("InterpretQuestion() error = %v, must not carry the PRIMARY leg's stale invalid_output/ErrModelOutput classification once the fallback also ran and failed", err)
+	}
+	if receipt.FallbackUsed {
+		t.Fatalf("receipt.FallbackUsed = true, want false: the fallback call never produced usable output, so the receipt must not claim fallback use")
+	}
+	if receipt.Outcome != "unavailable" {
+		t.Fatalf("receipt.Outcome = %q, want the fallback leg's own outcome %q, not the primary's stale \"invalid_output\"", receipt.Outcome, "unavailable")
+	}
+}
+
+// TestRuntimeRecordsTheFinalLegsFailureWhenSynthesisIsSemanticallyInvalidAndFallbackAlsoFails
+// is the SynthesizeAnswer counterpart -- see
+// TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationIsSemanticallyInvalidAndFallbackAlsoFails.
+func TestRuntimeRecordsTheFinalLegsFailureWhenSynthesisIsSemanticallyInvalidAndFallbackAlsoFails(t *testing.T) {
+	t.Parallel()
+	invalidOutput := validSynthesisOutput()
+	invalidOutput.EvidenceRefIDs = []string{"evidence_not_in_input"} // fails ValidateAgainst grounding
+	fallbackErr := fmt.Errorf("%w: fallback provider down", contextfabric.ErrModelRateLimited)
+	fallbackReceipt := validReceipt(contextfabric.ModelOperationSynthesize)
+	fallbackReceipt.Outcome = "rate_limited"
+	runtime := mustRuntime(t, &generatorStub{synthesis: invalidOutput}, Config{
+		MaxAttempts: 1,
+		Fallback:    erroringFallbackRuntime{err: fallbackErr, receipt: fallbackReceipt},
+	})
+
+	_, receipt, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+
+	if !errors.Is(err, contextfabric.ErrModelRateLimited) {
+		t.Fatalf("SynthesizeAnswer() error = %v, want the FALLBACK leg's own classification (ErrModelRateLimited)", err)
+	}
+	if errors.Is(err, contextfabric.ErrModelOutput) {
+		t.Fatalf("SynthesizeAnswer() error = %v, must not carry the PRIMARY leg's stale invalid_output/ErrModelOutput classification once the fallback also ran and failed", err)
+	}
+	if receipt.FallbackUsed {
+		t.Fatalf("receipt.FallbackUsed = true, want false: the fallback call never produced usable output, so the receipt must not claim fallback use")
+	}
+	if receipt.Outcome != "rate_limited" {
+		t.Fatalf("receipt.Outcome = %q, want the fallback leg's own outcome %q, not the primary's stale \"invalid_output\"", receipt.Outcome, "rate_limited")
+	}
+}
+
 func TestRuntimeBoundsModelDeadline(t *testing.T) {
 	stub := &generatorStub{wait: true}
 	runtime := mustRuntime(t, stub, Config{Timeout: time.Second, MaxAttempts: 1})

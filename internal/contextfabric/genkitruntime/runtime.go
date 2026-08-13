@@ -308,6 +308,13 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 				receipt.Outcome = "fallback"
 				return fallback, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
+			// Both legs failed -- CHAOS-3770 F4 residual: this branch (the
+			// primary's output was parseable but semantically invalid) had
+			// the same bug as the generation-error branch above. See its
+			// comment: report the fallback's own outcome/classification,
+			// not the primary's stale invalid_output/ErrModelOutput.
+			receipt.Outcome = fallbackReceipt.Outcome
+			return contextfabric.InterpretedQuestion{}, receipt, fallbackErr
 		}
 		return contextfabric.InterpretedQuestion{}, receipt, fmt.Errorf("%w: %v", contextfabric.ErrModelOutput, err)
 	}
@@ -372,6 +379,11 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 				receipt.Outcome = "fallback"
 				return fallback, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
+			// Both legs failed -- see the matching comment in
+			// InterpretQuestion's semantic-invalid-output branch (CHAOS-3770
+			// F4 residual).
+			receipt.Outcome = fallbackReceipt.Outcome
+			return contextfabric.SynthesisDraft{}, receipt, fallbackErr
 		}
 		return contextfabric.SynthesisDraft{}, receipt, fmt.Errorf("%w: %v", contextfabric.ErrModelOutput, err)
 	}
