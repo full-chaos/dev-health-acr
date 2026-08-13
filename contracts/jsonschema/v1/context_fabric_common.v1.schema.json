@@ -104,6 +104,66 @@
         }
       ]
     },
+    "TemporalLabel": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The time an answer actually speaks for on a historical time axis (CHAOS-3781, AC-3781-2). Absent on the current axis. Effective is always narrower than or equal to requested; an answer may speak for less time than was asked about, never more.",
+      "properties": {
+        "requested": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/TimeContext"
+            },
+            {
+              "properties": {
+                "axis": {
+                  "enum": [
+                    "valid_time",
+                    "observed_time",
+                    "range"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "effective": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/TimeContext"
+            },
+            {
+              "properties": {
+                "axis": {
+                  "enum": [
+                    "valid_time",
+                    "observed_time",
+                    "range"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "grain": {
+          "type": "string",
+          "enum": [
+            "instant",
+            "day",
+            "none"
+          ]
+        },
+        "coverage_complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "requested",
+        "effective",
+        "grain",
+        "coverage_complete"
+      ]
+    },
     "SubjectRef": {
       "type": "object",
       "additionalProperties": false,

@@ -148,6 +148,9 @@
     "reused": {
       "type": "boolean",
       "description": "CHAOS-3782: true when this result was served from the immutable result store rather than a fresh investigation. When true, result_id and generated_at name the reused result's own identifier and generation time, not this request's."
+    },
+    "temporal": {
+      "$ref": "context_fabric_common.v1.schema.json#/$defs/TemporalLabel"
     }
   },
   "required": [
