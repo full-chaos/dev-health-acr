@@ -418,10 +418,10 @@ if grep -qE '^report_root="\$\{work_root\}' "$scan_script"; then
 fi
 record_line="$(grep -n 'record_trivy_db_provenance "\$metadata"' "$scan_script" | cut -d: -f1)"
 judge_line="$(grep -n 'check_trivy_db_freshness "\$metadata"' "$scan_script" | cut -d: -f1)"
-test -n "$record_line" && test -n "$judge_line" || {
+if [[ -z "$record_line" || -z "$judge_line" ]]; then
   printf 'expected trivy-db provenance recording and freshness judgment lines were not found\n' >&2
   exit 1
-}
+fi
 test "$record_line" -lt "$judge_line" || {
   printf 'trivy-db provenance must be recorded before the freshness gate judges it, so a rejection ships its own evidence (CHAOS-3772 F2)\n' >&2
   exit 1
