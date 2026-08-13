@@ -237,6 +237,17 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if err != nil {
 		return nil, nil, err
 	}
+	// orgModelConfigStore is a concrete *pgmodelconfig.Store, possibly nil
+	// -- the same typed-nil-interface trap open()'s own conversion guards
+	// against (see its doc comment) applies here too: assigning a nil
+	// *pgmodelconfig.Store directly into an interface-typed field would
+	// produce a non-nil interface wrapping nil, so
+	// contextFabricReuseModelIdentityResolver's own `configs == nil` check
+	// would never see it as absent.
+	var reuseModelIdentityConfigs contextfabric.OrgModelConfigResolver
+	if orgModelConfigStore != nil {
+		reuseModelIdentityConfigs = orgModelConfigStore
+	}
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, Sink: receiptSink},
 		Graph:       graphReader,
@@ -253,6 +264,20 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// the reuse snapshot itself, before the graph read, rather than
 		// Save taking a later (too late) one.
 		ReuseSnapshotter: reuseSnapshotter,
+		// CHAOS-3782 Codex round-2 finding #3: resolve the reuse lookup's
+		// model identity per-organization, from the SAME orgModelConfigStore
+		// wrapWithOrgModelRuntimeResolver above already uses for the actual
+		// model runtime, rather than binding every organization's lookups
+		// to one static deployment-wide identity -- see
+		// contextFabricReuseModelIdentityResolver's doc comment. orgModelConfigStore
+		// may be nil (no per-organization support configured at all); the
+		// resolver handles that by always returning fallback, so it is
+		// still safe -- and still correct, since there is then no
+		// per-organization divergence possible -- to wire unconditionally.
+		ReuseModelIdentityResolver: contextFabricReuseModelIdentityResolver{
+			configs:  reuseModelIdentityConfigs,
+			fallback: contextFabricReuseModelIdentity(os.LookupEnv),
+		},
 		// CHAOS-3782 AC-3782-8: the first production EngineTelemetry
 		// wiring (previously always nil -- see SlogEngineTelemetry's doc
 		// comment). Also covers the pre-existing

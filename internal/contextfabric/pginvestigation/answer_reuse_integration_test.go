@@ -61,20 +61,25 @@ func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKe
 }
 
 // saveWithReuseSnapshot mirrors exactly what Engine does in production
-// (CHAOS-3782 Codex round-1 F1, and team-lead's veto of context-smuggled
-// snapshots): capture the CURRENT source-watermark snapshot via
-// Store.SnapshotSourceWatermarks, then pass it to Save as its own
-// explicit parameter. Every test in this file that wants a result to
-// actually become reusable must go through this helper, not call
-// store.Save directly -- Save no longer queries watermarks itself (that
-// was the F1 bug), so a bare store.Save(ctx, principal, result, nil) with
-// no snapshot passed now deliberately leaves every reuse column NULL
-// (see TestF1_SaveLeavesReuseColumnsNullWithoutAThreadedSnapshot).
+// (CHAOS-3782 Codex round-1 F1, round-2 finding #7, and team-lead's veto
+// of context-smuggled snapshots): capture the CURRENT source-watermark
+// snapshot AND the CURRENT rebuild epoch, both via Store's own
+// snapshot-time methods, then pass both to Save as its own explicit
+// parameters. Every test in this file that wants a result to actually
+// become reusable must go through this helper, not call store.Save
+// directly -- Save no longer queries either of these itself (that was
+// the F1 bug, and reuseEpoch is the same discipline applied to a second
+// piece of snapshot-time state), so a bare
+// store.Save(ctx, principal, result, nil, nil) with nothing passed now
+// deliberately leaves every reuse column NULL (see
+// TestF1_SaveLeavesReuseColumnsNullWithoutAThreadedSnapshot).
 func saveWithReuseSnapshot(t *testing.T, ctx context.Context, store *pginvestigation.Store, principal storage.Principal, result contextfabric.InvestigationResult) {
 	t.Helper()
 	snapshot, err := store.SnapshotSourceWatermarks(ctx, principal.OrgID)
 	require.NoError(t, err)
-	require.NoError(t, store.Save(ctx, principal, result, snapshot))
+	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
+	require.NoError(t, err)
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch))
 }
 
 // TestFindReusable_HappyPathRoundTrip proves the baseline: a result saved
@@ -114,9 +119,9 @@ func TestF1_SaveLeavesReuseColumnsNullWithoutAThreadedSnapshot(t *testing.T) {
 	store := mustReuseStore(t, db, time.Hour)
 	result := reusableResult("result_reuse_nosnap01", principal.OrgID, "Did this get saved without a snapshot?")
 	// Deliberately NOT using saveWithReuseSnapshot -- plain Save with a
-	// nil reuse snapshot, exactly what a Save call from a caller that
-	// doesn't know about answer reuse would pass.
-	require.NoError(t, store.Save(ctx, principal, result, nil))
+	// nil reuse snapshot and a nil epoch, exactly what a Save call from a
+	// caller that doesn't know about answer reuse would pass.
+	require.NoError(t, store.Save(ctx, principal, result, nil, nil))
 
 	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
@@ -328,31 +333,68 @@ func TestFindReusable_OutsideStalenessWindowIsAMiss(t *testing.T) {
 }
 
 // TestF6_StalenessWindowUsesCreatedAtNotAppSuppliedGeneratedAt is the
-// Codex round-1 F6 regression, isolating created_at from generated_at
-// specifically: a result whose APP-SUPPLIED GeneratedAt is deliberately
-// set far in the future (a value this store's Save never validates or
-// corrects) must still be judged by when the row was actually written
-// (created_at, DB clock_timestamp()), not by that untrustworthy
-// generated_at. If the staleness window used generated_at, this
-// far-future value would make the row look arbitrarily fresh forever;
-// bounding on created_at means the tiny real-world save latency alone
-// determines staleness, unaffected by what GeneratedAt claims.
+// Codex round-1 F6 regression, REWORKED per Codex round-2 finding #6.
+//
+// The ORIGINAL version of this test set GeneratedAt 24h in the future,
+// inside a generous one-hour window, and asserted reuse succeeded. That
+// assertion is a FALSE PASS: a future-dated generated_at is "inside the
+// window" under EITHER clock -- the real created_at (comfortably fresh)
+// AND a hypothetical generated_at-based check (a claimed future
+// generation time always looks fresh) both say "reusable" there, so the
+// test could never have caught a regression back to the untrustworthy
+// app clock. It was asserting a property every implementation shares,
+// not the one this test exists to bind.
+//
+// This version instead uses two cases specifically chosen so a
+// generated_at-based implementation would give the WRONG answer while a
+// created_at-based one gives the right one:
+//
+//  1. GeneratedAt set far in the PAST, well outside the window --
+//     created_at (real save time) is fresh, so the correct
+//     implementation still finds the row reusable; a generated_at-based
+//     implementation would see the stale claimed generation time and
+//     wrongly miss.
+//  2. GeneratedAt set far in the FUTURE, but with a near-zero staleness
+//     window (mirroring TestFindReusable_OutsideStalenessWindowIsAMiss)
+//     -- created_at is already outside that window by the time
+//     FindReusable runs, so the correct implementation misses; a
+//     generated_at-based implementation would see the far-future claimed
+//     generation time as eternally "inside" any window and wrongly hit.
 func TestF6_StalenessWindowUsesCreatedAtNotAppSuppliedGeneratedAt(t *testing.T) {
 	ctx := context.Background()
 	db := newInvestigationTestDatabase(t, ctx)
-	principal := storage.Principal{OrgID: "org-reuse-clockauthority"}
-	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
 
-	store := mustReuseStore(t, db, time.Hour)
-	result := reusableResult("result_reuse_clockskew01", principal.OrgID, "Is the future-dated result still reusable?")
-	result.GeneratedAt = time.Now().UTC().Add(24 * time.Hour) // app clock claims "tomorrow"
-	saveWithReuseSnapshot(t, ctx, store, principal, result)
+	t.Run("past_generated_at_is_still_reusable_via_created_at", func(t *testing.T) {
+		principal := storage.Principal{OrgID: "org-reuse-clockskew-past"}
+		setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
 
-	// created_at is real "now" regardless of GeneratedAt, so this is
-	// still comfortably inside a one-hour window.
-	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
-	require.NoError(t, err)
-	require.True(t, ok, "expected created_at (DB clock), not the future-dated app-supplied generated_at, to govern the staleness window")
+		store := mustReuseStore(t, db, time.Hour)
+		result := reusableResult("result_reuse_clockskew_past01", principal.OrgID, "Is the past-dated result still reusable via created_at?")
+		result.GeneratedAt = time.Now().UTC().Add(-48 * time.Hour) // app clock claims "two days ago" -- well outside a 1h window
+		saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+		_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+		require.NoError(t, err)
+		require.True(t, ok, "expected created_at (real save time), not the stale app-supplied generated_at, to govern the staleness window")
+	})
+
+	t.Run("future_generated_at_is_still_stale_via_created_at", func(t *testing.T) {
+		principal := storage.Principal{OrgID: "org-reuse-clockskew-future"}
+		setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+		// Near-zero staleness tolerance, exactly like
+		// TestFindReusable_OutsideStalenessWindowIsAMiss: by the time
+		// FindReusable runs, the just-saved row is already older than 1
+		// nanosecond of REAL time, regardless of what GeneratedAt claims.
+		store := mustReuseStore(t, db, time.Nanosecond)
+		result := reusableResult("result_reuse_clockskew_future01", principal.OrgID, "Is the future-dated result still stale via created_at?")
+		result.GeneratedAt = time.Now().UTC().Add(24 * time.Hour) // app clock claims "tomorrow" -- would look eternally fresh under generated_at
+		saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+		_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+		require.NoError(t, err)
+		require.False(t, ok, "expected created_at (real save time), not the future-dated app-supplied generated_at, to govern the staleness window")
+	})
 }
 
 // TestFindReusable_DoesNotCrossOrganizations proves org scoping holds for
@@ -372,4 +414,119 @@ func TestFindReusable_DoesNotCrossOrganizations(t *testing.T) {
 	_, ok, err := store.FindReusable(ctx, other, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.False(t, ok, "expected no cross-organization reuse")
+}
+
+// TestSnapshotRebuildEpoch_StartsAtZeroAndAdvancesOnEachInvalidation is
+// the direct probe for RebuildEpoch's baseline and monotonic-advance
+// contract (Codex round-2 finding #7): a never-invalidated organization
+// reads epoch 0, and each InvalidateOrganizationReuse call advances it by
+// exactly one.
+func TestSnapshotRebuildEpoch_StartsAtZeroAndAdvancesOnEachInvalidation(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	store := mustReuseStore(t, db, time.Hour)
+	orgID := "org-reuse-epoch-baseline"
+
+	epoch, err := store.SnapshotRebuildEpoch(ctx, orgID)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), epoch, "expected a never-invalidated organization to read epoch 0")
+
+	require.NoError(t, store.InvalidateOrganizationReuse(ctx, orgID))
+	epoch, err = store.SnapshotRebuildEpoch(ctx, orgID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), epoch, "expected the first invalidation to advance epoch to 1")
+
+	require.NoError(t, store.InvalidateOrganizationReuse(ctx, orgID))
+	epoch, err = store.SnapshotRebuildEpoch(ctx, orgID)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), epoch, "expected a second invalidation to advance epoch again")
+}
+
+// TestAC_3782_4_RebuildBetweenSnapshotAndSaveIsCaughtByEpochNotTimestamp
+// is the Codex round-2 finding #7 probe. It reproduces the race a
+// created_at-vs-invalidated_at timestamp comparison cannot close: Engine
+// captures the reuse epoch BEFORE reading the graph; a concurrent
+// rebuild's invalidation lands while that read (and the synthesis after
+// it) is still in flight; Save only happens once all of that finishes,
+// so its row's created_at ends up AFTER the invalidation's timestamp --
+// exactly the shape a timestamp-only check would have wrongly called
+// "fresh." Before this fix (a timestamp-only check), this test would have
+// failed: FindReusable would have returned ok=true.
+func TestAC_3782_4_RebuildBetweenSnapshotAndSaveIsCaughtByEpochNotTimestamp(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-epoch-race"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+
+	// Engine-side capture, BEFORE the (simulated) graph read: watermark
+	// snapshot and epoch, both as of this moment.
+	snapshot, err := store.SnapshotSourceWatermarks(ctx, principal.OrgID)
+	require.NoError(t, err)
+	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), epoch, "sanity: organization has never been invalidated yet")
+
+	// A rebuild completes WHILE the (simulated) graph read/synthesis for
+	// this investigation is still in flight -- i.e. strictly between this
+	// investigation's snapshot capture and its eventual Save.
+	require.NoError(t, store.InvalidateOrganizationReuse(ctx, principal.OrgID))
+
+	// Save lands AFTER the invalidation (created_at > invalidated_at) --
+	// exactly what a timestamp-only check would have called "fresh" --
+	// but carries the STALE epoch captured before the rebuild.
+	result := reusableResult("result_reuse_epoch_race01", principal.OrgID, "Did the mid-flight rebuild get caught?")
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch))
+
+	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.False(t, ok, "expected the epoch fence to catch a rebuild that landed between snapshot capture and Save, even though created_at > invalidated_at")
+}
+
+// TestAC_3782_4_InvestigationStartedAfterRebuildIsReusable is the control
+// case: an investigation whose epoch snapshot is captured AFTER a
+// rebuild completes (the ordinary, non-racy case) must still be
+// reusable -- proving the epoch fence does not over-invalidate every
+// investigation that merely happens to run after SOME rebuild, only ones
+// racing a rebuild that lands DURING their own snapshot-to-save window.
+func TestAC_3782_4_InvestigationStartedAfterRebuildIsReusable(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-epoch-post-rebuild"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	require.NoError(t, store.InvalidateOrganizationReuse(ctx, principal.OrgID))
+
+	result := reusableResult("result_reuse_epoch_postrebuild01", principal.OrgID, "Is a post-rebuild investigation still reusable?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.True(t, ok, "expected an investigation snapshotted AFTER the rebuild to remain reusable")
+}
+
+// TestFindReusable_NilEpochAtSaveIsNeverReusable is the store-side F7
+// analog of TestF1_SaveLeavesReuseColumnsNullWithoutAThreadedSnapshot: a
+// Save with a real watermark snapshot but NO epoch (the Engine-side epoch
+// read failed independently of the watermark read) must leave the row
+// permanently unreusable, never falling back to treating a nil epoch as
+// "matches everything."
+func TestFindReusable_NilEpochAtSaveIsNeverReusable(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-epoch-nil"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	snapshot, err := store.SnapshotSourceWatermarks(ctx, principal.OrgID)
+	require.NoError(t, err)
+
+	result := reusableResult("result_reuse_epoch_nil01", principal.OrgID, "Was the no-epoch save left unreusable?")
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, nil))
+
+	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.False(t, ok, "expected a Save with a watermark snapshot but no epoch to never be reusable")
 }

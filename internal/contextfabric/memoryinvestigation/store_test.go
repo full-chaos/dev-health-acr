@@ -60,7 +60,7 @@ func TestStore_getDefensiveCopyDoesNotLeakStoredState(t *testing.T) {
 		},
 		Warnings: []string{},
 	}
-	if err := store.Save(ctx, principal, original, nil); err != nil {
+	if err := store.Save(ctx, principal, original, nil, nil); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
@@ -87,7 +87,7 @@ func TestStore_saveRespectsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	store := memoryinvestigation.NewStore()
-	err := store.Save(ctx, storage.Principal{OrgID: "org-1"}, contextfabric.InvestigationResult{ResultID: "result-cancelled"}, nil)
+	err := store.Save(ctx, storage.Principal{OrgID: "org-1"}, contextfabric.InvestigationResult{ResultID: "result-cancelled"}, nil, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("save: want context.Canceled, got %v", err)
 	}

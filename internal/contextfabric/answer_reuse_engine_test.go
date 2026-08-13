@@ -458,6 +458,182 @@ func reuseOutcomeSlicesEqual(a, b []AnswerReuseOutcome) bool {
 	return true
 }
 
+// reuseModelIdentityResolverFunc is a fake ReuseModelIdentityResolver
+// driven by a plain function, mirroring reuseGateFunc above.
+type reuseModelIdentityResolverFunc func(context.Context, string) (string, error)
+
+func (f reuseModelIdentityResolverFunc) ResolveReuseModelIdentity(ctx context.Context, orgID string) (string, error) {
+	return f(ctx, orgID)
+}
+
+// TestAC_3782_7_ReuseKeyUsesCurrentOrgEffectiveModelIdentityNotAStaticOne is
+// the probe for Codex round-2 finding #3: two otherwise-identical
+// Investigate calls, with the organization's EFFECTIVE model identity
+// flipped between them (simulating a CHAOS-3775 BYO reconfiguration),
+// must NOT both reuse the same stored candidate. Before the fix, Engine's
+// lookup key came from a single value fixed at engine-construction time
+// (EngineOptions.ReuseModelIdentity), so a per-organization config change
+// between calls was invisible to it and both calls would have kept
+// matching -- and reusing -- the same stale-model row.
+func TestAC_3782_7_ReuseKeyUsesCurrentOrgEffectiveModelIdentityNotAStaticOne(t *testing.T) {
+	t.Parallel()
+
+	project, candidate := reusableCandidate()
+	freshResult := validInvestigationResult()
+
+	currentIdentity := "org-a/model-v1"
+	var capturedKeys []ReuseKey
+	telemetry := &recordingTelemetry{}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results:   &resultStoreStub{},
+		Telemetry: telemetry,
+		ReuseModelIdentityResolver: reuseModelIdentityResolverFunc(func(context.Context, string) (string, error) {
+			return currentIdentity, nil
+		}),
+		// The candidate was saved under "org-a/model-v1" -- a real store's
+		// FindReusable only returns it when the LOOKUP key's ModelIdentity
+		// still matches (its own WHERE model_identity = $N), which this
+		// fake reproduces directly.
+		ReuseGate: reuseGateFunc(func(_ context.Context, _ storage.Principal, key ReuseKey) (InvestigationResult, bool, error) {
+			capturedKeys = append(capturedKeys, key)
+			if key.ModelIdentity == "org-a/model-v1" {
+				return candidate, true, nil
+			}
+			return InvestigationResult{}, false, nil
+		}),
+	})
+
+	first, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() (first) error = %v", err)
+	}
+	if !first.Reused {
+		t.Fatal("first Investigate(): result.Reused = false, want true (org identity unchanged)")
+	}
+
+	// The organization reconfigures its model between the two calls.
+	currentIdentity = "org-a/model-v2"
+
+	second, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() (second) error = %v", err)
+	}
+	if second.Reused {
+		t.Fatal("second Investigate(): result.Reused = true, want false -- a reconfigured organization must not reuse a stale-model answer")
+	}
+	if len(capturedKeys) != 2 {
+		t.Fatalf("FindReusable called %d times, want 2", len(capturedKeys))
+	}
+	if capturedKeys[0].ModelIdentity != "org-a/model-v1" || capturedKeys[1].ModelIdentity != "org-a/model-v2" {
+		t.Fatalf("captured ModelIdentity per call = [%q, %q], want [%q, %q]",
+			capturedKeys[0].ModelIdentity, capturedKeys[1].ModelIdentity, "org-a/model-v1", "org-a/model-v2")
+	}
+	want := []AnswerReuseOutcome{AnswerReuseHit, AnswerReuseMissNoCandidate}
+	if got := telemetry.answerReuseOutcomes; !reuseOutcomeSlicesEqual(got, want) {
+		t.Fatalf("answerReuseOutcomes = %v, want %v", got, want)
+	}
+}
+
+// TestReuseModelIdentityResolverErrorFailsClosed proves a resolver error
+// (e.g. an organization's BYO configuration exists but no longer
+// decrypts) degrades to an ordinary fresh investigation -- it must never
+// fall back to a different identity as a substitute, and must never call
+// FindReusable with a guessed key.
+func TestReuseModelIdentityResolverErrorFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	freshResult := validInvestigationResult()
+	telemetry := &recordingTelemetry{}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results:   &resultStoreStub{},
+		Telemetry: telemetry,
+		ReuseModelIdentityResolver: reuseModelIdentityResolverFunc(func(context.Context, string) (string, error) {
+			return "", errors.New("credential no longer decrypts")
+		}),
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			t.Fatal("FindReusable must not be called when the model identity could not be resolved")
+			return InvestigationResult{}, false, nil
+		}),
+	})
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Reused {
+		t.Fatal("result.Reused = true, want false")
+	}
+	want := []AnswerReuseOutcome{AnswerReuseMissNoCandidate}
+	if got := telemetry.answerReuseOutcomes; !reuseOutcomeSlicesEqual(got, want) {
+		t.Fatalf("answerReuseOutcomes = %v, want %v", got, want)
+	}
+}
+
+// TestPunctuationOnlyQuestionNeverAttemptsReuseLookup is the probe for
+// Codex round-2 finding #4: CanonicalizeQuestion("?!?") ==
+// CanonicalizeQuestion("!!") == "" -- every punctuation-only question would
+// share ONE hash if tryReuse ever looked one up, even though "?!?" and "!!"
+// are unrelated questions. This asserts the stronger, fail-closed property
+// tryReuse actually implements: such a question never even reaches
+// ReuseGate.FindReusable, proven by a gate fake that fails the test if
+// called at all (not merely a gate that returns no candidate, which
+// wouldn't distinguish "never looked up" from "looked up and missed").
+func TestPunctuationOnlyQuestionNeverAttemptsReuseLookup(t *testing.T) {
+	t.Parallel()
+
+	freshResult := validInvestigationResult()
+	telemetry := &recordingTelemetry{}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}},
+		Results:   &resultStoreStub{},
+		Telemetry: telemetry,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			t.Fatal("FindReusable must not be called for a punctuation-only question (Codex round-2 finding #4)")
+			return InvestigationResult{}, false, nil
+		}),
+	})
+
+	request := validInvestigationRequest()
+	request.Question = "?!?"
+	if _, err := engine.Investigate(context.Background(), reusePrincipal(), request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+
+	want := []AnswerReuseOutcome{AnswerReuseMissNoCandidate}
+	if got := telemetry.answerReuseOutcomes; !reuseOutcomeSlicesEqual(got, want) {
+		t.Fatalf("answerReuseOutcomes = %v, want %v", got, want)
+	}
+}
+
 // TestEngineFallsThroughToFreshInvestigationWhenReuseGateErrors proves a
 // ReuseGate error degrades to an ordinary fresh investigation rather than
 // failing the whole request -- TRD §19.7.3 fails closed, but "closed"
@@ -551,6 +727,22 @@ func (s orderTrackingSnapshotter) SnapshotSourceWatermarks(context.Context, stri
 	return s.snapshot, nil
 }
 
+// orderTrackingEpochSnapshotter is a fake RebuildEpochSnapshotter that
+// appends "epoch_snapshot" to a shared, ordered event log and returns a
+// fixed epoch -- the Codex round-2 finding #7 analog of
+// orderTrackingSnapshotter, used to prove Engine captures the epoch at
+// the same point it captures the watermark snapshot: BEFORE the graph is
+// read.
+type orderTrackingEpochSnapshotter struct {
+	events *[]string
+	epoch  int64
+}
+
+func (s orderTrackingEpochSnapshotter) SnapshotRebuildEpoch(context.Context, string) (int64, error) {
+	*s.events = append(*s.events, "epoch_snapshot")
+	return s.epoch, nil
+}
+
 // orderTrackingGraphReader appends "resolve_subjects" to the SAME shared
 // event log on ResolveSubjects -- the first actual graph read in
 // Investigate's flow.
@@ -576,11 +768,13 @@ func (g orderTrackingGraphReader) DiscoverContext(context.Context, storage.Princ
 type snapshotCapturingResultStore struct {
 	saveCalled    bool
 	savedSnapshot SourceWatermarkSnapshot
+	savedEpoch    RebuildEpoch
 }
 
-func (s *snapshotCapturingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, reuseSnapshot SourceWatermarkSnapshot) error {
+func (s *snapshotCapturingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch) error {
 	s.saveCalled = true
 	s.savedSnapshot = reuseSnapshot
+	s.savedEpoch = reuseEpoch
 	return nil
 }
 
@@ -665,5 +859,96 @@ func TestF1_NilSnapshotPassedToSaveWhenReuseSnapshotterIsNil(t *testing.T) {
 	}
 	if store.savedSnapshot != nil {
 		t.Errorf("snapshot passed to Save = %v, want nil", store.savedSnapshot)
+	}
+}
+
+// TestCodex2F7_EpochCapturedBeforeGraphReadAndPassedExplicitlyToSave is
+// the Codex round-2 finding #7 analog of
+// TestF1_SnapshotCapturedBeforeGraphReadAndPassedExplicitlyToSave: the
+// rebuild-invalidation epoch must be captured at the SAME point as the
+// watermark snapshot -- BEFORE the graph is read, never later at Save --
+// and the exact value captured must be the one Save receives as its
+// explicit RebuildEpoch parameter.
+func TestCodex2F7_EpochCapturedBeforeGraphReadAndPassedExplicitlyToSave(t *testing.T) {
+	t.Parallel()
+
+	var events []string
+	snapshot := SourceWatermarkSnapshot{"linear": "wm-1"}
+	store := &snapshotCapturingResultStore{}
+	freshResult := validInvestigationResult()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: orderTrackingGraphReader{events: &events, resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results:               store,
+		ReuseSnapshotter:      orderTrackingSnapshotter{events: &events, snapshot: snapshot},
+		ReuseEpochSnapshotter: orderTrackingEpochSnapshotter{events: &events, epoch: 7},
+	})
+
+	if _, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest()); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+
+	// Both snapshot-time reads must happen before resolve_subjects; their
+	// own relative order to EACH OTHER is not asserted (Engine's own
+	// code performs them sequentially, but nothing about the contract
+	// requires one before the other -- only that both precede the graph
+	// read).
+	if len(events) != 3 || events[2] != "resolve_subjects" {
+		t.Fatalf("call order = %v, want [snapshot, epoch_snapshot (either order)] followed by resolve_subjects", events)
+	}
+	if !store.saveCalled {
+		t.Fatal("Save was never called")
+	}
+	if store.savedEpoch == nil {
+		t.Fatal("epoch passed to Save = nil, want the captured epoch")
+	}
+	if *store.savedEpoch != 7 {
+		t.Errorf("epoch passed to Save = %d, want 7", *store.savedEpoch)
+	}
+}
+
+// TestCodex2F7_NilEpochPassedToSaveWhenReuseEpochSnapshotterIsNil proves
+// the safe default: with no ReuseEpochSnapshotter configured, Save is
+// called with a nil RebuildEpoch -- never a guessed or zero-value epoch
+// substituted in its place (zero is a legitimate epoch value for a
+// never-invalidated organization, so it cannot double as a sentinel).
+func TestCodex2F7_NilEpochPassedToSaveWhenReuseEpochSnapshotterIsNil(t *testing.T) {
+	t.Parallel()
+
+	store := &snapshotCapturingResultStore{}
+	freshResult := validInvestigationResult()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: store,
+		// ReuseEpochSnapshotter left nil.
+	})
+
+	if _, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest()); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !store.saveCalled {
+		t.Fatal("Save was never called")
+	}
+	if store.savedEpoch != nil {
+		t.Errorf("epoch passed to Save = %v, want nil", store.savedEpoch)
 	}
 }

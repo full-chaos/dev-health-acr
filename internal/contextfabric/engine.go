@@ -55,6 +55,27 @@ type EngineDependencies struct {
 	// result never carries a snapshot and so never becomes reusable,
 	// exactly as if ReuseGate were also nil.
 	ReuseSnapshotter SourceWatermarkSnapshotter
+	// ReuseEpochSnapshotter is optional (CHAOS-3782, Codex round-2
+	// finding #7). When set, Engine captures the organization's current
+	// rebuild-invalidation epoch itself, at the same moment as the
+	// watermark snapshot (immediately before the graph is read for a
+	// fresh investigation), and threads it to Save alongside that
+	// snapshot -- see RebuildEpoch's doc comment for why this closes a
+	// race the watermark snapshot and timestamp comparison alone could
+	// not. Leaving this nil means a fresh result never carries an epoch
+	// and so never becomes reusable, exactly as if ReuseGate were also
+	// nil.
+	ReuseEpochSnapshotter RebuildEpochSnapshotter
+	// ReuseModelIdentityResolver is optional (CHAOS-3782, Codex round-2
+	// finding #3). When set, tryReuse resolves the CURRENT org-effective
+	// model identity through it, per call, instead of using
+	// EngineOptions.ReuseModelIdentity's single static value for every
+	// organization -- see ReuseModelIdentityResolver's doc comment for
+	// the staleness bug a static identity causes. Leaving this nil keeps
+	// pre-existing behavior (EngineOptions.ReuseModelIdentity for every
+	// organization) -- the correct choice only for a deployment that has
+	// no per-organization model configuration at all.
+	ReuseModelIdentityResolver ReuseModelIdentityResolver
 }
 
 // EngineTelemetry receives content-safe operational counters from Engine.
@@ -93,19 +114,21 @@ type EngineTelemetry interface {
 // Engine coordinates one open-ended investigation. It deliberately composes
 // capabilities rather than matching the question against a route/plan table.
 type Engine struct {
-	interpreter            QuestionInterpreter
-	graph                  GraphReader
-	facts                  CanonicalFactReader
-	synthesizer            AnswerSynthesizer
-	results                InvestigationResultStore
-	telemetry              EngineTelemetry
-	reuseGate              AnswerReuseGate
-	reuseSnapshotter       SourceWatermarkSnapshotter
-	reuseProjectionVersion string
-	reuseModelIdentity     string
-	serviceVersion         string
-	now                    func() time.Time
-	newResultID            func() string
+	interpreter                QuestionInterpreter
+	graph                      GraphReader
+	facts                      CanonicalFactReader
+	synthesizer                AnswerSynthesizer
+	results                    InvestigationResultStore
+	telemetry                  EngineTelemetry
+	reuseGate                  AnswerReuseGate
+	reuseSnapshotter           SourceWatermarkSnapshotter
+	reuseEpochSnapshotter      RebuildEpochSnapshotter
+	reuseModelIdentityResolver ReuseModelIdentityResolver
+	reuseProjectionVersion     string
+	reuseModelIdentity         string
+	serviceVersion             string
+	now                        func() time.Time
+	newResultID                func() string
 }
 
 func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine, error) {
@@ -125,7 +148,9 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		interpreter: dependencies.Interpreter, graph: dependencies.Graph, facts: dependencies.Facts,
 		synthesizer: dependencies.Synthesizer, results: dependencies.Results, telemetry: dependencies.Telemetry,
 		reuseGate: dependencies.ReuseGate, reuseSnapshotter: dependencies.ReuseSnapshotter,
-		reuseProjectionVersion: options.ReuseProjectionVersion, reuseModelIdentity: options.ReuseModelIdentity,
+		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
+		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
+		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentity: options.ReuseModelIdentity,
 		serviceVersion: options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
 	}, nil
 }
@@ -252,6 +277,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			reuseWatermarkSnapshot = snapshot
 		}
 	}
+	// Codex round-2 finding #7: captured at the SAME point as the
+	// watermark snapshot above, for the same reason (see RebuildEpoch's
+	// doc comment) -- a value read later, at Save, could describe an
+	// invalidation that happened AFTER the graph read this investigation
+	// actually used, wrongly clearing this result to reuse under an epoch
+	// that no longer describes what it was built from. Fails open on the
+	// read itself (reuseEpoch simply stays nil); Save must treat nil as
+	// "this row never becomes reusable," the fail-CLOSED outcome for
+	// reuse specifically -- same convention as reuseWatermarkSnapshot.
+	var reuseEpoch RebuildEpoch
+	if e.reuseEpochSnapshotter != nil {
+		if epoch, epochErr := e.reuseEpochSnapshotter.SnapshotRebuildEpoch(ctx, principal.OrgID); epochErr == nil {
+			reuseEpoch = &epoch
+		}
+	}
 	resolution, err := e.graph.ResolveSubjects(ctx, principal, graphRequest, interpretation)
 	if err != nil {
 		return InvestigationResult{}, fmt.Errorf("resolve subjects: %w", err)
@@ -316,7 +356,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return InvestigationResult{}, fmt.Errorf("%w: %v", ErrInvalidResult, err)
 	}
 	if e.results != nil {
-		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot); err != nil {
+		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch); err != nil {
 			return InvestigationResult{}, fmt.Errorf("save investigation result: %w", err)
 		}
 	}

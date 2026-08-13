@@ -178,11 +178,37 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 	if e.reuseGate == nil {
 		return InvestigationResult{}, false
 	}
+	if CanonicalizeQuestion(request.Question) == "" {
+		// Codex round-2 finding #4: a punctuation-only (or otherwise
+		// entirely-stripped) question canonicalizes to the empty string,
+		// so every such question would share ONE hash -- "?", "!!", and
+		// "?!?" are unrelated questions that must never be treated as the
+		// same one. Fail closed: never even attempt a lookup. See
+		// reuseColumnsFor's matching guard on the save side.
+		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
+		return InvestigationResult{}, false
+	}
+	modelIdentity := e.reuseModelIdentity
+	if e.reuseModelIdentityResolver != nil {
+		// Codex round-2 finding #3: resolve the org-EFFECTIVE identity now,
+		// not the single static identity fixed at engine-construction time
+		// -- see ReuseModelIdentityResolver's doc comment for the
+		// per-organization staleness bug a static identity causes. A
+		// resolve failure (e.g. a BYO configuration that exists but no
+		// longer decrypts) is treated exactly like "no candidate found":
+		// fail closed, fall through to a fresh investigation, never guess.
+		resolved, err := e.reuseModelIdentityResolver.ResolveReuseModelIdentity(ctx, principal.OrgID)
+		if err != nil {
+			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
+			return InvestigationResult{}, false
+		}
+		modelIdentity = resolved
+	}
 	key := ReuseKey{
 		QuestionHash:      QuestionHash(request.Question),
 		ContractVersion:   InvestigationResultSchemaV1,
 		ProjectionVersion: e.reuseProjectionVersion,
-		ModelIdentity:     e.reuseModelIdentity,
+		ModelIdentity:     modelIdentity,
 	}
 	candidate, ok, err := e.reuseGate.FindReusable(ctx, principal, key)
 	if err != nil || !ok {

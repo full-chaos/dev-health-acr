@@ -1,7 +1,9 @@
 package hosted
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelconfigcrypto"
@@ -65,6 +67,46 @@ func wrapWithOrgModelRuntimeResolver(deploymentDefault contextfabric.ModelRuntim
 	}
 	resolver := modelruntimeresolver.New(deploymentDefault, orgConfigs, modelruntimeresolver.NewModelProviderBuild(defaults))
 	return resolver, resolver, nil
+}
+
+// contextFabricReuseModelIdentityResolver implements
+// contextfabric.ReuseModelIdentityResolver (CHAOS-3782, Codex round-2
+// finding #3) by resolving the SAME organization-effective configuration
+// modelruntimeresolver.Resolver.runtimeFor would (configs, falling
+// through to fallback when the organization has none) -- without
+// building a contextfabric.ModelRuntime, since a reuse lookup only needs
+// the identity string, never a genkit instance. configs may be nil (no
+// per-organization support wired at all), in which case every
+// organization's resolved identity is simply fallback, matching pre-
+// CHAOS-3782 (and pre-CHAOS-3775) behavior.
+type contextFabricReuseModelIdentityResolver struct {
+	configs  contextfabric.OrgModelConfigResolver
+	fallback string
+}
+
+func (r contextFabricReuseModelIdentityResolver) ResolveReuseModelIdentity(ctx context.Context, orgID string) (string, error) {
+	if r.configs == nil || strings.TrimSpace(orgID) == "" {
+		return r.fallback, nil
+	}
+	resolved, ok, err := r.configs.ResolveOrgModelConfig(ctx, orgID)
+	if err != nil {
+		// AC-3775-3's prohibition applies here too: an organization whose
+		// configuration exists but cannot be read must never fall back to
+		// the deployment-default identity as a substitute -- that could
+		// wrongly match (and reuse) a row this organization's ACTUAL
+		// current configuration would never have produced. The caller
+		// (Engine.tryReuse) treats this error as a plain cache miss.
+		return "", err
+	}
+	if !ok {
+		return r.fallback, nil
+	}
+	provider := strings.TrimSpace(resolved.Provider)
+	model := strings.TrimSpace(resolved.Model)
+	if provider == "" || model == "" {
+		return r.fallback, nil
+	}
+	return provider + "/" + model, nil
 }
 
 // contextFabricModelDefaults returns the Timeout/MaxAttempts/

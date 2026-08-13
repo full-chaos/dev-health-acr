@@ -135,16 +135,17 @@ type AnswerSynthesizer interface {
 // the caller's own org graph, where it does not exist, and the receipt is
 // silently skipped exactly like any other unresolvable one.
 type InvestigationResultStore interface {
-	// Save's fourth parameter is the CHAOS-3782 answer-reuse watermark
-	// snapshot -- see SourceWatermarkSnapshot's doc comment. Every
-	// implementation and every test fake must accept it explicitly, even
-	// one that ignores it entirely (e.g. memoryinvestigation, which
-	// doesn't implement answer reuse): the parameter's presence in the
-	// signature is deliberate, not incidental, so a caller cannot forget
-	// to pass it and silently reproduce answer reuse's own fail-open
-	// hazard (Codex round-1 findings F1/F2) the way a context.Context
-	// value could.
-	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot) error
+	// Save's fourth and fifth parameters are the CHAOS-3782 answer-reuse
+	// snapshot-time data -- see SourceWatermarkSnapshot's and
+	// RebuildEpoch's doc comments. Every implementation and every test
+	// fake must accept both explicitly, even one that ignores them
+	// entirely (e.g. memoryinvestigation, which doesn't implement answer
+	// reuse): their presence in the signature is deliberate, not
+	// incidental, so a caller cannot forget to pass either and silently
+	// reproduce answer reuse's own fail-open hazard (Codex round-1
+	// findings F1/F2, round-2 finding #7) the way a context.Context value
+	// could.
+	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch) error
 	Get(context.Context, storage.Principal, string) (InvestigationResult, error)
 }
 
@@ -230,6 +231,93 @@ type ReuseInvalidator interface {
 // when Engine passes nil.
 type SourceWatermarkSnapshotter interface {
 	SnapshotSourceWatermarks(ctx context.Context, orgID string) (SourceWatermarkSnapshot, error)
+}
+
+// RebuildEpoch is the CHAOS-3782 rebuild-invalidation epoch (Codex
+// round-2 finding #7): the organization-scoped monotonic counter
+// RebuildEpochSnapshotter reads and ReuseInvalidator.
+// InvalidateOrganizationReuse alone bumps, captured by Engine at the SAME
+// moment as SourceWatermarkSnapshot -- immediately before the graph is
+// read for a fresh investigation -- and passed to Save as its own
+// explicit parameter, alongside the watermark snapshot.
+//
+// nil (the alias's zero value) means "no epoch was captured" -- reuse
+// disabled for this Engine, or the snapshot read failed -- exactly
+// mirroring SourceWatermarkSnapshot's own nil convention, and for the
+// same reason: a Save implementation must treat nil as "this result
+// never becomes reusable" and must never substitute a later, live query
+// of its own as a fallback for either field independently. This is a
+// type ALIAS for *int64 (not a defined type), so it composes with plain
+// pointer values and literals at every call site without conversion --
+// the name exists purely for signature readability.
+//
+// Why this exists (the race a timestamp-only comparison cannot close):
+// condition 4b -- "generated after the organization's most recent
+// rebuild invalidation, if any" -- was originally checked by comparing a
+// candidate row's OWN created_at (DB clock_timestamp() at INSERT) against
+// invalidated_at. That comparison is blind to WHEN the investigation's
+// underlying graph read actually happened relative to the invalidation:
+// an investigation whose graph read began before (or raced) a rebuild's
+// InvalidateOrganizationReuse call, but whose Save happened to land AFTER
+// it purely due to processing time, would still show created_at >
+// invalidated_at and pass the old check -- serving an answer built from
+// stale/mid-rebuild data as if it reflected the post-rebuild state.
+// Binding to a captured-at-snapshot-time epoch instead closes this: a
+// candidate is reuse-eligible only if the epoch it captured still equals
+// the organization's CURRENT epoch at lookup time, which is true if and
+// only if NO invalidation occurred anywhere in [snapshot-capture,
+// lookup] -- a strictly larger, and therefore safe, superset of
+// [snapshot-capture, this row's own created_at].
+type RebuildEpoch = *int64
+
+// RebuildEpochSnapshotter reads the CURRENT rebuild-invalidation epoch
+// for an organization (CHAOS-3782, Codex round-2 finding #7) -- see
+// RebuildEpoch's doc comment for what the value means and why Engine
+// must capture it at the same moment as the watermark snapshot, never
+// later. Implementations must read the SAME counter
+// ReuseInvalidator.InvalidateOrganizationReuse bumps for this
+// organization; an organization never invalidated reads as epoch 0 (the
+// baseline every fresh organization starts at, matching "no
+// invalidations table row exists yet").
+type RebuildEpochSnapshotter interface {
+	SnapshotRebuildEpoch(ctx context.Context, orgID string) (int64, error)
+}
+
+// ReuseModelIdentityResolver resolves the CURRENT org-effective model
+// identity a reuse lookup's ReuseKey.ModelIdentity must use (CHAOS-3782,
+// Codex round-2 finding #3). Engine calls this itself, explicitly, from
+// tryReuse -- BEFORE building the ReuseKey and calling
+// AnswerReuseGate.FindReusable -- never a value captured once at
+// engine-construction time and reused for every organization thereafter.
+//
+// Why a static identity is wrong (the bug this closes): a fresh
+// investigation's SAVED Versions.ModelIdentity already correctly reflects
+// whichever model actually answered it (RuntimeAnswerSynthesizer derives
+// it from the execution receipt, which for a CHAOS-3775 BYO-configured
+// organization is that organization's own provider/model, not the
+// deployment default). But a LOOKUP built from a single static identity
+// fixed at startup never changes when an organization's own configuration
+// does -- so after an organization reconfigures its model (or is
+// configured for the first time, diverging from the deployment default),
+// tryReuse keeps querying for the OLD identity, which still matches the
+// row saved before the change, and keeps serving it. Condition 7 (model
+// identity match) exists specifically to invalidate reuse across a model
+// change; a static lookup key defeats it silently for every organization
+// whose effective identity differs from the deployment default, without
+// ever producing an error or a miss that would surface the problem.
+//
+// Implementations MUST resolve the same organization-effective identity
+// that would actually answer a fresh investigation for orgID right now
+// (mirroring modelruntimeresolver.Resolver's own config-then-default
+// fallthrough) so the lookup key can never diverge from what Save would
+// have written for an equivalent fresh call. Returning an error means the
+// identity could not be determined for this organization right now (e.g.
+// its stored BYO configuration exists but fails to decrypt) -- tryReuse
+// treats that exactly like "no candidate found" and falls through to a
+// fresh investigation; it must never fall back to a different, possibly
+// wrong identity as a substitute.
+type ReuseModelIdentityResolver interface {
+	ResolveReuseModelIdentity(ctx context.Context, orgID string) (string, error)
 }
 
 // ProjectionBackend is the write-side graph/index boundary. Applying a batch

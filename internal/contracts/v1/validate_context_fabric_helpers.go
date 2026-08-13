@@ -281,6 +281,34 @@ func validVersion(value string) bool {
 	return stringLengthBetween(value, 1, 256) && strings.TrimSpace(value) == value
 }
 
+// ContextFabricModelIdentityMaxLength bounds Versions.ModelIdentity
+// (CHAOS-3782), which is NOT a general version string like its
+// VersionSet siblings -- it is "<provider>/<model>", and both halves are
+// independently bounded at 256 bytes each: modelprovider.Config's own
+// Provider/Model fields (maximumProviderOrModelLength,
+// internal/contextfabric/modelprovider/config.go) and this package's own
+// CHAOS-3775 per-organization ContextFabricOrgModelConfig.Provider/Model
+// (contextFabricOrgModelConfigMaxFieldLength, context_fabric_model_config.go,
+// which already documents mirroring modelprovider's constant) both use
+// exactly 256. 256 + 1 ("/") + 256 = 513 is therefore the true worst case
+// a fully valid, already-billed model call can produce -- validVersion's
+// shared 256-byte bound (correct for every OTHER VersionSet field, which
+// are all short deployment/prompt version tokens ACR itself controls)
+// would reject it. Codex round-2 finding #8: a valid, in-bounds org model
+// configuration was failing InvestigationResult.Validate() AFTER a
+// successful, billable model call, purely because this field was folded
+// into the same 256-byte check as everything else.
+//
+// Derived from contextFabricOrgModelConfigMaxFieldLength (same package,
+// already the single source of truth for this 256 value) rather than a
+// second literal, so the two cannot drift apart independently of each
+// other.
+const ContextFabricModelIdentityMaxLength = 2*contextFabricOrgModelConfigMaxFieldLength + 1
+
+func validModelIdentity(value string) bool {
+	return stringLengthBetween(value, 1, ContextFabricModelIdentityMaxLength) && strings.TrimSpace(value) == value
+}
+
 // validDriverCategory reports whether value is one of the closed
 // ContextFabricDriverCategory vocabulary members (CHAOS-3755 adversarial
 // review finding H4). Before this, ContextFabricDriverJudgment.Category

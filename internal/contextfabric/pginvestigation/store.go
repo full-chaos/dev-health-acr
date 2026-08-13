@@ -34,7 +34,7 @@ var ErrNotFound = errors.New("pginvestigation: investigation result not found")
 //
 // Store also implements contextfabric.AnswerReuseGate and
 // contextfabric.ReuseInvalidator (CHAOS-3782): the reuse-key columns
-// migration 0010 added live on this same table, alongside the immutable
+// migration 0011 added live on this same table, alongside the immutable
 // payload, so the write and read sides of answer reuse belong with the
 // store that already owns Save/Get's first-insert-wins and org-scoping
 // invariants rather than in a separate package.
@@ -54,7 +54,7 @@ type Store struct {
 	// Save/FindReusable read acr.context_fabric_projection_checkpoints
 	// directly, with plain SQL, over the SAME *sql.DB this Store already
 	// owns -- both tables live in the identical Postgres schema (see
-	// migrations/postgres/0006 and 0010). This also means Store discovers
+	// migrations/postgres/0006 and 0011). This also means Store discovers
 	// whichever sources currently have a checkpoint row for an
 	// organization at query time, rather than needing a statically
 	// injected source-name list that composition would otherwise have to
@@ -70,7 +70,7 @@ type StoreOption func(*Store)
 // additionally snapshots, at insert time, the CURRENT backend_watermark of
 // EVERY source that currently has a checkpoint row for the organization --
 // not only the sources a given question happened to touch (see
-// migrations/postgres/0010_context_fabric_answer_reuse.sql's header
+// migrations/postgres/0011_context_fabric_answer_reuse.sql's header
 // comment for why binding to the full configured set is the conservative,
 // fail-closed reading of TRD §19.7.3 condition 3). maxAge is the
 // staleness window condition 4 enforces; it must be configured
@@ -103,7 +103,7 @@ func NewStore(db *sql.DB, opts ...StoreOption) (*Store, error) {
 // identical payload is treated as success (idempotent retry); a replay
 // under the same result_id with a DIFFERENT payload is rejected, since that
 // would silently overwrite an immutable record.
-func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot) error {
+func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch) error {
 	if s == nil || s.db == nil {
 		return errors.New("pginvestigation: store is not configured")
 	}
@@ -123,15 +123,15 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	if err != nil {
 		return fmt.Errorf("pginvestigation: marshal investigation result: %w", err)
 	}
-	questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks := s.reuseColumnsFor(result, reuseSnapshot)
+	questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch := s.reuseColumnsFor(result, reuseSnapshot, reuseEpoch)
 
 	insertResult, err := s.db.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (result_id) DO NOTHING`,
 		resultID, orgID, payload, result.GeneratedAt,
-		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks)
+		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch)
 	if err != nil {
 		return fmt.Errorf("save investigation result: %w", sanitizeError(err))
 	}
@@ -238,10 +238,10 @@ SELECT payload FROM acr.context_fabric_investigation_results WHERE result_id = $
 
 // reuseColumnsFor computes the CHAOS-3782 reuse-key column values Save
 // should write alongside result's immutable payload, or four zero
-// sql.NullString values and a nil watermark blob when answer reuse is not
-// enabled on this Store (s.reuseEnabled == false) -- Save's INSERT then
-// writes SQL NULL into every reuse column, exactly as if this were the
-// pre-CHAOS-3782 schema.
+// sql.NullString values, a nil watermark blob, and an invalid
+// sql.NullInt64 when answer reuse is not enabled on this Store
+// (s.reuseEnabled == false) -- Save's INSERT then writes SQL NULL into
+// every reuse column, exactly as if this were the pre-CHAOS-3782 schema.
 //
 // Codex round-1 F1 (and team-lead's veto of threading this through
 // context.Context): reuseSnapshot is Save's own explicit parameter,
@@ -256,19 +256,45 @@ SELECT payload FROM acr.context_fabric_investigation_results WHERE result_id = $
 // this fails OPEN on the write (the investigation result itself is never
 // lost) and CLOSED on reuse participation (nothing here falls back to a
 // live query, which would silently reopen the same race).
-func (s *Store) reuseColumnsFor(result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot) (questionHash, contractVersion, projectionVersion, modelIdentity sql.NullString, sourceWatermarks []byte) {
+//
+// reuseEpoch (Codex round-2 finding #7) is the same explicit-parameter,
+// same-moment-as-the-graph-read discipline applied to a SECOND piece of
+// snapshot-time state -- see RebuildEpoch's doc comment for the race it
+// closes that reuseSnapshot/created_at alone could not. It is checked and
+// nulled out independently of reuseSnapshot: a row can have watermarks
+// but no epoch (or vice versa) if one of the two Engine-side reads failed
+// while the other succeeded, and FindReusable's invalidation_epoch IS NOT
+// NULL guard is what turns a nil reuseEpoch into "never reusable" here.
+func (s *Store) reuseColumnsFor(result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch) (questionHash, contractVersion, projectionVersion, modelIdentity sql.NullString, sourceWatermarks []byte, invalidationEpoch sql.NullInt64) {
 	if !s.reuseEnabled || reuseSnapshot == nil {
-		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil
+		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil, sql.NullInt64{}
+	}
+	// Codex round-2 finding #4: a punctuation-only (or otherwise
+	// entirely-stripped) question canonicalizes to the empty string, so
+	// every such question would share ONE hash. Never let this row
+	// become a reuse candidate at all -- see tryReuse's matching guard on
+	// the lookup side.
+	if contextfabric.CanonicalizeQuestion(result.Question) == "" {
+		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil, sql.NullInt64{}
 	}
 	encoded, err := json.Marshal(reuseSnapshot)
 	if err != nil {
-		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil
+		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil, sql.NullInt64{}
+	}
+	// Codex round-2 finding #7: reuseEpoch nil means the epoch snapshot
+	// was never captured (reuse-epoch snapshotting not wired, or the read
+	// itself failed) -- FindReusable's own invalidation_epoch IS NOT NULL
+	// guard is what actually keeps such a row out of reuse; leaving it
+	// NULL here, independent of whatever reuseSnapshot/watermarks
+	// resolved to, is what makes that guard meaningful.
+	if reuseEpoch != nil {
+		invalidationEpoch = sql.NullInt64{Int64: *reuseEpoch, Valid: true}
 	}
 	questionHash = sql.NullString{String: contextfabric.QuestionHash(result.Question), Valid: true}
 	contractVersion = sql.NullString{String: result.Versions.ContractVersion, Valid: true}
 	projectionVersion = sql.NullString{String: result.Versions.ProjectionVersion, Valid: true}
 	modelIdentity = sql.NullString{String: result.Versions.ModelIdentity, Valid: true}
-	return questionHash, contractVersion, projectionVersion, modelIdentity, encoded
+	return questionHash, contractVersion, projectionVersion, modelIdentity, encoded, invalidationEpoch
 }
 
 // SnapshotSourceWatermarks implements contextfabric.SourceWatermarkSnapshotter.
@@ -281,6 +307,31 @@ func (s *Store) SnapshotSourceWatermarks(ctx context.Context, orgID string) (con
 		return nil, err
 	}
 	return contextfabric.SourceWatermarkSnapshot(snapshot), nil
+}
+
+// SnapshotRebuildEpoch implements contextfabric.RebuildEpochSnapshotter
+// (Codex round-2 finding #7). Engine calls this directly (not through
+// Save), at the same point it calls SnapshotSourceWatermarks, immediately
+// before reading the graph for a fresh investigation -- see RebuildEpoch's
+// doc comment for why the timing matters. An organization with no row in
+// acr.context_fabric_reuse_invalidations (never invalidated) reads as
+// epoch 0, the same baseline InvalidateOrganizationReuse's first-ever
+// UPSERT for an organization bumps FROM.
+func (s *Store) SnapshotRebuildEpoch(ctx context.Context, orgID string) (int64, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return 0, errors.New("pginvestigation: organization is required")
+	}
+	var epoch int64
+	err := s.db.QueryRowContext(ctx, `
+SELECT epoch FROM acr.context_fabric_reuse_invalidations WHERE org_id = $1`, orgID).Scan(&epoch)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("read rebuild epoch: %w", sanitizeError(err))
+	}
+	return epoch, nil
 }
 
 // currentSourceWatermarks reads the CURRENT backend_watermark of every
@@ -344,20 +395,30 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 		return contextfabric.InvestigationResult{}, false, nil
 	}
 
-	// Codex round-1 F6: condition 4's staleness window and the rebuild-
-	// invalidation comparison both use created_at (DB clock_timestamp(),
-	// migration 0009) against DB now() -- NEVER generated_at, which is
-	// app-clock metadata a caller's own process supplies and this store
-	// must not trust as an authority for a security/correctness-bearing
-	// comparison. generated_at stays purely a display field on the
-	// returned result (AC-3782-2's "generation time of the reused
-	// result"); it plays no role in deciding reuse eligibility here.
+	// Codex round-1 F6: the staleness window uses created_at (DB
+	// clock_timestamp(), migration 0009) against DB now() -- NEVER
+	// generated_at, which is app-clock metadata a caller's own process
+	// supplies and this store must not trust as an authority for a
+	// security/correctness-bearing comparison. generated_at stays purely
+	// a display field on the returned result (AC-3782-2's "generation
+	// time of the reused result"); it plays no role in deciding reuse
+	// eligibility here.
 	//
 	// F2: source_watermarks IS NOT NULL excludes any row where the
-	// Engine-side snapshot was never captured (reuse disabled at save
-	// time, or the snapshot read failed) -- such a row must never be
-	// treated as reusable no matter what watermarksStillMatch would
+	// Engine-side watermark snapshot was never captured (reuse disabled
+	// at save time, or the snapshot read failed) -- such a row must never
+	// be treated as reusable no matter what watermarksStillMatch would
 	// otherwise conclude from a NULL/empty value.
+	//
+	// Codex round-2 finding #7: the rebuild-invalidation check is
+	// invalidation_epoch = <the organization's CURRENT epoch>, not a
+	// created_at-vs-invalidated_at timestamp comparison (which this
+	// replaces -- see RebuildEpoch's doc comment for the race a
+	// timestamp comparison cannot close). invalidation_epoch IS NOT NULL
+	// excludes any row where the Engine-side epoch snapshot was never
+	// captured, exactly mirroring the source_watermarks guard just above
+	// it. The COALESCE(..., 0) matches SnapshotRebuildEpoch's own
+	// baseline for an organization with no invalidations row at all.
 	row := s.db.QueryRowContext(ctx, `
 SELECT payload, source_watermarks
 FROM acr.context_fabric_investigation_results
@@ -367,11 +428,18 @@ WHERE org_id = $1
   AND projection_version = $4
   AND model_identity = $5
   AND source_watermarks IS NOT NULL
+  AND invalidation_epoch IS NOT NULL
   AND created_at > now() - ($6 * INTERVAL '1 second')
-  AND created_at > COALESCE(
-        (SELECT invalidated_at FROM acr.context_fabric_reuse_invalidations WHERE org_id = $1),
-        '-infinity'::timestamptz)
-ORDER BY created_at DESC
+  AND invalidation_epoch = COALESCE(
+        (SELECT epoch FROM acr.context_fabric_reuse_invalidations WHERE org_id = $1),
+        0)
+-- Codex round-2 finding #5: created_at alone is clock_timestamp(), which
+-- is NOT guaranteed unique -- two Saves landing in the same instant tie,
+-- and "ORDER BY created_at DESC" alone leaves Postgres free to return
+-- either one nondeterministically. result_id DESC is a stable, always-
+-- unique secondary key (primary key column) purely to make candidate
+-- SELECTION deterministic; it carries no freshness meaning of its own.
+ORDER BY created_at DESC, result_id DESC
 LIMIT 1`,
 		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentity, s.reuseMaxAge.Seconds())
 	var payload, sourceWatermarks []byte
@@ -463,7 +531,14 @@ func (s *Store) watermarksStillMatch(ctx context.Context, orgID string, snapshot
 // call whether or not answer reuse is enabled on this Store. The ON
 // CONFLICT clause is guarded to never move invalidated_at backward, so a
 // rare out-of-order concurrent call cannot un-invalidate an
-// already-recorded, later rebuild.
+// already-recorded, later rebuild; epoch only advances alongside a
+// forward-moving invalidated_at, for the same reason (Codex round-2
+// finding #7: FindReusable and SnapshotRebuildEpoch both read this same
+// counter -- see RebuildEpoch's doc comment for what it fences against).
+// The first-ever invalidation for an organization sets epoch to 1, one
+// past SnapshotRebuildEpoch's 0 baseline for a never-invalidated
+// organization, so a snapshot captured before this call and one captured
+// after it can never compare equal.
 func (s *Store) InvalidateOrganizationReuse(ctx context.Context, orgID string) error {
 	if s == nil || s.db == nil {
 		return errors.New("pginvestigation: store is not configured")
@@ -473,10 +548,11 @@ func (s *Store) InvalidateOrganizationReuse(ctx context.Context, orgID string) e
 		return errors.New("pginvestigation: organization is required")
 	}
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO acr.context_fabric_reuse_invalidations (org_id, invalidated_at)
-VALUES ($1, clock_timestamp())
+INSERT INTO acr.context_fabric_reuse_invalidations (org_id, invalidated_at, epoch)
+VALUES ($1, clock_timestamp(), 1)
 ON CONFLICT (org_id) DO UPDATE
-    SET invalidated_at = EXCLUDED.invalidated_at
+    SET invalidated_at = EXCLUDED.invalidated_at,
+        epoch = acr.context_fabric_reuse_invalidations.epoch + 1
     WHERE acr.context_fabric_reuse_invalidations.invalidated_at < EXCLUDED.invalidated_at`, orgID)
 	if err != nil {
 		return fmt.Errorf("invalidate organization reuse: %w", sanitizeError(err))
