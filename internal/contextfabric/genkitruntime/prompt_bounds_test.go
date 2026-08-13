@@ -294,6 +294,33 @@ func modelFacingBounds() []boundCase {
 			},
 		},
 		{
+			// CHAOS-3784 round-2 R2-2: enforced (validate_context_fabric_result.go's
+			// uniqueTrimmedStrings(d.PathIDs, ContextFabricIdentifierRefMaxLength))
+			// and already stated in the prompt ("each at most 256 characters"),
+			// but had no registry entry and no case here until this fix.
+			name: "synthesis/driver path_id item max length", registryName: "synthesis.driver.path_ids.item_max_length",
+			limit: contractsv1.ContextFabricIdentifierRefMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"path_ids and at most 250 claimed_fact_ids, each at most 256"},
+			atLimit: func() error {
+				return driverWithPathIDLength(contractsv1.ContextFabricIdentifierRefMaxLength).Validate()
+			},
+			over: func() error {
+				return driverWithPathIDLength(contractsv1.ContextFabricIdentifierRefMaxLength + 1).Validate()
+			},
+		},
+		{
+			// See the matching comment on the path_id item-length case above.
+			name: "synthesis/driver claimed_fact_id item max length", registryName: "synthesis.driver.claimed_fact_ids.item_max_length",
+			limit: contractsv1.ContextFabricIdentifierRefMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"path_ids and at most 250 claimed_fact_ids, each at most 256"},
+			atLimit: func() error {
+				return driverWithClaimedFactIDLength(contractsv1.ContextFabricIdentifierRefMaxLength).Validate()
+			},
+			over: func() error {
+				return driverWithClaimedFactIDLength(contractsv1.ContextFabricIdentifierRefMaxLength + 1).Validate()
+			},
+		},
+		{
 			name: "synthesis/driver evidence_ref_ids max count", registryName: "synthesis.driver.evidence_ref_ids.max_count",
 			limit: contractsv1.ContextFabricEvidenceRefIDsMaxCount, prompt: synthesisSystemPrompt,
 			mentions: []string{"evidence_ref_ids", "500"},
@@ -356,6 +383,22 @@ func modelFacingBounds() []boundCase {
 			},
 			over: func() error {
 				return findingWithClaimedFactIDs(contractsv1.ContextFabricDriverClaimedFactIDsMaxCount + 1).Validate()
+			},
+		},
+		{
+			// CHAOS-3784 round-2 R2-2: see the matching driver-side case
+			// above -- Finding.Validate() enforces this the same way
+			// (uniqueTrimmedStrings(f.ClaimedFactIDs, ContextFabricIdentifierRefMaxLength)),
+			// and the SAME prompt sentence covers both driver and finding
+			// (prompts.go states them together).
+			name: "synthesis/finding claimed_fact_id item max length", registryName: "synthesis.finding.claimed_fact_ids.item_max_length",
+			limit: contractsv1.ContextFabricIdentifierRefMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"path_ids and at most 250 claimed_fact_ids, each at most 256"},
+			atLimit: func() error {
+				return findingWithClaimedFactIDLength(contractsv1.ContextFabricIdentifierRefMaxLength).Validate()
+			},
+			over: func() error {
+				return findingWithClaimedFactIDLength(contractsv1.ContextFabricIdentifierRefMaxLength + 1).Validate()
 			},
 		},
 		{
@@ -721,6 +764,23 @@ func driverWithClaimedFactIDs(count int) contractsv1.ContextFabricDriverJudgment
 	return driver
 }
 
+// driverWithPathIDLength and driverWithClaimedFactIDLength are the
+// per-item length counterparts of driverWithPathIDs/driverWithClaimedFactIDs
+// above (which vary COUNT): a single path_id/claimed_fact_id of the given
+// length, isolating the item-length bound from the count bound
+// (CHAOS-3784 round-2 R2-2).
+func driverWithPathIDLength(length int) contractsv1.ContextFabricDriverJudgment {
+	driver := baseDriver()
+	driver.PathIDs = []string{filler(length)}
+	return driver
+}
+
+func driverWithClaimedFactIDLength(length int) contractsv1.ContextFabricDriverJudgment {
+	driver := baseDriver()
+	driver.ClaimedFactIDs = []string{filler(length)}
+	return driver
+}
+
 func evidenceRefs(count int) []string {
 	refs := make([]string, 0, count)
 	for i := 0; i < count; i++ {
@@ -793,6 +853,14 @@ func findingWithEvidenceRefIDs(count int) contractsv1.ContextFabricFinding {
 func findingWithClaimedFactIDs(count int) contractsv1.ContextFabricFinding {
 	finding := baseFinding()
 	finding.ClaimedFactIDs = uniqueTerms(count)
+	return finding
+}
+
+// findingWithClaimedFactIDLength is driverWithClaimedFactIDLength's
+// finding-side counterpart (CHAOS-3784 round-2 R2-2).
+func findingWithClaimedFactIDLength(length int) contractsv1.ContextFabricFinding {
+	finding := baseFinding()
+	finding.ClaimedFactIDs = []string{filler(length)}
 	return finding
 }
 

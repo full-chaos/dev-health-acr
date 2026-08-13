@@ -78,6 +78,16 @@ func TestClassifyMapsHostedAPIErrorCodesToDistinctCategories(t *testing.T) {
 		{"incompatibility (version mismatch)", http.StatusBadRequest, "version_mismatch", "version"},
 		{"unavailable (upstream)", http.StatusServiceUnavailable, "upstream_unavailable", "unavailable"},
 		{"unavailable (internal_error code)", http.StatusInternalServerError, "internal_error", "unavailable"},
+		// CHAOS-3784 round-2 R2-1: interpretation_rejected/synthesis_rejected
+		// (the Context Fabric investigations endpoint's 422 bound-violation
+		// codes) must classify as "validation", not fall through to the
+		// default "unavailable" -- that collapse is exactly the
+		// distinction this ticket exists to preserve for an MCP consumer.
+		// upstream_invalid_output (a provider/schema-level failure, not a
+		// bound violation) stays "unavailable".
+		{"interpretation rejected (bound violation)", http.StatusUnprocessableEntity, "interpretation_rejected", "validation"},
+		{"synthesis rejected (bound violation)", http.StatusUnprocessableEntity, "synthesis_rejected", "validation"},
+		{"unavailable (upstream_invalid_output code)", http.StatusBadGateway, "upstream_invalid_output", "unavailable"},
 	}
 
 	token := fixtureToken(0x5A)

@@ -142,8 +142,18 @@ func DiagnoseContextFabricDriverJudgmentBound(d ContextFabricDriverJudgment) (bo
 	if len(d.PathIDs) > ContextFabricDriverPathIDsMaxCount {
 		return "synthesis.driver.path_ids.max_count", true
 	}
+	for _, pathID := range d.PathIDs {
+		if runeLongerThan(pathID, ContextFabricIdentifierRefMaxLength) {
+			return "synthesis.driver.path_ids.item_max_length", true
+		}
+	}
 	if len(d.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount {
 		return "synthesis.driver.claimed_fact_ids.max_count", true
+	}
+	for _, claimedFactID := range d.ClaimedFactIDs {
+		if runeLongerThan(claimedFactID, ContextFabricIdentifierRefMaxLength) {
+			return "synthesis.driver.claimed_fact_ids.item_max_length", true
+		}
 	}
 	if len(d.EvidenceRefIDs) > ContextFabricEvidenceRefIDsMaxCount {
 		return "synthesis.driver.evidence_ref_ids.max_count", true
@@ -170,6 +180,11 @@ func DiagnoseContextFabricFindingBound(f ContextFabricFinding) (bound string, ok
 	}
 	if len(f.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount {
 		return "synthesis.finding.claimed_fact_ids.max_count", true
+	}
+	for _, claimedFactID := range f.ClaimedFactIDs {
+		if runeLongerThan(claimedFactID, ContextFabricIdentifierRefMaxLength) {
+			return "synthesis.finding.claimed_fact_ids.item_max_length", true
+		}
 	}
 	return "", false
 }

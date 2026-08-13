@@ -105,7 +105,25 @@ func classifyAPIError(err error, apiErr *sidecar.APIError) *classifiedError {
 		category = "no_data"
 	case errors.Is(err, sidecar.ErrInvalidRequest):
 		category = "validation"
-	case errors.Is(err, sidecar.ErrUpstreamUnavailable), errors.Is(err, sidecar.ErrInternalAPIError),
+	// ErrInterpretationRejected/ErrSynthesisRejected are the Context Fabric
+	// investigations endpoint's 422 codes (CHAOS-3784): the request was
+	// well-formed, but ACR's own contracts/v1 bound (or a claim-binding/
+	// grounding rule) rejected the derived interpretation/synthesis --
+	// the same "well-formed but semantically rejected" shape
+	// ErrInvalidRequest already maps to "validation" for, not an
+	// unavailability. Without an explicit case here both fell through to
+	// the default "unavailable" bucket, losing exactly the distinction
+	// CHAOS-3784 exists to create for an MCP consumer (round-2 R2-1).
+	case errors.Is(err, sidecar.ErrInterpretationRejected), errors.Is(err, sidecar.ErrSynthesisRejected):
+		category = "validation"
+	// ErrUpstreamInvalidOutput is the pre-existing upstream_invalid_output
+	// code (a provider/schema-level failure, not a bound violation): it
+	// already fell into the default "unavailable" bucket before this case
+	// existed, so this is not a behavior change, only making the mapping
+	// explicit rather than incidental (round-2 R2-1 asked for an explicit
+	// case per sentinel, not just the two new ones).
+	case errors.Is(err, sidecar.ErrUpstreamInvalidOutput),
+		errors.Is(err, sidecar.ErrUpstreamUnavailable), errors.Is(err, sidecar.ErrInternalAPIError),
 		errors.Is(err, sidecar.ErrUnexpectedRedirect), errors.Is(err, sidecar.ErrResponseTooLarge),
 		errors.Is(err, sidecar.ErrMalformedResponse):
 		category = "unavailable"

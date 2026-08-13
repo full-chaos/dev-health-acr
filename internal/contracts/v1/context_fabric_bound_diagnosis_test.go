@@ -167,6 +167,10 @@ func driverJudgmentDiagnosisCases() []diagnosisCase[ContextFabricDriverJudgment]
 			}
 			return d
 		}, "synthesis.driver.path_ids.max_count"},
+		{"path_id item length", func(d ContextFabricDriverJudgment) ContextFabricDriverJudgment {
+			d.PathIDs = []string{strings.Repeat("p", ContextFabricIdentifierRefMaxLength+1)}
+			return d
+		}, "synthesis.driver.path_ids.item_max_length"},
 		{"claimed_fact_ids count", func(d ContextFabricDriverJudgment) ContextFabricDriverJudgment {
 			d.ClaimedFactIDs = make([]string, ContextFabricDriverClaimedFactIDsMaxCount+1)
 			for i := range d.ClaimedFactIDs {
@@ -174,6 +178,10 @@ func driverJudgmentDiagnosisCases() []diagnosisCase[ContextFabricDriverJudgment]
 			}
 			return d
 		}, "synthesis.driver.claimed_fact_ids.max_count"},
+		{"claimed_fact_id item length", func(d ContextFabricDriverJudgment) ContextFabricDriverJudgment {
+			d.ClaimedFactIDs = []string{strings.Repeat("c", ContextFabricIdentifierRefMaxLength+1)}
+			return d
+		}, "synthesis.driver.claimed_fact_ids.item_max_length"},
 		{"evidence_ref_ids count", func(d ContextFabricDriverJudgment) ContextFabricDriverJudgment {
 			d.EvidenceRefIDs = make([]string, ContextFabricEvidenceRefIDsMaxCount+1)
 			for i := range d.EvidenceRefIDs {
@@ -247,6 +255,10 @@ func findingDiagnosisCases() []diagnosisCase[ContextFabricFinding] {
 			}
 			return f
 		}, "synthesis.finding.claimed_fact_ids.max_count"},
+		{"claimed_fact_id item length", func(f ContextFabricFinding) ContextFabricFinding {
+			f.ClaimedFactIDs = []string{strings.Repeat("c", ContextFabricIdentifierRefMaxLength+1)}
+			return f
+		}, "synthesis.finding.claimed_fact_ids.item_max_length"},
 	}
 }
 

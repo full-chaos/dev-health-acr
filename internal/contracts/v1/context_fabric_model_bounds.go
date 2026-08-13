@@ -68,7 +68,16 @@ const (
 	// claimed_fact_id string a driver or finding lists (as opposed to the
 	// COUNT bounds above) -- one shared bound, since both are the same
 	// "reference to an ID this answer already returned or was given"
-	// shape.
+	// shape. Unlike an evidence_ref_id (excluded from this registry --
+	// see the file doc comment's class (a): allowedEvidence's membership
+	// check in SynthesisDraft.ValidateAgainst always rejects an
+	// unrecognized evidence ref before its length is the operative
+	// failure), a claimed_fact_id reference points at a claim the MODEL
+	// itself minted earlier in the SAME draft, not at something ACR
+	// independently supplied and bounded -- so this length is genuinely
+	// model-facing and belongs in the registry (CHAOS-3784 round-2 R2-2:
+	// enforced at validate_context_fabric_result.go's uniqueTrimmedStrings
+	// calls but absent from here and from Diagnose* until this fix).
 	ContextFabricIdentifierRefMaxLength = 256
 	// ContextFabricEvidenceRefIDsMaxCount bounds evidence_ref_ids wherever a
 	// model populates it directly: per-driver and per-finding.
@@ -137,7 +146,9 @@ var ContextFabricModelFacingBounds = []ContextFabricModelFacingBound{
 	{"synthesis.driver.qualification.max_length", ContextFabricDriverQualificationMaxLength},
 	{"synthesis.driver.affected_subjects.max_count", ContextFabricDriverAffectedSubjectsMaxCount},
 	{"synthesis.driver.path_ids.max_count", ContextFabricDriverPathIDsMaxCount},
+	{"synthesis.driver.path_ids.item_max_length", ContextFabricIdentifierRefMaxLength},
 	{"synthesis.driver.claimed_fact_ids.max_count", ContextFabricDriverClaimedFactIDsMaxCount},
+	{"synthesis.driver.claimed_fact_ids.item_max_length", ContextFabricIdentifierRefMaxLength},
 	{"synthesis.driver.evidence_ref_ids.max_count", ContextFabricEvidenceRefIDsMaxCount},
 
 	{"synthesis.finding.finding_id.max_length", ContextFabricModelMintedIDMaxLength},
@@ -146,6 +157,7 @@ var ContextFabricModelFacingBounds = []ContextFabricModelFacingBound{
 	{"synthesis.finding.subjects.max_count", ContextFabricFindingSubjectsMaxCount},
 	{"synthesis.finding.evidence_ref_ids.max_count", ContextFabricEvidenceRefIDsMaxCount},
 	{"synthesis.finding.claimed_fact_ids.max_count", ContextFabricDriverClaimedFactIDsMaxCount},
+	{"synthesis.finding.claimed_fact_ids.item_max_length", ContextFabricIdentifierRefMaxLength},
 
 	{"synthesis.claimed_fact.claim_id.max_length", ContextFabricModelMintedIDMaxLength},
 	{"synthesis.claimed_fact.field.max_length", ContextFabricClaimedFieldMaxLength},
