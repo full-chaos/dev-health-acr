@@ -317,8 +317,14 @@ func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug st
 	return []any{workItemID, teamID, source, confidence, repoID, repoSlug, computedAt}
 }
 
-func projectTeamRow(projectID, teamID, source string, validFrom time.Time, hasOpenWindow uint8, maxValidTo, updatedAt time.Time) []any {
-	return []any{projectID, teamID, source, validFrom, hasOpenWindow, maxValidTo, updatedAt}
+// projectTeamRow mirrors queryProjectTeams' SELECT list exactly, trailing
+// key_resolution_count included -- the per-(provider, project_key) project
+// count the producer uses to omit an ambiguous key. A row here supplies 1
+// (unambiguous); the multi-resolution behaviour is tested against real SQL in
+// teams_projects_ownership_integration_test.go, since a canned-row fake
+// cannot exercise the window function that computes it.
+func projectTeamRow(projectID, teamID, source string, validFrom time.Time, latestIsOpen uint8, latestValidTo, updatedAt time.Time) []any {
+	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, uint64(1)}
 }
 
 // liveShapedEdgeClient replays the ground-truth org's real edge row shapes:

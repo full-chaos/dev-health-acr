@@ -129,6 +129,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
+	teamsProjectsSource.WithLogger(logger)
 
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs:  cfg.OrgIDs,

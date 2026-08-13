@@ -3,6 +3,7 @@ package devhealthsource
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -50,12 +51,20 @@ const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v1"
 // original producers. It mirrors no column type, engine or sort key, so it
 // cannot drift from production the way a rival schema declaration would;
 // devhealthschema stays the only physical source for these four tables.
-var teamsProjectsTables = []entityTable{
-	{name: "teams", query: queryTeams},
-	{name: "projects", query: queryProjects},
-	{name: "work_items_projects", query: queryWorkItemProjects},
-	{name: "work_item_team_attributions", query: queryWorkItemTeams},
-	{name: "team_project_ownership", query: queryProjectTeams},
+//
+// teamsProjectsTables is built per source rather than declared as a package
+// var so the ownership producer can be handed a real logger (it omits
+// ambiguous project keys and must say so) without a package-level global or
+// shared mutable state -- the coordinator projects organizations
+// concurrently, so a shared counter would be a race.
+func teamsProjectsTables(logger *slog.Logger) []entityTable {
+	return []entityTable{
+		{name: "teams", query: queryTeams},
+		{name: "projects", query: queryProjects},
+		{name: "work_items_projects", query: queryWorkItemProjects},
+		{name: "work_item_team_attributions", query: queryWorkItemTeams},
+		{name: "team_project_ownership", query: projectTeamsQuery(logger)},
+	}
 }
 
 // TeamsProjectsSource is the canonical Dev Health ProjectionSource for Team
@@ -67,6 +76,7 @@ type TeamsProjectsSource struct {
 	client  contextpacket.ClickHouseQueryClient
 	enabled bool
 	now     func() time.Time
+	logger  *slog.Logger
 }
 
 // NewTeamsProjectsSource returns a TeamsProjectsSource. enabled mirrors
@@ -76,7 +86,17 @@ func NewTeamsProjectsSource(client contextpacket.ClickHouseQueryClient, enabled 
 	if client == nil {
 		return nil, fmt.Errorf("devhealthsource: clickhouse query client is required")
 	}
-	return &TeamsProjectsSource{client: client, enabled: enabled, now: time.Now}, nil
+	return &TeamsProjectsSource{client: client, enabled: enabled, now: time.Now, logger: slog.Default()}, nil
+}
+
+// WithLogger overrides the default logger, mirroring
+// ClickHouseProjectionSource.WithLogger: only cmd/acr-projector wires a real
+// one, and a nil logger is a no-op rather than a panic.
+func (s *TeamsProjectsSource) WithLogger(logger *slog.Logger) *TeamsProjectsSource {
+	if logger != nil {
+		s.logger = logger
+	}
+	return s
 }
 
 func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
@@ -90,7 +110,7 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		client:  s.client,
 		source:  TeamsProjectsSourceName,
 		version: TeamsProjectsSourceVersion,
-		tables:  teamsProjectsTables,
+		tables:  teamsProjectsTables(s.logger),
 		now:     s.now,
 		// No seed: the synthesized Organization entity belongs to
 		// ClickHouseProjectionSource's full snapshot and must be projected

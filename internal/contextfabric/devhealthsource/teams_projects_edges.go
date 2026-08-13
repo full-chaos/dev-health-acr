@@ -2,6 +2,7 @@ package devhealthsource
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -188,6 +189,25 @@ WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') 
 // exactly one projects.id (verified across every organization), and no
 // information is lost: zero groups map to more than one project_id.
 //
+// THIRD-B -- ambiguity, the failure mode provider-scoping MOVES rather than
+// removes. Grouping on (provider, project_key) and resolving through projects
+// assumes (org, provider, project_key) names exactly one project. That holds
+// in live data today (verified across every organization), but nothing in the
+// schema enforces it, and the failure is invisible where every other duplicate
+// is loud: a key resolving to two projects fans this join out to two rows with
+// two DISTINCT projects.id, so their RelationshipIDs differ and
+// ContextFabricProjectionBatch.Validate never trips. The result would be a
+// fabricated ownership edge to a project the source never asserted.
+//
+// key_resolution_count carries the per-(provider, project_key) project count
+// out of SQL, and the scan omits BOTH candidates when it exceeds one. Omitted,
+// not guessed: choosing between two equally-matching projects would be minting
+// canonical truth from a coin flip. Omitted, not fatal: one ambiguous key must
+// not take an organization's whole projection down, so this never returns an
+// error -- it drops the edge and logs a bounded reason plus a count
+// (logAmbiguousProjectKeys), because an unlogged omission is indistinguishable
+// from an ownership that simply does not exist.
+//
 // FOURTH -- validity, and a ClickHouse NULL trap (codex round-1 F2). The
 // window runs from the EARLIEST assertion ever observed to whatever the
 // LATEST assertion says, keyed on valid_from. Neither obvious spelling works:
@@ -200,9 +220,15 @@ WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') 
 // tuple wrapper is load-bearing rather than decorative -- see
 // TestOwnershipWindowTakesTheLatestAssertion, which asserts both directions
 // because each spelling passes one and fails the other.
-func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+func projectTeamsQuery(logger *slog.Logger) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
+	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+		return queryProjectTeams(ctx, client, orgID, cursor, limit, logger)
+	}
+}
+
+func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, logger *slog.Logger) ([]candidate, bool, error) {
 	const rowKey = "concat(p.id, ':', o.team_id, ':', o.source_name)"
-	statement := `SELECT p.id, o.team_id, o.source_name, o.first_valid_from, o.latest_is_open, o.latest_valid_to, o.updated_at
+	statement := `SELECT p.id, o.team_id, o.source_name, o.first_valid_from, o.latest_is_open, o.latest_valid_to, o.updated_at, p.key_resolution_count
 FROM (
   SELECT provider, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name,
          min(valid_from) AS first_valid_from,
@@ -213,15 +239,26 @@ FROM (
   WHERE org_id = {org_id:String}
   GROUP BY provider, project_key, team_id, source_name
 ) AS o
-INNER JOIN (SELECT id, provider, ifNull(project_key, '') AS project_key FROM projects FINAL WHERE org_id = {org_id:String}) AS p USING (provider, project_key)
+INNER JOIN (
+  SELECT id, provider, project_key, count() OVER (PARTITION BY provider, project_key) AS key_resolution_count
+  FROM (SELECT id, provider, ifNull(project_key, '') AS project_key FROM projects FINAL WHERE org_id = {org_id:String})
+) AS p USING (provider, project_key)
 INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id
 WHERE o.project_key != ''` + sincePredicate(cursor, "o.updated_at", rowKey) + orderBy("o.updated_at", rowKey)
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+	ambiguous := map[string]struct{}{}
+	rows, truncated, err := fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var projectID, teamID, source string
 		var validFrom, latestValidTo, observedAt time.Time
 		var latestIsOpen uint8
-		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt); err != nil {
+		var keyResolutionCount uint64
+		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt, &keyResolutionCount); err != nil {
 			return nil, err
+		}
+		// An ambiguous project_key is omitted, not guessed and not fatal --
+		// see this function's ambiguity note.
+		if keyResolutionCount > 1 {
+			ambiguous[teamID+":"+source] = struct{}{}
+			return nil, nil
 		}
 		observedAt, validFrom, latestValidTo = observedAt.UTC(), validFrom.UTC(), latestValidTo.UTC()
 		relationship := contractsv1.ContextFabricRelationshipProjection{
@@ -243,6 +280,26 @@ WHERE o.project_key != ''` + sincePredicate(cursor, "o.updated_at", rowKey) + or
 		relationship.ValidFrom, relationship.ValidTo = ownershipValidity(validFrom, latestIsOpen, latestValidTo)
 		return []candidate{{observedAt: observedAt, sortKey: projectID + ":" + teamID + ":" + source, relationship: &relationship}}, nil
 	})
+	if err != nil {
+		return nil, false, err
+	}
+	logAmbiguousProjectKeys(ctx, logger, orgID, len(ambiguous))
+	return rows, truncated, nil
+}
+
+// logAmbiguousProjectKeys surfaces omitted ownership edges as a bounded
+// per-read signal. Without it, an omission is indistinguishable from an
+// ownership that simply does not exist, which is the shape of silence this
+// wave keeps removing. The message carries a fixed reason and a COUNT only --
+// never a project key, project id or team id, which are tenant data; the
+// organization is hashed the same way logOrphanedWorkItems hashes it.
+func logAmbiguousProjectKeys(ctx context.Context, logger *slog.Logger, orgID string, omitted int) {
+	if logger == nil || omitted == 0 {
+		return
+	}
+	logger.WarnContext(ctx, "devhealthsource omitted project ownership edges for ambiguous project keys",
+		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+		"reason", "project_key resolves to more than one project within its provider", "omitted_ownership_keys", omitted)
 }
 
 // ownershipValidity states a project->team edge's window explicitly in both

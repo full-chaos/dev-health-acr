@@ -133,6 +133,12 @@ func newOwnershipFixture(t *testing.T, ctx context.Context) *ownershipFixture {
 			orgID, provider, teamID, projectID, key, "native", validFrom, validTo, at)
 	}
 
+	// AMBIGUOUS: two projects sharing one (provider, project_key). The join
+	// fans out to two DISTINCT projects.id, so the RelationshipIDs differ and
+	// batch.Validate stays silent -- the producer must catch this itself.
+	seedProject("PROJ-AMBIG-A", "github", "AMBIG-KEY")
+	seedProject("PROJ-AMBIG-B", "github", "AMBIG-KEY")
+
 	seedTeam("TEAM-GITHUB", "github")
 	seedTeam("TEAM-GITLAB", "gitlab")
 
@@ -152,6 +158,8 @@ func newOwnershipFixture(t *testing.T, ctx context.Context) *ownershipFixture {
 	seedProject("PROJ-OPEN", "github", "OPEN-KEY")
 	seedOwnership("github", "TEAM-GITHUB", "PROJ-OPEN", "OPEN-KEY", ownershipFirstSeen, ownershipSupersededEarlyClose)
 	seedOwnership("github", "TEAM-GITHUB", "PROJ-OPEN", "OPEN-KEY", ownershipLaterAssertion, nil)
+
+	seedOwnership("github", "TEAM-GITHUB", "PROJ-AMBIG-A", "AMBIG-KEY", ownershipFirstSeen, nil)
 
 	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
 	if err != nil {
@@ -197,4 +205,45 @@ func assertUniqueRelationshipIDs(t *testing.T, batch contextfabric.ProjectionBat
 			t.Errorf("relationship %q emitted %d times -- duplicate relationship IDs fail batch validation and wedge the organization", id, count)
 		}
 	}
+}
+
+// TestAmbiguousProjectKeyOmitsTheEdgeRatherThanGuessing closes the failure
+// mode the F1 rewrite MOVED rather than removed.
+//
+// Grouping ownership on (provider, project_key) and resolving through
+// projects assumes (org, provider, project_key) names exactly one project.
+// That holds in live data today, but nothing in the schema enforces it, and
+// the failure is invisible where every other duplicate is loud: a key
+// resolving to two projects fans the join out to two rows with two DISTINCT
+// projects.id, so the RelationshipIDs differ and
+// ContextFabricProjectionBatch.Validate never trips. The result would be a
+// fabricated ownership edge to a project the source never asserted -- the
+// same class of silent invention as the cross-provider merge, one level down.
+//
+// The producer omits BOTH candidates rather than picking one, and does not
+// fail the batch: one ambiguous key must not take an organization's whole
+// projection down, and guessing between two projects is exactly the
+// "discoveries may not mint canonical truth" line.
+func TestAmbiguousProjectKeyOmitsTheEdgeRatherThanGuessing(t *testing.T) {
+	ctx := context.Background()
+	fixture := newOwnershipFixture(t, ctx)
+
+	batch := fixture.project(t, ctx)
+	for _, projectID := range []string{"PROJ-AMBIG-A", "PROJ-AMBIG-B"} {
+		id := "relationship:project_team:" + projectID + ":TEAM-GITHUB:native"
+		if hasRelationship(batch, id) {
+			t.Errorf("emitted %q from an ambiguous project_key -- two projects share (github, AMBIG-KEY), so which one the source meant is unknowable and neither may be guessed", id)
+		}
+	}
+	// The unambiguous edges must survive: omission is per-key, never a
+	// whole-batch refusal.
+	for _, id := range []string{
+		"relationship:project_team:PROJ-GITHUB:TEAM-GITHUB:native",
+		"relationship:project_team:PROJ-OPEN:TEAM-GITHUB:native",
+	} {
+		if !hasRelationship(batch, id) {
+			t.Errorf("lost the unambiguous edge %q -- one ambiguous key must not suppress the rest", id)
+		}
+	}
+	assertUniqueRelationshipIDs(t, batch)
 }
