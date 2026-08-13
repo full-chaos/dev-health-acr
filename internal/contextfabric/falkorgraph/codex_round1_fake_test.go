@@ -24,6 +24,7 @@ import (
 type fakeConn struct {
 	queryFunc       func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error)
 	constraintsFunc func(ctx context.Context, graphKey string) ([]constraintStatus, error)
+	indexesFunc     func(ctx context.Context, graphKey string) ([]indexStatus, error)
 }
 
 func (f *fakeConn) query(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
@@ -41,6 +42,9 @@ func (f *fakeConn) constraints(ctx context.Context, graphKey string) ([]constrai
 	return []constraintStatus{}, nil
 }
 func (f *fakeConn) indexes(ctx context.Context, graphKey string) ([]indexStatus, error) {
+	if f.indexesFunc != nil {
+		return f.indexesFunc(ctx, graphKey)
+	}
 	return nil, nil
 }
 func (f *fakeConn) createIndex(ctx context.Context, graphKey, label string, properties []string, relationship bool) error {

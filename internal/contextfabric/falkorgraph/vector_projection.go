@@ -168,13 +168,105 @@ func embedMaxRunes(embedder contextfabric.Embedder) int {
 }
 
 // ensureVectorIndex creates the organization's vector index once vector
-// retrieval is configured. Separate from bootstrapSchema's constraint work
-// because it is CONDITIONAL: an organization graph bootstrapped before an
-// embedder was configured is perfectly valid and must not be treated as
-// broken.
+// retrieval is configured, and enforces AC-3778-7's dimension fence.
+//
+// Separate from bootstrapSchema's constraint work because it is CONDITIONAL:
+// an organization graph bootstrapped before an embedder was configured is
+// perfectly valid and must not be treated as broken.
+//
+// AC-3778-7 ("changing the embedder identity or dimension invalidates the
+// affected vectors and forces a deterministic rebuild; a stale-dimension
+// vector is never queried") is enforced here rather than per query, because
+// the answer cannot change without a rebuild and a per-query check would cost
+// a round trip on the AC-3778-5 budget for a constant.
+//
+// A dimension mismatch DISABLES vector retrieval for that organization rather
+// than failing the request or silently rebuilding:
+//
+//   - Failing would take down lexical retrieval too, over an optional
+//     improvement, for every request until an operator noticed.
+//   - Silently dropping and recreating the index would discard every stored
+//     vector for the organization on a config typo, with no operator
+//     decision -- and would still leave every NODE carrying a stale vector of
+//     the old width until a full reprojection, so it would not even be
+//     correct.
+//
+// The prescribed recovery is the existing `acr-projector rebuild --org` path,
+// which already resets checkpoints and bumps the rebuild epoch (invalidating
+// CHAOS-3782 answer reuse). Until then the organization answers lexically,
+// which is exactly the pre-CHAOS-3778 behavior.
+//
+// FalkorDB's own hard "Vector dimension mismatch" error on a wrong-width query
+// (verified live) is a second, independent fail-closed layer underneath this
+// one.
 func (a *Adapter) ensureVectorIndex(ctx context.Context, key string) error {
 	if a.embedder == nil {
 		return nil
 	}
-	return a.createVectorIndex(ctx, key, a.embedder.Identity().Dimension)
+	want := a.embedder.Identity().Dimension
+	existing, found, err := a.vectorIndexDimension(ctx, key)
+	if err != nil {
+		return err
+	}
+	if found && existing != want {
+		a.disableVectorForKey(key)
+		return nil
+	}
+	if found {
+		return nil
+	}
+	return a.createVectorIndex(ctx, key, want)
+}
+
+// vectorIndexDimension reports the dimension an existing vector index on
+// Subject.embedding was built with. found=false means no such index exists
+// yet, which is the normal first-bootstrap case, not an error.
+func (a *Adapter) vectorIndexDimension(ctx context.Context, key string) (int, bool, error) {
+	indexes, err := a.api.indexes(ctx, key)
+	if err != nil {
+		return 0, false, safeDependencyError("inspect vector index", err)
+	}
+	for _, index := range indexes {
+		if index.Label != labelSubject {
+			continue
+		}
+		types, ok := index.Types[propEmbedding]
+		if !ok {
+			continue
+		}
+		for _, indexType := range types {
+			if !strings.EqualFold(indexType, "VECTOR") {
+				continue
+			}
+			// The dimension is reported in the index options; a server
+			// version that does not report it is treated as "unknown", which
+			// falls through to the stored-vector check below rather than
+			// guessing a match.
+			if dimension, ok := index.Dimension(); ok {
+				return dimension, true, nil
+			}
+			return 0, false, nil
+		}
+	}
+	return 0, false, nil
+}
+
+func (a *Adapter) disableVectorForKey(key string) {
+	a.bootstrapMu.Lock()
+	defer a.bootstrapMu.Unlock()
+	if a.vectorDisabled == nil {
+		a.vectorDisabled = make(map[string]bool)
+	}
+	a.vectorDisabled[key] = true
+}
+
+// vectorEnabledForKey reports whether vector retrieval may be used for one
+// organization's graph.
+func (a *Adapter) vectorEnabledForKey(key string) bool {
+	if a.embedder == nil {
+		return false
+	}
+	a.bootstrapMu.RLock()
+	defer a.bootstrapMu.RUnlock()
+	return !a.vectorDisabled[key]
 }

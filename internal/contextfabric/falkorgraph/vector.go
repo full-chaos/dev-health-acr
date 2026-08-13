@@ -236,7 +236,9 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 	for i := range lexical {
 		lexical[i].Mechanism = contextfabric.MatchLexical
 	}
-	if a.embedder == nil {
+	if !a.vectorEnabledForKey(key) {
+		// Either no embedder is configured, or AC-3778-7's dimension fence
+		// disabled vector retrieval for this organization until a rebuild.
 		return lexical, truncated, nil
 	}
 	vectors, embedErr := a.embedder.Embed(ctx, []string{term})

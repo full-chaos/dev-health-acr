@@ -34,6 +34,11 @@ type Adapter struct {
 
 	bootstrapMu   sync.RWMutex
 	bootstrapDone map[string]bool
+	// vectorDisabled marks organization graph keys whose stored vector index
+	// was built at a DIFFERENT dimension than the currently configured
+	// embedder produces (AC-3778-7). Such a key answers lexically until an
+	// operator runs a rebuild; a stale-dimension vector is never queried.
+	vectorDisabled map[string]bool
 }
 
 // EmbedderOptions carries the optional vector-retrieval dependencies

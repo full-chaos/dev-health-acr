@@ -253,3 +253,80 @@ func TestCollectEmbedTargetsMatchesTheProjectedSearchTextAndSkipsEdges(t *testin
 		t.Fatalf("embedded text %q must equal the projected search text %q", targets[0].text, entitySearchText(entity))
 	}
 }
+
+// AC-3778-7: changing the embedder dimension must force a rebuild, and a
+// stale-dimension vector must never be queried. The organization degrades to
+// lexical-only rather than failing, because failing would take down lexical
+// retrieval too over an optional improvement.
+func TestAC_3778_7_DimensionChangeDisablesVectorRetrievalUntilRebuild(t *testing.T) {
+	var created bool
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "CREATE VECTOR INDEX") {
+			created = true
+		}
+		return nil, nil
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		// An index built at width 4 while the embedder now produces 8.
+		return []indexStatus{{
+			Label: labelSubject, EntityType: "NODE",
+			Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+			Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(4)}},
+		}}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+	if err := adapter.ensureVectorIndex(context.Background(), "graphkey"); err != nil {
+		t.Fatalf("a dimension mismatch must degrade, not error: %v", err)
+	}
+	if created {
+		t.Fatal("a mismatched index must never be silently dropped and recreated")
+	}
+	if adapter.vectorEnabledForKey("graphkey") {
+		t.Fatal("a stale-dimension index must disable vector retrieval for that organization")
+	}
+	// A different organization's graph is unaffected.
+	if !adapter.vectorEnabledForKey("other-graphkey") {
+		t.Fatal("one organization's stale index must not disable another's")
+	}
+}
+
+// A matching dimension keeps vector retrieval on and does not recreate the
+// index.
+func TestAC_3778_7_MatchingDimensionKeepsVectorRetrievalEnabled(t *testing.T) {
+	var created bool
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "CREATE VECTOR INDEX") {
+			created = true
+		}
+		return nil, nil
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{{
+			Label: labelSubject, EntityType: "NODE",
+			Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+			Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(8)}},
+		}}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+	if err := adapter.ensureVectorIndex(context.Background(), "graphkey"); err != nil {
+		t.Fatalf("ensureVectorIndex: %v", err)
+	}
+	if created {
+		t.Fatal("an index at the right dimension must not be recreated")
+	}
+	if !adapter.vectorEnabledForKey("graphkey") {
+		t.Fatal("a matching dimension must keep vector retrieval enabled")
+	}
+}
+
+// A server that does not report the dimension is UNKNOWN, never a match --
+// guessing a match is exactly the failure AC-3778-7 exists to prevent.
+func TestAC_3778_7_UnreportedDimensionIsNotTreatedAsAMatch(t *testing.T) {
+	status := indexStatus{Options: map[string]interface{}{propEmbedding: map[string]interface{}{}}}
+	if _, ok := status.Dimension(); ok {
+		t.Fatal("a missing dimension must report ok=false")
+	}
+	if _, ok := (indexStatus{}).Dimension(); ok {
+		t.Fatal("an index with no options must report ok=false")
+	}
+}
