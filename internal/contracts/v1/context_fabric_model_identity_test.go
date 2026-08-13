@@ -1,6 +1,11 @@
 package v1
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
+)
 
 // TestContextFabricVersionSet_ModelIdentityOptional_LegacyPayloadValidates is
 // the probe for Codex round-2 finding #2: a result persisted before
@@ -46,6 +51,50 @@ func TestContextFabricVersionSet_ModelIdentityAcceptsFullWidthProviderModel(t *t
 	result.Versions.ModelIdentity = fullWidth + "x"
 	if err := result.Validate(); err == nil {
 		t.Fatalf("Validate() error = nil, want a bounds error for a 514-byte model identity")
+	}
+}
+
+// TestContextFabricVersionSet_ModelIdentityOmitemptyRoundTripsThroughSchema
+// is the probe for Codex round-3 finding 2: without omitempty, decoding a
+// legacy payload that never carried model_identity yields the Go zero
+// value "", and re-marshaling emits "model_identity":"" -- a PRESENT empty
+// string, which the schema's minLength:1 (contracts/jsonschema/v1/
+// context_fabric_common.v1.schema.json, $defs.VersionSet) rejects even
+// though the field's ABSENCE is allowed. Before the omitempty fix, the
+// re-marshal step below produced a payload ValidateSerialized rejected;
+// it must now pass, with model_identity genuinely absent from the wire
+// JSON.
+func TestContextFabricVersionSet_ModelIdentityOmitemptyRoundTripsThroughSchema(t *testing.T) {
+	t.Parallel()
+
+	// Given a legacy payload decoded with no model_identity captured at
+	// all (result.Validate() already treats this as legitimate -- see
+	// TestContextFabricVersionSet_ModelIdentityOptional_LegacyPayloadValidates
+	// above).
+	result := validContextFabricContractResult()
+	result.Versions.ModelIdentity = ""
+
+	// When re-marshaled, as any read-then-re-serve path does.
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatalf("Unmarshal() into a map error = %v", err)
+	}
+	versions, ok := wire["versions"].(map[string]any)
+	if !ok {
+		t.Fatalf("wire payload versions = %T, want an object", wire["versions"])
+	}
+	if _, present := versions["model_identity"]; present {
+		t.Fatal(`wire payload carries "model_identity" for an empty value; want it omitted entirely`)
+	}
+
+	// Then the re-marshaled wire payload validates against the canonical
+	// JSON Schema -- not just Go's own Validate().
+	if err := contractcheck.ValidateSerialized("", "context_fabric_investigation_result.v1.schema.json", encoded); err != nil {
+		t.Fatalf("ValidateSerialized() error = %v, want a legacy-shaped result with no model_identity to validate", err)
 	}
 }
 

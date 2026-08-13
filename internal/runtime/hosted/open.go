@@ -215,13 +215,25 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialize investigation result store: %w", err)
 	}
-	// reuseSnapshotter stays nil when reuse is disabled -- Engine then
-	// never queries checkpoints for a snapshot it would immediately
-	// discard (reuseColumnsFor short-circuits on !s.reuseEnabled before
-	// ever consulting one).
+	// reuseSnapshotter and reuseEpochSnapshotter both stay nil when reuse
+	// is disabled -- Engine then never queries checkpoints for a
+	// snapshot it would immediately discard (reuseColumnsFor
+	// short-circuits on !s.reuseEnabled before ever consulting one).
+	//
+	// CHAOS-3782 Codex round-3 finding 1: these two MUST be wired
+	// together, from the same reuseEnabled switch -- the same
+	// *pginvestigation.Store satisfies both SourceWatermarkSnapshotter
+	// and RebuildEpochSnapshotter, and Engine treats a nil
+	// ReuseEpochSnapshotter exactly like reuse being off entirely (see
+	// EngineDependencies.ReuseEpochSnapshotter's doc comment): a saved
+	// row with a nil invalidation_epoch never satisfies store.go's
+	// FindReusable, so wiring only the watermark half silently disables
+	// reuse for every new result while looking fully configured.
 	var reuseSnapshotter contextfabric.SourceWatermarkSnapshotter
+	var reuseEpochSnapshotter contextfabric.RebuildEpochSnapshotter
 	if reuseEnabled {
 		reuseSnapshotter = investigationStore
+		reuseEpochSnapshotter = investigationStore
 	}
 	// nil when no model provider is configured; see the function doc
 	// comment and newContextFabricModelRuntime.
@@ -264,6 +276,11 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// the reuse snapshot itself, before the graph read, rather than
 		// Save taking a later (too late) one.
 		ReuseSnapshotter: reuseSnapshotter,
+		// CHAOS-3782 Codex round-3 finding 1: wired from the same
+		// reuseEnabled switch, on the same investigationStore, as
+		// ReuseSnapshotter immediately above -- see that variable's
+		// declaration for why these two must never be set independently.
+		ReuseEpochSnapshotter: reuseEpochSnapshotter,
 		// CHAOS-3782 Codex round-2 finding #3: resolve the reuse lookup's
 		// model identity per-organization, from the SAME orgModelConfigStore
 		// wrapWithOrgModelRuntimeResolver above already uses for the actual

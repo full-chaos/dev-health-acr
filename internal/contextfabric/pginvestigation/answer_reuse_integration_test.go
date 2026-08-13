@@ -530,3 +530,82 @@ func TestFindReusable_NilEpochAtSaveIsNeverReusable(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok, "expected a Save with a watermark snapshot but no epoch to never be reusable")
 }
+
+// TestInvalidateOrganizationReuse_AdvancesEpochEvenWhenInvalidatedAtDoesNotMoveForward
+// is CHAOS-3782 Codex round-3 finding 3. epoch is a COUNTER of
+// invalidation EVENTS, not a derivative of the invalidated_at clock: every
+// call to InvalidateOrganizationReuse represents a real rebuild, and must
+// bump the epoch, whether or not clock_timestamp() happens to advance past
+// the previously recorded invalidated_at. The old UPSERT only bumped epoch
+// under `WHERE invalidated_at < EXCLUDED.invalidated_at`, so two
+// invalidations landing at (or the second at/before) the same recorded
+// timestamp silently skipped the bump -- leaving a stale result reusable
+// through a rebuild that, from the epoch's perspective, never happened.
+//
+// This reproduces that directly: the invalidations row is seeded with
+// invalidated_at set into the FUTURE relative to real clock_timestamp(),
+// so the guard's `<` comparison is false on the very next call -- the same
+// shape a same-timestamp race collapses to. Before the fix this call left
+// epoch unchanged; it must now advance by exactly one every time.
+func TestInvalidateOrganizationReuse_AdvancesEpochEvenWhenInvalidatedAtDoesNotMoveForward(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	store := mustReuseStore(t, db, time.Hour)
+	orgID := "org-reuse-epoch-clock-stall"
+
+	require.NoError(t, store.InvalidateOrganizationReuse(ctx, orgID))
+	epoch, err := store.SnapshotRebuildEpoch(ctx, orgID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), epoch, "sanity: first invalidation advances epoch to 1")
+
+	// Push the recorded invalidated_at into the future so the next real
+	// InvalidateOrganizationReuse call's clock_timestamp() cannot exceed
+	// it -- the same "no forward movement" condition an exact-tie
+	// timestamp produces.
+	_, err = db.ExecContext(ctx,
+		`UPDATE acr.context_fabric_reuse_invalidations SET invalidated_at = now() + interval '1 hour' WHERE org_id = $1`,
+		orgID)
+	require.NoError(t, err)
+
+	require.NoError(t, store.InvalidateOrganizationReuse(ctx, orgID))
+	epoch, err = store.SnapshotRebuildEpoch(ctx, orgID)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), epoch, "expected epoch to advance even though invalidated_at did not move forward")
+
+	require.NoError(t, store.InvalidateOrganizationReuse(ctx, orgID))
+	epoch, err = store.SnapshotRebuildEpoch(ctx, orgID)
+	require.NoError(t, err)
+	require.Equal(t, int64(3), epoch, "expected a third invalidation to advance epoch again")
+}
+
+// TestSave_EmptyModelIdentityPersistsAsNeverReusable is CHAOS-3782 Codex
+// round-3 finding 4. validate_context_fabric_result.go allows an empty
+// ModelIdentity (it is optional -- see ContextFabricVersionSet's doc
+// comment), but migration 0011's CHECK on the model_identity column
+// rejects an empty string (only NULL or 1-513 chars). reuseColumnsFor used
+// to write ” as Valid:true whenever reuse was enabled, so a
+// contract-valid legacy-shaped result (no model identity) failed to Save
+// at all instead of persisting as an ordinary, never-reusable row.
+//
+// Before the fix, this Save call failed with a CHECK-violation error; it
+// must now succeed, and the row must never surface from FindReusable.
+func TestSave_EmptyModelIdentityPersistsAsNeverReusable(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-empty-model-identity"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	snapshot, err := store.SnapshotSourceWatermarks(ctx, principal.OrgID)
+	require.NoError(t, err)
+	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
+	require.NoError(t, err)
+
+	result := reusableResult("result_reuse_no_model_id01", principal.OrgID, "Was the empty model identity save left unreusable?")
+	result.Versions.ModelIdentity = ""
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch))
+
+	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.False(t, ok, "expected a Save with an empty model identity to never be reusable")
+}

@@ -293,7 +293,18 @@ func (s *Store) reuseColumnsFor(result contextfabric.InvestigationResult, reuseS
 	questionHash = sql.NullString{String: contextfabric.QuestionHash(result.Question), Valid: true}
 	contractVersion = sql.NullString{String: result.Versions.ContractVersion, Valid: true}
 	projectionVersion = sql.NullString{String: result.Versions.ProjectionVersion, Valid: true}
-	modelIdentity = sql.NullString{String: result.Versions.ModelIdentity, Valid: true}
+	// Codex round-3 finding 4: ModelIdentity is optional at the contract
+	// layer (validate_context_fabric_result.go accepts "" -- a
+	// legacy-shaped, contract-valid result), but migration 0011's CHECK
+	// on the model_identity column rejects an empty string outright (only
+	// NULL or 1-513 chars is allowed). Writing '' as Valid:true here would
+	// fail Save with a CHECK violation instead of persisting the row as
+	// an ordinary, never-reusable one -- so an empty identity maps to SQL
+	// NULL, the same "this row never becomes reusable" sentinel already
+	// used above for a missing snapshot/epoch/punctuation-only question.
+	if result.Versions.ModelIdentity != "" {
+		modelIdentity = sql.NullString{String: result.Versions.ModelIdentity, Valid: true}
+	}
 	return questionHash, contractVersion, projectionVersion, modelIdentity, encoded, invalidationEpoch
 }
 
@@ -528,17 +539,23 @@ func (s *Store) watermarksStillMatch(ctx context.Context, orgID string, snapshot
 // It records the invalidation as a row in the separate, mutable
 // acr.context_fabric_reuse_invalidations table -- never by rewriting
 // anything in the immutable investigation-results table -- and is safe to
-// call whether or not answer reuse is enabled on this Store. The ON
-// CONFLICT clause is guarded to never move invalidated_at backward, so a
-// rare out-of-order concurrent call cannot un-invalidate an
-// already-recorded, later rebuild; epoch only advances alongside a
-// forward-moving invalidated_at, for the same reason (Codex round-2
-// finding #7: FindReusable and SnapshotRebuildEpoch both read this same
-// counter -- see RebuildEpoch's doc comment for what it fences against).
-// The first-ever invalidation for an organization sets epoch to 1, one
-// past SnapshotRebuildEpoch's 0 baseline for a never-invalidated
-// organization, so a snapshot captured before this call and one captured
-// after it can never compare equal.
+// call whether or not answer reuse is enabled on this Store.
+//
+// epoch is a COUNTER of invalidation events, not a derivative of the
+// invalidated_at clock (Codex round-3 finding 3): every call here
+// represents a real rebuild and must bump the epoch UNCONDITIONALLY, on
+// every ON CONFLICT, with no timestamp predicate gating it. An earlier
+// version guarded the bump on `invalidated_at < EXCLUDED.invalidated_at`
+// to stop a rare out-of-order call from moving invalidated_at backward --
+// but that same guard just as easily suppressed the bump for two calls
+// landing at (or the second at/before) an equal clock_timestamp(), which
+// silently left a stale result reusable through a rebuild the epoch never
+// recorded. invalidated_at stays informational only now (still set to
+// clock_timestamp() on every call, for operator visibility); it no longer
+// gates whether epoch advances. The first-ever invalidation for an
+// organization sets epoch to 1, one past SnapshotRebuildEpoch's 0
+// baseline for a never-invalidated organization, so a snapshot captured
+// before this call and one captured after it can never compare equal.
 func (s *Store) InvalidateOrganizationReuse(ctx context.Context, orgID string) error {
 	if s == nil || s.db == nil {
 		return errors.New("pginvestigation: store is not configured")
@@ -552,8 +569,7 @@ INSERT INTO acr.context_fabric_reuse_invalidations (org_id, invalidated_at, epoc
 VALUES ($1, clock_timestamp(), 1)
 ON CONFLICT (org_id) DO UPDATE
     SET invalidated_at = EXCLUDED.invalidated_at,
-        epoch = acr.context_fabric_reuse_invalidations.epoch + 1
-    WHERE acr.context_fabric_reuse_invalidations.invalidated_at < EXCLUDED.invalidated_at`, orgID)
+        epoch = acr.context_fabric_reuse_invalidations.epoch + 1`, orgID)
 	if err != nil {
 		return fmt.Errorf("invalidate organization reuse: %w", sanitizeError(err))
 	}

@@ -534,7 +534,18 @@ type ContextFabricVersionSet struct {
 	// a result generated under one model identity is never reused once the
 	// organization's configured model changes, even if the prompt/model
 	// version strings captured in SynthesisVersion happen to collide.
-	ModelIdentity string `json:"model_identity"`
+	//
+	// omitempty (Codex round-3 finding 2): the field is genuinely
+	// OPTIONAL -- a pre-0011 payload, or one written with answer reuse
+	// disabled, never carried it (see the schema's own minLength:1
+	// description). Without omitempty, decoding such a legacy payload
+	// yields the Go zero value "", and re-marshaling emits
+	// "model_identity":"" -- a PRESENT empty string, which violates the
+	// schema's minLength:1 even though absence itself is allowed. A
+	// result read then written back unchanged (Get -> re-serve, or any
+	// round trip) would fail schema validation purely from this
+	// asymmetry.
+	ModelIdentity string `json:"model_identity,omitempty"`
 }
 
 type ContextFabricInterpretedQuestion struct {
