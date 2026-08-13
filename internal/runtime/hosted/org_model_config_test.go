@@ -278,3 +278,44 @@ func TestContextFabricReuseModelIdentityResolver_resolveErrorNeverFallsBack(t *t
 		t.Fatalf("ResolveReuseModelIdentity() = %v, want empty on error (never the fallback)", got)
 	}
 }
+
+// TestChaos3786_ContextFabricReuseModelIdentityResolver_dedupesEqualFallback
+// is the codex round-1 P2 probe: pgmodelconfig reads a stored row back
+// WITHOUT revalidation (see pgmodelconfig/store.go's decode path), so a
+// row with FallbackModel == Model -- a shape the request-time
+// modelprovider.Config.Validate() rejects, but that could still reach
+// storage from a row written before that rule existed, or by a
+// future/older binary -- can still reach this resolver. The resolved
+// chain must contain the identity exactly once, not twice.
+func TestChaos3786_ContextFabricReuseModelIdentityResolver_dedupesEqualFallback(t *testing.T) {
+	resolver := contextFabricReuseModelIdentityResolver{
+		configs: orgModelConfigResolverFunc(func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
+			return contextfabric.ResolvedOrgModelConfig{Provider: "anthropic", Model: "claude-x", FallbackModel: "claude-x"}, true, nil
+		}),
+		fallback: []string{"deployment/default"},
+	}
+	got, err := resolver.ResolveReuseModelIdentity(context.Background(), "org_1")
+	if err != nil {
+		t.Fatalf("ResolveReuseModelIdentity() error = %v", err)
+	}
+	want := []string{"anthropic/claude-x"}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("ResolveReuseModelIdentity() = %v, want %v (deduplicated)", got, want)
+	}
+}
+
+// TestAppendReuseIdentity_dedupesPreservingOrder is the direct unit probe
+// for the codex round-1 P2 helper both contextFabricReuseModelIdentities
+// (open.go) and contextFabricReuseModelIdentityResolver (this file) share.
+func TestAppendReuseIdentity_dedupesPreservingOrder(t *testing.T) {
+	got := appendReuseIdentity([]string{"a", "b"}, "a")
+	want := []string{"a", "b"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("appendReuseIdentity() = %v, want %v (no duplicate appended)", got, want)
+	}
+	got = appendReuseIdentity([]string{"a"}, "b")
+	want = []string{"a", "b"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("appendReuseIdentity() = %v, want %v (distinct candidate appended)", got, want)
+	}
+}

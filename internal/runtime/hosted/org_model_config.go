@@ -118,9 +118,30 @@ func (r contextFabricReuseModelIdentityResolver) ResolveReuseModelIdentity(ctx c
 	// produced must be able to match.
 	identities := []string{provider + "/" + model}
 	if fallbackModel := strings.TrimSpace(resolved.FallbackModel); fallbackModel != "" {
-		identities = append(identities, provider+"/"+fallbackModel)
+		identities = appendReuseIdentity(identities, provider+"/"+fallbackModel)
 	}
 	return identities, nil
+}
+
+// appendReuseIdentity appends candidate to identities unless it is already
+// present, preserving order (CHAOS-3786, codex round-1 P2). A configured
+// FallbackModel equal to the primary Model is rejected by
+// modelprovider.Config.Validate() on the request path, but a row already
+// persisted in pgmodelconfig is read back WITHOUT revalidation
+// (pgmodelconfig/store.go's decode path), so a stored row that predates a
+// tightened validation rule -- or one written by a future/older binary --
+// can still reach here with FallbackModel == Model. Without this guard,
+// such a chain would carry the same identity twice; harmless for
+// FindReusable's `= ANY(...)` correctness, but it wastes a comparison and
+// makes a debug dump of the resolved chain misleadingly imply two distinct
+// models are in play.
+func appendReuseIdentity(identities []string, candidate string) []string {
+	for _, existing := range identities {
+		if existing == candidate {
+			return identities
+		}
+	}
+	return append(identities, candidate)
 }
 
 // contextFabricModelDefaults returns the Timeout/MaxAttempts/

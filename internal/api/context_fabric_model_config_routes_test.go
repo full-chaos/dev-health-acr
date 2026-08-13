@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -255,5 +256,123 @@ func TestContextFabricOrgModelConfig_orgIDIsServerDerived_neverFromBody(t *testi
 	}
 	if _, ok, err := configs.ResolveOrgModelConfig(context.Background(), "org_1"); err != nil || !ok {
 		t.Fatalf("the write must land under the authenticated principal's org (org_1); ok=%v err=%v", ok, err)
+	}
+}
+
+// spyReuseInvalidator is a fake contextfabric.ReuseInvalidator recording
+// every InvalidateOrganizationReuse call, for the CHAOS-3786 codex round-1
+// P1(b) probes below.
+type spyReuseInvalidator struct {
+	orgIDs []string
+	err    error
+}
+
+func (s *spyReuseInvalidator) InvalidateOrganizationReuse(_ context.Context, orgID string) error {
+	s.orgIDs = append(s.orgIDs, orgID)
+	return s.err
+}
+
+// newContextFabricModelConfigTestAppWithReuseInvalidator mirrors
+// newContextFabricModelConfigTestApp, additionally wiring a
+// spyReuseInvalidator so PUT/DELETE's CHAOS-3786 invalidation call is
+// directly observable, without changing the existing helper's signature
+// (and so every other test in this file, which never needs the spy).
+func newContextFabricModelConfigTestAppWithReuseInvalidator(t *testing.T) (*App, string, *spyReuseInvalidator) {
+	t.Helper()
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	audit := memory.NewAuditStore()
+	credentials := newMemoryCredentialLifecycle(t, audit, now)
+	devices, err := memory.NewDeviceAuthorizationStore(memory.DeviceAuthorizationStoreOptions{Credentials: credentials, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := issueScopedCredential(t, credentials, audit, now, []string{auth.ScopeContextAdmin}, []string{hostedTestRepository})
+	configs := memorymodelconfig.NewStore(func() time.Time { return now })
+	invalidator := &spyReuseInvalidator{}
+	entitlements := EntitlementFunc(func(context.Context, string, string) (bool, error) { return true, nil })
+	manager, err := limits.NewManager(limits.Options{Now: func() time.Time { return now }, PerOrgConcurrency: 4, Policies: limits.PolicySet{
+		Auth:    limits.AuthPolicy{Window: time.Minute, PerOrgLimit: 100},
+		Context: limits.ContextPolicy{Window: time.Minute, PerOrgLimit: 100, Resources: limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := StaticCapabilitiesProvider{Now: func() time.Time { return now }, Value: hostedCapabilities()}
+	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
+		Capabilities: provider, Limits: manager, Now: func() time.Time { return now },
+		Runtime: &RuntimeDependencies{
+			Credentials: credentials, Audit: audit, Entitlements: entitlements,
+			Assembler: noopAssembler{}, Evidence: noopEvidenceStore{},
+			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device",
+			DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(func() time.Time { return now })),
+			ReadinessChecks:            exactRuntimeChecks(),
+			OrgModelConfigs:            configs,
+			ReuseInvalidator:           invalidator,
+		},
+	}, testLogger(&bytes.Buffer{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return app, token, invalidator
+}
+
+// TestContextFabricOrgModelConfig_put_invalidatesReuseForTheOrganization is
+// the CHAOS-3786 codex round-1 P1(b) probe: a successful PUT (an org
+// reconfiguring its model, including its FALLBACK model) must invalidate
+// answer reuse for that organization going forward -- chain membership
+// alone cannot detect every configuration change that should invalidate a
+// stored candidate (e.g. a BaseURL- or credential-only change leaves the
+// provider/model identity strings, and therefore chain membership,
+// completely unchanged), so PUT bumps the epoch unconditionally, the same
+// way a projection rebuild does.
+func TestContextFabricOrgModelConfig_put_invalidatesReuseForTheOrganization(t *testing.T) {
+	app, token, invalidator := newContextFabricModelConfigTestAppWithReuseInvalidator(t)
+
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, modelConfigRequest(t, http.MethodPut, token, modelConfigWriteBody()))
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200; body: %s", response.Code, response.Body.String())
+	}
+	if len(invalidator.orgIDs) != 1 || invalidator.orgIDs[0] != "org_1" {
+		t.Fatalf("InvalidateOrganizationReuse calls = %v, want exactly one call for org_1", invalidator.orgIDs)
+	}
+}
+
+// TestContextFabricOrgModelConfig_delete_invalidatesReuseForTheOrganization
+// is the DELETE counterpart: removing the organization's BYO configuration
+// changes its effective chain back to the deployment default, which must
+// invalidate reuse the same way a change TO a configuration does.
+func TestContextFabricOrgModelConfig_delete_invalidatesReuseForTheOrganization(t *testing.T) {
+	app, token, invalidator := newContextFabricModelConfigTestAppWithReuseInvalidator(t)
+
+	putResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(putResponse, modelConfigRequest(t, http.MethodPut, token, modelConfigWriteBody()))
+	if putResponse.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200", putResponse.Code)
+	}
+	invalidator.orgIDs = nil // isolate the DELETE call from the PUT call above.
+
+	deleteResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(deleteResponse, modelConfigRequest(t, http.MethodDelete, token, nil))
+	if deleteResponse.Code != http.StatusNoContent {
+		t.Fatalf("DELETE status = %d, want 204; body: %s", deleteResponse.Code, deleteResponse.Body.String())
+	}
+	if len(invalidator.orgIDs) != 1 || invalidator.orgIDs[0] != "org_1" {
+		t.Fatalf("InvalidateOrganizationReuse calls = %v, want exactly one call for org_1", invalidator.orgIDs)
+	}
+}
+
+// TestContextFabricOrgModelConfig_put_succeedsEvenWhenInvalidationFails
+// locks that InvalidateOrganizationReuse failing never fails the write
+// itself -- the configuration write already succeeded and is not rolled
+// back; only the invalidation is best-effort (logged, not surfaced).
+func TestContextFabricOrgModelConfig_put_succeedsEvenWhenInvalidationFails(t *testing.T) {
+	app, token, invalidator := newContextFabricModelConfigTestAppWithReuseInvalidator(t)
+	invalidator.err = errors.New("reuse invalidation store unavailable")
+
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, modelConfigRequest(t, http.MethodPut, token, modelConfigWriteBody()))
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200 even though invalidation failed; body: %s", response.Code, response.Body.String())
 	}
 }

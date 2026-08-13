@@ -69,7 +69,20 @@ type RuntimeDependencies struct {
 	// nil, the DELETE model-config handler skips eviction entirely: there
 	// is no cached runtime anywhere to purge if no resolver exists.
 	OrgModelRuntimeEvictor contextfabric.OrgModelRuntimeEvictor
-	ReadinessChecks        []ReadinessCheck
+	// ReuseInvalidator is optional (CHAOS-3786, codex round-1 P1(b)) and
+	// may be nil even when OrgModelConfigs is non-nil (e.g. answer reuse
+	// itself is disabled -- ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE unset
+	// -- so no reuse-capable investigation-result store was ever
+	// composed). When non-nil, the model-config PUT and DELETE handlers
+	// call InvalidateOrganizationReuse(principal.OrgID) after a
+	// successful write: a chain change (primary or fallback model) must
+	// invalidate reuse for that organization going forward, because a
+	// stored candidate's chain-membership match is authorized by the
+	// CURRENT chain, and a reconfiguration changes what that chain
+	// vouches for. When nil, both handlers skip invalidation entirely --
+	// there is no reuse-capable store to invalidate against.
+	ReuseInvalidator contextfabric.ReuseInvalidator
+	ReadinessChecks  []ReadinessCheck
 }
 
 func (r *RuntimeDependencies) validate() error {
