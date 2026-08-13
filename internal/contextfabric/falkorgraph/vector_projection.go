@@ -95,14 +95,22 @@ func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int) []em
 //
 // One batched embed call is issued per MaxBatch-sized chunk, not one per node
 // (contextfabric.Embedder.Embed takes a slice for exactly this reason).
-func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch contextfabric.ProjectionBatch) {
+func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch contextfabric.ProjectionBatch) error {
 	if a.embedder == nil {
-		return
+		return nil
+	}
+	// Codex round-2 R2-1: the write side re-verifies the index every batch
+	// rather than trusting anything bootstrap cached. A mismatched or unknown
+	// index means this batch writes no vectors at all.
+	usable, err := a.vectorIndexUsable(ctx, key)
+	if err != nil || !usable {
+		a.recordVectorDegraded(ctx, batch.OrgID)
+		return nil
 	}
 	identity := a.embedder.Identity()
 	targets := collectEmbedTargets(batch, embedMaxRunes(a.embedder))
 	if len(targets) == 0 {
-		return
+		return nil
 	}
 	texts := make([]string, 0, len(targets))
 	for _, target := range targets {
@@ -120,20 +128,19 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		//
 		// So the vector is CLEARED instead. A node with no vector degrades
 		// honestly to lexical retrieval; a node with a stale vector lies.
-		a.clearNodeVectors(ctx, key, batch.OrgID, targets)
 		a.recordVectorDegraded(ctx, batch.OrgID)
-		return
+		return a.clearNodeVectors(ctx, key, batch.OrgID, targets)
 	}
 	for index, target := range targets {
 		if err := a.writeNodeVector(ctx, key, batch.OrgID, target, vectors[index], identity); err != nil {
 			// Same reasoning, mid-batch: targets before this one carry fresh
 			// vectors and are fine; this one and everything after it still
 			// carry yesterday's, so clear exactly those.
-			a.clearNodeVectors(ctx, key, batch.OrgID, targets[index:])
 			a.recordVectorDegraded(ctx, batch.OrgID)
-			return
+			return a.clearNodeVectors(ctx, key, batch.OrgID, targets[index:])
 		}
 	}
+	return nil
 }
 
 // clearNodeVectors removes the embedding and its identity properties from
@@ -144,14 +151,21 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 // genuinely stops being a vector-search result rather than merely losing its
 // metadata.
 //
-// Best-effort by construction: this runs on a path that is already degrading,
-// and the canonical projection it follows has already succeeded and must not
-// be rolled back. A failure here is recorded and left for the next rebuild --
-// there is nothing better available, and erroring would only convert a
-// degraded retrieval into a stalled projection pipeline.
-func (a *Adapter) clearNodeVectors(ctx context.Context, key, orgID string, targets []embedTarget) {
+// A FAILED CLEAR FAILS THE BATCH (codex round-2 R2-3, orchestrator ruling).
+// This was previously best-effort with telemetry, which left a genuinely
+// unrecoverable state: when the embed failed AND the clear also failed, the
+// stale vector kept the CONFIGURED identity and dimension, so the read-side
+// fence saw nothing wrong and served it -- permanently, because the watermark
+// advanced and nothing retries until a rebuild. Telemetry is not containment.
+//
+// Returning an error here stops ApplyProjectionBatch before it writes the
+// watermark, so the projection checkpoint does not advance past a batch whose
+// vector state is unreconciled. Projection is idempotent, so the next tick
+// replays the batch and reconciles. A stalled checkpoint is loud, bounded, and
+// self-healing; a silently-serving stale vector is none of those.
+func (a *Adapter) clearNodeVectors(ctx context.Context, key, orgID string, targets []embedTarget) error {
 	if len(targets) == 0 {
-		return
+		return nil
 	}
 	list := make([]interface{}, 0, len(targets))
 	for _, target := range targets {
@@ -166,7 +180,9 @@ func (a *Adapter) clearNodeVectors(ctx context.Context, key, orgID string, targe
 	)
 	if _, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": orgID, "targets": list}, false); err != nil {
 		a.recordVectorDegraded(ctx, orgID)
+		return safeDependencyError("clear stale node embeddings", err)
 	}
+	return nil
 }
 
 // writeNodeVector attaches one vector and its embedder identity to an EXISTING
@@ -256,23 +272,41 @@ func (a *Adapter) ensureVectorIndex(ctx context.Context, key string) error {
 	if err != nil {
 		return err
 	}
-	switch state {
-	case vectorIndexAbsent:
+	if state == vectorIndexAbsent {
 		return a.createVectorIndex(ctx, key, want)
-	case vectorIndexUnknown:
-		// Codex round-1 F5: an index that EXISTS but whose metadata could not
-		// be read is not "absent". The earlier code returned found=false here
-		// and fell through to CREATE, whose already-exists error was treated
-		// as success -- leaving vector retrieval ENABLED against an index of
-		// entirely unknown width. Fail closed instead: unknown is not fine.
-		a.disableVectorForKey(key)
-		return nil
-	default:
-		if existing != want {
-			a.disableVectorForKey(key)
-		}
-		return nil
 	}
+	// An index that exists but is unknown or mismatched is NOT created and NOT
+	// repaired here. Whether it may be used is decided fresh at each read and
+	// each write by vectorIndexUsable -- see R2-1 below for why no verdict is
+	// cached.
+	_ = existing
+	return nil
+}
+
+// vectorIndexUsable reports whether this organization's vector index exists,
+// is OPERATIONAL, and was built at the dimension the configured embedder
+// produces.
+//
+// Codex round-2 R2-1: this is evaluated FRESH, never cached across requests.
+// The earlier design cached an ENABLED verdict for the process lifetime on the
+// premise that "the configured embedder cannot change without a restart". That
+// premise was true per PROCESS and false per DEPLOYMENT: acr-api and
+// acr-projector construct their embedders independently, from their own
+// environments, and identical configuration between them is DOCUMENTED, not
+// enforced. A projector configured with a different same-dimension model would
+// write identity-B vectors into a graph whose reader had already cached
+// ENABLED and would therefore never probe again -- serving another model's
+// vectors indefinitely, which is exactly the corruption the fence exists to
+// stop.
+func (a *Adapter) vectorIndexUsable(ctx context.Context, key string) (bool, error) {
+	if a.embedder == nil {
+		return false, nil
+	}
+	dimension, state, err := a.vectorIndexDimension(ctx, key)
+	if err != nil {
+		return false, err
+	}
+	return state == vectorIndexKnown && dimension == a.embedder.Identity().Dimension, nil
 }
 
 // vectorIndexState classifies what vectorIndexDimension could learn.
@@ -361,9 +395,21 @@ func (a *Adapter) vectorIndexDimension(ctx context.Context, key string) (int, ve
 // worst case is paid once rather than per request.
 func (a *Adapter) verifyStoredEmbedderIdentity(ctx context.Context, key, orgID string) (bool, error) {
 	identity := a.embedder.Identity().String()
+	// Codex round-2 R2-2: the predicate is anchored on the EMBEDDING being
+	// present, not on the identity being present.
+	//
+	// The earlier form asked only "is there a node whose identity is set and
+	// differs", which let a node with an indexed embedding and a NULL identity
+	// pass as clean -- treating UNKNOWN PROVENANCE as verified provenance.
+	// That is the same mistake as F5's absent-versus-unknown conflation, one
+	// layer down: a vector whose producer cannot be named is exactly as
+	// unusable as one produced by the wrong model, because nothing can rule
+	// out that it came from a different embedder. Such a node is reachable in
+	// practice -- anything written before identity stamping existed, or by a
+	// producer that wrote a vector without stamping one.
 	cypher := fmt.Sprintf(
-		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s <> $identity RETURN n.%s LIMIT 1",
-		labelSubject, propOrgID, propEmbedderIdentity, propEmbedderIdentity, propCanonicalID,
+		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND (n.%s IS NULL OR n.%s <> $identity) RETURN n.%s LIMIT 1",
+		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity, propEmbedderIdentity, propCanonicalID,
 	)
 	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": orgID, "identity": identity}, true)
 	if err != nil {
@@ -375,14 +421,10 @@ func (a *Adapter) verifyStoredEmbedderIdentity(ctx context.Context, key, orgID s
 // ensureVectorReadable is the read path's own fence check, run before any
 // vector query for an organization (codex round-1 F2).
 //
-// Result caching: an ENABLED verdict is cached for the process lifetime, which
-// is sound because the configured embedder cannot change without a restart
-// (configuration is read from the environment at construction) and a rebuild
-// re-embeds with that same configuration. A DISABLED verdict is re-checked
-// after vectorFenceRecheckInterval, so an operator who runs
-// `acr-projector rebuild --org` recovers without also having to restart
-// acr-api -- a disabled verdict that never expired would turn a recoverable
-// state into a deploy.
+// NO VERDICT IS CACHED ACROSS REQUESTS (codex round-2 R2-1). It is memoized
+// only for the lifetime of one ResolveSubjects call, by resolutionFence, so a
+// resolution pays one bounded probe rather than one per interpreted term. See
+// vectorIndexUsable for why a longer-lived cache was wrong.
 //
 // Any error checking the fence DISABLES vector retrieval for this request
 // rather than enabling it. An unverifiable fence is not a passed fence.
@@ -390,73 +432,13 @@ func (a *Adapter) ensureVectorReadable(ctx context.Context, key, orgID string) b
 	if a.embedder == nil {
 		return false
 	}
-	if verdict, decided := a.cachedVectorFence(key); decided {
-		return verdict
-	}
-	want := a.embedder.Identity().Dimension
-	dimension, state, err := a.vectorIndexDimension(ctx, key)
-	if err != nil || state != vectorIndexKnown || dimension != want {
-		a.disableVectorForKey(key)
+	usable, err := a.vectorIndexUsable(ctx, key)
+	if err != nil || !usable {
 		return false
 	}
 	matches, err := a.verifyStoredEmbedderIdentity(ctx, key, orgID)
 	if err != nil || !matches {
-		a.disableVectorForKey(key)
 		return false
 	}
-	a.enableVectorForKey(key)
 	return true
-}
-
-func (a *Adapter) disableVectorForKey(key string) {
-	a.setVectorFence(key, false)
-}
-
-func (a *Adapter) enableVectorForKey(key string) {
-	a.setVectorFence(key, true)
-}
-
-func (a *Adapter) setVectorFence(key string, enabled bool) {
-	a.bootstrapMu.Lock()
-	defer a.bootstrapMu.Unlock()
-	if a.vectorFence == nil {
-		a.vectorFence = make(map[string]vectorFenceEntry)
-	}
-	a.vectorFence[key] = vectorFenceEntry{enabled: enabled, decidedAt: a.now()}
-}
-
-// cachedVectorFence returns a cached verdict when one is still authoritative.
-// An enabled verdict never expires; a disabled one expires after
-// vectorFenceRecheckInterval so a completed rebuild is picked up without a
-// process restart.
-func (a *Adapter) cachedVectorFence(key string) (enabled bool, decided bool) {
-	a.bootstrapMu.RLock()
-	defer a.bootstrapMu.RUnlock()
-	entry, ok := a.vectorFence[key]
-	if !ok {
-		return false, false
-	}
-	if entry.enabled {
-		return true, true
-	}
-	if a.now().Sub(entry.decidedAt) < vectorFenceRecheckInterval {
-		return false, true
-	}
-	return false, false
-}
-
-// vectorEnabledForKey reports the cached verdict WITHOUT consulting the
-// backend. Used by tests and by callers that have already run
-// ensureVectorReadable in this request.
-func (a *Adapter) vectorEnabledForKey(key string) bool {
-	if a.embedder == nil {
-		return false
-	}
-	enabled, decided := a.cachedVectorFence(key)
-	if !decided {
-		// Undecided means "not yet verified", and an unverified fence is not
-		// a passed fence.
-		return false
-	}
-	return enabled
 }

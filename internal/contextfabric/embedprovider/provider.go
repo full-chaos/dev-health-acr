@@ -205,7 +205,15 @@ func (e *Embedder) embedChunk(ctx context.Context, texts []string) ([][]float32,
 // is ASCII case-insensitive. Nothing else -- no prefix stripping, no suffix
 // matching, no substring containment -- because every one of those would also
 // match a genuinely different model whose id merely resembles the configured
-// one, which is precisely the case this must catch. A provider that
+// one, which is precisely the case this must catch.
+//
+// ASCII-ONLY, ENFORCED (codex round-2 R2-5). This deliberately does NOT use
+// strings.EqualFold, which performs UNICODE simple folding: under it the
+// Kelvin sign (U+212A) compares equal to "k" and the long s (U+017F) equal to
+// "s", so a model id that is a Unicode fold-equivalent of the configured one
+// would pass a check documented as ASCII case-folding. Those are different
+// byte sequences and therefore different identifiers; only a-z/A-Z are folded
+// here, byte-wise. A provider that
 // legitimately reports a different id is handled by naming that id explicitly
 // in Config.ExpectResponseModel, which RETARGETS the comparison rather than
 // weakening it.
@@ -225,10 +233,32 @@ func (e *Embedder) verifyServingModel(served string) error {
 	if served == "" {
 		return fmt.Errorf("%w: server did not report a serving model, expected %q", ErrModelIdentityMismatch, expected)
 	}
-	if !strings.EqualFold(served, expected) {
+	if !asciiFoldEqual(served, expected) {
 		return fmt.Errorf("%w: expected %q", ErrModelIdentityMismatch, expected)
 	}
 	return nil
+}
+
+// asciiFoldEqual reports whether a and b are equal after folding ONLY ASCII
+// A-Z to a-z, byte-wise. Every other byte must match exactly. See
+// verifyServingModel for why Unicode folding is unacceptable here.
+func asciiFoldEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		if asciiLower(a[i]) != asciiLower(b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiLower(c byte) byte {
+	if c >= 'A' && c <= 'Z' {
+		return c + ('a' - 'A')
+	}
+	return c
 }
 
 // newClientOptions builds the OpenAI-compatible client options.

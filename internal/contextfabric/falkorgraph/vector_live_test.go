@@ -310,4 +310,5 @@ func TestLiveVectorIndexReportsItsDimension(t *testing.T) {
 		t.Fatal("a freshly bootstrapped, matching index must pass the read-path fence")
 	}
 	_ = embedprovider.DefaultSimilarityFloor
+	_ = embedprovider.DefaultSimilarityFloor
 }

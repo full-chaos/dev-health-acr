@@ -471,6 +471,19 @@ type ContextFabricSubjectResolution struct {
 	// recent health, which is what makes it usable as an input to the
 	// engine's own coverage and limitation handling.
 	//
+	// IT REPORTS MECHANISM AVAILABILITY, NOT CORPUS COMPLETENESS (codex
+	// round-2 R2-4). A node that carries no vector -- because a projection
+	// batch's embedding step failed and cleared it, or because projection has
+	// not reached it yet -- is a DATA GAP, and a later query that runs the
+	// vector mechanism successfully over the rest of the corpus reports no
+	// degradation. That is intended: such a node is still fully reachable
+	// lexically, since both retrieval paths index the same text, so it is
+	// findable one way instead of two rather than lost. Degradation means the
+	// query could not run one of its retrieval strategies AT ALL, so every
+	// subject was searched one way short. Reporting data gaps here would make
+	// the field fire on nearly every answer during any re-embedding backlog,
+	// and a partial-coverage signal that is always on carries no information.
+	//
 	// Additive-optional in v1: absent means "not reported", never "healthy".
 	// Every result persisted before CHAOS-3778 lacks it and must still
 	// validate on replay.

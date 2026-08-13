@@ -261,7 +261,7 @@ func (a *Adapter) vectorSearchNodes(ctx context.Context, key, orgID string, vect
 // derived from what happened during this one search, never from the
 // organization's recent history -- which is what makes it usable as the
 // engine's input for a coverage/limitation decision about THIS answer.
-func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
+func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string, limit int, fence *resolutionFence) ([]graphrank.CandidateNode, bool, bool, error) {
 	lexical, truncated, err := a.fulltextSearchNodes(ctx, key, orgID, term, limit)
 	if err != nil {
 		return nil, false, false, err
@@ -281,7 +281,7 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 		// not mark the answer.
 		return lexical, truncated, false, nil
 	}
-	if !a.ensureVectorReadable(ctx, key, orgID) {
+	if !fence.readable(ctx, a, key, orgID) {
 		// The graph holds vectors this embedder did not produce, or the fence
 		// could not be verified. Lexical retrieval proceeds, and the answer
 		// records that a mechanism was missing.
@@ -355,4 +355,36 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 		return EmbedderOptions{}, err
 	}
 	return EmbedderOptions{Embedder: embedder, SimilarityFloor: embedder.SimilarityFloor()}, nil
+}
+
+// resolutionFence memoizes the AC-3778-7 fence verification for the lifetime
+// of ONE ResolveSubjects call.
+//
+// Codex round-2 R2-1 ruled that the fence must be verified per query rather
+// than cached across requests, because acr-api and acr-projector configure
+// their embedders independently and a process-lifetime ENABLED verdict can
+// outlive the configuration it was based on. This is the narrowest scope that
+// honors that: fresh for every resolution, shared across the several Search
+// calls one resolution makes (ResolveSubjects issues one per interpreted
+// subject term), so a resolution pays exactly ONE bounded probe rather than
+// one per term.
+//
+// It is created per ResolveSubjects call and never escapes it, so it needs no
+// synchronization -- ResolveSubjects walks its terms sequentially.
+type resolutionFence struct {
+	decided bool
+	enabled bool
+}
+
+func (f *resolutionFence) readable(ctx context.Context, a *Adapter, key, orgID string) bool {
+	if f == nil {
+		// Defensive: a caller that did not supply a fence gets an
+		// unmemoized, still-correct verification rather than a silent pass.
+		return a.ensureVectorReadable(ctx, key, orgID)
+	}
+	if !f.decided {
+		f.enabled = a.ensureVectorReadable(ctx, key, orgID)
+		f.decided = true
+	}
+	return f.enabled
 }

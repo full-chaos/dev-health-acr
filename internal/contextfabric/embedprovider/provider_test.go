@@ -364,3 +364,55 @@ func TestEmbedVerifiesTheServingModelOnEveryChunk(t *testing.T) {
 		t.Fatal("the second chunk was never issued; this test is not exercising what it claims")
 	}
 }
+
+// Codex round-2 R2-5, RED->GREEN: the fold must be ASCII-only.
+//
+// strings.EqualFold performs UNICODE simple folding, under which the Kelvin
+// sign (U+212A) equals "k" and the long s (U+017F) equals "s". A model id that
+// is a Unicode fold-equivalent of the configured one would therefore pass a
+// check whose documentation promises ASCII case-folding. Those are different
+// byte sequences and different identifiers.
+func TestR2_5_UnicodeFoldEquivalentModelIDsAreRejected(t *testing.T) {
+	embedder, err := New(testConfig("http://localhost:1"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	cases := []struct{ configured, served, note string }{
+		{"embed-kilo", "embed-Kilo", "Kelvin sign U+212A folds to k"},
+		{"embed-strong", "embed-ſtrong", "long s U+017F folds to s"},
+		{"model-k", "model-K", "trailing Kelvin sign U+212A"},
+	}
+	for _, testCase := range cases {
+		embedder.config.Model = testCase.configured
+		// Guard: if this ever stops being a Unicode fold-equivalent, the test
+		// is no longer testing what it claims.
+		if !strings.EqualFold(testCase.served, testCase.configured) {
+			t.Fatalf("%s: fixture is not Unicode fold-equivalent, test is vacuous", testCase.note)
+		}
+		if err := embedder.verifyServingModel(testCase.served); !errors.Is(err, ErrModelIdentityMismatch) {
+			t.Fatalf("%s: a Unicode fold-equivalent id must be rejected, got %v", testCase.note, err)
+		}
+	}
+}
+
+// ASCII folding itself must still work, and must not fold anything else.
+func TestR2_5_AsciiFoldEqualFoldsOnlyAsciiLetters(t *testing.T) {
+	if !asciiFoldEqual("Probe-EMBED", "probe-embed") {
+		t.Fatal("ASCII letters must fold")
+	}
+	if !asciiFoldEqual("", "") {
+		t.Fatal("empty strings are equal")
+	}
+	if asciiFoldEqual("probe", "probes") {
+		t.Fatal("different lengths must never be equal")
+	}
+	// Non-ASCII bytes must compare exactly, never fold.
+	if asciiFoldEqual("caf\u00c9", "caf\u00e9") {
+		t.Fatal("non-ASCII letters must not be folded")
+	}
+	// Digits and punctuation are untouched but must still match exactly.
+	if !asciiFoldEqual("v1.5-Model_X", "V1.5-mODEL_x") {
+		t.Fatal("digits and punctuation must pass through while ASCII letters fold")
+	}
+}

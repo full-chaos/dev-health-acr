@@ -89,7 +89,12 @@ func (a *Adapter) ApplyProjectionBatch(ctx context.Context, batch contextfabric.
 	// it was derived from. Deliberately not error-returning -- see
 	// embedProjectionBatch's doc comment for why a missing vector degrades
 	// retrieval rather than stalling the projection pipeline.
-	a.embedProjectionBatch(ctx, key, batch)
+	// Codex round-2 R2-3: a batch whose vector state could not be reconciled
+	// must NOT advance the checkpoint -- see clearNodeVectors. Every other
+	// embedding failure still degrades silently and lets the batch commit.
+	if err := a.embedProjectionBatch(ctx, key, batch); err != nil {
+		return contextfabric.ProjectionReceipt{}, err
+	}
 	watermark := projectionWatermark(batch)
 	if err := a.writeWatermark(ctx, key, batch, watermark); err != nil {
 		return contextfabric.ProjectionReceipt{}, err

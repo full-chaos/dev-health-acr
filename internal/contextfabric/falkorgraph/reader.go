@@ -23,6 +23,9 @@ func isInternalSubject(contextfabric.SubjectRef) bool { return false }
 
 func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion) (contextfabric.SubjectResolution, error) {
 	key := graphKey(a.config.GraphPrefix, principal.OrgID)
+	// One fence verification per resolution, not per term (codex round-2
+	// R2-1). Scoped to this call and never shared across requests.
+	fence := &resolutionFence{}
 	deps := graphrank.ResolveDeps{
 		ExactHint: func(ctx context.Context, subject contextfabric.SubjectRef) (graphrank.CandidateNode, bool, error) {
 			cypher := fmt.Sprintf("MATCH (n:%s {%s:$org, %s:$kind, %s:$id}) RETURN n", labelSubject, propOrgID, propKind, propCanonicalID)
@@ -40,7 +43,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			return toCandidateNode(n), true, nil
 		},
 		Search: func(ctx context.Context, term string, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
-			return a.hybridSearchNodes(ctx, key, principal.OrgID, term, limit)
+			return a.hybridSearchNodes(ctx, key, principal.OrgID, term, limit, fence)
 		},
 		Traverse: func(ctx context.Context, term string, observation graphrank.CandidateNode) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
 			return graphrank.TraverseObservationToSubject(ctx, principal, request.RequestedScope, term, observation, isInternalSubject,

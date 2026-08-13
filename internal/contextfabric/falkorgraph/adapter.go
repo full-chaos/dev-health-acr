@@ -34,25 +34,7 @@ type Adapter struct {
 
 	bootstrapMu   sync.RWMutex
 	bootstrapDone map[string]bool
-	// vectorFence caches the per-organization AC-3778-7 verdict: whether the
-	// stored vector index and stored embedder identity match the currently
-	// configured embedder. See ensureVectorReadable for the caching rules and
-	// why a DISABLED verdict expires while an ENABLED one does not.
-	vectorFence map[string]vectorFenceEntry
 }
-
-// vectorFenceEntry is one organization's cached fence verdict.
-type vectorFenceEntry struct {
-	enabled   bool
-	decidedAt time.Time
-}
-
-// vectorFenceRecheckInterval bounds how long a DISABLED verdict is cached.
-// An enabled verdict never expires (the configured embedder cannot change
-// without a restart), but a disabled one must, or an operator who fixed the
-// graph with `acr-projector rebuild --org` would also have to restart acr-api
-// to get vector retrieval back -- turning a recoverable state into a deploy.
-const vectorFenceRecheckInterval = 5 * time.Minute
 
 // EmbedderOptions carries the optional vector-retrieval dependencies
 // (CHAOS-3778). A zero value, or a nil Embedder, leaves vector retrieval off.

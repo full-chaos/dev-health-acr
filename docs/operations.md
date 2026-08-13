@@ -385,6 +385,31 @@ retrieval saw less than it should have. The operator-facing detail is in
 telemetry (`RecordVectorRetrievalDegraded`), which is where you diagnose *which*
 of the causes above fired.
 
+**What it does *not* report, deliberately: nodes that simply have no vector.**
+A projection batch whose embedding step failed clears the affected nodes'
+vectors, so those nodes are absent from vector search until a later batch or a
+rebuild re-embeds them. A subsequent query runs the vector mechanism
+successfully over the remaining corpus and reports **no** degradation — which is
+correct, and worth stating because it looks like a gap.
+
+The distinction the marker draws is *mechanism availability*, not *corpus
+completeness*:
+
+- A vector-less node is a **data gap**. It is still fully reachable
+  lexically — both retrieval paths index the same `search_text` — so the subject
+  has not disappeared, it is merely findable one way instead of two. This is the
+  same class as a subject the projection has not caught up to yet, which the
+  answer has never claimed to report.
+- A degraded mechanism means the query **could not run one of its retrieval
+  strategies at all**, so every subject in the organization was searched one way
+  short.
+
+Reporting data gaps through this marker would make it fire on essentially every
+answer during any backlog, which would train readers to ignore it — and a
+partial-coverage signal that is always on carries no information. Operators
+track re-embedding backlog through the projection worker's own lag and the
+degradation telemetry, not through per-answer coverage.
+
 **Degradation is expected and safe.** An embedder that is unreachable, cold, or
 slow degrades the request to lexical-only rather than failing it; a cold local
 model was measured at 9.3 s against 10–17 ms warm, which is exactly why the

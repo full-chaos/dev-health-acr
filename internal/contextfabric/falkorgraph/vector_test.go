@@ -176,7 +176,7 @@ func TestHybridSearchFailsOpenToLexicalWhenTheEmbedderErrors(t *testing.T) {
 		return nil, nil
 	}}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{err: errors.New("connection refused")}, 0.55)
-	candidates, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5)
+	candidates, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5, &resolutionFence{})
 	if err != nil {
 		t.Fatalf("an embedder failure must not fail the request: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestHybridSearchIsLexicalOnlyWithoutAnEmbedder(t *testing.T) {
 		return nil, nil
 	}}
 	adapter := newFakeAdapter(t, fake)
-	if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5); err != nil {
+	if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5, &resolutionFence{}); err != nil {
 		t.Fatalf("hybridSearchNodes: %v", err)
 	}
 	if vectorQueried {
@@ -288,13 +288,11 @@ func TestAC_3778_7_DimensionChangeDisablesVectorRetrievalUntilRebuild(t *testing
 	if created {
 		t.Fatal("a mismatched index must never be silently dropped and recreated")
 	}
-	if adapter.vectorEnabledForKey("graphkey") {
-		t.Fatal("a stale-dimension index must disable vector retrieval for that organization")
+	if usable, err := adapter.vectorIndexUsable(context.Background(), "graphkey"); err != nil || usable {
+		t.Fatalf("a stale-dimension index must not be usable (usable=%v err=%v)", usable, err)
 	}
-	// A different organization's graph has no verdict yet, so it is not
-	// disabled -- it simply has not been checked.
-	if enabled, decided := adapter.cachedVectorFence("other-graphkey"); decided || enabled {
-		t.Fatal("one organization's stale index must not decide another's verdict")
+	if adapter.ensureVectorReadable(context.Background(), "graphkey", "org") {
+		t.Fatal("a stale-dimension index must not pass the read fence")
 	}
 }
 
@@ -323,22 +321,13 @@ func TestAC_3778_7_MatchingDimensionKeepsVectorRetrievalEnabled(t *testing.T) {
 	if created {
 		t.Fatal("an index at the right dimension must not be recreated")
 	}
-	if err := adapter.verifyFenceForTest("graphkey"); err != nil {
-		t.Fatal(err)
+	if !adapter.ensureVectorReadable(context.Background(), "graphkey", "org") {
+		t.Fatal("a matching dimension and identity must pass the read-path fence")
 	}
 }
 
 // A server that does not report the dimension is UNKNOWN, never a match --
 // guessing a match is exactly the failure AC-3778-7 exists to prevent.
-// verifyFenceForTest asserts the read-path fence passes for a key whose
-// stored identity query returns no mismatching rows.
-func (a *Adapter) verifyFenceForTest(key string) error {
-	if !a.ensureVectorReadable(context.Background(), key, "org") {
-		return errors.New("a matching dimension and identity must pass the read-path fence")
-	}
-	return nil
-}
-
 func TestAC_3778_7_UnreportedDimensionIsNotTreatedAsAMatch(t *testing.T) {
 	status := indexStatus{Options: map[string]interface{}{propEmbedding: map[string]interface{}{}}}
 	if _, ok := status.Dimension(); ok {
@@ -415,7 +404,7 @@ func TestWrongServingModelDegradesTheReadPathToLexical(t *testing.T) {
 	}}
 	adapter := vectorAdapter(t, fake, wrongModelEmbedder(t, server.URL), 0.55)
 
-	candidates, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5)
+	candidates, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5, &resolutionFence{})
 	if err != nil {
 		t.Fatalf("a serving-model mismatch must not fail the request: %v", err)
 	}
@@ -439,6 +428,9 @@ func TestWrongServingModelPersistsNoVector(t *testing.T) {
 		}
 		return nil, nil
 	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
 	adapter := vectorAdapter(t, fake, wrongModelEmbedder(t, server.URL), 0.55)
 
 	observed := time.Now().UTC()
@@ -454,7 +446,9 @@ func TestWrongServingModelPersistsNoVector(t *testing.T) {
 	// embedProjectionBatch degrades rather than erroring -- the canonical
 	// projection already succeeded and must not be rolled back over a missing
 	// vector.
-	adapter.embedProjectionBatch(context.Background(), "k", batch)
+	if err := adapter.embedProjectionBatch(context.Background(), "k", batch); err != nil {
+		t.Fatalf("a successful clear must not fail the batch: %v", err)
+	}
 	if embeddingWritten {
 		t.Fatal("no embedding may be persisted when the serving model is not the configured one")
 	}
@@ -514,8 +508,8 @@ func TestF5_IndexWithUnknownMetadataFailsClosedRatherThanBeingTreatedAsAbsent(t 
 			if created {
 				t.Fatal("an EXISTING index must never be treated as absent and re-created")
 			}
-			if adapter.vectorEnabledForKey("graphkey") {
-				t.Fatal("an index with unknown metadata must disable vector retrieval")
+			if usable, err := adapter.vectorIndexUsable(context.Background(), "graphkey"); err != nil || usable {
+				t.Fatalf("an index with unknown metadata must not be usable (usable=%v err=%v)", usable, err)
 			}
 		})
 	}
@@ -554,7 +548,7 @@ func TestF2_ReadPathVerifiesTheStoredEmbedderIdentity(t *testing.T) {
 	}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
 
-	candidates, _, degraded, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5)
+	candidates, _, degraded, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5, &resolutionFence{})
 	if err != nil {
 		t.Fatalf("a stale-identity graph must degrade, not fail: %v", err)
 	}
@@ -586,7 +580,7 @@ func TestF2_MatchingStoredIdentityPassesTheReadFence(t *testing.T) {
 		return []indexStatus{operationalVectorIndex(8)}, nil
 	}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
-	if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5); err != nil {
+	if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5, &resolutionFence{}); err != nil {
 		t.Fatalf("hybridSearchNodes: %v", err)
 	}
 	if !vectorQueried {
@@ -723,7 +717,12 @@ func TestF3_EmbedFailureClearsTheStaleVectorInsteadOfLeavingIt(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	adapter := vectorAdapter(t, fake, &stubEmbedder{err: errors.New("connection refused")}, 0.55)
+	// The write side re-verifies the index every batch (R2-1), so the fake
+	// must present an operational index at the embedder's own dimension.
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8), err: errors.New("connection refused")}, 0.55)
 
 	observed := time.Now().UTC()
 	batch := contextfabric.ProjectionBatch{
@@ -735,7 +734,9 @@ func TestF3_EmbedFailureClearsTheStaleVectorInsteadOfLeavingIt(t *testing.T) {
 			ObservedAt: observed, SourceVersion: "v1",
 		}},
 	}
-	adapter.embedProjectionBatch(context.Background(), "k", batch)
+	if err := adapter.embedProjectionBatch(context.Background(), "k", batch); err != nil {
+		t.Fatalf("a successful clear must not fail the batch: %v", err)
+	}
 
 	if !cleared {
 		t.Fatal("an embed failure must CLEAR the stale vector, not leave it attached to new text")
@@ -764,6 +765,9 @@ func TestF3_MidBatchWriteFailureClearsOnlyTheUnwrittenNodes(t *testing.T) {
 		}
 		return nil, nil
 	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(4)}, nil
+	}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0, 0}}, 0.55)
 
 	observed := time.Now().UTC()
@@ -776,12 +780,200 @@ func TestF3_MidBatchWriteFailureClearsOnlyTheUnwrittenNodes(t *testing.T) {
 			ObservedAt: observed, SourceVersion: "v1",
 		})
 	}
-	adapter.embedProjectionBatch(context.Background(), "k", batch)
+	if err := adapter.embedProjectionBatch(context.Background(), "k", batch); err != nil {
+		t.Fatalf("a successful clear must not fail the batch: %v", err)
+	}
 
 	// Targets are sorted; the second write failed, so targets[1:] (two nodes)
 	// still hold yesterday's vectors and must be cleared. The first was
 	// refreshed successfully and must be left alone.
 	if len(clearedTargets) != 2 {
 		t.Fatalf("expected the two unwritten nodes to be cleared, got %d", len(clearedTargets))
+	}
+}
+
+// Codex round-2 R2-1, RED->GREEN: the fence verdict must NOT survive across
+// requests. The earlier design cached an ENABLED verdict for the process
+// lifetime on the premise that configuration cannot change without a restart
+// -- true per PROCESS, false per DEPLOYMENT, since acr-api and acr-projector
+// configure their embedders independently. A differently-configured projector
+// writing same-dimension identity-B vectors would then be served forever by an
+// API that never probed again.
+func TestR2_1_FenceIsReVerifiedOnEveryResolutionNotCachedAcrossThem(t *testing.T) {
+	identityProbes := 0
+	mismatch := false
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, propEmbedderIdentity) {
+			identityProbes++
+			if mismatch {
+				return []row{{"n.canonical_id": "p9"}}, nil
+			}
+		}
+		return nil, nil
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+
+	// First resolution: clean, so vector retrieval is enabled.
+	if !adapter.ensureVectorReadable(context.Background(), "k", "org") {
+		t.Fatal("a clean graph must pass the fence")
+	}
+	if identityProbes != 1 {
+		t.Fatalf("expected one identity probe, got %d", identityProbes)
+	}
+
+	// A differently-configured projector now writes identity-B vectors.
+	mismatch = true
+
+	// A LATER resolution must notice. Under the old process-lifetime ENABLED
+	// cache this returned true forever without probing again.
+	if adapter.ensureVectorReadable(context.Background(), "k", "org") {
+		t.Fatal("a later resolution must re-verify and reject drifted vectors")
+	}
+	if identityProbes != 2 {
+		t.Fatalf("the fence must be re-probed per resolution, got %d probes", identityProbes)
+	}
+}
+
+// The memo bounds the cost to ONE probe per resolution, not one per term --
+// ResolveSubjects issues a Search per interpreted subject term.
+func TestR2_1_ResolutionFenceProbesOncePerResolutionNotPerTerm(t *testing.T) {
+	identityProbes := 0
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, propEmbedderIdentity) {
+			identityProbes++
+		}
+		return nil, nil
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+
+	fence := &resolutionFence{}
+	for _, term := range []string{"the auth work", "authentication", "login"} {
+		if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", term, 5, fence); err != nil {
+			t.Fatalf("hybridSearchNodes(%q): %v", term, err)
+		}
+	}
+	if identityProbes != 1 {
+		t.Fatalf("one resolution must probe once across all its terms, got %d", identityProbes)
+	}
+
+	// A NEW resolution gets a new fence and therefore a new probe.
+	if _, _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "again", 5, &resolutionFence{}); err != nil {
+		t.Fatalf("hybridSearchNodes: %v", err)
+	}
+	if identityProbes != 2 {
+		t.Fatalf("a new resolution must probe again, got %d", identityProbes)
+	}
+}
+
+// Codex round-2 R2-2, RED->GREEN: a node with an indexed embedding and a NULL
+// identity is UNKNOWN provenance, and unknown must not read as verified. The
+// earlier predicate asked only "identity IS NOT NULL AND <> configured", so
+// such a node passed as clean.
+func TestR2_2_VectoredNodeWithNullIdentityTripsTheFence(t *testing.T) {
+	var probeCypher string
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, propEmbedderIdentity) {
+			probeCypher = cypher
+			// The server finds a node matching the predicate.
+			return []row{{"n.canonical_id": "p_unstamped"}}, nil
+		}
+		return nil, nil
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+
+	if adapter.ensureVectorReadable(context.Background(), "k", "org") {
+		t.Fatal("a node of unknown vector provenance must trip the fence")
+	}
+	// The predicate must be anchored on the EMBEDDING being present and must
+	// admit a NULL identity as a mismatch -- not merely a differing one.
+	if !strings.Contains(probeCypher, "n."+propEmbedding+" IS NOT NULL") {
+		t.Fatalf("the probe must be anchored on the embedding being present: %s", probeCypher)
+	}
+	if !strings.Contains(probeCypher, "n."+propEmbedderIdentity+" IS NULL") {
+		t.Fatalf("the probe must treat a NULL identity as unverified: %s", probeCypher)
+	}
+}
+
+// Codex round-2 R2-3, RED->GREEN: when the embed fails AND the clear also
+// fails, the batch must FAIL so the projection checkpoint does not advance
+// past unreconciled vector state. Telemetry is not containment: the stale
+// vector still carries the CONFIGURED identity and dimension, so the read
+// fence sees nothing wrong and serves it.
+func TestR2_3_FailedClearFailsTheBatchSoTheCheckpointCannotAdvance(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "SET n."+propEmbedding+" = NULL") {
+			return nil, errors.New("clear failed")
+		}
+		return nil, nil
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8), err: errors.New("embed failed")}, 0.55)
+
+	batch := contextfabric.ProjectionBatch{
+		OrgID: "org",
+		Entities: []contextfabric.EntityProjection{{
+			Subject: contextfabric.SubjectRef{
+				Kind: contextfabric.SubjectProject, CanonicalID: "p1", Label: "Authentication Service",
+			},
+			ObservedAt: time.Now().UTC(), SourceVersion: "v1",
+		}},
+	}
+	if err := adapter.embedProjectionBatch(context.Background(), "k", batch); err == nil {
+		t.Fatal("an unreconciled vector state must fail the batch, not degrade silently")
+	}
+}
+
+// The full ApplyProjectionBatch path: a failed clear must stop the watermark
+// write, so the checkpoint genuinely cannot advance. Projection is idempotent,
+// so the next tick replays and reconciles.
+func TestR2_3_ApplyProjectionBatchDoesNotWriteTheWatermarkOnUnreconciledVectors(t *testing.T) {
+	watermarkWritten := false
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "SET n."+propEmbedding+" = NULL"):
+			return nil, errors.New("clear failed")
+		case strings.Contains(cypher, labelWatermark):
+			watermarkWritten = true
+		}
+		return nil, nil
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	fake.constraintsFunc = func(ctx context.Context, key string) ([]constraintStatus, error) {
+		return []constraintStatus{{Status: "OPERATIONAL", Label: labelSubject, EntityType: "NODE"}}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8), err: errors.New("embed failed")}, 0.55)
+
+	observed := time.Now().UTC()
+	batch := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_r23_00000001", OrgID: "org",
+		Source: "r2-3-test", SourceVersion: "v1", Cursor: "c1", NextCursor: "c2", GeneratedAt: observed,
+		Entities: []contextfabric.EntityProjection{{
+			Subject: contextfabric.SubjectRef{
+				Kind: contextfabric.SubjectProject, CanonicalID: "p1", Label: "Authentication Service",
+			},
+			Authorization:  contextfabric.AuthorizationScope{RepositorySlugs: []string{"full-chaos/dev-health-acr"}},
+			EvidenceRefIDs: []string{"evidence_vector_1234"}, ObservedAt: observed, SourceVersion: "v1",
+		}},
+		Relationships: []contextfabric.RelationshipProjection{}, Contents: []contextfabric.ContentProjection{},
+		Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), batch); err == nil {
+		t.Fatal("ApplyProjectionBatch must fail when vector state is unreconciled")
+	}
+	if watermarkWritten {
+		t.Fatal("the watermark must not be written for a batch whose vector state is unreconciled")
 	}
 }
