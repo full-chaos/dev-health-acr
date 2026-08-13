@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -130,6 +133,16 @@ func answerFixtureBootstrap(t *testing.T, result contractsv1.ContextFabricInvest
 	t.Cleanup(server.Close)
 
 	cfg := fixtureConfig(t, server)
+	// Raised to the sidecar's own configuration ceiling so the transport
+	// is not what fails when the wrapper closure proof drives a very large
+	// payload. Note this ceiling is REAL: the canonical contract permits
+	// results larger than any sidecar can be configured to read, so the
+	// largest legal results are unreachable through MCP by construction.
+	// The wrapper proof therefore uses the largest TRANSPORTABLE result;
+	// the true contract-maximum closure is proven at the validator level
+	// in internal/contextfabric/answerprojection, where no transport is
+	// involved.
+	cfg.MaxResponseBytes = 8 << 20
 	client, err := sidecar.NewClient(cfg, fixedCredentialSource(fixtureToken(0xAB)))
 	if err != nil {
 		t.Fatal(err)
@@ -528,4 +541,157 @@ func TestUntrustedDeclarationCannotBeWeakened(t *testing.T) {
 	if err := denied.Validate(); err == nil {
 		t.Error("a payload denying it is untrusted was accepted")
 	}
+}
+
+// TestMCPWrappersAreClosedOverCanonicalMaxima is the codex round-3 P2-4
+// regression.
+//
+// The closure proof in internal/contextfabric/answerprojection exercises the
+// projection VALIDATOR. That is necessary but not sufficient: what a client
+// actually receives is the MCP wrapper, serialized, and a wrapper can fail
+// where the inner value passes -- an envelope bound, a required member left
+// nil, or emitted JSON that no longer matches the published tool schema.
+//
+// This drives a canonical result at its maximum legal size through BOTH real
+// tool handlers and validates the EMITTED JSON against the tool's own
+// schema, which is the document a client validates against.
+func TestMCPWrappersAreClosedOverCanonicalMaxima(t *testing.T) {
+	result := canonicalMaximumInvestigationResult(t)
+	if err := result.Validate(); err != nil {
+		t.Fatalf("the canonical-maximum fixture is not a valid result, so it proves nothing: %v", err)
+	}
+	boot := answerFixtureBootstrap(t, result, nil)
+
+	t.Run("investigate_question", func(t *testing.T) {
+		response := callInvestigateQuestion(t, boot, contractsv1.MCPInvestigateQuestionRequest{Question: result.Question})
+		if err := response.Validate(); err != nil {
+			t.Fatalf("wrapper rejected a maximum-size answer: %v", err)
+		}
+		assertMatchesToolSchema(t, response, investigateQuestionResponseSchemaFile)
+	})
+
+	t.Run("investigation_result", func(t *testing.T) {
+		args, err := json.Marshal(contractsv1.MCPInvestigationResultRequest{ResultID: result.ResultID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		toolResult, err := handleInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{
+			Params: &mcpsdk.CallToolParamsRaw{Arguments: args},
+		})
+		if err != nil {
+			t.Fatalf("protocol error: %v", err)
+		}
+		if toolResult.IsError {
+			t.Fatalf("tool reported an error on a maximum-size result: %s", toolResultText(toolResult))
+		}
+		var response contractsv1.MCPInvestigationResultResponse
+		if err := json.Unmarshal(toolResult.StructuredContent.(json.RawMessage), &response); err != nil {
+			t.Fatal(err)
+		}
+		if err := response.Validate(); err != nil {
+			t.Fatalf("wrapper rejected a maximum-size result: %v", err)
+		}
+		assertMatchesToolSchema(t, response, investigationResultResponseSchemaFile)
+	})
+}
+
+// assertMatchesToolSchema validates an emitted response against the tool
+// schema the sidecar publishes, which is what a client checks it against.
+// Go-side validation agreeing is not the same as the wire document being
+// schema-valid.
+func assertMatchesToolSchema(t *testing.T, response any, schemaFile string) {
+	t.Helper()
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	name := strings.TrimPrefix(schemaFile, "schemas/")
+	if err := contractcheck.ValidateSerialized("", name, encoded); err != nil {
+		t.Fatalf("emitted JSON violates the published tool schema %s: %v", name, err)
+	}
+}
+
+// canonicalMaximumInvestigationResult builds a valid canonical result that
+// sits at the contract maximum for the fields the answer surface carries,
+// so the wrapper closure proof exercises the largest legal payload rather
+// than a comfortable one.
+func canonicalMaximumInvestigationResult(t *testing.T) contractsv1.ContextFabricInvestigationResult {
+	t.Helper()
+	result := parityResult()
+	project := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+
+	result.Question = strings.Repeat("q", 8000)
+	result.DirectJudgment = strings.Repeat("j", 4000)
+	result.CurrentState = strings.Repeat("c", 4000)
+	result.DeterministicAnswer = strings.Repeat("d", 12000)
+	result.StrongestPressures = maximalStrings(50, "pressure", 2000)
+	result.Limitations = maximalStrings(100, "limitation", 2000)
+	result.Warnings = maximalStrings(100, "warning", 2000)
+
+	value := "amber"
+	result.Drivers = nil
+	result.ClaimedFacts = nil
+	for i := 0; i < 50; i++ {
+		claimID := "claim_max_" + strconv.Itoa(1000+i)
+		result.ClaimedFacts = append(result.ClaimedFacts, contractsv1.ContextFabricClaimedFact{
+			ClaimID: claimID, Kind: contractsv1.ContextFabricFactStatus, Subject: project,
+			Field: strings.Repeat("f", 128), Value: contractsv1.ContextFabricScalarValue{String: &value},
+		})
+		result.Drivers = append(result.Drivers, contractsv1.ContextFabricDriverJudgment{
+			DriverID: "driver_max_" + strconv.Itoa(1000+i),
+			Standing: contractsv1.ContextFabricDriverPrincipal, Category: "status",
+			Title: strings.Repeat("t", 512), Summary: strings.Repeat("s", 4000),
+			Qualification:    strings.Repeat("u", 2000),
+			AffectedSubjects: []contractsv1.ContextFabricSubjectRef{project},
+			EvidenceRefIDs:   []string{"evidence_max_" + strconv.Itoa(1000+i)},
+			ClaimedFactIDs:   []string{claimID},
+			Derivation:       contractsv1.ContextFabricDerivationCanonicalStructured,
+			EpistemicStatus:  contractsv1.ContextFabricEpistemicObserved,
+			Confidence:       1, Current: true,
+		})
+	}
+
+	// 60 rather than the contract's 250: 250 members at the maximum
+	// inclusion-reason size alone exceeds the sidecar's 8 MiB ceiling, so
+	// a larger cohort would test the transport limit rather than the
+	// wrapper.
+	members := make([]contractsv1.ContextFabricCohortMember, 0, 60)
+	for i := 0; i < 60; i++ {
+		members = append(members, contractsv1.ContextFabricCohortMember{
+			Subject:          contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team_max_" + strconv.Itoa(i), Label: "Team " + strconv.Itoa(i)},
+			Rank:             i + 1,
+			InclusionReasons: maximalStrings(32, "reason-"+strconv.Itoa(i), 1000),
+			EvidenceRefIDs:   []string{"evidence_cohort_" + strconv.Itoa(1000+i)},
+		})
+	}
+	result.Cohort = &contractsv1.ContextFabricCohort{
+		Kind: contractsv1.ContextFabricSubjectTeam, Members: members,
+		Rationale: strings.Repeat("r", 4000), Complete: true,
+	}
+
+	sources := make([]contractsv1.ContextFabricSourceObservation, 0, 100)
+	for i := 0; i < 100; i++ {
+		sources = append(sources, contractsv1.ContextFabricSourceObservation{
+			Source: "source_" + strconv.Itoa(1000+i),
+			State:  contractsv1.ContextFabricSourceUnavailable,
+			Reason: strings.Repeat("e", 2000),
+		})
+	}
+	result.Coverage = contractsv1.ContextFabricCoverage{
+		Sources: sources, Partial: true, DegradedReasons: maximalStrings(100, "degraded", 2000),
+	}
+	return result
+}
+
+func maximalStrings(count int, prefix string, length int) []string {
+	out := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		head := prefix + "-" + strconv.Itoa(i) + "-"
+		if len(head) >= length {
+			out = append(out, head[:length])
+			continue
+		}
+		out = append(out, head+strings.Repeat("x", length-len(head)))
+	}
+	return out
 }

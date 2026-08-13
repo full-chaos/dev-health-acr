@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -294,5 +295,19 @@ func TestGoldenCapabilitiesExamplePassesTheRealStartupGate(t *testing.T) {
 		if !slices.Contains(capabilities.SupportedSchemaVersions, required) {
 			t.Errorf("golden capabilities example omits required schema %q", required)
 		}
+	}
+
+	// SET EQUALITY against the canonical list, both directions (codex
+	// round-3 P2-5). A subset check only catches an omission; it cannot
+	// catch a stale extra entry, and it lets the golden document drift
+	// quietly behind AllSchemaVersions as new contracts land -- which is
+	// exactly how it came to advertise the answer tools without the
+	// schemas they need.
+	advertised := append([]string(nil), capabilities.SupportedSchemaVersions...)
+	canonical := append([]string(nil), contractsv1.AllSchemaVersions...)
+	sort.Strings(advertised)
+	sort.Strings(canonical)
+	if !slices.Equal(advertised, canonical) {
+		t.Errorf("golden capabilities example advertises a different schema set than AllSchemaVersions.\n advertised: %v\n canonical:  %v", advertised, canonical)
 	}
 }

@@ -254,7 +254,7 @@ SELECT payload FROM acr.context_fabric_investigation_results WHERE result_id = $
 	// binary with different validation, or a row an operator hand-edited)
 	// -- a caller must never receive a result this package cannot vouch
 	// for.
-	if err := result.Validate(); err != nil {
+	if err := result.ValidateStored(); err != nil {
 		return contextfabric.InvestigationResult{}, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
 	}
 	return result, nil

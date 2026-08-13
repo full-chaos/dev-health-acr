@@ -121,8 +121,8 @@ func canonicalMaximumResult(t *testing.T) contractsv1.ContextFabricInvestigation
 	result.DeterministicAnswer = strings.Repeat("d", 12000)
 
 	result.StrongestPressures = filled(50, func(i int) string { return pad("pressure", i, 2000) })
-	result.Limitations = filled(250, func(i int) string { return pad("limitation", i, 2000) })
-	result.Warnings = filled(250, func(i int) string { return pad("warning", i, 2000) })
+	result.Limitations = filled(100, func(i int) string { return pad("limitation", i, 2000) })
+	result.Warnings = filled(100, func(i int) string { return pad("warning", i, 2000) })
 
 	// 50 drivers, each at the maximum text bounds, each citing a claim.
 	result.Drivers = nil
@@ -165,8 +165,8 @@ func canonicalMaximumResult(t *testing.T) contractsv1.ContextFabricInvestigation
 	}
 
 	// Coverage at the source maximum, each with a maximum-length reason.
-	sources := make([]contractsv1.ContextFabricSourceObservation, 0, 250)
-	for i := 0; i < 250; i++ {
+	sources := make([]contractsv1.ContextFabricSourceObservation, 0, 100)
+	for i := 0; i < 100; i++ {
 		sources = append(sources, contractsv1.ContextFabricSourceObservation{
 			Source: "source_" + strconv.Itoa(1000+i),
 			State:  contractsv1.ContextFabricSourceUnavailable,
@@ -175,7 +175,7 @@ func canonicalMaximumResult(t *testing.T) contractsv1.ContextFabricInvestigation
 	}
 	result.Coverage = contractsv1.ContextFabricCoverage{
 		Sources: sources, Partial: true,
-		DegradedReasons: filled(250, func(i int) string { return pad("degraded", i, 2000) }),
+		DegradedReasons: filled(100, func(i int) string { return pad("degraded", i, 2000) }),
 	}
 
 	// Clarification candidates at their maximum.

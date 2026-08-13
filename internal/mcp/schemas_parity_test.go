@@ -49,6 +49,10 @@ func TestEmbeddedSchemasMatchCanonicalSource(t *testing.T) {
 		{contextForTaskResponseSchemaFile, "contracts/jsonschema/v1/mcp_context_for_task_response.v1.schema.json"},
 		{sourceEvidenceRequestSchemaFile, "contracts/jsonschema/v1/mcp_source_evidence_request.v1.schema.json"},
 		{sourceEvidenceResponseSchemaFile, "contracts/jsonschema/v1/mcp_source_evidence_response.v1.schema.json"},
+		{investigateQuestionRequestSchemaFile, "contracts/jsonschema/v1/mcp_investigate_question_request.v1.schema.json"},
+		{investigateQuestionResponseSchemaFile, "contracts/jsonschema/v1/mcp_investigate_question_response.v1.schema.json"},
+		{investigationResultRequestSchemaFile, "contracts/jsonschema/v1/mcp_investigation_result_request.v1.schema.json"},
+		{investigationResultResponseSchemaFile, "contracts/jsonschema/v1/mcp_investigation_result_response.v1.schema.json"},
 		{recordEpisodeRequestSchemaFile, "contracts/jsonschema/v1/mcp_record_episode_request.v1.schema.json"},
 		{recordEpisodeResponseSchemaFile, "contracts/jsonschema/v1/mcp_record_episode_response.v1.schema.json"},
 	}

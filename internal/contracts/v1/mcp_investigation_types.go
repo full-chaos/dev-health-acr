@@ -171,9 +171,17 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.coverage.sources[].reason",
 	"structured.drivers[].affected_subjects[].label",
 	"structured.interpretation.clarification_reason",
+	// The model emits requested_judgment (see genkitruntime's
+	// interpretation output); it is not a service-issued token, so it was
+	// wrongly allowlisted as trusted.
+	"structured.interpretation.requested_judgment",
 	"structured.interpretation.comparison_terms[]",
 	"structured.interpretation.fact_requirements[].subjects[].label",
 	"structured.interpretation.subject_terms[]",
+	// Fact-requirement parameter VALUES are model-emitted alongside the
+	// interpretation. Only the strict walker surfaced them: a map's value
+	// schema is as much a string field as any named property.
+	"structured.interpretation.fact_requirements[].parameters{}",
 	"structured.paths[].edges[].from.label",
 	"structured.paths[].edges[].to.label",
 	"structured.paths[].nodes[].label",

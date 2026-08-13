@@ -201,10 +201,20 @@ const (
 	ContextFabricRemainingWorkMaxCount      = 250
 	ContextFabricReadinessGapsMaxCount      = 250
 	ContextFabricConflictsMaxCount          = 250
-	ContextFabricLimitationsMaxCount        = 250
-	ContextFabricLimitationMaxLength        = 4000
-	ContextFabricWarningsMaxCount           = 250
-	ContextFabricWarningMaxLength           = 4000
+	// These are MODEL-FACING: the synthesis prompt states them, so they
+	// must equal what validation actually enforces on a write, or the
+	// prompt invites the model to produce output the validator then
+	// rejects. They were 250 x 4000 while the published JSON Schema said
+	// 100 x 2000 (codex round-3 P2-4); the schema is the wire-contract
+	// source of truth, so these moved to it.
+	//
+	// The looser historical values survive only as the stored-read
+	// allowance in validate_context_fabric_result.go, which exists so
+	// immutable rows written before the correction stay readable.
+	ContextFabricLimitationsMaxCount = 100
+	ContextFabricLimitationMaxLength = 2000
+	ContextFabricWarningsMaxCount    = 100
+	ContextFabricWarningMaxLength    = 2000
 	// ContextFabricClaimedFactsMaxCount bounds the synthesis draft's own
 	// top-level claimed_facts list -- the model decides how many claims to
 	// write (unlike driver/finding claimed_fact_ids, which only REFERENCE

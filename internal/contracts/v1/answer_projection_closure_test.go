@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -209,18 +210,26 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 	documents := schemaDocuments(t)
 
 	for _, surface := range []struct {
-		name      string
-		root      string
-		prefix    string
-		untrusted []string
+		name          string
+		root          string
+		prefix        string
+		untrusted     []string
+		expectedPaths int
 	}{
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields},
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields},
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 58},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 129},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
-			if len(paths) == 0 {
-				t.Fatal("no string paths discovered; the walker is not working")
+			// The discovered path COUNT is pinned (codex round-3 P2-3).
+			// A non-empty check is not enough: this walker has twice
+			// under-reported while looking healthy, and a shrinking path
+			// set is exactly what that failure looks like from outside.
+			// Pinning makes shrinkage fail as loudly as growth, and both
+			// force a deliberate update.
+			if len(paths) != surface.expectedPaths {
+				t.Fatalf("discovered %d string paths, pinned %d.\nA smaller number means the walker stopped reaching fields; a larger one means the contract grew.\nPaths:\n  %s",
+					len(paths), surface.expectedPaths, strings.Join(paths, "\n  "))
 			}
 			untrusted := make(map[string]bool, len(surface.untrusted))
 			for _, field := range surface.untrusted {
@@ -283,7 +292,7 @@ func trustedBecauseClosed(path string) bool {
 	case "service_version", "contract_version", "backend", "backend_version",
 		"projection_version", "query_version", "interpretation_version",
 		"synthesis_version", "canonical_service_version", "source_version",
-		"model_identity", "requested_judgment":
+		"model_identity":
 		return true
 	// Timestamps.
 	case "generated_at", "observed_at", "created_at", "as_of", "start", "end",
@@ -301,12 +310,14 @@ func trustedBecauseClosed(path string) bool {
 // resolves to a string-typed leaf, in the dotted "[]"-suffixed notation the
 // untrusted enumeration uses.
 //
-// It carries the CURRENT document through the walk. An earlier version did
-// not: after following a cross-file $ref into context_fabric_common.v1, the
-// local "#/$defs/..." refs inside that document were resolved against the
-// ORIGINAL root, silently dead-ending and hiding every nested subject label
-// from classification. A walker that quietly stops walking is worse than no
-// walker, because it reports a clean result.
+// It FAILS on any dead end rather than returning what it managed to reach.
+// That rule exists because this walker has now silently under-reported
+// twice: once when a cross-file $ref lost its document context, and once
+// when a depth cap truncated deep paths. Both times it reported a clean
+// result while skipping real fields, which is the worst possible behavior
+// for a completeness check -- a guard that under-reports is indistinguishable
+// from a guard that passes. Every node it cannot traverse is now a test
+// failure demanding a deliberate decision.
 func stringPathsIn(t *testing.T, documents map[string]map[string]any, root, prefix string) []string {
 	t.Helper()
 	seen := map[string]bool{}
@@ -314,14 +325,51 @@ func stringPathsIn(t *testing.T, documents map[string]map[string]any, root, pref
 
 	var walk func(document string, node any, path string, depth int)
 	walk = func(document string, node any, path string, depth int) {
+		if depth > 64 {
+			t.Fatalf("%s: walk exceeded the depth guard; the schema is cyclic or the walker is looping", path)
+		}
 		object, ok := node.(map[string]any)
-		if !ok || depth > 24 {
-			return
+		if !ok {
+			t.Fatalf("%s: node is not a schema object (%T); classification would silently skip it", path, node)
 		}
 		if reference, ok := object["$ref"].(string); ok {
 			nextDocument, resolved := resolveSchemaRef(t, documents, document, reference)
+			if resolved == nil {
+				t.Fatalf("%s: $ref %q did not resolve; classification would silently skip it", path, reference)
+			}
 			walk(nextDocument, resolved, path, depth+1)
 			return
+		}
+		// Combinator branches are traversed, not skipped: a string field
+		// reachable only through oneOf/anyOf/allOf is still a string field
+		// a consumer receives.
+		combinators := 0
+		// if/then/else are conditional SHAPE, not just presence: a field
+		// reachable only through a "then" branch is still a field a
+		// consumer receives. The stricter walker found these untraversed
+		// at the result root.
+		for _, keyword := range []string{"then", "else"} {
+			branch, ok := object[keyword].(map[string]any)
+			if !ok || onlyPresenceConstraint(branch) {
+				continue
+			}
+			combinators++
+			walk(document, branch, path, depth+1)
+		}
+		for _, keyword := range []string{"oneOf", "anyOf", "allOf"} {
+			branches, ok := object[keyword].([]any)
+			if !ok {
+				continue
+			}
+			for _, branch := range branches {
+				// A bare {"required": [...]} branch constrains presence
+				// rather than shape and carries no reachable field.
+				if constraint, ok := branch.(map[string]any); ok && onlyPresenceConstraint(constraint) {
+					continue
+				}
+				combinators++
+				walk(document, branch, path, depth+1)
+			}
 		}
 		if kind, ok := object["type"].(string); ok {
 			switch kind {
@@ -332,13 +380,42 @@ func stringPathsIn(t *testing.T, documents map[string]map[string]any, root, pref
 				}
 				return
 			case "array":
-				walk(document, object["items"], path+"[]", depth+1)
+				items, ok := object["items"]
+				if !ok {
+					t.Fatalf("%s: array has no items schema; classification would silently skip its members", path)
+				}
+				walk(document, items, path+"[]", depth+1)
 				return
+			case "object":
+				// A map-shaped object carries its value schema in
+				// additionalProperties. Its VALUES are as much a string
+				// field as any named property, and the strict walker
+				// caught them going unclassified.
+				if valueSchema, ok := object["additionalProperties"].(map[string]any); ok {
+					walk(document, valueSchema, path+"{}", depth+1)
+					if _, named := object["properties"]; !named {
+						return
+					}
+				}
+				// falls through to properties below
+			default:
+				return // number, integer, boolean: no string leaf
 			}
 		}
 		properties, ok := object["properties"].(map[string]any)
 		if !ok {
-			return
+			// A const/enum leaf, a pure presence constraint, or a branch
+			// already covered by a combinator above carries no properties.
+			if _, isConst := object["const"]; isConst {
+				return
+			}
+			if _, isEnum := object["enum"]; isEnum {
+				return
+			}
+			if combinators > 0 || onlyPresenceConstraint(object) {
+				return
+			}
+			t.Fatalf("%s: schema node has no properties, type, const, enum, or combinator; classification would silently skip it (%v)", path, sortedKeysOf(object))
 		}
 		for name, child := range properties {
 			walk(document, child, path+"."+name, depth+1)
@@ -349,8 +426,34 @@ func stringPathsIn(t *testing.T, documents map[string]map[string]any, root, pref
 	return paths
 }
 
+// onlyPresenceConstraint reports whether a schema node constrains only
+// which members must be present, carrying no shape of its own.
+func onlyPresenceConstraint(node map[string]any) bool {
+	if len(node) == 0 {
+		return true
+	}
+	for key := range node {
+		switch key {
+		case "required", "not", "description", "title", "$comment", "additionalProperties", "minProperties", "maxProperties", "uniqueItems", "minItems", "maxItems", "if", "then", "else", "properties":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func sortedKeysOf(node map[string]any) []string {
+	keys := make([]string, 0, len(node))
+	for key := range node {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // resolveSchemaRef follows a $ref, returning the document it landed in so a
-// subsequent local ref resolves against the right file.
+// subsequent local ref resolves against the right file. A pointer that does
+// not resolve returns nil, which the caller turns into a test failure.
 func resolveSchemaRef(t *testing.T, documents map[string]map[string]any, current, reference string) (string, any) {
 	t.Helper()
 	target := current
@@ -376,7 +479,11 @@ func resolveSchemaRef(t *testing.T, documents map[string]map[string]any, current
 		if !ok {
 			return target, nil
 		}
-		node = object[key]
+		next, exists := object[key]
+		if !exists {
+			return target, nil
+		}
+		node = next
 	}
 	return target, node
 }
@@ -398,5 +505,69 @@ func TestProjectionEmitsArraysNotNull(t *testing.T) {
 		if strings.Contains(string(encoded), fmt.Sprintf("%q:null", member)) {
 			t.Errorf("%s serialized as null; the schema requires an array", member)
 		}
+	}
+}
+
+// legacyCohortMember builds a cohort member at the OLD Go-validator
+// maximum: 50 inclusion reasons of 1024 characters. Rows of this shape were
+// legitimately written by an earlier binary and are immutable, so they must
+// stay readable forever.
+func legacyCohortMember() ContextFabricCohortMember {
+	reasons := make([]string, 0, contextFabricLegacyCohortInclusionReasonsCount)
+	for i := 0; i < contextFabricLegacyCohortInclusionReasonsCount; i++ {
+		head := "legacy-reason-" + strconv.Itoa(i) + "-"
+		reasons = append(reasons, head+strings.Repeat("x", contextFabricLegacyCohortInclusionReasonLength-len(head)))
+	}
+	return ContextFabricCohortMember{
+		Subject:          ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team_legacy", Label: "Team Legacy"},
+		Rank:             1,
+		InclusionReasons: reasons,
+		EvidenceRefIDs:   []string{},
+	}
+}
+
+// TestLegacyCohortBoundsAreStrictOnWriteAndLenientOnRead is the codex
+// round-3 P1-1 regression.
+//
+// Round 2 tightened the cohort inclusion-reason bound from 50x1024 to the
+// published 32x1000. That was right for writes and wrong for reads:
+// investigation results are IMMUTABLE, so a row written at the old maximum
+// cannot be migrated, and a read path enforcing the new bound would turn it
+// into a permanent API 500 and MCP retrieval failure after deploy.
+//
+// The rule is strict-write, lenient-read. This proves both halves on the
+// SAME value: the write validator rejects it, the stored-read validator
+// accepts it.
+func TestLegacyCohortBoundsAreStrictOnWriteAndLenientOnRead(t *testing.T) {
+	member := legacyCohortMember()
+
+	if err := member.Validate(); err == nil {
+		t.Error("the write path accepted a legacy-sized cohort member; new rows must not be creatable at the legacy size")
+	}
+	if err := member.validateStored(); err != nil {
+		t.Errorf("the read path rejected a legacy-sized cohort member, making an immutable stored row unreadable: %v", err)
+	}
+
+	// And the same, end to end, through a whole result document.
+	result := closureResult()
+	result.Cohort = &ContextFabricCohort{
+		Kind:      ContextFabricSubjectTeam,
+		Members:   []ContextFabricCohortMember{member},
+		Rationale: "Legacy cohort written by an earlier binary.",
+		Complete:  true,
+	}
+	if err := result.Validate(); err == nil {
+		t.Error("Validate accepted a legacy-sized result; writes must enforce the current contract")
+	}
+	if err := result.ValidateStored(); err != nil {
+		t.Errorf("ValidateStored rejected a legacy stored result: %v", err)
+	}
+
+	// A value beyond even the legacy maximum stays invalid on both paths:
+	// the allowance is bounded history, not an open door.
+	beyond := member
+	beyond.InclusionReasons = append(append([]string{}, member.InclusionReasons...), "one-too-many")
+	if err := beyond.validateStored(); err == nil {
+		t.Error("the read path accepted a member beyond the legacy maximum")
 	}
 }

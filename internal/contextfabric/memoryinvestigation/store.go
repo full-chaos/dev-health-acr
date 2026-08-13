@@ -157,7 +157,7 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	// storage some other way (e.g. written directly, or by a future/older
 	// binary with different validation) -- a caller must never receive a
 	// result this package cannot vouch for.
-	if err := result.Validate(); err != nil {
+	if err := result.ValidateStored(); err != nil {
 		return contextfabric.InvestigationResult{}, fmt.Errorf("memoryinvestigation: stored investigation result is invalid: %w", err)
 	}
 	return result, nil

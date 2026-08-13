@@ -2,6 +2,7 @@ package v1
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -59,14 +60,24 @@ func (r ContextFabricSubjectResolution) Validate() error {
 	return nil
 }
 
+// Validate enforces the current contract bounds (write path).
 func (c ContextFabricCohort) Validate() error {
+	return c.validate(ContextFabricCohortMember.Validate)
+}
+
+// validateStored enforces the legacy bounds for an already-persisted row.
+func (c ContextFabricCohort) validateStored() error {
+	return c.validate(ContextFabricCohortMember.validateStored)
+}
+
+func (c ContextFabricCohort) validate(validateMember func(ContextFabricCohortMember) error) error {
 	if !validContextFabricSubjectKind(c.Kind) || (c.Kind != ContextFabricSubjectTeam && c.Kind != ContextFabricSubjectProject) || c.Members == nil || len(c.Members) > 250 || len(c.Exclusions) > 250 || !stringLengthBetween(strings.TrimSpace(c.Rationale), 1, 4000) || (c.Complete && c.Truncated) {
 		return fmt.Errorf("cohort violates v1 bounds")
 	}
 	seen := make(map[string]struct{}, len(c.Members))
 	lastRank := 0
 	for _, member := range c.Members {
-		if err := member.Validate(); err != nil {
+		if err := validateMember(member); err != nil {
 			return fmt.Errorf("members: %w", err)
 		}
 		if member.Subject.Kind != c.Kind || member.Rank <= lastRank {
@@ -93,17 +104,59 @@ func (c ContextFabricCohort) Validate() error {
 	return nil
 }
 
+// Cohort member inclusion-reason bounds.
+//
+// The CURRENT bounds match this shape's published JSON Schema, which is the
+// wire-contract source of truth. The LEGACY bounds are what the Go
+// validator alone used to accept, before CHAOS-3746 round 2 found it was
+// looser than the contract it claimed to enforce.
+//
+// Both exist because investigation results are IMMUTABLE and already
+// persisted. Tightening a validator that runs on the read path would have
+// made previously accepted rows unreadable after deploy -- API 500s and MCP
+// retrieval failures for data nobody can migrate, since the payloads cannot
+// be rewritten. So writes enforce the contract and reads tolerate the
+// history: a row written by an older binary stays readable, and no new row
+// can be created at the legacy size.
+const (
+	contextFabricCohortInclusionReasonsMaxCount    = 32
+	contextFabricCohortInclusionReasonMaxLength    = 1000
+	contextFabricLegacyCohortInclusionReasonsCount = 50
+	contextFabricLegacyCohortInclusionReasonLength = 1024
+
+	// Limitations and warnings carry the same split, for the same reason
+	// and found the same way: the Go bound (250 x 4000) was looser than
+	// the published schema (100 x 2000), so a result could pass Go
+	// validation and still be a schema-invalid document on the wire. It
+	// surfaced only when the EMITTED JSON was validated against the
+	// published tool schema (codex round-3 P2-4) -- Go-side agreement is
+	// not the same as the wire document being valid.
+	contextFabricNarrativeMaxCount  = ContextFabricLimitationsMaxCount
+	contextFabricNarrativeMaxLength = ContextFabricLimitationMaxLength
+	// The historical Go-only maxima, kept solely so immutable rows written
+	// before the correction stay readable.
+	contextFabricLegacyNarrativeMaxCount  = 250
+	contextFabricLegacyNarrativeMaxLength = 4000
+)
+
+// Validate enforces the CURRENT contract bounds. This is the write path and
+// the path every freshly produced result takes.
 func (m ContextFabricCohortMember) Validate() error {
+	return m.validate(contextFabricCohortInclusionReasonsMaxCount, contextFabricCohortInclusionReasonMaxLength)
+}
+
+// validateStored enforces the LEGACY bounds, for revalidating a row that
+// was already persisted. See the bounds block above for why the read path
+// deliberately accepts more than the write path.
+func (m ContextFabricCohortMember) validateStored() error {
+	return m.validate(contextFabricLegacyCohortInclusionReasonsCount, contextFabricLegacyCohortInclusionReasonLength)
+}
+
+func (m ContextFabricCohortMember) validate(maxReasons, maxReasonLength int) error {
 	if err := m.Subject.Validate(); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
-	// 32 items of at most 1000 characters, matching this shape's PUBLISHED
-	// schema. The Go bound used to be 50/1024 -- looser than the contract
-	// it claims to enforce -- so a cohort member could pass Go validation
-	// while violating the schema, and then fail projection (codex round-2
-	// F2). JSON Schema is the wire-contract source of truth here, so the
-	// Go bound moves to it, not the reverse.
-	if m.Rank < 1 || len(m.InclusionReasons) < 1 || len(m.InclusionReasons) > 32 || !uniqueTrimmedStrings(m.InclusionReasons, 1000) || !optionalEvidenceRefs(m.EvidenceRefIDs, 500) {
+	if m.Rank < 1 || len(m.InclusionReasons) < 1 || len(m.InclusionReasons) > maxReasons || !uniqueTrimmedStrings(m.InclusionReasons, maxReasonLength) || !optionalEvidenceRefs(m.EvidenceRefIDs, 500) {
 		return fmt.Errorf("cohort member violates v1 bounds")
 	}
 	return nil
@@ -229,7 +282,19 @@ func (o ContextFabricSourceObservation) Validate() error {
 	return nil
 }
 
+// Validate enforces the current contract (write path).
 func (c ContextFabricCoverage) Validate() error {
+	return c.validate(contextFabricNarrativeMaxCount)
+}
+
+// validateStored accepts the legacy source and degraded-reason counts for
+// an already-persisted row. Same immutability argument as the cohort and
+// narrative bounds.
+func (c ContextFabricCoverage) validateStored() error {
+	return c.validate(contextFabricLegacyNarrativeMaxCount)
+}
+
+func (c ContextFabricCoverage) validate(maxSourcesAndReasons int) error {
 	// DegradedReasons has no non-nil requirement, unlike Sources: the JSON
 	// Schema's Coverage.required is ["sources", "partial"] only --
 	// degraded_reasons is genuinely optional there, and its Go tag is
@@ -240,7 +305,7 @@ func (c ContextFabricCoverage) Validate() error {
 	// JSON (as InvestigationResultStore implementations now do on every
 	// Get -- CHAOS-3755 finding M2) even though nothing was ever actually
 	// invalid.
-	if c.Sources == nil || len(c.Sources) > 250 || len(c.DegradedReasons) > 250 || !uniqueTrimmedStrings(c.DegradedReasons, 2000) {
+	if c.Sources == nil || len(c.Sources) > maxSourcesAndReasons || len(c.DegradedReasons) > maxSourcesAndReasons || !uniqueTrimmedStrings(c.DegradedReasons, 2000) {
 		return fmt.Errorf("coverage violates v1 bounds")
 	}
 	seen := make(map[string]struct{}, len(c.Sources))
@@ -336,7 +401,45 @@ func (r ContextFabricFactRequirement) Validate() error {
 	return nil
 }
 
+// isStoredValidation reports whether the supplied cohort validator is the
+// lenient stored-read one. Deriving the narrative mode from it keeps a
+// single decision -- "is this a read of persisted data?" -- rather than
+// letting two independently-set flags disagree.
+func isStoredValidation(validateCohort func(ContextFabricCohort) error) bool {
+	return reflect.ValueOf(validateCohort).Pointer() == reflect.ValueOf(ContextFabricCohort.validateStored).Pointer()
+}
+
+// Validate enforces the CURRENT contract on a result being produced or
+// accepted. Use it for every write and for anything a caller is about to
+// receive fresh.
 func (r ContextFabricInvestigationResult) Validate() error {
+	return r.validate(ContextFabricCohort.Validate)
+}
+
+// ValidateStored revalidates a result read back from durable storage.
+//
+// It differs from Validate in exactly one way: bounds that were legitimately
+// looser in an older binary are still accepted, because investigation
+// results are IMMUTABLE. A stored row cannot be rewritten to satisfy a
+// tightened bound, so a read path that enforced the new bound would make
+// previously valid data permanently unreadable -- an API 500 and an MCP
+// retrieval failure for a row that was correct when it was written.
+//
+// Writes stay strict, so the looseness cannot grow: no NEW row can be
+// created at the legacy size. See the cohort inclusion-reason bounds block
+// for the specific allowance and its origin.
+func (r ContextFabricInvestigationResult) ValidateStored() error {
+	return r.validate(ContextFabricCohort.validateStored)
+}
+
+func (r ContextFabricInvestigationResult) validate(validateCohort func(ContextFabricCohort) error) error {
+	// The narrative bounds follow the same strict-write / lenient-read
+	// split as the cohort bounds, keyed off which cohort validator was
+	// supplied so the two can never drift apart.
+	narrativeCount, narrativeLength := contextFabricNarrativeMaxCount, contextFabricNarrativeMaxLength
+	if isStoredValidation(validateCohort) {
+		narrativeCount, narrativeLength = contextFabricLegacyNarrativeMaxCount, contextFabricLegacyNarrativeMaxLength
+	}
 	if r.SchemaVersion != ContextFabricInvestigationResultSchema || !stringLengthBetween(r.ResultID, 8, 256) || !stringLengthBetween(r.RequestID, 8, 256) || r.GeneratedAt.IsZero() || !stringLengthBetween(strings.TrimSpace(r.Question), 1, 8000) || !validInvestigationStatus(r.Status) {
 		return fmt.Errorf("result identity or status violates v1 bounds")
 	}
@@ -347,7 +450,7 @@ func (r ContextFabricInvestigationResult) Validate() error {
 		return fmt.Errorf("subject_resolution: %w", err)
 	}
 	if r.Cohort != nil {
-		if err := r.Cohort.Validate(); err != nil {
+		if err := validateCohort(*r.Cohort); err != nil {
 			return fmt.Errorf("cohort: %w", err)
 		}
 	}
@@ -366,9 +469,9 @@ func (r ContextFabricInvestigationResult) Validate() error {
 		r.ReadinessGaps == nil || len(r.ReadinessGaps) > ContextFabricReadinessGapsMaxCount ||
 		r.Paths == nil || len(r.Paths) > 250 ||
 		r.Conflicts == nil || len(r.Conflicts) > ContextFabricConflictsMaxCount ||
-		r.Limitations == nil || len(r.Limitations) > ContextFabricLimitationsMaxCount || !uniqueTrimmedStrings(r.Limitations, ContextFabricLimitationMaxLength) ||
+		r.Limitations == nil || len(r.Limitations) > narrativeCount || !uniqueTrimmedStrings(r.Limitations, narrativeLength) ||
 		r.EvidenceRefIDs == nil || !boundedEvidenceRefs(r.EvidenceRefIDs, ContextFabricEvidenceRefIDsMaxCount, true) ||
-		r.Warnings == nil || len(r.Warnings) > ContextFabricWarningsMaxCount || !uniqueTrimmedStrings(r.Warnings, ContextFabricWarningMaxLength) {
+		r.Warnings == nil || len(r.Warnings) > narrativeCount || !uniqueTrimmedStrings(r.Warnings, narrativeLength) {
 		return fmt.Errorf("result answer fields violate v1 bounds")
 	}
 	if r.Status == ContextFabricInvestigationComplete || r.Status == ContextFabricInvestigationPartial {
@@ -398,7 +501,11 @@ func (r ContextFabricInvestigationResult) Validate() error {
 	if err := validateFindings("conflicts", r.Conflicts, claimed); err != nil {
 		return err
 	}
-	if err := r.Coverage.Validate(); err != nil {
+	validateCoverage := ContextFabricCoverage.Validate
+	if isStoredValidation(validateCohort) {
+		validateCoverage = ContextFabricCoverage.validateStored
+	}
+	if err := validateCoverage(r.Coverage); err != nil {
 		return fmt.Errorf("coverage: %w", err)
 	}
 	if err := r.Versions.Validate(); err != nil {
