@@ -1,0 +1,721 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/context_fabric_answer_projection.v1.schema.json",
+  "title": "ACR Context Fabric Answer Projection v1",
+  "description": "Bounded consumer projection of a context_fabric_investigation_result.v1 (CHAOS-3746). Produced by exactly one function so that the hosted API and the MCP sidecar cannot diverge. The projection SELECTS and DROPS: it never rewrites, re-ranks, re-judges, or re-words. direct_judgment, current_state, and every retained driver standing and category are copied verbatim, so consumer-specific truncation can never change the underlying judgment. Every drop is declared in projection_budget. result_id identifies the canonical result: a consumer that needs anything dropped fetches that result rather than asking for a fatter answer. Every identifier is opaque and must not be parsed.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "context_fabric_answer_projection.v1"
+    },
+    "result_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "degraded",
+        "clarification_required",
+        "no_match"
+      ]
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8000
+    },
+    "direct_judgment": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "current_state": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "strongest_pressures": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      },
+      "maxItems": 50,
+      "uniqueItems": true
+    },
+    "committed_subjects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SubjectRef"
+      },
+      "maxItems": 250,
+      "uniqueItems": true
+    },
+    "clarification": {
+      "$ref": "#/$defs/ProjectedClarification"
+    },
+    "cohort": {
+      "$ref": "#/$defs/ProjectedCohort"
+    },
+    "principal_drivers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProjectedDriver"
+      },
+      "maxItems": 50
+    },
+    "key_facts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProjectedFact"
+      },
+      "maxItems": 250
+    },
+    "coverage_summary": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProjectedCoverage"
+      },
+      "maxItems": 100
+    },
+    "coverage_partial": {
+      "type": "boolean"
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      },
+      "maxItems": 100,
+      "uniqueItems": true
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      },
+      "maxItems": 100,
+      "uniqueItems": true
+    },
+    "evidence_ref_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 256,
+        "pattern": "^[^|]*$"
+      },
+      "maxItems": 500,
+      "uniqueItems": true
+    },
+    "subject_receipts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/BoundSubjectReceipt"
+      },
+      "maxItems": 50
+    },
+    "versions": {
+      "$ref": "#/$defs/VersionSet"
+    },
+    "projection_budget": {
+      "$ref": "#/$defs/ProjectionBudget"
+    }
+  },
+  "required": [
+    "schema_version",
+    "result_id",
+    "request_id",
+    "generated_at",
+    "status",
+    "question",
+    "direct_judgment",
+    "current_state",
+    "strongest_pressures",
+    "committed_subjects",
+    "principal_drivers",
+    "key_facts",
+    "coverage_summary",
+    "coverage_partial",
+    "limitations",
+    "warnings",
+    "evidence_ref_ids",
+    "subject_receipts",
+    "versions",
+    "projection_budget"
+  ],
+  "$defs": {
+    "SubjectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "organization",
+            "team",
+            "project",
+            "repository",
+            "work_item",
+            "pull_request",
+            "deployment",
+            "incident",
+            "document",
+            "decision",
+            "episode",
+            "metric",
+            "pull_request_review",
+            "ci_pipeline_run"
+          ]
+        },
+        "canonical_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "kind",
+        "canonical_id",
+        "label"
+      ]
+    },
+    "ScalarValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "string": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "integer": {
+          "type": "integer"
+        },
+        "number": {
+          "type": "number"
+        },
+        "boolean": {
+          "type": "boolean"
+        },
+        "null": {
+          "const": true
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "string"
+          ]
+        },
+        {
+          "required": [
+            "integer"
+          ]
+        },
+        {
+          "required": [
+            "number"
+          ]
+        },
+        {
+          "required": [
+            "boolean"
+          ]
+        },
+        {
+          "required": [
+            "null"
+          ]
+        }
+      ]
+    },
+    "VersionSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "service_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "contract_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "backend": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "backend_version": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "projection_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "query_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "interpretation_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "synthesis_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "canonical_service_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "service_version",
+        "contract_version",
+        "backend",
+        "projection_version",
+        "query_version",
+        "interpretation_version",
+        "synthesis_version",
+        "canonical_service_version"
+      ]
+    },
+    "ProjectedCandidate": {
+      "description": "One ambiguity option. receipt_id is the opaque handle a caller returns to commit this choice on the next turn.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "receipt_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "subject": {
+          "$ref": "#/$defs/SubjectRef"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "committed",
+            "proposed",
+            "ambiguous",
+            "unresolved"
+          ]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "match_reasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "maxItems": 100,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "receipt_id",
+        "subject",
+        "state",
+        "confidence",
+        "match_reasons"
+      ]
+    },
+    "ProjectedClarification": {
+      "description": "Present only when status is clarification_required.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectedCandidate"
+          },
+          "maxItems": 50
+        }
+      },
+      "required": [
+        "candidates"
+      ]
+    },
+    "ProjectedCohortMember": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subject": {
+          "$ref": "#/$defs/SubjectRef"
+        },
+        "rank": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "inclusion_reasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "evidence_ref_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 256,
+            "pattern": "^[^|]*$"
+          },
+          "maxItems": 500,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "subject",
+        "rank",
+        "inclusion_reasons"
+      ]
+    },
+    "ProjectedCohort": {
+      "description": "Subjectless cohort answer. total reports the canonical member count before projection, so a caller always sees the true size even when members is truncated. complete is the engine's statement about the cohort it discovered, never a statement about this projection.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "organization",
+            "team",
+            "project",
+            "repository",
+            "work_item",
+            "pull_request",
+            "deployment",
+            "incident",
+            "document",
+            "decision",
+            "episode",
+            "metric",
+            "pull_request_review",
+            "ci_pipeline_run"
+          ]
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectedCohortMember"
+          },
+          "maxItems": 250
+        }
+      },
+      "required": [
+        "kind",
+        "total",
+        "rationale",
+        "complete",
+        "members"
+      ]
+    },
+    "ProjectedDriver": {
+      "description": "One driver judgment, narrowed to what a bounded consumer needs to state and defend it. standing and category are copied verbatim from the canonical result: driver standing IS the judgment, so a projection that promoted or demoted one would change the answer.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "driver_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "standing": {
+          "type": "string",
+          "enum": [
+            "principal",
+            "contributing",
+            "symptom",
+            "context",
+            "withheld"
+          ]
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "status",
+            "actual_completion",
+            "work",
+            "blockers",
+            "reviews",
+            "continuous_integration",
+            "deployments",
+            "incidents",
+            "health",
+            "workload",
+            "investment",
+            "readiness",
+            "operational_deficiency",
+            "source_health",
+            "relationship",
+            "narrative"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "qualification": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "evidence_ref_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 256,
+            "pattern": "^[^|]*$"
+          },
+          "maxItems": 500,
+          "uniqueItems": true
+        },
+        "claimed_fact_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 250,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "driver_id",
+        "standing",
+        "category",
+        "title",
+        "summary",
+        "confidence",
+        "evidence_ref_ids"
+      ]
+    },
+    "ProjectedFact": {
+      "description": "A claimed fact a retained driver cites, carried at value level so a consumer can show the canonical observation behind a judgment rather than only prose about it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "identity",
+            "membership",
+            "status",
+            "actual_completion",
+            "work",
+            "blockers",
+            "required_children",
+            "pull_requests",
+            "reviews",
+            "continuous_integration",
+            "deployments",
+            "incidents",
+            "metrics",
+            "health",
+            "workload",
+            "investment",
+            "readiness",
+            "operational_deficiencies",
+            "source_health",
+            "evidence"
+          ]
+        },
+        "subject": {
+          "$ref": "#/$defs/SubjectRef"
+        },
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "value": {
+          "$ref": "#/$defs/ScalarValue"
+        }
+      },
+      "required": [
+        "claim_id",
+        "kind",
+        "subject",
+        "field",
+        "value"
+      ]
+    },
+    "ProjectedCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "available",
+            "stale",
+            "unavailable",
+            "unconfigured",
+            "unauthorized",
+            "no_data",
+            "truncated",
+            "conflicted",
+            "not_applicable"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      },
+      "required": [
+        "source",
+        "state"
+      ]
+    },
+    "BoundSubjectReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "result_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "result_id",
+        "receipt_id"
+      ]
+    },
+    "ProjectionBudget": {
+      "description": "Declares what the projection dropped. truncated is true if and only if at least one omitted count is non-zero or full_result_omitted is set. Silent truncation is a defect: a caller that cannot see what was omitted cannot tell a short answer from a complete one.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "truncated": {
+          "type": "boolean"
+        },
+        "drivers_omitted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "withheld_drivers_omitted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cohort_members_omitted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "facts_omitted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "candidates_omitted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evidence_refs_omitted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "full_result_omitted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "truncated",
+        "drivers_omitted",
+        "withheld_drivers_omitted",
+        "cohort_members_omitted",
+        "facts_omitted",
+        "candidates_omitted",
+        "evidence_refs_omitted",
+        "full_result_omitted"
+      ]
+    }
+  }
+}

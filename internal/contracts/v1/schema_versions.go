@@ -23,6 +23,7 @@ var AllSchemaVersions = []string{
 	ErrorSchema,
 	ContextFabricInvestigationRequestSchema,
 	ContextFabricInvestigationResultSchema,
+	ContextFabricAnswerProjectionSchema,
 	ContextFabricProjectionBatchSchema,
 	ContextFabricOrgModelConfigSchema,
 	ContextFabricOrgModelConfigWriteRequestSchema,
