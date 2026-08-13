@@ -439,7 +439,7 @@ func validEpistemicStatus(value ContextFabricEpistemicStatus) bool {
 
 func validSourceState(value ContextFabricSourceState) bool {
 	switch value {
-	case ContextFabricSourceAvailable, ContextFabricSourceStale, ContextFabricSourceUnavailable, ContextFabricSourceUnconfigured, ContextFabricSourceUnauthorized, ContextFabricSourceNoData, ContextFabricSourceTruncated, ContextFabricSourceConflicted, ContextFabricSourceNotApplicable:
+	case ContextFabricSourceAvailable, ContextFabricSourceStale, ContextFabricSourceUnavailable, ContextFabricSourceUnconfigured, ContextFabricSourceUnauthorized, ContextFabricSourceNoData, ContextFabricSourceTruncated, ContextFabricSourceConflicted, ContextFabricSourceNotApplicable, ContextFabricSourcePruned:
 		return true
 	default:
 		return false

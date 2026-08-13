@@ -1038,7 +1038,8 @@
             "no_data",
             "truncated",
             "conflicted",
-            "not_applicable"
+            "not_applicable",
+            "pruned"
           ]
         },
         "observed_at": {
@@ -1085,7 +1086,8 @@
                   "no_data",
                   "truncated",
                   "conflicted",
-                  "not_applicable"
+                  "not_applicable",
+                  "pruned"
                 ]
               },
               "observed_at": {

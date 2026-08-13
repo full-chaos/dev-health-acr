@@ -112,6 +112,7 @@ const (
 	SourceTruncated     = contractsv1.ContextFabricSourceTruncated
 	SourceConflicted    = contractsv1.ContextFabricSourceConflicted
 	SourceNotApplicable = contractsv1.ContextFabricSourceNotApplicable
+	SourcePruned        = contractsv1.ContextFabricSourcePruned
 )
 
 type ConversationRole = contractsv1.ContextFabricConversationRole
