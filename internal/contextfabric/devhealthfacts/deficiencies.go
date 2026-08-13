@@ -18,6 +18,21 @@ import (
 // (§19.6.3). A team can have several distinct fired rules at once, so this
 // provider returns zero or more CanonicalFacts per requested team, one per
 // (rule_id, most recent window).
+//
+// fired must be evaluated AFTER picking the truly latest row per
+// (team_id, rule_id), never before: live data shows CHAOS/saturation's most
+// recent window (2026-08-12) is fired=false, while an OLDER window
+// (2026-08-08) is fired=true (Codex finding F1, confirmed against real
+// ClickHouse data). Filtering fired=1 in the same WHERE that feeds
+// row_number() windows only the fired rows against each other, so the
+// "latest" row becomes the latest FIRED row -- silently resurrecting a
+// deficiency Ops already cleared. The fix: window over every row for the
+// key (row_number() ORDER BY window_end DESC, computed_at DESC, no fired
+// predicate), then keep rn=1 rows only if THAT row is fired=1.
+// recommendations_daily is ReplacingMergeTree(computed_at) sorted on
+// (org_id, team_id, rule_id, window_end); FINAL collapses a same-window
+// recompute, and computed_at DESC still breaks the tie if FINAL's merge
+// has not landed yet.
 type OperationalDeficienciesProvider struct{ facts clickhouseFacts }
 
 func newOperationalDeficienciesProvider(client contextpacket.ClickHouseQueryClient) *OperationalDeficienciesProvider {
@@ -38,17 +53,19 @@ func (p *OperationalDeficienciesProvider) ReadFacts(ctx context.Context, princip
 	}
 	ids, bySubject := subjectIndex(query.Subjects, teamPrefix)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	// fired = 1 restricts to rows Ops' own rule engine already decided are a
-	// live deficiency finding; row_number() picks the most recently
-	// evaluated window for each (team, rule) pair.
+	// row_number() windows over EVERY row for (team_id, rule_id) -- fired
+	// is never part of that WHERE -- so rn=1 is always the truly latest
+	// evaluation. fired=1 is then applied to that single winning row only,
+	// in the outer WHERE, so a rule Ops has since cleared never resurfaces
+	// just because it fired at some earlier point (F1).
 	statement := withRowLimit(`SELECT team_id, rule_id, rule_version, severity, title, rationale, success_criterion, toString(window_start), toString(window_end)
 FROM (
-	SELECT team_id, rule_id, rule_version, severity, title, rationale, success_criterion, window_start, window_end,
-		row_number() OVER (PARTITION BY team_id, rule_id ORDER BY window_end DESC) AS rn
-	FROM recommendations_daily
-	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)} AND fired = 1
+	SELECT team_id, rule_id, rule_version, severity, title, rationale, success_criterion, window_start, window_end, fired,
+		row_number() OVER (PARTITION BY team_id, rule_id ORDER BY window_end DESC, computed_at DESC) AS rn
+	FROM recommendations_daily FINAL
+	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}
 )
-WHERE rn = 1`)
+WHERE rn = 1 AND fired = 1`)
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++

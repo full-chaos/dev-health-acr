@@ -21,6 +21,14 @@ import (
 // (scope='repo'/'team'), so this provider supports both subject kinds, the
 // same dual-block shape identity.go's IdentityProvider uses for repository +
 // work item.
+//
+// Live data shows up to 86 rows sharing the IDENTICAL computed_at for one
+// (scope, scope_id) key (Codex finding F2, confirmed against real
+// ClickHouse data) -- an independent argMax(severity, computed_at) and
+// argMax(compounding_risk, computed_at) in the same query have no guarantee
+// of resolving that tie to the same underlying row, so this provider uses
+// row_number() OVER (... ORDER BY day DESC, computed_at DESC), picking rn=1
+// and scanning every field off that ONE row.
 type HealthProvider struct{ facts clickhouseFacts }
 
 func newHealthProvider(client contextpacket.ClickHouseQueryClient) *HealthProvider {
@@ -69,14 +77,14 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 // inline into the statement the same way withRowLimit's maxFactRowsPerQuery
 // is.
 func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids []string, bySubject map[string]contextfabric.SubjectRef, evidenceEntityType string, facts *[]contextfabric.CanonicalFact) (int, error) {
-	statement := withRowLimit(`SELECT c.scope_id,
-	toString(argMax(c.severity, c.computed_at)),
-	toUInt8(argMax(isNotNull(c.compounding_risk), c.computed_at)),
-	toFloat64(argMax(ifNull(c.compounding_risk, 0), c.computed_at)),
-	toString(max(c.computed_at))
-FROM compounding_risk_daily AS c
-WHERE c.org_id = {org_id:String} AND c.scope = '` + scope + `' AND c.scope_id IN {ids:Array(String)}
-GROUP BY c.scope_id`)
+	statement := withRowLimit(`SELECT scope_id, toString(severity), toUInt8(isNotNull(compounding_risk)), toFloat64(ifNull(compounding_risk, 0)), toString(computed_at)
+FROM (
+	SELECT scope_id, severity, compounding_risk, computed_at,
+		row_number() OVER (PARTITION BY scope_id ORDER BY day DESC, computed_at DESC) AS rn
+	FROM compounding_risk_daily
+	WHERE org_id = {org_id:String} AND scope = '` + scope + `' AND scope_id IN {ids:Array(String)}
+)
+WHERE rn = 1`)
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++

@@ -24,6 +24,15 @@ const teamPrefix = "team:"
 // at all -- every row is already team-aggregated -- so this satisfies the
 // "no person-level workload output" constraint structurally, not by
 // filtering.
+//
+// A team can be forecast under several distinct work_scope_id values at
+// once -- live data shows one team with 12 concurrent scopes, computed
+// within the same batch, with wildly different throughput/percentile
+// values (Codex finding F3, confirmed against real ClickHouse data).
+// Grouping by team_id alone silently keeps one scope's forecast and
+// discards the other 11 with no record they existed. This provider instead
+// partitions by (team_id, work_scope_id) and emits one CanonicalFact per
+// scope, naming the scope in the payload, up to the row cap.
 type WorkloadProvider struct{ facts clickhouseFacts }
 
 func newWorkloadProvider(client contextpacket.ClickHouseQueryClient) *WorkloadProvider {
@@ -44,31 +53,31 @@ func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	}
 	ids, bySubject := subjectIndex(query.Subjects, teamPrefix)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	// argMax(..., computed_at) picks each team's single most recently
-	// computed forecast, across every work_scope_id that team has been
-	// forecast for -- never an ACR-side re-simulation.
-	statement := withRowLimit(`SELECT ifNull(c.team_id, ''),
-	toFloat64(argMax(c.throughput_mean, c.computed_at)),
-	toFloat64(argMax(c.throughput_stddev, c.computed_at)),
-	toUInt8(argMax(isNotNull(c.p50_days), c.computed_at)),
-	toInt64(argMax(ifNull(c.p50_days, 0), c.computed_at)),
-	toUInt8(argMax(c.insufficient_history, c.computed_at)),
-	toUInt8(argMax(c.high_variance, c.computed_at)),
-	toInt64(argMax(c.backlog_size, c.computed_at)),
-	toString(max(c.computed_at))
-FROM capacity_forecasts AS c
-WHERE c.org_id = {org_id:String} AND c.team_id IN {ids:Array(String)}
-GROUP BY c.team_id`)
+	// row_number() OVER (PARTITION BY team_id, work_scope_id ORDER BY
+	// computed_at DESC) picks the single most recently computed forecast
+	// for EACH scope a team has been forecast under, never collapsing
+	// distinct scopes into one another. FINAL is defensive: capacity_forecasts
+	// is ReplacingMergeTree(computed_at) sorted on (org_id, forecast_id), so
+	// FINAL only collapses a re-emitted identical forecast_id, not distinct
+	// scopes -- the row_number() partition is what actually resolves F3.
+	statement := withRowLimit(`SELECT team_id, ifNull(work_scope_id, ''), throughput_mean, throughput_stddev, toUInt8(isNotNull(p50_days)), toInt64(ifNull(p50_days, 0)), insufficient_history, high_variance, toInt64(backlog_size), toString(computed_at)
+FROM (
+	SELECT ifNull(team_id, '') AS team_id, work_scope_id, throughput_mean, throughput_stddev, p50_days, insufficient_history, high_variance, backlog_size, computed_at,
+		row_number() OVER (PARTITION BY team_id, work_scope_id ORDER BY computed_at DESC) AS rn
+	FROM capacity_forecasts FINAL
+	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}
+)
+WHERE rn = 1`)
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
-		var teamID, computedAt string
+		var teamID, workScopeID, computedAt string
 		var throughputMean, throughputStddev float64
 		var hasP50 uint8
 		var p50Days int64
 		var insufficientHistory, highVariance uint8
 		var backlogSize int64
-		if err := row.Scan(&teamID, &throughputMean, &throughputStddev, &hasP50, &p50Days, &insufficientHistory, &highVariance, &backlogSize, &computedAt); err != nil {
+		if err := row.Scan(&teamID, &workScopeID, &throughputMean, &throughputStddev, &hasP50, &p50Days, &insufficientHistory, &highVariance, &backlogSize, &computedAt); err != nil {
 			return err
 		}
 		subject, ok := bySubject[teamID]
@@ -88,6 +97,9 @@ GROUP BY c.team_id`)
 			"high_variance":        contextfabric.BooleanFactValue(highVariance != 0),
 			"backlog_size":         contextfabric.IntegerFactValue(backlogSize),
 			"computed_at":          contextfabric.StringFactValue(computedAt),
+		}
+		if workScopeID != "" {
+			fields["work_scope_id"] = contextfabric.StringFactValue(workScopeID)
 		}
 		if hasP50 != 0 {
 			fields["forecast_p50_days"] = contextfabric.IntegerFactValue(p50Days)

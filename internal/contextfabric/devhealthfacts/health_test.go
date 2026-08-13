@@ -45,7 +45,7 @@ func TestHealthProviderRepoScopeHappyPath(t *testing.T) {
 	if fact.Fields["compounding_risk"].Number == nil || *fact.Fields["compounding_risk"].Number != 0.62 {
 		t.Fatalf("fields = %#v", fact.Fields)
 	}
-	if !strings.Contains(client.queries[len(client.queries)-1].statement, "c.scope = 'repo'") {
+	if !strings.Contains(client.queries[len(client.queries)-1].statement, "scope = 'repo'") {
 		t.Fatalf("statement = %q, want scope='repo'", client.queries[len(client.queries)-1].statement)
 	}
 }
@@ -64,7 +64,7 @@ func TestHealthProviderTeamScopeHappyPath(t *testing.T) {
 	if len(result.Facts) != 1 {
 		t.Fatalf("facts = %#v, want 1", result.Facts)
 	}
-	if !strings.Contains(client.queries[len(client.queries)-1].statement, "c.scope = 'team'") {
+	if !strings.Contains(client.queries[len(client.queries)-1].statement, "scope = 'team'") {
 		t.Fatalf("statement = %q, want scope='team'", client.queries[len(client.queries)-1].statement)
 	}
 }
@@ -136,6 +136,24 @@ func TestHealthProviderScopedToOrgAndRequestedSubjects(t *testing.T) {
 		t.Fatalf("ids binding = %#v, want exactly the requested subject", got)
 	}
 	assertQueryScopedToOrgAndSubjects(t, client.queries[len(client.queries)-1].statement)
+}
+
+// TestHealthProviderRowForUnrequestedRepositoryNeverAppears is the F5
+// result-content guard.
+func TestHealthProviderRowForUnrequestedRepositoryNeverAppears(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM compounding_risk_daily", rows: [][]any{healthRow("repo-other-org")}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 0 {
+		t.Fatalf("facts = %#v, want empty -- the returned row belongs to an unrequested repository", result.Facts)
+	}
 }
 
 const maxHealthRowsPerQueryForTest = 200

@@ -12,13 +12,13 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-func workloadRow(teamID string) []any {
-	return []any{teamID, float64(3.2), float64(0.8), uint8(1), int64(14), uint8(0), uint8(1), int64(120), "2026-07-27 04:00:00"}
+func workloadRow(teamID, workScopeID string) []any {
+	return []any{teamID, workScopeID, float64(3.2), float64(0.8), uint8(1), int64(14), uint8(0), uint8(1), int64(120), "2026-07-27 04:00:00"}
 }
 
 func TestWorkloadProviderHappyPath(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM capacity_forecasts", rows: [][]any{workloadRow("CHAOS")}}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM capacity_forecasts", rows: [][]any{workloadRow("CHAOS", "scope-a")}}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactWorkload)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -40,11 +40,45 @@ func TestWorkloadProviderHappyPath(t *testing.T) {
 	if fact.Fields["forecast_p50_days"].Integer == nil || *fact.Fields["forecast_p50_days"].Integer != 14 {
 		t.Fatalf("fields = %#v", fact.Fields)
 	}
+	if fact.Fields["work_scope_id"].String == nil || *fact.Fields["work_scope_id"].String != "scope-a" {
+		t.Fatalf("fields = %#v, want work_scope_id=scope-a named in the payload (F3)", fact.Fields)
+	}
 	// Semantic-honesty guard: a workload fact must state, in its own
 	// structure, that it is a capacity forecast, never a current-load
 	// reading (team-lead review requirement).
 	if fact.Fields["basis"].String == nil || *fact.Fields["basis"].String != "capacity_forecast" {
 		t.Fatalf("fields = %#v, want basis=capacity_forecast", fact.Fields)
+	}
+}
+
+// TestWorkloadProviderMultipleWorkScopesProduceMultipleFacts is the F5
+// regression test for Codex finding F3: a team forecast under several
+// distinct work_scope_id values must produce one fact PER scope, never a
+// silent collapse into a single, arbitrarily-chosen scope.
+func TestWorkloadProviderMultipleWorkScopesProduceMultipleFacts(t *testing.T) {
+	t.Parallel()
+	rowB := workloadRow("CHAOS", "scope-b")
+	rowB[2] = float64(0.01) // a very different throughput_mean, proving it's a distinct row, not a repeat
+	client := &fakeClient{tables: []fakeTable{{match: "FROM capacity_forecasts", rows: [][]any{workloadRow("CHAOS", "scope-a"), rowB}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactWorkload)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactWorkload, Subjects: []contextfabric.SubjectRef{teamSubject("CHAOS")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 2 {
+		t.Fatalf("facts = %#v, want 2 -- one per work_scope_id, neither discarded", result.Facts)
+	}
+	scopes := map[string]bool{}
+	for _, fact := range result.Facts {
+		if fact.Fields["work_scope_id"].String != nil {
+			scopes[*fact.Fields["work_scope_id"].String] = true
+		}
+	}
+	if !scopes["scope-a"] || !scopes["scope-b"] {
+		t.Fatalf("scopes seen = %#v, want both scope-a and scope-b", scopes)
 	}
 }
 
@@ -85,7 +119,7 @@ func TestWorkloadProviderQueryErrorReturnsFactReadFailure(t *testing.T) {
 // person-shaped.
 func TestWorkloadProviderNoPersonLevelFields(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM capacity_forecasts", rows: [][]any{workloadRow("CHAOS")}}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM capacity_forecasts", rows: [][]any{workloadRow("CHAOS", "scope-a")}}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactWorkload)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -95,7 +129,7 @@ func TestWorkloadProviderNoPersonLevelFields(t *testing.T) {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
 	allowed := map[string]bool{
-		"basis": true, "throughput_mean": true, "throughput_stddev": true, "insufficient_history": true,
+		"basis": true, "work_scope_id": true, "throughput_mean": true, "throughput_stddev": true, "insufficient_history": true,
 		"high_variance": true, "backlog_size": true, "computed_at": true, "forecast_p50_days": true,
 	}
 	for _, fact := range result.Facts {
@@ -127,12 +161,30 @@ func TestWorkloadProviderScopedToOrgAndRequestedSubjects(t *testing.T) {
 	assertQueryScopedToOrgAndSubjects(t, client.queries[len(client.queries)-1].statement)
 }
 
+// TestWorkloadProviderRowForUnrequestedTeamNeverAppears is the F5
+// result-content guard.
+func TestWorkloadProviderRowForUnrequestedTeamNeverAppears(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM capacity_forecasts", rows: [][]any{workloadRow("other-team", "scope-a")}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactWorkload)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactWorkload, Subjects: []contextfabric.SubjectRef{teamSubject("CHAOS")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 0 {
+		t.Fatalf("facts = %#v, want empty -- the returned row belongs to an unrequested team", result.Facts)
+	}
+}
+
 const maxWorkloadRowsPerQueryForTest = 200
 
 func workloadRows(n int) [][]any {
 	rows := make([][]any, n)
 	for i := 0; i < n; i++ {
-		rows[i] = workloadRow("team-" + strconv.Itoa(i))
+		rows[i] = workloadRow("team-"+strconv.Itoa(i), "scope-"+strconv.Itoa(i))
 	}
 	return rows
 }

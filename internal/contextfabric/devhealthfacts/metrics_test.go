@@ -114,6 +114,32 @@ func TestMetricsProviderScopedToOrgAndRequestedSubjects(t *testing.T) {
 	assertQueryScopedToOrgAndSubjects(t, client.queries[len(client.queries)-1].statement)
 }
 
+// TestMetricsProviderRowForUnrequestedRepositoryNeverAppears is the F5
+// result-content guard: even though the fake client can return a row for
+// ANY repository (it doesn't execute the SQL's own org/id filters), the
+// provider itself must never surface a fact for a subject the caller did
+// not ask about.
+func TestMetricsProviderRowForUnrequestedRepositoryNeverAppears(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: [][]any{metricsRow("repo-other-org")}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	for _, fact := range result.Facts {
+		if fact.Subject.CanonicalID == "repository:repo-other-org" {
+			t.Fatalf("facts = %#v, want no fact for the unrequested repository", result.Facts)
+		}
+	}
+	if len(result.Facts) != 0 {
+		t.Fatalf("facts = %#v, want empty", result.Facts)
+	}
+}
+
 const maxMetricsRowsPerQueryForTest = 200
 
 func metricsRows(n int) [][]any {

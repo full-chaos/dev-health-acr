@@ -108,6 +108,24 @@ func TestOperationalDeficienciesProviderScopedToOrgAndRequestedSubjects(t *testi
 	assertQueryScopedToOrgAndSubjects(t, client.queries[len(client.queries)-1].statement)
 }
 
+// TestOperationalDeficienciesProviderRowForUnrequestedTeamNeverAppears is
+// the F5 result-content guard.
+func TestOperationalDeficienciesProviderRowForUnrequestedTeamNeverAppears(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM recommendations_daily", rows: [][]any{deficiencyRow("other-team")}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactOperationalDeficiencies)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactOperationalDeficiencies, Subjects: []contextfabric.SubjectRef{teamSubject("CHAOS")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 0 {
+		t.Fatalf("facts = %#v, want empty -- the returned row belongs to an unrequested team", result.Facts)
+	}
+}
+
 const maxDeficiencyRowsPerQueryForTest = 200
 
 func deficiencyRows(n int) [][]any {

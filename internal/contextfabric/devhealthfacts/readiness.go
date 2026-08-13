@@ -18,6 +18,15 @@ import (
 // (§19.6.3). The ratio itself is read exactly as Ops computed it; this
 // provider never recomputes estimated_count/backlog_size into a ratio of
 // its own.
+//
+// estimate_coverage_metrics_daily's own sort key is
+// (org_id, day, provider, work_scope_id, team_id) -- two different source
+// providers (live data: gitlab, linear) can report against the same
+// work_scope_id string, so provider is part of this provider's partition
+// key too (Codex finding F4), not folded away. The table is
+// ReplacingMergeTree(computed_at): FINAL collapses an exact-key rerun, and
+// row_number() ORDER BY day DESC, computed_at DESC (not day alone) still
+// resolves the case where FINAL has not yet merged a same-day recompute.
 type ReadinessProvider struct{ facts clickhouseFacts }
 
 func newReadinessProvider(client contextpacket.ClickHouseQueryClient) *ReadinessProvider {
@@ -38,15 +47,17 @@ func (p *ReadinessProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	}
 	ids, bySubject := subjectIndex(query.Subjects, teamPrefix)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	// row_number() OVER (PARTITION BY team_id, work_scope_id ORDER BY day
-	// DESC) picks the single most recent already-computed row for each
-	// (team, work scope) pair a team can have several concurrent work
-	// scopes (e.g. sprints) tracked at once.
-	statement := withRowLimit(`SELECT team_id, work_scope_id, provider, toString(day), estimated_count, unestimated_count, backlog_size, toUInt8(isNotNull(ratio)), toFloat64(ifNull(ratio, 0))
+	// row_number() OVER (PARTITION BY team_id, work_scope_id, provider
+	// ORDER BY day DESC, computed_at DESC) picks the single most recent
+	// already-computed row for each (team, work scope, provider) triple --
+	// a team can have several concurrent work scopes (e.g. sprints)
+	// tracked at once, and different source providers can share a
+	// work_scope_id string.
+	statement := withRowLimit(`SELECT team_id, work_scope_id, provider, toString(day), toInt64(estimated_count), toInt64(unestimated_count), toInt64(backlog_size), toUInt8(isNotNull(ratio)), toFloat64(ifNull(ratio, 0))
 FROM (
 	SELECT ifNull(team_id, '') AS team_id, work_scope_id, provider, day, estimated_count, unestimated_count, backlog_size, ratio,
-		row_number() OVER (PARTITION BY team_id, work_scope_id ORDER BY day DESC) AS rn
-	FROM estimate_coverage_metrics_daily
+		row_number() OVER (PARTITION BY team_id, work_scope_id, provider ORDER BY day DESC, computed_at DESC) AS rn
+	FROM estimate_coverage_metrics_daily FINAL
 	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}
 )
 WHERE rn = 1`)

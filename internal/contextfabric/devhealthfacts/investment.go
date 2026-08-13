@@ -18,6 +18,14 @@ import (
 // semantics). One team can have several (investment_area, project_stream)
 // rows, so this provider -- like blockers.go's BlockersProvider -- returns
 // zero or more CanonicalFacts per requested subject, not exactly one.
+//
+// investment_metrics_daily is a plain, append-only MergeTree: live data
+// shows up to 25 rows sharing one (team_id, investment_area, project_stream,
+// day) key (intraday reruns, Codex finding F4, confirmed against real
+// ClickHouse data). ORDER BY day DESC alone leaves that same-day tie
+// unresolved -- computed_at DESC breaks it deterministically, and because
+// row_number() (not per-field argMax) is used, the winning row is always one
+// whole row, never a stitched combination.
 type InvestmentProvider struct{ facts clickhouseFacts }
 
 func newInvestmentProvider(client contextpacket.ClickHouseQueryClient) *InvestmentProvider {
@@ -39,13 +47,14 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	ids, bySubject := subjectIndex(query.Subjects, teamPrefix)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// row_number() OVER (PARTITION BY team_id, investment_area,
-	// project_stream ORDER BY day DESC) picks the single most recent
-	// already-computed row for each (team, area, stream) triple -- a
-	// selection, never an aggregation, of Ops' own published rows.
-	statement := withRowLimit(`SELECT team_id, investment_area, project_stream, toString(day), delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours
+	// project_stream ORDER BY day DESC, computed_at DESC) picks the single
+	// most recent already-computed row for each (team, area, stream)
+	// triple -- a selection, never an aggregation, of Ops' own published
+	// rows. computed_at breaks same-day reruns deterministically (F4).
+	statement := withRowLimit(`SELECT team_id, investment_area, project_stream, toString(day), toInt64(delivery_units), toInt64(work_items_completed), toInt64(prs_merged), toInt64(churn_loc), cycle_p50_hours
 FROM (
 	SELECT team_id, investment_area, project_stream, day, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours,
-		row_number() OVER (PARTITION BY team_id, investment_area, project_stream ORDER BY day DESC) AS rn
+		row_number() OVER (PARTITION BY team_id, investment_area, project_stream ORDER BY day DESC, computed_at DESC) AS rn
 	FROM investment_metrics_daily
 	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}
 )

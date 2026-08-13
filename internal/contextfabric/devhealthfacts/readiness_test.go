@@ -114,6 +114,24 @@ func TestReadinessProviderScopedToOrgAndRequestedSubjects(t *testing.T) {
 	assertQueryScopedToOrgAndSubjects(t, client.queries[len(client.queries)-1].statement)
 }
 
+// TestReadinessProviderRowForUnrequestedTeamNeverAppears is the F5
+// result-content guard.
+func TestReadinessProviderRowForUnrequestedTeamNeverAppears(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM estimate_coverage_metrics_daily", rows: [][]any{readinessRow("other-team")}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReadiness)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactReadiness, Subjects: []contextfabric.SubjectRef{teamSubject("CHAOS")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 0 {
+		t.Fatalf("facts = %#v, want empty -- the returned row belongs to an unrequested team", result.Facts)
+	}
+}
+
 const maxReadinessRowsPerQueryForTest = 200
 
 func readinessRows(n int) [][]any {

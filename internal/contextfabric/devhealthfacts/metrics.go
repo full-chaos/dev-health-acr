@@ -14,10 +14,18 @@ const repositoryPrefix = "repository:"
 // repo_metrics_daily -- the same nightly, precomputed-by-Ops delivery-metrics
 // rollup devhealthsource would read if it needed repository metrics. This
 // package never recomputes a metric: every column read here is already a
-// finished, precomputed value written by Dev Health Ops; the query only ever
-// selects the most recent day's row for each requested repository
-// (argMax(..., day) -- CHAOS-3780's "current" time axis is "the latest known
-// value", never a derived one).
+// finished, precomputed value written by Dev Health Ops.
+//
+// repo_metrics_daily is a plain, append-only MergeTree: live data shows up
+// to 85 rows sharing one (repo_id, day) key (intraday reruns), and those
+// reruns carry genuinely different values, not no-op repeats (Codex finding
+// F2, confirmed against real ClickHouse data). row_number() OVER (PARTITION
+// BY repo_id ORDER BY day DESC, computed_at DESC), picking rn=1 and scanning
+// every field off that ONE row, is required here -- GROUP BY + independent
+// per-field argMax(field, day) calls have no guarantee of breaking a day tie
+// the same way across fields, so on a day with several reruns they can
+// stitch a fact together from different rows, fabricating a combination
+// that was never actually true at any single point in time.
 type MetricsProvider struct{ facts clickhouseFacts }
 
 func newMetricsProvider(client contextpacket.ClickHouseQueryClient) *MetricsProvider {
@@ -38,22 +46,14 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	}
 	ids, bySubject := subjectIndex(query.Subjects, repositoryPrefix)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	// GROUP BY + argMax(..., day) picks the single most recent day's already-
-	// computed row for each repository, never an ACR-side aggregate of the
-	// underlying facts (H6: "current" means "latest known", not "derived").
-	statement := withRowLimit(`SELECT toString(m.repo_id),
-	toString(max(m.day)),
-	toInt64(argMax(m.commits_count, m.day)),
-	toInt64(argMax(m.prs_merged, m.day)),
-	toFloat64(argMax(m.median_pr_cycle_hours, m.day)),
-	toFloat64(argMax(m.change_failure_rate, m.day)),
-	toUInt8(argMax(isNotNull(m.mttr_hours), m.day)),
-	toFloat64(argMax(ifNull(m.mttr_hours, 0), m.day)),
-	toInt64(argMax(m.bus_factor, m.day)),
-	toFloat64(argMax(m.code_ownership_gini, m.day))
-FROM repo_metrics_daily AS m
-WHERE m.org_id = {org_id:String} AND toString(m.repo_id) IN {ids:Array(String)}
-GROUP BY m.repo_id`)
+	statement := withRowLimit(`SELECT toString(repo_id), toString(day), toInt64(commits_count), toInt64(prs_merged), toFloat64(median_pr_cycle_hours), toFloat64(change_failure_rate), toUInt8(isNotNull(mttr_hours)), toFloat64(ifNull(mttr_hours, 0)), toInt64(bus_factor), toFloat64(code_ownership_gini)
+FROM (
+	SELECT repo_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini,
+		row_number() OVER (PARTITION BY repo_id ORDER BY day DESC, computed_at DESC) AS rn
+	FROM repo_metrics_daily
+	WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}
+)
+WHERE rn = 1`)
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
