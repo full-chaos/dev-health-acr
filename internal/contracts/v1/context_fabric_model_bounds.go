@@ -57,32 +57,50 @@ package v1
 // on the LENGTH violation, unreported, exactly like the path_id/
 // claimed_fact_id case R2-2 fixed. All four are now registered below.
 //
-// The only exclusions that remain, and why NEITHER can be contradicted by
-// validation order the way the four above were:
+// CHAOS-3784 round-4: R3-1's fix (registering the four fields above) was
+// necessary but not sufficient -- DiagnoseContextFabric*Bound still SCANNED
+// each struct independently for any registrable violation, so an EARLIER
+// non-registrable rejection (an invalid enum, a too-short value, a missing
+// required field, a grounding/claim-binding failure) sitting before a
+// LATER genuine bound violation in Validate()/ValidateAgainst()'s own
+// clause order could still be masked by that later, unrelated bound --
+// reporting a name for something the validator never actually rejected
+// on. The fix is structural, not another case-by-case exclusion:
+// DiagnoseContextFabric*Bound (context_fabric_bound_diagnosis.go) and
+// internal/contextfabric's diagnoseSynthesisDraftBound are now literal,
+// clause-by-clause MIRRORS of their Validate()/ValidateAgainst()
+// counterparts' own left-to-right, short-circuit order -- including every
+// non-bound clause -- and return at the FIRST clause that fails, naming a
+// bound only when that first failure is one.
+//
+// This makes the exclusion list below an ORDER-PROOF guarantee, not an
+// assumption about which check happens to run first: a rejection whose
+// first-failing clause is anything below (an enum, a min-side length, an
+// uniqueness/duplicate check, a grounding/claim-binding rule, a missing
+// required field) yields NO violated_bound BY CONSTRUCTION -- the mirror
+// stops there and never reaches a later clause, registered or not -- not
+// because each case was individually reasoned about and found safe.
 //   - ContextFabricFactRequirement.Subjects: the model has no wire field to
 //     populate it through at all (factRequirementOutput in
 //     genkitruntime/runtime.go carries only kind/parameters) -- toDomain()
 //     never assigns it, so it is always nil regardless of what the model
-//     returns. Not an ordering argument; the field is structurally
-//     unreachable from model output, full stop.
+//     returns. Structurally unreachable from model output, full stop --
+//     the one exclusion that doesn't depend on clause order at all.
 //   - Every MINIMUM-side length/count bound (ContextFabricModelMintedIDMinLength,
 //     ContextFabricDriverAffectedSubjectsMinCount, SubjectRef.CanonicalID/
 //     Label's min of 1, evidence_ref_id's min of 8): this registry's
 //     one-entry-per-field convention (see e.g. driver_id/finding_id/
 //     claim_id sharing a single "max_length" entry for their [8,256] shape)
-//     names only the MAXIMUM side. A too-SHORT value is still rejected by
-//     Validate(), just not attributed to a specific registry entry --
-//     DiagnoseContextFabric*Bound (context_fabric_bound_diagnosis.go)
-//     deliberately never reports the "max_length" name for a too-short
-//     value (CHAOS-3784 round-1 F3), so there is no name to misreport and
-//     no ordering question: a min violation simply has ok=false, same as
-//     any other business-rule rejection.
+//     names only the MAXIMUM side (CHAOS-3784 round-1 F3), so the mirror's
+//     length-clause helper reports no name for a min-side failure -- there
+//     is nothing to misattribute.
 //   - Enum/range/logical checks (Standing, Category, Derivation,
 //     EpistemicStatus, Confidence's [0,1] range, ContextFabricTimeContext's
 //     axis-shaped timestamp rules, and every "requires a claim"/"requires a
-//     qualification"/uniqueness rule): none of these are length or count
-//     bounds, the sole scope of this registry per the file doc comment
-//     above.
+//     qualification"/uniqueness/grounding/claim-binding rule): none of
+//     these are length or count bounds, the sole scope of this registry
+//     per the file doc comment above -- the mirror still evaluates them,
+//     in Validate()'s own order, purely to know WHERE to stop.
 const (
 	// Interpretation (ContextFabricInterpretedQuestion, ContextFabricFactRequirement).
 	ContextFabricRequestedJudgmentMaxLength             = 256

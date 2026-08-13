@@ -231,8 +231,17 @@ func TestDiagnoseContextFabricDriverJudgmentBoundDoesNotFlagBusinessRules(t *tes
 	}
 }
 
+// validDiagnosisFinding is a STRUCTURALLY valid base (CHAOS-3784 round-4):
+// EvidenceRefIDs must be non-empty for a finding (boundedEvidenceRefs is
+// called with allowEmpty=false), so leaving it nil -- as earlier rounds'
+// fixture did, before diagnosis mirrored Validate()'s full clause order --
+// would itself be a (non-diagnosable) rejection reason that masks
+// whatever LATER field a test case means to isolate.
 func validDiagnosisFinding() ContextFabricFinding {
-	return ContextFabricFinding{FindingID: "finding_12345678", Kind: "readiness_gap", Summary: "Summary"}
+	return ContextFabricFinding{
+		FindingID: "finding_12345678", Kind: "readiness_gap", Summary: "Summary",
+		EvidenceRefIDs: []string{"evidence_00000001"},
+	}
 }
 
 func findingDiagnosisCases() []diagnosisCase[ContextFabricFinding] {
@@ -309,8 +318,16 @@ func TestDiagnoseContextFabricFindingBound(t *testing.T) {
 	}
 }
 
+// validDiagnosisClaimedFact is a STRUCTURALLY valid base (CHAOS-3784
+// round-4): Subject must itself be valid (ContextFabricSubjectRef's zero
+// value has an empty, non-enum Kind), or a test case that only mutates
+// Value would be masked by Subject's own (earlier-checked, non-diagnosable)
+// rejection before Value is ever reached.
 func validDiagnosisClaimedFact() ContextFabricClaimedFact {
-	return ContextFabricClaimedFact{ClaimID: "claim_12345678", Kind: "status", Field: "release_ready"}
+	return ContextFabricClaimedFact{
+		ClaimID: "claim_12345678", Kind: "status", Field: "release_ready",
+		Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_1", Label: "Project"},
+	}
 }
 
 func claimedFactDiagnosisCases() []diagnosisCase[ContextFabricClaimedFact] {
@@ -435,7 +452,7 @@ func TestContextFabricModelFacingBoundRegistryDiagnosisCoverage(t *testing.T) {
 // TestDiagnoseModelMintedIDBoundsDoNotFlagTooShortValues is the CHAOS-3784
 // round-2 F3 regression: driver_id/finding_id/claim_id share one registry
 // entry named "max_length" for their [8,256] shape -- there is no separate
-// "min_length" entry (see runeLongerThan's doc comment) -- so a too-SHORT
+// "min_length" entry (see diagnoseLengthBound's doc comment) -- so a too-SHORT
 // value must not be misreported under the "max_length" name. Validate()
 // still rejects it (via stringLengthBetween's two-sided check); Diagnose
 // just correctly declines to attribute that specific rejection to a
@@ -548,5 +565,55 @@ func TestDiagnoseContextFabricDriverJudgmentBoundMatchesValidateStatementOrder(t
 	}
 	if bound != "synthesis.driver.evidence_ref_ids.item_max_length" {
 		t.Fatalf("bound = %q, want synthesis.driver.evidence_ref_ids.item_max_length (the violation Validate() actually rejected on, not claimed_fact_ids')", bound)
+	}
+}
+
+// TestDiagnoseContextFabricInterpretedQuestionBoundStopsAtFirstFailingClauseNotFirstDiagnosableOne
+// is the CHAOS-3784 round-4 regression (codex's exact scenario): an
+// EARLIER non-diagnosable clause (RequestedJudgment empty -- the min side,
+// checked before subject_terms in Validate()) combined with a LATER
+// registered-bound violation (an overlong subject term) must report NO
+// violated_bound. Validate() rejects on the empty judgment and never even
+// evaluates subject_terms (Go's || short-circuits), so naming that bound
+// would be actively WRONG, not merely an incomplete-but-safe omission.
+func TestDiagnoseContextFabricInterpretedQuestionBoundStopsAtFirstFailingClauseNotFirstDiagnosableOne(t *testing.T) {
+	q := validDiagnosisInterpretedQuestion()
+	q.RequestedJudgment = ""
+	q.SubjectTerms = []string{strings.Repeat("a", ContextFabricSubjectOrComparisonTermMaxLength+1)}
+	if err := q.Validate(); err == nil {
+		t.Fatal("fixture question.Validate() = nil, want an error")
+	}
+	if bound, ok := DiagnoseContextFabricInterpretedQuestionBound(q); ok {
+		t.Fatalf("DiagnoseContextFabricInterpretedQuestionBound() = (%q, true), want ok=false: Validate() rejects on the empty requested_judgment, never reaching subject_terms", bound)
+	}
+}
+
+// TestDiagnoseContextFabricInterpretedQuestionBoundReportsFirstFailingClauseWhenItIsABound
+// is the positive control for the regression above: when the FIRST
+// failing clause genuinely is a registered bound, it must still be
+// reported.
+func TestDiagnoseContextFabricInterpretedQuestionBoundReportsFirstFailingClauseWhenItIsABound(t *testing.T) {
+	q := validDiagnosisInterpretedQuestion()
+	q.RequestedJudgment = strings.Repeat("a", ContextFabricRequestedJudgmentMaxLength+1)
+	bound, ok := DiagnoseContextFabricInterpretedQuestionBound(q)
+	if !ok || bound != "interpretation.requested_judgment.max_length" {
+		t.Fatalf("bound = %q, ok = %v, want interpretation.requested_judgment.max_length/true", bound, ok)
+	}
+}
+
+// TestDiagnoseContextFabricInterpretedQuestionBoundReportsEarlierBoundOverLaterBusinessRule
+// is the mixed-order control: a registered bound fails FIRST, and a
+// business rule would ALSO independently fail LATER -- the earlier bound
+// must still win, exactly as Validate() would reject on it first.
+func TestDiagnoseContextFabricInterpretedQuestionBoundReportsEarlierBoundOverLaterBusinessRule(t *testing.T) {
+	q := validDiagnosisInterpretedQuestion()
+	q.RequestedJudgment = strings.Repeat("a", ContextFabricRequestedJudgmentMaxLength+1)
+	q.ClarificationNeeded = true // clarification_needed requires a non-empty reason -- a LATER, non-bound statement
+	if err := q.Validate(); err == nil {
+		t.Fatal("fixture question.Validate() = nil, want an error")
+	}
+	bound, ok := DiagnoseContextFabricInterpretedQuestionBound(q)
+	if !ok || bound != "interpretation.requested_judgment.max_length" {
+		t.Fatalf("bound = %q, ok = %v, want interpretation.requested_judgment.max_length/true (the earlier bound, not the later business rule)", bound, ok)
 	}
 }

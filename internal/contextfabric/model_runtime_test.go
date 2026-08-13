@@ -1086,6 +1086,70 @@ func TestErrInterpretationRejectedAndErrSynthesisRejectedAreDistinctFromEachOthe
 	}
 }
 
+// TestDiagnoseSynthesisDraftBoundStopsAtFirstFailingStatementNotFirstDiagnosableOne
+// is the CHAOS-3784 round-4 regression (codex's exact scenario): an
+// invalid status -- checked FIRST in ValidateAgainst, no bound -- combined
+// with a LATER genuine bound violation (an overlong driver title) must
+// report NO violated_bound. ValidateAgainst rejects on the invalid status
+// and never even reaches the Drivers loop, so naming the title bound would
+// be actively WRONG.
+func TestDiagnoseSynthesisDraftBoundStopsAtFirstFailingStatementNotFirstDiagnosableOne(t *testing.T) {
+	t.Parallel()
+	input := validSynthesisInputFixture()
+	draft := validSynthesisDraftFixture(input)
+	draft.Status = "not_a_real_status"
+	draft.Drivers[0].Title = strings.Repeat("a", contractsv1.ContextFabricDriverTitleMaxLength+1)
+	if err := draft.ValidateAgainst(input); err == nil || !strings.Contains(err.Error(), "status is invalid") {
+		t.Fatalf("draft.ValidateAgainst() error = %v, want the status rejection", err)
+	}
+	if bound, ok := diagnoseSynthesisDraftBound(draft, input); ok {
+		t.Fatalf("diagnoseSynthesisDraftBound() = (%q, true), want ok=false: ValidateAgainst rejects on the invalid status, never reaching Drivers", bound)
+	}
+}
+
+// TestDiagnoseSynthesisDraftBoundReportsFirstFailingStatementWhenItIsABound
+// is the positive control for the regression above: when the FIRST
+// failing statement genuinely is a registered bound, it must still be
+// reported.
+func TestDiagnoseSynthesisDraftBoundReportsFirstFailingStatementWhenItIsABound(t *testing.T) {
+	t.Parallel()
+	input := validSynthesisInputFixture()
+	draft := validSynthesisDraftFixture(input)
+	draft.Drivers[0].Title = strings.Repeat("a", contractsv1.ContextFabricDriverTitleMaxLength+1)
+	bound, ok := diagnoseSynthesisDraftBound(draft, input)
+	if !ok || bound != "synthesis.driver.title.max_length" {
+		t.Fatalf("bound = %q, ok = %v, want synthesis.driver.title.max_length/true", bound, ok)
+	}
+}
+
+// TestDiagnoseSynthesisDraftBoundReportsEarlierGroundingFailureOverLaterBound
+// is the mixed-order control: driver[0] is structurally VALID but fails
+// its grounding check (AffectedSubjects references a subject outside the
+// investigation, a business rule) -- checked before driver[1], which has
+// a genuine structural bound violation (an overlong title). ValidateAgainst
+// processes one driver's structural AND grounding checks fully before
+// moving to the next, so it rejects on driver[0], never reaching
+// driver[1]'s bound.
+func TestDiagnoseSynthesisDraftBoundReportsEarlierGroundingFailureOverLaterBound(t *testing.T) {
+	t.Parallel()
+	input := validSynthesisInputFixture()
+	draft := validSynthesisDraftFixture(input)
+	invented := SubjectRef{Kind: SubjectProject, CanonicalID: "project_invented_by_model", Label: "Invented Project"}
+	draft.Drivers[0].AffectedSubjects = []SubjectRef{invented}
+	secondDriver := draft.Drivers[0]
+	secondDriver.DriverID = "driver_second_00001"
+	secondDriver.AffectedSubjects = []SubjectRef{input.Graph.Resolution.Committed[0]}
+	secondDriver.Title = strings.Repeat("a", contractsv1.ContextFabricDriverTitleMaxLength+1)
+	draft.Drivers = append(draft.Drivers, secondDriver)
+
+	if err := draft.ValidateAgainst(input); err == nil || !strings.Contains(err.Error(), "outside the investigation") {
+		t.Fatalf("draft.ValidateAgainst() error = %v, want driver[0]'s grounding rejection", err)
+	}
+	if bound, ok := diagnoseSynthesisDraftBound(draft, input); ok {
+		t.Fatalf("diagnoseSynthesisDraftBound() = (%q, true), want ok=false: ValidateAgainst rejects on driver[0]'s grounding failure, never reaching driver[1]'s title bound", bound)
+	}
+}
+
 func TestComposeFieldConstantsMatchContractBounds(t *testing.T) {
 	t.Parallel()
 	if directJudgmentMaxLength != 8000 {

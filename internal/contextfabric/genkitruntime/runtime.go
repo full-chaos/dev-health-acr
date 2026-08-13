@@ -456,7 +456,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// RuntimeAnswerSynthesizer.Synthesize's defensive re-check), so it
 		// must carry the same ErrSynthesisRejected/ModelBoundViolation
 		// classification -- see the matching comment in InterpretQuestion.
-		return contextfabric.SynthesisDraft{}, receipt, contextfabric.ClassifySynthesisRejection(draft, err)
+		return contextfabric.SynthesisDraft{}, receipt, contextfabric.ClassifySynthesisRejection(draft, input, err)
 	}
 	outputBytes, _ := json.Marshal(output)
 	receipt.OutputDigest = contextfabric.DigestModelValue(outputBytes)

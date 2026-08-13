@@ -515,7 +515,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	if err == nil {
 		if validateErr := draft.ValidateAgainst(input); validateErr != nil {
 			receipt.Outcome = "invalid_output"
-			err = ClassifySynthesisRejection(draft, validateErr)
+			err = ClassifySynthesisRejection(draft, input, validateErr)
 		} else if receipt.Outcome == "pending_validation" {
 			receipt.Outcome = "success"
 		}
