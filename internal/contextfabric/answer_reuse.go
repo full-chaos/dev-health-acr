@@ -298,9 +298,9 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 	// exists here yet, which is also why Save keys on the clamped REQUEST
 	// context rather than the clamped interpreted one.
 	//
-	// Round-1 F6 made this symmetric: Save keys the same way, from the
-	// same wire context, rather than from the interpreted result. The two
-	// sides MUST agree. When Save keyed from the interpretation, an
+	// Save keys the same way, from the same clamped effective context,
+	// rather than from the interpreted result. The two sides MUST agree.
+	// When Save keyed from the interpretation, an
 	// interpreter reading a current-axis request as historical saved
 	// under a historical key that this lookup -- keyed "current" -- could
 	// never find, so that entire class of question reused nothing, and

@@ -150,13 +150,22 @@ type InvestigationResultStore interface {
 	// never re-derived here, and never smuggled through ctx: a caller who
 	// forgets one must fail to compile.
 	//
-	// The final string is the REUSE TIME-AXIS KEY (CHAOS-3781 round-1
-	// F6), computed from the caller's ORIGINAL WIRE request rather than
-	// from result.Interpretation. Both sides of reuse must key the same
-	// way: an interpreter that reads a current-axis request as historical
-	// would otherwise SAVE under a historical key that an identical
-	// future request -- keyed from its own wire context as "current" --
-	// could never look up, so such questions would never reuse at all.
+	// The final string is the REUSE TIME-AXIS KEY (CHAOS-3781), computed
+	// by Engine from the CLAMPED EFFECTIVE request context -- the same
+	// value, byte for byte, that AnswerReuseGate.FindReusable keys its
+	// lookup with. Never re-derived here from result.Interpretation.
+	//
+	// The invariant is SYMMETRY: both sides must derive the key from a
+	// value both sides can compute. The lookup runs before Interpret, so
+	// only the request context qualifies -- keying Save on the interpreted
+	// context would save under a key no identical request could produce,
+	// and that whole class of question would silently never reuse.
+	//
+	// EFFECTIVE, not the raw wire value: a request whose as-of is clamped
+	// means a different instant at different arrival times, so the wire
+	// value stops describing what the answer means. See
+	// contextfabric.TimeAxisKeyFor for the accepted cost.
+	//
 	// The key's job is REQUEST identity; interpretation identity is
 	// covered separately by condition 6's re-resolution against the
 	// stored Interpretation.

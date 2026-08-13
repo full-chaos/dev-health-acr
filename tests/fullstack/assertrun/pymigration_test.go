@@ -241,6 +241,9 @@ def upgrade(client):
 // later .sql ALTER -- all replayed together in lexical filename order, matching how
 // 027_add_org_id_to_sorting_keys.py actually sits between .sql migrations in the real ops
 // directory.
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration
+// parser under test, never a fixture any Context Fabric reader queries. The
+// table names are incidental; the test asserts how statements are replayed.
 func TestReplayMigrationsDir_PythonAndSQLInterleaved(t *testing.T) {
 	dir := t.TempDir()
 	writeMigration(t, dir, "000_create.sql", `
@@ -334,6 +337,9 @@ def upgrade(client):
 // TestApplyMigrationPython_LiteralNonShadowCreateAndDropTableReported is the CREATE/DROP TABLE
 // half of Codex finding 12: a literal, real (non-shadow) table name in a CREATE/DROP TABLE
 // statement is DDL this file does not interpret at all and must be reported, not ignored.
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration
+// parser under test, never a fixture any Context Fabric reader queries. The
+// table names are incidental; the test asserts how statements are replayed.
 func TestApplyMigrationPython_LiteralNonShadowCreateAndDropTableReported(t *testing.T) {
 	schema := newCHSchema()
 	source := `
@@ -364,6 +370,9 @@ def upgrade(client):
 // EXCHANGE TABLES), used by several real ops migrations, must not generate noise -- it is
 // column-set-neutral by construction and its DDL is only visible as runtime-templated
 // f-strings this file cannot statically resolve to a literal name anyway.
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration
+// parser under test, never a fixture any Context Fabric reader queries. The
+// table names are incidental; the test asserts how statements are replayed.
 func TestApplyMigrationPython_ShadowTableRebuildIsNotReported(t *testing.T) {
 	schema := newCHSchema()
 	schema.createTable("work_items")
@@ -386,6 +395,9 @@ def upgrade(client):
 // (module-level, as in migration 027/042, and function-level, as in migration 010)
 // describing the shadow-table algorithm in narrative form -- "DROP TABLE if concurrent
 // access fails", "4. CREATE TABLE table_new ..." -- must not be misread as real DDL.
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration
+// parser under test, never a fixture any Context Fabric reader queries. The
+// table names are incidental; the test asserts how statements are replayed.
 func TestApplyMigrationPython_DocstringProseNotMisreadAsDDL(t *testing.T) {
 	schema := newCHSchema()
 	schema.createTable("repos")

@@ -124,9 +124,9 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		return fmt.Errorf("pginvestigation: marshal investigation result: %w", err)
 	}
 	questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch := s.reuseColumnsFor(result, reuseSnapshot, reuseEpoch)
-	// CHAOS-3781 round-1 F6: the axis key is supplied by Engine from the
-	// original WIRE request, matching exactly what FindReusable will key
-	// with. It is NOT re-derived from result.Interpretation here -- an
+	// CHAOS-3781: the axis key is supplied by Engine from the CLAMPED
+	// EFFECTIVE request context, matching exactly what FindReusable will
+	// key with. It is NOT re-derived from result.Interpretation here -- an
 	// interpreter that reads a current-axis request as historical would
 	// then save under a key no identical request could ever look up, and
 	// that whole class of question would silently never reuse.

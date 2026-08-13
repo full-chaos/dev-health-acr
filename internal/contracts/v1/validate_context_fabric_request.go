@@ -125,6 +125,14 @@ func representableInstant(value time.Time) bool {
 	return !value.Before(minRepresentableInstant) && !value.After(maxRepresentableInstant)
 }
 
+// RepresentableInstant is representableInstant, exported so callers that
+// enforce the same guarantee at a different trust boundary share this
+// definition instead of restating the range (CHAOS-3781 round-5 R5-4:
+// contextfabric.resolveTimeContext bounds what an INTERPRETER returned,
+// which the request contract never sees). A second copy of the endpoints
+// is a second thing to get wrong.
+func RepresentableInstant(value time.Time) bool { return representableInstant(value) }
+
 func (t ContextFabricTimeContext) Validate() error {
 	// Every bound this axis requires must survive the epoch-nanosecond
 	// representation. An out-of-range instant is refused as a malformed

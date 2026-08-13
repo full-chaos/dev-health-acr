@@ -203,8 +203,31 @@ func validateProjectionTombstones(values []ContextFabricProjectionTombstone) err
 
 func validateTimeRange(observed, validFrom, validTo *time.Time) error {
 	for _, value := range []*time.Time{observed, validFrom, validTo} {
-		if value != nil && value.IsZero() {
+		if value == nil {
+			continue
+		}
+		if value.IsZero() {
 			return fmt.Errorf("temporal timestamp is invalid")
+		}
+		// CHAOS-3781 round-5 R5-3: the same representation-derived bound
+		// R4-4 applies to REQUEST timestamps, applied to PROJECTION
+		// ingest.
+		//
+		// Every temporal comparison downstream converts through
+		// UnixNano, which is undefined outside the epoch-nanosecond
+		// range: a year-9999 valid_to does not saturate, it WRAPS to a
+		// plausible instant. Ingested, that silently corrupts historical
+		// admission -- an element would be excluded or admitted at
+		// entirely the wrong times -- and the same wrap reorders
+		// tombstones against the rows they are meant to retire.
+		//
+		// An out-of-range producer timestamp is data corruption, not a
+		// caller mistake, so the batch is REJECTED rather than clamped.
+		// Clamping would write a value the source never asserted and
+		// leave no trace that anything was wrong.
+		if !representableInstant(*value) {
+			return fmt.Errorf("temporal timestamp is outside the representable range (%s..%s)",
+				minRepresentableInstant.Format("2006-01-02"), maxRepresentableInstant.Format("2006-01-02"))
 		}
 	}
 	if validFrom != nil && validTo != nil && validTo.Before(*validFrom) {

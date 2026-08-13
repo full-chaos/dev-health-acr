@@ -299,3 +299,51 @@ func TestR4_4_OrdinaryInstantsStillValidate(t *testing.T) {
 		}
 	}
 }
+
+// TestR5_3_ProjectionIngestRejectsUnrepresentableTimestamps is round-5
+// R5-3, red→green.
+//
+// R4-4 bounded REQUEST timestamps. Projection INGEST was still unbounded:
+// validateTimeRange rejected only zero and reversed windows, so a
+// year-9999 valid_to passed validation and then wrapped through UnixNano
+// on its way into the graph — corrupting historical admission for that
+// element, and reordering tombstones against the rows they retire.
+//
+// Rejected, never clamped: an out-of-range producer timestamp is data
+// corruption, and clamping would write a value the source never asserted
+// while leaving no trace anything was wrong.
+func TestR5_3_ProjectionIngestRejectsUnrepresentableTimestamps(t *testing.T) {
+	t.Parallel()
+	farFuture := time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+	farPast := time.Date(1, 1, 2, 0, 0, 0, 0, time.UTC)
+	observed := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	subject := ContextFabricSubjectRef{Kind: ContextFabricSubjectWorkItem, CanonicalID: "work_item:WI-1", Label: "WI-1"}
+	scope := ContextFabricAuthorizationScope{RepositorySlugs: []string{"acme/svc"}}
+
+	entity := func(validFrom, validTo *time.Time) ContextFabricEntityProjection {
+		return ContextFabricEntityProjection{
+			Subject: subject, Authorization: scope, EvidenceRefIDs: []string{"acr:v1:work-item:WI-1"},
+			ObservedAt: observed, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: "v1",
+		}
+	}
+
+	if err := entity(nil, &farFuture).Validate(); err == nil {
+		t.Fatal("a year-9999 valid_to was accepted; it wraps rather than fails on conversion to epoch nanoseconds")
+	}
+	if err := entity(&farPast, nil).Validate(); err == nil {
+		t.Fatal("a year-1 valid_from was accepted")
+	}
+	// A tombstone's effective_at orders it against the rows it retires.
+	tombstone := ContextFabricProjectionTombstone{
+		Kind: "incident", CanonicalID: "incident:i-1", Reason: "source_deleted",
+		EffectiveAt: farFuture, SourceVersion: "v1",
+	}
+	if err := tombstone.Validate(); err == nil {
+		t.Fatal("a year-9999 tombstone effective_at was accepted; a wrapped value could sort before the data it removes")
+	}
+
+	// Over-blocking guard: ordinary windows still validate.
+	if err := entity(&observed, nil).Validate(); err != nil {
+		t.Fatalf("an ordinary validity window was refused: %v", err)
+	}
+}

@@ -510,3 +510,59 @@ func TestF7_AToleratedFutureInstantIsClampedNotPropagated(t *testing.T) {
 		t.Fatalf("the label reports %v, which is after now (%v); the answer must not claim to speak for the future", result.Temporal.Requested.AsOf, now)
 	}
 }
+
+// TestR5_4_AnOutOfRangeInterpretedTimeIsRefusedAtTheEngineBoundary is
+// round-5 R5-4, red→green.
+//
+// R4-4 bounds what a CALLER sent, in the request contract.
+// QuestionInterpreter is a PORT, so what an interpreter RETURNS crosses a
+// different trust boundary the contract never sees. A different
+// implementation -- a future runtime, a test double, a differently-wired
+// composition -- can hand back an out-of-range historical time that
+// reaches UnixNano in the graph predicate and the reuse key and wraps
+// there, exactly as a caller's would have.
+//
+// This test deliberately uses a BARE interpreterFunc rather than the real
+// RuntimeQuestionInterpreter. That is not a shortcut, it IS the finding:
+// the shipped adapter validates its own output, so through it the defect
+// is unreachable and a test built on it proves only that one
+// implementation is careful. The guarantee has to hold for any
+// implementation of the port, so the test has to be one.
+//
+// The lesson is composition-root reachability: a bound enforced only
+// inside the implementation that happens to ship today is a property of
+// that implementation, not of the system.
+func TestR5_4_AnOutOfRangeInterpretedTimeIsRefusedAtTheEngineBoundary(t *testing.T) {
+	t.Parallel()
+	yearOne := time.Date(1, 1, 2, 0, 0, 0, 0, time.UTC)
+	yearNineThousand := time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := acceptanceNow
+
+	for _, testCase := range []struct {
+		name string
+		time TimeContext
+	}{
+		{"interpreted as year 1", TimeContext{Axis: TemporalValidTime, AsOf: &yearOne}},
+		{"interpreted as year 9999", TimeContext{Axis: TemporalValidTime, AsOf: &yearNineThousand}},
+		{"interpreted range out of range", TimeContext{Axis: TemporalRange, Start: &yearOne, End: &yearNineThousand}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			// The wire request is perfectly ordinary; ONLY the
+			// interpreter returns something unrepresentable.
+			engine, probe := mustHistoricalEngine(t, testCase.time, now)
+			request := validInvestigationRequest()
+			if request.TimeContext.Axis != TemporalCurrent {
+				t.Fatalf("fixture axis = %q, want a current-axis wire request so only the interpreter is out of range", request.TimeContext.Axis)
+			}
+
+			_, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+			if !errors.Is(err, ErrInvalidTimeBound) {
+				t.Fatalf("Investigate() error = %v, want ErrInvalidTimeBound -- an unrepresentable interpreted time must be refused, not wrapped", err)
+			}
+			if probe.graph.resolveCalls != 0 || probe.factsRead || probe.synthesized {
+				t.Fatal("work ran with an unrepresentable time; the refusal must precede every capability call")
+			}
+		})
+	}
+}

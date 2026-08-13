@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // Historical time axis (CHAOS-3781, TRD §19.8).
@@ -67,6 +69,26 @@ var ErrInvalidTimeBound = fmt.Errorf("context fabric time bounds are not answera
 //
 // The current axis is always answerable and never clamped.
 func resolveTimeContext(timeContext TimeContext, now time.Time) (TimeContext, error) {
+	// CHAOS-3781 round-5 R5-4: the representable-range bound is enforced
+	// HERE, at the engine boundary, not only in the request contract.
+	//
+	// The contract check (R4-4) covers what a CALLER sent. This covers
+	// what an INTERPRETER returned, and those are different trust
+	// boundaries: QuestionInterpreter is a port, so any implementation --
+	// a future runtime, a test double, a differently-wired composition --
+	// can hand back a time context the wire contract never saw. An
+	// out-of-range instant from that direction reaches UnixNano in the
+	// graph predicate and the reuse key exactly as a caller's would, and
+	// wraps identically.
+	//
+	// A bound enforced only inside the one implementation that happens to
+	// ship today is not a bound; it is a property of that implementation.
+	// The engine owns this guarantee, so the engine checks it.
+	for _, instant := range []*time.Time{timeContext.AsOf, timeContext.Start, timeContext.End} {
+		if instant != nil && !instant.IsZero() && !contractsv1.RepresentableInstant(*instant) {
+			return timeContext, fmt.Errorf("%w: instant is outside the representable range", ErrInvalidTimeBound)
+		}
+	}
 	horizon := now.Add(futureSkewTolerance)
 	switch timeContext.Axis {
 	case TemporalCurrent:
