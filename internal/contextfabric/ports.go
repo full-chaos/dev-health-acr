@@ -175,6 +175,30 @@ type SourceWatermarkSnapshot map[string]string
 // must scope by principal.OrgID, mirroring InvestigationResultStore's own
 // convention (see its doc comment on why Get's org scoping is a binding
 // precondition, not optional).
+//
+// devhealthsource's own producer SourceVersion (bumped v2->v3 by
+// CHAOS-3785) is deliberately NOT a fourth dimension here either -- codex
+// round-5 raised this as a P1 (API deploys on v3 while an org's checkpoint
+// still holds v2, pre-rebuild) and it was investigated, not assumed. During
+// that window every already-projected organization's checkpoint carries a
+// stale SourceVersion, so ProjectionWorker.RunOnce (projector.go) refuses
+// EVERY tick with ErrProjectionSourceVersionChanged BEFORE ever calling
+// ProjectionBackend.ApplyProjectionBatch -- the graph backend is
+// structurally untouched for that entire window, so a FRESH investigation
+// during it reads the exact same pre-rebuild graph a reused answer would;
+// reuse adds zero staleness beyond what the un-rebuilt graph already has.
+// And the moment the graph actually changes -- the operator-prescribed
+// recovery, `acr-projector rebuild --org` (docs/operations.md) ->
+// Coordinator.performRebuild -- resetAllCheckpoints
+// (projectionrun/coordinator.go) already blanks every source's
+// backend_watermark to "" before InvalidateOrganizationReuse runs, so
+// condition 3 (watermarksStillMatch, pginvestigation/store.go) fails for
+// any pre-rebuild candidate before the epoch fence (condition 4,
+// RebuildEpoch's own doc comment) even needs to. Binding SourceVersion
+// into this key would be redundant with a fence that already closes the
+// window from both ends. See TestAC_3782_4_RebuildBetweenSnapshotAndSaveIsCaughtByEpochNotTimestamp
+// / TestAC_3782_4_CompletedRebuildInvalidatesReuseForTheOrganization for
+// the binding proof.
 type ReuseKey struct {
 	QuestionHash      string
 	ContractVersion   string
