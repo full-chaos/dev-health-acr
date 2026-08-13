@@ -26,13 +26,13 @@ const (
 	defaultMaxOutputTokens    = 4000
 	defaultMaxSerializedBytes = 262144
 	defaultRequestsPerMinute  = 60
-	// defaultAnswerReuseMaxAge (CHAOS-3782) is deliberately short relative
-	// to how long a result COULD legally be reused for -- see
-	// Config.AnswerReuseMaxAge's D15 hazard doc comment for why erring
-	// conservative here matters more than maximizing the reuse rate.
-	defaultAnswerReuseMaxAge = 15 * time.Minute
-	minAnswerReuseMaxAge     = time.Minute
-	maxAnswerReuseMaxAge     = 24 * time.Hour
+	// minAnswerReuseMaxAge and maxAnswerReuseMaxAge bound
+	// ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE when it is set at all --
+	// see Config.AnswerReuseMaxAge's doc comment. There is deliberately
+	// no default duration: answer reuse is OFF (AnswerReuseMaxAge == 0)
+	// unless an operator explicitly opts in by setting this variable.
+	minAnswerReuseMaxAge = time.Minute
+	maxAnswerReuseMaxAge = 24 * time.Hour
 )
 
 // Config contains only process-level configuration. Credentials and request
@@ -76,7 +76,15 @@ type Config struct {
 	// investigation result older than this is never reused, regardless of
 	// whether every other reuse condition holds.
 	//
-	// D15 HAZARD (TRD §19.2/§19.7.3), read before changing this: the
+	// ZERO MEANS DISABLED. Unlike every other duration in this Config,
+	// there is no default: leaving the environment variable unset leaves
+	// this at its zero value, and hosted composition (internal/runtime/hosted)
+	// treats that as "do not turn on answer reuse at all" -- an operator
+	// must explicitly opt in by setting a window. Validate() below allows
+	// exactly zero through unchecked; any NON-zero value must fall inside
+	// [minAnswerReuseMaxAge, maxAnswerReuseMaxAge].
+	//
+	// D15 HAZARD (TRD §19.2/§19.7.3), read before setting this: the
 	// projection cursor is event-time based, so a backfilled or corrected
 	// source row does NOT advance backend_watermark and is not
 	// re-observed until a full rebuild. Watermark equality (condition 3)
@@ -192,7 +200,9 @@ func load(lookup lookupEnv) (Config, error) {
 	if cfg.DevHealthEntitlementTimeout, err = durationValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT", 5*time.Second); err != nil {
 		return Config{}, err
 	}
-	if cfg.AnswerReuseMaxAge, err = durationValue(lookup, "ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE", defaultAnswerReuseMaxAge); err != nil {
+	// No default: an unset variable leaves AnswerReuseMaxAge at zero,
+	// which means "answer reuse disabled" -- see the field's doc comment.
+	if cfg.AnswerReuseMaxAge, err = durationValue(lookup, "ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE", 0); err != nil {
 		return Config{}, err
 	}
 	devHealthEntitlementMaxResponseBytes, err := intValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_MAX_RESPONSE_BYTES", 16<<10)
@@ -257,8 +267,15 @@ func (c Config) Validate() error {
 	if c.RequestsPerMinute < 1 {
 		return errors.New("ACR_REQUESTS_PER_MINUTE must be positive")
 	}
-	if c.AnswerReuseMaxAge < minAnswerReuseMaxAge || c.AnswerReuseMaxAge > maxAnswerReuseMaxAge {
-		return fmt.Errorf("ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE must be between %s and %s", minAnswerReuseMaxAge, maxAnswerReuseMaxAge)
+	// Zero (unset) means answer reuse is disabled -- a valid, deliberate
+	// state, not a bounds violation. Any other value must be a sane
+	// window: this also rejects a negative duration, which
+	// time.ParseDuration accepts syntactically ("-5m") but which would
+	// mean every candidate row is already "in the future" and always
+	// rejected -- a silent, confusing way to disable reuse that the
+	// explicit zero-means-disabled convention exists to avoid.
+	if c.AnswerReuseMaxAge != 0 && (c.AnswerReuseMaxAge < minAnswerReuseMaxAge || c.AnswerReuseMaxAge > maxAnswerReuseMaxAge) {
+		return fmt.Errorf("ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE must be unset (disabled) or between %s and %s", minAnswerReuseMaxAge, maxAnswerReuseMaxAge)
 	}
 	if err := c.RequestControls.validate(); err != nil {
 		return err

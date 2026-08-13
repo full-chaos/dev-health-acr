@@ -15,7 +15,7 @@ func TestEmbedded_loadsAndOrdersEveryMigration(t *testing.T) {
 	if len(runner.migrations) == 0 {
 		t.Fatal("Embedded() loaded no migrations")
 	}
-	seenTen := false
+	seenReuseMigration := false
 	for index, migration := range runner.migrations {
 		if index > 0 && migration.Version <= runner.migrations[index-1].Version {
 			t.Fatalf("migrations are not strictly ascending at index %d: %d after %d", index, migration.Version, runner.migrations[index-1].Version)
@@ -23,14 +23,14 @@ func TestEmbedded_loadsAndOrdersEveryMigration(t *testing.T) {
 		if migration.Checksum == "" {
 			t.Fatalf("migration %d (%s) has no checksum", migration.Version, migration.Name)
 		}
-		if migration.Version == 10 {
-			seenTen = true
-			if migration.Name != "0010_context_fabric_answer_reuse.sql" {
-				t.Fatalf("migration 10 name = %q, want the CHAOS-3782 reuse migration", migration.Name)
+		if migration.Version == 11 {
+			seenReuseMigration = true
+			if migration.Name != "0011_context_fabric_answer_reuse.sql" {
+				t.Fatalf("migration 11 name = %q, want the CHAOS-3782 reuse migration", migration.Name)
 			}
 		}
 	}
-	if !seenTen {
-		t.Fatal("expected migration 10 (CHAOS-3782 answer reuse) to be embedded")
+	if !seenReuseMigration {
+		t.Fatal("expected migration 11 (CHAOS-3782 answer reuse) to be embedded")
 	}
 }

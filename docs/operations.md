@@ -295,16 +295,17 @@ carries `credential_masked` only (last 4 characters, e.g. `********wxyz`).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE` | `15m` | Staleness window (1m–24h). A stored investigation result older than this is never reused, regardless of whether every other reuse condition holds. |
+| `ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE` | *(unset — disabled)* | Staleness window (1m–24h when set). A stored investigation result older than this is never reused, regardless of whether every other reuse condition holds. Leaving this unset disables answer reuse entirely: every Investigate call runs fresh, exactly as if `pginvestigation.WithAnswerReuse` were never passed. |
 
-Answer reuse is always on once the investigator itself is composed (`ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED` plus a configured graph backend) --
-there is no separate enable flag. This is deliberate: the six-condition
-policy (TRD §19.7.3) already fails closed on its own -- an unauthorized
-subject, a changed watermark, a stale generation time, or a version
-mismatch all fall through to an ordinary fresh investigation, never a
-wrong answer -- so there is nothing an operator would gain from disabling
-it outright that the max-age window (set close to its 1-minute floor)
-does not already give them.
+Answer reuse is **opt-in**: an operator turns it on by setting a window.
+This is deliberate, not merely conservative-by-default -- reuse changes
+what a request can be served from (a prior turn's stored answer, not a
+fresh graph/fact read), and that is a deployment decision, not something
+composing the investigator should silently switch on. Once opted in, the
+six-condition policy (TRD §19.7.3) fails closed on its own -- an
+unauthorized subject, a changed watermark, a stale generation time, or a
+version mismatch all fall through to an ordinary fresh investigation,
+never a wrong answer.
 
 **D15 hazard, restated (TRD §19.2/§19.7.3):** the projection cursor is
 event-time based, so a backfilled or corrected source row does not

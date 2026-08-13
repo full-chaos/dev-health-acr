@@ -272,9 +272,12 @@ func TestAC_3782_6_LostEvidenceVisibilityFailsReuseRecheck(t *testing.T) {
 
 // TestAC_3782_8_RecordsReuseOutcomeForHitAndMiss binds AC-3782-8: the
 // reuse rate and the saved model-call count are both derived from
-// EngineTelemetry.RecordAnswerReuse's boolean stream (see that method's
-// doc comment) -- so this asserts the stream itself is correct for both a
-// hit and a miss.
+// EngineTelemetry.RecordAnswerReuse's outcome stream (see that method's
+// doc comment) -- so this asserts the stream itself is correct for a hit
+// and for the AnswerReuseMissNoCandidate miss reason specifically (the
+// gate itself reported no candidate). The authorization/containment miss
+// reasons are asserted directly in TestAC_3782_6_LostSubjectAuthorizationFailsReuseRecheck
+// and TestAC_3782_6_LostEvidenceVisibilityFailsReuseRecheck below.
 func TestAC_3782_8_RecordsReuseOutcomeForHitAndMiss(t *testing.T) {
 	t.Parallel()
 
@@ -315,12 +318,74 @@ func TestAC_3782_8_RecordsReuseOutcomeForHitAndMiss(t *testing.T) {
 		t.Fatalf("Investigate() (miss) error = %v", err)
 	}
 
-	if got, want := telemetry.answerReuseOutcomes, []bool{true, false}; !boolSlicesEqual(got, want) {
+	want := []AnswerReuseOutcome{AnswerReuseHit, AnswerReuseMissNoCandidate}
+	if got := telemetry.answerReuseOutcomes; !reuseOutcomeSlicesEqual(got, want) {
 		t.Fatalf("answerReuseOutcomes = %v, want %v", got, want)
 	}
 }
 
-func boolSlicesEqual(a, b []bool) bool {
+// TestAC_3782_8_DistinguishesAuthorizationFromContainmentMissReasons binds
+// the review correction to AC-3782-8: a subject-authorization miss and an
+// evidence-containment miss must record DIFFERENT outcome labels, not
+// collapse into one generic "miss", so a cratered reuse rate is
+// diagnosable from telemetry alone.
+func TestAC_3782_8_DistinguishesAuthorizationFromContainmentMissReasons(t *testing.T) {
+	t.Parallel()
+
+	project, authCandidate := reusableCandidate()
+	_, evidenceCandidate := reusableCandidate()
+	evidenceCandidate.EvidenceRefIDs = []string{"acr:v1:evidence:0000000002"}
+	freshResult := validInvestigationResult()
+
+	freshDeps := func(telemetry *recordingTelemetry) EngineDependencies {
+		return EngineDependencies{
+			Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+				return CanonicalFactBundle{}, nil
+			}),
+			Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+				return freshResult, nil
+			}),
+			Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+				return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+			}),
+			Results:   &resultStoreStub{},
+			Telemetry: telemetry,
+		}
+	}
+
+	authTelemetry := &recordingTelemetry{}
+	authDeps := freshDeps(authTelemetry)
+	authDeps.Graph = graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}}
+	authDeps.ReuseGate = reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+		return authCandidate, true, nil
+	})
+	authEngine := mustReuseTestEngine(t, authDeps)
+	if _, err := authEngine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest()); err != nil {
+		t.Fatalf("Investigate() (authorization miss) error = %v", err)
+	}
+	if want := []AnswerReuseOutcome{AnswerReuseMissAuthorization}; !reuseOutcomeSlicesEqual(authTelemetry.answerReuseOutcomes, want) {
+		t.Fatalf("authorization-miss outcomes = %v, want %v", authTelemetry.answerReuseOutcomes, want)
+	}
+
+	evidenceTelemetry := &recordingTelemetry{}
+	evidenceDeps := freshDeps(evidenceTelemetry)
+	evidenceDeps.Graph = graphReaderStub{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context:    GraphContext{EvidenceRefIDs: []string{}},
+	}
+	evidenceDeps.ReuseGate = reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+		return evidenceCandidate, true, nil
+	})
+	evidenceEngine := mustReuseTestEngine(t, evidenceDeps)
+	if _, err := evidenceEngine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest()); err != nil {
+		t.Fatalf("Investigate() (containment miss) error = %v", err)
+	}
+	if want := []AnswerReuseOutcome{AnswerReuseMissEvidenceContainment}; !reuseOutcomeSlicesEqual(evidenceTelemetry.answerReuseOutcomes, want) {
+		t.Fatalf("containment-miss outcomes = %v, want %v", evidenceTelemetry.answerReuseOutcomes, want)
+	}
+}
+
+func reuseOutcomeSlicesEqual(a, b []AnswerReuseOutcome) bool {
 	if len(a) != len(b) {
 		return false
 	}

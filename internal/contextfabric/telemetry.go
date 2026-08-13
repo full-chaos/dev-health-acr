@@ -16,10 +16,12 @@ import (
 //
 // AC-3782-8 (the reuse rate and the saved model-call count are recorded):
 // both are derived entirely from the RecordAnswerReuse log line's
-// "reused" field -- a log aggregation query counts reused=true events for
-// the saved-call count, and reused=true / total for the rate. No separate
-// counter or call is needed; see RecordAnswerReuse's doc comment on
-// EngineTelemetry for why one boolean stream is sufficient.
+// "outcome" field -- a log aggregation query counts outcome="hit" events
+// for the saved-call count, and hits / total for the rate. The non-hit
+// outcome values split WHY a call missed (authorization vs. evidence
+// containment vs. no candidate at all), so a cratered rate is
+// diagnosable from this one stream; see RecordAnswerReuse's doc comment
+// on EngineTelemetry.
 type SlogEngineTelemetry struct {
 	logger *slog.Logger
 }
@@ -41,6 +43,6 @@ func (t SlogEngineTelemetry) RecordPriorSubjectReceiptsSkipped(ctx context.Conte
 	t.logger.WarnContext(ctx, "context fabric prior-subject receipts skipped", "org_id", principal.OrgID, "skipped_count", skipped)
 }
 
-func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal storage.Principal, reused bool) {
-	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", "org_id", principal.OrgID, "reused", reused)
+func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome) {
+	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", "org_id", principal.OrgID, "outcome", string(outcome))
 }

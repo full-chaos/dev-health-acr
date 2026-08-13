@@ -66,16 +66,20 @@ type EngineTelemetry interface {
 	// happened.
 	RecordPriorSubjectReceiptsSkipped(ctx context.Context, principal storage.Principal, skipped int)
 	// RecordAnswerReuse reports the outcome of ONE Investigate call's
-	// reuse attempt (CHAOS-3782, AC-3782-8): reused=true when a stored
-	// result was served with zero model calls, reused=false when the
-	// call ran a fresh investigation (whether because ReuseGate is nil,
-	// no candidate matched, or the candidate failed a §19.7.3 condition).
-	// The reuse rate and the saved model-call count are both derived
-	// entirely from this one boolean stream -- no separate call is
-	// needed for "saved calls": that is just the count of reused=true
-	// events, each one representing exactly the interpret+synthesize
-	// model calls a fresh investigation would otherwise have made.
-	RecordAnswerReuse(ctx context.Context, principal storage.Principal, reused bool)
+	// reuse attempt (CHAOS-3782, AC-3782-8) as a closed AnswerReuseOutcome
+	// label -- AnswerReuseHit when a stored result was served with zero
+	// model calls, or one of the specific miss reasons when the call ran
+	// a fresh investigation instead. The reuse rate and the saved
+	// model-call count are both derived from this one stream (rate =
+	// hits / total; saved calls = count of hits, each one representing
+	// exactly the interpret+synthesize model calls a fresh investigation
+	// would otherwise have made); the miss reasons exist so a cratered
+	// reuse rate is diagnosable from telemetry (e.g.
+	// miss_evidence_containment dominating usually means the recheck's
+	// own bounds are the problem, not real staleness) rather than an
+	// operator only ever seeing "reuse rarely happens" with no way to
+	// tell why.
+	RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome)
 }
 
 // Engine coordinates one open-ended investigation. It deliberately composes

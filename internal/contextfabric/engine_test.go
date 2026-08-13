@@ -198,11 +198,11 @@ func TestNewEngineRequiresAllCoreCapabilities(t *testing.T) {
 // through.
 type recordingTelemetry struct {
 	priorSubjectReceiptsSkipped []int
-	answerReuseOutcomes         []bool
+	answerReuseOutcomes         []AnswerReuseOutcome
 }
 
-func (r *recordingTelemetry) RecordAnswerReuse(_ context.Context, _ storage.Principal, reused bool) {
-	r.answerReuseOutcomes = append(r.answerReuseOutcomes, reused)
+func (r *recordingTelemetry) RecordAnswerReuse(_ context.Context, _ storage.Principal, outcome AnswerReuseOutcome) {
+	r.answerReuseOutcomes = append(r.answerReuseOutcomes, outcome)
 }
 
 func (r *recordingTelemetry) RecordPriorSubjectReceiptsSkipped(_ context.Context, _ storage.Principal, skipped int) {

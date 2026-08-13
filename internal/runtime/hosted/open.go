@@ -201,8 +201,15 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// CHAOS-3782: WithAnswerReuse turns on Save's reuse-column bookkeeping
 	// and FindReusable/InvalidateOrganizationReuse. request.config.AnswerReuseMaxAge
 	// is condition 4's staleness window -- see its doc comment (D15
-	// hazard) for why it must stay conservative.
-	investigationStore, err := pginvestigation.NewStore(postgres.db, pginvestigation.WithAnswerReuse(request.config.AnswerReuseMaxAge))
+	// hazard) for why it must stay conservative. Zero (the unset default;
+	// config.Config.Validate lets zero through as "disabled") means
+	// answer reuse stays off entirely: WithAnswerReuse is not passed, so
+	// Save never writes reuse columns and FindReusable always misses.
+	var storeOpts []pginvestigation.StoreOption
+	if request.config.AnswerReuseMaxAge > 0 {
+		storeOpts = append(storeOpts, pginvestigation.WithAnswerReuse(request.config.AnswerReuseMaxAge))
+	}
+	investigationStore, err := pginvestigation.NewStore(postgres.db, storeOpts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialize investigation result store: %w", err)
 	}

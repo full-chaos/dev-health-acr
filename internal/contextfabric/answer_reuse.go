@@ -88,6 +88,63 @@ func stripTrailingPunctuation(s string) string {
 // a subset.
 const maxReuseSubjectRecheckCount = 50
 
+// reuseRecheckOptions is the InvestigationOptions the condition-6 recheck
+// uses for ResolveSubjects/DiscoverContext -- the contract's own MAXIMUM
+// bound for every Max* field (ContextFabricInvestigationOptions.Validate,
+// internal/contracts/v1/validate_context_fabric_request.go), never the
+// live caller's own (possibly smaller) Options.
+//
+// Why this matters (flagged in review): graphrank truncates its final
+// admitted set to Options.MaxRelationshipPaths/MaxEvidenceRefs/
+// MaxCohortMembers/MaxSubjectCandidates (see falkorgraph/reader.go and
+// graphrank/discover.go, resolve.go). If the recheck used the CURRENT
+// request's Options and those happened to be smaller than whatever
+// Options generated the stored candidate, the recheck's discovered set
+// could legitimately shrink relative to the original -- with the
+// watermark and authorization both completely unchanged -- and the
+// containment check below would then reject a candidate that is
+// genuinely still fresh and visible. That is a spurious cache miss, not
+// a wrong answer (the safe direction), but if it fires often it craters
+// the reuse rate silently. Using the contract's ceiling here means the
+// recheck's set can only be as large as or larger than what ANY legal
+// original investigation could have produced, so it stops truncation
+// itself from ever being the reason a recheck fails.
+var reuseRecheckOptions = InvestigationOptions{
+	MaxSubjectCandidates: 50, MaxCohortMembers: 250, MaxRelationshipPaths: 250,
+	MaxDrivers: 50, MaxEvidenceRefs: 500, MaxSerializedBytes: 1 << 20,
+	AllowClarification: true,
+}
+
+// AnswerReuseOutcome classifies why one Investigate call did or did not
+// reuse a stored result (CHAOS-3782, AC-3782-8). A closed set of fixed
+// labels -- content-safe by construction, never free text -- so a
+// dashboard can tell "reuse rate looks low because of authorization
+// churn" apart from "reuse rate looks low because containment keeps
+// failing" (the latter usually means the recheck's own bounds, not real
+// staleness, are the problem -- see reuseRecheckOptions).
+type AnswerReuseOutcome string
+
+const (
+	// AnswerReuseHit: a stored result was served; zero model calls made.
+	AnswerReuseHit AnswerReuseOutcome = "hit"
+	// AnswerReuseMissNoCandidate: no gate candidate matched, or the
+	// candidate failed one of AnswerReuseGate's own conditions
+	// (1/2/3/4/5/7) -- ReuseGate is nil, the question hash/org/contract/
+	// projection/model-identity didn't match anything, a source
+	// watermark advanced, or the candidate fell outside the staleness/
+	// invalidation window.
+	AnswerReuseMissNoCandidate AnswerReuseOutcome = "miss_no_candidate"
+	// AnswerReuseMissAuthorization: a candidate was found, but a subject
+	// it names no longer resolves under current authorization (or the
+	// recheck itself could not be completed).
+	AnswerReuseMissAuthorization AnswerReuseOutcome = "miss_authorization"
+	// AnswerReuseMissEvidenceContainment: the subject recheck passed, but
+	// an evidence reference the candidate cites was not present in a
+	// freshly discovered evidence set (or the recheck itself could not
+	// be completed).
+	AnswerReuseMissEvidenceContainment AnswerReuseOutcome = "miss_evidence_containment"
+)
+
 // tryReuse implements CHAOS-3782 (TRD §19.7). It is called from
 // Investigate BEFORE QuestionInterpreter.Interpret -- see the call site's
 // comment for why that ordering is what makes AC-3782-1's zero-model-call
@@ -109,14 +166,14 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 	}
 	candidate, ok, err := e.reuseGate.FindReusable(ctx, principal, key)
 	if err != nil || !ok {
-		e.recordReuseOutcome(ctx, principal, false)
+		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
 		return InvestigationResult{}, false
 	}
 	if err := ctx.Err(); err != nil {
 		return InvestigationResult{}, false
 	}
-	if !e.reuseAuthorizationStillHolds(ctx, principal, request, candidate) {
-		e.recordReuseOutcome(ctx, principal, false)
+	if holds, missReason := e.reuseAuthorizationStillHolds(ctx, principal, request, candidate); !holds {
+		e.recordReuseOutcome(ctx, principal, missReason)
 		return InvestigationResult{}, false
 	}
 	// The candidate is served EXACTLY as stored -- same ResultID,
@@ -125,15 +182,15 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 	// Reused is per-serving metadata, set only on this in-memory copy;
 	// nothing about the stored row is touched.
 	candidate.Reused = true
-	e.recordReuseOutcome(ctx, principal, true)
+	e.recordReuseOutcome(ctx, principal, AnswerReuseHit)
 	return candidate, true
 }
 
-func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Principal, reused bool) {
+func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome) {
 	if e.telemetry == nil {
 		return
 	}
-	e.telemetry.RecordAnswerReuse(ctx, principal, reused)
+	e.telemetry.RecordAnswerReuse(ctx, principal, outcome)
 }
 
 // reuseAuthorizationStillHolds implements TRD §19.7.3 condition 6 --
@@ -141,7 +198,14 @@ func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Princ
 // stored result -- using only GraphReader's two existing methods
 // (ResolveSubjects, DiscoverContext). No new port or graph query surface
 // is needed: both calls are graph reads, never model calls, so this stays
-// inside AC-3782-1's zero-model-call bound.
+// inside AC-3782-1's zero-model-call bound. On failure it returns
+// (false, reason) so tryReuse's telemetry can tell an authorization
+// rejection apart from a containment rejection (AC-3782-8) -- see
+// AnswerReuseOutcome's doc comment for why that split matters
+// diagnostically. Both legs use reuseRecheckOptions, the contract's
+// ceiling bounds, not the live caller's own Options -- see that var's doc
+// comment for why using the caller's (possibly smaller) Options here
+// would risk a truncation-induced false miss.
 //
 // Subject leg: every subject the candidate ever names is re-resolved
 // through ResolveSubjects with an exact SubjectHint, the same mechanism
@@ -156,12 +220,13 @@ func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Princ
 // the candidate cites; if authorization narrowed since the candidate was
 // generated, DiscoverContext silently omits what is no longer visible,
 // and the containment check below correctly fails closed.
-func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal storage.Principal, request InvestigationRequest, candidate InvestigationResult) bool {
+func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal storage.Principal, request InvestigationRequest, candidate InvestigationResult) (bool, AnswerReuseOutcome) {
 	subjects := reuseSubjectsToRecheck(candidate)
 	if len(subjects) > maxReuseSubjectRecheckCount {
-		return false
+		return false, AnswerReuseMissAuthorization
 	}
 	recheckRequest := request
+	recheckRequest.Options = reuseRecheckOptions
 	if len(subjects) > 0 {
 		hints := make([]SubjectHint, 0, len(subjects))
 		for _, subject := range subjects {
@@ -172,7 +237,7 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 
 	resolution, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation)
 	if err != nil {
-		return false
+		return false, AnswerReuseMissAuthorization
 	}
 	committed := make(map[string]struct{}, len(resolution.Committed))
 	for _, subject := range resolution.Committed {
@@ -180,19 +245,19 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	}
 	for _, subject := range subjects {
 		if _, ok := committed[subjectKeyForModel(subject)]; !ok {
-			return false
+			return false, AnswerReuseMissAuthorization
 		}
 	}
 
 	evidenceRefs := reuseEvidenceRefsToRecheck(candidate)
 	if len(evidenceRefs) == 0 {
-		return true
+		return true, AnswerReuseHit
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
 		Request: recheckRequest, Interpretation: candidate.Interpretation, Resolution: resolution,
 	})
 	if err != nil {
-		return false
+		return false, AnswerReuseMissEvidenceContainment
 	}
 	visible := make(map[string]struct{}, len(graphContext.EvidenceRefIDs))
 	for _, ref := range graphContext.EvidenceRefIDs {
@@ -200,10 +265,10 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	}
 	for _, ref := range evidenceRefs {
 		if _, ok := visible[ref]; !ok {
-			return false
+			return false, AnswerReuseMissEvidenceContainment
 		}
 	}
-	return true
+	return true, AnswerReuseHit
 }
 
 // reuseSubjectsToRecheck collects every distinct subject named anywhere in

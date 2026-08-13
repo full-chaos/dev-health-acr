@@ -237,3 +237,58 @@ func TestLoad_webAssertionsRetainFixedIssuerAudienceAndJWKSPath(t *testing.T) {
 		t.Fatalf("web assertion config = %#v", cfg)
 	}
 }
+
+// TestLoad_answerReuseMaxAgeDefaultsToDisabled binds the CHAOS-3782
+// correction: leaving ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE unset must
+// leave AnswerReuseMaxAge at zero (disabled), never a default duration --
+// answer reuse is opt-in.
+func TestLoad_answerReuseMaxAgeDefaultsToDisabled(t *testing.T) {
+	cfg, err := load(mapLookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AnswerReuseMaxAge != 0 {
+		t.Fatalf("AnswerReuseMaxAge = %v, want 0 (disabled) when unset", cfg.AnswerReuseMaxAge)
+	}
+}
+
+func TestLoad_answerReuseMaxAgeAcceptsAnExplicitWindow(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{"ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE": "30m"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AnswerReuseMaxAge.String() != "30m0s" {
+		t.Fatalf("AnswerReuseMaxAge = %v, want 30m0s", cfg.AnswerReuseMaxAge)
+	}
+}
+
+func TestLoad_answerReuseMaxAgeRejectsBelowMinimum(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{"ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE": "30s"}))
+	if err == nil || !strings.Contains(err.Error(), "ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE") {
+		t.Fatalf("load() error = %v, want an ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE bounds error", err)
+	}
+}
+
+func TestLoad_answerReuseMaxAgeRejectsAboveMaximum(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{"ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE": "48h"}))
+	if err == nil || !strings.Contains(err.Error(), "ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE") {
+		t.Fatalf("load() error = %v, want an ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE bounds error", err)
+	}
+}
+
+func TestLoad_answerReuseMaxAgeRejectsNegativeDuration(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{"ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE": "-5m"}))
+	if err == nil || !strings.Contains(err.Error(), "ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE") {
+		t.Fatalf("load() error = %v, want an ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE bounds error", err)
+	}
+}
+
+func TestLoad_answerReuseMaxAgeExplicitZeroStaysDisabled(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{"ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE": "0s"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AnswerReuseMaxAge != 0 {
+		t.Fatalf("AnswerReuseMaxAge = %v, want 0 (disabled)", cfg.AnswerReuseMaxAge)
+	}
+}

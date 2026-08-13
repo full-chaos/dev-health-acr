@@ -15,10 +15,10 @@ func TestSlogEngineTelemetry_RecordAnswerReuseLogsOrgAndOutcome(t *testing.T) {
 	var buf bytes.Buffer
 	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil)))
 
-	telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_1"}, true)
+	telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_1"}, AnswerReuseHit)
 
 	line := buf.String()
-	for _, want := range []string{"org_id=org_telemetry_1", "reused=true"} {
+	for _, want := range []string{"org_id=org_telemetry_1", "outcome=hit"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("log line = %q, want it to contain %q", line, want)
 		}
@@ -34,15 +34,18 @@ func TestSlogEngineTelemetry_RecordAnswerReuseLogsOrgAndOutcome(t *testing.T) {
 	}
 }
 
-func TestSlogEngineTelemetry_RecordAnswerReuseLogsFalseOutcome(t *testing.T) {
+func TestSlogEngineTelemetry_RecordAnswerReuseLogsMissReasons(t *testing.T) {
 	t.Parallel()
-	var buf bytes.Buffer
-	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil)))
+	for _, outcome := range []AnswerReuseOutcome{AnswerReuseMissNoCandidate, AnswerReuseMissAuthorization, AnswerReuseMissEvidenceContainment} {
+		var buf bytes.Buffer
+		telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil)))
 
-	telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_2"}, false)
+		telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_2"}, outcome)
 
-	if !strings.Contains(buf.String(), "reused=false") {
-		t.Errorf("log line = %q, want reused=false", buf.String())
+		want := "outcome=" + string(outcome)
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("log line = %q, want it to contain %q", buf.String(), want)
+		}
 	}
 }
 
@@ -66,5 +69,5 @@ func TestNewSlogEngineTelemetry_NilLoggerFallsBackToDefault(t *testing.T) {
 	t.Parallel()
 	// Must not panic.
 	telemetry := NewSlogEngineTelemetry(nil)
-	telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_4"}, true)
+	telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_4"}, AnswerReuseHit)
 }
