@@ -903,7 +903,8 @@ bash scripts/docs/clean-room.sh --mode mcp
 
 `doctor --offline` checks configuration but may report incomplete configuration
 with a successful process exit; inspect its JSON `status`. The MCP tool surface
-is read-only by default (`context_for_task` and `source_evidence`). Episode
+is read-only by default (`context_for_task`, `source_evidence`, and, when the
+hosted API advertises them, `investigate_question` and `investigation_result`). Episode
 writeback remains disabled unless every local and server authorization gate is
 enabled; it is not an External Push substitute.
 

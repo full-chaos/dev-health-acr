@@ -194,3 +194,39 @@ questions use axis=current, whose key is a fixed literal, and real
 historical questions carry a past as_of that never clamps -- and those rows
 are ordinary saved answers under normal retention and invalidation, so the
 growth is bounded rather than accumulating.
+
+## ANSWER SURFACE (CHAOS-3746)
+
+`internal/contextfabric/answerprojection` derives the bounded consumer
+projection (`context_fabric_answer_projection.v1`) of an investigation
+result. It is the SINGLE choke point every bounded consumer sees an answer
+through: the hosted API and the MCP sidecar both call `Project`, so neither
+can grow its own summariser and drift.
+
+- The package is import-pure by constraint: standard library and
+  `internal/contracts/v1` only, no HTTP, MCP, storage, or database imports.
+  `TestPackageImportsStayPure` enforces it rather than leaving it to review.
+- The projection SELECTS and DROPS. It never rewrites, re-ranks, re-judges,
+  or re-words. `direct_judgment`, `current_state`, and every retained driver
+  standing and category are copied verbatim.
+- Driver selection follows the engine's own standing field; canonical order
+  is preserved within a standing. Withheld drivers never reach a consumer as
+  part of the answer, and their absence is counted, not hidden.
+- Every drop is declared in `projection_budget`, and `truncated` is true if
+  and only if something was dropped. Silent truncation is a defect.
+- A retained driver may never cite a claimed fact the projection dropped, so
+  value-level evidence stays checkable by whoever received it.
+
+`context_fabric_answer_projection.v1` is deliberately a self-contained
+schema rather than a composition of `context_fabric_common.v1`, so an
+agent-facing tool schema does not carry graph-projection vocabulary no
+answer consumer uses. The resulting enum-drift risk is closed mechanically
+by `TestAnswerProjectionVocabulariesMatchTheCanonicalOnes`.
+
+Result retrieval (`GET /api/v1/context-fabric/investigations/{result_id}`)
+reads the same immutable store the engine writes through, surfaced as
+`api.RuntimeDependencies.InvestigationResults`. Not-found is classified
+through the port sentinel `ErrInvestigationResultNotFound`, which both store
+adapters wrap; unknown, malformed, and cross-organization IDs are
+indistinguishable on the wire so `result_id` can never act as a cross-tenant
+existence oracle.
