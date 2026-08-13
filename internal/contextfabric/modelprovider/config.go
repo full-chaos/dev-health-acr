@@ -48,12 +48,19 @@ const (
 	DefaultBaseURL = "https://api.openai.com/v1/"
 )
 
+// DefaultTimeout, DefaultMaxAttempts, and DefaultMaxTransportRetries are
+// exported so a caller building a Config for a surface ConfigFromEnv does
+// not cover -- e.g. internal/contextfabric/modelruntimeresolver constructing
+// a per-organization Config (CHAOS-3775), whose tuning knobs are inherited
+// from the deployment surface rather than being part of the per-organization
+// contract -- can reuse the same defaults without duplicating them.
 const (
-	defaultTimeout               = 45 * time.Second
-	defaultMaxAttempts           = 2
-	defaultMaxTransportRetries   = 2
-	maximumProviderOrModelLength = 256
+	DefaultTimeout             = 45 * time.Second
+	DefaultMaxAttempts         = 2
+	DefaultMaxTransportRetries = 2
 )
+
+const maximumProviderOrModelLength = 256
 
 // Environment variable names, following the ACR_<COMPONENT>_ naming and the
 // KEY / KEY_FILE secret convention used by internal/config.SecretValue and
@@ -266,13 +273,13 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		FallbackModel: envString(lookup, EnvFallbackModel, ""),
 		APIKey:        apiKey,
 	}
-	if cfg.Timeout, err = envDuration(lookup, EnvTimeout, defaultTimeout); err != nil {
+	if cfg.Timeout, err = envDuration(lookup, EnvTimeout, DefaultTimeout); err != nil {
 		return Config{}, err
 	}
-	if cfg.MaxAttempts, err = envInt(lookup, EnvMaxAttempts, defaultMaxAttempts); err != nil {
+	if cfg.MaxAttempts, err = envInt(lookup, EnvMaxAttempts, DefaultMaxAttempts); err != nil {
 		return Config{}, err
 	}
-	if cfg.MaxTransportRetries, err = envInt(lookup, EnvMaxTransportRetries, defaultMaxTransportRetries); err != nil {
+	if cfg.MaxTransportRetries, err = envInt(lookup, EnvMaxTransportRetries, DefaultMaxTransportRetries); err != nil {
 		return Config{}, err
 	}
 	if cfg.AllowInsecureBaseURL, err = envBool(lookup, EnvAllowInsecureBaseURL, false); err != nil {

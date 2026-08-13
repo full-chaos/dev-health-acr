@@ -101,9 +101,9 @@ func TestConfigFromEnv_appliesProviderShapedDefaults(t *testing.T) {
 	if cfg.FallbackModel != "" {
 		t.Fatalf("fallback model = %q, want empty (a fallback is a second billable call and must be opted into)", cfg.FallbackModel)
 	}
-	if cfg.Timeout != defaultTimeout || cfg.MaxAttempts != defaultMaxAttempts || cfg.MaxTransportRetries != defaultMaxTransportRetries {
+	if cfg.Timeout != DefaultTimeout || cfg.MaxAttempts != DefaultMaxAttempts || cfg.MaxTransportRetries != DefaultMaxTransportRetries {
 		t.Fatalf("bounds = %v/%d/%d, want %v/%d/%d", cfg.Timeout, cfg.MaxAttempts, cfg.MaxTransportRetries,
-			defaultTimeout, defaultMaxAttempts, defaultMaxTransportRetries)
+			DefaultTimeout, DefaultMaxAttempts, DefaultMaxTransportRetries)
 	}
 	if cfg.AllowInsecureBaseURL {
 		t.Fatal("insecure base URLs are permitted by default")

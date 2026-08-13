@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgmodelconfig"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
@@ -106,9 +107,32 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		Window: request.config.RequestControls.Auth.Window, AttemptLimit: request.config.RequestControls.Auth.Requests,
 		FailureLimit: request.config.RequestControls.AuthFailures, MaxTrackedKeys: request.config.RequestControls.AuthTrackedKeys,
 	})
-	investigator, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse)
+	// CHAOS-3775: composed independently of the investigator/graph gating
+	// below -- see buildOrgModelConfigStore's doc comment -- so a customer
+	// can save their organization's BYO LLM configuration whether or not
+	// the graph backend is separately wired.
+	orgModelConfigStore, err := buildOrgModelConfigStore(postgres, os.LookupEnv)
+	if err != nil {
+		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric org model config store: %w", err))
+	}
+	investigator, runtimeEvictor, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigStore)
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric investigator: %w", err))
+	}
+	// orgModelConfigStore is a concrete *pgmodelconfig.Store, possibly nil;
+	// runtimeEvictor is a concrete *modelruntimeresolver.Resolver, possibly
+	// nil. Assigning either nil pointer directly into its interface-typed
+	// field below would produce a non-nil interface wrapping a nil value
+	// (the classic typed-nil trap -- see (*App).orgModelConfigs' and
+	// (*App).investigator's matching doc comments), so both nil checks
+	// happen here, before the interface conversion, not after.
+	var orgModelConfigs contextfabric.OrgModelConfigStore
+	if orgModelConfigStore != nil {
+		orgModelConfigs = orgModelConfigStore
+	}
+	var orgModelRuntimeEvictor contextfabric.OrgModelRuntimeEvictor
+	if runtimeEvictor != nil {
+		orgModelRuntimeEvictor = runtimeEvictor
 	}
 	runtime.Dependencies = api.Dependencies{
 		Capabilities: capabilities, Now: request.options.Now, Observability: &hooks, Limits: manager, AuthAttempts: authAttempts,
@@ -119,6 +143,8 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			DeviceAuthorizations: postgres.devices, DeviceVerificationURL: request.config.DeviceVerificationURL,
 			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(request.options.Now)),
 			Investigator:               investigator,
+			OrgModelConfigs:            orgModelConfigs,
+			OrgModelRuntimeEvictor:     orgModelRuntimeEvictor,
 		},
 	}
 	return runtime, nil
@@ -128,8 +154,8 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 // (CHAOS-3755) when the operator opted in AND the graph backend is
 // separately configured. It never fails composition over an unconfigured
 // optional dependency (ADR 0007's convention): if either condition is
-// false, it returns (nil, nil) and the investigations route degrades to a
-// static 503 (see api.App.investigator / handleRuntimeUnavailable).
+// false, it returns (nil, nil, nil) and the investigations route degrades
+// to a static 503 (see api.App.investigator / handleRuntimeUnavailable).
 //
 // The model runtime is a third, INDEPENDENT enablement (CHAOS-3770): it is
 // constructed by newContextFabricModelRuntime only when a provider is
@@ -137,40 +163,62 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 // the investigator from being composed -- the graph and canonical-fact
 // layers are real and live either way, and every request degrades to a
 // clean ErrModelUnavailable 503 instead. See newContextFabricModelRuntime.
-func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents) (contextfabric.Investigator, error) {
+//
+// orgModelConfigStore is CHAOS-3775's per-organization layer over that same
+// model runtime: when non-nil, the deployment-default runtime built here is
+// wrapped in a modelruntimeresolver.Resolver so each request's actual
+// runtime is chosen by the requesting organization's own stored
+// configuration (falling through to this deployment default when the
+// organization has none). When nil (no encryption key configured), the
+// deployment-default runtime is used completely unwrapped, unchanged from
+// pre-CHAOS-3775 behavior, and the returned evictor is nil too.
+//
+// The second return value is that same Resolver, exposed only as
+// contextfabric.OrgModelRuntimeEvictor -- open() wires it into
+// api.RuntimeDependencies.OrgModelRuntimeEvictor so the DELETE model-config
+// route can purge a cached runtime immediately (Codex round-1 finding F4).
+func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigStore *pgmodelconfig.Store) (contextfabric.Investigator, contextfabric.OrgModelRuntimeEvictor, error) {
 	if !request.config.EnableContextFabricInvestigations || !falkorgraph.Configured(os.LookupEnv) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	graphConfig, err := falkorgraph.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
-		return nil, fmt.Errorf("load context fabric graph configuration: %w", err)
+		return nil, nil, fmt.Errorf("load context fabric graph configuration: %w", err)
 	}
 	graphReader, err := falkorgraph.New(graphConfig)
 	if err != nil {
-		return nil, fmt.Errorf("initialize context fabric graph adapter: %w", err)
+		return nil, nil, fmt.Errorf("initialize context fabric graph adapter: %w", err)
 	}
 	factRegistry, err := contextfabric.NewFactCapabilityRegistry(
 		devhealthfacts.NewProviders(clickhouse.queryClient),
 		contextfabric.FactRegistryOptions{Now: request.options.Now},
 	)
 	if err != nil {
-		return nil, fmt.Errorf("initialize canonical fact registry: %w", err)
+		return nil, nil, fmt.Errorf("initialize canonical fact registry: %w", err)
 	}
 	investigationStore, err := pginvestigation.NewStore(postgres.db)
 	if err != nil {
-		return nil, fmt.Errorf("initialize investigation result store: %w", err)
+		return nil, nil, fmt.Errorf("initialize investigation result store: %w", err)
 	}
 	// nil when no model provider is configured; see the function doc
 	// comment and newContextFabricModelRuntime.
-	modelRuntime, err := newContextFabricModelRuntime(ctx, os.LookupEnv)
+	deploymentDefaultRuntime, err := newContextFabricModelRuntime(ctx, os.LookupEnv)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	modelRuntime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefaultRuntime, orgModelConfigStore, os.LookupEnv)
+	if err != nil {
+		return nil, nil, err
+	}
+	receiptSink, err := buildModelReceiptSink(postgres)
+	if err != nil {
+		return nil, nil, err
 	}
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
-		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime},
+		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, Sink: receiptSink},
 		Graph:       graphReader,
 		Facts:       factRegistry,
-		Synthesizer: contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Options: contextfabric.RuntimeAnswerSynthesizerOptions{
+		Synthesizer: contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextfabric.RuntimeAnswerSynthesizerOptions{
 			ServiceVersion: request.options.ServiceVersion,
 			Backend:        "graph",
 		}},
@@ -179,9 +227,17 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		ServiceVersion: request.options.ServiceVersion, Now: request.options.Now, NewResultID: newInvestigationResultID,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("initialize context fabric engine: %w", err)
+		return nil, nil, fmt.Errorf("initialize context fabric engine: %w", err)
 	}
-	return engine, nil
+	// evictor is a concrete *modelruntimeresolver.Resolver, possibly nil
+	// (when orgModelConfigStore was nil) -- guard the typed-nil-interface
+	// trap here too, same as open()'s conversion, so a nil *Resolver can
+	// never reach the caller wrapped in a non-nil
+	// contextfabric.OrgModelRuntimeEvictor.
+	if evictor == nil {
+		return engine, nil, nil
+	}
+	return engine, evictor, nil
 }
 
 func newInvestigationResultID() string {

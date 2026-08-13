@@ -1,0 +1,8 @@
+{
+  "schema_version": "context_fabric_org_model_config_write_request.v1",
+  "provider": "acme-gateway",
+  "base_url": "https://llm.acme-gateway.example/v1/",
+  "model": "acme-large",
+  "fallback_model": "acme-large-fallback",
+  "credential": "sk-acme-live-a1b2c3d4e5f6wxyz"
+}
