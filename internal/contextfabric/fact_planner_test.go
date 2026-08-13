@@ -1258,3 +1258,113 @@ func TestReadFactsRejectsDuplicateSubjectsEvenWhenEverythingPrunes(t *testing.T)
 		}
 	})
 }
+
+// TestReadFactsRejectsDisallowedParametersEvenWhenEverythingPrunes closes the
+// LAST buildFactQuery check that was reachable only when a capability is not
+// pruned. Self-found while auditing this branch against codex round-8 F1's
+// class, then independently confirmed as codex round-9's finding.
+//
+// Same defect one field over: a requirement carrying a parameter key the
+// capability does not allow never reached buildFactQuery once its capability
+// pruned, so an invalid request returned SUCCESS with pruned coverage.
+// Whether a request is VALID must not depend on how much work it happens to
+// imply.
+func TestReadFactsRejectsDisallowedParametersEvenWhenEverythingPrunes(t *testing.T) {
+	t.Parallel()
+
+	team := subject(SubjectTeam, "team_platform")
+	repository := subject(SubjectRepository, "repo_api")
+	// Repository-only capability that allows exactly one parameter key.
+	newRegistry := func(t *testing.T) (*FactCapabilityRegistry, *factProviderStub) {
+		t.Helper()
+		metrics := &factProviderStub{
+			capability: FactCapability{
+				Kind: FactMetrics, Name: "metrics", Version: "v1",
+				SupportedSubjectKinds: []SubjectKind{SubjectRepository},
+				AllowedParameters:     []string{"window_days"},
+			},
+			result: FactProviderResult{State: SourceAvailable},
+		}
+		registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{})
+		if err != nil {
+			t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+		}
+		return registry, metrics
+	}
+
+	t.Run("codex round-9 scenario: disallowed parameter on an all-pruned request errors", func(t *testing.T) {
+		t.Parallel()
+		registry, metrics := newRegistry(t)
+		_, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			// Team-only subjects against a repository-only capability: every
+			// requirement prunes, so buildFactQuery never ran.
+			Subjects: []SubjectRef{team},
+			Requirements: []FactRequirement{
+				{Kind: FactMetrics, Parameters: map[string]string{"sql": "select *"}},
+			},
+		})
+		if err == nil {
+			t.Fatal("ReadFacts() error = nil, want a disallowed parameter rejected even when every requirement prunes")
+		}
+		if !strings.Contains(err.Error(), "parameter") || !strings.Contains(err.Error(), "not allowed") {
+			t.Fatalf("ReadFacts() error = %v, want the disallowed parameter named", err)
+		}
+		if len(metrics.queries) != 0 {
+			t.Fatal("no provider should be queried for an invalid request")
+		}
+	})
+
+	t.Run("control: an ALLOWED parameter on an all-pruned request still prunes", func(t *testing.T) {
+		t.Parallel()
+		registry, metrics := newRegistry(t)
+		bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			Subjects: []SubjectRef{team},
+			Requirements: []FactRequirement{
+				{Kind: FactMetrics, Parameters: map[string]string{"window_days": "30"}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() error = %v, want a valid pruned requirement to prune, not fail", err)
+		}
+		if len(metrics.queries) != 0 {
+			t.Fatal("a pruned capability must never be queried")
+		}
+		if len(bundle.Coverage.Sources) != 1 || bundle.Coverage.Sources[0].State != SourcePruned {
+			t.Fatalf("coverage = %+v, want a single pruned observation", bundle.Coverage.Sources)
+		}
+	})
+
+	t.Run("control: a disallowed parameter on a RUNNING request still errors", func(t *testing.T) {
+		t.Parallel()
+		registry, _ := newRegistry(t)
+		if _, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			Subjects: []SubjectRef{repository},
+			Requirements: []FactRequirement{
+				{Kind: FactMetrics, Parameters: map[string]string{"sql": "select *"}},
+			},
+		}); err == nil {
+			t.Fatal("ReadFacts() error = nil, want the pre-existing rejection preserved on the running path")
+		}
+	})
+
+	t.Run("control: an unregistered kind's parameters are not newly rejected", func(t *testing.T) {
+		t.Parallel()
+		registry, _ := newRegistry(t)
+		// FactWorkload has no provider here, so there is no capability to
+		// declare an allowlist against and the kind already degrades to
+		// SourceUnconfigured without ever building a query. The pre-pass
+		// must not invent a rejection for it.
+		bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			Subjects: []SubjectRef{repository},
+			Requirements: []FactRequirement{
+				{Kind: FactWorkload, Parameters: map[string]string{"anything": "goes"}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() error = %v, want an unregistered kind to stay SourceUnconfigured", err)
+		}
+		if len(bundle.Coverage.Sources) != 1 || bundle.Coverage.Sources[0].State != SourceUnconfigured {
+			t.Fatalf("coverage = %+v, want a single unconfigured observation", bundle.Coverage.Sources)
+		}
+	})
+}

@@ -191,11 +191,40 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 	// this index is a lossless way to get back from a plan entry -- which
 	// deliberately carries only a kind, never the request's prose -- to the
 	// requirement's provider Parameters.
+	// Self-found, same class as codex round-8 F1: the parameter allowlist
+	// was the LAST buildFactQuery check reachable only when a capability is
+	// not pruned. A requirement carrying a disallowed parameter key whose
+	// capability then prunes never reached buildFactQuery, so an invalid
+	// request returned success with pruned coverage.
+	//
+	// It runs as a pre-pass here, before the plan loop, rather than inside
+	// it: validity must be decided before ANY short-circuit, and a check
+	// placed ahead of the loop cannot be skipped by a future branch added
+	// inside it. It lives in ReadFacts rather than
+	// validateCanonicalFactRequest because AllowedParameters is declared by
+	// the capability, which only the registry knows.
+	//
+	// An unregistered kind is deliberately not validated here: there is no
+	// capability to declare an allowlist against, and that kind already
+	// degrades to SourceUnconfigured without ever building a query. This
+	// check governs exactly the requests buildFactQuery would have judged.
+	capabilities := r.capabilityIndex()
+	for _, requirement := range request.Requirements {
+		capability, registered := capabilities[requirement.Kind]
+		if !registered {
+			continue
+		}
+		for key := range requirement.Parameters {
+			if !containsString(capability.AllowedParameters, key) {
+				return CanonicalFactBundle{}, fmt.Errorf("fact capability %s: parameter %q is not allowed", requirement.Kind, key)
+			}
+		}
+	}
 	requirementsByKind := make(map[FactKind]FactRequirement, len(request.Requirements))
 	for _, requirement := range request.Requirements {
 		requirementsByKind[requirement.Kind] = requirement
 	}
-	for _, planned := range planFactReads(newFactPlanInput(request), r.capabilityIndex()) {
+	for _, planned := range planFactReads(newFactPlanInput(request), capabilities) {
 		requirement := requirementsByKind[planned.Kind]
 		registered, ok := r.providers[planned.Kind]
 		if !ok {
@@ -509,10 +538,17 @@ func validateCanonicalFactRequest(request CanonicalFactRequest) error {
 	//
 	// Checked in two places because those are the two lists that can carry a
 	// duplicate: the investigation-wide scope (used whenever a requirement
-	// names no subjects of its own) and each explicit requirement list. That
-	// is exactly equivalent to checking every requirement's effective
-	// subject list, which is what buildFactQuery does, without rechecking
-	// the shared scope once per requirement.
+	// names no subjects of its own) and each explicit requirement list.
+	//
+	// Relationship to buildFactQuery's own uniqueness check, stated
+	// precisely: this is equivalent for every request buildFactQuery would
+	// have judged, and STRICTER for a duplicate confined to subjects that
+	// narrowing drops. buildFactQuery sees the narrowed list; this sees the
+	// raw one. Duplicates share a kind, so narrowing keeps or drops both
+	// together and the two agree whenever the duplicate is among supported
+	// subjects. Being stricter is the contract-correct direction: the v1
+	// schema's uniqueItems forbids a duplicate outright, whether or not any
+	// capability would have queried it.
 	if duplicate, found := firstDuplicateSubject(investigationScopeSubjects(request)); found {
 		return fmt.Errorf("canonical fact request subjects must be unique: %q appears more than once", duplicate.CanonicalID)
 	}
