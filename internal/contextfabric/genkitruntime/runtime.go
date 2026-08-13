@@ -441,6 +441,27 @@ func boundedJSON(value any, maximum int) ([]byte, error) {
 	return encoded, nil
 }
 
+// retryable decides whether a generation failure may be retried with the
+// EXACT SAME encoded payload. It classifies ONLY on structured status/code
+// (a Genkit gRPC-style status, or context.DeadlineExceeded) -- never by
+// sniffing an error's message text (CHAOS-3770 F2).
+//
+// That restriction is deliberate, not merely cautious: the OpenAI SDK's own
+// error type (openai-go/internal/apierror.Error, aliased as openai.Error)
+// formats Error() as "%s %q: %d %s %s" with the raw provider response body
+// as the last verbatim component, and compat_oai/generate.go wraps that
+// error with a plain fmt.Errorf rather than a *core.GenkitError. So by the
+// time an error from the real production transport reaches this function,
+// it is routinely UNSTRUCTURED, and its message can legitimately be a
+// non-transient validation failure whose body happens to contain a word
+// like "timeout" or the digits "502" -- retrying that with the identical
+// payload would resubmit a request that can never succeed, violating the
+// no-retry-same-input rule (operations.md) for no benefit. An unstructured
+// error is therefore never retried by this function, full stop; genuinely
+// transient transport conditions (connection resets, 429/5xx, provider
+// timeouts) remain covered by the OpenAI SDK's own transport-level retry
+// loop (ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES), which runs BEFORE
+// its terminal error ever reaches genkitruntime.
 func retryable(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
@@ -450,26 +471,25 @@ func retryable(err error) bool {
 	}
 	// Genkit (and well-behaved plugins) surface transport and provider
 	// failures as *core.GenkitError with a gRPC-style status. Prefer that
-	// structured signal over string sniffing when it is present.
+	// structured signal over string sniffing when it is present -- and once
+	// present, trust it completely: an unmatched status (e.g. INTERNAL, or
+	// anything else Genkit's own validation paths raise) is not retryable
+	// either, never falling through to string matching on its own Message.
 	var genkitErr *core.GenkitError
 	if errors.As(err, &genkitErr) {
 		switch genkitErr.Status {
 		case core.RESOURCE_EXHAUSTED, core.UNAVAILABLE, core.DEADLINE_EXCEEDED, core.ABORTED:
 			return true
-		case core.INVALID_ARGUMENT:
-			// Malformed request or schema-incompatible output; the model is
-			// not going to succeed against the same input, so this fails
-			// closed instead of retrying (ADR 0008: invalid output fails
-			// closed).
+		default:
+			// Includes INVALID_ARGUMENT (malformed request or
+			// schema-incompatible output; the model is not going to
+			// succeed against the same input, so this fails closed
+			// instead of retrying -- ADR 0008: invalid output fails
+			// closed) and every other structured status.
 			return false
 		}
 	}
-	lower := strings.ToLower(err.Error())
-	for _, token := range []string{"429", "rate limit", "temporarily unavailable", "timeout", "deadline", "connection reset", "502", "503", "504"} {
-		if strings.Contains(lower, token) {
-			return true
-		}
-	}
+	// No structured signal: not retryable. See the function doc comment.
 	return false
 }
 

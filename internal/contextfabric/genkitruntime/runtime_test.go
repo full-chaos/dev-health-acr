@@ -597,8 +597,23 @@ func TestRetryableUsesStructuredGenkitStatusOverStringHeuristics(t *testing.T) {
 		{"deadline_exceeded_status_retryable", core.NewError(core.DEADLINE_EXCEEDED, "slow"), true},
 		{"aborted_retryable", core.NewError(core.ABORTED, "aborted"), true},
 		{"invalid_argument_not_retryable", core.NewError(core.INVALID_ARGUMENT, "bad schema: invented_kind value present in response"), false},
+		{"internal_not_retryable_even_with_transient_wording", core.NewError(core.INTERNAL, "unexpected panic: connection reset while parsing"), false},
 		{"context_canceled_not_retryable", context.Canceled, false},
-		{"plain_502_retryable", errors.New("upstream returned 502"), true},
+		// CHAOS-3770 F2: an UNSTRUCTURED error (not *core.GenkitError -- what
+		// the real OpenAI SDK returns, since compat_oai/generate.go wraps the
+		// SDK's own error with plain fmt.Errorf rather than producing a
+		// GenkitError) must never be retried by sniffing its message for a
+		// transient-sounding substring. The OpenAI SDK's error Error() method
+		// embeds the raw provider response body verbatim
+		// (openai-go/internal/apierror.Error.Error()), so a NON-transient
+		// validation failure whose body happens to quote a word like
+		// "timeout" or contain "502" would otherwise be retried with the
+		// identical payload, violating the no-retry-same-input rule
+		// (operations.md). These two cases replace the old
+		// "plain_502_retryable=true" expectation, which encoded exactly that
+		// defect.
+		{"plain_502_not_retryable_unstructured", errors.New("upstream returned 502"), false},
+		{"unstructured_error_embedding_transient_word_not_retried", errors.New(`400 Bad Request: {"error":{"message":"Rejected prompt: request timeout budget of 30s exceeded for this input","type":"invalid_request_error","code":"invalid_prompt"}}`), false},
 		{"plain_opaque_not_retryable", errors.New("boom"), false},
 	}
 	for _, tc := range cases {
@@ -608,6 +623,32 @@ func TestRetryableUsesStructuredGenkitStatusOverStringHeuristics(t *testing.T) {
 				t.Fatalf("retryable(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRuntimeDoesNotRetryAnUnstructuredNonTransientErrorWithTheSamePayload is
+// the CHAOS-3770 F2 end-to-end probe: it drives the retry loop itself
+// (rather than calling retryable() directly) to prove that an unstructured,
+// non-transient generation failure whose message happens to contain a
+// transient-sounding word is called exactly once, never resubmitted with the
+// same encoded payload.
+func TestRuntimeDoesNotRetryAnUnstructuredNonTransientErrorWithTheSamePayload(t *testing.T) {
+	t.Parallel()
+	stub := &generatorStub{
+		interpretErr: errors.New(`400 Bad Request: {"error":{"message":"Rejected prompt: request timeout budget of 30s exceeded for this input","type":"invalid_request_error"}}`),
+	}
+	runtime := mustRuntime(t, stub, Config{MaxAttempts: 3})
+
+	_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+
+	if err == nil {
+		t.Fatal("InterpretQuestion() error = nil, want the classified generation failure")
+	}
+	if len(stub.requests) != 1 {
+		t.Fatalf("generator was called %d times, want exactly 1 -- a non-transient unstructured error must not be retried with the same payload", len(stub.requests))
+	}
+	if receipt.Attempts != 1 {
+		t.Fatalf("receipt.Attempts = %d, want 1", receipt.Attempts)
 	}
 }
 
