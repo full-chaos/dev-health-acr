@@ -31,6 +31,21 @@ var (
 	ErrNotFound            = errors.New("acr: resource was not found")
 	ErrInvalidRequest      = errors.New("acr: request was rejected as invalid")
 	ErrUnknownAPIError     = errors.New("acr: hosted API reported an unrecognized error code")
+	// ErrUpstreamInvalidOutput, ErrInterpretationRejected, and
+	// ErrSynthesisRejected are the Context Fabric investigations endpoint's
+	// three model-failure codes (CHAOS-3784: internal/api/context_fabric_routes.go's
+	// writeContextFabricError). upstream_invalid_output predates that
+	// change (a provider/schema-level failure) and was already reachable
+	// on the wire; it had no sidecar sentinel until round-2 review (F2)
+	// caught that every one of these three codes fell through
+	// validateErrorEnvelope's codeSentinels membership check straight to
+	// the generic, information-losing newTransportError fallback -- which
+	// also silently forces Retryable to a status-based guess
+	// (422/502 not covered by that guess), discarding the hosted
+	// response's own correct retryable=true.
+	ErrUpstreamInvalidOutput  = errors.New("acr: hosted API's model provider returned an invalid response")
+	ErrInterpretationRejected = errors.New("acr: hosted API rejected the interpreted question against a v1 bound")
+	ErrSynthesisRejected      = errors.New("acr: hosted API rejected the synthesized answer against a v1 bound")
 
 	ErrUnexpectedRedirect        = errors.New("acr: hosted API attempted a redirect, which the client does not follow")
 	ErrResponseTooLarge          = errors.New("acr: hosted API response exceeded the configured size limit")
@@ -50,16 +65,19 @@ var (
 )
 
 var codeSentinels = map[string]error{
-	"invalid_token":        ErrInvalidToken,
-	"insufficient_scope":   ErrInsufficientScope,
-	"repo_forbidden":       ErrRepositoryForbidden,
-	"feature_not_enabled":  ErrFeatureNotEnabled,
-	"version_mismatch":     ErrVersionMismatch,
-	"rate_limited":         ErrRateLimited,
-	"upstream_unavailable": ErrUpstreamUnavailable,
-	"internal_error":       ErrInternalAPIError,
-	"not_found":            ErrNotFound,
-	"invalid_request":      ErrInvalidRequest,
+	"invalid_token":           ErrInvalidToken,
+	"insufficient_scope":      ErrInsufficientScope,
+	"repo_forbidden":          ErrRepositoryForbidden,
+	"feature_not_enabled":     ErrFeatureNotEnabled,
+	"version_mismatch":        ErrVersionMismatch,
+	"rate_limited":            ErrRateLimited,
+	"upstream_unavailable":    ErrUpstreamUnavailable,
+	"internal_error":          ErrInternalAPIError,
+	"not_found":               ErrNotFound,
+	"invalid_request":         ErrInvalidRequest,
+	"upstream_invalid_output": ErrUpstreamInvalidOutput,
+	"interpretation_rejected": ErrInterpretationRejected,
+	"synthesis_rejected":      ErrSynthesisRejected,
 }
 
 // codeSafeMessages maps each recognized hosted error code to a fixed,
@@ -73,16 +91,19 @@ var codeSentinels = map[string]error{
 // sanitizing it, closes that channel independent of what the hosted
 // response actually said.
 var codeSafeMessages = map[string]string{
-	"invalid_token":        "the configured credential is missing or invalid",
-	"insufficient_scope":   "the configured credential is missing a required scope",
-	"repo_forbidden":       "the repository is not authorized for this credential",
-	"feature_not_enabled":  "this feature is not enabled for the organization",
-	"version_mismatch":     "the sidecar version is not supported by the hosted API",
-	"rate_limited":         "the request rate limit was exceeded",
-	"upstream_unavailable": "the hosted API is temporarily unavailable",
-	"internal_error":       "the hosted API reported an internal error",
-	"not_found":            "the requested resource was not found",
-	"invalid_request":      "the request was rejected as invalid",
+	"invalid_token":           "the configured credential is missing or invalid",
+	"insufficient_scope":      "the configured credential is missing a required scope",
+	"repo_forbidden":          "the repository is not authorized for this credential",
+	"feature_not_enabled":     "this feature is not enabled for the organization",
+	"version_mismatch":        "the sidecar version is not supported by the hosted API",
+	"rate_limited":            "the request rate limit was exceeded",
+	"upstream_unavailable":    "the hosted API is temporarily unavailable",
+	"internal_error":          "the hosted API reported an internal error",
+	"not_found":               "the requested resource was not found",
+	"invalid_request":         "the request was rejected as invalid",
+	"upstream_invalid_output": "the hosted API's model provider returned an invalid response",
+	"interpretation_rejected": "the hosted API rejected the interpreted question against a v1 bound",
+	"synthesis_rejected":      "the hosted API rejected the synthesized answer against a v1 bound",
 }
 
 // unknownCodeSafeMessage is used for a hosted error code this client does

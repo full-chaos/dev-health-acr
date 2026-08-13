@@ -2,6 +2,7 @@ package v1
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -301,7 +302,23 @@ func (r ContextFabricFactRequirement) Validate() error {
 	if !validFactKind(r.Kind) || len(r.Subjects) > 250 || !uniqueSubjects(r.Subjects) || len(r.Parameters) > ContextFabricFactRequirementParametersMaxCount {
 		return fmt.Errorf("fact requirement violates v1 bounds")
 	}
-	for key, value := range r.Parameters {
+	// Sorted, not a bare map range (CHAOS-3784 round-5 R5-1): Go
+	// randomizes map iteration order per range, so ranging r.Parameters
+	// directly would make WHICH parameter this rejects on -- and so which
+	// one DiagnoseContextFabricFactRequirementBound (bound_diagnosis.go,
+	// which already sorts) can correctly attribute -- nondeterministic
+	// when more than one parameter violates a bound. Sorting here does not
+	// change the accept/reject set (the same requirements are still
+	// rejected either way); it only makes the first-reported violation,
+	// among several, deterministic and equal to what diagnosis reports
+	// (CHAOS-3784 round-3 R3-2's same fix, applied to this validator).
+	keys := make([]string, 0, len(r.Parameters))
+	for key := range r.Parameters {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		value := r.Parameters[key]
 		if !stringLengthBetween(key, 1, ContextFabricFactRequirementParameterKeyMaxLength) || !stringLengthBetween(value, 0, ContextFabricFactRequirementParameterValueMaxLength) || strings.TrimSpace(key) != key || strings.TrimSpace(value) != value {
 			return fmt.Errorf("fact requirement parameter violates v1 bounds")
 		}

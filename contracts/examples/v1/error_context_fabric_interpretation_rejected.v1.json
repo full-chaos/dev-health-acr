@@ -1,0 +1,13 @@
+{
+  "schema_version": "error.v1",
+  "request_id": "req_01J0ACR002",
+  "error": {
+    "code": "interpretation_rejected",
+    "message": "Context Fabric's interpretation of the question violated a v1 bound",
+    "http_status": 422,
+    "retryable": true,
+    "details": {
+      "violated_bound": "interpretation.requested_judgment.max_length"
+    }
+  }
+}

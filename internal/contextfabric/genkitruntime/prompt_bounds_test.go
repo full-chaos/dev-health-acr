@@ -276,6 +276,35 @@ func modelFacingBounds() []boundCase {
 			},
 		},
 		{
+			// CHAOS-3784 round-3 R3-1: enforced (SubjectRef.Validate(), via
+			// uniqueSubjects in ContextFabricDriverJudgment.Validate()) but
+			// had no registry entry, no case, and no prompt statement until
+			// this fix -- the class (a) exclusion this bound was
+			// (incorrectly) covered by is documented and retracted in
+			// ContextFabricModelFacingBounds's doc comment.
+			name: "synthesis/driver affected_subjects item canonical_id max length", registryName: "synthesis.driver.affected_subjects.item_canonical_id_max_length",
+			limit: contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"canonical ID at most 256"},
+			atLimit: func() error {
+				return driverWithAffectedSubjectCanonicalIDLength(contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength).Validate()
+			},
+			over: func() error {
+				return driverWithAffectedSubjectCanonicalIDLength(contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength + 1).Validate()
+			},
+		},
+		{
+			// See the matching comment on the canonical_id case above.
+			name: "synthesis/driver affected_subjects item label max length", registryName: "synthesis.driver.affected_subjects.item_label_max_length",
+			limit: contractsv1.ContextFabricSubjectRefLabelMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"label at most 512"},
+			atLimit: func() error {
+				return driverWithAffectedSubjectLabelLength(contractsv1.ContextFabricSubjectRefLabelMaxLength).Validate()
+			},
+			over: func() error {
+				return driverWithAffectedSubjectLabelLength(contractsv1.ContextFabricSubjectRefLabelMaxLength + 1).Validate()
+			},
+		},
+		{
 			name: "synthesis/driver path_ids max count", registryName: "synthesis.driver.path_ids.max_count",
 			limit: contractsv1.ContextFabricDriverPathIDsMaxCount, prompt: synthesisSystemPrompt,
 			mentions: []string{"path_ids", "250"},
@@ -294,6 +323,33 @@ func modelFacingBounds() []boundCase {
 			},
 		},
 		{
+			// CHAOS-3784 round-2 R2-2: enforced (validate_context_fabric_result.go's
+			// uniqueTrimmedStrings(d.PathIDs, ContextFabricIdentifierRefMaxLength))
+			// and already stated in the prompt ("each at most 256 characters"),
+			// but had no registry entry and no case here until this fix.
+			name: "synthesis/driver path_id item max length", registryName: "synthesis.driver.path_ids.item_max_length",
+			limit: contractsv1.ContextFabricIdentifierRefMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"path_ids and at most 250 claimed_fact_ids, each at most 256"},
+			atLimit: func() error {
+				return driverWithPathIDLength(contractsv1.ContextFabricIdentifierRefMaxLength).Validate()
+			},
+			over: func() error {
+				return driverWithPathIDLength(contractsv1.ContextFabricIdentifierRefMaxLength + 1).Validate()
+			},
+		},
+		{
+			// See the matching comment on the path_id item-length case above.
+			name: "synthesis/driver claimed_fact_id item max length", registryName: "synthesis.driver.claimed_fact_ids.item_max_length",
+			limit: contractsv1.ContextFabricIdentifierRefMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"path_ids and at most 250 claimed_fact_ids, each at most 256"},
+			atLimit: func() error {
+				return driverWithClaimedFactIDLength(contractsv1.ContextFabricIdentifierRefMaxLength).Validate()
+			},
+			over: func() error {
+				return driverWithClaimedFactIDLength(contractsv1.ContextFabricIdentifierRefMaxLength + 1).Validate()
+			},
+		},
+		{
 			name: "synthesis/driver evidence_ref_ids max count", registryName: "synthesis.driver.evidence_ref_ids.max_count",
 			limit: contractsv1.ContextFabricEvidenceRefIDsMaxCount, prompt: synthesisSystemPrompt,
 			mentions: []string{"evidence_ref_ids", "500"},
@@ -302,6 +358,22 @@ func modelFacingBounds() []boundCase {
 			},
 			over: func() error {
 				return driverWithEvidenceRefIDs(contractsv1.ContextFabricEvidenceRefIDsMaxCount + 1).Validate()
+			},
+		},
+		{
+			// CHAOS-3784 round-3 R3-1: enforced (boundedEvidenceRefs's
+			// stringLengthBetween, called from ContextFabricDriverJudgment.Validate())
+			// but had no registry entry, no case, and no prompt statement
+			// until this fix -- same retracted class (a) exclusion as the
+			// affected_subjects item-length bounds above.
+			name: "synthesis/driver evidence_ref_id item max length", registryName: "synthesis.driver.evidence_ref_ids.item_max_length",
+			limit: contractsv1.ContextFabricEvidenceRefIDMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"evidence_ref_ids, each at most 256"},
+			atLimit: func() error {
+				return driverWithEvidenceRefIDLength(contractsv1.ContextFabricEvidenceRefIDMaxLength).Validate()
+			},
+			over: func() error {
+				return driverWithEvidenceRefIDLength(contractsv1.ContextFabricEvidenceRefIDMaxLength + 1).Validate()
 			},
 		},
 		{
@@ -337,6 +409,29 @@ func modelFacingBounds() []boundCase {
 			},
 		},
 		{
+			// CHAOS-3784 round-3 R3-1: see the matching driver-side comment.
+			name: "synthesis/finding subjects item canonical_id max length", registryName: "synthesis.finding.subjects.item_canonical_id_max_length",
+			limit: contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"canonical ID at most 256"},
+			atLimit: func() error {
+				return findingWithSubjectCanonicalIDLength(contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength).Validate()
+			},
+			over: func() error {
+				return findingWithSubjectCanonicalIDLength(contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength + 1).Validate()
+			},
+		},
+		{
+			name: "synthesis/finding subjects item label max length", registryName: "synthesis.finding.subjects.item_label_max_length",
+			limit: contractsv1.ContextFabricSubjectRefLabelMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"label at most 512"},
+			atLimit: func() error {
+				return findingWithSubjectLabelLength(contractsv1.ContextFabricSubjectRefLabelMaxLength).Validate()
+			},
+			over: func() error {
+				return findingWithSubjectLabelLength(contractsv1.ContextFabricSubjectRefLabelMaxLength + 1).Validate()
+			},
+		},
+		{
 			name: "synthesis/finding evidence_ref_ids max count", registryName: "synthesis.finding.evidence_ref_ids.max_count",
 			limit: contractsv1.ContextFabricEvidenceRefIDsMaxCount, prompt: synthesisSystemPrompt,
 			mentions: []string{"evidence_ref_ids", "500"},
@@ -348,6 +443,18 @@ func modelFacingBounds() []boundCase {
 			},
 		},
 		{
+			// CHAOS-3784 round-3 R3-1: see the matching driver-side comment.
+			name: "synthesis/finding evidence_ref_id item max length", registryName: "synthesis.finding.evidence_ref_ids.item_max_length",
+			limit: contractsv1.ContextFabricEvidenceRefIDMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"evidence_ref_ids, each at most 256"},
+			atLimit: func() error {
+				return findingWithEvidenceRefIDLength(contractsv1.ContextFabricEvidenceRefIDMaxLength).Validate()
+			},
+			over: func() error {
+				return findingWithEvidenceRefIDLength(contractsv1.ContextFabricEvidenceRefIDMaxLength + 1).Validate()
+			},
+		},
+		{
 			name: "synthesis/finding claimed_fact_ids max count", registryName: "synthesis.finding.claimed_fact_ids.max_count",
 			limit: contractsv1.ContextFabricDriverClaimedFactIDsMaxCount, prompt: synthesisSystemPrompt,
 			mentions: []string{"claimed_fact_ids", "250"},
@@ -356,6 +463,22 @@ func modelFacingBounds() []boundCase {
 			},
 			over: func() error {
 				return findingWithClaimedFactIDs(contractsv1.ContextFabricDriverClaimedFactIDsMaxCount + 1).Validate()
+			},
+		},
+		{
+			// CHAOS-3784 round-2 R2-2: see the matching driver-side case
+			// above -- Finding.Validate() enforces this the same way
+			// (uniqueTrimmedStrings(f.ClaimedFactIDs, ContextFabricIdentifierRefMaxLength)),
+			// and the SAME prompt sentence covers both driver and finding
+			// (prompts.go states them together).
+			name: "synthesis/finding claimed_fact_id item max length", registryName: "synthesis.finding.claimed_fact_ids.item_max_length",
+			limit: contractsv1.ContextFabricIdentifierRefMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"path_ids and at most 250 claimed_fact_ids, each at most 256"},
+			atLimit: func() error {
+				return findingWithClaimedFactIDLength(contractsv1.ContextFabricIdentifierRefMaxLength).Validate()
+			},
+			over: func() error {
+				return findingWithClaimedFactIDLength(contractsv1.ContextFabricIdentifierRefMaxLength + 1).Validate()
 			},
 		},
 		{
@@ -371,6 +494,43 @@ func modelFacingBounds() []boundCase {
 			mentions: []string{"field", "128"},
 			atLimit:  func() error { return claimWithField(contractsv1.ContextFabricClaimedFieldMaxLength).Validate() },
 			over:     func() error { return claimWithField(contractsv1.ContextFabricClaimedFieldMaxLength + 1).Validate() },
+		},
+		{
+			// CHAOS-3784 round-3 R3-1: see the matching driver-side comment.
+			name: "synthesis/claimed fact subject canonical_id max length", registryName: "synthesis.claimed_fact.subject.canonical_id_max_length",
+			limit: contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"canonical ID at most 256"},
+			atLimit: func() error {
+				return claimWithSubjectCanonicalIDLength(contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength).Validate()
+			},
+			over: func() error {
+				return claimWithSubjectCanonicalIDLength(contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength + 1).Validate()
+			},
+		},
+		{
+			name: "synthesis/claimed fact subject label max length", registryName: "synthesis.claimed_fact.subject.label_max_length",
+			limit: contractsv1.ContextFabricSubjectRefLabelMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"label at most 512"},
+			atLimit: func() error {
+				return claimWithSubjectLabelLength(contractsv1.ContextFabricSubjectRefLabelMaxLength).Validate()
+			},
+			over: func() error {
+				return claimWithSubjectLabelLength(contractsv1.ContextFabricSubjectRefLabelMaxLength + 1).Validate()
+			},
+		},
+		{
+			// CHAOS-3784 round-3 R3-1: enforced (ContextFabricScalarValue.Validate())
+			// but had no registry entry, no case, and no prompt statement
+			// until this fix -- same retracted class (a) exclusion.
+			name: "synthesis/claimed fact value max length", registryName: "synthesis.claimed_fact.value.max_length",
+			limit: contractsv1.ContextFabricClaimedFactValueMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"string value is at most 4000"},
+			atLimit: func() error {
+				return claimWithValueLength(contractsv1.ContextFabricClaimedFactValueMaxLength).Validate()
+			},
+			over: func() error {
+				return claimWithValueLength(contractsv1.ContextFabricClaimedFactValueMaxLength + 1).Validate()
+			},
 		},
 		{
 			name: "synthesis/strongest_pressures max count", registryName: "synthesis.strongest_pressures.max_count",
@@ -721,6 +881,23 @@ func driverWithClaimedFactIDs(count int) contractsv1.ContextFabricDriverJudgment
 	return driver
 }
 
+// driverWithPathIDLength and driverWithClaimedFactIDLength are the
+// per-item length counterparts of driverWithPathIDs/driverWithClaimedFactIDs
+// above (which vary COUNT): a single path_id/claimed_fact_id of the given
+// length, isolating the item-length bound from the count bound
+// (CHAOS-3784 round-2 R2-2).
+func driverWithPathIDLength(length int) contractsv1.ContextFabricDriverJudgment {
+	driver := baseDriver()
+	driver.PathIDs = []string{filler(length)}
+	return driver
+}
+
+func driverWithClaimedFactIDLength(length int) contractsv1.ContextFabricDriverJudgment {
+	driver := baseDriver()
+	driver.ClaimedFactIDs = []string{filler(length)}
+	return driver
+}
+
 func evidenceRefs(count int) []string {
 	refs := make([]string, 0, count)
 	for i := 0; i < count; i++ {
@@ -732,6 +909,32 @@ func evidenceRefs(count int) []string {
 func driverWithEvidenceRefIDs(count int) contractsv1.ContextFabricDriverJudgment {
 	driver := baseDriver()
 	driver.EvidenceRefIDs = evidenceRefs(count)
+	return driver
+}
+
+// driverWithEvidenceRefIDLength, driverWithAffectedSubjectCanonicalIDLength,
+// and driverWithAffectedSubjectLabelLength are CHAOS-3784 round-3 R3-1
+// additions: the per-item length counterparts of driverWithEvidenceRefIDs/
+// driverWithSubjects above (which vary COUNT).
+func driverWithEvidenceRefIDLength(length int) contractsv1.ContextFabricDriverJudgment {
+	driver := baseDriver()
+	driver.EvidenceRefIDs = []string{filler(length)}
+	return driver
+}
+
+func driverWithAffectedSubjectCanonicalIDLength(length int) contractsv1.ContextFabricDriverJudgment {
+	driver := baseDriver()
+	driver.AffectedSubjects = []contractsv1.ContextFabricSubjectRef{{
+		Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: filler(length), Label: "Project",
+	}}
+	return driver
+}
+
+func driverWithAffectedSubjectLabelLength(length int) contractsv1.ContextFabricDriverJudgment {
+	driver := baseDriver()
+	driver.AffectedSubjects = []contractsv1.ContextFabricSubjectRef{{
+		Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_0000", Label: filler(length),
+	}}
 	return driver
 }
 
@@ -790,9 +993,42 @@ func findingWithEvidenceRefIDs(count int) contractsv1.ContextFabricFinding {
 	return finding
 }
 
+// findingWithEvidenceRefIDLength, findingWithSubjectCanonicalIDLength, and
+// findingWithSubjectLabelLength are the finding-side counterparts of the
+// driver-side helpers above (CHAOS-3784 round-3 R3-1).
+func findingWithEvidenceRefIDLength(length int) contractsv1.ContextFabricFinding {
+	finding := baseFinding()
+	finding.EvidenceRefIDs = []string{filler(length)}
+	return finding
+}
+
+func findingWithSubjectCanonicalIDLength(length int) contractsv1.ContextFabricFinding {
+	finding := baseFinding()
+	finding.Subjects = []contractsv1.ContextFabricSubjectRef{{
+		Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: filler(length), Label: "Project",
+	}}
+	return finding
+}
+
+func findingWithSubjectLabelLength(length int) contractsv1.ContextFabricFinding {
+	finding := baseFinding()
+	finding.Subjects = []contractsv1.ContextFabricSubjectRef{{
+		Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_0000", Label: filler(length),
+	}}
+	return finding
+}
+
 func findingWithClaimedFactIDs(count int) contractsv1.ContextFabricFinding {
 	finding := baseFinding()
 	finding.ClaimedFactIDs = uniqueTerms(count)
+	return finding
+}
+
+// findingWithClaimedFactIDLength is driverWithClaimedFactIDLength's
+// finding-side counterpart (CHAOS-3784 round-2 R2-2).
+func findingWithClaimedFactIDLength(length int) contractsv1.ContextFabricFinding {
+	finding := baseFinding()
+	finding.ClaimedFactIDs = []string{filler(length)}
 	return finding
 }
 
@@ -815,6 +1051,36 @@ func claimWithField(length int) contractsv1.ContextFabricClaimedFact {
 		Subject: boundsSubject(0),
 		Field:   filler(length),
 		Value:   contractsv1.ContextFabricScalarValue{String: &value},
+	}
+}
+
+// claimWithSubjectCanonicalIDLength, claimWithSubjectLabelLength, and
+// claimWithValueLength are CHAOS-3784 round-3 R3-1 additions: the
+// remaining fields ContextFabricClaimedFact.Validate() bounds by length.
+func claimWithSubjectCanonicalIDLength(length int) contractsv1.ContextFabricClaimedFact {
+	value := "in_progress"
+	return contractsv1.ContextFabricClaimedFact{
+		ClaimID: "claim_00000001", Kind: contractsv1.ContextFabricFactStatus,
+		Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: filler(length), Label: "Project"},
+		Field:   "status", Value: contractsv1.ContextFabricScalarValue{String: &value},
+	}
+}
+
+func claimWithSubjectLabelLength(length int) contractsv1.ContextFabricClaimedFact {
+	value := "in_progress"
+	return contractsv1.ContextFabricClaimedFact{
+		ClaimID: "claim_00000001", Kind: contractsv1.ContextFabricFactStatus,
+		Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_0000", Label: filler(length)},
+		Field:   "status", Value: contractsv1.ContextFabricScalarValue{String: &value},
+	}
+}
+
+func claimWithValueLength(length int) contractsv1.ContextFabricClaimedFact {
+	value := filler(length)
+	return contractsv1.ContextFabricClaimedFact{
+		ClaimID: "claim_00000001", Kind: contractsv1.ContextFabricFactStatus,
+		Subject: boundsSubject(0), Field: "status",
+		Value: contractsv1.ContextFabricScalarValue{String: &value},
 	}
 }
 

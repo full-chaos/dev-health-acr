@@ -127,17 +127,74 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Context Fabric is temporarily unavailable", true, nil)
 		return
 	}
-	// The model produced output that failed grounding/evidence-closure
-	// validation (SynthesisDraft.ValidateAgainst). This is an upstream
-	// data-quality failure, not an ACR bug: 502 (not 500) so a caller can
-	// tell the two apart, and retryable because a fresh model call may
-	// succeed even though this one didn't.
+	// Interpretation/synthesis bound violations (CHAOS-3784). The model
+	// produced structurally parseable output that ACR's OWN contracts/v1
+	// bounds rejected (InterpretedQuestion.Validate /
+	// SynthesisDraft.ValidateAgainst) -- distinct from a raw provider/
+	// schema failure below, and worth a distinct code plus (when
+	// determinable) the violated bound's name: CHAOS-3770 evidence showed 5
+	// of 8 real failures were exactly one bound (requested_judgment's
+	// 256-character cap) with zero signal at this endpoint. Checked BEFORE
+	// the plain ErrModelOutput branch: both these sentinels also wrap
+	// ErrModelOutput (contextfabric.RuntimeQuestionInterpreter.Interpret /
+	// RuntimeAnswerSynthesizer.Synthesize), so the more specific check must
+	// run first.
+	//
+	// Status is 422 (Unprocessable Entity), deliberately NOT 502: a bound
+	// violation is not the provider misbehaving (that stays 502, below) and
+	// not an ACR bug (that stays 500) -- it is ACR's own validator
+	// rejecting a derived artifact, the same "well-formed but semantically
+	// rejected" shape 422 already names elsewhere in HTTP. Retryable
+	// because a fresh model call, independent of the rejected one, may
+	// produce compliant output.
+	//
+	// Only the violated bound's fixed, ACR-owned registry NAME goes in
+	// details (contractsv1.ContextFabricModelFacingBounds) -- e.g.
+	// "interpretation.requested_judgment.max_length" -- never the rejected
+	// value or any other model-generated text. A business-rule rejection
+	// (an invalid enum, a claim-binding/grounding failure) has no single
+	// bound to name, so details is omitted for those.
+	if errors.Is(err, contextfabric.ErrInterpretationRejected) {
+		writeContextFabricRejectionError(w, r, err, "interpretation_rejected", "Context Fabric's interpretation of the question violated a v1 bound")
+		return
+	}
+	if errors.Is(err, contextfabric.ErrSynthesisRejected) {
+		writeContextFabricRejectionError(w, r, err, "synthesis_rejected", "Context Fabric's synthesized answer violated a v1 bound")
+		return
+	}
+	// A provider/transport-level failure: the raw generation call failed,
+	// or Genkit itself could not parse the provider's response into the
+	// expected schema (genkitruntime.classifyModelError). This is still an
+	// upstream data-quality failure, not an ACR bug: 502 (not 500) so a
+	// caller can tell the two apart, and retryable because a fresh model
+	// call may succeed even though this one didn't. Never a bound
+	// violation -- no violated_bound in details.
+	//
+	// Code stays upstream_invalid_output (unchanged from before CHAOS-3784,
+	// deliberately NOT renamed to a new "provider_error" value): round-2
+	// review flagged a rename here as gratuitous breakage for any existing
+	// upstream_invalid_output matcher outside this repo, for zero benefit
+	// -- the new interpretation_rejected/synthesis_rejected codes above
+	// already carry the distinguishing signal this ticket asked for.
 	if errors.Is(err, contextfabric.ErrModelOutput) {
 		writeError(w, r, http.StatusBadGateway, "upstream_invalid_output", "Context Fabric produced an invalid answer; retry", true, nil)
 		return
 	}
 	a.logger.ErrorContext(r.Context(), "context fabric investigation failed", "request_id", RequestID(r.Context()), "failure_class", "context_fabric_investigation")
 	writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
+}
+
+// writeContextFabricRejectionError writes the shared 422 response shape for
+// ErrInterpretationRejected/ErrSynthesisRejected, attaching
+// details.violated_bound only when err carries a
+// *contextfabric.ModelBoundViolation.
+func writeContextFabricRejectionError(w http.ResponseWriter, r *http.Request, err error, code, message string) {
+	var violation *contextfabric.ModelBoundViolation
+	var details map[string]any
+	if errors.As(err, &violation) {
+		details = map[string]any{"violated_bound": violation.Bound}
+	}
+	writeError(w, r, http.StatusUnprocessableEntity, code, message, true, details)
 }
 
 func contextFabricResultItems(result contextfabric.InvestigationResult) int {

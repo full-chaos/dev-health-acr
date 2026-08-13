@@ -33,6 +33,88 @@ package v1
 // such a case -- so a bound value can drift, or a whole new bound can be
 // added, and either is caught mechanically rather than depending on a
 // second, independently-maintained manual list staying in sync by hand.
+//
+// CHAOS-3784 round-3 R3-1: a bound is not safely excludable from this
+// registry merely because some OTHER check (a membership/grounding/value-
+// equality check in SynthesisDraft.ValidateAgainst) would "obviously"
+// reject the same violating value for a different reason -- Go evaluates a
+// struct's own Validate() call BEFORE any of ValidateAgainst's grounding
+// checks in every single caller site in this codebase (the per-item loops
+// in internal/contextfabric/model_runtime.go always call
+// driver.Validate()/finding.Validate()/claim.Validate() first, THEN check
+// membership/labels/value-equality), so a length bound enforced INSIDE a
+// Validate() method always wins the race against a grounding check enforced
+// OUTSIDE it, regardless of which one an exclusion rationale assumed would
+// fire first. ContextFabricIdentifierRefMaxLength (path_id/claimed_fact_id
+// item length, added CHAOS-3784 round-2 R2-2) was reasoned about
+// correctly; the ORIGINAL CHAOS-3770 v7 prompt-doc rationale for excluding
+// evidence_ref_id/SubjectRef.CanonicalID/SubjectRef.Label/ClaimedFact.Value
+// ("a membership/grounding check already rejects an unrecognized value
+// before its length is the operative failure reason") was not -- all four
+// are enforced inside a Validate() call that runs strictly before the
+// membership/grounding check the rationale relied on, so an
+// simultaneously-too-long-AND-ungrounded value from the model is rejected
+// on the LENGTH violation, unreported, exactly like the path_id/
+// claimed_fact_id case R2-2 fixed. All four are now registered below.
+//
+// CHAOS-3784 round-4: R3-1's fix (registering the four fields above) was
+// necessary but not sufficient -- DiagnoseContextFabric*Bound still SCANNED
+// each struct independently for any registrable violation, so an EARLIER
+// non-registrable rejection (an invalid enum, a too-short value, a missing
+// required field, a grounding/claim-binding failure) sitting before a
+// LATER genuine bound violation in Validate()/ValidateAgainst()'s own
+// clause order could still be masked by that later, unrelated bound --
+// reporting a name for something the validator never actually rejected
+// on. The fix is structural, not another case-by-case exclusion:
+// DiagnoseContextFabric*Bound (context_fabric_bound_diagnosis.go) and
+// internal/contextfabric's diagnoseSynthesisDraftBound are now literal,
+// clause-by-clause MIRRORS of their Validate()/ValidateAgainst()
+// counterparts' own left-to-right, short-circuit order -- including every
+// non-bound clause -- and return at the FIRST clause that fails, naming a
+// bound only when that first failure is one.
+//
+// This makes the exclusion list below an ORDER-PROOF guarantee, not an
+// assumption about which check happens to run first: a rejection whose
+// first-failing clause is anything below (an enum, a min-side length, an
+// uniqueness/duplicate check, a grounding/claim-binding rule, a missing
+// required field) yields NO violated_bound BY CONSTRUCTION -- the mirror
+// stops there and never reaches a later clause, registered or not -- not
+// because each case was individually reasoned about and found safe.
+//
+// CHAOS-3784 round-5: this guarantee holds only as long as each mirror's
+// clause order is kept in sync with its Validate()/ValidateAgainst()
+// counterpart by hand, since no mechanical check can compare two
+// independently-written control-flow bodies for order equality (unlike
+// ContextFabricModelFacingBounds itself, which IS mechanically checked
+// against Diagnose* by TestContextFabricModelFacingBoundRegistryDiagnosisCoverage);
+// this residual is accepted deliberately, not overlooked -- the shared
+// clause helpers (diagnoseLengthBound and friends) cover every length/
+// uniqueness clause BODY so only the call-site ORDER can drift, and the
+// paired regression tests alongside each mirror
+// (TestDiagnose*MatchesValidateStatementOrder/*StopsAtFirstFailingClause*)
+// exist specifically to catch that drift for every bound it would affect,
+// each time a Validate()/ValidateAgainst() clause order changes.
+//   - ContextFabricFactRequirement.Subjects: the model has no wire field to
+//     populate it through at all (factRequirementOutput in
+//     genkitruntime/runtime.go carries only kind/parameters) -- toDomain()
+//     never assigns it, so it is always nil regardless of what the model
+//     returns. Structurally unreachable from model output, full stop --
+//     the one exclusion that doesn't depend on clause order at all.
+//   - Every MINIMUM-side length/count bound (ContextFabricModelMintedIDMinLength,
+//     ContextFabricDriverAffectedSubjectsMinCount, SubjectRef.CanonicalID/
+//     Label's min of 1, evidence_ref_id's min of 8): this registry's
+//     one-entry-per-field convention (see e.g. driver_id/finding_id/
+//     claim_id sharing a single "max_length" entry for their [8,256] shape)
+//     names only the MAXIMUM side (CHAOS-3784 round-1 F3), so the mirror's
+//     length-clause helper reports no name for a min-side failure -- there
+//     is nothing to misattribute.
+//   - Enum/range/logical checks (Standing, Category, Derivation,
+//     EpistemicStatus, Confidence's [0,1] range, ContextFabricTimeContext's
+//     axis-shaped timestamp rules, and every "requires a claim"/"requires a
+//     qualification"/uniqueness/grounding/claim-binding rule): none of
+//     these are length or count bounds, the sole scope of this registry
+//     per the file doc comment above -- the mirror still evaluates them,
+//     in Validate()'s own order, purely to know WHERE to stop.
 const (
 	// Interpretation (ContextFabricInterpretedQuestion, ContextFabricFactRequirement).
 	ContextFabricRequestedJudgmentMaxLength             = 256
@@ -68,19 +150,48 @@ const (
 	// claimed_fact_id string a driver or finding lists (as opposed to the
 	// COUNT bounds above) -- one shared bound, since both are the same
 	// "reference to an ID this answer already returned or was given"
-	// shape.
+	// shape: a claimed_fact_id reference points at a claim the MODEL
+	// itself minted earlier in the SAME draft, not at something ACR
+	// independently supplied and bounded -- so this length is genuinely
+	// model-facing and belongs in the registry (CHAOS-3784 round-2 R2-2:
+	// enforced at validate_context_fabric_result.go's uniqueTrimmedStrings
+	// calls but absent from here and from Diagnose* until that fix).
 	ContextFabricIdentifierRefMaxLength = 256
 	// ContextFabricEvidenceRefIDsMaxCount bounds evidence_ref_ids wherever a
 	// model populates it directly: per-driver and per-finding.
 	ContextFabricEvidenceRefIDsMaxCount = 500
+	// ContextFabricEvidenceRefIDMaxLength bounds each individual
+	// evidence_ref_id string (as opposed to the COUNT bound above), matching
+	// boundedEvidenceRefs's stringLengthBetween(value, 8, 256)
+	// (validate_context_fabric_helpers.go). See the file doc comment
+	// (CHAOS-3784 round-3 R3-1): the original exclusion rationale for this
+	// bound was order-contradicted, same as path_id/claimed_fact_id item
+	// length was before round-2 R2-2.
+	ContextFabricEvidenceRefIDMaxLength = 256
 
 	// Synthesis: finding (ContextFabricFinding).
 	ContextFabricFindingKindMaxLength    = 128
 	ContextFabricFindingSummaryMaxLength = 4000
 	ContextFabricFindingSubjectsMaxCount = 250
 
+	// ContextFabricSubjectRefCanonicalIDMaxLength and
+	// ContextFabricSubjectRefLabelMaxLength bound every model-minted
+	// ContextFabricSubjectRef's CanonicalID/Label -- driver.affected_subjects,
+	// finding.subjects, and claimed_fact.subject all share this shape
+	// (SubjectRef.Validate(), validate_context_fabric_result.go). See the
+	// file doc comment (CHAOS-3784 round-3 R3-1): order-contradicted
+	// exclusion, same class as evidence_ref_id above.
+	ContextFabricSubjectRefCanonicalIDMaxLength = 256
+	ContextFabricSubjectRefLabelMaxLength       = 512
+
 	// Synthesis: claimed fact (ContextFabricClaimedFact).
 	ContextFabricClaimedFieldMaxLength = 128
+	// ContextFabricClaimedFactValueMaxLength bounds a claimed fact's string
+	// value (ContextFabricScalarValue.Validate(), the String variant only --
+	// Integer/Number/Boolean/Null carry no length). See the file doc
+	// comment (CHAOS-3784 round-3 R3-1): order-contradicted exclusion, same
+	// class as evidence_ref_id above.
+	ContextFabricClaimedFactValueMaxLength = 4000
 
 	// Synthesis: top-level synthesis draft / result collections the model
 	// itself populates.
@@ -136,19 +247,31 @@ var ContextFabricModelFacingBounds = []ContextFabricModelFacingBound{
 	{"synthesis.driver.summary.max_length", ContextFabricDriverSummaryMaxLength},
 	{"synthesis.driver.qualification.max_length", ContextFabricDriverQualificationMaxLength},
 	{"synthesis.driver.affected_subjects.max_count", ContextFabricDriverAffectedSubjectsMaxCount},
+	{"synthesis.driver.affected_subjects.item_canonical_id_max_length", ContextFabricSubjectRefCanonicalIDMaxLength},
+	{"synthesis.driver.affected_subjects.item_label_max_length", ContextFabricSubjectRefLabelMaxLength},
 	{"synthesis.driver.path_ids.max_count", ContextFabricDriverPathIDsMaxCount},
-	{"synthesis.driver.claimed_fact_ids.max_count", ContextFabricDriverClaimedFactIDsMaxCount},
+	{"synthesis.driver.path_ids.item_max_length", ContextFabricIdentifierRefMaxLength},
 	{"synthesis.driver.evidence_ref_ids.max_count", ContextFabricEvidenceRefIDsMaxCount},
+	{"synthesis.driver.evidence_ref_ids.item_max_length", ContextFabricEvidenceRefIDMaxLength},
+	{"synthesis.driver.claimed_fact_ids.max_count", ContextFabricDriverClaimedFactIDsMaxCount},
+	{"synthesis.driver.claimed_fact_ids.item_max_length", ContextFabricIdentifierRefMaxLength},
 
 	{"synthesis.finding.finding_id.max_length", ContextFabricModelMintedIDMaxLength},
 	{"synthesis.finding.kind.max_length", ContextFabricFindingKindMaxLength},
 	{"synthesis.finding.summary.max_length", ContextFabricFindingSummaryMaxLength},
 	{"synthesis.finding.subjects.max_count", ContextFabricFindingSubjectsMaxCount},
+	{"synthesis.finding.subjects.item_canonical_id_max_length", ContextFabricSubjectRefCanonicalIDMaxLength},
+	{"synthesis.finding.subjects.item_label_max_length", ContextFabricSubjectRefLabelMaxLength},
 	{"synthesis.finding.evidence_ref_ids.max_count", ContextFabricEvidenceRefIDsMaxCount},
+	{"synthesis.finding.evidence_ref_ids.item_max_length", ContextFabricEvidenceRefIDMaxLength},
 	{"synthesis.finding.claimed_fact_ids.max_count", ContextFabricDriverClaimedFactIDsMaxCount},
+	{"synthesis.finding.claimed_fact_ids.item_max_length", ContextFabricIdentifierRefMaxLength},
 
 	{"synthesis.claimed_fact.claim_id.max_length", ContextFabricModelMintedIDMaxLength},
 	{"synthesis.claimed_fact.field.max_length", ContextFabricClaimedFieldMaxLength},
+	{"synthesis.claimed_fact.subject.canonical_id_max_length", ContextFabricSubjectRefCanonicalIDMaxLength},
+	{"synthesis.claimed_fact.subject.label_max_length", ContextFabricSubjectRefLabelMaxLength},
+	{"synthesis.claimed_fact.value.max_length", ContextFabricClaimedFactValueMaxLength},
 
 	{"synthesis.strongest_pressures.max_count", ContextFabricStrongestPressuresMaxCount},
 	{"synthesis.strongest_pressures.item_max_length", ContextFabricStrongestPressureMaxLength},
