@@ -199,6 +199,28 @@ runs regardless of `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED` (an operator
 invoking it has already made that call) but still needs Postgres, ClickHouse,
 and a configured graph backend to do anything.
 
+**A rebuild is REQUIRED after deploying CHAOS-3781** (`devhealthsource`
+`ClickHouseSourceVersion` v3 → v4). Every producer now emits a valid-time
+window (`valid_from` / `valid_to`) derived from its source row's own
+interval columns, and the graph read side admits by that window when a
+question asks about a past time.
+
+An organization projected before this deploy holds nodes and edges with NO
+window at all. The read side admits an unbounded element at *every*
+requested time, so an un-rebuilt graph answers a historical question as
+though everything in it had always been true. The version bump makes this
+impossible to miss rather than silent: `ProjectionWorker.RunOnce` refuses
+every tick with `ErrProjectionSourceVersionChanged` until the rebuild runs,
+so the graph is structurally untouched in the meantime — a *fresh*
+investigation during that window reads exactly the same pre-rebuild graph
+it would have before, and no historical answer is fabricated.
+
+Run `acr-projector rebuild --org <organization-id>` for every projected
+organization after deploying. Until then, historical questions still
+answer, but only from canonical fact sources; the graph half contributes
+whatever unbounded elements it holds, disclosed in the answer's coverage as
+`context-fabric:graph-validity-windows`.
+
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is
 confirmed reset. If `acr-projector` crashes mid-rebuild, ordinary `serve`

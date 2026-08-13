@@ -1,6 +1,7 @@
 # CHAOS-3781 — historical time axis: design note
 
-Status: PROPOSED. Awaiting team-lead GO.
+Status: IMPLEMENTED. All six decisions ruled by team-lead; see §7 for what
+was decided and §9 for what changed relative to the proposal.
 Scope source: TRD §19.8 (AC-3781-1..7), drift item D5.
 
 ---
@@ -445,3 +446,71 @@ change?
    `internal/contextfabric/AGENTS.md`, root `AGENTS.md`).
 
 Evidence per milestone will be reported as it lands.
+
+---
+
+## 9. As implemented — decisions and deltas
+
+All six decisions in §7 were approved as recommended:
+
+| # | Decision | Ruling |
+|---|---|---|
+| A | Populate `ValidFrom`/`ValidTo`, bump v3 → v4 | **Yes.** Team-lead owns the rebuild sweep; CHAOS-3785's v3 had not deployed, so one org-wide rebuild lands at v4, not two. |
+| B | `observed_time` accepted with zero fact coverage | **Yes.** AC-3781-1 wins; P4 makes the near-empty answer the only honest one. |
+| C | Tier B derived-state providers | **In.** |
+| D | Additive `ContextFabricTemporalLabel` | **Yes.** |
+| E | Route refusal removed in this changeset | **Option (i).** lane-3746 merges last and rebases over it. |
+| F | Reuse-key sequencing with lane-3786 | **Sequential.** 3786 lands first; `TimeAxisKey` + migration `0012` rebase over it. |
+
+### Deltas from the proposal
+
+These are places the implementation is deliberately different from §1-§6.
+
+1. **`Requested`/`Effective` are full `ContextFabricTimeContext` values**, not
+   six loose `*time.Time` fields (§4 proposed the latter). The axis-shape
+   rules are then defined exactly once, on the type that already validates
+   them, and the JSON Schema `$ref`s the existing `TimeContext` def twice
+   instead of restating a 60-line `oneOf`.
+2. **`Grain` is a closed enum** (`instant` / `day` / `none`), not a free
+   string. Drift item D9 records free-string vocabularies in this contract
+   as a governance gap; adding another would have widened it.
+3. **`CoverageComplete`, not `Complete`.** Avoids reading as a restatement of
+   the `complete` investigation *status*, which it is not.
+4. **The contract refuses an unlabeled historical result.** Not in the
+   proposal. A composition bug that dropped the label would otherwise ship
+   exactly the unlabeled historical answer this issue removes, so the
+   invariant is enforced where it cannot be bypassed.
+5. **`existencePredicate` applies only the upper bound**, never the lower one,
+   even for a range. An entity created *before* a requested window still
+   existed during it; bounding its creation below would silently drop the
+   long-lived subjects a historical question is usually about. Period rows
+   (Tier A) keep both bounds, because a row outside the window genuinely
+   describes a different period.
+6. **`ErrInvalidTimeBound` is a new sentinel**, not a reuse of
+   `ErrUnsupportedTimeAxis`. The retired one meant "historical questions are
+   unsupported"; the new one means "these bounds are not answerable". Both
+   map to 400, but conflating them would tell a caller their whole class of
+   question is unsupported when only their bounds were wrong.
+7. **Range grain narrows at both ends.** The effective start moves forward
+   and the end backward, so the effective window always sits inside the
+   requested one — the direction the contract validates.
+
+### Evidence
+
+- **P3 confirmed in production shape**: `repo_metrics_daily` as-of
+  2026-03-01 returns the `2026-02-28` row against the unbounded query's
+  `2026-08-04`.
+- **P4 confirmed**: `WHERE computed_at <= '2026-03-01'` returns zero rows;
+  `day` spans 2025-12-27..2026-08-13 while `computed_at` spans only
+  2026-07-02..2026-08-13.
+- **Tier B derivation is not theoretical**: of 639 pull requests created
+  before 2026-03-01, **15 read `merged` today but were `open` at that
+  instant** — e.g. #208, created 2026-02-27, merged 2026-03-05. That is the
+  false historical answer H6 named, now answered correctly.
+- **Graph admission proved live** against real FalkorDB
+  (`falkorgraph/temporal_live_test.go`): exclusion of closed windows, the
+  before-anything-existed case, the half-open boundary, range overlap, and
+  current-axis non-regression on the same seeded data.
+- **Reuse collision proved live** against real Postgres
+  (`pginvestigation/time_axis_reuse_integration_test.go`): a June answer is
+  not served for a March question, and the June question still reuses it.

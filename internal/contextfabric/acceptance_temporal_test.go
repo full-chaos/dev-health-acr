@@ -1,0 +1,312 @@
+package contextfabric
+
+// Acceptance proofs for CHAOS-3781 (TRD §19.8), AC-3781-1 through -7.
+//
+// These run the real Engine wired to the real RuntimeQuestionInterpreter /
+// RuntimeAnswerSynthesizer adapters, exactly as acceptance_test.go does, so
+// the temporal label is composed through the production path rather than
+// asserted against a stub. The graph reader and fact reader are faked; the
+// adapters that actually bind to a time have their own dedicated suites --
+// falkorgraph/temporal_live_test.go against real FalkorDB, and
+// devhealthfacts/shared_test.go for the three provider tiers.
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+// acceptanceNow must match buildAcceptanceEngine's clock, or a fixture's
+// as-of would read as a request about the future.
+var acceptanceNow = time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+
+func historicalAsOf() time.Time { return time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC) }
+
+func historicalInterpretation(timeContext TimeContext) InterpretedQuestion {
+	interpretation := bootstrapInterpretation()
+	interpretation.TimeContext = timeContext
+	return interpretation
+}
+
+// temporallyDegradedFactBundle is what a Tier C provider's refusal looks
+// like once it reaches the engine: the source is healthy, it simply cannot
+// speak for the requested time, so it reports not_applicable with the
+// reason devhealthfacts emits verbatim.
+func temporallyDegradedFactBundle(project SubjectRef) CanonicalFactBundle {
+	bundle := bootstrapFactBundle(project)
+	bundle.Coverage.Sources = append(bundle.Coverage.Sources, SourceObservation{
+		Source: "canonical_fact:status", State: SourceNotApplicable,
+		Reason: "devhealthfacts: this fact has no recorded history, so it cannot answer for a past time; only its current value exists",
+	})
+	return bundle
+}
+
+func runHistoricalAcceptance(t *testing.T, timeContext TimeContext, bundle CanonicalFactBundle) InvestigationResult {
+	t.Helper()
+	project := acceptanceProject()
+	graph := &acceptanceGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context:    bootstrapGraphContext(project),
+	}
+	facts := factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+		return bundle, nil
+	})
+	engine := buildAcceptanceEngine(t, graph, facts,
+		historicalInterpretation(timeContext), bootstrapDraft(project), newMapResultStore())
+
+	request := validInvestigationRequest()
+	request.Question = "Was Ask Dev release-ready at the start of March?"
+	request.TimeContext = timeContext
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	return result
+}
+
+// AC-3781-1: a question on the valid_time, observed_time, or range axis
+// returns an answer, not a 400.
+func TestAC_3781_1_HistoricalAxesReturnAnAnswerNotARefusal(t *testing.T) {
+	t.Parallel()
+	asOf := historicalAsOf()
+	start := asOf.Add(-30 * 24 * time.Hour)
+	project := acceptanceProject()
+	for _, testCase := range []struct {
+		name string
+		time TimeContext
+	}{
+		{"valid_time", TimeContext{Axis: TemporalValidTime, AsOf: &asOf}},
+		{"observed_time", TimeContext{Axis: TemporalObservedTime, AsOf: &asOf}},
+		{"range", TimeContext{Axis: TemporalRange, Start: &start, End: &asOf}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			result := runHistoricalAcceptance(t, testCase.time, bootstrapFactBundle(project))
+			if result.Status != InvestigationComplete {
+				t.Fatalf("Status = %q, want an answer", result.Status)
+			}
+			if result.DirectJudgment == "" {
+				t.Fatal("a historical question produced no judgment")
+			}
+		})
+	}
+}
+
+// AC-3781-2: the answer states the as-of time, or the window, in a
+// structured field -- and it must be the time the answer SPEAKS FOR, not
+// merely the time that was requested.
+func TestAC_3781_2_TheAnswerStatesTheTimeItSpeaksFor(t *testing.T) {
+	t.Parallel()
+	asOf := historicalAsOf()
+	project := acceptanceProject()
+	result := runHistoricalAcceptance(t, TimeContext{Axis: TemporalValidTime, AsOf: &asOf}, bootstrapFactBundle(project))
+
+	if result.Temporal == nil {
+		t.Fatal("no temporal label; a historical answer with nothing marking it as one is the defect this issue removes")
+	}
+	if result.Temporal.Requested.Axis != TemporalValidTime || !result.Temporal.Requested.AsOf.Equal(asOf) {
+		t.Fatalf("requested = %+v, want valid_time at %v", result.Temporal.Requested, asOf)
+	}
+	// Effective may only ever narrow. A label claiming to speak for a
+	// LATER time than was asked about would be the false historical
+	// answer wearing a structured field.
+	if result.Temporal.Effective.AsOf.After(asOf) {
+		t.Fatalf("effective as-of %v is after the requested %v", result.Temporal.Effective.AsOf, asOf)
+	}
+	if result.Temporal.Grain == "" {
+		t.Fatal("the label states no grain, so a caller cannot tell instant precision from day precision")
+	}
+	// And it must survive the contract's own validation, which refuses a
+	// historical result carrying no label at all.
+	if err := result.Validate(); err != nil {
+		t.Fatalf("a labeled historical result must be contract-valid: %v", err)
+	}
+}
+
+// AC-3781-3: a subject that did not exist at the requested time returns a
+// clear not-applicable state, NOT a current-state answer.
+func TestAC_3781_3_ASubjectAbsentAtThatTimeIsNotAnswered(t *testing.T) {
+	t.Parallel()
+	asOf := historicalAsOf()
+	// The graph admits by validity window, so a subject whose window
+	// excludes the requested time simply does not resolve -- this is what
+	// falkorgraph's admission predicate produces, modeled here at the
+	// engine boundary.
+	graph := &acceptanceGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		context: GraphContext{
+			DriverCandidates: []DriverJudgment{}, EvidenceRefIDs: []string{}, FactRequirements: []FactRequirement{},
+			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	factsCalled := false
+	facts := factReaderFunc(func(_ context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
+		factsCalled = true
+		if len(request.Subjects) != 0 {
+			t.Errorf("facts were requested for %d subjects, but none existed at the requested time", len(request.Subjects))
+		}
+		return CanonicalFactBundle{
+			Facts:    []CanonicalFact{},
+			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+			Version:  "ops-v1",
+		}, nil
+	})
+	// A no-match draft: with nothing resolved there is no evidence to
+	// cite, so the ordinary bootstrap draft would (correctly) fail
+	// value-level closure rather than exercise the temporal path.
+	draft := SynthesisDraft{
+		Status: InvestigationNoMatch, DirectJudgment: "", CurrentState: "", StrongestPressures: []string{},
+		Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Conflicts: []Finding{},
+		Limitations: []string{"No subject existed at the requested time."}, EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{},
+		DeterministicAnswer: "placeholder", Warnings: []string{},
+	}
+	engine := buildAcceptanceEngine(t, graph, facts,
+		historicalInterpretation(TimeContext{Axis: TemporalValidTime, AsOf: &asOf}),
+		draft, newMapResultStore())
+
+	request := validInvestigationRequest()
+	request.Question = "Was Ask Dev release-ready at the start of March?"
+	request.TimeContext = TimeContext{Axis: TemporalValidTime, AsOf: &asOf}
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Fatalf("Status = %q, want no_match: a subject that did not exist then must not get a current-state answer", result.Status)
+	}
+	if len(result.SubjectResolution.Committed) != 0 {
+		t.Fatalf("committed = %#v, want nothing committed for a time before the subject existed", result.SubjectResolution.Committed)
+	}
+	if !factsCalled {
+		t.Fatal("the fact path was skipped entirely; this test cannot prove no current-state facts leaked in")
+	}
+}
+
+// AC-3781-5: a fact kind that cannot answer for the requested time reports
+// its limitation, and the REST of the answer survives (§8.6).
+func TestAC_3781_5_AnUnanswerableFactKindDegradesWithoutSinkingTheAnswer(t *testing.T) {
+	t.Parallel()
+	asOf := historicalAsOf()
+	project := acceptanceProject()
+	result := runHistoricalAcceptance(t, TimeContext{Axis: TemporalValidTime, AsOf: &asOf}, temporallyDegradedFactBundle(project))
+
+	// The rest survives.
+	if result.DirectJudgment == "" || len(result.Drivers) == 0 {
+		t.Fatal("a single temporally-unanswerable fact kind sank the whole answer; §8.6 requires the rest survive")
+	}
+	// The limitation is reported.
+	var reported bool
+	for _, source := range result.Coverage.Sources {
+		if source.State == SourceNotApplicable && strings.Contains(source.Reason, "cannot answer for a past time") {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Fatalf("coverage does not report the temporal limitation: %#v", result.Coverage.Sources)
+	}
+	// And the label says coverage was incomplete, so a reader does not
+	// have to parse coverage prose to learn it.
+	if result.Temporal == nil || result.Temporal.CoverageComplete {
+		t.Fatalf("temporal = %#v, want coverage_complete=false when a source could not answer for the requested time", result.Temporal)
+	}
+}
+
+// AC-3781-6: the refusal is removed from the engine, from every provider,
+// and from the route in the same change -- no layer keeps a stale one.
+//
+// The engine's half is proved here by construction: the retired sentinel
+// no longer exists, so this file would not compile if any engine path
+// still returned it. What this test adds is the behavioral half -- the
+// axes that were refused now complete, and what replaced the refusal is
+// strictly narrower.
+func TestAC_3781_6_NoStaleRefusalSurvivesInTheEngine(t *testing.T) {
+	t.Parallel()
+	asOf := historicalAsOf()
+	project := acceptanceProject()
+
+	result := runHistoricalAcceptance(t, TimeContext{Axis: TemporalValidTime, AsOf: &asOf}, bootstrapFactBundle(project))
+	if result.Status != InvestigationComplete {
+		t.Fatalf("Status = %q, want a completed historical investigation", result.Status)
+	}
+
+	// The narrower replacement still fires, so the removal did not simply
+	// delete the guard.
+	future := acceptanceNow.Add(72 * time.Hour)
+	graph := &acceptanceGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context:    bootstrapGraphContext(project),
+	}
+	facts := factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+		return bootstrapFactBundle(project), nil
+	})
+	engine := buildAcceptanceEngine(t, graph, facts,
+		historicalInterpretation(TimeContext{Axis: TemporalValidTime, AsOf: &future}),
+		bootstrapDraft(project), newMapResultStore())
+	request := validInvestigationRequest()
+	request.TimeContext = TimeContext{Axis: TemporalValidTime, AsOf: &future}
+	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), request); !errors.Is(err, ErrInvalidTimeBound) {
+		t.Fatalf("Investigate() error = %v, want ErrInvalidTimeBound for a question about the future", err)
+	}
+}
+
+// AC-3781-7: temporal comparison uses the epoch-nanosecond properties,
+// never a string comparison of a timestamp.
+//
+// The graph's half is proved live in falkorgraph/temporal_live_test.go.
+// This covers the reuse key, the other place a timestamp is compared: it
+// must key on epoch nanoseconds, so one instant has exactly one key
+// however it was formatted or zoned.
+func TestAC_3781_7_TemporalKeysUseEpochNanosecondsNotStrings(t *testing.T) {
+	t.Parallel()
+	instant := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	// A whole-second instant and a sub-second one render at DIFFERENT
+	// string lengths (time.Format trims trailing zeros), which is exactly
+	// why lexicographic comparison is wrong for these -- see nsTimestamp's
+	// doc comment in falkorgraph.
+	subSecond := instant.Add(time.Nanosecond)
+	if TimeAxisKeyFor(TimeContext{Axis: TemporalValidTime, AsOf: &instant}) ==
+		TimeAxisKeyFor(TimeContext{Axis: TemporalValidTime, AsOf: &subSecond}) {
+		t.Fatal("two instants one nanosecond apart produced the same key; the key is not nanosecond-precise")
+	}
+	zoned := instant.In(time.FixedZone("elsewhere", -7*3600))
+	if TimeAxisKeyFor(TimeContext{Axis: TemporalValidTime, AsOf: &instant}) !=
+		TimeAxisKeyFor(TimeContext{Axis: TemporalValidTime, AsOf: &zoned}) {
+		t.Fatal("the same instant in two zones produced different keys; the key is formatting-dependent, not epoch-based")
+	}
+}
+
+// TestHistoricalAnswersDiscloseTheDeletedSubjectLimitation covers the
+// standing disclosure §2.4 of the design requires: the graph holds only
+// the CURRENT projection, so what a historical read can return is bounded
+// by what still exists now. Unfixable here, but never silent.
+func TestHistoricalAnswersDiscloseTheDeletedSubjectLimitation(t *testing.T) {
+	t.Parallel()
+	asOf := historicalAsOf()
+	project := acceptanceProject()
+	result := runHistoricalAcceptance(t, TimeContext{Axis: TemporalValidTime, AsOf: &asOf}, bootstrapFactBundle(project))
+
+	var disclosed bool
+	for _, limitation := range result.Limitations {
+		if strings.Contains(limitation, "deleted at source") {
+			disclosed = true
+		}
+	}
+	if !disclosed {
+		t.Fatalf("Limitations = %#v, want the deleted-subject disclosure on a historical answer", result.Limitations)
+	}
+
+	// A current-axis answer carries neither the label nor the disclosure.
+	current := runHistoricalAcceptance(t, TimeContext{Axis: TemporalCurrent}, bootstrapFactBundle(project))
+	if current.Temporal != nil {
+		t.Fatal("a current-axis answer must carry no temporal label")
+	}
+	for _, limitation := range current.Limitations {
+		if strings.Contains(limitation, "deleted at source") {
+			t.Fatal("a current-axis answer must not carry the historical deleted-subject disclosure")
+		}
+	}
+}

@@ -63,3 +63,51 @@ Three constants carry the acceptance bars, and none of them may be moved casuall
 `embedprovider` verifies the `model` field of every embeddings RESPONSE against the configured model and fails closed on mismatch, including when the field is absent. This is not defensive polish: LM Studio with several embedding models loaded silently ignores the request's `model` and serves another, and the dimension check only catches that when the widths differ -- two same-width models would produce silent mixed-vector corruption stamped with the identity of the model that was asked for. Normalization is exactly trim + ASCII case-fold; anything else is a mismatch (`ExpectResponseModel` retargets the comparison, it cannot weaken it).
 
 FalkorDB's vector score is a cosine DISTANCE (0 = identical), verified live. It must never reach `graphrank.ResultConfidence` -- see the D11-class regression in `graphrank/vector_ladder_regression_test.go`. Embeddings are projection artifacts, so the existing epoch/rebuild machinery covers them; a dimension change disables vector retrieval for that organization until `acr-projector rebuild --org` runs, and a stale-dimension vector is never queried.
+
+Historical time axis (CHAOS-3781): the H6 refusal of every non-current axis
+is GONE from all three layers it lived in -- `Engine` (`temporal.go`'s
+`validateTimeContext` replaces `requireCurrentTimeAxis`), every
+`devhealthfacts` provider (`timebound.go` replaces `checkCurrentTimeOnly`),
+and `internal/api/context_fabric_routes.go`. AC-3781-6 required that in one
+change: a layer left refusing would either contradict the others or answer
+with current data under a historical label.
+
+What replaced it is narrower, not equivalent. `ErrInvalidTimeBound` refuses
+only bounds this service will not read -- a time in the future (the axis is
+historical, not speculative) and a range wider than 400 days. A time
+EARLIER than any retained data is not an error: "we have nothing that far
+back" is a real answer.
+
+Three things make a historical answer honest rather than merely possible:
+
+- `devhealthsource` now emits `ValidFrom`/`ValidTo` from each source row's
+  own immutable interval columns (`validity.go`), and `falkorgraph` admits
+  by that window on the `_ns` int64 properties only (`temporal.go`,
+  AC-3781-7). Half-open `[valid_from, valid_to)`; a point-in-time request
+  is the degenerate interval `[T, T]`, so one predicate serves both axes.
+  An element with NO window is admitted at every requested time AND
+  counted, disclosed as the `context-fabric:graph-validity-windows`
+  coverage source -- excluding it would empty a pre-rebuild graph;
+  admitting it silently would be the H6 defect. This is why the source
+  version bumped v3 → v4 and why a rebuild is required (docs/operations.md).
+- `devhealthfacts` providers split three ways, and the split is per
+  provider, not per table: Tier A rollups bound `day`/`window_end`/
+  `computed_at`; Tier B derives state from immutable interval columns (PR
+  merged/closed, incident resolved, run finished, item completed) and gates
+  existence; Tier C has no recorded history and returns `not_applicable`.
+  `observed_time` degrades EVERYWHERE, Tier A included -- `computed_at` is
+  a recompute stamp and the entity tables are `ReplacingMergeTree`, so no
+  observation history exists to query (drift item D15 as a hard limit).
+- `Engine` composes `ContextFabricTemporalLabel` itself, never a
+  synthesizer: what time an answer covers is a fact about which reads ran,
+  not something a model may assert. Effective time only ever narrows, and
+  the result contract refuses a non-current axis carrying no label.
+
+`ReuseKey` gained a fifth dimension, `TimeAxisKey` (migration `0012`).
+Without it the same question text at two as-of times shares one key and a
+June answer is served for a March question. The current axis maps to a
+FIXED literal -- a wall-clock-derived key would make every current-axis key
+unique and silently drop the reuse rate to zero while CHAOS-3782's own
+tests kept passing. Conditions 1-7 are otherwise unchanged: a historical
+answer is NOT safely cacheable for longer, because a backfill rewrites past
+days (D15).
