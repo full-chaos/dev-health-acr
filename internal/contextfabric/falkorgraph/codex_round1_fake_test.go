@@ -212,6 +212,81 @@ func TestDiscoverContextReportsPartialOnEndpointLookupFailure(t *testing.T) {
 	}
 }
 
+// TestDiscoverContextFromBlockedSideStillSurfacesBLOCKSNotAnInvertedName is
+// CHAOS-3779's direction-safety probe for pruning BLOCKED_BY out of
+// graphrank.relationMeaning (team-lead review caution: before pruning the
+// inverse-direction recognizer entry, verify nothing in the traversal path
+// returns the SAME edge with an inverse name when read from the target
+// side -- if it did, pruning BLOCKED_BY would silently drop driver
+// standing for exactly half the directions, the H4 failure shape again).
+//
+// This starts DiscoverContext from work_target -- the BLOCKED work item,
+// i.e. the target/dst side of the stored 'blocks' edge -- exactly the
+// direction edgesOfNode's UNION second branch
+// ((other)-[r]->(n) where n = the queried node) serves. edgesOfNode
+// (queries.go) and toCandidateEdge read propRelationType verbatim off the
+// stored edge in BOTH UNION branches -- there is no direction-conditional
+// rewriting anywhere in this package (grep-verified: toCandidateEdge is
+// the only call site in the repository that ever constructs a
+// CandidateEdge.Name from a graph-read edge) -- so the relation always
+// surfaces as the literal stored value, "BLOCKS", never a synthesized
+// "BLOCKED_BY", regardless of which endpoint's traversal found it. This
+// test proves that behavior end to end: querying from the blocked side
+// still returns a "BLOCKS" edge, correctly oriented From=work_blocker
+// To=work_target (never inverted), and still carries DriverPrincipal
+// standing -- so pruning the producer-less BLOCKED_BY recognizer entry
+// drops nothing, in either direction.
+func TestDiscoverContextFromBlockedSideStillSurfacesBLOCKSNotAnInvertedName(t *testing.T) {
+	origin := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_target", Label: "Blocked Work"}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			if params["id"] != "work_target" {
+				return nil, nil
+			}
+			// The real edgesOfNode UNION's second branch --
+			// (other)-[r]->(n) where n is the queried node -- reports
+			// srcKind/srcId/dstKind/dstId from the edge's TRUE stored
+			// direction, not from which side was queried. This fake
+			// encodes exactly that: work_target is the query origin, but
+			// it is the edge's DESTINATION (the blocked item); work_blocker
+			// is the edge's SOURCE (the blocker).
+			return []row{{
+				"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "relationship_blocked_side", propEvidenceRefs: []string{"evidence_blocked_side"}}},
+				"srcKind": "work_item", "srcId": "work_blocker", "dstKind": "work_item", "dstId": "work_target",
+			}}, nil
+		default: // nodeByKindID (origin resolution + hop-walk neighbor resolution)
+			switch params["id"] {
+			case "work_target":
+				return []row{fakeSubjectNodeRow("work_item", "work_target", "Blocked Work")}, nil
+			case "work_blocker":
+				return []row{fakeSubjectNodeRow("work_item", "work_blocker", "Blocker Work")}, nil
+			default:
+				return nil, nil
+			}
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1"}
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, fakeDiscoveryRequest(origin, 10))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v, want a clean result", err)
+	}
+	edge := findFakeEdge(result.Paths, "BLOCKS")
+	if edge == nil {
+		t.Fatalf("no BLOCKS edge surfaced when querying from the blocked side: %#v", result.Paths)
+	}
+	if edge.From.CanonicalID != "work_blocker" || edge.To.CanonicalID != "work_target" {
+		t.Fatalf("edge direction = %s -> %s, want work_blocker -> work_target (the edge's true stored direction, unchanged by which side was queried)", edge.From.CanonicalID, edge.To.CanonicalID)
+	}
+	if len(result.DriverCandidates) != 1 || result.DriverCandidates[0].Standing != contextfabric.DriverPrincipal {
+		t.Fatalf("DriverCandidates = %#v, want exactly one principal-standing driver -- BLOCKS must still be recognized when discovered from the blocked side", result.DriverCandidates)
+	}
+}
+
 // TestDiscoverContextRanksBeforeTruncatingCollectedEdges is the Codex P2a
 // probe. Two edges are reachable from the origin in a single edgesOfNode
 // call, returned in this exact order: "rel_zzz" is encountered FIRST during

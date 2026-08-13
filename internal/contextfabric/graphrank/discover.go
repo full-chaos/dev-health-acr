@@ -297,8 +297,22 @@ func edgeFact(edge ResolvedEdge) string {
 // ever wrote them. CHAOS-3779 prunes the eight unproducable entries
 // instead of inventing producers with no deterministic source (§19.5.3
 // lists no source for CAUSES/CONTRIBUTES_TO/PRESSURES/INDICATES/
-// SYMPTOM_OF, and BLOCKED_BY/REQUIRES/DEPENDS_ON are inverse-direction or
-// synonym spellings work_item_dependencies never emits). A recognizer
+// SYMPTOM_OF, and REQUIRES/DEPENDS_ON are synonym spellings
+// work_item_dependencies never emits).
+//
+// BLOCKED_BY specifically was checked for the inverse-direction hazard
+// before pruning (review caution: dropping it would be an H4-shaped defect
+// IF the read path ever surfaced a 'blocks' row under an inverted name when
+// traversal reached it from the blocked side). It does not: edgesOfNode
+// (falkorgraph/queries.go) reads propRelationType verbatim off the stored
+// edge in BOTH directions of its UNION query, and toCandidateEdge is the
+// only call site in the repository that ever constructs a
+// CandidateEdge.Name from a graph-read edge (grep-verified) -- there is no
+// direction-conditional rewriting anywhere. A 'blocks' row always surfaces
+// as literal "BLOCKS", correctly oriented, regardless of which endpoint's
+// traversal found it. See falkorgraph's
+// TestDiscoverContextFromBlockedSideStillSurfacesBLOCKSNotAnInvertedName,
+// which proves this end to end from the blocked side. A recognizer
 // entry with no producer is a defect, not a placeholder -- see
 // ContextFabricRelationshipType's doc comment for the closed vocabulary
 // this table draws its keys from.
