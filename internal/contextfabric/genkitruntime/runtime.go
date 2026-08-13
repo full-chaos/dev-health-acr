@@ -266,11 +266,23 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 	if generationErr != nil {
 		if r.config.Fallback != nil {
 			interpreted, fallbackReceipt, fallbackErr := r.config.Fallback.InterpretQuestion(ctx, principal, request)
-			receipt.FallbackUsed = true
-			receipt.Outcome = "fallback"
 			if fallbackErr == nil {
+				receipt.FallbackUsed = true
+				receipt.Outcome = "fallback"
 				return interpreted, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
+			// Both the primary and the fallback failed (CHAOS-3770 F4): the
+			// receipt must not claim FallbackUsed/Outcome="fallback", which
+			// means the fallback produced usable output -- it did not -- and
+			// the caller must see the FINAL (fallback) leg's own
+			// classification, not the primary's. fallbackReceipt.Outcome is
+			// already the fallback's own receiptOutcomeForError result (the
+			// fallback is itself a ModelRuntime that builds and returns a
+			// receipt on every call, success or failure), so reusing it here
+			// keeps the outcome vocabulary consistent with a direct call to
+			// that same fallback.
+			receipt.Outcome = fallbackReceipt.Outcome
+			return contextfabric.InterpretedQuestion{}, receipt, fallbackErr
 		}
 		return contextfabric.InterpretedQuestion{}, receipt, classifiedErr
 	}
@@ -321,11 +333,17 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	if generationErr != nil {
 		if r.config.Fallback != nil {
 			draft, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
-			receipt.FallbackUsed = true
-			receipt.Outcome = "fallback"
 			if fallbackErr == nil {
+				receipt.FallbackUsed = true
+				receipt.Outcome = "fallback"
 				return draft, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
+			// See the matching comment in InterpretQuestion: both legs
+			// failed, so the receipt must reflect the fallback's own
+			// (final) outcome and the caller must see its classification,
+			// not the primary's.
+			receipt.Outcome = fallbackReceipt.Outcome
+			return contextfabric.SynthesisDraft{}, receipt, fallbackErr
 		}
 		return contextfabric.SynthesisDraft{}, receipt, classifiedErr
 	}

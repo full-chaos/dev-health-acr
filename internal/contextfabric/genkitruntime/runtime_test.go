@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,27 @@ func (f fallbackRuntime) InterpretQuestion(context.Context, storage.Principal, c
 
 func (f fallbackRuntime) SynthesizeAnswer(context.Context, storage.Principal, contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {
 	return f.draft, validReceipt(contextfabric.ModelOperationSynthesize), nil
+}
+
+// erroringFallbackRuntime is a fallback ModelRuntime whose own call also
+// fails, always returning err alongside its own already-classified receipt
+// -- exactly what a real fallback genkitruntime.Runtime returns on its own
+// terminal failure (receipt built, Outcome set via receiptOutcomeForError,
+// paired with the classified error). It exists to prove CHAOS-3770 F4: when
+// BOTH the primary and the fallback fail, the primary's receipt must not
+// claim a successful fallback, and the caller must see the fallback's own
+// (final leg) classification.
+type erroringFallbackRuntime struct {
+	err     error
+	receipt contextfabric.ModelExecutionReceipt
+}
+
+func (f erroringFallbackRuntime) InterpretQuestion(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
+	return contextfabric.InterpretedQuestion{}, f.receipt, f.err
+}
+
+func (f erroringFallbackRuntime) SynthesizeAnswer(context.Context, storage.Principal, contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {
+	return contextfabric.SynthesisDraft{}, f.receipt, f.err
 }
 
 func TestSDKGeneratorUsesGenkitStructuredOutputAndUsage(t *testing.T) {
@@ -303,6 +325,74 @@ func TestRuntimeUsesBoundedFallbackWhenModelUnavailable(t *testing.T) {
 	}
 	if interpreted.RequestedJudgment != fallbackQuestion.RequestedJudgment || !receipt.FallbackUsed || receipt.Outcome != "fallback" {
 		t.Fatalf("interpreted = %#v receipt = %#v", interpreted, receipt)
+	}
+}
+
+// TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationFallbackAlsoFails is
+// the CHAOS-3770 F4 probe: when the primary fails and the configured
+// fallback ALSO fails, the receipt must not claim FallbackUsed/"fallback"
+// (that outcome means the fallback produced usable output, which it did
+// not), and the caller must see the fallback's own -- the final leg's --
+// classification, not the primary's. Getting this wrong means a caller
+// reading the primary's classification (e.g. a transient rate limit) could
+// treat a case as retryable when the fallback's own failure was actually
+// terminal, or vice versa.
+func TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationFallbackAlsoFails(t *testing.T) {
+	t.Parallel()
+	fallbackErr := fmt.Errorf("%w: fallback provider down", contextfabric.ErrModelUnavailable)
+	fallbackReceipt := validReceipt(contextfabric.ModelOperationInterpret)
+	fallbackReceipt.Outcome = "unavailable"
+	runtime := mustRuntime(t, &generatorStub{
+		interpretErr: core.NewError(core.RESOURCE_EXHAUSTED, "primary quota exhausted"),
+	}, Config{
+		MaxAttempts: 1,
+		Fallback:    erroringFallbackRuntime{err: fallbackErr, receipt: fallbackReceipt},
+	})
+
+	_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+
+	if !errors.Is(err, contextfabric.ErrModelUnavailable) {
+		t.Fatalf("InterpretQuestion() error = %v, want the FALLBACK leg's own classification (ErrModelUnavailable)", err)
+	}
+	if errors.Is(err, contextfabric.ErrModelRateLimited) {
+		t.Fatalf("InterpretQuestion() error = %v, must not carry the PRIMARY leg's classification once the fallback also ran and failed", err)
+	}
+	if receipt.FallbackUsed {
+		t.Fatalf("receipt.FallbackUsed = true, want false: the fallback call never produced usable output, so the receipt must not claim fallback use")
+	}
+	if receipt.Outcome != "unavailable" {
+		t.Fatalf("receipt.Outcome = %q, want the fallback leg's own outcome %q, not \"fallback\" (which means the fallback succeeded)", receipt.Outcome, "unavailable")
+	}
+}
+
+// TestRuntimeRecordsTheFinalLegsFailureWhenSynthesisFallbackAlsoFails is the
+// SynthesizeAnswer counterpart -- see
+// TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationFallbackAlsoFails.
+func TestRuntimeRecordsTheFinalLegsFailureWhenSynthesisFallbackAlsoFails(t *testing.T) {
+	t.Parallel()
+	fallbackErr := fmt.Errorf("%w: fallback output failed validation", contextfabric.ErrModelOutput)
+	fallbackReceipt := validReceipt(contextfabric.ModelOperationSynthesize)
+	fallbackReceipt.Outcome = "invalid_output"
+	runtime := mustRuntime(t, &generatorStub{
+		synthesisErr: core.NewError(core.RESOURCE_EXHAUSTED, "primary quota exhausted"),
+	}, Config{
+		MaxAttempts: 1,
+		Fallback:    erroringFallbackRuntime{err: fallbackErr, receipt: fallbackReceipt},
+	})
+
+	_, receipt, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+
+	if !errors.Is(err, contextfabric.ErrModelOutput) {
+		t.Fatalf("SynthesizeAnswer() error = %v, want the FALLBACK leg's own classification (ErrModelOutput)", err)
+	}
+	if errors.Is(err, contextfabric.ErrModelRateLimited) {
+		t.Fatalf("SynthesizeAnswer() error = %v, must not carry the PRIMARY leg's classification once the fallback also ran and failed", err)
+	}
+	if receipt.FallbackUsed {
+		t.Fatalf("receipt.FallbackUsed = true, want false: the fallback call never produced usable output, so the receipt must not claim fallback use")
+	}
+	if receipt.Outcome != "invalid_output" {
+		t.Fatalf("receipt.Outcome = %q, want the fallback leg's own outcome %q, not \"fallback\" (which means the fallback succeeded)", receipt.Outcome, "invalid_output")
 	}
 }
 
