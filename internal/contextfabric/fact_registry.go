@@ -145,6 +145,19 @@ func (r *FactCapabilityRegistry) Capabilities() []FactCapability {
 	return capabilities
 }
 
+// capabilityIndex exposes the registered capabilities to the fact planner
+// keyed by kind. It returns the declared FactCapability values directly
+// rather than the registeredFactProvider wrappers, so the planner can only
+// read what a provider DECLARES about itself and can never reach the
+// provider to call it -- planning stays pure by construction.
+func (r *FactCapabilityRegistry) capabilityIndex() map[FactKind]FactCapability {
+	index := make(map[FactKind]FactCapability, len(r.providers))
+	for kind, registered := range r.providers {
+		index[kind] = registered.capability
+	}
+	return index
+}
+
 func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
 	if r == nil {
 		return CanonicalFactBundle{}, errors.New("fact capability registry is required")
@@ -167,13 +180,30 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		Watermarks: map[FactKind]string{},
 	}
 	allowedSubjects := canonicalFactSubjectSet(request.Subjects, request.Cohort)
-	for _, requirement := range request.Requirements {
+	// CHAOS-3783: decide the whole fan-out up front, before any provider is
+	// touched, so a capability that provably cannot contribute is never
+	// queried and never silently missing. See planFactReads for the rule and
+	// for why an empty subject-kind intersection is a proof rather than a
+	// guess.
+	for _, planned := range planFactReads(request, r.capabilityIndex()) {
+		requirement := planned.Requirement
 		registered, ok := r.providers[requirement.Kind]
 		if !ok {
 			appendFactCoverage(&bundle, requirement.Kind, SourceUnconfigured, nil, "", "canonical fact capability is not configured")
 			continue
 		}
-		query, err := buildFactQuery(request, requirement, registered.capability, allowedSubjects)
+		if planned.Pruned {
+			// The whole point of the issue's "record every pruning decision"
+			// constraint: a pruned capability is visible in Coverage with a
+			// reason, exactly like one that ran and failed. It contributes
+			// no facts and -- unlike every degrading state -- does not mark
+			// the bundle partial, because nothing is actually missing from
+			// the answer. factStateDegrades(SourcePruned) is false for that
+			// reason.
+			appendFactCoverage(&bundle, requirement.Kind, SourcePruned, nil, "", planned.Reason)
+			continue
+		}
+		query, err := buildFactQuery(request, requirement, registered.capability, allowedSubjects, planned.Subjects)
 		if err != nil {
 			return CanonicalFactBundle{}, fmt.Errorf("fact capability %s: %w", requirement.Kind, err)
 		}
@@ -185,6 +215,15 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			state, reason := classifyFactReadError(err)
 			appendFactCoverage(&bundle, requirement.Kind, state, nil, "", reason)
 			continue
+		}
+		if planned.Narrowed {
+			// Coverage source names must be unique
+			// (ContextFabricCoverage.Validate), so the subjects this
+			// capability could not be asked about cannot get an observation
+			// of their own -- the narrowing rides on the capability's own
+			// observation instead. Prefixed, never replacing: whatever the
+			// provider said about its own read still has to survive.
+			result.Reason = strings.TrimSpace(planned.Reason + " " + result.Reason)
 		}
 		if err := mergeFactProviderResult(&bundle, registered.capability, query, result, allowedSubjects); err != nil {
 			return CanonicalFactBundle{}, fmt.Errorf("fact capability %s: %w", requirement.Kind, err)
@@ -211,16 +250,21 @@ func (r *FactCapabilityRegistry) readProvider(ctx context.Context, principal sto
 	return result, nil
 }
 
-func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, capability FactCapability, allowed map[string]SubjectRef) (FactQuery, error) {
-	subjects := requirement.Subjects
+// buildFactQuery turns one planned read into the query a provider receives.
+//
+// planned is the subject list planFactReads already narrowed to the kinds
+// this capability declares it supports; it is nil only for a requirement the
+// planner passed through untouched (an unregistered kind, or an
+// investigation with no subjects at all). The subject-kind check below is
+// therefore no longer reachable in the ordinary path -- the planner prunes
+// or narrows first -- but it stays as the invariant that proves it: if a
+// planning bug ever let an unsupported subject through, failing here is
+// correct, because a provider must never be asked a question its capability
+// says it cannot answer.
+func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, capability FactCapability, allowed map[string]SubjectRef, planned []SubjectRef) (FactQuery, error) {
+	subjects := planned
 	if len(subjects) == 0 {
-		subjects = request.Subjects
-	}
-	if len(subjects) == 0 && request.Cohort != nil {
-		subjects = make([]SubjectRef, 0, len(request.Cohort.Members))
-		for _, member := range request.Cohort.Members {
-			subjects = append(subjects, member.Subject)
-		}
+		subjects = factQuerySubjects(request, requirement)
 	}
 	if len(subjects) == 0 {
 		return FactQuery{}, errors.New("fact capability requires at least one discovered subject")
@@ -325,9 +369,22 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 	return nil
 }
 
+// maxCoverageReasonLength mirrors ContextFabricSourceObservation's own
+// 2000-character bound on Reason. Every coverage reason this package emits
+// funnels through appendFactCoverage, so clamping here is what keeps a
+// long provider reason -- or, since CHAOS-3783, a provider reason with a
+// planner narrowing note prefixed onto it -- from pushing the finished
+// result past its own contract and failing validation for the whole
+// investigation. Truncating an explanation is strictly better than losing
+// the answer that carried it.
+const maxCoverageReasonLength = 2000
+
 func appendFactCoverage(bundle *CanonicalFactBundle, kind FactKind, state SourceState, observedAt *time.Time, watermark, reason string) {
 	if strings.TrimSpace(reason) == "" && state != SourceAvailable {
 		reason = "canonical fact capability returned " + string(state)
+	}
+	if len(reason) > maxCoverageReasonLength {
+		reason = reason[:maxCoverageReasonLength]
 	}
 	bundle.Coverage.Sources = append(bundle.Coverage.Sources, SourceObservation{
 		Source: "canonical_fact:" + string(kind), State: state, ObservedAt: observedAt, Watermark: watermark, Reason: reason,
@@ -417,15 +474,28 @@ func factKindOrder(kind FactKind) int {
 	return len(order)
 }
 
+// stateRejectsFacts lists the states that cannot coexist with facts.
+// SourcePruned joins them (CHAOS-3783): the provider was never called, so a
+// fact attributed to a pruned capability would have no origin at all.
 func stateRejectsFacts(state SourceState) bool {
 	switch state {
-	case SourceUnavailable, SourceUnconfigured, SourceUnauthorized, SourceNoData, SourceConflicted, SourceNotApplicable:
+	case SourceUnavailable, SourceUnconfigured, SourceUnauthorized, SourceNoData, SourceConflicted, SourceNotApplicable, SourcePruned:
 		return true
 	default:
 		return false
 	}
 }
 
+// factStateDegrades lists the states that make an answer partial.
+//
+// SourcePruned is deliberately NOT among them (CHAOS-3783). Every other
+// non-available state means something the answer wanted is missing -- the
+// source was unreachable, unconfigured, truncated, or in conflict. A prune
+// means the planner proved the source had nothing to contribute to THIS
+// question, so nothing is missing and the answer is not degraded. Marking it
+// partial would train every consumer to treat a correctly-scoped
+// investigation as a compromised one, and would make Coverage.Partial
+// useless as a signal exactly as pruning became routine.
 func factStateDegrades(state SourceState) bool {
 	switch state {
 	case SourceStale, SourceUnavailable, SourceUnconfigured, SourceUnauthorized, SourceTruncated, SourceConflicted:
@@ -435,6 +505,9 @@ func factStateDegrades(state SourceState) bool {
 	}
 }
 
+// validFactSourceState bounds what a PROVIDER may return. SourcePruned is
+// absent on purpose: it is a planner verdict, minted only by ReadFacts, and
+// a provider claiming to have pruned itself has by definition already run.
 func validFactSourceState(state SourceState) bool {
 	switch state {
 	case SourceAvailable, SourceStale, SourceUnavailable, SourceUnconfigured, SourceUnauthorized, SourceNoData, SourceTruncated, SourceConflicted, SourceNotApplicable:
