@@ -1090,39 +1090,23 @@ func (s *keyRecordingResultStore) Get(context.Context, storage.Principal, string
 	return InvestigationResult{}, nil
 }
 
-// TestF2_ClampedRequestStillReusesItsOwnAnswer is CHAOS-3781 round-2 F2,
-// red-green.
-//
-// The round-1 F6 ruling was that BOTH reuse sides key from the wire
-// request. The save side complied; the lookup side did not -- it read
-// request.TimeContext AFTER the engine had overwritten it with the
-// clamped value. Whenever clamping actually fired (an as-of inside the
-// skew tolerance), the row saved under the wire key and was looked up
-// under the clamped one, so the two never matched and the lookup key
-// drifted with `now`.
-//
-// The round-1 test missed this precisely because its as-of was safely in
-// the past, so clamping never fired and both keys coincided. This one
-// puts the requested instant INSIDE the tolerance, the only place the
-// defect is observable.
-func TestF2_ClampedRequestStillReusesItsOwnAnswer(t *testing.T) {
-	t.Parallel()
-	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
-	insideTolerance := now.Add(30 * time.Second)
-	wireKey := TimeAxisKeyFor(TimeContext{Axis: TemporalValidTime, AsOf: &insideTolerance})
-
-	store := &keyRecordingResultStore{}
-	var lookupKeys []string
+// clampReuseEngine builds an engine whose clock the test controls, with a
+// reuse gate that serves only what Save actually stored -- so lookup/save
+// key agreement is what decides a hit, which is the invariant under test.
+func clampReuseEngine(t *testing.T, now func() time.Time, store *keyRecordingResultStore, lookupKeys *[]string) *Engine {
+	t.Helper()
 	gate := reuseGateFunc(func(_ context.Context, _ storage.Principal, key ReuseKey) (InvestigationResult, bool, error) {
-		lookupKeys = append(lookupKeys, key.TimeAxisKey)
+		*lookupKeys = append(*lookupKeys, key.TimeAxisKey)
+		if store.savedKey != "" && key.TimeAxisKey == store.savedKey {
+			return store.saved, true, nil
+		}
 		return InvestigationResult{}, false, nil
 	})
-
 	engine, err := NewEngine(EngineDependencies{
-		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+		Interpreter: interpreterFunc(func(_ context.Context, _ storage.Principal, request InvestigationRequest) (InterpretedQuestion, error) {
 			return InterpretedQuestion{
 				Shape: ShapeSingleSubject, RequestedJudgment: "status",
-				TimeContext:      TimeContext{Axis: TemporalValidTime, AsOf: &insideTolerance},
+				TimeContext:      request.TimeContext,
 				FactRequirements: []FactRequirement{{Kind: FactStatus}},
 			}, nil
 		}),
@@ -1154,10 +1138,77 @@ func TestF2_ClampedRequestStillReusesItsOwnAnswer(t *testing.T) {
 			}, nil
 		}),
 		Results: store, ReuseGate: gate,
-	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return now }, NewResultID: func() string { return "result_12345678" }})
+	}, EngineOptions{ServiceVersion: "acr-test", Now: now, NewResultID: func() string { return "result_12345678" }})
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
+	return engine
+}
+
+// TestF1_ClampedRequestDoesNotServeAnEarlierEffectiveAnswer is CHAOS-3781
+// round-3 F1, red-green: the two-arrival scenario end to end.
+//
+// Round-1 F6 keyed reuse on the WIRE request, on the premise that
+// identical wire requests should key identically regardless of arrival.
+// That premise is false when clamping is time-dependent. A request for
+// as_of 12:00:30 arriving at 12:00:00 is clamped to 12:00:00 and answered
+// for that instant. The SAME wire request arriving at or after 12:00:30 is
+// no longer future, so it is answered for 12:00:30 -- a different question
+// with a legitimately different answer. Under wire keying the second
+// request hit the first's row and was served the 12:00:00 answer.
+//
+// The arrival must be >= as_of. At, say, +1s the as_of is still in the
+// future and still clamps, so the two keys would coincide and the test
+// would pass without exercising the defect at all.
+func TestF1_ClampedRequestDoesNotServeAnEarlierEffectiveAnswer(t *testing.T) {
+	t.Parallel()
+	asOf := time.Date(2026, 8, 13, 12, 0, 30, 0, time.UTC)
+	firstArrival := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)   // as_of is future -> clamps to 12:00:00
+	secondArrival := time.Date(2026, 8, 13, 12, 0, 45, 0, time.UTC) // as_of is past -> no clamp, means 12:00:30
+
+	arrival := firstArrival
+	store := &keyRecordingResultStore{}
+	var lookupKeys []string
+	engine := clampReuseEngine(t, func() time.Time { return arrival }, store, &lookupKeys)
+
+	request := validInvestigationRequest()
+	request.TimeContext = TimeContext{Axis: TemporalValidTime, AsOf: &asOf}
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("first Investigate() error = %v", err)
+	}
+	clampedFirst := TimeAxisKeyFor(TimeContext{Axis: TemporalValidTime, AsOf: &firstArrival})
+	if store.savedKey != clampedFirst {
+		t.Fatalf("Save keyed %q, want the CLAMPED effective key %q", store.savedKey, clampedFirst)
+	}
+
+	arrival = secondArrival
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		t.Fatalf("second Investigate() error = %v", err)
+	}
+	if result.Reused {
+		t.Fatal("a request meaning 12:00:30 was served the answer that meant 12:00:00; the key must describe the effective time, not the wire time")
+	}
+	// And it looked up under its OWN effective time, which by now is the
+	// unclamped as_of.
+	wantSecond := TimeAxisKeyFor(TimeContext{Axis: TemporalValidTime, AsOf: &asOf})
+	if lookupKeys[len(lookupKeys)-1] != wantSecond {
+		t.Fatalf("second lookup keyed %q, want %q", lookupKeys[len(lookupKeys)-1], wantSecond)
+	}
+}
+
+// TestF1_LookupAndSaveKeyIdentically preserves round-2 F2's invariant on
+// the new semantics: whatever the key is derived from, both sides must
+// derive it the same way, or a saved row is unreachable.
+func TestF1_LookupAndSaveKeyIdentically(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	insideTolerance := now.Add(30 * time.Second)
+
+	store := &keyRecordingResultStore{}
+	var lookupKeys []string
+	engine := clampReuseEngine(t, func() time.Time { return now }, store, &lookupKeys)
 
 	request := validInvestigationRequest()
 	request.TimeContext = TimeContext{Axis: TemporalValidTime, AsOf: &insideTolerance}
@@ -1165,19 +1216,43 @@ func TestF2_ClampedRequestStillReusesItsOwnAnswer(t *testing.T) {
 		t.Fatalf("Investigate() error = %v", err)
 	}
 
-	if store.savedKey != wireKey {
-		t.Fatalf("Save keyed %q, want the pre-clamp wire key %q", store.savedKey, wireKey)
-	}
-	if len(lookupKeys) != 1 {
-		t.Fatalf("reuse gate consulted %d times, want 1", len(lookupKeys))
-	}
-	// The invariant: the two sides agree. Before F2 the lookup key was
-	// derived from the CLAMPED instant, so it differed from the saved one
-	// and no identical request could ever match.
 	if lookupKeys[0] != store.savedKey {
-		t.Fatalf("lookup keyed %q but Save keyed %q; a clamped request can never reuse its own answer", lookupKeys[0], store.savedKey)
+		t.Fatalf("lookup keyed %q but Save keyed %q; a saved row would be unreachable", lookupKeys[0], store.savedKey)
 	}
-	if lookupKeys[0] != wireKey {
-		t.Fatalf("lookup keyed %q, want the pre-clamp wire key %q", lookupKeys[0], wireKey)
+	// Both on the clamped value, not the wire one.
+	if want := TimeAxisKeyFor(TimeContext{Axis: TemporalValidTime, AsOf: &now}); store.savedKey != want {
+		t.Fatalf("keyed %q, want the clamped %q", store.savedKey, want)
+	}
+}
+
+// TestF1_UnclampedRequestsKeyIdenticallyAcrossArrivals is consequence (b):
+// the overwhelming majority of requests never clamp, so their keys are
+// unchanged and their reuse is unaffected. Without this, "key on the
+// effective time" could quietly have cost reuse everywhere rather than
+// only in the narrow future-dated class.
+func TestF1_UnclampedRequestsKeyIdenticallyAcrossArrivals(t *testing.T) {
+	t.Parallel()
+	pastAsOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	firstArrival := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	laterArrival := time.Date(2026, 8, 13, 18, 30, 0, 0, time.UTC)
+
+	arrival := firstArrival
+	store := &keyRecordingResultStore{}
+	var lookupKeys []string
+	engine := clampReuseEngine(t, func() time.Time { return arrival }, store, &lookupKeys)
+
+	request := validInvestigationRequest()
+	request.TimeContext = TimeContext{Axis: TemporalValidTime, AsOf: &pastAsOf}
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("first Investigate() error = %v", err)
+	}
+
+	arrival = laterArrival
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		t.Fatalf("second Investigate() error = %v", err)
+	}
+	if !result.Reused {
+		t.Fatal("an ordinary historical request stopped reusing across arrivals; clamping never fires for a past as_of, so its key must not move")
 	}
 }

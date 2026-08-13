@@ -174,3 +174,23 @@ made it drift with `now` and disagree with what was saved), and temporal
 grain is contributed by any provider whose FACTS WERE RETAINED, not only
 by `SourceAvailable` ones -- both derived from `factsRetained` so the
 retention and grain decisions cannot diverge again.
+
+Round 3 corrected the round-1 reuse-key ruling. Both sides key on the
+CLAMPED EFFECTIVE time context, not the wire one.
+
+Round 1 keyed on the wire request, reasoning that identical wire requests
+should key identically whatever their arrival time. That premise is false
+once clamping is time-dependent: a request for as_of 12:00:30 arriving at
+12:00:00 is clamped and answered for 12:00:00, while the SAME wire request
+arriving at 12:00:45 is answered for 12:00:30 -- a different question. Wire
+keying served the second the first's answer. The key now means what the
+answer means, and round-2 F2's symmetry survives because BOTH sides moved
+together.
+
+The accepted cost is stated at `TimeAxisKeyFor`: a future-dated request
+inside the skew tolerance keys per arrival, so that class never reuses and
+each request writes its own row. It is near-empty in practice -- "now"
+questions use axis=current, whose key is a fixed literal, and real
+historical questions carry a past as_of that never clamps -- and those rows
+are ordinary saved answers under normal retention and invalidation, so the
+growth is bounded rather than accumulating.

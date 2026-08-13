@@ -186,12 +186,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// tolerance is pulled back to now, so a future time can never reach a
 	// predicate or a label. The clamped value replaces the caller's on
 	// the request every layer below sees.
-	// Captured BEFORE clamping: the reuse key must describe the request
-	// as the caller sent it, so two byte-identical requests key
-	// identically regardless of when they arrive relative to `now`
-	// (F6/F7 together -- clamping is time-dependent, and keying on a
-	// clamped value would make an identical request's key drift).
-	wireTimeContext := request.TimeContext
 	clampedRequestTime, err := resolveTimeContext(request.TimeContext, e.now())
 	if err != nil {
 		return InvestigationResult{}, err
@@ -208,14 +202,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// closed); Investigate always falls through to a fresh investigation
 	// in that case, so a reuse-path failure is never visible to the
 	// caller as anything other than normal, slightly slower success.
-	// F2 (round 2): the reuse key comes from the PRE-CLAMP wire context,
-	// passed explicitly rather than read off `request` -- which now holds
-	// the clamped value. Save already keyed from the wire context, so a
-	// lookup keyed from the clamped one meant the two sides disagreed
-	// whenever clamping fired: the row saved under one key and was looked
-	// up under another, so identical requests inside the skew tolerance
-	// could never reuse, and the lookup key drifted with `now`.
-	if reused, ok := e.tryReuse(ctx, principal, request, wireTimeContext); ok {
+	// Round-3 F1: the reuse key is the CLAMPED EFFECTIVE context, and
+	// Save below keys on the same value -- symmetry preserved from
+	// round-2 F2, but on the value that describes what the answer
+	// actually MEANS rather than what the caller literally typed.
+	//
+	// Round-1 F6's premise (identical wire requests key identically
+	// regardless of arrival) is false precisely when clamping is
+	// time-dependent: the same wire instant means a DIFFERENT effective
+	// instant at different arrival times, and those answers legitimately
+	// differ. Keying on the wire value served a request meaning 12:00:30
+	// an answer that had meant 12:00:00.
+	if reused, ok := e.tryReuse(ctx, principal, request, clampedRequestTime); ok {
 		return reused, nil
 	}
 
@@ -423,11 +421,17 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return InvestigationResult{}, fmt.Errorf("%w: %v", ErrInvalidResult, err)
 	}
 	if e.results != nil {
-		// F6: keyed from the ORIGINAL wire request -- the same context
-		// tryReuse keys its lookup with, captured before any clamping or
-		// interpretation could move it. Save and FindReusable must agree
-		// on this or the save is unreachable.
-		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, TimeAxisKeyFor(wireTimeContext)); err != nil {
+		// Keyed from the CLAMPED REQUEST context -- byte-for-byte the
+		// value tryReuse keyed its lookup with (round-3 F1). Save and
+		// FindReusable must agree or the saved row is unreachable, which
+		// is what round-2 F2 fixed; round 3 moved BOTH to the effective
+		// value rather than moving them apart.
+		//
+		// Deliberately the clamped REQUEST context, not the clamped
+		// interpreted one: the lookup runs before Interpret and can only
+		// know the former, so keying Save on the latter would reopen the
+		// same asymmetry from the other side.
+		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, TimeAxisKeyFor(clampedRequestTime)); err != nil {
 			return InvestigationResult{}, fmt.Errorf("save investigation result: %w", err)
 		}
 	}
