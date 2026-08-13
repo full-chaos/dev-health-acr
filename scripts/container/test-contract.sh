@@ -273,12 +273,15 @@ scan_script="${repo_root}/scripts/container/scan.sh"
 trivy_scanner_pin_pattern="^trivy_image='aquasec/trivy:[^'\"]+@sha256:[0-9a-f]{64}'"
 trivy_db_static_pin_pattern='trivy-db[^@]*@sha256:[0-9a-f]{64}|sha256:[0-9a-f]{64}[^@]*trivy-db'
 
-# CHAOS-3772 R2-2: a pinned assignment followed by a later, unpinned
-# reassignment would satisfy a plain "does a pinned line exist" grep while
-# the live value at runtime is whatever assignment ran last. Require
-# exactly one trivy_image assignment in the whole script, and that it be
-# the pinned one.
-trivy_image_assignment_count="$(grep -cE '^trivy_image=' "$scan_script")"
+# CHAOS-3772 R2-2 / R3 F3: a pinned assignment followed by a later,
+# unpinned reassignment would satisfy a plain "does a pinned line exist"
+# grep while the live value at runtime is whatever assignment ran last --
+# including two assignments packed onto one physical line with a `;`,
+# which a `^`-anchored per-line count would miss entirely. Count
+# assignment occurrences by statement position (start of line, or right
+# after a `;`), not physical lines, and require exactly one.
+trivy_image_assignment_pattern='(^|;[[:space:]]*)trivy_image='
+trivy_image_assignment_count="$(grep -oE "$trivy_image_assignment_pattern" "$scan_script" | wc -l | tr -d ' ')"
 test "$trivy_image_assignment_count" -eq 1 || {
   printf 'scan.sh must assign trivy_image exactly once (found %s) -- a later reassignment could override the pinned value at runtime (CHAOS-3772 R2-2)\n' \
     "$trivy_image_assignment_count" >&2
@@ -363,8 +366,19 @@ duplicate_assignment_evasion="${pin_fixture}/duplicate-assignment.sh"
   printf "trivy_image='aquasec/trivy:0.69.3@sha256:%s'\n" "$(printf 'b%.0s' $(seq 1 64))"
   printf "trivy_image='aquasec/trivy:latest'\n"
 } >"$duplicate_assignment_evasion"
-if [[ "$(grep -cE '^trivy_image=' "$duplicate_assignment_evasion")" -eq 1 ]]; then
-  printf 'trivy_image single-assignment count check failed to catch a duplicate-assignment evasion (CHAOS-3772 R2-2)\n' >&2
+if [[ "$(grep -oE "$trivy_image_assignment_pattern" "$duplicate_assignment_evasion" | wc -l | tr -d ' ')" -eq 1 ]]; then
+  printf 'trivy_image assignment-count check failed to catch a two-line duplicate assignment (CHAOS-3772 R2-2)\n' >&2
+  exit 1
+fi
+
+# CHAOS-3772 R3 F3: the exact evasion codex demonstrated -- both
+# assignments packed onto ONE physical line via `;`, which a `^`-anchored
+# per-line grep -c would count as a single line and miss entirely.
+single_line_duplicate_evasion="${pin_fixture}/single-line-duplicate.sh"
+printf "trivy_image='aquasec/trivy:0.69.3@sha256:%s' ; trivy_image='aquasec/trivy:latest'\n" \
+  "$(printf 'c%.0s' $(seq 1 64))" >"$single_line_duplicate_evasion"
+if [[ "$(grep -oE "$trivy_image_assignment_pattern" "$single_line_duplicate_evasion" | wc -l | tr -d ' ')" -eq 1 ]]; then
+  printf 'trivy_image assignment-count check failed to catch a single-line, semicolon-separated duplicate assignment (CHAOS-3772 R3 F3)\n' >&2
   exit 1
 fi
 

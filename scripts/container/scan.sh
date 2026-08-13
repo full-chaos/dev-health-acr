@@ -53,12 +53,11 @@ trivy_cache="${work_root}/trivy-cache"
 # upload (CHAOS-3772 F2). Stale attempt directories from a previous failed
 # run are pruned here rather than accumulating forever on a long-lived
 # machine; a successful run's own directory is moved away by the
-# publication step below, so only failed attempts ever linger. Pruning
-# only ever removes a sibling whose owning process is provably dead
-# (CHAOS-3772 R2-1): two scan.sh invocations sharing this .tmp root must
-# never delete each other's in-flight evidence.
+# publication step below, so only failed attempts ever linger. Pruning is
+# age-based (CHAOS-3772 R3): a run takes minutes, so anything older than
+# the 6h default is safely stale, and two scan.sh invocations sharing this
+# .tmp root can never race each other's brand-new directory.
 report_root="$(mktemp -d "${tmp_root}/container-scan-attempt.XXXXXX")"
-printf '%s\n' "$$" >"${report_root}/.owner.pid"
 prune_stale_attempt_dirs "$tmp_root" 'container-scan-attempt.' "$report_root"
 mkdir -p "$scan_root" "$report_root" "$trivy_cache"
 if [[ -n "$source_oci_root" ]]; then
