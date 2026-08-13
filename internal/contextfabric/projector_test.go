@@ -46,12 +46,20 @@ func (s *checkpointStoreStub) LoadProjectionCheckpoint(context.Context, string, 
 	return s.checkpoint, nil
 }
 
+// CompareAndSwapProjectionCheckpoint persists a successful save into
+// s.checkpoint (CHAOS-3779 codex round-3 M1), so a SECOND worker/RunOnce
+// call sharing this same stub instance -- simulating a later tick over a
+// real, durable checkpoint store -- observes what an earlier tick
+// actually saved, including a claim write that happened before an apply
+// failure. Every prior single-tick test only ever calls RunOnce once per
+// stub instance, so this never changes their behavior.
 func (s *checkpointStoreStub) CompareAndSwapProjectionCheckpoint(_ context.Context, expected, checkpoint ProjectionCheckpoint) error {
 	s.expected = append(s.expected, expected)
 	if s.compareErr != nil {
 		return s.compareErr
 	}
 	s.saved = append(s.saved, checkpoint)
+	s.checkpoint = checkpoint
 	return nil
 }
 
@@ -62,7 +70,13 @@ func TestProjectionWorkerAdvancesCheckpointOnlyAfterBackendAcceptance(t *testing
 	batch.Cursor = "cursor_1"
 	batch.NextCursor = "cursor_2"
 	backend := &projectionBackendStub{receipt: ProjectionReceipt{BatchID: batch.BatchID, AppliedAt: time.Unix(50, 0).UTC(), BackendWatermark: "backend_2"}}
-	original := ProjectionCheckpoint{OrgID: "org_1", Source: "dev-health-ops", Cursor: "cursor_1"}
+	// SourceVersion matches batch.SourceVersion: this is an ALREADY-projected
+	// organization on an unchanged source version, not the M1/H2-residual
+	// first-run-or-claim case (that shape has its own dedicated tests
+	// below) -- keeping this fixture realistic avoids tripping the
+	// claim-write path and keeps this test's single-CAS-call assertion
+	// meaningful.
+	original := ProjectionCheckpoint{OrgID: "org_1", Source: "dev-health-ops", Cursor: "cursor_1", SourceVersion: batch.SourceVersion}
 	checkpoints := &checkpointStoreStub{checkpoint: original}
 	worker, err := NewProjectionWorker(projectionSourceStub{batch: batch, available: true}, backend, checkpoints, ProjectionWorkerOptions{Now: func() time.Time { return time.Unix(60, 0).UTC() }})
 	if err != nil {
@@ -89,7 +103,12 @@ func TestProjectionWorkerDoesNotAdvanceCheckpointWhenBackendFails(t *testing.T) 
 
 	batch := validProjectionBatch()
 	backend := &projectionBackendStub{err: errors.New("backend unavailable")}
-	checkpoints := &checkpointStoreStub{checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "dev-health-ops", Cursor: batch.Cursor}}
+	// SourceVersion matches batch.SourceVersion -- an already-projected
+	// organization, so the M1 claim-write path (which itself persists a
+	// checkpoint before the backend is ever called -- see the dedicated
+	// M1 tests below) does not interfere with this test's "nothing is
+	// EVER saved on backend failure" assertion.
+	checkpoints := &checkpointStoreStub{checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "dev-health-ops", Cursor: batch.Cursor, SourceVersion: batch.SourceVersion}}
 	worker, err := NewProjectionWorker(projectionSourceStub{batch: batch, available: true}, backend, checkpoints, ProjectionWorkerOptions{})
 	if err != nil {
 		t.Fatalf("NewProjectionWorker() error = %v", err)
@@ -132,8 +151,13 @@ func TestProjectionWorkerSurfacesConcurrentCheckpointConflict(t *testing.T) {
 	batch.Cursor = "cursor_1"
 	batch.NextCursor = "cursor_2"
 	backend := &projectionBackendStub{receipt: ProjectionReceipt{BatchID: batch.BatchID, AppliedAt: time.Unix(50, 0).UTC(), BackendWatermark: "backend_2"}}
+	// SourceVersion matches batch.SourceVersion -- an already-projected
+	// organization, so this test's compareErr fires on the FINAL
+	// checkpoint-advance CAS (the concurrency conflict this test is
+	// actually about), not on the M1 claim-write CAS a mismatched/empty
+	// SourceVersion would otherwise trigger first.
 	checkpoints := &checkpointStoreStub{
-		checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "dev-health-ops", Cursor: "cursor_1"},
+		checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "dev-health-ops", Cursor: "cursor_1", SourceVersion: batch.SourceVersion},
 		compareErr: ErrProjectionConflict,
 	}
 	worker, err := NewProjectionWorker(projectionSourceStub{batch: batch, available: true}, backend, checkpoints, ProjectionWorkerOptions{})
@@ -241,5 +265,100 @@ func TestProjectionWorkerAllowsFirstEverProjectionWithNoStoredSourceVersion(t *t
 	}
 	if !run.Applied || backend.applied != 1 {
 		t.Fatalf("run = %#v, backend.applied = %d, want the batch applied normally", run, backend.applied)
+	}
+}
+
+// TestProjectionWorkerClaimSurvivesAnApplyFailureOnAnEmptyCheckpoint is
+// CHAOS-3779 codex round-3 finding M1's first regression test. Probed
+// first (temporary reproduction, deleted before this commit): a v1 batch
+// whose apply fails partway left the checkpoint at its original empty
+// SourceVersion, because pre-fix RunOnce only ever wrote a checkpoint
+// AFTER a successful apply -- so a later, different-version batch over
+// that same still-empty checkpoint sailed straight through the H2-residual
+// guard (which intentionally treats an empty SourceVersion as "no
+// mismatch," a first-run allowance) and applied, duplicating whatever the
+// first attempt had partially written.
+//
+// This proves the claim half of the fix in isolation: even though the
+// backend fails and RunOnce surfaces that failure, the claim -- written
+// BEFORE ApplyProjectionBatch is ever called, cursor left unchanged from
+// what was loaded -- is left durably saved.
+func TestProjectionWorkerClaimSurvivesAnApplyFailureOnAnEmptyCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	batch := validProjectionBatch()
+	batch.SourceVersion = "devhealthsource.clickhouse.v1"
+	batch.Cursor = ""
+	batch.NextCursor = "cursor_1"
+	backend := &projectionBackendStub{err: errors.New("simulated partial write failure partway through the batch")}
+	checkpoints := &checkpointStoreStub{checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "dev-health-ops"}}
+	worker, err := NewProjectionWorker(projectionSourceStub{batch: batch, available: true}, backend, checkpoints, ProjectionWorkerOptions{})
+	if err != nil {
+		t.Fatalf("NewProjectionWorker() error = %v", err)
+	}
+
+	_, err = worker.RunOnce(context.Background(), "org_1", "dev-health-ops")
+	if err == nil || !strings.Contains(err.Error(), "apply projection batch") {
+		t.Fatalf("RunOnce() error = %v, want the simulated apply failure to surface", err)
+	}
+	if backend.applied != 1 {
+		t.Fatalf("backend.applied = %d, want 1 -- the apply must still have been attempted (and failed) after the claim", backend.applied)
+	}
+	if len(checkpoints.saved) != 1 {
+		t.Fatalf("checkpoints.saved = %#v, want exactly one entry -- the claim, saved BEFORE the apply failure", checkpoints.saved)
+	}
+	claim := checkpoints.saved[0]
+	if claim.SourceVersion != "devhealthsource.clickhouse.v1" {
+		t.Fatalf("claim.SourceVersion = %q, want the batch's source version to have been claimed", claim.SourceVersion)
+	}
+	if claim.Cursor != "" {
+		t.Fatalf("claim.Cursor = %q, want unchanged (empty) -- the claim records zero progress, only the version", claim.Cursor)
+	}
+}
+
+// TestProjectionWorkerRefusesALaterDifferentVersionAfterAClaimSurvivedFailure
+// is M1's second regression test, closing the loop the first test opens:
+// after tick 1's claim survives an apply failure, tick 2 -- a DIFFERENT
+// SourceVersion arriving on the same, still-durably-claimed checkpoint --
+// must now be refused by the ordinary H2-residual mismatch check, exactly
+// as if the org had been fully, successfully projected under v1 already.
+// This is the actual hazard closing: a real backend never sees the v2
+// batch, so it never duplicates whatever v1 partially wrote.
+func TestProjectionWorkerRefusesALaterDifferentVersionAfterAClaimSurvivedFailure(t *testing.T) {
+	t.Parallel()
+
+	checkpoints := &checkpointStoreStub{checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "dev-health-ops"}}
+
+	v1Batch := validProjectionBatch()
+	v1Batch.SourceVersion = "devhealthsource.clickhouse.v1"
+	v1Batch.Cursor = ""
+	v1Batch.NextCursor = "cursor_1"
+	failingBackend := &projectionBackendStub{err: errors.New("simulated partial write failure partway through the batch")}
+	worker1, err := NewProjectionWorker(projectionSourceStub{batch: v1Batch, available: true}, failingBackend, checkpoints, ProjectionWorkerOptions{})
+	if err != nil {
+		t.Fatalf("NewProjectionWorker() error = %v", err)
+	}
+	if _, err := worker1.RunOnce(context.Background(), "org_1", "dev-health-ops"); err == nil {
+		t.Fatal("tick1 setup invalid: expected the simulated backend failure to surface as an error")
+	}
+	if len(checkpoints.saved) != 1 {
+		t.Fatalf("tick1 setup invalid: want the claim saved, got %#v", checkpoints.saved)
+	}
+
+	v2Batch := validProjectionBatch()
+	v2Batch.SourceVersion = "devhealthsource.clickhouse.v2"
+	v2Batch.Cursor = "" // the checkpoint's Cursor is still "" -- the claim recorded zero progress
+	v2Batch.NextCursor = "cursor_1"
+	succeedingBackend := &projectionBackendStub{receipt: ProjectionReceipt{BatchID: v2Batch.BatchID}}
+	worker2, err := NewProjectionWorker(projectionSourceStub{batch: v2Batch, available: true}, succeedingBackend, checkpoints, ProjectionWorkerOptions{})
+	if err != nil {
+		t.Fatalf("NewProjectionWorker() error = %v", err)
+	}
+	_, err = worker2.RunOnce(context.Background(), "org_1", "dev-health-ops")
+	if !errors.Is(err, ErrProjectionSourceVersionChanged) {
+		t.Fatalf("tick2 RunOnce() error = %v, want ErrProjectionSourceVersionChanged -- the surviving v1 claim must refuse the v2 batch", err)
+	}
+	if succeedingBackend.applied != 0 {
+		t.Fatalf("tick2 backend.applied = %d, want 0 -- the v2 batch must never reach the backend, or it would duplicate whatever v1 partially wrote", succeedingBackend.applied)
 	}
 }
