@@ -92,7 +92,8 @@ matches.
 So the pruned read is not "probably useless", it is **provably empty**. That
 is why no confidence threshold, score, or tunable appears anywhere in the
 planner: there is nothing to be uncertain about. It is also why the
-measurement harness can assert the fact bundle comes out byte-identical.
+measurement harness can assert the FACTS come out identical (§6 states
+precisely what that claim does and does not cover).
 
 ### Why a model cannot prune by phrasing
 
@@ -293,36 +294,62 @@ On the live dev corpus (3 repositories, 3 work items, 1 team):
 | mixed-kind open question | 17 → 11 (35%) | 119 → 32 (73%) |
 | project cohort | 2 → 0 | previously unanswerable |
 
-**The honest negative result: the fact bundle is byte-identical in every
-case.** Pruning saves round-trips and subject bindings, not bundle size, and
+**The honest negative result: the FACTS are identical in every case.**
+Pruning saves round-trips and subject bindings, not fact-bundle size, and
 that is structural rather than a property of this corpus -- a pruned
 capability would have returned nothing anyway (§3). The issue's "smaller fact
-bundles, fewer hallucination surfaces" rationale is therefore **not** supported
-by measurement. The round-trip and correctness wins are.
+bundles, fewer hallucination surfaces" rationale is therefore **not**
+supported by measurement. The round-trip and correctness wins are.
 
-That negative result is the harness's strongest assertion: a difference in
-fact count or bundle bytes fails the test, because pruning must remove work,
-never answer.
+### What "identical" covers, precisely
 
-Both sides of that comparison are canonically ordered first. The registry
-sorts its bundle while the naive baseline accumulates in requirement order,
-and no provider `SELECT` carries an outer `ORDER BY`, so identical fact sets
-could otherwise differ on ordering alone -- and a flaky assertion about
-correctness is worse than none. `TestCHAOS3783BundleBytesIsOrderInsensitive`
-proves the canonicalization without needing a database, so it runs in
-ordinary CI rather than only under the opt-in measurement.
+The claim is **fact-identity**, not bundle-identity. The compared digest is
+over `bundle.Facts` alone. `Coverage` deliberately DIFFERS between the two
+runs -- the pruned observations are the entire point of the feature -- so
+folding coverage into the digest would make the claim unfalsifiable.
 
-The assertion compares a **digest** of the canonical encoding, not its byte
-length. A length is a reporting number, not an identity: any two bundles of
-equal size compare equal under it, so a canonicalization regression that
-reordered or swapped equal-length values would pass unnoticed -- including in
-the permutation test written to catch exactly that. The test also pins the
-digest's sensitivity, altering one value to a different value of the same
-length and asserting the digest changes while the byte count does not.
+The coverage difference is not excluded from checking, though; it is asserted
+exactly. For every case that prunes, the harness requires that the planned
+run's coverage minus the reduced run's coverage is **precisely the pruned
+set**: a pruned kind must be absent from the reduced run, every surviving kind
+must be present in both, and a surviving kind's state and reason must be
+byte-equal across the two. A prune that also perturbed a surviving
+capability's observation fails there. That turns an intentional difference
+into a checked property rather than a carve-out.
+
+`TestCHAOS3783FactsDigestIsOrderInsensitiveAndContentSensitive` guards the
+shared serializer without needing a database, so it runs in ordinary CI rather
+than only under the opt-in measurement. It pins both directions: permuting the
+input must not change the digest, and altering one value to a **different
+value of the same length** must change it. The second half matters because an
+earlier version compared byte LENGTHS, under which any two same-size bundles
+compare equal -- including in the permutation test written to catch exactly
+that.
+
+### The all-pruned case
+
+The project-cohort case prunes every requirement, so there is no reduced run
+to compare against: `validateCanonicalFactRequest` rejects a request with zero
+requirements, and there is no "ask for nothing" call to make. Rather than
+leaving this ticket's headline case as the only unverified one, the identity
+statement is made directly for it -- an investigation whose every capability
+was pruned must produce no facts at all, and must explain every one of them in
+coverage with a non-empty reason.
+
+### The harness fails loudly
+
+Subject discovery treats any query, scan, or `rows.Err()` failure as a test
+failure rather than returning what it managed to read. A case with no subjects
+is skipped, so a silently-degrading discovery would shrink the subject set,
+shrink the measured savings, and still report success. A measurement layer
+that fails toward "fine" is worse than one that breaks, because nobody
+re-reads a green benchmark. `TestCHAOS3783SubjectDiscoveryFailsLoudly` covers
+all three failure paths, including the mid-iteration one that only `rows.Err()`
+reveals.
 
 Wall-clock is reported but caveated. Dev tables are small enough that provider
 time is round-trip dominated, so round-trip **count** is the durable number
-and the observed 28ms → 15ms style improvements are supporting evidence only.
+and the observed improvements are supporting evidence only.
 
 ## 7. Known adjacent work, not taken
 

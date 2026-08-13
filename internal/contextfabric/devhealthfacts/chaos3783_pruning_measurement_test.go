@@ -96,10 +96,23 @@ type chaos3783Measurement struct {
 	prunedKinds      []contextfabric.FactKind
 	facts            int
 	bundleBytes      int
-	bundleDigest     string
-	elapsed          time.Duration
-	failed           bool
-	failure          string
+	// factsDigest covers bundle.Facts ONLY (codex round-4 R4-3). Coverage is
+	// deliberately excluded because it is SUPPOSED to differ between the two
+	// runs -- the pruned observations are the whole point -- so folding it in
+	// would make the identity claim unfalsifiable. The coverage difference is
+	// asserted separately, and exactly, rather than ignored.
+	factsDigest string
+	coverage    map[contextfabric.FactKind]chaos3783Observation
+	elapsed     time.Duration
+	failed      bool
+	failure     string
+}
+
+// chaos3783Observation is one coverage entry reduced to what the identity
+// assertion compares.
+type chaos3783Observation struct {
+	state  contextfabric.SourceState
+	reason string
 }
 
 func TestCHAOS3783PruningMeasurement(t *testing.T) {
@@ -132,9 +145,19 @@ func TestCHAOS3783PruningMeasurement(t *testing.T) {
 		registered[capability.Kind] = capability
 	}
 
-	repositories := chaos3783Subjects(t, ctx, client, orgID, "repos", "toString(id)", contextfabric.SubjectRepository, "repository:", 3)
-	workItems := chaos3783Subjects(t, ctx, client, orgID, "work_items", "work_item_id", contextfabric.SubjectWorkItem, "work_item:", 3)
-	teams := chaos3783Subjects(t, ctx, client, orgID, "capacity_forecasts", "team_id", contextfabric.SubjectTeam, "team:", 3)
+	discover := func(table, column string, kind contextfabric.SubjectKind, prefix string) []contextfabric.SubjectRef {
+		t.Helper()
+		subjects, err := chaos3783Subjects(ctx, client, orgID, table, column, kind, prefix, 3)
+		if err != nil {
+			// R4-1: never degrade to "no subjects of that kind". A failed
+			// discovery would silently shrink the measurement.
+			t.Fatalf("subject discovery failed, so any measurement below would understate the fan-out: %v", err)
+		}
+		return subjects
+	}
+	repositories := discover("repos", "toString(id)", contextfabric.SubjectRepository, "repository:")
+	workItems := discover("work_items", "work_item_id", contextfabric.SubjectWorkItem, "work_item:")
+	teams := discover("capacity_forecasts", "team_id", contextfabric.SubjectTeam, "team:")
 	if len(repositories)+len(workItems)+len(teams) == 0 {
 		t.Fatalf("organization %q has no repositories, work items, or teams -- pick one with data", orgID)
 	}
@@ -180,6 +203,7 @@ func TestCHAOS3783PruningMeasurement(t *testing.T) {
 		planned          chaos3783Measurement
 		reduced          chaos3783Measurement
 		identityIsTested bool
+		allPruned        bool
 	}
 	rows := make([]row, 0, len(cases))
 	plannedFailures := 0
@@ -198,9 +222,26 @@ func TestCHAOS3783PruningMeasurement(t *testing.T) {
 		// The identity check: the same production path, asked only for the
 		// kinds the planner did not prune.
 		if !planned.failed && len(planned.prunedKinds) > 0 {
-			if remaining := chaos3783Without(testCase.requirements, planned.prunedKinds); len(remaining) > 0 {
+			remaining := chaos3783Without(testCase.requirements, planned.prunedKinds)
+			switch {
+			case len(remaining) > 0:
 				current.reduced = chaos3783Run(ctx, principal, registry, registered, testCase.subjects, remaining)
 				current.identityIsTested = true
+			default:
+				// Codex round-4 R4-4: every requirement was pruned -- the
+				// project-cohort case, which is this ticket's headline. The
+				// reduced run cannot be made, because
+				// validateCanonicalFactRequest rejects a request with zero
+				// requirements, so there is no "ask for nothing" call to
+				// compare against.
+				//
+				// The identity statement for an empty reduced set is
+				// therefore stated directly rather than skipped: an
+				// investigation whose every capability was pruned must
+				// produce no facts at all, and must explain every one of
+				// them in coverage. Leaving it untested would have left the
+				// headline case as the only unverified one.
+				current.allPruned = true
 			}
 		}
 		rows = append(rows, current)
@@ -222,8 +263,11 @@ func TestCHAOS3783PruningMeasurement(t *testing.T) {
 			r.naiveRoundTrips-r.planned.providersQueried,
 			chaos3783Percent(r.naiveRoundTrips-r.planned.providersQueried, r.naiveRoundTrips),
 			r.naiveBindings-r.planned.subjectBindings)
-		if r.identityIsTested {
-			t.Logf("  identity       : facts=%d digest-match=%v", r.reduced.facts, r.reduced.bundleDigest == r.planned.bundleDigest)
+		switch {
+		case r.identityIsTested:
+			t.Logf("  identity       : facts=%d facts-digest-match=%v", r.reduced.facts, r.reduced.factsDigest == r.planned.factsDigest)
+		case r.allPruned:
+			t.Logf("  identity       : every requirement pruned -- asserted zero facts and all-pruned coverage instead")
 		}
 	}
 	t.Logf("planned-path failures: %d of %d cases", plannedFailures, len(rows))
@@ -238,6 +282,21 @@ func TestCHAOS3783PruningMeasurement(t *testing.T) {
 		if r.planned.subjectBindings > r.naiveBindings {
 			t.Fatalf("case %q bound MORE subjects than a planner-free run would (%d > %d)", r.name, r.planned.subjectBindings, r.naiveBindings)
 		}
+		if r.allPruned {
+			// R4-4: the identity statement when nothing survives pruning.
+			if r.planned.facts != 0 {
+				t.Fatalf("case %q: every capability was pruned but the bundle carries %d fact(s)", r.name, r.planned.facts)
+			}
+			for kind, observation := range r.planned.coverage {
+				if observation.state != contextfabric.SourcePruned {
+					t.Fatalf("case %q: kind %q has state %q, want every kind pruned", r.name, kind, observation.state)
+				}
+				if strings.TrimSpace(observation.reason) == "" {
+					t.Fatalf("case %q: pruned kind %q has no reason -- absence must be explainable", r.name, kind)
+				}
+			}
+			continue
+		}
 		if !r.identityIsTested {
 			continue
 		}
@@ -249,9 +308,39 @@ func TestCHAOS3783PruningMeasurement(t *testing.T) {
 		// removes WORK, never ANSWER. Both sides are real ReadFacts calls, so
 		// a difference cannot be an artifact of how the test assembled a
 		// bundle -- it can only mean the planner dropped something real.
-		if r.planned.facts != r.reduced.facts || r.planned.bundleDigest != r.reduced.bundleDigest {
-			t.Fatalf("case %q: pruning changed the fact bundle (facts %d vs %d, digest %s vs %s) -- it must only skip work that could not have produced facts",
-				r.name, r.planned.facts, r.reduced.facts, r.planned.bundleDigest, r.reduced.bundleDigest)
+		if r.planned.facts != r.reduced.facts || r.planned.factsDigest != r.reduced.factsDigest {
+			t.Fatalf("case %q: pruning changed the FACTS (count %d vs %d, digest %s vs %s) -- it must only skip work that could not have produced facts",
+				r.name, r.planned.facts, r.reduced.facts, r.planned.factsDigest, r.reduced.factsDigest)
+		}
+		// R4-3: coverage is SUPPOSED to differ between these two runs, so
+		// rather than excluding it from the claim, assert the difference is
+		// exactly the planner's pruned set and nothing else. That converts an
+		// intentional difference into a checked property: a prune that also
+		// perturbed a surviving capability's observation would fail here.
+		pruned := make(map[contextfabric.FactKind]struct{}, len(r.planned.prunedKinds))
+		for _, kind := range r.planned.prunedKinds {
+			pruned[kind] = struct{}{}
+		}
+		for kind, plannedObservation := range r.planned.coverage {
+			reducedObservation, present := r.reduced.coverage[kind]
+			if _, wasPruned := pruned[kind]; wasPruned {
+				if present {
+					t.Fatalf("case %q: pruned kind %q still appears in the reduced run's coverage", r.name, kind)
+				}
+				continue
+			}
+			if !present {
+				t.Fatalf("case %q: kind %q is in the planned coverage but missing from the reduced run -- the delta must be the pruned set alone", r.name, kind)
+			}
+			if plannedObservation != reducedObservation {
+				t.Fatalf("case %q: kind %q was not pruned yet its observation changed (%+v vs %+v) -- pruning must not perturb a surviving capability",
+					r.name, kind, plannedObservation, reducedObservation)
+			}
+		}
+		for kind := range r.reduced.coverage {
+			if _, known := r.planned.coverage[kind]; !known {
+				t.Fatalf("case %q: kind %q appears only in the reduced run's coverage", r.name, kind)
+			}
 		}
 	}
 }
@@ -286,10 +375,12 @@ func chaos3783Run(
 
 	measurement := chaos3783Measurement{
 		elapsed: elapsed, facts: len(bundle.Facts),
-		bundleBytes: chaos3783BundleBytes(bundle.Facts), bundleDigest: chaos3783BundleDigest(bundle.Facts),
+		bundleBytes: chaos3783BundleBytes(bundle.Facts), factsDigest: chaos3783FactsDigest(bundle.Facts),
+		coverage: make(map[contextfabric.FactKind]chaos3783Observation, len(bundle.Coverage.Sources)),
 	}
 	for _, source := range bundle.Coverage.Sources {
 		kind := contextfabric.FactKind(strings.TrimPrefix(source.Source, "canonical_fact:"))
+		measurement.coverage[kind] = chaos3783Observation{state: source.State, reason: source.Reason}
 		switch source.State {
 		case contextfabric.SourcePruned:
 			measurement.prunedSources++
@@ -341,19 +432,19 @@ func chaos3783SupportedSubjectCount(capability contextfabric.FactCapability, sub
 }
 
 // chaos3783BundleBytes is the human-readable size of what reaches the model.
-// It is reported, never asserted on -- see chaos3783BundleDigest.
+// It is reported, never asserted on -- see chaos3783FactsDigest.
 func chaos3783BundleBytes(facts []contextfabric.CanonicalFact) int {
 	return len(chaos3783CanonicalEncoding(facts))
 }
 
-// chaos3783BundleDigest is what the equality assertion actually compares
+// chaos3783FactsDigest is what the equality assertion actually compares
 // (codex round-2 R2-2). Byte LENGTH is a reporting number, not an identity:
 // any two bundles of equal size compare equal under it, so a
 // canonicalization regression that reordered or swapped equal-length values
 // would slip straight through -- including in the permutation test meant to
 // catch exactly that. The digest is over the canonical encoding, so it
 // changes if any byte changes.
-func chaos3783BundleDigest(facts []contextfabric.CanonicalFact) string {
+func chaos3783FactsDigest(facts []contextfabric.CanonicalFact) string {
 	sum := sha256.Sum256(chaos3783CanonicalEncoding(facts))
 	return hex.EncodeToString(sum[:])
 }
@@ -429,8 +520,15 @@ func chaos3783Without(kinds, remove []contextfabric.FactKind) []contextfabric.Fa
 // chaos3783Subjects discovers real subject IDs from the live database rather
 // than hard-coding them, so the harness keeps working as the dev corpus is
 // rebuilt. It is deliberately a plain SELECT of identifiers only.
-func chaos3783Subjects(t *testing.T, ctx context.Context, client *runtimeclickhouse.Client, orgID, table, column string, kind contextfabric.SubjectKind, prefix string, limit int) []contextfabric.SubjectRef {
-	t.Helper()
+//
+// Codex round-4 R4-1: it returns an error instead of logging and carrying
+// on. A measurement layer that degrades quietly is worse than one that
+// breaks, because the caller SKIPS a case with no subjects -- so a broken
+// query used to shrink the discovered subject set, shrink the measured
+// savings, and still report success. Failing toward "fine" is the specific
+// trap a benchmark must not have. rows.Err() is checked for the same reason:
+// a mid-iteration failure truncates the set silently.
+func chaos3783Subjects(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID, table, column string, kind contextfabric.SubjectKind, prefix string, limit int) ([]contextfabric.SubjectRef, error) {
 	// table/column/limit are internal Go literals from the call sites just
 	// above, never caller- or request-supplied, so inlining them mirrors
 	// this package's existing convention for such constants (see
@@ -442,21 +540,22 @@ func chaos3783Subjects(t *testing.T, ctx context.Context, client *runtimeclickho
 	)
 	rows, err := client.Query(ctx, statement, []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
 	if err != nil {
-		t.Logf("discover %s subjects: %v (continuing without them)", kind, err)
-		return nil
+		return nil, fmt.Errorf("discover %s subjects: %w", kind, err)
 	}
 	defer rows.Close()
 	subjects := make([]contextfabric.SubjectRef, 0, limit)
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			t.Logf("scan %s subject: %v", kind, err)
-			return subjects
+			return nil, fmt.Errorf("scan %s subject: %w", kind, err)
 		}
 		subjects = append(subjects, contextfabric.SubjectRef{Kind: kind, CanonicalID: prefix + id, Label: id})
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate %s subjects: %w", kind, err)
+	}
 	sort.Slice(subjects, func(i, j int) bool { return subjects[i].CanonicalID < subjects[j].CanonicalID })
-	return subjects
+	return subjects, nil
 }
 
 func chaos3783Concat(groups ...[]contextfabric.SubjectRef) []contextfabric.SubjectRef {
@@ -481,10 +580,10 @@ func chaos3783Percent(part, whole int) float64 {
 	return float64(part) / float64(whole) * 100
 }
 
-// TestCHAOS3783BundleDigestIsOrderInsensitiveAndContentSensitive guards the
+// TestCHAOS3783FactsDigestIsOrderInsensitiveAndContentSensitive guards the
 // shared serializer both compared bundles go through. It needs no database,
 // so it runs in ordinary CI rather than only under the opt-in measurement.
-func TestCHAOS3783BundleDigestIsOrderInsensitiveAndContentSensitive(t *testing.T) {
+func TestCHAOS3783FactsDigestIsOrderInsensitiveAndContentSensitive(t *testing.T) {
 	t.Parallel()
 
 	facts := []contextfabric.CanonicalFact{
@@ -508,13 +607,13 @@ func TestCHAOS3783BundleDigestIsOrderInsensitiveAndContentSensitive(t *testing.T
 		},
 	}
 
-	want := chaos3783BundleDigest(facts)
+	want := chaos3783FactsDigest(facts)
 	for _, permutation := range [][]int{{2, 1, 0}, {1, 2, 0}, {0, 2, 1}, {2, 0, 1}} {
 		shuffled := make([]contextfabric.CanonicalFact, 0, len(facts))
 		for _, index := range permutation {
 			shuffled = append(shuffled, facts[index])
 		}
-		if got := chaos3783BundleDigest(shuffled); got != want {
+		if got := chaos3783FactsDigest(shuffled); got != want {
 			t.Fatalf("bundle digest = %s for permutation %v, want %s -- the comparison must not depend on accumulation order", got, permutation, want)
 		}
 	}
@@ -524,10 +623,119 @@ func TestCHAOS3783BundleDigestIsOrderInsensitiveAndContentSensitive(t *testing.T
 	// what a byte-count comparison could not see.
 	altered := append([]contextfabric.CanonicalFact(nil), facts...)
 	altered[0].Fields = map[string]contextfabric.FactValue{"commits": contextfabric.IntegerFactValue(3)}
-	if chaos3783BundleDigest(altered) == want {
+	if chaos3783FactsDigest(altered) == want {
 		t.Fatal("digest ignored an equal-length value change -- it must compare content, not size")
 	}
 	if chaos3783BundleBytes(altered) != chaos3783BundleBytes(facts) {
 		t.Fatal("test setup no longer exercises the equal-length case the digest exists to catch")
+	}
+}
+
+// chaos3783FakeClient is a minimal ClickHouseQueryClient for exercising
+// chaos3783Subjects' failure paths without a database.
+type chaos3783FakeClient struct {
+	queryErr error
+	rows     *chaos3783FakeRows
+}
+
+func (c *chaos3783FakeClient) Query(context.Context, string, []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	if c.queryErr != nil {
+		return nil, c.queryErr
+	}
+	return c.rows, nil
+}
+
+type chaos3783FakeRows struct {
+	values   []string
+	index    int
+	scanErr  error
+	iterErr  error
+	closeErr error
+}
+
+func (r *chaos3783FakeRows) Next() bool {
+	if r.index >= len(r.values) {
+		return false
+	}
+	r.index++
+	return true
+}
+
+func (r *chaos3783FakeRows) Scan(targets ...any) error {
+	if r.scanErr != nil {
+		return r.scanErr
+	}
+	if len(targets) != 1 {
+		return fmt.Errorf("unexpected scan arity %d", len(targets))
+	}
+	target, ok := targets[0].(*string)
+	if !ok {
+		return fmt.Errorf("unexpected scan target %T", targets[0])
+	}
+	*target = r.values[r.index-1]
+	return nil
+}
+
+func (r *chaos3783FakeRows) Err() error   { return r.iterErr }
+func (r *chaos3783FakeRows) Close() error { return r.closeErr }
+
+// TestCHAOS3783SubjectDiscoveryFailsLoudly is the codex round-4 R4-1
+// regression. Subject discovery used to log and return whatever it had, and
+// the caller SKIPS a case with no subjects -- so a broken query quietly
+// shrank the discovered subject set, shrank the measured savings, and still
+// reported success. A measurement layer that degrades toward "fine" is worse
+// than one that breaks loudly, because nobody re-reads a green benchmark.
+//
+// The mid-iteration case is the subtle one: rows.Err() going unchecked
+// truncates the set with no error anywhere, which looks exactly like an
+// organization that genuinely has fewer subjects.
+func TestCHAOS3783SubjectDiscoveryFailsLoudly(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		client *chaos3783FakeClient
+	}{
+		{
+			name:   "query error",
+			client: &chaos3783FakeClient{queryErr: fmt.Errorf("clickhouse refused the connection")},
+		},
+		{
+			name:   "scan error",
+			client: &chaos3783FakeClient{rows: &chaos3783FakeRows{values: []string{"a"}, scanErr: fmt.Errorf("type mismatch")}},
+		},
+		{
+			name:   "mid-iteration failure surfaced only by rows.Err()",
+			client: &chaos3783FakeClient{rows: &chaos3783FakeRows{values: []string{"a", "b"}, iterErr: fmt.Errorf("connection reset mid-stream")}},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			subjects, err := chaos3783Subjects(context.Background(), testCase.client, "org_1", "repos", "toString(id)", contextfabric.SubjectRepository, "repository:", 3)
+			if err == nil {
+				t.Fatalf("chaos3783Subjects() error = nil (returned %d subjects), want a failure -- a silent partial result understates the measurement", len(subjects))
+			}
+		})
+	}
+}
+
+// TestCHAOS3783SubjectDiscoverySucceedsOnCleanRows is the companion guard:
+// failing loudly must not mean failing spuriously.
+func TestCHAOS3783SubjectDiscoverySucceedsOnCleanRows(t *testing.T) {
+	t.Parallel()
+
+	client := &chaos3783FakeClient{rows: &chaos3783FakeRows{values: []string{"b", "a"}}}
+	subjects, err := chaos3783Subjects(context.Background(), client, "org_1", "repos", "toString(id)", contextfabric.SubjectRepository, "repository:", 3)
+	if err != nil {
+		t.Fatalf("chaos3783Subjects() error = %v, want success", err)
+	}
+	if len(subjects) != 2 {
+		t.Fatalf("subjects = %d, want 2", len(subjects))
+	}
+	// Sorted and prefixed, as the fact providers expect.
+	if subjects[0].CanonicalID != "repository:a" || subjects[1].CanonicalID != "repository:b" {
+		t.Fatalf("subjects = %+v, want sorted, prefixed canonical IDs", subjects)
 	}
 }
