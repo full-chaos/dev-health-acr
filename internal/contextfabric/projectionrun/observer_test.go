@@ -99,25 +99,14 @@ func TestR4_F3_SuccessfulTickLogsNoFailureClass(t *testing.T) {
 // while not being that sentinel. Identity-based classification rejects them
 // all; any text-based classification would misclassify every one.
 func TestR5_SelfFound_ClassifierKeysOnIdentityNotErrorText(t *testing.T) {
-	// Paired with the sentinel each one mimics, so every probe can assert it
-	// is genuinely NOT that sentinel -- a fixture that accidentally WAS the
-	// sentinel would classify correctly and prove nothing.
-	sentinels := []error{
-		contextfabric.ErrProjectionConflict,
-		ErrOrgLocked,
-		contextfabric.ErrProjectionSourceVersionChanged,
-		contextfabric.ErrRateLimited,
-		contextfabric.ErrUnavailable,
-		contextfabric.ErrInvalidResult,
-		context.Canceled,
-		// Codex round-6: the classifier has a DISTINCT deadline branch beside
-		// the cancellation one, so it needs its own impostor. Without it, a
-		// text/substring regression on that branch alone would misclassify an
-		// unrelated "context deadline exceeded" error as canceled while every
-		// other probe here stayed green.
-		context.DeadlineExceeded,
+	// Derived from the classifier's OWN table, not a parallel hand-list
+	// (codex round 7). A sentinel added to failureClasses is probed here
+	// automatically; there is no second list to forget to update.
+	if len(failureClasses) == 0 {
+		t.Fatal("failureClasses is empty; this test would be vacuous")
 	}
-	for _, sentinel := range sentinels {
+	for _, entry := range failureClasses {
+		sentinel := entry.sentinel
 		impostor := errors.New(sentinel.Error())
 		// Anti-vacuity, both directions: the impostor must carry the
 		// sentinel's exact text, and must NOT be the sentinel.

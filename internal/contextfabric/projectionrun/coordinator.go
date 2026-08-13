@@ -515,7 +515,43 @@ const (
 // which logs its own lifecycle failures and must use the SAME bounded
 // vocabulary. Codex round-5: a second logging site with its own error
 // formatting is how the first sanitized one gets bypassed.
+//
+// ADD SENTINELS TO failureClasses, NOT HERE AND NOT AS AN INLINE CHECK. The
+// probe test enumerates that table, so a sentinel added to it is automatically
+// covered; a check written inline -- above the loop, or in this function -- is
+// invisible to the probes and reintroduces exactly the gap the table exists to
+// close.
 func ClassifyFailure(err error) string { return classifyOutcomeError(err) }
+
+// failureClasses is THE single place a sentinel-to-class pairing lives.
+//
+// ORDERED: the first errors.Is match wins, so entries that must share a class
+// (cancellation and deadline) sit adjacent and both resolve to it. Reordering
+// changes classification, so treat the order as part of the contract.
+//
+// classifyOutcomeError loops over this table, and the probe test in
+// observer_test.go RANGES OVER THE SAME TABLE. That is the point of it being a
+// table at all (codex round 7): the previous form kept the classifier's
+// sentinels as inline switch arms and the probes as a separate hand-written
+// list, so adding a branch without adding a probe left the new branch
+// untested while every existing probe stayed green. Deriving both from one
+// declaration makes that mistake structurally impossible rather than merely
+// less likely.
+var failureClasses = []struct {
+	sentinel error
+	class    string
+}{
+	// Cancellation and deadline share a class; adjacency plus first-match
+	// ordering is what expresses that.
+	{context.Canceled, failureClassCanceled},
+	{context.DeadlineExceeded, failureClassCanceled},
+	{contextfabric.ErrProjectionConflict, failureClassConflict},
+	{ErrOrgLocked, failureClassLocked},
+	{contextfabric.ErrProjectionSourceVersionChanged, failureClassRebuildNeeded},
+	{contextfabric.ErrRateLimited, failureClassRateLimited},
+	{contextfabric.ErrUnavailable, failureClassUnavailable},
+	{contextfabric.ErrInvalidResult, failureClassInvalidResult},
+}
 
 // classifyOutcomeError maps a tick failure onto the closed vocabulary above.
 //
@@ -531,24 +567,13 @@ func ClassifyFailure(err error) string { return classifyOutcomeError(err) }
 // arrived that this vocabulary does not yet name, which is itself the signal
 // that the vocabulary needs extending.
 func classifyOutcomeError(err error) string {
-	switch {
-	case err == nil:
+	if err == nil {
 		return ""
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return failureClassCanceled
-	case errors.Is(err, contextfabric.ErrProjectionConflict):
-		return failureClassConflict
-	case errors.Is(err, ErrOrgLocked):
-		return failureClassLocked
-	case errors.Is(err, contextfabric.ErrProjectionSourceVersionChanged):
-		return failureClassRebuildNeeded
-	case errors.Is(err, contextfabric.ErrRateLimited):
-		return failureClassRateLimited
-	case errors.Is(err, contextfabric.ErrUnavailable):
-		return failureClassUnavailable
-	case errors.Is(err, contextfabric.ErrInvalidResult):
-		return failureClassInvalidResult
-	default:
-		return failureClassUnclassified
 	}
+	for _, entry := range failureClasses {
+		if errors.Is(err, entry.sentinel) {
+			return entry.class
+		}
+	}
+	return failureClassUnclassified
 }
