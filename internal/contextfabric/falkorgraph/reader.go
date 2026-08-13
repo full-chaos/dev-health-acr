@@ -214,10 +214,16 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// this is the one I/O boundary in the call chain, so it is the one
 	// place that both marks Coverage.Partial and logs it. The type
 	// strings themselves are safe to log (not evidence, not a credential,
-	// not org-identifying) -- logged once per distinct type per call, not
-	// once per dropped edge, matching the aggregated
-	// endpoint_lookup_failed:%d convention below rather than spamming per
-	// occurrence.
+	// not org-identifying).
+	//
+	// Codex round-2 ruling: this emits ONE AGGREGATE WARNING PER
+	// DiscoverContext CALL -- bounded, request-scoped, naming every
+	// distinct dropped type that call saw -- not a process-lifetime
+	// dedup (no sync.Once, no cross-call suppression). A strict
+	// once-ever log would HIDE recurring bad data on every call after
+	// the first; per-call aggregation stays bounded (never one log line
+	// per dropped edge) without ever going silent on a call that has
+	// something to report.
 	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0
 	var degradedReasons []string
 	if failedLookups > 0 {

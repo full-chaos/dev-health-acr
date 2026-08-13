@@ -18,7 +18,16 @@ import (
 // onto every batch it produces. Checkpoints and telemetry are keyed by it.
 const SourceName = "dev_health_clickhouse"
 
-const sourceVersion = "devhealthsource.clickhouse.v1"
+// sourceVersion is bumped to v2 by CHAOS-3779 (codex round-2 H2 residual):
+// queryWorkItemDependencies' RelationshipID now embeds relationship_type
+// (previously (source, target) only), and queryWorkItemHierarchy is a new
+// producer. The bump is deliberate, not cosmetic: ProjectionWorker.RunOnce
+// (internal/contextfabric/projector.go) refuses to advance a checkpoint
+// whose stored SourceVersion differs from the current one, forcing every
+// already-projected organization through an explicit rebuild instead of
+// silently double-writing edges under the old, now-collapsed identity
+// scheme beside the new one.
+const sourceVersion = "devhealthsource.clickhouse.v2"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and

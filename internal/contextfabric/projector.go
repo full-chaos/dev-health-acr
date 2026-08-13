@@ -68,6 +68,21 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 	if batch.OrgID != orgID || batch.Source != sourceName || batch.Cursor != checkpoint.Cursor {
 		return ProjectionRun{}, fmt.Errorf("%w: batch scope or cursor does not match checkpoint", ErrProjectionConflict)
 	}
+	// CHAOS-3779 codex round-2 H2 residual: a checkpoint.SourceVersion of
+	// "" means no prior checkpoint was ever durably saved for this
+	// (org, source) pair -- a genuine first run, or the state a completed
+	// Rebuild leaves behind (projectionrun.Coordinator.resetAllCheckpoints
+	// resets the whole checkpoint, SourceVersion included) -- so it is
+	// never itself a mismatch. Any OTHER stored value that differs from
+	// the current batch's SourceVersion means the producer's identity
+	// semantics changed since this organization was last projected, and
+	// applying the batch would MERGE a new edge under the new identity
+	// beside whatever the old identity already wrote in the backend,
+	// silently doubling it. Refuse before the backend ever sees the
+	// batch; recovery is the existing rebuild path.
+	if checkpoint.SourceVersion != "" && checkpoint.SourceVersion != batch.SourceVersion {
+		return ProjectionRun{}, fmt.Errorf("%w: org %s source %s checkpoint source_version %q, batch source_version %q", ErrProjectionSourceVersionChanged, orgID, sourceName, checkpoint.SourceVersion, batch.SourceVersion)
+	}
 	receipt, err := w.backend.ApplyProjectionBatch(ctx, batch)
 	if err != nil {
 		return ProjectionRun{}, fmt.Errorf("apply projection batch: %w", err)

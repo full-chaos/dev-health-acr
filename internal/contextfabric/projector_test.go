@@ -149,3 +149,97 @@ func TestProjectionWorkerSurfacesConcurrentCheckpointConflict(t *testing.T) {
 		t.Fatalf("backend applied = %d, expected = %#v, saved = %#v", backend.applied, checkpoints.expected, checkpoints.saved)
 	}
 }
+
+// TestProjectionWorkerRefusesIncrementalAdvanceOnSourceVersionMismatch is
+// CHAOS-3779 codex round-2's H2 residual: a producer's identity semantics
+// can change between deploys (this issue's own RelationshipID change,
+// which now embeds relationship_type -- see devhealthsource/tables.go).
+// Without this check, RunOnce would apply a re-projected batch straight
+// through: the backend MERGEs a NEW edge under the new identity beside
+// whatever the OLD identity already wrote, both stay visible forever (a
+// tombstone only ever deletes an exact ID it is told to, and nothing
+// retargets the stale one), and the checkpoint advances as if nothing
+// happened -- a graph that silently doubles its edges after this deploys,
+// for every organization already projected under the old identity scheme,
+// the next time any of its rows are re-observed.
+//
+// A checkpoint whose stored SourceVersion differs from the current batch's
+// must refuse the incremental advance outright, loudly, with a named
+// error -- exactly like the existing out-of-order-cursor and
+// concurrent-checkpoint-conflict refusals above, neither of which trusts
+// the caller to have gotten pagination or concurrency right either. The
+// existing Rebuild sequence (projectionrun.Coordinator.performRebuild ->
+// resetAllCheckpoints) already resets a checkpoint to its zero value
+// (Cursor="", SourceVersion="") as a side effect of resetting it for any
+// reason, so recovery needs no new machinery: an operator (or an
+// automated policy, out of this test's scope) reruns the existing
+// `rebuild --org` path, and the very next tick's checkpoint carries no
+// stored SourceVersion to conflict with.
+func TestProjectionWorkerRefusesIncrementalAdvanceOnSourceVersionMismatch(t *testing.T) {
+	t.Parallel()
+
+	batch := validProjectionBatch()
+	batch.Cursor = "cursor_1"
+	batch.NextCursor = "cursor_2"
+	batch.SourceVersion = "devhealthsource.clickhouse.v2"
+	backend := &projectionBackendStub{receipt: ProjectionReceipt{BatchID: batch.BatchID, AppliedAt: time.Unix(50, 0).UTC(), BackendWatermark: "backend_2"}}
+	checkpoints := &checkpointStoreStub{
+		// A non-empty Cursor AND a non-empty, DIFFERENT SourceVersion is
+		// exactly what a real checkpoint looks like for an organization
+		// already projected under the pre-CHAOS-3779 identity scheme.
+		checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "dev-health-ops", Cursor: "cursor_1", SourceVersion: "devhealthsource.clickhouse.v1"},
+	}
+	worker, err := NewProjectionWorker(projectionSourceStub{batch: batch, available: true}, backend, checkpoints, ProjectionWorkerOptions{})
+	if err != nil {
+		t.Fatalf("NewProjectionWorker() error = %v", err)
+	}
+
+	_, err = worker.RunOnce(context.Background(), "org_1", "dev-health-ops")
+	if !errors.Is(err, ErrProjectionSourceVersionChanged) {
+		t.Fatalf("RunOnce() error = %v, want ErrProjectionSourceVersionChanged", err)
+	}
+	// The critical assertion: the backend must NEVER see this batch. A
+	// version mismatch that still called ApplyProjectionBatch would
+	// already have MERGEd the duplicate edge before the caller ever sees
+	// the error -- refusing after the fact is not the same as refusing
+	// before the fact.
+	if backend.applied != 0 {
+		t.Fatalf("backend.applied = %d, want 0 -- a source_version mismatch must refuse BEFORE the backend ever sees the batch, not merely fail to advance the checkpoint after", backend.applied)
+	}
+	if len(checkpoints.saved) != 0 {
+		t.Fatalf("checkpoints.saved = %#v, want none -- the checkpoint must not advance past a version mismatch", checkpoints.saved)
+	}
+}
+
+// TestProjectionWorkerAllowsFirstEverProjectionWithNoStoredSourceVersion
+// guards the version-mismatch check above against a false positive: an
+// organization with no prior checkpoint (LoadProjectionCheckpoint returns
+// a zero-value ProjectionCheckpoint, per pgprojection's sql.ErrNoRows
+// handling) has an empty stored SourceVersion, which is not a "mismatch"
+// against anything -- it is simply the first run. The same zero value
+// recurs immediately after Rebuild resets a checkpoint, so this also
+// covers "just rebuilt, about to run its first post-rebuild batch."
+func TestProjectionWorkerAllowsFirstEverProjectionWithNoStoredSourceVersion(t *testing.T) {
+	t.Parallel()
+
+	batch := validProjectionBatch()
+	batch.Cursor = ""
+	batch.NextCursor = "cursor_1"
+	batch.SourceVersion = "devhealthsource.clickhouse.v2"
+	backend := &projectionBackendStub{receipt: ProjectionReceipt{BatchID: batch.BatchID, AppliedAt: time.Unix(50, 0).UTC(), BackendWatermark: "backend_1"}}
+	checkpoints := &checkpointStoreStub{
+		checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "dev-health-ops"}, // zero value: never projected, or just rebuilt
+	}
+	worker, err := NewProjectionWorker(projectionSourceStub{batch: batch, available: true}, backend, checkpoints, ProjectionWorkerOptions{})
+	if err != nil {
+		t.Fatalf("NewProjectionWorker() error = %v", err)
+	}
+
+	run, err := worker.RunOnce(context.Background(), "org_1", "dev-health-ops")
+	if err != nil {
+		t.Fatalf("RunOnce() error = %v, want nil -- an empty stored SourceVersion must never be treated as a mismatch", err)
+	}
+	if !run.Applied || backend.applied != 1 {
+		t.Fatalf("run = %#v, backend.applied = %d, want the batch applied normally", run, backend.applied)
+	}
+}
