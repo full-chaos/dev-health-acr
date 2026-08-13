@@ -518,3 +518,32 @@ Migration-numbering caution: verified `origin/main`'s migration set was
 still `0001`–`0005` immediately before implementation began (no other lane
 had landed a new one), so `0006_context_fabric_projection_checkpoints.sql`
 did not need renumbering.
+
+## PART_OF hierarchy: cycles are accepted, self-references are filtered (CHAOS-3779 codex round-1 finding M3)
+
+`queryWorkItemHierarchy` (`devhealthsource/tables.go`) projects `PART_OF`
+edges from `work_items.parent_id`. Two distinct hazards were raised in
+review, and they get two distinct answers:
+
+* **Multi-node cycles** (A `PART_OF` B `PART_OF` C `PART_OF` A) are
+  **accepted graph state**. This source does not detect or reject them.
+  Whether a work-item hierarchy may legitimately cycle is a graph-shape
+  policy question — outside this issue's scope, which is the deterministic
+  edge *vocabulary*, not graph-shape validation. A future issue that wants
+  cycle detection (for traversal bounding, or because product decides a
+  cycle is always a data error) should add it explicitly, with its own
+  ruling on what "reject" or "break" means for an already-projected
+  organization.
+* **Self-references** (`parent_id == work_item_id`) are filtered in SQL
+  (`AND c.parent_id != c.work_item_id`), not accepted. A work item cannot
+  legitimately be its own parent, and
+  `ContextFabricRelationshipProjection.Validate()` unconditionally rejects
+  `From == To` ("relationship cannot be self-referential"). Because
+  `ContextFabricProjectionBatch.Validate()` is all-or-nothing, one
+  self-referencing row — a source-system data bug, not a modeling choice —
+  would otherwise poison the entire batch and wedge that organization's
+  projection forever, silently, until someone traced the stuck projection
+  back to one bad row. The SQL filter is cheap insurance against that
+  poison-pill shape; live ClickHouse held zero such rows when this was
+  written (verified against the running database), but a future sync bug
+  in an upstream provider could introduce one.
