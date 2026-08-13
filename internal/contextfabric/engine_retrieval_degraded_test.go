@@ -142,6 +142,35 @@ func TestF4_LegacyLimitationSpellingIsStillRecognized(t *testing.T) {
 	}
 }
 
+// SELF-FOUND (lane-3778, pre-round-5): the decoy above is similar-but-different
+// PROSE, which proves the recognizer is not matching on theme. It does not
+// prove the recognizer is exact rather than prefix/suffix/contains-based --
+// those would all still reject it.
+//
+// These NEAR-MISS decoys close that: each differs from a real constant by a
+// single character, a trailing space, or a case change, so a prefix, suffix,
+// contains, or case-folded comparison would wrongly accept at least one.
+func TestF4_SelfFound_RecognizerIsExactNotFuzzy(t *testing.T) {
+	nearMisses := []string{
+		retrievalDegradedLimitation + " ",                             // trailing space
+		" " + retrievalDegradedLimitation,                             // leading space
+		strings.TrimSuffix(retrievalDegradedLimitation, "."),          // one character short
+		retrievalDegradedLimitation + " Retry advised.",               // strict superstring (contains would accept)
+		strings.ToUpper(retrievalDegradedLimitation),                  // case fold would accept
+		strings.Replace(retrievalDegradedLimitation, "One", "Ore", 1), // one character changed
+		strings.TrimSuffix(retrievalDegradedLimitationLegacy, "."),    // same, legacy spelling
+		retrievalDegradedLimitationLegacy + " ",                       // same, legacy spelling
+	}
+	for _, nearMiss := range nearMisses {
+		if nearMiss == retrievalDegradedLimitation || nearMiss == retrievalDegradedLimitationLegacy {
+			t.Fatalf("near-miss fixture equals a real constant; this probe would be vacuous: %q", nearMiss)
+		}
+		if isRetrievalDegradedLimitation(nearMiss) {
+			t.Fatalf("recognizer accepted a near-miss, so it is not exact: %q", nearMiss)
+		}
+	}
+}
+
 // RIDER 1, at the fold: a draft already carrying EITHER spelling must not gain
 // a second, differently worded copy of the same statement.
 func TestF4_FoldDoesNotDuplicateAnExistingDegradationLimitation(t *testing.T) {

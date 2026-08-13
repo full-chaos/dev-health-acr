@@ -426,6 +426,12 @@ durations only — never text, vectors, model output, or provider response bodie
 | `context_fabric: projection tick failed; checkpoint held for replay` | ERROR | A projection tick failed, including one that failed to keep vector state reconcilable | The checkpoint is deliberately held. Sustained = an organization is stalled. Carries a bounded `failure_class`, never the underlying error text — see below. |
 | `context_fabric: observation traversal degraded` | WARN | Observation-to-entity traversal failed for some candidates | Unrelated to vectors; listed because it shares the sink. |
 
+**No log line in this subsystem carries an error's own text.** The bounded
+`failure_class` is the only failure detail emitted, and that holds at every log
+site — the observer, the coordinator's own lock, rebuild-marker and pair-failure
+records, and the projector binary's lifecycle logs — not merely at the observer.
+A sanitized log beside an unsanitized one provides no guarantee at all.
+
 **Tick failures report a class, not an error string.** `failure_class` is one
 of `canceled`, `checkpoint_conflict`, `organization_locked`,
 `rebuild_required`, `dependency_unavailable`, `dependency_rate_limited`,

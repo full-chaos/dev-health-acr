@@ -261,7 +261,7 @@ func (c *Coordinator) Rebuild(ctx context.Context, orgID string) error {
 	}
 	defer func() {
 		if unlockErr := unlock(); unlockErr != nil {
-			c.logger.WarnContext(ctx, "projection organization unlock failed after rebuild", "org_id", orgID, "error", unlockErr)
+			c.logger.WarnContext(ctx, "projection organization unlock failed after rebuild", "org_id", orgID, "failure_class", classifyOutcomeError(unlockErr))
 		}
 	}()
 	return c.performRebuild(ctx, orgID)
@@ -411,13 +411,13 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string) {
 	unlock, err := c.locker.Lock(ctx, orgID)
 	if err != nil {
 		if !errors.Is(err, ErrOrgLocked) {
-			c.logger.WarnContext(ctx, "projection organization lock failed", "org_id", orgID, "error", err)
+			c.logger.WarnContext(ctx, "projection organization lock failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		}
 		return
 	}
 	defer func() {
 		if unlockErr := unlock(); unlockErr != nil {
-			c.logger.WarnContext(ctx, "projection organization unlock failed", "org_id", orgID, "error", unlockErr)
+			c.logger.WarnContext(ctx, "projection organization unlock failed", "org_id", orgID, "failure_class", classifyOutcomeError(unlockErr))
 		}
 	}()
 
@@ -429,11 +429,11 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string) {
 	// projection for this org this tick regardless of outcome (the marker
 	// state, not a stale checkpoint, is the true source of truth right now).
 	if inProgress, err := c.rebuildMarkers.IsRebuildInProgress(ctx, orgID); err != nil {
-		c.logger.WarnContext(ctx, "check rebuild marker failed; skipping tick", "org_id", orgID, "error", err)
+		c.logger.WarnContext(ctx, "check rebuild marker failed; skipping tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		return
 	} else if inProgress {
 		if err := c.performRebuild(ctx, orgID); err != nil {
-			c.logger.WarnContext(ctx, "resume interrupted rebuild failed; will retry next tick", "org_id", orgID, "error", err)
+			c.logger.WarnContext(ctx, "resume interrupted rebuild failed; will retry next tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		} else {
 			c.logger.InfoContext(ctx, "resumed an interrupted rebuild", "org_id", orgID)
 		}
@@ -460,7 +460,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string) {
 	c.observer.ObserveProjectionOutcome(outcome)
 	switch {
 	case err != nil:
-		c.logger.WarnContext(ctx, "projection pair failed", "org_id", orgID, "source", source, "error", err, "duration_ms", outcome.Duration.Milliseconds())
+		c.logger.WarnContext(ctx, "projection pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(err), "duration_ms", outcome.Duration.Milliseconds())
 	case run.Applied:
 		c.logger.InfoContext(ctx, "projection batch applied", "org_id", orgID, "source", source, "batch_id", run.BatchID, "backend_watermark", run.BackendWatermark, "duration_ms", outcome.Duration.Milliseconds())
 	}
@@ -510,6 +510,12 @@ const (
 	failureClassInvalidResult = "invalid_result"
 	failureClassUnclassified  = "unclassified"
 )
+
+// ClassifyFailure is classifyOutcomeError exported for the projector binary,
+// which logs its own lifecycle failures and must use the SAME bounded
+// vocabulary. Codex round-5: a second logging site with its own error
+// formatting is how the first sanitized one gets bypassed.
+func ClassifyFailure(err error) string { return classifyOutcomeError(err) }
 
 // classifyOutcomeError maps a tick failure onto the closed vocabulary above.
 //

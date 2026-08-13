@@ -88,3 +88,35 @@ func TestR4_F3_SuccessfulTickLogsNoFailureClass(t *testing.T) {
 		t.Fatalf("a successful tick must carry no failure class: %s", buffer.String())
 	}
 }
+
+// SELF-FOUND (lane-3778, pre-round-5): the table above proves that an UNKNOWN
+// error classifies as unclassified, but it does not prove classification keys
+// on sentinel IDENTITY rather than on error TEXT -- every case in it is
+// textually unlike the sentinels. A switch from errors.Is to substring
+// matching would keep all of it green.
+//
+// These probes close that: each error's text is BYTE-IDENTICAL to a sentinel's
+// while not being that sentinel. Identity-based classification rejects them
+// all; any text-based classification would misclassify every one.
+func TestR5_SelfFound_ClassifierKeysOnIdentityNotErrorText(t *testing.T) {
+	impostors := []error{
+		errors.New(contextfabric.ErrProjectionConflict.Error()),
+		errors.New(ErrOrgLocked.Error()),
+		errors.New(contextfabric.ErrProjectionSourceVersionChanged.Error()),
+		errors.New(contextfabric.ErrRateLimited.Error()),
+		errors.New(contextfabric.ErrUnavailable.Error()),
+		errors.New(contextfabric.ErrInvalidResult.Error()),
+		errors.New(context.Canceled.Error()),
+	}
+	for _, impostor := range impostors {
+		// Guard: the impostor must genuinely carry a sentinel's text, or the
+		// probe proves nothing.
+		if impostor.Error() == "" {
+			t.Fatal("impostor fixture is empty; this test would be vacuous")
+		}
+		if got := classifyOutcomeError(fmt.Errorf("tick: %w", impostor)); got != failureClassUnclassified {
+			t.Fatalf("an error merely TEXT-EQUAL to a sentinel (%q) classified as %q; "+
+				"classification must key on identity, not text", impostor.Error(), got)
+		}
+	}
+}
