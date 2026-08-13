@@ -502,8 +502,9 @@ func TestF5_IndexWithUnknownMetadataFailsClosedRatherThanBeingTreatedAsAbsent(t 
 				return []indexStatus{testCase.index}, nil
 			}
 			adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
-			if err := adapter.ensureVectorIndex(context.Background(), "graphkey"); err != nil {
-				t.Fatalf("unknown metadata must degrade, not error: %v", err)
+			adapter.config.RequestTimeout = 50 * time.Millisecond
+			if err := adapter.ensureVectorIndex(context.Background(), "graphkey"); !errors.Is(err, errVectorIndexNotReady) {
+				t.Fatalf("an index that never becomes readable must fail loudly, got %v", err)
 			}
 			if created {
 				t.Fatal("an EXISTING index must never be treated as absent and re-created")
@@ -1271,5 +1272,131 @@ func TestR3_BootstrapFailsWhenTheVectorIndexNeverBecomesReady(t *testing.T) {
 
 	if err := adapter.ensureOrgGraph(context.Background(), "graphkey"); !errors.Is(err, errVectorIndexNotReady) {
 		t.Fatalf("bootstrap must fail loudly on an index that never settles, got %v", err)
+	}
+}
+
+// Codex round-4 F1, RED->GREEN: a PRE-EXISTING index that never settles must
+// fail bootstrap loudly within the timeout, not return success.
+//
+// The earlier form polled only after CREATING an absent index, so a
+// pre-existing under-construction index cached bootstrap success. Round-3 F1
+// containment then correctly failed every batch -- holding the organization's
+// checkpoint INDEFINITELY while the loud, bounded timeout built for exactly
+// this condition was never reached. A silent livelock where a loud timeout
+// exists is worse than the bug it replaced.
+func TestR4_F1_PreExistingNeverSettlingIndexFailsBootstrapLoudly(t *testing.T) {
+	for _, status := range []string{"UNDER CONSTRUCTION", "", "SOMETHING-NEW"} {
+		t.Run(status, func(t *testing.T) {
+			created := false
+			fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+				if strings.Contains(cypher, "CREATE VECTOR INDEX") {
+					created = true
+				}
+				return nil, nil
+			}}
+			fake.constraintsFunc = func(context.Context, string) ([]constraintStatus, error) {
+				return []constraintStatus{{Status: "OPERATIONAL", Label: labelSubject, EntityType: "NODE"}}, nil
+			}
+			// The index ALREADY EXISTS and never becomes readable.
+			fake.indexesFunc = func(context.Context, string) ([]indexStatus, error) {
+				return []indexStatus{{
+					Label: labelSubject, EntityType: "NODE", Status: status,
+					Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+					Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(8)}},
+				}}, nil
+			}
+			adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+			adapter.config.RequestTimeout = 50 * time.Millisecond
+
+			err := adapter.ensureOrgGraph(context.Background(), "graphkey")
+			if !errors.Is(err, errVectorIndexNotReady) {
+				t.Fatalf("a never-settling PRE-EXISTING index must fail bootstrap loudly, got %v", err)
+			}
+			if created {
+				t.Fatal("an existing index must never be re-created")
+			}
+			// Retryable: bootstrap success must not have been cached.
+			adapter.bootstrapMu.RLock()
+			cached := adapter.bootstrapDone["graphkey"]
+			adapter.bootstrapMu.RUnlock()
+			if cached {
+				t.Fatal("a failed bootstrap must not cache success")
+			}
+		})
+	}
+}
+
+// A pre-existing index that settles is waited out, not failed.
+func TestR4_F1_PreExistingIndexThatSettlesIsWaitedOut(t *testing.T) {
+	polls := 0
+	fake := &fakeConn{}
+	fake.constraintsFunc = func(context.Context, string) ([]constraintStatus, error) {
+		return []constraintStatus{{Status: "OPERATIONAL", Label: labelSubject, EntityType: "NODE"}}, nil
+	}
+	fake.indexesFunc = func(context.Context, string) ([]indexStatus, error) {
+		polls++
+		if polls < 3 {
+			return []indexStatus{{
+				Label: labelSubject, EntityType: "NODE", Status: "UNDER CONSTRUCTION",
+				Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+				Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(8)}},
+			}}, nil
+		}
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+	if err := adapter.ensureOrgGraph(context.Background(), "graphkey"); err != nil {
+		t.Fatalf("a settling pre-existing index must be waited out: %v", err)
+	}
+}
+
+// A DIMENSION MISMATCH must NOT block bootstrap: it is the persistent,
+// operator-fixable state whose batches clear-and-commit, so blocking here
+// would reintroduce the stall that exception exists to avoid.
+func TestR4_F1_DimensionMismatchDoesNotBlockBootstrap(t *testing.T) {
+	fake := &fakeConn{}
+	fake.constraintsFunc = func(context.Context, string) ([]constraintStatus, error) {
+		return []constraintStatus{{Status: "OPERATIONAL", Label: labelSubject, EntityType: "NODE"}}, nil
+	}
+	fake.indexesFunc = func(context.Context, string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(4)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+	adapter.config.RequestTimeout = 50 * time.Millisecond
+	if err := adapter.ensureOrgGraph(context.Background(), "graphkey"); err != nil {
+		t.Fatalf("a dimension mismatch must not block bootstrap: %v", err)
+	}
+}
+
+// Codex round-4 F2, RED->GREEN: a batch with nothing to embed must still
+// report zero counts. The absence of a signal must mean "no batch ran", never
+// "a batch ran and had nothing to embed".
+func TestR4_F2_BatchWithNoEmbeddingTargetsStillReportsZeroCounts(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	fake := &fakeConn{}
+	fake.indexesFunc = func(context.Context, string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	adapter := vectorAdapterWithTelemetry(t, fake, &stubEmbedder{vector: make([]float32, 8)}, telemetry)
+
+	// A relationship-only batch: valid, and produces no embedding targets.
+	observed := time.Now().UTC()
+	batch := contextfabric.ProjectionBatch{
+		OrgID: "org",
+		Relationships: []contextfabric.RelationshipProjection{{
+			RelationshipID: "relationship_00000001", Type: "BLOCKS",
+			From:       contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "p1", Label: "A"},
+			To:         contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "p2", Label: "B"},
+			ObservedAt: observed, SourceVersion: "v1",
+		}},
+	}
+	if err := adapter.embedProjectionBatch(context.Background(), "k", batch); err != nil {
+		t.Fatalf("embedProjectionBatch: %v", err)
+	}
+	if telemetry.projections != 1 {
+		t.Fatalf("a batch with nothing to embed must still report, got %d records", telemetry.projections)
+	}
+	if telemetry.embedded != 0 || telemetry.cleared != 0 {
+		t.Fatalf("the record must be zero-count, got embedded=%d cleared=%d", telemetry.embedded, telemetry.cleared)
 	}
 }

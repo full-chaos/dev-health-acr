@@ -423,8 +423,19 @@ durations only — never text, vectors, model output, or provider response bodie
 | `context_fabric: vector retrieval unavailable for a request` | WARN | A query could not run the vector mechanism (embed failure/timeout, wrong serving model, fence mismatch) | The read path degraded to lexical for that request. Sustained = the embedder or the fence needs attention. |
 | `context_fabric: projection batch cleared stale vectors` | WARN | A projection batch cleared vectors it had invalidated (`embedded`, `cleared` counts) | **This is the mass-clear signal.** A sustained nonzero `cleared` count means a growing fraction of the corpus is vectorless. |
 | `context_fabric: projection batch embedded nodes` | DEBUG | Every healthy batch (`embedded`, `cleared` counts) | Steady-state progress; raise to DEBUG to measure re-embedding throughput. |
-| `context_fabric: projection tick failed; checkpoint held for replay` | ERROR | A projection tick failed, including one that failed to keep vector state reconcilable | The checkpoint is deliberately held. Sustained = an organization is stalled and not making progress. |
+| `context_fabric: projection tick failed; checkpoint held for replay` | ERROR | A projection tick failed, including one that failed to keep vector state reconcilable | The checkpoint is deliberately held. Sustained = an organization is stalled. Carries a bounded `failure_class`, never the underlying error text — see below. |
 | `context_fabric: observation traversal degraded` | WARN | Observation-to-entity traversal failed for some candidates | Unrelated to vectors; listed because it shares the sink. |
+
+**Tick failures report a class, not an error string.** `failure_class` is one
+of `canceled`, `checkpoint_conflict`, `organization_locked`,
+`rebuild_required`, `dependency_unavailable`, `dependency_rate_limited`,
+`invalid_result`, or `unclassified`. The underlying error's own text is never
+logged, at any level: a source or checkpoint-store error is unbounded
+dependency output, and a guarantee that held only at some log levels would make
+leaking depend on deployment configuration. For dependency-specific detail,
+read that dependency's own logs. `unclassified` is a real answer — it means a
+failure arrived that this vocabulary does not yet name, which is itself the
+signal that the vocabulary needs extending.
 
 **Known limitation — no backlog ratio.** These signals report *events*, not a
 *proportion*. Summing `cleared` against `embedded` over time approximates how

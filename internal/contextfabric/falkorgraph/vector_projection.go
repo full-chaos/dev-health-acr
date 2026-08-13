@@ -160,6 +160,13 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 	identity := a.embedder.Identity()
 	targets := collectEmbedTargets(batch, embedMaxRunes(a.embedder))
 	if len(targets) == 0 {
+		// Codex round-4 F2: a relationship-only or tombstone-only batch is
+		// valid and produces no embedding targets. It must still report, so
+		// the ABSENCE of a RecordVectorProjection signal means "no batch ran"
+		// and never "a batch ran and had nothing to embed". An observability
+		// gap that looks identical to inactivity is the same class of defect
+		// as round-3 F2.
+		a.recordVectorProjection(ctx, batch.OrgID, 0, 0)
 		return nil
 	}
 	texts := make([]string, 0, len(targets))
@@ -331,26 +338,44 @@ func (a *Adapter) ensureVectorIndex(ctx context.Context, key string) error {
 	if err != nil {
 		return err
 	}
-	if state == vectorIndexAbsent {
+	switch state {
+	case vectorIndexAbsent:
 		if err := a.createVectorIndex(ctx, key, want); err != nil {
 			return err
 		}
-		// Codex round-3 (bootstrap gap): wait for it, exactly as bootstrap
-		// already waits for constraints. Index creation is asynchronous, so
-		// without this the very first batch after bootstrap could find the
-		// index UNDER CONSTRUCTION, skip embedding, and -- before F1 -- still
-		// advance its watermark past nodes that were never embedded. F1 now
-		// fails that batch rather than committing it, but making the first
-		// batch FAIL on a condition bootstrap could simply have waited out
-		// would be a self-inflicted stall.
+		// Index creation is asynchronous, so wait for it exactly as bootstrap
+		// already waits for constraints.
 		return a.pollVectorIndexOperational(ctx, key)
+	case vectorIndexUnknown:
+		// Codex round-4 F1: a PRE-EXISTING index that is still building, or
+		// reports a status this adapter does not recognize, must be polled to
+		// readiness on the SAME terms as one this bootstrap just created.
+		//
+		// The earlier form polled only after CREATING an absent index and
+		// returned success for any pre-existing one. That produced a silent
+		// LIVELOCK, which is worse than the failure it replaced: bootstrap
+		// cached success, and the round-3 F1 containment then correctly failed
+		// every subsequent batch with errVectorIndexNotReady -- holding the
+		// organization's checkpoint indefinitely while the LOUD, bounded
+		// timeout built for exactly this condition was never reached. A
+		// deliberate stall that nothing announces is indistinguishable from an
+		// idle organization.
+		//
+		// Polling here means a never-settling pre-existing index fails
+		// bootstrap loudly, within RequestTimeout, instead of stalling
+		// forever. bootstrapDone is only set on success, so the next tick
+		// retries.
+		return a.pollVectorIndexOperational(ctx, key)
+	default:
+		// vectorIndexKnown. A DIMENSION MISMATCH deliberately does not block
+		// bootstrap: it is the persistent, operator-fixable state whose
+		// batches clear-and-commit rather than replay (see
+		// embedProjectionBatch), so blocking here would reintroduce the very
+		// stall that exception exists to avoid. Usability is decided fresh at
+		// each read and each write by vectorIndexUsable.
+		_ = existing
+		return nil
 	}
-	// An index that exists but is unknown or mismatched is NOT created and NOT
-	// repaired here. Whether it may be used is decided fresh at each read and
-	// each write by vectorIndexUsable -- see R2-1 below for why no verdict is
-	// cached.
-	_ = existing
-	return nil
 }
 
 // pollVectorIndexOperational waits for the vector index to become usable,

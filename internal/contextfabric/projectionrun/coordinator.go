@@ -65,8 +65,20 @@ func (o SlogObserver) ObserveProjectionOutcome(outcome Outcome) {
 		"duration_ms", outcome.Duration.Milliseconds(),
 	}
 	if outcome.Err != nil {
+		// Codex round-4 F3: a CLASSIFICATION, never the error's own text.
+		//
+		// Outcome.Err is whatever a source, checkpoint store, or backend
+		// returned. The graph adapter sanitizes its own errors
+		// (safeDependencyError), but a ClickHouse driver error or a Postgres
+		// checkpoint error arrives here unbounded, and logging it verbatim
+		// would put raw dependency text into production telemetry -- breaking
+		// the guarantee this observer's own doc comment and
+		// docs/operations.md both make.
+		//
+		// Same discipline as the embedder's model-identity error: name the
+		// classified thing, never the received text.
 		logger.Error("context_fabric: projection tick failed; checkpoint held for replay",
-			append(attrs, "error", outcome.Err.Error())...)
+			append(attrs, "failure_class", classifyOutcomeError(outcome.Err))...)
 		return
 	}
 	logger.Debug("context_fabric: projection tick completed", attrs...)
@@ -484,4 +496,53 @@ func (c *Coordinator) recordBackoff(key string, err error) {
 	}
 	jitter := time.Duration(rand.Int63n(int64(baseBackoff))) //nolint:gosec // scheduling jitter, not security-sensitive
 	state.nextAttempt = c.now().Add(delay + jitter)
+}
+
+// Outcome failure classes. A closed, bounded vocabulary: an unrecognized error
+// reports failureClassUnclassified rather than leaking anything about itself.
+const (
+	failureClassCanceled      = "canceled"
+	failureClassConflict      = "checkpoint_conflict"
+	failureClassLocked        = "organization_locked"
+	failureClassRebuildNeeded = "rebuild_required"
+	failureClassUnavailable   = "dependency_unavailable"
+	failureClassRateLimited   = "dependency_rate_limited"
+	failureClassInvalidResult = "invalid_result"
+	failureClassUnclassified  = "unclassified"
+)
+
+// classifyOutcomeError maps a tick failure onto the closed vocabulary above.
+//
+// It deliberately offers NO escape hatch to the raw text -- not even at debug
+// level. A guarantee that holds only at some log levels is not a guarantee: it
+// makes leak-or-not depend on deployment configuration, which is precisely how
+// this class of defect recurs. Operators who need dependency-specific detail
+// have it at the dependency, which logs its own errors with its own
+// sanitization; what this signal is FOR is answering "is this organization
+// stalled, and roughly why", which the class answers.
+//
+// failureClassUnclassified is a real answer, not a shrug: it means a failure
+// arrived that this vocabulary does not yet name, which is itself the signal
+// that the vocabulary needs extending.
+func classifyOutcomeError(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return failureClassCanceled
+	case errors.Is(err, contextfabric.ErrProjectionConflict):
+		return failureClassConflict
+	case errors.Is(err, ErrOrgLocked):
+		return failureClassLocked
+	case errors.Is(err, contextfabric.ErrProjectionSourceVersionChanged):
+		return failureClassRebuildNeeded
+	case errors.Is(err, contextfabric.ErrRateLimited):
+		return failureClassRateLimited
+	case errors.Is(err, contextfabric.ErrUnavailable):
+		return failureClassUnavailable
+	case errors.Is(err, contextfabric.ErrInvalidResult):
+		return failureClassInvalidResult
+	default:
+		return failureClassUnclassified
+	}
 }
