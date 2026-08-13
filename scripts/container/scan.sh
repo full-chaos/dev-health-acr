@@ -238,6 +238,13 @@ for name in acr-api-amd64 acr-api-arm64 acr-mcp-amd64 acr-mcp-arm64; do
   fi
 done
 
+# Diagnostic (CHAOS-3772): make the primary job log self-sufficient proof
+# of what this run actually wrote, independent of whether the downstream
+# artifact upload's own path/hidden-file handling matches. Printed on
+# every disposition, not only failure.
+printf 'report_root contents (%s):\n' "$report_root" >&2
+ls -la "$report_root" >&2 || true
+
 test "$failures" -eq 0 || { printf 'one or more image scan or SBOM gates failed\n' >&2; exit 1; }
 bash "${repo_root}/scripts/container/publish-directory.sh" "$stable_report_root" "$report_root" "$lock_timeout"
 report_root=""

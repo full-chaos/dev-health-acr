@@ -221,7 +221,13 @@ jobs:
           # trivy-db snapshot -- even when the job failed before
           # publication.
           path: |
-            .tmp/container-reports/
-            .tmp/container-scan-attempt*/
+            .tmp/container-reports/**
+            .tmp/container-scan-attempt*/**
+          # Both live under the dot-directory .tmp/; upload-artifact
+          # excludes hidden files/directories by default
+          # (include-hidden-files: false), which silently drops
+          # everything under a dot-prefixed path segment. Explicit
+          # opt-in, or nothing here ever uploads.
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7

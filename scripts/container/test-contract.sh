@@ -433,8 +433,23 @@ attempt_path_line="$(grep -n '\.tmp/container-scan-attempt' "$ci_workflow" | tai
 }
 step_start_line="$(head -n "$attempt_path_line" "$ci_workflow" | grep -nE '^\s*- (uses|name):' | tail -1 | cut -d: -f1)"
 step_start_line="${step_start_line:-1}"
-sed -n "${step_start_line},${attempt_path_line}p" "$ci_workflow" | grep -q 'if: always()' || {
+step_end_line="$(tail -n "+$((attempt_path_line + 1))" "$ci_workflow" | grep -nE '^\s*- (uses|name):' | head -1 | cut -d: -f1)" || true
+if [[ -n "$step_end_line" ]]; then
+  step_end_line=$((attempt_path_line + step_end_line - 1))
+else
+  step_end_line="$(wc -l <"$ci_workflow")"
+fi
+container_reports_step="$(sed -n "${step_start_line},${step_end_line}p" "$ci_workflow")"
+grep -q 'if: always()' <<<"$container_reports_step" || {
   printf 'ci.yml must upload .tmp/container-scan-attempt*/ from an if: always() step, or it never surfaces on a failed run (CHAOS-3772 F2)\n' >&2
+  exit 1
+}
+# The evidence path lives under .tmp/, a dot-directory: upload-artifact
+# excludes hidden files by default (include-hidden-files: false), which
+# silently drops everything under a dot-prefixed path segment unless
+# explicitly overridden.
+grep -q 'include-hidden-files: true' <<<"$container_reports_step" || {
+  printf 'ci.yml must set include-hidden-files: true on the container-reports upload -- .tmp/ is hidden by default and uploads nothing (CHAOS-3772)\n' >&2
   exit 1
 }
 grep -q 'anchore/syft:v1.46.0@sha256:' "$scan_script"
