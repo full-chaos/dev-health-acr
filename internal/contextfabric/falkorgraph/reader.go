@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -213,10 +214,32 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// (an edge/path that legitimately exists in the graph but this
 	// investigation could not confirm and admit) -- it must never present as
 	// clean, complete coverage.
-	partial := failedLookups > 0
+	//
+	// CHAOS-3779 codex round-1 H1: an edge whose Type failed the closed
+	// relationship-type vocabulary is the same shape of silent loss --
+	// AdmitEdges (pure, no I/O) only counts and names what it dropped;
+	// this is the one I/O boundary in the call chain, so it is the one
+	// place that both marks Coverage.Partial and logs it. The type
+	// strings themselves are safe to log (not evidence, not a credential,
+	// not org-identifying).
+	//
+	// Codex round-2 ruling: this emits ONE AGGREGATE WARNING PER
+	// DiscoverContext CALL -- bounded, request-scoped, naming every
+	// distinct dropped type that call saw -- not a process-lifetime
+	// dedup (no sync.Once, no cross-call suppression). A strict
+	// once-ever log would HIDE recurring bad data on every call after
+	// the first; per-call aggregation stays bounded (never one log line
+	// per dropped edge) without ever going silent on a call that has
+	// something to report.
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0
 	var degradedReasons []string
-	if partial {
-		degradedReasons = []string{fmt.Sprintf("endpoint_lookup_failed:%d", failedLookups)}
+	if failedLookups > 0 {
+		degradedReasons = append(degradedReasons, fmt.Sprintf("endpoint_lookup_failed:%d", failedLookups))
+	}
+	if admission.DroppedUnknownRelationshipTypeCount > 0 {
+		degradedReasons = append(degradedReasons, fmt.Sprintf("unknown_relationship_type:%d", admission.DroppedUnknownRelationshipTypeCount))
+		slog.Default().Warn("context_fabric: dropped relationship edge(s) with a type outside the closed vocabulary",
+			"count", admission.DroppedUnknownRelationshipTypeCount, "types", admission.DroppedUnknownRelationshipTypeNames)
 	}
 	return contextfabric.GraphContext{
 		Resolution: request.Resolution, Cohort: cohort, Paths: admission.Paths, DriverCandidates: admission.Drivers,

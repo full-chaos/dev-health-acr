@@ -66,7 +66,7 @@ func liveBatch(orgID string) contextfabric.ProjectionBatch {
 			EvidenceRefIDs: []string{"evidence_project_1234"}, ObservedAt: observed, SourceVersion: "v1",
 		}},
 		Relationships: []contextfabric.RelationshipProjection{{
-			RelationshipID: "relationship_00000001", Type: "DEPENDS_ON", From: project, To: work,
+			RelationshipID: "relationship_00000001", Type: "BLOCKS", From: project, To: work,
 			Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
 			Authorization:  contextfabric.AuthorizationScope{RepositorySlugs: []string{"full-chaos/dev-health-acr"}},
 			EvidenceRefIDs: []string{"evidence_dependency_1234"}, ObservedAt: observed, ValidFrom: &validFrom, ValidTo: &validTo, SourceVersion: "v1",
@@ -79,7 +79,7 @@ func liveBatch(orgID string) contextfabric.ProjectionBatch {
 func liveInvestigationRequest() contextfabric.InvestigationRequest {
 	return contextfabric.InvestigationRequest{
 		SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_00000001",
-		Question: "What is Ask Dev depending on?", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Question: "What is Ask Dev blocked by?", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Options: contextfabric.InvestigationOptions{
 			MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
 			MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144, AllowClarification: true,
@@ -153,7 +153,7 @@ func TestLiveFalkorDBContextFabricLifecycle(t *testing.T) {
 
 	// (4)
 	discoveryRequest := request
-	discoveryRequest.Question = "What is Ask Dev depending on?"
+	discoveryRequest.Question = "What is Ask Dev blocked by?"
 	discovery := contextfabric.GraphDiscoveryRequest{
 		Request: discoveryRequest,
 		Interpretation: contextfabric.InterpretedQuestion{
@@ -166,9 +166,9 @@ func TestLiveFalkorDBContextFabricLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("(4) DiscoverContext() error = %v", err)
 	}
-	dependencyEdge := findLiveEdge(graphContext.Paths, "DEPENDS_ON")
+	dependencyEdge := findLiveEdge(graphContext.Paths, "BLOCKS")
 	if dependencyEdge == nil {
-		t.Fatalf("(4) DiscoverContext() did not surface the projected DEPENDS_ON relationship: %#v", graphContext.Paths)
+		t.Fatalf("(4) DiscoverContext() did not surface the projected BLOCKS relationship: %#v", graphContext.Paths)
 	}
 	if dependencyEdge.ValidFrom == nil || dependencyEdge.ValidTo == nil || len(dependencyEdge.EvidenceRefIDs) == 0 || dependencyEdge.EvidenceRefIDs[0] != "evidence_dependency_1234" {
 		t.Fatalf("(4) relationship temporal/evidence metadata = %#v", dependencyEdge)
@@ -191,7 +191,7 @@ func TestLiveFalkorDBContextFabricLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("(5) DiscoverContext() after tombstone error = %v", err)
 	}
-	if edge := findLiveEdge(afterTombstone.Paths, "DEPENDS_ON"); edge != nil {
+	if edge := findLiveEdge(afterTombstone.Paths, "BLOCKS"); edge != nil {
 		t.Fatalf("(5) tombstoned relationship still surfaced: %#v", edge)
 	}
 
@@ -287,7 +287,7 @@ func TestLiveReadOnlyPathAfterPurgeReturnsNotFoundWithoutAutoCreating(t *testing
 	}
 }
 
-func findLiveEdge(paths []contextfabric.RelationshipPath, relationType string) *contextfabric.RelationshipEdge {
+func findLiveEdge(paths []contextfabric.RelationshipPath, relationType contextfabric.RelationshipType) *contextfabric.RelationshipEdge {
 	for pathIndex := range paths {
 		for edgeIndex := range paths[pathIndex].Edges {
 			if paths[pathIndex].Edges[edgeIndex].Type == relationType {

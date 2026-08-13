@@ -1,11 +1,13 @@
 package graphrank
 
 import (
+	"errors"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -47,6 +49,24 @@ type AdmitEdgesResult struct {
 	Drivers          []contextfabric.DriverJudgment
 	EvidenceRefIDs   []string
 	FactRequirements []contextfabric.FactRequirement
+	// DroppedUnknownRelationshipTypeCount and
+	// DroppedUnknownRelationshipTypeNames record every candidate edge
+	// AdmitEdges excluded because its Type failed
+	// ContextFabricRelationshipType's closed vocabulary (CHAOS-3779 codex
+	// round-1 finding H1). Before this, such an edge was dropped by the
+	// same generic `path.Validate() != nil` continue as any other
+	// malformed edge -- no metric, no degraded-coverage signal -- which is
+	// the H4 silent-admission-failure shape, just relocated to the READ
+	// path (a write-path producer bug, a partial rollback leaving legacy
+	// data, or a future contract downgrade could all put an
+	// out-of-vocabulary type in the graph). AdmitEdges stays pure (no I/O,
+	// per its own doc comment): it only counts and names the dropped
+	// types, deduplicated and sorted for determinism. The caller (e.g.
+	// falkorgraph.DiscoverContext, the only I/O boundary in this call
+	// chain) is responsible for marking Coverage.Partial/DegradedReasons
+	// and for logging -- see that function's doc comment.
+	DroppedUnknownRelationshipTypeCount int
+	DroppedUnknownRelationshipTypeNames []string
 }
 
 // AdmitEdges applies the evidence-budget-bounded admission decision to an
@@ -69,6 +89,8 @@ func AdmitEdges(orgID string, edges []ResolvedEdge, options contextfabric.Invest
 	drivers := make([]contextfabric.DriverJudgment, 0, len(edges))
 	evidenceSet := make(map[string]struct{})
 	requirements := make(map[contextfabric.FactKind]contextfabric.FactRequirement)
+	droppedUnknownCount := 0
+	droppedUnknownSeen := make(map[string]struct{})
 	for _, edge := range edges {
 		if edge.From == edge.To || isInternal(edge.From) || isInternal(edge.To) {
 			continue
@@ -97,7 +119,7 @@ func AdmitEdges(orgID string, edges []ResolvedEdge, options contextfabric.Invest
 			}
 		}
 		relationship := contextfabric.RelationshipEdge{
-			Type: NormalizeRelation(edge.Name), From: edge.From, To: edge.To,
+			Type: contextfabric.RelationshipType(NormalizeRelation(edge.Name)), From: edge.From, To: edge.To,
 			Derivation: contextfabric.DerivationGraphAssociated, EpistemicStatus: edgeEpistemicStatus(edge),
 			ObservedAt: ParseOptionalTime(edge.CreatedAt), ValidFrom: ParseOptionalTimePtr(edge.ValidAt), ValidTo: edgeValidTo(edge),
 			EvidenceRefIDs: evidence,
@@ -108,6 +130,18 @@ func AdmitEdges(orgID string, edges []ResolvedEdge, options contextfabric.Invest
 			WhyRelevant: edgeFact(edge), EvidenceRefIDs: evidence, Truncated: false,
 		}
 		if err := path.Validate(); err != nil {
+			// H1 (CHAOS-3779 codex round-1): an edge whose Type is outside
+			// the closed relationship-type vocabulary must not vanish
+			// silently -- count it and remember its (normalized) name so
+			// the caller can mark Coverage.Partial and log it, exactly
+			// like a failed endpoint lookup already does. Every OTHER
+			// path.Validate() failure (a malformed subject, an oversized
+			// field, ...) still just continues, unrecorded -- unknown
+			// relationship type is the one call-out this issue owns.
+			if errors.Is(err, contractsv1.ErrContextFabricUnknownRelationshipType) {
+				droppedUnknownCount++
+				droppedUnknownSeen[NormalizeRelation(edge.Name)] = struct{}{}
+			}
 			continue
 		}
 		// N3: the shared evidence set is only mutated once the path this
@@ -152,7 +186,15 @@ func AdmitEdges(orgID string, edges []ResolvedEdge, options contextfabric.Invest
 		evidence = append(evidence, id)
 	}
 	sort.Strings(evidence)
-	return AdmitEdgesResult{Paths: paths, Drivers: drivers, EvidenceRefIDs: evidence, FactRequirements: factRequirements}
+	droppedUnknownNames := make([]string, 0, len(droppedUnknownSeen))
+	for name := range droppedUnknownSeen {
+		droppedUnknownNames = append(droppedUnknownNames, name)
+	}
+	sort.Strings(droppedUnknownNames)
+	return AdmitEdgesResult{
+		Paths: paths, Drivers: drivers, EvidenceRefIDs: evidence, FactRequirements: factRequirements,
+		DroppedUnknownRelationshipTypeCount: droppedUnknownCount, DroppedUnknownRelationshipTypeNames: droppedUnknownNames,
+	}
 }
 
 // SortEdgesByRelevance sorts edges descending by ResultConfidence, tie-broken
@@ -280,18 +322,75 @@ func edgeFact(edge ResolvedEdge) string {
 // by edge type and is used only to request that FactKind from the
 // canonical fact registry (requirements[factKind]), which is a request,
 // not a claim.
+// relationMeaningTable is THE driver-admission table (AC-3779-2: this is
+// the only edge-type -> standing/category/factKind mapping in the
+// repository -- grep-verified during CHAOS-3779; a duplicate is a defect,
+// because a rebase silently reintroduced the pre-H4 strings from a
+// duplicated copy once already). It is also the AC-3779-9 producer
+// cross-check: every key here MUST have a real projection producer,
+// verified by TestEveryRecognizedRelationshipTypeHasAProducer in
+// cmd/acr-projector.
+//
+// Before CHAOS-3779 this table recognized nine types
+// (BLOCKS/BLOCKED_BY/REQUIRES/DEPENDS_ON/CAUSES/CONTRIBUTES_TO/PRESSURES/
+// INDICATES/SYMPTOM_OF) but only BLOCKS had a producer -- the other eight
+// were dead code (drift item D12), silently falling every one of those
+// edge types to the default context standing forever, because nothing
+// ever wrote them. CHAOS-3779 prunes the eight unproducable entries
+// instead of inventing producers with no deterministic source (§19.5.3
+// lists no source for CAUSES/CONTRIBUTES_TO/PRESSURES/INDICATES/
+// SYMPTOM_OF, and REQUIRES/DEPENDS_ON are synonym spellings
+// work_item_dependencies never emits).
+//
+// BLOCKED_BY specifically was checked for the inverse-direction hazard
+// before pruning (review caution: dropping it would be an H4-shaped defect
+// IF the read path ever surfaced a 'blocks' row under an inverted name when
+// traversal reached it from the blocked side). It does not: edgesOfNode
+// (falkorgraph/queries.go) reads propRelationType verbatim off the stored
+// edge in BOTH directions of its UNION query, and toCandidateEdge is the
+// only call site in the repository that ever constructs a
+// CandidateEdge.Name from a graph-read edge (grep-verified) -- there is no
+// direction-conditional rewriting anywhere. A 'blocks' row always surfaces
+// as literal "BLOCKS", correctly oriented, regardless of which endpoint's
+// traversal found it. See falkorgraph's
+// TestDiscoverContextFromBlockedSideStillSurfacesBLOCKSNotAnInvertedName,
+// which proves this end to end from the blocked side. A recognizer
+// entry with no producer is a defect, not a placeholder -- see
+// ContextFabricRelationshipType's doc comment for the closed vocabulary
+// this table draws its keys from.
+//
+// PART_OF (the other CHAOS-3779 producer, work_items.parent_id hierarchy)
+// is intentionally absent: it is structural (a work-item hierarchy fact),
+// not itself a driver signal the way a blocker is, so it stays a plain
+// graph-associated path relationship without a DriverJudgment -- exactly
+// like BELONGS_TO_REPOSITORY, CORRELATED_WITH_INCIDENT, RELATED_TO,
+// RELATES_TO, and DUPLICATES.
+var relationMeaningTable = map[string]struct {
+	standing contextfabric.DriverStanding
+	category string
+	factKind contextfabric.FactKind
+}{
+	"BLOCKS": {contextfabric.DriverPrincipal, "relationship", contextfabric.FactBlockers},
+}
+
+// RecognizedRelationshipTypes returns relationMeaningTable's keys -- see
+// its doc comment. Exported for the AC-3779-9 cross-wiring test in
+// cmd/acr-projector, which is the only caller today.
+func RecognizedRelationshipTypes() []string {
+	types := make([]string, 0, len(relationMeaningTable))
+	for name := range relationMeaningTable {
+		types = append(types, name)
+	}
+	sort.Strings(types)
+	return types
+}
+
 func relationMeaning(name string) (contextfabric.DriverStanding, string, contextfabric.FactKind, bool) {
-	normalized := NormalizeRelation(name)
-	switch normalized {
-	case "BLOCKS", "BLOCKED_BY", "REQUIRES", "DEPENDS_ON":
-		return contextfabric.DriverPrincipal, "relationship", contextfabric.FactBlockers, true
-	case "CAUSES", "CONTRIBUTES_TO", "PRESSURES":
-		return contextfabric.DriverContributing, "relationship", contextfabric.FactHealth, true
-	case "INDICATES", "SYMPTOM_OF":
-		return contextfabric.DriverSymptom, "relationship", contextfabric.FactMetrics, true
-	default:
+	entry, ok := relationMeaningTable[NormalizeRelation(name)]
+	if !ok {
 		return contextfabric.DriverContext, "relationship", contextfabric.FactEvidence, false
 	}
+	return entry.standing, entry.category, entry.factKind, true
 }
 
 func relationTitle(name, target string) string {

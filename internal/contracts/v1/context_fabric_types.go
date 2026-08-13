@@ -1,9 +1,19 @@
 package v1
 
 import (
+	"errors"
 	"strings"
 	"time"
 )
+
+// ErrContextFabricUnknownRelationshipType is returned, wrapped with the
+// offending value, whenever a relationship projection or edge names a type
+// outside ContextFabricRelationshipType's closed vocabulary. Named and
+// exported -- rather than folded into a generic bounds-violation string --
+// so a caller can assert on it directly with errors.Is. The H4 lesson
+// (TRD §19.5.5) is that an unrecognized value must fail loudly, never be
+// silently admitted or silently dropped.
+var ErrContextFabricUnknownRelationshipType = errors.New("context fabric: unknown relationship type")
 
 const (
 	ContextFabricInvestigationRequestSchema = "context_fabric_investigation_request.v1"
@@ -139,6 +149,56 @@ const (
 	ContextFabricEpistemicDisputed       ContextFabricEpistemicStatus = "disputed"
 	ContextFabricEpistemicSuperseded     ContextFabricEpistemicStatus = "superseded"
 	ContextFabricEpistemicUnknown        ContextFabricEpistemicStatus = "unknown"
+)
+
+// ContextFabricRelationshipType is the closed vocabulary for
+// ContextFabricRelationshipProjection.Type and
+// ContextFabricRelationshipEdge.Type (CHAOS-3779, closing drift item D9 /
+// the H4 lesson recorded in the TRD's §19.5.5). Before this type existed,
+// both fields were free strings of 1 to 128 bytes: a typo or a novel
+// spelling from a projection source would enter the graph silently and
+// degrade driver discovery the same way the H4 free-form category strings
+// did. Every producer and every reader now shares exactly one closed list.
+//
+// Membership is additive-only after this point (removing or renaming a
+// member is a new major contract version -- see contracts/AGENTS.md and
+// §19.5.4's "do not rename an existing projected type without a
+// migration"). The six pre-existing types
+// (BelongsToRepository/BelongsToPullRequest/CorrelatedWithIncident/
+// RelatedTo/DocumentedBy/HasEpisode) keep their exact wire spelling.
+//
+// RelatesTo and Duplicates are admitted, not mapped onto RelatedTo:
+// live ClickHouse work_item_dependencies.relationship_type carries
+// 'relates_to' and 'duplicates' today (verified against the running
+// database, TRD §19.13 Correction 1), and both are semantically distinct
+// from the generic RelatedTo association DOCUMENTED_BY/HAS_EPISODE-style
+// producers use, and from each other -- folding 'duplicates' into
+// RelatedTo would silently discard the "this is a duplicate" signal a
+// reader needs.
+type ContextFabricRelationshipType string
+
+const (
+	// Pre-existing six -- see this type's doc comment. Spelling is frozen.
+	ContextFabricRelationshipBelongsToRepository    ContextFabricRelationshipType = "BELONGS_TO_REPOSITORY"
+	ContextFabricRelationshipBelongsToPullRequest   ContextFabricRelationshipType = "BELONGS_TO_PULL_REQUEST"
+	ContextFabricRelationshipCorrelatedWithIncident ContextFabricRelationshipType = "CORRELATED_WITH_INCIDENT"
+	ContextFabricRelationshipRelatedTo              ContextFabricRelationshipType = "RELATED_TO"
+	ContextFabricRelationshipDocumentedBy           ContextFabricRelationshipType = "DOCUMENTED_BY"
+	ContextFabricRelationshipHasEpisode             ContextFabricRelationshipType = "HAS_EPISODE"
+	// ContextFabricRelationshipBlocks (CHAOS-3779): work_item_dependencies
+	// rows with relationship_type='blocks'. Already flowed into the graph
+	// before this type closed the vocabulary (TRD §19.13 Correction 1);
+	// this makes it a deliberate, tested, and recognized member.
+	ContextFabricRelationshipBlocks ContextFabricRelationshipType = "BLOCKS"
+	// ContextFabricRelationshipPartOf (CHAOS-3779): work_items.parent_id
+	// hierarchy. New producer; see devhealthsource's queryWorkItemHierarchy.
+	ContextFabricRelationshipPartOf ContextFabricRelationshipType = "PART_OF"
+	// ContextFabricRelationshipRelatesTo and ContextFabricRelationshipDuplicates
+	// (CHAOS-3779): the other two live work_item_dependencies.relationship_type
+	// values -- see this type's doc comment for why they are admitted
+	// rather than mapped onto ContextFabricRelationshipRelatedTo.
+	ContextFabricRelationshipRelatesTo  ContextFabricRelationshipType = "RELATES_TO"
+	ContextFabricRelationshipDuplicates ContextFabricRelationshipType = "DUPLICATES"
 )
 
 type ContextFabricSourceState string
@@ -372,7 +432,7 @@ type ContextFabricRelationshipPath struct {
 }
 
 type ContextFabricRelationshipEdge struct {
-	Type            string                        `json:"type"`
+	Type            ContextFabricRelationshipType `json:"type"`
 	From            ContextFabricSubjectRef       `json:"from"`
 	To              ContextFabricSubjectRef       `json:"to"`
 	Derivation      ContextFabricDerivationMethod `json:"derivation"`
@@ -568,7 +628,7 @@ type ContextFabricEntityProjection struct {
 
 type ContextFabricRelationshipProjection struct {
 	RelationshipID  string                              `json:"relationship_id"`
-	Type            string                              `json:"type"`
+	Type            ContextFabricRelationshipType       `json:"type"`
 	From            ContextFabricSubjectRef             `json:"from"`
 	To              ContextFabricSubjectRef             `json:"to"`
 	Properties      map[string]ContextFabricScalarValue `json:"properties,omitempty"`

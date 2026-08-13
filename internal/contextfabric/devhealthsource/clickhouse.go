@@ -18,7 +18,16 @@ import (
 // onto every batch it produces. Checkpoints and telemetry are keyed by it.
 const SourceName = "dev_health_clickhouse"
 
-const sourceVersion = "devhealthsource.clickhouse.v1"
+// sourceVersion is bumped to v2 by CHAOS-3779 (codex round-2 H2 residual):
+// queryWorkItemDependencies' RelationshipID now embeds relationship_type
+// (previously (source, target) only), and queryWorkItemHierarchy is a new
+// producer. The bump is deliberate, not cosmetic: ProjectionWorker.RunOnce
+// (internal/contextfabric/projector.go) refuses to advance a checkpoint
+// whose stored SourceVersion differs from the current one, forcing every
+// already-projected organization through an explicit rebuild instead of
+// silently double-writing edges under the old, now-collapsed identity
+// scheme beside the new one.
+const sourceVersion = "devhealthsource.clickhouse.v2"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and
@@ -31,6 +40,32 @@ const (
 // organizationAnchorTime is the fixed ObservedAt every full-snapshot
 // organization entity uses; see the comment where it's applied.
 var organizationAnchorTime = time.Unix(1, 0).UTC()
+
+// ProducedRelationshipTypes lists every ContextFabricRelationshipType this
+// package's queries can write into a ContextFabricRelationshipProjection
+// (CHAOS-3779, AC-3779-9's second direction: every produced type must be a
+// member of the closed vocabulary). RELATED_TO/RELATES_TO/BLOCKS/DUPLICATES
+// come from queryWorkItemDependencies (work_item_dependencies.
+// relationship_type, uppercased -- TRD §19.13 Correction 1's three live
+// values plus the ifNull default); BELONGS_TO_REPOSITORY from
+// belongsToRepository (queryWorkItems/queryPullRequests/queryDeployments/
+// queryIncidents/queryCIRuns); BELONGS_TO_PULL_REQUEST from
+// queryPullRequestReviews; CORRELATED_WITH_INCIDENT from
+// queryDeploymentIncidentEdges; PART_OF from queryWorkItemHierarchy. See
+// the AC-3779-9 cross-wiring test in cmd/acr-projector, the only caller
+// today.
+func ProducedRelationshipTypes() []contractsv1.ContextFabricRelationshipType {
+	return []contractsv1.ContextFabricRelationshipType{
+		contractsv1.ContextFabricRelationshipBelongsToRepository,
+		contractsv1.ContextFabricRelationshipBelongsToPullRequest,
+		contractsv1.ContextFabricRelationshipCorrelatedWithIncident,
+		contractsv1.ContextFabricRelationshipRelatedTo,
+		contractsv1.ContextFabricRelationshipBlocks,
+		contractsv1.ContextFabricRelationshipPartOf,
+		contractsv1.ContextFabricRelationshipRelatesTo,
+		contractsv1.ContextFabricRelationshipDuplicates,
+	}
+}
 
 // ClickHouseProjectionSource is the production contextfabric.ProjectionSource
 // for canonical Dev Health repository, work item, pull request, deployment,

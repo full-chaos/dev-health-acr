@@ -65,7 +65,7 @@ func fakeSubjectNodeRow(kind, canonicalID, label string) row {
 	return row{"n": &node{Properties: map[string]interface{}{propKind: kind, propCanonicalID: canonicalID, propLabel: label}}}
 }
 
-func findFakeEdge(paths []contextfabric.RelationshipPath, relationType string) *contextfabric.RelationshipEdge {
+func findFakeEdge(paths []contextfabric.RelationshipPath, relationType contextfabric.RelationshipType) *contextfabric.RelationshipEdge {
 	for pathIndex := range paths {
 		for edgeIndex := range paths[pathIndex].Edges {
 			if paths[pathIndex].Edges[edgeIndex].Type == relationType {
@@ -180,7 +180,7 @@ func TestDiscoverContextReportsPartialOnEndpointLookupFailure(t *testing.T) {
 				return nil, nil
 			}
 			return []row{{
-				"r":       &edge{Properties: map[string]interface{}{propRelationType: "DEPENDS_ON", propRelationshipID: "relationship_1"}},
+				"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "relationship_1"}},
 				"srcKind": "project", "srcId": "p1", "dstKind": "work_item", "dstId": "work_target",
 			}}, nil
 		default: // nodeByKindID
@@ -207,8 +207,165 @@ func TestDiscoverContextReportsPartialOnEndpointLookupFailure(t *testing.T) {
 	if len(result.Coverage.DegradedReasons) == 0 {
 		t.Fatal("Coverage.DegradedReasons is empty, want a reason recorded for the failed lookup")
 	}
-	if edge := findFakeEdge(result.Paths, "DEPENDS_ON"); edge != nil {
+	if edge := findFakeEdge(result.Paths, "BLOCKS"); edge != nil {
 		t.Fatalf("result surfaced a path built from an edge whose endpoint lookup failed: %#v", edge)
+	}
+}
+
+// TestDiscoverContextFromBlockedSideStillSurfacesBLOCKSNotAnInvertedName is
+// CHAOS-3779's direction-safety probe for pruning BLOCKED_BY out of
+// graphrank.relationMeaning (team-lead review caution: before pruning the
+// inverse-direction recognizer entry, verify nothing in the traversal path
+// returns the SAME edge with an inverse name when read from the target
+// side -- if it did, pruning BLOCKED_BY would silently drop driver
+// standing for exactly half the directions, the H4 failure shape again).
+//
+// This starts DiscoverContext from work_target -- the BLOCKED work item,
+// i.e. the target/dst side of the stored 'blocks' edge -- exactly the
+// direction edgesOfNode's UNION second branch
+// ((other)-[r]->(n) where n = the queried node) serves. edgesOfNode
+// (queries.go) and toCandidateEdge read propRelationType verbatim off the
+// stored edge in BOTH UNION branches -- there is no direction-conditional
+// rewriting anywhere in this package (grep-verified: toCandidateEdge is
+// the only call site in the repository that ever constructs a
+// CandidateEdge.Name from a graph-read edge) -- so the relation always
+// surfaces as the literal stored value, "BLOCKS", never a synthesized
+// "BLOCKED_BY", regardless of which endpoint's traversal found it. This
+// test proves that behavior end to end: querying from the blocked side
+// still returns a "BLOCKS" edge, correctly oriented From=work_blocker
+// To=work_target (never inverted), and still carries DriverPrincipal
+// standing -- so pruning the producer-less BLOCKED_BY recognizer entry
+// drops nothing, in either direction.
+func TestDiscoverContextFromBlockedSideStillSurfacesBLOCKSNotAnInvertedName(t *testing.T) {
+	origin := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_target", Label: "Blocked Work"}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			if params["id"] != "work_target" {
+				return nil, nil
+			}
+			// L5 (CHAOS-3779 codex round-1): assert the query text itself,
+			// not just serve a canned response -- without this, the test
+			// would still pass even if edgesOfNode's real Cypher regressed
+			// to the outgoing-only branch and dropped the incoming
+			// "(other)-[r]->(n)" branch entirely, since the fake never
+			// executes real Cypher and would happily serve this row for
+			// ANY query containing the literal substring "UNION". This
+			// binds the test to the actual query shape, not just its
+			// keyword.
+			if !strings.Contains(cypher, ")-[r:"+labelRelation+"]->(n:"+labelSubject) {
+				t.Fatalf("edgesOfNode's query text does not contain the incoming UNION branch (other)-[r]->(n) -- this test cannot prove direction safety against a query that dropped it: %s", cypher)
+			}
+			// The real edgesOfNode UNION's second branch --
+			// (other)-[r]->(n) where n is the queried node -- reports
+			// srcKind/srcId/dstKind/dstId from the edge's TRUE stored
+			// direction, not from which side was queried. This fake
+			// encodes exactly that: work_target is the query origin, but
+			// it is the edge's DESTINATION (the blocked item); work_blocker
+			// is the edge's SOURCE (the blocker).
+			return []row{{
+				"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "relationship_blocked_side", propEvidenceRefs: []string{"evidence_blocked_side"}}},
+				"srcKind": "work_item", "srcId": "work_blocker", "dstKind": "work_item", "dstId": "work_target",
+			}}, nil
+		default: // nodeByKindID (origin resolution + hop-walk neighbor resolution)
+			switch params["id"] {
+			case "work_target":
+				return []row{fakeSubjectNodeRow("work_item", "work_target", "Blocked Work")}, nil
+			case "work_blocker":
+				return []row{fakeSubjectNodeRow("work_item", "work_blocker", "Blocker Work")}, nil
+			default:
+				return nil, nil
+			}
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1"}
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, fakeDiscoveryRequest(origin, 10))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v, want a clean result", err)
+	}
+	edge := findFakeEdge(result.Paths, "BLOCKS")
+	if edge == nil {
+		t.Fatalf("no BLOCKS edge surfaced when querying from the blocked side: %#v", result.Paths)
+	}
+	if edge.From.CanonicalID != "work_blocker" || edge.To.CanonicalID != "work_target" {
+		t.Fatalf("edge direction = %s -> %s, want work_blocker -> work_target (the edge's true stored direction, unchanged by which side was queried)", edge.From.CanonicalID, edge.To.CanonicalID)
+	}
+	if len(result.DriverCandidates) != 1 || result.DriverCandidates[0].Standing != contextfabric.DriverPrincipal {
+		t.Fatalf("DriverCandidates = %#v, want exactly one principal-standing driver -- BLOCKS must still be recognized when discovered from the blocked side", result.DriverCandidates)
+	}
+}
+
+// TestDiscoverContextMarksCoveragePartialOnUnknownRelationshipType is
+// CHAOS-3779 codex round-1 finding H1's regression test: before this,
+// AdmitEdges dropped an edge whose Type failed the closed
+// ContextFabricRelationshipType vocabulary with the same silent `continue`
+// as any other malformed edge -- no metric, no degraded-coverage signal.
+// That is the H4 failure shape (silent admission failure) relocated to the
+// READ path: a write-path producer bug, a partial rollback leaving legacy
+// free-form data, or a future contract downgrade could all put an
+// out-of-vocabulary type in the graph, and a caller would have no way to
+// tell "this investigation is honestly complete" from "this investigation
+// silently lost material."
+//
+// This plants one edge with relation_type "LEGACY_UNKNOWN_TYPE" (never a
+// member of the closed vocabulary) reachable from the origin, alongside no
+// other edges, and proves DiscoverContext returns a Partial=true result
+// with a named "unknown_relationship_type:1" degraded reason -- not a
+// clean, empty-but-successful result indistinguishable from "the graph
+// genuinely has nothing to say here."
+func TestDiscoverContextMarksCoveragePartialOnUnknownRelationshipType(t *testing.T) {
+	origin := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_legacy", Label: "Legacy Work"}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			if params["id"] != "work_legacy" {
+				return nil, nil
+			}
+			return []row{{
+				"r": &edge{Properties: map[string]interface{}{
+					propRelationType: "LEGACY_UNKNOWN_TYPE", propRelationshipID: "relationship_legacy_1",
+					propEvidenceRefs: []string{"evidence_legacy_1"},
+				}},
+				"srcKind": "work_item", "srcId": "work_legacy", "dstKind": "work_item", "dstId": "work_other",
+			}}, nil
+		default: // nodeByKindID
+			switch params["id"] {
+			case "work_legacy":
+				return []row{fakeSubjectNodeRow("work_item", "work_legacy", "Legacy Work")}, nil
+			case "work_other":
+				return []row{fakeSubjectNodeRow("work_item", "work_other", "Other Work")}, nil
+			default:
+				return nil, nil
+			}
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1"}
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, fakeDiscoveryRequest(origin, 10))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v, want a degraded-but-successful result", err)
+	}
+	if len(result.Paths) != 0 {
+		t.Fatalf("result.Paths = %#v, want the out-of-vocabulary edge excluded from the admitted paths", result.Paths)
+	}
+	if !result.Coverage.Partial {
+		t.Fatalf("Coverage = %#v, want Partial=true -- an unknown relationship type must not present as clean, complete coverage", result.Coverage)
+	}
+	found := false
+	for _, reason := range result.Coverage.DegradedReasons {
+		if reason == "unknown_relationship_type:1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Coverage.DegradedReasons = %#v, want \"unknown_relationship_type:1\"", result.Coverage.DegradedReasons)
 	}
 }
 
@@ -238,11 +395,11 @@ func TestDiscoverContextRanksBeforeTruncatingCollectedEdges(t *testing.T) {
 			}
 			return []row{
 				{
-					"r":       &edge{Properties: map[string]interface{}{propRelationType: "DEPENDS_ON", propRelationshipID: "rel_zzz", propEvidenceRefs: []string{"evidence_zzz"}}},
+					"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_zzz", propEvidenceRefs: []string{"evidence_zzz"}}},
 					"srcKind": "project", "srcId": "p1", "dstKind": "work_item", "dstId": "work_zzz",
 				},
 				{
-					"r":       &edge{Properties: map[string]interface{}{propRelationType: "DEPENDS_ON", propRelationshipID: "rel_aaa", propEvidenceRefs: []string{"evidence_aaa"}}},
+					"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_aaa", propEvidenceRefs: []string{"evidence_aaa"}}},
 					"srcKind": "project", "srcId": "p1", "dstKind": "work_item", "dstId": "work_aaa",
 				},
 			}, nil
@@ -269,7 +426,7 @@ func TestDiscoverContextRanksBeforeTruncatingCollectedEdges(t *testing.T) {
 	if len(result.Paths) != 1 {
 		t.Fatalf("len(Paths) = %d, want exactly 1 (MaxRelationshipPaths=1): %#v", len(result.Paths), result.Paths)
 	}
-	edge := findFakeEdge(result.Paths, "DEPENDS_ON")
+	edge := findFakeEdge(result.Paths, "BLOCKS")
 	if edge == nil || edge.To.CanonicalID != "work_aaa" {
 		t.Fatalf("admitted edge = %#v, want the relationship to work_aaa (rel_aaa sorts first; the tight-collection bug would instead have kept rel_zzz, the edge physically encountered first)", edge)
 	}

@@ -57,13 +57,13 @@ func TestDiscoverContextResolvesPastALongRunOfFilteredCandidatesToReachAdmissibl
 				// lookup finds nothing (a legitimate, not-an-error miss)
 				// and classifies the edge as edgeFiltered.
 				rows = append(rows, row{
-					"r":       &edge{Properties: map[string]interface{}{propRelationType: "DEPENDS_ON", propRelationshipID: relID, propEvidenceRefs: []string{"evidence_loser"}}},
+					"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: relID, propEvidenceRefs: []string{"evidence_loser"}}},
 					"srcKind": "project", "srcId": "p1", "dstKind": "work_item", "dstId": fmt.Sprintf("work_loser_%02d", i),
 				})
 			}
 			for _, relID := range winnerRelIDs {
 				rows = append(rows, row{
-					"r":       &edge{Properties: map[string]interface{}{propRelationType: "DEPENDS_ON", propRelationshipID: relID, propEvidenceRefs: []string{"evidence_" + relID}}},
+					"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: relID, propEvidenceRefs: []string{"evidence_" + relID}}},
 					"srcKind": "project", "srcId": "p1", "dstKind": "work_item", "dstId": winnerTargets[relID],
 				})
 			}

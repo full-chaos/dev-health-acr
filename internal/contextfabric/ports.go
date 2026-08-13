@@ -17,6 +17,18 @@ var (
 	// ErrProjectionConflict identifies an out-of-order or incompatible
 	// projection batch. The worker must not advance its checkpoint.
 	ErrProjectionConflict = errors.New("context fabric projection conflict")
+	// ErrProjectionSourceVersionChanged identifies a checkpoint whose
+	// stored SourceVersion no longer matches the current batch's
+	// SourceVersion (CHAOS-3779 codex round-2 H2 residual): the producer's
+	// identity semantics changed since this organization was last
+	// projected (e.g. CHAOS-3779's own RelationshipID scheme change). The
+	// worker must refuse the incremental advance and must never call
+	// ApplyProjectionBatch -- doing so would MERGE a new edge under the
+	// new identity beside whatever the old identity already wrote,
+	// silently doubling edges. Recovery is the existing rebuild path
+	// (projectionrun.Coordinator.Rebuild), which resets the checkpoint to
+	// its zero value, clearing the stored SourceVersion along with it.
+	ErrProjectionSourceVersionChanged = errors.New("context fabric projection source version changed; rebuild required")
 	// ErrRateLimited signals a bounded dependency (graph backend or
 	// canonical fact source) rejected a call because a rate or quota limit
 	// was exceeded. Adapters must wrap their own vendor-specific

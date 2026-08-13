@@ -154,7 +154,7 @@
       ],
       "edges": [
         {
-          "type": "REQUIRES",
+          "type": "BLOCKS",
           "from": {
             "kind": "project",
             "canonical_id": "project_ask_dev",
@@ -176,6 +176,375 @@
       "why_relevant": "The open acceptance work directly prevents release readiness.",
       "evidence_ref_ids": [
         "evidence_release_acceptance"
+      ],
+      "truncated": false
+    },
+    {
+      "path_id": "path_belongs_to_repository_1",
+      "nodes": [
+        {
+          "kind": "pull_request",
+          "canonical_id": "pull_request:repo_1:42",
+          "label": "PR #42"
+        },
+        {
+          "kind": "repository",
+          "canonical_id": "repository:repo_1",
+          "label": "full-chaos/dev-health-acr"
+        }
+      ],
+      "edges": [
+        {
+          "type": "BELONGS_TO_REPOSITORY",
+          "from": {
+            "kind": "pull_request",
+            "canonical_id": "pull_request:repo_1:42",
+            "label": "PR #42"
+          },
+          "to": {
+            "kind": "repository",
+            "canonical_id": "repository:repo_1",
+            "label": "full-chaos/dev-health-acr"
+          },
+          "derivation": "canonical_structured",
+          "epistemic_status": "observed",
+          "observed_at": "2026-08-11T15:59:00Z",
+          "evidence_ref_ids": [
+            "acr:v1:pull-request:repo_1:42"
+          ]
+        }
+      ],
+      "why_relevant": "The pull request belongs to this repository.",
+      "evidence_ref_ids": [
+        "acr:v1:pull-request:repo_1:42"
+      ],
+      "truncated": false
+    },
+    {
+      "path_id": "path_belongs_to_pull_request_1",
+      "nodes": [
+        {
+          "kind": "pull_request_review",
+          "canonical_id": "pull_request_review:review_1",
+          "label": "PR #42 review"
+        },
+        {
+          "kind": "pull_request",
+          "canonical_id": "pull_request:repo_1:42",
+          "label": "PR #42"
+        }
+      ],
+      "edges": [
+        {
+          "type": "BELONGS_TO_PULL_REQUEST",
+          "from": {
+            "kind": "pull_request_review",
+            "canonical_id": "pull_request_review:review_1",
+            "label": "PR #42 review"
+          },
+          "to": {
+            "kind": "pull_request",
+            "canonical_id": "pull_request:repo_1:42",
+            "label": "PR #42"
+          },
+          "derivation": "canonical_structured",
+          "epistemic_status": "observed",
+          "observed_at": "2026-08-11T15:59:00Z",
+          "evidence_ref_ids": [
+            "acr:v1:review:review_1"
+          ]
+        }
+      ],
+      "why_relevant": "The review belongs to this pull request.",
+      "evidence_ref_ids": [
+        "acr:v1:review:review_1"
+      ],
+      "truncated": false
+    },
+    {
+      "path_id": "path_correlated_with_incident_1",
+      "nodes": [
+        {
+          "kind": "deployment",
+          "canonical_id": "deployment:deploy_1",
+          "label": "production deployment"
+        },
+        {
+          "kind": "incident",
+          "canonical_id": "incident:incident_1",
+          "label": "Elevated error rate"
+        }
+      ],
+      "edges": [
+        {
+          "type": "CORRELATED_WITH_INCIDENT",
+          "from": {
+            "kind": "deployment",
+            "canonical_id": "deployment:deploy_1",
+            "label": "production deployment"
+          },
+          "to": {
+            "kind": "incident",
+            "canonical_id": "incident:incident_1",
+            "label": "Elevated error rate"
+          },
+          "derivation": "rule_inferred",
+          "epistemic_status": "source_asserted",
+          "observed_at": "2026-08-11T15:59:00Z",
+          "evidence_ref_ids": [
+            "acr:v1:deployment-incident:edge_1"
+          ]
+        }
+      ],
+      "why_relevant": "The deployment is correlated in time with this incident. Correlation is not causation.",
+      "evidence_ref_ids": [
+        "acr:v1:deployment-incident:edge_1"
+      ],
+      "truncated": false
+    },
+    {
+      "path_id": "path_related_to_1",
+      "nodes": [
+        {
+          "kind": "work_item",
+          "canonical_id": "work_item:CHAOS-2001",
+          "label": "CHAOS-2001"
+        },
+        {
+          "kind": "work_item",
+          "canonical_id": "work_item:CHAOS-2002",
+          "label": "CHAOS-2002"
+        }
+      ],
+      "edges": [
+        {
+          "type": "RELATED_TO",
+          "from": {
+            "kind": "work_item",
+            "canonical_id": "work_item:CHAOS-2001",
+            "label": "CHAOS-2001"
+          },
+          "to": {
+            "kind": "work_item",
+            "canonical_id": "work_item:CHAOS-2002",
+            "label": "CHAOS-2002"
+          },
+          "derivation": "canonical_structured",
+          "epistemic_status": "observed",
+          "observed_at": "2026-08-11T15:59:00Z",
+          "evidence_ref_ids": [
+            "acr:v1:work-item-dependency:CHAOS-2001:CHAOS-2002"
+          ]
+        }
+      ],
+      "why_relevant": "The graph associated the two work items through related_to.",
+      "evidence_ref_ids": [
+        "acr:v1:work-item-dependency:CHAOS-2001:CHAOS-2002"
+      ],
+      "truncated": false
+    },
+    {
+      "path_id": "path_part_of_1",
+      "nodes": [
+        {
+          "kind": "work_item",
+          "canonical_id": "work_item:CHAOS-2005",
+          "label": "CHAOS-2005"
+        },
+        {
+          "kind": "work_item",
+          "canonical_id": "work_item:CHAOS-2000",
+          "label": "CHAOS-2000"
+        }
+      ],
+      "edges": [
+        {
+          "type": "PART_OF",
+          "from": {
+            "kind": "work_item",
+            "canonical_id": "work_item:CHAOS-2005",
+            "label": "CHAOS-2005"
+          },
+          "to": {
+            "kind": "work_item",
+            "canonical_id": "work_item:CHAOS-2000",
+            "label": "CHAOS-2000"
+          },
+          "derivation": "canonical_structured",
+          "epistemic_status": "observed",
+          "observed_at": "2026-08-11T15:59:00Z",
+          "evidence_ref_ids": [
+            "acr:v1:work-item-hierarchy:CHAOS-2005:CHAOS-2000"
+          ]
+        }
+      ],
+      "why_relevant": "CHAOS-2005 is part of CHAOS-2000.",
+      "evidence_ref_ids": [
+        "acr:v1:work-item-hierarchy:CHAOS-2005:CHAOS-2000"
+      ],
+      "truncated": false
+    },
+    {
+      "path_id": "path_relates_to_1",
+      "nodes": [
+        {
+          "kind": "work_item",
+          "canonical_id": "work_item:CHAOS-2006",
+          "label": "CHAOS-2006"
+        },
+        {
+          "kind": "work_item",
+          "canonical_id": "work_item:CHAOS-2007",
+          "label": "CHAOS-2007"
+        }
+      ],
+      "edges": [
+        {
+          "type": "RELATES_TO",
+          "from": {
+            "kind": "work_item",
+            "canonical_id": "work_item:CHAOS-2006",
+            "label": "CHAOS-2006"
+          },
+          "to": {
+            "kind": "work_item",
+            "canonical_id": "work_item:CHAOS-2007",
+            "label": "CHAOS-2007"
+          },
+          "derivation": "canonical_structured",
+          "epistemic_status": "observed",
+          "observed_at": "2026-08-11T15:59:00Z",
+          "evidence_ref_ids": [
+            "acr:v1:work-item-dependency:CHAOS-2006:CHAOS-2007"
+          ]
+        }
+      ],
+      "why_relevant": "The source work item dependency row states relates_to.",
+      "evidence_ref_ids": [
+        "acr:v1:work-item-dependency:CHAOS-2006:CHAOS-2007"
+      ],
+      "truncated": false
+    },
+    {
+      "path_id": "path_duplicates_1",
+      "nodes": [
+        {
+          "kind": "work_item",
+          "canonical_id": "work_item:CHAOS-2008",
+          "label": "CHAOS-2008"
+        },
+        {
+          "kind": "work_item",
+          "canonical_id": "work_item:CHAOS-2009",
+          "label": "CHAOS-2009"
+        }
+      ],
+      "edges": [
+        {
+          "type": "DUPLICATES",
+          "from": {
+            "kind": "work_item",
+            "canonical_id": "work_item:CHAOS-2008",
+            "label": "CHAOS-2008"
+          },
+          "to": {
+            "kind": "work_item",
+            "canonical_id": "work_item:CHAOS-2009",
+            "label": "CHAOS-2009"
+          },
+          "derivation": "canonical_structured",
+          "epistemic_status": "observed",
+          "observed_at": "2026-08-11T15:59:00Z",
+          "evidence_ref_ids": [
+            "acr:v1:work-item-dependency:CHAOS-2008:CHAOS-2009"
+          ]
+        }
+      ],
+      "why_relevant": "CHAOS-2009 is recorded as a duplicate of CHAOS-2008.",
+      "evidence_ref_ids": [
+        "acr:v1:work-item-dependency:CHAOS-2008:CHAOS-2009"
+      ],
+      "truncated": false
+    },
+    {
+      "path_id": "path_documented_by_1",
+      "nodes": [
+        {
+          "kind": "project",
+          "canonical_id": "project_ask_dev",
+          "label": "Ask Dev"
+        },
+        {
+          "kind": "document",
+          "canonical_id": "document:doc_1",
+          "label": "Ask Dev design notes"
+        }
+      ],
+      "edges": [
+        {
+          "type": "DOCUMENTED_BY",
+          "from": {
+            "kind": "project",
+            "canonical_id": "project_ask_dev",
+            "label": "Ask Dev"
+          },
+          "to": {
+            "kind": "document",
+            "canonical_id": "document:doc_1",
+            "label": "Ask Dev design notes"
+          },
+          "derivation": "canonical_structured",
+          "epistemic_status": "observed",
+          "observed_at": "2026-08-11T15:59:00Z",
+          "evidence_ref_ids": [
+            "acr:v1:document:doc_1"
+          ]
+        }
+      ],
+      "why_relevant": "This document is authoritatively about the project.",
+      "evidence_ref_ids": [
+        "acr:v1:document:doc_1"
+      ],
+      "truncated": false
+    },
+    {
+      "path_id": "path_has_episode_1",
+      "nodes": [
+        {
+          "kind": "project",
+          "canonical_id": "project_ask_dev",
+          "label": "Ask Dev"
+        },
+        {
+          "kind": "episode",
+          "canonical_id": "episode:episode_1",
+          "label": "Investigated release readiness"
+        }
+      ],
+      "edges": [
+        {
+          "type": "HAS_EPISODE",
+          "from": {
+            "kind": "project",
+            "canonical_id": "project_ask_dev",
+            "label": "Ask Dev"
+          },
+          "to": {
+            "kind": "episode",
+            "canonical_id": "episode:episode_1",
+            "label": "Investigated release readiness"
+          },
+          "derivation": "canonical_structured",
+          "epistemic_status": "observed",
+          "observed_at": "2026-08-11T15:59:00Z",
+          "evidence_ref_ids": [
+            "acr:v1:episode:episode_1"
+          ]
+        }
+      ],
+      "why_relevant": "This episode is authoritatively about the project.",
+      "evidence_ref_ids": [
+        "acr:v1:episode:episode_1"
       ],
       "truncated": false
     }

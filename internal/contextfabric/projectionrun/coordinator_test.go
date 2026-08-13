@@ -49,6 +49,10 @@ type fakeSource struct {
 	delay time.Duration
 	err   error
 	calls atomic.Int32
+	// sourceVersion overrides validBatch's default "test.v1" when set --
+	// used by the M2 rebuild-wedge regression test (CHAOS-3779 codex
+	// round-4) to simulate a source version change across two ticks.
+	sourceVersion string
 }
 
 func (f *fakeSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
@@ -64,7 +68,14 @@ func (f *fakeSource) NextProjectionBatch(ctx context.Context, checkpoint context
 		return contextfabric.ProjectionBatch{}, false, f.err
 	}
 	next := checkpoint.Cursor + "n"
-	return validBatch(checkpoint.OrgID, f.name, checkpoint.Cursor, next), true, nil
+	batch := validBatch(checkpoint.OrgID, f.name, checkpoint.Cursor, next)
+	if f.sourceVersion != "" {
+		batch.SourceVersion = f.sourceVersion
+		for i := range batch.Entities {
+			batch.Entities[i].SourceVersion = f.sourceVersion
+		}
+	}
+	return batch, true, nil
 }
 
 // fakeBackend applies batches and tracks, per organization, the maximum

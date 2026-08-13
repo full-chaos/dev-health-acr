@@ -549,7 +549,7 @@ func validSynthesisInput() contextfabric.SynthesisInput {
 	path := contextfabric.RelationshipPath{
 		PathID: "path_12345678", Nodes: []contextfabric.SubjectRef{project, {Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_1", Label: "Release acceptance"}},
 		Edges: []contextfabric.RelationshipEdge{{
-			Type: "REQUIRES", From: project, To: contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_1", Label: "Release acceptance"},
+			Type: "BLOCKS", From: project, To: contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_1", Label: "Release acceptance"},
 			Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
 			EvidenceRefIDs: []string{"evidence_release_1234"},
 		}},

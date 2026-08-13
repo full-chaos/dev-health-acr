@@ -251,6 +251,287 @@ func TestClickHouseProjectionSourceProjectsPullRequestReviewsAndCIRuns(t *testin
 	}
 }
 
+// TestClickHouseProjectionSourceProjectsEveryClosedVocabularyRelationshipType
+// is CHAOS-3779's central regression test, binding several ACs at once:
+//
+//   - AC-3779-5 (first half): a real source row deterministically maps to
+//     the correct closed-vocabulary Type, for both new CHAOS-3779 producers
+//     (PART_OF, from work_items.parent_id) and the formalized BLOCKS
+//     producer that TRD §19.13 Correction 1 found already flowing.
+//   - The single most important regression in the whole issue: RELATES_TO
+//     and DUPLICATES are the two OTHER live work_item_dependencies.
+//     relationship_type values Correction 1 found (verified live against
+//     ClickHouse: 'relates_to', 'blocks', 'duplicates'). Closing
+//     ContextFabricRelationshipProjection.Type into an enum without
+//     covering these would make every 'relates_to' and 'duplicates' row in
+//     production fail loudly -- exactly the H4 failure this issue exists
+//     to close, just inverted (loud failure of GOOD data instead of silent
+//     admission of BAD data). RELATED_TO (the ifNull default for a NULL
+//     relationship_type) is covered the same way.
+//   - AC-3779-7: source.NextProjectionBatch takes no ModelRuntime
+//     parameter, and this package (grep-verified) imports nothing from
+//     model_runtime.go -- projection is structurally incapable of model
+//     participation, not just incidentally free of it. This call proves
+//     every edge type still projects with that structural guarantee in
+//     force.
+//   - AC-3779-8: every relationship this source projects carries a
+//     derivation method, an epistemic status, a non-empty authorization
+//     scope, at least one evidence reference, and a source version --
+//     asserted explicitly below, not just implied by batch.Validate()
+//     passing.
+//
+// everyRelationshipTypeFixtureTables seeds fakeTables covering every
+// relationship type devhealthsource.ProducedRelationshipTypes() declares
+// (BELONGS_TO_REPOSITORY/BELONGS_TO_PULL_REQUEST/CORRELATED_WITH_INCIDENT
+// come from baseTables itself; the rest are added here). Shared by
+// TestClickHouseProjectionSourceProjectsEveryClosedVocabularyRelationshipType
+// and TestProducedRelationshipTypesMatchesWhatProjectionActuallyProduces so
+// both exercise the identical fixture.
+func everyRelationshipTypeFixtureTables(at time.Time) []fakeTable {
+	tables := baseTables(at)
+	for i, table := range tables {
+		if table.match == "FROM work_item_dependencies AS d" {
+			// blocks/relates_to/duplicates are the three live values TRD
+			// §19.13 Correction 1 verified against ClickHouse;
+			// related_to is the ifNull(...,'related_to') default for a
+			// NULL relationship_type -- already collapsed to a non-null
+			// string by the real SQL's ifNull before Go ever scans it.
+			tables[i] = fakeTable{match: table.match, rows: [][]any{
+				{"WIDGET-101", "WIDGET-099", "blocks", "example-org/widget-service", at},
+				{"WIDGET-101", "WIDGET-098", "relates_to", "example-org/widget-service", at},
+				{"WIDGET-101", "WIDGET-097", "duplicates", "example-org/widget-service", at},
+				{"WIDGET-101", "WIDGET-096", "related_to", "example-org/widget-service", at},
+			}}
+		}
+	}
+	return append(tables,
+		fakeTable{match: "FROM git_pull_request_reviews AS r", rows: [][]any{{"review-1", "repo-1", int64(1042), "approved", at, "example-org/widget-service"}}},
+		// FROM work_items AS c is queryWorkItemHierarchy's child-side
+		// alias -- distinct from baseTables' "FROM work_items AS w"
+		// (queryWorkItems' entity query), so this does not collide with
+		// it in fakeClient's substring match.
+		fakeTable{match: "FROM work_items AS c", rows: [][]any{{"WIDGET-101", "WIDGET-050", "example-org/widget-service", at}}},
+	)
+}
+
+func TestClickHouseProjectionSourceProjectsEveryClosedVocabularyRelationshipType(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+	tables := everyRelationshipTypeFixtureTables(at)
+	client := &fakeClient{tables: tables}
+	source, err := devhealthsource.NewClickHouseProjectionSource(client)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	// No ModelRuntime is constructed, configured, or passed anywhere on
+	// this call path (AC-3779-7) -- NextProjectionBatch's signature has no
+	// parameter for one.
+	batch, available, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName})
+	if err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if !available {
+		t.Fatal("expected a batch to be available")
+	}
+	if err := batch.Validate(); err != nil {
+		t.Fatalf("batch failed contract validation: %v", err)
+	}
+
+	wantDependencyTargets := map[string]contractsv1.ContextFabricRelationshipType{
+		"work_item:WIDGET-099": contractsv1.ContextFabricRelationshipBlocks,
+		"work_item:WIDGET-098": contractsv1.ContextFabricRelationshipRelatesTo,
+		"work_item:WIDGET-097": contractsv1.ContextFabricRelationshipDuplicates,
+		"work_item:WIDGET-096": contractsv1.ContextFabricRelationshipRelatedTo,
+	}
+	seenTypes := map[contractsv1.ContextFabricRelationshipType]bool{}
+	partOfFound := false
+	for _, relationship := range batch.Relationships {
+		seenTypes[relationship.Type] = true
+
+		// AC-3779-8: every envelope field is present, not merely
+		// non-erroring under Validate().
+		if relationship.Derivation == "" {
+			t.Fatalf("relationship %s has no derivation method: %+v", relationship.RelationshipID, relationship)
+		}
+		if relationship.EpistemicStatus == "" {
+			t.Fatalf("relationship %s has no epistemic status: %+v", relationship.RelationshipID, relationship)
+		}
+		if len(relationship.Authorization.RepositorySlugs)+len(relationship.Authorization.ProjectIDs)+len(relationship.Authorization.TeamIDs) == 0 {
+			t.Fatalf("relationship %s has an empty authorization scope: %+v", relationship.RelationshipID, relationship)
+		}
+		if len(relationship.EvidenceRefIDs) == 0 {
+			t.Fatalf("relationship %s has no evidence references: %+v", relationship.RelationshipID, relationship)
+		}
+		if relationship.SourceVersion == "" {
+			t.Fatalf("relationship %s has no source version: %+v", relationship.RelationshipID, relationship)
+		}
+
+		if relationship.From.CanonicalID != "work_item:WIDGET-101" {
+			continue
+		}
+		if relationship.Type == contractsv1.ContextFabricRelationshipPartOf {
+			partOfFound = true
+			if relationship.To.CanonicalID != "work_item:WIDGET-050" {
+				t.Fatalf("PART_OF target = %q, want work_item:WIDGET-050", relationship.To.CanonicalID)
+			}
+			continue
+		}
+		if wantType, tracked := wantDependencyTargets[relationship.To.CanonicalID]; tracked {
+			if relationship.Type != wantType {
+				t.Fatalf("relationship work_item:WIDGET-101 -> %s Type = %q, want %q", relationship.To.CanonicalID, relationship.Type, wantType)
+			}
+			delete(wantDependencyTargets, relationship.To.CanonicalID)
+		}
+	}
+	if !partOfFound {
+		t.Fatalf("PART_OF relationship not found in batch: %+v", batch.Relationships)
+	}
+	if len(wantDependencyTargets) != 0 {
+		t.Fatalf("dependency relationships not found for targets: %+v, batch=%+v", wantDependencyTargets, batch.Relationships)
+	}
+
+	// AC-3779-7: every edge type this source can produce is present in one
+	// deterministic, model-runtime-free projection.
+	wantTypes := []contractsv1.ContextFabricRelationshipType{
+		contractsv1.ContextFabricRelationshipBelongsToRepository,
+		contractsv1.ContextFabricRelationshipBelongsToPullRequest,
+		contractsv1.ContextFabricRelationshipCorrelatedWithIncident,
+		contractsv1.ContextFabricRelationshipRelatedTo,
+		contractsv1.ContextFabricRelationshipBlocks,
+		contractsv1.ContextFabricRelationshipPartOf,
+		contractsv1.ContextFabricRelationshipRelatesTo,
+		contractsv1.ContextFabricRelationshipDuplicates,
+	}
+	for _, want := range wantTypes {
+		if !seenTypes[want] {
+			t.Fatalf("relationship type %q was not produced by this projection batch: %+v", want, batch.Relationships)
+		}
+	}
+}
+
+// TestProducedRelationshipTypesMatchesWhatProjectionActuallyProduces is
+// CHAOS-3779 codex round-1 finding L4: devhealthsource.
+// ProducedRelationshipTypes() is a hand-maintained list (the AC-3779-9
+// cross-check in cmd/acr-projector reads it as ground truth), which can
+// silently drift from what the real projection code actually does -- a
+// query function added later and forgotten in the list, or a type
+// removed from a query but left in the list, would both go undetected by
+// a test that only inspects the declared list itself. This binds the
+// declared list to a REAL executed projection batch, built from the exact
+// same fixture as
+// TestClickHouseProjectionSourceProjectsEveryClosedVocabularyRelationshipType,
+// and requires exact set equality in both directions: every declared type
+// must actually appear in the batch, and every type the batch actually
+// produced must be declared.
+func TestProducedRelationshipTypesMatchesWhatProjectionActuallyProduces(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+	client := &fakeClient{tables: everyRelationshipTypeFixtureTables(at)}
+	source, err := devhealthsource.NewClickHouseProjectionSource(client)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	batch, available, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName})
+	if err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if !available {
+		t.Fatal("expected a batch to be available")
+	}
+
+	actual := map[contractsv1.ContextFabricRelationshipType]bool{}
+	for _, relationship := range batch.Relationships {
+		actual[relationship.Type] = true
+	}
+	declared := devhealthsource.ProducedRelationshipTypes()
+	if len(declared) == 0 {
+		t.Fatal("ProducedRelationshipTypes() is empty -- this test would pass vacuously with nothing to check")
+	}
+	for _, want := range declared {
+		if !actual[want] {
+			t.Fatalf("ProducedRelationshipTypes() declares %q, but a real projection run over the full fixture never produced it -- the hand-maintained list has drifted from the actual projection mapping path", want)
+		}
+	}
+	declaredSet := map[contractsv1.ContextFabricRelationshipType]bool{}
+	for _, d := range declared {
+		declaredSet[d] = true
+	}
+	for got := range actual {
+		if !declaredSet[got] {
+			t.Fatalf("a real projection run produced relationship type %q, but ProducedRelationshipTypes() does not declare it -- the AC-3779-9 cross-check would silently miss this type", got)
+		}
+	}
+}
+
+// TestClickHouseProjectionSourceKeepsBothEdgesForASourceTargetPairWithTwoRelationshipTypes
+// is CHAOS-3779 codex round-1 finding H2's regression test. work_item_
+// dependencies' natural key is (org, source, target, relationship_type) --
+// live ClickHouse holds real rows where the same (source, target) pair
+// carries both 'blocks' and 'relates_to' (verified against the running
+// database: org 70d529e0-3c06-4597-8480-794fd02328b6,
+// linear:CHAOS-3292->linear:CHAOS-3289 and
+// linear:CHAOS-3300->linear:CHAOS-3219). Before this fix, RelationshipID
+// and the keyset-pagination rowKey both derived from (source, target)
+// alone, so two rows sharing a pair collapsed onto one identity: within a
+// single page, ContextFabricProjectionBatch.Validate() would reject the
+// whole batch outright ("relationship IDs must be unique within a
+// batch") -- this test seeds exactly that shape (one source_work_item_id,
+// two target rows sharing ONE pair by using the SAME target for both
+// rows) and proves both a 'blocks' edge and a 'relates_to' edge survive
+// into the batch, with distinct RelationshipIDs, and the batch still
+// validates.
+func TestClickHouseProjectionSourceKeepsBothEdgesForASourceTargetPairWithTwoRelationshipTypes(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+	tables := baseTables(at)
+	for i, table := range tables {
+		if table.match == "FROM work_item_dependencies AS d" {
+			tables[i] = fakeTable{match: table.match, rows: [][]any{
+				{"WIDGET-101", "WIDGET-050", "blocks", "example-org/widget-service", at},
+				{"WIDGET-101", "WIDGET-050", "relates_to", "example-org/widget-service", at},
+			}}
+		}
+	}
+	client := &fakeClient{tables: tables}
+	source, err := devhealthsource.NewClickHouseProjectionSource(client)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	batch, available, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName})
+	if err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if !available {
+		t.Fatal("expected a batch to be available")
+	}
+	if err := batch.Validate(); err != nil {
+		t.Fatalf("batch failed contract validation -- H2 regression: two relationship_type rows for the same (source, target) pair must not collide on RelationshipID: %v", err)
+	}
+
+	var blocksFound, relatesToFound bool
+	seenIDs := map[string]int{}
+	for _, relationship := range batch.Relationships {
+		if relationship.From.CanonicalID != "work_item:WIDGET-101" || relationship.To.CanonicalID != "work_item:WIDGET-050" {
+			continue
+		}
+		seenIDs[relationship.RelationshipID]++
+		switch relationship.Type {
+		case contractsv1.ContextFabricRelationshipBlocks:
+			blocksFound = true
+		case contractsv1.ContextFabricRelationshipRelatesTo:
+			relatesToFound = true
+		}
+	}
+	if !blocksFound || !relatesToFound {
+		t.Fatalf("blocksFound=%t relatesToFound=%t, want both edges present for the same (source, target) pair: %+v", blocksFound, relatesToFound, batch.Relationships)
+	}
+	for id, count := range seenIDs {
+		if count > 1 {
+			t.Fatalf("RelationshipID %q used by %d relationships, want each relationship_type to have its own identity", id, count)
+		}
+	}
+}
+
 func TestClickHouseProjectionSourceFullSnapshotIsOneCompleteBatch(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)

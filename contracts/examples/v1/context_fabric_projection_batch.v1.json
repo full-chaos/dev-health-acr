@@ -44,31 +44,217 @@
   ],
   "relationships": [
     {
-      "relationship_id": "relationship_12345678",
-      "type": "OWNS",
+      "relationship_id": "relationship_belongs_to_repository_1",
+      "type": "BELONGS_TO_REPOSITORY",
       "from": {
-        "kind": "team",
-        "canonical_id": "team_dev_health",
-        "label": "Dev Health"
+        "kind": "pull_request",
+        "canonical_id": "pull_request:repo_1:42",
+        "label": "PR #42"
       },
       "to": {
-        "kind": "project",
-        "canonical_id": "project_ask_dev",
-        "label": "Ask Dev"
+        "kind": "repository",
+        "canonical_id": "repository:repo_1",
+        "label": "full-chaos/dev-health-acr"
       },
       "properties": {},
       "derivation": "canonical_structured",
       "epistemic_status": "observed",
       "authorization": {
-        "project_ids": [
-          "project_ask_dev"
-        ],
-        "team_ids": [
-          "team_dev_health"
+        "repository_slugs": [
+          "full-chaos/dev-health-acr"
         ]
       },
       "evidence_ref_ids": [
-        "evidence_project_identity"
+        "acr:v1:pull-request:repo_1:42"
+      ],
+      "observed_at": "2026-08-11T15:59:00Z",
+      "source_version": "ops-projection-v1"
+    },
+    {
+      "relationship_id": "relationship_belongs_to_pull_request_1",
+      "type": "BELONGS_TO_PULL_REQUEST",
+      "from": {
+        "kind": "pull_request_review",
+        "canonical_id": "pull_request_review:review_1",
+        "label": "PR #42 review"
+      },
+      "to": {
+        "kind": "pull_request",
+        "canonical_id": "pull_request:repo_1:42",
+        "label": "PR #42"
+      },
+      "properties": {},
+      "derivation": "canonical_structured",
+      "epistemic_status": "observed",
+      "authorization": {
+        "repository_slugs": [
+          "full-chaos/dev-health-acr"
+        ]
+      },
+      "evidence_ref_ids": [
+        "acr:v1:review:review_1"
+      ],
+      "observed_at": "2026-08-11T15:59:00Z",
+      "source_version": "ops-projection-v1"
+    },
+    {
+      "relationship_id": "relationship_correlated_with_incident_1",
+      "type": "CORRELATED_WITH_INCIDENT",
+      "from": {
+        "kind": "deployment",
+        "canonical_id": "deployment:deploy_1",
+        "label": "production deployment"
+      },
+      "to": {
+        "kind": "incident",
+        "canonical_id": "incident:incident_1",
+        "label": "Elevated error rate"
+      },
+      "properties": {},
+      "derivation": "rule_inferred",
+      "epistemic_status": "source_asserted",
+      "authorization": {
+        "repository_slugs": [
+          "full-chaos/dev-health-acr"
+        ]
+      },
+      "evidence_ref_ids": [
+        "acr:v1:deployment-incident:edge_1"
+      ],
+      "observed_at": "2026-08-11T15:59:00Z",
+      "source_version": "ops-projection-v1"
+    },
+    {
+      "relationship_id": "relationship_related_to_1",
+      "type": "RELATED_TO",
+      "from": {
+        "kind": "work_item",
+        "canonical_id": "work_item:CHAOS-2001",
+        "label": "CHAOS-2001"
+      },
+      "to": {
+        "kind": "work_item",
+        "canonical_id": "work_item:CHAOS-2002",
+        "label": "CHAOS-2002"
+      },
+      "properties": {},
+      "derivation": "canonical_structured",
+      "epistemic_status": "observed",
+      "authorization": {
+        "repository_slugs": [
+          "full-chaos/dev-health-acr"
+        ]
+      },
+      "evidence_ref_ids": [
+        "acr:v1:work-item-dependency:CHAOS-2001:CHAOS-2002"
+      ],
+      "observed_at": "2026-08-11T15:59:00Z",
+      "source_version": "ops-projection-v1"
+    },
+    {
+      "relationship_id": "relationship_blocks_1",
+      "type": "BLOCKS",
+      "from": {
+        "kind": "work_item",
+        "canonical_id": "work_item:CHAOS-2003",
+        "label": "CHAOS-2003"
+      },
+      "to": {
+        "kind": "work_item",
+        "canonical_id": "work_item:CHAOS-2004",
+        "label": "CHAOS-2004"
+      },
+      "properties": {},
+      "derivation": "canonical_structured",
+      "epistemic_status": "observed",
+      "authorization": {
+        "repository_slugs": [
+          "full-chaos/dev-health-acr"
+        ]
+      },
+      "evidence_ref_ids": [
+        "acr:v1:work-item-dependency:CHAOS-2003:CHAOS-2004"
+      ],
+      "observed_at": "2026-08-11T15:59:00Z",
+      "source_version": "ops-projection-v1"
+    },
+    {
+      "relationship_id": "relationship_part_of_1",
+      "type": "PART_OF",
+      "from": {
+        "kind": "work_item",
+        "canonical_id": "work_item:CHAOS-2005",
+        "label": "CHAOS-2005"
+      },
+      "to": {
+        "kind": "work_item",
+        "canonical_id": "work_item:CHAOS-2000",
+        "label": "CHAOS-2000"
+      },
+      "properties": {},
+      "derivation": "canonical_structured",
+      "epistemic_status": "observed",
+      "authorization": {
+        "repository_slugs": [
+          "full-chaos/dev-health-acr"
+        ]
+      },
+      "evidence_ref_ids": [
+        "acr:v1:work-item-hierarchy:CHAOS-2005:CHAOS-2000"
+      ],
+      "observed_at": "2026-08-11T15:59:00Z",
+      "source_version": "ops-projection-v1"
+    },
+    {
+      "relationship_id": "relationship_relates_to_1",
+      "type": "RELATES_TO",
+      "from": {
+        "kind": "work_item",
+        "canonical_id": "work_item:CHAOS-2006",
+        "label": "CHAOS-2006"
+      },
+      "to": {
+        "kind": "work_item",
+        "canonical_id": "work_item:CHAOS-2007",
+        "label": "CHAOS-2007"
+      },
+      "properties": {},
+      "derivation": "canonical_structured",
+      "epistemic_status": "observed",
+      "authorization": {
+        "repository_slugs": [
+          "full-chaos/dev-health-acr"
+        ]
+      },
+      "evidence_ref_ids": [
+        "acr:v1:work-item-dependency:CHAOS-2006:CHAOS-2007"
+      ],
+      "observed_at": "2026-08-11T15:59:00Z",
+      "source_version": "ops-projection-v1"
+    },
+    {
+      "relationship_id": "relationship_duplicates_1",
+      "type": "DUPLICATES",
+      "from": {
+        "kind": "work_item",
+        "canonical_id": "work_item:CHAOS-2008",
+        "label": "CHAOS-2008"
+      },
+      "to": {
+        "kind": "work_item",
+        "canonical_id": "work_item:CHAOS-2009",
+        "label": "CHAOS-2009"
+      },
+      "properties": {},
+      "derivation": "canonical_structured",
+      "epistemic_status": "observed",
+      "authorization": {
+        "repository_slugs": [
+          "full-chaos/dev-health-acr"
+        ]
+      },
+      "evidence_ref_ids": [
+        "acr:v1:work-item-dependency:CHAOS-2008:CHAOS-2009"
       ],
       "observed_at": "2026-08-11T15:59:00Z",
       "source_version": "ops-projection-v1"

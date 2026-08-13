@@ -47,7 +47,7 @@ func TestLiveRelationshipProjectionPreservesPriorCanonicalEntityMetadata(t *test
 	relBatch.NextCursor = "cursor-2"
 	relBatch.Entities = []contextfabric.EntityProjection{}
 	relBatch.Relationships = []contextfabric.RelationshipProjection{{
-		RelationshipID: "relationship_merge_1", Type: "DEPENDS_ON", From: project, To: work,
+		RelationshipID: "relationship_merge_1", Type: "BLOCKS", From: project, To: work,
 		Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
 		Authorization: contextfabric.AuthorizationScope{RepositorySlugs: []string{"full-chaos/dev-health-acr"}}, EvidenceRefIDs: []string{"evidence_dependency_1"},
 		ObservedAt: observed.Add(time.Minute), SourceVersion: "v1",
@@ -236,12 +236,12 @@ func TestLiveDiscoverContextEnforcesAuthorizationOnPathsAndAttributionEdges(t *t
 		},
 		Relationships: []contextfabric.RelationshipProjection{
 			{
-				RelationshipID: "rel_visible", Type: "DEPENDS_ON", From: project, To: visibleWork,
+				RelationshipID: "rel_visible", Type: "BLOCKS", From: project, To: visibleWork,
 				Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
 				Authorization: allowedScope, EvidenceRefIDs: []string{"evidence_dep_visible"}, ObservedAt: observed, SourceVersion: "v1",
 			},
 			{
-				RelationshipID: "rel_restricted", Type: "DEPENDS_ON", From: project, To: restrictedWork,
+				RelationshipID: "rel_restricted", Type: "BLOCKS", From: project, To: restrictedWork,
 				Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
 				Authorization: privateScope, EvidenceRefIDs: []string{"evidence_dep_restricted"}, ObservedAt: observed, SourceVersion: "v1",
 			},
@@ -282,10 +282,10 @@ func TestLiveDiscoverContextEnforcesAuthorizationOnPathsAndAttributionEdges(t *t
 	for pathIndex := range result.Paths {
 		for edgeIndex := range result.Paths[pathIndex].Edges {
 			edge := result.Paths[pathIndex].Edges[edgeIndex]
-			if edge.Type == "DEPENDS_ON" && edge.To == restrictedWork {
+			if edge.Type == "BLOCKS" && edge.To == restrictedWork {
 				t.Fatalf("unauthorized relationship leaked into the result despite both endpoints being individually visible: %#v", edge)
 			}
-			if edge.Type == "DEPENDS_ON" && edge.To == visibleWork {
+			if edge.Type == "BLOCKS" && edge.To == visibleWork {
 				sawVisibleDependency = true
 			}
 			if edge.Type == "DOCUMENTED_BY" {
@@ -294,6 +294,87 @@ func TestLiveDiscoverContextEnforcesAuthorizationOnPathsAndAttributionEdges(t *t
 		}
 	}
 	if !sawVisibleDependency {
-		t.Fatalf("authorized DEPENDS_ON relationship missing -- authorization filtering must not exclude paths the principal IS scoped to see: %#v", result.Paths)
+		t.Fatalf("authorized BLOCKS relationship missing -- authorization filtering must not exclude paths the principal IS scoped to see: %#v", result.Paths)
+	}
+}
+
+// TestLivePartOfEdgeRoundTripsFromProjectionThroughDiscoverContext is
+// CHAOS-3779 codex round-1 finding L6's integration-shaped proof for
+// PART_OF: a projected relationship -> ApplyProjectionBatch (real
+// FalkorDB) -> DiscoverContext (real FalkorDB read), end to end, against
+// an actual backend rather than the fakeConn unit tests already covering
+// PART_OF's admission/direction logic in isolation
+// (TestAdmitEdgesAnswersBlocksAndPartOfInOneHopWithEvidence, graphrank
+// package -- pure, no I/O) and its deterministic source-row mapping in
+// isolation (TestClickHouseProjectionSourceProjectsEveryClosedVocabularyRelationshipType,
+// devhealthsource package -- fakeClient, no real ClickHouse or FalkorDB).
+// This is the missing middle: does a PART_OF edge, once actually written
+// to a real graph, actually come back out through the real read path with
+// its evidence intact? A fakeConn-based ApplyProjectionBatch harness was
+// considered impractical to build with confidence here: unlike
+// DiscoverContext's read-only queries (already fake-tested extensively
+// elsewhere in this package), ApplyProjectionBatch's write path also
+// exercises bootstrapSchema's constraint/index polling, which no existing
+// fake test drives end to end -- a live container is the honest way to
+// prove this round trip rather than a first-time, unexecuted fake
+// harness for the write path.
+func TestLivePartOfEdgeRoundTripsFromProjectionThroughDiscoverContext(t *testing.T) {
+	adapter := newLiveAdapter(t, context.Background())
+	ctx := context.Background()
+	orgID := "live-part-of-" + time.Now().UTC().Format("20060102T150405.000000000")
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
+
+	observed := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	child := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_child", Label: "Child Work"}
+	parent := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_parent", Label: "Parent Work"}
+	scope := contextfabric.AuthorizationScope{RepositorySlugs: []string{"full-chaos/dev-health-acr"}}
+
+	batch := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_part_of_1", OrgID: orgID, Source: "live-test",
+		SourceVersion: "v1", Cursor: "", NextCursor: "cursor-1", GeneratedAt: observed,
+		Entities: []contextfabric.EntityProjection{
+			{Subject: child, Authorization: scope, EvidenceRefIDs: []string{"evidence_child"}, ObservedAt: observed, SourceVersion: "v1"},
+			{Subject: parent, Authorization: scope, EvidenceRefIDs: []string{"evidence_parent"}, ObservedAt: observed, SourceVersion: "v1"},
+		},
+		Relationships: []contextfabric.RelationshipProjection{{
+			RelationshipID: "rel_part_of_1", Type: "PART_OF", From: child, To: parent,
+			Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
+			Authorization: scope, EvidenceRefIDs: []string{"evidence_hierarchy_child_parent"}, ObservedAt: observed, SourceVersion: "v1",
+		}},
+		Contents: []contextfabric.ContentProjection{}, Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+	if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
+		t.Fatalf("ApplyProjectionBatch() error = %v", err)
+	}
+
+	principal := storage.Principal{OrgID: orgID}
+	request := liveInvestigationRequest()
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: child.Kind, ID: child.CanonicalID, Label: child.Label, Source: "live-test"}}
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "hierarchy", SubjectTerms: []string{child.Label},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactRequiredChildren}},
+	}
+	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0] != child {
+		t.Fatalf("origin resolution = %#v, want the child work item resolvable", resolution)
+	}
+	discovery := contextfabric.GraphDiscoveryRequest{Request: request, Interpretation: interpreted, Resolution: resolution}
+	result, err := adapter.DiscoverContext(ctx, principal, discovery)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+
+	edge := findLiveEdge(result.Paths, "PART_OF")
+	if edge == nil {
+		t.Fatalf("PART_OF edge did not round-trip through ApplyProjectionBatch -> DiscoverContext: %#v", result.Paths)
+	}
+	if edge.From != child || edge.To != parent {
+		t.Fatalf("PART_OF edge = %s -> %s, want work_child -> work_parent", edge.From.CanonicalID, edge.To.CanonicalID)
+	}
+	if len(edge.EvidenceRefIDs) == 0 || edge.EvidenceRefIDs[0] != "evidence_hierarchy_child_parent" {
+		t.Fatalf("PART_OF edge evidence = %#v, want [evidence_hierarchy_child_parent] to have survived the round trip", edge.EvidenceRefIDs)
 	}
 }

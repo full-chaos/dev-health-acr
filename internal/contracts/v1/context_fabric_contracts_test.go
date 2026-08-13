@@ -125,6 +125,68 @@ func TestContextFabricProjectionRequiresCompleteEnumerationAndScalarOneOf(t *tes
 	}
 }
 
+// TestContextFabricRelationshipTypeRejectsUnknownValueLoudly is
+// AC-3779-1/AC-3779-3's binding test (CHAOS-3779, closing drift item D9 /
+// the H4 lesson): both ContextFabricRelationshipProjection.Type and
+// ContextFabricRelationshipEdge.Type must reject an unrecognized value
+// with the NAMED ErrContextFabricUnknownRelationshipType error -- loudly,
+// via errors.Is, not folded into a generic bounds-violation string a
+// caller cannot distinguish from any other malformed field. Before
+// CHAOS-3779 both fields were free strings of 1 to 128 bytes: a typo would
+// have been accepted silently, exactly the H4 failure mode.
+func TestContextFabricRelationshipTypeRejectsUnknownValueLoudly(t *testing.T) {
+	t.Parallel()
+
+	batch := validContextFabricProjectionBatch()
+	from := ContextFabricSubjectRef{Kind: ContextFabricSubjectWorkItem, CanonicalID: "work_from", Label: "From"}
+	to := ContextFabricSubjectRef{Kind: ContextFabricSubjectWorkItem, CanonicalID: "work_to", Label: "To"}
+	projection := ContextFabricRelationshipProjection{
+		RelationshipID: "relationship_12345678", Type: "NOT_A_REAL_TYPE", From: from, To: to,
+		Derivation: ContextFabricDerivationCanonicalStructured, EpistemicStatus: ContextFabricEpistemicObserved,
+		Authorization: ContextFabricAuthorizationScope{ProjectIDs: []string{"project_ask_dev"}}, EvidenceRefIDs: []string{"evidence_12345678"},
+		ObservedAt: time.Now().UTC(), SourceVersion: "source-v1",
+	}
+	if err := projection.Validate(); !errors.Is(err, ErrContextFabricUnknownRelationshipType) {
+		t.Fatalf("ContextFabricRelationshipProjection.Validate() error = %v, want errors.Is(err, ErrContextFabricUnknownRelationshipType)", err)
+	}
+	batch.Relationships = []ContextFabricRelationshipProjection{projection}
+	if err := batch.Validate(); !errors.Is(err, ErrContextFabricUnknownRelationshipType) {
+		t.Fatalf("ContextFabricProjectionBatch.Validate() with an unknown relationship type error = %v, want errors.Is(err, ErrContextFabricUnknownRelationshipType) (the unknown type must not be silently dropped from the batch)", err)
+	}
+
+	edge := ContextFabricRelationshipEdge{
+		Type: "NOT_A_REAL_TYPE", From: from, To: to,
+		Derivation: ContextFabricDerivationGraphAssociated, EpistemicStatus: ContextFabricEpistemicInferred,
+		EvidenceRefIDs: []string{"evidence_12345678"},
+	}
+	if err := edge.Validate(); !errors.Is(err, ErrContextFabricUnknownRelationshipType) {
+		t.Fatalf("ContextFabricRelationshipEdge.Validate() error = %v, want errors.Is(err, ErrContextFabricUnknownRelationshipType)", err)
+	}
+
+	// Every closed-vocabulary member -- the pre-existing six, plus
+	// CHAOS-3779's BLOCKS/PART_OF/RELATES_TO/DUPLICATES -- must validate
+	// cleanly on both fields. A closed enum that silently rejects a real
+	// member is as much an H4-class defect as one that silently admits a
+	// fake one.
+	members := []ContextFabricRelationshipType{
+		ContextFabricRelationshipBelongsToRepository, ContextFabricRelationshipBelongsToPullRequest,
+		ContextFabricRelationshipCorrelatedWithIncident, ContextFabricRelationshipRelatedTo,
+		ContextFabricRelationshipDocumentedBy, ContextFabricRelationshipHasEpisode,
+		ContextFabricRelationshipBlocks, ContextFabricRelationshipPartOf,
+		ContextFabricRelationshipRelatesTo, ContextFabricRelationshipDuplicates,
+	}
+	for _, member := range members {
+		projection.Type = member
+		if err := projection.Validate(); err != nil {
+			t.Fatalf("ContextFabricRelationshipProjection.Validate() with Type=%q error = %v, want a closed-vocabulary member to validate", member, err)
+		}
+		edge.Type = member
+		if err := edge.Validate(); err != nil {
+			t.Fatalf("ContextFabricRelationshipEdge.Validate() with Type=%q error = %v, want a closed-vocabulary member to validate", member, err)
+		}
+	}
+}
+
 // TestContextFabricAuthorizationScopeRejectsSeparatorCharacter guards the v1
 // port against a scope value that would corrupt a backend's delimited-string
 // encoding (e.g. zepgraph's "|a|b|" scope encoding used '|' as its
@@ -190,7 +252,7 @@ func TestContextFabricReservedOrganizationScopeRejectedOutsideOrganizationSubjec
 	// rejected, even though its From subject happens to be an organization.
 	relationship := ContextFabricRelationshipProjection{
 		RelationshipID: "relationship_reserved_probe",
-		Type:           "BELONGS_TO",
+		Type:           "RELATED_TO",
 		From:           ContextFabricSubjectRef{Kind: ContextFabricSubjectOrganization, CanonicalID: "organization:org-1", Label: "org-1"},
 		To:             ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"},
 		Derivation:     ContextFabricDerivationCanonicalStructured, EpistemicStatus: ContextFabricEpistemicObserved,

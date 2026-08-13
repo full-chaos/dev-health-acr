@@ -108,7 +108,12 @@ func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection 
 		// ORDER BY id alone would let ClickHouse collapse the two tenants'
 		// rows into one under FINAL, before the query under test even runs.
 		`CREATE TABLE repos (id String, org_id String, repo String, provider Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
-		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY work_item_id`,
+		// parent_id (CHAOS-3779, queryWorkItemHierarchy's PART_OF source)
+		// defaults to '' via the trailing column omitted from every INSERT
+		// below -- ClickHouse fills an un-listed String column with its
+		// type's zero value, matching the "no parent" real-world case this
+		// fixture doesn't otherwise need to exercise.
+		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC'), parent_id String DEFAULT '') ENGINE = ReplacingMergeTree ORDER BY work_item_id`,
 		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number Int64, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
 		`CREATE TABLE deployments (repo_id String, org_id String, deployment_id String, status Nullable(String), environment Nullable(String), deployed_at Nullable(DateTime64(6, 'UTC')), started_at Nullable(DateTime64(6, 'UTC')), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY deployment_id`,
 		`CREATE TABLE operational_incidents (id String, org_id String, service_id String, title Nullable(String), normalized_status Nullable(String), raw_status Nullable(String), normalized_severity Nullable(String), raw_severity Nullable(String), started_at Nullable(DateTime64(6, 'UTC')), source_event_at Nullable(DateTime64(6, 'UTC')), observed_at DateTime64(6, 'UTC'), is_deleted UInt8) ENGINE = ReplacingMergeTree ORDER BY id`,
@@ -133,7 +138,7 @@ func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection 
 	if err := connection.Exec(ctx, `INSERT INTO repos VALUES (?, ?, ?, ?, ?)`, collidingRepoID, "org-b", "org-b/other-service", "github", at); err != nil {
 		t.Fatalf("seed org-b repo: %v", err)
 	}
-	if err := connection.Exec(ctx, `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?)`, "WI-1", collidingRepoID, "org-a", "Org A task", "open", "", at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "WI-1", collidingRepoID, "org-a", "Org A task", "open", "", at, ""); err != nil {
 		t.Fatalf("seed org-a work item: %v", err)
 	}
 
@@ -248,5 +253,97 @@ func TestClickHouseProjectionSourceScopesTheRepositoryJoinByOrganization(t *test
 	}
 	if !foundRun {
 		t.Fatalf("expected org-a's CI run to be projected: %+v", batch.Entities)
+	}
+}
+
+// TestClickHouseProjectionSourceFiltersSelfReferentialParentID is CHAOS-3779
+// codex round-1 finding M3's regression test. A work_items row whose
+// parent_id equals its own work_item_id is never a legitimate hierarchy
+// edge (a work item cannot be its own parent), and
+// ContextFabricRelationshipProjection.Validate() unconditionally rejects
+// From == To. Because ContextFabricProjectionBatch.Validate() is
+// all-or-nothing, one such row would otherwise poison the ENTIRE batch and
+// wedge this organization's projection forever -- queryWorkItemHierarchy
+// filters it in SQL (parent_id != work_item_id) before it ever becomes a
+// candidate. This proves that filter against a real ClickHouse server (a
+// fake client does not execute real SQL, so it cannot exercise a
+// WHERE-clause fix): a self-referencing row and a legitimately-parented
+// row are seeded side by side, and the resulting batch must (a) validate
+// cleanly, (b) carry the legitimate PART_OF edge, and (c) carry no edge at
+// all for the self-referencing row.
+func TestClickHouseProjectionSourceFiltersSelfReferentialParentID(t *testing.T) {
+	ctx := context.Background()
+	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+
+	statements := []string{
+		`CREATE TABLE repos (id String, org_id String, repo String, provider Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
+		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC'), parent_id String DEFAULT '') ENGINE = ReplacingMergeTree ORDER BY work_item_id`,
+		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number Int64, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
+		`CREATE TABLE deployments (repo_id String, org_id String, deployment_id String, status Nullable(String), environment Nullable(String), deployed_at Nullable(DateTime64(6, 'UTC')), started_at Nullable(DateTime64(6, 'UTC')), last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY deployment_id`,
+		`CREATE TABLE operational_incidents (id String, org_id String, service_id String, title Nullable(String), normalized_status Nullable(String), raw_status Nullable(String), normalized_severity Nullable(String), raw_severity Nullable(String), started_at Nullable(DateTime64(6, 'UTC')), source_event_at Nullable(DateTime64(6, 'UTC')), observed_at DateTime64(6, 'UTC'), is_deleted UInt8) ENGINE = ReplacingMergeTree ORDER BY id`,
+		`CREATE TABLE operational_service_repository_mappings (org_id String, service_id String, repo_id String, is_active UInt8) ENGINE = ReplacingMergeTree ORDER BY (org_id, service_id, repo_id)`,
+		`CREATE TABLE work_item_dependencies (source_work_item_id String, target_work_item_id String, relationship_type Nullable(String), org_id String, last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (source_work_item_id, target_work_item_id)`,
+		`CREATE TABLE work_graph_deployment_incident_edges (edge_id String, deployment_id String, incident_id String, repo_id String, org_id UUID, observed_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY edge_id`,
+		`CREATE TABLE git_pull_request_reviews (review_id String, repo_id String, org_id String, number Int64, state Nullable(String), submitted_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, review_id)`,
+		`CREATE TABLE ci_pipeline_runs (run_id String, repo_id String, org_id String, branch Nullable(String), status Nullable(String), started_at DateTime64(6, 'UTC'), finished_at Nullable(DateTime64(6, 'UTC'))) ENGINE = ReplacingMergeTree ORDER BY (org_id, run_id)`,
+	}
+	for _, statement := range statements {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v", err)
+		}
+	}
+	repoID := "22222222-2222-2222-2222-222222222222"
+	if err := direct.Exec(ctx, `INSERT INTO repos VALUES (?, ?, ?, ?, ?)`, repoID, "org-m3", "org-m3/service", "github", at); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	// PARENT-1: no parent (root). CHILD-1: legitimately parented by
+	// PARENT-1. POISON-1: parent_id equals its own work_item_id -- the
+	// self-reference this test exists to prove gets filtered.
+	if err := direct.Exec(ctx, `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "PARENT-1", repoID, "org-m3", "Parent", "open", "", at, ""); err != nil {
+		t.Fatalf("seed parent work item: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "CHILD-1", repoID, "org-m3", "Child", "open", "", at, "PARENT-1"); err != nil {
+		t.Fatalf("seed legitimately-parented work item: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "POISON-1", repoID, "org-m3", "Poison", "open", "", at, "POISON-1"); err != nil {
+		t.Fatalf("seed self-referencing work item: %v", err)
+	}
+
+	source, err := devhealthsource.NewClickHouseProjectionSource(query)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: "org-m3", Source: devhealthsource.SourceName})
+	if err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if !available {
+		t.Fatal("expected a batch to be available")
+	}
+	if err := batch.Validate(); err != nil {
+		t.Fatalf("batch failed contract validation -- a self-referencing parent_id row must never reach the batch: %v", err)
+	}
+
+	foundLegitimate, foundPoison := false, false
+	for _, relationship := range batch.Relationships {
+		if relationship.Type != "PART_OF" {
+			continue
+		}
+		switch relationship.From.CanonicalID {
+		case "work_item:CHILD-1":
+			foundLegitimate = true
+			if relationship.To.CanonicalID != "work_item:PARENT-1" {
+				t.Fatalf("PART_OF target for CHILD-1 = %q, want work_item:PARENT-1", relationship.To.CanonicalID)
+			}
+		case "work_item:POISON-1":
+			foundPoison = true
+		}
+	}
+	if !foundLegitimate {
+		t.Fatalf("expected a PART_OF edge from CHILD-1 to PARENT-1: %+v", batch.Relationships)
+	}
+	if foundPoison {
+		t.Fatalf("a self-referencing PART_OF edge (POISON-1 -> POISON-1) reached the batch -- the SQL filter did not exclude it: %+v", batch.Relationships)
 	}
 }

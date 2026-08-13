@@ -27,7 +27,9 @@ type entityTable struct {
 // reviews and CI runs are core work-graph signal, and both are already read
 // for context packets (source_queries.go's pull_request_reviews.v1 /
 // ci_pipeline_runs.v1), so this reuses that same join shape rather than
-// inventing a new one.
+// inventing a new one. work_items_hierarchy (CHAOS-3779) is not a distinct
+// ClickHouse table -- it self-joins work_items on parent_id, a column
+// work_item_dependencies never carries, to project the PART_OF edge type.
 var entityTables = []entityTable{
 	{name: "repos", query: queryRepositories},
 	{name: "work_items", query: queryWorkItems},
@@ -35,6 +37,7 @@ var entityTables = []entityTable{
 	{name: "deployments", query: queryDeployments},
 	{name: "operational_incidents", query: queryIncidents},
 	{name: "work_item_dependencies", query: queryWorkItemDependencies},
+	{name: "work_items_hierarchy", query: queryWorkItemHierarchy},
 	{name: "work_graph_deployment_incident_edges", query: queryDeploymentIncidentEdges},
 	{name: "git_pull_request_reviews", query: queryPullRequestReviews},
 	{name: "ci_pipeline_runs", query: queryCIRuns},
@@ -290,9 +293,26 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id"
 	})
 }
 
+// queryWorkItemDependencies' natural key is (org, source, target,
+// relationship_type) -- work_item_dependencies allows more than one row
+// for the same (source, target) pair when relationship_type differs, and
+// this is not hypothetical: live ClickHouse holds real rows where the
+// same (source, target) pair carries BOTH 'blocks' and 'relates_to'
+// (CHAOS-3779 codex round-1 finding H2, verified against the running
+// database). rowKey, sortKey, and RelationshipID all include
+// relationship_type for exactly that reason -- omitting it, as an earlier
+// version of this function did, collapses two genuinely different edges
+// onto one identity: within a single page both rows share one
+// RelationshipID, which ContextFabricProjectionBatch.Validate() rejects
+// outright ("relationship IDs must be unique within a batch"), and across
+// two pages (or two incremental ticks) with the SAME rowKey, the
+// keyset-pagination predicate (sincePredicate's own doc comment, C5) could
+// skip one row entirely, or a later write could silently overwrite the
+// earlier edge's Type in the graph via relationship_id-keyed MERGE.
 func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	const rowKey = "concat(d.source_work_item_id, ':', d.target_work_item_id)"
-	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, 'related_to'), r.repo, d.last_synced
+	const relationshipTypeExpr = "ifNull(d.relationship_type, 'related_to')"
+	const rowKey = "concat(d.source_work_item_id, ':', d.target_work_item_id, ':', " + relationshipTypeExpr + ")"
+	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ` + relationshipTypeExpr + `, r.repo, d.last_synced
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS w FINAL ON w.org_id = d.org_id AND w.work_item_id = d.source_work_item_id
 INNER JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
@@ -304,16 +324,69 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
-		relationshipID := "relationship:work_item_dependency:" + sourceID + ":" + targetID
+		relationshipID := "relationship:work_item_dependency:" + sourceID + ":" + targetID + ":" + relationshipType
 		relationship := contractsv1.ContextFabricRelationshipProjection{
-			RelationshipID: relationshipID, Type: strings.ToUpper(relationshipType),
+			RelationshipID: relationshipID, Type: contractsv1.ContextFabricRelationshipType(strings.ToUpper(relationshipType)),
 			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + sourceID, Label: sourceID},
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + targetID, Label: targetID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
-			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-dependency:" + sourceID + ":" + targetID},
+			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-dependency:" + sourceID + ":" + targetID + ":" + relationshipType},
 			ObservedAt: observedAt, SourceVersion: sourceVersion,
 		}
-		return []candidate{{observedAt: observedAt, sortKey: sourceID + ":" + targetID, relationship: &relationship}}, nil
+		return []candidate{{observedAt: observedAt, sortKey: sourceID + ":" + targetID + ":" + relationshipType, relationship: &relationship}}, nil
+	})
+}
+
+// queryWorkItemHierarchy (CHAOS-3779, §19.5.3 PART_OF) projects
+// work_items.parent_id -- a distinct column from work_item_dependencies,
+// carrying real hierarchy data (verified live: 2082 of 3282 work_items
+// rows have a non-empty parent_id, and every one of those resolves to a
+// real work_items row in the same organization). The INNER JOIN to a
+// second work_items instance for the parent enforces that resolvability at
+// query time: a child row whose parent_id names a work item that does not
+// exist (a different organization, or a row deleted out from under it) is
+// never projected as a dangling PART_OF edge.
+//
+// c.parent_id != c.work_item_id (CHAOS-3779 codex round-1 finding M3) is a
+// SELF-reference filter, not cycle detection. A multi-node cycle (A part_of
+// B part_of A) is accepted graph state -- deciding whether a hierarchy may
+// legitimately cycle is a graph-shape policy question outside this issue's
+// scope (see docs/design/context-fabric-projection-worker.md's "PART_OF
+// cycles" note). A SELF-reference is different in kind: it is never a
+// legitimate hierarchy (a work item cannot be its own parent) and
+// ContextFabricRelationshipProjection.Validate() unconditionally rejects
+// any relationship with From == To ("relationship cannot be
+// self-referential"). Because ContextFabricProjectionBatch.Validate() is
+// all-or-nothing, ONE such row -- a source-system data bug, not a modeling
+// choice -- would poison the ENTIRE batch and wedge this organization's
+// projection forever, silently, until someone traced the failure back to
+// one bad row. Filtering it at the SQL boundary, before it ever becomes a
+// candidate, is cheap and permanent; live ClickHouse holds zero such rows
+// today (verified), but the filter guards against a future one.
+func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+	const rowKey = "c.work_item_id"
+	statement := `SELECT c.work_item_id, c.parent_id, r.repo, c.updated_at
+FROM work_items AS c FINAL
+INNER JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = c.parent_id
+INNER JOIN repos AS r FINAL ON r.id = c.repo_id AND r.org_id = c.org_id
+WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work_item_id` + sincePredicate(cursor, "c.updated_at", rowKey) + orderBy("c.updated_at", rowKey)
+	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+		var childID, parentID, repoSlug string
+		var observedAt time.Time
+		if err := r.Scan(&childID, &parentID, &repoSlug, &observedAt); err != nil {
+			return nil, err
+		}
+		observedAt = observedAt.UTC()
+		relationshipID := "relationship:work_item_hierarchy:" + childID + ":" + parentID
+		relationship := contractsv1.ContextFabricRelationshipProjection{
+			RelationshipID: relationshipID, Type: contractsv1.ContextFabricRelationshipPartOf,
+			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + childID, Label: childID},
+			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + parentID, Label: parentID},
+			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
+			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-hierarchy:" + childID + ":" + parentID},
+			ObservedAt: observedAt, SourceVersion: sourceVersion,
+		}
+		return []candidate{{observedAt: observedAt, sortKey: childID, relationship: &relationship}}, nil
 	})
 }
 
