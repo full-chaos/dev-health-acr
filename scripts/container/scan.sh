@@ -9,10 +9,14 @@ lock_timeout="${CONTAINER_PUBLISH_LOCK_TIMEOUT:-60}"
 work_root=""
 exact_archives=false
 
-# shellcheck source=lib/trivy-db-freshness.sh
+# shellcheck source=scripts/container/lib/trivy-db-freshness.sh
 source "${repo_root}/scripts/container/lib/trivy-db-freshness.sh"
-# shellcheck source=lib/trivy-report-classify.sh
+# shellcheck source=scripts/container/lib/trivy-report-classify.sh
 source "${repo_root}/scripts/container/lib/trivy-report-classify.sh"
+# shellcheck source=scripts/container/lib/prune-stale-attempt-dirs.sh
+source "${repo_root}/scripts/container/lib/prune-stale-attempt-dirs.sh"
+# shellcheck source=scripts/container/lib/trivy-db-provenance.sh
+source "${repo_root}/scripts/container/lib/trivy-db-provenance.sh"
 
 trivy_image='aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c'
 syft_image='anchore/syft:v1.46.0@sha256:473a60e3a58e29aca3aedb3e99e787bb4ef273917e44d10fcbea4330a07320bb'
@@ -49,11 +53,13 @@ trivy_cache="${work_root}/trivy-cache"
 # upload (CHAOS-3772 F2). Stale attempt directories from a previous failed
 # run are pruned here rather than accumulating forever on a long-lived
 # machine; a successful run's own directory is moved away by the
-# publication step below, so only failed attempts ever linger.
+# publication step below, so only failed attempts ever linger. Pruning
+# only ever removes a sibling whose owning process is provably dead
+# (CHAOS-3772 R2-1): two scan.sh invocations sharing this .tmp root must
+# never delete each other's in-flight evidence.
 report_root="$(mktemp -d "${tmp_root}/container-scan-attempt.XXXXXX")"
-for stale_attempt in "${tmp_root}"/container-scan-attempt.*; do
-  [[ -d "$stale_attempt" && "$stale_attempt" != "$report_root" ]] && rm -rf "$stale_attempt"
-done
+printf '%s\n' "$$" >"${report_root}/.owner.pid"
+prune_stale_attempt_dirs "$tmp_root" 'container-scan-attempt.' "$report_root"
 mkdir -p "$scan_root" "$report_root" "$trivy_cache"
 if [[ -n "$source_oci_root" ]]; then
   source_oci_root="$(cd "$source_oci_root" && pwd -P)"
@@ -168,10 +174,11 @@ now="$(date -u +%s)"
 resolved_at="$(date -u -d "@${now}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$now" +%Y-%m-%dT%H:%M:%SZ)"
 # Record before judging (CHAOS-3772 F2): if the freshness check below
 # rejects this snapshot, the run still needs to show what it rejected. A
-# tripped alarm without its own evidence is unauditable.
-cp "$metadata" "${report_root}/trivy-db-metadata.json"
-printf 'mirror=%s\nresolved_at=%s\ndigest=%s\n' "$trivy_db_mirror" "$resolved_at" "$trivy_db_ref" \
-  >"${report_root}/trivy-db-snapshot.txt"
+# tripped alarm without its own evidence is unauditable. The write itself
+# is explicitly rc-checked, not left to `set -e` (CHAOS-3772 R2-3): a full
+# or unwritable report_root must fail loudly as its own distinct case,
+# never silently skip the freshness judgment below.
+record_trivy_db_provenance "$metadata" "$report_root" "$trivy_db_mirror" "$resolved_at" "$trivy_db_ref" || exit 1
 check_trivy_db_freshness "$metadata" "$max_db_age_hours" "$now" || exit 1
 
 failures=0

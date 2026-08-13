@@ -52,6 +52,12 @@ jobs:
             ! -name 'publish-ci-release.sh' \
             ! -name 'test_release_scripts.sh' -print0 \
             | xargs -0 shellcheck -x
+      - name: Shellcheck container scripts
+        run: |
+          # SC2016: test-contract.sh intentionally greps scan.sh for literal
+          # shell variables such as $trivy_db_mirror and $metadata.
+          find scripts/container -type f -name '*.sh' -print0 \
+            | xargs -0 shellcheck -x -e SC2016
       - name: Test release asset assembly
         run: scripts/release/test-assemble-release-assets.sh
       - name: Test container release manifest

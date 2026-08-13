@@ -273,6 +273,17 @@ scan_script="${repo_root}/scripts/container/scan.sh"
 trivy_scanner_pin_pattern="^trivy_image='aquasec/trivy:[^'\"]+@sha256:[0-9a-f]{64}'"
 trivy_db_static_pin_pattern='trivy-db[^@]*@sha256:[0-9a-f]{64}|sha256:[0-9a-f]{64}[^@]*trivy-db'
 
+# CHAOS-3772 R2-2: a pinned assignment followed by a later, unpinned
+# reassignment would satisfy a plain "does a pinned line exist" grep while
+# the live value at runtime is whatever assignment ran last. Require
+# exactly one trivy_image assignment in the whole script, and that it be
+# the pinned one.
+trivy_image_assignment_count="$(grep -cE '^trivy_image=' "$scan_script")"
+test "$trivy_image_assignment_count" -eq 1 || {
+  printf 'scan.sh must assign trivy_image exactly once (found %s) -- a later reassignment could override the pinned value at runtime (CHAOS-3772 R2-2)\n' \
+    "$trivy_image_assignment_count" >&2
+  exit 1
+}
 grep -Eq "$trivy_scanner_pin_pattern" "$scan_script" || {
   printf 'scan.sh trivy_image assignment must be pinned by digest, not merely documented in a comment\n' >&2
   exit 1
@@ -306,10 +317,22 @@ grep -qF 'source "${repo_root}/scripts/container/lib/trivy-report-classify.sh"' 
   printf 'scan.sh must use the shared, unit-tested report classifier\n' >&2
   exit 1
 }
+grep -qF 'source "${repo_root}/scripts/container/lib/prune-stale-attempt-dirs.sh"' "$scan_script" || {
+  printf 'scan.sh must use the shared, unit-tested attempt-dir pruner\n' >&2
+  exit 1
+}
+grep -qF 'source "${repo_root}/scripts/container/lib/trivy-db-provenance.sh"' "$scan_script" || {
+  printf 'scan.sh must use the shared, unit-tested provenance writer\n' >&2
+  exit 1
+}
 require scripts/container/lib/trivy-db-freshness.sh
 require scripts/container/test-trivy-db-freshness.sh
 require scripts/container/lib/trivy-report-classify.sh
 require scripts/container/test-trivy-report-classify.sh
+require scripts/container/lib/prune-stale-attempt-dirs.sh
+require scripts/container/test-prune-stale-attempt-dirs.sh
+require scripts/container/lib/trivy-db-provenance.sh
+require scripts/container/test-trivy-db-provenance.sh
 
 # CHAOS-3772 F3: prove the two pin-check patterns above actually catch the
 # evasions they were tightened for, against synthetic fixtures -- not just
@@ -334,6 +357,17 @@ if grep -Eq "$trivy_scanner_pin_pattern" "$comment_only_evasion"; then
   printf 'trivy scanner pin regex was satisfied by a comment instead of the live assignment (CHAOS-3772 F3)\n' >&2
   exit 1
 fi
+
+duplicate_assignment_evasion="${pin_fixture}/duplicate-assignment.sh"
+{
+  printf "trivy_image='aquasec/trivy:0.69.3@sha256:%s'\n" "$(printf 'b%.0s' $(seq 1 64))"
+  printf "trivy_image='aquasec/trivy:latest'\n"
+} >"$duplicate_assignment_evasion"
+if [[ "$(grep -cE '^trivy_image=' "$duplicate_assignment_evasion")" -eq 1 ]]; then
+  printf 'trivy_image single-assignment count check failed to catch a duplicate-assignment evasion (CHAOS-3772 R2-2)\n' >&2
+  exit 1
+fi
+
 rm -rf "$pin_fixture"
 
 # CHAOS-3772 F1: a release must be able to prove which trivy-db snapshot
@@ -354,7 +388,7 @@ if grep -qE '^report_root="\$\{work_root\}' "$scan_script"; then
   printf 'report_root must not live inside work_root -- a failed run would delete its own evidence before upload (CHAOS-3772 F2)\n' >&2
   exit 1
 fi
-record_line="$(grep -n 'cp "\$metadata" "\${report_root}/trivy-db-metadata.json"' "$scan_script" | cut -d: -f1)"
+record_line="$(grep -n 'record_trivy_db_provenance "\$metadata"' "$scan_script" | cut -d: -f1)"
 judge_line="$(grep -n 'check_trivy_db_freshness "\$metadata"' "$scan_script" | cut -d: -f1)"
 test -n "$record_line" && test -n "$judge_line" || {
   printf 'expected trivy-db provenance recording and freshness judgment lines were not found\n' >&2
@@ -408,6 +442,8 @@ fi
 
 bash "${repo_root}/scripts/container/test-trivy-db-freshness.sh"
 bash "${repo_root}/scripts/container/test-trivy-report-classify.sh"
+bash "${repo_root}/scripts/container/test-prune-stale-attempt-dirs.sh"
+bash "${repo_root}/scripts/container/test-trivy-db-provenance.sh"
 
 # 18. The MCP runtime must contain Git but no shell at all; build-only shell
 # use is pruned before the final scratch target.

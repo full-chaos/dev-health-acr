@@ -9,7 +9,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-# shellcheck source=lib/trivy-report-classify.sh
+# shellcheck source=scripts/container/lib/trivy-report-classify.sh
 source "${repo_root}/scripts/container/lib/trivy-report-classify.sh"
 
 fixture="$(mktemp -d)"
