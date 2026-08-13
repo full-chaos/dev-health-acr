@@ -76,7 +76,8 @@ grep -Eq 'driver-opts: image=moby/buildkit:v0\.31\.0@sha256:[0-9a-f]{64}' "$ci_w
 # not a mutable tag alone.
 grep -Eq '^# syntax=docker/dockerfile:[^[:space:]]+@sha256:[0-9a-f]{64}$' "${repo_root}/Dockerfile"
 
-# 4. Both target architectures must be SBOMed.
+# 4. Both target architectures must be scanned and SBOMed; unfixed
+# HIGH/CRITICAL findings must not be hidden via --ignore-unfixed.
 grep -q 'bash scripts/container/oci.sh' "${repo_root}/Makefile"
 grep -q 'CONTAINER_PLATFORMS=linux/amd64,linux/arm64' "${repo_root}/scripts/container/oci.sh"
 test "$(grep -c 'CONTAINER_NO_CACHE=1 CONTAINER_OUTPUT=oci' "${repo_root}/scripts/container/oci.sh")" -eq 2
@@ -93,7 +94,7 @@ grep -q 'CONTAINER_SCAN_OCI_ROOT' "${repo_root}/scripts/container/scan.sh"
 grep -q 'materialize_archive_layouts acr-api' "${repo_root}/scripts/container/scan.sh"
 grep -q 'materialize_archive_layouts acr-mcp' "${repo_root}/scripts/container/scan.sh"
 grep -q 'ln -s "../[$]{product}-source/blobs"' "${repo_root}/scripts/container/scan.sh"
-scan_failure_line="$(grep -n 'one or more SBOM gates failed' "${repo_root}/scripts/container/scan.sh" | cut -d: -f1)"
+scan_failure_line="$(grep -n 'one or more image scan or SBOM gates failed' "${repo_root}/scripts/container/scan.sh" | cut -d: -f1)"
 scan_publish_line="$(grep -n 'publish-directory.sh' "${repo_root}/scripts/container/scan.sh" | cut -d: -f1)"
 test "$scan_failure_line" -lt "$scan_publish_line" || {
   printf 'container scan must reject failures before publication\n' >&2
@@ -104,9 +105,11 @@ if grep -q $'^\tsync$' "${repo_root}/Makefile"; then
   printf 'container scan must wait for each OCI exporter, not use a global sync\n' >&2
   exit 1
 fi
+if grep -q -- '--ignore-unfixed' "${repo_root}/Makefile"; then exit 1; fi
+if grep -q -- '--ignore-unfixed' "${repo_root}/docs/container-images.md"; then exit 1; fi
 grep -q 'acr-api-amd64' "${repo_root}/docs/container-images.md"
 grep -q 'acr-mcp-arm64' "${repo_root}/docs/container-images.md"
-for transitive_pin in 'docker/dockerfile:1.20@sha256:' 'tonistiigi/binfmt:qemu-v10.2.3@sha256:' 'moby/buildkit:v0.31.0@sha256:' 'anchore/syft:v1.46.0@sha256:' 'postgres:18-alpine@sha256:' 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' 'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16' 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'; do
+for transitive_pin in 'docker/dockerfile:1.20@sha256:' 'tonistiigi/binfmt:qemu-v10.2.3@sha256:' 'moby/buildkit:v0.31.0@sha256:' 'aquasec/trivy:0.69.3@sha256:' 'anchore/syft:v1.46.0@sha256:' 'postgres:18-alpine@sha256:' 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' 'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16' 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'; do
   grep -qF "$transitive_pin" "${repo_root}/docs/container-images.md" || {
     printf 'container documentation is missing transitive pin: %s\n' "$transitive_pin" >&2
     exit 1
@@ -254,16 +257,203 @@ if grep -Eq 'done < <\(jq' "${repo_root}/scripts/container/validate-oci.sh" "${r
   exit 1
 fi
 
-# 17. SBOM generation uses an immutable Syft image, network-disabled, for
-# four SBOMs. No vulnerability scanner is invoked (CHAOS-3772 tracks
-# reintroducing one without a recurring pin-expiry time bomb).
-if grep -qi 'trivy' "${repo_root}/scripts/container/scan.sh"; then
-  printf 'scan.sh must not reference Trivy\n' >&2
+# 17. Vulnerability scanning is reintroduced (CHAOS-3772) without the
+# recurring pin-expiry time bomb it was removed for: the Trivy scanner
+# binary is pinned by immutable digest like every other tool image, but the
+# vulnerability DB carries no committed digest anywhere in source -- it is
+# always resolved fresh from the mirror tag at scan time, so wall-clock
+# passage against an unmoving pin can never turn this gate red again.
+# The positive/negative pin checks below are regex-anchored, not
+# whole-file greps: a whole-file grep is satisfied by a decorative comment
+# even if the live assignment is unpinned or a digest sneaks back in under
+# a different tag+digest shape. Both patterns are exercised against
+# synthetic evasion fixtures further down, so the checks' own logic is
+# tested, not just today's scan.sh content (CHAOS-3772 F3).
+scan_script="${repo_root}/scripts/container/scan.sh"
+trivy_scanner_pin_pattern="^trivy_image='aquasec/trivy:[^'\"]+@sha256:[0-9a-f]{64}'"
+trivy_db_static_pin_pattern='trivy-db[^@]*@sha256:[0-9a-f]{64}|sha256:[0-9a-f]{64}[^@]*trivy-db'
+
+# CHAOS-3772 R2-2 / R3 F3 / R4-1: a pinned assignment followed by a
+# later, unpinned reassignment would satisfy a plain "does a pinned line
+# exist" grep while the live value at runtime is whatever assignment ran
+# last -- including two assignments packed onto one physical line, joined
+# by `;`, `&&`, `||`, `|`, or whatever shell composes next. Enumerating
+# separators is an arms race; instead strip comments (so a comment
+# mentioning trivy_image= can't inflate the count) and count every
+# remaining word-boundary occurrence of the assignment, anywhere in the
+# line, however it's joined to what precedes it.
+count_trivy_image_assignments() {
+  sed 's/#.*//' "$1" | grep -oE '\btrivy_image=' | wc -l | tr -d ' '
+}
+trivy_image_assignment_count="$(count_trivy_image_assignments "$scan_script")"
+test "$trivy_image_assignment_count" -eq 1 || {
+  printf 'scan.sh must assign trivy_image exactly once (found %s) -- a later reassignment could override the pinned value at runtime (CHAOS-3772 R2-2)\n' \
+    "$trivy_image_assignment_count" >&2
+  exit 1
+}
+grep -Eq "$trivy_scanner_pin_pattern" "$scan_script" || {
+  printf 'scan.sh trivy_image assignment must be pinned by digest, not merely documented in a comment\n' >&2
+  exit 1
+}
+if grep -Eiq "$trivy_db_static_pin_pattern" "$scan_script"; then
+  printf 'scan.sh must not commit a static trivy-db digest in any tag+digest or digest+tag form -- it must resolve one at scan time (CHAOS-3772)\n' >&2
   exit 1
 fi
-grep -q 'anchore/syft:v1.46.0@sha256:' "${repo_root}/scripts/container/scan.sh"
-grep -q 'container-scan.work.XXXXXX' "${repo_root}/scripts/container/scan.sh"
-scan_script="${repo_root}/scripts/container/scan.sh"
+grep -q "trivy_db_mirror='ghcr.io/aquasecurity/trivy-db:2'" "$scan_script" || {
+  printf 'scan.sh must resolve the trivy-db digest from the moving mirror tag\n' >&2
+  exit 1
+}
+grep -q 'docker buildx imagetools inspect "\$trivy_db_mirror"' "$scan_script" || {
+  printf 'scan.sh must resolve the trivy-db mirror digest before downloading it\n' >&2
+  exit 1
+}
+grep -q 'mirror unreachable' "$scan_script" || {
+  printf 'scan.sh must report a mirror-unreachable failure distinctly from a vulnerability finding\n' >&2
+  exit 1
+}
+grep -q 'HIGH/CRITICAL vulnerabilities in' "$scan_script" || {
+  printf 'scan.sh must lead a scan failure with the actual CVE findings, not just an exit code\n' >&2
+  exit 1
+}
+grep -q 'TRIVY_DB_MAX_AGE_HOURS' "$scan_script"
+grep -qF 'source "${repo_root}/scripts/container/lib/trivy-db-freshness.sh"' "$scan_script" || {
+  printf 'scan.sh must use the shared, unit-tested freshness check\n' >&2
+  exit 1
+}
+grep -qF 'source "${repo_root}/scripts/container/lib/trivy-report-classify.sh"' "$scan_script" || {
+  printf 'scan.sh must use the shared, unit-tested report classifier\n' >&2
+  exit 1
+}
+grep -qF 'source "${repo_root}/scripts/container/lib/prune-stale-attempt-dirs.sh"' "$scan_script" || {
+  printf 'scan.sh must use the shared, unit-tested attempt-dir pruner\n' >&2
+  exit 1
+}
+grep -qF 'source "${repo_root}/scripts/container/lib/trivy-db-provenance.sh"' "$scan_script" || {
+  printf 'scan.sh must use the shared, unit-tested provenance writer\n' >&2
+  exit 1
+}
+require scripts/container/lib/trivy-db-freshness.sh
+require scripts/container/test-trivy-db-freshness.sh
+require scripts/container/lib/trivy-report-classify.sh
+require scripts/container/test-trivy-report-classify.sh
+require scripts/container/lib/prune-stale-attempt-dirs.sh
+require scripts/container/test-prune-stale-attempt-dirs.sh
+require scripts/container/lib/trivy-db-provenance.sh
+require scripts/container/test-trivy-db-provenance.sh
+
+# CHAOS-3772 F3: prove the two pin-check patterns above actually catch the
+# evasions they were tightened for, against synthetic fixtures -- not just
+# today's compliant scan.sh.
+pin_fixture="$(mktemp -d)"
+
+tag_and_digest_evasion="${pin_fixture}/tag-and-digest.sh"
+printf 'trivy_db_ref="ghcr.io/aquasecurity/trivy-db:2@sha256:%s"\n' \
+  "$(printf '0%.0s' $(seq 1 64))" >"$tag_and_digest_evasion"
+grep -Eiq "$trivy_db_static_pin_pattern" "$tag_and_digest_evasion" || {
+  printf 'trivy-db pin regex failed to catch a tag+digest evasion (CHAOS-3772 F3)\n' >&2
+  exit 1
+}
+
+# The comment deliberately mentions the literal text "trivy_image=" --
+# proving comment-stripping actually excludes prose, not merely that this
+# particular comment happens not to contain the string (CHAOS-3772 R4-1).
+comment_only_evasion="${pin_fixture}/comment-only.sh"
+{
+  printf '# trivy_image=would-be-double-counted-if-comment-stripping-were-broken\n'
+  printf "trivy_image='aquasec/trivy:latest'\n"
+} >"$comment_only_evasion"
+if grep -Eq "$trivy_scanner_pin_pattern" "$comment_only_evasion"; then
+  printf 'trivy scanner pin regex was satisfied by a comment instead of the live assignment (CHAOS-3772 F3)\n' >&2
+  exit 1
+fi
+test "$(count_trivy_image_assignments "$comment_only_evasion")" -eq 1 || {
+  printf 'comment-stripping failed: a comment mentioning trivy_image= inflated the assignment count (CHAOS-3772 R4-1)\n' >&2
+  exit 1
+}
+
+two_line_duplicate_evasion="${pin_fixture}/two-line-duplicate.sh"
+{
+  printf "trivy_image='aquasec/trivy:0.69.3@sha256:%s'\n" "$(printf 'b%.0s' $(seq 1 64))"
+  printf "trivy_image='aquasec/trivy:latest'\n"
+} >"$two_line_duplicate_evasion"
+if [[ "$(count_trivy_image_assignments "$two_line_duplicate_evasion")" -eq 1 ]]; then
+  printf 'trivy_image assignment-count check failed to catch a two-line duplicate assignment (CHAOS-3772 R2-2)\n' >&2
+  exit 1
+fi
+
+# CHAOS-3772 R3 F3 / R4-1: rather than enumerate every separator a
+# duplicate could hide behind, prove the structural (comment-stripped,
+# word-boundary) count catches both `;` and `&&` composition without the
+# check itself needing to know either separator exists.
+for separator in ' ; ' ' && '; do
+  separator_evasion="${pin_fixture}/separator-duplicate.sh"
+  printf "trivy_image='aquasec/trivy:0.69.3@sha256:%s'%strivy_image='aquasec/trivy:latest'\n" \
+    "$(printf 'c%.0s' $(seq 1 64))" "$separator" >"$separator_evasion"
+  if [[ "$(count_trivy_image_assignments "$separator_evasion")" -eq 1 ]]; then
+    printf 'trivy_image assignment-count check failed to catch a duplicate assignment joined by %s (CHAOS-3772 R4-1)\n' \
+      "$(printf '%q' "$separator")" >&2
+    exit 1
+  fi
+done
+
+rm -rf "$pin_fixture"
+
+# CHAOS-3772 F1: a release must be able to prove which trivy-db snapshot
+# and which per-image scan results it shipped with, not only its SBOMs.
+release_workflow="${repo_root}/.github/workflows/release.yml"
+for staged_artifact in '*.spdx.json' '*-trivy.json' 'trivy-db-metadata.json' 'trivy-db-snapshot.txt'; do
+  grep -qF "$staged_artifact" "$release_workflow" || {
+    printf 'release.yml must stage container-reports/%s alongside the SBOMs\n' "$staged_artifact" >&2
+    exit 1
+  }
+done
+
+# CHAOS-3772 F2: report_root must live outside work_root (which cleanup()
+# unconditionally rm -rf's on every exit), and the DB snapshot/metadata
+# must be recorded before the freshness gate can exit -- otherwise a
+# tripped stale-DB alarm ships no evidence of what was stale.
+if grep -qE '^report_root="\$\{work_root\}' "$scan_script"; then
+  printf 'report_root must not live inside work_root -- a failed run would delete its own evidence before upload (CHAOS-3772 F2)\n' >&2
+  exit 1
+fi
+record_line="$(grep -n 'record_trivy_db_provenance "\$metadata"' "$scan_script" | cut -d: -f1)"
+judge_line="$(grep -n 'check_trivy_db_freshness "\$metadata"' "$scan_script" | cut -d: -f1)"
+if [[ -z "$record_line" || -z "$judge_line" ]]; then
+  printf 'expected trivy-db provenance recording and freshness judgment lines were not found\n' >&2
+  exit 1
+fi
+test "$record_line" -lt "$judge_line" || {
+  printf 'trivy-db provenance must be recorded before the freshness gate judges it, so a rejection ships its own evidence (CHAOS-3772 F2)\n' >&2
+  exit 1
+}
+attempt_path_line="$(grep -n '\.tmp/container-scan-attempt' "$ci_workflow" | tail -1 | cut -d: -f1)"
+[[ -n "$attempt_path_line" ]] || {
+  printf 'ci.yml must upload .tmp/container-scan-attempt*/, or a failed run never surfaces its own evidence (CHAOS-3772 F2)\n' >&2
+  exit 1
+}
+step_start_line="$(head -n "$attempt_path_line" "$ci_workflow" | grep -nE '^\s*- (uses|name):' | tail -1 | cut -d: -f1)"
+step_start_line="${step_start_line:-1}"
+step_end_line="$(tail -n "+$((attempt_path_line + 1))" "$ci_workflow" | grep -nE '^\s*- (uses|name):' | head -1 | cut -d: -f1)" || true
+if [[ -n "$step_end_line" ]]; then
+  step_end_line=$((attempt_path_line + step_end_line - 1))
+else
+  step_end_line="$(wc -l <"$ci_workflow")"
+fi
+container_reports_step="$(sed -n "${step_start_line},${step_end_line}p" "$ci_workflow")"
+grep -q 'if: always()' <<<"$container_reports_step" || {
+  printf 'ci.yml must upload .tmp/container-scan-attempt*/ from an if: always() step, or it never surfaces on a failed run (CHAOS-3772 F2)\n' >&2
+  exit 1
+}
+# The evidence path lives under .tmp/, a dot-directory: upload-artifact
+# excludes hidden files by default (include-hidden-files: false), which
+# silently drops everything under a dot-prefixed path segment unless
+# explicitly overridden.
+grep -q 'include-hidden-files: true' <<<"$container_reports_step" || {
+  printf 'ci.yml must set include-hidden-files: true on the container-reports upload -- .tmp/ is hidden by default and uploads nothing (CHAOS-3772)\n' >&2
+  exit 1
+}
+grep -q 'anchore/syft:v1.46.0@sha256:' "$scan_script"
+grep -q 'container-scan.work.XXXXXX' "$scan_script"
 grep -qF "scanner_uid=\"\$(id -u)\"" "$scan_script" || {
   printf 'container scanners must derive the invoking host UID\n' >&2
   exit 1
@@ -272,22 +462,31 @@ grep -qF "scanner_gid=\"\$(id -g)\"" "$scan_script" || {
   printf 'container scanners must derive the invoking host GID\n' >&2
   exit 1
 }
-test "$(grep -cF -- "--user \"\${scanner_uid}:\${scanner_gid}\"" "$scan_script")" -eq 1 || {
-  printf 'Syft SBOMs must run as the invoking non-root user\n' >&2
+test "$(grep -cF -- "--user \"\${scanner_uid}:\${scanner_gid}\"" "$scan_script")" -eq 3 || {
+  printf 'DB download, Trivy scans, and Syft SBOMs must run as the invoking non-root user\n' >&2
   exit 1
 }
-test "$(grep -c -- '--read-only' "$scan_script")" -eq 1 || {
+test "$(grep -c -- '--read-only' "$scan_script")" -eq 3 || {
   printf 'every scanner container must use a read-only root filesystem\n' >&2
   exit 1
 }
-test "$(grep -cF -- '--tmpfs /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777' "$scan_script")" -eq 1 || {
+test "$(grep -cF -- '--tmpfs /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777' "$scan_script")" -eq 3 || {
   printf 'every scanner container must provide bounded non-root scratch space\n' >&2
   exit 1
 }
-if grep -q "rm -rf \"\$scan_root\" \"\$report_root\"" "${repo_root}/scripts/container/scan.sh"; then
+if grep -q '/root/.cache/trivy' "$scan_script"; then
+  printf 'Trivy cache must not depend on root-home traversal or ownership\n' >&2
+  exit 1
+fi
+if grep -q "rm -rf \"\$scan_root\" \"\$report_root\" \"\$trivy_cache\"" "$scan_script"; then
   printf 'container scan must not delete shared work roots before generating reports\n' >&2
   exit 1
 fi
+
+bash "${repo_root}/scripts/container/test-trivy-db-freshness.sh"
+bash "${repo_root}/scripts/container/test-trivy-report-classify.sh"
+bash "${repo_root}/scripts/container/test-prune-stale-attempt-dirs.sh"
+bash "${repo_root}/scripts/container/test-trivy-db-provenance.sh"
 
 # 18. The MCP runtime must contain Git but no shell at all; build-only shell
 # use is pruned before the final scratch target.

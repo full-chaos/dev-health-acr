@@ -52,6 +52,7 @@ GitHub action commit SHA):
 | QEMU binfmt | `docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0` |
 | Buildx CLI | `v0.35.0` linux-amd64 asset, SHA-256 `d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda` |
 | BuildKit driver | `moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1` |
+| Scanner | `aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c` |
 | SBOM generator | `anchore/syft:v1.46.0@sha256:473a60e3a58e29aca3aedb3e99e787bb4ef273917e44d10fcbea4330a07320bb` |
 | Migration smoke database | `postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15` |
 | Compose E2E PostgreSQL helper | `postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15` |
@@ -85,7 +86,11 @@ sit on tags that move by design (`:latest`, `nonroot`, rolling series such as
 cadence rather than on anything under review. Run it when you want to know
 whether a newer image exists. What still gates, offline and without flaking, is
 the pin list itself: `scripts/e2e/test-compose.sh` requires every compose image
-to appear in it, so an unreviewed image cannot enter the stack.
+to appear in it, so an unreviewed image cannot enter the stack. The Trivy
+**scanner** image above is pinned the same way as every other tool image.
+The Trivy **vulnerability database** is the deliberate exception: it carries
+no pin anywhere in source. See "Vulnerability scanning" below for why, and
+for how a scan failure is triaged.
 
 ## Build context and verification
 
@@ -172,30 +177,95 @@ earlier layer's same-named entry) so the extracted binary reflects the
 actual final merged filesystem rather than the first layer that happens to
 contain a same-named entry.
 
-`container-scan` writes four SPDX JSON SBOMs:
+`container-scan` writes four Trivy reports and four SPDX JSON SBOMs:
 
 - `acr-api-amd64`, `acr-api-arm64`
 - `acr-mcp-amd64`, `acr-mcp-arm64`
 
 The ordinary local target builds independent layouts. The tagged Release
-workflow sets `CONTAINER_SCAN_OCI_ROOT=.tmp/container-oci`, so Syft selects
-both platforms directly from the exact multi-platform archives that are
-later attached and copied to GHCR; it performs no release-scan rebuild.
+workflow sets `CONTAINER_SCAN_OCI_ROOT=.tmp/container-oci`, so Trivy and Syft
+select both platforms directly from the exact multi-platform archives that
+are later attached and copied to GHCR; it performs no release-scan rebuild.
 
-Each invocation uses unique OCI layout and report staging roots. It pulls the
-digest-pinned Syft image and generates all four SBOMs with `--network none`.
-Only after every SBOM command and report validator succeeds does a bounded
-publication lock atomically point `.tmp/container-reports` at the new
-immutable report generation; failed or concurrent runs cannot replace the
-last known-good reports, expose a missing stable path, or leave work/lock
-state behind.
+Each invocation uses unique OCI layout, scanner cache, and report staging
+roots. It pulls the digest-pinned Trivy and Syft images, resolves the
+`trivy-db` mirror tag to one immutable digest, downloads that exact
+snapshot, validates its `metadata.json` freshness, and performs all four
+scans with `--skip-db-update`, `--network none`, and the same recorded
+cache. Only after every scanner command and report validator succeeds does a
+bounded publication lock atomically point `.tmp/container-reports` at the
+new immutable report generation; failed or concurrent runs cannot replace
+the last known-good reports, expose a missing stable path, or leave
+work/lock state behind. It fails on every HIGH/CRITICAL finding, including
+unfixed findings, and currently has no exceptions. A future exception must
+be a reviewed, tracked ignore file entry with CVE, narrow package/image
+scope, rationale, owner, and expiration date — then be removed at expiry or
+the gate must fail again.
 
-No vulnerability scanner runs in this gate. Trivy previously scanned these
-images against a pinned, weekly-refreshed `trivy-db` snapshot; that pin
-expired and failed the containers CI check repo-wide twice within a week
-(see #74), so the scan was removed rather than left as a recurring time
-bomb. Reintroducing image vulnerability scanning without that failure mode
-is tracked in CHAOS-3772.
+### Vulnerability scanning: DB pinning removed, not the check (CHAOS-3772)
+
+Trivy previously scanned these images against a `trivy-db` snapshot pinned
+by immutable digest **in source**, refreshed on a manual weekly cadence and
+gated by `TRIVY_DB_MAX_AGE_HOURS=168` against that pin's own age. An
+immutable digest's `UpdatedAt` never advances once pinned, so that gate was
+guaranteed to go red exactly 168 hours after each manual refresh — by
+construction, not by accident. It expired and failed the containers CI
+check repo-wide twice within roughly two weeks — #74 fixed the first
+expiry by hand; the second, on 2026-08-12, blocked all pushes until #82
+removed the scan outright rather than leave it as a recurring time bomb.
+CHAOS-3772 tracks this reintroduction.
+
+The fix is not a static pin refreshed faster or by a bot: any value
+committed to source can still go stale while code is untouched. Instead,
+`scan.sh` resolves the `trivy-db` mirror tag (`ghcr.io/aquasecurity/trivy-db:2`)
+to an immutable digest **at scan time**, on every run, and downloads exactly
+that resolved snapshot. No trivy-db value ever sits in source, so wall-clock
+passage against a fixed pin cannot happen again — there is no fixed pin.
+The resolved digest, the resolution timestamp, and the downloaded
+`metadata.json` are written to the run's reports (`trivy-db-snapshot.txt`,
+`trivy-db-metadata.json`) so exactly which DB snapshot scanned a given run
+stays auditable, without needing that value to stay fixed.
+
+The Trivy **scanner binary** stays pinned by immutable digest like every
+other tool image in this pipeline — it is code, and code is pinned. The
+vulnerability **database** is not, because a DB whose entire purpose is
+reflecting current CVE knowledge defeats that purpose the moment it is
+frozen. Pin code; let necessarily-changing threat-intel data float; record
+what was actually used.
+
+The freshness check on the downloaded snapshot's `UpdatedAt` is kept
+(`TRIVY_DB_MAX_AGE_HOURS`, default 168h), but its meaning changed: since the
+digest is freshly resolved every run, a large gap now means the upstream
+`trivy-db` feed itself looks stalled — a real signal about the mirror, not
+about our own inaction. `scripts/container/lib/trivy-db-freshness.sh`
+implements this as a standalone, sourceable function so it stays unit
+testable without Docker; `scripts/container/test-trivy-db-freshness.sh`
+proves it still rejects a stale snapshot (the same shape of staleness the
+old pin-expiry bug produced) and runs as part of `container-contract`.
+
+**A scan failure has two distinct, differently worded shapes; do not confuse
+them:**
+
+- `trivy-db mirror unreachable` / `trivy-db download failed` / `trivy
+  scanner image unreachable`: a transient registry or mirror outage,
+  exactly like a pull failure for any other digest-pinned tool image in
+  this pipeline (Syft, BuildKit, QEMU). Self-heals on retry. Not a
+  vulnerability finding, not a stale pin.
+- `HIGH/CRITICAL vulnerabilities in <target>`, followed by the actual CVE
+  ID, package, installed/fixed versions, and severity: a real, newly
+  published finding against an image whose code did not change. **This is
+  the intended, correct behavior of a vulnerability scanner, not a
+  regression of the CHAOS-3772 class.** The old defect was the gate going
+  red while *both* code and the DB pin were frozen. Here the DB is
+  deliberately never frozen, so a new red means new externally published
+  vulnerability information, not the passage of time against our own
+  static value. Triage it as a real finding: confirm the CVE against the
+  reported package, and update the affected dependency or base image. There
+  is currently no suppression mechanism (see the "no exceptions" note
+  above) — a HIGH/CRITICAL finding must be fixed, not waited out. If a
+  narrow, time-boxed exception is ever genuinely needed, add reviewed
+  `.trivyignore` support as its own change, with the CVE, package/image
+  scope, rationale, owner, and expiration date all in the PR, not silently.
 
 `container-reproducible` refuses a dirty product worktree, derives identity
 from `HEAD`, creates a `git archive HEAD` snapshot, and performs two clean

@@ -220,7 +220,11 @@ jobs:
         with:
           driver-opts: image=moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1
           cache-binary: false
-      - name: Build, validate, and SBOM exact multi-architecture OCI archives
+      # CodeQL flags this step for cache poisoning (alert #11) — dismissed as a false
+      # positive: no cache sink exists in this job (qemu cache-image and buildx
+      # cache-binary are both false; no actions/cache or setup-go). Job-level
+      # hardening for this workflow is tracked in CHAOS-3794.
+      - name: Build, validate, scan, and SBOM exact multi-architecture OCI archives
         env:
           CONTAINER_VERSION: ${{ needs.preflight.outputs.version }}
           CONTAINER_COMMIT: ${{ needs.preflight.outputs.commit }}
@@ -248,7 +252,15 @@ jobs:
             --version "$VERSION" \
             --commit "$COMMIT" \
             --date "$DATE"
-          cp .tmp/container-reports/*.spdx.json container-release/
+          # CHAOS-3772 F1: stage Trivy provenance (resolved DB digest, its
+          # metadata, and the four per-image scan reports) alongside the
+          # SBOMs, not only the SBOMs -- otherwise a release cannot prove
+          # which trivy-db snapshot actually scanned it.
+          cp .tmp/container-reports/*.spdx.json \
+            .tmp/container-reports/*-trivy.json \
+            .tmp/container-reports/trivy-db-metadata.json \
+            .tmp/container-reports/trivy-db-snapshot.txt \
+            container-release/
           (
             cd container-release
             find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort \

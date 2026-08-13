@@ -52,6 +52,12 @@ jobs:
             ! -name 'publish-ci-release.sh' \
             ! -name 'test_release_scripts.sh' -print0 \
             | xargs -0 shellcheck -x
+      - name: Shellcheck container scripts
+        run: |
+          # SC2016: test-contract.sh intentionally greps scan.sh for literal
+          # shell variables such as $trivy_db_mirror and $metadata.
+          find scripts/container -type f -name '*.sh' -print0 \
+            | xargs -0 shellcheck -x -e SC2016
       - name: Test release asset assembly
         run: scripts/release/test-assemble-release-assets.sh
       - name: Test container release manifest
@@ -197,7 +203,7 @@ jobs:
         run: make container-reproducible
       - name: Build and validate multi-architecture OCI archives
         run: make container-oci
-      - name: Generate SPDX SBOMs for immutable amd64 and arm64 OCI images
+      - name: Scan for HIGH/CRITICAL vulnerabilities and generate SPDX SBOMs
         env:
           CONTAINER_SCAN_OCI_ROOT: .tmp/container-oci
         run: make container-scan
@@ -206,6 +212,22 @@ jobs:
         if: always()
         with:
           name: container-reports
-          path: .tmp/container-reports/
+          # container-reports/ is the atomically-published known-good
+          # generation (populated only on a fully successful scan).
+          # container-scan-attempt*/ is scan.sh's own work-in-progress
+          # report dir (CHAOS-3772 F2), aged out after 24h rather than
+          # cleaned up immediately (R4-2): it carries whatever the run
+          # managed to write -- including a resolved but rejected
+          # trivy-db snapshot -- even when the job failed before
+          # publication.
+          path: |
+            .tmp/container-reports/**
+            .tmp/container-scan-attempt*/**
+          # Both live under the dot-directory .tmp/; upload-artifact
+          # excludes hidden files/directories by default
+          # (include-hidden-files: false), which silently drops
+          # everything under a dot-prefixed path segment. Explicit
+          # opt-in, or nothing here ever uploads.
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
