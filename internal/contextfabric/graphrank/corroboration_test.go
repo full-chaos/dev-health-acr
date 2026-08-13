@@ -190,6 +190,14 @@ func TestCorroborationNeverLiftsACandidateToTheTopOfTwoGate(t *testing.T) {
 			if got >= topOfTwoGate && base < topOfTwoGate {
 				t.Fatalf("corroboration lifted base %v (%d mechanisms) to %v, at or past the top-of-two gate", base, count, got)
 			}
+			// Codex round-1 review note (b): for a base above the ceiling the
+			// never-demote guard must pass it through EXACTLY, not merely
+			// bound it. Asserting only the bound would let a future change
+			// quietly reshape a high base (say, damping it toward the
+			// ceiling) while still satisfying the inequality.
+			if base > CorroboratedCeiling && got != base {
+				t.Fatalf("a base above the ceiling must pass through unchanged: base %v (%d mechanisms) became %v", base, count, got)
+			}
 			if got < CorroboratedFloor && got != base {
 				t.Fatalf("corroborated confidence %v (base %v, %d mechanisms) fell below the band floor", got, base, count)
 			}
@@ -269,5 +277,36 @@ func TestSingleMechanismConfidenceIsUnchanged(t *testing.T) {
 		if got := CorroboratedConfidence(nil, base); got != base {
 			t.Fatalf("no-mechanism base %v changed to %v", base, got)
 		}
+	}
+}
+
+// Codex round-1 F1, at the RESOLUTION level: this is what the adapter-side bug
+// actually cost. A strong, unopposed lexical candidate must still commit when
+// a sibling vector search found nothing -- truncation authority belongs to a
+// search that had something to truncate.
+func TestF1_AStrongLexicalCommitSurvivesAVectorSearchThatFoundNothing(t *testing.T) {
+	// A lexical hit at the band ceiling, alone, clears the 0.72 gate.
+	strong := corroborationCandidate("auth", 0.75, contextfabric.MatchLexical)
+
+	// The shipped behavior: the empty vector search reports no truncation, so
+	// the lexical commit stands.
+	notTruncated := ResolveFromMergedCandidates(
+		map[string]contextfabric.SubjectCandidate{SubjectKey(strong.Subject): strong},
+		map[string]string{}, map[string]bool{}, 10, true, false,
+	)
+	if len(notTruncated.Committed) != 1 {
+		t.Fatalf("a strong unopposed lexical candidate must commit, got %v", notTruncated.Committed)
+	}
+
+	// The bug, demonstrated: had the empty vector search claimed truncation,
+	// the same candidate would have been forced to ambiguous. This asserts the
+	// COST of the defect, so the fix cannot be reverted without a red test.
+	truncated := ResolveFromMergedCandidates(
+		map[string]contextfabric.SubjectCandidate{SubjectKey(strong.Subject): strong},
+		map[string]string{}, map[string]bool{}, 10, true, true,
+	)
+	if len(truncated.Committed) != 0 {
+		t.Fatal("this test no longer demonstrates the cost it exists to pin: " +
+			"searchTruncated must still short-circuit the commit decision")
 	}
 }

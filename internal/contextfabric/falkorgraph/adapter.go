@@ -34,12 +34,34 @@ type Adapter struct {
 
 	bootstrapMu   sync.RWMutex
 	bootstrapDone map[string]bool
-	// vectorDisabled marks organization graph keys whose stored vector index
-	// was built at a DIFFERENT dimension than the currently configured
-	// embedder produces (AC-3778-7). Such a key answers lexically until an
-	// operator runs a rebuild; a stale-dimension vector is never queried.
-	vectorDisabled map[string]bool
+	// vectorFence caches the per-organization AC-3778-7 verdict: whether the
+	// stored vector index and stored embedder identity match the currently
+	// configured embedder. See ensureVectorReadable for the caching rules and
+	// why a DISABLED verdict expires while an ENABLED one does not.
+	vectorFence map[string]vectorFenceEntry
+	// vectorDegradedAt records, per organization, when vector retrieval last
+	// degraded (codex round-1 F4). See recordVectorDegraded and
+	// vectorRecentlyDegraded for what this can and cannot claim.
+	vectorDegradedAt map[string]time.Time
 }
+
+// vectorFenceEntry is one organization's cached fence verdict.
+type vectorFenceEntry struct {
+	enabled   bool
+	decidedAt time.Time
+}
+
+// vectorFenceRecheckInterval bounds how long a DISABLED verdict is cached.
+// An enabled verdict never expires (the configured embedder cannot change
+// without a restart), but a disabled one must, or an operator who fixed the
+// graph with `acr-projector rebuild --org` would also have to restart acr-api
+// to get vector retrieval back -- turning a recoverable state into a deploy.
+const vectorFenceRecheckInterval = 5 * time.Minute
+
+// vectorDegradationWindow bounds how long a vector degradation is reported in
+// Coverage. Deliberately short -- it is a "this is happening now" signal, not
+// a durable state.
+const vectorDegradationWindow = 30 * time.Second
 
 // EmbedderOptions carries the optional vector-retrieval dependencies
 // (CHAOS-3778). A zero value, or a nil Embedder, leaves vector retrieval off.

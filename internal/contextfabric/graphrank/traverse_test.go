@@ -12,7 +12,7 @@ import (
 func observationNode(uuid, canonicalID, label string, relevance float64) CandidateNode {
 	r := relevance
 	return CandidateNode{
-		UUID: uuid, Name: label, Relevance: &r,
+		UUID: uuid, Name: label, Relevance: Normalized(r),
 		Attributes: map[string]interface{}{
 			"canonical_id": canonicalID, "subject_kind": string(contextfabric.SubjectDocument), "label": label,
 			"evidence_refs": []string{"evidence_document_1234"},

@@ -72,7 +72,7 @@ func discoverOptions() contextfabric.InvestigationOptions {
 func testResolvedEdge(uuid, name string, from, to contextfabric.SubjectRef, relevance float64, evidenceRefs ...string) ResolvedEdge {
 	r := relevance
 	return ResolvedEdge{
-		UUID: uuid, Name: name, Fact: "test fact", From: from, To: to, Relevance: &r,
+		UUID: uuid, Name: name, Fact: "test fact", From: from, To: to, Relevance: Normalized(r),
 		Attributes: map[string]interface{}{"evidence_refs": evidenceRefs, "epistemic_status": "observed"},
 		CreatedAt:  "2026-01-01T00:00:00Z",
 	}

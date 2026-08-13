@@ -28,7 +28,13 @@ type CandidateNode struct {
 	// itself declares, not a raw backend score -- see ResultConfidence.
 	// Setting this is how a backend states "I have already normalized my
 	// own retrieval score into a documented, bounded band" (AC-3778-0).
-	Relevance *float64
+	//
+	// Its DISTINCT TYPE is the point (codex round-1 review note): a raw
+	// backend score is a float64, and a *float64 cannot be assigned here.
+	// The only way to produce a value is Normalized, which is the one place
+	// the "this number has been normalized" claim is made. See
+	// NormalizedRelevance.
+	Relevance *NormalizedRelevance
 	// Score is the backend's own raw, unnormalized retrieval value, with a
 	// meaning that is backend-specific and NOT interpreted by this package
 	// beyond ResultConfidence's fallback heuristic (see its doc comment for
@@ -59,7 +65,7 @@ type CandidateEdge struct {
 	SourceNodeUUID string
 	TargetNodeUUID string
 	Attributes     map[string]interface{}
-	Relevance      *float64
+	Relevance      *NormalizedRelevance
 	Score          *float64
 	// CreatedAt/ValidAt/InvalidAt/ExpiredAt are RFC3339Nano-formatted
 	// timestamps (or empty/nil), matching what every current and planned
@@ -69,6 +75,50 @@ type CandidateEdge struct {
 	InvalidAt *string
 	ExpiredAt *string
 }
+
+// NormalizedRelevance is a retrieval confidence an adapter has ALREADY
+// normalized into a documented, bounded band.
+//
+// It is a distinct type, not a float64, on purpose (codex round-1 review
+// note). D11 and its CHAOS-3778 sequel are the same mistake made twice: a raw
+// backend score -- an unbounded RediSearch relevance the first time, a
+// FalkorDB cosine DISTANCE the second -- reaching confidence arithmetic that
+// assumed it had been normalized. Regression tests pin the two shipped paths,
+// but a test cannot stop a THIRD backend, or a new call site on an existing
+// one, from doing it again.
+//
+// A type can. A raw score is a float64 and cannot be assigned to a
+// *NormalizedRelevance, so `candidate.Relevance = &score` does not compile.
+// The only way to obtain one is Normalized, which is therefore the single
+// place in this codebase where the claim "this number is a bounded confidence,
+// not a raw score" is made -- and the single place to look when auditing it.
+type NormalizedRelevance float64
+
+// Normalized declares a value as an already-bounded [0,1] retrieval
+// confidence, clamping it into range.
+//
+// Clamping rather than erroring is deliberate and matches every other
+// confidence path in this package: an out-of-range value is an adapter bug,
+// and the safe direction for an adapter bug is a confidence at the edge of the
+// band rather than a failed investigation. Every failure mode in this
+// package's confidence computation is a failure toward LESS confidence, never
+// more -- see fulltextRelevanceFromMatchedTerms' clamping for the same posture
+// on the lexical arm.
+//
+// NaN and infinity map to 0 rather than propagating: ResultConfidence rejects
+// them anyway, and letting them reach it would silently fall through to the
+// raw-Score arm, which is exactly the D11 hazard this type exists to close.
+func Normalized(value float64) *NormalizedRelevance {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		zero := NormalizedRelevance(0)
+		return &zero
+	}
+	relevance := NormalizedRelevance(Clamp(value))
+	return &relevance
+}
+
+// Float returns the underlying value.
+func (r NormalizedRelevance) Float() float64 { return float64(r) }
 
 // ResultConfidence normalizes a backend's relevance/score pair into a [0,1]
 // confidence, preferring relevance when it is a usable finite number and
@@ -106,9 +156,11 @@ type CandidateEdge struct {
 // Relevance if that meaning does not match this arm's distance assumption
 // -- merging a vector score that doesn't fit this arm straight into Score
 // and letting it fall through here is exactly the bug this fixes.
-func ResultConfidence(relevance, score *float64) float64 {
-	if relevance != nil && !math.IsNaN(*relevance) && !math.IsInf(*relevance, 0) {
-		return Clamp(*relevance)
+func ResultConfidence(relevance *NormalizedRelevance, score *float64) float64 {
+	if relevance != nil {
+		// Normalized already clamped and rejected non-finite values, so no
+		// re-checking is needed here -- the type IS the guarantee.
+		return Clamp(relevance.Float())
 	}
 	if score != nil && !math.IsNaN(*score) && !math.IsInf(*score, 0) {
 		if *score >= 0 && *score <= 1 {

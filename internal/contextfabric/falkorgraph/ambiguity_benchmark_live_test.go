@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -17,9 +18,17 @@ import (
 // implementing lane", so it is supplied at run time:
 //
 //	ACR_TEST_AMBIGUITY_CORPUS=/path/to/corpus.json \
+//	ACR_TEST_AMBIGUITY_ORG=<org-id> \
+//	ACR_TEST_FALKOR_ADDR=host:port \
 //	ACR_TEST_EMBED_BASE_URL=... ACR_TEST_EMBED_MODEL=... ACR_TEST_EMBED_DIMENSION=... \
-//	ACR_CONTEXT_FABRIC_FALKOR_ADDR=... \
 //	  go test ./internal/contextfabric/falkorgraph -run AmbiguityBenchmark -v
+//
+// EVERY input is a dedicated ACR_TEST_* name, never the production
+// ACR_CONTEXT_FABRIC_* names (codex round-1 F6). The earlier version documented
+// the test names but READ the production ones, so as documented it recorded the
+// lexical baseline and then silently skipped the hybrid half -- reporting no
+// failure while measuring nothing. Dedicated names also mean a benchmark run
+// can never reach a production embedder or graph through ambient environment.
 //
 // Corpus format -- a JSON array. Each case names the question and the subject
 // that a correct resolution must commit. A case with an EMPTY expected subject
@@ -145,9 +154,9 @@ func committedMatches(committed []contextfabric.SubjectRef, testCase ambiguityCa
 // TestAmbiguityBenchmarkMeasuresTheHybridLift is the AC-3778-2 gate.
 func TestAmbiguityBenchmarkMeasuresTheHybridLift(t *testing.T) {
 	corpus := loadAmbiguityCorpus(t)
-	address := os.Getenv("ACR_CONTEXT_FABRIC_FALKOR_ADDR")
+	address := os.Getenv("ACR_TEST_FALKOR_ADDR")
 	if address == "" {
-		t.Skip("ACR_CONTEXT_FABRIC_FALKOR_ADDR is not set; this benchmark measures against live data")
+		t.Skip("ACR_TEST_FALKOR_ADDR is not set; this benchmark measures against live data")
 	}
 	orgID := os.Getenv("ACR_TEST_AMBIGUITY_ORG")
 	if orgID == "" {
@@ -156,7 +165,7 @@ func TestAmbiguityBenchmarkMeasuresTheHybridLift(t *testing.T) {
 	principal := storage.Principal{OrgID: orgID}
 	ctx := context.Background()
 
-	graphConfig, err := ConfigFromEnv(os.LookupEnv)
+	graphConfig, err := ConfigFromEnv(benchmarkLookup)
 	if err != nil {
 		t.Fatalf("graph configuration: %v", err)
 	}
@@ -172,12 +181,15 @@ func TestAmbiguityBenchmarkMeasuresTheHybridLift(t *testing.T) {
 	t.Logf("AC-3778-1 lexical-only baseline: correct=%d/%d (%.1f%%) wrong=%d no-commit=%d",
 		baseline.correctCommits, baseline.total, baseline.correctRate()*100, baseline.wrongCommits, baseline.noCommit)
 
-	embedderOptions, err := EmbedderFromEnv(os.LookupEnv)
+	embedderOptions, err := EmbedderFromEnv(benchmarkLookup)
 	if err != nil {
 		t.Fatalf("embedder configuration: %v", err)
 	}
 	if embedderOptions.Embedder == nil {
-		t.Skip("no embedder configured; the hybrid half of the benchmark cannot run")
+		// A hard failure, not a skip: reaching this point means the baseline
+		// was already measured, so silently stopping here would report a
+		// successful run that gated on nothing (codex round-1 F6).
+		t.Fatal("ACR_TEST_EMBED_BASE_URL is not set; the hybrid half cannot run and the AC-3778-2 gate would measure nothing")
 	}
 	hybridAdapter, err := NewWithEmbedder(graphConfig, embedderOptions)
 	if err != nil {
@@ -204,5 +216,53 @@ func TestAmbiguityBenchmarkMeasuresTheHybridLift(t *testing.T) {
 	// pass, which is why the two run first.
 	if lift < 25.0 {
 		t.Errorf("AC-3778-2 NOT MET: lift %+.1f percentage points, bar +25.0", lift)
+	}
+}
+
+// benchmarkLookup translates this harness's dedicated ACR_TEST_* inputs into
+// the production variable names the adapter constructors expect, WITHOUT ever
+// reading the production names from the ambient environment.
+//
+// Codex round-1 F6: passing os.LookupEnv here is what made the documented
+// invocation silently skip the hybrid gate, and it also meant a benchmark run
+// on a machine with production configuration set would have pointed at a
+// production embedder and graph. Every value below comes from an ACR_TEST_*
+// name or is a fixed test-only default; a production name is never consulted.
+func benchmarkLookup(key string) (string, bool) {
+	value := func(name string) (string, bool) {
+		v := os.Getenv(name)
+		return v, v != ""
+	}
+	switch key {
+	case EnvAddr:
+		return value("ACR_TEST_FALKOR_ADDR")
+	case EnvPassword:
+		return value("ACR_TEST_FALKOR_PASSWORD")
+	case EnvTLS:
+		return "false", true
+	case EnvAllowInsecure:
+		return "true", true
+	case EnvGraphPrefix:
+		if v, ok := value("ACR_TEST_FALKOR_GRAPH_PREFIX"); ok {
+			return v, true
+		}
+		return "acr-cf", true
+	case embedprovider.EnvBaseURL:
+		return value("ACR_TEST_EMBED_BASE_URL")
+	case embedprovider.EnvModel:
+		return value("ACR_TEST_EMBED_MODEL")
+	case embedprovider.EnvDimension:
+		return value("ACR_TEST_EMBED_DIMENSION")
+	case embedprovider.EnvProvider:
+		if v, ok := value("ACR_TEST_EMBED_PROVIDER"); ok {
+			return v, true
+		}
+		return "ambiguity-benchmark", true
+	case embedprovider.EnvSimilarityFloor:
+		return value("ACR_TEST_EMBED_SIMILARITY_FLOOR")
+	case embedprovider.EnvAllowInsecureBaseURL:
+		return "true", true
+	default:
+		return "", false
 	}
 }

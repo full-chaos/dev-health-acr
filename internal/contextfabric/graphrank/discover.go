@@ -27,10 +27,12 @@ type ResolvedEdge struct {
 	UUID string
 	// Name is the raw, backend-reported relation name; AdmitEdges applies
 	// NormalizeRelation itself.
-	Name      string
-	Fact      string
-	From, To  contextfabric.SubjectRef
-	Relevance *float64
+	Name     string
+	Fact     string
+	From, To contextfabric.SubjectRef
+	// Relevance is an adapter-declared, already-normalized confidence -- see
+	// NormalizedRelevance for why this is a distinct type and not a float64.
+	Relevance *NormalizedRelevance
 	Score     *float64
 	// Attributes must carry "epistemic_status" (string) and "evidence_refs"
 	// ([]string, graphrank's shared convention -- see EvidenceRefs).

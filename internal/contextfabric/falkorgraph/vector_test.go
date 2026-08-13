@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -142,8 +143,8 @@ func TestVectorCandidateDeclaresRelevanceAndNeverCarriesTheRawDistance(t *testin
 	if candidate.Relevance == nil {
 		t.Fatal("a vector candidate must declare Relevance")
 	}
-	if *candidate.Relevance != vectorRelevanceCeiling {
-		t.Fatalf("a perfect match must reach the band ceiling, got %v", *candidate.Relevance)
+	if candidate.Relevance.Float() != vectorRelevanceCeiling {
+		t.Fatalf("a perfect match must reach the band ceiling, got %v", candidate.Relevance.Float())
 	}
 	if candidate.Mechanism != contextfabric.MatchVector {
 		t.Fatalf("mechanism = %q, want vector", candidate.Mechanism)
@@ -275,6 +276,7 @@ func TestAC_3778_7_DimensionChangeDisablesVectorRetrievalUntilRebuild(t *testing
 		// An index built at width 4 while the embedder now produces 8.
 		return []indexStatus{{
 			Label: labelSubject, EntityType: "NODE",
+			Status:  "OPERATIONAL",
 			Types:   map[string][]string{propEmbedding: {"VECTOR"}},
 			Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(4)}},
 		}}, nil
@@ -289,9 +291,10 @@ func TestAC_3778_7_DimensionChangeDisablesVectorRetrievalUntilRebuild(t *testing
 	if adapter.vectorEnabledForKey("graphkey") {
 		t.Fatal("a stale-dimension index must disable vector retrieval for that organization")
 	}
-	// A different organization's graph is unaffected.
-	if !adapter.vectorEnabledForKey("other-graphkey") {
-		t.Fatal("one organization's stale index must not disable another's")
+	// A different organization's graph has no verdict yet, so it is not
+	// disabled -- it simply has not been checked.
+	if enabled, decided := adapter.cachedVectorFence("other-graphkey"); decided || enabled {
+		t.Fatal("one organization's stale index must not decide another's verdict")
 	}
 }
 
@@ -308,6 +311,7 @@ func TestAC_3778_7_MatchingDimensionKeepsVectorRetrievalEnabled(t *testing.T) {
 	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
 		return []indexStatus{{
 			Label: labelSubject, EntityType: "NODE",
+			Status:  "OPERATIONAL",
 			Types:   map[string][]string{propEmbedding: {"VECTOR"}},
 			Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(8)}},
 		}}, nil
@@ -319,13 +323,22 @@ func TestAC_3778_7_MatchingDimensionKeepsVectorRetrievalEnabled(t *testing.T) {
 	if created {
 		t.Fatal("an index at the right dimension must not be recreated")
 	}
-	if !adapter.vectorEnabledForKey("graphkey") {
-		t.Fatal("a matching dimension must keep vector retrieval enabled")
+	if err := adapter.verifyFenceForTest("graphkey"); err != nil {
+		t.Fatal(err)
 	}
 }
 
 // A server that does not report the dimension is UNKNOWN, never a match --
 // guessing a match is exactly the failure AC-3778-7 exists to prevent.
+// verifyFenceForTest asserts the read-path fence passes for a key whose
+// stored identity query returns no mismatching rows.
+func (a *Adapter) verifyFenceForTest(key string) error {
+	if !a.ensureVectorReadable(context.Background(), key, "org") {
+		return errors.New("a matching dimension and identity must pass the read-path fence")
+	}
+	return nil
+}
+
 func TestAC_3778_7_UnreportedDimensionIsNotTreatedAsAMatch(t *testing.T) {
 	status := indexStatus{Options: map[string]interface{}{propEmbedding: map[string]interface{}{}}}
 	if _, ok := status.Dimension(); ok {
@@ -444,5 +457,332 @@ func TestWrongServingModelPersistsNoVector(t *testing.T) {
 	adapter.embedProjectionBatch(context.Background(), "k", batch)
 	if embeddingWritten {
 		t.Fatal("no embedding may be persisted when the serving model is not the configured one")
+	}
+}
+
+// operationalVectorIndex is a well-formed db.indexes() row for the fence.
+func operationalVectorIndex(dimension int64) indexStatus {
+	return indexStatus{
+		Label: labelSubject, EntityType: "NODE", Status: "OPERATIONAL",
+		Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+		Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": dimension}},
+	}
+}
+
+// Codex round-1 F5, RED->GREEN: an index that EXISTS but reports no usable
+// metadata must DISABLE vector retrieval. The earlier code read it as
+// "absent", issued CREATE, treated the resulting already-exists error as
+// success, and left vector retrieval enabled against an index of entirely
+// unknown width.
+func TestF5_IndexWithUnknownMetadataFailsClosedRatherThanBeingTreatedAsAbsent(t *testing.T) {
+	cases := []struct {
+		name  string
+		index indexStatus
+	}{
+		{"no reported dimension", indexStatus{
+			Label: labelSubject, EntityType: "NODE", Status: "OPERATIONAL",
+			Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+			Options: map[string]interface{}{propEmbedding: map[string]interface{}{}},
+		}},
+		{"status still building", indexStatus{
+			Label: labelSubject, EntityType: "NODE", Status: "UNDER CONSTRUCTION",
+			Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+			Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(8)}},
+		}},
+		{"undecodable status", indexStatus{
+			Label: labelSubject, EntityType: "NODE", Status: "",
+			Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+			Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(8)}},
+		}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var created bool
+			fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+				if strings.Contains(cypher, "CREATE VECTOR INDEX") {
+					created = true
+				}
+				return nil, nil
+			}}
+			fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+				return []indexStatus{testCase.index}, nil
+			}
+			adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+			if err := adapter.ensureVectorIndex(context.Background(), "graphkey"); err != nil {
+				t.Fatalf("unknown metadata must degrade, not error: %v", err)
+			}
+			if created {
+				t.Fatal("an EXISTING index must never be treated as absent and re-created")
+			}
+			if adapter.vectorEnabledForKey("graphkey") {
+				t.Fatal("an index with unknown metadata must disable vector retrieval")
+			}
+		})
+	}
+}
+
+// Codex round-1 F2, RED->GREEN: the read path must verify the fence itself.
+// The hosted API never runs bootstrap, so before this the identity fence was
+// write-only and a same-dimension model swap served stale vectors into
+// resolution.
+func TestF2_ReadPathVerifiesTheStoredEmbedderIdentity(t *testing.T) {
+	lexicalRows := []row{{
+		"node": &node{Properties: map[string]interface{}{
+			propKind: "project", propCanonicalID: "p1", propLabel: "Auth", propSearchText: "auth service",
+		}},
+		"score": 2.0,
+	}}
+	var vectorQueried, identityChecked bool
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "db.idx.vector.queryNodes"):
+			vectorQueried = true
+			return nil, nil
+		case strings.Contains(cypher, propEmbedderIdentity):
+			identityChecked = true
+			// One node carries a DIFFERENT model's identity -- the
+			// same-dimension swap the width check cannot see.
+			return []row{{"n.canonical_id": "p9"}}, nil
+		case strings.Contains(cypher, "db.idx.fulltext.queryNodes"):
+			return lexicalRows, nil
+		}
+		return nil, nil
+	}}
+	// The index width MATCHES, so only the identity check can catch this.
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+
+	candidates, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth service", 5)
+	if err != nil {
+		t.Fatalf("a stale-identity graph must degrade, not fail: %v", err)
+	}
+	if !identityChecked {
+		t.Fatal("the read path must verify the stored embedder identity")
+	}
+	if vectorQueried {
+		t.Fatal("vectors from a different model must never be queried")
+	}
+	if len(candidates) != 1 || candidates[0].Mechanism != contextfabric.MatchLexical {
+		t.Fatalf("lexical retrieval must proceed, got %#v", candidates)
+	}
+	// And the degradation is visible in coverage, not only in logs (F4).
+	if !adapter.vectorRecentlyDegraded("org") {
+		t.Fatal("the degradation must be recorded for Coverage")
+	}
+}
+
+// A graph whose stored identity matches passes the read fence and queries.
+func TestF2_MatchingStoredIdentityPassesTheReadFence(t *testing.T) {
+	var vectorQueried bool
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			vectorQueried = true
+		}
+		// The identity probe returns NO mismatching rows.
+		return nil, nil
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+	if _, _, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5); err != nil {
+		t.Fatalf("hybridSearchNodes: %v", err)
+	}
+	if !vectorQueried {
+		t.Fatal("a matching identity and dimension must allow the vector query")
+	}
+}
+
+// Codex round-1 F1, RED->GREEN: a vector query whose every row falls below the
+// similarity floor found NOTHING, and must therefore claim NO truncation
+// authority. The earlier order set the truncation flag from the raw row count
+// before the tau filter ran, so such a query returned zero candidates while
+// reporting truncated=true -- and truncation is checked BEFORE any confidence
+// threshold in ResolveFromMergedCandidates, so it could force the whole
+// resolution to ambiguous and block an unopposed, otherwise-strong lexical
+// commit.
+func TestF1_AllBelowFloorVectorQueryClaimsNoTruncationAuthority(t *testing.T) {
+	const limit = 2
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if !strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			return nil, nil
+		}
+		// limit+1 rows, EVERY one below the 0.55 floor (distance 0.9 ->
+		// similarity 0.10). Enough rows to have tripped the old flag.
+		rows := make([]row, 0, limit+1)
+		for i := 0; i < limit+1; i++ {
+			rows = append(rows, row{
+				"node":  &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p", propLabel: "Unrelated"}},
+				"score": 0.9,
+			})
+		}
+		return rows, nil
+	}}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0, 0}}, 0.55)
+	candidates, truncated, err := adapter.vectorSearchNodes(context.Background(), "k", "org", []float32{1, 0, 0, 0}, 0.55, limit)
+	if err != nil {
+		t.Fatalf("vectorSearchNodes: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("every row was below the floor; expected no candidates, got %d", len(candidates))
+	}
+	if truncated {
+		t.Fatal("a vector query that found NOTHING must not claim truncation authority")
+	}
+}
+
+// The other half of F1: truncation is still reported when it is real -- more
+// than `limit` rows genuinely CLEARED the floor.
+func TestF1_TruncationIsStillReportedWhenAboveFloorRowsExceedTheLimit(t *testing.T) {
+	const limit = 2
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if !strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			return nil, nil
+		}
+		rows := make([]row, 0, limit+1)
+		for i := 0; i < limit+1; i++ {
+			rows = append(rows, row{
+				"node": &node{Properties: map[string]interface{}{
+					propKind: "project", propCanonicalID: fmt.Sprintf("p%d", i), propLabel: "Auth",
+				}},
+				// distance 0.1 -> similarity 0.90, comfortably above tau.
+				"score": 0.1,
+			})
+		}
+		return rows, nil
+	}}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0, 0}}, 0.55)
+	candidates, truncated, err := adapter.vectorSearchNodes(context.Background(), "k", "org", []float32{1, 0, 0, 0}, 0.55, limit)
+	if err != nil {
+		t.Fatalf("vectorSearchNodes: %v", err)
+	}
+	if !truncated {
+		t.Fatal("more above-floor rows than the budget must report truncation")
+	}
+	if len(candidates) != limit {
+		t.Fatalf("the extra detection row must be discarded, got %d candidates", len(candidates))
+	}
+	// A truncated batch caps every survivor at the band floor.
+	for _, candidate := range candidates {
+		if candidate.Relevance.Float() != vectorRelevanceFloor {
+			t.Fatalf("a truncated batch must floor-cap its survivors, got %v", candidate.Relevance.Float())
+		}
+	}
+}
+
+// Exactly `limit` survivors after tau filtering is NOT truncation: the k-NN
+// result is ordered by ascending distance, so if the (limit+1)th row fell
+// below the floor, everything beyond it is further away and also below it --
+// no genuine competitor was cut off.
+func TestF1_SurvivorsAtExactlyTheLimitAreNotTruncated(t *testing.T) {
+	const limit = 2
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if !strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			return nil, nil
+		}
+		return []row{
+			{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p0", propLabel: "A"}}, "score": 0.1},
+			{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p1", propLabel: "B"}}, "score": 0.2},
+			// The detection row falls below the floor.
+			{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p2", propLabel: "C"}}, "score": 0.9},
+		}, nil
+	}}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0, 0}}, 0.55)
+	candidates, truncated, err := adapter.vectorSearchNodes(context.Background(), "k", "org", []float32{1, 0, 0, 0}, 0.55, limit)
+	if err != nil {
+		t.Fatalf("vectorSearchNodes: %v", err)
+	}
+	if truncated {
+		t.Fatal("a below-floor detection row must not read as truncation")
+	}
+	if len(candidates) != limit {
+		t.Fatalf("expected %d above-floor candidates, got %d", limit, len(candidates))
+	}
+	// Not truncated, so relevance is the real band value, not the floor cap.
+	if candidates[0].Relevance.Float() <= vectorRelevanceFloor {
+		t.Fatalf("an untruncated batch must carry real band relevance, got %v", candidates[0].Relevance.Float())
+	}
+}
+
+// Codex round-1 F3, RED->GREEN: when embedding fails after the batch has
+// already written NEW search_text, the OLD vector must be CLEARED. Leaving it
+// pairs model-A's understanding of yesterday's text with today's text,
+// permanently -- the watermark advances, nothing retries until a rebuild, and
+// no read-side check can see it because the vector is present, well-formed,
+// and stamped with a matching identity.
+func TestF3_EmbedFailureClearsTheStaleVectorInsteadOfLeavingIt(t *testing.T) {
+	var cleared bool
+	var clearedTargets []interface{}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "SET n."+propEmbedding+" = NULL") {
+			cleared = true
+			if list, ok := params["targets"].([]interface{}); ok {
+				clearedTargets = list
+			}
+		}
+		return nil, nil
+	}}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{err: errors.New("connection refused")}, 0.55)
+
+	observed := time.Now().UTC()
+	batch := contextfabric.ProjectionBatch{
+		OrgID: "org",
+		Entities: []contextfabric.EntityProjection{{
+			Subject: contextfabric.SubjectRef{
+				Kind: contextfabric.SubjectProject, CanonicalID: "p1", Label: "Authentication Service",
+			},
+			ObservedAt: observed, SourceVersion: "v1",
+		}},
+	}
+	adapter.embedProjectionBatch(context.Background(), "k", batch)
+
+	if !cleared {
+		t.Fatal("an embed failure must CLEAR the stale vector, not leave it attached to new text")
+	}
+	if len(clearedTargets) != 1 {
+		t.Fatalf("expected exactly the batch's own node to be cleared, got %d", len(clearedTargets))
+	}
+}
+
+// Mid-batch write failure clears only the nodes that still carry yesterday's
+// vector -- never the ones this batch already refreshed.
+func TestF3_MidBatchWriteFailureClearsOnlyTheUnwrittenNodes(t *testing.T) {
+	writes := 0
+	var clearedTargets []interface{}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "SET n."+propEmbedding+" = NULL"):
+			if list, ok := params["targets"].([]interface{}); ok {
+				clearedTargets = list
+			}
+		case strings.Contains(cypher, "vecf32($vec)"):
+			writes++
+			if writes == 2 {
+				return nil, errors.New("write failed")
+			}
+		}
+		return nil, nil
+	}}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0, 0}}, 0.55)
+
+	observed := time.Now().UTC()
+	batch := contextfabric.ProjectionBatch{OrgID: "org"}
+	for _, id := range []string{"p1", "p2", "p3"} {
+		batch.Entities = append(batch.Entities, contextfabric.EntityProjection{
+			Subject: contextfabric.SubjectRef{
+				Kind: contextfabric.SubjectProject, CanonicalID: id, Label: "Subject " + id,
+			},
+			ObservedAt: observed, SourceVersion: "v1",
+		})
+	}
+	adapter.embedProjectionBatch(context.Background(), "k", batch)
+
+	// Targets are sorted; the second write failed, so targets[1:] (two nodes)
+	// still hold yesterday's vectors and must be cleared. The first was
+	// refreshed successfully and must be left alone.
+	if len(clearedTargets) != 2 {
+		t.Fatalf("expected the two unwritten nodes to be cleared, got %d", len(clearedTargets))
 	}
 }

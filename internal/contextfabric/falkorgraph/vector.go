@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
@@ -174,11 +175,30 @@ func (a *Adapter) vectorSearchNodes(ctx context.Context, key, orgID string, vect
 	if err != nil {
 		return nil, false, safeDependencyError("vector search context graph", err)
 	}
-	truncated := len(rows) > limit
-	if truncated {
-		rows = rows[:limit]
+	// Codex round-1 F1: the tau filter runs BEFORE the truncation decision and
+	// before the top-limit slice, and truncation is derived from how many rows
+	// SURVIVED tau -- never from how many the server returned.
+	//
+	// The earlier order had it backwards, and the consequence was not
+	// cosmetic. A query whose every row fell below the similarity floor
+	// returned ZERO candidates while still reporting truncated=true, and
+	// truncation is resolution-wide authority: ResolveFromMergedCandidates
+	// checks searchTruncated BEFORE any confidence threshold, so a vector
+	// query that found NOTHING could force the whole resolution to ambiguous
+	// and block an otherwise strong, unopposed lexical commit. A search that
+	// found nothing must have authority over nothing.
+	//
+	// Deriving truncation from survivors is sound because the k-NN result is
+	// ordered by ascending distance: if the (limit+1)th row falls below tau,
+	// every row beyond it is further away and therefore also below tau, so no
+	// genuine competitor was cut off. Only a full limit+1 rows ALL clearing
+	// tau means the corpus may hold above-floor candidates this budget could
+	// not show.
+	type survivor struct {
+		node       *node
+		similarity float64
 	}
-	candidates := make([]graphrank.CandidateNode, 0, len(rows))
+	survivors := make([]survivor, 0, len(rows))
 	for _, row := range rows {
 		n, ok := row["node"].(*node)
 		if !ok || n == nil {
@@ -193,12 +213,20 @@ func (a *Adapter) vectorSearchNodes(ctx context.Context, key, orgID string, vect
 			// AC-3778-4: not close enough to be evidence of anything.
 			continue
 		}
-		candidate := toCandidateNode(n)
+		survivors = append(survivors, survivor{node: n, similarity: similarity})
+	}
+	truncated := len(survivors) > limit
+	if truncated {
+		survivors = survivors[:limit]
+	}
+	candidates := make([]graphrank.CandidateNode, 0, len(survivors))
+	for _, s := range survivors {
+		candidate := toCandidateNode(s.node)
 		relevance := vectorRelevanceFloor
 		if !truncated {
-			relevance = vectorRelevanceFromSimilarity(similarity, tau)
+			relevance = vectorRelevanceFromSimilarity(s.similarity, tau)
 		}
-		candidate.Relevance = &relevance
+		candidate.Relevance = graphrank.Normalized(relevance)
 		candidate.Mechanism = contextfabric.MatchVector
 		candidates = append(candidates, candidate)
 	}
@@ -236,9 +264,16 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 	for i := range lexical {
 		lexical[i].Mechanism = contextfabric.MatchLexical
 	}
-	if !a.vectorEnabledForKey(key) {
-		// Either no embedder is configured, or AC-3778-7's dimension fence
-		// disabled vector retrieval for this organization until a rebuild.
+	// Codex round-1 F2: the AC-3778-7 fence is verified HERE, on the read
+	// path, not only at projection bootstrap -- the hosted API never runs
+	// bootstrap, so a read-only process previously checked neither the index
+	// dimension nor the stored embedder identity. The verdict is cached per
+	// organization (see ensureVectorReadable), so this is one bounded probe
+	// per organization per process, not per request.
+	if !a.ensureVectorReadable(ctx, key, orgID) {
+		// No embedder, or the graph holds vectors this embedder did not
+		// produce. Lexical retrieval proceeds; the degradation is recorded.
+		a.recordVectorDegraded(ctx, orgID)
 		return lexical, truncated, nil
 	}
 	vectors, embedErr := a.embedder.Embed(ctx, []string{term})
@@ -256,13 +291,59 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 	return append(lexical, vectorCandidates...), truncated || vectorTruncated, nil
 }
 
+// recordVectorDegraded marks vector retrieval as degraded for an organization
+// and reports it to telemetry.
+//
+// Codex round-1 F4: the design promised Coverage.Partial on vector
+// degradation and the implementation only emitted telemetry, so an embed
+// timeout was visible in logs but not in the answer. This records the
+// degradation somewhere DiscoverContext can read it.
+//
+// THE SCOPE IS ORGANIZATION AND TIME, NOT REQUEST -- stated plainly because it
+// matters. Vector degradation happens during ResolveSubjects, while Coverage
+// is built during a later DiscoverContext call, and there is no request-scoped
+// carrier between the two (GraphReader's two methods take independent
+// contexts, and the only value threaded between them, SubjectResolution, is a
+// contract type this change does not own). So the marker is per-organization
+// with a short window instead.
+//
+// The consequence, precisely: within vectorDegradationWindow this can mark a
+// request partial whose OWN retrieval was complete, because a different
+// concurrent request for the same organization degraded. It cannot do the
+// reverse. Over-reporting partial is the safe direction -- an answer that
+// says "possibly incomplete" when it was complete costs a reader some
+// caution; one that says "complete" when vector retrieval silently dropped out
+// is the failure F4 is about. A narrower, genuinely request-scoped signal
+// needs a carrier through GraphReader that does not exist today.
 func (a *Adapter) recordVectorDegraded(ctx context.Context, orgID string) {
+	a.bootstrapMu.Lock()
+	if a.vectorDegradedAt == nil {
+		a.vectorDegradedAt = make(map[string]time.Time)
+	}
+	a.vectorDegradedAt[orgID] = a.now()
+	a.bootstrapMu.Unlock()
 	if a.config.Telemetry == nil {
 		return
 	}
 	if recorder, ok := a.config.Telemetry.(VectorTelemetry); ok {
 		recorder.RecordVectorRetrievalDegraded(ctx, orgID)
 	}
+}
+
+// vectorRecentlyDegraded reports whether vector retrieval degraded for this
+// organization inside vectorDegradationWindow. See recordVectorDegraded for
+// the scope caveat.
+func (a *Adapter) vectorRecentlyDegraded(orgID string) bool {
+	if a.embedder == nil {
+		return false
+	}
+	a.bootstrapMu.RLock()
+	defer a.bootstrapMu.RUnlock()
+	at, ok := a.vectorDegradedAt[orgID]
+	if !ok {
+		return false
+	}
+	return a.now().Sub(at) < vectorDegradationWindow
 }
 
 // VectorTelemetry is an OPTIONAL extension of GraphTelemetry. An

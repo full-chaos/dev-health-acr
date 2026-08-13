@@ -321,7 +321,7 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 			matched := fulltextMatchedTermCount(graphrank.StringAttribute(candidate.Attributes, propSearchText), matchTerms)
 			relevance = fulltextRelevanceFromMatchedTerms(matched, termCount)
 		}
-		candidate.Relevance = &relevance
+		candidate.Relevance = graphrank.Normalized(relevance)
 		candidates = append(candidates, candidate)
 	}
 	return candidates, truncated, nil

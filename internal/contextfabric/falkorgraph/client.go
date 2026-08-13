@@ -145,6 +145,7 @@ func (s *sdkAPI) indexes(ctx context.Context, graphKey string) ([]indexStatus, e
 		statuses = append(statuses, indexStatus{
 			Label: rowString(r, "label"), Properties: rowStringSlice(r, "properties"),
 			Types: types, EntityType: rowString(r, "entitytype"), Options: options,
+			Status: rowString(r, "status"),
 		})
 	}
 	return statuses, nil

@@ -50,6 +50,10 @@ type indexStatus struct {
 	Properties []string
 	Types      map[string][]string // property -> index types (e.g. "RANGE", "FULLTEXT", "VECTOR")
 	EntityType string
+	// Status is the index's own readiness, e.g. "OPERATIONAL". Decoded so the
+	// vector fence can fail closed on anything else (codex round-1 F5) rather
+	// than querying an index that is still building.
+	Status string
 	// Options carries the per-property index options FalkorDB echoes back.
 	// For a vector index this is where the dimension lives -- verified live
 	// against graph module 42002, which reports

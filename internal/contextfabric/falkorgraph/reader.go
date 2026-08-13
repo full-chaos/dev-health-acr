@@ -231,8 +231,17 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// the first; per-call aggregation stays bounded (never one log line
 	// per dropped edge) without ever going silent on a call that has
 	// something to report.
-	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0
+	// Codex round-1 F4: vector retrieval dropping out is a real reduction in
+	// what the investigation could see, so it belongs in Coverage rather than
+	// only in telemetry. See recordVectorDegraded for why this signal is
+	// organization-and-window scoped rather than request scoped, and why that
+	// errs toward over-reporting partial.
+	vectorDegraded := a.vectorRecentlyDegraded(principal.OrgID)
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || vectorDegraded
 	var degradedReasons []string
+	if vectorDegraded {
+		degradedReasons = append(degradedReasons, "vector_retrieval_degraded")
+	}
 	if failedLookups > 0 {
 		degradedReasons = append(degradedReasons, fmt.Sprintf("endpoint_lookup_failed:%d", failedLookups))
 	}

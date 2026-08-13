@@ -48,7 +48,7 @@ func TestD11Class_RawVectorDistanceThroughScoreWouldInvertConfidence(t *testing.
 // The shipped path: the adapter declares Relevance, so the perfect match wins.
 func TestD11Class_NormalizedVectorRelevanceRestoresConfidenceOrder(t *testing.T) {
 	// What falkorgraph's vector search does: distance -> similarity -> band.
-	relevanceFor := func(distance float64) *float64 {
+	relevanceFor := func(distance float64) *NormalizedRelevance {
 		cosine := 1 - distance
 		if cosine < 0 {
 			cosine = 0
@@ -58,8 +58,7 @@ func TestD11Class_NormalizedVectorRelevanceRestoresConfidenceOrder(t *testing.T)
 		if cosine < tau {
 			t.Fatalf("a similarity of %v is below the floor and must be dropped, not scored", cosine)
 		}
-		value := 0.50 + 0.20*(cosine-tau)/(1-tau)
-		return &value
+		return Normalized(0.50 + 0.20*(cosine-tau)/(1-tau))
 	}
 
 	best := ResultConfidence(relevanceFor(0.0), nil)  // identical
@@ -78,8 +77,8 @@ func TestD11Class_NormalizedVectorRelevanceRestoresConfidenceOrder(t *testing.T)
 func TestD11Class_NoVectorOnlyConfidenceCanReachTheCommitGate(t *testing.T) {
 	const tau = 0.55
 	for cosine := tau; cosine <= 1.0; cosine += 0.001 {
-		relevance := 0.50 + 0.20*(cosine-tau)/(1-tau)
-		confidence := ResultConfidence(&relevance, nil)
+		relevance := Normalized(0.50 + 0.20*(cosine-tau)/(1-tau))
+		confidence := ResultConfidence(relevance, nil)
 		if confidence >= loneCommitGate {
 			t.Fatalf("a vector-only candidate at cosine %v reached confidence %v, at or past the %v gate",
 				cosine, confidence, loneCommitGate)
@@ -96,9 +95,9 @@ func TestD11Class_NoVectorOnlyConfidenceCanReachTheCommitGate(t *testing.T) {
 // if an adapter ever sets BOTH, Relevance must win. This is what makes the
 // "normalize into Relevance" rule enforceable rather than merely advised.
 func TestD11Class_RelevanceAlwaysBeatsAStrayScore(t *testing.T) {
-	relevance := 0.68
+	relevance := Normalized(0.68)
 	strayDistance := 0.0 // what the raw FalkorDB score would have been
-	if got := ResultConfidence(&relevance, &strayDistance); got != relevance {
-		t.Fatalf("ResultConfidence = %v, want the declared relevance %v -- Score must never win", got, relevance)
+	if got := ResultConfidence(relevance, &strayDistance); got != relevance.Float() {
+		t.Fatalf("ResultConfidence = %v, want the declared relevance %v -- Score must never win", got, relevance.Float())
 	}
 }

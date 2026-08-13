@@ -147,7 +147,7 @@ func TestLiveVectorSearchNormalizesRealFalkorDistances(t *testing.T) {
 		if candidate.Mechanism != contextfabric.MatchVector {
 			t.Fatalf("mechanism = %q, want vector", candidate.Mechanism)
 		}
-		byLabel[candidate.Name] = *candidate.Relevance
+		byLabel[candidate.Name] = candidate.Relevance.Float()
 	}
 	exact, ok := byLabel["Authentication Service"]
 	if !ok {
@@ -296,18 +296,18 @@ func TestLiveVectorIndexReportsItsDimension(t *testing.T) {
 	if err := adapter.ensureOrgGraph(context.Background(), key); err != nil {
 		t.Fatalf("ensureOrgGraph(): %v", err)
 	}
-	dimension, found, err := adapter.vectorIndexDimension(context.Background(), key)
+	dimension, state, err := adapter.vectorIndexDimension(context.Background(), key)
 	if err != nil {
 		t.Fatalf("vectorIndexDimension(): %v", err)
 	}
-	if !found {
-		t.Fatal("the vector index must be discoverable via db.indexes()")
+	if state != vectorIndexKnown {
+		t.Fatalf("the vector index must be discoverable with a KNOWN dimension via db.indexes(), got state %v", state)
 	}
 	if dimension != embedder.Identity().Dimension {
 		t.Fatalf("reported dimension = %d, want %d", dimension, embedder.Identity().Dimension)
 	}
-	if !adapter.vectorEnabledForKey(key) {
-		t.Fatal("a freshly bootstrapped, matching index must leave vector retrieval enabled")
+	if !adapter.ensureVectorReadable(context.Background(), key, orgID) {
+		t.Fatal("a freshly bootstrapped, matching index must pass the read-path fence")
 	}
 	_ = embedprovider.DefaultSimilarityFloor
 }

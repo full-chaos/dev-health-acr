@@ -110,14 +110,62 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 	}
 	vectors, err := a.embedder.Embed(ctx, texts)
 	if err != nil || len(vectors) != len(targets) {
+		// Codex round-1 F3: the batch has ALREADY written new search_text to
+		// these nodes and the watermark is about to advance. Leaving the OLD
+		// vector attached would pair model-A's understanding of yesterday's
+		// text with today's text, permanently and silently -- nothing retries
+		// until a rebuild, and no read-side check can detect it, because the
+		// vector is present, well-formed, and stamped with a matching
+		// identity.
+		//
+		// So the vector is CLEARED instead. A node with no vector degrades
+		// honestly to lexical retrieval; a node with a stale vector lies.
+		a.clearNodeVectors(ctx, key, batch.OrgID, targets)
 		a.recordVectorDegraded(ctx, batch.OrgID)
 		return
 	}
 	for index, target := range targets {
 		if err := a.writeNodeVector(ctx, key, batch.OrgID, target, vectors[index], identity); err != nil {
+			// Same reasoning, mid-batch: targets before this one carry fresh
+			// vectors and are fine; this one and everything after it still
+			// carry yesterday's, so clear exactly those.
+			a.clearNodeVectors(ctx, key, batch.OrgID, targets[index:])
 			a.recordVectorDegraded(ctx, batch.OrgID)
 			return
 		}
+	}
+}
+
+// clearNodeVectors removes the embedding and its identity properties from
+// every named node, in ONE round trip.
+//
+// Verified live (graph module 42002): `SET n.embedding = NULL` both removes
+// the property and drops the node out of the vector index, so a cleared node
+// genuinely stops being a vector-search result rather than merely losing its
+// metadata.
+//
+// Best-effort by construction: this runs on a path that is already degrading,
+// and the canonical projection it follows has already succeeded and must not
+// be rolled back. A failure here is recorded and left for the next rebuild --
+// there is nothing better available, and erroring would only convert a
+// degraded retrieval into a stalled projection pipeline.
+func (a *Adapter) clearNodeVectors(ctx context.Context, key, orgID string, targets []embedTarget) {
+	if len(targets) == 0 {
+		return
+	}
+	list := make([]interface{}, 0, len(targets))
+	for _, target := range targets {
+		list = append(list, map[string]interface{}{"kind": target.kind, "id": target.canonicalID})
+	}
+	cypher := fmt.Sprintf(
+		"UNWIND $targets AS t "+
+			"MATCH (n:%s {%s:$org, %s:t.kind, %s:t.id}) "+
+			"SET n.%s = NULL, n.%s = NULL, n.%s = NULL",
+		labelSubject, propOrgID, propKind, propCanonicalID,
+		propEmbedding, propEmbedderIdentity, propEmbedderDimension,
+	)
+	if _, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": orgID, "targets": list}, false); err != nil {
+		a.recordVectorDegraded(ctx, orgID)
 	}
 }
 
@@ -204,27 +252,54 @@ func (a *Adapter) ensureVectorIndex(ctx context.Context, key string) error {
 		return nil
 	}
 	want := a.embedder.Identity().Dimension
-	existing, found, err := a.vectorIndexDimension(ctx, key)
+	existing, state, err := a.vectorIndexDimension(ctx, key)
 	if err != nil {
 		return err
 	}
-	if found && existing != want {
+	switch state {
+	case vectorIndexAbsent:
+		return a.createVectorIndex(ctx, key, want)
+	case vectorIndexUnknown:
+		// Codex round-1 F5: an index that EXISTS but whose metadata could not
+		// be read is not "absent". The earlier code returned found=false here
+		// and fell through to CREATE, whose already-exists error was treated
+		// as success -- leaving vector retrieval ENABLED against an index of
+		// entirely unknown width. Fail closed instead: unknown is not fine.
 		a.disableVectorForKey(key)
 		return nil
-	}
-	if found {
+	default:
+		if existing != want {
+			a.disableVectorForKey(key)
+		}
 		return nil
 	}
-	return a.createVectorIndex(ctx, key, want)
 }
 
+// vectorIndexState classifies what vectorIndexDimension could learn.
+type vectorIndexState int
+
+const (
+	// vectorIndexAbsent: no vector index on Subject.embedding exists.
+	vectorIndexAbsent vectorIndexState = iota
+	// vectorIndexKnown: an index exists and reported its dimension.
+	vectorIndexKnown
+	// vectorIndexUnknown: an index exists but its dimension or status could
+	// not be determined. Codex round-1 F5 -- this must never be conflated
+	// with absent, because the recovery for absent (create it) silently
+	// succeeds against an existing index and leaves it enabled.
+	vectorIndexUnknown
+)
+
 // vectorIndexDimension reports the dimension an existing vector index on
-// Subject.embedding was built with. found=false means no such index exists
-// yet, which is the normal first-bootstrap case, not an error.
-func (a *Adapter) vectorIndexDimension(ctx context.Context, key string) (int, bool, error) {
+// Subject.embedding was built with, and whether that answer is trustworthy.
+//
+// Fail-closed rules (codex round-1 F5): an index whose status is not
+// OPERATIONAL, or which does not report a usable dimension, is
+// vectorIndexUnknown -- never treated as a match and never treated as absent.
+func (a *Adapter) vectorIndexDimension(ctx context.Context, key string) (int, vectorIndexState, error) {
 	indexes, err := a.api.indexes(ctx, key)
 	if err != nil {
-		return 0, false, safeDependencyError("inspect vector index", err)
+		return 0, vectorIndexUnknown, safeDependencyError("inspect vector index", err)
 	}
 	for _, index := range indexes {
 		if index.Label != labelSubject {
@@ -234,39 +309,154 @@ func (a *Adapter) vectorIndexDimension(ctx context.Context, key string) (int, bo
 		if !ok {
 			continue
 		}
+		isVector := false
 		for _, indexType := range types {
-			if !strings.EqualFold(indexType, "VECTOR") {
-				continue
+			if strings.EqualFold(indexType, "VECTOR") {
+				isVector = true
+				break
 			}
-			// The dimension is reported in the index options; a server
-			// version that does not report it is treated as "unknown", which
-			// falls through to the stored-vector check below rather than
-			// guessing a match.
-			if dimension, ok := index.Dimension(); ok {
-				return dimension, true, nil
-			}
-			return 0, false, nil
 		}
+		if !isVector {
+			continue
+		}
+		// Strict allowlist on status, mirroring pollConstraintsOperational's
+		// posture: only an explicitly OPERATIONAL index may be queried. A
+		// blank status (a server version that does not report one) is
+		// unknown, not acceptable.
+		if !strings.EqualFold(strings.TrimSpace(index.Status), "OPERATIONAL") {
+			return 0, vectorIndexUnknown, nil
+		}
+		dimension, ok := index.Dimension()
+		if !ok {
+			return 0, vectorIndexUnknown, nil
+		}
+		return dimension, vectorIndexKnown, nil
 	}
-	return 0, false, nil
+	return 0, vectorIndexAbsent, nil
+}
+
+// verifyStoredEmbedderIdentity is the READ-side half of the AC-3778-7 fence
+// (codex round-1 F2).
+//
+// The fence was WRITE-only: embedder_identity was stamped onto every node but
+// never read back, and the hosted API's read path never runs bootstrap at all,
+// so it checked neither the index dimension nor the stored identity. A
+// same-dimension model swap -- nomic and embeddinggemma are both 768, which is
+// exactly the live LM Studio scenario -- would therefore serve stale model-A
+// vectors into resolution, where they can alter ranking or, via corroboration,
+// commit a subject. The dimension check cannot see it, and the stored identity
+// says what was ASKED for at write time, so only comparing that stored value
+// against the CURRENTLY configured embedder closes it.
+//
+// This composes with embedprovider's response-model verification rather than
+// duplicating it: that one catches a server serving the wrong model at WRITE
+// time, this one catches a graph already holding vectors from a different
+// model at READ time. Same invariant, two boundaries, and neither subsumes the
+// other -- a graph embedded before the check existed has no write-time
+// protection at all.
+//
+// The query is a bounded existence probe (LIMIT 1), not a count: it asks "does
+// any node carry an identity other than the configured one", and stops at the
+// first. It runs once per graph key per process, cached, so a full scan in the
+// worst case is paid once rather than per request.
+func (a *Adapter) verifyStoredEmbedderIdentity(ctx context.Context, key, orgID string) (bool, error) {
+	identity := a.embedder.Identity().String()
+	cypher := fmt.Sprintf(
+		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s <> $identity RETURN n.%s LIMIT 1",
+		labelSubject, propOrgID, propEmbedderIdentity, propEmbedderIdentity, propCanonicalID,
+	)
+	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": orgID, "identity": identity}, true)
+	if err != nil {
+		return false, safeDependencyError("verify stored embedder identity", err)
+	}
+	return len(rows) == 0, nil
+}
+
+// ensureVectorReadable is the read path's own fence check, run before any
+// vector query for an organization (codex round-1 F2).
+//
+// Result caching: an ENABLED verdict is cached for the process lifetime, which
+// is sound because the configured embedder cannot change without a restart
+// (configuration is read from the environment at construction) and a rebuild
+// re-embeds with that same configuration. A DISABLED verdict is re-checked
+// after vectorFenceRecheckInterval, so an operator who runs
+// `acr-projector rebuild --org` recovers without also having to restart
+// acr-api -- a disabled verdict that never expired would turn a recoverable
+// state into a deploy.
+//
+// Any error checking the fence DISABLES vector retrieval for this request
+// rather than enabling it. An unverifiable fence is not a passed fence.
+func (a *Adapter) ensureVectorReadable(ctx context.Context, key, orgID string) bool {
+	if a.embedder == nil {
+		return false
+	}
+	if verdict, decided := a.cachedVectorFence(key); decided {
+		return verdict
+	}
+	want := a.embedder.Identity().Dimension
+	dimension, state, err := a.vectorIndexDimension(ctx, key)
+	if err != nil || state != vectorIndexKnown || dimension != want {
+		a.disableVectorForKey(key)
+		return false
+	}
+	matches, err := a.verifyStoredEmbedderIdentity(ctx, key, orgID)
+	if err != nil || !matches {
+		a.disableVectorForKey(key)
+		return false
+	}
+	a.enableVectorForKey(key)
+	return true
 }
 
 func (a *Adapter) disableVectorForKey(key string) {
-	a.bootstrapMu.Lock()
-	defer a.bootstrapMu.Unlock()
-	if a.vectorDisabled == nil {
-		a.vectorDisabled = make(map[string]bool)
-	}
-	a.vectorDisabled[key] = true
+	a.setVectorFence(key, false)
 }
 
-// vectorEnabledForKey reports whether vector retrieval may be used for one
-// organization's graph.
+func (a *Adapter) enableVectorForKey(key string) {
+	a.setVectorFence(key, true)
+}
+
+func (a *Adapter) setVectorFence(key string, enabled bool) {
+	a.bootstrapMu.Lock()
+	defer a.bootstrapMu.Unlock()
+	if a.vectorFence == nil {
+		a.vectorFence = make(map[string]vectorFenceEntry)
+	}
+	a.vectorFence[key] = vectorFenceEntry{enabled: enabled, decidedAt: a.now()}
+}
+
+// cachedVectorFence returns a cached verdict when one is still authoritative.
+// An enabled verdict never expires; a disabled one expires after
+// vectorFenceRecheckInterval so a completed rebuild is picked up without a
+// process restart.
+func (a *Adapter) cachedVectorFence(key string) (enabled bool, decided bool) {
+	a.bootstrapMu.RLock()
+	defer a.bootstrapMu.RUnlock()
+	entry, ok := a.vectorFence[key]
+	if !ok {
+		return false, false
+	}
+	if entry.enabled {
+		return true, true
+	}
+	if a.now().Sub(entry.decidedAt) < vectorFenceRecheckInterval {
+		return false, true
+	}
+	return false, false
+}
+
+// vectorEnabledForKey reports the cached verdict WITHOUT consulting the
+// backend. Used by tests and by callers that have already run
+// ensureVectorReadable in this request.
 func (a *Adapter) vectorEnabledForKey(key string) bool {
 	if a.embedder == nil {
 		return false
 	}
-	a.bootstrapMu.RLock()
-	defer a.bootstrapMu.RUnlock()
-	return !a.vectorDisabled[key]
+	enabled, decided := a.cachedVectorFence(key)
+	if !decided {
+		// Undecided means "not yet verified", and an unverified fence is not
+		// a passed fence.
+		return false
+	}
+	return enabled
 }
