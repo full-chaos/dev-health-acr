@@ -38,7 +38,20 @@ const (
 	// ModelExecutionReceipt content (ADR 0008), so a prompt content
 	// change must bump this even though the interpretationOutput schema
 	// itself is unchanged.
-	defaultInterpretationPromptVersion = "context-fabric-interpretation.v3"
+	//
+	// v4 is the same defect one layer over: the prompt stated no length or
+	// count limit, but InterpretedQuestion.Validate caps
+	// requested_judgment at 256 characters and rejects the interpretation
+	// in full when it is longer. Measured live, that single omission was
+	// the entire difference between a usable and an unusable model:
+	// gpt-5-mini failed 5 of 12 investigations on it alone, every one with
+	// a requested_judgment of 259-294 characters, because it writes a more
+	// thorough judgment than gpt-5-nano and nothing told it not to. The
+	// cap itself is a contracts/v1 bound and is deliberately NOT relaxed
+	// here; v4 states it, along with the other bounds a model cannot
+	// infer, and tells the model where that detail belongs instead
+	// (fact_requirements).
+	defaultInterpretationPromptVersion = "context-fabric-interpretation.v4"
 	// defaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
@@ -55,7 +68,16 @@ const (
 	// claimed_fact_ids-must-resolve rule that a model cannot infer. v3
 	// stated none of them, so a real provider failed
 	// SynthesisDraft.ValidateAgainst on ordinary inputs; v4 states them.
-	defaultSynthesisPromptVersion = "context-fabric-synthesis.v4"
+	//
+	// v5 closes the class the first three fixes each patched one instance
+	// of: a bound the validator enforces that the prompt never states. It
+	// adds the length and count limits (title, summary, qualification,
+	// affected_subjects, per-item and per-collection caps, identifier
+	// upper bound) that v4 left unstated, and TestPromptsStateEveryModelFacingBound
+	// now fails if a bound is added or changed in contracts/v1 without the
+	// prompt being updated to match, so a fourth instance cannot ship
+	// silently.
+	defaultSynthesisPromptVersion = "context-fabric-synthesis.v5"
 	defaultSchemaVersion          = "context-fabric-model-output.v1"
 	defaultEvaluatorVersion       = "context-fabric-grounding.v1"
 )
