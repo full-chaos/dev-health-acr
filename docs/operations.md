@@ -485,9 +485,10 @@ So the failure mode is availability, not correctness — but at 2 in 33 the
 endpoint is unusable. As of CHAOS-3784, a synthesis-side claim-binding
 rejection like this one is `422 synthesis_rejected` (no `violated_bound`,
 since claim-binding is a business rule, not a length/count bound); a
-provider/schema-level failure is the separate `502 provider_error`. Earlier
-measurements in this section predate that split and describe what was then
-a single opaque `502 upstream_invalid_output` for both.
+provider/schema-level failure keeps the pre-existing `502
+upstream_invalid_output` code (unchanged). Earlier measurements in this
+section predate that split and describe what was then a single opaque `502
+upstream_invalid_output` for both.
 
 **The fallback is required, not optional.** Invalid output is deliberately
 **not** retried (`genkitruntime` fails closed on a schema-shaped failure
@@ -502,9 +503,10 @@ rate is the signal to promote the fallback to primary.
 
 The fallback raises the answer rate; it does not make it 1.0. One of those
 17 attempts still failed, so a caller must treat `422 interpretation_rejected`,
-`422 synthesis_rejected`, and `502 provider_error` as expected, retryable
-outcomes even with the fallback configured — do not build a client that
-assumes an investigation always returns an answer on the first call.
+`422 synthesis_rejected`, and `502 upstream_invalid_output` as expected,
+retryable outcomes even with the fallback configured — do not build a
+client that assumes an investigation always returns an answer on the first
+call.
 
 #### Measured model matrix
 

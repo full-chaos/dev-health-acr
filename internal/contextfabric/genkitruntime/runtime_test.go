@@ -295,6 +295,74 @@ func TestRuntimeRejectsInvalidStructuredInterpretation(t *testing.T) {
 	if receipt.Outcome != "invalid_output" {
 		t.Fatalf("receipt = %#v", receipt)
 	}
+	// CHAOS-3784: this is the PRODUCTION ModelRuntime's OWN Validate()
+	// rejection (interpretationOutput.toDomain, not
+	// RuntimeQuestionInterpreter.Interpret's defensive re-check), so it
+	// must already carry ErrInterpretationRejected here -- an invalid
+	// Shape enum is a business rule, not a registry bound, so no
+	// ModelBoundViolation.
+	if !errors.Is(err, contextfabric.ErrInterpretationRejected) {
+		t.Fatalf("InterpretQuestion() error = %v, want ErrInterpretationRejected", err)
+	}
+	var violation *contextfabric.ModelBoundViolation
+	if errors.As(err, &violation) {
+		t.Fatalf("InterpretQuestion() error = %v, want no ModelBoundViolation for an invalid enum", err)
+	}
+}
+
+// TestRuntimeClassifiesInterpretationBoundViolationWithoutFallback is the
+// CHAOS-3784 F1 regression: it reproduces the CHAOS-3770 evidence exactly
+// (a 259-character requested_judgment, one past the 256-character cap)
+// through Runtime.InterpretQuestion itself -- the real production call
+// site, not RuntimeQuestionInterpreter.Interpret's defensive re-validation
+// -- with NO fallback configured, so the classification decided inside
+// interpretationOutput.toDomain's Validate() failure is what a caller
+// actually receives.
+func TestRuntimeClassifiesInterpretationBoundViolationWithoutFallback(t *testing.T) {
+	t.Parallel()
+	output := validInterpretationOutput()
+	output.RequestedJudgment = strings.Repeat("a", 259)
+	runtime := mustRuntime(t, &generatorStub{interpretation: output}, Config{})
+	_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+	if err == nil || !errors.Is(err, contextfabric.ErrInterpretationRejected) || !errors.Is(err, contextfabric.ErrModelOutput) {
+		t.Fatalf("InterpretQuestion() error = %v, want both ErrInterpretationRejected and ErrModelOutput", err)
+	}
+	if errors.Is(err, contextfabric.ErrSynthesisRejected) {
+		t.Fatalf("InterpretQuestion() error = %v, must not also classify as ErrSynthesisRejected", err)
+	}
+	if receipt.Outcome != "invalid_output" {
+		t.Fatalf("receipt = %#v", receipt)
+	}
+	var violation *contextfabric.ModelBoundViolation
+	if !errors.As(err, &violation) {
+		t.Fatalf("InterpretQuestion() error = %v, want a ModelBoundViolation", err)
+	}
+	if violation.Bound != "interpretation.requested_judgment.max_length" {
+		t.Fatalf("violation.Bound = %q, want interpretation.requested_judgment.max_length", violation.Bound)
+	}
+}
+
+// TestRuntimeFallsBackWhenPrimaryInterpretationIsSemanticallyInvalid proves
+// the CHAOS-3784 F1 fix did not change WHEN the fallback triggers: a
+// primary bound violation (not just a generation/transport error) must
+// still hand off to a configured fallback and succeed exactly as before,
+// with no ErrInterpretationRejected/ModelBoundViolation surfacing to the
+// caller once the fallback itself produced a valid interpretation.
+func TestRuntimeFallsBackWhenPrimaryInterpretationIsSemanticallyInvalid(t *testing.T) {
+	t.Parallel()
+	invalid := validInterpretationOutput()
+	invalid.RequestedJudgment = strings.Repeat("a", 259)
+	fallbackQuestion := validInterpretedQuestion()
+	runtime := mustRuntime(t, &generatorStub{interpretation: invalid}, Config{
+		Fallback: fallbackRuntime{interpreted: fallbackQuestion, draft: validDraft()},
+	})
+	interpreted, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+	if err != nil {
+		t.Fatalf("InterpretQuestion() error = %v, want the fallback to resolve the primary's bound violation", err)
+	}
+	if interpreted.RequestedJudgment != fallbackQuestion.RequestedJudgment || !receipt.FallbackUsed || receipt.Outcome != "fallback" {
+		t.Fatalf("interpreted = %#v receipt = %#v", interpreted, receipt)
+	}
 }
 
 func TestRuntimeRejectsSynthesisThatInventsEvidence(t *testing.T) {
@@ -308,6 +376,68 @@ func TestRuntimeRejectsSynthesisThatInventsEvidence(t *testing.T) {
 	}
 	if receipt.Outcome != "invalid_output" {
 		t.Fatalf("receipt = %#v", receipt)
+	}
+	// CHAOS-3784: this is the PRODUCTION ModelRuntime's OWN
+	// draft.ValidateAgainst(input) rejection, so it must already carry
+	// ErrSynthesisRejected here. Inventing evidence is a claim-binding/
+	// grounding business rule, not a registry bound, so no
+	// ModelBoundViolation.
+	if !errors.Is(err, contextfabric.ErrSynthesisRejected) {
+		t.Fatalf("SynthesizeAnswer() error = %v, want ErrSynthesisRejected", err)
+	}
+	var violation *contextfabric.ModelBoundViolation
+	if errors.As(err, &violation) {
+		t.Fatalf("SynthesizeAnswer() error = %v, want no ModelBoundViolation for invented evidence", err)
+	}
+}
+
+// TestRuntimeClassifiesSynthesisBoundViolationWithoutFallback is
+// TestRuntimeClassifiesInterpretationBoundViolationWithoutFallback's
+// synthesis-side counterpart: Runtime.SynthesizeAnswer calls
+// draft.ValidateAgainst(input) itself (it has the SynthesisInput the check
+// needs), so a real bound violation must classify correctly straight from
+// that call, with no fallback configured.
+func TestRuntimeClassifiesSynthesisBoundViolationWithoutFallback(t *testing.T) {
+	t.Parallel()
+	output := validSynthesisOutput()
+	output.Drivers[0].Title = strings.Repeat("a", 513)
+	runtime := mustRuntime(t, &generatorStub{synthesis: output}, Config{})
+	_, receipt, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if err == nil || !errors.Is(err, contextfabric.ErrSynthesisRejected) || !errors.Is(err, contextfabric.ErrModelOutput) {
+		t.Fatalf("SynthesizeAnswer() error = %v, want both ErrSynthesisRejected and ErrModelOutput", err)
+	}
+	if errors.Is(err, contextfabric.ErrInterpretationRejected) {
+		t.Fatalf("SynthesizeAnswer() error = %v, must not also classify as ErrInterpretationRejected", err)
+	}
+	if receipt.Outcome != "invalid_output" {
+		t.Fatalf("receipt = %#v", receipt)
+	}
+	var violation *contextfabric.ModelBoundViolation
+	if !errors.As(err, &violation) {
+		t.Fatalf("SynthesizeAnswer() error = %v, want a ModelBoundViolation", err)
+	}
+	if violation.Bound != "synthesis.driver.title.max_length" {
+		t.Fatalf("violation.Bound = %q, want synthesis.driver.title.max_length", violation.Bound)
+	}
+}
+
+// TestRuntimeFallsBackWhenPrimarySynthesisIsSemanticallyInvalid is
+// TestRuntimeFallsBackWhenPrimaryInterpretationIsSemanticallyInvalid's
+// synthesis-side counterpart.
+func TestRuntimeFallsBackWhenPrimarySynthesisIsSemanticallyInvalid(t *testing.T) {
+	t.Parallel()
+	invalid := validSynthesisOutput()
+	invalid.EvidenceRefIDs = []string{"evidence_not_in_input"}
+	fallbackDraft := validDraft()
+	runtime := mustRuntime(t, &generatorStub{synthesis: invalid}, Config{
+		Fallback: fallbackRuntime{interpreted: validInterpretedQuestion(), draft: fallbackDraft},
+	})
+	draft, receipt, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v, want the fallback to resolve the primary's rejection", err)
+	}
+	if draft.DeterministicAnswer != fallbackDraft.DeterministicAnswer || !receipt.FallbackUsed || receipt.Outcome != "fallback" {
+		t.Fatalf("draft = %#v receipt = %#v", draft, receipt)
 	}
 }
 

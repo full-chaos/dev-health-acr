@@ -2,8 +2,8 @@
   "schema_version": "error.v1",
   "request_id": "req_01J0ACR004",
   "error": {
-    "code": "provider_error",
-    "message": "Context Fabric's model provider returned an invalid response; retry",
+    "code": "upstream_invalid_output",
+    "message": "Context Fabric produced an invalid answer; retry",
     "http_status": 502,
     "retryable": true,
     "details": {}

@@ -351,7 +351,14 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 			receipt.Outcome = fallbackReceipt.Outcome
 			return contextfabric.InterpretedQuestion{}, receipt, fallbackErr
 		}
-		return contextfabric.InterpretedQuestion{}, receipt, fmt.Errorf("%w: %v", contextfabric.ErrModelOutput, err)
+		// CHAOS-3784 F1: this is the production ModelRuntime's OWN
+		// Validate() rejection (interpreted.Validate() inside toDomain
+		// above), not merely RuntimeQuestionInterpreter.Interpret's
+		// defensive re-check -- it must carry the same
+		// ErrInterpretationRejected/ModelBoundViolation classification, or
+		// every real bound violation reaches the route as an
+		// indistinguishable bare ErrModelOutput.
+		return contextfabric.InterpretedQuestion{}, receipt, contextfabric.ClassifyInterpretationRejection(interpreted, err)
 	}
 	outputBytes, _ := json.Marshal(output)
 	receipt.OutputDigest = contextfabric.DigestModelValue(outputBytes)
@@ -420,7 +427,13 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 			receipt.Outcome = fallbackReceipt.Outcome
 			return contextfabric.SynthesisDraft{}, receipt, fallbackErr
 		}
-		return contextfabric.SynthesisDraft{}, receipt, fmt.Errorf("%w: %v", contextfabric.ErrModelOutput, err)
+		// CHAOS-3784 F1: this is the production ModelRuntime's OWN
+		// draft.ValidateAgainst(input) call above (it has the
+		// SynthesisInput the check needs, unlike
+		// RuntimeAnswerSynthesizer.Synthesize's defensive re-check), so it
+		// must carry the same ErrSynthesisRejected/ModelBoundViolation
+		// classification -- see the matching comment in InterpretQuestion.
+		return contextfabric.SynthesisDraft{}, receipt, contextfabric.ClassifySynthesisRejection(draft, err)
 	}
 	outputBytes, _ := json.Marshal(output)
 	receipt.OutputDigest = contextfabric.DigestModelValue(outputBytes)
@@ -699,7 +712,13 @@ func (o interpretationOutput) toDomain(defaultTime contextfabric.TimeContext) (c
 		ClarificationNeeded: o.ClarificationNeeded, ClarificationReason: strings.TrimSpace(o.ClarificationReason),
 	}
 	if err := interpreted.Validate(); err != nil {
-		return contextfabric.InterpretedQuestion{}, err
+		// Return interpreted (not a zero value) alongside the error: the
+		// caller (Runtime.InterpretQuestion) needs the actual rejected
+		// value to diagnose which bound it violated (CHAOS-3784 F1) --
+		// this is the production ModelRuntime's OWN Validate() call site,
+		// the only place that still has it before it would otherwise be
+		// discarded.
+		return interpreted, err
 	}
 	return interpreted, nil
 }
@@ -757,7 +776,11 @@ func (o synthesisOutput) toDomain() (contextfabric.SynthesisDraft, error) {
 		DeterministicAnswer: strings.TrimSpace(o.DeterministicAnswer), Warnings: trimmedUnique(o.Warnings),
 	}
 	if strings.TrimSpace(draft.DeterministicAnswer) == "" {
-		return contextfabric.SynthesisDraft{}, errors.New("deterministic answer is required")
+		// Return draft (not a zero value) alongside the error: the caller
+		// (Runtime.SynthesizeAnswer) needs it to diagnose whether any
+		// OTHER field also violates a bound (CHAOS-3784 F1), the same
+		// reason interpretationOutput.toDomain does this above.
+		return draft, errors.New("deterministic answer is required")
 	}
 	return draft, nil
 }

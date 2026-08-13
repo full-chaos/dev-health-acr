@@ -1,7 +1,9 @@
 package sidecar
 
 import (
+	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -9,24 +11,70 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
+// TestNewAPIErrorMapsKnownCodesToSentinels iterates codeSentinels itself,
+// not a hand-maintained parallel list -- a code added there without adding
+// a case here (or vice versa) would otherwise ship untested (CHAOS-3784
+// round-2 F2/F4 class: don't let a registry drift from its own coverage).
 func TestNewAPIErrorMapsKnownCodesToSentinels(t *testing.T) {
-	cases := map[string]error{
-		"invalid_token":        ErrInvalidToken,
-		"insufficient_scope":   ErrInsufficientScope,
-		"repo_forbidden":       ErrRepositoryForbidden,
-		"feature_not_enabled":  ErrFeatureNotEnabled,
-		"version_mismatch":     ErrVersionMismatch,
-		"rate_limited":         ErrRateLimited,
-		"upstream_unavailable": ErrUpstreamUnavailable,
-		"internal_error":       ErrInternalAPIError,
-		"not_found":            ErrNotFound,
-		"invalid_request":      ErrInvalidRequest,
-	}
-	for code, sentinel := range cases {
+	for code, sentinel := range codeSentinels {
 		apiErr := newAPIError(400, contractsv1.ErrorDetail{Code: code, Message: "safe message", HTTPStatus: 400}, "req_1", "")
 		if !errors.Is(apiErr, sentinel) {
 			t.Fatalf("code %q did not map to expected sentinel", code)
 		}
+	}
+}
+
+// TestDecodeAPIErrorRecognizesContextFabricModelFailureCodes is the
+// CHAOS-3784 round-2 F2 regression: before upstream_invalid_output,
+// interpretation_rejected, and synthesis_rejected were added to
+// codeSentinels, decodeAPIError's validateErrorEnvelope call rejected an
+// envelope carrying any of them (an unrecognized code) and fell back to
+// newTransportError -- whose Retryable guess (status==429||status>=500) is
+// FALSE for 422, silently discarding the hosted response's own correct
+// retryable=true. This drives decodeAPIError itself (not just newAPIError)
+// with a schema-conformant envelope for each code, at its real HTTP
+// status, and proves the envelope's own fields survive.
+func TestDecodeAPIErrorRecognizesContextFabricModelFailureCodes(t *testing.T) {
+	cases := []struct {
+		name     string
+		code     string
+		status   int
+		sentinel error
+	}{
+		{"upstream invalid output", "upstream_invalid_output", http.StatusBadGateway, ErrUpstreamInvalidOutput},
+		{"interpretation rejected", "interpretation_rejected", http.StatusUnprocessableEntity, ErrInterpretationRejected},
+		{"synthesis rejected", "synthesis_rejected", http.StatusUnprocessableEntity, ErrSynthesisRejected},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			envelope := contractsv1.ErrorEnvelope{
+				SchemaVersion: contractsv1.ErrorSchema, RequestID: "req_01J0ACR999",
+				Error: contractsv1.ErrorDetail{
+					Code: testCase.code, Message: "safe message", HTTPStatus: testCase.status, Retryable: true,
+				},
+			}
+			body, err := json.Marshal(envelope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := decodeAPIError(testCase.status, "req_01J0ACR999", "", body)
+			apiErr, ok := got.(*APIError)
+			if !ok {
+				t.Fatalf("decodeAPIError() = %#v (%T), want *APIError", got, got)
+			}
+			if errors.Is(apiErr, ErrMalformedResponse) {
+				t.Fatalf("code %q fell back to the transport error path (ErrMalformedResponse), want it recognized", testCase.code)
+			}
+			if !errors.Is(apiErr, testCase.sentinel) {
+				t.Fatalf("code %q did not map to expected sentinel, got %v", testCase.code, apiErr)
+			}
+			if apiErr.HTTPStatus != testCase.status {
+				t.Fatalf("HTTPStatus = %d, want %d", apiErr.HTTPStatus, testCase.status)
+			}
+			if !apiErr.Retryable {
+				t.Fatalf("Retryable = false, want true (the hosted envelope's own retryable=true, not a transport-fallback status guess)")
+			}
+		})
 	}
 }
 

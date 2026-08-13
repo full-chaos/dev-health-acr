@@ -21,7 +21,7 @@ var exampleSchemaPairs = map[string]string{
 	"error.v1.json":                                         "error.v1.schema.json",
 	"error_context_fabric_interpretation_rejected.v1.json":  "error.v1.schema.json",
 	"error_context_fabric_synthesis_rejected.v1.json":       "error.v1.schema.json",
-	"error_context_fabric_provider_error.v1.json":           "error.v1.schema.json",
+	"error_context_fabric_upstream_invalid_output.v1.json":  "error.v1.schema.json",
 	"mcp_context_for_task_request.v1.json":                  "mcp_context_for_task_request.v1.schema.json",
 	"mcp_context_for_task_request_full.v1.json":             "mcp_context_for_task_request.v1.schema.json",
 	"mcp_context_for_task_response.v1.json":                 "mcp_context_for_task_response.v1.schema.json",

@@ -451,9 +451,7 @@ func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal sto
 	if err == nil {
 		if validateErr := question.Validate(); validateErr != nil {
 			receipt.Outcome = "invalid_output"
-			wrapped := fmt.Errorf("%w: %w: %v", ErrInterpretationRejected, ErrModelOutput, validateErr)
-			bound, diagnosed := contractsv1.DiagnoseContextFabricInterpretedQuestionBound(question)
-			err = withBoundViolation(wrapped, bound, diagnosed)
+			err = ClassifyInterpretationRejection(question, validateErr)
 		} else if receipt.Outcome == "pending_validation" {
 			receipt.Outcome = "success"
 		}
@@ -503,9 +501,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	if err == nil {
 		if validateErr := draft.ValidateAgainst(input); validateErr != nil {
 			receipt.Outcome = "invalid_output"
-			wrapped := fmt.Errorf("%w: %w: %v", ErrSynthesisRejected, ErrModelOutput, validateErr)
-			bound, diagnosed := diagnoseSynthesisDraftBound(draft)
-			err = withBoundViolation(wrapped, bound, diagnosed)
+			err = ClassifySynthesisRejection(draft, validateErr)
 		} else if receipt.Outcome == "pending_validation" {
 			receipt.Outcome = "success"
 		}

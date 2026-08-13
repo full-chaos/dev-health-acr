@@ -1,6 +1,44 @@
 package contextfabric
 
-import contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+import (
+	"fmt"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
+
+// ClassifyInterpretationRejection wraps cause -- already produced by
+// question.Validate() failing -- into ErrInterpretationRejected (which also
+// wraps ErrModelOutput, so every existing errors.Is(err, ErrModelOutput)
+// caller is unaffected), attaching a ModelBoundViolation when question's
+// rejection is attributable to a specific contracts/v1 model-facing bound
+// (see contractsv1.DiagnoseContextFabricInterpretedQuestionBound).
+//
+// question must be the ACTUAL (possibly invalid) value Validate() was
+// called against, not a zero value -- CHAOS-3784 round-2 finding F1:
+// genkitruntime.Runtime.InterpretQuestion's own toDomain() call is the
+// production ModelRuntime's OWN Validate() call site (it self-validates
+// before RuntimeQuestionInterpreter.Interpret ever sees the result), so
+// this function must be reachable from there too, not only from
+// RuntimeQuestionInterpreter.Interpret's defensive re-validation for a
+// ModelRuntime that does not self-validate.
+func ClassifyInterpretationRejection(question InterpretedQuestion, cause error) error {
+	wrapped := fmt.Errorf("%w: %w: %v", ErrInterpretationRejected, ErrModelOutput, cause)
+	bound, diagnosed := contractsv1.DiagnoseContextFabricInterpretedQuestionBound(question)
+	return withBoundViolation(wrapped, bound, diagnosed)
+}
+
+// ClassifySynthesisRejection is ClassifyInterpretationRejection's
+// synthesis-side counterpart: draft must be the actual (possibly invalid)
+// value ValidateAgainst was called against. See its doc comment --
+// genkitruntime.Runtime.SynthesizeAnswer calls draft.ValidateAgainst(input)
+// itself (it has the SynthesisInput the check needs), so this must be
+// reachable from there too, not only from
+// RuntimeAnswerSynthesizer.Synthesize's defensive re-validation.
+func ClassifySynthesisRejection(draft SynthesisDraft, cause error) error {
+	wrapped := fmt.Errorf("%w: %w: %v", ErrSynthesisRejected, ErrModelOutput, cause)
+	bound, diagnosed := diagnoseSynthesisDraftBound(draft)
+	return withBoundViolation(wrapped, bound, diagnosed)
+}
 
 // diagnoseSynthesisDraftBound re-derives, for reporting purposes only,
 // which model-facing length/count bound (if any) caused d to fail

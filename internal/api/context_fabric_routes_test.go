@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -232,9 +233,9 @@ func TestContextFabricInvestigationRouteReportsDistinctCodesAndBoundNames(t *tes
 			wantStatus: http.StatusUnprocessableEntity, wantCode: "synthesis_rejected", wantNoBound: true,
 		},
 		{
-			name:       "provider error carries no bound",
+			name:       "upstream invalid output carries no bound",
 			err:        contextfabric.ErrModelOutput,
-			wantStatus: http.StatusBadGateway, wantCode: "provider_error", wantNoBound: true,
+			wantStatus: http.StatusBadGateway, wantCode: "upstream_invalid_output", wantNoBound: true,
 		},
 	}
 	for _, testCase := range cases {
@@ -262,6 +263,201 @@ func TestContextFabricInvestigationRouteReportsDistinctCodesAndBoundNames(t *tes
 			}
 			gotBound, _ := body.Error.Details["violated_bound"].(string)
 			if testCase.wantNoBound {
+				if _, present := body.Error.Details["violated_bound"]; present {
+					t.Fatalf("details.violated_bound = %q, want absent", gotBound)
+				}
+				return
+			}
+			if gotBound != testCase.wantBound {
+				t.Fatalf("details.violated_bound = %q, want %q", gotBound, testCase.wantBound)
+			}
+		})
+	}
+}
+
+// routeTestModelRuntime is a minimal contextfabric.ModelRuntime a route
+// test can wire directly into contextfabric.RuntimeQuestionInterpreter /
+// RuntimeAnswerSynthesizer, so a route test exercises the REAL
+// classification code (question.Validate(), draft.ValidateAgainst(),
+// contextfabric.ClassifyInterpretationRejection/ClassifySynthesisRejection)
+// instead of a hand-built *contextfabric.ModelBoundViolation (CHAOS-3784
+// round-2 F6).
+type routeTestModelRuntime struct {
+	interpreted   contextfabric.InterpretedQuestion
+	interpretErr  error
+	draft         contextfabric.SynthesisDraft
+	synthesizeErr error
+}
+
+func (f routeTestModelRuntime) InterpretQuestion(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
+	return f.interpreted, validRouteTestModelReceipt(contextfabric.ModelOperationInterpret), f.interpretErr
+}
+
+func (f routeTestModelRuntime) SynthesizeAnswer(context.Context, storage.Principal, contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {
+	return f.draft, validRouteTestModelReceipt(contextfabric.ModelOperationSynthesize), f.synthesizeErr
+}
+
+type noopModelReceiptSink struct{}
+
+func (noopModelReceiptSink) RecordModelExecution(context.Context, storage.Principal, contextfabric.ModelExecutionReceipt) error {
+	return nil
+}
+
+func validRouteTestModelReceipt(operation contextfabric.ModelOperation) contextfabric.ModelExecutionReceipt {
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	return contextfabric.ModelExecutionReceipt{
+		Operation: operation, Provider: "test-provider", Model: "test-model", ModelVersion: "model-v1",
+		PromptVersion: "prompt-v1", SchemaVersion: "schema-v1", EvaluatorVersion: "eval-v1",
+		StartedAt: now, CompletedAt: now.Add(time.Second), Attempts: 1,
+		InputDigest: contextfabric.DigestModelValue([]byte("route-test-input")),
+	}
+}
+
+func validRouteTestSynthesisInput() contextfabric.SynthesisInput {
+	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	return contextfabric.SynthesisInput{
+		Request: investigationRequestDomain(),
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeOpen, RequestedJudgment: "status_and_drivers",
+			TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		},
+		Graph: contextfabric.GraphContext{
+			Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{project}},
+			Coverage:   contextfabric.Coverage{Sources: []contextfabric.SourceObservation{}, DegradedReasons: []string{}},
+		},
+		Facts: contextfabric.CanonicalFactBundle{
+			Coverage: contextfabric.Coverage{Sources: []contextfabric.SourceObservation{}, DegradedReasons: []string{}}, Version: "ops-v1",
+		},
+	}
+}
+
+func validRouteTestSynthesisDraft() contextfabric.SynthesisDraft {
+	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	return contextfabric.SynthesisDraft{
+		Status: contextfabric.InvestigationComplete, DirectJudgment: "Ask Dev is not release-ready.",
+		CurrentState: "Diverges.", StrongestPressures: []string{}, RemainingWork: []contextfabric.Finding{},
+		ReadinessGaps: []contextfabric.Finding{}, Conflicts: []contextfabric.Finding{}, Limitations: []string{},
+		EvidenceRefIDs: []string{}, Warnings: []string{},
+		Drivers: []contextfabric.DriverJudgment{{
+			DriverID: "driver_12345678", Standing: contextfabric.DriverPrincipal, Category: "relationship",
+			Title: "Release acceptance remains open", Summary: "Required acceptance has not completed.",
+			AffectedSubjects: []contextfabric.SubjectRef{project}, Derivation: contextfabric.DerivationRuleInferred,
+			EpistemicStatus: contextfabric.EpistemicInferred, Confidence: 0.9, Current: true,
+			EvidenceRefIDs: []string{},
+		}},
+		DeterministicAnswer: "Ask Dev is not release-ready because release acceptance remains open.",
+	}
+}
+
+// investigationRequestDomain returns the exact contextfabric.InvestigationRequest
+// (a type alias of contractsv1.ContextFabricInvestigationRequest) the route
+// decodes investigationRequest's HTTP body into, so a fake ModelRuntime
+// wired through contextfabric.RuntimeQuestionInterpreter sees the identical
+// request the route itself would pass to a real investigator.
+func investigationRequestDomain() contextfabric.InvestigationRequest {
+	return investigationRequestBody()
+}
+
+// TestContextFabricInvestigationRouteEndToEndClassifiesRealFailures is the
+// CHAOS-3784 round-2 F6 probe: unlike
+// TestContextFabricInvestigationRouteReportsDistinctCodesAndBoundNames
+// (which unit-tests the route's own switch against hand-built errors), this
+// drives a fake ModelRuntime's genuinely invalid output through the REAL
+// contextfabric.RuntimeQuestionInterpreter/RuntimeAnswerSynthesizer
+// classification code (question.Validate(), draft.ValidateAgainst(),
+// Classify*Rejection) and the route, then binds the FULL response contract:
+// status, code, http_status, retryable, request ID, a fixed (non-model)
+// message, and details.violated_bound where expected -- plus a negative
+// check that neither the model's own text nor a raw provider error string
+// ever reaches the body.
+func TestContextFabricInvestigationRouteEndToEndClassifiesRealFailures(t *testing.T) {
+	const secretModelText = "SECRET MODEL PROSE ACR MUST NEVER RETURN"
+	cases := []struct {
+		name        string
+		investigate func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error)
+		wantStatus  int
+		wantCode    string
+		wantBound   string
+	}{
+		{
+			name: "real interpretation bound violation",
+			investigate: func(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+				invalid := contextfabric.InterpretedQuestion{
+					Shape: contextfabric.ShapeOpen, RequestedJudgment: secretModelText + strings.Repeat("a", 259),
+					TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+				}
+				interpreter := contextfabric.RuntimeQuestionInterpreter{
+					Runtime: routeTestModelRuntime{interpreted: invalid}, Sink: noopModelReceiptSink{},
+				}
+				_, err := interpreter.Interpret(ctx, principal, request)
+				return contextfabric.InvestigationResult{}, err
+			},
+			wantStatus: http.StatusUnprocessableEntity, wantCode: "interpretation_rejected",
+			wantBound: "interpretation.requested_judgment.max_length",
+		},
+		{
+			name: "real synthesis bound violation",
+			investigate: func(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+				input := validRouteTestSynthesisInput()
+				draft := validRouteTestSynthesisDraft()
+				draft.Drivers[0].Title = secretModelText + strings.Repeat("a", 513)
+				synthesizer := contextfabric.RuntimeAnswerSynthesizer{
+					Runtime: routeTestModelRuntime{draft: draft}, Sink: noopModelReceiptSink{},
+				}
+				_, err := synthesizer.Synthesize(ctx, principal, input)
+				return contextfabric.InvestigationResult{}, err
+			},
+			wantStatus: http.StatusUnprocessableEntity, wantCode: "synthesis_rejected",
+			wantBound: "synthesis.driver.title.max_length",
+		},
+		{
+			name: "real upstream invalid output",
+			investigate: func(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+				interpreter := contextfabric.RuntimeQuestionInterpreter{
+					Runtime: routeTestModelRuntime{interpretErr: fmt.Errorf("%w: provider status INTERNAL: %s", contextfabric.ErrModelOutput, secretModelText)},
+					Sink:    noopModelReceiptSink{},
+				}
+				_, err := interpreter.Interpret(ctx, principal, request)
+				return contextfabric.InvestigationResult{}, err
+			},
+			wantStatus: http.StatusBadGateway, wantCode: "upstream_invalid_output",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			app, token := newContextFabricTestApp(t, investigatorFunc(testCase.investigate))
+			response := httptest.NewRecorder()
+
+			app.Handler().ServeHTTP(response, investigationRequest(t, token))
+
+			if response.Code != testCase.wantStatus {
+				t.Fatalf("status = %d, want %d body=%s", response.Code, testCase.wantStatus, response.Body.String())
+			}
+			raw := response.Body.String()
+			if strings.Contains(raw, secretModelText) {
+				t.Fatalf("response body leaked model/provider text: %s", raw)
+			}
+			var body contractsv1.ErrorEnvelope
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode error body: %v (body=%s)", err, raw)
+			}
+			if body.RequestID == "" {
+				t.Fatalf("request_id is empty: %s", raw)
+			}
+			if body.Error.Code != testCase.wantCode {
+				t.Fatalf("code = %q, want %q", body.Error.Code, testCase.wantCode)
+			}
+			if body.Error.HTTPStatus != testCase.wantStatus {
+				t.Fatalf("http_status = %d, want %d", body.Error.HTTPStatus, testCase.wantStatus)
+			}
+			if !body.Error.Retryable {
+				t.Fatalf("retryable = false, want true")
+			}
+			if body.Error.Message == "" || strings.Contains(body.Error.Message, secretModelText) {
+				t.Fatalf("message = %q", body.Error.Message)
+			}
+			gotBound, _ := body.Error.Details["violated_bound"].(string)
+			if testCase.wantBound == "" {
 				if _, present := body.Error.Details["violated_bound"]; present {
 					t.Fatalf("details.violated_bound = %q, want absent", gotBound)
 				}

@@ -169,8 +169,15 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	// caller can tell the two apart, and retryable because a fresh model
 	// call may succeed even though this one didn't. Never a bound
 	// violation -- no violated_bound in details.
+	//
+	// Code stays upstream_invalid_output (unchanged from before CHAOS-3784,
+	// deliberately NOT renamed to a new "provider_error" value): round-2
+	// review flagged a rename here as gratuitous breakage for any existing
+	// upstream_invalid_output matcher outside this repo, for zero benefit
+	// -- the new interpretation_rejected/synthesis_rejected codes above
+	// already carry the distinguishing signal this ticket asked for.
 	if errors.Is(err, contextfabric.ErrModelOutput) {
-		writeError(w, r, http.StatusBadGateway, "provider_error", "Context Fabric's model provider returned an invalid response; retry", true, nil)
+		writeError(w, r, http.StatusBadGateway, "upstream_invalid_output", "Context Fabric produced an invalid answer; retry", true, nil)
 		return
 	}
 	a.logger.ErrorContext(r.Context(), "context fabric investigation failed", "request_id", RequestID(r.Context()), "failure_class", "context_fabric_investigation")
