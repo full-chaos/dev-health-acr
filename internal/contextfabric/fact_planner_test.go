@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -86,7 +87,7 @@ func TestPlanFactReadsPrunesOnlyProvableIrrelevance(t *testing.T) {
 				Subjects:     testCase.subjects,
 				Requirements: []FactRequirement{{Kind: testCase.capability.Kind}},
 			}
-			plan := planFactReads(request, planIndex(testCase.capability))
+			plan := planFactReads(newFactPlanInput(request), planIndex(testCase.capability))
 			if len(plan) != 1 {
 				t.Fatalf("plan length = %d, want 1", len(plan))
 			}
@@ -127,7 +128,7 @@ func TestPlanFactReadsReasonsCarryClosedCodesAndNoContent(t *testing.T) {
 			{Kind: FactMetrics},
 		},
 	}
-	plan := planFactReads(request, planIndex(planCapability(FactMetrics, "metrics", SubjectRepository)))
+	plan := planFactReads(newFactPlanInput(request), planIndex(planCapability(FactMetrics, "metrics", SubjectRepository)))
 	entry := plan[0]
 	if !strings.HasPrefix(entry.Reason, FactPruneReasonSubjectKindUnsupported) {
 		t.Fatalf("reason = %q, want the closed prune code as its prefix", entry.Reason)
@@ -146,7 +147,7 @@ func TestPlanFactReadsReasonsCarryClosedCodesAndNoContent(t *testing.T) {
 		},
 		Requirements: []FactRequirement{{Kind: FactMetrics}},
 	}
-	narrowed := planFactReads(narrowing, planIndex(planCapability(FactMetrics, "metrics", SubjectRepository)))[0]
+	narrowed := planFactReads(newFactPlanInput(narrowing), planIndex(planCapability(FactMetrics, "metrics", SubjectRepository)))[0]
 	if !strings.HasPrefix(narrowed.Reason, FactNarrowReasonSubjectKindUnsupported) {
 		t.Fatalf("reason = %q, want the closed narrowing code as its prefix", narrowed.Reason)
 	}
@@ -188,7 +189,7 @@ func TestPlanFactReadsIgnoresEveryModelPhrasingSignal(t *testing.T) {
 		Subjects: subjects, Requirements: requirements,
 	}
 
-	tersePlan, elaboratePlan := planFactReads(terse, capabilities), planFactReads(elaborate, capabilities)
+	tersePlan, elaboratePlan := planFactReads(newFactPlanInput(terse), capabilities), planFactReads(newFactPlanInput(elaborate), capabilities)
 	if len(tersePlan) != len(elaboratePlan) {
 		t.Fatalf("plan lengths differ: %d vs %d", len(tersePlan), len(elaboratePlan))
 	}
@@ -200,6 +201,54 @@ func TestPlanFactReadsIgnoresEveryModelPhrasingSignal(t *testing.T) {
 	// And specifically: the elaborate phrasing did NOT prune workload.
 	if elaboratePlan[0].Pruned {
 		t.Fatal("workload was pruned by question phrasing -- the planner must read only subject kinds")
+	}
+
+	// Codex round-1 F1: the behavioral halves above only prove that TODAY's
+	// planner body ignores prose. They cannot fail for a future edit that
+	// starts reading it, because such an edit would come with its own
+	// behavior. The structural assertion is the durable one: the planner's
+	// input type carries no prose at all, so two requests differing in every
+	// model-authored field must reduce to the SAME planning input. If
+	// factPlanInput ever grows a field that can carry interpretation text,
+	// this fails immediately.
+	if !reflect.DeepEqual(newFactPlanInput(terse), newFactPlanInput(elaborate)) {
+		t.Fatalf("planning inputs differ by prose alone:\n terse = %+v\n elaborate = %+v",
+			newFactPlanInput(terse), newFactPlanInput(elaborate))
+	}
+}
+
+// TestFactPlanInputCarriesNoInterpretation is the companion type-level
+// guard to the assertion above. planFactReads is given factPlanInput and
+// nothing else, so the set of things a pruning decision COULD be made from
+// is exactly this type's fields -- enumerated here so that adding one is a
+// deliberate, reviewed act rather than an accident.
+func TestFactPlanInputCarriesNoInterpretation(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]string{
+		"Subjects":     "[]v1.ContextFabricSubjectRef",
+		"Requirements": "[]contextfabric.factPlanRequirement",
+	}
+	inputType := reflect.TypeOf(factPlanInput{})
+	if inputType.NumField() != len(want) {
+		t.Fatalf("factPlanInput has %d fields, want %d -- a new field is a new way to prune, review it deliberately", inputType.NumField(), len(want))
+	}
+	for i := 0; i < inputType.NumField(); i++ {
+		field := inputType.Field(i)
+		wantType, known := want[field.Name]
+		if !known {
+			t.Fatalf("factPlanInput gained field %q -- prose must never become reachable from the planner", field.Name)
+		}
+		if got := field.Type.String(); got != wantType {
+			t.Fatalf("factPlanInput.%s is %s, want %s", field.Name, got, wantType)
+		}
+	}
+
+	// The per-requirement half: kind and subject scoping only, never the
+	// provider Parameters or anything derived from question text.
+	requirementType := reflect.TypeOf(factPlanRequirement{})
+	if requirementType.NumField() != 2 {
+		t.Fatalf("factPlanRequirement has %d fields, want 2 (Kind, Subjects)", requirementType.NumField())
 	}
 }
 
@@ -213,7 +262,7 @@ func TestPlanFactReadsFailsOpen(t *testing.T) {
 			Subjects:     []SubjectRef{subject(SubjectTeam, "team_platform")},
 			Requirements: []FactRequirement{{Kind: FactEvidence}},
 		}
-		entry := planFactReads(request, planIndex())[0]
+		entry := planFactReads(newFactPlanInput(request), planIndex())[0]
 		if entry.Pruned {
 			t.Fatal("an unregistered kind must keep its own SourceUnconfigured path, not become a prune")
 		}
@@ -222,7 +271,7 @@ func TestPlanFactReadsFailsOpen(t *testing.T) {
 	t.Run("no subjects at all is left to the existing error", func(t *testing.T) {
 		t.Parallel()
 		request := CanonicalFactRequest{Requirements: []FactRequirement{{Kind: FactWorkload}}}
-		entry := planFactReads(request, planIndex(planCapability(FactWorkload, "workload", SubjectTeam)))[0]
+		entry := planFactReads(newFactPlanInput(request), planIndex(planCapability(FactWorkload, "workload", SubjectTeam)))[0]
 		if entry.Pruned {
 			t.Fatal("an investigation with no subjects is a different failure from an unfitting capability")
 		}
@@ -236,7 +285,7 @@ func TestPlanFactReadsFailsOpen(t *testing.T) {
 				{Kind: FactMetrics, Subjects: []SubjectRef{subject(SubjectRepository, "repo_api")}},
 			},
 		}
-		entry := planFactReads(request, planIndex(planCapability(FactMetrics, "metrics", SubjectRepository)))[0]
+		entry := planFactReads(newFactPlanInput(request), planIndex(planCapability(FactMetrics, "metrics", SubjectRepository)))[0]
 		if entry.Pruned || entry.Narrowed {
 			t.Fatalf("an explicitly subject-scoped requirement must run as given, got %+v", entry)
 		}
@@ -253,7 +302,7 @@ func TestPlanFactReadsFailsOpen(t *testing.T) {
 			}},
 			Requirements: []FactRequirement{{Kind: FactWorkload}},
 		}
-		entry := planFactReads(request, planIndex(planCapability(FactWorkload, "workload", SubjectTeam)))[0]
+		entry := planFactReads(newFactPlanInput(request), planIndex(planCapability(FactWorkload, "workload", SubjectTeam)))[0]
 		if entry.Pruned || len(entry.Subjects) != 1 {
 			t.Fatalf("cohort-only investigation must plan its members, got %+v", entry)
 		}
@@ -276,8 +325,8 @@ func TestPlanFactReadsPreservesRequirementOrder(t *testing.T) {
 		Requirements: []FactRequirement{{Kind: FactMetrics}, {Kind: FactWorkload}, {Kind: FactStatus}},
 	}
 	for attempt := 0; attempt < 8; attempt++ {
-		plan := planFactReads(request, capabilities)
-		got := []FactKind{plan[0].Requirement.Kind, plan[1].Requirement.Kind, plan[2].Requirement.Kind}
+		plan := planFactReads(newFactPlanInput(request), capabilities)
+		got := []FactKind{plan[0].Kind, plan[1].Kind, plan[2].Kind}
 		want := []FactKind{FactMetrics, FactWorkload, FactStatus}
 		for i := range want {
 			if got[i] != want[i] {
@@ -502,5 +551,140 @@ func TestAppendFactCoverageClampsReasonToContractBound(t *testing.T) {
 	}
 	if err := bundle.Coverage.Validate(); err != nil {
 		t.Fatalf("Coverage.Validate() error = %v, want the clamped reason to stay within v1 bounds", err)
+	}
+}
+
+// TestReadFactsNarrowedProviderThatFailsKeepsBothRecords is the codex
+// round-1 F2 regression. A narrowed capability that then errors has TWO
+// independent things to report: the read failed, and the planner had already
+// cut its subject list. Before the fix the failure path recorded only the
+// first, so the record that subjects were dropped vanished -- an absence with
+// no explanation, which is exactly what the empty-states rule forbids.
+func TestReadFactsNarrowedProviderThatFailsKeepsBothRecords(t *testing.T) {
+	t.Parallel()
+
+	metrics := &factProviderStub{
+		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+		err:        &FactReadFailure{State: SourceUnavailable, Reason: "clickhouse is unreachable"},
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+		// A team subject the capability cannot serve plus a repository it
+		// can: that is what makes this read a NARROWED one.
+		Subjects:     []SubjectRef{subject(SubjectTeam, "team_platform"), subject(SubjectRepository, "repo_api")},
+		Requirements: []FactRequirement{{Kind: FactMetrics}},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v, want a provider failure to stay coverage", err)
+	}
+	if len(bundle.Coverage.Sources) != 1 {
+		t.Fatalf("coverage = %+v, want exactly one entry", bundle.Coverage.Sources)
+	}
+	observation := bundle.Coverage.Sources[0]
+	if observation.State != SourceUnavailable {
+		t.Fatalf("state = %q, want the provider failure preserved as %q", observation.State, SourceUnavailable)
+	}
+	if !strings.HasPrefix(observation.Reason, FactNarrowReasonSubjectKindUnsupported) {
+		t.Fatalf("reason = %q, want the narrowing note kept on a FAILED narrowed read", observation.Reason)
+	}
+	if !strings.Contains(observation.Reason, "clickhouse is unreachable") {
+		t.Fatalf("reason = %q, want the provider's own failure reason kept too", observation.Reason)
+	}
+}
+
+// TestMergeRejectsImpossiblePerFactSourceState is the codex round-1 F3
+// regression. The provider RESULT state was validated, but each FACT's own
+// SourceState was not -- and the evidence requirement is keyed on that exact
+// field, so a fact stamped with a state other than available/stale silently
+// skipped RequiresEvidence. An evidence-free fact could therefore ride inside
+// an ordinary available result.
+func TestMergeRejectsImpossiblePerFactSourceState(t *testing.T) {
+	t.Parallel()
+
+	repository := subject(SubjectRepository, "repo_api")
+	cases := []struct {
+		name  string
+		state SourceState
+	}{
+		{"pruned is a planner verdict a provider must never mint", SourcePruned},
+		{"no_data cannot carry a fact", SourceNoData},
+		{"unavailable cannot carry a fact", SourceUnavailable},
+		{"not_applicable cannot carry a fact", SourceNotApplicable},
+		{"an unknown state is rejected outright", SourceState("invented")},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			provider := &factProviderStub{
+				capability: FactCapability{
+					Kind: FactMetrics, Name: "metrics", Version: "v1",
+					SupportedSubjectKinds: []SubjectKind{SubjectRepository}, RequiresEvidence: true,
+				},
+				result: FactProviderResult{
+					State: SourceAvailable,
+					Facts: []CanonicalFact{{
+						Kind: FactMetrics, Subject: repository,
+						Fields: map[string]FactValue{"commits": IntegerFactValue(7)},
+						// No EvidenceRefIDs at all: with the bad state this
+						// fact would have bypassed RequiresEvidence entirely.
+						SourceState: testCase.state, Source: "metrics", SourceVersion: "v1",
+					}},
+				},
+			}
+			registry, err := NewFactCapabilityRegistry([]FactProvider{provider}, FactRegistryOptions{})
+			if err != nil {
+				t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+			}
+			_, err = registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+				Subjects:     []SubjectRef{repository},
+				Requirements: []FactRequirement{{Kind: FactMetrics}},
+			})
+			if err == nil {
+				t.Fatalf("ReadFacts() error = nil, want a fact carrying source state %q rejected", testCase.state)
+			}
+		})
+	}
+}
+
+// TestMergeStillAcceptsLegitimatePerFactSourceStates is the companion guard:
+// the F3 check must reject only impossible states, never tighten the two a
+// provider legitimately stamps on an individual fact.
+func TestMergeStillAcceptsLegitimatePerFactSourceStates(t *testing.T) {
+	t.Parallel()
+
+	repository := subject(SubjectRepository, "repo_api")
+	for _, state := range []SourceState{SourceAvailable, SourceStale} {
+		provider := &factProviderStub{
+			capability: FactCapability{
+				Kind: FactMetrics, Name: "metrics", Version: "v1",
+				SupportedSubjectKinds: []SubjectKind{SubjectRepository}, RequiresEvidence: true,
+			},
+			result: FactProviderResult{
+				State: SourceAvailable,
+				Facts: []CanonicalFact{{
+					Kind: FactMetrics, Subject: repository,
+					Fields:         map[string]FactValue{"commits": IntegerFactValue(7)},
+					EvidenceRefIDs: []string{"evidence_metrics_0001"},
+					SourceState:    state, Source: "metrics", SourceVersion: "v1",
+				}},
+			},
+		}
+		registry, err := NewFactCapabilityRegistry([]FactProvider{provider}, FactRegistryOptions{})
+		if err != nil {
+			t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+		}
+		bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			Subjects:     []SubjectRef{repository},
+			Requirements: []FactRequirement{{Kind: FactMetrics}},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() error = %v, want per-fact state %q still accepted", err, state)
+		}
+		if len(bundle.Facts) != 1 {
+			t.Fatalf("facts = %d, want 1 for per-fact state %q", len(bundle.Facts), state)
+		}
 	}
 }

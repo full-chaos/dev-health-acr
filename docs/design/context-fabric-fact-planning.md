@@ -41,6 +41,18 @@ second-order.
 `FactCapabilityRegistry.ReadFacts` before any provider is touched -- after
 interpretation, before fan-out.
 
+The planner is given `factPlanInput`, not the `CanonicalFactRequest`. That
+matters: the request carries the full `InterpretedQuestion` -- shape,
+`RequestedJudgment`, `SubjectTerms`, `ComparisonTerms`, `ClarificationReason`
+-- all model-authored text. An earlier version took the whole request and
+simply did not read those fields, which made "a model cannot prune by
+phrasing" a property of the function body rather than of the interface: a
+later edit could reach for `request.Question` with no signature change, and a
+behavioral test cannot fail for an edit it was never written against.
+`newFactPlanInput` is the single boundary that strips the request down, so
+prose is not merely unread, it is not present. `TestFactPlanInputCarriesNoInterpretation`
+pins the field set so adding one is a deliberate, reviewed act.
+
 It lives in the registry rather than in `Engine` because the registry is the
 only place that already holds everything the decision needs: the
 interpretation, the resolved subjects, the cohort, the requirements, **and**
@@ -136,6 +148,26 @@ The contract's own "a non-available source requires a reason" rule applies to
 `pruned` too, which is what makes the empty-states rule hold for it
 mechanically rather than by convention.
 
+A **narrowed capability that then fails** carries both records. The narrowing
+note is attached on every path a narrowed read can take, not just the success
+path: the read failing and the planner having cut the subject list are
+independent facts, and recording only the first would silently lose the
+second. `TestReadFactsNarrowedProviderThatFailsKeepsBothRecords` pins it.
+
+### Per-fact source state
+
+`pruned` being absent from `validFactSourceState` bounds what a provider may
+return as its RESULT state, but each individual fact carries its own
+`SourceState` too, and the evidence requirement in `mergeFactProviderResult`
+is keyed on that exact field. A fact stamped with anything other than
+`available`/`stale` therefore skipped `RequiresEvidence` entirely -- an
+evidence-free fact could ride inside an ordinary `available` result just by
+mislabelling itself. Merge now rejects a fact whose own state is outside the
+provider-legal set (catching `pruned`) or is a facts-rejecting state
+(`no_data`, `unavailable`, `unconfigured`, `unauthorized`, `conflicted`,
+`not_applicable` -- all of which mean "there is no fact here", so a fact
+wearing one is self-contradicting).
+
 ### Reason codes, and why narrowing rides along
 
 Reasons carry closed code prefixes -- `pruned:subject_kind_unsupported`,
@@ -222,6 +254,14 @@ by measurement. The round-trip and correctness wins are.
 That negative result is the harness's strongest assertion: a difference in
 fact count or bundle bytes fails the test, because pruning must remove work,
 never answer.
+
+Both sides of that comparison are canonically ordered first. The registry
+sorts its bundle while the naive baseline accumulates in requirement order,
+and no provider `SELECT` carries an outer `ORDER BY`, so identical fact sets
+could otherwise differ on ordering alone -- and a flaky assertion about
+correctness is worse than none. `TestCHAOS3783BundleBytesIsOrderInsensitive`
+proves the canonicalization without needing a database, so it runs in
+ordinary CI rather than only under the opt-in measurement.
 
 Wall-clock is reported but caveated. Dev tables are small enough that provider
 time is round-trip dominated, so round-trip **count** is the durable number

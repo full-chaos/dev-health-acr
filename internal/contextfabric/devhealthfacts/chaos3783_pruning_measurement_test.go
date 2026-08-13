@@ -322,12 +322,55 @@ func chaos3783SupportedSubjectCount(registry *contextfabric.FactCapabilityRegist
 // chaos3783BundleBytes measures what actually reaches the model: the
 // serialized facts. Fact COUNT alone understates the difference, because
 // families differ by an order of magnitude in how wide each fact is.
+//
+// Codex round-1 F4: it canonicalizes ORDER first. The registry sorts its
+// bundle (sortCanonicalFacts) while the naive baseline accumulates in
+// requirement order, and no provider SELECT carries an outer ORDER BY, so
+// two runs holding the identical SET of facts can serialize differently for
+// reasons that have nothing to do with pruning. Comparing those bytes
+// directly would make the byte-identity assertion flaky, and a flaky
+// assertion about correctness is worse than no assertion. Both sides go
+// through this one function, so both are ordered the same way.
 func chaos3783BundleBytes(facts []contextfabric.CanonicalFact) int {
-	encoded, err := json.Marshal(facts)
+	encoded, err := json.Marshal(chaos3783Canonical(facts))
 	if err != nil {
 		return 0
 	}
 	return len(encoded)
+}
+
+// chaos3783Canonical returns a stably-ordered copy. The sort key ends with
+// the fact's own serialization so that two facts identical in kind, subject,
+// and source -- which a provider may legitimately return, e.g. one row per
+// day -- still order deterministically instead of relying on the order the
+// database happened to return them in.
+func chaos3783Canonical(facts []contextfabric.CanonicalFact) []contextfabric.CanonicalFact {
+	// The key travels WITH its fact. Computing keys into a position-indexed
+	// side table and sorting the facts separately would leave the comparator
+	// reading whichever key now sits at that index, not the one belonging to
+	// the fact being compared.
+	type keyed struct {
+		key  string
+		fact contextfabric.CanonicalFact
+	}
+	pairs := make([]keyed, 0, len(facts))
+	for _, fact := range facts {
+		encoded, err := json.Marshal(fact)
+		if err != nil {
+			encoded = nil
+		}
+		pairs = append(pairs, keyed{
+			key: string(fact.Kind) + "\x00" + string(fact.Subject.Kind) + "\x00" +
+				fact.Subject.CanonicalID + "\x00" + fact.Source + "\x00" + string(encoded),
+			fact: fact,
+		})
+	}
+	sort.SliceStable(pairs, func(i, j int) bool { return pairs[i].key < pairs[j].key })
+	ordered := make([]contextfabric.CanonicalFact, 0, len(pairs))
+	for _, pair := range pairs {
+		ordered = append(ordered, pair.fact)
+	}
+	return ordered
 }
 
 func chaos3783Requirements(kinds []contextfabric.FactKind) []contextfabric.FactRequirement {
@@ -391,4 +434,46 @@ func chaos3783Percent(part, whole int) float64 {
 		return 0
 	}
 	return float64(part) / float64(whole) * 100
+}
+
+// TestCHAOS3783BundleBytesIsOrderInsensitive proves the F4 fix without
+// needing a database, so it runs in ordinary CI rather than only under the
+// opt-in measurement. The byte-identity assertion is only meaningful if two
+// identical fact SETS measure identically regardless of the order they were
+// accumulated in -- the registry sorts its bundle, the naive baseline does
+// not, and no provider SELECT has an outer ORDER BY.
+func TestCHAOS3783BundleBytesIsOrderInsensitive(t *testing.T) {
+	t.Parallel()
+
+	facts := []contextfabric.CanonicalFact{
+		{
+			Kind: contextfabric.FactMetrics, Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:b", Label: "b"},
+			Fields: map[string]contextfabric.FactValue{"commits": contextfabric.IntegerFactValue(2)},
+			Source: "devhealthfacts.metrics", SourceVersion: "v1", SourceState: contextfabric.SourceAvailable,
+		},
+		{
+			Kind: contextfabric.FactHealth, Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:a", Label: "a"},
+			Fields: map[string]contextfabric.FactValue{"severity": contextfabric.StringFactValue("high")},
+			Source: "devhealthfacts.health", SourceVersion: "v1", SourceState: contextfabric.SourceAvailable,
+		},
+		{
+			// Same kind, subject, and source as the first -- only the value
+			// differs, which is the case a coarser sort key would leave
+			// order-dependent.
+			Kind: contextfabric.FactMetrics, Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:b", Label: "b"},
+			Fields: map[string]contextfabric.FactValue{"commits": contextfabric.IntegerFactValue(9)},
+			Source: "devhealthfacts.metrics", SourceVersion: "v1", SourceState: contextfabric.SourceAvailable,
+		},
+	}
+
+	want := chaos3783BundleBytes(facts)
+	for _, permutation := range [][]int{{2, 1, 0}, {1, 2, 0}, {0, 2, 1}, {2, 0, 1}} {
+		shuffled := make([]contextfabric.CanonicalFact, 0, len(facts))
+		for _, index := range permutation {
+			shuffled = append(shuffled, facts[index])
+		}
+		if got := chaos3783BundleBytes(shuffled); got != want {
+			t.Fatalf("bundle bytes = %d for permutation %v, want %d -- the comparison must not depend on accumulation order", got, permutation, want)
+		}
+	}
 }

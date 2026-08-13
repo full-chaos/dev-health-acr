@@ -185,11 +185,19 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 	// queried and never silently missing. See planFactReads for the rule and
 	// for why an empty subject-kind intersection is a proof rather than a
 	// guess.
-	for _, planned := range planFactReads(request, r.capabilityIndex()) {
-		requirement := planned.Requirement
-		registered, ok := r.providers[requirement.Kind]
+	// Requirements are unique by kind (validateCanonicalFactRequest), so
+	// this index is a lossless way to get back from a plan entry -- which
+	// deliberately carries only a kind, never the request's prose -- to the
+	// requirement's provider Parameters.
+	requirementsByKind := make(map[FactKind]FactRequirement, len(request.Requirements))
+	for _, requirement := range request.Requirements {
+		requirementsByKind[requirement.Kind] = requirement
+	}
+	for _, planned := range planFactReads(newFactPlanInput(request), r.capabilityIndex()) {
+		requirement := requirementsByKind[planned.Kind]
+		registered, ok := r.providers[planned.Kind]
 		if !ok {
-			appendFactCoverage(&bundle, requirement.Kind, SourceUnconfigured, nil, "", "canonical fact capability is not configured")
+			appendFactCoverage(&bundle, planned.Kind, SourceUnconfigured, nil, "", "canonical fact capability is not configured")
 			continue
 		}
 		if planned.Pruned {
@@ -200,12 +208,12 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			// the bundle partial, because nothing is actually missing from
 			// the answer. factStateDegrades(SourcePruned) is false for that
 			// reason.
-			appendFactCoverage(&bundle, requirement.Kind, SourcePruned, nil, "", planned.Reason)
+			appendFactCoverage(&bundle, planned.Kind, SourcePruned, nil, "", planned.Reason)
 			continue
 		}
 		query, err := buildFactQuery(request, requirement, registered.capability, allowedSubjects, planned.Subjects)
 		if err != nil {
-			return CanonicalFactBundle{}, fmt.Errorf("fact capability %s: %w", requirement.Kind, err)
+			return CanonicalFactBundle{}, fmt.Errorf("fact capability %s: %w", planned.Kind, err)
 		}
 		result, err := r.readProvider(ctx, principal, registered, query)
 		if err != nil {
@@ -213,20 +221,23 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 				return CanonicalFactBundle{}, context.Canceled
 			}
 			state, reason := classifyFactReadError(err)
-			appendFactCoverage(&bundle, requirement.Kind, state, nil, "", reason)
+			// Codex round-1 F2: a narrowed capability that then FAILS still
+			// had its subject list cut, and the observation has to say both
+			// things. Recording only the failure would silently drop the
+			// record that subjects were dropped -- the unexplained absence
+			// the empty-states rule forbids.
+			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(planned, reason))
 			continue
 		}
-		if planned.Narrowed {
-			// Coverage source names must be unique
-			// (ContextFabricCoverage.Validate), so the subjects this
-			// capability could not be asked about cannot get an observation
-			// of their own -- the narrowing rides on the capability's own
-			// observation instead. Prefixed, never replacing: whatever the
-			// provider said about its own read still has to survive.
-			result.Reason = strings.TrimSpace(planned.Reason + " " + result.Reason)
-		}
+		// Coverage source names must be unique
+		// (ContextFabricCoverage.Validate), so the subjects this capability
+		// could not be asked about cannot get an observation of their own --
+		// the narrowing rides on the capability's own observation instead.
+		// Prefixed, never replacing: whatever the provider said about its
+		// own read still has to survive.
+		result.Reason = withNarrowingNote(planned, result.Reason)
 		if err := mergeFactProviderResult(&bundle, registered.capability, query, result, allowedSubjects); err != nil {
-			return CanonicalFactBundle{}, fmt.Errorf("fact capability %s: %w", requirement.Kind, err)
+			return CanonicalFactBundle{}, fmt.Errorf("fact capability %s: %w", planned.Kind, err)
 		}
 	}
 	sortCanonicalFacts(bundle.Facts)
@@ -355,6 +366,28 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 		}
 		if fact.SourceState == "" {
 			fact.SourceState = result.State
+		}
+		// Codex round-1 F3: the RESULT state was validated above, but until
+		// now an individual fact's own SourceState was not. That gap is not
+		// cosmetic -- the evidence requirement immediately below is keyed on
+		// this exact field, so a fact carrying any state other than
+		// available/stale silently skips the RequiresEvidence check. A
+		// provider could therefore return an evidence-free fact inside a
+		// perfectly ordinary available result just by stamping the fact
+		// itself with an impossible state.
+		//
+		// Two things are rejected. A state outside the provider-legal set
+		// catches SourcePruned, which is a planner verdict a provider must
+		// never mint (a provider claiming to have pruned itself has by
+		// definition already run). A state that rejects facts catches the
+		// rest of the bypass: no_data, unavailable, unconfigured,
+		// unauthorized, conflicted, and not_applicable all mean "there is no
+		// fact here", so a fact wearing one is self-contradicting.
+		if !validFactSourceState(fact.SourceState) {
+			return fmt.Errorf("provider returned fact with invalid source state %q", fact.SourceState)
+		}
+		if stateRejectsFacts(fact.SourceState) {
+			return fmt.Errorf("provider returned fact with source state %q, which cannot carry facts", fact.SourceState)
 		}
 		if err := fact.Validate(capability.RequiresEvidence && (fact.SourceState == SourceAvailable || fact.SourceState == SourceStale)); err != nil {
 			return fmt.Errorf("provider fact: %w", err)
