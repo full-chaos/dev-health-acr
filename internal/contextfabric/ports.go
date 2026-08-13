@@ -508,6 +508,37 @@ type ProjectionSource interface {
 	NextProjectionBatch(context.Context, ProjectionCheckpoint) (ProjectionBatch, bool, error)
 }
 
+// ProjectionProgress is an OPTIONAL capability a ProjectionSource may
+// implement (CHAOS-3802). It exists for one narrow, real situation: a source
+// can consume rows that are provably unpublishable -- today, ownership rows
+// omitted because their project_key resolves to more than one project -- and
+// those rows still occupy cursor space.
+//
+// Without this, such rows are a permanent stall rather than a slow patch.
+// A payload-free ContextFabricProjectionBatch cannot carry their cursor
+// (Validate rejects an empty batch outright), so a source that finds only
+// unpublishable rows must answer available=false; the worker then reads
+// "caught up", the DURABLE checkpoint never moves, and every later tick
+// replays the same prefix forever, leaving publishable rows beyond the block
+// unreachable. Skipping them inside one NextProjectionBatch call only defers
+// the wall: whatever bound that skipping uses, an organization can exceed it.
+//
+// Implementations report a cursor covering ONLY rows they proved carry
+// nothing publishable. ok=false means "no progress to record" and must be the
+// answer whenever a source is genuinely caught up, so an idle tick never
+// writes.
+//
+// Safety (the CHAOS-3778 rule that a watermark must never advance past
+// unreconciled publishable state): the worker persists this progress with the
+// BackendWatermark and SourceVersion UNCHANGED. Only the source-side cursor
+// moves, and its meaning is "rows consumed", never "rows applied". Nothing
+// publishable is skipped, because a page qualifies only when it produced no
+// publishable candidate at all -- so there is no unreconciled state in the
+// range being passed over.
+type ProjectionProgress interface {
+	ConsumedWithoutPublishing(context.Context, ProjectionCheckpoint) (nextCursor string, ok bool, err error)
+}
+
 // ProjectionCheckpointStore advances only after the backend has durably
 // accepted a batch. CompareAndSwapProjectionCheckpoint must return
 // ErrProjectionConflict when expected no longer matches the durable cursor, so

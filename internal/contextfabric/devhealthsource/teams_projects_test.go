@@ -550,3 +550,70 @@ func TestOmissionTelemetryCountsDistinctKeysAcrossTheRun(t *testing.T) {
 		}
 	}
 }
+
+// TestConsumedProgressIsRefusedWhenItDoesNotMatchTheCheckpoint pins the
+// staleness guard on the progress memo.
+//
+// The memo is an optimisation: it records what the immediately preceding
+// NextProjectionBatch call proved, so the worker need not re-derive it. Its
+// safety rests on the coordinator's single-flight-per-organization lock, and
+// a memo recorded against a DIFFERENT checkpoint must be refused rather than
+// trusted -- handing back a cursor derived from another position could move
+// the durable checkpoint somewhere the source never proved was empty.
+//
+// Mutation-testing found this guard unheld: deleting it changed no test, the
+// exact shape of dead defensive code this branch has already removed once.
+func TestConsumedProgressIsRefusedWhenItDoesNotMatchTheCheckpoint(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", rows: [][]any{
+			ambiguousProjectTeamRow("p1", "team-a", "native", "github", "SHARED", at),
+		}},
+	}}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	startCursor := testCursor(t, time.Unix(0, 0).UTC(), "")
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: startCursor}
+	if _, available, err := source.NextProjectionBatch(context.Background(), checkpoint); err != nil || available {
+		t.Fatalf("expected an all-omitted read to publish nothing; available=%v err=%v", available, err)
+	}
+
+	// Asked about a DIFFERENT position than the memo was recorded for.
+	stale := checkpoint
+	stale.Cursor = testCursor(t, at.Add(time.Hour), "somewhere-else")
+	if cursor, ok, err := source.ConsumedWithoutPublishing(context.Background(), stale); err != nil || ok {
+		t.Fatalf("a memo recorded at another checkpoint must be refused, got cursor=%q ok=%v err=%v", cursor, ok, err)
+	}
+}
+
+// TestConsumedProgressIsReportedOnceForItsOwnCheckpoint is the positive half:
+// the memo must actually be offered for the checkpoint it belongs to, and
+// only once, so a failed CAS re-derives rather than replays.
+func TestConsumedProgressIsReportedOnceForItsOwnCheckpoint(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", rows: [][]any{
+			ambiguousProjectTeamRow("p1", "team-a", "native", "github", "SHARED", at),
+		}},
+	}}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	startCursor := testCursor(t, time.Unix(0, 0).UTC(), "")
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: startCursor}
+	if _, available, err := source.NextProjectionBatch(context.Background(), checkpoint); err != nil || available {
+		t.Fatalf("expected an all-omitted read to publish nothing; available=%v err=%v", available, err)
+	}
+	cursor, ok, err := source.ConsumedWithoutPublishing(context.Background(), checkpoint)
+	if err != nil || !ok || cursor == "" || cursor == startCursor {
+		t.Fatalf("progress for this checkpoint must be offered and must move; cursor=%q ok=%v err=%v", cursor, ok, err)
+	}
+	if _, ok, _ := source.ConsumedWithoutPublishing(context.Background(), checkpoint); ok {
+		t.Fatal("the memo must be consumed on read, so a failed CAS re-derives progress rather than replaying a stale one")
+	}
+}

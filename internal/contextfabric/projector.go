@@ -60,6 +60,13 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		return ProjectionRun{}, fmt.Errorf("read projection batch: %w", err)
 	}
 	if !available {
+		advanced, progressed, err := w.persistConsumedProgress(ctx, checkpoint)
+		if err != nil {
+			return ProjectionRun{}, err
+		}
+		if progressed {
+			return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: advanced}, nil
+		}
 		return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor}, nil
 	}
 	if err := batch.Validate(); err != nil {
@@ -133,6 +140,40 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		BatchID: batch.BatchID, Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: batch.NextCursor,
 		BackendWatermark: receipt.BackendWatermark, Applied: true, AppliedAt: receipt.AppliedAt,
 	}, nil
+}
+
+// persistConsumedProgress durably advances the checkpoint over source rows
+// that were consumed but proved unpublishable -- see ProjectionProgress for
+// why this cannot be done with a batch, and for the safety argument.
+//
+// Deliberately narrow: it runs only when the source reported no batch, only
+// when the source implements the optional capability, and only for a cursor
+// that actually moves. BackendWatermark and SourceVersion are carried through
+// UNCHANGED -- nothing was applied, so nothing about the backend's reconciled
+// state may change here. The same CAS the apply path uses keeps a concurrent
+// projector from silently reordering this with a real batch.
+func (w *ProjectionWorker) persistConsumedProgress(ctx context.Context, checkpoint ProjectionCheckpoint) (string, bool, error) {
+	reporter, ok := w.source.(ProjectionProgress)
+	if !ok {
+		return "", false, nil
+	}
+	advanced, ok, err := reporter.ConsumedWithoutPublishing(ctx, checkpoint)
+	if err != nil {
+		return "", false, fmt.Errorf("read consumed projection progress: %w", err)
+	}
+	if !ok || strings.TrimSpace(advanced) == "" || advanced == checkpoint.Cursor {
+		return "", false, nil
+	}
+	updated := checkpoint
+	updated.Cursor = advanced
+	updated.UpdatedAt = w.now().UTC()
+	if err := w.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, checkpoint, updated); err != nil {
+		if errors.Is(err, ErrProjectionConflict) {
+			return "", false, err
+		}
+		return "", false, fmt.Errorf("advance projection checkpoint over unpublishable rows: %w", err)
+	}
+	return advanced, true, nil
 }
 
 // Run continuously projects one organization/source pair until cancellation.

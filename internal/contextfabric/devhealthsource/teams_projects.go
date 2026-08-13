@@ -85,6 +85,59 @@ type TeamsProjectsSource struct {
 	// projects organizations concurrently, so this is genuinely shared state.
 	omissionsMu sync.Mutex
 	omissions   map[string]*ambiguityLedger
+
+	// consumedMu guards consumed, which memoises the furthest cursor a
+	// NextProjectionBatch call proved holds nothing publishable, per
+	// organization. ConsumedWithoutPublishing hands it to the worker.
+	consumedMu sync.Mutex
+	consumed   map[string]consumedProgress
+}
+
+// consumedProgress is a memo, never a source of truth. It records the cursor
+// a call advanced to AND the checkpoint cursor it started from, so
+// ConsumedWithoutPublishing can refuse a memo that does not belong to the
+// checkpoint being asked about -- a stale memo must never move a cursor.
+type consumedProgress struct{ from, to string }
+
+// ConsumedWithoutPublishing implements contextfabric.ProjectionProgress.
+//
+// The memo comes from the immediately preceding NextProjectionBatch call for
+// this organization, which is safe because the coordinator holds a
+// single-flight advisory lock per organization -- the same guarantee
+// ProjectionWorker.RunOnce's own source-version claim relies on. The
+// from-cursor check makes that safety explicit rather than assumed: a memo
+// recorded against a different checkpoint is discarded, so the worst case is
+// a lost optimisation, never a skipped row.
+//
+// The memo is consumed on read. If the worker's CAS then fails, the next tick
+// simply re-derives the same progress by re-reading the same rows.
+func (s *TeamsProjectsSource) ConsumedWithoutPublishing(_ context.Context, checkpoint contextfabric.ProjectionCheckpoint) (string, bool, error) {
+	if s == nil || !s.enabled {
+		return "", false, nil
+	}
+	orgID := strings.TrimSpace(checkpoint.OrgID)
+	s.consumedMu.Lock()
+	defer s.consumedMu.Unlock()
+	progress, ok := s.consumed[orgID]
+	if !ok {
+		return "", false, nil
+	}
+	delete(s.consumed, orgID)
+	if progress.from != checkpoint.Cursor || progress.to == "" || progress.to == checkpoint.Cursor {
+		return "", false, nil
+	}
+	return progress.to, true, nil
+}
+
+func (s *TeamsProjectsSource) recordConsumed(fromCursor string) func(orgID, cursor string) {
+	return func(orgID, cursor string) {
+		s.consumedMu.Lock()
+		defer s.consumedMu.Unlock()
+		if s.consumed == nil {
+			s.consumed = map[string]consumedProgress{}
+		}
+		s.consumed[strings.TrimSpace(orgID)] = consumedProgress{from: fromCursor, to: cursor}
+	}
 }
 
 // ambiguityLedger counts DISTINCT ambiguous (provider, project_key) keys
@@ -169,11 +222,12 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	ledger := s.ledgerFor(strings.TrimSpace(checkpoint.OrgID), checkpoint.Cursor == "")
 	defer logAmbiguousProjectKeys(ctx, s.logger, checkpoint.OrgID, ledger.count())
 	return sourcePlan{
-		client:  s.client,
-		source:  TeamsProjectsSourceName,
-		version: TeamsProjectsSourceVersion,
-		tables:  teamsProjectsTables(ledger),
-		now:     s.now,
+		client:         s.client,
+		source:         TeamsProjectsSourceName,
+		version:        TeamsProjectsSourceVersion,
+		tables:         teamsProjectsTables(ledger),
+		now:            s.now,
+		recordConsumed: s.recordConsumed(checkpoint.Cursor),
 		// No seed: the synthesized Organization entity belongs to
 		// ClickHouseProjectionSource's full snapshot and must be projected
 		// exactly once per organization, not once per source.
@@ -416,3 +470,8 @@ func distinctNonEmpty(values ...string) []string {
 	}
 	return result
 }
+
+// TeamsProjectsSource is the only source in this package that can consume
+// unpublishable rows, so it is the only one implementing the optional
+// progress capability.
+var _ contextfabric.ProjectionProgress = (*TeamsProjectsSource)(nil)

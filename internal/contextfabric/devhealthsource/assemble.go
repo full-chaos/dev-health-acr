@@ -45,6 +45,11 @@ type sourcePlan struct {
 	// observe is handed every built batch alongside the candidates it came
 	// from, before the batch is returned. Optional.
 	observe func(ctx context.Context, batch contextfabric.ProjectionBatch, all []candidate)
+
+	// recordConsumed is called with a cursor covering rows proven to hold
+	// nothing publishable, so the owning source can offer it to the worker as
+	// durable progress (contextfabric.ProjectionProgress). Optional.
+	recordConsumed func(orgID, cursor string)
 }
 
 func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
@@ -138,6 +143,8 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 // from-scratch catch-up (cursor == ""), so a seeded entity is projected
 // exactly once, not on every page.
 func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state cursorState, includeSeed bool) (contextfabric.ProjectionBatch, bool, error) {
+	// consumed records the furthest position proven to hold nothing
+	// publishable, so a caller can persist it even when no batch is returned.
 	// cursor stays the caller's ORIGINAL position for every batch built here.
 	// Only state advances as fully-omitted pages are skipped, so the
 	// coordinator moves from where it was straight to the first page with
@@ -177,11 +184,14 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		// rejects an empty batch outright -- so the page cannot be published
 		// to carry its own cursor. Skip past it in-process instead and keep
 		// looking for real content, bounded so one tick cannot spin.
+		last := all[len(all)-1]
+		state = cursorState{Since: last.observedAt, After: last.sortKey}
+		if encoded, err := encodeCursor(state); err == nil {
+			p.noteConsumed(orgID, encoded)
+		}
 		if skips >= maxOmittedPageSkips {
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
-		last := all[len(all)-1]
-		state = cursorState{Since: last.observedAt, After: last.sortKey}
 	}
 }
 
@@ -252,6 +262,12 @@ func (e *tableReadError) Error() string {
 // Unwrap returns both so errors.Is answers for the classification AND the
 // cause; a single-error Unwrap could only preserve one of them.
 func (e *tableReadError) Unwrap() []error { return []error{contextfabric.ErrUnavailable, e.cause} }
+
+func (p sourcePlan) noteConsumed(orgID, cursor string) {
+	if p.recordConsumed != nil {
+		p.recordConsumed(orgID, cursor)
+	}
+}
 
 func (p sourcePlan) seedCandidates(orgID string) []candidate {
 	if p.seed == nil {

@@ -131,6 +131,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"ambiguous rows do not stall pagination", "30000000-0000-4000-8000-000000000004", subAmbiguousRowsDoNotStallPagination},
 		{"tied assertions resolve deterministically", "30000000-0000-4000-8000-000000000005", subTiedOwnershipAssertionsResolveDeterministically},
 		{"ambiguity guard is scoped to one organization", "30000000-0000-4000-8000-000000000006", subAmbiguityGuardIsScopedToOneOrganization},
+		{"omitted rows beyond the skip bound still converge", "30000000-0000-4000-8000-000000000007", subOmittedRowsBeyondTheSkipBoundStillConverge},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -453,4 +454,116 @@ func subAmbiguityGuardIsScopedToOneOrganization(t *testing.T, ctx context.Contex
 			t.Errorf("projected %q -- another organization's ownership crossed the tenant boundary", forbidden)
 		}
 	}
+}
+
+// memoryCheckpoints is a durable-enough checkpoint store for a multi-tick
+// test: it keeps what was saved, so a later RunOnce observes an earlier
+// tick's write exactly as a real store would.
+type memoryCheckpoints struct {
+	checkpoint contextfabric.ProjectionCheckpoint
+}
+
+func (m *memoryCheckpoints) LoadProjectionCheckpoint(context.Context, string, string) (contextfabric.ProjectionCheckpoint, error) {
+	return m.checkpoint, nil
+}
+
+func (m *memoryCheckpoints) CompareAndSwapProjectionCheckpoint(_ context.Context, expected, updated contextfabric.ProjectionCheckpoint) error {
+	if m.checkpoint.Cursor != expected.Cursor {
+		return contextfabric.ErrProjectionConflict
+	}
+	m.checkpoint = updated
+	return nil
+}
+
+type recordingBackend struct {
+	applied []contextfabric.ProjectionBatch
+}
+
+func (b *recordingBackend) ApplyProjectionBatch(_ context.Context, batch contextfabric.ProjectionBatch) (contextfabric.ProjectionReceipt, error) {
+	b.applied = append(b.applied, batch)
+	return contextfabric.ProjectionReceipt{BatchID: batch.BatchID, BackendWatermark: "w", AppliedAt: batch.GeneratedAt}, nil
+}
+
+func (*recordingBackend) ProjectionWatermark(context.Context, string, string) (contextfabric.ProjectionWatermark, error) {
+	return contextfabric.ProjectionWatermark{}, nil
+}
+func (*recordingBackend) PurgeOrganization(context.Context, string) error { return nil }
+
+// subOmittedRowsBeyondTheSkipBoundStillConverge is codex round-3 F1's
+// end-to-end case, and the reason the in-process skip bound was never a fix.
+//
+// A single NextProjectionBatch call skips at most maxOmittedPageSkips
+// fully-omitted pages and then reports available=false. Before the durable
+// progress path existed, that answer left the checkpoint untouched, so an
+// organization with more consecutive ambiguity-only pages than the bound
+// replayed the same prefix on every tick, forever, and the publishable edge
+// beyond the block was unreachable. Raising the bound only moves the wall.
+//
+// This drives the REAL ProjectionWorker across ticks over a block larger than
+// the bound, and asserts the durable checkpoint advances between ticks and
+// the edge beyond it is published exactly once.
+func subOmittedRowsBeyondTheSkipBoundStillConverge(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	fixture.seedOversizedAmbiguousBlock(t, ctx)
+
+	checkpoints := &memoryCheckpoints{checkpoint: contextfabric.ProjectionCheckpoint{OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName}}
+	backend := &recordingBackend{}
+	worker, err := contextfabric.NewProjectionWorker(fixture.source, backend, checkpoints, contextfabric.ProjectionWorkerOptions{})
+	if err != nil {
+		t.Fatalf("NewProjectionWorker: %v", err)
+	}
+
+	const wantEdge = "relationship:project_team:PROJ-PAST-BOUND:TEAM-GITHUB:native"
+	seenCursors := map[string]int{}
+	published := 0
+	for tick := 0; tick < 60; tick++ {
+		before := checkpoints.checkpoint.Cursor
+		if _, err := worker.RunOnce(ctx, fixture.orgID, devhealthsource.TeamsProjectsSourceName); err != nil {
+			t.Fatalf("tick %d: %v", tick, err)
+		}
+		after := checkpoints.checkpoint.Cursor
+		for _, batch := range backend.applied {
+			if hasRelationship(batch, wantEdge) {
+				published++
+			}
+		}
+		backend.applied = nil
+		if published > 0 {
+			break
+		}
+		if after == before {
+			t.Fatalf("tick %d: durable cursor stuck at %q with the edge still unreached -- more consecutive omitted pages than the in-process bound is a permanent stall, not a slow catch-up", tick, before)
+		}
+		if seenCursors[after]++; seenCursors[after] > 1 {
+			t.Fatalf("tick %d: durable cursor revisited %q -- progress is not monotonic", tick, after)
+		}
+	}
+	if published != 1 {
+		t.Fatalf("the edge beyond the omitted block was published %d times, want exactly 1", published)
+	}
+}
+
+// seedOversizedAmbiguousBlock writes more consecutive ambiguity-only rows
+// than maxOmittedPageSkips pages can absorb in one call, then one valid edge
+// after them.
+func (f *ownershipFixture) seedOversizedAmbiguousBlock(t *testing.T, ctx context.Context) {
+	t.Helper()
+	early := ownershipLaterAssertion.Add(1 * time.Hour)
+	block := ownershipLaterAssertion.Add(24 * time.Hour)
+	beyond := ownershipLaterAssertion.Add(48 * time.Hour)
+	// 5200 ambiguous keys x 2 projects each = 10400 joined rows, past the
+	// 50-page x 200-row in-process bound.
+	const keys = 5200
+	for _, half := range []string{"A", "B"} {
+		mustExec(t, ctx, f.direct, `INSERT INTO projects
+SELECT concat('P-BOUND-`+half+`-', toString(number)), ?, 'github', concat('BOUND-', toString(number)), 'bulk', 1, 'started', '', ?
+FROM numbers(?)`, f.orgID, early, uint64(keys))
+	}
+	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership
+SELECT ?, 'github', 'TEAM-GITHUB', concat('P-BOUND-A-', toString(number)), concat('BOUND-', toString(number)), 'native', ?, NULL, ?
+FROM numbers(?)`, f.orgID, block, block, uint64(keys))
+
+	mustExec(t, ctx, f.direct, `INSERT INTO projects VALUES (?, ?, 'github', 'PAST-BOUND-KEY', 'past bound', 1, 'started', '', ?)`,
+		"PROJ-PAST-BOUND", f.orgID, early)
+	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, 'PAST-BOUND-KEY', 'native', ?, NULL, ?)`,
+		f.orgID, "PROJ-PAST-BOUND", beyond, beyond)
 }

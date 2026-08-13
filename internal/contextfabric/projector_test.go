@@ -362,3 +362,141 @@ func TestProjectionWorkerRefusesALaterDifferentVersionAfterAClaimSurvivedFailure
 		t.Fatalf("tick2 backend.applied = %d, want 0 -- the v2 batch must never reach the backend, or it would duplicate whatever v1 partially wrote", succeedingBackend.applied)
 	}
 }
+
+// consumedWithoutPublishingStub is a source that finds rows, proves none of
+// them are publishable, and reports how far it got. The first call publishes
+// nothing but reports progress; the second publishes a real batch from the
+// advanced cursor.
+type consumedWithoutPublishingStub struct {
+	progressCursor string
+	batch          ProjectionBatch
+	calls          []ProjectionCheckpoint
+	progressCalls  int
+}
+
+func (s *consumedWithoutPublishingStub) NextProjectionBatch(_ context.Context, checkpoint ProjectionCheckpoint) (ProjectionBatch, bool, error) {
+	s.calls = append(s.calls, checkpoint)
+	if checkpoint.Cursor == s.progressCursor {
+		return s.batch, true, nil
+	}
+	return ProjectionBatch{}, false, nil
+}
+
+func (s *consumedWithoutPublishingStub) ConsumedWithoutPublishing(_ context.Context, checkpoint ProjectionCheckpoint) (string, bool, error) {
+	s.progressCalls++
+	if checkpoint.Cursor == s.progressCursor {
+		return "", false, nil
+	}
+	return s.progressCursor, true, nil
+}
+
+// TestProjectionWorkerPersistsProgressOverUnpublishableRows is CHAOS-3802
+// codex round-3 F1. A source can legitimately consume rows that yield nothing
+// publishable (today: ownership rows omitted for an ambiguous project_key).
+// Skipping them only inside one NextProjectionBatch call is not enough: once
+// the source's in-process bound is reached it returns available=false, and if
+// the worker treats that as "caught up" the DURABLE checkpoint never moves.
+// Every later tick then replays the same prefix forever, and any publishable
+// row beyond it is unreachable -- a permanent stall that no bound can fix,
+// because the bound only prices it.
+//
+// The checkpoint must therefore advance over proven-unpublishable rows
+// WITHOUT a batch, since ContextFabricProjectionBatch.Validate rejects a
+// payload-free batch outright and a synthetic one cannot be published.
+func TestProjectionWorkerPersistsProgressOverUnpublishableRows(t *testing.T) {
+	t.Parallel()
+
+	batch := validProjectionBatch()
+	batch.Cursor = "cursor_after_omitted"
+	batch.NextCursor = "cursor_final"
+	source := &consumedWithoutPublishingStub{progressCursor: "cursor_after_omitted", batch: batch}
+	backend := &projectionBackendStub{receipt: ProjectionReceipt{BatchID: batch.BatchID, BackendWatermark: "w1", AppliedAt: time.Now().UTC()}}
+	store := &checkpointStoreStub{checkpoint: ProjectionCheckpoint{OrgID: batch.OrgID, Source: batch.Source, Cursor: "", SourceVersion: batch.SourceVersion}}
+	worker, err := NewProjectionWorker(source, backend, store, ProjectionWorkerOptions{})
+	if err != nil {
+		t.Fatalf("NewProjectionWorker: %v", err)
+	}
+
+	// Tick 1: nothing publishable, but the source proved progress.
+	if _, err := worker.RunOnce(context.Background(), batch.OrgID, batch.Source); err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	if store.checkpoint.Cursor != "cursor_after_omitted" {
+		t.Fatalf("tick 1 left the durable cursor at %q -- progress over unpublishable rows was not persisted, so every later tick replays the same prefix", store.checkpoint.Cursor)
+	}
+	if backend.applied != 0 {
+		t.Fatalf("tick 1 applied %d batches; progress must persist WITHOUT publishing anything", backend.applied)
+	}
+
+	// Tick 2: from the advanced cursor the real batch is reachable.
+	if _, err := worker.RunOnce(context.Background(), batch.OrgID, batch.Source); err != nil {
+		t.Fatalf("tick 2: %v", err)
+	}
+	if backend.applied != 1 {
+		t.Fatalf("tick 2 applied %d batches, want exactly 1 -- the row beyond the omitted block must be published exactly once", backend.applied)
+	}
+	if store.checkpoint.Cursor != "cursor_final" {
+		t.Fatalf("tick 2 durable cursor = %q, want cursor_final", store.checkpoint.Cursor)
+	}
+}
+
+// caughtUpStub reports neither a batch nor progress -- the ordinary idle
+// state of a source with nothing new to read.
+type caughtUpStub struct{ progressCalls int }
+
+func (*caughtUpStub) NextProjectionBatch(context.Context, ProjectionCheckpoint) (ProjectionBatch, bool, error) {
+	return ProjectionBatch{}, false, nil
+}
+
+func (s *caughtUpStub) ConsumedWithoutPublishing(context.Context, ProjectionCheckpoint) (string, bool, error) {
+	s.progressCalls++
+	return "", false, nil
+}
+
+// TestProjectionWorkerIgnoresProgressWhenSourceIsGenuinelyCaughtUp keeps the
+// mechanism from turning every idle tick into a checkpoint write: a source
+// reporting no progress must leave the durable checkpoint untouched.
+func TestProjectionWorkerIgnoresProgressWhenSourceIsGenuinelyCaughtUp(t *testing.T) {
+	t.Parallel()
+
+	source := &caughtUpStub{}
+	store := &checkpointStoreStub{checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "src", Cursor: "cursor_here", SourceVersion: "v1"}}
+	worker, err := NewProjectionWorker(source, &projectionBackendStub{}, store, ProjectionWorkerOptions{})
+	if err != nil {
+		t.Fatalf("NewProjectionWorker: %v", err)
+	}
+	for tick := 0; tick < 3; tick++ {
+		if _, err := worker.RunOnce(context.Background(), "org_1", "src"); err != nil {
+			t.Fatalf("tick %d: %v", tick, err)
+		}
+	}
+	if len(store.saved) != 0 {
+		t.Fatalf("idle ticks wrote %d checkpoints; a source reporting no progress must not cause a write", len(store.saved))
+	}
+	if source.progressCalls != 3 {
+		t.Fatalf("ConsumedWithoutPublishing called %d times across 3 idle ticks, want 3", source.progressCalls)
+	}
+	if store.checkpoint.Cursor != "cursor_here" {
+		t.Fatalf("idle ticks moved the cursor to %q", store.checkpoint.Cursor)
+	}
+}
+
+// TestProjectionWorkerWithoutProgressCapabilityIsUnchanged pins the
+// capability as strictly additive: a source that does not implement it must
+// behave exactly as before.
+func TestProjectionWorkerWithoutProgressCapabilityIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	store := &checkpointStoreStub{checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "src", Cursor: "cursor_here", SourceVersion: "v1"}}
+	worker, err := NewProjectionWorker(projectionSourceStub{available: false}, &projectionBackendStub{}, store, ProjectionWorkerOptions{})
+	if err != nil {
+		t.Fatalf("NewProjectionWorker: %v", err)
+	}
+	run, err := worker.RunOnce(context.Background(), "org_1", "src")
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if len(store.saved) != 0 || run.NextCursor != "" || run.Applied {
+		t.Fatalf("a source without the progress capability must be unaffected; saved=%d run=%+v", len(store.saved), run)
+	}
+}
