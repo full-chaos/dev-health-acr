@@ -111,3 +111,38 @@ unique and silently drop the reuse rate to zero while CHAOS-3782's own
 tests kept passing. Conditions 1-7 are otherwise unchanged: a historical
 answer is NOT safely cacheable for longer, because a backfill rewrites past
 days (D15).
+
+Codex round 1 on CHAOS-3781 changed four things worth knowing before
+touching this area again:
+
+- **Grain is per PROVIDER, not per answer.** `FactProviderResult.Grain`
+  carries the precision each provider actually answered at; the registry
+  keeps the COARSEST among providers that CONTRIBUTED facts
+  (`coarsestGrain`), and only that reaches the label. The daily rollups
+  report day; everything deriving from an immutable event timestamp
+  reports instant. Assuming one grain for the whole answer under-reported
+  Tier B precision -- a pull request merged at 14:00Z read as midnight.
+- **A field with no history is DROPPED, not carried.** Historical incident
+  facts omit `severity` entirely: it is revised in place, so the row holds
+  only its current value, and a reason string on the answer does not undo
+  a wrong VALUE on a specific fact. Status stays, because
+  `started_at`/`resolved_at` are immutable.
+- **Referenced stubs carry NO validity window.** A stub used to inherit
+  the window of whatever relationship or episode mentioned it, so an
+  unrelated record's interval excluded a real subject -- and projection
+  ORDER decided which interval won. Only the authoritative entity write
+  states validity; stubs assert identity and nothing canonical, matching
+  CHAOS-3785's stub discipline.
+- **Reuse keys from the WIRE request on BOTH sides.** `FindReusable` always
+  did (tryReuse runs before Interpret); `Save` now does too, via an
+  explicit parameter. Keying Save from the interpretation meant an
+  interpreter that read a current-axis request as historical saved under a
+  key no identical request could produce, so that whole class of question
+  silently reused nothing. Interpretation identity is covered separately
+  by condition 6's re-resolution.
+
+Two smaller ones: a tolerated future instant is CLAMPED to now, not merely
+accepted (it used to reach the predicates and the label), and a bounded
+historical query returning zero rows reports `no_data` with an
+out-of-retention reason rather than a clean `available` -- "nothing
+happened then" and "we retain nothing that far back" are different answers.

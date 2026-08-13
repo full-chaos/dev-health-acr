@@ -180,3 +180,59 @@ func TestTimeAxisKeyForIsStableAndCollisionFree(t *testing.T) {
 			"%s must produce no key, so it can never become reusable", name)
 	}
 }
+
+// TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest is round-1
+// F6, red→green.
+//
+// The lookup keys from the WIRE request (tryReuse runs before Interpret),
+// but Save used to key from the INTERPRETED result. When an interpreter
+// read a current-axis request as historical -- exactly what it is supposed
+// to do for "what was the status last month" -- the row was saved under a
+// historical key that no identical future request could ever produce,
+// because that request keys itself "current". The whole class of
+// interpreted-historical questions therefore reused nothing, silently.
+//
+// Both sides now key from the wire request. Interpretation identity is not
+// lost: condition 6 re-resolves subjects against the stored Interpretation
+// before anything is served.
+func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) {
+	ctx := context.Background()
+	const orgID = "org-reuse-flip"
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: orgID}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+	store := mustReuseStore(t, db, time.Hour)
+
+	asOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+
+	// The caller sent axis=current; the interpreter concluded the
+	// question was historical, so the stored result's Interpretation
+	// carries valid_time.
+	interpretedHistorical := historicalResult(t, "result_flip_00001", principal.OrgID,
+		contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &asOf})
+
+	// Engine keys Save from the WIRE context, which was current.
+	wireKey := contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})
+	snapshot, err := store.SnapshotSourceWatermarks(ctx, principal.OrgID)
+	require.NoError(t, err)
+	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
+	require.NoError(t, err)
+	require.NoError(t, store.Save(ctx, principal, interpretedHistorical, snapshot, &epoch, wireKey))
+
+	// A byte-identical follow-up request -- same text, same current axis --
+	// must find it. Before F6 this was a permanent miss.
+	lookup := contextfabric.ReuseKey{
+		QuestionHash:      contextfabric.QuestionHash(interpretedHistorical.Question),
+		ContractVersion:   interpretedHistorical.Versions.ContractVersion,
+		ProjectionVersion: interpretedHistorical.Versions.ProjectionVersion,
+		ModelIdentity:     interpretedHistorical.Versions.ModelIdentity,
+		TimeAxisKey:       wireKey,
+	}
+	reused, found, err := store.FindReusable(ctx, principal, lookup)
+	require.NoError(t, err)
+	require.True(t, found, "an interpreted-historical answer was unreachable to the identical wire request that produced it")
+	require.Equal(t, interpretedHistorical.ResultID, reused.ResultID)
+	// And what was stored still records the historical interpretation, so
+	// condition 6 re-resolves against the right question.
+	require.Equal(t, contextfabric.TemporalValidTime, reused.Interpretation.TimeContext.Axis)
+}

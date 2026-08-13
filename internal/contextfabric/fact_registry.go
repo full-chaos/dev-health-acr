@@ -69,6 +69,22 @@ type FactProviderResult struct {
 	Reason     string
 	Version    string
 	Truncated  bool
+	// Grain is the temporal precision THIS provider answered at
+	// (CHAOS-3781 round-1 F1). It exists because the providers are not
+	// uniform: a daily rollup can only speak for a day, while a provider
+	// deriving state from an immutable event timestamp answers at the
+	// exact requested instant.
+	//
+	// Composing one answer-level grain from a single assumption was
+	// observably wrong -- a pull request merged at 14:00Z, serialized
+	// under a day grain, reads as though the answer only knew about
+	// midnight. Each provider now reports its own, and the engine takes
+	// the COARSEST among those that actually contributed.
+	//
+	// Empty means the provider did not answer on a temporal axis (the
+	// current axis, or a degradation), and contributes nothing to the
+	// composed grain.
+	Grain TemporalGrain
 }
 
 type FactProvider interface {
@@ -445,6 +461,12 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 		bundle.Watermarks[capability.Kind] = result.Watermark
 	}
 	appendFactCoverage(bundle, capability.Kind, result.State, result.ObservedAt, result.Watermark, result.Reason)
+	// F1: only a provider that actually CONTRIBUTED counts toward the
+	// composed grain. A degraded or empty provider reporting a grain
+	// would let a source that answered nothing coarsen the whole answer.
+	if result.State == SourceAvailable && len(result.Facts) > 0 {
+		bundle.TemporalGrain = coarsestGrain(bundle.TemporalGrain, result.Grain)
+	}
 	return nil
 }
 
@@ -465,6 +487,23 @@ const maxCoverageReasonLength = 2000
 // prefix), so they are clamped independently rather than sharing one
 // constant by coincidence.
 const maxCoverageDegradedReasonLength = 2000
+
+// coarsestGrain returns whichever of two grains speaks for the LARGER
+// span, because an answer is only as precise as its least precise
+// contributing source. day is coarser than instant; an empty grain (a
+// provider that did not answer temporally) never coarsens anything.
+func coarsestGrain(current, candidate TemporalGrain) TemporalGrain {
+	if candidate == "" {
+		return current
+	}
+	if current == GrainDay || candidate == GrainDay {
+		return GrainDay
+	}
+	if current == "" {
+		return candidate
+	}
+	return current
+}
 
 func appendFactCoverage(bundle *CanonicalFactBundle, kind FactKind, state SourceState, observedAt *time.Time, watermark, reason string) {
 	if strings.TrimSpace(reason) == "" && state != SourceAvailable {

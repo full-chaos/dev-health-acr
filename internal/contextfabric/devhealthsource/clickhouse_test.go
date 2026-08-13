@@ -193,8 +193,8 @@ func baseTables(at time.Time) []fakeTable {
 		{match: "FROM git_pull_requests AS p", rows: [][]any{{"repo-1", "example-org/widget-service", uint32(1042), "Typed session tokens", "open", at, at, uint8(0), zeroTime}}},
 		{match: "FROM deployments AS d", rows: [][]any{{"repo-1", "example-org/widget-service", "deploy-1", "success", "production", at, uint8(1), at, uint8(0), zeroTime}}},
 		{match: "FROM operational_incidents AS i", rows: [][]any{{"incident-1", "repo-1", "example-org/widget-service", "Widget incident", "open", "low", at, uint8(0), uint8(1), at, uint8(0), zeroTime}}},
-		{match: "FROM work_item_dependencies AS d", rows: [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime}}},
-		{match: "FROM work_graph_deployment_incident_edges AS e", rows: [][]any{{"edge-1", "deploy-1", "incident-1", "example-org/widget-service", at}}},
+		{match: "FROM work_item_dependencies AS d", rows: [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime}}},
+		{match: "FROM work_graph_deployment_incident_edges AS e", rows: [][]any{{"edge-1", "deploy-1", "incident-1", "example-org/widget-service", at, uint8(1), at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime}}},
 	}
 }
 
@@ -296,8 +296,8 @@ func TestNextProjectionBatchLogsOrphanedWorkItemCount(t *testing.T) {
 			// orphaned work item, not two, proving the count is over
 			// DISTINCT work-item IDs, not raw candidates.
 			orphanTables[i] = fakeTable{match: table.match, rows: [][]any{
-				{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime},
-				{"WIDGET-ORPHAN", "WIDGET-101", "blocks", orphanRepoID, "", at, at, uint8(0), zeroTime},
+				{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
+				{"WIDGET-ORPHAN", "WIDGET-101", "blocks", orphanRepoID, "", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
 			}}
 		}
 	}
@@ -460,10 +460,10 @@ func everyRelationshipTypeFixtureTables(at time.Time) []fakeTable {
 			// NULL relationship_type -- already collapsed to a non-null
 			// string by the real SQL's ifNull before Go ever scans it.
 			tables[i] = fakeTable{match: table.match, rows: [][]any{
-				{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime},
-				{"WIDGET-101", "WIDGET-098", "relates_to", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime},
-				{"WIDGET-101", "WIDGET-097", "duplicates", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime},
-				{"WIDGET-101", "WIDGET-096", "related_to", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime},
+				{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
+				{"WIDGET-101", "WIDGET-098", "relates_to", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
+				{"WIDGET-101", "WIDGET-097", "duplicates", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
+				{"WIDGET-101", "WIDGET-096", "related_to", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
 			}}
 		}
 	}
@@ -650,8 +650,8 @@ func TestClickHouseProjectionSourceKeepsBothEdgesForASourceTargetPairWithTwoRela
 	for i, table := range tables {
 		if table.match == "FROM work_item_dependencies AS d" {
 			tables[i] = fakeTable{match: table.match, rows: [][]any{
-				{"WIDGET-101", "WIDGET-050", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime},
-				{"WIDGET-101", "WIDGET-050", "relates_to", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime},
+				{"WIDGET-101", "WIDGET-050", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
+				{"WIDGET-101", "WIDGET-050", "relates_to", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime},
 			}}
 		}
 	}

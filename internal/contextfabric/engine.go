@@ -182,9 +182,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// for on the wire; the second (below, after Interpret) bounds what
 	// the question was understood to mean. Both are required -- see the
 	// second check's comment for why this one alone is not enough.
-	if err := validateTimeContext(request.TimeContext, e.now()); err != nil {
+	// F7: the returned context is CLAMPED -- an instant inside the skew
+	// tolerance is pulled back to now, so a future time can never reach a
+	// predicate or a label. The clamped value replaces the caller's on
+	// the request every layer below sees.
+	// Captured BEFORE clamping: the reuse key must describe the request
+	// as the caller sent it, so two byte-identical requests key
+	// identically regardless of when they arrive relative to `now`
+	// (F6/F7 together -- clamping is time-dependent, and keying on a
+	// clamped value would make an identical request's key drift).
+	wireTimeContext := request.TimeContext
+	clampedRequestTime, err := resolveTimeContext(request.TimeContext, e.now())
+	if err != nil {
 		return InvestigationResult{}, err
 	}
+	request.TimeContext = clampedRequestTime
 	if err := ctx.Err(); err != nil {
 		return InvestigationResult{}, err
 	}
@@ -228,9 +240,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	//
 	// Placed before prior-receipt expansion and every capability call, so
 	// a rejected investigation does no graph or fact work at all.
-	if err := validateTimeContext(interpretation.TimeContext, e.now()); err != nil {
+	clampedInterpretedTime, err := resolveTimeContext(interpretation.TimeContext, e.now())
+	if err != nil {
 		return InvestigationResult{}, err
 	}
+	interpretation.TimeContext = clampedInterpretedTime
 	// Prior-result receipts (PriorSubjectReceipts) name a subject already
 	// committed or proposed in an earlier InvestigationResult -- e.g. a
 	// conversational follow-up ("what about it") binding back to the
@@ -396,13 +410,17 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// model may assert. The result contract refuses a non-current axis
 	// carrying no label, so a composition bug fails loudly here rather
 	// than shipping an unlabeled historical answer.
-	result.Temporal = composeTemporalLabel(interpretation, result.Coverage)
+	result.Temporal = composeTemporalLabel(interpretation, result.Coverage, facts.TemporalGrain)
 	result.Limitations = appendTemporalLimitations(result.Limitations, interpretation)
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, fmt.Errorf("%w: %v", ErrInvalidResult, err)
 	}
 	if e.results != nil {
-		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch); err != nil {
+		// F6: keyed from the ORIGINAL wire request -- the same context
+		// tryReuse keys its lookup with, captured before any clamping or
+		// interpretation could move it. Save and FindReusable must agree
+		// on this or the save is unreachable.
+		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, TimeAxisKeyFor(wireTimeContext)); err != nil {
 			return InvestigationResult{}, fmt.Errorf("save investigation result: %w", err)
 		}
 	}

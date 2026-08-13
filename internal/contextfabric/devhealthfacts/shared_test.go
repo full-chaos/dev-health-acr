@@ -139,8 +139,14 @@ func TestTierABProvidersAnswerValidTime(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadFacts() error = %v", err)
 			}
-			if result.State != contextfabric.SourceAvailable {
-				t.Fatalf("result.State = %q, want %q -- this provider can answer for a past time", result.State, contextfabric.SourceAvailable)
+			// The point is that the provider ANSWERED rather than
+			// declining. It may legitimately come back no_data -- this
+			// fake returns zero rows, which post-F8 is reported as
+			// out-of-retention rather than as a clean available/empty --
+			// but it must never report the not_applicable degradation,
+			// which means "I cannot speak for that time at all".
+			if result.State == contextfabric.SourceNotApplicable {
+				t.Fatalf("result.State = %q, but this provider can answer for a past time", result.State)
 			}
 			if len(client.queries) == 0 {
 				t.Fatal("no ClickHouse query was issued; a Tier A/B provider must answer a valid-time question, not degrade")
@@ -283,6 +289,63 @@ func TestReadFailureNeverLeaksRawClickHouseError(t *testing.T) {
 			var failure *contextfabric.FactReadFailure
 			if errors.As(err, &failure) && strings.Contains(failure.Reason, marker) {
 				t.Fatalf("failure.Reason = %q, must not contain the raw driver error", failure.Reason)
+			}
+		})
+	}
+}
+
+// TestBoundedHistoricalQueryWithNoRowsReportsOutOfRetention is round-1 F8:
+// a historical query that finds nothing must say so as no_data with the
+// retention reason, not as a clean `available`.
+//
+// The two are genuinely different answers -- "nothing happened then"
+// versus "we do not retain data that far back" -- and reporting the second
+// as the first is a quiet false negative. The rest of the answer survives
+// either way (AC-3781-5).
+func TestBoundedHistoricalQueryWithNoRowsReportsOutOfRetention(t *testing.T) {
+	t.Parallel()
+	asOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range timeAxisCases() {
+		if !tc.answersHistory {
+			continue
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client := &fakeClient{} // no tables seeded: every query returns zero rows
+			provider := findProvider(t, devhealthfacts.NewProviders(client), tc.kind)
+			result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"},
+				historicalQuery(tc, contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &asOf}))
+			if err != nil {
+				t.Fatalf("ReadFacts() error = %v", err)
+			}
+			if result.State != contextfabric.SourceNoData {
+				t.Fatalf("result.State = %q, want %q for a historical query that retained nothing", result.State, contextfabric.SourceNoData)
+			}
+			if !strings.Contains(result.Reason, "predate the retained corpus") {
+				t.Fatalf("result.Reason = %q, want it to name the retention limitation", result.Reason)
+			}
+		})
+	}
+}
+
+// TestCurrentAxisWithNoRowsStaysAvailable is the over-blocking guard for
+// F8:zero rows on the CURRENT axis has always meant an ordinary empty read,
+// and retention is not the question there. Reporting no_data for it would
+// change long-standing behavior for every current-axis investigation.
+func TestCurrentAxisWithNoRowsStaysAvailable(t *testing.T) {
+	t.Parallel()
+	for _, tc := range timeAxisCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client := &fakeClient{}
+			provider := findProvider(t, devhealthfacts.NewProviders(client), tc.kind)
+			result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"},
+				historicalQuery(tc, contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}))
+			if err != nil {
+				t.Fatalf("ReadFacts() error = %v", err)
+			}
+			if result.State != contextfabric.SourceAvailable {
+				t.Fatalf("result.State = %q, want %q: an empty current-axis read is not a retention question", result.State, contextfabric.SourceAvailable)
 			}
 		})
 	}

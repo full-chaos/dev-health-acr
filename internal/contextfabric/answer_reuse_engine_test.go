@@ -891,7 +891,7 @@ type snapshotCapturingResultStore struct {
 	savedEpoch    RebuildEpoch
 }
 
-func (s *snapshotCapturingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch) error {
+func (s *snapshotCapturingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string) error {
 	s.saveCalled = true
 	s.savedSnapshot = reuseSnapshot
 	s.savedEpoch = reuseEpoch

@@ -54,7 +54,7 @@ func NewStore() *Store {
 // test/dev store does not implement CHAOS-3782 answer reuse
 // (contextfabric.AnswerReuseGate), so there is no reuse-key bookkeeping
 // to populate.
-func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch) error {
+func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string) error {
 	if s == nil {
 		return errors.New("memoryinvestigation: store is not configured")
 	}

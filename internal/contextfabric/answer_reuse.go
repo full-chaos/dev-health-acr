@@ -260,18 +260,22 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		}
 		modelIdentities = resolved
 	}
-	// CHAOS-3781: the axis key is taken from the WIRE request, not from
-	// an interpretation -- tryReuse runs BEFORE Interpret, which is the
-	// whole mechanism behind AC-3782-1's zero-model-call guarantee, so no
-	// interpreted axis exists yet.
+	// CHAOS-3781: the axis key comes from the WIRE request. tryReuse runs
+	// BEFORE Interpret -- the whole mechanism behind AC-3782-1's
+	// zero-model-call guarantee -- so no interpreted axis exists here yet.
 	//
-	// That is sound but narrower than it looks, and the narrowness is the
-	// safe direction: a question whose TEXT is historical while its wire
-	// axis says current keys as current, so it can only ever reuse
-	// another answer to that same text under that same wire axis, whose
-	// interpretation would have reached the same historical axis. It can
-	// never cross-serve a differently-bounded question, which is the
-	// collision this dimension exists to prevent.
+	// Round-1 F6 made this symmetric: Save keys the same way, from the
+	// same wire context, rather than from the interpreted result. The two
+	// sides MUST agree. When Save keyed from the interpretation, an
+	// interpreter reading a current-axis request as historical saved
+	// under a historical key that this lookup -- keyed "current" -- could
+	// never find, so that entire class of question reused nothing, and
+	// nothing surfaced the miss.
+	//
+	// The key's job is REQUEST identity, not interpretation identity.
+	// Interpretation is still proved to match before anything is served:
+	// condition 6 re-resolves every subject against the candidate's own
+	// stored Interpretation.
 	timeAxisKey := TimeAxisKeyFor(request.TimeContext)
 	if timeAxisKey == "" {
 		// A historical context missing its own required bounds. Fail

@@ -394,3 +394,119 @@ func TestEffectiveRangeNarrowsToWholeDaysWithoutOverNarrowing(t *testing.T) {
 		t.Fatalf("a sub-day range produced a label the contract rejects: %v", err)
 	}
 }
+
+// --- CHAOS-3781 codex round-1 regressions ---
+
+func gradedFactBundle(project SubjectRef, grain TemporalGrain) CanonicalFactBundle {
+	bundle := bootstrapFactBundle(project)
+	bundle.TemporalGrain = grain
+	return bundle
+}
+
+// TestF1_ComposedGrainIsTheCoarsestContributingSource: the answer's grain
+// is composed from what the providers reported, not assumed.
+//
+// The old code hardcoded day for any answered source, so a Tier B provider
+// answering from an exact event timestamp -- a pull request merged at
+// 14:00Z -- was reported at day grain, and the label's effective time was
+// rounded back to midnight. That understates precision the data actually
+// has, and it is a claim about the answer that the answer contradicts.
+func TestF1_ComposedGrainIsTheCoarsestContributingSource(t *testing.T) {
+	t.Parallel()
+	asOf := time.Date(2026, 3, 1, 14, 0, 0, 0, time.UTC)
+	project := acceptanceProject()
+
+	// Only exact-grain providers contributed: the answer speaks for the
+	// requested INSTANT, and the effective time is not rounded.
+	instant := runHistoricalAcceptance(t,
+		TimeContext{Axis: TemporalValidTime, AsOf: &asOf}, gradedFactBundle(project, GrainInstant))
+	if instant.Temporal.Grain != GrainInstant {
+		t.Fatalf("grain = %q, want %q when only exact-grain providers contributed", instant.Temporal.Grain, GrainInstant)
+	}
+	if !instant.Temporal.Effective.AsOf.Equal(asOf) {
+		t.Fatalf("effective as-of = %v, want the exact requested %v -- an instant-grain answer must not be rounded to a day",
+			instant.Temporal.Effective.AsOf, asOf)
+	}
+
+	// A day-grain provider contributed: the whole answer is only as
+	// precise as its least precise source, and the effective time rounds
+	// back to the day it can actually speak for.
+	day := runHistoricalAcceptance(t,
+		TimeContext{Axis: TemporalValidTime, AsOf: &asOf}, gradedFactBundle(project, GrainDay))
+	if day.Temporal.Grain != GrainDay {
+		t.Fatalf("grain = %q, want %q when a daily rollup contributed", day.Temporal.Grain, GrainDay)
+	}
+	if !day.Temporal.Effective.AsOf.Before(asOf) {
+		t.Fatalf("effective as-of = %v, want it rounded back from %v at day grain", day.Temporal.Effective.AsOf, asOf)
+	}
+
+	// No provider reported a grain: nothing spoke for the requested time.
+	none := runHistoricalAcceptance(t,
+		TimeContext{Axis: TemporalValidTime, AsOf: &asOf}, gradedFactBundle(project, ""))
+	if none.Temporal.Grain != GrainNone || none.Temporal.CoverageComplete {
+		t.Fatalf("temporal = %#v, want grain=none and incomplete coverage when no provider answered temporally", none.Temporal)
+	}
+}
+
+// TestF1_CoarsestGrainWins pins the composition rule itself: an answer is
+// only as precise as its least precise contributing source.
+func TestF1_CoarsestGrainWins(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name          string
+		first, second TemporalGrain
+		want          TemporalGrain
+	}{
+		{"day beats instant", GrainInstant, GrainDay, GrainDay},
+		{"day beats instant, other order", GrainDay, GrainInstant, GrainDay},
+		{"instant only", GrainInstant, GrainInstant, GrainInstant},
+		{"an absent grain never coarsens", GrainInstant, "", GrainInstant},
+		{"an absent grain never refines", GrainDay, "", GrainDay},
+		{"first absent takes the candidate", "", GrainInstant, GrainInstant},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := coarsestGrain(testCase.first, testCase.second); got != testCase.want {
+				t.Fatalf("coarsestGrain(%q, %q) = %q, want %q", testCase.first, testCase.second, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestF7_AToleratedFutureInstantIsClampedNotPropagated: the skew tolerance
+// forgives a caller's clock, it does not admit a question about the
+// future. Before the clamp, a now+30s as_of flowed straight through to the
+// graph predicate and the answer's label, so the answer claimed to speak
+// for a time that has not happened.
+func TestF7_AToleratedFutureInstantIsClampedNotPropagated(t *testing.T) {
+	t.Parallel()
+	now := acceptanceNow
+	slightlyAhead := now.Add(30 * time.Second) // inside futureSkewTolerance
+
+	project := acceptanceProject()
+	graph := &acceptanceGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context:    bootstrapGraphContext(project),
+	}
+	var boundTime TimeContext
+	facts := factReaderFunc(func(_ context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
+		boundTime = request.Question.TimeContext
+		return gradedFactBundle(project, GrainInstant), nil
+	})
+	engine := buildAcceptanceEngine(t, graph, facts,
+		historicalInterpretation(TimeContext{Axis: TemporalValidTime, AsOf: &slightlyAhead}),
+		bootstrapDraft(project), newMapResultStore())
+
+	request := validInvestigationRequest()
+	request.TimeContext = TimeContext{Axis: TemporalValidTime, AsOf: &slightlyAhead}
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v, want a skewed clock to be tolerated, not refused", err)
+	}
+	if boundTime.AsOf.After(now) {
+		t.Fatalf("the fact read was bound to %v, which is after now (%v); a tolerated instant must be clamped, never propagated", boundTime.AsOf, now)
+	}
+	if result.Temporal.Requested.AsOf.After(now) {
+		t.Fatalf("the label reports %v, which is after now (%v); the answer must not claim to speak for the future", result.Temporal.Requested.AsOf, now)
+	}
+}

@@ -67,5 +67,6 @@ WHERE d.org_id = {org_id:String} AND d.deployment_id IN {ids:Array(String)}` + t
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query deployments", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	state, retentionReason := timeBound.retentionState(rowCount)
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

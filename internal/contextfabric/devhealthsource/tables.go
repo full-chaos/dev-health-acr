@@ -374,28 +374,43 @@ func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHo
 	const relationshipTypeExpr = "ifNull(d.relationship_type, 'related_to')"
 	const rowKey = "concat(d.source_work_item_id, ':', d.target_work_item_id, ':', " + relationshipTypeExpr + ")"
 	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ` + relationshipTypeExpr + `, toString(w.repo_id), ifNull(r.repo, ''), d.last_synced,
-       w.created_at, ` + nullableTimestamp("coalesce(w.completed_at, w.closed_at)") + `
+       w.created_at, ` + nullableTimestamp("coalesce(w.completed_at, w.closed_at)") + `,
+       ` + nullableTimestamp("t.created_at") + `, ` + nullableTimestamp("coalesce(t.completed_at, t.closed_at)") + `
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS w FINAL ON w.org_id = d.org_id AND w.work_item_id = d.source_work_item_id
+LEFT JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
 WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowKey) + orderBy("d.last_synced", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var sourceID, targetID, relationshipType, repoID, repoSlug string
-		var observedAt, sourceCreatedAt, sourceEndedAt time.Time
-		var sourceHasEnded uint8
-		if err := r.Scan(&sourceID, &targetID, &relationshipType, &repoID, &repoSlug, &observedAt, &sourceCreatedAt, &sourceHasEnded, &sourceEndedAt); err != nil {
+		var observedAt, sourceCreatedAt, sourceEndedAt, targetCreatedAt, targetEndedAt time.Time
+		var sourceHasEnded, targetHasCreated, targetHasEnded uint8
+		if err := r.Scan(&sourceID, &targetID, &relationshipType, &repoID, &repoSlug, &observedAt,
+			&sourceCreatedAt, &sourceHasEnded, &sourceEndedAt,
+			&targetHasCreated, &targetCreatedAt, &targetHasEnded, &targetEndedAt); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
 		// work_item_dependencies carries only last_synced -- no interval
-		// of its own -- so the edge's window comes from its endpoints.
-		// Only the SOURCE endpoint is available here: the target is
-		// deliberately not joined, because a target_work_item_id is not
-		// guaranteed to name a work item at all (see this function's doc
-		// comment on cross-system PR references). The window is
-		// therefore the source's, which is an approximation and is
-		// recorded as one rather than left absent.
-		validFrom, validTo := requiredTime(sourceCreatedAt), optionalTime(sourceHasEnded, sourceEndedAt)
+		// of its own -- so the edge's window is its endpoints'
+		// intersection (CHAOS-3781 round-1 F5).
+		//
+		// The target join is LEFT, not INNER, and that asymmetry is
+		// deliberate: a target_work_item_id is not guaranteed to name a
+		// work item at all (see this function's doc comment on
+		// cross-system PR references), so an INNER join would silently
+		// stop projecting those edges entirely. When the target does not
+		// resolve, its bounds come back absent and edgeValidity falls
+		// back to the source's window alone -- the honest answer, since
+		// nothing in the row says when the target existed.
+		//
+		// F5 fixed the earlier source-only version, which asserted the
+		// edge was valid while the target did not yet exist, and made
+		// the window depend on which endpoint happened to be joined
+		// rather than on the data.
+		validFrom, validTo := edgeValidity(
+			requiredTime(sourceCreatedAt), optionalTime(sourceHasEnded, sourceEndedAt),
+			optionalTime(targetHasCreated, targetCreatedAt), optionalTime(targetHasEnded, targetEndedAt))
 		relationshipID := "relationship:work_item_dependency:" + sourceID + ":" + targetID + ":" + relationshipType
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: relationshipID, Type: contractsv1.ContextFabricRelationshipType(strings.ToUpper(relationshipType)),
@@ -477,18 +492,43 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 	})
 }
 
+// queryDeploymentIncidentEdges derives its validity window from its two
+// ENDPOINTS (CHAOS-3781 round-1 F4), because
+// work_graph_deployment_incident_edges carries no interval of its own --
+// only observed_at and computed_at, which are derivation stamps, not the
+// span over which the correlation was true.
+//
+// The semantic interval IS knowable from the source, so leaving the edge
+// unbounded would have been the wrong kind of honest: an unbounded edge is
+// admitted at EVERY requested time, so a deployment would have appeared
+// correlated with an incident years before either happened. Both endpoint
+// tables are joined LEFT, so an edge whose endpoint row cannot be resolved
+// still projects -- with the window absent, which is the admit-count-label
+// path, and the correct answer when the interval genuinely is unknowable.
 func queryDeploymentIncidentEdges(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	statement := `SELECT e.edge_id, e.deployment_id, e.incident_id, r.repo, e.observed_at
+	statement := `SELECT e.edge_id, e.deployment_id, e.incident_id, r.repo, e.observed_at,
+       ` + nullableTimestamp("coalesce(d.started_at, d.deployed_at)") + `, ` + nullableTimestamp("d.finished_at") + `,
+       ` + nullableTimestamp("i.started_at") + `, ` + nullableTimestamp("coalesce(i.resolved_at, i.deleted_at)") + `
 FROM work_graph_deployment_incident_edges AS e FINAL
 INNER JOIN repos AS r FINAL ON r.id = e.repo_id AND r.org_id = toString(e.org_id)
+LEFT JOIN deployments AS d FINAL ON d.org_id = toString(e.org_id) AND d.deployment_id = e.deployment_id
+LEFT JOIN operational_incidents AS i FINAL ON i.org_id = toString(e.org_id) AND i.id = e.incident_id
 WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incident_id NOT IN ('', 'none')` + sincePredicate(cursor, "e.observed_at", "e.edge_id") + orderBy("e.observed_at", "e.edge_id")
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var edgeID, deploymentID, incidentID, repoSlug string
-		var observedAt time.Time
-		if err := r.Scan(&edgeID, &deploymentID, &incidentID, &repoSlug, &observedAt); err != nil {
+		var observedAt, deployStartedAt, deployFinishedAt, incidentStartedAt, incidentEndedAt time.Time
+		var hasDeployStart, hasDeployEnd, hasIncidentStart, hasIncidentEnd uint8
+		if err := r.Scan(&edgeID, &deploymentID, &incidentID, &repoSlug, &observedAt,
+			&hasDeployStart, &deployStartedAt, &hasDeployEnd, &deployFinishedAt,
+			&hasIncidentStart, &incidentStartedAt, &hasIncidentEnd, &incidentEndedAt); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		// The correlation is valid only while BOTH ends are -- the same
+		// endpoint-intersection rule every other edge here uses.
+		validFrom, validTo := edgeValidity(
+			optionalTime(hasDeployStart, deployStartedAt), optionalTime(hasDeployEnd, deployFinishedAt),
+			optionalTime(hasIncidentStart, incidentStartedAt), optionalTime(hasIncidentEnd, incidentEndedAt))
 		relationshipID := "relationship:deployment_incident:" + edgeID
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: relationshipID, Type: "CORRELATED_WITH_INCIDENT",
@@ -496,7 +536,7 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectIncident, CanonicalID: "incident:" + incidentID, Label: incidentID},
 			Derivation: contractsv1.ContextFabricDerivationRuleInferred, EpistemicStatus: contractsv1.ContextFabricEpistemicSourceAsserted,
 			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:deployment-incident:" + edgeID},
-			ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			ObservedAt: observedAt, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: edgeID, relationship: &relationship}}, nil
 	})

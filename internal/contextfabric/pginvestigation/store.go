@@ -103,7 +103,7 @@ func NewStore(db *sql.DB, opts ...StoreOption) (*Store, error) {
 // identical payload is treated as success (idempotent retry); a replay
 // under the same result_id with a DIFFERENT payload is rejected, since that
 // would silently overwrite an immutable record.
-func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch) error {
+func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string) error {
 	if s == nil || s.db == nil {
 		return errors.New("pginvestigation: store is not configured")
 	}
@@ -124,16 +124,22 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		return fmt.Errorf("pginvestigation: marshal investigation result: %w", err)
 	}
 	questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch := s.reuseColumnsFor(result, reuseSnapshot, reuseEpoch)
-	// CHAOS-3781: the axis key comes from the result's own INTERPRETED
-	// time context -- the axis the reads were actually bound to, which is
-	// what this stored answer speaks for. Unconditional (never gated on
-	// reuseEnabled) because the column is NOT NULL: a row saved with
-	// reuse disabled still has to record which question it answered.
-	timeAxisKey := contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext)
-	if timeAxisKey == "" {
-		// A malformed historical context. Store the row (it is still a
-		// real result) but under a key no lookup can ever produce, so it
-		// can never be reused -- TimeAxisKeyFor never returns this.
+	// CHAOS-3781 round-1 F6: the axis key is supplied by Engine from the
+	// original WIRE request, matching exactly what FindReusable will key
+	// with. It is NOT re-derived from result.Interpretation here -- an
+	// interpreter that reads a current-axis request as historical would
+	// then save under a key no identical request could ever look up, and
+	// that whole class of question would silently never reuse.
+	//
+	// Interpretation identity is not lost by this: condition 6 re-resolves
+	// every subject against the candidate's own stored Interpretation
+	// before serving it, so a reused answer is still proved to match the
+	// question that was actually asked.
+	if strings.TrimSpace(timeAxisKey) == "" {
+		// Engine could not canonicalize the requested time (a malformed
+		// historical context). Store the row -- it is still a real result
+		// -- but under a key no lookup can ever produce, so it can never
+		// be reused. TimeAxisKeyFor never returns this value.
 		timeAxisKey = "unkeyed"
 	}
 

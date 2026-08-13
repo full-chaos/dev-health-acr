@@ -50,44 +50,68 @@ const futureSkewTolerance = time.Minute
 // it is delivered as an answer whose sources all report no data.
 var ErrInvalidTimeBound = fmt.Errorf("context fabric time bounds are not answerable")
 
-// validateTimeContext is the single definition of what this engine can
+// resolveTimeContext is the single definition of what this engine can
 // honestly answer, shared by the wire-request check and the
 // post-interpretation check so the two can never diverge -- the same role
 // requireCurrentTimeAxis played, with a different verdict.
 //
-// The current axis is always answerable. A historical axis is answerable
-// when its bounds are shaped correctly (already proved by the contract),
-// sit at or before now, and describe a window this service will read.
-func validateTimeContext(timeContext TimeContext, now time.Time) error {
+// It both VALIDATES and CLAMPS, returning the context every layer below
+// should bind to. Round-1 F7: validation alone accepted an instant inside
+// futureSkewTolerance and then let that future instant flow through to the
+// graph predicate and the answer's label, so a `now + 30s` request was
+// answered and labeled as being about a time that has not happened. The
+// tolerance exists to forgive a caller's clock skew, not to admit a
+// question about the future -- so a tolerated instant is pulled back to
+// now, and the label reports the clamped value as what the answer speaks
+// for.
+//
+// The current axis is always answerable and never clamped.
+func resolveTimeContext(timeContext TimeContext, now time.Time) (TimeContext, error) {
 	horizon := now.Add(futureSkewTolerance)
 	switch timeContext.Axis {
 	case TemporalCurrent:
-		return nil
+		return timeContext, nil
 	case TemporalValidTime, TemporalObservedTime:
 		if timeContext.AsOf == nil {
-			return fmt.Errorf("%w: %s requires an as-of time", ErrInvalidTimeBound, timeContext.Axis)
+			return timeContext, fmt.Errorf("%w: %s requires an as-of time", ErrInvalidTimeBound, timeContext.Axis)
 		}
 		if timeContext.AsOf.After(horizon) {
 			// §19.8.3: the axis is historical, not speculative.
-			return fmt.Errorf("%w: as-of time is in the future", ErrInvalidTimeBound)
+			return timeContext, fmt.Errorf("%w: as-of time is in the future", ErrInvalidTimeBound)
 		}
-		return nil
+		clamped := timeContext
+		if timeContext.AsOf.After(now) {
+			at := now
+			clamped.AsOf = &at
+		}
+		return clamped, nil
 	case TemporalRange:
 		if timeContext.Start == nil || timeContext.End == nil {
-			return fmt.Errorf("%w: range requires a start and an end", ErrInvalidTimeBound)
+			return timeContext, fmt.Errorf("%w: range requires a start and an end", ErrInvalidTimeBound)
 		}
 		if timeContext.End.Before(*timeContext.Start) {
-			return fmt.Errorf("%w: range end precedes its start", ErrInvalidTimeBound)
+			return timeContext, fmt.Errorf("%w: range end precedes its start", ErrInvalidTimeBound)
 		}
 		if timeContext.End.After(horizon) {
-			return fmt.Errorf("%w: range end is in the future", ErrInvalidTimeBound)
+			return timeContext, fmt.Errorf("%w: range end is in the future", ErrInvalidTimeBound)
 		}
 		if timeContext.End.Sub(*timeContext.Start) > maxHistoricalRangeDays*24*time.Hour {
-			return fmt.Errorf("%w: range is wider than %d days", ErrInvalidTimeBound, maxHistoricalRangeDays)
+			return timeContext, fmt.Errorf("%w: range is wider than %d days", ErrInvalidTimeBound, maxHistoricalRangeDays)
 		}
-		return nil
+		clamped := timeContext
+		if timeContext.End.After(now) {
+			end := now
+			clamped.End = &end
+			// A window whose whole span sat inside the tolerance would
+			// otherwise invert once the end is pulled back.
+			if timeContext.Start.After(now) {
+				start := now
+				clamped.Start = &start
+			}
+		}
+		return clamped, nil
 	default:
-		return fmt.Errorf("%w: unknown time axis %q", ErrInvalidTimeBound, timeContext.Axis)
+		return timeContext, fmt.Errorf("%w: unknown time axis %q", ErrInvalidTimeBound, timeContext.Axis)
 	}
 }
 
@@ -102,12 +126,12 @@ func validateTimeContext(timeContext TimeContext, now time.Time) error {
 // what was requested: a day-grain rollup cannot speak for an instant, so
 // an answer built from one says so rather than implying precision it does
 // not have.
-func composeTemporalLabel(interpretation InterpretedQuestion, coverage Coverage) *TemporalLabel {
+func composeTemporalLabel(interpretation InterpretedQuestion, coverage Coverage, factGrain TemporalGrain) *TemporalLabel {
 	requested := interpretation.TimeContext
 	if requested.Axis == TemporalCurrent {
 		return nil
 	}
-	grain, complete := temporalCoverage(coverage)
+	grain, complete := temporalCoverage(coverage, factGrain)
 	if requested.Axis == TemporalObservedTime {
 		// No source in this system retains observation history: the
 		// canonical rollups' computed_at is a recompute stamp and the
@@ -138,15 +162,24 @@ func composeTemporalLabel(interpretation InterpretedQuestion, coverage Coverage)
 	}
 }
 
-// temporalCoverage reads the answer's own coverage to decide the grain it
-// achieved and whether every source could speak for the requested time.
+// temporalCoverage reads the answer's own coverage, plus the grain the
+// fact providers reported, to decide the grain this answer achieved and
+// whether every source could speak for the requested time.
 //
 // A source that reported not_applicable for a temporal reason is what
 // makes coverage incomplete (AC-3781-5). Sources are matched on the fixed
 // reason literals the providers and the graph adapter emit -- never on
 // free text, and never on the source name, which is not a stable
 // vocabulary.
-func temporalCoverage(coverage Coverage) (TemporalGrain, bool) {
+//
+// factGrain is the COARSEST grain among providers that actually
+// contributed (CanonicalFactBundle.TemporalGrain). Round-1 F1: this used
+// to be hardcoded to GrainDay for any answered source, which was
+// observably wrong -- a Tier B provider answers from an exact event
+// timestamp, so a pull request merged at 14:00Z was being reported under a
+// day grain, reading as though the answer only knew about midnight. The
+// providers know their own precision; this only composes what they report.
+func temporalCoverage(coverage Coverage, factGrain TemporalGrain) (TemporalGrain, bool) {
 	complete := true
 	answered := false
 	for _, source := range coverage.Sources {
@@ -157,19 +190,18 @@ func temporalCoverage(coverage Coverage) (TemporalGrain, bool) {
 			answered = true
 		}
 	}
-	if !answered {
+	if !answered || factGrain == "" {
 		// Nothing spoke for the requested time. The honest grain is
 		// none: the answer carries no fact coverage on this axis, which
 		// is the steady state for observed_time.
+		//
+		// factGrain == "" is the same condition reached from the other
+		// side: coverage can show an available source that contributed
+		// no facts (an empty but healthy read), and such a source gives
+		// the answer no temporal precision to report.
 		return GrainNone, false
 	}
-	// Any contributing canonical fact source is day-grained at best (the
-	// rollup tables are the only ones that answer a valid-time question
-	// natively), so an answer that used one speaks for a day, not an
-	// instant. Claiming instant precision here would be the smaller,
-	// quieter version of the same false-precision problem this issue
-	// exists to remove.
-	return GrainDay, complete
+	return factGrain, complete
 }
 
 // temporalDegradationMarkers are the fixed substrings a source's Reason

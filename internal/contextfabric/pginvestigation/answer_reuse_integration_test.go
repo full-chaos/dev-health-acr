@@ -77,7 +77,7 @@ func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKe
 // directly -- Save no longer queries either of these itself (that was
 // the F1 bug, and reuseEpoch is the same discipline applied to a second
 // piece of snapshot-time state), so a bare
-// store.Save(ctx, principal, result, nil, nil) with nothing passed now
+// store.Save(ctx, principal, result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})) with nothing passed now
 // deliberately leaves every reuse column NULL (see
 // TestF1_SaveLeavesReuseColumnsNullWithoutAThreadedSnapshot).
 func saveWithReuseSnapshot(t *testing.T, ctx context.Context, store *pginvestigation.Store, principal storage.Principal, result contextfabric.InvestigationResult) {
@@ -86,7 +86,7 @@ func saveWithReuseSnapshot(t *testing.T, ctx context.Context, store *pginvestiga
 	require.NoError(t, err)
 	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
 	require.NoError(t, err)
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext)))
 }
 
 // TestFindReusable_HappyPathRoundTrip proves the baseline: a result saved
@@ -128,7 +128,7 @@ func TestF1_SaveLeavesReuseColumnsNullWithoutAThreadedSnapshot(t *testing.T) {
 	// Deliberately NOT using saveWithReuseSnapshot -- plain Save with a
 	// nil reuse snapshot and a nil epoch, exactly what a Save call from a
 	// caller that doesn't know about answer reuse would pass.
-	require.NoError(t, store.Save(ctx, principal, result, nil, nil))
+	require.NoError(t, store.Save(ctx, principal, result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})))
 
 	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
@@ -580,7 +580,7 @@ func TestAC_3782_4_RebuildBetweenSnapshotAndSaveIsCaughtByEpochNotTimestamp(t *t
 	// exactly what a timestamp-only check would have called "fresh" --
 	// but carries the STALE epoch captured before the rebuild.
 	result := reusableResult("result_reuse_epoch_race01", principal.OrgID, "Did the mid-flight rebuild get caught?")
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext)))
 
 	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
@@ -627,7 +627,7 @@ func TestFindReusable_NilEpochAtSaveIsNeverReusable(t *testing.T) {
 	require.NoError(t, err)
 
 	result := reusableResult("result_reuse_epoch_nil01", principal.OrgID, "Was the no-epoch save left unreusable?")
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, nil))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, nil, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext)))
 
 	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
@@ -706,7 +706,7 @@ func TestSave_EmptyModelIdentityPersistsAsNeverReusable(t *testing.T) {
 
 	result := reusableResult("result_reuse_no_model_id01", principal.OrgID, "Was the empty model identity save left unreusable?")
 	result.Versions.ModelIdentity = ""
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext)))
 
 	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)

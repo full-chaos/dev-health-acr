@@ -145,7 +145,22 @@ type InvestigationResultStore interface {
 	// reproduce answer reuse's own fail-open hazard (Codex round-1
 	// findings F1/F2, round-2 finding #7) the way a context.Context value
 	// could.
-	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch) error
+	// Save persists one immutable result. The trailing parameters are the
+	// reuse bindings Engine captures itself and threads explicitly --
+	// never re-derived here, and never smuggled through ctx: a caller who
+	// forgets one must fail to compile.
+	//
+	// The final string is the REUSE TIME-AXIS KEY (CHAOS-3781 round-1
+	// F6), computed from the caller's ORIGINAL WIRE request rather than
+	// from result.Interpretation. Both sides of reuse must key the same
+	// way: an interpreter that reads a current-axis request as historical
+	// would otherwise SAVE under a historical key that an identical
+	// future request -- keyed from its own wire context as "current" --
+	// could never look up, so such questions would never reuse at all.
+	// The key's job is REQUEST identity; interpretation identity is
+	// covered separately by condition 6's re-resolution against the
+	// stored Interpretation.
+	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string) error
 	Get(context.Context, storage.Principal, string) (InvestigationResult, error)
 }
 

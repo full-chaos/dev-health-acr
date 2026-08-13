@@ -103,5 +103,6 @@ WHERE rn = 1`)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query source health", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	state, retentionReason := timeBound.retentionState(rowCount)
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

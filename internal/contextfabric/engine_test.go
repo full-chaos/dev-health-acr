@@ -49,7 +49,7 @@ type resultStoreStub struct {
 	savedEpoch    RebuildEpoch
 }
 
-func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch) error {
+func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string) error {
 	s.saved = result
 	s.savedSnapshot = reuseSnapshot
 	s.savedEpoch = reuseEpoch
@@ -68,7 +68,7 @@ type staticResultStore struct {
 	getErr  error
 }
 
-func (s *staticResultStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch) error {
+func (s *staticResultStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string) error {
 	return nil
 }
 

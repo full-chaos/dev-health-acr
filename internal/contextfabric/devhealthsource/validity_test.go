@@ -219,3 +219,112 @@ func TestSourceVersionIsBumpedForValidityWindows(t *testing.T) {
 		t.Fatalf("ClickHouseSourceVersion = %q, want devhealthsource.clickhouse.v4", devhealthsource.ClickHouseSourceVersion)
 	}
 }
+
+// --- CHAOS-3781 codex round-1 regressions ---
+
+// TestF5_DependencyEdgeIntersectsBothEndpoints is round-1 F5: the edge's
+// window used to come from the SOURCE work item alone, which asserted the
+// dependency was valid while the TARGET did not yet exist -- and made the
+// window depend on which endpoint happened to be joined rather than on the
+// data.
+func TestF5_DependencyEdgeIntersectsBothEndpoints(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	sourceCreated := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	targetCreated := time.Date(2026, 1, 20, 0, 0, 0, 0, time.UTC) // later start wins
+	targetEnded := time.Date(2026, 2, 10, 0, 0, 0, 0, time.UTC)   // earlier end wins
+	sourceEnded := time.Date(2026, 2, 25, 0, 0, 0, 0, time.UTC)
+
+	tables := baseTables(at)
+	for index, table := range tables {
+		if table.match == "FROM work_item_dependencies AS d" {
+			tables[index].rows = [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at,
+				sourceCreated, uint8(1), sourceEnded, uint8(1), targetCreated, uint8(1), targetEnded}}
+			continue
+		}
+		tables[index].rows = nil
+	}
+	batch := projectOneBatch(t, tables)
+
+	edge := relationshipByID(t, batch, "relationship:work_item_dependency:WIDGET-101:WIDGET-099:blocks")
+	requireWindow(t, "dependency", edge.ValidFrom, edge.ValidTo, &targetCreated, &targetEnded)
+}
+
+// TestF5_DependencyEdgeFallsBackToTheSourceWhenTheTargetIsNotAWorkItem:
+// target_work_item_id is not guaranteed to name a work item (it can carry
+// a cross-system PR reference), so the join is LEFT. An unresolved target
+// contributes no bound rather than dropping the edge entirely.
+func TestF5_DependencyEdgeFallsBackToTheSourceWhenTheTargetIsNotAWorkItem(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	sourceCreated := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	tables := baseTables(at)
+	for index, table := range tables {
+		if table.match == "FROM work_item_dependencies AS d" {
+			// uint8(0) on both target flags: the LEFT JOIN found nothing.
+			tables[index].rows = [][]any{{"WIDGET-101", "ghpr:owner/repo#7", "blocks", "repo-1", "example-org/widget-service", at,
+				sourceCreated, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime}}
+			continue
+		}
+		tables[index].rows = nil
+	}
+	batch := projectOneBatch(t, tables)
+
+	edge := relationshipByID(t, batch, "relationship:work_item_dependency:WIDGET-101:ghpr:owner/repo#7:blocks")
+	requireWindow(t, "dependency", edge.ValidFrom, edge.ValidTo, &sourceCreated, nil)
+}
+
+// TestF4_DeploymentIncidentEdgeDerivesItsWindowFromBothEndpoints is
+// round-1 F4: work_graph_deployment_incident_edges carries no interval of
+// its own, and the edge was previously left unbounded -- so it was
+// admitted at EVERY requested time, correlating a deployment with an
+// incident years before either happened. The semantic interval IS
+// knowable from the endpoints, so leaving it absent was the wrong kind of
+// honest.
+func TestF4_DeploymentIncidentEdgeDerivesItsWindowFromBothEndpoints(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	deployStarted := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	incidentStarted := time.Date(2026, 2, 3, 0, 0, 0, 0, time.UTC) // later start wins
+	incidentResolved := time.Date(2026, 2, 5, 0, 0, 0, 0, time.UTC)
+	deployFinished := time.Date(2026, 2, 9, 0, 0, 0, 0, time.UTC)
+
+	tables := baseTables(at)
+	for index, table := range tables {
+		if table.match == "FROM work_graph_deployment_incident_edges AS e" {
+			tables[index].rows = [][]any{{"edge-1", "deploy-1", "incident-1", "example-org/widget-service", at,
+				uint8(1), deployStarted, uint8(1), deployFinished,
+				uint8(1), incidentStarted, uint8(1), incidentResolved}}
+			continue
+		}
+		tables[index].rows = nil
+	}
+	batch := projectOneBatch(t, tables)
+
+	edge := relationshipByID(t, batch, "relationship:deployment_incident:edge-1")
+	requireWindow(t, "deployment_incident", edge.ValidFrom, edge.ValidTo, &incidentStarted, &incidentResolved)
+}
+
+// TestF4_DeploymentIncidentEdgeStaysUnboundedWhenEndpointsDoNotResolve:
+// both joins are LEFT, so an edge whose endpoint rows are missing still
+// projects -- with the window absent, which is the admit-count-label path
+// and the correct answer when the interval genuinely is unknowable.
+func TestF4_DeploymentIncidentEdgeStaysUnboundedWhenEndpointsDoNotResolve(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	tables := baseTables(at)
+	for index, table := range tables {
+		if table.match == "FROM work_graph_deployment_incident_edges AS e" {
+			tables[index].rows = [][]any{{"edge-1", "deploy-1", "incident-1", "example-org/widget-service", at,
+				uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime}}
+			continue
+		}
+		tables[index].rows = nil
+	}
+	batch := projectOneBatch(t, tables)
+
+	edge := relationshipByID(t, batch, "relationship:deployment_incident:edge-1")
+	requireWindow(t, "deployment_incident", edge.ValidFrom, edge.ValidTo, nil, nil)
+}

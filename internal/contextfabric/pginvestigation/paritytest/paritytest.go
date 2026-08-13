@@ -213,7 +213,7 @@ func RunSuite(t *testing.T, newStore func(t *testing.T) contextfabric.Investigat
 			ctx := context.Background()
 
 			for index, step := range testCase.Save {
-				err := store.Save(ctx, step.Principal, step.Result, nil, nil)
+				err := store.Save(ctx, step.Principal, step.Result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}))
 				if step.WantErr {
 					if err == nil {
 						t.Fatalf("save[%d] %q: want error, got nil", index, step.Result.ResultID)
@@ -323,7 +323,7 @@ func RunExplicitNullDegradedReasonsSuite(t *testing.T, newStore func(t *testing.
 		// successful idempotent replay: doing so would report success
 		// while leaving the invalid stored row in place forever, since
 		// these stores never overwrite.
-		err := store.Save(context.Background(), orgA, valid, nil, nil)
+		err := store.Save(context.Background(), orgA, valid, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}))
 		if err == nil {
 			t.Fatal("Save() error = nil, want a replay against a stored explicit-null row to be rejected, not treated as an idempotent success")
 		}

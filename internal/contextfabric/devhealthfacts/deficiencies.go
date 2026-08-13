@@ -109,5 +109,6 @@ WHERE rn = 1 AND fired = 1`)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query team operational deficiencies", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	state, retentionReason := timeBound.retentionState(rowCount)
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

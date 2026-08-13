@@ -533,3 +533,39 @@ the contiguous `{1..13}`. `cmd/acr-migrate/cli_test.go` asserts a COUNT
 - **Reuse collision proved live** against real Postgres
   (`pginvestigation/time_axis_reuse_integration_test.go`): a June answer is
   not served for a March question, and the June question still reuses it.
+
+---
+
+## 10. Codex round 1 — findings and resolutions
+
+BLOCK, 8 findings (4 High, 4 Medium), all fixed with red→green guards.
+Cleared on the first pass: the six §9 deltas, the observed-time honesty
+fixes, the narrowing math, the Tier-A tiebreakers, the refusal sweep,
+migration registration, and the unbounded-count surfacing.
+
+| # | Sev | Defect | Resolution |
+|---|---|---|---|
+| F1 | High | Every answered source labeled day grain, but Tier B answers from EXACT timestamps — a PR merged at 14:00Z serialized as midnight | Grain is now per PROVIDER (`FactProviderResult.Grain`); the registry keeps the coarsest among providers that CONTRIBUTED, and only that reaches the label |
+| F2 | High | Incident severity was current-row data emitted under a historical label | Severity is EXCLUDED from historical incident facts entirely, with the omission named in the provider's reason. Status stays — it derives from immutable columns |
+| F3 | High | Referenced stubs inherited the window of the relationship or episode that mentioned them; projection ORDER decided which won | Stubs carry no validity window at all. Only the authoritative entity write states validity — CHAOS-3785's stub discipline |
+| F4 | High | Deployment→incident edges were unbounded, so admitted at every requested time | Window derives from both endpoints (incident interval ∩ deployment validity), joined LEFT so an unresolvable endpoint leaves it absent for the admit-count-label path |
+| F5 | Med | Dependency-edge window came from the SOURCE endpoint only, asserting validity while the target did not exist | Both endpoints intersect. The target join is LEFT because `target_work_item_id` may name a cross-system reference; an unresolved target contributes no bound |
+| F6 | Med | Lookup keyed from the wire request, Save keyed from the interpretation — an interpreter axis flip saved under an unreachable key | BOTH sides key from the wire request, threaded to `Save` as an explicit parameter. Interpretation identity stays covered by condition 6 |
+| F7 | Med | The skew tolerance accepted a future instant and let it reach predicates and the label | `resolveTimeContext` validates AND clamps; the label reports the clamped value |
+| F8 | Med | A bounded historical query returning zero rows still reported `available` | Reports `no_data` with a fixed out-of-retention reason — "nothing happened then" and "we retain nothing that far back" are different answers |
+
+### Live verification of the round-1 fixes
+
+- **F5** is exercised on real data: all 1149 `work_item_dependencies` rows
+  in the live corpus resolve their target, so the intersection runs on
+  every one; the LEFT-JOIN fallback is the rare path and is unit-tested.
+- **F4**'s query parses against live ClickHouse, but
+  `work_graph_deployment_incident_edges` is EMPTY in this corpus (0 rows),
+  so there is no live row to verify the derived window against. Both
+  branches are unit-tested instead. Stated rather than implied.
+- **F3** is proved against a real FalkorDB
+  (`TestLiveReferencedStubsCarryNoValidityWindow`): a stub survives a query
+  outside an unrelated relationship's window, while the EDGE is still
+  correctly excluded — the fix must not weaken AC-3781-4.
+- **F6** is proved against real Postgres: an interpreted-historical answer
+  is found by the identical wire request that produced it.

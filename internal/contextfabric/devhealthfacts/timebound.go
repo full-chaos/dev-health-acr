@@ -60,6 +60,46 @@ const observedTimeUnsupportedReason = "devhealthfacts: observed-time questions c
 // historical answer this issue exists to remove.
 const noHistoryUnsupportedReason = "devhealthfacts: this fact has no recorded history, so it cannot answer for a past time; only its current value exists"
 
+// incidentSeverityOmittedReason names the one field a historical incident
+// fact drops (round-1 F2). Severity is revised in place with no recorded
+// history, so it cannot be reported for a past time; the fact still
+// carries the status it CAN derive, and this states what is missing rather
+// than letting a reader assume the fact is complete.
+//
+// A fixed literal like every other reason in this package -- it never
+// interpolates the query or the requested time (finding M6).
+const incidentSeverityOmittedReason = "devhealthfacts: incident severity is omitted for a past time; it is revised in place with no recorded history, so only the derivable status is reported"
+
+// outOfRetentionReason is reported when a bounded historical query
+// returns NO rows (round-1 F8).
+//
+// A source that answered zero rows for a past time was previously still
+// reported `available`, which reads as "this source answered and there was
+// nothing to say" -- indistinguishable from a genuine empty result at a
+// time the corpus does cover. The two are different answers: one means
+// "nothing happened then", the other means "we do not retain data that far
+// back". The design's service-bound section makes the second answerable
+// rather than refusable, which only works if it is LABELED.
+//
+// This is `no_data`, not a failure: an absent record is unknown, never
+// zero (§19.8.3, §3.5). The rest of the answer survives, exactly as
+// AC-3781-5 requires for any single-source limitation.
+//
+// A fixed literal like every other reason here -- it never interpolates
+// the requested time (finding M6).
+const outOfRetentionReason = "devhealthfacts: no rows were retained at or before the requested time; this may predate the retained corpus rather than mean nothing happened"
+
+// retentionState classifies a bounded query's row count. On the CURRENT
+// axis it changes nothing -- zero rows has always meant an ordinary empty
+// read there, and only a historical question raises the retention
+// question at all.
+func (b factTimeBound) retentionState(rowCount int) (contextfabric.SourceState, string) {
+	if !b.active || rowCount > 0 {
+		return contextfabric.SourceAvailable, ""
+	}
+	return contextfabric.SourceNoData, outOfRetentionReason
+}
+
 // factTimeBound is a resolved valid-time window for one provider query.
 // The zero value is inactive, which is what the current axis needs: no
 // predicate is added and the SQL keeps the exact text it had before
@@ -207,12 +247,41 @@ func (b factTimeBound) bindings() []timeBinding {
 	return bindings
 }
 
+// Provider grains (CHAOS-3781 round-1 F1). Each provider declares the
+// precision it can actually answer a historical question at, because the
+// providers in this package are NOT uniform and composing one answer-level
+// grain from a single assumption was observably wrong: a pull request
+// merged at 14:00Z reported under a day grain reads as though the answer
+// only knew about midnight.
+//
+// grainDaily -- the `*_daily` rollup tables. A row describes a whole DAY,
+// so the best this can say is which day's row was current at the
+// requested time. It cannot speak for an instant within that day.
+//
+// grainExact -- everything whose answer comes from a timestamp that is
+// itself exact: Tier B's derivations from immutable event columns (merged
+// at, resolved at, finished at, completed at), and the Tier A sources
+// whose rows are point observations rather than daily buckets
+// (capacity_forecasts' computed_at, backfill_log's created_at). "The
+// latest such row at or before T" is exactly true at T, with no bucket
+// rounding.
+const (
+	grainDaily = contextfabric.GrainDay
+	grainExact = contextfabric.GrainInstant
+)
+
 // effectiveGrain reports the grain this bound answers at for one provider,
 // so the engine can compose the answer's temporal label without each
-// provider restating it.
+// provider restating the composition rule.
+//
+// An INACTIVE bound is the current axis, which is exact by construction --
+// "now" needs no bucket -- so it reports grainExact regardless of what the
+// provider would answer historically. The registry only counts a grain
+// from a provider that actually contributed facts, so a current-axis
+// answer's grain never reaches a temporal label anyway (there is none).
 func (b factTimeBound) effectiveGrain(providerGrain contextfabric.TemporalGrain) contextfabric.TemporalGrain {
 	if !b.active {
-		return contextfabric.GrainInstant
+		return grainExact
 	}
 	return providerGrain
 }

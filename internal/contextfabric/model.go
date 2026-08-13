@@ -306,6 +306,11 @@ type CanonicalFactBundle struct {
 	Version    string              `json:"version"`
 	Versions   map[FactKind]string `json:"versions"`
 	Watermarks map[FactKind]string `json:"watermarks"`
+	// TemporalGrain is the COARSEST grain among the providers that
+	// actually contributed facts (CHAOS-3781 round-1 F1) -- an answer is
+	// only as precise as its least precise source. Empty when no provider
+	// answered on a temporal axis. See FactProviderResult.Grain.
+	TemporalGrain TemporalGrain `json:"temporal_grain,omitempty"`
 }
 
 type SynthesisInput struct {

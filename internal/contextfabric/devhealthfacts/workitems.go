@@ -188,5 +188,6 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}` + ti
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item actual completion", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	state, retentionReason := timeBound.retentionState(rowCount)
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

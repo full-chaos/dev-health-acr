@@ -334,3 +334,84 @@ func TestLiveCurrentAxisIsUnaffected(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveReferencedStubsCarryNoValidityWindow is round-1 F3, proved
+// against a real FalkorDB.
+//
+// A referenced stub used to inherit the window of whatever record
+// mentioned it: a relationship valid for one week stamped that week onto
+// the work item it pointed at, and an episode that ran for an hour stamped
+// that hour. A historical read then excluded the subject everywhere
+// outside an unrelated record's interval -- and which interval won
+// depended on projection ORDER, since the next referencing record
+// overwrote it.
+//
+// Stubs now assert identity and nothing canonical, the same discipline
+// CHAOS-3785 set. Only the authoritative entity write states validity.
+func TestLiveReferencedStubsCarryNoValidityWindow(t *testing.T) {
+	adapter := newLiveAdapter(t, context.Background())
+	ctx := context.Background()
+	stamp := time.Now().UTC().Format("20060102T150405.000000000")
+	orgID := "live-temporal-stub-" + stamp
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
+
+	observed := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	// A relationship with a NARROW window, pointing at two subjects that
+	// have no authoritative entity write of their own.
+	windowStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	windowEnd := time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC)
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_stub_anchor", Label: "Stub anchor"}
+	referenced := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_referenced_only", Label: "Referenced only"}
+
+	batch := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_stub_00001", OrgID: orgID,
+		Source: "live-test", SourceVersion: "v1", Cursor: "c1", NextCursor: "c2", GeneratedAt: observed,
+		Entities: []contextfabric.EntityProjection{},
+		Relationships: []contextfabric.RelationshipProjection{{
+			RelationshipID: "relationship_stub_0001", Type: "BLOCKS", From: anchor, To: referenced,
+			Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
+			Authorization:  contextfabric.AuthorizationScope{RepositorySlugs: []string{"full-chaos/dev-health-acr"}},
+			EvidenceRefIDs: []string{"evidence_stub_0001"},
+			ObservedAt:     observed, ValidFrom: &windowStart, ValidTo: &windowEnd, SourceVersion: "v1",
+		}},
+		Contents: []contextfabric.ContentProjection{}, Episodes: []contextfabric.EpisodeProjection{},
+		Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+	principal := storage.Principal{OrgID: orgID}
+	if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
+		t.Fatalf("ApplyProjectionBatch() error = %v", err)
+	}
+
+	// Ask about a time WELL OUTSIDE the relationship's window. If the
+	// stubs had inherited it, the anchor subject would not resolve at all.
+	outside := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	request, interpreted := temporalLiveRequest(anchor, contextfabric.TimeContext{
+		Axis: contextfabric.TemporalValidTime, AsOf: &outside,
+	})
+	resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	var found bool
+	for _, subject := range resolution.Committed {
+		if subject.CanonicalID == anchor.CanonicalID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("a referenced stub was excluded outside an unrelated relationship's window; stubs must carry no validity window at all")
+	}
+
+	// The EDGE still carries its own window, so the association itself is
+	// correctly excluded outside it -- the stub fix must not weaken
+	// AC-3781-4.
+	graphContext, err := adapter.DiscoverContext(ctx, principal, contextfabric.GraphDiscoveryRequest{
+		Request: request, Interpretation: interpreted, Resolution: resolution,
+	})
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if subjectsInPaths(graphContext)[referenced.CanonicalID] {
+		t.Error("the relationship was returned outside its own validity window; the edge must still be excluded")
+	}
+}
