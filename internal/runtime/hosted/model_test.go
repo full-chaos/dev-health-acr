@@ -77,6 +77,33 @@ func TestNewContextFabricModelRuntime_buildsAUsableRuntimeWhenConfigured(t *test
 	}
 }
 
+// TestNewContextFabricModelRuntime_failsCompositionOnAModelOnlyPartialConfig
+// is the CHAOS-3770 F5 probe at the composition boundary: an operator who
+// sets ONLY the model name (no credential, no base URL) must get a startup
+// failure naming the missing credential, not the CHAOS-3755 clean 503 --
+// that behavior is reserved for a deployment that configured no model
+// provider at all.
+func TestNewContextFabricModelRuntime_failsCompositionOnAModelOnlyPartialConfig(t *testing.T) {
+	// Given an operator who set only the model name.
+	lookup := envLookup(map[string]string{modelprovider.EnvModel: "gpt-5-mini"})
+
+	// When
+	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup)
+
+	// Then startup fails loudly, naming the missing credential variable --
+	// not a silent nil runtime that 503s forever without ever telling the
+	// operator their ACR_CONTEXT_FABRIC_MODEL setting was ignored.
+	if err == nil {
+		t.Fatal("newContextFabricModelRuntime() = nil error for a model-only partial configuration")
+	}
+	if modelRuntime != nil {
+		t.Fatal("newContextFabricModelRuntime() returned a runtime alongside an error")
+	}
+	if !strings.Contains(err.Error(), modelprovider.EnvAPIKey) {
+		t.Fatalf("err = %q, want it to name the missing credential variable %s", err, modelprovider.EnvAPIKey)
+	}
+}
+
 func TestNewContextFabricModelRuntime_failsCompositionOnAMisconfiguredProvider(t *testing.T) {
 	// Given an operator who asked for a model provider and mis-specified it.
 	lookup := envLookup(map[string]string{

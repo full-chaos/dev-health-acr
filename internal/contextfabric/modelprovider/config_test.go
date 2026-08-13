@@ -52,6 +52,34 @@ func TestConfigured_acceptsEitherCredentialOrBaseURL(t *testing.T) {
 	}
 }
 
+// TestConfigured_treatsAnyModelVariableAsOptingIn is the CHAOS-3770 F5
+// probe: setting ONLY a model name, or ONLY a tuning variable, with no
+// credential and no base URL, must still opt into full config parsing.
+// Before this fix, Configured() consulted only EnvAPIKey/EnvAPIKey_FILE/
+// EnvBaseURL, so a model-only (or timeout-only, or provider-only)
+// environment silently reported "unconfigured" -- newContextFabricModelRuntime
+// then returned (nil, nil), and the caller's setting was discarded with a
+// clean per-request 503 instead of the startup failure AC-3770-2 requires
+// for a mis-specified configuration.
+func TestConfigured_treatsAnyModelVariableAsOptingIn(t *testing.T) {
+	cases := map[string]map[string]string{
+		"model only":                   {EnvModel: "gpt-5-mini"},
+		"provider only":                {EnvProvider: "acme-gateway"},
+		"fallback model only":          {EnvFallbackModel: "gpt-5.6-luna"},
+		"timeout only":                 {EnvTimeout: "60s"},
+		"max attempts only":            {EnvMaxAttempts: "3"},
+		"max transport retries only":   {EnvMaxTransportRetries: "0"},
+		"allow insecure base url only": {EnvAllowInsecureBaseURL: "true"},
+	}
+	for name, values := range cases {
+		t.Run(name, func(t *testing.T) {
+			if !Configured(lookupFrom(values)) {
+				t.Fatalf("Configured(%v) = false, want true -- a nonblank ACR_CONTEXT_FABRIC_MODEL* variable must opt in even alone", values)
+			}
+		})
+	}
+}
+
 func TestConfigFromEnv_appliesProviderShapedDefaults(t *testing.T) {
 	// Given only a credential -- the minimum a hosted deployment supplies.
 	lookup := lookupFrom(map[string]string{EnvAPIKey: "sk-test"})

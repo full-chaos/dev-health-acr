@@ -221,16 +221,29 @@ func validateModelID(name, value string) error {
 // leave contextfabric.ModelRuntime nil, which keeps the investigation
 // endpoint's clean per-request 503 (CHAOS-3755) exactly as it is today.
 //
-// Either a credential or an explicit base URL counts as opting in. A base
-// URL alone is sufficient because an OpenAI-compatible server reached over
-// loopback commonly has no credential at all; a credential alone is
-// sufficient because the default provider endpoint needs nothing else.
+// ANY nonblank ACR_CONTEXT_FABRIC_MODEL* variable counts as opting in --
+// not just a credential or base URL (CHAOS-3770 F5). An operator who sets
+// only ACR_CONTEXT_FABRIC_MODEL, or only a tuning variable like
+// ACR_CONTEXT_FABRIC_MODEL_TIMEOUT, has unambiguously expressed intent to
+// configure a provider; treating that as "unconfigured" would silently
+// discard their setting and degrade to a clean per-request 503 instead of
+// the startup failure AC-3770-2 requires for a mis-specified configuration.
+// Once any of these variables is set, ConfigFromEnv+validate own deciding
+// whether the resulting configuration is actually usable (e.g. a model
+// name with no credential and no base URL still fails validate() with a
+// message naming EnvAPIKey) -- Configured only decides whether to attempt
+// that parse at all.
+//
 // Ambient OPENAI_* variables are deliberately NOT consulted: opting this
 // service into a paid provider is an ACR configuration decision, never
 // something inherited from whatever happened to be exported in the
 // process environment.
 func Configured(lookup func(string) (string, bool)) bool {
-	for _, key := range []string{EnvAPIKey, EnvAPIKey + "_FILE", EnvBaseURL} {
+	for _, key := range []string{
+		EnvProvider, EnvBaseURL, EnvModel, EnvFallbackModel,
+		EnvAPIKey, EnvAPIKey + "_FILE",
+		EnvTimeout, EnvMaxAttempts, EnvMaxTransportRetries, EnvAllowInsecureBaseURL,
+	} {
 		if value, ok := lookup(key); ok && strings.TrimSpace(value) != "" {
 			return true
 		}
