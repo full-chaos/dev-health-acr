@@ -306,6 +306,28 @@ Genkit's lazy telemetry wiring never activates and never consults that
 variable, regardless of the ambient environment
 (`modelprovider.TestNew_neverExportsPromptContentToGenkitTelemetry`).
 
+The same construction point closes three related paths: Genkit's action
+metrics also embed a failed generation's raw error text (which can carry a
+provider response body) as a metric attribute on the global
+`otel.Meter("genkit")`, so `modelprovider.New` registers a no-op
+`MeterProvider` alongside the no-op tracer provider
+(`modelprovider.TestNew_neverExportsErrorContentToGenkitMetrics`); `New`
+also fails composition outright if the ambient `GENKIT_ENV` variable is
+set to `dev`, which would start Genkit's local reflection server and its
+`handleNotify` endpoint — a second, independent way to register a
+telemetry exporter at runtime
+(`modelprovider.TestNew_rejectsGenkitDevEnvironment`); and Genkit's
+Debug-level logging of generation content was checked empirically, not
+assumed safe — it never fires on ACR's own call path at any log level
+reachable in production
+(`modelprovider.TestGenkitDebugLoggingNeverCarriesGenerationContentOnACRsPath`).
+Both the tracer- and meter-provider registrations are last-writer-wins
+against any later `otel.Set{Tracer,Meter}Provider` call anywhere in the
+process; see `suppressGenkitTelemetryExport`'s doc comment in
+`internal/contextfabric/modelprovider/provider.go` for why that is a
+durable guarantee for this codebase specifically, and what a future change
+adding real OpenTelemetry export to ACR must account for.
+
 **`ACR_REQUEST_TIMEOUT` must be raised before enabling investigations.** It
 defaults to **15s**, and it bounds the whole HTTP request. A real
 investigation is two sequential model calls (interpret, then synthesise) and
