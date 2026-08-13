@@ -38,7 +38,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			}
 			return toCandidateNode(n), true, nil
 		},
-		Search: func(ctx context.Context, term string, limit int) ([]graphrank.CandidateNode, error) {
+		Search: func(ctx context.Context, term string, limit int) ([]graphrank.CandidateNode, bool, error) {
 			return a.fulltextSearchNodes(ctx, key, principal.OrgID, term, limit)
 		},
 		Traverse: func(ctx context.Context, term string, observation graphrank.CandidateNode) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
@@ -127,7 +127,14 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 	}
 
-	textNodes, err := a.fulltextSearchNodes(ctx, key, principal.OrgID, request.Request.Question, collectLimit)
+	// The search-truncation signal (fulltextSearchNodes' 2nd return value)
+	// is deliberately discarded here: it exists to gate SUBJECT-RESOLUTION
+	// auto-commit (graphrank.ResolveFromMergedCandidates' searchTruncated,
+	// via ResolveSubjects above) against an incomplete candidate set, per
+	// Codex's round-3 ruling. DiscoverContext has no analogous auto-commit
+	// decision to protect -- this call feeds cohort/edge DISCOVERY, already
+	// bounded and already best-effort, not a committed-subject gate.
+	textNodes, _, err := a.fulltextSearchNodes(ctx, key, principal.OrgID, request.Request.Question, collectLimit)
 	if err != nil {
 		return contextfabric.GraphContext{}, err
 	}

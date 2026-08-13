@@ -81,7 +81,7 @@ func TestLiveOrgIDPredicateExcludesNodesPlantedInSameGraphKeyAcrossReadPaths(t *
 	if edges, err := adapter.edgesOfNode(ctx, key, orgID, subjectUUID("project", "project_planted")); err != nil || len(edges) != 0 {
 		t.Fatalf("edgesOfNode() = (%#v, %v), want (empty, nil) -- an edge whose endpoint has a different org_id must be excluded", edges, err)
 	}
-	nodes, err := adapter.fulltextSearchNodes(ctx, key, orgID, "plantedsearchtoken", 10)
+	nodes, _, err := adapter.fulltextSearchNodes(ctx, key, orgID, "plantedsearchtoken", 10)
 	if err != nil {
 		t.Fatalf("fulltextSearchNodes() error = %v", err)
 	}
@@ -130,7 +130,7 @@ func TestLiveFulltextSearchOrdersByScoreServerSide(t *testing.T) {
 	}
 
 	key := graphKey(adapter.config.GraphPrefix, orgID)
-	results, err := adapter.fulltextSearchNodes(ctx, key, orgID, "urgent", 10)
+	results, _, err := adapter.fulltextSearchNodes(ctx, key, orgID, "urgent", 10)
 	if err != nil {
 		t.Fatalf("fulltextSearchNodes() error = %v", err)
 	}

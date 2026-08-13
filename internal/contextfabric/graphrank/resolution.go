@@ -27,8 +27,13 @@ import (
 //     parent of any retained observation, then everything else by
 //     confidence/stable key.
 //
-// Ported unchanged from zepgraph.resolveFromMergedCandidates.
-func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool) contextfabric.SubjectResolution {
+// Ported unchanged from zepgraph.resolveFromMergedCandidates, except for
+// searchTruncated (Codex round-3 review of the D11/AC-3778-0 fix -- see its
+// doc comment below). Note this is a DIFFERENT truncation than phase 4's:
+// phase 4 truncates the FINAL, already-decided candidate LIST down to max
+// entries for the response; searchTruncated is about the INPUT candidate
+// SET possibly being incomplete before phase 3's commit decision ever runs.
+func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool) contextfabric.SubjectResolution {
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
 	for _, candidate := range candidatesBySubject {
 		candidates = append(candidates, candidate)
@@ -72,6 +77,30 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 			commitIndex = append(commitIndex, index)
 		}
 		switch {
+		case searchTruncated:
+			// Codex round-3 review of D11/AC-3778-0: truncation is a
+			// property of the RESOLUTION, not of any one candidate's
+			// score, and it must be checked BEFORE any confidence
+			// threshold, not after -- a candidate reaching this branch at
+			// all (as opposed to the hard State==Committed fast path
+			// above, reachable only via ExactHint's keyed,
+			// truncation-immune lookup) can never be trusted to auto-commit
+			// when the search that produced it (or any sibling search in
+			// this same resolution) may have had a genuinely competing
+			// candidate dropped before it ever reached this function. This
+			// closes two escape paths a per-candidate confidence cap alone
+			// left open: (a) NodeCandidate's exact label/name match
+			// override forces Confidence to 1.0 regardless of the
+			// backend's own (possibly truncation-capped) Relevance, and
+			// (b) the candidatesBySubject merge in ResolveSubjects keeps
+			// whichever of two same-subject entries has the HIGHER
+			// confidence, so an untruncated call's full-strength entry for
+			// a subject can silently overwrite a truncated call's
+			// deliberately-demoted one for that SAME subject -- neither
+			// case is visible from a single candidate's own Confidence
+			// value, which is exactly why this has to be an independent,
+			// resolution-wide signal instead.
+			ambiguous = true
 		case len(commitIndex) == 1 && candidates[commitIndex[0]].Confidence >= 0.72:
 			committedIndex[commitIndex[0]] = true
 			candidates[commitIndex[0]].State = contextfabric.ResolutionCommitted

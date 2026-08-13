@@ -17,7 +17,14 @@ type ResolveDeps struct {
 	// found" -- a safe non-match, not an error.
 	ExactHint func(ctx context.Context, subject contextfabric.SubjectRef) (node CandidateNode, ok bool, err error)
 	// Search performs bounded node-scoped hybrid search for term.
-	Search func(ctx context.Context, term string, limit int) ([]CandidateNode, error)
+	// truncated reports whether the backend's own bound on this result set
+	// (e.g. a server-side row LIMIT) means genuinely competing candidates
+	// could have been left out before ResolveSubjects ever saw them -- see
+	// ResolveFromMergedCandidates' searchTruncated parameter for what that
+	// means for auto-commit eligibility. A backend with no such bound (or
+	// one that fetched a generous superset with no risk of missing a real
+	// competitor) always reports false.
+	Search func(ctx context.Context, term string, limit int) (candidates []CandidateNode, truncated bool, err error)
 	// Traverse implements observation-to-entity traversal for a matched
 	// document/episode node -- see TraverseObservationToSubject, which a
 	// backend's own Traverse implementation should call with its own
@@ -104,10 +111,23 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	observationParentKey := make(map[string]string)
 	observationBlocked := make(map[string]bool)
 	traversalDegraded := 0
+	// searchTruncated is true if ANY of this invocation's Search() calls
+	// (one per entry in terms) reported truncation -- a subject found by an
+	// UNtruncated call for one term can still merge over/replace a
+	// truncated call's own (deliberately floor-capped, see falkorgraph's
+	// fulltextSearchNodes) entry for the same subject a few lines below,
+	// silently erasing the fact that truncation happened at all. Tracking
+	// it here, independently of any one candidate's own data, is what lets
+	// ResolveFromMergedCandidates treat truncation as a property of the
+	// WHOLE resolution (Codex round 3 review of the D11/AC-3778-0 fix).
+	searchTruncated := false
 	for _, term := range terms {
-		results, err := deps.Search(ctx, term, request.Options.MaxSubjectCandidates)
+		results, truncated, err := deps.Search(ctx, term, request.Options.MaxSubjectCandidates)
 		if err != nil {
 			return contextfabric.SubjectResolution{}, err
+		}
+		if truncated {
+			searchTruncated = true
 		}
 		for _, node := range results {
 			candidate, ok := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal)
@@ -147,5 +167,5 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if traversalDegraded > 0 && deps.TraversalDegraded != nil {
 		deps.TraversalDegraded(ctx, principal.OrgID, traversalDegraded)
 	}
-	return ResolveFromMergedCandidates(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification), nil
+	return ResolveFromMergedCandidates(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated), nil
 }
