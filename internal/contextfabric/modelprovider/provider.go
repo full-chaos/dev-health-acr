@@ -146,7 +146,22 @@ func newClientOptions(cfg Config) []option.RequestOption {
 // classifies on them.
 func sanitizeProviderErrorBody(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 	resp, err := next(req)
-	if err != nil || resp == nil || resp.StatusCode < 400 {
+	// A 2xx allowlist, not a >=400 threshold (CHAOS-3770 F1(b) round-4
+	// residual): the OpenAI SDK's own success/error branch treats ANY
+	// status below 400 as success, so a 3xx response -- one without a
+	// Location header, since net/http.Client only follows a redirect when
+	// one is present -- was reaching the SDK, and Genkit, completely
+	// unsanitized under the old resp.StatusCode < 400 check. That is worse
+	// than an unsanitized log line: Action.Run's err is nil for a 3xx
+	// exactly as it would be for a genuine 200, so a well-formed
+	// completion body on a redirect response (from a misconfigured proxy
+	// in front of a BYO endpoint, say) was silently ACCEPTED as legitimate
+	// model output, not merely logged
+	// (TestNew_neverTreatsA3xxResponseAsASuccessfulCompletion). Only
+	// 200-299 is ever a genuine provider success; everything else --
+	// 1xx, 3xx, 4xx, 5xx alike -- gets the same sanitized, choices-free
+	// body, which the SDK/compat_oai then deterministically reject.
+	if err != nil || resp == nil || (resp.StatusCode >= 200 && resp.StatusCode < 300) {
 		return resp, err
 	}
 	if resp.Body != nil {

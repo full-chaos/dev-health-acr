@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -381,5 +382,74 @@ func TestSanitizedProviderErrorStillClassifiesIdenticallyThroughRetryableAndTaxo
 			// probes live in genkitruntime; this test's job is only the
 			// classification composition.
 		})
+	}
+}
+
+// TestNew_neverTreatsA3xxResponseAsASuccessfulCompletion is the CHAOS-3770
+// F1(b) round-4 probe. sanitizeProviderErrorBody originally sanitized only
+// resp.StatusCode >= 400 -- this package's own doc comments and
+// docs/operations.md claimed "non-2xx", but the code actually implemented
+// "non-4xx-or-5xx", so a 3xx response passed through this middleware
+// untouched.
+//
+// The requested repro ("a 3xx with a secret-laden body leaks through a
+// Debug-level logger") was probed exhaustively and does NOT reproduce with
+// this SDK version for a MALFORMED body: the OpenAI SDK's own
+// internal/apijson decoder never embeds a decoded value in its error
+// messages (every branch returns a fixed, generic string -- confirmed by
+// reading its source), and compat_oai's own wrapping ("no choices in
+// completion") is likewise fixed and content-free. Nine body/content-type
+// variants (plain text, valid-but-wrong-shaped JSON at several nesting
+// levels, syntactically invalid JSON, and an OpenAI-shaped {"error":...}
+// envelope) all produced the SAME generic message, never the injected
+// content.
+//
+// What DOES reproduce, and is materially worse than a log leak: a
+// WELL-FORMED 3xx body is accepted as a genuine completion. The OpenAI
+// SDK's own success/error branch is "StatusCode >= 400 is an error",
+// which means literally any 1xx/2xx/3xx status is treated as success --
+// Action.Run's err is nil for a 3xx exactly as it would be for a real
+// 200. So a redirect response (or a misconfigured proxy/gateway sitting
+// in front of a BYO endpoint that emits one) carrying a well-formed
+// completion body is silently trusted as legitimate model output, not
+// rejected and not logged. This test proves that acceptance pre-fix.
+//
+// The prescribed fix (a 2xx allowlist rather than a >=400 threshold)
+// closes both concerns with the same one-line change: a 3xx now gets its
+// body replaced with the same fixed, choices-free shape as a 4xx/5xx, so
+// the completion this test injects is deterministically rejected
+// ("no choices in completion") post-fix instead of silently accepted.
+func TestNew_neverTreatsA3xxResponseAsASuccessfulCompletion(t *testing.T) {
+	provider := recordingProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+		// Deliberately no Location header: net/http.Client only follows a
+		// redirect when one is present, so this response reaches the
+		// middleware chain, and the SDK's own decoder, exactly like any
+		// other response -- body intact, status un-redirected. The body
+		// is a genuine, well-formed chat-completion envelope (the same
+		// shape chatCompletion's 200 responses use elsewhere in this
+		// file) with the interpretation JSON as its content -- everything
+		// a real 200 success would need, on a 302 instead.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusFound)
+		fmt.Fprintf(w, `{
+			"id": "chatcmpl-redirect-injected",
+			"object": "chat.completion",
+			"created": 1760000000,
+			"model": "gpt-5-nano",
+			"choices": [{"index": 0, "message": {"role": "assistant", "content": %q}, "finish_reason": "stop"}],
+			"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+		}`, validInterpretationJSON)
+	})
+	cfg := testConfig(provider)
+
+	runtime, err := New(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interpreted, receipt, callErr := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_test"}, testRequest())
+
+	if callErr == nil {
+		t.Fatalf("InterpretQuestion() accepted a 3xx response as a successful completion (shape=%q, judgment=%q, receipt.outcome=%q) -- a redirect or misconfigured-endpoint response must never be treated as legitimate model output",
+			interpreted.Shape, interpreted.RequestedJudgment, receipt.Outcome)
 	}
 }
