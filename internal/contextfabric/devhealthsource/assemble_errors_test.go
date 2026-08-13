@@ -5,9 +5,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // rawDriverError stands in for what a ClickHouse driver or Scan failure
@@ -75,5 +77,44 @@ func TestClickHouseSourceSharesTheSameBoundedClassification(t *testing.T) {
 	}
 	if !errors.Is(err, contextfabric.ErrUnavailable) || !errors.Is(err, rawDriverError) {
 		t.Errorf("classification or cause lost: %v", err)
+	}
+}
+
+// failingEpisodeRows is an EpisodeRows implementation whose read fails with
+// raw driver text. The point is the BOUNDARY, not today's adapter: the
+// Postgres EpisodeStore happens to sanitize its errors, so this leak was
+// invisible in production while remaining available to any alternate
+// provider.
+type failingEpisodeRows struct{}
+
+func (failingEpisodeRows) ListSince(context.Context, string, time.Time, string, int) ([]storage.EpisodeProjectionRecord, error) {
+	return nil, rawDriverError
+}
+
+// TestEpisodesSourceBoundsItsReadFailuresToo is codex round-2 F4. My first
+// error sweep was scoped to the files this branch had CHANGED rather than to
+// the ProjectionSource boundary as a class, which is exactly how this one
+// escaped -- a diff-shaped sweep cannot find a leak in a file the diff never
+// touched.
+func TestEpisodesSourceBoundsItsReadFailuresToo(t *testing.T) {
+	t.Parallel()
+	source, err := devhealthsource.NewEpisodesProjectionSource(failingEpisodeRows{})
+	if err != nil {
+		t.Fatalf("NewEpisodesProjectionSource: %v", err)
+	}
+	_, _, err = source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: liveOrgID, Source: devhealthsource.EpisodesSourceName})
+	if err == nil {
+		t.Fatal("a failing episode read must surface as an error")
+	}
+	for _, leaked := range []string{"converting UInt32", "SELECT", "org_id = 'acme'", "code: 184"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Errorf("episodes error string leaks raw driver text %q: %s", leaked, err.Error())
+		}
+	}
+	if !errors.Is(err, contextfabric.ErrUnavailable) {
+		t.Errorf("episodes error must stay classified as ErrUnavailable, got: %v", err)
+	}
+	if !errors.Is(err, rawDriverError) {
+		t.Error("episodes error must keep its cause inspectable via errors.Is")
 	}
 }

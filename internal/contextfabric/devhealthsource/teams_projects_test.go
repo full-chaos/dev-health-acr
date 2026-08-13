@@ -1,7 +1,9 @@
 package devhealthsource_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -324,7 +326,7 @@ func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug st
 // teams_projects_ownership_integration_test.go, since a canned-row fake
 // cannot exercise the window function that computes it.
 func projectTeamRow(projectID, teamID, source string, validFrom time.Time, latestIsOpen uint8, latestValidTo, updatedAt time.Time) []any {
-	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, uint64(1)}
+	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, uint64(1), "github", "KEY-" + projectID}
 }
 
 // liveShapedEdgeClient replays the ground-truth org's real edge row shapes:
@@ -489,6 +491,62 @@ func TestEveryTeamsProjectsEdgeTypeIsDeclared(t *testing.T) {
 	for kind := range declared {
 		if !emitted[kind] {
 			t.Fatalf("TeamsProjectsRelationshipTypes declares %q but no producer emitted it against live-shaped rows", kind)
+		}
+	}
+}
+
+// ambiguousProjectTeamRow mirrors projectTeamRow but reports the key as
+// resolving to two projects, so the producer omits it.
+func ambiguousProjectTeamRow(projectID, teamID, source, provider, projectKey string, updatedAt time.Time) []any {
+	return []any{projectID, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, uint64(2), provider, projectKey}
+}
+
+// TestOmissionTelemetryCountsDistinctKeysAcrossTheRun is codex round-2 F3.
+// The count was keyed by team_id:source and scoped to one page, so several
+// distinct ambiguous keys collapsed into one number and a multi-page catch-up
+// reported a slice of the truth. Understated omission telemetry reads as
+// health -- measurement failing toward fine.
+func TestOmissionTelemetryCountsDistinctKeysAcrossTheRun(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
+	// Three omitted rows, but only TWO distinct (provider, project_key):
+	// keying on team/source would report 3, keying on the key reports 2.
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", rows: [][]any{
+			ambiguousProjectTeamRow("p1", "team-a", "native", "github", "SHARED", at),
+			ambiguousProjectTeamRow("p2", "team-b", "manual", "github", "SHARED", at.Add(time.Minute)),
+			ambiguousProjectTeamRow("p3", "team-c", "native", "gitlab", "OTHER", at.Add(2*time.Minute)),
+		}},
+	}}
+
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+
+	// A non-empty cursor means "continuing a run", so the ledger must NOT
+	// reset between these two calls -- that is the accumulation half.
+	for call := 0; call < 2; call++ {
+		if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+			OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
+		}); err != nil {
+			t.Fatalf("call %d: %v", call, err)
+		}
+	}
+
+	output := logged.String()
+	if !strings.Contains(output, "omitted_ambiguous_project_keys=2") {
+		t.Fatalf("want a run total of 2 DISTINCT (provider, project_key) keys; got:\n%s", output)
+	}
+	if strings.Contains(output, "omitted_ambiguous_project_keys=3") {
+		t.Fatalf("counted omitted ROWS rather than distinct ambiguity keys:\n%s", output)
+	}
+	// Nothing tenant-identifying may reach the log line.
+	for _, secret := range []string{"SHARED", "OTHER", "team-a", "team-b", "p1", liveOrgID} {
+		if strings.Contains(output, secret) {
+			t.Errorf("omission telemetry leaked tenant data %q:\n%s", secret, output)
 		}
 	}
 }

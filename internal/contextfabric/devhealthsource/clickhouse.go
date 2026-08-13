@@ -130,8 +130,9 @@ func (s *ClickHouseProjectionSource) WithLogger(logger *slog.Logger) *ClickHouse
 	return s
 }
 
-// candidate is a sortable, already-built projection item. Exactly one of
-// Entity, Relationship, Episode, or Tombstone is set.
+// candidate is a sortable, already-built projection item. At most one of
+// entity, relationship, episode, or tombstone is set; a candidate with NONE
+// of them is a progress marker (see progressCandidate).
 type candidate struct {
 	observedAt   time.Time
 	sortKey      string
@@ -250,6 +251,24 @@ func (s *ClickHouseProjectionSource) logOrphanedWorkItems(ctx context.Context, b
 			"org_id", redactOrg(batch.OrgID), "source", batch.Source, "batch_id", batch.BatchID,
 			"cursor", batch.Cursor, "next_cursor", batch.NextCursor, "orphaned_work_items", len(ids))
 	}
+}
+
+// progressCandidate represents a source row that was CONSUMED but emits
+// nothing -- today, an ownership row omitted for an ambiguous project_key
+// (queryProjectTeams). It carries the row's keyset identity and no payload,
+// so buildBatch's switch appends it to nothing while buildBatch's cursor
+// arithmetic still advances past it.
+//
+// This exists because omission happens in the scan, AFTER the raw-row limit
+// (fetch), so an omitted row spends page budget. Returning no candidate at
+// all for such a row made a page of them produce an EMPTY candidate set;
+// pagedBatch then returned available=false without building a batch, so the
+// cursor never moved and the next tick re-read, re-omitted and re-stopped on
+// the same page forever -- reporting "caught up" while every valid row beyond
+// the block stayed unreachable (CHAOS-3802 codex round-2 F1). Cursor
+// advancement must follow raw rows consumed, never candidates emitted.
+func progressCandidate(observedAt time.Time, sortKey string) candidate {
+	return candidate{observedAt: observedAt, sortKey: sortKey}
 }
 
 func sortCandidates(all []candidate) {

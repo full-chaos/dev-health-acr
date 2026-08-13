@@ -118,7 +118,9 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 		return p.pagedBatch(ctx, orgID, "", cursorState{}, true)
 	}
 	all = append(all, seeded...)
-	if len(all) == 0 {
+	// An organization whose only rows are omitted has nothing to enumerate;
+	// an empty batch is not a valid full snapshot (Validate rejects it).
+	if len(all) == 0 || !carriesPayload(all) {
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	sortCandidates(all)
@@ -136,31 +138,68 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 // from-scratch catch-up (cursor == ""), so a seeded entity is projected
 // exactly once, not on every page.
 func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state cursorState, includeSeed bool) (contextfabric.ProjectionBatch, bool, error) {
-	var all []candidate
-	for _, table := range p.tables {
-		rows, _, err := table.query(ctx, p.client, orgID, state, incrementalBatchCap)
-		if err != nil {
-			return contextfabric.ProjectionBatch{}, false, &tableReadError{table: table.name, cause: err}
+	// cursor stays the caller's ORIGINAL position for every batch built here.
+	// Only state advances as fully-omitted pages are skipped, so the
+	// coordinator moves from where it was straight to the first page with
+	// real content, and deterministicBatchID stays stable for replay.
+	for skips := 0; ; skips++ {
+		var all []candidate
+		for _, table := range p.tables {
+			rows, _, err := table.query(ctx, p.client, orgID, state, incrementalBatchCap)
+			if err != nil {
+				return contextfabric.ProjectionBatch{}, false, &tableReadError{table: table.name, cause: err}
+			}
+			all = append(all, rows...)
 		}
-		all = append(all, rows...)
+		if includeSeed {
+			all = append(all, p.seedCandidates(orgID)...)
+			includeSeed = false
+		}
+		if len(all) == 0 {
+			return contextfabric.ProjectionBatch{}, false, nil
+		}
+		sortCandidates(all)
+		all = truncateToCompleteRows(all, incrementalBatchCap)
+		if len(all) == 0 {
+			return contextfabric.ProjectionBatch{}, false, nil
+		}
+		if carriesPayload(all) {
+			batch, err := buildBatch(orgID, p.source, p.version, cursor, all, false, false, p.clock())
+			if err != nil {
+				return contextfabric.ProjectionBatch{}, false, err
+			}
+			p.observeBatch(ctx, batch, all)
+			return batch, true, nil
+		}
+		// Every row on this page was consumed but emitted nothing (today:
+		// ownership rows omitted for an ambiguous project_key). A batch built
+		// from them would be empty, and ContextFabricProjectionBatch.Validate
+		// rejects an empty batch outright -- so the page cannot be published
+		// to carry its own cursor. Skip past it in-process instead and keep
+		// looking for real content, bounded so one tick cannot spin.
+		if skips >= maxOmittedPageSkips {
+			return contextfabric.ProjectionBatch{}, false, nil
+		}
+		last := all[len(all)-1]
+		state = cursorState{Since: last.observedAt, After: last.sortKey}
 	}
-	if includeSeed {
-		all = append(all, p.seedCandidates(orgID)...)
+}
+
+// maxOmittedPageSkips bounds how many consecutive fully-omitted pages one
+// tick will skip before yielding. Without a bound, a pathological
+// organization could hold a tick indefinitely; with it, the walk resumes on
+// the next tick from the same place, having lost only the re-scan.
+const maxOmittedPageSkips = 50
+
+// carriesPayload reports whether any candidate would actually appear in a
+// built batch. Progress markers (progressCandidate) carry none.
+func carriesPayload(all []candidate) bool {
+	for _, c := range all {
+		if c.entity != nil || c.relationship != nil || c.episode != nil || c.tombstone != nil {
+			return true
+		}
 	}
-	if len(all) == 0 {
-		return contextfabric.ProjectionBatch{}, false, nil
-	}
-	sortCandidates(all)
-	all = truncateToCompleteRows(all, incrementalBatchCap)
-	if len(all) == 0 {
-		return contextfabric.ProjectionBatch{}, false, nil
-	}
-	batch, err := buildBatch(orgID, p.source, p.version, cursor, all, false, false, p.clock())
-	if err != nil {
-		return contextfabric.ProjectionBatch{}, false, err
-	}
-	p.observeBatch(ctx, batch, all)
-	return batch, true, nil
+	return false
 }
 
 // ProducerRejection is a producer's own bounded refusal of a source row -- a

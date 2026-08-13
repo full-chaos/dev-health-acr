@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -57,13 +59,13 @@ const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v1"
 // ambiguous project keys and must say so) without a package-level global or
 // shared mutable state -- the coordinator projects organizations
 // concurrently, so a shared counter would be a race.
-func teamsProjectsTables(logger *slog.Logger) []entityTable {
+func teamsProjectsTables(omissions *ambiguityLedger) []entityTable {
 	return []entityTable{
 		{name: "teams", query: queryTeams},
 		{name: "projects", query: queryProjects},
 		{name: "work_items_projects", query: queryWorkItemProjects},
 		{name: "work_item_team_attributions", query: queryWorkItemTeams},
-		{name: "team_project_ownership", query: projectTeamsQuery(logger)},
+		{name: "team_project_ownership", query: projectTeamsQuery(omissions)},
 	}
 }
 
@@ -77,6 +79,64 @@ type TeamsProjectsSource struct {
 	enabled bool
 	now     func() time.Time
 	logger  *slog.Logger
+
+	// omissionsMu guards omissions, which accumulates ambiguity telemetry
+	// per organization ACROSS the pages of a source run. The coordinator
+	// projects organizations concurrently, so this is genuinely shared state.
+	omissionsMu sync.Mutex
+	omissions   map[string]*ambiguityLedger
+}
+
+// ambiguityLedger counts DISTINCT ambiguous (provider, project_key) keys
+// whose ownership edges were omitted, accumulated over a source run rather
+// than per page (CHAOS-3802 codex round-2 F3).
+//
+// Both properties were wrong before and both understated the signal. The
+// count was keyed by team_id:source, so several distinct ambiguous keys
+// collapsed into one; and it was page-scoped, so a multi-page catch-up
+// reported each page's slice instead of the run's total. Understated
+// omission telemetry reads as health -- measurement failing toward fine.
+type ambiguityLedger struct {
+	mu   sync.Mutex
+	keys map[string]struct{}
+}
+
+func (l *ambiguityLedger) add(provider, projectKey string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.keys == nil {
+		l.keys = map[string]struct{}{}
+	}
+	l.keys[provider+"\x00"+projectKey] = struct{}{}
+}
+
+func (l *ambiguityLedger) count() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.keys)
+}
+
+// ledgerFor returns this organization's ledger, starting a fresh one when the
+// run starts from scratch (an empty cursor -- a first projection or a
+// post-rebuild reset). That is what bounds "a source run": totals accumulate
+// across every page of one catch-up and reset when a new one begins, rather
+// than growing forever in a long-lived process.
+func (s *TeamsProjectsSource) ledgerFor(orgID string, fromScratch bool) *ambiguityLedger {
+	s.omissionsMu.Lock()
+	defer s.omissionsMu.Unlock()
+	if s.omissions == nil {
+		s.omissions = map[string]*ambiguityLedger{}
+	}
+	if fromScratch || s.omissions[orgID] == nil {
+		s.omissions[orgID] = &ambiguityLedger{}
+	}
+	return s.omissions[orgID]
 }
 
 // NewTeamsProjectsSource returns a TeamsProjectsSource. enabled mirrors
@@ -106,11 +166,13 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	if !s.enabled {
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
+	ledger := s.ledgerFor(strings.TrimSpace(checkpoint.OrgID), checkpoint.Cursor == "")
+	defer logAmbiguousProjectKeys(ctx, s.logger, checkpoint.OrgID, ledger.count())
 	return sourcePlan{
 		client:  s.client,
 		source:  TeamsProjectsSourceName,
 		version: TeamsProjectsSourceVersion,
-		tables:  teamsProjectsTables(s.logger),
+		tables:  teamsProjectsTables(ledger),
 		now:     s.now,
 		// No seed: the synthesized Organization entity belongs to
 		// ClickHouseProjectionSource's full snapshot and must be projected

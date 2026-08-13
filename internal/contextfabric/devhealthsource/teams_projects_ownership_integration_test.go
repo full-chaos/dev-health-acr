@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 )
@@ -102,6 +103,7 @@ var (
 type ownershipFixture struct {
 	orgID  string
 	source *devhealthsource.TeamsProjectsSource
+	direct clickhousedriver.Conn
 }
 
 func newOwnershipFixture(t *testing.T, ctx context.Context) *ownershipFixture {
@@ -165,7 +167,7 @@ func newOwnershipFixture(t *testing.T, ctx context.Context) *ownershipFixture {
 	if err != nil {
 		t.Fatalf("new teams/projects source: %v", err)
 	}
-	return &ownershipFixture{orgID: orgID, source: source}
+	return &ownershipFixture{orgID: orgID, source: source, direct: direct}
 }
 
 func (f *ownershipFixture) project(t *testing.T, ctx context.Context) contextfabric.ProjectionBatch {
@@ -246,4 +248,187 @@ func TestAmbiguousProjectKeyOmitsTheEdgeRatherThanGuessing(t *testing.T) {
 		}
 	}
 	assertUniqueRelationshipIDs(t, batch)
+}
+
+// TestAmbiguousRowsDoNotStallPagination is codex round-2 F1, and it is the
+// defect the ambiguity omission introduced.
+//
+// Omission happens AFTER the raw-row limit, in the scan, so an omitted row
+// consumes page budget while contributing no candidate. A page whose rows are
+// all omitted therefore produces an EMPTY candidate set, and pagedBatch
+// returns available=false without ever building a batch -- so the cursor never
+// advances past those rows. The next tick reads the same page, omits the same
+// rows, and stops again: the source reports "caught up" forever while valid
+// edges sitting beyond the ambiguous block are never reached.
+//
+// Cursor advancement has to be driven by RAW ROWS CONSUMED, not by candidates
+// emitted. This seeds a full page of ambiguous rows ahead of a valid edge and
+// asserts the walk both reaches the edge and terminates.
+func TestAmbiguousRowsDoNotStallPagination(t *testing.T) {
+	ctx := context.Background()
+	fixture := newOwnershipFixture(t, ctx)
+	fixture.seedAmbiguousBlockThenValidEdge(t, ctx)
+
+	const wantEdge = "relationship:project_team:PROJ-BEYOND:TEAM-GITHUB:native"
+	cursor := ""
+	found := false
+	for page := 0; page < 40; page++ {
+		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
+			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
+		})
+		if err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		if !available {
+			break
+		}
+		if batch.NextCursor == cursor {
+			t.Fatalf("page %d: cursor did not advance past a page of omitted rows -- projection would repeat this page forever", page)
+		}
+		cursor = batch.NextCursor
+		if hasRelationship(batch, wantEdge) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("never reached %q -- a block of omitted ambiguous rows stalled the walk before it", wantEdge)
+	}
+}
+
+// seedAmbiguousBlockThenValidEdge writes more ambiguous ownership rows than
+// one page holds, all timestamped after the fixture's other rows, followed by
+// a single valid edge later still -- so at least one whole page consists only
+// of rows that emit nothing.
+func (f *ownershipFixture) seedAmbiguousBlockThenValidEdge(t *testing.T, ctx context.Context) {
+	t.Helper()
+	// The bulk PROJECT rows are timestamped EARLIER than the ownership rows
+	// they make ambiguous. That separation is the whole point: if the project
+	// entities shared the ownership rows' timestamp they would emit entity
+	// candidates into the same page, the batch would be non-empty, and the
+	// cursor would advance for a reason unrelated to the omitted rows --
+	// hiding the stall. With entities consumed first, a later page consists
+	// of nothing but rows that emit nothing.
+	early := ownershipLaterAssertion.Add(1 * time.Hour)
+	block := ownershipLaterAssertion.Add(24 * time.Hour)
+	beyond := ownershipLaterAssertion.Add(48 * time.Hour)
+	// Each generated key resolves to TWO projects, so it is ambiguous and the
+	// join yields two rows per key -- comfortably past one page.
+	mustExec(t, ctx, f.direct, `INSERT INTO projects
+SELECT concat('P-AMBIG-A-', toString(number)), ?, 'github', concat('BULK-', toString(number)), 'bulk a', 1, 'started', '', ?
+FROM numbers(150)`, f.orgID, early)
+	mustExec(t, ctx, f.direct, `INSERT INTO projects
+SELECT concat('P-AMBIG-B-', toString(number)), ?, 'github', concat('BULK-', toString(number)), 'bulk b', 1, 'started', '', ?
+FROM numbers(150)`, f.orgID, early)
+	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership
+SELECT ?, 'github', 'TEAM-GITHUB', concat('P-AMBIG-A-', toString(number)), concat('BULK-', toString(number)), 'native', ?, NULL, ?
+FROM numbers(150)`, f.orgID, block, block)
+
+	// Also early, so the page holding the ambiguous block cannot be rescued
+	// by this project's own entity candidate.
+	mustExec(t, ctx, f.direct, `INSERT INTO projects VALUES (?, ?, 'github', 'BEYOND-KEY', 'beyond', 1, 'started', '', ?)`,
+		"PROJ-BEYOND", f.orgID, early)
+	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, 'BEYOND-KEY', 'native', ?, NULL, ?)`,
+		f.orgID, "PROJ-BEYOND", beyond, beyond)
+}
+
+func mustExec(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, statement string, args ...any) {
+	t.Helper()
+	if err := direct.Exec(ctx, statement, args...); err != nil {
+		t.Fatalf("seed: %v\n%s", err, statement)
+	}
+}
+
+// TestTiedOwnershipAssertionsResolveDeterministically is codex round-2 F2.
+//
+// argMax keyed on valid_from alone has no ordering between two assertions
+// stamped at the SAME instant, so a group holding one open and one closed
+// assertion at that instant could project either -- flipping between runs
+// with merge order. A flaky pass here IS the defect, so this projects
+// repeatedly and asserts every run agrees.
+//
+// Reaching the tie takes care: (org, provider, project_id, team_id, source,
+// valid_from) is team_project_ownership's full ORDER BY, so two rows agreeing
+// on all of it collapse under FINAL and no tie survives. The rows must differ
+// in a column inside that key but OUTSIDE the producer's GROUP BY, and
+// project_id is the only one -- which is realistic precisely because this
+// table's project_id is unreliable (the same project_key legitimately appears
+// under different project_id values; that is Trap B).
+//
+// The tiebreak is open-wins, and the justification is semantic rather than
+// empirical: live data cannot adjudicate it, because the writer has never
+// emitted a closed ownership row at all (0 of 618 carry a valid_to). A
+// same-instant assertion of ongoing ownership outranks a same-instant
+// closure, so a live owner is never hidden by a simultaneous close.
+func TestTiedOwnershipAssertionsResolveDeterministically(t *testing.T) {
+	ctx := context.Background()
+	fixture := newOwnershipFixture(t, ctx)
+	at := ownershipLaterAssertion
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', 'TIE-KEY', 'tie', 1, 'started', '', ?)`,
+		"PROJ-TIE", fixture.orgID, at)
+	// Same instant, same group after collapse; one closes, one leaves open.
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', 'ownership-row-closed', 'TIE-KEY', 'native', ?, ?, ?)`,
+		fixture.orgID, ownershipFirstSeen, ownershipLatestClose, at)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', 'ownership-row-open', 'TIE-KEY', 'native', ?, NULL, ?)`,
+		fixture.orgID, ownershipFirstSeen, at)
+
+	const tieEdge = "relationship:project_team:PROJ-TIE:TEAM-GITHUB:native"
+	for run := 0; run < 8; run++ {
+		edge := relationshipByID(t, fixture.project(t, ctx), tieEdge)
+		if edge.ValidTo != nil {
+			t.Fatalf("run %d: ValidTo = %v, want nil -- a same-instant assertion of ongoing ownership outranks a same-instant closure, and the result must not depend on merge order", run, edge.ValidTo)
+		}
+	}
+}
+
+// TestAmbiguityGuardIsScopedToOneOrganization is the self-found gap from the
+// round-2 org-scope review, now a test rather than an argument.
+//
+// The ambiguity guard counts projects per (provider, project_key) with a
+// window function whose PARTITION BY does NOT include org_id. It is correct
+// only because the org filter sits INSIDE the subquery the window runs over,
+// so the window never sees another organization's rows. That correctness
+// rests entirely on a subquery boundary, and hoisting the WHERE outward is a
+// plausible, well-intentioned refactor that nothing objected to -- a proof
+// carrying its own copy.
+//
+// Two organizations sharing (provider, project_key), each with ONE project:
+// neither is ambiguous, and both edges must project. Flatten the filter and
+// the window counts across organizations, both keys look ambiguous, and both
+// valid edges silently vanish.
+func TestAmbiguityGuardIsScopedToOneOrganization(t *testing.T) {
+	ctx := context.Background()
+	fixture := newOwnershipFixture(t, ctx)
+	const otherOrg = "40000000-0000-4000-8000-000000000004"
+	at := ownershipLaterAssertion
+
+	// The OTHER organization's project and ownership, sharing this
+	// organization's provider and project_key.
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', 'CROSS-ORG-KEY', 'other org project', 1, 'started', '', ?)`,
+		"PROJ-OTHER-ORG", otherOrg, at)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO teams VALUES (?, ?, '', ?, ?, 'github', ?, 1)`,
+		"TEAM-OTHER-ORG", "other org team", at, otherOrg, "TEAM-OTHER-ORG")
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-OTHER-ORG', ?, 'CROSS-ORG-KEY', 'native', ?, NULL, ?)`,
+		otherOrg, "PROJ-OTHER-ORG", ownershipFirstSeen, at)
+
+	// This organization's own project under the SAME (provider, project_key).
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', 'CROSS-ORG-KEY', 'this org project', 1, 'started', '', ?)`,
+		"PROJ-THIS-ORG", fixture.orgID, at)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, 'CROSS-ORG-KEY', 'native', ?, NULL, ?)`,
+		fixture.orgID, "PROJ-THIS-ORG", ownershipFirstSeen, at)
+
+	batch := fixture.project(t, ctx)
+	const wantEdge = "relationship:project_team:PROJ-THIS-ORG:TEAM-GITHUB:native"
+	if !hasRelationship(batch, wantEdge) {
+		t.Fatalf("%q was omitted -- the ambiguity window counted another organization's project, so a single unambiguous project looked like two", wantEdge)
+	}
+	// The other organization's rows must not leak into this projection at all.
+	for _, forbidden := range []string{
+		"relationship:project_team:PROJ-OTHER-ORG:TEAM-OTHER-ORG:native",
+		"relationship:project_team:PROJ-OTHER-ORG:TEAM-GITHUB:native",
+	} {
+		if hasRelationship(batch, forbidden) {
+			t.Errorf("projected %q -- another organization's ownership crossed the tenant boundary", forbidden)
+		}
+	}
 }

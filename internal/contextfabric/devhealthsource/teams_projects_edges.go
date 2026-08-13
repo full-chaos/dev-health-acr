@@ -216,24 +216,48 @@ WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') 
 // and plain argMax(valid_to, valid_from) SKIPS a NULL, so a newer OPEN
 // assertion loses to an older closed one and a live ownership reads as ended.
 // Both were verified directly against this ClickHouse version.
-// argMax(tuple(valid_to), valid_from).1 preserves the NULL, which is why the
-// tuple wrapper is load-bearing rather than decorative -- see
+// argMax(tuple(valid_to), ...).1 preserves the NULL, which is why the tuple
+// wrapper is load-bearing rather than decorative -- see
 // TestOwnershipWindowTakesTheLatestAssertion, which asserts both directions
 // because each spelling passes one and fails the other.
-func projectTeamsQuery(logger *slog.Logger) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
+//
+// The ordering key is a TUPLE, not valid_from alone (codex round-2 F2):
+// valid_from alone leaves two assertions stamped at the same instant
+// unordered, so a group holding one open and one closed assertion at that
+// instant could project either, flipping with merge order. The key is
+// (valid_from, valid_to IS NULL, ifNull(valid_to, epoch)):
+//
+//   - latest valid_from wins -- the latest-assertion rule;
+//   - on a tie, OPEN outranks CLOSED, so a same-instant assertion of ongoing
+//     ownership is never hidden by a simultaneous closure;
+//   - among tied closed assertions, the latest valid_to wins, so even that
+//     case is ordered rather than arbitrary.
+//
+// The open-wins choice is justified semantically, NOT empirically, and that
+// distinction is worth stating: live data cannot adjudicate it, because the
+// writer has never emitted a closed ownership row at all (0 of 618 rows carry
+// a valid_to). Reaching the tie also requires rows differing in project_id --
+// the only column inside this table's ORDER BY but outside the GROUP BY,
+// which FINAL would otherwise collapse -- and that is realistic exactly
+// because project_id here is unreliable (see the id-space note above).
+// projectTeamsQuery binds the run-scoped ambiguity ledger to the ownership
+// producer. The producer records omissions; the SOURCE logs the run total
+// once per batch, so the number an operator sees is the run's distinct-key
+// count rather than one page's slice.
+func projectTeamsQuery(omissions *ambiguityLedger) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
 	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-		return queryProjectTeams(ctx, client, orgID, cursor, limit, logger)
+		return queryProjectTeams(ctx, client, orgID, cursor, limit, omissions)
 	}
 }
 
-func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, logger *slog.Logger) ([]candidate, bool, error) {
+func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, omissions *ambiguityLedger) ([]candidate, bool, error) {
 	const rowKey = "concat(p.id, ':', o.team_id, ':', o.source_name)"
-	statement := `SELECT p.id, o.team_id, o.source_name, o.first_valid_from, o.latest_is_open, o.latest_valid_to, o.updated_at, p.key_resolution_count
+	statement := `SELECT p.id, o.team_id, o.source_name, o.first_valid_from, o.latest_is_open, o.latest_valid_to, o.updated_at, p.key_resolution_count, o.provider, o.project_key
 FROM (
   SELECT provider, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name,
          min(valid_from) AS first_valid_from,
-         argMax(tuple(valid_to), valid_from).1 IS NULL AS latest_is_open,
-         ifNull(argMax(tuple(valid_to), valid_from).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
+         argMax(tuple(valid_to), (valid_from, valid_to IS NULL, ifNull(valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open,
+         ifNull(argMax(tuple(valid_to), (valid_from, valid_to IS NULL, ifNull(valid_to, toDateTime64(0, 3, 'UTC')))).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
          max(updated_at) AS updated_at
   FROM team_project_ownership FINAL
   WHERE org_id = {org_id:String}
@@ -245,22 +269,25 @@ INNER JOIN (
 ) AS p USING (provider, project_key)
 INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id
 WHERE o.project_key != ''` + sincePredicate(cursor, "o.updated_at", rowKey) + orderBy("o.updated_at", rowKey)
-	ambiguous := map[string]struct{}{}
 	rows, truncated, err := fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var projectID, teamID, source string
+		var projectID, teamID, source, provider, projectKey string
 		var validFrom, latestValidTo, observedAt time.Time
 		var latestIsOpen uint8
 		var keyResolutionCount uint64
-		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt, &keyResolutionCount); err != nil {
+		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt, &keyResolutionCount, &provider, &projectKey); err != nil {
 			return nil, err
 		}
-		// An ambiguous project_key is omitted, not guessed and not fatal --
-		// see this function's ambiguity note.
-		if keyResolutionCount > 1 {
-			ambiguous[teamID+":"+source] = struct{}{}
-			return nil, nil
-		}
 		observedAt, validFrom, latestValidTo = observedAt.UTC(), validFrom.UTC(), latestValidTo.UTC()
+		rowSortKey := projectID + ":" + teamID + ":" + source
+		// An ambiguous project_key is omitted, not guessed and not fatal --
+		// see this function's ambiguity note. It still yields a PROGRESS
+		// candidate: the row was consumed and spent page budget, so the
+		// cursor must advance past it or a page of omissions stalls the walk
+		// forever (progressCandidate's doc comment).
+		if keyResolutionCount > 1 {
+			omissions.add(provider, projectKey)
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: "relationship:project_team:" + projectID + ":" + teamID + ":" + source,
 			Type:           contractsv1.ContextFabricRelationshipOwnedByTeam,
@@ -278,17 +305,17 @@ WHERE o.project_key != ''` + sincePredicate(cursor, "o.updated_at", rowKey) + or
 			SourceVersion:   TeamsProjectsSourceVersion,
 		}
 		relationship.ValidFrom, relationship.ValidTo = ownershipValidity(validFrom, latestIsOpen, latestValidTo)
-		return []candidate{{observedAt: observedAt, sortKey: projectID + ":" + teamID + ":" + source, relationship: &relationship}}, nil
+		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
 	})
 	if err != nil {
 		return nil, false, err
 	}
-	logAmbiguousProjectKeys(ctx, logger, orgID, len(ambiguous))
 	return rows, truncated, nil
 }
 
 // logAmbiguousProjectKeys surfaces omitted ownership edges as a bounded
-// per-read signal. Without it, an omission is indistinguishable from an
+// signal, counting DISTINCT (provider, project_key) keys accumulated over the
+// whole source run rather than one page's slice keyed by something else. Without it, an omission is indistinguishable from an
 // ownership that simply does not exist, which is the shape of silence this
 // wave keeps removing. The message carries a fixed reason and a COUNT only --
 // never a project key, project id or team id, which are tenant data; the
@@ -299,7 +326,7 @@ func logAmbiguousProjectKeys(ctx context.Context, logger *slog.Logger, orgID str
 	}
 	logger.WarnContext(ctx, "devhealthsource omitted project ownership edges for ambiguous project keys",
 		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
-		"reason", "project_key resolves to more than one project within its provider", "omitted_ownership_keys", omitted)
+		"reason", "project_key resolves to more than one project within its provider", "omitted_ambiguous_project_keys", omitted)
 }
 
 // ownershipValidity states a project->team edge's window explicitly in both
