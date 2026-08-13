@@ -138,7 +138,24 @@ INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload
 VALUES ('result_precutover_00001', $1, '{}'::jsonb, now())`, quarantinedOrg)
 	require.NoError(t, err)
 
-	// And a second organization with NO investigation result at all.
+	// And a THIRD organization with TWO investigation results (migration
+	// 0009 permits more than one result per organization) -- codex round-2
+	// P1: a naive `SELECT DISTINCT org_id, clock_timestamp(), 1` dedupes
+	// on the whole row, and clock_timestamp() is volatile, so this
+	// organization would emit TWO source rows for the cutover INSERT,
+	// which then hits the same ON CONFLICT target twice in one statement
+	// -- a cardinality violation that aborts the ENTIRE migration, not
+	// just this organization's row. This is the case that must not
+	// regress.
+	const multiResultOrg = "org-precutover-multi-result"
+	for _, resultID := range []string{"result_precutover_multi01", "result_precutover_multi02"} {
+		_, err = db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at)
+VALUES ($1, $2, '{}'::jsonb, now())`, resultID, multiResultOrg)
+		require.NoError(t, err)
+	}
+
+	// And a fourth organization with NO investigation result at all.
 	const untouchedOrg = "org-precutover-empty"
 
 	// When upgrading to the full (post-CHAOS-3786) migration set.
@@ -154,6 +171,15 @@ VALUES ('result_precutover_00001', $1, '{}'::jsonb, now())`, quarantinedOrg)
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT epoch FROM acr.context_fabric_reuse_invalidations WHERE org_id = $1`, quarantinedOrg).Scan(&epoch))
 	require.Equal(t, int64(1), epoch, "pre-cutover organization must be quarantined by migration 0012")
+
+	// The organization with TWO investigation results must ALSO be
+	// quarantined exactly once -- proving the migration itself completed
+	// (did not abort on a cardinality violation) and did not double-count
+	// the organization.
+	var multiResultEpoch int64
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT epoch FROM acr.context_fabric_reuse_invalidations WHERE org_id = $1`, multiResultOrg).Scan(&multiResultEpoch))
+	require.Equal(t, int64(1), multiResultEpoch, "an organization with multiple investigation results must still be quarantined exactly once")
 
 	// And the organization with nothing to quarantine gets no row at all.
 	var untouchedRows int

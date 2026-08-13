@@ -37,9 +37,25 @@
 -- on why the bump must never be timestamp-gated), so this is safe to
 -- reason about as "every affected organization got one ordinary
 -- programmatic invalidation call", not a special case.
+--
+-- Codex round-2 P1: the org set is deduplicated in its OWN subquery,
+-- naming only org_id -- never alongside clock_timestamp() in the same
+-- SELECT DISTINCT. clock_timestamp() is volatile: DISTINCT over
+-- (org_id, clock_timestamp(), 1) dedupes on the FULL row, and a second
+-- evaluation of a volatile function is not guaranteed to equal the
+-- first, so an organization with more than one row in
+-- acr.context_fabric_investigation_results (migration 0009 permits
+-- this) could still emit more than one source row for the SAME org_id.
+-- A single INSERT touching the same ON CONFLICT target twice is a
+-- cardinality violation ("ON CONFLICT DO UPDATE command cannot affect
+-- row a second time") that aborts the entire migration. Computing
+-- clock_timestamp() in the OUTER SELECT, over an org_id set that is
+-- already exactly one row per organization, closes this: every org_id
+-- reaching the INSERT is unique by construction, regardless of how many
+-- investigation results it has or how clock_timestamp() evaluates.
 INSERT INTO acr.context_fabric_reuse_invalidations (org_id, invalidated_at, epoch)
-SELECT DISTINCT org_id, clock_timestamp(), 1
-FROM acr.context_fabric_investigation_results
+SELECT org_id, clock_timestamp(), 1
+FROM (SELECT DISTINCT org_id FROM acr.context_fabric_investigation_results) AS orgs_with_investigation_results
 ON CONFLICT (org_id) DO UPDATE
     SET invalidated_at = EXCLUDED.invalidated_at,
         epoch = acr.context_fabric_reuse_invalidations.epoch + 1;

@@ -360,15 +360,22 @@ type RebuildEpochSnapshotter interface {
 // NOTE on rows saved before this fix: a fallback-produced investigation
 // saved before CHAOS-3786 shipped is persisted under the PRIMARY's
 // identity (the genkitruntime bug this fix also closes), not the
-// fallback's. Such a row is unaffected by the chain change here -- it
-// still matches whenever the primary is in the current chain, exactly as
-// before -- and cannot be retroactively relabeled (the investigation-
-// results table is immutable). This is accepted: answer reuse is disabled
-// by default and only ever runs inside the configured
-// ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE staleness window, so any such
-// row ages out on its own; an operator wanting a clean slate immediately
-// can call ReuseInvalidator.InvalidateOrganizationReuse for the
-// organization instead.
+// fallback's -- and, being an immutable row, can never be retroactively
+// relabeled. Left alone, such a row would keep matching whenever the
+// primary is in the current chain, indistinguishable from a row the
+// primary genuinely produced. It is NOT left alone: migration 0012 is a
+// one-time cutover that bumps every existing organization's
+// reuse-invalidation epoch exactly once, at deploy, which quarantines
+// every row saved before that migration ran via the same epoch mechanism
+// a projection rebuild uses (see RebuildEpoch's doc comment) -- no
+// payload touched, no manual per-organization action required. A FRESH
+// investigation saved after the cutover captures the CURRENT (bumped)
+// epoch as its own invalidation_epoch, so it is unaffected going forward.
+// An operator who additionally wants to invalidate a SPECIFIC
+// organization at any later point (e.g. after a configuration change --
+// see internal/api/context_fabric_model_config_routes.go's PUT/DELETE
+// handlers, which already do this automatically on every write) can call
+// ReuseInvalidator.InvalidateOrganizationReuse directly.
 //
 // Implementations MUST resolve the same organization-effective chain that
 // would actually be tried for a fresh investigation for orgID right now
