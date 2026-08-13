@@ -495,6 +495,27 @@ func validateCanonicalFactRequest(request CanonicalFactRequest) error {
 	if len(allowed) == 0 {
 		return errors.New("canonical fact request requires discovered subjects or a cohort")
 	}
+	// Codex round-8 F1: subject UNIQUENESS is decided here too, before any
+	// pruning short-circuit -- the same family as the round-5 scope fix.
+	//
+	// buildFactQuery has always rejected a duplicated subject, and both the
+	// v1 schema (uniqueItems) and ContextFabricSubjectResolution's validator
+	// reject one on the wire. But when every requirement prunes, no provider
+	// is queried, so buildFactQuery never runs and its rejection never
+	// fires: an invalid request returned SUCCESS with pruned coverage. An
+	// invalid request is an error even when nothing would have run --
+	// validity is a property of the request, not of how much work it happens
+	// to imply.
+	//
+	// Checked in two places because those are the two lists that can carry a
+	// duplicate: the investigation-wide scope (used whenever a requirement
+	// names no subjects of its own) and each explicit requirement list. That
+	// is exactly equivalent to checking every requirement's effective
+	// subject list, which is what buildFactQuery does, without rechecking
+	// the shared scope once per requirement.
+	if duplicate, found := firstDuplicateSubject(investigationScopeSubjects(request)); found {
+		return fmt.Errorf("canonical fact request subjects must be unique: %q appears more than once", duplicate.CanonicalID)
+	}
 	seenKinds := make(map[FactKind]struct{}, len(request.Requirements))
 	for _, requirement := range request.Requirements {
 		if !validFactCapabilityKind(requirement.Kind) {
@@ -526,8 +547,26 @@ func validateCanonicalFactRequest(request CanonicalFactRequest) error {
 				return fmt.Errorf("fact capability %s: subject %q is outside the discovered investigation set", requirement.Kind, subject.CanonicalID)
 			}
 		}
+		if duplicate, found := firstDuplicateSubject(requirement.Subjects); found {
+			return fmt.Errorf("fact capability %s: fact query subjects must be unique: %q appears more than once", requirement.Kind, duplicate.CanonicalID)
+		}
 	}
 	return nil
+}
+
+// firstDuplicateSubject reports the first subject that appears twice in
+// subjects, keyed the same way scope membership is (kind + canonical ID), so
+// "duplicate" means exactly what "in scope" means and the two cannot drift.
+func firstDuplicateSubject(subjects []SubjectRef) (SubjectRef, bool) {
+	seen := make(map[string]struct{}, len(subjects))
+	for _, subject := range subjects {
+		key := canonicalFactSubjectKey(subject)
+		if _, exists := seen[key]; exists {
+			return subject, true
+		}
+		seen[key] = struct{}{}
+	}
+	return SubjectRef{}, false
 }
 
 func canonicalFactSubjectKey(subject SubjectRef) string {

@@ -247,9 +247,34 @@ func TestFactPlanInputCarriesNoInterpretation(t *testing.T) {
 
 	// The per-requirement half: kind and subject scoping only, never the
 	// provider Parameters or anything derived from question text.
+	//
+	// Self-found while auditing this branch against codex round-7 F1's
+	// lesson. This check used to be `NumField() != 2` and nothing else -- a
+	// COUNT standing in for identity, the same defect shape as that finding.
+	// Swapping Subjects for Parameters keeps the count at 2, so the guard
+	// stayed green while factPlanRequirement regained the one thing it
+	// exists to exclude: Parameters are provider query inputs, and letting
+	// planning see them reopens the round-1 F1 boundary (a pruning decision
+	// must be reachable only from subject kinds, never from anything
+	// model-authored). Names and types are pinned now, exactly as the
+	// factPlanInput half above.
+	wantRequirement := map[string]string{
+		"Kind":     "v1.ContextFabricFactKind",
+		"Subjects": "[]v1.ContextFabricSubjectRef",
+	}
 	requirementType := reflect.TypeOf(factPlanRequirement{})
-	if requirementType.NumField() != 2 {
-		t.Fatalf("factPlanRequirement has %d fields, want 2 (Kind, Subjects)", requirementType.NumField())
+	if requirementType.NumField() != len(wantRequirement) {
+		t.Fatalf("factPlanRequirement has %d fields, want %d (Kind, Subjects)", requirementType.NumField(), len(wantRequirement))
+	}
+	for i := 0; i < requirementType.NumField(); i++ {
+		field := requirementType.Field(i)
+		wantType, known := wantRequirement[field.Name]
+		if !known {
+			t.Fatalf("factPlanRequirement gained field %q -- planning must not reach provider Parameters or anything model-authored", field.Name)
+		}
+		if got := field.Type.String(); got != wantType {
+			t.Fatalf("factPlanRequirement.%s is %s, want %s", field.Name, got, wantType)
+		}
 	}
 }
 
@@ -1129,6 +1154,107 @@ func TestScopePrecedenceIsSharedBetweenPlannerAndRegistry(t *testing.T) {
 		}
 		if len(health.queries) != 1 {
 			t.Fatalf("provider queried %d time(s), want 1", len(health.queries))
+		}
+	})
+}
+
+// TestReadFactsRejectsDuplicateSubjectsEvenWhenEverythingPrunes is the codex
+// round-8 F1 regression, and the same family as the round-5 scope fix:
+// request VALIDATION must complete before any pruning short-circuit.
+//
+// buildFactQuery has always rejected a duplicated subject, and both the v1
+// schema (uniqueItems) and the Go resolution validator reject one on the
+// wire. But when every requirement prunes, no provider is queried, so
+// buildFactQuery never runs and its rejection never fires -- an invalid
+// request returned SUCCESS with pruned coverage. Validity is a property of
+// the request, not of how much work the request happens to imply.
+func TestReadFactsRejectsDuplicateSubjectsEvenWhenEverythingPrunes(t *testing.T) {
+	t.Parallel()
+
+	team := subject(SubjectTeam, "team_platform")
+	// Repository-only, so a team-subject investigation prunes it entirely and
+	// no provider is ever queried.
+	newRegistry := func(t *testing.T) (*FactCapabilityRegistry, *factProviderStub) {
+		t.Helper()
+		metrics := &factProviderStub{
+			capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+			result:     FactProviderResult{State: SourceAvailable},
+		}
+		registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{})
+		if err != nil {
+			t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+		}
+		return registry, metrics
+	}
+
+	t.Run("duplicate investigation subjects error even though everything prunes", func(t *testing.T) {
+		t.Parallel()
+		registry, metrics := newRegistry(t)
+		_, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			// The same subject twice: rejected by uniqueItems on the wire, so
+			// it must not be quietly accepted here either.
+			Subjects:     []SubjectRef{team, team},
+			Requirements: []FactRequirement{{Kind: FactMetrics}},
+		})
+		if err == nil {
+			t.Fatal("ReadFacts() error = nil, want a duplicated subject rejected even when every requirement prunes")
+		}
+		if !strings.Contains(err.Error(), "unique") {
+			t.Fatalf("ReadFacts() error = %v, want the uniqueness violation named", err)
+		}
+		if len(metrics.queries) != 0 {
+			t.Fatal("no provider should be queried for an invalid request")
+		}
+	})
+
+	t.Run("duplicate explicit requirement subjects error even though everything prunes", func(t *testing.T) {
+		t.Parallel()
+		registry, _ := newRegistry(t)
+		_, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			Subjects: []SubjectRef{team},
+			Requirements: []FactRequirement{
+				// In scope, but duplicated within the requirement's own list.
+				{Kind: FactMetrics, Subjects: []SubjectRef{team, team}},
+			},
+		})
+		if err == nil {
+			t.Fatal("ReadFacts() error = nil, want a duplicated explicit subject rejected even when the requirement prunes")
+		}
+		if !strings.Contains(err.Error(), "unique") {
+			t.Fatalf("ReadFacts() error = %v, want the uniqueness violation named", err)
+		}
+	})
+
+	t.Run("control: duplicate-free all-unsupported still prunes", func(t *testing.T) {
+		t.Parallel()
+		registry, metrics := newRegistry(t)
+		bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			Subjects:     []SubjectRef{team},
+			Requirements: []FactRequirement{{Kind: FactMetrics}},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() error = %v, want a valid all-unsupported request to prune, not fail", err)
+		}
+		if len(metrics.queries) != 0 {
+			t.Fatal("a pruned capability must never be queried")
+		}
+		if len(bundle.Coverage.Sources) != 1 || bundle.Coverage.Sources[0].State != SourcePruned {
+			t.Fatalf("coverage = %+v, want a single pruned observation", bundle.Coverage.Sources)
+		}
+	})
+
+	t.Run("control: duplicate-free request that actually runs is unaffected", func(t *testing.T) {
+		t.Parallel()
+		repository := subject(SubjectRepository, "repo_api")
+		registry, metrics := newRegistry(t)
+		if _, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			Subjects:     []SubjectRef{repository},
+			Requirements: []FactRequirement{{Kind: FactMetrics}},
+		}); err != nil {
+			t.Fatalf("ReadFacts() error = %v, want a valid request unaffected by the uniqueness guard", err)
+		}
+		if len(metrics.queries) != 1 {
+			t.Fatalf("provider queried %d time(s), want 1", len(metrics.queries))
 		}
 	})
 }
