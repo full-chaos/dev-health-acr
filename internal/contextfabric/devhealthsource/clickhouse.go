@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -18,16 +19,28 @@ import (
 // onto every batch it produces. Checkpoints and telemetry are keyed by it.
 const SourceName = "dev_health_clickhouse"
 
-// ClickHouseSourceVersion is bumped to v2 by CHAOS-3779 (codex round-2 H2 residual):
-// queryWorkItemDependencies' RelationshipID now embeds relationship_type
-// (previously (source, target) only), and queryWorkItemHierarchy is a new
-// producer. The bump is deliberate, not cosmetic: ProjectionWorker.RunOnce
-// (internal/contextfabric/projector.go) refuses to advance a checkpoint
-// whose stored SourceVersion differs from the current one, forcing every
-// already-projected organization through an explicit rebuild instead of
-// silently double-writing edges under the old, now-collapsed identity
-// scheme beside the new one.
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v2"
+// ClickHouseSourceVersion is bumped to v3 by CHAOS-3785: queryWorkItems,
+// queryWorkItemDependencies, and queryWorkItemHierarchy relax their repos
+// join from INNER to LEFT so a Linear-sourced work item (repo_id = the zero
+// UUID at ingest) projects instead of being silently dropped. The bump is
+// deliberate here too, for a reason distinct from v2's identity-scheme
+// change: this cursor is an event-time watermark
+// (docs/design/context-fabric-projection-worker.md, "Honest limitation:
+// event-time watermarks miss backfilled/corrected rows") -- an
+// already-projected organization's checkpoint may have advanced past many
+// Linear work items' updated_at values on the strength of OTHER tables'
+// rows sharing the same checkpoint, long before those work items could ever
+// satisfy the old INNER JOIN. Left unversioned, ordinary incremental
+// catch-up would never revisit them; only a full rebuild does. Forcing
+// ErrProjectionSourceVersionChanged on every already-projected organization
+// makes that rebuild happen deliberately (acr-projector rebuild --org)
+// instead of leaving a silent, permanent gap for exactly the organizations
+// this fix exists to help.
+//
+// (v2, CHAOS-3779 codex round-2 H2 residual: queryWorkItemDependencies'
+// RelationshipID began embedding relationship_type (previously (source,
+// target) only), and queryWorkItemHierarchy was a new producer.)
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v3"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and
@@ -74,13 +87,31 @@ func ProducedRelationshipTypes() []contractsv1.ContextFabricRelationshipType {
 type ClickHouseProjectionSource struct {
 	client contextpacket.ClickHouseQueryClient
 	now    func() time.Time
+	logger *slog.Logger
 }
 
 func NewClickHouseProjectionSource(client contextpacket.ClickHouseQueryClient) (*ClickHouseProjectionSource, error) {
 	if client == nil {
 		return nil, fmt.Errorf("devhealthsource: clickhouse query client is required")
 	}
-	return &ClickHouseProjectionSource{client: client, now: time.Now}, nil
+	return &ClickHouseProjectionSource{client: client, now: time.Now, logger: slog.Default()}, nil
+}
+
+// WithLogger overrides the default logger (slog.Default()) with one the
+// caller actually wires to its output (CHAOS-3785 codex round-2 finding
+// R2-3): logOrphanedWorkItems needs somewhere to surface a per-batch
+// orphaned-work-item count, or that data-quality signal requires graph
+// spelunking to notice. Optional and additive on purpose -- every existing
+// call site keeps building a source exactly as before; only
+// cmd/acr-projector wires a real logger in, matching how
+// projectionrun.Coordinator's own Logger field works (a real logger from
+// the caller, slog.Default() otherwise). Returns s for chaining; a nil
+// logger is a no-op, not a panic.
+func (s *ClickHouseProjectionSource) WithLogger(logger *slog.Logger) *ClickHouseProjectionSource {
+	if logger != nil {
+		s.logger = logger
+	}
+	return s
 }
 
 // candidate is a sortable, already-built projection item. Exactly one of
@@ -169,6 +200,7 @@ func (s *ClickHouseProjectionSource) fullSnapshot(ctx context.Context, orgID str
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
+	s.logOrphanedWorkItems(ctx, batch, all)
 	return batch, true, nil
 }
 
@@ -209,6 +241,7 @@ func (s *ClickHouseProjectionSource) pagedBatch(ctx context.Context, orgID, curs
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
+	s.logOrphanedWorkItems(ctx, batch, all)
 	return batch, true, nil
 }
 
@@ -230,6 +263,65 @@ func candidateCounts(all []candidate) (entities, relationships, tombstones int) 
 		}
 	}
 	return entities, relationships, tombstones
+}
+
+// orphanedWorkItemIDs returns the DISTINCT work_item canonical IDs
+// workItemAuthorization marked orphaned in this batch -- a genuine, nonzero
+// repo_id that never resolved against repos (CHAOS-3785 codex round-2
+// finding R2-3), as opposed to noRepositorySentinel's "never had one by
+// design." CHAOS-3785 codex round-3 finding R3-4: this counts WORK ITEMS,
+// not candidates -- one orphaned item can carry any number of
+// queryWorkItemDependencies/queryWorkItemHierarchy edges (its own entity
+// candidate plus one relationship candidate per edge), and counting
+// candidates would report that single item as however many edges it
+// happens to have. Every orphan-scoped relationship's From endpoint is the
+// orphaned work item that produced it (queryWorkItemDependencies derives a
+// dependency edge's scope from its source_work_item_id's own repo;
+// queryWorkItemHierarchy derives a PART_OF edge's scope from its child's),
+// so entity and relationship candidates both resolve to the same ID space
+// and de-duplicate against each other correctly. RepositorySlugs is checked
+// as an exact single-element match (never a substring or prefix test):
+// orphanedRepositorySentinel can only ever appear as workItemAuthorization's
+// sole entry, so anything looser would risk matching a real repository slug
+// that happened to contain the same text.
+func orphanedWorkItemIDs(all []candidate) map[string]struct{} {
+	isOrphaned := func(scope contractsv1.ContextFabricAuthorizationScope) bool {
+		return len(scope.RepositorySlugs) == 1 && scope.RepositorySlugs[0] == orphanedRepositorySentinel
+	}
+	ids := map[string]struct{}{}
+	for _, c := range all {
+		switch {
+		case c.entity != nil && isOrphaned(c.entity.Authorization):
+			ids[c.entity.Subject.CanonicalID] = struct{}{}
+		case c.relationship != nil && isOrphaned(c.relationship.Authorization):
+			ids[c.relationship.From.CanonicalID] = struct{}{}
+		}
+	}
+	return ids
+}
+
+// logOrphanedWorkItems surfaces orphanedWorkItemIDs as a per-batch log line
+// -- CHAOS-3785 codex round-2 finding R2-3: without this, an orphaned work
+// item (a nonzero repo_id that never resolved -- a sync race, a deleted
+// repository, stale seed data) is indistinguishable from any other
+// projected row unless someone goes looking for the sentinel value directly
+// in the graph. Logged only when the count is positive, matching this
+// signal's actual purpose (surfacing something worth investigating), not as
+// an always-on per-tick line for the common all-zero case. batch_id/source/
+// cursor (codex round-3 finding R3-3) match the vocabulary
+// projectionrun.Coordinator's own per-run "projection batch applied" log
+// already uses (coordinator.go), so an operator can correlate this WARN --
+// emitted here, before the coordinator's Apply step even runs -- with that
+// later line by batch_id, or notice its batch never reached one at all.
+func (s *ClickHouseProjectionSource) logOrphanedWorkItems(ctx context.Context, batch contextfabric.ProjectionBatch, all []candidate) {
+	if s.logger == nil {
+		return
+	}
+	if ids := orphanedWorkItemIDs(all); len(ids) > 0 {
+		s.logger.WarnContext(ctx, "devhealthsource projection batch contains orphaned work items",
+			"org_id", redactOrg(batch.OrgID), "source", batch.Source, "batch_id", batch.BatchID,
+			"cursor", batch.Cursor, "next_cursor", batch.NextCursor, "orphaned_work_items", len(ids))
+	}
 }
 
 func (s *ClickHouseProjectionSource) clock() time.Time {
@@ -383,8 +475,76 @@ func stringScalar(value string) contractsv1.ContextFabricScalarValue {
 	return contractsv1.ContextFabricScalarValue{String: &value}
 }
 
+// zeroRepositoryID is the placeholder work_items.repo_id carries for a
+// source row that is repo-less BY DESIGN (CHAOS-3785) -- a Linear issue is
+// not tied to a single git repo, so Linear ingest writes this exact value
+// rather than leaving repo_id null. It is what distinguishes
+// workItemAuthorization's two non-repo cases from each other: this value
+// means "never had a repository," anything else means "named one that
+// didn't resolve" (see orphanedRepositorySentinel).
+const zeroRepositoryID = "00000000-0000-0000-0000-000000000000"
+
+// noRepositorySentinel and orphanedRepositorySentinel (CHAOS-3785;
+// orphanedRepositorySentinel is codex round-1 finding F2) are the
+// RepositorySlugs values workItemAuthorization uses for a work item whose
+// LEFT JOIN to repos found no match. ContextFabricAuthorizationScope.
+// Validate() rejects an empty scope outright ("authorization scope must not
+// be empty"), so neither case can fall back to a bare empty scope --
+// confirmed early against real ClickHouse output that doing so would fail
+// batch.Validate() and take down projection for the whole organization, not
+// just the affected rows. The reserved organization-scope ProjectIDs
+// namespace (organizationScopePrefix) is not an option either: it is
+// exclusively for the synthesized Organization entity --
+// TestOnlyTheOrganizationEntityPopulatesProjectIDs proves nothing else may
+// populate it.
+//
+// The two sentinels stay DISTINCT rather than collapsing to one "no repo"
+// value: work_items.repo_id = zeroRepositoryID is repo-less by design
+// (every Linear-sourced row), but a work item can also carry a genuine,
+// nonzero repo_id that simply never resolves against repos -- a sync race,
+// a deleted repository, or (live-verified: 5 such rows across 5
+// organizations in dev ClickHouse today, all pre-existing CHAOS-2698 test
+// fixture data) stale seed data. That second case is a data-quality signal
+// worth surfacing and counting on its own, not one that should silently
+// masquerade as an intentionally repo-less Linear item.
+//
+// Both sentinels share the same authorization consequence: a principal
+// scoped to specific repositories (storage.Principal.RepositoryScopes)
+// never matches either value and so never sees these rows, while an
+// org-wide/unrestricted principal does (graphrank.AuthorizedAttributes only
+// gates on RepositorySlugs when the principal or the request actually names
+// one). Neither value can collide with a real Dev Health repo slug
+// ("owner/repo" shaped, always contains '/').
+const (
+	noRepositorySentinel       = "acr-context-fabric:no-repository"
+	orphanedRepositorySentinel = "acr-context-fabric:orphaned-repository"
+)
+
+// repoAuthorization is every OTHER producer's authorization builder
+// (queryPullRequests, queryDeployments, queryIncidents,
+// queryPullRequestReviews, queryCIRuns, queryDeploymentIncidentEdges): each
+// still INNER JOINs repos, so repoSlug is always non-empty here. CHAOS-3785's
+// three work-item producers (queryWorkItems, queryWorkItemDependencies,
+// queryWorkItemHierarchy), whose LEFT JOIN can legitimately find no repos
+// match, route through workItemAuthorization below instead.
 func repoAuthorization(repoSlug string) contractsv1.ContextFabricAuthorizationScope {
 	return contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{repoSlug}}
+}
+
+// workItemAuthorization is queryWorkItems / queryWorkItemDependencies /
+// queryWorkItemHierarchy's authorization builder -- see the sentinel
+// constants' doc comment above for why the zeroRepositoryID/orphan split
+// exists. repoID is the row's own (or, for a dependency/hierarchy edge, its
+// source/child work item's own) work_items.repo_id; repoSlug is what the
+// LEFT JOIN to repos actually resolved, ” when it found no match.
+func workItemAuthorization(repoID, repoSlug string) contractsv1.ContextFabricAuthorizationScope {
+	if repoSlug != "" {
+		return repoAuthorization(repoSlug)
+	}
+	if repoID == zeroRepositoryID {
+		return contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{noRepositorySentinel}}
+	}
+	return contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{orphanedRepositorySentinel}}
 }
 
 // belongsToRepository's rowKey must equal the exact same value the entity

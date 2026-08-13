@@ -1,11 +1,13 @@
 package devhealthsource_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"testing"
@@ -182,8 +184,160 @@ func baseTables(at time.Time) []fakeTable {
 		{match: "FROM git_pull_requests AS p", rows: [][]any{{"repo-1", "example-org/widget-service", int64(1042), "Typed session tokens", "open", at}}},
 		{match: "FROM deployments AS d", rows: [][]any{{"repo-1", "example-org/widget-service", "deploy-1", "success", "production", at}}},
 		{match: "FROM operational_incidents AS i", rows: [][]any{{"incident-1", "repo-1", "example-org/widget-service", "Widget incident", "open", "low", at, uint8(0)}}},
-		{match: "FROM work_item_dependencies AS d", rows: [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "example-org/widget-service", at}}},
+		{match: "FROM work_item_dependencies AS d", rows: [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at}}},
 		{match: "FROM work_graph_deployment_incident_edges AS e", rows: [][]any{{"edge-1", "deploy-1", "incident-1", "example-org/widget-service", at}}},
+	}
+}
+
+// TestQueryWorkItemsDistinguishesRepolessFromOrphanedAuthorization is
+// CHAOS-3785 codex round-1 finding F2: a work item whose repos join found no
+// match is repo-less for one of two distinct reasons, and the two must not
+// collapse into a single sentinel. repo_id = the zero UUID means "never had
+// a repository" (WIDGET-LINEAR, the Linear shape this issue exists for);
+// any OTHER repo_id that still fails to resolve means "named one that
+// didn't" (WIDGET-ORPHAN, a sync race / deleted repository / stale seed
+// data -- live-verified: 5 such rows exist across 5 organizations in dev
+// ClickHouse today). A third row (the base fixture's WIDGET-101,
+// repo-backed) proves the ordinary case is untouched.
+func TestQueryWorkItemsDistinguishesRepolessFromOrphanedAuthorization(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+	tables := baseTables(at)
+	for i, table := range tables {
+		if table.match == "FROM work_items AS w" {
+			tables[i] = fakeTable{match: table.match, rows: [][]any{
+				{"WIDGET-101", "repo-1", "example-org/widget-service", "Investigate checkout flake", "in_progress", "", at},
+				{"WIDGET-LINEAR", "00000000-0000-0000-0000-000000000000", "", "Linear-sourced item", "open", "", at},
+				{"WIDGET-ORPHAN", "99999999-9999-9999-9999-999999999999", "", "Orphaned repo_id", "open", "", at},
+			}}
+		}
+	}
+	client := &fakeClient{tables: tables}
+	source, err := devhealthsource.NewClickHouseProjectionSource(client)
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	batch, available, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName})
+	if err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if !available {
+		t.Fatal("expected a batch to be available")
+	}
+	if err := batch.Validate(); err != nil {
+		t.Fatalf("batch failed contract validation: %v", err)
+	}
+
+	want := map[string][]string{
+		"work_item:WIDGET-101":    {"example-org/widget-service"},
+		"work_item:WIDGET-LINEAR": {"acr-context-fabric:no-repository"},
+		"work_item:WIDGET-ORPHAN": {"acr-context-fabric:orphaned-repository"},
+	}
+	found := map[string]bool{}
+	for _, entity := range batch.Entities {
+		wantSlugs, tracked := want[entity.Subject.CanonicalID]
+		if !tracked {
+			continue
+		}
+		found[entity.Subject.CanonicalID] = true
+		if len(entity.Authorization.RepositorySlugs) != len(wantSlugs) || entity.Authorization.RepositorySlugs[0] != wantSlugs[0] {
+			t.Fatalf("%s authorization = %+v, want RepositorySlugs=%v", entity.Subject.CanonicalID, entity.Authorization, wantSlugs)
+		}
+	}
+	for id := range want {
+		if !found[id] {
+			t.Fatalf("expected %s to be projected: entities=%+v", id, batch.Entities)
+		}
+	}
+
+	// WIDGET-ORPHAN has no resolvable repository, so -- exactly like a
+	// Linear-shaped work item -- it must never carry a BELONGS_TO_REPOSITORY
+	// edge (there is no repository entity to point one at).
+	for _, relationship := range batch.Relationships {
+		if relationship.From.CanonicalID == "work_item:WIDGET-ORPHAN" && relationship.Type == "BELONGS_TO_REPOSITORY" {
+			t.Fatalf("WIDGET-ORPHAN unexpectedly carries a BELONGS_TO_REPOSITORY edge: %+v", relationship)
+		}
+	}
+}
+
+// TestNextProjectionBatchLogsOrphanedWorkItemCount is CHAOS-3785 codex
+// round-2 finding R2-3: an orphaned work item is otherwise indistinguishable
+// from any other projected row unless someone goes looking for the sentinel
+// value directly in the graph. A batch containing one must surface the
+// count through the source's logger; a batch containing none must stay
+// quiet (this signal exists to flag something worth investigating, not to
+// add an always-on line to every ordinary tick).
+func TestNextProjectionBatchLogsOrphanedWorkItemCount(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+	const orphanRepoID = "99999999-9999-9999-9999-999999999999"
+
+	orphanTables := baseTables(at)
+	for i, table := range orphanTables {
+		switch table.match {
+		case "FROM work_items AS w":
+			orphanTables[i] = fakeTable{match: table.match, rows: [][]any{
+				{"WIDGET-101", "repo-1", "example-org/widget-service", "Investigate checkout flake", "in_progress", "", at},
+				{"WIDGET-ORPHAN", orphanRepoID, "", "Orphaned repo_id", "open", "", at},
+			}}
+		case "FROM work_item_dependencies AS d":
+			// WIDGET-ORPHAN carries TWO orphan-scoped candidates (its own
+			// entity, plus this dependency edge rooted at it) -- codex
+			// round-3 finding R3-4: the log must still report exactly ONE
+			// orphaned work item, not two, proving the count is over
+			// DISTINCT work-item IDs, not raw candidates.
+			orphanTables[i] = fakeTable{match: table.match, rows: [][]any{
+				{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at},
+				{"WIDGET-ORPHAN", "WIDGET-101", "blocks", orphanRepoID, "", at},
+			}}
+		}
+	}
+	orphanSource, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: orphanTables})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	var orphanLogs bytes.Buffer
+	orphanSource.WithLogger(slog.New(slog.NewJSONHandler(&orphanLogs, nil)))
+	batch, available, err := orphanSource.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName})
+	if err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if !available {
+		t.Fatal("expected a batch to be available")
+	}
+	if err := batch.Validate(); err != nil {
+		t.Fatalf("batch failed contract validation: %v", err)
+	}
+	logged := orphanLogs.String()
+	if !strings.Contains(logged, `"orphaned_work_items":1`) {
+		t.Fatalf("expected the orphan count to report 1 DISTINCT work item (not 2 candidates), got: %s", logged)
+	}
+	// R3-3: the warning must carry the same batch-identity vocabulary
+	// coordinator.go's own per-run "projection batch applied" log uses, so
+	// an operator can correlate the two (or notice this batch never reached
+	// that later line at all).
+	for _, want := range []string{
+		`"source":"` + devhealthsource.SourceName + `"`,
+		`"batch_id":"` + batch.BatchID + `"`,
+		`"cursor":"` + batch.Cursor + `"`,
+		`"next_cursor":"` + batch.NextCursor + `"`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("expected the orphan warning to carry %s, got: %s", want, logged)
+		}
+	}
+
+	cleanSource, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: baseTables(at)})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	var cleanLogs bytes.Buffer
+	cleanSource.WithLogger(slog.New(slog.NewJSONHandler(&cleanLogs, nil)))
+	if _, _, err := cleanSource.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName}); err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if cleanLogs.Len() != 0 {
+		t.Fatalf("expected no log output for a batch with zero orphaned work items, got: %s", cleanLogs.String())
 	}
 }
 
@@ -297,10 +451,10 @@ func everyRelationshipTypeFixtureTables(at time.Time) []fakeTable {
 			// NULL relationship_type -- already collapsed to a non-null
 			// string by the real SQL's ifNull before Go ever scans it.
 			tables[i] = fakeTable{match: table.match, rows: [][]any{
-				{"WIDGET-101", "WIDGET-099", "blocks", "example-org/widget-service", at},
-				{"WIDGET-101", "WIDGET-098", "relates_to", "example-org/widget-service", at},
-				{"WIDGET-101", "WIDGET-097", "duplicates", "example-org/widget-service", at},
-				{"WIDGET-101", "WIDGET-096", "related_to", "example-org/widget-service", at},
+				{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at},
+				{"WIDGET-101", "WIDGET-098", "relates_to", "repo-1", "example-org/widget-service", at},
+				{"WIDGET-101", "WIDGET-097", "duplicates", "repo-1", "example-org/widget-service", at},
+				{"WIDGET-101", "WIDGET-096", "related_to", "repo-1", "example-org/widget-service", at},
 			}}
 		}
 	}
@@ -310,7 +464,7 @@ func everyRelationshipTypeFixtureTables(at time.Time) []fakeTable {
 		// alias -- distinct from baseTables' "FROM work_items AS w"
 		// (queryWorkItems' entity query), so this does not collide with
 		// it in fakeClient's substring match.
-		fakeTable{match: "FROM work_items AS c", rows: [][]any{{"WIDGET-101", "WIDGET-050", "example-org/widget-service", at}}},
+		fakeTable{match: "FROM work_items AS c", rows: [][]any{{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at}}},
 	)
 }
 
@@ -487,8 +641,8 @@ func TestClickHouseProjectionSourceKeepsBothEdgesForASourceTargetPairWithTwoRela
 	for i, table := range tables {
 		if table.match == "FROM work_item_dependencies AS d" {
 			tables[i] = fakeTable{match: table.match, rows: [][]any{
-				{"WIDGET-101", "WIDGET-050", "blocks", "example-org/widget-service", at},
-				{"WIDGET-101", "WIDGET-050", "relates_to", "example-org/widget-service", at},
+				{"WIDGET-101", "WIDGET-050", "blocks", "repo-1", "example-org/widget-service", at},
+				{"WIDGET-101", "WIDGET-050", "relates_to", "repo-1", "example-org/widget-service", at},
 			}}
 		}
 	}
