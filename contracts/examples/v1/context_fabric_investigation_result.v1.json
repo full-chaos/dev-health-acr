@@ -66,6 +66,9 @@
           "Exact canonical project label."
         ],
         "confidence": 1.0,
+        "match_mechanisms": [
+          "exact"
+        ],
         "evidence_ref_ids": [
           "evidence_project_identity"
         ]

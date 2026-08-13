@@ -111,6 +111,30 @@ const (
 	ContextFabricResolutionUnresolved ContextFabricResolutionState = "unresolved"
 )
 
+// ContextFabricSubjectMatchMechanism names HOW a subject candidate was
+// proposed (CHAOS-3778 / AC-3778-6): a reader can tell a vector match from an
+// exact match, an alias match, and a graph match. This is a CLOSED enum --
+// adding a member is a contract change, not an implementation detail, because
+// the corroboration band in graphrank counts DISTINCT members (see
+// ValidContextFabricSubjectMatchMechanism and graphrank.CorroboratedConfidence).
+type ContextFabricSubjectMatchMechanism string
+
+const (
+	// ContextFabricMatchExact is an exact canonical identity or label match.
+	ContextFabricMatchExact ContextFabricSubjectMatchMechanism = "exact"
+	// ContextFabricMatchAlias is a match on an approved alias or previous name.
+	ContextFabricMatchAlias ContextFabricSubjectMatchMechanism = "alias"
+	// ContextFabricMatchProviderKey is a match on an upstream provider key.
+	ContextFabricMatchProviderKey ContextFabricSubjectMatchMechanism = "provider_key"
+	// ContextFabricMatchLexical is a full-text/keyword retrieval match.
+	ContextFabricMatchLexical ContextFabricSubjectMatchMechanism = "lexical"
+	// ContextFabricMatchVector is an embedding-similarity retrieval match.
+	ContextFabricMatchVector ContextFabricSubjectMatchMechanism = "vector"
+	// ContextFabricMatchTraversalParent is a match reached by walking from a
+	// matched observation (document/episode) to its canonical parent entity.
+	ContextFabricMatchTraversalParent ContextFabricSubjectMatchMechanism = "traversal_parent"
+)
+
 type ContextFabricTemporalAxis string
 
 const (
@@ -419,6 +443,14 @@ type ContextFabricSubjectCandidate struct {
 	MatchReasons   []string                     `json:"match_reasons"`
 	Confidence     float64                      `json:"confidence"`
 	EvidenceRefIDs []string                     `json:"evidence_ref_ids,omitempty"`
+	// MatchMechanisms records WHICH retrieval mechanisms proposed this
+	// candidate (CHAOS-3778 / AC-3778-6). Additive and optional in v1: every
+	// InvestigationResult persisted before CHAOS-3778 was serialized without
+	// it, and those snapshots must still validate on replay, so this field is
+	// never required and an empty value is never an error. A reader that finds
+	// it empty learns only "this result predates mechanism recording", never
+	// "no mechanism matched".
+	MatchMechanisms []ContextFabricSubjectMatchMechanism `json:"match_mechanisms,omitempty"`
 }
 
 type ContextFabricSubjectResolution struct {
