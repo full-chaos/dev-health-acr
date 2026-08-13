@@ -656,13 +656,33 @@ func TestContextFabricSourceStatePrunedIsAcceptedAndParityHolds(t *testing.T) {
 	if len(enums) == 0 {
 		t.Fatal("found no source-state enum in the schema -- the parity check would silently pass")
 	}
+	// Exact set equality, asserted in BOTH directions, plus explicit
+	// duplicate rejection (codex round-7 F1).
+	//
+	// Checking length plus "every schema value is Go-known" is not parity: it
+	// passes for a schema that DUPLICATES one value and drops another. Swap
+	// "pruned" for a second copy of "available" and the count still matches
+	// and every value is still Go-known -- while the schema silently no
+	// longer admits the planner's own state, so JSON Schema validation
+	// rejects real coverage output at runtime. Set equality both ways is what
+	// closes it; the duplicate check is what keeps the SET comparison from
+	// hiding a multiset difference.
 	for _, enum := range enums {
-		if len(enum) != len(want) {
-			t.Fatalf("schema source-state enum = %v, want the same %d values as Go", enum, len(want))
-		}
+		seen := make(map[string]struct{}, len(enum))
 		for _, value := range enum {
+			if _, duplicate := seen[value]; duplicate {
+				t.Fatalf("schema source-state enum repeats %q -- a duplicate can mask a missing value from any count-based check", value)
+			}
+			seen[value] = struct{}{}
 			if _, ok := want[value]; !ok {
 				t.Fatalf("schema source-state enum has %q, which Go's validSourceState does not accept", value)
+			}
+		}
+		// The direction the old assertion never covered: every Go-accepted
+		// state must actually appear in the schema.
+		for state := range want {
+			if _, present := seen[state]; !present {
+				t.Fatalf("Go accepts source state %q but the schema enum %v omits it -- the wire would reject a payload the Go side produces", state, enum)
 			}
 		}
 	}
