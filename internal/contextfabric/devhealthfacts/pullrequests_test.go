@@ -23,7 +23,9 @@ func reviewSubject(reviewID string) contextfabric.SubjectRef {
 func TestPullRequestsProviderHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", int64(1042), "open"}}},
+		// uint32, matching the production column type -- an int64 fixture here
+		// is what let the reader's own int64 scan pass for so long.
+		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", uint32(1042), "open"}}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactPullRequests)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{

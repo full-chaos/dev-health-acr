@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
 )
@@ -48,8 +49,8 @@ func TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse(t *testing.T) {
 		t.Fatalf("ping live ClickHouse: %v", err)
 	}
 
-	tables := make([]string, 0, len(productionColumns))
-	for table := range productionColumns {
+	tables := make([]string, 0, len(devhealthschema.ProductionColumns))
+	for table := range devhealthschema.ProductionColumns {
 		tables = append(tables, table)
 	}
 
@@ -76,20 +77,20 @@ func TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse(t *testing.T) {
 		t.Fatalf("iterate system.columns rows: %v", err)
 	}
 
-	for table, columns := range productionColumns {
+	for table, columns := range devhealthschema.ProductionColumns {
 		live, ok := liveTypes[table]
 		if !ok {
 			t.Errorf("live ClickHouse has no table %q that productionColumns (schema_parity_integration_test.go) expects -- regenerate the snapshot against the current schema", table)
 			continue
 		}
 		for _, column := range columns {
-			actual, ok := live[column.name]
+			actual, ok := live[column.Name]
 			if !ok {
-				t.Errorf("live %s.%s no longer exists -- regenerate productionColumns (schema_parity_integration_test.go); the devhealthsource producer reading it will fail on real data", table, column.name)
+				t.Errorf("live %s.%s no longer exists -- regenerate productionColumns (schema_parity_integration_test.go); the devhealthsource producer reading it will fail on real data", table, column.Name)
 				continue
 			}
-			if actual != column.chType {
-				t.Errorf("live %s.%s is %q but productionColumns (schema_parity_integration_test.go) still says %q -- regenerate the snapshot, then check every devhealthsource producer's Scan() destination for %s.%s against the new type", table, column.name, actual, column.chType, table, column.name)
+			if actual != column.Type {
+				t.Errorf("live %s.%s is %q but productionColumns (schema_parity_integration_test.go) still says %q -- regenerate the snapshot, then check every devhealthsource producer's Scan() destination for %s.%s against the new type", table, column.Name, actual, column.Type, table, column.Name)
 			}
 		}
 	}

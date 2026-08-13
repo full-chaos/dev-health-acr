@@ -1072,3 +1072,112 @@ func TestCodex2F7_NilEpochPassedToSaveWhenReuseEpochSnapshotterIsNil(t *testing.
 		t.Errorf("epoch passed to Save = %v, want nil", store.savedEpoch)
 	}
 }
+
+// keyRecordingResultStore records the time-axis key Save was given, so a
+// test can assert lookup and save agree on it.
+type keyRecordingResultStore struct {
+	saved    InvestigationResult
+	savedKey string
+}
+
+func (s *keyRecordingResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, timeAxisKey string) error {
+	s.saved = result
+	s.savedKey = timeAxisKey
+	return nil
+}
+
+func (s *keyRecordingResultStore) Get(context.Context, storage.Principal, string) (InvestigationResult, error) {
+	return InvestigationResult{}, nil
+}
+
+// TestF2_ClampedRequestStillReusesItsOwnAnswer is CHAOS-3781 round-2 F2,
+// red-green.
+//
+// The round-1 F6 ruling was that BOTH reuse sides key from the wire
+// request. The save side complied; the lookup side did not -- it read
+// request.TimeContext AFTER the engine had overwritten it with the
+// clamped value. Whenever clamping actually fired (an as-of inside the
+// skew tolerance), the row saved under the wire key and was looked up
+// under the clamped one, so the two never matched and the lookup key
+// drifted with `now`.
+//
+// The round-1 test missed this precisely because its as-of was safely in
+// the past, so clamping never fired and both keys coincided. This one
+// puts the requested instant INSIDE the tolerance, the only place the
+// defect is observable.
+func TestF2_ClampedRequestStillReusesItsOwnAnswer(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	insideTolerance := now.Add(30 * time.Second)
+	wireKey := TimeAxisKeyFor(TimeContext{Axis: TemporalValidTime, AsOf: &insideTolerance})
+
+	store := &keyRecordingResultStore{}
+	var lookupKeys []string
+	gate := reuseGateFunc(func(_ context.Context, _ storage.Principal, key ReuseKey) (InvestigationResult, bool, error) {
+		lookupKeys = append(lookupKeys, key.TimeAxisKey)
+		return InvestigationResult{}, false, nil
+	})
+
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{
+				Shape: ShapeSingleSubject, RequestedJudgment: "status",
+				TimeContext:      TimeContext{Axis: TemporalValidTime, AsOf: &insideTolerance},
+				FactRequirements: []FactRequirement{{Kind: FactStatus}},
+			}, nil
+		}),
+		Graph: graphReaderStub{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+			context: GraphContext{
+				DriverCandidates: []DriverJudgment{}, EvidenceRefIDs: []string{}, FactRequirements: []FactRequirement{},
+				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+			},
+		},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{
+				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+			}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{
+				Status: InvestigationComplete, DirectJudgment: "It was fine then.", CurrentState: "Nominal.",
+				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
+				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+				ClaimedFacts:        []ClaimedFact{},
+				Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				DeterministicAnswer: "It was fine then.", Warnings: []string{},
+				Versions: VersionSet{
+					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+					InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+				},
+			}, nil
+		}),
+		Results: store, ReuseGate: gate,
+	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return now }, NewResultID: func() string { return "result_12345678" }})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	request := validInvestigationRequest()
+	request.TimeContext = TimeContext{Axis: TemporalValidTime, AsOf: &insideTolerance}
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+
+	if store.savedKey != wireKey {
+		t.Fatalf("Save keyed %q, want the pre-clamp wire key %q", store.savedKey, wireKey)
+	}
+	if len(lookupKeys) != 1 {
+		t.Fatalf("reuse gate consulted %d times, want 1", len(lookupKeys))
+	}
+	// The invariant: the two sides agree. Before F2 the lookup key was
+	// derived from the CLAMPED instant, so it differed from the saved one
+	// and no identical request could ever match.
+	if lookupKeys[0] != store.savedKey {
+		t.Fatalf("lookup keyed %q but Save keyed %q; a clamped request can never reuse its own answer", lookupKeys[0], store.savedKey)
+	}
+	if lookupKeys[0] != wireKey {
+		t.Fatalf("lookup keyed %q, want the pre-clamp wire key %q", lookupKeys[0], wireKey)
+	}
+}

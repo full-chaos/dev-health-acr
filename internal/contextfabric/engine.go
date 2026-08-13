@@ -208,7 +208,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// closed); Investigate always falls through to a fresh investigation
 	// in that case, so a reuse-path failure is never visible to the
 	// caller as anything other than normal, slightly slower success.
-	if reused, ok := e.tryReuse(ctx, principal, request); ok {
+	// F2 (round 2): the reuse key comes from the PRE-CLAMP wire context,
+	// passed explicitly rather than read off `request` -- which now holds
+	// the clamped value. Save already keyed from the wire context, so a
+	// lookup keyed from the clamped one meant the two sides disagreed
+	// whenever clamping fired: the row saved under one key and was looked
+	// up under another, so identical requests inside the skew tolerance
+	// could never reuse, and the lookup key drifted with `now`.
+	if reused, ok := e.tryReuse(ctx, principal, request, wireTimeContext); ok {
 		return reused, nil
 	}
 

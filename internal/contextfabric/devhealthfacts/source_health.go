@@ -68,7 +68,19 @@ func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.
 	// a single backfill job is chunked into several rows sharing one
 	// job_id (Codex round-3 correction) -- so this provider tiebreaks on
 	// job_id, then chunk_index, both real columns, no value hash needed.
-	statement := withRowLimit(`SELECT provider, status, items_synced, duration_ms, error_message, toString(created_at)
+	// toInt64 on items_synced (UInt32) and duration_ms (UInt64): the
+	// clickhouse-go driver rejects scanning either width into an *int64
+	// destination, the same class of defect CHAOS-3789 fixed for
+	// git_pull_requests.number and CHAOS-3781 round-2 F1 fixed for this
+	// package's pull-request reader. Found by the schema parity guard
+	// rather than by a fixture, because this package's fixtures modeled
+	// both columns as int64.
+	//
+	// Converted in SQL rather than by widening the Go destinations, so the
+	// scan shape stays independent of each column's exact source width --
+	// the same convention every other numeric projection in this package
+	// already uses (toInt64(commits_count), toInt64(backlog_size)).
+	statement := withRowLimit(`SELECT provider, status, toInt64(items_synced), toInt64(duration_ms), error_message, toString(created_at)
 FROM (
 	SELECT provider, status, items_synced, duration_ms, error_message, created_at,
 		row_number() OVER (PARTITION BY provider ORDER BY created_at DESC, job_id DESC, chunk_index DESC) AS rn

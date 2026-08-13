@@ -146,3 +146,31 @@ accepted (it used to reach the predicates and the label), and a bounded
 historical query returning zero rows reports `no_data` with an
 out-of-retention reason rather than a clean `available` -- "nothing
 happened then" and "we retain nothing that far back" are different answers.
+
+Codex round 2 added one structural change worth knowing: the production
+ClickHouse column snapshot now lives in ONE place,
+`internal/contextfabric/devhealthschema`, and every parity guard and
+fixture in both `devhealthsource` and `devhealthfacts` renders from it.
+
+That consolidation is not tidiness. The UInt32 scan defect CHAOS-3789
+fixed in `devhealthsource` survived in `devhealthfacts` reading the SAME
+column, because each package hand-wrote fixtures that agreed with its own
+reader's mistake -- a fixture cannot catch a fixture's own error. Two
+artifacts rendered from one declaration cannot disagree. The declaration
+also carries each table's production ENGINE, because the readers query the
+ReplacingMergeTree tables with FINAL and FINAL against a plain MergeTree is
+a query error, and column POSITION order, so a fixture is a positional
+replica of the real table.
+
+Extending that guard immediately found a second live instance the review
+had not reported: `source_health` scanned `items_synced` (UInt32) and
+`duration_ms` (UInt64) into `*int64`, which the driver also rejects. Both
+are now converted in SQL with `toInt64(...)`, the convention every other
+numeric projection in the package already used.
+
+Two smaller round-2 rules: reuse keys from the PRE-CLAMP wire context on
+both the lookup and the save side (keying the lookup off the clamped value
+made it drift with `now` and disagree with what was saved), and temporal
+grain is contributed by any provider whose FACTS WERE RETAINED, not only
+by `SourceAvailable` ones -- both derived from `factsRetained` so the
+retention and grain decisions cannot diverge again.

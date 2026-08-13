@@ -70,11 +70,29 @@ WHERE p.org_id = {org_id:String} AND concat(toString(p.repo_id), ':', toString(p
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var repoID string
-		var number int64
+		// git_pull_requests.number is UInt32 in production, and
+		// clickhouse-go's native driver REJECTS scanning a UInt32 column
+		// into an *int64 destination outright ("converting UInt32 to
+		// *int64 is unsupported"). Scanning it as int64 here meant every
+		// live pull-request row failed Scan, so this provider silently
+		// returned no pull-request facts at all.
+		//
+		// CHAOS-3789 fixed exactly this in devhealthsource
+		// (tables.go's queryPullRequests) but the same defect survived
+		// here, in a different package reading the same column -- and
+		// this package's fixtures modeled the column as int64 too, so
+		// the tests agreed with the bug. See the devhealthfacts schema
+		// parity guard, which now covers these readers for that reason.
+		//
+		// The int64 conversion happens immediately after Scan, once the
+		// value is safely in Go, so pullRequestKey and every downstream
+		// use are unchanged.
+		var rawNumber uint32
 		var state string
-		if err := row.Scan(&repoID, &number, &state); err != nil {
+		if err := row.Scan(&repoID, &rawNumber, &state); err != nil {
 			return err
 		}
+		number := int64(rawNumber)
 		key := pullRequestKey(repoID, number)
 		subject, ok := bySubject[key]
 		if !ok {

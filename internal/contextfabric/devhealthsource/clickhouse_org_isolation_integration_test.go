@@ -9,6 +9,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
@@ -102,33 +103,14 @@ func newDevHealthClickHouseIntegrationClient(t *testing.T, ctx context.Context) 
 // repos row per organization plus one work item that belongs to org-a.
 func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection clickhousedriver.Conn, at time.Time) {
 	t.Helper()
-	statements := []string{
-		// ORDER BY (org_id, id), not id alone: this test deliberately inserts
-		// two repos rows sharing one id across two organizations (the exact
-		// collision W1 guards against), and ReplacingMergeTree treats rows
-		// with an identical sorting key as versions of the same logical row --
-		// ORDER BY id alone would let ClickHouse collapse the two tenants'
-		// rows into one under FINAL, before the query under test even runs.
-		`CREATE TABLE repos (id String, org_id String, repo String, provider Nullable(String), last_synced DateTime64(6, 'UTC'), created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
-		// parent_id (CHAOS-3779, queryWorkItemHierarchy's PART_OF source)
-		// defaults to '' via the trailing column omitted from every INSERT
-		// below -- ClickHouse fills an un-listed String column with its
-		// type's zero value, matching the "no parent" real-world case this
-		// fixture doesn't otherwise need to exercise.
-		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC'), parent_id String DEFAULT '', created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC'), completed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, closed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY work_item_id`,
-		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number UInt32, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC'), created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC'), merged_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, closed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
-		`CREATE TABLE deployments (repo_id String, org_id String, deployment_id String, status Nullable(String), environment Nullable(String), deployed_at Nullable(DateTime64(6, 'UTC')), started_at Nullable(DateTime64(6, 'UTC')), last_synced DateTime64(6, 'UTC'), finished_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY deployment_id`,
-		`CREATE TABLE operational_incidents (id String, org_id String, service_id String, title Nullable(String), normalized_status Nullable(String), raw_status Nullable(String), normalized_severity Nullable(String), raw_severity Nullable(String), started_at Nullable(DateTime64(6, 'UTC')), source_event_at Nullable(DateTime64(6, 'UTC')), observed_at DateTime64(6, 'UTC'), is_deleted UInt8, resolved_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, deleted_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY id`,
-		`CREATE TABLE operational_service_repository_mappings (org_id String, service_id String, repo_id String, is_active UInt8) ENGINE = ReplacingMergeTree ORDER BY (org_id, service_id, repo_id)`,
-		`CREATE TABLE work_item_dependencies (source_work_item_id String, target_work_item_id String, relationship_type Nullable(String), org_id String, last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (source_work_item_id, target_work_item_id)`,
-		`CREATE TABLE work_graph_deployment_incident_edges (edge_id String, deployment_id String, incident_id String, repo_id String, org_id UUID, observed_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY edge_id`,
-		// org_id per testdata/fullstack/v1/README.md:96 (migration
-		// 027_add_org_id_to_sorting_keys.py) -- codex round-2 finding K1: the
-		// first version of this fixture omitted it here, matching the bug it
-		// was meant to catch.
-		`CREATE TABLE git_pull_request_reviews (review_id String, repo_id String, org_id String, number UInt32, state Nullable(String), submitted_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, review_id)`,
-		`CREATE TABLE ci_pipeline_runs (run_id String, repo_id String, org_id String, branch Nullable(String), status Nullable(String), started_at DateTime64(6, 'UTC'), finished_at Nullable(DateTime64(6, 'UTC'))) ENGINE = ReplacingMergeTree ORDER BY (org_id, run_id)`,
-	}
+	// Rendered from the SHARED production declaration rather than
+	// hand-written (CHAOS-3781 round-2 F4). These fixtures previously
+	// declared their own types -- DateTime64(6,'UTC') where production is
+	// mostly DateTime64(3), repo_id as String where production is UUID --
+	// so they proved organization isolation against a schema production
+	// does not have, and could not have caught the UInt32 drift that
+	// prompted the parity guard in the first place.
+	statements := devhealthschema.DDL(sourceSchemaTables...)
 	for _, statement := range statements {
 		if err := connection.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v", err)
@@ -276,35 +258,14 @@ const zeroRepoID = "00000000-0000-0000-0000-000000000000"
 // regardless of which producer or which JOIN kind reads it.
 func seedTwoTenantLinearWorkItems(t *testing.T, ctx context.Context, connection clickhousedriver.Conn, at time.Time) {
 	t.Helper()
-	statements := []string{
-		`CREATE TABLE repos (id String, org_id String, repo String, provider Nullable(String), last_synced DateTime64(6, 'UTC'), created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
-		// ORDER BY (org_id, work_item_id), not work_item_id alone (unlike this
-		// file's other CREATE TABLE work_items statements, which never seed a
-		// colliding work_item_id across organizations): this fixture
-		// deliberately reuses "REPO-1"/"LINEAR-1"/"LINEAR-2" for BOTH
-		// organizations, and production's real ORDER BY is (org_id, repo_id,
-		// work_item_id) -- verified via `SHOW CREATE TABLE work_items` against
-		// live ClickHouse. Without org_id in the sort key, ReplacingMergeTree
-		// would treat org-a's and org-b's same-named rows as versions of one
-		// logical row and FINAL would silently collapse them to one, before
-		// the query under test even runs -- the same class of self-inflicted
-		// collision seedTwoTenantRepoIDCollision's repos ORDER BY comment
-		// warns about.
-		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC'), parent_id String DEFAULT '', created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC'), completed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, closed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY (org_id, work_item_id)`,
-		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number UInt32, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC'), created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC'), merged_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, closed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
-		`CREATE TABLE deployments (repo_id String, org_id String, deployment_id String, status Nullable(String), environment Nullable(String), deployed_at Nullable(DateTime64(6, 'UTC')), started_at Nullable(DateTime64(6, 'UTC')), last_synced DateTime64(6, 'UTC'), finished_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY deployment_id`,
-		`CREATE TABLE operational_incidents (id String, org_id String, service_id String, title Nullable(String), normalized_status Nullable(String), raw_status Nullable(String), normalized_severity Nullable(String), raw_severity Nullable(String), started_at Nullable(DateTime64(6, 'UTC')), source_event_at Nullable(DateTime64(6, 'UTC')), observed_at DateTime64(6, 'UTC'), is_deleted UInt8, resolved_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, deleted_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY id`,
-		`CREATE TABLE operational_service_repository_mappings (org_id String, service_id String, repo_id String, is_active UInt8) ENGINE = ReplacingMergeTree ORDER BY (org_id, service_id, repo_id)`,
-		// ORDER BY (org_id, source_work_item_id, target_work_item_id): same
-		// reasoning as work_items above -- this fixture's org-a and org-b both
-		// insert a "LINEAR-1"->"LINEAR-2" dependency row, and production's key
-		// already includes org_id (migration 027_add_org_id_to_sorting_keys.py,
-		// testdata/fullstack/v1/README.md:96).
-		`CREATE TABLE work_item_dependencies (source_work_item_id String, target_work_item_id String, relationship_type Nullable(String), org_id String, last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, source_work_item_id, target_work_item_id)`,
-		`CREATE TABLE work_graph_deployment_incident_edges (edge_id String, deployment_id String, incident_id String, repo_id String, org_id UUID, observed_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY edge_id`,
-		`CREATE TABLE git_pull_request_reviews (review_id String, repo_id String, org_id String, number UInt32, state Nullable(String), submitted_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, review_id)`,
-		`CREATE TABLE ci_pipeline_runs (run_id String, repo_id String, org_id String, branch Nullable(String), status Nullable(String), started_at DateTime64(6, 'UTC'), finished_at Nullable(DateTime64(6, 'UTC'))) ENGINE = ReplacingMergeTree ORDER BY (org_id, run_id)`,
-	}
+	// Rendered from the SHARED production declaration rather than
+	// hand-written (CHAOS-3781 round-2 F4). These fixtures previously
+	// declared their own types -- DateTime64(6,'UTC') where production is
+	// mostly DateTime64(3), repo_id as String where production is UUID --
+	// so they proved organization isolation against a schema production
+	// does not have, and could not have caught the UInt32 drift that
+	// prompted the parity guard in the first place.
+	statements := devhealthschema.DDL(sourceSchemaTables...)
 	for _, statement := range statements {
 		if err := connection.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v", err)
@@ -459,18 +420,14 @@ func TestClickHouseProjectionSourceFiltersSelfReferentialParentID(t *testing.T) 
 	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
 
-	statements := []string{
-		`CREATE TABLE repos (id String, org_id String, repo String, provider Nullable(String), last_synced DateTime64(6, 'UTC'), created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, id)`,
-		`CREATE TABLE work_items (work_item_id String, repo_id String, org_id String, title Nullable(String), status Nullable(String), url Nullable(String), updated_at DateTime64(6, 'UTC'), parent_id String DEFAULT '', created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC'), completed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, closed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY work_item_id`,
-		`CREATE TABLE git_pull_requests (repo_id String, org_id String, number UInt32, title Nullable(String), state Nullable(String), last_synced DateTime64(6, 'UTC'), created_at DateTime64(6, 'UTC') DEFAULT toDateTime64(0, 6, 'UTC'), merged_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, closed_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY (org_id, repo_id, number)`,
-		`CREATE TABLE deployments (repo_id String, org_id String, deployment_id String, status Nullable(String), environment Nullable(String), deployed_at Nullable(DateTime64(6, 'UTC')), started_at Nullable(DateTime64(6, 'UTC')), last_synced DateTime64(6, 'UTC'), finished_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY deployment_id`,
-		`CREATE TABLE operational_incidents (id String, org_id String, service_id String, title Nullable(String), normalized_status Nullable(String), raw_status Nullable(String), normalized_severity Nullable(String), raw_severity Nullable(String), started_at Nullable(DateTime64(6, 'UTC')), source_event_at Nullable(DateTime64(6, 'UTC')), observed_at DateTime64(6, 'UTC'), is_deleted UInt8, resolved_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL, deleted_at Nullable(DateTime64(6, 'UTC')) DEFAULT NULL) ENGINE = ReplacingMergeTree ORDER BY id`,
-		`CREATE TABLE operational_service_repository_mappings (org_id String, service_id String, repo_id String, is_active UInt8) ENGINE = ReplacingMergeTree ORDER BY (org_id, service_id, repo_id)`,
-		`CREATE TABLE work_item_dependencies (source_work_item_id String, target_work_item_id String, relationship_type Nullable(String), org_id String, last_synced DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (source_work_item_id, target_work_item_id)`,
-		`CREATE TABLE work_graph_deployment_incident_edges (edge_id String, deployment_id String, incident_id String, repo_id String, org_id UUID, observed_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY edge_id`,
-		`CREATE TABLE git_pull_request_reviews (review_id String, repo_id String, org_id String, number UInt32, state Nullable(String), submitted_at DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree ORDER BY (org_id, review_id)`,
-		`CREATE TABLE ci_pipeline_runs (run_id String, repo_id String, org_id String, branch Nullable(String), status Nullable(String), started_at DateTime64(6, 'UTC'), finished_at Nullable(DateTime64(6, 'UTC'))) ENGINE = ReplacingMergeTree ORDER BY (org_id, run_id)`,
-	}
+	// Rendered from the SHARED production declaration rather than
+	// hand-written (CHAOS-3781 round-2 F4). These fixtures previously
+	// declared their own types -- DateTime64(6,'UTC') where production is
+	// mostly DateTime64(3), repo_id as String where production is UUID --
+	// so they proved organization isolation against a schema production
+	// does not have, and could not have caught the UInt32 drift that
+	// prompted the parity guard in the first place.
+	statements := devhealthschema.DDL(sourceSchemaTables...)
 	for _, statement := range statements {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v", err)

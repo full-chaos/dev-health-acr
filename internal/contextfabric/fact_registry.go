@@ -464,7 +464,17 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 	// F1: only a provider that actually CONTRIBUTED counts toward the
 	// composed grain. A degraded or empty provider reporting a grain
 	// would let a source that answered nothing coarsen the whole answer.
-	if result.State == SourceAvailable && len(result.Facts) > 0 {
+	//
+	// Round-2 F3: "contributing" means FACTS RETAINED, not
+	// State == SourceAvailable. The narrower test silently dropped the
+	// grain of a truncated or stale provider whose facts this bundle
+	// KEPT -- so a mix of an instant-grain provider and a truncated
+	// day-grain one composed to instant, overstating the answer's
+	// precision on exactly the data it was built from.
+	//
+	// factsRetained is the same predicate the retention branch above
+	// uses, called from one place so the two cannot drift apart again.
+	if factsRetained(result.State, len(result.Facts)) {
 		bundle.TemporalGrain = coarsestGrain(bundle.TemporalGrain, result.Grain)
 	}
 	return nil
@@ -692,6 +702,15 @@ func factKindOrder(kind FactKind) int {
 // stateRejectsFacts lists the states that cannot coexist with facts.
 // SourcePruned joins them (CHAOS-3783): the provider was never called, so a
 // fact attributed to a pruned capability would have no origin at all.
+// factsRetained reports whether this provider's facts actually reached the
+// bundle -- the single definition of "contributed", shared by the
+// fact-retention check and the temporal-grain composition so a state that
+// keeps facts can never be one that skips reporting its grain (round-2
+// F3). A provider that returned no facts contributes nothing either way.
+func factsRetained(state SourceState, factCount int) bool {
+	return factCount > 0 && !stateRejectsFacts(state)
+}
+
 func stateRejectsFacts(state SourceState) bool {
 	switch state {
 	case SourceUnavailable, SourceUnconfigured, SourceUnauthorized, SourceNoData, SourceConflicted, SourceNotApplicable, SourcePruned:

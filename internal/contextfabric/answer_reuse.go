@@ -228,7 +228,7 @@ const (
 // condition-6 authorization recheck here) -- Investigate always falls
 // through to a fresh investigation in that case; ok=false is never an
 // error.
-func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, request InvestigationRequest) (InvestigationResult, bool) {
+func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, request InvestigationRequest, wireTimeContext TimeContext) (InvestigationResult, bool) {
 	if e.reuseGate == nil {
 		return InvestigationResult{}, false
 	}
@@ -260,9 +260,16 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		}
 		modelIdentities = resolved
 	}
-	// CHAOS-3781: the axis key comes from the WIRE request. tryReuse runs
-	// BEFORE Interpret -- the whole mechanism behind AC-3782-1's
-	// zero-model-call guarantee -- so no interpreted axis exists here yet.
+	// CHAOS-3781: the axis key comes from the WIRE request, and from the
+	// PRE-CLAMP value specifically (round-2 F2) -- it is passed in rather
+	// than read off request.TimeContext, which by this point holds the
+	// clamped instant. Keying on the clamped value made the key drift
+	// with `now` and disagree with the save side, so a request inside the
+	// skew tolerance could never reuse its own earlier answer.
+	//
+	// tryReuse runs BEFORE Interpret -- the whole mechanism behind
+	// AC-3782-1's zero-model-call guarantee -- so no interpreted axis
+	// exists here yet.
 	//
 	// Round-1 F6 made this symmetric: Save keys the same way, from the
 	// same wire context, rather than from the interpreted result. The two
@@ -276,7 +283,7 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 	// Interpretation is still proved to match before anything is served:
 	// condition 6 re-resolves every subject against the candidate's own
 	// stored Interpretation.
-	timeAxisKey := TimeAxisKeyFor(request.TimeContext)
+	timeAxisKey := TimeAxisKeyFor(wireTimeContext)
 	if timeAxisKey == "" {
 		// A historical context missing its own required bounds. Fail
 		// closed rather than key it as anything -- see TimeAxisKeyFor.
