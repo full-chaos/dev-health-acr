@@ -120,7 +120,7 @@ func TestReuseKeyDistinguishesHistoricalFromCurrent(t *testing.T) {
 	require.False(t, found, "a current-state answer was served for a historical question")
 
 	// The current question still reuses its own answer -- the backfilled
-	// 'current' default in migration 0012 is what makes this hold for
+	// 'current' default in migration 0013 is what makes this hold for
 	// every row written before that migration.
 	currentKey := reuseKeyFor(currentResult)
 	reused, found, err := store.FindReusable(ctx, principal, currentKey)

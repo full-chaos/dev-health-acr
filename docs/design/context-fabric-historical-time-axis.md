@@ -356,7 +356,7 @@ Nanoseconds, not a formatted string: the same instant must produce the same key 
 this matches the `_ns` convention AC-3781-7 requires everywhere else.
 
 Storage: additive column `time_axis_key TEXT NOT NULL DEFAULT 'current'` on the reuse lookup table,
-included in the lookup predicate and its unique index (migration `0012`). The default backfills
+included in the lookup predicate and its unique index (migration `0013` -- see §9). The default backfills
 every existing row correctly, because every stored row today *is* a current-axis answer.
 
 **Conditions 1–7 are otherwise unchanged, deliberately.** A reviewer will expect the argument that a
@@ -440,7 +440,7 @@ change?
    derivations (pending C); Tier C `not_applicable`; per-provider tests (AC-3781-5).
 5. `engine.go`: `validateTimeContext` replacing `requireCurrentTimeAxis` at both check points;
    as-of binding; temporal label composition; AC-3781-3 not-applicable subject state.
-6. `answer_reuse.go` + `pginvestigation` + migration `0012`: `TimeAxisKey` (pending F).
+6. `answer_reuse.go` + `pginvestigation` + migration `0013`: `TimeAxisKey` (pending F).
 7. Route refusal removal (pending E).
 8. Acceptance tests AC-3781-1..7; docs (`docs/design/`, `docs/operations.md` rebuild note,
    `internal/contextfabric/AGENTS.md`, root `AGENTS.md`).
@@ -460,7 +460,7 @@ All six decisions in §7 were approved as recommended:
 | C | Tier B derived-state providers | **In.** |
 | D | Additive `ContextFabricTemporalLabel` | **Yes.** |
 | E | Route refusal removed in this changeset | **Option (i).** lane-3746 merges last and rebases over it. |
-| F | Reuse-key sequencing with lane-3786 | **Sequential.** 3786 lands first; `TimeAxisKey` + migration `0012` rebase over it. |
+| F | Reuse-key sequencing with lane-3786 | **Sequential.** 3786 lands first and now carries migration `0012` (its reuse-epoch cutover), so `TimeAxisKey` is migration `0013` and rebases over it. |
 
 ### Deltas from the proposal
 
@@ -494,6 +494,25 @@ These are places the implementation is deliberately different from §1-§6.
 7. **Range grain narrows at both ends.** The effective start moves forward
    and the end backward, so the effective window always sits inside the
    requested one — the direction the contract validates.
+
+### Migration numbering and the CHAOS-3786 rebase
+
+`TimeAxisKey`'s migration is **0013**, not 0012 as §5 originally proposed:
+CHAOS-3786 now carries 0012 (its one-time reuse-epoch cutover) and merges
+first.
+
+Until that merge reaches this branch, this worktree's applied set is
+`{1..11, 13}` -- twelve migrations with a deliberate gap at 12. That
+applies cleanly and leaves the branch green standalone, because
+`migrations/postgres/runner.go` sorts by version and rejects only
+duplicate versions; it does not require contiguity (checked before
+renaming, not assumed).
+
+The head-pin assertions are centralized in one `expectedMigrationVersions`
+var (`migrations/postgres/runner_integration_test.go`) rather than
+repeated across five assertions, so the rebase is a single-line edit to
+the contiguous `{1..13}`. `cmd/acr-migrate/cli_test.go` asserts a COUNT
+(12 now, 13 after) and carries the same note.
 
 ### Evidence
 

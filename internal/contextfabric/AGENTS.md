@@ -103,7 +103,7 @@ Three things make a historical answer honest rather than merely possible:
   not something a model may assert. Effective time only ever narrows, and
   the result contract refuses a non-current axis carrying no label.
 
-`ReuseKey` gained a fifth dimension, `TimeAxisKey` (migration `0012`).
+`ReuseKey` gained a fifth dimension, `TimeAxisKey` (migration `0013`).
 Without it the same question text at two as-of times shares one key and a
 June answer is served for a March question. The current axis maps to a
 FIXED literal -- a wall-clock-derived key would make every current-axis key
