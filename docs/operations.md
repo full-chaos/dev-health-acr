@@ -406,9 +406,36 @@ completeness*:
 
 Reporting data gaps through this marker would make it fire on essentially every
 answer during any backlog, which would train readers to ignore it — and a
-partial-coverage signal that is always on carries no information. Operators
-track re-embedding backlog through the projection worker's own lag and the
-degradation telemetry, not through per-answer coverage.
+partial-coverage signal that is always on carries no information.
+
+### Observing vector retrieval
+
+Everything listed here is wired and emitted. Nothing else about vector
+retrieval is currently observable — if a signal is not in this table, it does
+not exist.
+
+All signals go through `log/slog` (`falkorgraph.SlogTelemetry`, supplied by both
+`acr-api` and `acr-projector`). They carry organization IDs, counts, and
+durations only — never text, vectors, model output, or provider response bodies.
+
+| Signal | Level | Emitted when | What it tells you |
+| --- | --- | --- | --- |
+| `context_fabric: vector retrieval unavailable for a request` | WARN | A query could not run the vector mechanism (embed failure/timeout, wrong serving model, fence mismatch) | The read path degraded to lexical for that request. Sustained = the embedder or the fence needs attention. |
+| `context_fabric: projection batch cleared stale vectors` | WARN | A projection batch cleared vectors it had invalidated (`embedded`, `cleared` counts) | **This is the mass-clear signal.** A sustained nonzero `cleared` count means a growing fraction of the corpus is vectorless. |
+| `context_fabric: projection batch embedded nodes` | DEBUG | Every healthy batch (`embedded`, `cleared` counts) | Steady-state progress; raise to DEBUG to measure re-embedding throughput. |
+| `context_fabric: projection tick failed; checkpoint held for replay` | ERROR | A projection tick failed, including one that failed to keep vector state reconcilable | The checkpoint is deliberately held. Sustained = an organization is stalled and not making progress. |
+| `context_fabric: observation traversal degraded` | WARN | Observation-to-entity traversal failed for some candidates | Unrelated to vectors; listed because it shares the sink. |
+
+**Known limitation — no backlog ratio.** These signals report *events*, not a
+*proportion*. Summing `cleared` against `embedded` over time approximates how
+much of a corpus is vectorless, but nothing computes "N% of this organization's
+nodes currently have no vector" or raises an alert when that fraction makes
+vector retrieval effectively useless. Concretely: after a mass clear followed by
+embedder recovery, queries succeed over the *remaining* vectorized nodes and
+correctly report no mechanism degradation, while the missing fraction is visible
+only by reading the accumulated `cleared` counts. That detector is deliberately
+out of scope for CHAOS-3778 and is filed as follow-up work; until it exists,
+watch the `cleared` counts and the projection tick failures.
 
 **Degradation is expected and safe.** An embedder that is unreachable, cold, or
 slow degrades the request to lexical-only rather than failing it; a cold local

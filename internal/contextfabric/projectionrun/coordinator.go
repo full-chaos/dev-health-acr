@@ -41,6 +41,37 @@ type noopObserver struct{}
 
 func (noopObserver) ObserveProjectionOutcome(Outcome) {}
 
+// SlogObserver logs every tick outcome through log/slog (codex round-3 F2).
+//
+// The projector previously defaulted to noopObserver and no production
+// construction supplied anything else, so a projection tick that failed --
+// including one failing because vector state could not be reconciled (R2-3,
+// round-3 F1) -- produced no operational signal at all. A failing tick that
+// holds its checkpoint is the correct behavior, but it is only SAFE behavior
+// if someone can see it happening; otherwise a stalled organization is
+// indistinguishable from an idle one.
+//
+// Content-safe by the same rule Observer documents: counts, IDs, durations,
+// and error text only.
+type SlogObserver struct{ Logger *slog.Logger }
+
+func (o SlogObserver) ObserveProjectionOutcome(outcome Outcome) {
+	logger := o.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	attrs := []any{
+		"org_id", outcome.OrgID, "source", outcome.Source,
+		"duration_ms", outcome.Duration.Milliseconds(),
+	}
+	if outcome.Err != nil {
+		logger.Error("context_fabric: projection tick failed; checkpoint held for replay",
+			append(attrs, "error", outcome.Err.Error())...)
+		return
+	}
+	logger.Debug("context_fabric: projection tick completed", attrs...)
+}
+
 // RebuildMarker enforces the CHAOS-3753 codex finding C2 invariant: no code
 // path may run incremental projection against a purged-but-not-reset
 // graph. PurgeOrganization and resetting every source's checkpoint are two

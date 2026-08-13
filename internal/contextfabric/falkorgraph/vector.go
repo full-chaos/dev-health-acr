@@ -313,17 +313,17 @@ func (a *Adapter) recordVectorDegraded(ctx context.Context, orgID string) {
 	if a.config.Telemetry == nil {
 		return
 	}
-	if recorder, ok := a.config.Telemetry.(VectorTelemetry); ok {
-		recorder.RecordVectorRetrievalDegraded(ctx, orgID)
-	}
+	a.config.Telemetry.RecordVectorRetrievalDegraded(ctx, orgID)
 }
 
-// VectorTelemetry is an OPTIONAL extension of GraphTelemetry. An
-// implementation that does not satisfy it simply records nothing, so adding
-// vector retrieval does not force every existing telemetry implementation to
-// change. Kept separate from GraphTelemetry for exactly that reason.
-type VectorTelemetry interface {
-	RecordVectorRetrievalDegraded(ctx context.Context, orgID string)
+// recordVectorProjection reports one batch's vector outcome (codex round-3
+// F2). Called on EVERY embedding path -- success, clear, and skip -- so the
+// cleared count is a complete accounting rather than a best-effort one.
+func (a *Adapter) recordVectorProjection(ctx context.Context, orgID string, embedded, cleared int) {
+	if a.config.Telemetry == nil {
+		return
+	}
+	a.config.Telemetry.RecordVectorProjection(ctx, orgID, embedded, cleared)
 }
 
 // EmbedderFromEnv builds the optional vector-retrieval dependencies from the

@@ -23,6 +23,7 @@ package falkorgraph
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -75,10 +76,82 @@ type Config struct {
 	Telemetry GraphTelemetry
 }
 
-// GraphTelemetry mirrors zepgraph.GraphTelemetry's contract exactly, so a
-// single telemetry implementation serves either backend.
+// GraphTelemetry is the graph adapter's operational signal sink.
+//
+// Codex round-3 F2: the vector signals are METHODS ON THIS INTERFACE, not an
+// optional extension discovered by type assertion. The earlier design put them
+// behind an optional `VectorTelemetry` interface so that "adding vector
+// retrieval does not force every existing telemetry implementation to change"
+// -- which sounded considerate and was the exact mechanism by which the
+// signals ended up unwired: an optional extension that nothing implements is
+// indistinguishable, at runtime, from no telemetry at all, while still reading
+// like an instrumented system. Documentation then claimed operators could
+// detect a re-embedding backlog through a signal that was never emitted, which
+// is the measurement layer failing toward "fine".
+//
+// A required method cannot be silently skipped. NoopTelemetry exists for
+// callers that genuinely want no signals, so declining is explicit.
 type GraphTelemetry interface {
 	RecordObservationTraversalDegraded(ctx context.Context, orgID string, count int)
+	// RecordVectorRetrievalDegraded fires when a query could not run the
+	// vector mechanism at all -- an embed failure or timeout, a wrong serving
+	// model, or a fence mismatch.
+	RecordVectorRetrievalDegraded(ctx context.Context, orgID string)
+	// RecordVectorProjection reports one projection batch's vector outcome:
+	// how many nodes were embedded and how many had a stale vector CLEARED.
+	//
+	// The cleared count is the signal that makes a mass clear visible. A
+	// prolonged embedder outage shows up here as a sustained nonzero cleared
+	// count long before anything else notices, and the running total against
+	// the organization's node count is what tells an operator how much of the
+	// corpus is currently vectorless.
+	RecordVectorProjection(ctx context.Context, orgID string, embedded, cleared int)
+}
+
+// NoopTelemetry discards every signal. Callers that want no telemetry pass
+// this explicitly rather than leaving Config.Telemetry nil, so "no signals" is
+// a decision in the source rather than an omission.
+type NoopTelemetry struct{}
+
+func (NoopTelemetry) RecordObservationTraversalDegraded(context.Context, string, int) {}
+func (NoopTelemetry) RecordVectorRetrievalDegraded(context.Context, string)           {}
+func (NoopTelemetry) RecordVectorProjection(context.Context, string, int, int)        {}
+
+// SlogTelemetry is the production GraphTelemetry: structured operational logs
+// through log/slog, the repository's standard.
+//
+// It logs organization IDs (an internal identifier, not a credential, evidence
+// body, or request payload) because "which organization" is the first question
+// every one of these signals raises. It logs no text, no vectors, no model
+// output, and no provider response content.
+type SlogTelemetry struct{ Logger *slog.Logger }
+
+func (t SlogTelemetry) logger() *slog.Logger {
+	if t.Logger != nil {
+		return t.Logger
+	}
+	return slog.Default()
+}
+
+func (t SlogTelemetry) RecordObservationTraversalDegraded(_ context.Context, orgID string, count int) {
+	t.logger().Warn("context_fabric: observation traversal degraded", "org_id", orgID, "count", count)
+}
+
+func (t SlogTelemetry) RecordVectorRetrievalDegraded(_ context.Context, orgID string) {
+	t.logger().Warn("context_fabric: vector retrieval unavailable for a request", "org_id", orgID)
+}
+
+// RecordVectorProjection logs at Warn when anything was cleared -- a cleared
+// vector means a node just became invisible to vector search -- and at Debug
+// otherwise, so steady-state projection does not generate noise.
+func (t SlogTelemetry) RecordVectorProjection(_ context.Context, orgID string, embedded, cleared int) {
+	if cleared > 0 {
+		t.logger().Warn("context_fabric: projection batch cleared stale vectors",
+			"org_id", orgID, "embedded", embedded, "cleared", cleared)
+		return
+	}
+	t.logger().Debug("context_fabric: projection batch embedded nodes",
+		"org_id", orgID, "embedded", embedded, "cleared", cleared)
 }
 
 func (c Config) validate() error {

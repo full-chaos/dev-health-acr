@@ -194,6 +194,10 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("load context fabric graph configuration: %w", err)
 	}
+	// Codex round-3 F2: supply a real telemetry sink. Left nil, every graph
+	// signal -- including the per-request vector-degradation signal -- was
+	// discarded, while documentation claimed operators could observe it.
+	graphConfig.Telemetry = falkorgraph.SlogTelemetry{}
 	// CHAOS-3778: vector retrieval is optional. An unconfigured embedder
 	// leaves the lexical retrieval path exactly as it was.
 	embedderOptions, err := falkorgraph.EmbedderFromEnv(os.LookupEnv)

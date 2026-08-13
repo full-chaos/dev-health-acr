@@ -2,13 +2,22 @@ package falkorgraph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 )
+
+// errVectorIndexNotReady reports that the organization's vector index exists
+// but is not in a state this batch can reason about (still building, or
+// reporting a status this adapter does not recognize). It is a REPLAYABLE
+// condition: the batch fails, the checkpoint holds, and the next tick tries
+// again once the index settles.
+var errVectorIndexNotReady = errors.New("context fabric vector index is not ready for embedding")
 
 // embedTarget is one node whose search text needs a vector.
 type embedTarget struct {
@@ -100,11 +109,52 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		return nil
 	}
 	// Codex round-2 R2-1: the write side re-verifies the index every batch
-	// rather than trusting anything bootstrap cached. A mismatched or unknown
-	// index means this batch writes no vectors at all.
-	usable, err := a.vectorIndexUsable(ctx, key)
-	if err != nil || !usable {
+	// rather than trusting anything bootstrap cached.
+	//
+	// Codex round-3 F1: what happens when that verification FAILS is the
+	// failed-VERIFY door into the room R2-3 closed by the failed-CLEAR door.
+	// The earlier form degraded and returned nil, so ApplyProjectionBatch went
+	// on to write the watermark -- with the batch's NEW search_text durably
+	// stored and the OLD vector still attached, still carrying the CONFIGURED
+	// identity. Once the transient condition cleared, the read fence found
+	// nothing wrong (the identity matches!) and served that stale vector
+	// against text it was never derived from. Permanently, because the
+	// checkpoint had advanced and nothing replays.
+	//
+	// The invariant, stated once: a batch may only commit when the stored
+	// vector state is CONSISTENT with the text it just wrote -- every affected
+	// node either re-embedded or cleared. Anything else fails the batch, so
+	// the checkpoint holds and the next tick reconciles.
+	dimension, state, err := a.vectorIndexDimension(ctx, key)
+	switch {
+	case err != nil:
+		// Transient: the probe itself failed, so nothing is known about the
+		// index and clearing cannot be reasoned about either. Replay.
 		a.recordVectorDegraded(ctx, batch.OrgID)
+		return fmt.Errorf("verify vector index before embedding: %w", err)
+	case state == vectorIndexUnknown, state == vectorIndexAbsent:
+		// UNDER CONSTRUCTION, an undecodable status, or an index that has
+		// vanished. All are expected to resolve on their own -- bootstrap
+		// creates and waits for the index -- so replay rather than commit
+		// against an index this batch could not reason about.
+		a.recordVectorDegraded(ctx, batch.OrgID)
+		return errVectorIndexNotReady
+	case dimension != a.embedder.Identity().Dimension:
+		// The one PERSISTENT failure that operator action must clear
+		// (AC-3778-7). Failing every batch forever would stall canonical
+		// projection entirely over an optional retrieval feature, which is a
+		// worse outcome than degraded retrieval. So instead of replaying, the
+		// batch makes its own vector state honest -- clears the vectors it
+		// just invalidated -- and commits. Reads are already fenced off by the
+		// same dimension mismatch, so nothing can serve them in the meantime.
+		//
+		// If that clear fails, R2-3 applies and the batch fails.
+		a.recordVectorDegraded(ctx, batch.OrgID)
+		stale := collectEmbedTargets(batch, embedMaxRunes(a.embedder))
+		if err := a.clearNodeVectors(ctx, key, batch.OrgID, stale); err != nil {
+			return err
+		}
+		a.recordVectorProjection(ctx, batch.OrgID, 0, len(stale))
 		return nil
 	}
 	identity := a.embedder.Identity()
@@ -129,7 +179,11 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		// So the vector is CLEARED instead. A node with no vector degrades
 		// honestly to lexical retrieval; a node with a stale vector lies.
 		a.recordVectorDegraded(ctx, batch.OrgID)
-		return a.clearNodeVectors(ctx, key, batch.OrgID, targets)
+		if err := a.clearNodeVectors(ctx, key, batch.OrgID, targets); err != nil {
+			return err
+		}
+		a.recordVectorProjection(ctx, batch.OrgID, 0, len(targets))
+		return nil
 	}
 	for index, target := range targets {
 		if err := a.writeNodeVector(ctx, key, batch.OrgID, target, vectors[index], identity); err != nil {
@@ -137,9 +191,14 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 			// vectors and are fine; this one and everything after it still
 			// carry yesterday's, so clear exactly those.
 			a.recordVectorDegraded(ctx, batch.OrgID)
-			return a.clearNodeVectors(ctx, key, batch.OrgID, targets[index:])
+			if clearErr := a.clearNodeVectors(ctx, key, batch.OrgID, targets[index:]); clearErr != nil {
+				return clearErr
+			}
+			a.recordVectorProjection(ctx, batch.OrgID, index, len(targets)-index)
+			return nil
 		}
 	}
+	a.recordVectorProjection(ctx, batch.OrgID, len(targets), 0)
 	return nil
 }
 
@@ -273,7 +332,18 @@ func (a *Adapter) ensureVectorIndex(ctx context.Context, key string) error {
 		return err
 	}
 	if state == vectorIndexAbsent {
-		return a.createVectorIndex(ctx, key, want)
+		if err := a.createVectorIndex(ctx, key, want); err != nil {
+			return err
+		}
+		// Codex round-3 (bootstrap gap): wait for it, exactly as bootstrap
+		// already waits for constraints. Index creation is asynchronous, so
+		// without this the very first batch after bootstrap could find the
+		// index UNDER CONSTRUCTION, skip embedding, and -- before F1 -- still
+		// advance its watermark past nodes that were never embedded. F1 now
+		// fails that batch rather than committing it, but making the first
+		// batch FAIL on a condition bootstrap could simply have waited out
+		// would be a self-inflicted stall.
+		return a.pollVectorIndexOperational(ctx, key)
 	}
 	// An index that exists but is unknown or mismatched is NOT created and NOT
 	// repaired here. Whether it may be used is decided fresh at each read and
@@ -281,6 +351,34 @@ func (a *Adapter) ensureVectorIndex(ctx context.Context, key string) error {
 	// cached.
 	_ = existing
 	return nil
+}
+
+// pollVectorIndexOperational waits for the vector index to become usable,
+// mirroring pollConstraintsOperational's contract and bound.
+//
+// Same strict-allowlist posture: only a KNOWN, readable dimension counts as
+// ready. An unknown state keeps polling until the deadline rather than being
+// accepted, because "I could not read it" must never resolve to "it is fine"
+// (the F5 lesson).
+func (a *Adapter) pollVectorIndexOperational(ctx context.Context, key string) error {
+	deadline := a.now().Add(a.config.RequestTimeout)
+	for {
+		_, state, err := a.vectorIndexDimension(ctx, key)
+		if err != nil {
+			return err
+		}
+		if state == vectorIndexKnown {
+			return nil
+		}
+		if a.now().After(deadline) {
+			return fmt.Errorf("%w: vector index did not become operational for key %q", errVectorIndexNotReady, key)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
 }
 
 // vectorIndexUsable reports whether this organization's vector index exists,

@@ -977,3 +977,299 @@ func TestR2_3_ApplyProjectionBatchDoesNotWriteTheWatermarkOnUnreconciledVectors(
 		t.Fatal("the watermark must not be written for a batch whose vector state is unreconciled")
 	}
 }
+
+// recordingTelemetry captures every graph signal so a test can assert what an
+// operator would actually see.
+type recordingTelemetry struct {
+	degraded    int
+	embedded    int
+	cleared     int
+	projections int
+}
+
+func (r *recordingTelemetry) RecordObservationTraversalDegraded(context.Context, string, int) {}
+func (r *recordingTelemetry) RecordVectorRetrievalDegraded(context.Context, string) {
+	r.degraded++
+}
+func (r *recordingTelemetry) RecordVectorProjection(_ context.Context, _ string, embedded, cleared int) {
+	r.projections++
+	r.embedded += embedded
+	r.cleared += cleared
+}
+
+func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {
+	t.Helper()
+	adapter, err := newWithAPI(Config{
+		Addr: "fake:6379", GraphPrefix: "acr-cf-fake", RequestTimeout: time.Second,
+		MaxAttempts: 1, MaxResults: 25, PoolSize: 1, AllowInsecure: true, Telemetry: telemetry,
+	}, fake)
+	if err != nil {
+		t.Fatalf("newWithAPI: %v", err)
+	}
+	adapter.attachEmbedder(EmbedderOptions{Embedder: embedder, SimilarityFloor: 0.55})
+	return adapter
+}
+
+func vectorProbeBatch(orgID string) contextfabric.ProjectionBatch {
+	observed := time.Now().UTC()
+	return contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_r3_00000001", OrgID: orgID,
+		Source: "round3-test", SourceVersion: "v1", Cursor: "c1", NextCursor: "c2", GeneratedAt: observed,
+		Entities: []contextfabric.EntityProjection{{
+			Subject: contextfabric.SubjectRef{
+				Kind: contextfabric.SubjectProject, CanonicalID: "p1", Label: "Authentication Service",
+			},
+			Authorization:  contextfabric.AuthorizationScope{RepositorySlugs: []string{"full-chaos/dev-health-acr"}},
+			EvidenceRefIDs: []string{"evidence_vector_1234"}, ObservedAt: observed, SourceVersion: "v1",
+		}},
+		Relationships: []contextfabric.RelationshipProjection{}, Contents: []contextfabric.ContentProjection{},
+		Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+}
+
+// Codex round-3 F1, RED->GREEN: an index-verification failure is the
+// failed-VERIFY door into the room R2-3 closed via failed-CLEAR. The batch
+// wrote new search_text; if verification fails and the batch commits, the OLD
+// vector stays attached, still carrying the CONFIGURED identity, so once the
+// transient condition clears the read fence sees nothing wrong and serves it
+// against text it was never derived from -- permanently, because the
+// checkpoint advanced.
+func TestR3_F1_IndexProbeFailureFailsTheBatchBeforeTheWatermark(t *testing.T) {
+	cases := []struct {
+		name    string
+		indexes func(ctx context.Context, key string) ([]indexStatus, error)
+	}{
+		{"probe errors", func(context.Context, string) ([]indexStatus, error) {
+			return nil, errors.New("transient GRAPH.QUERY failure")
+		}},
+		{"index still under construction", func(context.Context, string) ([]indexStatus, error) {
+			return []indexStatus{{
+				Label: labelSubject, EntityType: "NODE", Status: "UNDER CONSTRUCTION",
+				Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+				Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(8)}},
+			}}, nil
+		}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			watermarkWritten := false
+			embeddingWritten := false
+			fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+				switch {
+				case strings.Contains(cypher, labelWatermark):
+					watermarkWritten = true
+				case strings.Contains(cypher, "vecf32($vec)"):
+					embeddingWritten = true
+				}
+				return nil, nil
+			}}
+			fake.indexesFunc = testCase.indexes
+			fake.constraintsFunc = func(context.Context, string) ([]constraintStatus, error) {
+				return []constraintStatus{{Status: "OPERATIONAL", Label: labelSubject, EntityType: "NODE"}}, nil
+			}
+			adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+
+			if _, err := adapter.ApplyProjectionBatch(context.Background(), vectorProbeBatch("org")); err == nil {
+				t.Fatal("a batch that cannot verify the vector index must fail, not commit")
+			}
+			if watermarkWritten {
+				t.Fatal("the watermark must not advance past a batch whose vector state is unverified")
+			}
+			if embeddingWritten {
+				t.Fatal("no embedding may be written against an unverified index")
+			}
+		})
+	}
+}
+
+// The replay half: once the index becomes readable, the same batch reconciles
+// and commits. A failing batch that could never succeed would be a stall, not
+// containment.
+func TestR3_F1_BatchReconcilesOnReplayOnceTheIndexIsReady(t *testing.T) {
+	ready := false
+	watermarkWritten := false
+	embeddingWritten := false
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, labelWatermark):
+			watermarkWritten = true
+		case strings.Contains(cypher, "vecf32($vec)"):
+			embeddingWritten = true
+		}
+		return nil, nil
+	}}
+	fake.indexesFunc = func(context.Context, string) ([]indexStatus, error) {
+		if !ready {
+			return []indexStatus{{
+				Label: labelSubject, EntityType: "NODE", Status: "UNDER CONSTRUCTION",
+				Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+				Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(8)}},
+			}}, nil
+		}
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	fake.constraintsFunc = func(context.Context, string) ([]constraintStatus, error) {
+		return []constraintStatus{{Status: "OPERATIONAL", Label: labelSubject, EntityType: "NODE"}}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), vectorProbeBatch("org")); err == nil {
+		t.Fatal("RED case is not red: the first attempt was expected to fail")
+	}
+	if watermarkWritten {
+		t.Fatal("the first attempt must not advance the watermark")
+	}
+
+	ready = true
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), vectorProbeBatch("org")); err != nil {
+		t.Fatalf("the replayed batch must reconcile and commit: %v", err)
+	}
+	if !embeddingWritten {
+		t.Fatal("the replayed batch must embed the node it previously could not")
+	}
+	if !watermarkWritten {
+		t.Fatal("the replayed batch must advance the watermark")
+	}
+}
+
+// A PERSISTENT dimension mismatch is the one verification failure that must
+// NOT replay forever: it needs operator action, and stalling canonical
+// projection indefinitely over an optional retrieval feature is worse than
+// degraded retrieval. The batch makes its own vector state honest -- clears --
+// and commits.
+func TestR3_F1_PersistentDimensionMismatchClearsAndCommitsRatherThanStalling(t *testing.T) {
+	watermarkWritten := false
+	cleared := false
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, labelWatermark):
+			watermarkWritten = true
+		case strings.Contains(cypher, "SET n."+propEmbedding+" = NULL"):
+			cleared = true
+		}
+		return nil, nil
+	}}
+	// Index built at 4; embedder now produces 8.
+	fake.indexesFunc = func(context.Context, string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(4)}, nil
+	}
+	fake.constraintsFunc = func(context.Context, string) ([]constraintStatus, error) {
+		return []constraintStatus{{Status: "OPERATIONAL", Label: labelSubject, EntityType: "NODE"}}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), vectorProbeBatch("org")); err != nil {
+		t.Fatalf("a persistent dimension mismatch must not stall projection: %v", err)
+	}
+	if !cleared {
+		t.Fatal("the batch must clear the vectors it just invalidated")
+	}
+	if !watermarkWritten {
+		t.Fatal("a batch whose vector state IS consistent (cleared) may commit")
+	}
+}
+
+// Codex round-3 F2, RED->GREEN: the vector signals are required methods and
+// production supplies a real sink, so a mass clear is visible.
+func TestR3_F2_VectorSignalsReachTelemetry(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	fake := &fakeConn{}
+	fake.indexesFunc = func(context.Context, string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	adapter := vectorAdapterWithTelemetry(t, fake, &stubEmbedder{vector: make([]float32, 8)}, telemetry)
+
+	if err := adapter.embedProjectionBatch(context.Background(), "k", vectorProbeBatch("org")); err != nil {
+		t.Fatalf("embedProjectionBatch: %v", err)
+	}
+	if telemetry.projections != 1 || telemetry.embedded != 1 || telemetry.cleared != 0 {
+		t.Fatalf("a healthy batch must report its embedded count: %#v", telemetry)
+	}
+
+	// Now an embed failure that clears -- the mass-clear signal.
+	clearing := vectorAdapterWithTelemetry(t, fake,
+		&stubEmbedder{vector: make([]float32, 8), err: errors.New("embedder down")}, telemetry)
+	if err := clearing.embedProjectionBatch(context.Background(), "k", vectorProbeBatch("org")); err != nil {
+		t.Fatalf("embedProjectionBatch: %v", err)
+	}
+	if telemetry.cleared != 1 {
+		t.Fatalf("a cleared vector must be counted so a mass clear is visible: %#v", telemetry)
+	}
+	if telemetry.degraded == 0 {
+		t.Fatal("the degradation signal must reach telemetry")
+	}
+}
+
+// The interface must not be satisfiable by accident: a type missing the vector
+// methods is not a GraphTelemetry. This is what makes "unwired" a compile
+// error rather than a silent no-op.
+func TestR3_F2_VectorSignalsAreRequiredNotAnOptionalExtension(t *testing.T) {
+	var _ GraphTelemetry = NoopTelemetry{}
+	var _ GraphTelemetry = SlogTelemetry{}
+	var _ GraphTelemetry = &recordingTelemetry{}
+}
+
+// Codex round-3 bootstrap gap, RED->GREEN: bootstrap waited for constraints
+// but not for the VECTOR index, so the first batch after bootstrap could find
+// it still building. F1 now fails such a batch rather than committing it, but
+// bootstrap failing to wait would turn a condition it could simply have waited
+// out into a self-inflicted first-batch failure.
+func TestR3_BootstrapWaitsForVectorIndexReadiness(t *testing.T) {
+	polls := 0
+	fake := &fakeConn{}
+	fake.constraintsFunc = func(context.Context, string) ([]constraintStatus, error) {
+		return []constraintStatus{{Status: "OPERATIONAL", Label: labelSubject, EntityType: "NODE"}}, nil
+	}
+	fake.indexesFunc = func(context.Context, string) ([]indexStatus, error) {
+		polls++
+		if polls < 3 {
+			// Absent on the first look (so bootstrap creates it), then
+			// building, then ready.
+			if polls == 1 {
+				return nil, nil
+			}
+			return []indexStatus{{
+				Label: labelSubject, EntityType: "NODE", Status: "UNDER CONSTRUCTION",
+				Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+				Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(8)}},
+			}}, nil
+		}
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+
+	if err := adapter.ensureOrgGraph(context.Background(), "graphkey"); err != nil {
+		t.Fatalf("bootstrap must wait out a building vector index, not fail: %v", err)
+	}
+	if polls < 3 {
+		t.Fatalf("bootstrap must poll the vector index to readiness, polled %d times", polls)
+	}
+}
+
+// A vector index that never becomes ready must time out loudly rather than
+// letting bootstrap proceed against an index of unknown state.
+func TestR3_BootstrapFailsWhenTheVectorIndexNeverBecomesReady(t *testing.T) {
+	fake := &fakeConn{}
+	fake.constraintsFunc = func(context.Context, string) ([]constraintStatus, error) {
+		return []constraintStatus{{Status: "OPERATIONAL", Label: labelSubject, EntityType: "NODE"}}, nil
+	}
+	first := true
+	fake.indexesFunc = func(context.Context, string) ([]indexStatus, error) {
+		if first {
+			first = false
+			return nil, nil
+		}
+		return []indexStatus{{
+			Label: labelSubject, EntityType: "NODE", Status: "UNDER CONSTRUCTION",
+			Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+			Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(8)}},
+		}}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8)}, 0.55)
+	// Squeeze the deadline so the test does not wait out a real timeout.
+	adapter.config.RequestTimeout = 50 * time.Millisecond
+
+	if err := adapter.ensureOrgGraph(context.Background(), "graphkey"); !errors.Is(err, errVectorIndexNotReady) {
+		t.Fatalf("bootstrap must fail loudly on an index that never settles, got %v", err)
+	}
+}
