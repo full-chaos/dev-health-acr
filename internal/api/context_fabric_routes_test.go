@@ -542,13 +542,18 @@ func TestContextFabricResultItemsCountsClaimedFacts(t *testing.T) {
 
 func ptrString(value string) *string { return &value }
 
-// TestContextFabricInvestigationRouteUnsupportedTimeAxisIsClientError is
-// the route half of the H6 fix: a historical or point-in-time question the
-// engine refuses must surface as a 400 the caller can act on, NOT a 5xx
-// that reads as an ACR outage and invites a retry that can never succeed.
-func TestContextFabricInvestigationRouteUnsupportedTimeAxisIsClientError(t *testing.T) {
+// TestContextFabricInvestigationRouteInvalidTimeBoundIsClientError is the
+// route half of CHAOS-3781, replacing the H6 mapping it succeeded.
+//
+// The H6 version asserted that any non-current axis surfaced as a 400.
+// That is now wrong: historical questions are answered. What still
+// surfaces as a 400 is a request whose BOUNDS are not answerable -- a time
+// in the future, or a range wider than this service reads -- and it must
+// still be a 400 rather than a 5xx, because a 5xx reads as an ACR outage
+// and invites a retry that can never succeed.
+func TestContextFabricInvestigationRouteInvalidTimeBoundIsClientError(t *testing.T) {
 	app, token := newContextFabricTestApp(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
-		return contextfabric.InvestigationResult{}, contextfabric.ErrUnsupportedTimeAxis
+		return contextfabric.InvestigationResult{}, contextfabric.ErrInvalidTimeBound
 	}))
 	response := httptest.NewRecorder()
 
@@ -566,7 +571,48 @@ func TestContextFabricInvestigationRouteUnsupportedTimeAxisIsClientError(t *test
 		t.Fatal(err)
 	}
 	if payload.Error.Retryable {
-		t.Fatal("unsupported time axis was marked retryable, but retrying the same request can never succeed")
+		t.Fatal("an unanswerable time bound was marked retryable, but retrying the same request can never succeed")
+	}
+}
+
+// TestContextFabricInvestigationRouteAnswersAHistoricalQuestion is the
+// AC-3781-6 guard at this layer: no stale refusal may survive here. A
+// historical request that the engine answers must reach the caller as a
+// 200 carrying the temporal label, not as the 400 this route used to
+// return for every non-current axis.
+func TestContextFabricInvestigationRouteAnswersAHistoricalQuestion(t *testing.T) {
+	asOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	app, token := newContextFabricTestApp(t, investigatorFunc(func(_ context.Context, _ storage.Principal, request contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		result := validContextFabricInvestigationResult()
+		result.Interpretation.TimeContext = contractsv1.ContextFabricTimeContext{Axis: contractsv1.ContextFabricTemporalValidTime, AsOf: &asOf}
+		result.Temporal = &contractsv1.ContextFabricTemporalLabel{
+			Requested:        contractsv1.ContextFabricTimeContext{Axis: contractsv1.ContextFabricTemporalValidTime, AsOf: &asOf},
+			Effective:        contractsv1.ContextFabricTimeContext{Axis: contractsv1.ContextFabricTemporalValidTime, AsOf: &asOf},
+			Grain:            contractsv1.ContextFabricGrainDay,
+			CoverageComplete: false,
+		}
+		return result, nil
+	}))
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, investigationRequest(t, token))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Temporal *struct {
+			Grain string `json:"grain"`
+		} `json:"temporal"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Temporal == nil {
+		t.Fatal("the temporal label did not survive to the wire; a historical answer must state the time it speaks for")
+	}
+	if payload.Temporal.Grain != string(contractsv1.ContextFabricGrainDay) {
+		t.Fatalf("grain = %q, want %q", payload.Temporal.Grain, contractsv1.ContextFabricGrainDay)
 	}
 }
 

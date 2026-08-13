@@ -98,13 +98,22 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 		writeError(w, r, http.StatusGatewayTimeout, "upstream_unavailable", "The Context Fabric investigation timed out", true, nil)
 		return
 	}
-	// A historical or point-in-time question this engine cannot answer
-	// (CHAOS-3755 adversarial review finding H6). 400, not 5xx: the
-	// request was well-formed but asked for something unsupported, so
-	// presenting it as an ACR outage would be wrong -- and it is not
-	// retryable, because the same request can never start succeeding.
-	if errors.Is(err, contextfabric.ErrUnsupportedTimeAxis) {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric can only answer questions about current state", false, nil)
+	// A historical question whose BOUNDS this engine will not answer --
+	// an as-of time in the future, or a range wider than it will read
+	// (CHAOS-3781, contextfabric.ErrInvalidTimeBound). 400, not 5xx: the
+	// request was well-formed but asked for something outside those
+	// bounds, so presenting it as an ACR outage would be wrong -- and it
+	// is not retryable, because the same request can never start
+	// succeeding.
+	//
+	// This REPLACES the CHAOS-3755 H6 mapping of ErrUnsupportedTimeAxis,
+	// which refused every non-current axis outright. Historical questions
+	// are answered now; only unanswerable bounds are refused. AC-3781-6
+	// required that removal land in the same change as the engine's and
+	// the providers' -- a layer left refusing would either contradict the
+	// others, or answer with current data under a historical label.
+	if errors.Is(err, contextfabric.ErrInvalidTimeBound) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "The requested time is not answerable: it must not be in the future, and a range must be narrower than the supported window", false, nil)
 		return
 	}
 	// Rate limiting: contextfabric.ErrRateLimited is the vendor-neutral

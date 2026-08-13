@@ -39,30 +39,30 @@ var (
 	// runtime specifically) and this one both reachable from one
 	// vendor-neutral check.
 	ErrRateLimited = errors.New("context fabric dependency rate limited")
-	// ErrUnsupportedTimeAxis identifies a request that asked a
-	// historical or point-in-time question the Context Fabric cannot
-	// currently answer (CHAOS-3755 adversarial review finding H6).
+	// ErrUnsupportedTimeAxis is RETIRED by CHAOS-3781 and deliberately
+	// not replaced by an equivalent.
 	//
-	// The v1 request contract accepts four temporal axes, but every
-	// canonical fact source behind this engine reads CURRENT state only.
-	// Answering a "what was the status last month" question with today's
-	// data -- presented as if it were that answer -- is a false
-	// historical answer, and the worst kind, because nothing in the
-	// response marks it as wrong. So the engine refuses the request
-	// outright rather than silently degrading it.
+	// It meant "this service cannot answer a historical question at all"
+	// (CHAOS-3755 finding H6), which was true and honest while every
+	// canonical source below read current state only. It stopped being
+	// true when the graph gained validity-window admission and the fact
+	// providers gained time bounds: a historical question is now answered
+	// on every axis, with the sources that cannot speak for the requested
+	// time degrading individually in coverage (AC-3781-5) rather than the
+	// whole request being refused.
 	//
-	// This is a REQUEST-level refusal (the route maps it to 400), not a
-	// dependency failure: the caller asked a well-formed question the
-	// service does not support, and the honest answer is to say so. The
-	// providers refuse the same thing independently at their own
-	// boundary; this is the clean, early half of that pair.
+	// AC-3781-6 required the refusal be removed from the engine, from
+	// every provider, and from the route in ONE change, for a specific
+	// reason: a partial removal reproduces exactly the false historical
+	// answer H6 named. If one layer still refuses, callers see an
+	// inconsistent service; if one layer stops refusing while another
+	// still cannot bound itself, that layer answers with current data
+	// under a historical label.
 	//
-	// Deliberately not enforced in ContextFabricInvestigationRequest.
-	// Validate(): the wire contract's accepted axes are unchanged, so
-	// tightening it there would be a contract-level meaning change
-	// requiring a new major version. What is unsupported is this
-	// engine's ability to answer, which is a service concern.
-	ErrUnsupportedTimeAxis = errors.New("context fabric time axis is not supported")
+	// What replaced it is contextfabric.ErrInvalidTimeBound (temporal.go),
+	// which is narrower on purpose: not "historical questions are
+	// unsupported" but "these particular bounds are not answerable" -- a
+	// future instant, or a range wider than this service will read.
 )
 
 // Investigator is the consumer-neutral Context Fabric entry point. Ask Dev,
