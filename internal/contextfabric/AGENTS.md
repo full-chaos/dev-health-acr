@@ -66,7 +66,7 @@ FalkorDB's vector score is a cosine DISTANCE (0 = identical), verified live. It 
 
 Historical time axis (CHAOS-3781): the H6 refusal of every non-current axis
 is GONE from all three layers it lived in -- `Engine` (`temporal.go`'s
-`validateTimeContext` replaces `requireCurrentTimeAxis`), every
+`resolveTimeContext` replaces `requireCurrentTimeAxis`), every
 `devhealthfacts` provider (`timebound.go` replaces `checkCurrentTimeOnly`),
 and `internal/api/context_fabric_routes.go`. AC-3781-6 required that in one
 change: a layer left refusing would either contradict the others or answer

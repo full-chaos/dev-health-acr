@@ -13,16 +13,16 @@ import (
 
 // expectedMigrationVersions pins the exact applied-migration sequence.
 //
-// NOTE FOR THE CHAOS-3786 REBASE: this branch (CHAOS-3781) adds migration
-// 0013, and 3786 adds 0012 and merges FIRST. Until that merge lands here,
-// this worktree legitimately has a GAP at 12 -- the runner sorts by
-// version and rejects only duplicates, so a gap applies cleanly and this
-// branch stays green standalone.
+// Held in ONE place rather than repeated across the assertions below, so
+// adding a migration is a single-line edit that cannot be applied to some
+// assertions and missed by others. cmd/acr-migrate/cli_test.go asserts the
+// COUNT of the same set and has to move with it.
 //
-// After rebasing onto 3786, 0012 is present and this becomes the
-// contiguous {1..13}. Change this ONE line; the five assertions below all
-// read from it.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13}
+// Contiguous again as of the CHAOS-3781 rebase onto CHAOS-3786: 0012 is
+// 3786's reuse-epoch cutover and 0013 is 3781's time-axis reuse key. (The
+// runner sorts by version and rejects only duplicates, so a gap applies
+// cleanly -- but there is no gap to tolerate here now.)
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given

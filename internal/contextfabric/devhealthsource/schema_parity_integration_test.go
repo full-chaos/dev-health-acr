@@ -52,19 +52,19 @@ type columnSpec struct {
 // fails loudly instead of going silently unasserted.
 var productionColumns = map[string][]columnSpec{
 	"repos": {
-		{"id", "UUID"}, {"org_id", "String"}, {"repo", "String"}, {"provider", "String"}, {"last_synced", "DateTime64(3, 'UTC')"},
+		{"id", "UUID"}, {"org_id", "String"}, {"repo", "String"}, {"provider", "String"}, {"last_synced", "DateTime64(3, 'UTC')"}, {"created_at", "DateTime64(3, 'UTC')"},
 	},
 	"work_items": {
-		{"work_item_id", "String"}, {"repo_id", "UUID"}, {"org_id", "String"}, {"title", "String"}, {"status", "String"}, {"url", "String"}, {"parent_id", "String"}, {"updated_at", "DateTime64(3)"},
+		{"work_item_id", "String"}, {"repo_id", "UUID"}, {"org_id", "String"}, {"title", "String"}, {"status", "String"}, {"url", "String"}, {"parent_id", "String"}, {"updated_at", "DateTime64(3)"}, {"created_at", "DateTime64(3)"}, {"completed_at", "Nullable(DateTime64(3))"}, {"closed_at", "Nullable(DateTime64(3))"},
 	},
 	"git_pull_requests": {
-		{"repo_id", "UUID"}, {"org_id", "String"}, {"number", "UInt32"}, {"title", "Nullable(String)"}, {"state", "Nullable(String)"}, {"last_synced", "DateTime64(3, 'UTC')"},
+		{"repo_id", "UUID"}, {"org_id", "String"}, {"number", "UInt32"}, {"title", "Nullable(String)"}, {"state", "Nullable(String)"}, {"last_synced", "DateTime64(3, 'UTC')"}, {"created_at", "DateTime64(3, 'UTC')"}, {"merged_at", "Nullable(DateTime64(3, 'UTC'))"}, {"closed_at", "Nullable(DateTime64(3, 'UTC'))"},
 	},
 	"deployments": {
-		{"repo_id", "UUID"}, {"org_id", "String"}, {"deployment_id", "String"}, {"status", "Nullable(String)"}, {"environment", "Nullable(String)"}, {"deployed_at", "Nullable(DateTime64(3, 'UTC'))"}, {"started_at", "Nullable(DateTime64(3, 'UTC'))"}, {"last_synced", "DateTime64(3, 'UTC')"},
+		{"repo_id", "UUID"}, {"org_id", "String"}, {"deployment_id", "String"}, {"status", "Nullable(String)"}, {"environment", "Nullable(String)"}, {"deployed_at", "Nullable(DateTime64(3, 'UTC'))"}, {"started_at", "Nullable(DateTime64(3, 'UTC'))"}, {"last_synced", "DateTime64(3, 'UTC')"}, {"finished_at", "Nullable(DateTime64(3, 'UTC'))"},
 	},
 	"operational_incidents": {
-		{"id", "String"}, {"org_id", "String"}, {"service_id", "Nullable(String)"}, {"title", "String"}, {"normalized_status", "Nullable(String)"}, {"raw_status", "Nullable(String)"}, {"normalized_severity", "Nullable(String)"}, {"raw_severity", "Nullable(String)"}, {"started_at", "Nullable(DateTime64(6, 'UTC'))"}, {"source_event_at", "Nullable(DateTime64(6, 'UTC'))"}, {"observed_at", "DateTime64(6, 'UTC')"}, {"is_deleted", "UInt8"},
+		{"id", "String"}, {"org_id", "String"}, {"service_id", "Nullable(String)"}, {"title", "String"}, {"normalized_status", "Nullable(String)"}, {"raw_status", "Nullable(String)"}, {"normalized_severity", "Nullable(String)"}, {"raw_severity", "Nullable(String)"}, {"started_at", "Nullable(DateTime64(6, 'UTC'))"}, {"source_event_at", "Nullable(DateTime64(6, 'UTC'))"}, {"observed_at", "DateTime64(6, 'UTC')"}, {"is_deleted", "UInt8"}, {"resolved_at", "Nullable(DateTime64(6, 'UTC'))"}, {"deleted_at", "Nullable(DateTime64(6, 'UTC'))"},
 	},
 	"operational_service_repository_mappings": {
 		{"org_id", "String"}, {"service_id", "String"}, {"repo_id", "Nullable(UUID)"}, {"is_active", "UInt8"},
@@ -155,19 +155,19 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 		}
 	}
 
-	mustSeed("repos", `INSERT INTO repos VALUES (?, ?, ?, ?, ?)`,
+	mustSeed("repos", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
 		repoID, orgID, repoSlug, "github", at)
-	mustSeed("work_items parent", `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	mustSeed("work_items parent", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		"WI-PARENT", repoID, orgID, "Parent work item", "open", "", "", at)
-	mustSeed("work_items child", `INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	mustSeed("work_items child", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		"WI-CHILD", repoID, orgID, "Child work item", "open", "", "WI-PARENT", at)
-	mustSeed("git_pull_requests", `INSERT INTO git_pull_requests VALUES (?, ?, ?, ?, ?, ?)`,
+	mustSeed("git_pull_requests", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) VALUES (?, ?, ?, ?, ?, ?)`,
 		repoID, orgID, uint32(4242), "Parity PR", "open", at)
-	mustSeed("deployments", `INSERT INTO deployments VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	mustSeed("deployments", `INSERT INTO deployments (repo_id, org_id, deployment_id, status, environment, deployed_at, started_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		repoID, orgID, "deploy-parity-1", "success", "production", at, at, at)
 	mustSeed("operational_service_repository_mappings", `INSERT INTO operational_service_repository_mappings VALUES (?, ?, ?, ?)`,
 		orgID, "svc-parity", repoID, uint8(1))
-	mustSeed("operational_incidents", `INSERT INTO operational_incidents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	mustSeed("operational_incidents", `INSERT INTO operational_incidents (id, org_id, service_id, title, normalized_status, raw_status, normalized_severity, raw_severity, started_at, source_event_at, observed_at, is_deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"incident-parity-1", orgID, "svc-parity", "Parity incident", "open", "open", "low", "low", at, at, at, uint8(0))
 	mustSeed("work_item_dependencies", `INSERT INTO work_item_dependencies VALUES (?, ?, ?, ?, ?)`,
 		"WI-CHILD", "WI-PARENT", "blocks", orgID, at)

@@ -100,7 +100,7 @@ func TestProducersEmitClosedValidityWindows(t *testing.T) {
 				"Investigate checkout flake", "done", "", at, created, uint8(1), ended}}
 		case "FROM git_pull_requests AS p":
 			// A merged pull request.
-			tables[index].rows = [][]any{{"repo-1", "example-org/widget-service", int64(1042),
+			tables[index].rows = [][]any{{"repo-1", "example-org/widget-service", uint32(1042),
 				"Typed session tokens", "merged", at, created, uint8(1), ended}}
 		case "FROM operational_incidents AS i":
 			// A resolved incident.

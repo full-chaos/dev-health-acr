@@ -225,8 +225,10 @@ func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) 
 		QuestionHash:      contextfabric.QuestionHash(interpretedHistorical.Question),
 		ContractVersion:   interpretedHistorical.Versions.ContractVersion,
 		ProjectionVersion: interpretedHistorical.Versions.ProjectionVersion,
-		ModelIdentity:     interpretedHistorical.Versions.ModelIdentity,
-		TimeAxisKey:       wireKey,
+		// A single-member chain (CHAOS-3786): the exact identity this
+		// result was stored under.
+		ModelIdentities: []string{interpretedHistorical.Versions.ModelIdentity},
+		TimeAxisKey:     wireKey,
 	}
 	reused, found, err := store.FindReusable(ctx, principal, lookup)
 	require.NoError(t, err)

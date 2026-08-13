@@ -55,7 +55,7 @@ type temporalFilter struct {
 // (or any context missing the bounds its axis requires) yields an inactive
 // filter rather than an error: request validation upstream already proved
 // the shape, and failing open to "no temporal predicate" here would be
-// wrong only if the axis were historical -- which validateTimeContext in
+// wrong only if the axis were historical -- which resolveTimeContext in
 // the engine refuses to let through unbounded.
 func newTemporalFilter(timeContext contextfabric.TimeContext) temporalFilter {
 	switch timeContext.Axis {
