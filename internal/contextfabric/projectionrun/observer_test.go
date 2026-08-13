@@ -99,24 +99,37 @@ func TestR4_F3_SuccessfulTickLogsNoFailureClass(t *testing.T) {
 // while not being that sentinel. Identity-based classification rejects them
 // all; any text-based classification would misclassify every one.
 func TestR5_SelfFound_ClassifierKeysOnIdentityNotErrorText(t *testing.T) {
-	impostors := []error{
-		errors.New(contextfabric.ErrProjectionConflict.Error()),
-		errors.New(ErrOrgLocked.Error()),
-		errors.New(contextfabric.ErrProjectionSourceVersionChanged.Error()),
-		errors.New(contextfabric.ErrRateLimited.Error()),
-		errors.New(contextfabric.ErrUnavailable.Error()),
-		errors.New(contextfabric.ErrInvalidResult.Error()),
-		errors.New(context.Canceled.Error()),
+	// Paired with the sentinel each one mimics, so every probe can assert it
+	// is genuinely NOT that sentinel -- a fixture that accidentally WAS the
+	// sentinel would classify correctly and prove nothing.
+	sentinels := []error{
+		contextfabric.ErrProjectionConflict,
+		ErrOrgLocked,
+		contextfabric.ErrProjectionSourceVersionChanged,
+		contextfabric.ErrRateLimited,
+		contextfabric.ErrUnavailable,
+		contextfabric.ErrInvalidResult,
+		context.Canceled,
+		// Codex round-6: the classifier has a DISTINCT deadline branch beside
+		// the cancellation one, so it needs its own impostor. Without it, a
+		// text/substring regression on that branch alone would misclassify an
+		// unrelated "context deadline exceeded" error as canceled while every
+		// other probe here stayed green.
+		context.DeadlineExceeded,
 	}
-	for _, impostor := range impostors {
-		// Guard: the impostor must genuinely carry a sentinel's text, or the
-		// probe proves nothing.
-		if impostor.Error() == "" {
-			t.Fatal("impostor fixture is empty; this test would be vacuous")
+	for _, sentinel := range sentinels {
+		impostor := errors.New(sentinel.Error())
+		// Anti-vacuity, both directions: the impostor must carry the
+		// sentinel's exact text, and must NOT be the sentinel.
+		if impostor.Error() != sentinel.Error() {
+			t.Fatalf("impostor for %v does not carry its text; the probe is vacuous", sentinel)
+		}
+		if errors.Is(impostor, sentinel) {
+			t.Fatalf("impostor for %v IS the sentinel; the probe is vacuous", sentinel)
 		}
 		if got := classifyOutcomeError(fmt.Errorf("tick: %w", impostor)); got != failureClassUnclassified {
-			t.Fatalf("an error merely TEXT-EQUAL to a sentinel (%q) classified as %q; "+
-				"classification must key on identity, not text", impostor.Error(), got)
+			t.Fatalf("an error merely TEXT-EQUAL to sentinel %v classified as %q; "+
+				"classification must key on identity, not text", sentinel, got)
 		}
 	}
 }
