@@ -168,6 +168,33 @@ provider-legal set (catching `pruned`) or is a facts-rejecting state
 `not_applicable` -- all of which mean "there is no fact here", so a fact
 wearing one is self-contradicting).
 
+With those two guards in place exactly `available`, `stale`, and `truncated`
+remain reachable, and all three are fact-bearing -- so the evidence
+requirement is keyed on the **capability alone**, not on the fact's state.
+An earlier form named `available`/`stale`, which silently exempted
+`truncated` even though the registry mints that state itself when the bundle
+cap trims a result. Truncation says "there are more facts than these", never
+"these facts need less grounding".
+
+### Coverage text bounds
+
+`SourceObservation.Reason` and each `DegradedReasons` entry are separate
+contract limits on separate strings, and the degraded entry is the longer one
+(it carries a `"<kind>: "` prefix). Both are clamped **after** composition:
+clamping the reason first and prefixing afterwards pushed the degraded entry
+back over its bound by exactly the prefix length, failing validation for the
+whole investigation -- the outcome the clamp exists to prevent. The live path
+is a narrowed provider that fails, where the narrowing note and the failure
+reason are concatenated before they reach coverage.
+
+`clampCoverageText` truncates by **runes**, because the contract bounds are
+rune counts (`stringLengthBetween` uses `utf8.RuneCountInString`) and a byte
+slice could also cut a rune in half. It strips leading whitespace before
+truncating, which is what makes the result provably non-empty: the retained
+prefix then starts with a non-space rune, so trimming its tail cannot empty
+it -- and an empty reason on a non-available source is itself a contract
+violation.
+
 ### Reason codes, and why narrowing rides along
 
 Reasons carry closed code prefixes -- `pruned:subject_kind_unsupported`,
@@ -262,6 +289,14 @@ could otherwise differ on ordering alone -- and a flaky assertion about
 correctness is worse than none. `TestCHAOS3783BundleBytesIsOrderInsensitive`
 proves the canonicalization without needing a database, so it runs in
 ordinary CI rather than only under the opt-in measurement.
+
+The assertion compares a **digest** of the canonical encoding, not its byte
+length. A length is a reporting number, not an identity: any two bundles of
+equal size compare equal under it, so a canonicalization regression that
+reordered or swapped equal-length values would pass unnoticed -- including in
+the permutation test written to catch exactly that. The test also pins the
+digest's sensitivity, altering one value to a different value of the same
+length and asserting the digest changes while the byte count does not.
 
 Wall-clock is reported but caveated. Dev tables are small enough that provider
 time is round-trip dominated, so round-trip **count** is the durable number

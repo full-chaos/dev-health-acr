@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -686,5 +687,113 @@ func TestMergeStillAcceptsLegitimatePerFactSourceStates(t *testing.T) {
 		if len(bundle.Facts) != 1 {
 			t.Fatalf("facts = %d, want 1 for per-fact state %q", len(bundle.Facts), state)
 		}
+	}
+}
+
+// TestMergeRequiresEvidenceOnTruncatedFacts is the codex round-2 R2-1
+// regression. Truncation is legitimately fact-bearing -- the registry mints
+// SourceTruncated itself when the bundle cap trims a result -- but the
+// evidence requirement used to be keyed on available/stale only, so an
+// evidence-requiring provider could return an evidence-FREE truncated fact
+// and have it accepted. Truncation says "there are more facts than these",
+// never "these facts need less grounding".
+func TestMergeRequiresEvidenceOnTruncatedFacts(t *testing.T) {
+	t.Parallel()
+
+	repository := subject(SubjectRepository, "repo_api")
+	evidenceRequiring := FactCapability{
+		Kind: FactMetrics, Name: "metrics", Version: "v1",
+		SupportedSubjectKinds: []SubjectKind{SubjectRepository}, RequiresEvidence: true,
+	}
+	factWith := func(evidence []string) CanonicalFact {
+		return CanonicalFact{
+			Kind: FactMetrics, Subject: repository,
+			Fields: map[string]FactValue{"commits": IntegerFactValue(7)},
+			// The state the registry itself assigns when a result is trimmed.
+			SourceState: SourceTruncated, Source: "metrics", SourceVersion: "v1",
+			EvidenceRefIDs: evidence,
+		}
+	}
+
+	read := func(t *testing.T, fact CanonicalFact) error {
+		t.Helper()
+		provider := &factProviderStub{
+			capability: evidenceRequiring,
+			result:     FactProviderResult{State: SourceTruncated, Reason: "trimmed", Facts: []CanonicalFact{fact}},
+		}
+		registry, err := NewFactCapabilityRegistry([]FactProvider{provider}, FactRegistryOptions{})
+		if err != nil {
+			t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+		}
+		_, err = registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			Subjects:     []SubjectRef{repository},
+			Requirements: []FactRequirement{{Kind: FactMetrics}},
+		})
+		return err
+	}
+
+	if err := read(t, factWith(nil)); err == nil {
+		t.Fatal("ReadFacts() error = nil, want an evidence-free truncated fact rejected when the capability requires evidence")
+	}
+	if err := read(t, factWith([]string{"evidence_metrics_0001"})); err != nil {
+		t.Fatalf("ReadFacts() error = %v, want a truncated fact WITH evidence still accepted", err)
+	}
+}
+
+// TestAppendFactCoverageDegradedReasonStaysWithinBounds is the codex
+// round-2 R2-3 regression. The reason was clamped to its own bound and the
+// "<kind>: " prefix was then added on top, pushing the DegradedReasons entry
+// back over the limit by exactly the prefix length -- so the finished result
+// failed contract validation, the very outcome this clamping exists to
+// prevent. The live path is a narrowed provider that fails: the narrowing
+// note and the failure reason are concatenated before they reach coverage.
+func TestAppendFactCoverageDegradedReasonStaysWithinBounds(t *testing.T) {
+	t.Parallel()
+
+	bundle := CanonicalFactBundle{Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}}
+	// Exactly at the reason bound: the old code left this untouched, then
+	// prefixed it, producing an over-long degraded entry.
+	appendFactCoverage(&bundle, FactOperationalDeficiencies, SourceUnavailable, nil, "", strings.Repeat("x", maxCoverageReasonLength))
+	if err := bundle.Coverage.Validate(); err != nil {
+		t.Fatalf("Coverage.Validate() error = %v, want the composed degraded reason within v1 bounds", err)
+	}
+	if len(bundle.Coverage.DegradedReasons) != 1 {
+		t.Fatalf("degraded reasons = %v, want one entry", bundle.Coverage.DegradedReasons)
+	}
+	if got := utf8.RuneCountInString(bundle.Coverage.DegradedReasons[0]); got > maxCoverageDegradedReasonLength {
+		t.Fatalf("degraded reason length = %d runes, want <= %d", got, maxCoverageDegradedReasonLength)
+	}
+}
+
+// TestClampCoverageTextIsRuneSafeAndNeverEmpty pins the two properties the
+// clamp has to hold beyond raw length. The contract bounds are RUNE counts
+// (contractsv1.stringLengthBetween), and DegradedReasons entries must equal
+// their own strings.TrimSpace -- so a byte-slicing or trailing-space-leaving
+// clamp would produce values the validator rejects for reasons unrelated to
+// length.
+func TestClampCoverageTextIsRuneSafeAndNeverEmpty(t *testing.T) {
+	t.Parallel()
+
+	multibyte := strings.Repeat("é", 3000)
+	clamped := clampCoverageText(multibyte, maxCoverageReasonLength)
+	if got := utf8.RuneCountInString(clamped); got != maxCoverageReasonLength {
+		t.Fatalf("rune count = %d, want exactly %d -- the bound is runes, not bytes", got, maxCoverageReasonLength)
+	}
+	if !utf8.ValidString(clamped) {
+		t.Fatal("clamped value is not valid UTF-8 -- a rune was cut in half")
+	}
+
+	// Truncation landing on whitespace must not leave a trailing space.
+	spacey := strings.Repeat("a ", maxCoverageReasonLength)
+	if got := clampCoverageText(spacey, maxCoverageReasonLength); got != strings.TrimSpace(got) {
+		t.Fatalf("clamped value %q has surrounding whitespace -- DegradedReasons requires TrimSpace(v) == v", got)
+	}
+
+	// Leading whitespace is stripped BEFORE truncating, which is what makes
+	// the result provably non-empty even when the head of the value is all
+	// spaces.
+	leading := strings.Repeat(" ", maxCoverageReasonLength+50) + "the real reason"
+	if got := clampCoverageText(leading, maxCoverageReasonLength); got == "" {
+		t.Fatal("clamped value is empty -- an empty reason on a non-available source is itself invalid")
 	}
 }

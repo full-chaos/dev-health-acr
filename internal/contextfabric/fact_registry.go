@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -389,7 +391,22 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 		if stateRejectsFacts(fact.SourceState) {
 			return fmt.Errorf("provider returned fact with source state %q, which cannot carry facts", fact.SourceState)
 		}
-		if err := fact.Validate(capability.RequiresEvidence && (fact.SourceState == SourceAvailable || fact.SourceState == SourceStale)); err != nil {
+		// Codex round-2 R2-1: the evidence requirement is now keyed on the
+		// capability ALONE, not on the fact's state.
+		//
+		// The old form excluded SourceTruncated, which is legitimately
+		// fact-bearing -- the registry itself mints that state when the
+		// bundle cap trims a result -- so an evidence-requiring provider
+		// could return an evidence-FREE truncated fact and have it accepted.
+		// Truncation says "there are more facts than these", never "these
+		// facts need less grounding".
+		//
+		// Naming states here is also redundant now: the two guards above
+		// leave exactly available, stale, and truncated reachable
+		// (validFactSourceState minus stateRejectsFacts), and all three are
+		// fact-bearing. So the state test could only ever weaken the
+		// requirement, never strengthen it.
+		if err := fact.Validate(capability.RequiresEvidence); err != nil {
 			return fmt.Errorf("provider fact: %w", err)
 		}
 		bundle.Facts = append(bundle.Facts, fact)
@@ -412,20 +429,62 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 // the answer that carried it.
 const maxCoverageReasonLength = 2000
 
+// maxCoverageDegradedReasonLength is ContextFabricCoverage's own bound on one
+// DegradedReasons entry. It happens to equal the Reason bound, but they are
+// separate contract limits on separate strings and a degraded entry is a
+// LONGER string than the reason it is built from (it carries a "<kind>: "
+// prefix), so they are clamped independently rather than sharing one
+// constant by coincidence.
+const maxCoverageDegradedReasonLength = 2000
+
 func appendFactCoverage(bundle *CanonicalFactBundle, kind FactKind, state SourceState, observedAt *time.Time, watermark, reason string) {
 	if strings.TrimSpace(reason) == "" && state != SourceAvailable {
 		reason = "canonical fact capability returned " + string(state)
 	}
-	if len(reason) > maxCoverageReasonLength {
-		reason = reason[:maxCoverageReasonLength]
-	}
 	bundle.Coverage.Sources = append(bundle.Coverage.Sources, SourceObservation{
-		Source: "canonical_fact:" + string(kind), State: state, ObservedAt: observedAt, Watermark: watermark, Reason: reason,
+		Source: "canonical_fact:" + string(kind), State: state, ObservedAt: observedAt, Watermark: watermark,
+		Reason: clampCoverageText(reason, maxCoverageReasonLength),
 	})
 	if factStateDegrades(state) {
 		bundle.Coverage.Partial = true
-		bundle.Coverage.DegradedReasons = append(bundle.Coverage.DegradedReasons, string(kind)+": "+reason)
+		// Codex round-2 R2-3: clamp the COMPOSED string, not its ingredients.
+		// Clamping reason first and then prefixing "<kind>: " pushed the
+		// result back over the bound by exactly the prefix length, producing
+		// a DegradedReasons entry the contract validator rejects -- which
+		// fails the whole investigation, the outcome this clamping exists to
+		// prevent. A narrowed provider that fails with a long reason is the
+		// live path: the narrowing note and the failure reason are
+		// concatenated before they ever reach here.
+		bundle.Coverage.DegradedReasons = append(
+			bundle.Coverage.DegradedReasons,
+			clampCoverageText(string(kind)+": "+reason, maxCoverageDegradedReasonLength),
+		)
 	}
+}
+
+// clampCoverageText bounds one coverage string to the contract's limit.
+//
+// The bound is a RUNE count (contractsv1.stringLengthBetween uses
+// utf8.RuneCountInString), so this truncates by runes -- a byte slice would
+// both mis-measure multi-byte text and be able to cut a rune in half.
+//
+// It also normalizes whitespace, because DegradedReasons entries must
+// satisfy strings.TrimSpace(value) == value: truncating mid-string can
+// easily land on a space, which would fail validation for a reason that has
+// nothing to do with length.
+//
+// Leading whitespace is removed BEFORE truncating, which is what makes the
+// result provably non-empty: the retained prefix then starts with a
+// non-space rune, so trimming its tail can never empty it. Trimming only
+// after truncating would leave a value whose first `maximum` runes are all
+// spaces collapsing to "", and an empty reason on a non-available source is
+// itself a contract violation.
+func clampCoverageText(value string, maximum int) string {
+	value = strings.TrimSpace(value)
+	if maximum <= 0 || utf8.RuneCountInString(value) <= maximum {
+		return value
+	}
+	return strings.TrimRightFunc(string([]rune(value)[:maximum]), unicode.IsSpace)
 }
 
 func validateCanonicalFactRequest(request CanonicalFactRequest) error {

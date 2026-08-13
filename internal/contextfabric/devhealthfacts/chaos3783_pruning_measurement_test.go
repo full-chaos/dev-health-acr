@@ -2,6 +2,8 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -62,6 +64,7 @@ type chaos3783Measurement struct {
 	subjectBindings  int
 	facts            int
 	bundleBytes      int
+	bundleDigest     string
 	elapsed          time.Duration
 	failed           bool
 	failure          string
@@ -195,9 +198,9 @@ func TestCHAOS3783PruningMeasurement(t *testing.T) {
 		// subject of an unsupported kind matches -- so the fact bundle must
 		// come out byte-identical. A difference here means the planner
 		// dropped something real and the rule is wrong.
-		if r.planned.facts != r.baseline.facts || r.planned.bundleBytes != r.baseline.bundleBytes {
-			t.Fatalf("case %q: pruning changed the fact bundle (facts %d vs %d, bytes %d vs %d) -- it must only skip work that could not have produced facts",
-				r.name, r.planned.facts, r.baseline.facts, r.planned.bundleBytes, r.baseline.bundleBytes)
+		if r.planned.facts != r.baseline.facts || r.planned.bundleDigest != r.baseline.bundleDigest {
+			t.Fatalf("case %q: pruning changed the fact bundle (facts %d vs %d, digest %s vs %s) -- it must only skip work that could not have produced facts",
+				r.name, r.planned.facts, r.baseline.facts, r.planned.bundleDigest, r.baseline.bundleDigest)
 		}
 	}
 }
@@ -236,6 +239,7 @@ func chaos3783MeasurePlanned(ctx context.Context, principal storage.Principal, r
 		}
 	}
 	measurement.bundleBytes = chaos3783BundleBytes(bundle.Facts)
+	measurement.bundleDigest = chaos3783BundleDigest(bundle.Facts)
 	return measurement
 }
 
@@ -292,6 +296,7 @@ func chaos3783MeasureNaiveFanout(ctx context.Context, principal storage.Principa
 	measurement.elapsed = time.Since(started)
 	measurement.facts = len(facts)
 	measurement.bundleBytes = chaos3783BundleBytes(facts)
+	measurement.bundleDigest = chaos3783BundleDigest(facts)
 	return measurement
 }
 
@@ -332,11 +337,30 @@ func chaos3783SupportedSubjectCount(registry *contextfabric.FactCapabilityRegist
 // assertion about correctness is worse than no assertion. Both sides go
 // through this one function, so both are ordered the same way.
 func chaos3783BundleBytes(facts []contextfabric.CanonicalFact) int {
+	return len(chaos3783CanonicalEncoding(facts))
+}
+
+// chaos3783BundleDigest is what the equality assertion actually compares
+// (codex round-2 R2-2). Byte LENGTH is a reporting number, not an identity:
+// any two bundles of equal size compare equal under it, so a
+// canonicalization regression that reordered or swapped equal-length values
+// would slip straight through -- including in the permutation test meant to
+// catch exactly that. The digest is over the canonical encoding, so it
+// changes if any byte changes.
+func chaos3783BundleDigest(facts []contextfabric.CanonicalFact) string {
+	sum := sha256.Sum256(chaos3783CanonicalEncoding(facts))
+	return hex.EncodeToString(sum[:])
+}
+
+// chaos3783CanonicalEncoding is the single serialization both the size and
+// the digest are taken from, so the number reported and the value asserted
+// on can never describe different bytes.
+func chaos3783CanonicalEncoding(facts []contextfabric.CanonicalFact) []byte {
 	encoded, err := json.Marshal(chaos3783Canonical(facts))
 	if err != nil {
-		return 0
+		return nil
 	}
-	return len(encoded)
+	return encoded
 }
 
 // chaos3783Canonical returns a stably-ordered copy. The sort key ends with
@@ -466,14 +490,26 @@ func TestCHAOS3783BundleBytesIsOrderInsensitive(t *testing.T) {
 		},
 	}
 
-	want := chaos3783BundleBytes(facts)
+	want := chaos3783BundleDigest(facts)
 	for _, permutation := range [][]int{{2, 1, 0}, {1, 2, 0}, {0, 2, 1}, {2, 0, 1}} {
 		shuffled := make([]contextfabric.CanonicalFact, 0, len(facts))
 		for _, index := range permutation {
 			shuffled = append(shuffled, facts[index])
 		}
-		if got := chaos3783BundleBytes(shuffled); got != want {
-			t.Fatalf("bundle bytes = %d for permutation %v, want %d -- the comparison must not depend on accumulation order", got, permutation, want)
+		if got := chaos3783BundleDigest(shuffled); got != want {
+			t.Fatalf("bundle digest = %s for permutation %v, want %s -- the comparison must not depend on accumulation order", got, permutation, want)
 		}
+	}
+
+	// The digest must also be SENSITIVE: a bundle differing only in a value
+	// of the SAME LENGTH has to produce a different digest, which is exactly
+	// what a byte-count comparison could not see.
+	altered := append([]contextfabric.CanonicalFact(nil), facts...)
+	altered[0].Fields = map[string]contextfabric.FactValue{"commits": contextfabric.IntegerFactValue(3)}
+	if chaos3783BundleDigest(altered) == want {
+		t.Fatal("digest ignored an equal-length value change -- it must compare content, not size")
+	}
+	if chaos3783BundleBytes(altered) != chaos3783BundleBytes(facts) {
+		t.Fatal("test setup no longer exercises the equal-length case the digest exists to catch")
 	}
 }
