@@ -159,8 +159,9 @@ self-hosted and needs no external credential at all (ADR 0009);
 `ACR_CONTEXT_FABRIC_FALKOR_PASSWORD` stays optional and empty by default,
 matching FalkorDB's own no-auth default. Both `cmd/acr-projector` and
 `cmd/acr-api`'s hosted runtime composition construct a `falkorgraph.Adapter`
-from this same env contract; Helm's `contextFabric.falkor.*` values wire the
-projector Deployment the same way. Reads (`internal/contextfabric.GraphReader`,
+from this same env contract; Helm's `contextFabric.falkor.*` values wire
+both the projector and `acr-api` Deployments the same way (CHAOS-3774).
+Reads (`internal/contextfabric.GraphReader`,
 the investigation endpoint) are a completely independent enablement:
 `ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED` (`config.GraphReadsEnabledEnvVar`),
 wired by CHAOS-3755's hosted composition

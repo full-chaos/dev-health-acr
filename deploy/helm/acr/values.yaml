@@ -190,10 +190,10 @@ contextFabric:
   # itself, the same posture as postgres/clickhouse being externally
   # provisioned; point addr at wherever it runs. No credential is required
   # by default (FalkorDB has no auth out of the box), so existingSecret is
-  # optional and empty by default. acr-api's own optional Investigator (gated by
-  # ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED) reads this same env var
-  # contract when set, but this chart's acr-api Deployment does not wire it
-  # yet -- pre-existing gap, not introduced or closed by this change.
+  # optional and empty by default. acr-api's own optional Investigator (gated
+  # by ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED) reads this same env var
+  # contract; templates/deployment.yaml wires it into the acr-api Deployment
+  # too (CHAOS-3774), mirroring templates/projector-deployment.yaml exactly.
   falkor:
     addr: ""
     tls: true
