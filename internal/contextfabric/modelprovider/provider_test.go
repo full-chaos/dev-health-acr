@@ -346,3 +346,71 @@ func TestNew_rejectsAnInvalidConfigurationWithoutContactingAProvider(t *testing.
 		t.Fatal("a rejected configuration still reached the provider")
 	}
 }
+
+// TestNew_classifiesStatusCorrectlyDespiteEphemeralPortsContainingStatusCodeDigits
+// is a follow-up to CHAOS-3770/#88. A rebased PR's CI hit a real,
+// intermittent (roughly 1-in-15 to 1-in-80 under
+// `go test -race -shuffle=on -count=1`, repeated) flake:
+// TestNew_classifiesRecordedProviderFailures's 401/403 cases occasionally
+// classified as rate-limited instead of unavailable. The flake WAS the
+// bug, not test contamination or a race (confirmed: -race never reported
+// anything, and the middleware always saw the correct status).
+//
+// Root cause: classifyModelError's fallback path did
+// strings.Contains(lower, "429") against the WHOLE unstructured error
+// text. The OpenAI SDK's apierror.Error.Error() embeds the full request
+// URL verbatim, so whenever an httptest.Server happened to land on an
+// ephemeral port whose digits contain "429" (e.g. 55429, or 4290), ANY
+// unrelated status on that request -- a 401, a 403, a 500 -- was
+// misclassified as rate-limited. In production the same hazard exists
+// wherever a BYO endpoint's own hostname, port, or path happens to
+// contain those digits. classifyModelError now anchors status extraction
+// to the fixed, ACR-controlled sanitized-error token
+// ("provider response redacted by ACR (status <code> <text>)") that
+// sanitizeProviderErrorBody guarantees for every non-2xx response, which
+// no incidental URL component can produce or collide with.
+//
+// This test recreates the churn pattern that originally surfaced the bug
+// (rapid create/close of httptest.Server instances, each on whatever
+// ephemeral port the OS just freed) as an ongoing regression signal for
+// the whole transport-to-classification path, one that does not depend
+// on `-shuffle=on` rolling the right port to have a chance of catching a
+// reintroduction. Each iteration constructs a FRESH runtime against a
+// FRESH server, explicitly closing the previous iteration's server first
+// (recordingProvider's t.Cleanup-scoped close would otherwise defer every
+// close to the end of this whole test function, defeating the churn this
+// test exists to stress) so the OS is free to hand back the same
+// ephemeral port immediately, and alternates success/failure shapes per
+// iteration so a response misattributed to the wrong iteration is caught
+// either way.
+func TestNew_classifiesStatusCorrectlyDespiteEphemeralPortsContainingStatusCodeDigits(t *testing.T) {
+	const iterations = 60
+	for i := 0; i < iterations; i++ {
+		var handler http.HandlerFunc
+		wantUnavailable := i%2 == 1
+		if wantUnavailable {
+			handler = providerError(http.StatusUnauthorized, "invalid_api_key", fmt.Sprintf("iteration %d credential rejected", i))
+		} else {
+			handler = chatCompletion(t, validInterpretationJSON)
+		}
+
+		server := httptest.NewServer(handler)
+		cfg := testConfig(&providerServer{baseURL: server.URL + "/v1/"})
+
+		runtime, err := New(context.Background(), cfg)
+		if err != nil {
+			server.Close()
+			t.Fatalf("iteration %d: New() error = %v", i, err)
+		}
+		_, _, callErr := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_test"}, testRequest())
+		server.Close()
+
+		if wantUnavailable {
+			if !errors.Is(callErr, contextfabric.ErrModelUnavailable) {
+				t.Fatalf("iteration %d: InterpretQuestion() error = %v, want ErrModelUnavailable -- a response may have been misattributed from a different iteration's server", i, callErr)
+			}
+		} else if callErr != nil {
+			t.Fatalf("iteration %d: InterpretQuestion() error = %v, want success -- a response may have been misattributed from a different iteration's server", i, callErr)
+		}
+	}
+}
