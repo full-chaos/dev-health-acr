@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Release-workflow CodeQL context: the build/scan step invoking this script is a
+# dismissed cache-poisoning false positive (alerts 11/12 — no cache sink in that
+# job); workflow-level hardening is tracked in CHAOS-3794.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
