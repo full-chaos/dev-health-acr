@@ -92,6 +92,9 @@ var boundPhrases = map[string]string{
 	"synthesis.warnings.max_count":                  "at most {N} warnings",
 	"synthesis.warnings.item_max_length":            "each warning at most {N} characters",
 	"synthesis.claimed_facts.max_count":             "restate at most {N} claimed_facts",
+	"synthesis.direct_judgment.max_length":          "direct_judgment and current_state are at most {N} characters each",
+	"synthesis.current_state.max_length":            "direct_judgment and current_state are at most {N} characters each",
+	"synthesis.deterministic_answer.max_length":     "deterministic_answer at most {N}",
 	"synthesis.driver.driver_id.max_length":         "each at most {N} characters, and at most",
 	"synthesis.finding.finding_id.max_length":       "each at most {N} characters, and at most",
 }
@@ -680,6 +683,39 @@ func modelFacingBounds() []boundCase {
 			},
 		},
 		{
+			name: "synthesis/direct_judgment max length", registryName: "synthesis.direct_judgment.max_length",
+			limit: contractsv1.ContextFabricDirectJudgmentMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"direct_judgment"},
+			atLimit: func() error {
+				return resultWithJudgment(contractsv1.ContextFabricDirectJudgmentMaxLength).Validate()
+			},
+			over: func() error {
+				return resultWithJudgment(contractsv1.ContextFabricDirectJudgmentMaxLength + 1).Validate()
+			},
+		},
+		{
+			name: "synthesis/current_state max length", registryName: "synthesis.current_state.max_length",
+			limit: contractsv1.ContextFabricCurrentStateMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"current_state"},
+			atLimit: func() error {
+				return resultWithCurrentState(contractsv1.ContextFabricCurrentStateMaxLength).Validate()
+			},
+			over: func() error {
+				return resultWithCurrentState(contractsv1.ContextFabricCurrentStateMaxLength + 1).Validate()
+			},
+		},
+		{
+			name: "synthesis/deterministic_answer max length", registryName: "synthesis.deterministic_answer.max_length",
+			limit: contractsv1.ContextFabricDeterministicAnswerMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"deterministic_answer"},
+			atLimit: func() error {
+				return resultWithDeterministicAnswer(contractsv1.ContextFabricDeterministicAnswerMaxLength).Validate()
+			},
+			over: func() error {
+				return resultWithDeterministicAnswer(contractsv1.ContextFabricDeterministicAnswerMaxLength + 1).Validate()
+			},
+		},
+		{
 			name: "synthesis/limitations max count", registryName: "synthesis.limitations.max_count",
 			limit: contractsv1.ContextFabricLimitationsMaxCount, prompt: synthesisSystemPrompt,
 			mentions: []string{"limitations"},
@@ -1252,6 +1288,24 @@ func resultWithFindings(field string, count int) contractsv1.ContextFabricInvest
 	return result
 }
 
+func resultWithJudgment(length int) contractsv1.ContextFabricInvestigationResult {
+	result := baseResult()
+	result.DirectJudgment = filler(length)
+	return result
+}
+
+func resultWithCurrentState(length int) contractsv1.ContextFabricInvestigationResult {
+	result := baseResult()
+	result.CurrentState = filler(length)
+	return result
+}
+
+func resultWithDeterministicAnswer(length int) contractsv1.ContextFabricInvestigationResult {
+	result := baseResult()
+	result.DeterministicAnswer = filler(length)
+	return result
+}
+
 func resultWithLimitations(count int) contractsv1.ContextFabricInvestigationResult {
 	result := baseResult()
 	result.Limitations = uniqueTerms(count)
@@ -1370,6 +1424,127 @@ func TestChangingOnePromptNumberFailsExactlyOneBound(t *testing.T) {
 			if !reflect.DeepEqual(affected, expected) {
 				t.Errorf("mutating %q broke %v, want exactly %v.\nA bound broken by an unrelated mutation shares a phrase; a bound broken by nothing is not pinned.",
 					mutation.from, affected, expected)
+			}
+		})
+	}
+}
+
+// exemptPromptNumerals are numbers a prompt states that are NOT
+// registry-backed bounds, each with the reason it is not one. Anything not
+// listed and not registry-derived fails TestEveryPromptNumeralIsAccounted.
+//
+// An exemption is a claim that the number is not a validated bound. It is
+// deliberately awkward to add, because the failure this test exists to
+// catch is exactly a bound hiding as prose (codex round-7 F5).
+var exemptPromptNumerals = map[int]string{
+	8: "identifier MINIMUM length, a floor rather than a bound the registry caps",
+	1: "affected_subjects minimum: the model must name at least one, a floor not a cap",
+	0: "confidence range floor",
+}
+
+// TestEveryPromptNumeralIsAccounted ships the enumeration that was
+// previously run by hand (codex round-7 F5).
+//
+// Every numeral in a prompt is either the value of a registry-backed bound
+// or an explicitly classified exemption. Hand-running this found an
+// unpinned deterministic_answer limit; shipping it means the next one
+// cannot survive to a review round.
+func TestEveryPromptNumeralIsAccounted(t *testing.T) {
+	registryValues := map[int]bool{}
+	for _, bound := range contractsv1.ContextFabricModelFacingBounds {
+		registryValues[bound.Limit] = true
+	}
+
+	for name, prompt := range map[string]string{
+		"interpretation": interpretationSystemPrompt,
+		"synthesis":      synthesisSystemPrompt,
+	} {
+		t.Run(name, func(t *testing.T) {
+			unaccounted := make([]int, 0, 4)
+			for _, numeral := range promptNumerals(prompt) {
+				if registryValues[numeral] {
+					continue
+				}
+				if _, exempt := exemptPromptNumerals[numeral]; exempt {
+					continue
+				}
+				unaccounted = append(unaccounted, numeral)
+			}
+			if len(unaccounted) > 0 {
+				t.Errorf("prompt states %v, which is neither a registry-backed bound nor a classified exemption.\nA number in a prompt that nothing validates is a bound hiding as prose.", unaccounted)
+			}
+		})
+	}
+}
+
+func promptNumerals(prompt string) []int {
+	var found []int
+	seen := map[int]bool{}
+	for _, field := range strings.FieldsFunc(prompt, func(r rune) bool { return r < '0' || r > '9' }) {
+		value, err := strconv.Atoi(field)
+		if err != nil || seen[value] {
+			continue
+		}
+		seen[value] = true
+		found = append(found, value)
+	}
+	sort.Ints(found)
+	return found
+}
+
+// TestEveryRegistryBoundHasAUniquePromptAnchor is the codex round-7 F3
+// closure: the mutation set is GENERATED from the registry rather than
+// sampled by hand.
+//
+// For every registry-derived assertion, it changes that bound's number in
+// the prompt and requires exactly that bound's assertions to stop matching.
+// A bound broken by an unrelated mutation shares an anchor with it -- which
+// is how claimed_fact_ids, evidence refs and the identifier bounds were
+// quietly proving each other.
+func TestEveryRegistryBoundHasAUniquePromptAnchor(t *testing.T) {
+	cases := modelFacingBounds()
+	for _, subject := range cases {
+		phrase, ok := boundPhrases[subject.registryName]
+		if !ok {
+			t.Errorf("%s has no prompt phrase", subject.registryName)
+			continue
+		}
+		t.Run(subject.registryName, func(t *testing.T) {
+			original := strings.ReplaceAll(phrase, "{N}", strconv.Itoa(subject.limit))
+			if !strings.Contains(subject.prompt, original) {
+				t.Fatalf("prompt does not contain %q", original)
+			}
+			// A value no other bound in this prompt uses, so the mutation
+			// cannot accidentally satisfy a neighbour.
+			mutated := strings.Replace(subject.prompt, original,
+				strings.ReplaceAll(phrase, "{N}", "424242"), 1)
+
+			broken := make([]string, 0, 2)
+			for _, other := range cases {
+				if other.prompt != subject.prompt {
+					continue
+				}
+				otherPhrase, ok := boundPhrases[other.registryName]
+				if !ok {
+					continue
+				}
+				want := strings.ReplaceAll(otherPhrase, "{N}", strconv.Itoa(other.limit))
+				if !strings.Contains(mutated, want) {
+					broken = append(broken, other.registryName)
+				}
+			}
+			// Bounds that legitimately SHARE a sentence share a phrase by
+			// construction (driver and finding claimed_fact_ids are one
+			// clause). Those are expected to break together; what must not
+			// happen is a bound breaking that does not share the phrase.
+			for _, name := range broken {
+				if boundPhrases[name] != phrase {
+					t.Errorf("mutating %s also broke %s, which uses a DIFFERENT phrase: the anchors overlap and one bound is proving another",
+						subject.registryName, name)
+				}
+			}
+			if len(broken) == 0 {
+				t.Errorf("mutating %s broke nothing: its anchor is not actually pinning it", subject.registryName)
 			}
 		})
 	}

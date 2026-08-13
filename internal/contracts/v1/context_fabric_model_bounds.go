@@ -221,6 +221,18 @@ const (
 	// The looser historical values survive only as the stored-read
 	// allowance in validate_context_fabric_result.go, which exists so
 	// immutable rows written before the correction stay readable.
+	// The result-level answer text. This is the SINGLE source: the
+	// composers in internal/contextfabric/model_runtime.go truncate to
+	// these, the result validator enforces them, and the synthesis prompt
+	// states them. Before CHAOS-3746 round 7 the composers carried their
+	// own copies at 8000/16000 while writes accepted 4000/12000, so a
+	// valid synthesis with enough driver titles could compose a judgment
+	// the engine then rejected -- an invalid-result failure entirely of
+	// ACR's own making.
+	ContextFabricDirectJudgmentMaxLength      = 4000
+	ContextFabricCurrentStateMaxLength        = 4000
+	ContextFabricDeterministicAnswerMaxLength = 12000
+
 	ContextFabricLimitationsMaxCount = 100
 	ContextFabricLimitationMaxLength = 2000
 	ContextFabricWarningsMaxCount    = 100
@@ -299,6 +311,9 @@ var ContextFabricModelFacingBounds = []ContextFabricModelFacingBound{
 	{"synthesis.remaining_work.max_count", ContextFabricRemainingWorkMaxCount},
 	{"synthesis.readiness_gaps.max_count", ContextFabricReadinessGapsMaxCount},
 	{"synthesis.conflicts.max_count", ContextFabricConflictsMaxCount},
+	{"synthesis.direct_judgment.max_length", ContextFabricDirectJudgmentMaxLength},
+	{"synthesis.current_state.max_length", ContextFabricCurrentStateMaxLength},
+	{"synthesis.deterministic_answer.max_length", ContextFabricDeterministicAnswerMaxLength},
 	{"synthesis.limitations.max_count", ContextFabricLimitationsMaxCount},
 	{"synthesis.limitations.item_max_length", ContextFabricLimitationMaxLength},
 	{"synthesis.warnings.max_count", ContextFabricWarningsMaxCount},

@@ -225,6 +225,12 @@ type ContextFabricProjectionBudget struct {
 	// 8000-rune legacy judgment became 4000 runes with truncated=false and
 	// no count, so a consumer could not tell it was reading a cut value.
 	// Shortening a value is a form of omission and is disclosed like one.
+	// ReasonsOmitted counts inclusion reasons and match reasons dropped
+	// from members and candidates that were themselves RETAINED. Folding
+	// these into the member and candidate counters made the projection
+	// claim members were dropped when they were not -- a wrong statement
+	// on the wire, not merely an imprecise one (codex round-7 F4).
+	ReasonsOmitted    int  `json:"reasons_omitted"`
 	ValuesClamped     int  `json:"values_clamped"`
 	FullResultOmitted bool `json:"full_result_omitted"`
 }

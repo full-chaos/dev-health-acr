@@ -422,8 +422,14 @@ func TestLegacyCohortInclusionReasonsProjectAndAreCounted(t *testing.T) {
 		}
 		seen[reason] = true
 	}
-	if projection.ProjectionBudget.CohortMembersOmitted == 0 {
+	// Reason drops belong in the REASONS counter, not the member counter:
+	// no member was dropped, and claiming otherwise is a wrong statement on
+	// the wire (codex round-7 F4).
+	if projection.ProjectionBudget.ReasonsOmitted == 0 {
 		t.Error("dropped inclusion reasons were not counted")
+	}
+	if projection.ProjectionBudget.CohortMembersOmitted != 0 {
+		t.Errorf("reason drops were misattributed as %d dropped members", projection.ProjectionBudget.CohortMembersOmitted)
 	}
 	if !projection.ProjectionBudget.Truncated {
 		t.Error("dropping inclusion reasons must set truncated")

@@ -39,6 +39,12 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 	carveOuts := map[string]string{
 		"full_result": "the whole canonical document, rendered by the investigation_result tool rather than this view",
 	}
+	// One sentinel PER FIELD, derived from its path (codex round-7 F6). A
+	// single shared sentinel only proved that SOME planted field survived
+	// rendering: a field could be dropped entirely while another kept the
+	// assertion green. Per-field sentinels make each field's reach
+	// individually provable.
+	sentinels := make(map[string]string, len(contractsv1.MCPInvestigateQuestionUntrustedFields))
 	planted := make([]string, 0, len(contractsv1.MCPInvestigateQuestionUntrustedFields))
 	for _, declared := range contractsv1.MCPInvestigateQuestionUntrustedFields {
 		path, isProjection := strings.CutPrefix(declared, "structured.")
@@ -48,14 +54,16 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 			}
 			continue
 		}
+		sentinel := sentinelFor(declared)
 		// EVERY declared projection path must resolve and plant. A path
 		// that silently returns false -- nil optional, empty slice, tag
 		// typo, unhandled kind -- is a field this closure is not actually
 		// covering, which is the whole failure mode.
-		if !setStringsAtPath(reflect.ValueOf(&projection).Elem(), path, injection) {
+		if !setStringsAtPath(reflect.ValueOf(&projection).Elem(), path, sentinel) {
 			t.Errorf("declared untrusted path %q could not be resolved and planted; this closure is not covering it", declared)
 			continue
 		}
+		sentinels[declared] = sentinel
 		planted = append(planted, declared)
 	}
 	if len(planted)+len(carveOuts) != len(contractsv1.MCPInvestigateQuestionUntrustedFields) {
@@ -65,18 +73,53 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 	t.Logf("planted the injection in %d declared projection fields", len(planted))
 
 	rendered, _ := RenderAnswerProjectionMarkdown(projection, 400000)
-	if !strings.Contains(rendered, injection) {
-		t.Fatal("the injected text never reached the rendering, so this proves nothing")
+
+	// Fields the renderer deliberately does not show. Named, so a field
+	// silently vanishing from the rendering cannot pass as "not rendered".
+	notRendered := map[string]string{
+		"structured.question":                                   "the caller already holds the question it asked; echoing it adds nothing to a bounded answer",
+		"structured.committed_subjects[].label":                 "subjects appear through the drivers and cohort that reference them, not as a standalone list",
+		"structured.clarification.candidates[].match_reasons[]": "the candidate line carries the subject and receipt an agent needs to choose; match reasoning is inspection detail, available through the full result",
 	}
-	for _, line := range strings.Split(rendered, "\n") {
-		if !strings.Contains(line, injection) {
+	for _, declared := range planted {
+		sentinel := sentinels[declared]
+		if !strings.Contains(rendered, sentinel) {
+			if _, expected := notRendered[declared]; expected {
+				continue
+			}
+			t.Errorf("declared untrusted field %q never reached the rendering; either it is unrendered (name it) or the render path dropped it", declared)
 			continue
 		}
-		marked := strings.HasPrefix(strings.TrimSpace(line), ">") || strings.Contains(line, untrustedDataHeader)
-		if !marked {
-			t.Errorf("untrusted text rendered as ordinary structure, indistinguishable from the sidecar's own words:\n  %s", line)
+		for _, line := range strings.Split(rendered, "\n") {
+			if !strings.Contains(line, sentinel) {
+				continue
+			}
+			marked := strings.HasPrefix(strings.TrimSpace(line), ">") || strings.Contains(line, untrustedDataHeader)
+			if !marked {
+				t.Errorf("%s rendered as ordinary structure, indistinguishable from the sidecar's own words:\n  %s", declared, line)
+			}
 		}
 	}
+}
+
+// sentinelFor builds a unique, injection-shaped marker for one declared
+// field. It keeps the attack wording so the test still demonstrates the
+// threat, and appends the path so each field is individually traceable.
+func sentinelFor(declared string) string {
+	// Letters and spaces only. safeInline escapes markdown-active
+	// characters, so a sentinel containing "_" or "." comes back as "\_"
+	// and a literal Contains check misses it -- which would look exactly
+	// like the field never rendering.
+	var safe strings.Builder
+	for _, r := range declared {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+			safe.WriteRune(r)
+		default:
+			safe.WriteByte(' ')
+		}
+	}
+	return injection + " via " + strings.Join(strings.Fields(safe.String()), " ")
 }
 
 // setStringsAtPath walks a dotted/"[]" path against the struct's json tags

@@ -725,6 +725,10 @@
           "type": "integer",
           "minimum": 0
         },
+        "reasons_omitted": {
+          "type": "integer",
+          "minimum": 0
+        },
         "values_clamped": {
           "type": "integer",
           "minimum": 0
@@ -744,6 +748,7 @@
         "limitations_omitted",
         "warnings_omitted",
         "coverage_omitted",
+        "reasons_omitted",
         "values_clamped",
         "full_result_omitted"
       ]

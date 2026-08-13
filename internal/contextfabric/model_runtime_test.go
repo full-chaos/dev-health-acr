@@ -1152,13 +1152,24 @@ func TestDiagnoseSynthesisDraftBoundReportsEarlierGroundingFailureOverLaterBound
 
 func TestComposeFieldConstantsMatchContractBounds(t *testing.T) {
 	t.Parallel()
-	if directJudgmentMaxLength != 8000 {
-		t.Fatalf("directJudgmentMaxLength = %d, want 8000 to match ContextFabricInvestigationResult.Validate()'s DirectJudgment bound", directJudgmentMaxLength)
-	}
-	if currentStateMaxLength != 8000 {
-		t.Fatalf("currentStateMaxLength = %d, want 8000 to match ContextFabricInvestigationResult.Validate()'s CurrentState bound", currentStateMaxLength)
-	}
-	if deterministicAnswerMaxLength != 16000 {
-		t.Fatalf("deterministicAnswerMaxLength = %d, want 16000 to match ContextFabricInvestigationResult.Validate()'s DeterministicAnswer bound", deterministicAnswerMaxLength)
+	// Derived, not written down (codex round-7 F2). This test used to
+	// assert the literals 8000/8000/16000, so when the contract bound moved
+	// to 4000/12000 it kept passing against the OLD numbers and the
+	// composers kept producing fields the validator would reject. A proof
+	// that carries its own copy of the value it is checking cannot detect
+	// the drift it exists to detect.
+	for _, bound := range []struct {
+		name     string
+		composer int
+		contract int
+	}{
+		{"directJudgmentMaxLength", directJudgmentMaxLength, contractsv1.ContextFabricDirectJudgmentMaxLength},
+		{"currentStateMaxLength", currentStateMaxLength, contractsv1.ContextFabricCurrentStateMaxLength},
+		{"deterministicAnswerMaxLength", deterministicAnswerMaxLength, contractsv1.ContextFabricDeterministicAnswerMaxLength},
+	} {
+		if bound.composer != bound.contract {
+			t.Errorf("%s = %d, but the contract enforces %d: a composer that exceeds the validator produces results the engine then rejects",
+				bound.name, bound.composer, bound.contract)
+		}
 	}
 }

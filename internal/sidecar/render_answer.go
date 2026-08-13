@@ -60,6 +60,18 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		}
 	}
 
+	if len(projection.StrongestPressures) > 0 {
+		b.writeLine("")
+		if !b.writeLine(fmt.Sprintf("## Strongest pressures (%s)", untrustedDataHeader)) {
+			return b.finishWithTruncation()
+		}
+		for _, pressure := range projection.StrongestPressures {
+			if !b.writeLines(untrustedBlock("pressure", pressure)) {
+				return b.finishWithTruncation()
+			}
+		}
+	}
+
 	// A clarification request is the answer when the engine could not
 	// settle the subject, so it renders before the drivers rather than as
 	// a footnote a reader might miss.
@@ -116,11 +128,19 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 			strconv.Itoa(len(projection.Cohort.Members)), strconv.Itoa(projection.Cohort.Total))) {
 			return b.finishWithTruncation()
 		}
+		if !b.writeLines(untrustedBlock("cohort_rationale", projection.Cohort.Rationale)) {
+			return b.finishWithTruncation()
+		}
 		for _, member := range projection.Cohort.Members {
 			line := fmt.Sprintf("%s. %s `%s`", strconv.Itoa(member.Rank),
 				safeInline(string(member.Subject.Kind)), untrustedInline(member.Subject.Label))
 			if !b.writeLine(line) {
 				return b.finishWithTruncation()
+			}
+			for _, reason := range member.InclusionReasons {
+				if !b.writeLine("   - " + untrustedInline(reason)) {
+					return b.finishWithTruncation()
+				}
 			}
 		}
 	}
@@ -253,6 +273,7 @@ func omittedSummary(budget contractsv1.ContextFabricProjectionBudget) string {
 	add(budget.LimitationsOmitted, "limitations")
 	add(budget.WarningsOmitted, "warnings")
 	add(budget.CoverageOmitted, "coverage entries")
+	add(budget.ReasonsOmitted, "reasons")
 	add(budget.ValuesClamped, "shortened values")
 	if budget.FullResultOmitted {
 		parts = append(parts, "the full canonical result (it exceeded the byte budget)")
