@@ -51,10 +51,15 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	// most recent already-computed row for each (team, area, stream)
 	// triple -- a selection, never an aggregation, of Ops' own published
 	// rows. computed_at breaks same-day reruns deterministically (F4).
+	//
+	// day/computed_at is still not a TOTAL order (Codex round-2 finding
+	// M1): investment_metrics_daily has no per-row unique id, so two rows
+	// could share both. cityHash64 of the value columns is the final
+	// tiebreaker -- arbitrary among an exact tie, but stable.
 	statement := withRowLimit(`SELECT team_id, investment_area, project_stream, toString(day), toInt64(delivery_units), toInt64(work_items_completed), toInt64(prs_merged), toInt64(churn_loc), cycle_p50_hours
 FROM (
 	SELECT team_id, investment_area, project_stream, day, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours,
-		row_number() OVER (PARTITION BY team_id, investment_area, project_stream ORDER BY day DESC, computed_at DESC) AS rn
+		row_number() OVER (PARTITION BY team_id, investment_area, project_stream ORDER BY day DESC, computed_at DESC, cityHash64(tuple(delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours)) DESC) AS rn
 	FROM investment_metrics_daily
 	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}
 )

@@ -53,10 +53,16 @@ func (p *ReadinessProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	// a team can have several concurrent work scopes (e.g. sprints)
 	// tracked at once, and different source providers can share a
 	// work_scope_id string.
+	//
+	// day/computed_at is still not a TOTAL order (Codex round-2 finding
+	// M1): estimate_coverage_metrics_daily has no per-row unique id beyond
+	// this partition's own key, so two rows could share both. cityHash64
+	// of the value columns is the final tiebreaker -- arbitrary among an
+	// exact tie, but stable.
 	statement := withRowLimit(`SELECT team_id, work_scope_id, provider, toString(day), toInt64(estimated_count), toInt64(unestimated_count), toInt64(backlog_size), toUInt8(isNotNull(ratio)), toFloat64(ifNull(ratio, 0))
 FROM (
 	SELECT ifNull(team_id, '') AS team_id, work_scope_id, provider, day, estimated_count, unestimated_count, backlog_size, ratio,
-		row_number() OVER (PARTITION BY team_id, work_scope_id, provider ORDER BY day DESC, computed_at DESC) AS rn
+		row_number() OVER (PARTITION BY team_id, work_scope_id, provider ORDER BY day DESC, computed_at DESC, cityHash64(tuple(estimated_count, unestimated_count, backlog_size, ifNull(ratio, -1))) DESC) AS rn
 	FROM estimate_coverage_metrics_daily FINAL
 	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}
 )

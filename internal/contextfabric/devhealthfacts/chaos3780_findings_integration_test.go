@@ -203,6 +203,64 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		}
 	})
 
+	// FINAL_binding_later_version_wins_over_replaced_key is Codex round-2
+	// gap #3: recommendations_daily's ReplacingMergeTree(computed_at)
+	// sorting key is (org_id, team_id, rule_id, window_end) -- two rows
+	// sharing that EXACT key are two "versions" of one logical row. This
+	// seeds both an old and a new version and asserts the new version's
+	// fields (not the old one's) are what the provider reads.
+	//
+	// Verified by hand (delete FINAL, rerun, restore): this specific
+	// assertion does NOT fail when FROM recommendations_daily FINAL is
+	// changed to FROM recommendations_daily. Reported, not silently
+	// "fixed" to force a red/green result -- the empirical finding is
+	// itself the useful signal here. The reason is structural: this
+	// provider's row_number() ORDER BY already includes computed_at
+	// DESC as its second term, and computed_at is ALSO
+	// ReplacingMergeTree(computed_at)'s own version column -- "keep the
+	// row with the max version" and "rank by computed_at DESC, take
+	// rn=1" are the same selection rule over the same column, so FINAL
+	// can never disagree with what row_number() already picks. The same
+	// holds for capacity_forecasts and estimate_coverage_metrics_daily
+	// (both also ReplacingMergeTree(computed_at), both also carry
+	// computed_at DESC as an ORDER BY term). FINAL stays -- it matches
+	// this package's convention (every one of the other providers
+	// applies it) and is free insurance against a future edit that
+	// reorders or drops computed_at from an ORDER BY clause -- but no
+	// correctness claim in this package rests on it alone.
+	t.Run("FINAL_binding_later_version_wins_over_replaced_key", func(t *testing.T) {
+		const orgID = "org-final"
+		if err := direct.Exec(ctx, `INSERT INTO recommendations_daily (team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			"TEAM1", orgID, "saturation", date(2026, 7, 29), date(2026, 8, 12), true, "critical", "OLD VERSION", "stale", "drops below threshold", ts(2026, 8, 12, 2, 0, 0)); err != nil {
+			t.Fatalf("seed old version: %v", err)
+		}
+		// Same (org_id, team_id, rule_id, window_end) -- the replacing key --
+		// a later computed_at, different content.
+		if err := direct.Exec(ctx, `INSERT INTO recommendations_daily (team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			"TEAM1", orgID, "saturation", date(2026, 7, 29), date(2026, 8, 12), true, "high", "NEW VERSION", "fresh", "drops below threshold", ts(2026, 8, 12, 20, 0, 0)); err != nil {
+			t.Fatalf("seed new version: %v", err)
+		}
+		provider := findProvider(t, providers, contextfabric.FactOperationalDeficiencies)
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind: contextfabric.FactOperationalDeficiencies,
+			Subjects: []contextfabric.SubjectRef{{
+				Kind: contextfabric.SubjectTeam, CanonicalID: "team:TEAM1", Label: "TEAM1",
+			}},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() error = %v", err)
+		}
+		if len(result.Facts) != 1 {
+			t.Fatalf("facts = %#v, want exactly 1 (the replaced key collapses to one logical row)", result.Facts)
+		}
+		title := result.Facts[0].Fields["title"].String
+		severity := result.Facts[0].Fields["severity"].String
+		if title == nil || *title != "NEW VERSION" || severity == nil || *severity != "high" {
+			t.Fatalf("fields = %#v, want the NEW VERSION (later computed_at)", result.Facts[0].Fields)
+		}
+	})
+
 	t.Run("F2_metrics_whole_fresh_row_wins_never_a_stitched_combination", func(t *testing.T) {
 		const orgID = "org-f2"
 		repoID := "22222222-2222-2222-2222-222222222222"
@@ -238,6 +296,108 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		}
 		if fact.Fields["mttr_hours"].Number == nil || *fact.Fields["mttr_hours"].Number != 3.5 {
 			t.Fatalf("fields = %#v, want the fresh row's mttr_hours=3.5", fact.Fields)
+		}
+	})
+
+	// F2_health_whole_fresh_row_wins_never_a_stitched_combination is the
+	// health.go counterpart of the metrics.go F2 test above (Codex round-2
+	// gap #1): it must be impossible for health.go to regress to
+	// independent per-field argMax without a real-suite test noticing --
+	// this seeds a same-day rerun with a DIFFERENT severity AND a
+	// DIFFERENT compounding_risk on the fresh row, and asserts both come
+	// from the SAME (freshest) row.
+	t.Run("F2_health_whole_fresh_row_wins_never_a_stitched_combination", func(t *testing.T) {
+		const orgID = "org-f2-health"
+		repoID := "55555555-5555-5555-5555-555555555555"
+		if err := direct.Exec(ctx, `INSERT INTO compounding_risk_daily (org_id, scope, scope_id, day, severity, compounding_risk, computed_at) VALUES (?,?,?,?,?,?,?)`,
+			orgID, "repo", repoID, date(2026, 8, 12), "low", 0.1, ts(2026, 8, 12, 10, 0, 0)); err != nil {
+			t.Fatalf("seed stale health row: %v", err)
+		}
+		if err := direct.Exec(ctx, `INSERT INTO compounding_risk_daily (org_id, scope, scope_id, day, severity, compounding_risk, computed_at) VALUES (?,?,?,?,?,?,?)`,
+			orgID, "repo", repoID, date(2026, 8, 12), "high", 0.95, ts(2026, 8, 12, 22, 0, 0)); err != nil {
+			t.Fatalf("seed fresh health row: %v", err)
+		}
+		provider := findProvider(t, providers, contextfabric.FactHealth)
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{repoSubject(repoID)},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() error = %v", err)
+		}
+		if len(result.Facts) != 1 {
+			t.Fatalf("facts = %#v, want 1", result.Facts)
+		}
+		fact := result.Facts[0]
+		severity := fact.Fields["severity"].String
+		risk := fact.Fields["compounding_risk"].Number
+		if severity == nil || *severity != "high" || risk == nil || *risk != 0.95 {
+			t.Fatalf("fields = %#v, want the fresh row's whole combination (severity=high, compounding_risk=0.95), not a stitched mix -- this is exactly what would still pass if health.go regressed to independent argMax(severity,...)/argMax(compounding_risk,...)", fact.Fields)
+		}
+	})
+
+	// M1_identical_computed_at_tie_resolves_to_the_same_row_every_time is
+	// Codex round-2 gap #2: whole-row row_number() selection kills field
+	// stitching, but without a total order two rows tied on every ORDER BY
+	// term before the final tiebreaker could still let a DIFFERENT one win
+	// on different executions of the identical query -- a fact that flaps
+	// with no data change. This seeds two rows in the SAME partition with
+	// the SAME day and the SAME computed_at (the live 86-way tie shape
+	// found in compounding_risk_daily), runs the query twice, and asserts
+	// the same severity wins both times.
+	t.Run("M1_identical_computed_at_tie_resolves_to_the_same_row_every_time", func(t *testing.T) {
+		const orgID = "org-m1-tie"
+		// Manual verification against real ClickHouse (docker exec,
+		// clickhouse-client, day DESC/computed_at DESC only, no further
+		// tiebreaker) showed a single tied pair flip in roughly half of 10
+		// repeated executions of the IDENTICAL query against UNCHANGED
+		// data -- genuinely non-deterministic. That flip did not reproduce
+		// through 10 repeated calls to the SAME provider instance in a Go
+		// test (the physical part layout does not change across calls a
+		// few milliseconds apart, so repeat-the-same-call is not a
+		// reliable reproduction from Go). What DOES reproduce it
+		// reliably: many independent (repo_id, tied pair) partitions
+		// evaluated within ONE query execution -- ClickHouse's per-
+		// partition window evaluation is not guaranteed to resolve a tie
+		// the same way across partitions, so this seeds 40 repositories,
+		// each with its own identical-computed_at tie between "low" and
+		// "elevated", and asserts every one resolves the same way. Without
+		// the tiebreaker this is flaky (some repos land on "low", others
+		// on "elevated", nondeterministically); with it, all 40 agree.
+		const repoCount = 40
+		subjects := make([]contextfabric.SubjectRef, 0, repoCount)
+		tiedAt := ts(2026, 8, 12, 12, 0, 0)
+		for i := 0; i < repoCount; i++ {
+			repoID := "77777777-7777-7777-7777-" + padHex(i)
+			if err := direct.Exec(ctx, `INSERT INTO compounding_risk_daily (org_id, scope, scope_id, day, severity, compounding_risk, computed_at) VALUES (?,?,?,?,?,?,?)`,
+				orgID, "repo", repoID, date(2026, 8, 12), "low", 0.2, tiedAt); err != nil {
+				t.Fatalf("seed tied row A for repo %d: %v", i, err)
+			}
+			if err := direct.Exec(ctx, `INSERT INTO compounding_risk_daily (org_id, scope, scope_id, day, severity, compounding_risk, computed_at) VALUES (?,?,?,?,?,?,?)`,
+				orgID, "repo", repoID, date(2026, 8, 12), "elevated", 0.6, tiedAt); err != nil {
+				t.Fatalf("seed tied row B for repo %d: %v", i, err)
+			}
+			subjects = append(subjects, repoSubject(repoID))
+		}
+		provider := findProvider(t, providers, contextfabric.FactHealth)
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind: contextfabric.FactHealth, Subjects: subjects,
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() error = %v", err)
+		}
+		if len(result.Facts) != repoCount {
+			t.Fatalf("facts = %d, want %d", len(result.Facts), repoCount)
+		}
+		seen := map[string]int{}
+		for _, fact := range result.Facts {
+			if fact.Fields["severity"].String != nil {
+				seen[*fact.Fields["severity"].String]++
+			}
+		}
+		if len(seen) != 1 {
+			t.Fatalf("severity outcomes across %d identically-tied repositories = %#v, want all %d to agree -- row_number() has no total order", repoCount, seen, repoCount)
 		}
 	})
 

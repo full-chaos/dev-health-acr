@@ -58,10 +58,17 @@ func (p *OperationalDeficienciesProvider) ReadFacts(ctx context.Context, princip
 	// evaluation. fired=1 is then applied to that single winning row only,
 	// in the outer WHERE, so a rule Ops has since cleared never resurfaces
 	// just because it fired at some earlier point (F1).
+	//
+	// window_end/computed_at is still not a TOTAL order (Codex round-2
+	// finding M1): without a further tiebreaker, a tie could let an
+	// arbitrary fired value win between executions of the identical
+	// query -- exactly the bug F1 fixed, reintroduced by a different
+	// route. cityHash64 of the value columns (fired included) is the
+	// final tiebreaker -- arbitrary among an exact tie, but stable.
 	statement := withRowLimit(`SELECT team_id, rule_id, rule_version, severity, title, rationale, success_criterion, toString(window_start), toString(window_end)
 FROM (
 	SELECT team_id, rule_id, rule_version, severity, title, rationale, success_criterion, window_start, window_end, fired,
-		row_number() OVER (PARTITION BY team_id, rule_id ORDER BY window_end DESC, computed_at DESC) AS rn
+		row_number() OVER (PARTITION BY team_id, rule_id ORDER BY window_end DESC, computed_at DESC, cityHash64(tuple(fired, severity, title, rationale, success_criterion)) DESC) AS rn
 	FROM recommendations_daily FINAL
 	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}
 )

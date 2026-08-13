@@ -26,6 +26,18 @@ const repositoryPrefix = "repository:"
 // the same way across fields, so on a day with several reruns they can
 // stitch a fact together from different rows, fabricating a combination
 // that was never actually true at any single point in time.
+//
+// day DESC, computed_at DESC is still not a TOTAL order: repo_metrics_daily
+// has no per-row unique id column, so two rows can share the exact same
+// computed_at too (Codex round-2 finding M1 -- the same 86-way identical-
+// computed_at tie this package found in compounding_risk_daily is possible
+// here). Without a final tiebreaker, row_number() can pick a different one
+// of those tied rows on different executions of the SAME query, which is
+// itself a correctness defect (a fact that flaps between two truths with no
+// data change). cityHash64 of the row's own value columns is the last
+// ORDER BY term: it is arbitrary (there is no "more correct" row among an
+// exact tie) but STABLE -- the same tied inputs always hash to the same
+// value, so the same row wins every time.
 type MetricsProvider struct{ facts clickhouseFacts }
 
 func newMetricsProvider(client contextpacket.ClickHouseQueryClient) *MetricsProvider {
@@ -49,7 +61,7 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	statement := withRowLimit(`SELECT toString(repo_id), toString(day), toInt64(commits_count), toInt64(prs_merged), toFloat64(median_pr_cycle_hours), toFloat64(change_failure_rate), toUInt8(isNotNull(mttr_hours)), toFloat64(ifNull(mttr_hours, 0)), toInt64(bus_factor), toFloat64(code_ownership_gini)
 FROM (
 	SELECT repo_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini,
-		row_number() OVER (PARTITION BY repo_id ORDER BY day DESC, computed_at DESC) AS rn
+		row_number() OVER (PARTITION BY repo_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, ifNull(mttr_hours, -1), bus_factor, code_ownership_gini)) DESC) AS rn
 	FROM repo_metrics_daily
 	WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}
 )

@@ -60,10 +60,15 @@ func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.
 	facts := make([]contextfabric.CanonicalFact, 0, maxFactRowsPerQuery)
 	// row_number() OVER (PARTITION BY provider ORDER BY created_at DESC)
 	// picks each provider's single most recent ingestion job outcome.
+	// created_at DESC alone is not a TOTAL order (Codex round-2 finding
+	// M1) -- two backfill jobs for the same provider could start in the
+	// same second. backfill_log carries a real per-row unique id, job_id,
+	// so this provider uses that as the final tiebreaker instead of a
+	// value hash.
 	statement := withRowLimit(`SELECT provider, status, items_synced, duration_ms, error_message, toString(created_at)
 FROM (
 	SELECT provider, status, items_synced, duration_ms, error_message, created_at,
-		row_number() OVER (PARTITION BY provider ORDER BY created_at DESC) AS rn
+		row_number() OVER (PARTITION BY provider ORDER BY created_at DESC, job_id DESC) AS rn
 	FROM backfill_log
 	WHERE org_id = {org_id:String}
 )

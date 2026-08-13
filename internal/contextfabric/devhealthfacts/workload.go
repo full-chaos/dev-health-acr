@@ -60,10 +60,16 @@ func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	// is ReplacingMergeTree(computed_at) sorted on (org_id, forecast_id), so
 	// FINAL only collapses a re-emitted identical forecast_id, not distinct
 	// scopes -- the row_number() partition is what actually resolves F3.
+	//
+	// computed_at DESC alone is not a TOTAL order (Codex round-2 finding
+	// M1): two forecasts for the same scope could share a computed_at.
+	// Unlike the other providers in this package, capacity_forecasts DOES
+	// carry a real per-row unique id -- forecast_id -- so this provider uses
+	// that as the final tiebreaker instead of a value hash.
 	statement := withRowLimit(`SELECT team_id, ifNull(work_scope_id, ''), throughput_mean, throughput_stddev, toUInt8(isNotNull(p50_days)), toInt64(ifNull(p50_days, 0)), insufficient_history, high_variance, toInt64(backlog_size), toString(computed_at)
 FROM (
 	SELECT ifNull(team_id, '') AS team_id, work_scope_id, throughput_mean, throughput_stddev, p50_days, insufficient_history, high_variance, backlog_size, computed_at,
-		row_number() OVER (PARTITION BY team_id, work_scope_id ORDER BY computed_at DESC) AS rn
+		row_number() OVER (PARTITION BY team_id, work_scope_id ORDER BY computed_at DESC, forecast_id DESC) AS rn
 	FROM capacity_forecasts FINAL
 	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}
 )

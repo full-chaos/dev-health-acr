@@ -29,6 +29,14 @@ import (
 // of resolving that tie to the same underlying row, so this provider uses
 // row_number() OVER (... ORDER BY day DESC, computed_at DESC), picking rn=1
 // and scanning every field off that ONE row.
+//
+// day DESC, computed_at DESC is still not a TOTAL order given that same
+// 86-way computed_at tie (Codex round-2 finding M1): compounding_risk_daily
+// has no per-row unique id, so without a further tiebreaker row_number()
+// could pick a different tied row on different executions of the identical
+// query. cityHash64 of severity/compounding_risk is the last ORDER BY
+// term -- arbitrary among an exact tie, but stable, so the same row wins
+// every time.
 type HealthProvider struct{ facts clickhouseFacts }
 
 func newHealthProvider(client contextpacket.ClickHouseQueryClient) *HealthProvider {
@@ -80,7 +88,7 @@ func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids
 	statement := withRowLimit(`SELECT scope_id, toString(severity), toUInt8(isNotNull(compounding_risk)), toFloat64(ifNull(compounding_risk, 0)), toString(computed_at)
 FROM (
 	SELECT scope_id, severity, compounding_risk, computed_at,
-		row_number() OVER (PARTITION BY scope_id ORDER BY day DESC, computed_at DESC) AS rn
+		row_number() OVER (PARTITION BY scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
 	FROM compounding_risk_daily
 	WHERE org_id = {org_id:String} AND scope = '` + scope + `' AND scope_id IN {ids:Array(String)}
 )
