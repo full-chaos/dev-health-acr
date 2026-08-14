@@ -157,6 +157,34 @@ func TestQuestionBoundsAreCountedInRunesNotBytes(t *testing.T) {
 		}
 	})
 
+	// The ASTRAL plane is where counting schemes disagree most (self-found
+	// before the round-15 verdict). "𝄞" is 4 bytes, ONE Go rune, and
+	// TWO UTF-16 code units. Go and JSON Schema both count code points, so
+	// 8000 of them is exactly at the bound here -- but a validator counting
+	// UTF-16 units sees 16000 and a validator counting bytes sees 32000.
+	//
+	// A BMP case like "e-acute" only separates bytes from code points. Only an
+	// astral case also separates UTF-16 units from code points, which is the
+	// divergence that actually bit the Workbench route guard (CHAOS-3803).
+	t.Run("astral runes count as one code point each", func(t *testing.T) {
+		const astral = "\U0001D11E"
+		atBound := strings.Repeat(astral, 8000)
+		if len(atBound) != 32000 {
+			t.Fatalf("fixture is not astral: %d bytes for 8000 runes", len(atBound))
+		}
+		if err := validQuestionRequest(t, atBound).Validate(); err != nil {
+			t.Errorf("a question of exactly 8000 astral runes is rejected (%v); the bound is not being counted in code points", err)
+		}
+		if err := validQuestionRequest(t, strings.Repeat(astral, 8001)).Validate(); err == nil {
+			t.Error("a question of 8001 astral runes is accepted; the bound is not enforced in code points")
+		}
+		result := closureResult()
+		result.Question = atBound
+		if err := result.Validate(); err != nil {
+			t.Errorf("an astral question admitted at the door is rejected when echoed into the result (%v)", err)
+		}
+	})
+
 	t.Run("padding is still rejected in runes", func(t *testing.T) {
 		padded := " " + atMax + " "
 		if err := validQuestionRequest(t, padded).Validate(); err == nil {

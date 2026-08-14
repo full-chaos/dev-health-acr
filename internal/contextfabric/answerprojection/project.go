@@ -690,7 +690,7 @@ func projectCoverage(result contractsv1.ContextFabricInvestigationResult, clamp 
 		// with different states. Collapsing drops one source's state and
 		// reason, so it is counted as an omission rather than vanishing
 		// (codex round-6 F3).
-		name := strings.TrimSpace(source.Source)
+		name := storedText(source.Source)
 		if _, exists := seen[name]; exists {
 			omitted++
 			continue
