@@ -63,8 +63,21 @@ func (b ContextFabricProjectionBatch) Validate() error {
 	if err := validateProjectionTombstones(b.Tombstones); err != nil {
 		return err
 	}
+	// R6-1: every timestamp this batch carries must survive conversion to
+	// epoch nanoseconds. Derived by reflection over the batch rather than
+	// checked per type, because the per-type hand list added in R5-3
+	// covered entities and tombstones and silently missed contents and
+	// episodes -- and a field added later would be missed the same way.
+	// This walk finds whatever the batch actually contains.
+	if err := validateRepresentableInstants(b); err != nil {
+		return fmt.Errorf("projection batch %w", errUnrepresentableInstant(err))
+	}
 	return nil
 }
+
+// errUnrepresentableInstant keeps the message shape stable for callers
+// that match on it.
+func errUnrepresentableInstant(err error) error { return err }
 
 func (s ContextFabricAuthorizationScope) Validate() error {
 	if len(s.RepositorySlugs) > 200 || len(s.ProjectIDs) > 200 || len(s.TeamIDs) > 200 || !uniqueTrimmedStrings(s.RepositorySlugs, 512) || !uniqueTrimmedStrings(s.ProjectIDs, 256) || !uniqueTrimmedStrings(s.TeamIDs, 256) {
@@ -188,6 +201,15 @@ func validateReservedOrganizationScope(kind ContextFabricSubjectKind, scope Cont
 func (t ContextFabricProjectionTombstone) Validate() error {
 	if !stringLengthBetween(strings.TrimSpace(t.Kind), 1, 64) || !stringLengthBetween(t.CanonicalID, 1, 256) || !stringLengthBetween(strings.TrimSpace(t.Reason), 1, 2000) || t.EffectiveAt.IsZero() || !validVersion(t.SourceVersion) {
 		return fmt.Errorf("projection tombstone violates v1 bounds")
+	}
+	// R5-3: EffectiveAt orders a tombstone against the rows it retires,
+	// and that ordering is done in epoch nanoseconds. An out-of-range
+	// value wraps rather than saturating, which would let a tombstone
+	// sort before the data it is supposed to remove -- so it is rejected
+	// with everything else that cannot be represented.
+	if !representableInstant(t.EffectiveAt) {
+		return fmt.Errorf("projection tombstone effective_at is outside the representable range (%s..%s)",
+			minRepresentableInstant.Format("2006-01-02"), maxRepresentableInstant.Format("2006-01-02"))
 	}
 	return nil
 }

@@ -39,30 +39,30 @@ var (
 	// runtime specifically) and this one both reachable from one
 	// vendor-neutral check.
 	ErrRateLimited = errors.New("context fabric dependency rate limited")
-	// ErrUnsupportedTimeAxis identifies a request that asked a
-	// historical or point-in-time question the Context Fabric cannot
-	// currently answer (CHAOS-3755 adversarial review finding H6).
+	// ErrUnsupportedTimeAxis is RETIRED by CHAOS-3781 and deliberately
+	// not replaced by an equivalent.
 	//
-	// The v1 request contract accepts four temporal axes, but every
-	// canonical fact source behind this engine reads CURRENT state only.
-	// Answering a "what was the status last month" question with today's
-	// data -- presented as if it were that answer -- is a false
-	// historical answer, and the worst kind, because nothing in the
-	// response marks it as wrong. So the engine refuses the request
-	// outright rather than silently degrading it.
+	// It meant "this service cannot answer a historical question at all"
+	// (CHAOS-3755 finding H6), which was true and honest while every
+	// canonical source below read current state only. It stopped being
+	// true when the graph gained validity-window admission and the fact
+	// providers gained time bounds: a historical question is now answered
+	// on every axis, with the sources that cannot speak for the requested
+	// time degrading individually in coverage (AC-3781-5) rather than the
+	// whole request being refused.
 	//
-	// This is a REQUEST-level refusal (the route maps it to 400), not a
-	// dependency failure: the caller asked a well-formed question the
-	// service does not support, and the honest answer is to say so. The
-	// providers refuse the same thing independently at their own
-	// boundary; this is the clean, early half of that pair.
+	// AC-3781-6 required the refusal be removed from the engine, from
+	// every provider, and from the route in ONE change, for a specific
+	// reason: a partial removal reproduces exactly the false historical
+	// answer H6 named. If one layer still refuses, callers see an
+	// inconsistent service; if one layer stops refusing while another
+	// still cannot bound itself, that layer answers with current data
+	// under a historical label.
 	//
-	// Deliberately not enforced in ContextFabricInvestigationRequest.
-	// Validate(): the wire contract's accepted axes are unchanged, so
-	// tightening it there would be a contract-level meaning change
-	// requiring a new major version. What is unsupported is this
-	// engine's ability to answer, which is a service concern.
-	ErrUnsupportedTimeAxis = errors.New("context fabric time axis is not supported")
+	// What replaced it is contextfabric.ErrInvalidTimeBound (temporal.go),
+	// which is narrower on purpose: not "historical questions are
+	// unsupported" but "these particular bounds are not answerable" -- a
+	// future instant, or a range wider than this service will read.
 )
 
 // Investigator is the consumer-neutral Context Fabric entry point. Ask Dev,
@@ -145,7 +145,31 @@ type InvestigationResultStore interface {
 	// reproduce answer reuse's own fail-open hazard (Codex round-1
 	// findings F1/F2, round-2 finding #7) the way a context.Context value
 	// could.
-	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch) error
+	// Save persists one immutable result. The trailing parameters are the
+	// reuse bindings Engine captures itself and threads explicitly --
+	// never re-derived here, and never smuggled through ctx: a caller who
+	// forgets one must fail to compile.
+	//
+	// The final string is the REUSE TIME-AXIS KEY (CHAOS-3781), computed
+	// by Engine from the CLAMPED EFFECTIVE request context -- the same
+	// value, byte for byte, that AnswerReuseGate.FindReusable keys its
+	// lookup with. Never re-derived here from result.Interpretation.
+	//
+	// The invariant is SYMMETRY: both sides must derive the key from a
+	// value both sides can compute. The lookup runs before Interpret, so
+	// only the request context qualifies -- keying Save on the interpreted
+	// context would save under a key no identical request could produce,
+	// and that whole class of question would silently never reuse.
+	//
+	// EFFECTIVE, not the raw wire value: a request whose as-of is clamped
+	// means a different instant at different arrival times, so the wire
+	// value stops describing what the answer means. See
+	// contextfabric.TimeAxisKeyFor for the accepted cost.
+	//
+	// The key's job is REQUEST identity; interpretation identity is
+	// covered separately by condition 6's re-resolution against the
+	// stored Interpretation.
+	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string) error
 	Get(context.Context, storage.Principal, string) (InvestigationResult, error)
 }
 
@@ -214,11 +238,28 @@ type SourceWatermarkSnapshot map[string]string
 // the primary was untouched. AnswerReuseGate.FindReusable implements the
 // membership test (e.g. `model_identity = ANY(...)`); this type only
 // carries the chain to test membership against.
+//
+// TimeAxisKey is the CHAOS-3781 fifth dimension. Before it, QuestionHash
+// -- which hashes the question TEXT only -- was a sound key because every
+// stored result was implicitly a current-axis answer: non-current axes
+// were refused outright, so no historical answer could ever be stored.
+// The moment historical answers became storable, the identical question
+// text asked "as of March" and "as of June" collapsed onto ONE key, and a
+// June answer would be served for a March question -- a silent wrong
+// answer, strictly worse than the refusal CHAOS-3781 removed.
+//
+// It is deliberately NOT folded into QuestionHash. That hash's contract
+// is "the SHA-256 of the canonicalized question text" (see
+// CanonicalizeQuestion), and conflating two independent things into one
+// opaque digest would destroy the per-condition diagnosability the
+// six-condition policy depends on -- a reuse miss must stay attributable
+// to a specific condition.
 type ReuseKey struct {
 	QuestionHash      string
 	ContractVersion   string
 	ProjectionVersion string
 	ModelIdentities   []string
+	TimeAxisKey       string
 }
 
 // AnswerReuseGate finds a stored InvestigationResult eligible for reuse

@@ -25,6 +25,7 @@ func TestContextFabricGoldenContractsDecodeAndValidate(t *testing.T) {
 	}{
 		{name: "context_fabric_investigation_request.v1.json", target: &ContextFabricInvestigationRequest{}},
 		{name: "context_fabric_investigation_result.v1.json", target: &ContextFabricInvestigationResult{}},
+		{name: "context_fabric_investigation_result_historical.v1.json", target: &ContextFabricInvestigationResult{}},
 		{name: "context_fabric_projection_batch.v1.json", target: &ContextFabricProjectionBatch{}},
 	}
 	for _, test := range tests {

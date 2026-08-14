@@ -325,3 +325,177 @@ func manyFacts(kind FactKind, subject SubjectRef, count int) []CanonicalFact {
 	}
 	return facts
 }
+
+// grainProviderStub builds a provider returning one fact at a declared
+// state and grain, using this file's existing stub.
+func grainProviderStub(kind FactKind, subject SubjectRef, state SourceState, grain TemporalGrain) *factProviderStub {
+	observed := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	return &factProviderStub{
+		capability: FactCapability{Kind: kind, Name: "ops-" + string(kind), Version: "v1", SupportedSubjectKinds: []SubjectKind{subject.Kind}, RequiresEvidence: true},
+		result: FactProviderResult{
+			State: state, ObservedAt: &observed, Version: "v1", Grain: grain,
+			Reason: "seeded for the grain-composition test",
+			Facts: []CanonicalFact{{
+				Kind: kind, Subject: subject, Fields: map[string]FactValue{"value": StringFactValue("x")},
+				ObservedAt: &observed, EvidenceRefIDs: []string{"evidence_grain_1234"}, SourceState: state,
+			}},
+		},
+	}
+}
+
+// TestF3_TruncatedProviderStillContributesItsGrain is CHAOS-3781 round-2
+// F3, red-green.
+//
+// The bundle RETAINS facts from a truncated (and from a fact-bearing
+// stale) provider, but the grain composition only counted
+// State == SourceAvailable. A day-grain provider that was truncated
+// therefore contributed its FACTS to the answer while its GRAIN was
+// dropped -- so an answer built from an instant-grain provider plus a
+// truncated daily rollup composed to instant, overstating the precision
+// of the very data it was built from.
+//
+// "Contributing" now means facts retained, from the same predicate the
+// retention branch uses, so the two cannot drift apart again.
+func TestF3_TruncatedProviderStillContributesItsGrain(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	asOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+
+	for _, testCase := range []struct {
+		name  string
+		state SourceState
+	}{
+		{"available", SourceAvailable},
+		// The two states that KEEP their facts must also keep their
+		// grain -- this pair is the regression.
+		{"truncated", SourceTruncated},
+		{"stale", SourceStale},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			exact := grainProviderStub(FactStatus, project, SourceAvailable, GrainInstant)
+			daily := grainProviderStub(FactReadiness, project, testCase.state, GrainDay)
+			registry, err := NewFactCapabilityRegistry([]FactProvider{exact, daily}, FactRegistryOptions{})
+			if err != nil {
+				t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+			}
+			bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, CanonicalFactRequest{
+				Question: InterpretedQuestion{
+					Shape: ShapeSingleSubject, RequestedJudgment: "status",
+					TimeContext: TimeContext{Axis: TemporalValidTime, AsOf: &asOf},
+				},
+				Subjects:     []SubjectRef{project},
+				Requirements: []FactRequirement{{Kind: FactStatus}, {Kind: FactReadiness}},
+			})
+			if err != nil {
+				t.Fatalf("ReadFacts() error = %v", err)
+			}
+			// Sanity: the day-grain provider's facts really did land in
+			// the bundle, or this proves nothing about its grain.
+			var sawDaily bool
+			for _, fact := range bundle.Facts {
+				if fact.Kind == FactReadiness {
+					sawDaily = true
+				}
+			}
+			if !sawDaily {
+				t.Fatalf("the %s provider contributed no facts; the test cannot show its grain was dropped", testCase.state)
+			}
+			if bundle.TemporalGrain != GrainDay {
+				t.Fatalf("composed grain = %q, want %q: a provider whose facts were kept must contribute its grain too",
+					bundle.TemporalGrain, GrainDay)
+			}
+		})
+	}
+}
+
+// TestF3_ProviderWithNoRetainedFactsContributesNoGrain is the
+// over-blocking guard: a provider whose facts are REJECTED must not
+// coarsen the answer either.
+func TestF3_ProviderWithNoRetainedFactsContributesNoGrain(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	asOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+
+	exact := grainProviderStub(FactStatus, project, SourceAvailable, GrainInstant)
+	// not_applicable keeps no facts -- a Tier C provider declining a
+	// historical question. It still reports a grain, which must be ignored.
+	declining := grainProviderStub(FactReadiness, project, SourceNotApplicable, GrainDay)
+	declining.result.Facts = nil
+
+	registry, err := NewFactCapabilityRegistry([]FactProvider{exact, declining}, FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, CanonicalFactRequest{
+		Question: InterpretedQuestion{
+			Shape: ShapeSingleSubject, RequestedJudgment: "status",
+			TimeContext: TimeContext{Axis: TemporalValidTime, AsOf: &asOf},
+		},
+		Subjects:     []SubjectRef{project},
+		Requirements: []FactRequirement{{Kind: FactStatus}, {Kind: FactReadiness}},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if bundle.TemporalGrain != GrainInstant {
+		t.Fatalf("composed grain = %q, want %q: a provider that contributed no facts must not coarsen the answer",
+			bundle.TemporalGrain, GrainInstant)
+	}
+}
+
+// TestR4_2_OmissionsSurfaceAsPartialCoverage is round-4 R4-2 at the
+// registry boundary: a provider that dropped rows must not produce a
+// bundle claiming complete coverage.
+//
+// The defect shape is "measurement fails toward fine" -- the answer looks
+// whole, and the omission is invisible precisely when it matters. The
+// registry derives the degradation from the count so no provider can
+// report omissions and forget to degrade.
+func TestR4_2_OmissionsSurfaceAsPartialCoverage(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	observed := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	omitting := &factProviderStub{
+		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, RequiresEvidence: true},
+		result: FactProviderResult{
+			State: SourceAvailable, ObservedAt: &observed, Version: "v1",
+			OmittedCount: 2,
+			Facts: []CanonicalFact{{
+				Kind: FactStatus, Subject: project, Fields: map[string]FactValue{"status": StringFactValue("in_progress")},
+				ObservedAt: &observed, EvidenceRefIDs: []string{"evidence_status_1234"}, SourceState: SourceAvailable,
+			}},
+		},
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{omitting}, FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, CanonicalFactRequest{
+		Question:     InterpretedQuestion{Shape: ShapeSingleSubject, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}},
+		Subjects:     []SubjectRef{project},
+		Requirements: []FactRequirement{{Kind: FactStatus}},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if !bundle.Coverage.Partial {
+		t.Fatal("rows were omitted but coverage reports complete; an answer must never look whole while something was withheld")
+	}
+	// The surviving fact is still there -- omission degrades, it does not
+	// sink the answer (§8.6).
+	if len(bundle.Facts) != 1 {
+		t.Fatalf("Facts = %#v, want the fact that was fine to survive", bundle.Facts)
+	}
+	// And the count is legible, not just a boolean.
+	var named bool
+	for _, reason := range bundle.Coverage.DegradedReasons {
+		if strings.Contains(reason, "omitted 2") {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("DegradedReasons = %#v, want the omission count stated", bundle.Coverage.DegradedReasons)
+	}
+}

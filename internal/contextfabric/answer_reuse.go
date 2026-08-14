@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -99,6 +100,85 @@ func stripTrailingPunctuation(s string) string {
 	}
 }
 
+// reuseCurrentAxisKey is the TimeAxisKey value for a current-axis
+// question. It is a FIXED LITERAL, and that is load-bearing.
+//
+// The tempting alternative -- deriving the key from the current wall clock
+// so a "now" question is keyed to its own instant -- would make every
+// current-axis key unique, so no two requests could ever share one. Answer
+// reuse would silently drop to a zero hit rate while every CHAOS-3782 test
+// kept passing, because each of those reuses within a single key it
+// computed once. The failure would surface only as an unexplained cost and
+// latency regression in production.
+//
+// A current-axis question means "as of whenever you answer this", and the
+// staleness window (condition 4) plus the watermark check (condition 3)
+// already bound how old that answer may be. The time axis contributes no
+// additional identity here, so it must contribute a constant.
+const reuseCurrentAxisKey = "current"
+
+// TimeAxisKeyFor canonicalizes a time context into the ReuseKey dimension
+// that keeps two different as-of questions apart (CHAOS-3781). See
+// ReuseKey.TimeAxisKey for why this exists and why it is not folded into
+// QuestionHash.
+//
+// Instants are rendered as epoch NANOSECONDS, never as a formatted
+// timestamp: the same instant must produce the same key byte-for-byte, and
+// a formatted string does not guarantee that (time.Format trims trailing
+// zeros, so one instant has several textual renderings). It also matches
+// the `_ns` convention AC-3781-7 requires for every other temporal
+// comparison in this system.
+//
+// The caller passes the CLAMPED EFFECTIVE context, never the raw wire one
+// (CHAOS-3781 round-3 F1). The distinction only bites for a request whose
+// as_of sits in the future inside the skew tolerance, where the clamp
+// pulls it back to `now`:
+//
+//   - Wire keying made the same as_of key identically at every arrival, so
+//     a request arriving at or after that instant -- which is answered for
+//     the instant itself -- hit a row whose answer had meant the earlier
+//     clamped time. A stale answer served under a key that claimed
+//     otherwise.
+//   - Effective keying makes the key mean what the answer means.
+//
+// DECISION, not an oversight: this makes a future-dated-within-tolerance
+// request key PER ARRIVAL, since `now` moves. That class therefore never
+// reuses, and each request writes its own row. Accepted because the class
+// is close to empty in practice -- a "now" question uses axis=current,
+// whose key is the fixed literal below, and a real historical question
+// carries a past as_of that never clamps -- while the alternative serves
+// an answer whose effective time differs from the question asked, the
+// exact defect class this issue exists to remove.
+//
+// The extra rows need no special handling: they are ordinary saved
+// answers, subject to the same staleness window, watermark check and
+// rebuild invalidation as every other row, so the growth is bounded by
+// normal retention rather than accumulating.
+//
+// A historical context missing the bounds its own axis requires yields the
+// empty string, which callers treat as "never reusable" -- fail closed,
+// exactly like a punctuation-only question.
+func TimeAxisKeyFor(timeContext TimeContext) string {
+	switch timeContext.Axis {
+	case TemporalCurrent:
+		return reuseCurrentAxisKey
+	case TemporalValidTime, TemporalObservedTime:
+		if timeContext.AsOf == nil {
+			return ""
+		}
+		return string(timeContext.Axis) + ":" + strconv.FormatInt(timeContext.AsOf.UTC().UnixNano(), 10)
+	case TemporalRange:
+		if timeContext.Start == nil || timeContext.End == nil {
+			return ""
+		}
+		return string(timeContext.Axis) + ":" +
+			strconv.FormatInt(timeContext.Start.UTC().UnixNano(), 10) + ":" +
+			strconv.FormatInt(timeContext.End.UTC().UnixNano(), 10)
+	default:
+		return ""
+	}
+}
+
 // maxReuseSubjectRecheckCount bounds how many distinct subjects tryReuse
 // will re-authorize for one candidate. It matches the existing
 // RequestedScope.SubjectHints wire bound (see Investigate's
@@ -174,7 +254,7 @@ const (
 // condition-6 authorization recheck here) -- Investigate always falls
 // through to a fresh investigation in that case; ok=false is never an
 // error.
-func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, request InvestigationRequest) (InvestigationResult, bool) {
+func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, request InvestigationRequest, effectiveTimeContext TimeContext) (InvestigationResult, bool) {
 	if e.reuseGate == nil {
 		return InvestigationResult{}, false
 	}
@@ -206,11 +286,43 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		}
 		modelIdentities = resolved
 	}
+	// CHAOS-3781 round-3 F1: the axis key is the CLAMPED EFFECTIVE
+	// context, passed in explicitly, and Save keys on the identical
+	// value. Round-2 F2 established that both sides must agree; round 3
+	// moved both to the effective value, because the wire value does not
+	// describe what the answer means once clamping has moved it. See
+	// TimeAxisKeyFor for the per-arrival cost this accepts and why.
+	//
+	// tryReuse runs BEFORE Interpret -- the whole mechanism behind
+	// AC-3782-1's zero-model-call guarantee -- so no interpreted axis
+	// exists here yet, which is also why Save keys on the clamped REQUEST
+	// context rather than the clamped interpreted one.
+	//
+	// Save keys the same way, from the same clamped effective context,
+	// rather than from the interpreted result. The two sides MUST agree.
+	// When Save keyed from the interpretation, an
+	// interpreter reading a current-axis request as historical saved
+	// under a historical key that this lookup -- keyed "current" -- could
+	// never find, so that entire class of question reused nothing, and
+	// nothing surfaced the miss.
+	//
+	// The key's job is REQUEST identity, not interpretation identity.
+	// Interpretation is still proved to match before anything is served:
+	// condition 6 re-resolves every subject against the candidate's own
+	// stored Interpretation.
+	timeAxisKey := TimeAxisKeyFor(effectiveTimeContext)
+	if timeAxisKey == "" {
+		// A historical context missing its own required bounds. Fail
+		// closed rather than key it as anything -- see TimeAxisKeyFor.
+		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
+		return InvestigationResult{}, false
+	}
 	key := ReuseKey{
 		QuestionHash:      QuestionHash(request.Question),
 		ContractVersion:   InvestigationResultSchemaV1,
 		ProjectionVersion: e.reuseProjectionVersion,
 		ModelIdentities:   modelIdentities,
+		TimeAxisKey:       timeAxisKey,
 	}
 	candidate, ok, err := e.reuseGate.FindReusable(ctx, principal, key)
 	if err != nil || !ok {

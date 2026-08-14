@@ -57,7 +57,7 @@ func TestGetReturnsStoredResultThatPassesValidation(t *testing.T) {
 	store := NewStore()
 	valid := paritytest.ValidResult("result-id-valid", "is the rollout healthy?")
 
-	if err := store.Save(context.Background(), principal, valid, nil, nil); err != nil {
+	if err := store.Save(context.Background(), principal, valid, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 	got, err := store.Get(context.Background(), principal, valid.ResultID)

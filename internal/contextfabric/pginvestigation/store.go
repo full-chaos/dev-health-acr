@@ -103,7 +103,7 @@ func NewStore(db *sql.DB, opts ...StoreOption) (*Store, error) {
 // identical payload is treated as success (idempotent retry); a replay
 // under the same result_id with a DIFFERENT payload is rejected, since that
 // would silently overwrite an immutable record.
-func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch) error {
+func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string) error {
 	if s == nil || s.db == nil {
 		return errors.New("pginvestigation: store is not configured")
 	}
@@ -124,14 +124,32 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		return fmt.Errorf("pginvestigation: marshal investigation result: %w", err)
 	}
 	questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch := s.reuseColumnsFor(result, reuseSnapshot, reuseEpoch)
+	// CHAOS-3781: the axis key is supplied by Engine from the CLAMPED
+	// EFFECTIVE request context, matching exactly what FindReusable will
+	// key with. It is NOT re-derived from result.Interpretation here -- an
+	// interpreter that reads a current-axis request as historical would
+	// then save under a key no identical request could ever look up, and
+	// that whole class of question would silently never reuse.
+	//
+	// Interpretation identity is not lost by this: condition 6 re-resolves
+	// every subject against the candidate's own stored Interpretation
+	// before serving it, so a reused answer is still proved to match the
+	// question that was actually asked.
+	if strings.TrimSpace(timeAxisKey) == "" {
+		// Engine could not canonicalize the requested time (a malformed
+		// historical context). Store the row -- it is still a real result
+		// -- but under a key no lookup can ever produce, so it can never
+		// be reused. TimeAxisKeyFor never returns this value.
+		timeAxisKey = "unkeyed"
+	}
 
 	insertResult, err := s.db.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (result_id) DO NOTHING`,
 		resultID, orgID, payload, result.GeneratedAt,
-		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch)
+		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch, timeAxisKey)
 	if err != nil {
 		return fmt.Errorf("save investigation result: %w", sanitizeError(err))
 	}
@@ -407,7 +425,11 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	}
 	orgID := strings.TrimSpace(principal.OrgID)
 	questionHash := strings.TrimSpace(key.QuestionHash)
-	if orgID == "" || questionHash == "" || len(key.ModelIdentities) == 0 {
+	// CHAOS-3781: an empty TimeAxisKey means the caller could not
+	// canonicalize the requested time (a malformed historical context).
+	// Treat it exactly like an empty question hash or an empty identity
+	// chain -- an ordinary miss, never a lookup that ignores the axis.
+	if orgID == "" || questionHash == "" || len(key.ModelIdentities) == 0 || strings.TrimSpace(key.TimeAxisKey) == "" {
 		return contextfabric.InvestigationResult{}, false, nil
 	}
 
@@ -450,6 +472,7 @@ WHERE org_id = $1
   AND contract_version = $3
   AND projection_version = $4
   AND model_identity = ANY($5)
+  AND time_axis_key = $7
   AND source_watermarks IS NOT NULL
   AND invalidation_epoch IS NOT NULL
   AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -464,7 +487,7 @@ WHERE org_id = $1
 -- SELECTION deterministic; it carries no freshness meaning of its own.
 ORDER BY created_at DESC, result_id DESC
 LIMIT 1`,
-		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds())
+		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds(), key.TimeAxisKey)
 	var payload, sourceWatermarks []byte
 	switch err := row.Scan(&payload, &sourceWatermarks); {
 	case errors.Is(err, sql.ErrNoRows):

@@ -34,8 +34,9 @@ func (p *SourceHealthProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
-		return result, nil
+	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
+	if unsupported {
+		return unsupportedResult, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
@@ -67,21 +68,43 @@ func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.
 	// a single backfill job is chunked into several rows sharing one
 	// job_id (Codex round-3 correction) -- so this provider tiebreaks on
 	// job_id, then chunk_index, both real columns, no value hash needed.
-	statement := withRowLimit(`SELECT provider, status, items_synced, duration_ms, error_message, toString(created_at)
+	// toInt64 on items_synced (UInt32) and duration_ms (UInt64): the
+	// clickhouse-go driver rejects scanning either width into an *int64
+	// destination, the same class of defect CHAOS-3789 fixed for
+	// git_pull_requests.number and CHAOS-3781 round-2 F1 fixed for this
+	// package's pull-request reader. Found by the schema parity guard
+	// rather than by a fixture, because this package's fixtures modeled
+	// both columns as int64.
+	//
+	// Converted in SQL rather than by widening the Go destinations, so the
+	// scan shape stays independent of each column's exact source width --
+	// the same convention every other numeric projection in this package
+	// already uses (toInt64(commits_count), toInt64(backlog_size)).
+	statement := withRowLimit(`SELECT provider, status, toInt64(items_synced), duration_ms, error_message, toString(created_at)
 FROM (
 	SELECT provider, status, items_synced, duration_ms, error_message, created_at,
 		row_number() OVER (PARTITION BY provider ORDER BY created_at DESC, job_id DESC, chunk_index DESC) AS rn
 	FROM backfill_log
-	WHERE org_id = {org_id:String}
+	WHERE org_id = {org_id:String}` + timeBound.timestampPredicate("created_at") + `
 )
 WHERE rn = 1`)
 	rowCount := 0
+	omittedUnrepresentableCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, orgSubjectIDs, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var provider, status, errorMessage, createdAt string
-		var itemsSynced, durationMS int64
-		if err := row.Scan(&provider, &status, &itemsSynced, &durationMS, &errorMessage, &createdAt); err != nil {
+		var itemsSynced int64
+		// duration_ms is UInt64 and is NOT wrapped with toInt64 in SQL
+		// (round-3 F2): the wrap is what silently turned a value above
+		// MaxInt64 negative. Scanned raw and range-checked here instead.
+		var rawDurationMS uint64
+		if err := row.Scan(&provider, &status, &itemsSynced, &rawDurationMS, &errorMessage, &createdAt); err != nil {
 			return err
+		}
+		durationMS, representable := representableInt64(rawDurationMS)
+		if !representable {
+			omittedUnrepresentableCount++
+			return nil
 		}
 		fields := map[string]contextfabric.FactValue{
 			"provider":       stringOrNull(provider),
@@ -98,9 +121,16 @@ WHERE rn = 1`)
 			EvidenceRefIDs: []string{evidenceRefID("organization", orgID)},
 		})
 		return nil
-	})
+	}, timeBound.bindings()...)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query source health", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	state, retentionReason := timeBound.retentionState(rowCount)
+	// Round-4 R4-2: the COUNT travels, not just a flag. The registry
+	// turns a nonzero count into a truncated/partial result, so an
+	// answer can never report complete coverage while rows were dropped.
+	if omittedUnrepresentableCount > 0 && retentionReason == "" {
+		retentionReason = unrepresentableValueReason
+	}
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery, OmittedCount: omittedUnrepresentableCount}, nil
 }

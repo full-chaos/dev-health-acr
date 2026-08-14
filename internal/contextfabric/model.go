@@ -83,6 +83,12 @@ const (
 	TemporalRange        = contractsv1.ContextFabricTemporalRange
 )
 
+const (
+	GrainInstant = contractsv1.ContextFabricGrainInstant
+	GrainDay     = contractsv1.ContextFabricGrainDay
+	GrainNone    = contractsv1.ContextFabricGrainNone
+)
+
 type DriverStanding = contractsv1.ContextFabricDriverStanding
 
 const (
@@ -167,6 +173,8 @@ type BoundSubjectReceipt = contractsv1.ContextFabricBoundSubjectReceipt
 type RequestedScope = contractsv1.ContextFabricRequestedScope
 type SubjectHint = contractsv1.ContextFabricSubjectHint
 type TimeContext = contractsv1.ContextFabricTimeContext
+type TemporalLabel = contractsv1.ContextFabricTemporalLabel
+type TemporalGrain = contractsv1.ContextFabricTemporalGrain
 type InvestigationOptions = contractsv1.ContextFabricInvestigationOptions
 type ConsumerInfo = contractsv1.ContextFabricConsumerInfo
 type SubjectRef = contractsv1.ContextFabricSubjectRef
@@ -298,6 +306,11 @@ type CanonicalFactBundle struct {
 	Version    string              `json:"version"`
 	Versions   map[FactKind]string `json:"versions"`
 	Watermarks map[FactKind]string `json:"watermarks"`
+	// TemporalGrain is the COARSEST grain among the providers that
+	// actually contributed facts (CHAOS-3781 round-1 F1) -- an answer is
+	// only as precise as its least precise source. Empty when no provider
+	// answered on a temporal axis. See FactProviderResult.Grain.
+	TemporalGrain TemporalGrain `json:"temporal_grain,omitempty"`
 }
 
 type SynthesisInput struct {

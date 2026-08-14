@@ -171,19 +171,26 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return InvestigationResult{}, errors.New("authenticated organization is required")
 	}
-	// Refuse historical/point-in-time questions before doing any work.
-	// Every canonical fact source behind this engine reads current state
-	// only, so continuing would answer the caller's question with data
-	// that does not correspond to the time they asked about. See
-	// ErrUnsupportedTimeAxis.
+	// CHAOS-3781: historical questions are ANSWERED now, not refused --
+	// the graph admits by validity window and the fact providers bound
+	// themselves or decline honestly, so the layers this engine used to
+	// protect callers from no longer need protecting from. What survives
+	// is a bounds check: a time in the future is a prediction, and a
+	// range wider than this service will read is not answerable.
 	//
-	// This is the FIRST of two checks. It rejects what the caller asked
-	// for on the wire; the second (below, after Interpret) rejects what
+	// This is the FIRST of two checks. It bounds what the caller asked
+	// for on the wire; the second (below, after Interpret) bounds what
 	// the question was understood to mean. Both are required -- see the
 	// second check's comment for why this one alone is not enough.
-	if err := requireCurrentTimeAxis(request.TimeContext.Axis); err != nil {
+	// F7: the returned context is CLAMPED -- an instant inside the skew
+	// tolerance is pulled back to now, so a future time can never reach a
+	// predicate or a label. The clamped value replaces the caller's on
+	// the request every layer below sees.
+	clampedRequestTime, err := resolveTimeContext(request.TimeContext, e.now())
+	if err != nil {
 		return InvestigationResult{}, err
 	}
+	request.TimeContext = clampedRequestTime
 	if err := ctx.Err(); err != nil {
 		return InvestigationResult{}, err
 	}
@@ -195,7 +202,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// closed); Investigate always falls through to a fresh investigation
 	// in that case, so a reuse-path failure is never visible to the
 	// caller as anything other than normal, slightly slower success.
-	if reused, ok := e.tryReuse(ctx, principal, request); ok {
+	// Round-3 F1: the reuse key is the CLAMPED EFFECTIVE context, and
+	// Save below keys on the same value -- symmetry preserved from
+	// round-2 F2, but on the value that describes what the answer
+	// actually MEANS rather than what the caller literally typed.
+	//
+	// Round-1 F6's premise (identical wire requests key identically
+	// regardless of arrival) is false precisely when clamping is
+	// time-dependent: the same wire instant means a DIFFERENT effective
+	// instant at different arrival times, and those answers legitimately
+	// differ. Keying on the wire value served a request meaning 12:00:30
+	// an answer that had meant 12:00:00.
+	if reused, ok := e.tryReuse(ctx, principal, request, clampedRequestTime); ok {
 		return reused, nil
 	}
 
@@ -203,18 +221,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if err != nil {
 		return InvestigationResult{}, fmt.Errorf("interpret question: %w", err)
 	}
-	// Re-check the axis on the INTERPRETED question, not just the wire
-	// request (CHAOS-3755 codex delta review, P2).
+	// Bound the INTERPRETED question too, not just the wire request
+	// (CHAOS-3755 codex delta review, P2).
 	//
 	// Interpretation may legitimately change the axis: a caller can send
 	// axis=current while the question itself is historical ("what was the
 	// status last month"), and a QuestionInterpreter is expected to
 	// recognize that and set valid_time. The wire-level check above
-	// cannot see this -- it ran before the question was understood -- so
-	// on its own it lets an interpreted-historical investigation run the
-	// graph, the fact reads, and synthesis, and answer with current data.
-	// That is the exact false-historical-answer this refusal exists to
-	// prevent, reached by a different door.
+	// cannot see this -- it ran before the question was understood.
+	//
+	// Under CHAOS-3781 this check matters MORE, not less. It is no longer
+	// deciding whether to refuse; it is deciding which time every layer
+	// below binds itself to. The interpreted axis is what reaches
+	// ResolveSubjects, DiscoverContext, the fact providers, and the
+	// answer's own temporal label, so an interpreted axis this engine
+	// will not answer must be caught before any of them run.
 	//
 	// The invariant belongs HERE rather than in any QuestionInterpreter
 	// implementation: clamping a model's axis inside the runtime adapter
@@ -223,10 +244,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// hole. The engine owns what it can honestly answer.
 	//
 	// Placed before prior-receipt expansion and every capability call, so
-	// a refused investigation does no graph or fact work at all.
-	if err := requireCurrentTimeAxis(interpretation.TimeContext.Axis); err != nil {
+	// a rejected investigation does no graph or fact work at all.
+	clampedInterpretedTime, err := resolveTimeContext(interpretation.TimeContext, e.now())
+	if err != nil {
 		return InvestigationResult{}, err
 	}
+	interpretation.TimeContext = clampedInterpretedTime
 	// Prior-result receipts (PriorSubjectReceipts) name a subject already
 	// committed or proposed in an earlier InvestigationResult -- e.g. a
 	// conversational follow-up ("what about it") binding back to the
@@ -384,11 +407,31 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if strings.TrimSpace(result.Versions.ModelIdentity) == "" {
 		result.Versions.ModelIdentity = "unwired"
 	}
+	// CHAOS-3781 AC-3781-2: a historical answer states the time it speaks
+	// for in a structured field. Composed HERE, from the interpretation
+	// and the coverage the sources actually returned, rather than inside
+	// any AnswerSynthesizer: a synthesizer may use a model, and what time
+	// an answer covers is a fact about which reads ran, never something a
+	// model may assert. The result contract refuses a non-current axis
+	// carrying no label, so a composition bug fails loudly here rather
+	// than shipping an unlabeled historical answer.
+	result.Temporal = composeTemporalLabel(interpretation, result.Coverage, facts.TemporalGrain)
+	result.Limitations = appendTemporalLimitations(result.Limitations, interpretation)
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, fmt.Errorf("%w: %v", ErrInvalidResult, err)
 	}
 	if e.results != nil {
-		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch); err != nil {
+		// Keyed from the CLAMPED REQUEST context -- byte-for-byte the
+		// value tryReuse keyed its lookup with (round-3 F1). Save and
+		// FindReusable must agree or the saved row is unreachable, which
+		// is what round-2 F2 fixed; round 3 moved BOTH to the effective
+		// value rather than moving them apart.
+		//
+		// Deliberately the clamped REQUEST context, not the clamped
+		// interpreted one: the lookup runs before Interpret and can only
+		// know the former, so keying Save on the latter would reopen the
+		// same asymmetry from the other side.
+		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, TimeAxisKeyFor(clampedRequestTime)); err != nil {
 			return InvestigationResult{}, fmt.Errorf("save investigation result: %w", err)
 		}
 	}
@@ -469,18 +512,6 @@ func (e *Engine) recordPriorSubjectReceiptSkips(ctx context.Context, principal s
 	if skipped := receiptCount - survived; skipped > 0 {
 		e.telemetry.RecordPriorSubjectReceiptsSkipped(ctx, principal, skipped)
 	}
-}
-
-// requireCurrentTimeAxis is the single definition of what this engine can
-// honestly answer, shared by the wire-request check and the
-// post-interpretation check so the two can never diverge. Any axis other
-// than current is refused with ErrUnsupportedTimeAxis, which the route
-// maps to a non-retryable 400.
-func requireCurrentTimeAxis(axis TemporalAxis) error {
-	if axis == TemporalCurrent {
-		return nil
-	}
-	return fmt.Errorf("%w: %q", ErrUnsupportedTimeAxis, axis)
 }
 
 func investigationSubjects(resolution SubjectResolution, cohort *Cohort) []SubjectRef {

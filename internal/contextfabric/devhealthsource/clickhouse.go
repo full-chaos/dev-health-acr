@@ -19,7 +19,24 @@ import (
 // onto every batch it produces. Checkpoints and telemetry are keyed by it.
 const SourceName = "dev_health_clickhouse"
 
-// ClickHouseSourceVersion is bumped to v3 by CHAOS-3785: queryWorkItems,
+// ClickHouseSourceVersion is bumped to v4 by CHAOS-3781: every producer in
+// tables.go now emits a VALID-TIME window (ValidFrom/ValidTo) derived from
+// its source row's own immutable interval columns -- see validity.go for
+// the mapping and the half-open convention.
+//
+// The bump is required, not cosmetic. Before this change no canonical
+// entity or relationship carried a validity window at all, so an
+// already-projected organization's graph holds nodes and edges whose
+// windows are ABSENT. The read side admits an unbounded element at EVERY
+// requested time (falkorgraph, and see AC-3781-4), so those window-less
+// rows would answer a historical question as though they had always been
+// true -- precisely the false historical answer this issue exists to
+// remove. Forcing ErrProjectionSourceVersionChanged makes the
+// operator-prescribed rebuild (acr-projector rebuild --org) happen
+// deliberately; only a rebuilt graph can honestly answer on a non-current
+// axis.
+//
+// (v3, CHAOS-3785: queryWorkItems,
 // queryWorkItemDependencies, and queryWorkItemHierarchy relax their repos
 // join from INNER to LEFT so a Linear-sourced work item (repo_id = the zero
 // UUID at ingest) projects instead of being silently dropped. The bump is
@@ -35,12 +52,12 @@ const SourceName = "dev_health_clickhouse"
 // ErrProjectionSourceVersionChanged on every already-projected organization
 // makes that rebuild happen deliberately (acr-projector rebuild --org)
 // instead of leaving a silent, permanent gap for exactly the organizations
-// this fix exists to help.
+// this fix exists to help.)
 //
 // (v2, CHAOS-3779 codex round-2 H2 residual: queryWorkItemDependencies'
 // RelationshipID began embedding relationship_type (previously (source,
 // target) only), and queryWorkItemHierarchy was a new producer.)
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v3"
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v4"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and
@@ -555,12 +572,23 @@ func workItemAuthorization(repoID, repoSlug string) contractsv1.ContextFabricAut
 // boundary landing between an entity and its relationship candidate (both
 // from the same row, sharing one timestamp) would have resumed from the
 // wrong position.
-func belongsToRepository(from contractsv1.ContextFabricSubjectRef, repoSlug, repoID string, observedAt time.Time, evidenceRefID, rowKey string) candidate {
+//
+// validFrom/validTo are the CHILD entity's own validity window
+// (CHAOS-3781). The repository endpoint contributes no bound of its own:
+// repos records no deletion column, so a repository's window is
+// open-ended, and its created_at necessarily precedes anything it
+// contains. Intersecting with an open-ended, earlier-starting interval
+// leaves the child's window unchanged, so passing the child's window
+// straight through IS the edge intersection here, not a shortcut around
+// it. A membership therefore stops being valid exactly when the member
+// does.
+func belongsToRepository(from contractsv1.ContextFabricSubjectRef, repoSlug, repoID string, observedAt time.Time, evidenceRefID, rowKey string, validFrom, validTo *time.Time) candidate {
 	to := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository:" + repoID, Label: repoSlug}
 	relationship := contractsv1.ContextFabricRelationshipProjection{
 		RelationshipID: "relationship:belongs_to_repository:" + from.CanonicalID, Type: "BELONGS_TO_REPOSITORY", From: from, To: to,
 		Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
-		Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+		Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt,
+		ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 	}
 	return candidate{observedAt: observedAt, sortKey: rowKey, relationship: &relationship}
 }

@@ -11,6 +11,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// expectedMigrationVersions pins the exact applied-migration sequence.
+//
+// Held in ONE place rather than repeated across the assertions below, so
+// adding a migration is a single-line edit that cannot be applied to some
+// assertions and missed by others. cmd/acr-migrate/cli_test.go asserts the
+// COUNT of the same set and has to move with it.
+//
+// Contiguous again as of the CHAOS-3781 rebase onto CHAOS-3786: 0012 is
+// 3786's reuse-epoch cutover and 0013 is 3781's time-axis reuse key. (The
+// runner sorts by version and rejects only duplicates, so a gap applies
+// cleanly -- but there is no gap to tolerate here now.)
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
+
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given
 	ctx := context.Background()
@@ -23,7 +36,7 @@ func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}, migrationVersions(t, ctx, runner, db))
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, runner, db))
 	requireRotatedAtColumn(t, ctx, db)
 	requireDeviceAuthorizationsTable(t, ctx, db)
 	requireDeviceAuthorizationHintColumns(t, ctx, db)
@@ -45,7 +58,7 @@ func TestRunner_isIdempotent_whenMigrationsAreAlreadyApplied(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}, migrationVersions(t, ctx, runner, db))
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, runner, db))
 	requireRotatedAtColumn(t, ctx, db)
 	requireDeviceAuthorizationsTable(t, ctx, db)
 	requireDeviceAuthorizationHintColumns(t, ctx, db)
@@ -88,7 +101,7 @@ func TestRunner_upgradesInOrder_whenDatabaseMatchesReleasedMain(t *testing.T) {
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}, migrationVersions(t, ctx, latest, db))
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, latest, db))
 	requireRotatedAtColumn(t, ctx, db)
 	requireDeviceAuthorizationsTable(t, ctx, db)
 	requireDeviceAuthorizationHintColumns(t, ctx, db)
@@ -210,7 +223,7 @@ func TestRunner_serializesConcurrentUp_calls(t *testing.T) {
 	for err := range errs {
 		require.NoError(t, err)
 	}
-	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}, migrationVersions(t, ctx, runner, db))
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, runner, db))
 }
 
 func TestRunner_rollsBackFailedMigration_withoutHistoryRow(t *testing.T) {
@@ -316,7 +329,7 @@ func TestRunner_backfillsLegacyChecksum_afterCanonicalHistoryValidation(t *testi
 
 	// Then
 	require.NoError(t, err)
-	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}, migrationVersions(t, ctx, runner, db))
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, runner, db))
 	var checksum string
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT checksum FROM acr.schema_migrations WHERE version = 1").Scan(&checksum))
 	require.NotEmpty(t, checksum)

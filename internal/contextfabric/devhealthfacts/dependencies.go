@@ -38,7 +38,7 @@ func (p *BlockersProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+	if result, unsupported := refuseHistoricalFact(query); unsupported {
 		return result, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
@@ -95,7 +95,7 @@ func (p *RequiredChildrenProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *RequiredChildrenProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+	if result, unsupported := refuseHistoricalFact(query); unsupported {
 		return result, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)

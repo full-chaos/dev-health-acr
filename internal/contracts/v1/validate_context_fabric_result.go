@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 func (s ContextFabricSubjectRef) Validate() error {
@@ -397,5 +398,91 @@ func (r ContextFabricInvestigationResult) Validate() error {
 	if err := r.Versions.Validate(); err != nil {
 		return fmt.Errorf("versions: %w", err)
 	}
+	if r.Temporal != nil {
+		if err := r.Temporal.Validate(); err != nil {
+			return fmt.Errorf("temporal: %w", err)
+		}
+		// The label must describe the SAME question the interpretation
+		// ran on. A label whose axis or instant disagreed with the
+		// interpreted one would let a result claim to speak for a time
+		// the investigation never actually bounded its reads by.
+		if !sameTimeContext(r.Temporal.Requested, r.Interpretation.TimeContext) {
+			return fmt.Errorf("temporal: requested time context must equal the interpreted time context")
+		}
+	} else if r.Interpretation.TimeContext.Axis != ContextFabricTemporalCurrent {
+		// The converse, and the more dangerous direction: a historical
+		// investigation carrying no temporal label is exactly an answer
+		// about a past time with nothing marking it as one (AC-3781-2).
+		// Refuse it at the contract boundary rather than let a
+		// composition bug ship a silently unlabeled historical answer.
+		return fmt.Errorf("temporal: a non-current time axis requires a temporal label")
+	}
 	return nil
+}
+
+// Validate enforces CHAOS-3781's temporal-label bounds (AC-3781-2). See
+// ContextFabricTemporalLabel's doc comment for what the type means; this
+// enforces the two invariants that make it trustworthy -- the label only
+// ever appears on a historical axis, and Effective never widens beyond
+// Requested.
+func (l ContextFabricTemporalLabel) Validate() error {
+	if err := l.Requested.Validate(); err != nil {
+		return fmt.Errorf("requested: %w", err)
+	}
+	if err := l.Effective.Validate(); err != nil {
+		return fmt.Errorf("effective: %w", err)
+	}
+	if l.Requested.Axis == ContextFabricTemporalCurrent {
+		return fmt.Errorf("a temporal label is only meaningful on a historical time axis")
+	}
+	if l.Effective.Axis != l.Requested.Axis {
+		return fmt.Errorf("effective axis must equal requested axis")
+	}
+	if !validContextFabricTemporalGrain(l.Grain) {
+		return fmt.Errorf("temporal grain is invalid")
+	}
+	// Effective is narrower than or equal to Requested, never wider. Both
+	// Validate calls above already proved the pointers each axis requires
+	// are non-nil, so these dereferences are safe.
+	switch l.Requested.Axis {
+	case ContextFabricTemporalValidTime, ContextFabricTemporalObservedTime:
+		if l.Effective.AsOf.After(*l.Requested.AsOf) {
+			return fmt.Errorf("effective as_of cannot be after the requested as_of")
+		}
+	case ContextFabricTemporalRange:
+		if l.Effective.Start.Before(*l.Requested.Start) || l.Effective.End.After(*l.Requested.End) {
+			return fmt.Errorf("effective window cannot extend beyond the requested window")
+		}
+	}
+	return nil
+}
+
+func validContextFabricTemporalGrain(grain ContextFabricTemporalGrain) bool {
+	switch grain {
+	case ContextFabricGrainInstant, ContextFabricGrainDay, ContextFabricGrainNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// sameTimeContext compares two ContextFabricTimeContext values by VALUE,
+// including through their *time.Time fields. Go's == on the struct would
+// compare the pointers themselves, so two contexts naming the same instant
+// through different pointers would compare unequal -- which is the normal
+// case here, since the label is composed separately from the
+// interpretation it must agree with. time.Time.Equal is used rather than
+// == so a UTC and a same-instant non-UTC value still match.
+func sameTimeContext(a, b ContextFabricTimeContext) bool {
+	return a.Axis == b.Axis &&
+		sameOptionalTime(a.AsOf, b.AsOf) &&
+		sameOptionalTime(a.Start, b.Start) &&
+		sameOptionalTime(a.End, b.End)
+}
+
+func sameOptionalTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
 }

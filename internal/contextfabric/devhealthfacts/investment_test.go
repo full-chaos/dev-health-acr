@@ -13,7 +13,9 @@ import (
 )
 
 func investmentRow(teamID string) []any {
-	return []any{teamID, "product", "growth", "2026-02-22", int64(30), int64(12), int64(4), int64(850), float64(18.5)}
+	// churn_loc is uint64, matching the production column -- the reader
+	// scans it raw and range-checks rather than wrapping it in SQL.
+	return []any{teamID, "product", "growth", "2026-02-22", int64(30), int64(12), int64(4), uint64(850), float64(18.5)}
 }
 
 func TestInvestmentProviderHappyPath(t *testing.T) {

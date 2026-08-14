@@ -261,8 +261,8 @@ func (a *Adapter) vectorSearchNodes(ctx context.Context, key, orgID string, vect
 // derived from what happened during this one search, never from the
 // organization's recent history -- which is what makes it usable as the
 // engine's input for a coverage/limitation decision about THIS answer.
-func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string, limit int, fence *resolutionFence) ([]graphrank.CandidateNode, bool, bool, error) {
-	lexical, truncated, err := a.fulltextSearchNodes(ctx, key, orgID, term, limit)
+func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string, limit int, fence *resolutionFence, temporal temporalFilter) ([]graphrank.CandidateNode, bool, bool, error) {
+	lexical, truncated, err := a.fulltextSearchNodes(ctx, key, orgID, term, limit, temporal)
 	if err != nil {
 		return nil, false, false, err
 	}
@@ -280,6 +280,40 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 		// a degradation -- nothing was expected to be available -- so it must
 		// not mark the answer.
 		return lexical, truncated, false, nil
+	}
+	// CHAOS-3781: the vector index has no notion of a validity window.
+	//
+	// db.idx.vector.queryNodes returns the top-k by distance and the org
+	// predicate is a POST-FILTER over that k (see vectorSearchNodes). A
+	// temporal predicate added the same way would inherit that shape, and
+	// unlike org -- a near no-op, since the graph key already scopes the
+	// database to one organization -- a validity window can eliminate most
+	// of the k. Two consequences, both wrong: under-recall that reads as
+	// absence, because the k came back full of current-only nodes; and a
+	// broken truncation argument, which is sound only because results are
+	// distance-ordered, so nothing closer was cut.
+	//
+	// So on a historical axis the vector step is SKIPPED and the answer
+	// says so. The alternative -- over-fetching some multiple of k and
+	// filtering -- needs an unbounded multiplier and a rewrite of a
+	// truncation argument that converged over eight review rounds; it is
+	// recorded as the future enhancement rather than taken now.
+	//
+	// PLACEMENT IS THE ARGUMENT. This sits AFTER the embedder-nil branch
+	// above, so the three cases fall out of ORDER rather than a compound
+	// condition: nil embedder keeps 3778's nothing-was-expected rule and
+	// reports degraded=FALSE, while here a mechanism WAS expected and is
+	// unavailable, so degraded=TRUE is the honest value. A current-axis
+	// question never reaches this line and behaves exactly as before.
+	if temporal.active {
+		// Round-16: answer-level degraded and telemetry-level degraded must
+		// fire TOGETHER. This branch used to set the answer flag and emit
+		// nothing, so a historical query with a configured embedder produced
+		// a degraded answer with zero operational signal -- indistinguishable
+		// from healthy retrieval, and from an outage, at exactly the moment
+		// an operator would be trying to tell those apart.
+		a.recordVectorSuppressed(ctx, orgID)
+		return lexical, truncated, true, nil
 	}
 	if !fence.readable(ctx, a, key, orgID) {
 		// The graph holds vectors this embedder did not produce, or the fence
@@ -314,6 +348,16 @@ func (a *Adapter) recordVectorDegraded(ctx context.Context, orgID string) {
 		return
 	}
 	a.config.Telemetry.RecordVectorRetrievalDegraded(ctx, orgID)
+}
+
+// recordVectorSuppressed reports a deliberate historical-axis suppression.
+// Separate from recordVectorDegraded so an operator can tell "withheld
+// because it cannot answer this" from "broken".
+func (a *Adapter) recordVectorSuppressed(ctx context.Context, orgID string) {
+	if a.config.Telemetry == nil {
+		return
+	}
+	a.config.Telemetry.RecordVectorRetrievalSuppressed(ctx, orgID)
 }
 
 // recordVectorProjection reports one batch's vector outcome (codex round-3

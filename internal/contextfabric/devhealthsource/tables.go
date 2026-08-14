@@ -15,6 +15,10 @@ type entityTable struct {
 	query func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) (rows []candidate, truncated bool, err error)
 }
 
+// devhealthschema:not-a-production-replica this is the PRODUCER REGISTRY -- it pairs each table
+// with the query that reads it. It mirrors no column types,
+// engines or sort keys, so it cannot drift from production the way a rival
+// schema declaration would; devhealthschema remains the only physical source.
 // entityTables is the bounded, documented coverage of canonical Dev Health
 // data this source projects today. Every table here is one this repository
 // already reads for context packets (internal/contextpacket/source_queries.go);
@@ -38,6 +42,9 @@ var entityTables = []entityTable{
 	{name: "operational_incidents", query: queryIncidents},
 	{name: "work_item_dependencies", query: queryWorkItemDependencies},
 	{name: "work_items_hierarchy", query: queryWorkItemHierarchy},
+	// devhealthschema:not-a-production-replica registry TAIL -- the same producer list continues here,
+	// past the reach of the marker on the declaration above. Still a
+	// table-to-query pairing that mirrors no column type, engine or sort key.
 	{name: "work_graph_deployment_incident_edges", query: queryDeploymentIncidentEdges},
 	{name: "git_pull_request_reviews", query: queryPullRequestReviews},
 	{name: "ci_pipeline_runs", query: queryCIRuns},
@@ -117,19 +124,21 @@ func fetch(ctx context.Context, client contextpacket.ClickHouseQueryClient, stat
 }
 
 func queryRepositories(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	statement := `SELECT toString(id), repo, ifNull(provider, ''), last_synced FROM repos FINAL
+	statement := `SELECT toString(id), repo, ifNull(provider, ''), last_synced, created_at FROM repos FINAL
 WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + orderBy("last_synced", "id")
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var id, slug, provider string
-		var observedAt time.Time
-		if err := r.Scan(&id, &slug, &provider, &observedAt); err != nil {
+		var observedAt, createdAt time.Time
+		if err := r.Scan(&id, &slug, &provider, &observedAt, &createdAt); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository:" + id, Label: slug}
+		// repos records no deletion column, so a repository's window is
+		// open-ended: valid from creation, with no recorded end.
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Authorization: repoAuthorization(slug), EvidenceRefIDs: []string{"acr:v1:repository:" + id},
-			ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			ObservedAt: observedAt, ValidFrom: requiredTime(createdAt), SourceVersion: ClickHouseSourceVersion,
 		}
 		if provider != "" {
 			entity.ProviderIDs = map[string]string{provider: id}
@@ -153,16 +162,21 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + 
 // LEFT JOIN already yields ” by default, but every other optional column
 // in this file guards the same way.
 func queryWorkItems(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	statement := `SELECT w.work_item_id, toString(w.repo_id), ifNull(r.repo, ''), ifNull(w.title, ''), ifNull(w.status, ''), ifNull(w.url, ''), w.updated_at
+	statement := `SELECT w.work_item_id, toString(w.repo_id), ifNull(r.repo, ''), ifNull(w.title, ''), ifNull(w.status, ''), ifNull(w.url, ''), w.updated_at,
+       w.created_at, ` + nullableTimestamp("coalesce(w.completed_at, w.closed_at)") + `
 FROM work_items AS w FINAL LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
 WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", "w.work_item_id") + orderBy("w.updated_at", "w.work_item_id")
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var workItemID, repoID, repoSlug, title, status, url string
-		var observedAt time.Time
-		if err := r.Scan(&workItemID, &repoID, &repoSlug, &title, &status, &url, &observedAt); err != nil {
+		var observedAt, createdAt, endedAt time.Time
+		var hasEnded uint8
+		if err := r.Scan(&workItemID, &repoID, &repoSlug, &title, &status, &url, &observedAt, &createdAt, &hasEnded, &endedAt); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		// A work item is valid from creation until it completed or
+		// closed, whichever the source recorded; an open item has no end.
+		validFrom, validTo := requiredTime(createdAt), optionalTime(hasEnded, endedAt)
 		label := title
 		if strings.TrimSpace(label) == "" {
 			label = workItemID
@@ -174,7 +188,8 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", "w.wo
 		}
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: workItemAuthorization(repoID, repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:work-item:" + workItemID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			EvidenceRefIDs: []string{"acr:v1:work-item:" + workItemID}, ObservedAt: observedAt,
+			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		_ = url
 		candidates := []candidate{{observedAt: observedAt, sortKey: workItemID, entity: &entity}}
@@ -182,7 +197,7 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", "w.wo
 		// there is no real repository entity to point a BELONGS_TO_REPOSITORY
 		// edge at, so this row emits an entity candidate only.
 		if repoSlug != "" {
-			candidates = append(candidates, belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:work-item:"+workItemID, workItemID))
+			candidates = append(candidates, belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:work-item:"+workItemID, workItemID, validFrom, validTo))
 		}
 		return candidates, nil
 	})
@@ -198,19 +213,24 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", "w.wo
 // (canonicalID, label, sort key) is unchanged.
 func queryPullRequests(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const rowKey = "concat(toString(p.repo_id), ':', toString(p.number))"
-	statement := `SELECT toString(p.repo_id), r.repo, p.number, ifNull(p.title, ''), ifNull(p.state, ''), p.last_synced
+	statement := `SELECT toString(p.repo_id), r.repo, p.number, ifNull(p.title, ''), ifNull(p.state, ''), p.last_synced,
+       p.created_at, ` + nullableTimestamp("coalesce(p.merged_at, p.closed_at)") + `
 FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id
 WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowKey) + orderBy("p.last_synced", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var repoID, repoSlug, state string
 		var rawNumber uint32
 		var title string
-		var observedAt time.Time
-		if err := r.Scan(&repoID, &repoSlug, &rawNumber, &title, &state, &observedAt); err != nil {
+		var observedAt, createdAt, endedAt time.Time
+		var hasEnded uint8
+		if err := r.Scan(&repoID, &repoSlug, &rawNumber, &title, &state, &observedAt, &createdAt, &hasEnded, &endedAt); err != nil {
 			return nil, err
 		}
 		number := int64(rawNumber)
 		observedAt = observedAt.UTC()
+		// A pull request is valid from creation until it merged or
+		// closed; an open one has no end.
+		validFrom, validTo := requiredTime(createdAt), optionalTime(hasEnded, endedAt)
 		canonicalID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
 		rowSortKey := fmt.Sprintf("%s:%d", repoID, number)
 		label := title
@@ -224,27 +244,33 @@ WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowK
 		}
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:pull-request:" + repoID + ":" + fmt.Sprint(number)}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			EvidenceRefIDs: []string{"acr:v1:pull-request:" + repoID + ":" + fmt.Sprint(number)}, ObservedAt: observedAt,
+			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
 			{observedAt: observedAt, sortKey: rowSortKey, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:pull-request:"+repoID+":"+fmt.Sprint(number), rowSortKey),
+			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:pull-request:"+repoID+":"+fmt.Sprint(number), rowSortKey, validFrom, validTo),
 		}, nil
 	})
 }
 
 func queryDeployments(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const timestampExpr = "coalesce(d.deployed_at, d.started_at, d.last_synced)"
-	statement := `SELECT toString(d.repo_id), r.repo, d.deployment_id, ifNull(d.status, ''), ifNull(d.environment, ''), ` + timestampExpr + `
+	statement := `SELECT toString(d.repo_id), r.repo, d.deployment_id, ifNull(d.status, ''), ifNull(d.environment, ''), ` + timestampExpr + `,
+       ` + nullableTimestamp("coalesce(d.started_at, d.deployed_at)") + `, ` + nullableTimestamp("d.finished_at") + `
 FROM deployments AS d FINAL INNER JOIN repos AS r FINAL ON r.id = d.repo_id AND r.org_id = d.org_id
 WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "d.deployment_id") + orderBy(timestampExpr, "d.deployment_id")
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var repoID, repoSlug, deploymentID, status, environment string
-		var observedAt time.Time
-		if err := r.Scan(&repoID, &repoSlug, &deploymentID, &status, &environment, &observedAt); err != nil {
+		var observedAt, startedAt, finishedAt time.Time
+		var hasStarted, hasFinished uint8
+		if err := r.Scan(&repoID, &repoSlug, &deploymentID, &status, &environment, &observedAt, &hasStarted, &startedAt, &hasFinished, &finishedAt); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		// A deployment is valid while it is running; one still in flight
+		// has no recorded end.
+		validFrom, validTo := optionalTime(hasStarted, startedAt), optionalTime(hasFinished, finishedAt)
 		label := deploymentID
 		if environment != "" {
 			label = environment + " deployment"
@@ -259,11 +285,12 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "d.dep
 		}
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:deployment:" + deploymentID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			EvidenceRefIDs: []string{"acr:v1:deployment:" + deploymentID}, ObservedAt: observedAt,
+			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
 			{observedAt: observedAt, sortKey: deploymentID, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:deployment:"+deploymentID, deploymentID),
+			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:deployment:"+deploymentID, deploymentID, validFrom, validTo),
 		}, nil
 	})
 }
@@ -277,19 +304,24 @@ func queryIncidents(ctx context.Context, client contextpacket.ClickHouseQueryCli
 	const timestampExpr = "coalesce(i.started_at, i.source_event_at, i.observed_at)"
 	statement := `SELECT i.id, toString(m.repo_id) AS repo_id, r.repo AS repo_slug, ifNull(i.title, ''),
        ifNull(i.normalized_status, ifNull(i.raw_status, '')), ifNull(i.normalized_severity, ifNull(i.raw_severity, '')),
-       ` + timestampExpr + `, i.is_deleted
+       ` + timestampExpr + `, i.is_deleted,
+       ` + nullableTimestamp("i.started_at") + `, ` + nullableTimestamp("coalesce(i.resolved_at, i.deleted_at)") + `
 FROM operational_incidents AS i FINAL
 INNER JOIN operational_service_repository_mappings AS m FINAL ON i.org_id = m.org_id AND i.service_id = m.service_id AND m.is_active = 1
 INNER JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
 WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id") + orderBy(timestampExpr, "i.id")
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var incidentID, repoID, repoSlug, title, status, severity string
-		var observedAt time.Time
-		var isDeleted uint8
-		if err := r.Scan(&incidentID, &repoID, &repoSlug, &title, &status, &severity, &observedAt, &isDeleted); err != nil {
+		var observedAt, startedAt, endedAt time.Time
+		var isDeleted, hasStarted, hasEnded uint8
+		if err := r.Scan(&incidentID, &repoID, &repoSlug, &title, &status, &severity, &observedAt, &isDeleted, &hasStarted, &startedAt, &hasEnded, &endedAt); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		// An incident is valid while it is ongoing: from when it started
+		// until it resolved (or was soft-deleted). An unresolved
+		// incident has no end.
+		validFrom, validTo := optionalTime(hasStarted, startedAt), optionalTime(hasEnded, endedAt)
 		canonicalID := "incident:" + incidentID
 		if isDeleted != 0 {
 			tombstone := contractsv1.ContextFabricProjectionTombstone{
@@ -311,11 +343,12 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id"
 		}
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:incident:" + incidentID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			EvidenceRefIDs: []string{"acr:v1:incident:" + incidentID}, ObservedAt: observedAt,
+			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
 			{observedAt: observedAt, sortKey: incidentID, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:incident:"+incidentID, incidentID),
+			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:incident:"+incidentID, incidentID, validFrom, validTo),
 		}, nil
 	})
 }
@@ -347,18 +380,44 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id"
 func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const relationshipTypeExpr = "ifNull(d.relationship_type, 'related_to')"
 	const rowKey = "concat(d.source_work_item_id, ':', d.target_work_item_id, ':', " + relationshipTypeExpr + ")"
-	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ` + relationshipTypeExpr + `, toString(w.repo_id), ifNull(r.repo, ''), d.last_synced
+	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ` + relationshipTypeExpr + `, toString(w.repo_id), ifNull(r.repo, ''), d.last_synced,
+       w.created_at, ` + nullableTimestamp("coalesce(w.completed_at, w.closed_at)") + `,
+       ` + nullableTimestamp("t.created_at") + `, ` + nullableTimestamp("coalesce(t.completed_at, t.closed_at)") + `
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS w FINAL ON w.org_id = d.org_id AND w.work_item_id = d.source_work_item_id
+LEFT JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
 WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowKey) + orderBy("d.last_synced", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var sourceID, targetID, relationshipType, repoID, repoSlug string
-		var observedAt time.Time
-		if err := r.Scan(&sourceID, &targetID, &relationshipType, &repoID, &repoSlug, &observedAt); err != nil {
+		var observedAt, sourceCreatedAt, sourceEndedAt, targetCreatedAt, targetEndedAt time.Time
+		var sourceHasEnded, targetHasCreated, targetHasEnded uint8
+		if err := r.Scan(&sourceID, &targetID, &relationshipType, &repoID, &repoSlug, &observedAt,
+			&sourceCreatedAt, &sourceHasEnded, &sourceEndedAt,
+			&targetHasCreated, &targetCreatedAt, &targetHasEnded, &targetEndedAt); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		// work_item_dependencies carries only last_synced -- no interval
+		// of its own -- so the edge's window is its endpoints'
+		// intersection (CHAOS-3781 round-1 F5).
+		//
+		// The target join is LEFT, not INNER, and that asymmetry is
+		// deliberate: a target_work_item_id is not guaranteed to name a
+		// work item at all (see this function's doc comment on
+		// cross-system PR references), so an INNER join would silently
+		// stop projecting those edges entirely. When the target does not
+		// resolve, its bounds come back absent and edgeValidity falls
+		// back to the source's window alone -- the honest answer, since
+		// nothing in the row says when the target existed.
+		//
+		// F5 fixed the earlier source-only version, which asserted the
+		// edge was valid while the target did not yet exist, and made
+		// the window depend on which endpoint happened to be joined
+		// rather than on the data.
+		validFrom, validTo := edgeValidity(
+			requiredTime(sourceCreatedAt), optionalTime(sourceHasEnded, sourceEndedAt),
+			optionalTime(targetHasCreated, targetCreatedAt), optionalTime(targetHasEnded, targetEndedAt))
 		relationshipID := "relationship:work_item_dependency:" + sourceID + ":" + targetID + ":" + relationshipType
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: relationshipID, Type: contractsv1.ContextFabricRelationshipType(strings.ToUpper(relationshipType)),
@@ -366,7 +425,7 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + targetID, Label: targetID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
 			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-dependency:" + sourceID + ":" + targetID + ":" + relationshipType},
-			ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			ObservedAt: observedAt, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: sourceID + ":" + targetID + ":" + relationshipType, relationship: &relationship}}, nil
 	})
@@ -405,18 +464,28 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 // does -- a Linear-sourced child work item's repo_id is the zero UUID.
 func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const rowKey = "c.work_item_id"
-	statement := `SELECT c.work_item_id, c.parent_id, toString(c.repo_id), ifNull(r.repo, ''), c.updated_at
+	statement := `SELECT c.work_item_id, c.parent_id, toString(c.repo_id), ifNull(r.repo, ''), c.updated_at,
+       c.created_at, ` + nullableTimestamp("coalesce(c.completed_at, c.closed_at)") + `,
+       p.created_at, ` + nullableTimestamp("coalesce(p.completed_at, p.closed_at)") + `
 FROM work_items AS c FINAL
 INNER JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = c.parent_id
 LEFT JOIN repos AS r FINAL ON r.id = c.repo_id AND r.org_id = c.org_id
 WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work_item_id` + sincePredicate(cursor, "c.updated_at", rowKey) + orderBy("c.updated_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var childID, parentID, repoID, repoSlug string
-		var observedAt time.Time
-		if err := r.Scan(&childID, &parentID, &repoID, &repoSlug, &observedAt); err != nil {
+		var observedAt, childCreatedAt, childEndedAt, parentCreatedAt, parentEndedAt time.Time
+		var childHasEnded, parentHasEnded uint8
+		if err := r.Scan(&childID, &parentID, &repoID, &repoSlug, &observedAt,
+			&childCreatedAt, &childHasEnded, &childEndedAt, &parentCreatedAt, &parentHasEnded, &parentEndedAt); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		// Both endpoints are joined here, so the PART_OF edge gets the
+		// true intersection of the two work items' windows: a child is
+		// part of its parent only while both exist.
+		validFrom, validTo := edgeValidity(
+			requiredTime(childCreatedAt), optionalTime(childHasEnded, childEndedAt),
+			requiredTime(parentCreatedAt), optionalTime(parentHasEnded, parentEndedAt))
 		relationshipID := "relationship:work_item_hierarchy:" + childID + ":" + parentID
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: relationshipID, Type: contractsv1.ContextFabricRelationshipPartOf,
@@ -424,24 +493,49 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + parentID, Label: parentID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
 			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-hierarchy:" + childID + ":" + parentID},
-			ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			ObservedAt: observedAt, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: childID, relationship: &relationship}}, nil
 	})
 }
 
+// queryDeploymentIncidentEdges derives its validity window from its two
+// ENDPOINTS (CHAOS-3781 round-1 F4), because
+// work_graph_deployment_incident_edges carries no interval of its own --
+// only observed_at and computed_at, which are derivation stamps, not the
+// span over which the correlation was true.
+//
+// The semantic interval IS knowable from the source, so leaving the edge
+// unbounded would have been the wrong kind of honest: an unbounded edge is
+// admitted at EVERY requested time, so a deployment would have appeared
+// correlated with an incident years before either happened. Both endpoint
+// tables are joined LEFT, so an edge whose endpoint row cannot be resolved
+// still projects -- with the window absent, which is the admit-count-label
+// path, and the correct answer when the interval genuinely is unknowable.
 func queryDeploymentIncidentEdges(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	statement := `SELECT e.edge_id, e.deployment_id, e.incident_id, r.repo, e.observed_at
+	statement := `SELECT e.edge_id, e.deployment_id, e.incident_id, r.repo, e.observed_at,
+       ` + nullableTimestamp("coalesce(d.started_at, d.deployed_at)") + `, ` + nullableTimestamp("d.finished_at") + `,
+       ` + nullableTimestamp("i.started_at") + `, ` + nullableTimestamp("coalesce(i.resolved_at, i.deleted_at)") + `
 FROM work_graph_deployment_incident_edges AS e FINAL
 INNER JOIN repos AS r FINAL ON r.id = e.repo_id AND r.org_id = toString(e.org_id)
+LEFT JOIN deployments AS d FINAL ON d.org_id = toString(e.org_id) AND d.deployment_id = e.deployment_id
+LEFT JOIN operational_incidents AS i FINAL ON i.org_id = toString(e.org_id) AND i.id = e.incident_id
 WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incident_id NOT IN ('', 'none')` + sincePredicate(cursor, "e.observed_at", "e.edge_id") + orderBy("e.observed_at", "e.edge_id")
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var edgeID, deploymentID, incidentID, repoSlug string
-		var observedAt time.Time
-		if err := r.Scan(&edgeID, &deploymentID, &incidentID, &repoSlug, &observedAt); err != nil {
+		var observedAt, deployStartedAt, deployFinishedAt, incidentStartedAt, incidentEndedAt time.Time
+		var hasDeployStart, hasDeployEnd, hasIncidentStart, hasIncidentEnd uint8
+		if err := r.Scan(&edgeID, &deploymentID, &incidentID, &repoSlug, &observedAt,
+			&hasDeployStart, &deployStartedAt, &hasDeployEnd, &deployFinishedAt,
+			&hasIncidentStart, &incidentStartedAt, &hasIncidentEnd, &incidentEndedAt); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		// The correlation is valid only while BOTH ends are -- the same
+		// endpoint-intersection rule every other edge here uses.
+		validFrom, validTo := edgeValidity(
+			optionalTime(hasDeployStart, deployStartedAt), optionalTime(hasDeployEnd, deployFinishedAt),
+			optionalTime(hasIncidentStart, incidentStartedAt), optionalTime(hasIncidentEnd, incidentEndedAt))
 		relationshipID := "relationship:deployment_incident:" + edgeID
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: relationshipID, Type: "CORRELATED_WITH_INCIDENT",
@@ -449,7 +543,7 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectIncident, CanonicalID: "incident:" + incidentID, Label: incidentID},
 			Derivation: contractsv1.ContextFabricDerivationRuleInferred, EpistemicStatus: contractsv1.ContextFabricEpistemicSourceAsserted,
 			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:deployment-incident:" + edgeID},
-			ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			ObservedAt: observedAt, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: edgeID, relationship: &relationship}}, nil
 	})
@@ -476,7 +570,8 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 // there.
 func queryPullRequestReviews(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const rowKey = "r.review_id"
-	statement := `SELECT r.review_id, toString(r.repo_id), r.number, ifNull(r.state, ''), r.submitted_at, repo.repo
+	statement := `SELECT r.review_id, toString(r.repo_id), r.number, ifNull(r.state, ''), r.submitted_at, repo.repo,
+       p.created_at, ` + nullableTimestamp("coalesce(p.merged_at, p.closed_at)") + `
 FROM git_pull_request_reviews AS r FINAL
 INNER JOIN git_pull_requests AS p FINAL ON r.repo_id = p.repo_id AND r.number = p.number AND r.org_id = p.org_id
 INNER JOIN repos AS repo FINAL ON repo.id = r.repo_id AND repo.org_id = r.org_id
@@ -484,12 +579,17 @@ WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.submitted_at", row
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var reviewID, repoID, state, repoSlug string
 		var rawNumber uint32
-		var observedAt time.Time
-		if err := r.Scan(&reviewID, &repoID, &rawNumber, &state, &observedAt, &repoSlug); err != nil {
+		var observedAt, pullRequestCreatedAt, pullRequestEndedAt time.Time
+		var pullRequestHasEnded uint8
+		if err := r.Scan(&reviewID, &repoID, &rawNumber, &state, &observedAt, &repoSlug, &pullRequestCreatedAt, &pullRequestHasEnded, &pullRequestEndedAt); err != nil {
 			return nil, err
 		}
 		number := int64(rawNumber)
 		observedAt = observedAt.UTC()
+		// A review is a point event: it becomes true when it is
+		// submitted and is never retracted, so its window is open-ended
+		// from submitted_at. observedAt IS submitted_at for this query.
+		validFrom, validTo := requiredTime(observedAt), (*time.Time)(nil)
 		canonicalID := "pull_request_review:" + reviewID
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequestReview, CanonicalID: canonicalID, Label: fmt.Sprintf("PR #%d review", number)}
 		properties := map[string]contractsv1.ContextFabricScalarValue{}
@@ -498,16 +598,24 @@ WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.submitted_at", row
 		}
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:review:" + reviewID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			EvidenceRefIDs: []string{"acr:v1:review:" + reviewID}, ObservedAt: observedAt,
+			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		pullRequestID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
+		// The BELONGS_TO_PULL_REQUEST edge is valid only while BOTH ends
+		// are, so it inherits the pull request's own window as well as
+		// the review's -- a review submitted on a pull request that has
+		// since merged stops being a live association when the pull
+		// request ends.
+		edgeValidFrom, edgeValidTo := edgeValidity(validFrom, validTo,
+			requiredTime(pullRequestCreatedAt), optionalTime(pullRequestHasEnded, pullRequestEndedAt))
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: "relationship:belongs_to_pull_request:" + canonicalID, Type: "BELONGS_TO_PULL_REQUEST",
 			From:       subject,
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: pullRequestID, Label: pullRequestID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
 			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:review:" + reviewID},
-			ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			ObservedAt: observedAt, ValidFrom: edgeValidFrom, ValidTo: edgeValidTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
 			{observedAt: observedAt, sortKey: reviewID, entity: &entity},
@@ -519,17 +627,22 @@ WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.submitted_at", row
 func queryCIRuns(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const timestampExpr = "coalesce(c.finished_at, c.started_at)"
 	const rowKey = "c.run_id"
-	statement := `SELECT c.run_id, toString(c.repo_id), ifNull(c.branch, ''), ifNull(c.status, ''), repo.repo, ` + timestampExpr + `
+	statement := `SELECT c.run_id, toString(c.repo_id), ifNull(c.branch, ''), ifNull(c.status, ''), repo.repo, ` + timestampExpr + `,
+       c.started_at, ` + nullableTimestamp("c.finished_at") + `
 FROM ci_pipeline_runs AS c FINAL
 INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id AND repo.org_id = c.org_id
 WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, rowKey) + orderBy(timestampExpr, rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var runID, repoID, branch, status, repoSlug string
-		var observedAt time.Time
-		if err := r.Scan(&runID, &repoID, &branch, &status, &repoSlug, &observedAt); err != nil {
+		var observedAt, startedAt, finishedAt time.Time
+		var hasFinished uint8
+		if err := r.Scan(&runID, &repoID, &branch, &status, &repoSlug, &observedAt, &startedAt, &hasFinished, &finishedAt); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		// A CI run is valid while it is executing; a run still in
+		// progress has no recorded end.
+		validFrom, validTo := requiredTime(startedAt), optionalTime(hasFinished, finishedAt)
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: "ci_pipeline_run:" + runID, Label: "CI " + runID}
 		properties := map[string]contractsv1.ContextFabricScalarValue{}
 		if status != "" {
@@ -540,11 +653,12 @@ WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, rowKey
 		}
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:ci:" + runID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			EvidenceRefIDs: []string{"acr:v1:ci:" + runID}, ObservedAt: observedAt,
+			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
 			{observedAt: observedAt, sortKey: runID, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:ci:"+runID, runID),
+			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:ci:"+runID, runID, validFrom, validTo),
 		}, nil
 	})
 }

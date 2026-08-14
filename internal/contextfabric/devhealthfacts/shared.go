@@ -58,14 +58,22 @@ type clickhouseFacts struct {
 // query runs statement scoped to orgID and the given raw ids, invoking scan
 // once per returned row. It never adds its own timeout; ctx is propagated
 // straight through to the query client.
-func (f clickhouseFacts) query(ctx context.Context, statement, orgID string, ids []string, scan func(contextpacket.ClickHouseRowScanner) error) error {
+// extra carries any additional bindings the statement references -- today
+// only the CHAOS-3781 time bounds (timebound.go). Like org_id and ids,
+// every one is a bound PARAMETER, never interpolated text, so a requested
+// instant can no more reach the statement than a subject id can.
+func (f clickhouseFacts) query(ctx context.Context, statement, orgID string, ids []string, scan func(contextpacket.ClickHouseRowScanner) error, extra ...timeBinding) error {
 	if f.client == nil {
 		return errors.New("devhealthfacts: clickhouse query client is required")
 	}
-	rows, err := f.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
+	bindings := []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
 		{Name: "ids", Value: ids},
-	})
+	}
+	for _, binding := range extra {
+		bindings = append(bindings, contextpacket.ClickHouseBinding{Name: binding.Name, Value: binding.Value})
+	}
+	rows, err := f.client.Query(ctx, statement, bindings)
 	if err != nil {
 		return err
 	}
@@ -103,38 +111,15 @@ func readFailure(action string, err error) error {
 	}
 }
 
-// timeUnsupportedReason is the fixed, non-parameterized Reason every
-// provider in this package returns when checkCurrentTimeOnly refuses a
-// query (H6 adversarial finding: "false historical answers"). It never
-// interpolates the requested query -- only ever this literal string.
-const timeUnsupportedReason = "devhealthfacts: only current-time (axis=current) queries are supported; requested axis was rejected to avoid presenting current data as if it answered a historical/point-in-time question"
-
-// checkCurrentTimeOnly reports whether query.Time.Axis requests anything
-// other than contextfabric.TemporalCurrent. No provider in this package has
-// a historical/point-in-time query path -- every ReadFacts here always
-// queries and returns CURRENT ClickHouse state -- so honoring any other
-// axis would silently answer a historical question (e.g. "what was the
-// status last month") with today's data presented as if it were the
-// answer. RULING: refuse instead of guessing. When this returns
-// (result, true), the caller must return result, nil as ReadFacts' entire
-// result, without ever calling clickhouseFacts.query.
-//
-// The zero value of TimeContext.Axis is treated as unsupported too, not as
-// an implicit "current": fact_registry.go's buildFactQuery always copies
-// request.Question.TimeContext straight from a validated
-// CanonicalFactRequest, and contractsv1.ContextFabricTimeContext.Validate
-// rejects an empty Axis outright (it must be one of the four defined enum
-// values) -- so a genuinely empty Axis reaching a provider here is itself
-// evidence of an unvalidated caller, never evidence the caller wants "now".
-func checkCurrentTimeOnly(query contextfabric.FactQuery) (contextfabric.FactProviderResult, bool) {
-	if query.Time.Axis == contextfabric.TemporalCurrent {
-		return contextfabric.FactProviderResult{}, false
-	}
-	return contextfabric.FactProviderResult{
-		State:  contextfabric.SourceUnconfigured,
-		Reason: timeUnsupportedReason,
-	}, true
-}
+// The pre-CHAOS-3781 refusal (checkCurrentTimeOnly, timeUnsupportedReason)
+// lived here. It returned SourceUnconfigured for every non-current axis,
+// in every provider, because none of them had a historical query path.
+// timebound.go replaces it with a per-provider answer: Tier A and Tier B
+// providers now bound their queries and answer honestly, while Tier C
+// providers -- whose facts have no recorded history -- still refuse, but
+// as not_applicable rather than unconfigured. See timebound.go's package
+// comment for the tier split and for why the observed_time axis degrades
+// everywhere.
 
 // requireOrgID validates principal.OrgID the same way every provider in this
 // package must: org-scoping comes from storage.Principal, never from the

@@ -199,6 +199,28 @@ runs regardless of `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED` (an operator
 invoking it has already made that call) but still needs Postgres, ClickHouse,
 and a configured graph backend to do anything.
 
+**A rebuild is REQUIRED after deploying CHAOS-3781** (`devhealthsource`
+`ClickHouseSourceVersion` v3 → v4). Every producer now emits a valid-time
+window (`valid_from` / `valid_to`) derived from its source row's own
+interval columns, and the graph read side admits by that window when a
+question asks about a past time.
+
+An organization projected before this deploy holds nodes and edges with NO
+window at all. The read side admits an unbounded element at *every*
+requested time, so an un-rebuilt graph answers a historical question as
+though everything in it had always been true. The version bump makes this
+impossible to miss rather than silent: `ProjectionWorker.RunOnce` refuses
+every tick with `ErrProjectionSourceVersionChanged` until the rebuild runs,
+so the graph is structurally untouched in the meantime — a *fresh*
+investigation during that window reads exactly the same pre-rebuild graph
+it would have before, and no historical answer is fabricated.
+
+Run `acr-projector rebuild --org <organization-id>` for every projected
+organization after deploying. Until then, historical questions still
+answer, but only from canonical fact sources; the graph half contributes
+whatever unbounded elements it holds, disclosed in the answer's coverage as
+`context-fabric:graph-validity-windows`.
+
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is
 confirmed reset. If `acr-projector` crashes mid-rebuild, ordinary `serve`
@@ -384,6 +406,28 @@ answer-facing prose, and every cause has the same consequence for a reader —
 retrieval saw less than it should have. The operator-facing detail is in
 telemetry (`RecordVectorRetrievalDegraded`), which is where you diagnose *which*
 of the causes above fired.
+
+**One cause is NOT a fault: a historical question (CHAOS-3781).** A question
+with an as-of or range time axis deliberately skips the vector mechanism,
+because a k-NN index cannot honour a validity window — `db.idx.vector.queryNodes`
+returns the top-k by distance and any temporal predicate is a post-filter over
+that k, which would under-report and would break the truncation guarantee. The
+answer carries the same limitation, because the reader's situation is the same:
+fewer candidates were considered.
+
+Telemetry separates the two, and this distinction is the one to reach for first
+when the limitation appears:
+
+| signal | level | meaning | action |
+| --- | --- | --- | --- |
+| `RecordVectorRetrievalDegraded` | Warn | the mechanism BROKE — embed failure or timeout, wrong serving model, fence mismatch | diagnose the embedder |
+| `RecordVectorRetrievalSuppressed` | Info | the mechanism was WITHHELD from a historical question, by design | none; expected with historical traffic |
+
+They are separate signals rather than one signal with a reason, because folding
+them together would make a healthy system serving historical questions
+indistinguishable from an embedder outage. A rising `Suppressed` count tracks
+historical query volume; a rising `Degraded` count is the one that warrants
+attention.
 
 **What it does *not* report, deliberately: nodes that simply have no vector.**
 A projection batch whose embedding step failed clears the affected nodes'

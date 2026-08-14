@@ -223,16 +223,28 @@ func subjectMergeAttrs(subject contextfabric.SubjectRef, authorization contextfa
 		// Cypher null, not a marshaling error.
 		attrs[propValidFrom], attrs[propValidFromNs] = validTimeAttrs(validFrom)
 		attrs[propValidTo], attrs[propValidToNs] = validTimeAttrs(validTo)
-	} else {
-		if validFrom != nil {
-			attrs[propValidFrom] = validFrom.UTC().Format(time.RFC3339Nano)
-			attrs[propValidFromNs] = nsTimestamp(*validFrom)
-		}
-		if validTo != nil {
-			attrs[propValidTo] = validTo.UTC().Format(time.RFC3339Nano)
-			attrs[propValidToNs] = nsTimestamp(*validTo)
-		}
 	}
+	// A REFERENCED stub deliberately writes NO validity window at all
+	// (CHAOS-3781 round-1 F3). It previously copied the window of
+	// whatever record happened to mention the subject, which is a
+	// different thing's interval: a relationship valid for one week, or
+	// an episode that ran for an hour, would stamp that window onto the
+	// work item it referenced. A historical read then excluded that work
+	// item everywhere outside the unrelated record's window -- and which
+	// window won depended on projection ORDER, since the next referencing
+	// record overwrote it.
+	//
+	// This is the same discipline CHAOS-3785 established for stubs
+	// generally: a stub asserts identity and nothing canonical. Only the
+	// authoritative entity write (the OWNED branch above, which asserts
+	// the window either way including an explicit nil) may state when a
+	// subject was valid.
+	//
+	// A stub therefore carries both bounds absent, which the read side
+	// already handles honestly: temporalFilter.predicate admits an
+	// unbounded element at every requested time, and countUnboundedValidity
+	// counts it into the coverage disclosure. An over-admitted stub is
+	// visible; a wrongly-excluded real subject is not.
 	if entityOwned != nil {
 		attrs[propAliases] = graphrank.UniqueSorted(entityOwned.Aliases)
 		attrs[propPreviousNames] = graphrank.UniqueSorted(entityOwned.PreviousNames)
@@ -281,8 +293,11 @@ func (a *Adapter) projectEntity(ctx context.Context, key, orgID string, entity c
 }
 
 func (a *Adapter) projectRelationship(ctx context.Context, key, orgID string, relationship contextfabric.RelationshipProjection) error {
-	fromAttrs := subjectMergeAttrs(relationship.From, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion, nil)
-	toAttrs := subjectMergeAttrs(relationship.To, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, relationship.ValidFrom, relationship.ValidTo, relationship.SourceVersion, nil)
+	// nil/nil validity: these are referenced STUBS, and a relationship's
+	// own window is not its endpoints' window (round-1 F3). The edge
+	// itself still carries the window, below.
+	fromAttrs := subjectMergeAttrs(relationship.From, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, nil, nil, relationship.SourceVersion, nil)
+	toAttrs := subjectMergeAttrs(relationship.To, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, nil, nil, relationship.SourceVersion, nil)
 	edgeAttrs := map[string]interface{}{
 		propRelationshipID: relationship.RelationshipID, propRelationType: graphrank.NormalizeRelation(string(relationship.Type)),
 		"derivation": string(relationship.Derivation), "epistemic_status": string(relationship.EpistemicStatus),
@@ -358,7 +373,12 @@ func (a *Adapter) projectContent(ctx context.Context, key, orgID string, content
 }
 
 func (a *Adapter) projectEpisode(ctx context.Context, key, orgID string, episode contextfabric.EpisodeProjection) error {
-	subjectAttrs := subjectMergeAttrs(episode.Subject, episode.Authorization, episode.EvidenceRefIDs, episode.EndedAt, &episode.StartedAt, &episode.EndedAt, episode.SourceVersion, nil)
+	// nil/nil validity: episode.Subject is a referenced STUB, and the
+	// episode's run window is the EPISODE's interval, not the subject's
+	// (round-1 F3). A work item does not stop being valid because an
+	// episode about it ended. The episode node itself keeps the window,
+	// below.
+	subjectAttrs := subjectMergeAttrs(episode.Subject, episode.Authorization, episode.EvidenceRefIDs, episode.EndedAt, nil, nil, episode.SourceVersion, nil)
 	episodeSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectEpisode, CanonicalID: "episode:" + episode.EpisodeID, Label: episode.EpisodeID}
 	summary := episodeSearchText(episode)
 	episodeAttrs := map[string]interface{}{

@@ -36,8 +36,9 @@ func (p *PullRequestsProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
-		return result, nil
+	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
+	if unsupported {
+		return unsupportedResult, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
@@ -45,18 +46,53 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 	}
 	ids, bySubject := pullRequestSubjectIndex(query.Subjects)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
-	statement := withRowLimit(`SELECT toString(p.repo_id), p.number, ifNull(p.state, '')
+	// CHAOS-3781 Tier B: a pull request's state at a past instant is a
+	// pure function of the immutable event timestamps the row already
+	// carries, so this is a reconstruction of a RECORDED fact, not of an
+	// unrecorded one (§19.8.3). Order matters -- merged wins over closed,
+	// because a merged pull request is also closed.
+	//
+	// The existence guard is the outer WHERE: a pull request created
+	// after the requested time is not returned at all, so the subject
+	// reports no fact rather than a current-state one (AC-3781-3).
+	stateExpression := "ifNull(p.state, '')"
+	if timeBound.active {
+		asOf := timeBound.asOfExpression()
+		stateExpression = "multiIf(" +
+			"p.merged_at IS NOT NULL AND p.merged_at <= " + asOf + ", 'merged', " +
+			"p.closed_at IS NOT NULL AND p.closed_at <= " + asOf + ", 'closed', " +
+			"'open')"
+	}
+	statement := withRowLimit(`SELECT toString(p.repo_id), p.number, ` + stateExpression + `
 FROM git_pull_requests AS p FINAL
-WHERE p.org_id = {org_id:String} AND concat(toString(p.repo_id), ':', toString(p.number)) IN {ids:Array(String)}`)
+WHERE p.org_id = {org_id:String} AND concat(toString(p.repo_id), ':', toString(p.number)) IN {ids:Array(String)}` + timeBound.existencePredicate("p.created_at"))
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var repoID string
-		var number int64
+		// git_pull_requests.number is UInt32 in production, and
+		// clickhouse-go's native driver REJECTS scanning a UInt32 column
+		// into an *int64 destination outright ("converting UInt32 to
+		// *int64 is unsupported"). Scanning it as int64 here meant every
+		// live pull-request row failed Scan, so this provider silently
+		// returned no pull-request facts at all.
+		//
+		// CHAOS-3789 fixed exactly this in devhealthsource
+		// (tables.go's queryPullRequests) but the same defect survived
+		// here, in a different package reading the same column -- and
+		// this package's fixtures modeled the column as int64 too, so
+		// the tests agreed with the bug. See the devhealthfacts schema
+		// parity guard, which now covers these readers for that reason.
+		//
+		// The int64 conversion happens immediately after Scan, once the
+		// value is safely in Go, so pullRequestKey and every downstream
+		// use are unchanged.
+		var rawNumber uint32
 		var state string
-		if err := row.Scan(&repoID, &number, &state); err != nil {
+		if err := row.Scan(&repoID, &rawNumber, &state); err != nil {
 			return err
 		}
+		number := int64(rawNumber)
 		key := pullRequestKey(repoID, number)
 		subject, ok := bySubject[key]
 		if !ok {
@@ -68,11 +104,12 @@ WHERE p.org_id = {org_id:String} AND concat(toString(p.repo_id), ':', toString(p
 			EvidenceRefIDs: []string{evidenceRefID("pull-request", repoID+":"+strconv.FormatInt(number, 10))},
 		})
 		return nil
-	})
+	}, timeBound.bindings()...)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query pull requests", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	state, retentionReason := timeBound.retentionState(rowCount)
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }
 
 // ReviewsProvider implements contextfabric.FactProvider for FactReviews from
@@ -89,8 +126,9 @@ func (p *ReviewsProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *ReviewsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
-		return result, nil
+	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
+	if unsupported {
+		return unsupportedResult, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
@@ -98,9 +136,12 @@ func (p *ReviewsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	}
 	ids, bySubject := subjectIndex(query.Subjects, "pull_request_review:")
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
+	// CHAOS-3781 Tier B: a review is an immutable point event -- its state
+	// is decided when it is submitted and is never revised -- so the only
+	// temporal question is whether it had been submitted yet.
 	statement := withRowLimit(`SELECT r.review_id, ifNull(r.state, '')
 FROM git_pull_request_reviews AS r FINAL
-WHERE r.org_id = {org_id:String} AND r.review_id IN {ids:Array(String)}`)
+WHERE r.org_id = {org_id:String} AND r.review_id IN {ids:Array(String)}` + timeBound.existencePredicate("r.submitted_at"))
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
@@ -118,9 +159,10 @@ WHERE r.org_id = {org_id:String} AND r.review_id IN {ids:Array(String)}`)
 			EvidenceRefIDs: []string{evidenceRefID("review", reviewID)},
 		})
 		return nil
-	})
+	}, timeBound.bindings()...)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query pull request reviews", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	state, retentionReason := timeBound.retentionState(rowCount)
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

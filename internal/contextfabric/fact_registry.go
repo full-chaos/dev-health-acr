@@ -69,6 +69,34 @@ type FactProviderResult struct {
 	Reason     string
 	Version    string
 	Truncated  bool
+	// Grain is the temporal precision THIS provider answered at
+	// (CHAOS-3781 round-1 F1). It exists because the providers are not
+	// uniform: a daily rollup can only speak for a day, while a provider
+	// deriving state from an immutable event timestamp answers at the
+	// exact requested instant.
+	//
+	// Composing one answer-level grain from a single assumption was
+	// observably wrong -- a pull request merged at 14:00Z, serialized
+	// under a day grain, reads as though the answer only knew about
+	// midnight. Each provider now reports its own, and the engine takes
+	// the COARSEST among those that actually contributed.
+	//
+	// Empty means the provider did not answer on a temporal axis (the
+	// current axis, or a degradation), and contributes nothing to the
+	// composed grain.
+	Grain TemporalGrain
+	// OmittedCount is how many rows the provider DROPPED rather than
+	// reported -- today, rows whose source value could not be represented
+	// (CHAOS-3781 round-4 R4-2).
+	//
+	// It exists because omitting a row while reporting complete coverage
+	// is a measurement that fails toward "fine": the answer looks whole,
+	// the caller has no way to know something was withheld, and the
+	// omission is invisible precisely when it matters. A count above zero
+	// makes the result Truncated, which the existing vocabulary already
+	// defines as "fewer rows than exist" and which degrades coverage to
+	// partial while KEEPING the rows that were fine.
+	OmittedCount int
 }
 
 type FactProvider interface {
@@ -372,6 +400,17 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 		result.Facts = result.Facts[:remaining]
 		result.Truncated = true
 	}
+	// R4-2: an omission is a truncation of the result set, in the exact
+	// sense the existing state already names -- so it routes through the
+	// same branch rather than minting a new state. Done here, in the
+	// registry, so no provider can count omissions and forget to degrade.
+	if result.OmittedCount > 0 {
+		result.Truncated = true
+		if strings.TrimSpace(result.Reason) == "" {
+			result.Reason = "canonical fact rows were omitted"
+		}
+		result.Reason = fmt.Sprintf("%s (omitted %d)", result.Reason, result.OmittedCount)
+	}
 	if result.Truncated {
 		result.State = SourceTruncated
 		if strings.TrimSpace(result.Reason) == "" {
@@ -445,6 +484,22 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 		bundle.Watermarks[capability.Kind] = result.Watermark
 	}
 	appendFactCoverage(bundle, capability.Kind, result.State, result.ObservedAt, result.Watermark, result.Reason)
+	// F1: only a provider that actually CONTRIBUTED counts toward the
+	// composed grain. A degraded or empty provider reporting a grain
+	// would let a source that answered nothing coarsen the whole answer.
+	//
+	// Round-2 F3: "contributing" means FACTS RETAINED, not
+	// State == SourceAvailable. The narrower test silently dropped the
+	// grain of a truncated or stale provider whose facts this bundle
+	// KEPT -- so a mix of an instant-grain provider and a truncated
+	// day-grain one composed to instant, overstating the answer's
+	// precision on exactly the data it was built from.
+	//
+	// factsRetained is the same predicate the retention branch above
+	// uses, called from one place so the two cannot drift apart again.
+	if factsRetained(result.State, len(result.Facts)) {
+		bundle.TemporalGrain = coarsestGrain(bundle.TemporalGrain, result.Grain)
+	}
 	return nil
 }
 
@@ -465,6 +520,23 @@ const maxCoverageReasonLength = 2000
 // prefix), so they are clamped independently rather than sharing one
 // constant by coincidence.
 const maxCoverageDegradedReasonLength = 2000
+
+// coarsestGrain returns whichever of two grains speaks for the LARGER
+// span, because an answer is only as precise as its least precise
+// contributing source. day is coarser than instant; an empty grain (a
+// provider that did not answer temporally) never coarsens anything.
+func coarsestGrain(current, candidate TemporalGrain) TemporalGrain {
+	if candidate == "" {
+		return current
+	}
+	if current == GrainDay || candidate == GrainDay {
+		return GrainDay
+	}
+	if current == "" {
+		return candidate
+	}
+	return current
+}
 
 func appendFactCoverage(bundle *CanonicalFactBundle, kind FactKind, state SourceState, observedAt *time.Time, watermark, reason string) {
 	if strings.TrimSpace(reason) == "" && state != SourceAvailable {
@@ -653,6 +725,15 @@ func factKindOrder(kind FactKind) int {
 // stateRejectsFacts lists the states that cannot coexist with facts.
 // SourcePruned joins them (CHAOS-3783): the provider was never called, so a
 // fact attributed to a pruned capability would have no origin at all.
+// factsRetained reports whether this provider's facts actually reached the
+// bundle -- the single definition of "contributed", shared by the
+// fact-retention check and the temporal-grain composition so a state that
+// keeps facts can never be one that skips reporting its grain (round-2
+// F3). A provider that returned no facts contributes nothing either way.
+func factsRetained(state SourceState, factCount int) bool {
+	return factCount > 0 && !stateRejectsFacts(state)
+}
+
 func stateRejectsFacts(state SourceState) bool {
 	switch state {
 	case SourceUnavailable, SourceUnconfigured, SourceUnauthorized, SourceNoData, SourceConflicted, SourceNotApplicable, SourcePruned:

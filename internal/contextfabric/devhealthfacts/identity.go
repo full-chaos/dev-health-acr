@@ -26,7 +26,7 @@ func (p *IdentityProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+	if result, unsupported := refuseHistoricalFact(query); unsupported {
 		return result, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
@@ -128,7 +128,7 @@ func (p *MembershipProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+	if result, unsupported := refuseHistoricalFact(query); unsupported {
 		return result, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)

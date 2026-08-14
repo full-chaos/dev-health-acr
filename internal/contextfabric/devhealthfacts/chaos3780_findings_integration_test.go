@@ -10,6 +10,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/testcontainers/testcontainers-go"
@@ -87,6 +88,9 @@ func newCHAOS3780IntegrationClient(t *testing.T, ctx context.Context) (query *ru
 	return query, direct
 }
 
+// devhealthschema:not-a-production-replica the table names passed to devhealthschema.DDL below
+// select what to render; the schema itself is the declaration's, not this
+// file's.
 // createCHAOS3780Tables creates every source table CHAOS-3780's providers
 // read, with the real production engine, sort key, and nullability shape
 // (verified against the live dev ClickHouse instance during the Codex
@@ -94,51 +98,16 @@ func newCHAOS3780IntegrationClient(t *testing.T, ctx context.Context) (query *ru
 // exact `DESCRIBE TABLE`/`SHOW CREATE TABLE` evidence).
 func createCHAOS3780Tables(t *testing.T, ctx context.Context, connection clickhousedriver.Conn) {
 	t.Helper()
-	statements := []string{
-		`CREATE TABLE repo_metrics_daily (
-			repo_id UUID, org_id String, day Date, commits_count UInt32, prs_merged UInt32,
-			median_pr_cycle_hours Float64, change_failure_rate Float64, mttr_hours Nullable(Float64),
-			bus_factor UInt32, code_ownership_gini Float64, computed_at DateTime('UTC')
-		) ENGINE = MergeTree ORDER BY (org_id, repo_id, day)`,
-		`CREATE TABLE compounding_risk_daily (
-			org_id String, scope Enum8('repo' = 1, 'team' = 2), scope_id String, day Date,
-			severity Enum8('unknown' = 0, 'low' = 1, 'elevated' = 2, 'high' = 3),
-			compounding_risk Nullable(Float64), computed_at DateTime DEFAULT now()
-		) ENGINE = MergeTree ORDER BY (org_id, scope, scope_id, day, computed_at)`,
-		`CREATE TABLE capacity_forecasts (
-			forecast_id String, computed_at DateTime64(3, 'UTC'), team_id Nullable(String),
-			work_scope_id Nullable(String), backlog_size UInt32, p50_days Nullable(UInt16),
-			throughput_mean Float64, throughput_stddev Float64, insufficient_history UInt8 DEFAULT 0,
-			high_variance UInt8 DEFAULT 0, org_id String DEFAULT 'default'
-		) ENGINE = ReplacingMergeTree(computed_at) ORDER BY (org_id, forecast_id)`,
-		`CREATE TABLE investment_metrics_daily (
-			repo_id Nullable(UUID), day Date, team_id LowCardinality(Nullable(String)),
-			investment_area LowCardinality(String), project_stream LowCardinality(String),
-			delivery_units UInt32, work_items_completed UInt32, prs_merged UInt32, churn_loc UInt64,
-			cycle_p50_hours Float64, computed_at DateTime DEFAULT now(), org_id String DEFAULT 'default'
-		) ENGINE = MergeTree ORDER BY (org_id, day, team_id, investment_area, project_stream) SETTINGS allow_nullable_key = 1`,
-		`CREATE TABLE estimate_coverage_metrics_daily (
-			day Date, provider String, work_scope_id String, team_id Nullable(String),
-			estimated_count UInt32, unestimated_count UInt32, backlog_size UInt32,
-			ratio Nullable(Float64), computed_at DateTime64(3, 'UTC'), org_id String DEFAULT ''
-		) ENGINE = ReplacingMergeTree(computed_at) ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, ''))`,
-		`CREATE TABLE recommendations_daily (
-			team_id LowCardinality(String), org_id String, rule_id LowCardinality(String),
-			rule_version LowCardinality(String) DEFAULT '1.0.0', window_start Date, window_end Date,
-			fired Bool, severity LowCardinality(String), title String, rationale String,
-			success_criterion String, evidence_json String DEFAULT '{}',
-			computed_at DateTime64(3, 'UTC') DEFAULT now64()
-		) ENGINE = ReplacingMergeTree(computed_at) ORDER BY (org_id, team_id, rule_id, window_end)`,
-	}
-	for _, statement := range statements {
+	// Rendered from the shared production declaration (CHAOS-3781 round-3
+	// F4). These six tables were hand-written here, which is the stale
+	// replica risk devhealthschema exists to remove: a type corrected
+	// upstream would have been fixed in the declaration and in the parity
+	// guards while this file quietly kept testing the old shape.
+	for _, statement := range devhealthschema.DDL("repo_metrics_daily", "compounding_risk_daily", "capacity_forecasts", "investment_metrics_daily", "estimate_coverage_metrics_daily", "recommendations_daily") {
 		if err := connection.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
 	}
-}
-
-func repoSubjectFor(id string) contextfabric.SubjectRef {
-	return contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + id, Label: id}
 }
 
 // TestCHAOS3780FindingsAgainstRealClickHouse is the F5 real-ClickHouse proof

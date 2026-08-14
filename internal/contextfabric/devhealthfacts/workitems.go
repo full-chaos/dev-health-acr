@@ -25,7 +25,7 @@ func (p *StatusProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+	if result, unsupported := refuseHistoricalFact(query); unsupported {
 		return result, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
@@ -75,7 +75,7 @@ func (p *WorkProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
+	if result, unsupported := refuseHistoricalFact(query); unsupported {
 		return result, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
@@ -136,8 +136,9 @@ func (p *ActualCompletionProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := checkCurrentTimeOnly(query); unsupported {
-		return result, nil
+	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
+	if unsupported {
+		return unsupportedResult, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
@@ -148,9 +149,19 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 	// isNotNull/ifNull avoid ever scanning a bare Nullable(DateTime64) column
 	// into Go, matching devhealthsource/tables.go's convention of only ever
 	// scanning coalesced, non-null timestamps.
-	statement := withRowLimit(`SELECT w.work_item_id, isNotNull(w.completed_at), ifNull(w.completed_at, toDateTime64(0, 6, 'UTC'))
+	// CHAOS-3781 Tier B: completion is the one work-item fact with a
+	// recorded timestamp, so "was it done at T" is answerable exactly --
+	// unlike the status vocabulary next door, which has no history at all
+	// and refuses (refuseHistoricalFact). An item completed AFTER the
+	// requested time reads as not completed then, which is what the row
+	// actually records.
+	completedExpression := "isNotNull(w.completed_at)"
+	if timeBound.active {
+		completedExpression = "toUInt8(w.completed_at IS NOT NULL AND w.completed_at <= " + timeBound.asOfExpression() + ")"
+	}
+	statement := withRowLimit(`SELECT w.work_item_id, ` + completedExpression + `, ifNull(w.completed_at, toDateTime64(0, 6, 'UTC'))
 FROM work_items AS w FINAL
-WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}` + timeBound.existencePredicate("w.created_at"))
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
@@ -173,9 +184,10 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
 			EvidenceRefIDs: []string{evidenceRefID("work-item", id)},
 		})
 		return nil
-	})
+	}, timeBound.bindings()...)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item actual completion", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	state, retentionReason := timeBound.retentionState(rowCount)
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

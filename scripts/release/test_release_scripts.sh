@@ -166,8 +166,8 @@ assert_go_version_pins() {
 
   ci_go_version="$(workflow_go_version "$1")" || return 1
   release_go_version="$(workflow_go_version "$2")" || return 1
-  test "$ci_go_version" = 1.26.5 || return 1
-  test "$release_go_version" = 1.26.5 || return 1
+  test "$ci_go_version" = 1.26.6 || return 1
+  test "$release_go_version" = 1.26.6 || return 1
   test "$ci_go_version" = "$release_go_version"
 }
 

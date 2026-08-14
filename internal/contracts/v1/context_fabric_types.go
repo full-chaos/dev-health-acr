@@ -412,6 +412,74 @@ type ContextFabricTimeContext struct {
 	End   *time.Time                `json:"end,omitempty"`
 }
 
+// ContextFabricTemporalGrain names the coarsest source grain that
+// contributed to a historical answer (CHAOS-3781, AC-3781-2). A closed
+// vocabulary, not a free string: drift item D9 records free-string
+// vocabularies in this contract as a governance gap, and a caller must be
+// able to branch on this value rather than parse prose.
+type ContextFabricTemporalGrain string
+
+const (
+	// ContextFabricGrainInstant: every contributing source answered at the
+	// exact requested instant. Only reachable when every source that
+	// contributed derives its answer from an immutable event timestamp.
+	ContextFabricGrainInstant ContextFabricTemporalGrain = "instant"
+	// ContextFabricGrainDay: at least one contributing source answers at
+	// day grain (the daily rollup tables), so the answer speaks for the
+	// most recent day at or before the requested instant, NOT for the
+	// instant itself. A caller must not read instant precision from it.
+	ContextFabricGrainDay ContextFabricTemporalGrain = "day"
+	// ContextFabricGrainNone: no source could speak for the requested
+	// time at all, so the answer carries no fact coverage on this axis.
+	// This is the honest steady state for the observed_time axis, where
+	// no canonical source retains observation history -- see
+	// ContextFabricTemporalLabel's doc comment.
+	ContextFabricGrainNone ContextFabricTemporalGrain = "none"
+)
+
+// ContextFabricTemporalLabel states the time an answer actually speaks
+// for, which is not always the time that was requested (CHAOS-3781, TRD
+// §19.8, AC-3781-2).
+//
+// Present only on a non-current time axis; nil means the answer is about
+// current state, which is what every result meant before CHAOS-3781.
+// Interpretation.TimeContext already round-trips what the caller ASKED
+// for, so this type exists for what that field cannot express: the
+// EFFECTIVE time after each source's own grain is applied, and whether
+// every source could speak for it at all.
+//
+// Why Requested and Effective are both full ContextFabricTimeContext
+// values rather than loose timestamp fields: the axis-shape rules
+// (as_of for a point-in-time axis, ordered start/end for a range, and
+// neither for current) are already defined and validated exactly once, on
+// that type. Restating them here as parallel pointers would let the two
+// definitions drift.
+//
+// Effective is always NARROWER than or equal to Requested, never wider:
+// a point-in-time Effective.AsOf is at or before Requested.AsOf, and a
+// range's effective window sits inside the requested one. An answer may
+// only ever speak for less time than was asked about, never more --
+// widening it would be the false historical answer the H6 refusal existed
+// to prevent.
+type ContextFabricTemporalLabel struct {
+	// Requested is the time context the investigation ran on, after
+	// interpretation. It equals Interpretation.TimeContext.
+	Requested ContextFabricTimeContext `json:"requested"`
+	// Effective is the time this answer speaks for once every
+	// contributing source's grain is applied. Same axis as Requested.
+	Effective ContextFabricTimeContext `json:"effective"`
+	// Grain is the coarsest contributing source grain. See
+	// ContextFabricTemporalGrain.
+	Grain ContextFabricTemporalGrain `json:"grain"`
+	// CoverageComplete is true only when every source consulted could
+	// speak for the requested time. False means at least one source
+	// reported that it cannot answer for that time, and its limitation is
+	// recorded in Coverage.Sources and Limitations (AC-3781-5). It is
+	// deliberately NOT a restatement of Coverage.Partial: a source can be
+	// partial for reasons that have nothing to do with time.
+	CoverageComplete bool `json:"coverage_complete"`
+}
+
 type ContextFabricInvestigationOptions struct {
 	MaxSubjectCandidates int  `json:"max_subject_candidates"`
 	MaxCohortMembers     int  `json:"max_cohort_members"`
@@ -693,6 +761,11 @@ type ContextFabricInvestigationResult struct {
 	// when it was first produced. A caller can always tell a reused answer
 	// from a fresh one by this field alone.
 	Reused bool `json:"reused"`
+	// Temporal states the time this answer speaks for on a historical
+	// time axis (CHAOS-3781, AC-3781-2). nil on the current axis, which
+	// keeps every pre-CHAOS-3781 result byte-identical: an additive
+	// optional field stays inside v1 per the contract-first rule.
+	Temporal *ContextFabricTemporalLabel `json:"temporal,omitempty"`
 }
 
 // ContextFabricScalarValue is the only free-form value admitted by the public

@@ -13,7 +13,8 @@ import (
 )
 
 func sourceHealthRow(provider string) []any {
-	return []any{provider, "success", int64(412), int64(9800), "", "2026-08-12 03:00:00"}
+	// duration_ms is uint64, matching the production column.
+	return []any{provider, "success", int64(412), uint64(9800), "", "2026-08-12 03:00:00"}
 }
 
 func TestSourceHealthProviderHappyPath(t *testing.T) {

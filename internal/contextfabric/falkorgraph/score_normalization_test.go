@@ -31,7 +31,7 @@ func TestFulltextSearchScoreOrderingSurvivesConfidence(t *testing.T) {
 	}}
 	adapter := newFakeAdapter(t, fake)
 
-	candidates, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "release", 10)
+	candidates, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", "release", 10, temporalFilter{})
 	if err != nil {
 		t.Fatalf("fulltextSearchNodes() error = %v", err)
 	}

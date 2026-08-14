@@ -26,10 +26,18 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	// One fence verification per resolution, not per term (codex round-2
 	// R2-1). Scoped to this call and never shared across requests.
 	fence := &resolutionFence{}
+	// CHAOS-3781: the window comes from the INTERPRETED question, never
+	// the wire request. A caller may send axis=current for a question
+	// whose text is historical; the interpreter is what settles which
+	// time this investigation is actually about, and the engine refuses
+	// any interpreted historical axis it cannot bound (AC-3781-3: a
+	// subject outside the window simply stops resolving here).
+	temporal := newTemporalFilter(interpreted.TimeContext)
 	deps := graphrank.ResolveDeps{
 		ExactHint: func(ctx context.Context, subject contextfabric.SubjectRef) (graphrank.CandidateNode, bool, error) {
-			cypher := fmt.Sprintf("MATCH (n:%s {%s:$org, %s:$kind, %s:$id}) RETURN n", labelSubject, propOrgID, propKind, propCanonicalID)
-			rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": principal.OrgID, "kind": string(subject.Kind), "id": subject.CanonicalID}, true)
+			cypher := fmt.Sprintf("MATCH (n:%s {%s:$org, %s:$kind, %s:$id}) WHERE true%s RETURN n",
+				labelSubject, propOrgID, propKind, propCanonicalID, temporal.predicate("n"))
+			rows, err := a.api.query(ctx, key, cypher, temporal.bind(map[string]interface{}{"org": principal.OrgID, "kind": string(subject.Kind), "id": subject.CanonicalID}), true)
 			if err != nil {
 				return graphrank.CandidateNode{}, false, safeDependencyError("resolve exact subject hint", err)
 			}
@@ -43,15 +51,15 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 			return toCandidateNode(n), true, nil
 		},
 		Search: func(ctx context.Context, term string, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
-			return a.hybridSearchNodes(ctx, key, principal.OrgID, term, limit, fence)
+			return a.hybridSearchNodes(ctx, key, principal.OrgID, term, limit, fence, temporal)
 		},
 		Traverse: func(ctx context.Context, term string, observation graphrank.CandidateNode) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
 			return graphrank.TraverseObservationToSubject(ctx, principal, request.RequestedScope, term, observation, isInternalSubject,
 				func(ctx context.Context, uuid string) ([]graphrank.CandidateEdge, error) {
-					return a.edgesOfNode(ctx, key, principal.OrgID, uuid)
+					return a.edgesOfNode(ctx, key, principal.OrgID, uuid, temporal)
 				},
 				func(ctx context.Context, uuid string) (graphrank.CandidateNode, bool) {
-					n, err := a.nodeByUUID(ctx, key, principal.OrgID, uuid)
+					n, err := a.nodeByUUID(ctx, key, principal.OrgID, uuid, temporal)
 					if err != nil || n == nil {
 						return graphrank.CandidateNode{}, false
 					}
@@ -78,6 +86,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 	key := graphKey(a.config.GraphPrefix, principal.OrgID)
 	scope := request.Request.RequestedScope
+	temporal := newTemporalFilter(request.Interpretation.TimeContext)
 
 	// Codex P2a: collection is bounded by a.config.MaxResults, a generous
 	// superset cap -- NEVER by request.Request.Options.MaxRelationshipPaths,
@@ -111,7 +120,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	failedLookups := 0
 
 	for _, subject := range request.Resolution.Committed {
-		nodes, edges, failed, err := a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit)
+		nodes, edges, failed, err := a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
 		if err != nil {
 			return contextfabric.GraphContext{}, err
 		}
@@ -138,7 +147,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// Codex's round-3 ruling. DiscoverContext has no analogous auto-commit
 	// decision to protect -- this call feeds cohort/edge DISCOVERY, already
 	// bounded and already best-effort, not a committed-subject gate.
-	textNodes, _, err := a.fulltextSearchNodes(ctx, key, principal.OrgID, request.Request.Question, collectLimit)
+	textNodes, _, err := a.fulltextSearchNodes(ctx, key, principal.OrgID, request.Request.Question, collectLimit, temporal)
 	if err != nil {
 		return contextfabric.GraphContext{}, err
 	}
@@ -161,7 +170,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			seenNode[nk] = true
 			resolvedNodes = append(resolvedNodes, n)
 		}
-		textEdges, err := a.edgesOfNode(ctx, key, principal.OrgID, n.UUID)
+		textEdges, err := a.edgesOfNode(ctx, key, principal.OrgID, n.UUID, temporal)
 		if err != nil {
 			return contextfabric.GraphContext{}, err
 		}
@@ -178,7 +187,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		if collectLimit > 0 && textAdmitted >= collectLimit {
 			break
 		}
-		resolved, resolution := a.resolveEdge(ctx, key, principal.OrgID, principal, scope, ce)
+		resolved, resolution := a.resolveEdge(ctx, key, principal.OrgID, principal, scope, ce, temporal)
 		switch resolution {
 		case edgeLookupFailed:
 			failedLookups++
@@ -234,6 +243,18 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// the first; per-call aggregation stays bounded (never one log line
 	// per dropped edge) without ever going silent on a call that has
 	// something to report.
+	// CHAOS-3781: on a historical axis, count how much of what was
+	// admitted carried NO validity bound at all. temporalFilter.predicate
+	// admits such an element at every requested time (see its doc comment
+	// for why excluding it would be worse), so the answer must disclose
+	// how much of itself rests on elements that were never shown to have
+	// been true then. Counted over what was ADMITTED, not over what was
+	// scanned, so the number describes this answer rather than the graph.
+	unbounded := 0
+	if temporal.active {
+		unbounded = countUnboundedValidity(resolvedNodes, orderedResolved)
+	}
+
 	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0
 	var degradedReasons []string
 	if failedLookups > 0 {
@@ -244,15 +265,47 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		slog.Default().Warn("context_fabric: dropped relationship edge(s) with a type outside the closed vocabulary",
 			"count", admission.DroppedUnknownRelationshipTypeCount, "types", admission.DroppedUnknownRelationshipTypeNames)
 	}
+	sources := []contextfabric.SourceObservation{{Source: "context-fabric:graph", State: contextfabric.SourceAvailable, ObservedAt: ptrTime(a.now().UTC())}}
+	if unbounded > 0 {
+		// A distinct source row rather than a degraded reason: this is not
+		// a failure and must not set Partial. The graph answered fully;
+		// part of what it returned simply carries no validity bound, and a
+		// reader deserves to see that separately from real degradation.
+		sources = append(sources, contextfabric.SourceObservation{
+			Source:     "context-fabric:graph-validity-windows",
+			State:      contextfabric.SourceNotApplicable,
+			ObservedAt: ptrTime(a.now().UTC()),
+			Reason:     fmt.Sprintf("graph elements carrying no validity window were admitted at the requested time: %d", unbounded),
+		})
+	}
 	return contextfabric.GraphContext{
 		Resolution: request.Resolution, Cohort: cohort, Paths: admission.Paths, DriverCandidates: admission.Drivers,
 		EvidenceRefIDs: admission.EvidenceRefIDs, FactRequirements: factRequirements,
 		Coverage: contextfabric.Coverage{
-			Sources:         []contextfabric.SourceObservation{{Source: "context-fabric:graph", State: contextfabric.SourceAvailable, ObservedAt: ptrTime(a.now().UTC())}},
+			Sources:         sources,
 			Partial:         partial,
 			DegradedReasons: degradedReasons,
 		},
 	}, nil
+}
+
+// countUnboundedValidity counts the admitted nodes and edges that carry no
+// validity bound on either side. See hasUnboundedValidity and
+// temporalFilter.predicate for why those elements are admitted rather than
+// excluded, and why the count has to reach the caller.
+func countUnboundedValidity(nodes []graphrank.CandidateNode, edges []graphrank.ResolvedEdge) int {
+	count := 0
+	for _, n := range nodes {
+		if hasUnboundedValidity(n.Attributes) {
+			count++
+		}
+	}
+	for _, e := range edges {
+		if hasUnboundedValidity(e.Attributes) {
+			count++
+		}
+	}
+	return count
 }
 
 func mustSubject(n graphrank.CandidateNode) contextfabric.SubjectRef {
