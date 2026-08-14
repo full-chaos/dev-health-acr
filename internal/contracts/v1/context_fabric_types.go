@@ -297,6 +297,65 @@ const (
 	ContextFabricFactEvidence                ContextFabricFactKind = "evidence"
 )
 
+// contextFabricFactKinds is the closed fact-kind vocabulary in published
+// order -- the SINGLE declaration every other check derives from:
+// validFactKind, the fact_requirements count bound, the interpretation
+// prompt's closed-set sentence, and the schema-parity proof.
+//
+// It is an ARRAY, not a slice, so len() is a compile-time constant and
+// ContextFabricFactRequirementsMaxCount can be derived from it rather than
+// transcribed. Adding or removing a kind therefore moves the bound, the
+// prompt, and the parity assertions together; the only thing left to update
+// by hand is the published schema, and a test fails until that happens.
+//
+// It is UNEXPORTED, and that is load-bearing (codex round-10 F2). As an
+// exported array var its elements were assignable by any importing package:
+// validation reads the vocabulary live, while the interpretation prompt
+// snapshots it at init, so a single in-process write desynchronized them --
+// the validator would accept a kind the prompt never advertised and the
+// schema does not publish. Callers get ContextFabricFactKindVocabulary()
+// instead, which returns a COPY, so there is no writable path to the
+// declaration the validator actually consults.
+var contextFabricFactKinds = [...]ContextFabricFactKind{
+	ContextFabricFactIdentity,
+	ContextFabricFactMembership,
+	ContextFabricFactStatus,
+	ContextFabricFactActualCompletion,
+	ContextFabricFactWork,
+	ContextFabricFactBlockers,
+	ContextFabricFactRequiredChildren,
+	ContextFabricFactPullRequests,
+	ContextFabricFactReviews,
+	ContextFabricFactContinuousIntegration,
+	ContextFabricFactDeployments,
+	ContextFabricFactIncidents,
+	ContextFabricFactMetrics,
+	ContextFabricFactHealth,
+	ContextFabricFactWorkload,
+	ContextFabricFactInvestment,
+	ContextFabricFactReadiness,
+	ContextFabricFactOperationalDeficiencies,
+	ContextFabricFactSourceHealth,
+	ContextFabricFactEvidence,
+}
+
+// ContextFabricFactKindCount is the size of the closed fact-kind vocabulary,
+// as a compile-time constant.
+const ContextFabricFactKindCount = len(contextFabricFactKinds)
+
+// ContextFabricFactKindVocabulary returns the closed fact-kind vocabulary in
+// published order.
+//
+// The return type is an ARRAY, so the value is copied to the caller: writing
+// to it cannot reach the declaration validFactKind consults. A slice return
+// would hand back an alias and reintroduce exactly the mutable-vocabulary
+// defect this shape exists to prevent (codex round-10 F2), so it must stay
+// an array even though a slice would be marginally more convenient to range
+// over.
+func ContextFabricFactKindVocabulary() [ContextFabricFactKindCount]ContextFabricFactKind {
+	return contextFabricFactKinds
+}
+
 // ContextFabricDriverCategory is a closed vocabulary for
 // ContextFabricDriverJudgment.Category / ContextFabricFinding.Kind values
 // that assert something canonical-fact-shaped (as opposed to a
@@ -334,6 +393,55 @@ const (
 	ContextFabricDriverCategoryRelationship ContextFabricDriverCategory = "relationship"
 	ContextFabricDriverCategoryNarrative    ContextFabricDriverCategory = "narrative"
 )
+
+// contextFabricDriverCategories is the closed driver-category vocabulary in
+// published order -- the SINGLE declaration validDriverCategory derives from,
+// and now also the vocabulary ContextFabricFinding.Kind is checked against.
+//
+// Finding.Kind is the category-equivalent field for findings and has always
+// been governed by the same closed set in the synthesis prompt and in
+// ContextFabricDriverCategoryRequiresClaimedFact. It was simply never
+// ENFORCED (codex round-12): Finding.validate checked only non-emptiness and
+// length, and the published schema left the field an unrestricted string
+// while DriverJudgment.category carried this exact enum. A model could emit
+// kind "source_disagreement" with valid evidence and produce a canonical
+// result that validated -- the prompt advertising a closed set the contract
+// did not keep.
+//
+// Unexported behind an accessor for the same reason as the fact-kind
+// vocabulary: an exported array var's elements are assignable, and a caller
+// mutating the vocabulary would desynchronize validation from the schema and
+// the prompt.
+var contextFabricDriverCategories = [...]ContextFabricDriverCategory{
+	ContextFabricDriverCategoryStatus,
+	ContextFabricDriverCategoryCompletion,
+	ContextFabricDriverCategoryWork,
+	ContextFabricDriverCategoryBlockers,
+	ContextFabricDriverCategoryReviews,
+	ContextFabricDriverCategoryCI,
+	ContextFabricDriverCategoryDeployments,
+	ContextFabricDriverCategoryIncidents,
+	ContextFabricDriverCategoryHealth,
+	ContextFabricDriverCategoryWorkload,
+	ContextFabricDriverCategoryInvestment,
+	ContextFabricDriverCategoryReadiness,
+	ContextFabricDriverCategoryDeficiency,
+	ContextFabricDriverCategorySourceHealth,
+	ContextFabricDriverCategoryRelationship,
+	ContextFabricDriverCategoryNarrative,
+}
+
+// ContextFabricDriverCategoryCount is the size of the closed driver-category
+// vocabulary, as a compile-time constant.
+const ContextFabricDriverCategoryCount = len(contextFabricDriverCategories)
+
+// ContextFabricDriverCategoryVocabulary returns the closed driver-category
+// vocabulary in published order. The return type is an ARRAY, so the value is
+// copied to the caller -- see ContextFabricFactKindVocabulary for why that
+// matters.
+func ContextFabricDriverCategoryVocabulary() [ContextFabricDriverCategoryCount]ContextFabricDriverCategory {
+	return contextFabricDriverCategories
+}
 
 // contextFabricDriverCategoryFactKind is the closed Category->FactKind
 // table. See ContextFabricDriverCategoryRequiresClaimedFact.
@@ -479,6 +587,49 @@ type ContextFabricTemporalLabel struct {
 	// partial for reasons that have nothing to do with time.
 	CoverageComplete bool `json:"coverage_complete"`
 }
+
+// ContextFabricSourceObservationReasonMaxLength and
+// ContextFabricCoverageDegradedReasonMaxLength are the contract's own
+// bounds on the two coverage explanation strings.
+//
+// Named because internal/contextfabric clamps every reason it emits to
+// them before composing a result (fact_registry.go's appendFactCoverage),
+// and until CHAOS-3746 that clamp was a hand-copied 2000 whose comment
+// said it "mirrors" this bound. A mirror is not a derivation: widening
+// the contract would leave the clamp shortening explanations for no
+// reason, and narrowing it would let the clamp emit a result the
+// validator then rejects in full -- losing the answer, not just the
+// explanation.
+//
+// They are equal today and still separate constants, because they bound
+// different strings: a degraded entry is BUILT from a reason and is
+// strictly longer (it carries a "<kind>: " prefix), so sharing one
+// constant would be a coincidence dressed as a relation.
+const (
+	ContextFabricSourceObservationReasonMaxLength = 2000
+	ContextFabricCoverageDegradedReasonMaxLength  = 2000
+)
+
+// ContextFabricSerializedBytesMin and ContextFabricSerializedBytesMax bound
+// ContextFabricInvestigationOptions.MaxSerializedBytes: the largest single
+// investigation response this service will serve.
+//
+// Named rather than inline (CHAOS-3795) because the number is load-bearing
+// somewhere else entirely. The MCP sidecar caps every hosted response body
+// it will read at its own ceiling, and the claim that the ceiling can never
+// truncate a legitimate answer is an arithmetic relation between the two
+// values -- see TestSidecarCeilingClearsTheServingBudget in
+// internal/sidecar. A relation between two literals is not checkable; a
+// relation between two constants is.
+//
+// This is the SERVING budget for one response, deliberately not the
+// contract's aggregate maximum across a full expansion (hundreds of MiB).
+// The sidecar reads one response at a time, so one response is the quantity
+// its ceiling has to clear.
+const (
+	ContextFabricSerializedBytesMin = 8192
+	ContextFabricSerializedBytesMax = 1 << 20
+)
 
 type ContextFabricInvestigationOptions struct {
 	MaxSubjectCandidates int  `json:"max_subject_candidates"`
@@ -741,7 +892,22 @@ type ContextFabricInvestigationResult struct {
 	Paths              []ContextFabricRelationshipPath  `json:"paths"`
 	Conflicts          []ContextFabricFinding           `json:"conflicts"`
 	Limitations        []string                         `json:"limitations"`
-	EvidenceRefIDs     []string                         `json:"evidence_ref_ids"`
+	// LimitationsDisplaced counts model-authored limitations the engine
+	// dropped to fit the retrieval-degradation disclosure inside
+	// ContextFabricLimitationsMaxCount (CHAOS-3746).
+	//
+	// It exists because the loss cannot be inferred from Limitations
+	// itself: a displaced list and a list that simply had room are the
+	// same length and the same shape, both ending with the disclosure. A
+	// consumer told nothing would read a list with content silently
+	// removed as a complete one, which is the exact class the projection
+	// budget exists to prevent -- so the canonical result declares it too,
+	// rather than leaving it to be re-derived by something that cannot.
+	//
+	// Zero for every result written before this field existed, and for
+	// every result where nothing was displaced, so it is omitempty.
+	LimitationsDisplaced int      `json:"limitations_displaced,omitempty"`
+	EvidenceRefIDs       []string `json:"evidence_ref_ids"`
 	// ClaimedFacts is the closed, checkable set of canonical fact
 	// restatements every fact-shaped driver/finding in this result cites
 	// by ClaimID. See ContextFabricClaimedFact's doc comment for why this

@@ -20,6 +20,16 @@ func engineForDegradation(t *testing.T, degraded bool) (*Engine, InvestigationRe
 
 func engineForDegradationWithLimitations(t *testing.T, degraded bool, limitations []string) (*Engine, InvestigationRequest) {
 	t.Helper()
+	return engineForDegradationOnAxis(t, degraded, limitations, TimeContext{Axis: TemporalCurrent})
+}
+
+// engineForDegradationOnAxis is the same harness with the INTERPRETED time
+// context under the caller's control. The engine reads the axis from the
+// interpretation, never from the request, so a test that only sets
+// request.TimeContext exercises the current axis while looking historical
+// (CHAOS-3746 round-17).
+func engineForDegradationOnAxis(t *testing.T, degraded bool, limitations []string, timeContext TimeContext) (*Engine, InvestigationRequest) {
+	t.Helper()
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	resolution := SubjectResolution{
 		Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project},
@@ -27,7 +37,7 @@ func engineForDegradationWithLimitations(t *testing.T, degraded bool, limitation
 	}
 	interpretation := InterpretedQuestion{
 		Shape: ShapeOpen, RequestedJudgment: "release_readiness_and_drivers",
-		TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{},
+		TimeContext: timeContext, FactRequirements: []FactRequirement{},
 	}
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {

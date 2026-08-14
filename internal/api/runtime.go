@@ -56,6 +56,19 @@ type RuntimeDependencies struct {
 	// mirroring how Episodes being nil leaves the episode route
 	// unregistered.
 	Investigator contextfabric.Investigator
+	// InvestigationResults is optional (CHAOS-3746) and exposes the SAME
+	// immutable result store the engine already writes through, so a
+	// consumer can re-read a result by ID for replay, diagnostics, or
+	// deeper inspection after receiving a bounded projection. It is
+	// read-only at this boundary: the retrieval route never writes, and
+	// composition keeps ownership of the Save path.
+	//
+	// It is wired independently of Investigator rather than reached
+	// through it. Retrieval is a genuinely different capability from
+	// investigation -- reading a stored answer costs no graph, fact, or
+	// model work -- and folding it into the Investigator port would widen
+	// a domain interface for one consumer's convenience.
+	InvestigationResults contextfabric.InvestigationResultStore
 	// OrgModelConfigs is optional (CHAOS-3775) -- same convention as
 	// Investigator. When nil (no ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS
 	// configured), the model-config routes stay registered, authorized, and
@@ -98,6 +111,9 @@ func (r *RuntimeDependencies) validate() error {
 	}
 	if r.Investigator != nil && storage.IsNil(r.Investigator) {
 		return errors.New("hosted context fabric investigator must not be typed nil")
+	}
+	if r.InvestigationResults != nil && storage.IsNil(r.InvestigationResults) {
+		return errors.New("hosted context fabric investigation result store must not be typed nil")
 	}
 	if len(r.ReadinessChecks) < 3 {
 		return errors.New("hosted read runtime requires postgres, clickhouse, and entitlement readiness checks")

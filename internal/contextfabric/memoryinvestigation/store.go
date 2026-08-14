@@ -23,7 +23,12 @@ import (
 // (org_id, result_id). It fires identically whether result_id is genuinely
 // unknown or belongs to a different organization, matching
 // pginvestigation.ErrNotFound's non-enumerating-404 behavior.
-var ErrNotFound = errors.New("memoryinvestigation: investigation result not found")
+//
+// It wraps contextfabric.ErrInvestigationResultNotFound (CHAOS-3746) for
+// the same reason pginvestigation.ErrNotFound does: a caller holding the
+// interface classifies not-found through the port, not through an
+// adapter. errors.Is against either sentinel still matches.
+var ErrNotFound = fmt.Errorf("memoryinvestigation: investigation result not found: %w", contextfabric.ErrInvestigationResultNotFound)
 
 // entry holds an immutable, already-serialized snapshot. Storing the JSON
 // form (rather than the Go struct) keeps Save's idempotent-replay
@@ -152,7 +157,7 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	// storage some other way (e.g. written directly, or by a future/older
 	// binary with different validation) -- a caller must never receive a
 	// result this package cannot vouch for.
-	if err := result.Validate(); err != nil {
+	if err := result.ValidateStored(); err != nil {
 		return contextfabric.InvestigationResult{}, fmt.Errorf("memoryinvestigation: stored investigation result is invalid: %w", err)
 	}
 	return result, nil

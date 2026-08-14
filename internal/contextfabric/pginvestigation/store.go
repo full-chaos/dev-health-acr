@@ -26,7 +26,13 @@ import (
 // contextfabric.InvestigationResultStore's Get doc comment). This is
 // deliberately not contextfabric.ErrUnavailable: a missing/foreign result
 // is a 404, not a transient 503.
-var ErrNotFound = errors.New("pginvestigation: investigation result not found")
+//
+// It wraps contextfabric.ErrInvestigationResultNotFound (CHAOS-3746) so a
+// caller holding only the InvestigationResultStore interface -- the
+// result-retrieval route does -- classifies not-found through the port
+// rather than through this package. errors.Is against either sentinel
+// still matches.
+var ErrNotFound = fmt.Errorf("pginvestigation: investigation result not found: %w", contextfabric.ErrInvestigationResultNotFound)
 
 // Store is the production contextfabric.InvestigationResultStore. The
 // caller owns database construction; this package never parses or logs
@@ -248,7 +254,7 @@ SELECT payload FROM acr.context_fabric_investigation_results WHERE result_id = $
 	// binary with different validation, or a row an operator hand-edited)
 	// -- a caller must never receive a result this package cannot vouch
 	// for.
-	if err := result.Validate(); err != nil {
+	if err := result.ValidateStored(); err != nil {
 		return contextfabric.InvestigationResult{}, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
 	}
 	return result, nil
@@ -512,7 +518,10 @@ LIMIT 1`,
 	if err := json.Unmarshal(payload, &result); err != nil {
 		return contextfabric.InvestigationResult{}, false, fmt.Errorf("pginvestigation: decode investigation result: %w", err)
 	}
-	if err := result.Validate(); err != nil {
+	// Lenient: this is a READ of a persisted row, exactly like Get. A row
+	// written by an older, looser binary must stay reusable rather than
+	// turning into a hard failure nobody can migrate away from.
+	if err := result.ValidateStored(); err != nil {
 		return contextfabric.InvestigationResult{}, false, fmt.Errorf("pginvestigation: stored investigation result is invalid: %w", err)
 	}
 	return result, true, nil

@@ -26,6 +26,68 @@ type mcpResponseDefsSync struct {
 	structuredRoot bool
 }
 
+// Context Fabric answer surface (CHAOS-3746). The three canonical
+// documents below compose by $ref across files, so embedding them into a
+// self-contained MCP response means rewriting every cross-file and
+// document-root pointer to the local $defs location an offline client can
+// actually resolve. Each map is declared once and shared by both response
+// schemas that embed the same document, so the two copies cannot drift
+// from each other.
+
+// contextFabricCommonDefsRewrites relocates context_fabric_common.v1's own
+// document-root pointers. Once the document is embedded at
+// #/$defs/context_fabric_common.v1, its internal "#/$defs/SubjectRef"
+// pointers would otherwise resolve against the WRAPPER's root, where
+// nothing of that name exists.
+var contextFabricCommonDefsRewrites = map[string]string{
+	"#/$defs/AuthorizationScope": "#/$defs/context_fabric_common.v1/$defs/AuthorizationScope",
+	"#/$defs/CohortExclusion":    "#/$defs/context_fabric_common.v1/$defs/CohortExclusion",
+	"#/$defs/CohortMember":       "#/$defs/context_fabric_common.v1/$defs/CohortMember",
+	"#/$defs/FactRequirement":    "#/$defs/context_fabric_common.v1/$defs/FactRequirement",
+	"#/$defs/RelationshipEdge":   "#/$defs/context_fabric_common.v1/$defs/RelationshipEdge",
+	"#/$defs/ScalarValue":        "#/$defs/context_fabric_common.v1/$defs/ScalarValue",
+	"#/$defs/SubjectCandidate":   "#/$defs/context_fabric_common.v1/$defs/SubjectCandidate",
+	"#/$defs/SubjectHint":        "#/$defs/context_fabric_common.v1/$defs/SubjectHint",
+	"#/$defs/SubjectRef":         "#/$defs/context_fabric_common.v1/$defs/SubjectRef",
+	"#/$defs/TimeContext":        "#/$defs/context_fabric_common.v1/$defs/TimeContext",
+}
+
+// contextFabricResultDefsRewrites relocates the cross-file pointers
+// context_fabric_investigation_result.v1 makes into
+// context_fabric_common.v1.
+var contextFabricResultDefsRewrites = map[string]string{
+	"context_fabric_common.v1.schema.json#/$defs/ClaimedFact":         "#/$defs/context_fabric_common.v1/$defs/ClaimedFact",
+	"context_fabric_common.v1.schema.json#/$defs/Cohort":              "#/$defs/context_fabric_common.v1/$defs/Cohort",
+	"context_fabric_common.v1.schema.json#/$defs/Coverage":            "#/$defs/context_fabric_common.v1/$defs/Coverage",
+	"context_fabric_common.v1.schema.json#/$defs/DriverJudgment":      "#/$defs/context_fabric_common.v1/$defs/DriverJudgment",
+	"context_fabric_common.v1.schema.json#/$defs/Finding":             "#/$defs/context_fabric_common.v1/$defs/Finding",
+	"context_fabric_common.v1.schema.json#/$defs/InterpretedQuestion": "#/$defs/context_fabric_common.v1/$defs/InterpretedQuestion",
+	"context_fabric_common.v1.schema.json#/$defs/RelationshipPath":    "#/$defs/context_fabric_common.v1/$defs/RelationshipPath",
+	"context_fabric_common.v1.schema.json#/$defs/SubjectResolution":   "#/$defs/context_fabric_common.v1/$defs/SubjectResolution",
+	"context_fabric_common.v1.schema.json#/$defs/VersionSet":          "#/$defs/context_fabric_common.v1/$defs/VersionSet",
+}
+
+// contextFabricProjectionDefsRewrites relocates
+// context_fabric_answer_projection.v1's own document-root pointers. The
+// projection schema is self-contained as a standalone file, so all of its
+// pointers are internal.
+var contextFabricProjectionDefsRewrites = map[string]string{
+	"#/$defs/BoundSubjectReceipt":    "#/$defs/context_fabric_answer_projection.v1/$defs/BoundSubjectReceipt",
+	"#/$defs/ProjectedCandidate":     "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedCandidate",
+	"#/$defs/ProjectedClarification": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedClarification",
+	"#/$defs/ProjectedCohort":        "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedCohort",
+	"#/$defs/ProjectedCohortMember":  "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedCohortMember",
+	"#/$defs/ProjectedCoverage":      "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedCoverage",
+	"#/$defs/ProjectedDriver":        "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedDriver",
+	"#/$defs/ProjectedFact":          "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedFact",
+	"#/$defs/ProjectionBudget":       "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectionBudget",
+	"#/$defs/ScalarValue":            "#/$defs/context_fabric_answer_projection.v1/$defs/ScalarValue",
+	"#/$defs/SubjectRef":             "#/$defs/context_fabric_answer_projection.v1/$defs/SubjectRef",
+	"#/$defs/TemporalLabel":          "#/$defs/context_fabric_answer_projection.v1/$defs/TemporalLabel",
+	"#/$defs/TimeContext":            "#/$defs/context_fabric_answer_projection.v1/$defs/TimeContext",
+	"#/$defs/VersionSet":             "#/$defs/context_fabric_answer_projection.v1/$defs/VersionSet",
+}
+
 var mcpResponseDefsSyncs = []mcpResponseDefsSync{
 	{
 		responseFile:   "mcp_context_for_task_response.v1.schema.json",
@@ -55,6 +117,38 @@ var mcpResponseDefsSyncs = []mcpResponseDefsSync{
 		responseFile:  "mcp_source_evidence_response.v1.schema.json",
 		defKey:        "evidence_ref.v1",
 		canonicalFile: "evidence_ref.v1.schema.json",
+	},
+	{
+		responseFile:   "mcp_investigate_question_response.v1.schema.json",
+		defKey:         "context_fabric_answer_projection.v1",
+		canonicalFile:  "context_fabric_answer_projection.v1.schema.json",
+		refRewrites:    contextFabricProjectionDefsRewrites,
+		structuredRoot: true,
+	},
+	{
+		responseFile:  "mcp_investigate_question_response.v1.schema.json",
+		defKey:        "context_fabric_investigation_result.v1",
+		canonicalFile: "context_fabric_investigation_result.v1.schema.json",
+		refRewrites:   contextFabricResultDefsRewrites,
+	},
+	{
+		responseFile:  "mcp_investigate_question_response.v1.schema.json",
+		defKey:        "context_fabric_common.v1",
+		canonicalFile: "context_fabric_common.v1.schema.json",
+		refRewrites:   contextFabricCommonDefsRewrites,
+	},
+	{
+		responseFile:   "mcp_investigation_result_response.v1.schema.json",
+		defKey:         "context_fabric_investigation_result.v1",
+		canonicalFile:  "context_fabric_investigation_result.v1.schema.json",
+		refRewrites:    contextFabricResultDefsRewrites,
+		structuredRoot: true,
+	},
+	{
+		responseFile:  "mcp_investigation_result_response.v1.schema.json",
+		defKey:        "context_fabric_common.v1",
+		canonicalFile: "context_fabric_common.v1.schema.json",
+		refRewrites:   contextFabricCommonDefsRewrites,
 	},
 }
 

@@ -182,3 +182,5 @@ func cloneURL(u *url.URL) *url.URL {
 }
 
 var errEmptyEvidenceReferenceID = errors.New("acr: evidence reference id is required")
+
+var errEmptyInvestigationResultID = errors.New("acr: investigation result id is required")

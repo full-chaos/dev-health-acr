@@ -117,13 +117,31 @@ package v1
 //     in Validate()'s own order, purely to know WHERE to stop.
 const (
 	// Interpretation (ContextFabricInterpretedQuestion, ContextFabricFactRequirement).
-	ContextFabricRequestedJudgmentMaxLength             = 256
-	ContextFabricSubjectTermsMaxCount                   = 100
-	ContextFabricSubjectOrComparisonTermMaxLength       = 512
-	ContextFabricComparisonTermsMaxCount                = 100
-	ContextFabricClarificationReasonMaxLength           = 2000
-	ContextFabricFactRequirementsMaxCount               = 64
-	ContextFabricFactRequirementParameterValueMaxLength = 1024
+	ContextFabricRequestedJudgmentMaxLength = 256
+	// The published schema bounds subject_terms and comparison_terms at 50
+	// each; Go said 100 (CHAOS-3746 round 5).
+	ContextFabricSubjectTermsMaxCount             = 50
+	ContextFabricSubjectOrComparisonTermMaxLength = 512
+	ContextFabricComparisonTermsMaxCount          = 50
+	ContextFabricClarificationReasonMaxLength     = 2000
+	// ContextFabricFactRequirementsMaxCount is DERIVED from the fact-kind
+	// vocabulary, because that vocabulary is what actually caps the list:
+	// ContextFabricInterpretedQuestion.validate rejects a duplicate Kind, so
+	// no valid interpretation can carry more requirements than there are
+	// legal kinds. The schema said 50 and Go said 64 (codex round-9 F1) --
+	// two different numbers, neither of them reachable, and the disagreement
+	// stayed invisible because a probe that duplicated requirements was
+	// rejected for uniqueness at BOTH N and N+1 and scored as a pass.
+	//
+	// A number above the vocabulary size is not a loose bound, it is a
+	// FALSE PROMISE: the schema told a client a 50-entry list was acceptable
+	// when the service rejects every list past 20. Deriving the bound makes
+	// the published contract state the truth, and makes it follow the
+	// vocabulary automatically if a kind is ever added or pruned.
+	ContextFabricFactRequirementsMaxCount = ContextFabricFactKindCount
+	// Matches the published schema (was 1024, which the schema never
+	// admitted -- CHAOS-3746 round 4).
+	ContextFabricFactRequirementParameterValueMaxLength = 1000
 	ContextFabricFactRequirementParameterKeyMaxLength   = 128
 	// ContextFabricFactRequirementParametersMaxCount bounds how many
 	// key/value entries the model may attach to ONE fact_requirements[]
@@ -159,6 +177,7 @@ const (
 	ContextFabricIdentifierRefMaxLength = 256
 	// ContextFabricEvidenceRefIDsMaxCount bounds evidence_ref_ids wherever a
 	// model populates it directly: per-driver and per-finding.
+	// The RESULT-LEVEL evidence index; the published schema allows 500 here.
 	ContextFabricEvidenceRefIDsMaxCount = 500
 	// ContextFabricEvidenceRefIDMaxLength bounds each individual
 	// evidence_ref_id string (as opposed to the COUNT bound above), matching
@@ -168,6 +187,11 @@ const (
 	// bound was order-contradicted, same as path_id/claimed_fact_id item
 	// length was before round-2 R2-2.
 	ContextFabricEvidenceRefIDMaxLength = 256
+	// Evidence references nested inside a driver, finding, or relationship
+	// path. The published schema bounds these at 200 while Go enforced the
+	// result-level 500, so a document could pass validation and still
+	// violate the contract (CHAOS-3746 round 4).
+	ContextFabricNestedEvidenceRefIDsMaxCount = 200
 
 	// Synthesis: finding (ContextFabricFinding).
 	ContextFabricFindingKindMaxLength    = 128
@@ -201,10 +225,32 @@ const (
 	ContextFabricRemainingWorkMaxCount      = 250
 	ContextFabricReadinessGapsMaxCount      = 250
 	ContextFabricConflictsMaxCount          = 250
-	ContextFabricLimitationsMaxCount        = 250
-	ContextFabricLimitationMaxLength        = 4000
-	ContextFabricWarningsMaxCount           = 250
-	ContextFabricWarningMaxLength           = 4000
+	// These are MODEL-FACING: the synthesis prompt states them, so they
+	// must equal what validation actually enforces on a write, or the
+	// prompt invites the model to produce output the validator then
+	// rejects. They were 250 x 4000 while the published JSON Schema said
+	// 100 x 2000 (codex round-3 P2-4); the schema is the wire-contract
+	// source of truth, so these moved to it.
+	//
+	// The looser historical values survive only as the stored-read
+	// allowance in validate_context_fabric_result.go, which exists so
+	// immutable rows written before the correction stay readable.
+	// The result-level answer text. This is the SINGLE source: the
+	// composers in internal/contextfabric/model_runtime.go truncate to
+	// these, the result validator enforces them, and the synthesis prompt
+	// states them. Before CHAOS-3746 round 7 the composers carried their
+	// own copies at 8000/16000 while writes accepted 4000/12000, so a
+	// valid synthesis with enough driver titles could compose a judgment
+	// the engine then rejected -- an invalid-result failure entirely of
+	// ACR's own making.
+	ContextFabricDirectJudgmentMaxLength      = 4000
+	ContextFabricCurrentStateMaxLength        = 4000
+	ContextFabricDeterministicAnswerMaxLength = 12000
+
+	ContextFabricLimitationsMaxCount = 100
+	ContextFabricLimitationMaxLength = 2000
+	ContextFabricWarningsMaxCount    = 100
+	ContextFabricWarningMaxLength    = 2000
 	// ContextFabricClaimedFactsMaxCount bounds the synthesis draft's own
 	// top-level claimed_facts list -- the model decides how many claims to
 	// write (unlike driver/finding claimed_fact_ids, which only REFERENCE
@@ -251,7 +297,7 @@ var ContextFabricModelFacingBounds = []ContextFabricModelFacingBound{
 	{"synthesis.driver.affected_subjects.item_label_max_length", ContextFabricSubjectRefLabelMaxLength},
 	{"synthesis.driver.path_ids.max_count", ContextFabricDriverPathIDsMaxCount},
 	{"synthesis.driver.path_ids.item_max_length", ContextFabricIdentifierRefMaxLength},
-	{"synthesis.driver.evidence_ref_ids.max_count", ContextFabricEvidenceRefIDsMaxCount},
+	{"synthesis.driver.evidence_ref_ids.max_count", ContextFabricNestedEvidenceRefIDsMaxCount},
 	{"synthesis.driver.evidence_ref_ids.item_max_length", ContextFabricEvidenceRefIDMaxLength},
 	{"synthesis.driver.claimed_fact_ids.max_count", ContextFabricDriverClaimedFactIDsMaxCount},
 	{"synthesis.driver.claimed_fact_ids.item_max_length", ContextFabricIdentifierRefMaxLength},
@@ -262,7 +308,7 @@ var ContextFabricModelFacingBounds = []ContextFabricModelFacingBound{
 	{"synthesis.finding.subjects.max_count", ContextFabricFindingSubjectsMaxCount},
 	{"synthesis.finding.subjects.item_canonical_id_max_length", ContextFabricSubjectRefCanonicalIDMaxLength},
 	{"synthesis.finding.subjects.item_label_max_length", ContextFabricSubjectRefLabelMaxLength},
-	{"synthesis.finding.evidence_ref_ids.max_count", ContextFabricEvidenceRefIDsMaxCount},
+	{"synthesis.finding.evidence_ref_ids.max_count", ContextFabricNestedEvidenceRefIDsMaxCount},
 	{"synthesis.finding.evidence_ref_ids.item_max_length", ContextFabricEvidenceRefIDMaxLength},
 	{"synthesis.finding.claimed_fact_ids.max_count", ContextFabricDriverClaimedFactIDsMaxCount},
 	{"synthesis.finding.claimed_fact_ids.item_max_length", ContextFabricIdentifierRefMaxLength},
@@ -279,6 +325,9 @@ var ContextFabricModelFacingBounds = []ContextFabricModelFacingBound{
 	{"synthesis.remaining_work.max_count", ContextFabricRemainingWorkMaxCount},
 	{"synthesis.readiness_gaps.max_count", ContextFabricReadinessGapsMaxCount},
 	{"synthesis.conflicts.max_count", ContextFabricConflictsMaxCount},
+	{"synthesis.direct_judgment.max_length", ContextFabricDirectJudgmentMaxLength},
+	{"synthesis.current_state.max_length", ContextFabricCurrentStateMaxLength},
+	{"synthesis.deterministic_answer.max_length", ContextFabricDeterministicAnswerMaxLength},
 	{"synthesis.limitations.max_count", ContextFabricLimitationsMaxCount},
 	{"synthesis.limitations.item_max_length", ContextFabricLimitationMaxLength},
 	{"synthesis.warnings.max_count", ContextFabricWarningsMaxCount},

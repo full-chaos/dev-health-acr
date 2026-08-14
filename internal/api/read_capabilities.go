@@ -38,6 +38,19 @@ func (a *App) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	if entitled && capabilities.Permissions.EvidenceRead {
 		capabilities.EnabledTools = append(capabilities.EnabledTools, "source_evidence")
 	}
+	// The CHAOS-3746 answer tools are advertised only when the
+	// investigation surface can actually serve them. context:read alone is
+	// not enough: investigating needs a composed Investigator and
+	// re-reading a result needs the result store. Advertising a tool the
+	// sidecar would then fail on turns a composition gap into a confusing
+	// per-call error instead of an honest capability answer -- the same
+	// reason record_episode below is gated on a.runtime.Episodes.
+	if entitled && capabilities.Permissions.ContextRead && a.investigator() != nil {
+		capabilities.EnabledTools = append(capabilities.EnabledTools, "investigate_question")
+	}
+	if entitled && capabilities.Permissions.ContextRead && a.investigationResults() != nil {
+		capabilities.EnabledTools = append(capabilities.EnabledTools, "investigation_result")
+	}
 	if entitled && capabilities.Permissions.EpisodeWrite && a.runtime.Episodes != nil {
 		capabilities.EnabledTools = append(capabilities.EnabledTools, "record_episode")
 	}

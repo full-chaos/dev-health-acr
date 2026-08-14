@@ -1,0 +1,119 @@
+{
+  "schema_version": "context_fabric_answer_projection.v1",
+  "result_id": "result_87654321",
+  "request_id": "request_87654321",
+  "generated_at": "2026-08-11T16:00:03Z",
+  "status": "partial",
+  "question": "Was Ask Dev release-ready at the start of March?",
+  "reused": false,
+  "direct_judgment": "As of 2026-02-28, Ask Dev was not release-ready: required product acceptance was still open at that time.",
+  "current_state": "This answer speaks for 2026-02-28, the most recent daily rollup at or before the requested time, not for current state.",
+  "strongest_pressures": [
+    "Release acceptance remains incomplete."
+  ],
+  "committed_subjects": [
+    {
+      "kind": "project",
+      "canonical_id": "project_ask_dev",
+      "label": "Ask Dev"
+    }
+  ],
+  "principal_drivers": [
+    {
+      "driver_id": "driver_12345678",
+      "standing": "principal",
+      "category": "readiness",
+      "title": "Release acceptance remains incomplete",
+      "summary": "The project cannot be treated as ready until the required real-product acceptance path succeeds.",
+      "qualification": "This judgment is limited to currently visible project and acceptance evidence.",
+      "confidence": 0.96,
+      "evidence_ref_ids": [
+        "evidence_release_acceptance"
+      ],
+      "claimed_fact_ids": [
+        "claim_readiness_ask_dev"
+      ]
+    }
+  ],
+  "key_facts": [
+    {
+      "claim_id": "claim_readiness_ask_dev",
+      "kind": "readiness",
+      "subject": {
+        "kind": "project",
+        "canonical_id": "project_ask_dev",
+        "label": "Ask Dev"
+      },
+      "field": "release_ready",
+      "value": {
+        "boolean": false
+      }
+    }
+  ],
+  "coverage_summary": [
+    {
+      "source": "dev-health-ops:readiness",
+      "state": "available"
+    },
+    {
+      "source": "dev-health-ops:status",
+      "state": "not_applicable",
+      "reason": "devhealthfacts: this fact has no recorded history, so it cannot answer for a past time"
+    }
+  ],
+  "temporal": {
+    "requested": {
+      "axis": "valid_time",
+      "as_of": "2026-03-01T00:00:00Z"
+    },
+    "effective": {
+      "axis": "valid_time",
+      "as_of": "2026-02-28T00:00:00Z"
+    },
+    "grain": "day",
+    "coverage_complete": false
+  },
+  "coverage_partial": true,
+  "limitations": [
+    "No production user-adoption evidence was available for this investigation.",
+    "Graph elements that carry no validity window are included at every requested time.",
+    "Subjects deleted at source since the requested time are not recoverable from the projected graph."
+  ],
+  "warnings": [],
+  "evidence_ref_ids": [
+    "evidence_release_acceptance"
+  ],
+  "subject_receipts": [
+    {
+      "result_id": "result_87654321",
+      "receipt_id": "receipt_12345678"
+    }
+  ],
+  "versions": {
+    "service_version": "0.2.0",
+    "contract_version": "context_fabric_investigation_result.v1",
+    "backend": "graph",
+    "backend_version": "v3",
+    "projection_version": "projection-v1",
+    "query_version": "query-v1",
+    "interpretation_version": "interpretation-v1",
+    "synthesis_version": "synthesis-v1",
+    "canonical_service_version": "ops-v1",
+    "model_identity": "openai-compatible/gpt-5-nano"
+  },
+  "projection_budget": {
+    "truncated": false,
+    "drivers_omitted": 0,
+    "withheld_drivers_omitted": 0,
+    "cohort_members_omitted": 0,
+    "facts_omitted": 0,
+    "candidates_omitted": 0,
+    "evidence_refs_omitted": 0,
+    "limitations_omitted": 0,
+    "warnings_omitted": 0,
+    "coverage_omitted": 0,
+    "reasons_omitted": 0,
+    "values_clamped": 0,
+    "full_result_omitted": false
+  }
+}

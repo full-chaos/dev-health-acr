@@ -50,7 +50,12 @@ func (l CapabilityLimits) Validate() error {
 
 func validEnabledTool(name string) bool {
 	switch name {
-	case "context_for_task", "source_evidence", "record_episode":
+	// CHAOS-3746 added investigate_question and investigation_result. This
+	// set is CLOSED and is validated by acr-mcp on the startup path
+	// (sidecar.validateCapabilities), so a name the hosted API advertises
+	// but this set omits does not degrade -- it refuses to boot the
+	// sidecar entirely.
+	case "context_for_task", "source_evidence", "investigate_question", "investigation_result", "record_episode":
 		return true
 	default:
 		return false

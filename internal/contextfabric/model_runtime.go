@@ -596,10 +596,14 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 // ACR's own making (CHAOS-3755 adversarial review finding M4) -- so every
 // composer truncates itself, at a sentence boundary with an explicit
 // elision marker, rather than ever producing an oversized field.
+// Derived from the contract registry, never copied. These composers used to
+// hold their own 8000/16000 while writes accepted 4000/12000, so a valid
+// synthesis could compose a field the validator then rejected (codex
+// round-7 F2). One source of truth removes the possibility.
 const (
-	directJudgmentMaxLength      = 8000
-	currentStateMaxLength        = 8000
-	deterministicAnswerMaxLength = 16000
+	directJudgmentMaxLength      = contractsv1.ContextFabricDirectJudgmentMaxLength
+	currentStateMaxLength        = contractsv1.ContextFabricCurrentStateMaxLength
+	deterministicAnswerMaxLength = contractsv1.ContextFabricDeterministicAnswerMaxLength
 )
 
 // truncateAtSentenceBoundary shortens text to at most maxRunes runes,

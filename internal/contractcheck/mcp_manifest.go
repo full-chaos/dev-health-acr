@@ -25,7 +25,18 @@ func (c *repositoryCheck) validateMCP() error {
 	if !ok {
 		return errors.New("MCP tools must be an array")
 	}
-	expected := map[string]bool{"context_for_task": false, "source_evidence": false, "record_episode": false}
+	// The manifest is a CLOSED set, not a minimum: every tool the sidecar
+	// may expose is named here, so adding one is a deliberate contract
+	// change rather than something that can appear by accident.
+	// investigate_question and investigation_result are the CHAOS-3746
+	// answer surface.
+	expected := map[string]bool{
+		"context_for_task":     false,
+		"source_evidence":      false,
+		"investigate_question": false,
+		"investigation_result": false,
+		"record_episode":       false,
+	}
 	for index, raw := range tools {
 		tool, ok := raw.(map[string]any)
 		if !ok {

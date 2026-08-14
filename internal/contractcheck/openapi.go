@@ -103,6 +103,12 @@ func validOpenAPIPath(path string) bool {
 		// it is a distinct consumer-neutral surface (ADR 0006), so it is
 		// listed explicitly like the oauth/credential-self routes above.
 		"/api/v1/context-fabric/investigations",
+		// CHAOS-3746: re-read one persisted investigation result by its
+		// opaque result_id. Listed explicitly rather than admitted by a
+		// new /api/v1/context-fabric/ prefix wildcard: this allow-list is
+		// what stops an unreviewed path from reaching the published
+		// contract, and a wildcard would surrender exactly that.
+		"/api/v1/context-fabric/investigations/{result_id}",
 		// CHAOS-3775: per-organization BYO LLM provider configuration.
 		// Same distinct surface as the investigation endpoint above.
 		"/api/v1/context-fabric/model-config":

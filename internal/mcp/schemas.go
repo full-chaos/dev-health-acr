@@ -20,13 +20,17 @@ import (
 var schemaFiles embed.FS
 
 const (
-	contextForTaskRequestSchemaFile  = "schemas/mcp_context_for_task_request.v1.schema.json"
-	contextForTaskResponseSchemaFile = "schemas/mcp_context_for_task_response.v1.schema.json"
-	sourceEvidenceRequestSchemaFile  = "schemas/mcp_source_evidence_request.v1.schema.json"
-	sourceEvidenceResponseSchemaFile = "schemas/mcp_source_evidence_response.v1.schema.json"
-	recordEpisodeRequestSchemaFile   = "schemas/mcp_record_episode_request.v1.schema.json"
-	recordEpisodeResponseSchemaFile  = "schemas/mcp_record_episode_response.v1.schema.json"
-	toolManifestFile                 = "schemas/tools.v1.json"
+	contextForTaskRequestSchemaFile       = "schemas/mcp_context_for_task_request.v1.schema.json"
+	contextForTaskResponseSchemaFile      = "schemas/mcp_context_for_task_response.v1.schema.json"
+	sourceEvidenceRequestSchemaFile       = "schemas/mcp_source_evidence_request.v1.schema.json"
+	sourceEvidenceResponseSchemaFile      = "schemas/mcp_source_evidence_response.v1.schema.json"
+	investigateQuestionRequestSchemaFile  = "schemas/mcp_investigate_question_request.v1.schema.json"
+	investigateQuestionResponseSchemaFile = "schemas/mcp_investigate_question_response.v1.schema.json"
+	investigationResultRequestSchemaFile  = "schemas/mcp_investigation_result_request.v1.schema.json"
+	investigationResultResponseSchemaFile = "schemas/mcp_investigation_result_response.v1.schema.json"
+	recordEpisodeRequestSchemaFile        = "schemas/mcp_record_episode_request.v1.schema.json"
+	recordEpisodeResponseSchemaFile       = "schemas/mcp_record_episode_response.v1.schema.json"
+	toolManifestFile                      = "schemas/tools.v1.json"
 )
 
 // toolManifestEntry mirrors one entry of contracts/mcp/tools.v1.json.

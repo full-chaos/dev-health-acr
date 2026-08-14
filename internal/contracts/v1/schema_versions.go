@@ -23,6 +23,7 @@ var AllSchemaVersions = []string{
 	ErrorSchema,
 	ContextFabricInvestigationRequestSchema,
 	ContextFabricInvestigationResultSchema,
+	ContextFabricAnswerProjectionSchema,
 	ContextFabricProjectionBatchSchema,
 	ContextFabricOrgModelConfigSchema,
 	ContextFabricOrgModelConfigWriteRequestSchema,
@@ -30,6 +31,10 @@ var AllSchemaVersions = []string{
 	MCPContextForTaskResponseSchema,
 	MCPSourceEvidenceRequestSchema,
 	MCPSourceEvidenceResponseSchema,
+	MCPInvestigateQuestionRequestSchema,
+	MCPInvestigateQuestionResponseSchema,
+	MCPInvestigationResultRequestSchema,
+	MCPInvestigationResultResponseSchema,
 	MCPRecordEpisodeRequestSchema,
 	MCPRecordEpisodeResponseSchema,
 }

@@ -67,7 +67,7 @@ func TestBuildContextFabricInvestigator_composesFalkorGraphWithAModelRuntime(t *
 	request, postgres, clickhouse := investigatorBuildRequest(t)
 
 	// When
-	investigator, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 
 	// Then
 	if err != nil {
@@ -86,7 +86,7 @@ func TestBuildContextFabricInvestigator_composesFalkorGraphWithoutAModelRuntime(
 	request, postgres, clickhouse := investigatorBuildRequest(t)
 
 	// When
-	investigator, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 
 	// Then the investigator is still composed: the graph and canonical-fact
 	// layers are live, and only the answer step degrades per request.
@@ -104,7 +104,7 @@ func TestBuildContextFabricInvestigator_staysUnbuiltWithoutTheGraphBackend(t *te
 	request, postgres, clickhouse := investigatorBuildRequest(t)
 
 	// When
-	investigator, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 
 	// Then a configured model alone must not compose an investigator: the
 	// graph backend is still the gate, and an unconfigured one never fails
@@ -137,7 +137,7 @@ func TestBuildContextFabricInvestigator_wiresBothReuseSnapshottersWhenReuseIsEna
 	request.config.AnswerReuseMaxAge = time.Hour
 
 	// When
-	investigator, _, reuseInvalidator, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, reuseInvalidator, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 	if err != nil {
 		t.Fatalf("buildContextFabricInvestigator() = %v, want a composed investigator", err)
 	}
@@ -175,7 +175,7 @@ func TestBuildContextFabricInvestigator_reuseInvalidatorIsNilWhenReuseIsDisabled
 	configureGraph(t)
 	request, postgres, clickhouse := investigatorBuildRequest(t)
 
-	investigator, _, reuseInvalidator, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, reuseInvalidator, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 	if err != nil {
 		t.Fatalf("buildContextFabricInvestigator() = %v, want a composed investigator", err)
 	}
@@ -196,7 +196,7 @@ func TestBuildContextFabricInvestigator_failsOnAMisconfiguredModelProvider(t *te
 	request, postgres, clickhouse := investigatorBuildRequest(t)
 
 	// When
-	investigator, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+	investigator, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 
 	// Then startup fails rather than silently serving 503s.
 	if err == nil {

@@ -29,7 +29,7 @@ docs/adr/                  # Owned architecture decisions
 | Task | Location | Notes |
 | --- | --- | --- |
 | Hosted startup/routes | `cmd/acr-api`, `internal/api` | Stock binary fails closed without the complete runtime bundle |
-| MCP commands/tools | `cmd/acr-mcp`, `internal/mcp` | `context_for_task` and `source_evidence` only |
+| MCP commands/tools | `cmd/acr-mcp`, `internal/mcp` | `context_for_task`, `source_evidence`, and the advertise-gated `investigate_question` / `investigation_result` |
 | Packet behavior | `internal/contextpacket` | Scope → evidence → ranking → budget → validation → snapshot |
 | Local client/security | `internal/sidecar` | HTTPS, credential precedence, Git discovery, inert Markdown |
 | Wire changes | `internal/contracts/v1`, `contracts` | Contract-first unit; update together |
@@ -46,6 +46,7 @@ docs/adr/                  # Owned architecture decisions
 | Context Fabric fact planning | `internal/contextfabric/fact_planner.go`, `fact_registry.go` | CHAOS-3783: prunes a capability no resolved subject kind fits, records it as the `pruned` source state; see `docs/design/context-fabric-fact-planning.md` |
 | Context Fabric result persistence | `internal/contextfabric/pginvestigation`, `internal/contextfabric/memoryinvestigation` | Immutable `InvestigationResultStore`; org-scoped `Get` is a binding precondition |
 | Context Fabric investigation endpoint | `internal/api/context_fabric_routes.go`, `internal/runtime/hosted` | `POST /api/v1/context-fabric/investigations`; `ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED`; see `docs/design/context-fabric-result-semantics.md` |
+| Context Fabric answer surface | `internal/contextfabric/answerprojection`, `internal/api/context_fabric_result_routes.go`, `internal/mcp/investigate_question.go` | CHAOS-3746: one shared projection function behind the API and MCP; `GET /api/v1/context-fabric/investigations/{result_id}` re-reads a stored result |
 | Context Fabric model provider | `internal/contextfabric/modelprovider`, `internal/contextfabric/genkitruntime` | BYO-LLM provider/base-URL/model/credential surface (`ACR_CONTEXT_FABRIC_MODEL_*`); only production `genkit.Genkit` construction; unconfigured means a clean per-request 503 |
 | Context Fabric per-organization model config | `internal/contextfabric/modelconfigcrypto`, `internal/contextfabric/pgmodelconfig`, `internal/contextfabric/modelruntimeresolver`, `internal/contextfabric/pgmodelreceipts` | CHAOS-3775: org-scoped BYO LLM config, AES-256-GCM sealed credential, invalidatable per-request runtime cache, durable `ModelExecutionReceipt` sink; migration `0010` |
 | Context Fabric vector retrieval | `internal/contextfabric/embedprovider`, `internal/contextfabric/falkorgraph/vector.go`, `internal/contextfabric/graphrank/mechanism.go` | CHAOS-3778: ACR-owned `Embedder` port over an OpenAI-compatible `/v1/embeddings`; embeddings written at projection time into a per-org FalkorDB vector index; vector band `[0.50,0.70]` sits below the 0.72 commit gate so a vector hit alone never commits; corroboration across distinct mechanisms lifts into `[0.72,0.86]`; off unless `ACR_CONTEXT_FABRIC_EMBED_BASE_URL` is set |
@@ -105,6 +106,7 @@ Any externally visible field or endpoint change must update, in the same change:
 - Do not accept a Dev Health license key as an ACR API bearer credential.
 - Sidecar write tools are disabled by default.
 - The API must enforce organization and repository scope independently of client-supplied fields.
+- Do not narrow an investigation result anywhere but `internal/contextfabric/answerprojection`. A second summariser in a consumer reopens API/MCP answer drift.
 - Outbound fetching of evidence URLs is disabled; evidence URLs are references only.
 - Do not scatter raw ClickHouse SQL through handlers; use versioned, parameterized adapters.
 

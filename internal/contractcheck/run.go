@@ -30,6 +30,10 @@ var exampleSchemaPairs = map[string]string{
 	"mcp_source_evidence_response.v1.json":                 "mcp_source_evidence_response.v1.schema.json",
 	"mcp_record_episode_request.v1.json":                   "mcp_record_episode_request.v1.schema.json",
 	"mcp_record_episode_response.v1.json":                  "mcp_record_episode_response.v1.schema.json",
+	"mcp_investigate_question_request.v1.json":             "mcp_investigate_question_request.v1.schema.json",
+	"mcp_investigate_question_response.v1.json":            "mcp_investigate_question_response.v1.schema.json",
+	"mcp_investigation_result_request.v1.json":             "mcp_investigation_result_request.v1.schema.json",
+	"mcp_investigation_result_response.v1.json":            "mcp_investigation_result_response.v1.schema.json",
 	"evaluation_demo.v1.json":                              "evaluation_demo.v1.schema.json",
 	"device_authorization_request.v1.json":                 "device_authorization_request.v1.schema.json",
 	"device_authorization_response.v1.json":                "device_authorization_response.v1.schema.json",
@@ -50,9 +54,15 @@ var exampleSchemaPairs = map[string]string{
 	// and shows a fact source that cannot answer for a past time degrading
 	// in coverage while the rest of the answer survives (AC-3781-2/5).
 	"context_fabric_investigation_result_historical.v1.json": "context_fabric_investigation_result.v1.schema.json",
-	"context_fabric_projection_batch.v1.json":                "context_fabric_projection_batch.v1.schema.json",
-	"context_fabric_org_model_config.v1.json":                "context_fabric_org_model_config.v1.schema.json",
-	"context_fabric_org_model_config_write_request.v1.json":  "context_fabric_org_model_config_write_request.v1.schema.json",
+	"context_fabric_answer_projection.v1.json":               "context_fabric_answer_projection.v1.schema.json",
+	// The historical-axis projection (CHAOS-3746): the only published
+	// example carrying a temporal label, so the only one that validates
+	// the label against the projection SCHEMA rather than only against
+	// the Go validator.
+	"context_fabric_answer_projection_historical.v1.json":   "context_fabric_answer_projection.v1.schema.json",
+	"context_fabric_projection_batch.v1.json":               "context_fabric_projection_batch.v1.schema.json",
+	"context_fabric_org_model_config.v1.json":               "context_fabric_org_model_config.v1.schema.json",
+	"context_fabric_org_model_config_write_request.v1.json": "context_fabric_org_model_config_write_request.v1.schema.json",
 }
 
 // Options configures repository contract validation.

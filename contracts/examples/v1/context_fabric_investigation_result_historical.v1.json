@@ -118,7 +118,7 @@
   "remaining_work": [
     {
       "finding_id": "finding_12345678",
-      "kind": "required_acceptance",
+      "kind": "narrative",
       "summary": "Complete the real Context Fabric to product acceptance path.",
       "subjects": [
         {

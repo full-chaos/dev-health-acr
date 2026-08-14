@@ -18,10 +18,10 @@ func validateScalarMap(values map[string]ContextFabricScalarValue) error {
 	return nil
 }
 
-func validateDrivers(values []ContextFabricDriverJudgment, claimed map[string]ContextFabricClaimedFact) error {
+func validateDrivers(values []ContextFabricDriverJudgment, claimed map[string]ContextFabricClaimedFact, bounds contextFabricBounds) error {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if err := value.Validate(); err != nil {
+		if err := value.validate(bounds); err != nil {
 			return fmt.Errorf("drivers: %w", err)
 		}
 		if _, exists := seen[value.DriverID]; exists {
@@ -35,10 +35,10 @@ func validateDrivers(values []ContextFabricDriverJudgment, claimed map[string]Co
 	return nil
 }
 
-func validateFindings(name string, values []ContextFabricFinding, claimed map[string]ContextFabricClaimedFact) error {
+func validateFindings(name string, values []ContextFabricFinding, claimed map[string]ContextFabricClaimedFact, bounds contextFabricBounds) error {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if err := value.Validate(); err != nil {
+		if err := value.validate(bounds); err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
 		if _, exists := seen[value.FindingID]; exists {
@@ -100,10 +100,10 @@ func validateClaimedFactReferences(name string, claimIDs []string, category stri
 	return nil
 }
 
-func validatePaths(values []ContextFabricRelationshipPath) error {
+func validatePaths(values []ContextFabricRelationshipPath, bounds contextFabricBounds) error {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if err := value.Validate(); err != nil {
+		if err := value.validate(bounds); err != nil {
 			return fmt.Errorf("paths: %w", err)
 		}
 		if _, exists := seen[value.PathID]; exists {
@@ -236,6 +236,31 @@ func validateTimeRange(observed, validFrom, validTo *time.Time) error {
 	return nil
 }
 
+// optionalEvidenceRefs validates an evidence reference list on a field the
+// JSON Schema does NOT mark required and that carries `omitempty` in Go.
+// For those fields nil and empty mean the same thing: "none".
+//
+// This exists because boundedEvidenceRefs rejects nil outright, which is
+// correct for a required field and wrong for an optional one. An optional
+// empty slice serializes to an OMITTED field and decodes back as nil, so a
+// validator demanding non-nil would reject the service's own valid output
+// the moment anything re-read it -- and InvestigationResultStore.Get
+// re-validates on every read, so a stored result carrying a candidate with
+// no evidence refs would fail to load. That is the same defect already
+// recorded for Coverage.DegradedReasons (CHAOS-3755 finding M2), reached
+// through a different field.
+//
+// Kept separate from boundedEvidenceRefs deliberately: the REQUIRED
+// evidence fields (DriverJudgment, Finding, RelationshipPath, and the edge
+// shapes) must keep rejecting nil, because for them a missing list really
+// is invalid.
+func optionalEvidenceRefs(values []string, maximum int) bool {
+	if values == nil {
+		return true
+	}
+	return boundedEvidenceRefs(values, maximum, true)
+}
+
 func boundedEvidenceRefs(values []string, maximum int, allowEmpty bool) bool {
 	if values == nil || len(values) > maximum || (!allowEmpty && len(values) == 0) {
 		return false
@@ -343,18 +368,16 @@ func validModelIdentity(value string) bool {
 // makes that bypass structurally impossible: every category is either a
 // known fact-shaped one (requires a claim) or a known narrative one
 // (relationship/narrative -- doesn't), never an unrecognized third thing.
+// validDriverCategory derives from contextFabricDriverCategories rather than
+// restating the vocabulary in a second switch, so the accepted set and the
+// declared set cannot drift apart.
 func validDriverCategory(value ContextFabricDriverCategory) bool {
-	switch value {
-	case ContextFabricDriverCategoryStatus, ContextFabricDriverCategoryCompletion, ContextFabricDriverCategoryWork,
-		ContextFabricDriverCategoryBlockers, ContextFabricDriverCategoryReviews, ContextFabricDriverCategoryCI,
-		ContextFabricDriverCategoryDeployments, ContextFabricDriverCategoryIncidents, ContextFabricDriverCategoryHealth,
-		ContextFabricDriverCategoryWorkload, ContextFabricDriverCategoryInvestment, ContextFabricDriverCategoryReadiness,
-		ContextFabricDriverCategoryDeficiency, ContextFabricDriverCategorySourceHealth,
-		ContextFabricDriverCategoryRelationship, ContextFabricDriverCategoryNarrative:
-		return true
-	default:
-		return false
+	for _, category := range contextFabricDriverCategories {
+		if category == value {
+			return true
+		}
 	}
+	return false
 }
 
 func allStringsInSet[T ~string](values []T, valid func(T) bool) bool {
@@ -504,11 +527,14 @@ func validSourceState(value ContextFabricSourceState) bool {
 	}
 }
 
+// validFactKind derives from contextFabricFactKinds rather than restating
+// the vocabulary in a second switch, so the accepted set and the declared
+// set cannot drift apart.
 func validFactKind(value ContextFabricFactKind) bool {
-	switch value {
-	case ContextFabricFactIdentity, ContextFabricFactMembership, ContextFabricFactStatus, ContextFabricFactActualCompletion, ContextFabricFactWork, ContextFabricFactBlockers, ContextFabricFactRequiredChildren, ContextFabricFactPullRequests, ContextFabricFactReviews, ContextFabricFactContinuousIntegration, ContextFabricFactDeployments, ContextFabricFactIncidents, ContextFabricFactMetrics, ContextFabricFactHealth, ContextFabricFactWorkload, ContextFabricFactInvestment, ContextFabricFactReadiness, ContextFabricFactOperationalDeficiencies, ContextFabricFactSourceHealth, ContextFabricFactEvidence:
-		return true
-	default:
-		return false
+	for _, kind := range contextFabricFactKinds {
+		if kind == value {
+			return true
+		}
 	}
+	return false
 }

@@ -105,7 +105,7 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 	requestID := resp.Header.Get("X-Request-ID")
 
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, redirectDrainBytes))
 		return resp.StatusCode, &APIError{
 			HTTPStatus: resp.StatusCode,
 			Message:    "hosted API returned an unexpected redirect, which the client does not follow",

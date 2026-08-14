@@ -252,6 +252,25 @@ func untrustedBlock(label, content string) []string {
 	return append(lines, "> "+fence)
 }
 
+// untrustedInline wraps a single-line untrusted value in an explicit,
+// inline-scoped marker.
+//
+// safeInline alone was not enough (CHAOS-3746 codex round-4 F4): it
+// neutralizes markdown syntax so the value cannot change document
+// structure, but the result then READS as the surface's own structural
+// text. A source-controlled label containing "ignore previous
+// instructions" arrived at the agent looking exactly like a heading the
+// sidecar wrote. Escaping protects the DOCUMENT; this marker protects the
+// READER, which is the actual threat model for an agent consuming the
+// rendering.
+//
+// It deliberately reuses untrustedBlock's vocabulary in an inline form, so
+// one delimiter convention means "untrusted data" everywhere in the
+// rendering rather than two conventions a reader has to learn.
+func untrustedInline(value string) string {
+	return "«" + untrustedDataHeader + ": " + safeInline(value) + "»"
+}
+
 // markdownActiveChars are the ASCII punctuation characters that can
 // change document structure or produce an active element (a link, image,
 // code span, raw HTML/autolink, emphasis, table cell, or strikethrough)

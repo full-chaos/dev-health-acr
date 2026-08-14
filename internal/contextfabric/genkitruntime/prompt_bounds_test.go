@@ -2,6 +2,9 @@ package genkitruntime
 
 import (
 	"fmt"
+	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +45,294 @@ import (
 // those Validate() methods themselves read their numeric literals from (see
 // that file's doc comment) -- so a bound can no longer be silently absent
 // from this table at all, let alone from the prompt.
+
+// boundPhrases gives each bound a phrase that is UNIQUE to it and carries
+// its number, where {N} is substituted with the validator-enforced limit.
+//
+// Proximity was not enough (codex round-6 F5): the interpretation prompt
+// states 128, 1000 and 32 in a single clause about parameters, so a stale
+// parameter count could be satisfied by the key-length number beside it.
+// An exact phrase ties each assertion to the words the model actually
+// reads for that bound, and TestChangingOnePromptNumberFailsExactlyOneBound
+// proves the ties are one-to-one.
+var boundPhrases = map[string]string{
+	"interpretation.requested_judgment.max_length":               "requested_judgment MUST be at most {N} characters",
+	"interpretation.subject_terms.max_count":                     "At most {N} subject_terms",
+	"interpretation.comparison_terms.max_count":                  "{N} comparison_terms",
+	"interpretation.subject_term.max_length":                     "comparison_terms, each at most {N} characters",
+	"interpretation.fact_requirements.max_count":                 "At most {N} fact_requirements.",
+	"interpretation.fact_requirement.parameter_key.max_length":   "parameters key is at most {N} characters",
+	"interpretation.fact_requirement.parameter_value.max_length": "each value at most {N}",
+	"interpretation.fact_requirement.parameters.max_count":       "entry has at most {N} parameters",
+	"interpretation.clarification_reason.max_length":             "clarification_reason is at most {N} characters",
+
+	"synthesis.driver.title.max_length":             "A driver's title is at most {N} characters",
+	"synthesis.driver.summary.max_length":           "its summary at most {N};",
+	"synthesis.driver.qualification.max_length":     "a driver's qualification is at most {N}",
+	"synthesis.driver.affected_subjects.max_count":  "at most {N} affected_subjects",
+	"synthesis.finding.kind.max_length":             "A finding's kind is at most {N} characters",
+	"synthesis.finding.summary.max_length":          "its summary at most {N}, with at most",
+	"synthesis.finding.subjects.max_count":          "with at most {N} subjects",
+	"synthesis.claimed_fact.field.max_length":       "A claimed fact's field is at most {N} characters",
+	"synthesis.driver.path_ids.max_count":           "carries at most {N} path_ids",
+	"synthesis.driver.claimed_fact_ids.max_count":   "at most {N} claimed_fact_ids",
+	"synthesis.finding.claimed_fact_ids.max_count":  "at most {N} claimed_fact_ids",
+	"synthesis.claimed_fact.claim_id.max_length":    identifierLengthPhrase,
+	"synthesis.driver.evidence_ref_ids.max_count":   "at most {N} evidence_ref_ids each",
+	"synthesis.finding.evidence_ref_ids.max_count":  "at most {N} evidence_ref_ids each",
+	"synthesis.evidence_ref_ids.max_count":          "result-level evidence_ref_ids list holds at most {N}",
+	"synthesis.drivers.max_count":                   "Return at most {N} drivers",
+	"synthesis.strongest_pressures.max_count":       "at most {N} strongest_pressures",
+	"synthesis.strongest_pressures.item_max_length": "strongest_pressures (each at most {N} characters)",
+	"synthesis.remaining_work.max_count":            "at most {N} each of remaining_work",
+	"synthesis.readiness_gaps.max_count":            "at most {N} each of remaining_work",
+	"synthesis.conflicts.max_count":                 "at most {N} each of remaining_work",
+	"synthesis.limitations.max_count":               "at most {N} limitations",
+	"synthesis.limitations.item_max_length":         "each limitation at most {N} characters",
+	"synthesis.warnings.max_count":                  "at most {N} warnings",
+	"synthesis.warnings.item_max_length":            "each warning at most {N} characters",
+	"synthesis.claimed_facts.max_count":             "restate at most {N} claimed_facts",
+	"synthesis.direct_judgment.max_length":          "direct_judgment and current_state are at most {N} characters each",
+	"synthesis.current_state.max_length":            "direct_judgment and current_state are at most {N} characters each",
+	"synthesis.deterministic_answer.max_length":     "deterministic_answer at most {N}",
+	"synthesis.driver.driver_id.max_length":         identifierLengthPhrase,
+	"synthesis.finding.finding_id.max_length":       identifierLengthPhrase,
+
+	// CHAOS-3784 round-3 R3-1 registered four more model-facing bounds
+	// (evidence_ref_id / SubjectRef.CanonicalID / SubjectRef.Label /
+	// ClaimedFact.Value item lengths) whose original exclusion rationale
+	// was order-contradicted. They arrive here as ANCHORS rather than as
+	// literal `mentions` strings: a mention carrying a hardcoded number
+	// asserts what the prompt said when it was written, while an anchor
+	// interpolates the registry's current value and so fails the moment
+	// the two disagree.
+	//
+	// Several of these deliberately SHARE a phrase, because the prompt
+	// genuinely states them in one sentence -- the same situation
+	// identifierLengthPhrase already covers. Sharing is legitimate;
+	// TestEveryRegistryBoundHasAUniquePromptAnchor allows it only between
+	// bounds whose phrase is identical, so a shared anchor can never
+	// silently prove a bound that is stated somewhere else.
+	"synthesis.driver.path_ids.item_max_length":                       identifierRefLengthPhrase,
+	"synthesis.driver.claimed_fact_ids.item_max_length":               identifierRefLengthPhrase,
+	"synthesis.finding.claimed_fact_ids.item_max_length":              identifierRefLengthPhrase,
+	"synthesis.driver.evidence_ref_ids.item_max_length":               evidenceRefLengthPhrase,
+	"synthesis.finding.evidence_ref_ids.item_max_length":              evidenceRefLengthPhrase,
+	"synthesis.driver.affected_subjects.item_canonical_id_max_length": subjectCanonicalIDLengthPhrase,
+	"synthesis.finding.subjects.item_canonical_id_max_length":         subjectCanonicalIDLengthPhrase,
+	"synthesis.claimed_fact.subject.canonical_id_max_length":          subjectCanonicalIDLengthPhrase,
+	"synthesis.driver.affected_subjects.item_label_max_length":        subjectLabelLengthPhrase,
+	"synthesis.finding.subjects.item_label_max_length":                subjectLabelLengthPhrase,
+	"synthesis.claimed_fact.subject.label_max_length":                 subjectLabelLengthPhrase,
+	"synthesis.claimed_fact.value.max_length":                         "A claimed fact's value is a string of at most {N} characters",
+}
+
+// identifierLengthPhrase is the ONE sentence that states the model-minted
+// identifier length, shared by driver_id, finding_id and claim_id because
+// the prompt genuinely states them together (codex round-9 F3).
+//
+// They previously anchored to "each at most {N} characters, and at most",
+// which is the path_ids/claimed_fact_ids clause: it carries the same number
+// 256 for an unrelated reason and never names an identifier, so all three
+// identifier bounds were being "proved" by a sentence about something else.
+const identifierLengthPhrase = "every driver_id, finding_id, and claim_id MUST be at least 8 and at most {N} characters"
+
+// identifierRefLengthPhrase, evidenceRefLengthPhrase,
+// subjectCanonicalIDLengthPhrase and subjectLabelLengthPhrase are the
+// CHAOS-3784 round-3 item-length anchors, each named because the prompt
+// states it once for several bounds at a time.
+//
+// identifierRefLengthPhrase covers path_ids and claimed_fact_ids together,
+// for driver and finding alike, because the prompt says "A driver or
+// finding carries ... path_ids and ... claimed_fact_ids, each at most N
+// characters" -- one clause, four bounds. Splitting it into four anchors
+// would mean inventing four sentences the model does not read.
+const (
+	identifierRefLengthPhrase      = "claimed_fact_ids, each at most {N} characters"
+	evidenceRefLengthPhrase        = "every evidence_ref_id is itself at most {N} characters"
+	subjectCanonicalIDLengthPhrase = "has a canonical_id at most {N} characters"
+	subjectLabelLengthPhrase       = "a label at most {N} characters"
+)
+
+// boundFields names the JSON field each bound actually governs, so an anchor
+// can be checked STRUCTURALLY instead of trusted (codex round-9 F3, the
+// third round this same class returned).
+//
+// A phrase can carry the right number, be unique, and still be attached to
+// the wrong sentence: driver_id, finding_id and claim_id anchored to the
+// path_ids/claimed_fact_ids clause, which states 256 for a different reason
+// and never names an identifier at all. Uniqueness and value checks both
+// passed, because neither asks the only question that catches it -- does the
+// sentence the model reads for this bound actually mention this field?
+//
+// TestEveryPromptAnchorNamesTheFieldItBounds answers it mechanically, and
+// TestBoundFieldsAreRealContractFields keeps this column honest by requiring
+// every value to be a JSON field name contracts/v1 actually declares, so a
+// mis-anchored bound cannot be rescued by inventing a word for it.
+var boundFields = map[string]string{
+	"interpretation.requested_judgment.max_length":               "requested_judgment",
+	"interpretation.subject_terms.max_count":                     "subject_terms",
+	"interpretation.comparison_terms.max_count":                  "comparison_terms",
+	"interpretation.subject_term.max_length":                     "subject_terms",
+	"interpretation.fact_requirements.max_count":                 "fact_requirements",
+	"interpretation.fact_requirement.parameter_key.max_length":   "parameters",
+	"interpretation.fact_requirement.parameter_value.max_length": "parameters",
+	"interpretation.fact_requirement.parameters.max_count":       "parameters",
+	"interpretation.clarification_reason.max_length":             "clarification_reason",
+
+	"synthesis.driver.title.max_length":             "title",
+	"synthesis.driver.summary.max_length":           "summary",
+	"synthesis.driver.qualification.max_length":     "qualification",
+	"synthesis.driver.affected_subjects.max_count":  "affected_subjects",
+	"synthesis.finding.kind.max_length":             "kind",
+	"synthesis.finding.summary.max_length":          "summary",
+	"synthesis.finding.subjects.max_count":          "subjects",
+	"synthesis.claimed_fact.field.max_length":       "field",
+	"synthesis.driver.path_ids.max_count":           "path_ids",
+	"synthesis.driver.claimed_fact_ids.max_count":   "claimed_fact_ids",
+	"synthesis.finding.claimed_fact_ids.max_count":  "claimed_fact_ids",
+	"synthesis.claimed_fact.claim_id.max_length":    "claim_id",
+	"synthesis.driver.evidence_ref_ids.max_count":   "evidence_ref_ids",
+	"synthesis.finding.evidence_ref_ids.max_count":  "evidence_ref_ids",
+	"synthesis.evidence_ref_ids.max_count":          "evidence_ref_ids",
+	"synthesis.drivers.max_count":                   "drivers",
+	"synthesis.strongest_pressures.max_count":       "strongest_pressures",
+	"synthesis.strongest_pressures.item_max_length": "strongest_pressures",
+	"synthesis.remaining_work.max_count":            "remaining_work",
+	"synthesis.readiness_gaps.max_count":            "readiness_gaps",
+	"synthesis.conflicts.max_count":                 "conflicts",
+	"synthesis.limitations.max_count":               "limitations",
+	"synthesis.limitations.item_max_length":         "limitations",
+	"synthesis.warnings.max_count":                  "warnings",
+	"synthesis.warnings.item_max_length":            "warnings",
+	"synthesis.claimed_facts.max_count":             "claimed_facts",
+	"synthesis.direct_judgment.max_length":          "direct_judgment",
+	"synthesis.current_state.max_length":            "current_state",
+	"synthesis.deterministic_answer.max_length":     "deterministic_answer",
+	"synthesis.driver.driver_id.max_length":         "driver_id",
+	"synthesis.finding.finding_id.max_length":       "finding_id",
+
+	"synthesis.driver.path_ids.item_max_length":                       "path_ids",
+	"synthesis.driver.claimed_fact_ids.item_max_length":               "claimed_fact_ids",
+	"synthesis.finding.claimed_fact_ids.item_max_length":              "claimed_fact_ids",
+	"synthesis.driver.evidence_ref_ids.item_max_length":               "evidence_ref_ids",
+	"synthesis.finding.evidence_ref_ids.item_max_length":              "evidence_ref_ids",
+	"synthesis.driver.affected_subjects.item_canonical_id_max_length": "canonical_id",
+	"synthesis.finding.subjects.item_canonical_id_max_length":         "canonical_id",
+	"synthesis.claimed_fact.subject.canonical_id_max_length":          "canonical_id",
+	"synthesis.driver.affected_subjects.item_label_max_length":        "label",
+	"synthesis.finding.subjects.item_label_max_length":                "label",
+	"synthesis.claimed_fact.subject.label_max_length":                 "label",
+	"synthesis.claimed_fact.value.max_length":                         "value",
+}
+
+// promptClause returns the sentence or semicolon-delimited clause of prompt
+// that contains phrase -- the span of text a reader takes as one statement,
+// which is the unit an anchor is either right or wrong about.
+func promptClause(prompt, phrase string) (string, bool) {
+	start := strings.Index(prompt, phrase)
+	if start < 0 {
+		return "", false
+	}
+	end := start + len(phrase)
+	// Walk outward to the nearest clause boundary on each side. The phrase
+	// itself may contain a boundary (one anchor ends in ";"), so the search
+	// starts from the phrase's own edges.
+	left := 0
+	for _, delimiter := range []string{". ", "; ", "\n"} {
+		if index := strings.LastIndex(prompt[:start], delimiter); index >= 0 && index+len(delimiter) > left {
+			left = index + len(delimiter)
+		}
+	}
+	right := len(prompt)
+	for _, delimiter := range []string{". ", "; ", "\n"} {
+		if index := strings.Index(prompt[end:], delimiter); index >= 0 && end+index < right {
+			right = end + index
+		}
+	}
+	return prompt[left:right], true
+}
+
+// TestEveryPromptAnchorNamesTheFieldItBounds requires each bound's anchor to
+// sit in a clause that names the field it bounds.
+//
+// This is the check that catches a correctly-valued, unique anchor pinned to
+// the wrong sentence -- the shape that survived two previous rounds.
+func TestEveryPromptAnchorNamesTheFieldItBounds(t *testing.T) {
+	for _, testCase := range modelFacingBounds() {
+		t.Run(testCase.registryName, func(t *testing.T) {
+			field, ok := boundFields[testCase.registryName]
+			if !ok {
+				t.Fatalf("%s declares no field, so its anchor cannot be checked structurally", testCase.registryName)
+			}
+			phrase, ok := boundPhrases[testCase.registryName]
+			if !ok {
+				t.Fatalf("%s has no prompt phrase", testCase.registryName)
+			}
+			resolved := strings.ReplaceAll(phrase, "{N}", strconv.Itoa(testCase.limit))
+			clause, found := promptClause(testCase.prompt, resolved)
+			if !found {
+				t.Fatalf("the prompt does not contain %q", resolved)
+			}
+			if !strings.Contains(clause, field) {
+				t.Errorf("%s anchors to a clause that never names %q, so the number is pinned to the wrong statement:\n  anchor: %q\n  clause: %q",
+					testCase.registryName, field, resolved, clause)
+			}
+		})
+	}
+}
+
+// TestBoundFieldsAreRealContractFields keeps boundFields from becoming free
+// text: every field named there must be a JSON field contracts/v1 actually
+// declares on a model-facing shape.
+func TestBoundFieldsAreRealContractFields(t *testing.T) {
+	declared := map[string]struct{}{}
+	for _, shape := range []any{
+		contractsv1.ContextFabricInterpretedQuestion{},
+		contractsv1.ContextFabricFactRequirement{},
+		contractsv1.ContextFabricDriverJudgment{},
+		contractsv1.ContextFabricFinding{},
+		contractsv1.ContextFabricClaimedFact{},
+		contractsv1.ContextFabricInvestigationResult{},
+		// ContextFabricSubjectRef is nested, not top-level, but it is
+		// every bit as model-facing: the model writes one into every
+		// affected_subjects and subjects entry and into each claimed
+		// fact. CHAOS-3784 round-3 registered bounds on its
+		// canonical_id and label, and leaving the shape out of this set
+		// would have made those two the only registry bounds whose field
+		// could not be named -- which reads as "the field does not
+		// exist" rather than "the list is short".
+		contractsv1.ContextFabricSubjectRef{},
+	} {
+		shapeType := reflect.TypeOf(shape)
+		for i := 0; i < shapeType.NumField(); i++ {
+			if name := strings.Split(shapeType.Field(i).Tag.Get("json"), ",")[0]; name != "" && name != "-" {
+				declared[name] = struct{}{}
+			}
+		}
+	}
+	for registryName, field := range boundFields {
+		if _, ok := declared[field]; !ok {
+			t.Errorf("boundFields[%q] names %q, which is not a JSON field any model-facing contracts/v1 shape declares", registryName, field)
+		}
+	}
+}
+
+// TestEveryRegistryBoundDeclaresItsField is the completeness half: a bound
+// with no declared field would silently skip the structural check above.
+func TestEveryRegistryBoundDeclaresItsField(t *testing.T) {
+	for _, bound := range contractsv1.ContextFabricModelFacingBounds {
+		if _, ok := boundFields[bound.Name]; !ok {
+			t.Errorf("registry bound %q declares no entry in boundFields, so its anchor is unchecked", bound.Name)
+		}
+	}
+	for registryName := range boundFields {
+		if _, ok := boundPhrases[registryName]; !ok {
+			t.Errorf("boundFields declares %q, which has no prompt phrase", registryName)
+		}
+	}
+}
+
 func TestPromptsStateEveryModelFacingBound(t *testing.T) {
 	for _, testCase := range modelFacingBounds() {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -55,6 +346,37 @@ func TestPromptsStateEveryModelFacingBound(t *testing.T) {
 				if !strings.Contains(testCase.prompt, mention) {
 					t.Errorf("the prompt never states %q, so the model cannot honour this bound", mention)
 				}
+			}
+			// The NUMBER is derived from the validator-backed limit, never
+			// written into this table (codex round-4 F6). A literal here
+			// is the defect, not the safeguard: when the bound moved from
+			// 250 to 100 the prompt kept saying 250 and this proof stayed
+			// green, because it was searching for the stale string it had
+			// been told to expect. Deriving it means the proof can only
+			// pass when the prompt states what the validator enforces.
+			// Anchored to the SENTENCE that names this bound, not to the
+			// whole prompt (codex round-5 R5-7). A prompt-wide search
+			// passes as soon as the number appears anywhere, so a stale
+			// phrase can be validated by an unrelated bound that happens
+			// to share a value -- the proof goes green while the sentence
+			// the model actually reads still lies.
+			if len(testCase.mentions) == 0 {
+				t.Fatalf("%s states no phrase to anchor its limit check to", testCase.registryName)
+			}
+			// The prompt must contain a phrase that is unique to THIS
+			// bound and carries its number (codex round-6 F5). A
+			// proximity window still let a neighbour satisfy the check:
+			// the interpretation prompt holds 128, 1000 and 32 in one
+			// clause about parameters, so a stale parameter-count could
+			// be "proved" by the key-length number sitting beside it.
+			phrase, ok := boundPhrases[testCase.registryName]
+			if !ok {
+				t.Fatalf("%s has no unique prompt phrase registered", testCase.registryName)
+			}
+			want := strings.ReplaceAll(phrase, "{N}", strconv.Itoa(testCase.limit))
+			if !strings.Contains(testCase.prompt, want) {
+				t.Errorf("the prompt does not contain the phrase that states %s:\n  want: %q\nThe number must appear in a phrase unique to this bound, not merely somewhere nearby.",
+					testCase.registryName, want)
 			}
 		})
 	}
@@ -118,7 +440,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/requested_judgment max length", registryName: "interpretation.requested_judgment.max_length",
 			limit: contractsv1.ContextFabricRequestedJudgmentMaxLength, prompt: interpretationSystemPrompt,
-			mentions: []string{"requested_judgment", "256"},
+			mentions: []string{"requested_judgment"},
 			atLimit: func() error {
 				return interpretationWithJudgment(contractsv1.ContextFabricRequestedJudgmentMaxLength).Validate()
 			},
@@ -129,7 +451,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/subject_terms max count", registryName: "interpretation.subject_terms.max_count",
 			limit: contractsv1.ContextFabricSubjectTermsMaxCount, prompt: interpretationSystemPrompt,
-			mentions: []string{"subject_terms", "100"},
+			mentions: []string{"subject_terms"},
 			atLimit: func() error {
 				return interpretationWithSubjectTerms(contractsv1.ContextFabricSubjectTermsMaxCount).Validate()
 			},
@@ -140,7 +462,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/subject term max length", registryName: "interpretation.subject_term.max_length",
 			limit: contractsv1.ContextFabricSubjectOrComparisonTermMaxLength, prompt: interpretationSystemPrompt,
-			mentions: []string{"512"},
+			mentions: []string{"subject_term"},
 			atLimit: func() error {
 				return interpretationWithTermLength(contractsv1.ContextFabricSubjectOrComparisonTermMaxLength).Validate()
 			},
@@ -151,7 +473,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/comparison_terms max count", registryName: "interpretation.comparison_terms.max_count",
 			limit: contractsv1.ContextFabricComparisonTermsMaxCount, prompt: interpretationSystemPrompt,
-			mentions: []string{"comparison_terms", "100"},
+			mentions: []string{"comparison_terms"},
 			atLimit: func() error {
 				return interpretationWithComparisonTerms(contractsv1.ContextFabricComparisonTermsMaxCount).Validate()
 			},
@@ -162,7 +484,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/clarification_reason max length", registryName: "interpretation.clarification_reason.max_length",
 			limit: contractsv1.ContextFabricClarificationReasonMaxLength, prompt: interpretationSystemPrompt,
-			mentions: []string{"clarification_reason", "2000"},
+			mentions: []string{"clarification_reason"},
 			atLimit: func() error {
 				return interpretationWithClarification(contractsv1.ContextFabricClarificationReasonMaxLength).Validate()
 			},
@@ -171,24 +493,27 @@ func modelFacingBounds() []boundCase {
 			},
 		},
 		{
-			// The registered fact-kind vocabulary has only 20 members
-			// (contracts/v1's closed ContextFabricFactKind set), so a
-			// FactRequirements list of exactly ContextFabricFactRequirementsMaxCount
-			// (64) with every Kind distinct -- required, since
-			// ContextFabricInterpretedQuestion.Validate rejects a
-			// duplicate Kind -- cannot be constructed at all; 20 distinct
-			// kinds is the real achievable ceiling. atLimit therefore
-			// proves the count bound does not block that real ceiling (a
-			// tightened bound below 20 would still fail this assertion);
-			// over proves the documented 64 is still the enforced count
-			// ceiling, using cycled (duplicate) kinds -- valid here only
-			// because the length check in
-			// ContextFabricInterpretedQuestion.Validate short-circuits
-			// before the per-Kind uniqueness loop ever runs once the
-			// count itself already exceeds the bound.
+			// The count bound is now DERIVED from the fact-kind vocabulary
+			// (codex round-9 F1), so it is exactly the achievable ceiling:
+			// ContextFabricInterpretedQuestion.Validate rejects a duplicate
+			// Kind, and there are only ContextFabricFactKindCount distinct
+			// kinds to spend. atLimit builds that many distinct kinds and
+			// proves the bound does not block the real ceiling; over proves
+			// the bound is still the enforced ceiling, using cycled
+			// (duplicate) kinds -- valid here only because the length check
+			// short-circuits the whole boolean expression before the
+			// per-Kind uniqueness loop ever runs once the count itself
+			// already exceeds the bound.
+			//
+			// mentions carries NO number (self-found while fixing F6): a
+			// literal here is the same defect the derived phrase check
+			// exists to prevent -- it said "At most 64 fact_requirements"
+			// and would have gone on passing against a prompt stating a
+			// bound nothing enforced. The number is asserted by
+			// boundPhrases, which substitutes the validator-backed limit.
 			name: "interpretation/fact_requirements max count", registryName: "interpretation.fact_requirements.max_count",
 			limit: contractsv1.ContextFabricFactRequirementsMaxCount, prompt: interpretationSystemPrompt,
-			mentions: []string{"At most 64 fact_requirements"},
+			mentions: []string{"fact_requirements"},
 			atLimit: func() error {
 				return interpretationWithDistinctFactRequirements(len(contextFabricAllFactKinds)).Validate()
 			},
@@ -199,7 +524,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/fact requirement parameter value max length", registryName: "interpretation.fact_requirement.parameter_value.max_length",
 			limit: contractsv1.ContextFabricFactRequirementParameterValueMaxLength, prompt: interpretationSystemPrompt,
-			mentions: []string{"parameters", "1024"},
+			mentions: []string{"parameters"},
 			atLimit: func() error {
 				return interpretationWithParameterValue(contractsv1.ContextFabricFactRequirementParameterValueMaxLength).Validate()
 			},
@@ -210,7 +535,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "interpretation/fact requirement parameter key max length", registryName: "interpretation.fact_requirement.parameter_key.max_length",
 			limit: contractsv1.ContextFabricFactRequirementParameterKeyMaxLength, prompt: interpretationSystemPrompt,
-			mentions: []string{"128"},
+			mentions: []string{"parameters key"},
 			atLimit: func() error {
 				return interpretationWithParameterKey(contractsv1.ContextFabricFactRequirementParameterKeyMaxLength).Validate()
 			},
@@ -224,7 +549,7 @@ func modelFacingBounds() []boundCase {
 			// parameter entries ONE fact_requirements[] item may carry.
 			name: "interpretation/fact requirement parameters max count", registryName: "interpretation.fact_requirement.parameters.max_count",
 			limit: contractsv1.ContextFabricFactRequirementParametersMaxCount, prompt: interpretationSystemPrompt,
-			mentions: []string{"parameters", "32"},
+			mentions: []string{"parameters"},
 			atLimit: func() error {
 				return interpretationWithParameterCount(contractsv1.ContextFabricFactRequirementParametersMaxCount).Validate()
 			},
@@ -235,28 +560,28 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/driver_id max length", registryName: "synthesis.driver.driver_id.max_length",
 			limit: contractsv1.ContextFabricModelMintedIDMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"driver_id", "256"},
+			mentions: []string{"driver_id"},
 			atLimit:  func() error { return driverWithID(contractsv1.ContextFabricModelMintedIDMaxLength).Validate() },
 			over:     func() error { return driverWithID(contractsv1.ContextFabricModelMintedIDMaxLength + 1).Validate() },
 		},
 		{
 			name: "synthesis/driver title max length", registryName: "synthesis.driver.title.max_length",
 			limit: contractsv1.ContextFabricDriverTitleMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"title", "512"},
+			mentions: []string{"title"},
 			atLimit:  func() error { return driverWithTitle(contractsv1.ContextFabricDriverTitleMaxLength).Validate() },
 			over:     func() error { return driverWithTitle(contractsv1.ContextFabricDriverTitleMaxLength + 1).Validate() },
 		},
 		{
 			name: "synthesis/driver summary max length", registryName: "synthesis.driver.summary.max_length",
 			limit: contractsv1.ContextFabricDriverSummaryMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"summary", "4000"},
+			mentions: []string{"summary"},
 			atLimit:  func() error { return driverWithSummary(contractsv1.ContextFabricDriverSummaryMaxLength).Validate() },
 			over:     func() error { return driverWithSummary(contractsv1.ContextFabricDriverSummaryMaxLength + 1).Validate() },
 		},
 		{
 			name: "synthesis/driver qualification max length", registryName: "synthesis.driver.qualification.max_length",
 			limit: contractsv1.ContextFabricDriverQualificationMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"qualification", "2000"},
+			mentions: []string{"qualification"},
 			atLimit: func() error {
 				return driverWithQualification(contractsv1.ContextFabricDriverQualificationMaxLength).Validate()
 			},
@@ -267,7 +592,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/driver affected_subjects max count", registryName: "synthesis.driver.affected_subjects.max_count",
 			limit: contractsv1.ContextFabricDriverAffectedSubjectsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"affected_subjects", "250"},
+			mentions: []string{"affected_subjects"},
 			atLimit: func() error {
 				return driverWithSubjects(contractsv1.ContextFabricDriverAffectedSubjectsMaxCount).Validate()
 			},
@@ -284,7 +609,7 @@ func modelFacingBounds() []boundCase {
 			// ContextFabricModelFacingBounds's doc comment.
 			name: "synthesis/driver affected_subjects item canonical_id max length", registryName: "synthesis.driver.affected_subjects.item_canonical_id_max_length",
 			limit: contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"canonical ID at most 256"},
+			mentions: []string{"canonical_id"},
 			atLimit: func() error {
 				return driverWithAffectedSubjectCanonicalIDLength(contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength).Validate()
 			},
@@ -296,7 +621,7 @@ func modelFacingBounds() []boundCase {
 			// See the matching comment on the canonical_id case above.
 			name: "synthesis/driver affected_subjects item label max length", registryName: "synthesis.driver.affected_subjects.item_label_max_length",
 			limit: contractsv1.ContextFabricSubjectRefLabelMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"label at most 512"},
+			mentions: []string{"label"},
 			atLimit: func() error {
 				return driverWithAffectedSubjectLabelLength(contractsv1.ContextFabricSubjectRefLabelMaxLength).Validate()
 			},
@@ -307,14 +632,14 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/driver path_ids max count", registryName: "synthesis.driver.path_ids.max_count",
 			limit: contractsv1.ContextFabricDriverPathIDsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"path_ids", "250"},
+			mentions: []string{"path_ids"},
 			atLimit:  func() error { return driverWithPathIDs(contractsv1.ContextFabricDriverPathIDsMaxCount).Validate() },
 			over:     func() error { return driverWithPathIDs(contractsv1.ContextFabricDriverPathIDsMaxCount + 1).Validate() },
 		},
 		{
 			name: "synthesis/driver claimed_fact_ids max count", registryName: "synthesis.driver.claimed_fact_ids.max_count",
 			limit: contractsv1.ContextFabricDriverClaimedFactIDsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"claimed_fact_ids", "250"},
+			mentions: []string{"claimed_fact_ids"},
 			atLimit: func() error {
 				return driverWithClaimedFactIDs(contractsv1.ContextFabricDriverClaimedFactIDsMaxCount).Validate()
 			},
@@ -329,7 +654,7 @@ func modelFacingBounds() []boundCase {
 			// but had no registry entry and no case here until this fix.
 			name: "synthesis/driver path_id item max length", registryName: "synthesis.driver.path_ids.item_max_length",
 			limit: contractsv1.ContextFabricIdentifierRefMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"path_ids and at most 250 claimed_fact_ids, each at most 256"},
+			mentions: []string{"path_ids"},
 			atLimit: func() error {
 				return driverWithPathIDLength(contractsv1.ContextFabricIdentifierRefMaxLength).Validate()
 			},
@@ -341,7 +666,7 @@ func modelFacingBounds() []boundCase {
 			// See the matching comment on the path_id item-length case above.
 			name: "synthesis/driver claimed_fact_id item max length", registryName: "synthesis.driver.claimed_fact_ids.item_max_length",
 			limit: contractsv1.ContextFabricIdentifierRefMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"path_ids and at most 250 claimed_fact_ids, each at most 256"},
+			mentions: []string{"claimed_fact_ids"},
 			atLimit: func() error {
 				return driverWithClaimedFactIDLength(contractsv1.ContextFabricIdentifierRefMaxLength).Validate()
 			},
@@ -351,13 +676,13 @@ func modelFacingBounds() []boundCase {
 		},
 		{
 			name: "synthesis/driver evidence_ref_ids max count", registryName: "synthesis.driver.evidence_ref_ids.max_count",
-			limit: contractsv1.ContextFabricEvidenceRefIDsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"evidence_ref_ids", "500"},
+			limit: contractsv1.ContextFabricNestedEvidenceRefIDsMaxCount, prompt: synthesisSystemPrompt,
+			mentions: []string{"evidence_ref_ids"},
 			atLimit: func() error {
-				return driverWithEvidenceRefIDs(contractsv1.ContextFabricEvidenceRefIDsMaxCount).Validate()
+				return driverWithEvidenceRefIDs(contractsv1.ContextFabricNestedEvidenceRefIDsMaxCount).Validate()
 			},
 			over: func() error {
-				return driverWithEvidenceRefIDs(contractsv1.ContextFabricEvidenceRefIDsMaxCount + 1).Validate()
+				return driverWithEvidenceRefIDs(contractsv1.ContextFabricNestedEvidenceRefIDsMaxCount + 1).Validate()
 			},
 		},
 		{
@@ -368,7 +693,7 @@ func modelFacingBounds() []boundCase {
 			// affected_subjects item-length bounds above.
 			name: "synthesis/driver evidence_ref_id item max length", registryName: "synthesis.driver.evidence_ref_ids.item_max_length",
 			limit: contractsv1.ContextFabricEvidenceRefIDMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"evidence_ref_ids, each at most 256"},
+			mentions: []string{"evidence_ref_ids"},
 			atLimit: func() error {
 				return driverWithEvidenceRefIDLength(contractsv1.ContextFabricEvidenceRefIDMaxLength).Validate()
 			},
@@ -379,21 +704,39 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/finding_id max length", registryName: "synthesis.finding.finding_id.max_length",
 			limit: contractsv1.ContextFabricModelMintedIDMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"finding_id", "256"},
+			mentions: []string{"finding_id"},
 			atLimit:  func() error { return findingWithID(contractsv1.ContextFabricModelMintedIDMaxLength).Validate() },
 			over:     func() error { return findingWithID(contractsv1.ContextFabricModelMintedIDMaxLength + 1).Validate() },
 		},
 		{
+			// Finding.Kind became a CLOSED VOCABULARY in codex round 12, so
+			// no filler string of any length is a valid kind and the length
+			// bound can no longer be probed at its own value on the write
+			// path. Same shape as interpretation.fact_requirements.max_count:
+			// atLimit proves the bound does not block the real achievable
+			// ceiling -- the longest legal vocabulary member -- rather than
+			// pretending a 128-character kind is constructible.
+			//
+			// over's rejection is now OVERDETERMINED on this path (too long
+			// AND not a member). The length bound's own proof lives where it
+			// is still the operative check: contracts/v1's
+			// TestFindingKindStaysReadableForStoredRows asserts an
+			// over-length kind is rejected even on the lenient stored-read
+			// path, where the vocabulary is deliberately not enforced.
+			//
+			// mentions carries no number (self-found, same defect as the
+			// round-9 fact_requirements case): a literal here is what the
+			// derived phrase check exists to prevent.
 			name: "synthesis/finding kind max length", registryName: "synthesis.finding.kind.max_length",
 			limit: contractsv1.ContextFabricFindingKindMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"kind is at most 128"},
-			atLimit:  func() error { return findingWithKind(contractsv1.ContextFabricFindingKindMaxLength).Validate() },
+			mentions: []string{"kind is at most"},
+			atLimit:  func() error { return findingWithLongestLegalKind().Validate() },
 			over:     func() error { return findingWithKind(contractsv1.ContextFabricFindingKindMaxLength + 1).Validate() },
 		},
 		{
 			name: "synthesis/finding summary max length", registryName: "synthesis.finding.summary.max_length",
 			limit: contractsv1.ContextFabricFindingSummaryMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"summary", "4000"},
+			mentions: []string{"summary"},
 			atLimit:  func() error { return findingWithSummary(contractsv1.ContextFabricFindingSummaryMaxLength).Validate() },
 			over: func() error {
 				return findingWithSummary(contractsv1.ContextFabricFindingSummaryMaxLength + 1).Validate()
@@ -402,7 +745,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/finding subjects max count", registryName: "synthesis.finding.subjects.max_count",
 			limit: contractsv1.ContextFabricFindingSubjectsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"subjects", "250"},
+			mentions: []string{"subjects"},
 			atLimit:  func() error { return findingWithSubjects(contractsv1.ContextFabricFindingSubjectsMaxCount).Validate() },
 			over: func() error {
 				return findingWithSubjects(contractsv1.ContextFabricFindingSubjectsMaxCount + 1).Validate()
@@ -412,7 +755,7 @@ func modelFacingBounds() []boundCase {
 			// CHAOS-3784 round-3 R3-1: see the matching driver-side comment.
 			name: "synthesis/finding subjects item canonical_id max length", registryName: "synthesis.finding.subjects.item_canonical_id_max_length",
 			limit: contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"canonical ID at most 256"},
+			mentions: []string{"canonical_id"},
 			atLimit: func() error {
 				return findingWithSubjectCanonicalIDLength(contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength).Validate()
 			},
@@ -423,7 +766,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/finding subjects item label max length", registryName: "synthesis.finding.subjects.item_label_max_length",
 			limit: contractsv1.ContextFabricSubjectRefLabelMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"label at most 512"},
+			mentions: []string{"label"},
 			atLimit: func() error {
 				return findingWithSubjectLabelLength(contractsv1.ContextFabricSubjectRefLabelMaxLength).Validate()
 			},
@@ -433,20 +776,20 @@ func modelFacingBounds() []boundCase {
 		},
 		{
 			name: "synthesis/finding evidence_ref_ids max count", registryName: "synthesis.finding.evidence_ref_ids.max_count",
-			limit: contractsv1.ContextFabricEvidenceRefIDsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"evidence_ref_ids", "500"},
+			limit: contractsv1.ContextFabricNestedEvidenceRefIDsMaxCount, prompt: synthesisSystemPrompt,
+			mentions: []string{"evidence_ref_ids"},
 			atLimit: func() error {
-				return findingWithEvidenceRefIDs(contractsv1.ContextFabricEvidenceRefIDsMaxCount).Validate()
+				return findingWithEvidenceRefIDs(contractsv1.ContextFabricNestedEvidenceRefIDsMaxCount).Validate()
 			},
 			over: func() error {
-				return findingWithEvidenceRefIDs(contractsv1.ContextFabricEvidenceRefIDsMaxCount + 1).Validate()
+				return findingWithEvidenceRefIDs(contractsv1.ContextFabricNestedEvidenceRefIDsMaxCount + 1).Validate()
 			},
 		},
 		{
 			// CHAOS-3784 round-3 R3-1: see the matching driver-side comment.
 			name: "synthesis/finding evidence_ref_id item max length", registryName: "synthesis.finding.evidence_ref_ids.item_max_length",
 			limit: contractsv1.ContextFabricEvidenceRefIDMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"evidence_ref_ids, each at most 256"},
+			mentions: []string{"evidence_ref_ids"},
 			atLimit: func() error {
 				return findingWithEvidenceRefIDLength(contractsv1.ContextFabricEvidenceRefIDMaxLength).Validate()
 			},
@@ -457,7 +800,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/finding claimed_fact_ids max count", registryName: "synthesis.finding.claimed_fact_ids.max_count",
 			limit: contractsv1.ContextFabricDriverClaimedFactIDsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"claimed_fact_ids", "250"},
+			mentions: []string{"claimed_fact_ids"},
 			atLimit: func() error {
 				return findingWithClaimedFactIDs(contractsv1.ContextFabricDriverClaimedFactIDsMaxCount).Validate()
 			},
@@ -473,7 +816,7 @@ func modelFacingBounds() []boundCase {
 			// (prompts.go states them together).
 			name: "synthesis/finding claimed_fact_id item max length", registryName: "synthesis.finding.claimed_fact_ids.item_max_length",
 			limit: contractsv1.ContextFabricIdentifierRefMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"path_ids and at most 250 claimed_fact_ids, each at most 256"},
+			mentions: []string{"claimed_fact_ids"},
 			atLimit: func() error {
 				return findingWithClaimedFactIDLength(contractsv1.ContextFabricIdentifierRefMaxLength).Validate()
 			},
@@ -484,14 +827,14 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/claim_id max length", registryName: "synthesis.claimed_fact.claim_id.max_length",
 			limit: contractsv1.ContextFabricModelMintedIDMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"claim_id", "256"},
+			mentions: []string{"claim_id"},
 			atLimit:  func() error { return claimWithID(contractsv1.ContextFabricModelMintedIDMaxLength).Validate() },
 			over:     func() error { return claimWithID(contractsv1.ContextFabricModelMintedIDMaxLength + 1).Validate() },
 		},
 		{
 			name: "synthesis/claimed fact field max length", registryName: "synthesis.claimed_fact.field.max_length",
 			limit: contractsv1.ContextFabricClaimedFieldMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"field", "128"},
+			mentions: []string{"field"},
 			atLimit:  func() error { return claimWithField(contractsv1.ContextFabricClaimedFieldMaxLength).Validate() },
 			over:     func() error { return claimWithField(contractsv1.ContextFabricClaimedFieldMaxLength + 1).Validate() },
 		},
@@ -499,7 +842,7 @@ func modelFacingBounds() []boundCase {
 			// CHAOS-3784 round-3 R3-1: see the matching driver-side comment.
 			name: "synthesis/claimed fact subject canonical_id max length", registryName: "synthesis.claimed_fact.subject.canonical_id_max_length",
 			limit: contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"canonical ID at most 256"},
+			mentions: []string{"canonical_id"},
 			atLimit: func() error {
 				return claimWithSubjectCanonicalIDLength(contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength).Validate()
 			},
@@ -510,7 +853,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/claimed fact subject label max length", registryName: "synthesis.claimed_fact.subject.label_max_length",
 			limit: contractsv1.ContextFabricSubjectRefLabelMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"label at most 512"},
+			mentions: []string{"label"},
 			atLimit: func() error {
 				return claimWithSubjectLabelLength(contractsv1.ContextFabricSubjectRefLabelMaxLength).Validate()
 			},
@@ -524,7 +867,7 @@ func modelFacingBounds() []boundCase {
 			// until this fix -- same retracted class (a) exclusion.
 			name: "synthesis/claimed fact value max length", registryName: "synthesis.claimed_fact.value.max_length",
 			limit: contractsv1.ContextFabricClaimedFactValueMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"string value is at most 4000"},
+			mentions: []string{"value"},
 			atLimit: func() error {
 				return claimWithValueLength(contractsv1.ContextFabricClaimedFactValueMaxLength).Validate()
 			},
@@ -535,7 +878,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/strongest_pressures max count", registryName: "synthesis.strongest_pressures.max_count",
 			limit: contractsv1.ContextFabricStrongestPressuresMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"at most 50 strongest_pressures"},
+			mentions: []string{"strongest_pressures"},
 			atLimit: func() error {
 				return resultWithStrongestPressures(contractsv1.ContextFabricStrongestPressuresMaxCount).Validate()
 			},
@@ -546,7 +889,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/strongest_pressures item max length", registryName: "synthesis.strongest_pressures.item_max_length",
 			limit: contractsv1.ContextFabricStrongestPressureMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"strongest_pressures", "2000"},
+			mentions: []string{"strongest_pressures"},
 			atLimit: func() error {
 				return resultWithStrongestPressureLength(contractsv1.ContextFabricStrongestPressureMaxLength).Validate()
 			},
@@ -557,14 +900,14 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/drivers max count", registryName: "synthesis.drivers.max_count",
 			limit: contractsv1.ContextFabricDriversMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"at most 50 drivers"},
+			mentions: []string{"drivers"},
 			atLimit:  func() error { return resultWithDrivers(contractsv1.ContextFabricDriversMaxCount).Validate() },
 			over:     func() error { return resultWithDrivers(contractsv1.ContextFabricDriversMaxCount + 1).Validate() },
 		},
 		{
 			name: "synthesis/remaining_work max count", registryName: "synthesis.remaining_work.max_count",
 			limit: contractsv1.ContextFabricRemainingWorkMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"remaining_work", "250"},
+			mentions: []string{"remaining_work"},
 			atLimit: func() error {
 				return resultWithFindings("remaining_work", contractsv1.ContextFabricRemainingWorkMaxCount).Validate()
 			},
@@ -575,7 +918,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/readiness_gaps max count", registryName: "synthesis.readiness_gaps.max_count",
 			limit: contractsv1.ContextFabricReadinessGapsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"readiness_gaps", "250"},
+			mentions: []string{"readiness_gaps"},
 			atLimit: func() error {
 				return resultWithFindings("readiness_gaps", contractsv1.ContextFabricReadinessGapsMaxCount).Validate()
 			},
@@ -586,7 +929,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/conflicts max count", registryName: "synthesis.conflicts.max_count",
 			limit: contractsv1.ContextFabricConflictsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"conflicts", "250"},
+			mentions: []string{"conflicts"},
 			atLimit: func() error {
 				return resultWithFindings("conflicts", contractsv1.ContextFabricConflictsMaxCount).Validate()
 			},
@@ -595,9 +938,42 @@ func modelFacingBounds() []boundCase {
 			},
 		},
 		{
+			name: "synthesis/direct_judgment max length", registryName: "synthesis.direct_judgment.max_length",
+			limit: contractsv1.ContextFabricDirectJudgmentMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"direct_judgment"},
+			atLimit: func() error {
+				return resultWithJudgment(contractsv1.ContextFabricDirectJudgmentMaxLength).Validate()
+			},
+			over: func() error {
+				return resultWithJudgment(contractsv1.ContextFabricDirectJudgmentMaxLength + 1).Validate()
+			},
+		},
+		{
+			name: "synthesis/current_state max length", registryName: "synthesis.current_state.max_length",
+			limit: contractsv1.ContextFabricCurrentStateMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"current_state"},
+			atLimit: func() error {
+				return resultWithCurrentState(contractsv1.ContextFabricCurrentStateMaxLength).Validate()
+			},
+			over: func() error {
+				return resultWithCurrentState(contractsv1.ContextFabricCurrentStateMaxLength + 1).Validate()
+			},
+		},
+		{
+			name: "synthesis/deterministic_answer max length", registryName: "synthesis.deterministic_answer.max_length",
+			limit: contractsv1.ContextFabricDeterministicAnswerMaxLength, prompt: synthesisSystemPrompt,
+			mentions: []string{"deterministic_answer"},
+			atLimit: func() error {
+				return resultWithDeterministicAnswer(contractsv1.ContextFabricDeterministicAnswerMaxLength).Validate()
+			},
+			over: func() error {
+				return resultWithDeterministicAnswer(contractsv1.ContextFabricDeterministicAnswerMaxLength + 1).Validate()
+			},
+		},
+		{
 			name: "synthesis/limitations max count", registryName: "synthesis.limitations.max_count",
 			limit: contractsv1.ContextFabricLimitationsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"limitations", "250"},
+			mentions: []string{"limitations"},
 			atLimit:  func() error { return resultWithLimitations(contractsv1.ContextFabricLimitationsMaxCount).Validate() },
 			over: func() error {
 				return resultWithLimitations(contractsv1.ContextFabricLimitationsMaxCount + 1).Validate()
@@ -606,7 +982,7 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/limitations item max length", registryName: "synthesis.limitations.item_max_length",
 			limit: contractsv1.ContextFabricLimitationMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"limitation", "4000"},
+			mentions: []string{"limitation"},
 			atLimit: func() error {
 				return resultWithLimitationLength(contractsv1.ContextFabricLimitationMaxLength).Validate()
 			},
@@ -617,21 +993,21 @@ func modelFacingBounds() []boundCase {
 		{
 			name: "synthesis/warnings max count", registryName: "synthesis.warnings.max_count",
 			limit: contractsv1.ContextFabricWarningsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"warnings", "250"},
+			mentions: []string{"warnings"},
 			atLimit:  func() error { return resultWithWarnings(contractsv1.ContextFabricWarningsMaxCount).Validate() },
 			over:     func() error { return resultWithWarnings(contractsv1.ContextFabricWarningsMaxCount + 1).Validate() },
 		},
 		{
 			name: "synthesis/warnings item max length", registryName: "synthesis.warnings.item_max_length",
 			limit: contractsv1.ContextFabricWarningMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"warning", "4000"},
+			mentions: []string{"warning"},
 			atLimit:  func() error { return resultWithWarningLength(contractsv1.ContextFabricWarningMaxLength).Validate() },
 			over:     func() error { return resultWithWarningLength(contractsv1.ContextFabricWarningMaxLength + 1).Validate() },
 		},
 		{
 			name: "synthesis/evidence_ref_ids (top-level) max count", registryName: "synthesis.evidence_ref_ids.max_count",
 			limit: contractsv1.ContextFabricEvidenceRefIDsMaxCount, prompt: synthesisSystemPrompt,
-			mentions: []string{"evidence_ref_ids", "500"},
+			mentions: []string{"evidence_ref_ids"},
 			atLimit: func() error {
 				return resultWithEvidenceRefIDs(contractsv1.ContextFabricEvidenceRefIDsMaxCount).Validate()
 			},
@@ -651,7 +1027,7 @@ func modelFacingBounds() []boundCase {
 			// unrelated reasons (the claimed_fact_ids reference bound, the
 			// closed-vocabulary sentence), so loose substrings alone would
 			// pass without an actual dedicated statement of THIS bound.
-			mentions: []string{"at most 250 claimed_facts"},
+			mentions: []string{"claimed_facts"},
 			atLimit: func() error {
 				return resultWithClaimedFacts(contractsv1.ContextFabricClaimedFactsMaxCount).Validate()
 			},
@@ -712,21 +1088,20 @@ func interpretationWithClarification(length int) contractsv1.ContextFabricInterp
 	return question
 }
 
-// contextFabricAllFactKinds is every kind in contracts/v1's closed
-// ContextFabricFactKind vocabulary -- 20 as of this writing, deliberately
-// fewer than ContextFabricFactRequirementsMaxCount (64), which is why
+// contextFabricAllFactKinds derives from contracts/v1's exported closed
+// vocabulary instead of restating it (codex round-9 F1). The restated copy
+// was a second list to drift against, and it carried the claim that the
+// vocabulary is "deliberately fewer" than the count bound -- which was
+// exactly the confusion: the bound is now DERIVED from this vocabulary, so
+// the two can no longer disagree.
+//
 // interpretationWithDistinctFactRequirements and
-// interpretationWithCycledFactRequirements below are two different
-// constructors rather than one.
-var contextFabricAllFactKinds = []contractsv1.ContextFabricFactKind{
-	contractsv1.ContextFabricFactIdentity, contractsv1.ContextFabricFactMembership, contractsv1.ContextFabricFactStatus,
-	contractsv1.ContextFabricFactActualCompletion, contractsv1.ContextFabricFactWork, contractsv1.ContextFabricFactBlockers,
-	contractsv1.ContextFabricFactRequiredChildren, contractsv1.ContextFabricFactPullRequests, contractsv1.ContextFabricFactReviews,
-	contractsv1.ContextFabricFactContinuousIntegration, contractsv1.ContextFabricFactDeployments, contractsv1.ContextFabricFactIncidents,
-	contractsv1.ContextFabricFactMetrics, contractsv1.ContextFabricFactHealth, contractsv1.ContextFabricFactWorkload,
-	contractsv1.ContextFabricFactInvestment, contractsv1.ContextFabricFactReadiness, contractsv1.ContextFabricFactOperationalDeficiencies,
-	contractsv1.ContextFabricFactSourceHealth, contractsv1.ContextFabricFactEvidence,
-}
+// interpretationWithCycledFactRequirements remain two constructors because
+// at-limit needs distinct kinds and over-limit cannot have them.
+var contextFabricAllFactKinds = func() []contractsv1.ContextFabricFactKind {
+	vocabulary := contractsv1.ContextFabricFactKindVocabulary()
+	return vocabulary[:]
+}()
 
 // interpretationWithDistinctFactRequirements builds count DISTINCT
 // fact_requirement kinds, and panics if count exceeds the vocabulary's
@@ -965,6 +1340,27 @@ func findingWithID(length int) contractsv1.ContextFabricFinding {
 	return finding
 }
 
+// findingWithLongestLegalKind builds a finding carrying the longest member of
+// the closed driver-category vocabulary -- the largest kind a model can
+// legally produce, and therefore the real ceiling the length bound must not
+// block.
+func findingWithLongestLegalKind() contractsv1.ContextFabricFinding {
+	finding := baseFinding()
+	finding.Kind = ""
+	for _, category := range contractsv1.ContextFabricDriverCategoryVocabulary() {
+		if len(string(category)) > len(finding.Kind) {
+			finding.Kind = string(category)
+		}
+	}
+	// The longest member is canonical-fact-shaped, so it requires a claimed
+	// fact for value-level closure. Supplying one keeps this probe measuring
+	// the LENGTH ceiling rather than failing on an unrelated rule.
+	if _, required := contractsv1.ContextFabricDriverCategoryRequiresClaimedFact(contractsv1.ContextFabricDriverCategory(finding.Kind)); required && len(finding.ClaimedFactIDs) == 0 {
+		finding.ClaimedFactIDs = []string{"claim_probe_00001"}
+	}
+	return finding
+}
+
 func findingWithKind(length int) contractsv1.ContextFabricFinding {
 	finding := baseFinding()
 	finding.Kind = filler(length)
@@ -1167,6 +1563,24 @@ func resultWithFindings(field string, count int) contractsv1.ContextFabricInvest
 	return result
 }
 
+func resultWithJudgment(length int) contractsv1.ContextFabricInvestigationResult {
+	result := baseResult()
+	result.DirectJudgment = filler(length)
+	return result
+}
+
+func resultWithCurrentState(length int) contractsv1.ContextFabricInvestigationResult {
+	result := baseResult()
+	result.CurrentState = filler(length)
+	return result
+}
+
+func resultWithDeterministicAnswer(length int) contractsv1.ContextFabricInvestigationResult {
+	result := baseResult()
+	result.DeterministicAnswer = filler(length)
+	return result
+}
+
 func resultWithLimitations(count int) contractsv1.ContextFabricInvestigationResult {
 	result := baseResult()
 	result.Limitations = uniqueTerms(count)
@@ -1220,4 +1634,230 @@ func resultWithClaimedFacts(count int) contractsv1.ContextFabricInvestigationRes
 	}
 	result.ClaimedFacts = claims
 	return result
+}
+
+// TestChangingOnePromptNumberFailsExactlyOneBound is the codex round-6 F5
+// mutation check.
+//
+// The phrase map is only trustworthy if each phrase is genuinely unique to
+// its bound. This mutates ONE number in a prompt and requires exactly the
+// assertions tied to that phrase to stop matching. If a mutation broke
+// nothing, that bound's phrase was not actually pinned; if it broke an
+// unrelated bound, two bounds share a phrase and one is being proved by the
+// other's number -- which is the defect this replaced.
+func TestChangingOnePromptNumberFailsExactlyOneBound(t *testing.T) {
+	for _, mutation := range []struct {
+		name         string
+		prompt       string
+		from, to     string
+		wantAffected []string
+	}{
+		{
+			name: "driver title length", prompt: synthesisSystemPrompt,
+			from: "A driver's title is at most 512 characters", to: "A driver's title is at most 999 characters",
+			wantAffected: []string{"synthesis.driver.title.max_length"},
+		},
+		{
+			name: "limitations count", prompt: synthesisSystemPrompt,
+			from: "at most 100 limitations", to: "at most 999 limitations",
+			wantAffected: []string{"synthesis.limitations.max_count"},
+		},
+		{
+			name: "parameter value length", prompt: interpretationSystemPrompt,
+			from: "each value at most 1000", to: "each value at most 999",
+			wantAffected: []string{"interpretation.fact_requirement.parameter_value.max_length"},
+		},
+		{
+			name: "subject terms count", prompt: interpretationSystemPrompt,
+			from: "At most 50 subject_terms", to: "At most 999 subject_terms",
+			wantAffected: []string{"interpretation.subject_terms.max_count"},
+		},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			if !strings.Contains(mutation.prompt, mutation.from) {
+				t.Fatalf("the prompt does not contain %q, so this mutation proves nothing", mutation.from)
+			}
+			mutated := strings.Replace(mutation.prompt, mutation.from, mutation.to, 1)
+
+			affected := make([]string, 0, 2)
+			for _, testCase := range modelFacingBounds() {
+				if testCase.prompt != mutation.prompt {
+					continue
+				}
+				phrase, ok := boundPhrases[testCase.registryName]
+				if !ok {
+					continue
+				}
+				want := strings.ReplaceAll(phrase, "{N}", strconv.Itoa(testCase.limit))
+				if !strings.Contains(mutated, want) {
+					affected = append(affected, testCase.registryName)
+				}
+			}
+			sort.Strings(affected)
+			expected := append([]string(nil), mutation.wantAffected...)
+			sort.Strings(expected)
+			if !reflect.DeepEqual(affected, expected) {
+				t.Errorf("mutating %q broke %v, want exactly %v.\nA bound broken by an unrelated mutation shares a phrase; a bound broken by nothing is not pinned.",
+					mutation.from, affected, expected)
+			}
+		})
+	}
+}
+
+// exemptPromptNumerals are numbers a prompt states that are NOT
+// registry-backed bounds, each with the reason it is not one. Anything not
+// listed and not registry-derived fails TestEveryPromptNumeralIsAccounted.
+//
+// An exemption is a claim that the number is not a validated bound. It is
+// deliberately awkward to add, because the failure this test exists to
+// catch is exactly a bound hiding as prose (codex round-7 F5).
+// exemptPromptNumerals ties each exemption to the exact PHRASE it appears
+// in, not to its bare value (codex round-8 F4). Exempting the value 1
+// globally meant any new "at most 1" cap anywhere was silently accepted; an
+// occurrence-anchored exemption only excuses the clause it was written for,
+// so a new occurrence of the same number is unclassified until claimed.
+var exemptPromptNumerals = []struct {
+	phrase string
+	why    string
+}{
+	{"at least 8 and at most", "identifier MINIMUM length: a floor, not a cap the registry governs"},
+	{"at least 1 and at most 250 affected_subjects", "affected_subjects minimum: the model must name at least one"},
+	{"confidence MUST be a number between 0 and 1 inclusive", "confidence range: a fixed unit interval, not a sized bound"},
+}
+
+// TestEveryPromptNumeralIsAccounted ships the enumeration that was
+// previously run by hand (codex round-7 F5).
+//
+// Every numeral in a prompt is either the value of a registry-backed bound
+// or an explicitly classified exemption. Hand-running this found an
+// unpinned deterministic_answer limit; shipping it means the next one
+// cannot survive to a review round.
+func TestEveryPromptNumeralIsAccounted(t *testing.T) {
+	registryValues := map[int]bool{}
+	for _, bound := range contractsv1.ContextFabricModelFacingBounds {
+		registryValues[bound.Limit] = true
+	}
+
+	for name, prompt := range map[string]string{
+		"interpretation": interpretationSystemPrompt,
+		"synthesis":      synthesisSystemPrompt,
+	} {
+		t.Run(name, func(t *testing.T) {
+			unaccounted := make([]int, 0, 4)
+			for _, numeral := range promptNumerals(prompt) {
+				if registryValues[numeral] {
+					continue
+				}
+				if exemptedByPhrase(prompt, numeral) {
+					continue
+				}
+				unaccounted = append(unaccounted, numeral)
+			}
+			if len(unaccounted) > 0 {
+				t.Errorf("prompt states %v, which is neither a registry-backed bound nor a classified exemption.\nA number in a prompt that nothing validates is a bound hiding as prose.", unaccounted)
+			}
+		})
+	}
+}
+
+// exemptedByPhrase reports whether every occurrence of numeral in the
+// prompt sits inside a phrase claimed by an exemption. A numeral that also
+// appears somewhere unclaimed is NOT exempt.
+func exemptedByPhrase(prompt string, numeral int) bool {
+	needle := strconv.Itoa(numeral)
+	claimed := false
+	for _, exemption := range exemptPromptNumerals {
+		if strings.Contains(exemption.phrase, needle) && strings.Contains(prompt, exemption.phrase) {
+			claimed = true
+			break
+		}
+	}
+	if !claimed {
+		return false
+	}
+	// Count occurrences outside the claimed phrases; any leftover means a
+	// new, unclaimed use of the same number.
+	stripped := prompt
+	for _, exemption := range exemptPromptNumerals {
+		stripped = strings.ReplaceAll(stripped, exemption.phrase, "")
+	}
+	for _, field := range strings.FieldsFunc(stripped, func(r rune) bool { return r < '0' || r > '9' }) {
+		if field == needle {
+			return false
+		}
+	}
+	return true
+}
+
+func promptNumerals(prompt string) []int {
+	var found []int
+	seen := map[int]bool{}
+	for _, field := range strings.FieldsFunc(prompt, func(r rune) bool { return r < '0' || r > '9' }) {
+		value, err := strconv.Atoi(field)
+		if err != nil || seen[value] {
+			continue
+		}
+		seen[value] = true
+		found = append(found, value)
+	}
+	sort.Ints(found)
+	return found
+}
+
+// TestEveryRegistryBoundHasAUniquePromptAnchor is the codex round-7 F3
+// closure: the mutation set is GENERATED from the registry rather than
+// sampled by hand.
+//
+// For every registry-derived assertion, it changes that bound's number in
+// the prompt and requires exactly that bound's assertions to stop matching.
+// A bound broken by an unrelated mutation shares an anchor with it -- which
+// is how claimed_fact_ids, evidence refs and the identifier bounds were
+// quietly proving each other.
+func TestEveryRegistryBoundHasAUniquePromptAnchor(t *testing.T) {
+	cases := modelFacingBounds()
+	for _, subject := range cases {
+		phrase, ok := boundPhrases[subject.registryName]
+		if !ok {
+			t.Errorf("%s has no prompt phrase", subject.registryName)
+			continue
+		}
+		t.Run(subject.registryName, func(t *testing.T) {
+			original := strings.ReplaceAll(phrase, "{N}", strconv.Itoa(subject.limit))
+			if !strings.Contains(subject.prompt, original) {
+				t.Fatalf("prompt does not contain %q", original)
+			}
+			// A value no other bound in this prompt uses, so the mutation
+			// cannot accidentally satisfy a neighbour.
+			mutated := strings.Replace(subject.prompt, original,
+				strings.ReplaceAll(phrase, "{N}", "424242"), 1)
+
+			broken := make([]string, 0, 2)
+			for _, other := range cases {
+				if other.prompt != subject.prompt {
+					continue
+				}
+				otherPhrase, ok := boundPhrases[other.registryName]
+				if !ok {
+					continue
+				}
+				want := strings.ReplaceAll(otherPhrase, "{N}", strconv.Itoa(other.limit))
+				if !strings.Contains(mutated, want) {
+					broken = append(broken, other.registryName)
+				}
+			}
+			// Bounds that legitimately SHARE a sentence share a phrase by
+			// construction (driver and finding claimed_fact_ids are one
+			// clause). Those are expected to break together; what must not
+			// happen is a bound breaking that does not share the phrase.
+			for _, name := range broken {
+				if boundPhrases[name] != phrase {
+					t.Errorf("mutating %s also broke %s, which uses a DIFFERENT phrase: the anchors overlap and one bound is proving another",
+						subject.registryName, name)
+				}
+			}
+			if len(broken) == 0 {
+				t.Errorf("mutating %s broke nothing: its anchor is not actually pinning it", subject.registryName)
+			}
+		})
+	}
 }
