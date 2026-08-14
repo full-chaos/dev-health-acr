@@ -306,6 +306,13 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 	// unavailable, so degraded=TRUE is the honest value. A current-axis
 	// question never reaches this line and behaves exactly as before.
 	if temporal.active {
+		// Round-16: answer-level degraded and telemetry-level degraded must
+		// fire TOGETHER. This branch used to set the answer flag and emit
+		// nothing, so a historical query with a configured embedder produced
+		// a degraded answer with zero operational signal -- indistinguishable
+		// from healthy retrieval, and from an outage, at exactly the moment
+		// an operator would be trying to tell those apart.
+		a.recordVectorSuppressed(ctx, orgID)
 		return lexical, truncated, true, nil
 	}
 	if !fence.readable(ctx, a, key, orgID) {
@@ -341,6 +348,16 @@ func (a *Adapter) recordVectorDegraded(ctx context.Context, orgID string) {
 		return
 	}
 	a.config.Telemetry.RecordVectorRetrievalDegraded(ctx, orgID)
+}
+
+// recordVectorSuppressed reports a deliberate historical-axis suppression.
+// Separate from recordVectorDegraded so an operator can tell "withheld
+// because it cannot answer this" from "broken".
+func (a *Adapter) recordVectorSuppressed(ctx context.Context, orgID string) {
+	if a.config.Telemetry == nil {
+		return
+	}
+	a.config.Telemetry.RecordVectorRetrievalSuppressed(ctx, orgID)
 }
 
 // recordVectorProjection reports one batch's vector outcome (codex round-3

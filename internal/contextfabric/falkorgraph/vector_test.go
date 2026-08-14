@@ -983,6 +983,7 @@ func TestR2_3_ApplyProjectionBatchDoesNotWriteTheWatermarkOnUnreconciledVectors(
 // operator would actually see.
 type recordingTelemetry struct {
 	degraded    int
+	suppressed  int
 	embedded    int
 	cleared     int
 	projections int
@@ -991,6 +992,9 @@ type recordingTelemetry struct {
 func (r *recordingTelemetry) RecordObservationTraversalDegraded(context.Context, string, int) {}
 func (r *recordingTelemetry) RecordVectorRetrievalDegraded(context.Context, string) {
 	r.degraded++
+}
+func (r *recordingTelemetry) RecordVectorRetrievalSuppressed(context.Context, string) {
+	r.suppressed++
 }
 func (r *recordingTelemetry) RecordVectorProjection(_ context.Context, _ string, embedded, cleared int) {
 	r.projections++
@@ -1541,5 +1545,84 @@ func TestCHAOS3781_AnOutOfWindowSubjectReachableOnlyByVectorIsNotAdmitted(t *tes
 	}
 	if !degraded {
 		t.Fatal("the answer did not record that a retrieval mechanism was unavailable")
+	}
+}
+
+// TestCHAOS3781_HistoricalSuppressionIsVisibleToOperators extends the
+// composition matrix by one column: the TELEMETRY column.
+//
+// Round-16 finding: the historical skip set the answer-level degraded flag
+// and emitted nothing, so a historical question with a configured embedder
+// produced a degraded answer with zero operational signal -- indistinguishable
+// from healthy retrieval, and from an outage, at exactly the moment an
+// operator would be trying to tell those apart.
+//
+// The invariant restored here is that answer-level and telemetry-level
+// degradation fire TOGETHER, and that suppression is distinguishable from
+// failure: the suppressed counter moves, the degraded (outage) counter does
+// not.
+func TestCHAOS3781_HistoricalSuppressionIsVisibleToOperators(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		temporal       func(*testing.T) temporalFilter
+		embedder       contextfabric.Embedder
+		wantSuppressed int
+		wantDegraded   int
+		wantAnswerFlag bool
+	}{
+		{
+			name:           "historical with an embedder: suppressed, not degraded",
+			temporal:       historicalFilter,
+			embedder:       &stubEmbedder{vector: make([]float32, 8)},
+			wantSuppressed: 1,
+			wantDegraded:   0,
+			wantAnswerFlag: true,
+		},
+		{
+			name:           "current axis: neither signal",
+			temporal:       func(*testing.T) temporalFilter { return temporalFilter{} },
+			embedder:       &stubEmbedder{vector: make([]float32, 8)},
+			wantSuppressed: 0,
+			wantDegraded:   0,
+			wantAnswerFlag: false,
+		},
+		{
+			// No embedder means nothing was expected, so nothing was lost
+			// and nothing is reported -- CHAOS-3778's rule, which the skip
+			// must not disturb even on a historical axis.
+			name:           "historical with no embedder: neither signal",
+			temporal:       historicalFilter,
+			embedder:       nil,
+			wantSuppressed: 0,
+			wantDegraded:   0,
+			wantAnswerFlag: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+				return nil, nil
+			}}
+			fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+				return []indexStatus{operationalVectorIndex(8)}, nil
+			}
+			telemetry := &recordingTelemetry{}
+			// attachEmbedder ignores a nil Embedder, so the nil case leaves
+			// the adapter with no embedder -- which is the state under test.
+			adapter := vectorAdapterWithTelemetry(t, fake, test.embedder, telemetry)
+
+			_, _, degraded, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5, &resolutionFence{}, test.temporal(t))
+			if err != nil {
+				t.Fatalf("hybridSearchNodes: %v", err)
+			}
+			if degraded != test.wantAnswerFlag {
+				t.Fatalf("answer-level degraded = %v, want %v", degraded, test.wantAnswerFlag)
+			}
+			if telemetry.suppressed != test.wantSuppressed {
+				t.Errorf("suppression signal fired %d times, want %d -- an operator cannot separate intentional historical suppression from healthy retrieval without it", telemetry.suppressed, test.wantSuppressed)
+			}
+			if telemetry.degraded != test.wantDegraded {
+				t.Errorf("OUTAGE signal fired %d times, want %d -- suppression must not look like a broken embedder", telemetry.degraded, test.wantDegraded)
+			}
+		})
 	}
 }

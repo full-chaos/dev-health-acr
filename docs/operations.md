@@ -407,6 +407,28 @@ retrieval saw less than it should have. The operator-facing detail is in
 telemetry (`RecordVectorRetrievalDegraded`), which is where you diagnose *which*
 of the causes above fired.
 
+**One cause is NOT a fault: a historical question (CHAOS-3781).** A question
+with an as-of or range time axis deliberately skips the vector mechanism,
+because a k-NN index cannot honour a validity window — `db.idx.vector.queryNodes`
+returns the top-k by distance and any temporal predicate is a post-filter over
+that k, which would under-report and would break the truncation guarantee. The
+answer carries the same limitation, because the reader's situation is the same:
+fewer candidates were considered.
+
+Telemetry separates the two, and this distinction is the one to reach for first
+when the limitation appears:
+
+| signal | level | meaning | action |
+| --- | --- | --- | --- |
+| `RecordVectorRetrievalDegraded` | Warn | the mechanism BROKE — embed failure or timeout, wrong serving model, fence mismatch | diagnose the embedder |
+| `RecordVectorRetrievalSuppressed` | Info | the mechanism was WITHHELD from a historical question, by design | none; expected with historical traffic |
+
+They are separate signals rather than one signal with a reason, because folding
+them together would make a healthy system serving historical questions
+indistinguishable from an embedder outage. A rising `Suppressed` count tracks
+historical query volume; a rising `Degraded` count is the one that warrants
+attention.
+
 **What it does *not* report, deliberately: nodes that simply have no vector.**
 A projection batch whose embedding step failed clears the affected nodes'
 vectors, so those nodes are absent from vector search until a later batch or a

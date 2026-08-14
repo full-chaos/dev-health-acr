@@ -97,6 +97,22 @@ type GraphTelemetry interface {
 	// vector mechanism at all -- an embed failure or timeout, a wrong serving
 	// model, or a fence mismatch.
 	RecordVectorRetrievalDegraded(ctx context.Context, orgID string)
+	// RecordVectorRetrievalSuppressed fires when the vector mechanism was
+	// deliberately NOT run because the question is historical (CHAOS-3781).
+	//
+	// Deliberately separate from RecordVectorRetrievalDegraded rather than
+	// reusing it with a reason string, because the existing signal has no
+	// reason vocabulary and the two facts are operationally opposite: one
+	// says the mechanism BROKE and someone should look at the embedder, the
+	// other says it was correctly withheld because a k-NN index cannot
+	// honour a validity window. Folding them together would make a healthy
+	// system with historical traffic indistinguishable from an embedder
+	// outage -- the measurement layer failing toward "something is wrong"
+	// instead of toward "fine", which is no better.
+	//
+	// Both fire alongside an answer-level degraded flag, so answer and
+	// telemetry never disagree about whether a mechanism was missing.
+	RecordVectorRetrievalSuppressed(ctx context.Context, orgID string)
 	// RecordVectorProjection reports one projection batch's vector outcome:
 	// how many nodes were embedded and how many had a stale vector CLEARED.
 	//
@@ -115,6 +131,7 @@ type NoopTelemetry struct{}
 
 func (NoopTelemetry) RecordObservationTraversalDegraded(context.Context, string, int) {}
 func (NoopTelemetry) RecordVectorRetrievalDegraded(context.Context, string)           {}
+func (NoopTelemetry) RecordVectorRetrievalSuppressed(context.Context, string)         {}
 func (NoopTelemetry) RecordVectorProjection(context.Context, string, int, int)        {}
 
 // SlogTelemetry is the production GraphTelemetry: structured operational logs
@@ -139,6 +156,13 @@ func (t SlogTelemetry) RecordObservationTraversalDegraded(_ context.Context, org
 
 func (t SlogTelemetry) RecordVectorRetrievalDegraded(_ context.Context, orgID string) {
 	t.logger().Warn("context_fabric: vector retrieval unavailable for a request", "org_id", orgID)
+}
+
+// RecordVectorRetrievalSuppressed logs at INFO, not Warn: nothing is wrong.
+// A historical question correctly declined a mechanism that cannot answer it,
+// and paging on correct behaviour is how operators learn to ignore a signal.
+func (t SlogTelemetry) RecordVectorRetrievalSuppressed(_ context.Context, orgID string) {
+	t.logger().Info("context_fabric: vector retrieval suppressed for a historical question", "org_id", orgID)
 }
 
 // RecordVectorProjection logs at Warn when anything was cleared -- a cleared
