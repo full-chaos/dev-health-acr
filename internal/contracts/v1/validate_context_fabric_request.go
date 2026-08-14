@@ -11,7 +11,7 @@ func (r ContextFabricInvestigationRequest) Validate() error {
 	if r.SchemaVersion != ContextFabricInvestigationRequestSchema {
 		return fmt.Errorf("schema_version must be %q", ContextFabricInvestigationRequestSchema)
 	}
-	if !stringLengthBetween(r.RequestID, 8, 256) || !stringLengthBetween(strings.TrimSpace(r.Question), 1, 8000) {
+	if !stringLengthBetween(r.RequestID, 8, 256) || !rawBoundedText(r.Question, 1, 8000) {
 		return fmt.Errorf("request_id or question violates v1 bounds")
 	}
 	if len(r.Conversation) > 50 || len(r.PriorSubjectReceipts) > 20 {

@@ -507,6 +507,19 @@ func (v ContextFabricVersionSet) Validate() error {
 	return nil
 }
 
+// rawBoundedText is boundedText's write-path rule for contracts that have no
+// stored-read counterpart: a REQUEST is validated once, at the door, and is
+// never re-read from storage under legacy bounds.
+//
+// Requests are checked raw so a padded question is refused where the client
+// can still act on it. Accepting it at the door and rejecting it later, when
+// the engine echoed it into the result, is the compose-then-reject failure
+// round 7 fixed -- and the request contract must not be the thing that
+// manufactures it (codex round-13 F2 follow-up).
+func rawBoundedText(value string, minimum, maximum int) bool {
+	return boundedText(value, minimum, maximum, contextFabricWriteBounds)
+}
+
 // boundedText enforces a text field's length against the maximum the schema
 // publishes. Writes measure the RAW value; stored reads measure the trimmed
 // one -- see contextFabricBounds.rawTextLength for why the two differ.
@@ -603,7 +616,7 @@ func (r ContextFabricInvestigationResult) ValidateStored() error {
 }
 
 func (r ContextFabricInvestigationResult) validate(bounds contextFabricBounds) error {
-	if r.SchemaVersion != ContextFabricInvestigationResultSchema || !stringLengthBetween(r.ResultID, 8, 256) || !stringLengthBetween(r.RequestID, 8, 256) || r.GeneratedAt.IsZero() || !stringLengthBetween(strings.TrimSpace(r.Question), 1, 8000) || !validInvestigationStatus(r.Status) {
+	if r.SchemaVersion != ContextFabricInvestigationResultSchema || !stringLengthBetween(r.ResultID, 8, 256) || !stringLengthBetween(r.RequestID, 8, 256) || r.GeneratedAt.IsZero() || !boundedText(r.Question, 1, 8000, bounds) || !validInvestigationStatus(r.Status) {
 		return fmt.Errorf("result identity or status violates v1 bounds")
 	}
 	if err := r.Interpretation.validate(bounds); err != nil {

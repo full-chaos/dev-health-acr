@@ -24,7 +24,7 @@ const (
 // hosted API grants -- the sidecar clamps to the advertised capability
 // limits after this runs.
 func (r MCPInvestigateQuestionRequest) Validate() error {
-	if !stringLengthBetween(strings.TrimSpace(r.Question), 1, MCPInvestigationQuestionMaxLength) {
+	if !rawBoundedText(r.Question, 1, MCPInvestigationQuestionMaxLength) {
 		return fmt.Errorf("investigate_question requires a question within v1 bounds")
 	}
 	if len(r.Conversation) > MCPInvestigationConversationMaxTurn {
