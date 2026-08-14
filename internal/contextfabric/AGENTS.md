@@ -238,6 +238,21 @@ the projection, which has no axis to test against; it is closed
 structurally instead, by `Project` copying from an already-valid result --
 see `TestEveryHistoricalResultProjectsItsTemporalLabel`.
 
+The retrieval-degradation limitation is DISPLACING, on both sides. At the
+contract's limitation cap the engine drops the last model-authored caveat
+rather than dropping the disclosure (a degraded answer would read as a
+clean one) or failing the result (which is what a plain append did: one
+entry over the cap, `ErrInvalidResult`, no answer at all -- and a degraded
+retrieval is exactly the run that produces a long limitation list). The
+projection does the same on the read side, because the engine appends the
+disclosure last and the projection keeps a prefix: without a retention
+priority, a legacy row written when the cap was 250 loses precisely that
+entry, and only the bounded consumer is misled -- the canonical view still
+carries it. Every displacement is counted in `limitations_omitted`. The
+strings and the two-spelling predicate live in `contracts/v1`
+(`context_fabric_limitations.go`) because `answerprojection` may not import
+the engine.
+
 Result retrieval (`GET /api/v1/context-fabric/investigations/{result_id}`)
 reads the same immutable store the engine writes through, surfaced as
 `api.RuntimeDependencies.InvestigationResults`. Not-found is classified

@@ -125,7 +125,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	drivers, driversOmitted, withheldOmitted, facts, factsOmitted := projectDrivers(result, bounds, index, clamp)
 	cohort, cohortOmitted, cohortReasonsOmitted := projectCohort(result, bounds, index, clamp)
 	clarification, candidatesOmitted, candidateReasonsOmitted := projectClarification(result, bounds, clamp)
-	limitations, limitationsOmitted := boundedNarrative(result.Limitations, clamp)
+	limitations, limitationsOmitted := boundedLimitations(result.Limitations, clamp)
 	warnings, warningsOmitted := boundedNarrative(result.Warnings, clamp)
 	coverage, coverageOmitted := projectCoverage(result, clamp)
 	evidence := index.ids()
@@ -511,6 +511,29 @@ func countUnindexedEvidence(result contractsv1.ContextFabricInvestigationResult,
 // than the crash: a shortened limitations list reads as a more confident
 // answer than the investigation actually gave.
 func boundedNarrative(values []string, clamp *clamper) ([]string, int) {
+	return boundedNarrativeRetaining(values, clamp, nil)
+}
+
+// boundedLimitations is boundedNarrative with a RETENTION PRIORITY: if the
+// list must be cut, the retrieval-degradation disclosure is kept.
+//
+// Without it the disclosure is precisely the entry that gets dropped. The
+// engine appends it last, and the cut keeps a prefix -- so on a legacy
+// stored row written when the canonical cap was 250, a bounded consumer
+// receives 100 model caveats and no statement that retrieval was degraded,
+// which reads as a cleaner answer than the investigation gave. The
+// canonical result still carries it, so nothing looks wrong from the API's
+// canonical view; only the bounded consumer is misled.
+//
+// The displacement is counted in limitations_omitted like every other drop,
+// because the entry it displaces is genuinely gone.
+func boundedLimitations(values []string, clamp *clamper) ([]string, int) {
+	return boundedNarrativeRetaining(values, clamp, contractsv1.IsContextFabricRetrievalDegradedLimitation)
+}
+
+// boundedNarrativeRetaining is the shared implementation. retain, when
+// non-nil, names entries that must survive the count cap.
+func boundedNarrativeRetaining(values []string, clamp *clamper, retain func(string) bool) ([]string, int) {
 	// Clamp FIRST, then dedupe (codex round-5 R5-4). Deduping first let two
 	// distinct legacy entries sharing a long prefix survive as separate
 	// values, collide once clamped to the same prefix, and produce a
@@ -526,10 +549,6 @@ func boundedNarrative(values []string, clamp *clamper) ([]string, int) {
 	// describes what the consumer RECEIVED in shortened form, so an entry it
 	// never received cannot appear in it. Same mechanics as the round-9 F4
 	// fix on clamper.strings; this path was simply not covered by it.
-	type clampedNarrative struct {
-		value     string
-		shortened bool
-	}
 	clamped := make([]clampedNarrative, 0, len(values))
 	for _, value := range values {
 		cut := truncateRunes(value, contractsv1.ContextFabricProjectedNarrativeMaxLength)
@@ -548,7 +567,17 @@ func boundedNarrative(values []string, clamp *clamper) ([]string, int) {
 	omitted := len(clamped) - len(distinct)
 	if len(distinct) > contractsv1.ContextFabricProjectedNarrativeMaxCount {
 		omitted += len(distinct) - contractsv1.ContextFabricProjectedNarrativeMaxCount
-		distinct = distinct[:contractsv1.ContextFabricProjectedNarrativeMaxCount]
+		kept := distinct[:contractsv1.ContextFabricProjectedNarrativeMaxCount]
+		// A retained entry sitting past the cut is moved into the kept
+		// set, displacing the last entry there. Deliberately checked
+		// against the CLAMPED value: a disclosure long enough to be
+		// shortened is no longer the constant, and would be missed by a
+		// check against the original -- the same trim-before-compare
+		// discipline the stored-read path already follows.
+		if retain != nil {
+			kept = retainPastTheCut(kept, distinct[contractsv1.ContextFabricProjectedNarrativeMaxCount:], retain)
+		}
+		distinct = kept
 	}
 	survivors := make([]string, 0, len(distinct))
 	for _, entry := range distinct {
@@ -798,4 +827,38 @@ func copyTimeContext(source contractsv1.ContextFabricTimeContext) contractsv1.Co
 		copied.End = &instant
 	}
 	return copied
+}
+
+// clampedNarrative is one narrative entry after clamping, carrying whether
+// the clamp actually shortened it. Package-level rather than local to
+// boundedNarrativeRetaining so retainPastTheCut can be a plain function
+// over it: an earlier attempt used a generic helper reaching the value
+// through an interface the type did not implement, which compiled and then
+// silently retained nothing.
+type clampedNarrative struct {
+	value     string
+	shortened bool
+}
+
+// retainPastTheCut moves the first dropped entry matching retain into kept,
+// displacing kept's LAST entry, and returns the result. It is a no-op when
+// nothing dropped matches or when a matching entry already survived.
+//
+// Only one entry is ever rescued, because only one is ever needed: the
+// caller's predicate names a single disclosure and the list is already
+// deduplicated by the time this runs.
+func retainPastTheCut(kept, dropped []clampedNarrative, retain func(string) bool) []clampedNarrative {
+	for _, entry := range kept {
+		if retain(entry.value) {
+			return kept
+		}
+	}
+	for _, entry := range dropped {
+		if !retain(entry.value) {
+			continue
+		}
+		rescued := append([]clampedNarrative(nil), kept[:len(kept)-1]...)
+		return append(rescued, entry)
+	}
+	return kept
 }

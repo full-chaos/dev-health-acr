@@ -1,6 +1,7 @@
 package answerprojection
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -181,5 +182,123 @@ func assertSameInstant(t *testing.T, field string, got, want *time.Time) {
 		t.Errorf("%s is %s in the projection, want absent", field, got)
 	case !got.Equal(*want):
 		t.Errorf("%s = %s, want the canonical %s", field, got, want)
+	}
+}
+
+// legacyLimitations returns count distinct model-authored limitations with
+// the retrieval-degradation disclosure LAST, which is where the engine puts
+// it -- and therefore exactly where a prefix-keeping cut loses it.
+func legacyLimitations(count int) []string {
+	limitations := make([]string, 0, count)
+	for i := 0; i < count-1; i++ {
+		limitations = append(limitations, "Legacy model caveat number "+strconv.Itoa(i)+".")
+	}
+	return append(limitations, contractsv1.ContextFabricRetrievalDegradedLimitation)
+}
+
+// TestLegacyReadRetainsTheDegradationDisclosure is the read-side half of
+// CHAOS-3746's limitation-retention decision.
+//
+// A stored row written when the canonical cap was 250 can carry 250
+// limitations, with the disclosure last. The projection keeps a prefix of
+// 100, so the disclosure was precisely the entry it dropped: a bounded
+// consumer received a hundred model caveats and no statement that retrieval
+// had been degraded, which reads as a cleaner answer than the investigation
+// gave. Nothing looked wrong from the canonical view, which still carried
+// it -- only the bounded consumer was misled.
+//
+// Both spellings are covered: a legacy row is exactly the row most likely
+// to carry the legacy wording, so testing only the current one would miss
+// the case this is about.
+func TestLegacyReadRetainsTheDegradationDisclosure(t *testing.T) {
+	for name, disclosure := range map[string]string{
+		"current": contractsv1.ContextFabricRetrievalDegradedLimitation,
+		"legacy":  contractsv1.ContextFabricRetrievalDegradedLimitationLegacy,
+	} {
+		t.Run(name, func(t *testing.T) {
+			const stored = 250
+			result := richResult()
+			limitations := legacyLimitations(stored)
+			limitations[len(limitations)-1] = disclosure
+			result.Limitations = limitations
+			if err := result.ValidateStored(); err != nil {
+				t.Fatalf("a legacy row with %d limitations is unreadable, so this proves nothing: %v", stored, err)
+			}
+
+			projection := Project(result, Budget{})
+			if err := projection.Validate(); err != nil {
+				t.Fatalf("a legacy stored row produced an invalid projection: %v", err)
+			}
+
+			found := false
+			for _, limitation := range projection.Limitations {
+				if contractsv1.IsContextFabricRetrievalDegradedLimitation(limitation) {
+					found = true
+				}
+			}
+			if !found {
+				t.Error("the degradation disclosure was cut, so a bounded consumer reads a degraded answer as a clean one")
+			}
+			if got, want := len(projection.Limitations), contractsv1.ContextFabricProjectedNarrativeMaxCount; got != want {
+				t.Errorf("projected %d limitations, want the cap %d: retention must displace, never widen", got, want)
+			}
+			// The displaced entry is genuinely gone, so it is counted like
+			// every other drop -- a shortened list that reported no
+			// omission would be the silent truncation this contract
+			// forbids.
+			if want := stored - contractsv1.ContextFabricProjectedNarrativeMaxCount; projection.ProjectionBudget.LimitationsOmitted != want {
+				t.Errorf("limitations_omitted = %d, want %d", projection.ProjectionBudget.LimitationsOmitted, want)
+			}
+			if !projection.ProjectionBudget.Truncated {
+				t.Error("dropping limitations must set truncated")
+			}
+		})
+	}
+}
+
+// TestRetentionDoesNotDisturbAListThatFits proves the priority is inert
+// below the cap. A rescue that reordered or displaced anything when there
+// was room would be a behaviour change disguised as a safety net.
+func TestRetentionDoesNotDisturbAListThatFits(t *testing.T) {
+	result := richResult()
+	result.Limitations = legacyLimitations(5)
+
+	projection := Project(result, Budget{})
+
+	if len(projection.Limitations) != 5 {
+		t.Fatalf("projected %d limitations from 5", len(projection.Limitations))
+	}
+	for i, limitation := range projection.Limitations {
+		if limitation != result.Limitations[i] {
+			t.Errorf("limitation %d changed from %q to %q", i, result.Limitations[i], limitation)
+		}
+	}
+	if projection.ProjectionBudget.LimitationsOmitted != 0 {
+		t.Errorf("limitations_omitted = %d, want 0", projection.ProjectionBudget.LimitationsOmitted)
+	}
+}
+
+// TestWarningsHaveNoRetentionPriority states the asymmetry deliberately.
+// Warnings carry no service-authored disclosure, so nothing there outranks
+// anything else and the plain prefix cut is correct for them.
+func TestWarningsHaveNoRetentionPriority(t *testing.T) {
+	result := richResult()
+	warnings := make([]string, 0, 150)
+	for i := 0; i < 149; i++ {
+		warnings = append(warnings, "Warning number "+strconv.Itoa(i)+".")
+	}
+	// A string that WOULD be rescued if the predicate were wired here.
+	warnings = append(warnings, contractsv1.ContextFabricRetrievalDegradedLimitation)
+	result.Warnings = warnings
+	if err := result.ValidateStored(); err != nil {
+		t.Fatalf("the legacy warning fixture is unreadable: %v", err)
+	}
+
+	projection := Project(result, Budget{})
+
+	for _, warning := range projection.Warnings {
+		if contractsv1.IsContextFabricRetrievalDegradedLimitation(warning) {
+			t.Error("a warning was rescued past the cut; retention priority belongs to limitations alone")
+		}
 	}
 }

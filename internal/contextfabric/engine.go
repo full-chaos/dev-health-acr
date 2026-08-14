@@ -387,10 +387,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if resolution.RetrievalDegraded {
 		// Deduplicated across BOTH spellings, not by exact equality: a draft
 		// that already carries either form must not gain a second, differently
-		// worded copy of the same statement.
-		if !hasRetrievalDegradedLimitation(result.Limitations) {
-			result.Limitations = append(result.Limitations, retrievalDegradedLimitation)
-		}
+		// worded copy of the same statement. At the contract's cap the last
+		// model-authored caveat is DISPLACED rather than the disclosure being
+		// dropped or the whole answer refused -- see withRetrievalDegradation.
+		result.Limitations = withRetrievalDegradation(result.Limitations)
 		result.Coverage.Partial = true
 	}
 	if result.Cohort == nil {
