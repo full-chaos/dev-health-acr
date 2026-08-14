@@ -650,6 +650,25 @@ func (r ContextFabricInvestigationResult) validate(bounds contextFabricBounds) e
 		r.Warnings == nil || len(r.Warnings) > bounds.narrativeCount || !uniqueTrimmedStrings(r.Warnings, bounds.narrativeLength) {
 		return fmt.Errorf("result answer fields violate v1 bounds")
 	}
+	// LimitationsDisplaced is a COHERENCE rule, not only a range check. A
+	// bare "count >= 0" would admit a result claiming losses it never
+	// took, which is the same lie as hiding one -- a reader cannot check
+	// this number against anything else in the document, so the contract
+	// has to. A displacement only ever happens when the disclosure had to
+	// be forced into a list that was already full, so a positive count
+	// requires exactly that shape: the list at its cap, carrying the
+	// disclosure.
+	//
+	// Legacy rows are unaffected: they carry zero, which makes the rule
+	// vacuous for every result written before this field existed.
+	if r.LimitationsDisplaced < 0 || r.LimitationsDisplaced > bounds.narrativeCount {
+		return fmt.Errorf("result displaced-limitation count violates v1 bounds")
+	}
+	if r.LimitationsDisplaced > 0 {
+		if len(r.Limitations) != ContextFabricLimitationsMaxCount || !HasContextFabricRetrievalDegradedLimitation(r.Limitations) {
+			return fmt.Errorf("result claims displaced limitations without the full list and disclosure that would require one")
+		}
+	}
 	if r.Status == ContextFabricInvestigationComplete || r.Status == ContextFabricInvestigationPartial {
 		if strings.TrimSpace(r.DirectJudgment) == "" {
 			return fmt.Errorf("answer-capable result requires a direct judgment")

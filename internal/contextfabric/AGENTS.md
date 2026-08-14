@@ -248,7 +248,11 @@ projection does the same on the read side, because the engine appends the
 disclosure last and the projection keeps a prefix: without a retention
 priority, a legacy row written when the cap was 250 loses precisely that
 entry, and only the bounded consumer is misled -- the canonical view still
-carries it. Every displacement is counted in `limitations_omitted`. The
+carries it. Every displacement is counted -- on the RESULT, as
+`limitations_displaced`, which the projection then adds into
+`limitations_omitted`. The count cannot be re-derived downstream: a
+displaced list and a list that simply had room are the same length and both
+end with the disclosure, so the engine has to say so. The
 strings and the two-spelling predicate live in `contracts/v1`
 (`context_fabric_limitations.go`) because `answerprojection` may not import
 the engine.

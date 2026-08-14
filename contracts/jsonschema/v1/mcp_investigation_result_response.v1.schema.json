@@ -180,6 +180,12 @@
           },
           "maxItems": 100
         },
+        "limitations_displaced": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 250,
+          "description": "Model-authored limitations the engine dropped to fit the retrieval-degradation disclosure inside the limitations cap (CHAOS-3746). Absent or zero when nothing was displaced. It cannot be inferred from limitations itself: a displaced list and a list that had room are the same length and both end with the disclosure."
+        },
         "evidence_ref_ids": {
           "type": "array",
           "items": {

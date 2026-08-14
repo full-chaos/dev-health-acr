@@ -29,33 +29,26 @@ import contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 // The cap is read from the contract rather than restated, so this cannot
 // drift from the bound it exists to respect -- the same relation
 // fact_registry.go's coverage clamps now hold.
-func withRetrievalDegradation(limitations []string) []string {
+func withRetrievalDegradation(limitations []string) (composed []string, displaced int) {
 	// Either spelling already present: nothing to add, and nothing may be
 	// displaced to make room for a duplicate. A reused answer reaches here
 	// carrying its stored wording, which must survive verbatim.
 	if hasRetrievalDegradedLimitation(limitations) {
-		return limitations
+		return limitations, 0
 	}
 	if len(limitations) < contractsv1.ContextFabricLimitationsMaxCount {
-		return append(limitations, retrievalDegradedLimitation)
+		return append(limitations, retrievalDegradedLimitation), 0
 	}
 	// At (or somehow past) the cap. Keep the first cap-1 entries in their
 	// original order and put the disclosure last.
+	//
+	// The count is returned BY the function that performs the swap, not
+	// derived by comparing the lists afterwards. A before/after length
+	// comparison cannot see this at all: the list is the same length on
+	// both sides, so the only honest place to count is here, where the
+	// decision to drop an entry is actually made. An earlier version of
+	// this file did compare lengths, in a helper nothing called; it would
+	// have reported zero for every displacement it was written to count.
 	kept := append([]string(nil), limitations[:contractsv1.ContextFabricLimitationsMaxCount-1]...)
-	return append(kept, retrievalDegradedLimitation)
-}
-
-// displacedLimitationCount reports how many model-authored limitations
-// withRetrievalDegradation dropped, so the projection can DECLARE the loss
-// rather than let a shortened list read as a complete one.
-//
-// It takes the before and after lists rather than recomputing the rule: a
-// second copy of the arithmetic is a second thing that can be wrong, and
-// this counter's whole job is to be right about what the other function
-// actually did.
-func displacedLimitationCount(before, after []string) int {
-	if len(before) <= len(after) {
-		return 0
-	}
-	return len(before) - len(after)
+	return append(kept, retrievalDegradedLimitation), len(limitations) - (contractsv1.ContextFabricLimitationsMaxCount - 1)
 }

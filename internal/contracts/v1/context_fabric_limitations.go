@@ -51,3 +51,16 @@ func IsContextFabricRetrievalDegradedLimitation(limitation string) bool {
 	return limitation == ContextFabricRetrievalDegradedLimitation ||
 		limitation == ContextFabricRetrievalDegradedLimitationLegacy
 }
+
+// HasContextFabricRetrievalDegradedLimitation reports whether any entry is either
+// spelling. Declared here beside the strings it scans for, so the contract
+// can enforce LimitationsDisplaced's coherence rule without depending on
+// the engine that writes it.
+func HasContextFabricRetrievalDegradedLimitation(limitations []string) bool {
+	for _, limitation := range limitations {
+		if IsContextFabricRetrievalDegradedLimitation(limitation) {
+			return true
+		}
+	}
+	return false
+}

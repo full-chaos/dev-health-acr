@@ -302,3 +302,76 @@ func TestWarningsHaveNoRetentionPriority(t *testing.T) {
 		}
 	}
 }
+
+// TestEngineDisplacementReachesLimitationsOmitted is round-16 finding 1.
+//
+// The engine drops a model-authored caveat to fit the
+// retrieval-degradation disclosure inside the contract cap. Until now that
+// loss stopped at the engine: the projection reported limitations_omitted
+// = 0 and truncated = false for an answer that had genuinely lost content,
+// which is precisely the silent truncation this contract forbids.
+//
+// The projection cannot rediscover the loss on its own -- a displaced list
+// and a list that simply had room are the same length and both end with
+// the disclosure -- so the canonical result carries the count and the
+// projection adds it in.
+//
+// Note the fixture sits exactly AT the projection's own cap, so the
+// projection itself drops nothing: every omission reported here comes from
+// the engine, which is what makes the assertion about this mechanism and
+// not about the projection's cut.
+func TestEngineDisplacementReachesLimitationsOmitted(t *testing.T) {
+	result := richResult()
+	result.Limitations = legacyLimitations(contractsv1.ContextFabricLimitationsMaxCount)
+	result.LimitationsDisplaced = 1
+	if err := result.Validate(); err != nil {
+		t.Fatalf("the displaced fixture is not a valid result, so it proves nothing: %v", err)
+	}
+
+	projection := Project(result, Budget{})
+	if err := projection.Validate(); err != nil {
+		t.Fatalf("a displaced result produced an invalid projection: %v", err)
+	}
+
+	if got := projection.ProjectionBudget.LimitationsOmitted; got != 1 {
+		t.Errorf("limitations_omitted = %d, want 1: the engine dropped a caveat and the consumer is told nothing", got)
+	}
+	// truncated is DERIVED, not set beside the count: declaresDrop already
+	// ORs limitations_omitted > 0, so it follows automatically. Asserted
+	// anyway, because the derivation is the reason no second field had to
+	// move -- if declaresDrop ever stops reading this counter, an answer
+	// with declared omissions would claim it was complete.
+	if !projection.ProjectionBudget.Truncated {
+		t.Error("truncated is false while limitations_omitted is positive")
+	}
+	// ValuesClamped deliberately does NOT move. It counts values the
+	// projection SHORTENED and still delivered (round-10 F1); a displaced
+	// caveat was removed whole and delivered not at all, so counting it
+	// there would overstate what the reader received in cut form.
+	if projection.ProjectionBudget.ValuesClamped != 0 {
+		t.Errorf("values_clamped = %d, want 0: nothing was shortened, an entry was removed", projection.ProjectionBudget.ValuesClamped)
+	}
+}
+
+// TestNoDisplacementReportsNoOmission is the other side, one below the cap:
+// the disclosure is appended into real room, so nothing is displaced and
+// nothing may be reported. A counter that fired here would make every
+// degraded answer look lossy and teach a reader to ignore it.
+func TestNoDisplacementReportsNoOmission(t *testing.T) {
+	result := richResult()
+	result.Limitations = legacyLimitations(contractsv1.ContextFabricLimitationsMaxCount - 1)
+	result.LimitationsDisplaced = 0
+	if err := result.Validate(); err != nil {
+		t.Fatalf("the one-below-cap fixture is not a valid result: %v", err)
+	}
+
+	projection := Project(result, Budget{})
+
+	if got := projection.ProjectionBudget.LimitationsOmitted; got != 0 {
+		t.Errorf("limitations_omitted = %d, want 0: no limitation was dropped anywhere", got)
+	}
+	// Deliberately NOT asserting truncated=false. This fixture drops
+	// drivers under the default budget, so truncated is legitimately true
+	// for reasons that have nothing to do with limitations, and an
+	// assertion on it here would pass or fail on unrelated content.
+}

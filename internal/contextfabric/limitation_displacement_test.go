@@ -1,11 +1,13 @@
 package contextfabric
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // modelLimitations returns count distinct model-authored limitation
@@ -37,13 +39,18 @@ func modelLimitations(count int) []string {
 // is exactly the run most likely to produce a long limitation list, since
 // the same missing mechanism drives the model to note more gaps.
 func TestRetrievalDegradationDisclosureSurvivesAFullLimitationList(t *testing.T) {
-	limitations := withRetrievalDegradation(modelLimitations(contractsv1.ContextFabricLimitationsMaxCount))
+	limitations, displaced := withRetrievalDegradation(modelLimitations(contractsv1.ContextFabricLimitationsMaxCount))
 
 	if got, want := len(limitations), contractsv1.ContextFabricLimitationsMaxCount; got != want {
 		t.Errorf("composed %d limitations, want at most the contract's %d: the append cost the entire answer", got, want)
 	}
 	if !hasRetrievalDegradedLimitation(limitations) {
 		t.Error("the degradation disclosure was dropped: a bounded consumer reads a degraded answer as a clean one")
+	}
+	// The count comes back from the swap itself. A before/after length
+	// comparison cannot see this: both lists are the same length.
+	if displaced != 1 {
+		t.Errorf("displaced = %d, want 1: a caveat was dropped and the caller was told nothing", displaced)
 	}
 
 	// The consequence, through the REAL validator. Without this the count
@@ -66,10 +73,13 @@ func TestRetrievalDegradationDisclosureSurvivesAFullLimitationList(t *testing.T)
 // qualifies.
 func TestDisplacementDropsTheLastModelLimitationOnly(t *testing.T) {
 	original := modelLimitations(contractsv1.ContextFabricLimitationsMaxCount)
-	composed := withRetrievalDegradation(original)
+	composed, displaced := withRetrievalDegradation(original)
 
 	if len(composed) != contractsv1.ContextFabricLimitationsMaxCount {
 		t.Fatalf("composed %d limitations, want %d", len(composed), contractsv1.ContextFabricLimitationsMaxCount)
+	}
+	if displaced != 1 {
+		t.Errorf("displaced = %d, want 1", displaced)
 	}
 	if composed[len(composed)-1] != retrievalDegradedLimitation {
 		t.Errorf("the disclosure is not last: %q", composed[len(composed)-1])
@@ -95,10 +105,13 @@ func TestDisplacementIsSkippedWhenTheDisclosureIsAlreadyPresent(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			original := append(modelLimitations(contractsv1.ContextFabricLimitationsMaxCount-1), present)
-			composed := withRetrievalDegradation(original)
+			composed, displaced := withRetrievalDegradation(original)
 
 			if len(composed) != len(original) {
 				t.Errorf("composed %d limitations from %d: a disclosure already present was duplicated or something was displaced for nothing", len(composed), len(original))
+			}
+			if displaced != 0 {
+				t.Errorf("displaced = %d, want 0: nothing may be dropped for a disclosure that is already there", displaced)
 			}
 			if composed[len(composed)-1] != present {
 				t.Errorf("the stored spelling was rewritten to %q; an immutable answer's own wording must survive verbatim", composed[len(composed)-1])
@@ -111,12 +124,62 @@ func TestDisplacementIsSkippedWhenTheDisclosureIsAlreadyPresent(t *testing.T) {
 // nothing is displaced and the disclosure is simply appended.
 func TestDisplacementLeavesRoomAlone(t *testing.T) {
 	original := modelLimitations(3)
-	composed := withRetrievalDegradation(original)
+	composed, displaced := withRetrievalDegradation(original)
 
 	if len(composed) != len(original)+1 {
 		t.Fatalf("composed %d limitations from %d, want one more", len(composed), len(original))
 	}
+	if displaced != 0 {
+		t.Errorf("displaced = %d, want 0: there was room, so nothing was dropped", displaced)
+	}
 	if composed[len(composed)-1] != retrievalDegradedLimitation {
 		t.Errorf("the disclosure is not last: %q", composed[len(composed)-1])
+	}
+}
+
+// TestEngineRecordsItsOwnDisplacement drives the real Investigate path at
+// the cap, which is the only place the RESULT's own count is written.
+//
+// Round 16 found the counter dead: the displacement happened, nothing
+// recorded it, and the projection reported no omission. The unit tests
+// above prove the swap reports a count; this proves the engine keeps it.
+// Without this, discarding the value at the call site fails nothing.
+func TestEngineRecordsItsOwnDisplacement(t *testing.T) {
+	engine, request := engineForDegradationWithLimitations(t, true, modelLimitations(contractsv1.ContextFabricLimitationsMaxCount))
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_displacement"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() = %v, want an answer: the displacement must cost a caveat, never the answer", err)
+	}
+
+	if got, want := len(result.Limitations), contractsv1.ContextFabricLimitationsMaxCount; got != want {
+		t.Errorf("result carries %d limitations, want the cap %d", got, want)
+	}
+	if !hasRetrievalDegradedLimitation(result.Limitations) {
+		t.Error("the degradation disclosure is absent from a degraded answer")
+	}
+	if result.LimitationsDisplaced != 1 {
+		t.Errorf("result.LimitationsDisplaced = %d, want 1: the engine dropped a caveat and recorded nothing", result.LimitationsDisplaced)
+	}
+}
+
+// TestEngineRecordsNoDisplacementWhenThereIsRoom is the other side at the
+// engine level: one below the cap, the disclosure is appended into real
+// room, so the result must claim no loss. The contract's coherence rule
+// would reject a false positive here anyway, which is the point -- the two
+// guards agree.
+func TestEngineRecordsNoDisplacementWhenThereIsRoom(t *testing.T) {
+	engine, request := engineForDegradationWithLimitations(t, true, modelLimitations(contractsv1.ContextFabricLimitationsMaxCount-1))
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_displacement"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() = %v, want an answer", err)
+	}
+
+	if result.LimitationsDisplaced != 0 {
+		t.Errorf("result.LimitationsDisplaced = %d, want 0: there was room", result.LimitationsDisplaced)
+	}
+	if got, want := len(result.Limitations), contractsv1.ContextFabricLimitationsMaxCount; got != want {
+		t.Errorf("result carries %d limitations, want %d (cap-1 model caveats plus the disclosure)", got, want)
 	}
 }

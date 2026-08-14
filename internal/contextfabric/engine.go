@@ -390,7 +390,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// worded copy of the same statement. At the contract's cap the last
 		// model-authored caveat is DISPLACED rather than the disclosure being
 		// dropped or the whole answer refused -- see withRetrievalDegradation.
-		result.Limitations = withRetrievalDegradation(result.Limitations)
+		composed, displaced := withRetrievalDegradation(result.Limitations)
+		result.Limitations = composed
+		// Recorded on the RESULT, because the loss is canonical: a model
+		// caveat this investigation produced is gone from the stored
+		// answer, and the API's canonical view is as much a consumer as
+		// the projection is. It cannot be inferred downstream either --
+		// a displaced list and a list that simply had room are the same
+		// shape and the same length, both ending with the disclosure.
+		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
 	}
 	if result.Cohort == nil {
@@ -575,13 +583,9 @@ const (
 
 var isRetrievalDegradedLimitation = contractsv1.IsContextFabricRetrievalDegradedLimitation
 
-// hasRetrievalDegradedLimitation reports whether any limitation in the slice
-// is one of the two spellings.
-func hasRetrievalDegradedLimitation(limitations []string) bool {
-	for _, limitation := range limitations {
-		if isRetrievalDegradedLimitation(limitation) {
-			return true
-		}
-	}
-	return false
-}
+// hasRetrievalDegradedLimitation reports whether any limitation in the
+// slice is one of the two spellings. Aliased to the contract's own scanner
+// (CHAOS-3746 round-16): contracts/v1 needs it to enforce
+// LimitationsDisplaced's coherence rule, and a second copy here would be a
+// second thing that can drift from the vocabulary it scans for.
+var hasRetrievalDegradedLimitation = contractsv1.HasContextFabricRetrievalDegradedLimitation

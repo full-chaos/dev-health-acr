@@ -233,6 +233,11 @@ type ContextFabricProjectionBudget struct {
 	// produce an INVALID projection, and silently cutting them would have
 	// hidden exactly the caveats a reader needs most: a shortened
 	// limitations list reads as more confident than the investigation was.
+	// LimitationsOmitted also carries the engine's own displacement
+	// (ContextFabricInvestigationResult.LimitationsDisplaced), not only
+	// what this projection cut: the field means "limitations this
+	// investigation produced that you are not reading", and where the
+	// loss happened does not change what the reader is missing.
 	LimitationsOmitted int `json:"limitations_omitted"`
 	WarningsOmitted    int `json:"warnings_omitted"`
 	CoverageOmitted    int `json:"coverage_omitted"`

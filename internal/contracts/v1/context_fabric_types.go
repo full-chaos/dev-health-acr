@@ -892,7 +892,22 @@ type ContextFabricInvestigationResult struct {
 	Paths              []ContextFabricRelationshipPath  `json:"paths"`
 	Conflicts          []ContextFabricFinding           `json:"conflicts"`
 	Limitations        []string                         `json:"limitations"`
-	EvidenceRefIDs     []string                         `json:"evidence_ref_ids"`
+	// LimitationsDisplaced counts model-authored limitations the engine
+	// dropped to fit the retrieval-degradation disclosure inside
+	// ContextFabricLimitationsMaxCount (CHAOS-3746).
+	//
+	// It exists because the loss cannot be inferred from Limitations
+	// itself: a displaced list and a list that simply had room are the
+	// same length and the same shape, both ending with the disclosure. A
+	// consumer told nothing would read a list with content silently
+	// removed as a complete one, which is the exact class the projection
+	// budget exists to prevent -- so the canonical result declares it too,
+	// rather than leaving it to be re-derived by something that cannot.
+	//
+	// Zero for every result written before this field existed, and for
+	// every result where nothing was displaced, so it is omitempty.
+	LimitationsDisplaced int      `json:"limitations_displaced,omitempty"`
+	EvidenceRefIDs       []string `json:"evidence_ref_ids"`
 	// ClaimedFacts is the closed, checkable set of canonical fact
 	// restatements every fact-shaped driver/finding in this result cites
 	// by ClaimID. See ContextFabricClaimedFact's doc comment for why this

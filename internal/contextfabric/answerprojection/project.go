@@ -126,6 +126,14 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	cohort, cohortOmitted, cohortReasonsOmitted := projectCohort(result, bounds, index, clamp)
 	clarification, candidatesOmitted, candidateReasonsOmitted := projectClarification(result, bounds, clamp)
 	limitations, limitationsOmitted := boundedLimitations(result.Limitations, clamp)
+	// The engine's own displacement counts too (CHAOS-3746 round-16).
+	// limitations_omitted means "limitations this investigation produced
+	// that you are not reading", and a caveat the engine dropped at the
+	// contract cap is exactly that. Leaving it out reported zero omissions
+	// for an answer that had genuinely lost content -- and the projection
+	// cannot rediscover it, because a displaced list and a list that had
+	// room are indistinguishable here.
+	limitationsOmitted += result.LimitationsDisplaced
 	warnings, warningsOmitted := boundedNarrative(result.Warnings, clamp)
 	coverage, coverageOmitted := projectCoverage(result, clamp)
 	evidence := index.ids()

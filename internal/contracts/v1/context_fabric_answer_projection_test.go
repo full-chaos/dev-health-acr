@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -404,4 +405,67 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDisplacedLimitationCountMustBeCoherent covers the direction a range
+// check cannot: a result that CLAIMS a loss it never took.
+//
+// Nothing downstream can check this number against the document -- that is
+// exactly why the field had to exist -- so an incoherent value would be
+// believed. Overstating a loss is not a harmless error either: it tells a
+// reader content is missing when the answer is whole, which erodes the
+// signal the honest case depends on.
+func TestDisplacedLimitationCountMustBeCoherent(t *testing.T) {
+	full := make([]string, 0, ContextFabricLimitationsMaxCount)
+	for i := 0; i < ContextFabricLimitationsMaxCount-1; i++ {
+		full = append(full, "Model caveat number "+strconv.Itoa(i)+".")
+	}
+	full = append(full, ContextFabricRetrievalDegradedLimitation)
+
+	base := validContextFabricContractResult()
+
+	t.Run("a full disclosing list may claim one", func(t *testing.T) {
+		result := base
+		result.Limitations = full
+		result.LimitationsDisplaced = 1
+		if err := result.Validate(); err != nil {
+			t.Errorf("the shape a displacement actually produces was rejected: %v", err)
+		}
+	})
+
+	t.Run("a short list may not claim one", func(t *testing.T) {
+		result := base
+		result.Limitations = []string{ContextFabricRetrievalDegradedLimitation}
+		result.LimitationsDisplaced = 1
+		if err := result.Validate(); err == nil {
+			t.Error("a result claiming a displacement with room to spare was accepted")
+		}
+	})
+
+	t.Run("a full list with no disclosure may not claim one", func(t *testing.T) {
+		result := base
+		withoutDisclosure := append([]string(nil), full[:len(full)-1]...)
+		withoutDisclosure = append(withoutDisclosure, "One more model caveat.")
+		result.Limitations = withoutDisclosure
+		result.LimitationsDisplaced = 1
+		if err := result.Validate(); err == nil {
+			t.Error("a result claiming a displacement made for a disclosure it does not carry was accepted")
+		}
+	})
+
+	t.Run("a negative count is rejected", func(t *testing.T) {
+		result := base
+		result.LimitationsDisplaced = -1
+		if err := result.Validate(); err == nil {
+			t.Error("a negative displaced count was accepted")
+		}
+	})
+
+	t.Run("legacy rows carrying zero stay readable", func(t *testing.T) {
+		result := base
+		result.LimitationsDisplaced = 0
+		if err := result.ValidateStored(); err != nil {
+			t.Errorf("a stored row predating this field became unreadable: %v", err)
+		}
+	})
 }
