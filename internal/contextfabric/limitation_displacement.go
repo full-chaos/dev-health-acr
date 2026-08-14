@@ -66,7 +66,19 @@ func appendBoundedLimitations(limitations []string, additions []string) (compose
 	// side effect, and every trimmed entry is counted in the SAME
 	// accounting as everything else this function drops -- a trim is a
 	// loss like any other, and silent loss is the defect, not the size.
-	composed, displaced = normalizeToCapacity(limitations)
+	// DEDUP, then normalize, then displace -- one pipeline, in that order,
+	// and the order is not arbitrary. Normalization trims from the TAIL,
+	// so a duplicate near the front survives every trim and the composed
+	// result is rejected for uniqueness after the appender was supposed
+	// to have made it valid. Deduping first also means the copies it
+	// removes shorten the list before the cap is measured, so no caveat
+	// is displaced to make room that a duplicate was already wasting.
+	//
+	// The engine cannot assume its synthesizer deduped: Synthesizer is a
+	// port, and only one implementation happens to call trimmedUnique on
+	// decode. Whatever this is handed has to come out valid.
+	composed = withoutDuplicates(limitations)
+	composed, displaced = normalizeToCapacity(composed)
 	for _, addition := range additions {
 		if alreadyStates(composed, addition) {
 			continue
@@ -176,4 +188,30 @@ func normalizeToCapacity(limitations []string) (composed []string, trimmed int) 
 		trimmed++
 	}
 	return composed, trimmed
+}
+
+// withoutDuplicates removes repeated entries, keeping the first occurrence
+// of each so the caller's order survives.
+//
+// Removals here are DELIBERATELY NOT COUNTED as displacements. A duplicate
+// carries no information its surviving copy does not, so dropping one
+// loses nothing -- and limitations_omitted is read as "content you are not
+// seeing". Counting a dropped copy there would report a loss that did not
+// happen, which erodes the signal exactly as much as hiding a real one.
+//
+// Equality is exact, matching the validator's own uniqueness key
+// (uniqueTrimmedStrings compares whole values and separately rejects
+// untrimmed ones on the write path). Trimming here instead would silently
+// repair a padded value the write path means to reject.
+func withoutDuplicates(limitations []string) []string {
+	seen := make(map[string]struct{}, len(limitations))
+	deduped := make([]string, 0, len(limitations))
+	for _, limitation := range limitations {
+		if _, exists := seen[limitation]; exists {
+			continue
+		}
+		seen[limitation] = struct{}{}
+		deduped = append(deduped, limitation)
+	}
+	return deduped
 }

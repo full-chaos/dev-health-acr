@@ -336,3 +336,76 @@ func TestNormalizationTrimsOnlyModelCaveats(t *testing.T) {
 		}
 	}
 }
+
+// duplicatedModelLimitations returns count entries in which an EARLY pair
+// is identical, so trimming from the tail can never remove the duplicate.
+func duplicatedModelLimitations(count int) []string {
+	limitations := modelLimitations(count)
+	limitations[1] = limitations[0]
+	return limitations
+}
+
+// TestOverCapInputWithADuplicateStillReturns is round-19.
+//
+// The result contract requires limitations to be unique. Normalization
+// trims from the TAIL, so a duplicate near the FRONT survives every trim
+// and the composed result is rejected -- ErrInvalidResult on the same real
+// path, for a list the appender was supposed to have made valid.
+//
+// The engine cannot assume its synthesizer deduped: Synthesizer is a port,
+// and only one implementation happens to call trimmedUnique on decode.
+// Anything the appender is handed has to leave it valid.
+func TestOverCapInputWithADuplicateStillReturns(t *testing.T) {
+	asOf := time.Unix(50, 0).UTC()
+	engine, request := engineForDegradationOnAxis(t, true,
+		duplicatedModelLimitations(contractsv1.ContextFabricLimitationsMaxCount+1),
+		TimeContext{Axis: TemporalValidTime, AsOf: &asOf})
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_dup"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() = %v, want an answer: a duplicate the caller sent must cost a copy, never the answer", err)
+	}
+
+	seen := make(map[string]bool, len(result.Limitations))
+	for _, limitation := range result.Limitations {
+		if seen[limitation] {
+			t.Errorf("duplicate survived into the composed result: %q", limitation)
+		}
+		seen[limitation] = true
+	}
+	if got, want := len(result.Limitations), contractsv1.ContextFabricLimitationsMaxCount; got > want {
+		t.Errorf("result carries %d limitations, over the cap %d", got, want)
+	}
+	if !hasRetrievalDegradedLimitation(result.Limitations) {
+		t.Error("the degradation disclosure was lost")
+	}
+	for _, disclosure := range temporalLimitationsFor(TemporalValidTime) {
+		if !alreadyStates(result.Limitations, disclosure) {
+			t.Errorf("historical disclosure was lost: %q", disclosure)
+		}
+	}
+	// The duplicate makes the list one SHORTER, which is what pays for the
+	// disclosures -- so nothing is displaced beyond them. Dropping a copy
+	// costs no content, and the count must not claim it did.
+	wantDisplaced := 1 + len(temporalLimitationsFor(TemporalValidTime))
+	if result.LimitationsDisplaced != wantDisplaced {
+		t.Errorf("result.LimitationsDisplaced = %d, want %d: a dropped duplicate must not be counted as lost content", result.LimitationsDisplaced, wantDisplaced)
+	}
+}
+
+// TestDroppingADuplicateIsNotADisplacement isolates the accounting rule.
+// A duplicate carries no information the surviving copy does not, so
+// removing one loses nothing and must not be reported as a loss --
+// limitations_omitted is read as "content you are not seeing".
+func TestDroppingADuplicateIsNotADisplacement(t *testing.T) {
+	withDuplicate := duplicatedModelLimitations(10)
+
+	composed, displaced := appendBoundedLimitations(withDuplicate, nil)
+
+	if len(composed) != len(withDuplicate)-1 {
+		t.Errorf("composed %d entries from %d, want the one duplicate removed", len(composed), len(withDuplicate))
+	}
+	if displaced != 0 {
+		t.Errorf("displaced = %d, want 0: dropping a copy is not losing content", displaced)
+	}
+}
