@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
@@ -90,12 +91,37 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
 }
 
+// Bounded failure classifications for the investigation endpoint
+// (CHAOS-3811). Each value names the SENTINEL the classifier matched, never
+// anything derived from the error's own text: a raw provider, driver, or
+// model message must not reach a log line at any level -- there is no debug
+// hatch that widens this set, because a guarantee that holds only at some log
+// levels is not a guarantee.
+//
+// contextFabricClassUnclassified is the one value that means "the classifier
+// recognized nothing". Before this existed, EVERY failure looked like that
+// from outside; now it is a specific, alertable signal that something reached
+// the route with no sentinel of its own.
+const (
+	contextFabricClassDeadline            = "deadline_exceeded"
+	contextFabricClassTimeBound           = "invalid_time_bound"
+	contextFabricClassRateLimited         = "rate_limited"
+	contextFabricClassUnavailable         = "dependency_unavailable"
+	contextFabricClassInterpretRejected   = "interpretation_rejected"
+	contextFabricClassSynthesisRejected   = "synthesis_rejected"
+	contextFabricClassModelOutput         = "model_output_invalid"
+	contextFabricClassNoSubjects          = "no_investigation_subjects"
+	contextFabricClassInvalidResult       = "invalid_result"
+	contextFabricClassUnclassified        = "unclassified"
+	contextFabricInvestigationFailureName = "context_fabric_investigation"
+)
+
 func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) {
 		return
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded) {
-		writeError(w, r, http.StatusGatewayTimeout, "upstream_unavailable", "The Context Fabric investigation timed out", true, nil)
+		a.writeContextFabricFailure(w, r, err, contextFabricClassDeadline, http.StatusGatewayTimeout, "upstream_unavailable", "The Context Fabric investigation timed out", true, nil)
 		return
 	}
 	// A historical question whose BOUNDS this engine will not answer --
@@ -112,8 +138,13 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	// required that removal land in the same change as the engine's and
 	// the providers' -- a layer left refusing would either contradict the
 	// others, or answer with current data under a historical label.
+	//
+	// The classification travels with the sentinel, not with the retired
+	// one's name: an operator alerting on this signal must read "these
+	// bounds are not answerable", never "historical questions are
+	// refused", which CHAOS-3781 made false.
 	if errors.Is(err, contextfabric.ErrInvalidTimeBound) {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "The requested time is not answerable: it must not be in the future, and a range must be narrower than the supported window", false, nil)
+		a.writeContextFabricFailure(w, r, err, contextFabricClassTimeBound, http.StatusBadRequest, "invalid_request", "The requested time is not answerable: it must not be in the future, and a range must be narrower than the supported window", false, nil)
 		return
 	}
 	// Rate limiting: contextfabric.ErrRateLimited is the vendor-neutral
@@ -123,7 +154,7 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	// for the model runtime (ADR 0008). Both mean the same thing to a
 	// caller: back off and retry later.
 	if errors.Is(err, contextfabric.ErrRateLimited) || errors.Is(err, contextfabric.ErrModelRateLimited) {
-		writeError(w, r, http.StatusTooManyRequests, "rate_limited", "Context Fabric is rate limited; retry later", true, nil)
+		a.writeContextFabricFailure(w, r, err, contextFabricClassRateLimited, http.StatusTooManyRequests, "rate_limited", "Context Fabric is rate limited; retry later", true, nil)
 		return
 	}
 	// contextfabric.ErrUnavailable already covers both a graph/model
@@ -133,7 +164,7 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	// problem is never presented to the caller as "you are unauthorized").
 	// ErrModelUnavailable joins the same bucket for the model runtime.
 	if errors.Is(err, contextfabric.ErrUnavailable) || errors.Is(err, contextfabric.ErrModelUnavailable) {
-		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Context Fabric is temporarily unavailable", true, nil)
+		a.writeContextFabricFailure(w, r, err, contextFabricClassUnavailable, http.StatusServiceUnavailable, "upstream_unavailable", "Context Fabric is temporarily unavailable", true, nil)
 		return
 	}
 	// Interpretation/synthesis bound violations (CHAOS-3784). The model
@@ -164,11 +195,11 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	// (an invalid enum, a claim-binding/grounding failure) has no single
 	// bound to name, so details is omitted for those.
 	if errors.Is(err, contextfabric.ErrInterpretationRejected) {
-		writeContextFabricRejectionError(w, r, err, "interpretation_rejected", "Context Fabric's interpretation of the question violated a v1 bound")
+		a.writeContextFabricRejectionError(w, r, err, contextFabricClassInterpretRejected, "interpretation_rejected", "Context Fabric's interpretation of the question violated a v1 bound")
 		return
 	}
 	if errors.Is(err, contextfabric.ErrSynthesisRejected) {
-		writeContextFabricRejectionError(w, r, err, "synthesis_rejected", "Context Fabric's synthesized answer violated a v1 bound")
+		a.writeContextFabricRejectionError(w, r, err, contextFabricClassSynthesisRejected, "synthesis_rejected", "Context Fabric's synthesized answer violated a v1 bound")
 		return
 	}
 	// A provider/transport-level failure: the raw generation call failed,
@@ -186,24 +217,71 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	// -- the new interpretation_rejected/synthesis_rejected codes above
 	// already carry the distinguishing signal this ticket asked for.
 	if errors.Is(err, contextfabric.ErrModelOutput) {
-		writeError(w, r, http.StatusBadGateway, "upstream_invalid_output", "Context Fabric produced an invalid answer; retry", true, nil)
+		a.writeContextFabricFailure(w, r, err, contextFabricClassModelOutput, http.StatusBadGateway, "upstream_invalid_output", "Context Fabric produced an invalid answer; retry", true, nil)
 		return
 	}
-	a.logger.ErrorContext(r.Context(), "context fabric investigation failed", "request_id", RequestID(r.Context()), "failure_class", "context_fabric_investigation")
-	writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
+	// CHAOS-3810/CHAOS-3811: the two ACR-side invariant breaches. Both stay
+	// 500/non-retryable -- reaching either means ACR produced something it
+	// should not have, and no amount of retrying fixes that -- but they are
+	// now NAMED instead of anonymous. ErrNoInvestigationSubjects in
+	// particular was the whole of CHAOS-3810's observable symptom: every
+	// real-corpus investigation landed in the fallthrough below, which is
+	// exactly why nobody could tell an unresolved subject apart from a
+	// genuine ACR fault.
+	if errors.Is(err, contextfabric.ErrNoInvestigationSubjects) {
+		a.writeContextFabricFailure(w, r, err, contextFabricClassNoSubjects, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
+		return
+	}
+	if errors.Is(err, contextfabric.ErrInvalidResult) {
+		a.writeContextFabricFailure(w, r, err, contextFabricClassInvalidResult, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
+		return
+	}
+	a.writeContextFabricFailure(w, r, err, contextFabricClassUnclassified, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
+}
+
+// writeContextFabricFailure is the single exit for every failed
+// investigation: it emits ONE structured log line carrying the bounded stage
+// and classification alongside the pre-existing failure_class, then writes
+// the caller-facing error.
+//
+// Both new fields are closed enums (contextfabric.InvestigationStage and the
+// contextFabricClass* constants above). Nothing derived from the error's own
+// message is logged, at any level -- the whole point is that an operator can
+// tell a resolution failure from a fact-read failure from an ACR-side
+// invariant breach WITHOUT anyone ever being tempted to log the raw
+// dependency text to find out.
+//
+// Level tracks who has to act: 5xx (and anything unclassified) is ACR's
+// problem and logs at Error; a classified 4xx is the caller's and logs at
+// Warn, so a spike in refusals is still visible without drowning the error
+// stream.
+func (a *App) writeContextFabricFailure(w http.ResponseWriter, r *http.Request, err error, classification string, status int, code, message string, retryable bool, details map[string]any) {
+	stage, _ := contextfabric.FailureStage(err)
+	level := slog.LevelWarn
+	if status >= http.StatusInternalServerError || classification == contextFabricClassUnclassified {
+		level = slog.LevelError
+	}
+	a.logger.Log(r.Context(), level, "context fabric investigation failed",
+		"request_id", RequestID(r.Context()),
+		"failure_class", contextFabricInvestigationFailureName,
+		"failure_stage", string(stage),
+		"failure_classification", classification,
+		"http_status", status,
+	)
+	writeError(w, r, status, code, message, retryable, details)
 }
 
 // writeContextFabricRejectionError writes the shared 422 response shape for
 // ErrInterpretationRejected/ErrSynthesisRejected, attaching
 // details.violated_bound only when err carries a
 // *contextfabric.ModelBoundViolation.
-func writeContextFabricRejectionError(w http.ResponseWriter, r *http.Request, err error, code, message string) {
+func (a *App) writeContextFabricRejectionError(w http.ResponseWriter, r *http.Request, err error, classification, code, message string) {
 	var violation *contextfabric.ModelBoundViolation
 	var details map[string]any
 	if errors.As(err, &violation) {
 		details = map[string]any{"violated_bound": violation.Bound}
 	}
-	writeError(w, r, http.StatusUnprocessableEntity, code, message, true, details)
+	a.writeContextFabricFailure(w, r, err, classification, http.StatusUnprocessableEntity, code, message, true, details)
 }
 
 func contextFabricResultItems(result contextfabric.InvestigationResult) int {

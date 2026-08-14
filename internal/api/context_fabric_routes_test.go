@@ -42,6 +42,24 @@ func newContextFabricTestApp(t *testing.T, investigator contextfabric.Investigat
 // "not configured" case that route degrades to a 503 for.
 func newContextFabricTestAppWithResults(t *testing.T, investigator contextfabric.Investigator, results contextfabric.InvestigationResultStore) (*App, string) {
 	t.Helper()
+	app, token, _ := newContextFabricTestAppWithResultsAndLogs(t, investigator, results)
+	return app, token
+}
+
+// newContextFabricTestAppWithLogs is newContextFabricTestApp plus the log
+// buffer, for the CHAOS-3811 assertions on what a failed investigation
+// actually records.
+func newContextFabricTestAppWithLogs(t *testing.T, investigator contextfabric.Investigator) (*App, string, *bytes.Buffer) {
+	t.Helper()
+	return newContextFabricTestAppWithResultsAndLogs(t, investigator, nil)
+}
+
+// newContextFabricTestAppWithResultsAndLogs is the one constructor the three
+// wrappers above narrow: CHAOS-3746 needed the result store, CHAOS-3811 needed
+// the log buffer, and a failure on the retrieval route needs both.
+func newContextFabricTestAppWithResultsAndLogs(t *testing.T, investigator contextfabric.Investigator, results contextfabric.InvestigationResultStore) (*App, string, *bytes.Buffer) {
+	t.Helper()
+	logs := &bytes.Buffer{}
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
 	credentials := newMemoryCredentialLifecycle(t, audit, now)
@@ -70,11 +88,11 @@ func newContextFabricTestAppWithResults(t *testing.T, investigator contextfabric
 			Investigator:               investigator,
 			InvestigationResults:       results,
 		},
-	}, testLogger(&bytes.Buffer{}))
+	}, testLogger(logs))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return app, token
+	return app, token, logs
 }
 
 type noopAssembler struct{}
