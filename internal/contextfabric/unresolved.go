@@ -156,7 +156,7 @@ func (e *Engine) terminalResult(
 		Warnings:            []string{},
 	}
 	if err := result.Validate(); err != nil {
-		return InvestigationResult{}, fmt.Errorf("%w: %w", ErrInvalidResult, err)
+		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
 	if e.results != nil {
 		// Keyed exactly as Investigate keys its own Save (CHAOS-3781): on the
@@ -167,7 +167,7 @@ func (e *Engine) terminalResult(
 		// introduce a difference, and a terminal result saved under a key no
 		// lookup will ever form is a row the clarification loop cannot reach.
 		if err := e.results.Save(ctx, principal, result, watermark, epoch, TimeAxisKeyFor(request.TimeContext)); err != nil {
-			return InvestigationResult{}, fmt.Errorf("save investigation result: %w", err)
+			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 	}
 	return result, nil

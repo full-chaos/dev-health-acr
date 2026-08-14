@@ -220,7 +220,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 
 	interpretation, err := e.interpreter.Interpret(ctx, principal, request)
 	if err != nil {
-		return InvestigationResult{}, fmt.Errorf("interpret question: %w", err)
+		return InvestigationResult{}, stageError(StageInterpretation, fmt.Errorf("interpret question: %w", err))
 	}
 	// Bound the INTERPRETED question too, not just the wire request
 	// (CHAOS-3755 codex delta review, P2).
@@ -327,7 +327,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	resolution, err := e.graph.ResolveSubjects(ctx, principal, graphRequest, interpretation)
 	if err != nil {
-		return InvestigationResult{}, fmt.Errorf("resolve subjects: %w", err)
+		return InvestigationResult{}, stageError(StageResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
 	if len(request.PriorSubjectReceipts) > 0 {
 		e.recordPriorSubjectReceiptSkips(ctx, principal, len(request.PriorSubjectReceipts), priorHints, resolution)
@@ -336,7 +336,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		Request: graphRequest, Interpretation: interpretation, Resolution: resolution,
 	})
 	if err != nil {
-		return InvestigationResult{}, fmt.Errorf("discover graph context: %w", err)
+		return InvestigationResult{}, stageError(StageGraph, fmt.Errorf("discover graph context: %w", err))
 	}
 	graphContext.Resolution = resolution
 
@@ -374,18 +374,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// with no subjects fails here as a NAMED condition the route classifies,
 	// instead of rediscovering the unclassified 500.
 	if len(factRequest.Subjects) == 0 {
-		return InvestigationResult{}, fmt.Errorf("%w: read canonical facts", ErrNoInvestigationSubjects)
+		return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts", ErrNoInvestigationSubjects))
 	}
 	facts, err := e.facts.ReadFacts(ctx, principal, factRequest)
 	if err != nil {
-		return InvestigationResult{}, fmt.Errorf("read canonical facts: %w", err)
+		return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("read canonical facts: %w", err))
 	}
 
 	result, err := e.synthesizer.Synthesize(ctx, principal, SynthesisInput{
 		Request: request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
 	})
 	if err != nil {
-		return InvestigationResult{}, fmt.Errorf("synthesize investigation: %w", err)
+		return InvestigationResult{}, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
 	}
 	result.SchemaVersion = InvestigationResultSchemaV1
 	result.ResultID = e.newResultID()
@@ -459,7 +459,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	result.Limitations = temporallyLimited
 	result.LimitationsDisplaced += temporalDisplaced
 	if err := result.Validate(); err != nil {
-		return InvestigationResult{}, fmt.Errorf("%w: %v", ErrInvalidResult, err)
+		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
 	if e.results != nil {
 		// Keyed from the CLAMPED REQUEST context -- byte-for-byte the
@@ -473,7 +473,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// know the former, so keying Save on the latter would reopen the
 		// same asymmetry from the other side.
 		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, TimeAxisKeyFor(clampedRequestTime)); err != nil {
-			return InvestigationResult{}, fmt.Errorf("save investigation result: %w", err)
+			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 	}
 	return result, nil

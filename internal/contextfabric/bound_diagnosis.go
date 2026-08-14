@@ -23,7 +23,11 @@ import (
 // RuntimeQuestionInterpreter.Interpret's defensive re-validation for a
 // ModelRuntime that does not self-validate.
 func ClassifyInterpretationRejection(question InterpretedQuestion, cause error) error {
-	wrapped := fmt.Errorf("%w: %w: %v", ErrInterpretationRejected, ErrModelOutput, cause)
+	// CHAOS-3811: %w on the cause too, not %v. The rendered message is
+	// identical either way; what changes is that a sentinel the
+	// contracts/v1 validator attached to cause still answers errors.Is at
+	// the route instead of being flattened into prose here.
+	wrapped := fmt.Errorf("%w: %w: %w", ErrInterpretationRejected, ErrModelOutput, cause)
 	bound, diagnosed := contractsv1.DiagnoseContextFabricInterpretedQuestionBound(question)
 	return withBoundViolation(wrapped, bound, diagnosed)
 }
@@ -39,7 +43,7 @@ func ClassifyInterpretationRejection(question InterpretedQuestion, cause error) 
 // there too, not only from RuntimeAnswerSynthesizer.Synthesize's
 // defensive re-validation.
 func ClassifySynthesisRejection(draft SynthesisDraft, input SynthesisInput, cause error) error {
-	wrapped := fmt.Errorf("%w: %w: %v", ErrSynthesisRejected, ErrModelOutput, cause)
+	wrapped := fmt.Errorf("%w: %w: %w", ErrSynthesisRejected, ErrModelOutput, cause)
 	bound, diagnosed := diagnoseSynthesisDraftBound(draft, input)
 	return withBoundViolation(wrapped, bound, diagnosed)
 }
