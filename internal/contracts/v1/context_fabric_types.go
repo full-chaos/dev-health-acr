@@ -588,6 +588,27 @@ type ContextFabricTemporalLabel struct {
 	CoverageComplete bool `json:"coverage_complete"`
 }
 
+// ContextFabricSerializedBytesMin and ContextFabricSerializedBytesMax bound
+// ContextFabricInvestigationOptions.MaxSerializedBytes: the largest single
+// investigation response this service will serve.
+//
+// Named rather than inline (CHAOS-3795) because the number is load-bearing
+// somewhere else entirely. The MCP sidecar caps every hosted response body
+// it will read at its own ceiling, and the claim that the ceiling can never
+// truncate a legitimate answer is an arithmetic relation between the two
+// values -- see TestSidecarCeilingClearsTheServingBudget in
+// internal/sidecar. A relation between two literals is not checkable; a
+// relation between two constants is.
+//
+// This is the SERVING budget for one response, deliberately not the
+// contract's aggregate maximum across a full expansion (hundreds of MiB).
+// The sidecar reads one response at a time, so one response is the quantity
+// its ceiling has to clear.
+const (
+	ContextFabricSerializedBytesMin = 8192
+	ContextFabricSerializedBytesMax = 1 << 20
+)
+
 type ContextFabricInvestigationOptions struct {
 	MaxSubjectCandidates int  `json:"max_subject_candidates"`
 	MaxCohortMembers     int  `json:"max_cohort_members"`
