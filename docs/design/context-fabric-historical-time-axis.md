@@ -698,3 +698,63 @@ One judgement worth keeping: at round 9 I declined to self-assess the
 paren balancer by reading it, because judging one's own parser by
 inspection is the same audit shape that had already failed repeatedly here.
 Round 10 found a real defect in exactly that code — through execution.
+
+## 14. CHAOS-3825 — disjoint endpoint windows wedge a projection
+
+`edgeValidity` (`internal/contextfabric/devhealthsource/validity.go`) derives a
+relationship's window as the intersection of its two endpoints': the later
+start and the earlier end. §2.2's admission predicate is what that window
+feeds. The derivation had no case for the intersection being **empty**.
+
+When the two endpoint windows are disjoint, `(later start, earlier end)` is
+INVERTED — `valid_to` strictly before `valid_from`. `validateTimeRange`
+(`internal/contracts/v1/validate_context_fabric_helpers.go`) rejects that pair,
+`ContextFabricProjectionBatch.Validate()` is all-or-nothing, so ONE such row
+fails the whole batch: `NextProjectionBatch` errors, the coordinator holds its
+checkpoint, and the same poisoned page rebuilds every tick. The organization's
+main-source projection is wedged permanently. Live: 35 `git_pull_request_reviews`
+rows for one org were submitted after their pull request's
+`coalesce(merged_at, closed_at)` — post-merge approvals, which GitHub allows.
+
+**Ruling.** An empty intersection means the association never held while both
+endpoints were valid. That is represented as the DEGENERATE half-open window
+`[later-start, later-start)`: the contract accepts it (only a strictly earlier
+end is rejected), §2.2 admits it at no instant (nothing satisfies
+`valid_from <= T < valid_to` when the bounds are equal), and a structural read
+that ignores the temporal axis still sees the edge. The two alternatives were
+rejected: widening to either endpoint's own end asserts an interval the source
+never stated, and dropping the edge silently loses a real association. The
+guard lives INSIDE `edgeValidity`, so every call site inherits it. It is
+strict (`Before`, not `!After`), so an already-zero-width window from merely
+touching endpoints is left exactly as it was.
+
+**Sweep — every other `ValidFrom`/`ValidTo` producer in `devhealthsource`,
+against live dev ClickHouse.** All four `edgeValidity` call sites are the same
+class and all four are REACHED today, not hypothetically:
+
+| Producer | Inverted rows live | Verdict |
+| --- | --- | --- |
+| `tables.go` `queryWorkItemDependencies` (edge) | 127 / 3438 | same class — fixed |
+| `tables.go` `queryWorkItemHierarchy` (PART_OF) | 42 / 2101 | same class — fixed |
+| `tables.go` `queryPullRequestReviews` (BELONGS_TO_PULL_REQUEST) | 35 / 1129 | same class — fixed |
+| `tables.go` `queryDeploymentIncidentEdges` | table empty | same class, latent — fixed |
+| `queryWorkItems`, `queryPullRequests`, `queryDeployments`, `queryIncidents`, `queryCIRuns` | 0 of 3316 / 2966 / 675 / 2 / 27902 | NOT REACHABLE: one row's own end column cannot precede its own start column; an inverted row would be source corruption, not an empty intersection, and clamping it here would hide that |
+| `queryRepositories`, `queryPullRequestReviews` (entity) | n/a | NOT REACHABLE: single-ended windows, no upper bound to invert against |
+| `belongsToRepository` (`clickhouse.go`) | n/a | NOT REACHABLE: passes the member's own window through; the repository end is open-ended and earlier-starting, so the intersection is a no-op |
+| `applyActiveValidity` (`teams_projects.go`) | n/a | NOT REACHABLE: `valid_from` is always nil, so no comparison exists |
+| `ownershipValidity` (`teams_projects_edges.go`) | 0 / 627 (no row carries a `valid_to` at all) | SOURCE-CORRUPTION-ONLY: `valid_to` comes from the argMax-latest row and `valid_from` from `min(valid_from)` group-wide, so `latest_valid_to >= that row's own valid_from >= min(valid_from)` unless one individual `team_project_ownership` row is itself inverted. Left alone deliberately: that would be corrupt input, and the batch rejection is the correct, loud outcome |
+
+`episodes.go` is out of scope — its window comes straight from a Postgres
+`EpisodeProjectionRecord` and is checked by its own `EndedAt.Before(StartedAt)`
+guard, not by this derivation.
+
+**No source-version bump.** `ClickHouseSourceVersion` stays at
+`devhealthsource.clickhouse.v4`. A bump exists to force a REBUILD when
+already-written graph state would otherwise be wrong (see
+`ClickHouseSourceVersion`'s doc comment and CHAOS-3781's bump to v4). Nothing
+wrong was written here: a rejected batch is rejected in full, before any write,
+and the coordinator then holds the checkpoint — so a wedged organization is
+missing the poisoned page and everything after it, never holding a bad window.
+Once the batch validates, the ordinary walk resumes from that held checkpoint
+and projects the pages it could not before. A bump would discard correct
+already-projected pages to re-derive them identically.

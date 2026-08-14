@@ -340,3 +340,235 @@ func TestF4_DeploymentIncidentEdgeStaysUnboundedWhenEndpointsDoNotResolve(t *tes
 	edge := relationshipByID(t, batch, "relationship:deployment_incident:edge-1")
 	requireWindow(t, "deployment_incident", edge.ValidFrom, edge.ValidTo, nil, nil)
 }
+
+// --- CHAOS-3825: disjoint endpoint windows ---
+//
+// edgeValidity intersects the two endpoints' windows: the later start and
+// the earlier end. When the two windows are DISJOINT that intersection is
+// empty, and the naive pair (later start, earlier end) is INVERTED --
+// valid_to strictly before valid_from. ContextFabricRelationshipProjection
+// rejects that ("valid_to precedes valid_from"), and because
+// ContextFabricProjectionBatch.Validate() is all-or-nothing, one such row
+// poisons the ENTIRE batch: NextProjectionBatch errors, the coordinator
+// holds the checkpoint, and the same poisoned page rebuilds every tick --
+// the organization's projection is wedged forever, exactly the failure
+// shape queryWorkItemHierarchy's self-reference filter already exists to
+// prevent, reached through the temporal axis instead.
+//
+// Disjoint endpoint windows are ORDINARY data, not corruption: a review
+// submitted after its pull request merged is a post-merge approval, which
+// GitHub allows and dev ClickHouse holds today (CHAOS-3825: 35 such rows
+// for one organization).
+//
+// The ruled representation is the DEGENERATE half-open window
+// [later-start, later-start): the association never held while both
+// endpoints were valid, and a zero-width half-open interval is exactly
+// that statement. The contract accepts it (only a STRICTLY earlier end is
+// rejected), every time-filtered read admits it nowhere (no instant
+// satisfies valid_from <= t < valid_to when the bounds are equal), and
+// structural reads that ignore the temporal axis still see the edge. The
+// alternatives were both worse: widening to either endpoint's own window
+// asserts an interval the source never stated, and dropping the edge
+// silently loses a real association.
+
+// TestPostMergeReviewEdgeCollapsesToADegenerateWindow builds the exact
+// live shape through the real query/assembly path: a review submitted
+// AFTER its pull request's coalesce(merged_at, closed_at). Before the fix
+// this failed at batch validation (tables.go:610).
+func TestPostMergeReviewEdgeCollapsesToADegenerateWindow(t *testing.T) {
+	t.Parallel()
+
+	pullRequestCreated := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+	pullRequestMerged := time.Date(2026, 2, 1, 17, 0, 0, 0, time.UTC)
+	// The post-merge approval: submitted after the pull request ended, so
+	// the review's [submitted, unbounded) window and the pull request's
+	// [created, merged) window never overlap.
+	submitted := time.Date(2026, 2, 10, 11, 0, 0, 0, time.UTC)
+
+	tables := baseTables(submitted)
+	for index := range tables {
+		tables[index].rows = nil
+	}
+	tables = append(tables, fakeTable{match: "FROM git_pull_request_reviews AS r", rows: [][]any{
+		{"review-1", "repo-1", uint32(1042), "approved", submitted, "example-org/widget-service",
+			pullRequestCreated, uint8(1), pullRequestMerged}}})
+	batch := projectOneBatch(t, tables)
+
+	// The review itself is untouched: a submitted review is never
+	// retracted, so its own window stays open-ended from submitted_at.
+	// Only the ASSOCIATION collapses.
+	entity := entityByCanonicalID(t, batch, "pull_request_review:review-1")
+	requireWindow(t, "pull_request_review", entity.ValidFrom, entity.ValidTo, &submitted, nil)
+
+	edge := relationshipByID(t, batch, "relationship:belongs_to_pull_request:pull_request_review:review-1")
+	requireWindow(t, "belongs_to_pull_request", edge.ValidFrom, edge.ValidTo, &submitted, &submitted)
+}
+
+// TestDisjointDependencyEdgeCollapsesToADegenerateWindow is the same
+// defect reached through tables.go:418 -- proving the fix is class-wide
+// (inside edgeValidity, inherited by all four call sites) rather than
+// patched at the one site the live data happened to hit. A dependency
+// whose target work item was created only after the source one closed is
+// the ordinary "this was blocked by something filed later" shape.
+func TestDisjointDependencyEdgeCollapsesToADegenerateWindow(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	sourceCreated := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	sourceEnded := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
+	targetCreated := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC) // after the source ended
+	targetEnded := time.Date(2026, 2, 20, 0, 0, 0, 0, time.UTC)
+
+	tables := baseTables(at)
+	for index, table := range tables {
+		if table.match == "FROM work_item_dependencies AS d" {
+			tables[index].rows = [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at,
+				sourceCreated, uint8(1), sourceEnded, uint8(1), targetCreated, uint8(1), targetEnded}}
+			continue
+		}
+		tables[index].rows = nil
+	}
+	batch := projectOneBatch(t, tables)
+
+	edge := relationshipByID(t, batch, "relationship:work_item_dependency:WIDGET-101:WIDGET-099:blocks")
+	requireWindow(t, "dependency", edge.ValidFrom, edge.ValidTo, &targetCreated, &targetCreated)
+}
+
+// TestEdgeValidityNeverInverts is the unit-level half: the invariant
+// belongs to edgeValidity, not to any one caller, so it is asserted
+// through the function directly across the combinations the fixtures do
+// not reach. Each case pins the EXACT expected pair, so a fix that
+// clamped the window into an interval the source never asserted (say, by
+// widening valid_to to the later end) fails here even though it would
+// satisfy the invariant.
+func TestEdgeValidityNeverInverts(t *testing.T) {
+	t.Parallel()
+
+	jan1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	jan10 := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
+	feb1 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	feb20 := time.Date(2026, 2, 20, 0, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name                       string
+		fromValidFrom, fromValidTo *time.Time
+		toValidFrom, toValidTo     *time.Time
+		wantValidFrom, wantValidTo *time.Time
+	}{{
+		// The live shape: the second endpoint starts after the first ended.
+		name:          "disjoint, from ends before to starts",
+		fromValidFrom: &jan1, fromValidTo: &jan10, toValidFrom: &feb1, toValidTo: &feb20,
+		wantValidFrom: &feb1, wantValidTo: &feb1,
+	}, {
+		// The mirror image: argument order must not change the answer.
+		name:          "disjoint, to ends before from starts",
+		fromValidFrom: &feb1, fromValidTo: &feb20, toValidFrom: &jan1, toValidTo: &jan10,
+		wantValidFrom: &feb1, wantValidTo: &feb1,
+	}, {
+		// Disjoint with only the inverting bounds recorded: still empty.
+		name:          "disjoint with nil outer bounds",
+		fromValidFrom: nil, fromValidTo: &jan10, toValidFrom: &feb1, toValidTo: nil,
+		wantValidFrom: &feb1, wantValidTo: &feb1,
+	}, {
+		// TOUCHING, not disjoint: the earlier end equals the later start.
+		// Already zero-width and already accepted, so the guard must
+		// leave it exactly as it was rather than "correcting" it.
+		name:          "touching, end equals start",
+		fromValidFrom: &jan1, fromValidTo: &feb1, toValidFrom: &feb1, toValidTo: &feb20,
+		wantValidFrom: &feb1, wantValidTo: &feb1,
+	}, {
+		// The ordinary overlapping case: the true intersection, unchanged.
+		name:          "overlapping",
+		fromValidFrom: &jan1, fromValidTo: &feb1, toValidFrom: &jan10, toValidTo: &feb20,
+		wantValidFrom: &jan10, wantValidTo: &feb1,
+	}, {
+		name:          "one endpoint open-ended",
+		fromValidFrom: &jan1, fromValidTo: nil, toValidFrom: &jan10, toValidTo: &feb20,
+		wantValidFrom: &jan10, wantValidTo: &feb20,
+	}, {
+		name:          "both open-ended",
+		fromValidFrom: &jan1, fromValidTo: nil, toValidFrom: &jan10, toValidTo: nil,
+		wantValidFrom: &jan10, wantValidTo: nil,
+	}, {
+		name:          "no bounds at all",
+		fromValidFrom: nil, fromValidTo: nil, toValidFrom: nil, toValidTo: nil,
+		wantValidFrom: nil, wantValidTo: nil,
+	}, {
+		// A start with no end on either side cannot invert, and must not
+		// be closed by the guard.
+		name:          "starts only",
+		fromValidFrom: &jan1, fromValidTo: nil, toValidFrom: &feb1, toValidTo: nil,
+		wantValidFrom: &feb1, wantValidTo: nil,
+	}, {
+		// An end with no start on either side: unbounded below, so there
+		// is nothing to invert against.
+		name:          "ends only",
+		fromValidFrom: nil, fromValidTo: &jan10, toValidFrom: nil, toValidTo: &feb20,
+		wantValidFrom: nil, wantValidTo: &jan10,
+	}}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			validFrom, validTo := devhealthsource.EdgeValidityForTest(
+				testCase.fromValidFrom, testCase.fromValidTo, testCase.toValidFrom, testCase.toValidTo)
+			requireWindow(t, testCase.name, validFrom, validTo, testCase.wantValidFrom, testCase.wantValidTo)
+			if validFrom != nil && validTo != nil && validTo.Before(*validFrom) {
+				t.Fatalf("%s: edgeValidity returned an inverted window [%v, %v)", testCase.name, validFrom, validTo)
+			}
+		})
+	}
+}
+
+// TestEdgeValidityDoesNotAliasItsArguments guards the collapse's
+// mechanics: returning the SAME pointer for both ends would make a caller
+// that later adjusted one bound silently move the other. Every call site
+// here passes pointers it also uses for the endpoint entity's own window
+// (tables.go:610 passes the review entity's validFrom straight in), so
+// aliasing would be a live hazard, not a theoretical one.
+func TestEdgeValidityDoesNotAliasItsArguments(t *testing.T) {
+	t.Parallel()
+
+	jan1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	jan10 := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
+	feb1 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	feb20 := time.Date(2026, 2, 20, 0, 0, 0, 0, time.UTC)
+
+	validFrom, validTo := devhealthsource.EdgeValidityForTest(&jan1, &jan10, &feb1, &feb20)
+	if validFrom == validTo {
+		t.Fatal("edgeValidity returned the same pointer for both bounds; a caller adjusting one would move the other")
+	}
+	*validTo = feb20
+	if !validFrom.Equal(feb1) {
+		t.Fatalf("mutating valid_to changed valid_from to %v", validFrom)
+	}
+}
+
+// TestDisjointHierarchyEdgeCollapsesToADegenerateWindow is the third of
+// the four edgeValidity call sites (tables.go:486). It is here rather
+// than left to the unit tests because the sweep for this issue found
+// live rows for it too -- 42 child/parent pairs whose windows do not
+// overlap -- so it is a REACHED site, not a hypothetical one. A child
+// closed before its parent was created is the ordinary "an old ticket was
+// re-parented under an epic filed later" shape.
+func TestDisjointHierarchyEdgeCollapsesToADegenerateWindow(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	childCreated := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	childEnded := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
+	parentCreated := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC) // after the child closed
+	parentEnded := time.Date(2026, 2, 20, 0, 0, 0, 0, time.UTC)
+
+	tables := baseTables(at)
+	for index := range tables {
+		tables[index].rows = nil
+	}
+	tables = append(tables, fakeTable{match: "FROM work_items AS c", rows: [][]any{
+		{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at,
+			childCreated, uint8(1), childEnded, parentCreated, uint8(1), parentEnded}}})
+	batch := projectOneBatch(t, tables)
+
+	edge := relationshipByID(t, batch, "relationship:work_item_hierarchy:WIDGET-101:WIDGET-050")
+	requireWindow(t, "part_of", edge.ValidFrom, edge.ValidTo, &parentCreated, &parentCreated)
+}
