@@ -333,10 +333,70 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 // escaped, since a caller-typed question is untrusted input and this
 // function's only job is producing a query that means "any of these words",
 // never anything structurally richer.
+//
+// CHAOS-3827: stripping that narrow set is not sufficient on its own,
+// because a separator can leave punctuation STANDING ALONE as a term of its
+// own -- the trailing "?" of `... "Horizontal scaling readiness"?` once the
+// quote it was glued to is stripped. fulltextSearchNodes OR-joins terms, and
+// RediSearch rejects a bare punctuation element in that join as a SYNTAX
+// ERROR rather than treating it as a term that simply matches nothing, so
+// the whole search fails ("context fabric graph dependency error during
+// search context graph") and subject resolution dies for that question.
+// Live-verified against the dev graph: the query
+// 'What|is|the|status|of|Horizontal|scaling|readiness|?' errors at offset
+// 50, while the identical query without that last element returns 915
+// nodes. Every bare punctuation rune probed behaves the same way in a join
+// (`|.`, `|_`, `|#`, `|~`, ...), so the rule below is a rune CLASS -- "keep
+// a term only if it carries a Unicode letter or digit" -- not a hand-picked
+// metacharacter list, for the same reason isFulltextWordRune is one.
+//
+// A leading run of such runes is trimmed rather than kept for the same
+// live-verified reason: `{foo`, `}foo`, `[foo`, `]foo`, `;foo` and `$foo`
+// are syntax errors even with a real word attached, and `~foo` is worse than
+// an error -- RediSearch reads the leading `~` as its own fuzzy/optional
+// operator and silently matches 35987 nodes where the bare word matches 47.
+//
+// What deliberately does NOT change is a term whose punctuation TRAILS a
+// real word ("readiness?", "acr`"): RediSearch accepts those and, live,
+// 'What|...|readiness?' returns exactly the same 915 nodes as
+// 'What|...|readiness'. Rewriting them would shift the candidate sets (and
+// so the lexical relevance numbers) of every search that already works.
+// hasLexicalContent reports whether text yields at least one search term --
+// i.e. whether it carries anything a retrieval mechanism could act ON.
+//
+// This is the single predicate the hybrid path gates BOTH of its mechanisms
+// on (see hybridSearchNodes): it delegates to tokenizeForFulltext, the same
+// function whose result fulltextSearchNodes checks for emptiness, so the
+// lexical arm and the vector arm can never disagree about whether a term
+// means anything. Written as a named predicate rather than an inline length
+// check precisely so the agreement is structural and a future edit to one
+// arm cannot quietly desynchronize the other.
+func hasLexicalContent(text string) bool {
+	return len(tokenizeForFulltext(text)) > 0
+}
+
 func tokenizeForFulltext(text string) []string {
 	fields := strings.FieldsFunc(text, func(r rune) bool {
 		switch r {
 		case '|', '%', '@', '"', '\'', '*', '-', '(', ')', ':':
+			return true
+		// CHAOS-3827 residual: these six are live-verified as a RediSearch
+		// syntax error in EVERY position -- leading-glued, trailing-glued
+		// and bare alike (`{foo`/`foo{`, `[foo`/`foo[`, `;foo`/`foo;`, and
+		// `~`, which errors trailing-glued and silently fuzzes
+		// leading-glued). The leading trim below cannot reach the trailing
+		// case, so a bracketed question still failed outright: `What is the
+		// status of [Q3] readiness?` tokenized to
+		// `What|is|the|status|of|Q3]|readiness?`, which the dev graph
+		// rejects, versus 905 nodes for the same query with the bracket
+		// gone. Because NO working query can contain any of these runes
+		// anywhere, dropping them is error recovery only: it cannot change
+		// the result set -- and so cannot change the lexical relevance -- of
+		// any query that works today. That is what separates them from a
+		// blanket trailing trim, which would rewrite the WORKING
+		// "readiness?" (live: identical result set to the bare word) and is
+		// therefore deliberately not done.
+		case '{', '}', '[', ']', ';', '~':
 			return true
 		}
 		return r == ' ' || r == '\t' || r == '\n' || r == '\r'
@@ -344,6 +404,10 @@ func tokenizeForFulltext(text string) []string {
 	terms := make([]string, 0, len(fields))
 	for _, field := range fields {
 		field = strings.TrimSpace(field)
+		// Trimming the leading non-word run also drops a field that is
+		// punctuation and nothing else: it trims away to empty, which is
+		// exactly the "no letter and no digit" case.
+		field = strings.TrimLeftFunc(field, func(r rune) bool { return !isFulltextWordRune(r) })
 		if field != "" {
 			terms = append(terms, field)
 		}

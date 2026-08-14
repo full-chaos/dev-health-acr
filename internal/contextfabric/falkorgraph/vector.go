@@ -262,6 +262,35 @@ func (a *Adapter) vectorSearchNodes(ctx context.Context, key, orgID string, vect
 // organization's recent history -- which is what makes it usable as the
 // engine's input for a coverage/limitation decision about THIS answer.
 func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string, limit int, fence *resolutionFence, temporal temporalFilter) ([]graphrank.CandidateNode, bool, bool, error) {
+	// CHAOS-3827 (codex round-1 High): BOTH mechanisms are gated on the one
+	// predicate, here at the seam, rather than each deciding for itself.
+	//
+	// The lexical arm has always stopped on a term that tokenizes to nothing
+	// (fulltextSearchNodes' len(terms)==0 early return), but the vector arm
+	// had no equivalent and would still embed the raw text and return its
+	// nearest neighbours. For a term like "???" those neighbours are
+	// arbitrary -- the embedding carries no subject meaning for them to be
+	// near -- yet they arrive as ordinary above-floor candidates, so
+	// resolution reaches clarification or no-match holding garbage instead of
+	// holding nothing. That is the same failure AC-3778-4's similarity floor
+	// exists to prevent (meaningless input must not manufacture candidates),
+	// reached by a different door. Before this branch the punctuation-only
+	// term hard-errored in the lexical step and never got this far, so
+	// closing it belongs here.
+	//
+	// hasLexicalContent delegates to tokenizeForFulltext, so the vector skip
+	// and the lexical early return cannot drift apart: they are the same
+	// tokenizer's verdict, asked once. The text is deliberately never
+	// embedded -- not embedded-then-discarded -- so no provider call is made
+	// on input that cannot mean anything.
+	//
+	// degraded stays FALSE: nothing was withheld by a fault. No mechanism
+	// could act on this input, which is a property of the question, not an
+	// outage, and marking the answer would misreport it (the same reasoning
+	// the embedder-nil branch below applies to "nothing was expected").
+	if !hasLexicalContent(term) {
+		return nil, false, false, nil
+	}
 	lexical, truncated, err := a.fulltextSearchNodes(ctx, key, orgID, term, limit, temporal)
 	if err != nil {
 		return nil, false, false, err
