@@ -248,11 +248,68 @@ var ProductionColumns = map[string][]Column{
 		{Name: "last_synced", Type: "DateTime64(3)"},
 		{Name: "org_id", Type: "String"},
 	},
+	// CHAOS-3802's four tables. Read off live system.columns the same way
+	// every entry above was, and listed in production POSITION order with
+	// only the columns this epic's readers SELECT -- plus every column
+	// each table's sorting key names, which a CREATE TABLE cannot omit.
+	//
+	// teams.updated_at genuinely carries NO timezone qualifier --
+	// DateTime64(6), not DateTime64(6,'UTC') -- while queryTeams'
+	// sincePredicate binds a DateTime64(6,'UTC') parameter against it. The
+	// Enum8 columns are spelled out in full for the same reason
+	// git_pull_requests.number is UInt32 here: a fake cannot tell you
+	// whether Scan survives the real type, and both are read through
+	// toString().
+	"teams": {
+		{Name: "id", Type: "String"},
+		{Name: "name", Type: "String"},
+		{Name: "description", Type: "Nullable(String)"},
+		{Name: "updated_at", Type: "DateTime64(6)"},
+		{Name: "org_id", Type: "String"},
+		{Name: "provider", Type: "String"},
+		{Name: "native_team_key", Type: "Nullable(String)"},
+		{Name: "is_active", Type: "UInt8"},
+	},
+	"projects": {
+		{Name: "id", Type: "String"},
+		{Name: "org_id", Type: "String"},
+		{Name: "provider", Type: "String"},
+		{Name: "project_key", Type: "Nullable(String)"},
+		{Name: "name", Type: "String"},
+		{Name: "is_active", Type: "UInt8"},
+		{Name: "state", Type: "LowCardinality(String)"},
+		{Name: "url", Type: "String"},
+		{Name: "updated_at", Type: "DateTime64(3, 'UTC')"},
+	},
+	"work_item_team_attributions": {
+		{Name: "org_id", Type: "String"},
+		{Name: "repo_id", Type: "UUID"},
+		{Name: "work_item_id", Type: "String"},
+		{Name: "team_id", Type: "Nullable(String)"},
+		{Name: "source", Type: "Enum8('native_team' = 1, 'linked_issue' = 2, 'project_ownership' = 3, 'repo_ownership' = 4, 'assignee_membership' = 5, 'unassigned' = 6, 'issue_project' = 7, 'manual_fallback' = 8)"},
+		{Name: "is_primary", Type: "UInt8"},
+		{Name: "confidence", Type: "Enum8('high' = 1, 'medium' = 2, 'low' = 3, 'manual' = 4, 'none' = 5)"},
+		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
+	},
+	"team_project_ownership": {
+		{Name: "org_id", Type: "String"},
+		{Name: "provider", Type: "String"},
+		{Name: "team_id", Type: "String"},
+		{Name: "project_id", Type: "String"},
+		{Name: "project_key", Type: "Nullable(String)"},
+		{Name: "source", Type: "Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5)"},
+		{Name: "valid_from", Type: "DateTime64(3, 'UTC')"},
+		{Name: "valid_to", Type: "Nullable(DateTime64(3, 'UTC'))"},
+		{Name: "updated_at", Type: "DateTime64(3, 'UTC')"},
+	},
 	"work_items": {
 		{Name: "repo_id", Type: "UUID"},
 		{Name: "work_item_id", Type: "String"},
 		{Name: "title", Type: "String"},
 		{Name: "status", Type: "String"},
+		// CHAOS-3802: queryWorkItemProjects selects project_id and joins it
+		// to projects.id. Position 10 in production, i.e. before created_at.
+		{Name: "project_id", Type: "String"},
 		{Name: "created_at", Type: "DateTime64(3)"},
 		{Name: "updated_at", Type: "DateTime64(3)"},
 		{Name: "completed_at", Type: "Nullable(DateTime64(3))"},
@@ -292,13 +349,23 @@ var EngineFull = map[string]string{
 	"git_pull_requests":                       "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number) SETTINGS index_granularity = 8192",
 	"investment_metrics_daily":                "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, team_id, investment_area, project_stream) SETTINGS allow_nullable_key = 1, index_granularity = 8192",
 	"operational_incidents":                   "ReplacingMergeTree(source_version_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
+	"projects":                                "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, id) SETTINGS index_granularity = 8192",
 	"operational_service_repository_mappings": "ReplacingMergeTree(source_version_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
 	"recommendations_daily":                   "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(window_end) ORDER BY (org_id, team_id, rule_id, window_end) SETTINGS index_granularity = 8192",
 	"repo_metrics_daily":                      "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"repos":                                   "ReplacingMergeTree(last_synced) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
-	"work_graph_deployment_incident_edges":    "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, deployment_id, incident_id, source) SETTINGS index_granularity = 8192",
-	"work_item_dependencies":                  "ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
-	"work_items":                              "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id) SETTINGS index_granularity = 8192",
+	// CHAOS-3802: valid_from is IN team_project_ownership's sorting key, so
+	// FINAL cannot collapse two windows of the same edge -- that is exactly
+	// what makes queryProjectTeams' GROUP BY load-bearing (its Trap C note).
+	// work_item_team_attributions keys on ifNull(team_id, ''), not team_id:
+	// two attributions differing only in team are DISTINCT rows in
+	// production, and a fixture that dropped the term would collapse them.
+	"team_project_ownership":               "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, project_id, team_id, source, valid_from) SETTINGS index_granularity = 8192",
+	"teams":                                "ReplacingMergeTree(updated_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
+	"work_graph_deployment_incident_edges": "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, deployment_id, incident_id, source) SETTINGS index_granularity = 8192",
+	"work_item_dependencies":               "ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
+	"work_item_team_attributions":          "ReplacingMergeTree(computed_at) ORDER BY (org_id, repo_id, work_item_id, ifNull(team_id, ''), source) SETTINGS index_granularity = 8192",
+	"work_items":                           "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id) SETTINGS index_granularity = 8192",
 }
 
 // DDL renders CREATE TABLE statements for the named tables, in a

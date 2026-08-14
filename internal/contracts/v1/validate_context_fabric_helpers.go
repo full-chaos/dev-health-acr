@@ -502,7 +502,8 @@ func validContextFabricRelationshipType(value ContextFabricRelationshipType) boo
 		ContextFabricRelationshipCorrelatedWithIncident, ContextFabricRelationshipRelatedTo,
 		ContextFabricRelationshipDocumentedBy, ContextFabricRelationshipHasEpisode,
 		ContextFabricRelationshipBlocks, ContextFabricRelationshipPartOf,
-		ContextFabricRelationshipRelatesTo, ContextFabricRelationshipDuplicates:
+		ContextFabricRelationshipRelatesTo, ContextFabricRelationshipDuplicates,
+		ContextFabricRelationshipBelongsToProject, ContextFabricRelationshipOwnedByTeam:
 		return true
 	default:
 		return false

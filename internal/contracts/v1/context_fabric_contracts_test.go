@@ -165,16 +165,17 @@ func TestContextFabricRelationshipTypeRejectsUnknownValueLoudly(t *testing.T) {
 	}
 
 	// Every closed-vocabulary member -- the pre-existing six, plus
-	// CHAOS-3779's BLOCKS/PART_OF/RELATES_TO/DUPLICATES -- must validate
-	// cleanly on both fields. A closed enum that silently rejects a real
-	// member is as much an H4-class defect as one that silently admits a
-	// fake one.
+	// CHAOS-3779's BLOCKS/PART_OF/RELATES_TO/DUPLICATES, plus CHAOS-3802's
+	// BELONGS_TO_PROJECT/OWNED_BY_TEAM -- must validate cleanly on both
+	// fields. A closed enum that silently rejects a real member is as much
+	// an H4-class defect as one that silently admits a fake one.
 	members := []ContextFabricRelationshipType{
 		ContextFabricRelationshipBelongsToRepository, ContextFabricRelationshipBelongsToPullRequest,
 		ContextFabricRelationshipCorrelatedWithIncident, ContextFabricRelationshipRelatedTo,
 		ContextFabricRelationshipDocumentedBy, ContextFabricRelationshipHasEpisode,
 		ContextFabricRelationshipBlocks, ContextFabricRelationshipPartOf,
 		ContextFabricRelationshipRelatesTo, ContextFabricRelationshipDuplicates,
+		ContextFabricRelationshipBelongsToProject, ContextFabricRelationshipOwnedByTeam,
 	}
 	for _, member := range members {
 		projection.Type = member

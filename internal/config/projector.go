@@ -111,7 +111,15 @@ func loadProjector(lookup lookupEnv) (ProjectorConfig, error) {
 	if cfg.Concurrency, err = intValue(lookup, envContextFabricConcurrency, defaultProjectionConcurrency); err != nil {
 		return ProjectorConfig{}, err
 	}
-	if cfg.TeamsProjectsEnabled, err = boolValue(lookup, envContextFabricTeamsProjects, false); err != nil {
+	// Defaults to true as of CHAOS-3802 (was false). The old default existed
+	// only because devhealthsource.TeamsProjectsSource was a stub that failed
+	// loudly when switched on; now that it is a real canonical source, a
+	// default-off feature whose acceptance criterion ("an org rebuild picks
+	// the new kinds up with no second migration") requires it on would be a
+	// dead guard. Still explicitly disableable -- this gates ONLY the
+	// teams/projects source, never the repository/work-item projection that
+	// ACR_CONTEXT_FABRIC_PROJECTION_ENABLED above governs.
+	if cfg.TeamsProjectsEnabled, err = boolValue(lookup, envContextFabricTeamsProjects, true); err != nil {
 		return ProjectorConfig{}, err
 	}
 

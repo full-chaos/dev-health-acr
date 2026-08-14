@@ -67,7 +67,14 @@ func (s *EpisodesProjectionSource) NextProjectionBatch(ctx context.Context, chec
 	}
 	rows, err := s.rows.ListSince(ctx, orgID, state.Since, state.After, limit+1)
 	if err != nil {
-		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("%w: read approved episodes: %v", contextfabric.ErrUnavailable, err)
+		// Same bounded classification the ClickHouse-backed sources use
+		// (assemble.go's tableReadError). This boundary escaped CHAOS-3802's
+		// first error sweep because that sweep was scoped to the files the
+		// branch had changed rather than to the ProjectionSource boundary as
+		// a class; today's EpisodeStore happens to sanitize, but the boundary
+		// does not enforce it, so an alternate provider would put driver text
+		// straight into coordinator logs.
+		return contextfabric.ProjectionBatch{}, false, &tableReadError{table: "approved episodes", cause: err}
 	}
 	// CHAOS-3753 codex round-2 finding K3: an oversized from-scratch read
 	// (more than episodesSnapshotCap approved episodes) used to hard-error

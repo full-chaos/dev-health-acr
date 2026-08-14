@@ -60,6 +60,13 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		return ProjectionRun{}, fmt.Errorf("read projection batch: %w", err)
 	}
 	if !available {
+		advanced, progressed, err := w.persistConsumedProgress(ctx, checkpoint)
+		if err != nil {
+			return ProjectionRun{}, err
+		}
+		if progressed {
+			return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: advanced}, nil
+		}
 		return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor}, nil
 	}
 	if err := batch.Validate(); err != nil {
@@ -133,6 +140,58 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		BatchID: batch.BatchID, Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: batch.NextCursor,
 		BackendWatermark: receipt.BackendWatermark, Applied: true, AppliedAt: receipt.AppliedAt,
 	}, nil
+}
+
+// persistConsumedProgress durably advances the checkpoint over source rows
+// that were consumed but proved unpublishable -- see ProjectionProgress for
+// why this cannot be done with a batch, and for the safety argument.
+//
+// Deliberately narrow: it runs only when the source reported no batch, only
+// when the source implements the optional capability, and only for a cursor
+// that actually moves. BackendWatermark and SourceVersion are carried through
+// UNCHANGED -- nothing was applied, so nothing about the backend's reconciled
+// state may change here. The same CAS the apply path uses keeps a concurrent
+// projector from silently reordering this with a real batch.
+func (w *ProjectionWorker) persistConsumedProgress(ctx context.Context, checkpoint ProjectionCheckpoint) (string, bool, error) {
+	reporter, ok := w.source.(ProjectionProgress)
+	if !ok {
+		return "", false, nil
+	}
+	progress, ok, err := reporter.ConsumedWithoutPublishing(ctx, checkpoint)
+	if err != nil {
+		return "", false, fmt.Errorf("read consumed projection progress: %w", err)
+	}
+	if !ok || strings.TrimSpace(progress.NextCursor) == "" || progress.NextCursor == checkpoint.Cursor {
+		return "", false, nil
+	}
+	// A source that cannot name the identity its progress was derived under
+	// gets no progress at all. Silently advancing under an unknown producer
+	// identity is the failure this guard exists to prevent.
+	if strings.TrimSpace(progress.SourceVersion) == "" {
+		return "", false, nil
+	}
+	// The same rule the batch path applies at the batch's own SourceVersion
+	// (see the CHAOS-3779 H2-residual comment above): a stored version that
+	// differs means the producer's identity semantics changed, so the durable
+	// cursor must NOT move -- rows the new version would publish sit behind
+	// it. Recovery is the existing rebuild path, not a quiet advance.
+	if checkpoint.SourceVersion != "" && checkpoint.SourceVersion != progress.SourceVersion {
+		return "", false, fmt.Errorf("%w: org %s source %s checkpoint source_version %q, progress source_version %q", ErrProjectionSourceVersionChanged, checkpoint.OrgID, checkpoint.Source, checkpoint.SourceVersion, progress.SourceVersion)
+	}
+	updated := checkpoint
+	updated.Cursor = progress.NextCursor
+	// Claim the version alongside the advance, exactly as the batch path
+	// claims it before applying: after this, an empty stored version can no
+	// longer wave a different producer identity through.
+	updated.SourceVersion = progress.SourceVersion
+	updated.UpdatedAt = w.now().UTC()
+	if err := w.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, checkpoint, updated); err != nil {
+		if errors.Is(err, ErrProjectionConflict) {
+			return "", false, err
+		}
+		return "", false, fmt.Errorf("advance projection checkpoint over unpublishable rows: %w", err)
+	}
+	return progress.NextCursor, true, nil
 }
 
 // Run continuously projects one organization/source pair until cancellation.

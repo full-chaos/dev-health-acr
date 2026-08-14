@@ -108,3 +108,28 @@ func TestProjectorConfigSafeAttributesOmitDSNs(t *testing.T) {
 		}
 	}
 }
+
+// TestTeamsProjectsDefaultsToEnabled is CHAOS-3802 D2. The flag defaulted to
+// false only because teams_projects.go was a stub that failed loudly when
+// switched on; with a real source behind it, a default-off feature whose
+// acceptance criterion ("an org rebuild picks the new kinds up") requires it
+// on is a dead guard, not a safety measure. An operator can still turn it off
+// explicitly -- which the second half of this test proves is a real, reachable
+// choice and not a value the loader ignores.
+func TestTeamsProjectsDefaultsToEnabled(t *testing.T) {
+	t.Parallel()
+	cfg, err := loadProjector(mapLookup(nil))
+	if err != nil {
+		t.Fatalf("loadProjector: %v", err)
+	}
+	if !cfg.TeamsProjectsEnabled {
+		t.Fatal("ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED must default to true now that the source is implemented")
+	}
+	off, err := loadProjector(mapLookup(map[string]string{envContextFabricTeamsProjects: "false"}))
+	if err != nil {
+		t.Fatalf("loadProjector: %v", err)
+	}
+	if off.TeamsProjectsEnabled {
+		t.Fatal("an explicit false must still disable team/project projection")
+	}
+}

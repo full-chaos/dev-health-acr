@@ -155,6 +155,10 @@ func (s *fakeScanner) Scan(dest ...any) error {
 			*value = row[index].(int64)
 		case *uint32:
 			*value = row[index].(uint32)
+		// UInt64 is what ClickHouse returns for count()/count() OVER (...);
+		// queryProjectTeams scans its key_resolution_count that way.
+		case *uint64:
+			*value = row[index].(uint64)
 		case *uint8:
 			*value = row[index].(uint8)
 		case *time.Time:

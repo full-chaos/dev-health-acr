@@ -75,6 +75,13 @@ func producedRelationshipTypeSet() map[contractsv1.ContextFabricRelationshipType
 	for _, t := range devhealthsource.ProducedRelationshipTypes() {
 		produced[t] = true
 	}
+	// CHAOS-3802: the teams/projects source is a THIRD producer inside
+	// devhealthsource with its own type list, so its types have to be
+	// unioned here explicitly. Omitting it would leave BELONGS_TO_PROJECT
+	// and OWNED_BY_TEAM invisible to both AC-3779-9 directions.
+	for _, t := range devhealthsource.TeamsProjectsRelationshipTypes() {
+		produced[t] = true
+	}
 	for _, t := range falkorgraph.ProducedRelationshipTypes() {
 		produced[contractsv1.ContextFabricRelationshipType(t)] = true
 	}

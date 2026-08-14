@@ -508,6 +508,55 @@ type ProjectionSource interface {
 	NextProjectionBatch(context.Context, ProjectionCheckpoint) (ProjectionBatch, bool, error)
 }
 
+// ProjectionProgress is an OPTIONAL capability a ProjectionSource may
+// implement (CHAOS-3802). It exists for one narrow, real situation: a source
+// can consume rows that are provably unpublishable -- today, ownership rows
+// omitted because their project_key resolves to more than one project -- and
+// those rows still occupy cursor space.
+//
+// Without this, such rows are a permanent stall rather than a slow patch.
+// A payload-free ContextFabricProjectionBatch cannot carry their cursor
+// (Validate rejects an empty batch outright), so a source that finds only
+// unpublishable rows must answer available=false; the worker then reads
+// "caught up", the DURABLE checkpoint never moves, and every later tick
+// replays the same prefix forever, leaving publishable rows beyond the block
+// unreachable. Skipping them inside one NextProjectionBatch call only defers
+// the wall: whatever bound that skipping uses, an organization can exceed it.
+//
+// Implementations report a cursor covering ONLY rows they proved carry
+// nothing publishable. ok=false means "no progress to record" and must be the
+// answer whenever a source is genuinely caught up, so an idle tick never
+// writes.
+//
+// Safety (the CHAOS-3778 rule that a watermark must never advance past
+// unreconciled publishable state): the worker persists this progress with the
+// BackendWatermark and SourceVersion UNCHANGED. Only the source-side cursor
+// moves, and its meaning is "rows consumed", never "rows applied". Nothing
+// publishable is skipped, because a page qualifies only when it produced no
+// publishable candidate at all -- so there is no unreconciled state in the
+// range being passed over.
+type ProjectionProgress interface {
+	ConsumedWithoutPublishing(context.Context, ProjectionCheckpoint) (ConsumedProgress, bool, error)
+}
+
+// ConsumedProgress is what a source reports about rows it consumed without
+// publishing. SourceVersion is not optional decoration: progress MUST be bound
+// to the producer identity that derived it (CHAOS-3802 codex round-4 F1).
+//
+// Without that binding, progress persisted after a source-version bump
+// advances the durable cursor under the PRIOR version -- and rows the NEW
+// version would publish (a relaxed join, a corrected id space; exactly what
+// past version bumps in this repository did) are then unreachable behind the
+// advanced cursor, silently, with no rebuild triggered. Reporting the version
+// lets the worker apply the same rule the batch path already applies: a
+// mismatch against a non-empty stored version is
+// ErrProjectionSourceVersionChanged and forces a rebuild, never a quiet
+// advance.
+type ConsumedProgress struct {
+	NextCursor    string
+	SourceVersion string
+}
+
 // ProjectionCheckpointStore advances only after the backend has durably
 // accepted a batch. CompareAndSwapProjectionCheckpoint must return
 // ErrProjectionConflict when expected no longer matches the durable cursor, so
