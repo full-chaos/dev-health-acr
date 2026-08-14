@@ -1,13 +1,13 @@
 {
   "schema_version": "context_fabric_answer_projection.v1",
-  "result_id": "result_12345678",
-  "request_id": "request_12345678",
+  "result_id": "result_87654321",
+  "request_id": "request_87654321",
   "generated_at": "2026-08-11T16:00:03Z",
-  "status": "complete",
-  "question": "Most of the work is closed, so why is Ask Dev still not ready to ship?",
+  "status": "partial",
+  "question": "Was Ask Dev release-ready at the start of March?",
   "reused": false,
-  "direct_judgment": "Ask Dev is not release-ready even though most tracked implementation work is closed.",
-  "current_state": "Implementation completion and release readiness diverge because required product acceptance remains open.",
+  "direct_judgment": "As of 2026-02-28, Ask Dev was not release-ready: required product acceptance was still open at that time.",
+  "current_state": "This answer speaks for 2026-02-28, the most recent daily rollup at or before the requested time, not for current state.",
   "strongest_pressures": [
     "Release acceptance remains incomplete."
   ],
@@ -52,22 +52,32 @@
   ],
   "coverage_summary": [
     {
-      "source": "dev-health-ops:status",
-      "state": "available"
-    },
-    {
       "source": "dev-health-ops:readiness",
       "state": "available"
     },
     {
-      "source": "canonical_fact:workload",
-      "state": "pruned",
-      "reason": "pruned:subject_kind_unsupported: no resolved subject has a kind this capability supports"
+      "source": "dev-health-ops:status",
+      "state": "not_applicable",
+      "reason": "devhealthfacts: this fact has no recorded history, so it cannot answer for a past time"
     }
   ],
-  "coverage_partial": false,
+  "temporal": {
+    "requested": {
+      "axis": "valid_time",
+      "as_of": "2026-03-01T00:00:00Z"
+    },
+    "effective": {
+      "axis": "valid_time",
+      "as_of": "2026-02-28T00:00:00Z"
+    },
+    "grain": "day",
+    "coverage_complete": false
+  },
+  "coverage_partial": true,
   "limitations": [
-    "No production user-adoption evidence was available for this investigation."
+    "No production user-adoption evidence was available for this investigation.",
+    "Graph elements that carry no validity window are included at every requested time.",
+    "Subjects deleted at source since the requested time are not recoverable from the projected graph."
   ],
   "warnings": [],
   "evidence_ref_ids": [
@@ -75,7 +85,7 @@
   ],
   "subject_receipts": [
     {
-      "result_id": "result_12345678",
+      "result_id": "result_87654321",
       "receipt_id": "receipt_12345678"
     }
   ],

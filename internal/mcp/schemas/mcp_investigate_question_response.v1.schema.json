@@ -171,6 +171,9 @@
           },
           "maxItems": 100
         },
+        "temporal": {
+          "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/TemporalLabel"
+        },
         "coverage_partial": {
           "type": "boolean"
         },
@@ -724,7 +727,8 @@
                 "no_data",
                 "truncated",
                 "conflicted",
-                "not_applicable"
+                "not_applicable",
+                "pruned"
               ]
             },
             "reason": {
@@ -735,6 +739,167 @@
           "required": [
             "source",
             "state"
+          ]
+        },
+        "TemporalLabel": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The time an answer actually speaks for on a historical time axis (CHAOS-3781, AC-3781-2). Absent on the current axis. Effective is always narrower than or equal to requested; an answer may speak for less time than was asked about, never more.",
+          "properties": {
+            "requested": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/TimeContext"
+                },
+                {
+                  "properties": {
+                    "axis": {
+                      "enum": [
+                        "valid_time",
+                        "observed_time",
+                        "range"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "effective": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/TimeContext"
+                },
+                {
+                  "properties": {
+                    "axis": {
+                      "enum": [
+                        "valid_time",
+                        "observed_time",
+                        "range"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "grain": {
+              "type": "string",
+              "enum": [
+                "instant",
+                "day",
+                "none"
+              ]
+            },
+            "coverage_complete": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "requested",
+            "effective",
+            "grain",
+            "coverage_complete"
+          ]
+        },
+        "TimeContext": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "axis": {
+              "type": "string",
+              "enum": [
+                "current",
+                "valid_time",
+                "observed_time",
+                "range"
+              ]
+            },
+            "as_of": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "start": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "end": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "axis"
+          ],
+          "oneOf": [
+            {
+              "properties": {
+                "axis": {
+                  "const": "current"
+                }
+              },
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "as_of"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "start"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "end"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "properties": {
+                "axis": {
+                  "enum": [
+                    "valid_time",
+                    "observed_time"
+                  ]
+                }
+              },
+              "required": [
+                "as_of"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "start"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "end"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "properties": {
+                "axis": {
+                  "const": "range"
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ],
+              "not": {
+                "required": [
+                  "as_of"
+                ]
+              }
+            }
           ]
         },
         "BoundSubjectReceipt": {
@@ -974,6 +1139,9 @@
         "reused": {
           "type": "boolean",
           "description": "CHAOS-3782: true when this result was served from the immutable result store rather than a fresh investigation. When true, result_id and generated_at name the reused result's own identifier and generation time, not this request's."
+        },
+        "temporal": {
+          "$ref": "context_fabric_common.v1.schema.json#/$defs/TemporalLabel"
         }
       },
       "required": [
@@ -1131,6 +1299,66 @@
                 ]
               }
             }
+          ]
+        },
+        "TemporalLabel": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The time an answer actually speaks for on a historical time axis (CHAOS-3781, AC-3781-2). Absent on the current axis. Effective is always narrower than or equal to requested; an answer may speak for less time than was asked about, never more.",
+          "properties": {
+            "requested": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/context_fabric_common.v1/$defs/TimeContext"
+                },
+                {
+                  "properties": {
+                    "axis": {
+                      "enum": [
+                        "valid_time",
+                        "observed_time",
+                        "range"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "effective": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/context_fabric_common.v1/$defs/TimeContext"
+                },
+                {
+                  "properties": {
+                    "axis": {
+                      "enum": [
+                        "valid_time",
+                        "observed_time",
+                        "range"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "grain": {
+              "type": "string",
+              "enum": [
+                "instant",
+                "day",
+                "none"
+              ]
+            },
+            "coverage_complete": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "requested",
+            "effective",
+            "grain",
+            "coverage_complete"
           ]
         },
         "SubjectRef": {
@@ -1446,6 +1674,22 @@
               "minimum": 0,
               "maximum": 1
             },
+            "match_mechanisms": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "exact",
+                  "alias",
+                  "provider_key",
+                  "lexical",
+                  "vector",
+                  "traversal_parent"
+                ]
+              },
+              "maxItems": 6,
+              "uniqueItems": true
+            },
             "evidence_ref_ids": {
               "type": "array",
               "items": {
@@ -1488,6 +1732,9 @@
             "clarification_prompt": {
               "type": "string",
               "maxLength": 2000
+            },
+            "retrieval_degraded": {
+              "type": "boolean"
             }
           },
           "required": [
@@ -2085,7 +2332,8 @@
                 "no_data",
                 "truncated",
                 "conflicted",
-                "not_applicable"
+                "not_applicable",
+                "pruned"
               ]
             },
             "observed_at": {
@@ -2132,7 +2380,8 @@
                       "no_data",
                       "truncated",
                       "conflicted",
-                      "not_applicable"
+                      "not_applicable",
+                      "pruned"
                     ]
                   },
                   "observed_at": {

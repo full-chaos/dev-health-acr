@@ -13,6 +13,20 @@ import (
 const (
 	canonicalExample  = "context_fabric_investigation_result.v1.json"
 	projectionExample = "context_fabric_answer_projection.v1.json"
+
+	// The historical pair (CHAOS-3781 through CHAOS-3746). It exists
+	// because the current-axis pair above cannot exercise the temporal
+	// label at all: the label is nil on the current axis, so no assertion
+	// over that example says anything about it.
+	//
+	// Publishing it is the point, not a side effect. Go's
+	// ContextFabricAnswerProjection.Validate is the only thing that had
+	// ever seen a temporal-carrying projection; contractcheck validates
+	// every published example against its JSON SCHEMA, so this pair is
+	// what proves the schema admits what Project actually emits for a
+	// historical answer.
+	canonicalHistoricalExample  = "context_fabric_investigation_result_historical.v1.json"
+	projectionHistoricalExample = "context_fabric_answer_projection_historical.v1.json"
 )
 
 func examplePath(t *testing.T, name string) string {
@@ -33,6 +47,16 @@ func examplePath(t *testing.T, name string) string {
 // Set ACR_WRITE_FIXTURE=1 to regenerate the projection example after a
 // deliberate projection change.
 func TestGoldenProjectionMatchesCanonicalExample(t *testing.T) {
+	for name, pair := range map[string][2]string{
+		"current":    {canonicalExample, projectionExample},
+		"historical": {canonicalHistoricalExample, projectionHistoricalExample},
+	} {
+		t.Run(name, func(t *testing.T) { assertGoldenProjectionPair(t, pair[0], pair[1]) })
+	}
+}
+
+func assertGoldenProjectionPair(t *testing.T, canonicalExample, projectionExample string) {
+	t.Helper()
 	raw, err := os.ReadFile(examplePath(t, canonicalExample))
 	if err != nil {
 		t.Fatalf("read canonical example: %v", err)
