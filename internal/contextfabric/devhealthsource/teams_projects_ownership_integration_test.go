@@ -514,21 +514,35 @@ func subOmittedRowsBeyondTheSkipBoundStillConverge(t *testing.T, ctx context.Con
 		t.Fatalf("NewProjectionWorker: %v", err)
 	}
 
-	// Codex round-4 F3: the earlier version of this loop broke on the FIRST
-	// sighting of the edge, so a duplicate emitted on any later tick was
-	// never counted -- the exactly-once claim could not fail. It also checked
-	// only that a cursor was never REVISITED, which a backwards jump passes.
-	// Run to genuinely caught-up, count every emission, and check the cursor
-	// orders forward.
-	const wantEdge = "relationship:project_team:PROJ-PAST-BOUND:TEAM-GITHUB:native"
+	// Termination is by CONSTRUCTION, not by observation (codex round-5).
+	//
+	// Two earlier versions of this loop were vacuous in the same family this
+	// batch keeps finding. The first broke on the first sighting of the edge,
+	// so a later-tick duplicate could never be counted. The second treated an
+	// unchanged checkpoint as caught-up -- but a batch that publishes while
+	// leaving the cursor unmoved satisfies that condition, so the exact defect
+	// the test exists to catch could end the loop before it was observed.
+	//
+	// The fixture knows its own size: 5200 ambiguous keys is 10400 joined
+	// rows, ~52 pages, and one tick absorbs up to maxOmittedPageSkips (50)
+	// pages, so the whole block plus the edge beyond it needs a handful of
+	// ticks. Running a fixed count far past that, with no early exit, means
+	// the source is exhausted by construction rather than because a signal
+	// said so -- and every tick after exhaustion is a cheap no-op.
+	const (
+		wantEdge   = "relationship:project_team:PROJ-PAST-BOUND:TEAM-GITHUB:native"
+		totalTicks = 120
+		quietTail  = 10
+	)
 	published := 0
+	quiet := 0
 	var previous cursorPosition
-	ticks := 0
-	for ; ticks < 200; ticks++ {
+	for tick := 0; tick < totalTicks; tick++ {
 		before := checkpoints.checkpoint.Cursor
 		if _, err := worker.RunOnce(ctx, fixture.orgID, devhealthsource.TeamsProjectsSourceName); err != nil {
-			t.Fatalf("tick %d: %v", ticks, err)
+			t.Fatalf("tick %d: %v", tick, err)
 		}
+		appliedThisTick := len(backend.applied)
 		for _, batch := range backend.applied {
 			if hasRelationship(batch, wantEdge) {
 				published++
@@ -536,17 +550,28 @@ func subOmittedRowsBeyondTheSkipBoundStillConverge(t *testing.T, ctx context.Con
 		}
 		backend.applied = nil
 		after := checkpoints.checkpoint.Cursor
-		if after == before {
-			break // genuinely caught up: no batch, no progress
+
+		// First-class invariant, asserted on EVERY tick rather than inferred
+		// from how the loop happens to end: publishing without moving the
+		// cursor forward would replay the same batch on every later tick.
+		if appliedThisTick > 0 && !decodeCursorPosition(t, after).after(decodeCursorPosition(t, before)) {
+			t.Fatalf("tick %d: applied %d batch(es) without advancing the cursor past %q -- that batch would republish forever", tick, appliedThisTick, before)
 		}
-		current := decodeCursorPosition(t, after)
-		if !previous.zero() && !current.after(previous) {
-			t.Fatalf("tick %d: cursor went from %+v to %+v -- progress must order strictly forward, not merely differ", ticks, previous, current)
+		if after != before {
+			current := decodeCursorPosition(t, after)
+			if !previous.zero() && !current.after(previous) {
+				t.Fatalf("tick %d: cursor went from %+v to %+v -- progress must order strictly forward", tick, previous, current)
+			}
+			previous = current
+			quiet = 0
+			continue
 		}
-		previous = current
+		if appliedThisTick == 0 {
+			quiet++
+		}
 	}
-	if ticks == 200 {
-		t.Fatal("never reached caught-up within 200 ticks")
+	if quiet < quietTail {
+		t.Fatalf("only %d consecutive quiet ticks at the end (want >= %d) -- the run never demonstrably reached exhaustion, so the exactly-once claim below is not yet meaningful", quiet, quietTail)
 	}
 	if published != 1 {
 		t.Fatalf("the edge beyond the omitted block was published %d times across the WHOLE run, want exactly 1", published)
@@ -563,6 +588,9 @@ type cursorPosition struct {
 func (c cursorPosition) zero() bool { return c.Since.IsZero() && c.After == "" }
 
 func (c cursorPosition) after(previous cursorPosition) bool {
+	if previous.zero() {
+		return !c.zero()
+	}
 	if c.Since.After(previous.Since) {
 		return true
 	}
@@ -571,6 +599,11 @@ func (c cursorPosition) after(previous cursorPosition) bool {
 
 func decodeCursorPosition(t *testing.T, cursor string) cursorPosition {
 	t.Helper()
+	// An empty cursor is the from-scratch position, which sorts before every
+	// real one -- not a malformed payload.
+	if cursor == "" {
+		return cursorPosition{}
+	}
 	raw, err := base64.RawURLEncoding.DecodeString(cursor)
 	if err != nil {
 		t.Fatalf("decode cursor %q: %v", cursor, err)
