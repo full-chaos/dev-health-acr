@@ -90,7 +90,50 @@ func ResolveFromMergedCandidates(candidatesBySubject map[string]contextfabric.Su
 			}
 			commitIndex = append(commitIndex, index)
 		}
+		// CHAOS-3810: the exact label/name match override, evaluated BEFORE
+		// the truncation branch below.
+		//
+		// NodeCandidate documents that an exact match sets Confidence to 1.0
+		// "regardless of Relevance". That statement was false in practice for
+		// every real corpus: falkorgraph's fulltextSearchNodes caps every
+		// candidate at fulltextRelevanceFloor as soon as the result set
+		// truncates, and a 20k+ subject graph with MaxSubjectCandidates=10
+		// truncates on essentially every search -- so the searchTruncated
+		// branch ran first and forced the whole resolution ambiguous, override
+		// or not. Nothing auto-committed, ever, including a candidate whose
+		// label was character-for-character the subject term.
+		//
+		// Why an exact match is allowed to outrank truncation, when a merely
+		// high-scoring one is not: truncation says "a competing candidate may
+		// have been dropped before this function ever saw it", and that is a
+		// real hazard for a RELEVANCE SCORE, which only ranks candidates
+		// against each other. String equality is not a ranking -- the term IS
+		// this subject's label. The only dropped row that could genuinely
+		// compete is one carrying the IDENTICAL label, and that case is
+		// handled honestly rather than assumed away: exactness is required to
+		// be UNIQUE among eligible candidates (len(exactIndex) == 1), so a
+		// second same-label subject in the retained set falls straight through
+		// to ambiguity. A duplicate label hidden entirely behind the
+		// truncation boundary remains the residual risk, and it is
+		// unresolvable by label under any rule -- a caller who means that
+		// subject must name it by canonical ID (SubjectHint), which takes the
+		// truncation-immune ExactHint path instead.
+		//
+		// Confidence == 1 is required alongside the mechanism so this can only
+		// ever read the override's own value: CorroboratedConfidence returns a
+		// base of 1 unchanged precisely so being found a second way never
+		// costs an exact match its certainty.
+		exactIndex := make([]int, 0, len(commitIndex))
+		for _, index := range commitIndex {
+			if candidates[index].Confidence == 1 && HasMechanism(candidates[index].MatchMechanisms, contextfabric.MatchExact) {
+				exactIndex = append(exactIndex, index)
+			}
+		}
 		switch {
+		case len(exactIndex) == 1:
+			committedIndex[exactIndex[0]] = true
+			candidates[exactIndex[0]].State = contextfabric.ResolutionCommitted
+			resolution.Committed = []contextfabric.SubjectRef{candidates[exactIndex[0]].Subject}
 		case searchTruncated:
 			// Codex round-3 review of D11/AC-3778-0: truncation is a
 			// property of the RESOLUTION, not of any one candidate's

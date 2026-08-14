@@ -175,14 +175,31 @@ func TestAC_3781_3_ASubjectAbsentAtThatTimeIsNotAnswered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
+	// The acceptance criterion is that no current-state fact answers a
+	// question about a time the subject did not exist for. It takes FOUR
+	// assertions together, and each one covers a way the other three can be
+	// satisfied vacuously.
+	//
+	// This used to be proved by letting the fact read run and asserting it
+	// was handed zero subjects. CHAOS-3810 gives the criterion a strictly
+	// stronger proof -- an investigation that commits nothing terminates
+	// before the fact read, so there is no read to leak through -- but
+	// "the read never ran" is, on its own, ALSO what you would see from an
+	// engine that never queried the graph, or from a stub that jumped
+	// straight to an outcome. Absence of the read only means something
+	// alongside evidence that the work leading up to it actually happened.
+	if graph.resolveCalls == 0 || graph.discoverCalls == 0 {
+		t.Fatalf("the graph was never queried (resolve=%d discover=%d); a no_match reached without resolution proves nothing about admission by validity window",
+			graph.resolveCalls, graph.discoverCalls)
+	}
 	if result.Status != InvestigationNoMatch {
 		t.Fatalf("Status = %q, want no_match: a subject that did not exist then must not get a current-state answer", result.Status)
 	}
 	if len(result.SubjectResolution.Committed) != 0 {
 		t.Fatalf("committed = %#v, want nothing committed for a time before the subject existed", result.SubjectResolution.Committed)
 	}
-	if !factsCalled {
-		t.Fatal("the fact path was skipped entirely; this test cannot prove no current-state facts leaked in")
+	if factsCalled {
+		t.Fatal("the canonical fact read ran for a subject that did not exist at the requested time; it must not be reached at all")
 	}
 }
 

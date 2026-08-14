@@ -109,7 +109,7 @@ WHERE p.org_id = {org_id:String} AND concat(toString(p.repo_id), ':', toString(p
 		return contextfabric.FactProviderResult{}, readFailure("query pull requests", scanErr)
 	}
 	state, retentionReason := timeBound.retentionState(rowCount)
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }
 
 // ReviewsProvider implements contextfabric.FactProvider for FactReviews from
@@ -164,5 +164,5 @@ WHERE r.org_id = {org_id:String} AND r.review_id IN {ids:Array(String)}` + timeB
 		return contextfabric.FactProviderResult{}, readFailure("query pull request reviews", scanErr)
 	}
 	state, retentionReason := timeBound.retentionState(rowCount)
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

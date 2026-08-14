@@ -49,14 +49,14 @@ func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.
 	// org_id = {org_id:String} clause below is itself the whole scope.
 	orgSubjectIDs, bySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization), organizationPrefix)
 	if len(orgSubjectIDs) == 0 {
-		return contextfabric.FactProviderResult{Facts: nil, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+		return contextfabric.FactProviderResult{Facts: nil, State: contextfabric.SourceAvailable, Version: QueryVersion}, nil
 	}
 	subject, requested := bySubject[orgID]
 	if !requested {
 		// The caller asked about a different organization's subject than
 		// principal.OrgID names -- never honor it (org scoping is
 		// structural, never caller-supplied).
-		return contextfabric.FactProviderResult{Facts: nil, State: contextfabric.SourceAvailable, Version: queryVersion}, nil
+		return contextfabric.FactProviderResult{Facts: nil, State: contextfabric.SourceAvailable, Version: QueryVersion}, nil
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, maxFactRowsPerQuery)
 	// row_number() OVER (PARTITION BY provider ORDER BY created_at DESC)
@@ -132,5 +132,5 @@ WHERE rn = 1`)
 	if omittedUnrepresentableCount > 0 && retentionReason == "" {
 		retentionReason = unrepresentableValueReason
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery, OmittedCount: omittedUnrepresentableCount}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery, OmittedCount: omittedUnrepresentableCount}, nil
 }

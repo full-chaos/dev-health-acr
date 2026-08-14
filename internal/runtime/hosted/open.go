@@ -302,13 +302,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, Sink: receiptSink},
 		Graph:       graphReader,
 		Facts:       factRegistry,
-		Synthesizer: contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextfabric.RuntimeAnswerSynthesizerOptions{
-			ServiceVersion:    request.options.ServiceVersion,
-			Backend:           "graph",
-			ProjectionVersion: contextFabricProjectionVersion,
-		}},
-		Results:   investigationStore,
-		ReuseGate: investigationStore,
+		Synthesizer: contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion)},
+		Results:     investigationStore,
+		ReuseGate:   investigationStore,
 		// CHAOS-3782 Codex round-1 F1: same *pginvestigation.Store also
 		// implements SourceWatermarkSnapshotter, so Engine can capture
 		// the reuse snapshot itself, before the graph read, rather than
@@ -367,6 +363,35 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		return engine, investigationStore, nil, reuseInvalidator, nil
 	}
 	return engine, investigationStore, evictor, reuseInvalidator, nil
+}
+
+// contextFabricSynthesizerOptions is the complete static version identity
+// hosted composition stamps on every InvestigationResult.
+//
+// It is a named function, not an inline literal, because CHAOS-3810 codex
+// round-1 P1 was exactly a half-filled literal: Backend and
+// ProjectionVersion were supplied while QueryVersion and
+// CanonicalServiceVersion were left to the "unwired" placeholder even though
+// both have real authorities in this repository. A field omitted from a
+// literal is invisible; a field omitted from this function is a test failure
+// (see the hosted composition test that asserts every field against its
+// authority).
+//
+// Why this matters most on the terminal path: a synthesized result could
+// still recover CanonicalServiceVersion from the fact bundle it read
+// (Engine falls back to facts.Version), but Engine's terminal
+// clarification_required/no_match result reads NO bundle -- it takes its
+// static versions from this struct alone, through
+// RuntimeAnswerSynthesizer.StaticResultVersions -- so an unset field there
+// is permanently unattributable across a rebuild.
+func contextFabricSynthesizerOptions(serviceVersion string) contextfabric.RuntimeAnswerSynthesizerOptions {
+	return contextfabric.RuntimeAnswerSynthesizerOptions{
+		ServiceVersion:          serviceVersion,
+		Backend:                 "graph",
+		ProjectionVersion:       contextFabricProjectionVersion,
+		QueryVersion:            devhealthfacts.QueryVersion,
+		CanonicalServiceVersion: contextfabric.CanonicalFactRegistryVersion,
+	}
 }
 
 // contextFabricProjectionVersion is Versions.ProjectionVersion for every

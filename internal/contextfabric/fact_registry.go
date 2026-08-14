@@ -14,7 +14,12 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-const canonicalFactRegistryVersion = "context-fabric-facts.v1"
+// CanonicalFactRegistryVersion is the canonical-service version every
+// CanonicalFactBundle this registry produces carries. Exported (CHAOS-3810
+// codex round-1 P1) so hosted composition can stamp the SAME value on a
+// terminal result, which reads no bundle and therefore has none to copy --
+// see RuntimeAnswerSynthesizerOptions.CanonicalServiceVersion.
+const CanonicalFactRegistryVersion = "context-fabric-facts.v1"
 
 // maxCanonicalFactsPerBundle bounds how many CanonicalFacts one
 // CanonicalFactBundle may carry, across ALL providers that contributed to
@@ -206,7 +211,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 	bundle := CanonicalFactBundle{
 		Facts:      []CanonicalFact{},
 		Coverage:   Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
-		Version:    canonicalFactRegistryVersion,
+		Version:    CanonicalFactRegistryVersion,
 		Versions:   map[FactKind]string{},
 		Watermarks: map[FactKind]string{},
 	}
@@ -601,7 +606,12 @@ func validateCanonicalFactRequest(request CanonicalFactRequest) error {
 	}
 	allowed := investigationScopeSubjectSet(request)
 	if len(allowed) == 0 {
-		return errors.New("canonical fact request requires discovered subjects or a cohort")
+		// CHAOS-3810/CHAOS-3811: classified, not bare. The rejection itself
+		// is correct -- a fact read with no subject is meaningless -- but as
+		// an unclassified error it reached the investigation route's final
+		// fallthrough and surfaced as a 500 internal_error with
+		// retryable=false. See ErrNoInvestigationSubjects.
+		return fmt.Errorf("%w: canonical fact request requires discovered subjects or a cohort", ErrNoInvestigationSubjects)
 	}
 	// Codex round-8 F1: subject UNIQUENESS is decided here too, before any
 	// pruning short-circuit -- the same family as the round-5 scope fix.

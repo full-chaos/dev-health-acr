@@ -53,9 +53,15 @@ func handleInvestigateQuestion(ctx context.Context, boot *Bootstrap, req *mcpsdk
 		Question:             input.Question,
 		Conversation:         input.Conversation,
 		PriorSubjectReceipts: input.PriorSubjectReceipts,
-		// Only the current axis is answerable today, and the tool schema
-		// deliberately exposes no axis field, so this is fixed rather
-		// than caller-driven.
+		// Fixed rather than caller-driven because the tool schema
+		// deliberately exposes no axis field -- a SURFACE decision, not a
+		// capability one. CHAOS-3781 made all three historical axes
+		// answerable (the engine, the providers and the route all stopped
+		// refusing; only ErrInvalidTimeBound remains, for a future instant
+		// or an over-wide range), so pinning current here is this tool
+		// choosing its scope, not reporting a limit. See
+		// contractsv1.MCPInvestigateQuestionRequest for what adding the
+		// field would take.
 		TimeContext: contractsv1.ContextFabricTimeContext{Axis: contractsv1.ContextFabricTemporalCurrent},
 		Options:     hostedOptions(budget, input.AllowClarification),
 	}
