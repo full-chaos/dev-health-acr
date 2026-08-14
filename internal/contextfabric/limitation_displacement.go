@@ -29,26 +29,108 @@ import contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 // The cap is read from the contract rather than restated, so this cannot
 // drift from the bound it exists to respect -- the same relation
 // fact_registry.go's coverage clamps now hold.
+// appendBoundedLimitations is the ONE path by which anything is added to a
+// composed result's limitations (CHAOS-3746 round-17 finding 1).
+//
+// It exists because the cap was handled at one append site and not the
+// other. The retrieval-degradation disclosure displaced a caveat to fit;
+// CHAOS-3781's standing historical disclosures were then appended straight
+// on top with no cap awareness, so a degraded answer on a historical axis
+// with a full limitation list overflowed and died at
+// ContextFabricInvestigationResult.Validate -- the very defect the
+// displacement was written to prevent, re-entering through the site the
+// fix did not cover. Fixing that site alone would have left the next one.
+//
+// Semantics are exactly the displacement rule, generalised: an addition
+// already stated is skipped; otherwise it is appended, and at the cap the
+// last MODEL-AUTHORED caveat gives way. Service-authored disclosures are
+// never displaced -- displacing one disclosure to make room for another
+// would be a net loss of exactly the statements that cannot be recovered
+// from anywhere else in the document.
+//
+// Returns the composed list and how many model caveats it dropped, because
+// nothing downstream can recover that: a displaced list and a list that
+// had room are the same length and carry the same disclosures.
+func appendBoundedLimitations(limitations []string, additions []string) (composed []string, displaced int) {
+	composed = limitations
+	for _, addition := range additions {
+		if alreadyStates(composed, addition) {
+			continue
+		}
+		if len(composed) < contractsv1.ContextFabricLimitationsMaxCount {
+			composed = append(composed, addition)
+			continue
+		}
+		index := lastModelAuthoredLimitation(composed)
+		if index < 0 {
+			// Unreachable with today's vocabulary: there are three
+			// service-authored disclosures in total against a cap of 100,
+			// so a full list always holds a model caveat. Kept as a
+			// branch rather than an assumption because the alternative is
+			// silently returning an over-cap list, and skipping the
+			// addition at least leaves a valid answer.
+			// TestServiceDisclosuresCannotFillTheCap pins the premise.
+			continue
+		}
+		shortened := append([]string(nil), composed[:index]...)
+		shortened = append(shortened, composed[index+1:]...)
+		composed = append(shortened, addition)
+		displaced++
+	}
+	return composed, displaced
+}
+
+// alreadyStates reports whether limitations already says what addition
+// says. The retrieval-degradation disclosure matches on EITHER spelling:
+// a stored answer carrying the legacy wording must not gain a second,
+// differently worded copy of the same statement.
+func alreadyStates(limitations []string, addition string) bool {
+	if contractsv1.IsContextFabricRetrievalDegradedLimitation(addition) {
+		return hasRetrievalDegradedLimitation(limitations)
+	}
+	for _, limitation := range limitations {
+		if limitation == addition {
+			return true
+		}
+	}
+	return false
+}
+
+// lastModelAuthoredLimitation returns the index of the last entry that is
+// not a service-authored disclosure, or -1 when every entry is one.
+func lastModelAuthoredLimitation(limitations []string) int {
+	for i := len(limitations) - 1; i >= 0; i-- {
+		if !isServiceAuthoredLimitation(limitations[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+// isServiceAuthoredLimitation reports whether a limitation is one this
+// service composes rather than one the model wrote. These are the
+// statements a reader cannot get from anywhere else in the document, so
+// they are never the ones displaced.
+func isServiceAuthoredLimitation(limitation string) bool {
+	if contractsv1.IsContextFabricRetrievalDegradedLimitation(limitation) {
+		return true
+	}
+	for _, disclosure := range serviceAuthoredLimitations() {
+		if limitation == disclosure {
+			return true
+		}
+	}
+	return false
+}
+
+// serviceAuthoredLimitations enumerates every disclosure this service
+// composes, derived from the same declarations the composers use so a new
+// disclosure cannot become displaceable by being forgotten here.
+func serviceAuthoredLimitations() []string {
+	disclosures := append([]string(nil), temporalLimitations...)
+	return append(disclosures, observedTimeLimitation)
+}
+
 func withRetrievalDegradation(limitations []string) (composed []string, displaced int) {
-	// Either spelling already present: nothing to add, and nothing may be
-	// displaced to make room for a duplicate. A reused answer reaches here
-	// carrying its stored wording, which must survive verbatim.
-	if hasRetrievalDegradedLimitation(limitations) {
-		return limitations, 0
-	}
-	if len(limitations) < contractsv1.ContextFabricLimitationsMaxCount {
-		return append(limitations, retrievalDegradedLimitation), 0
-	}
-	// At (or somehow past) the cap. Keep the first cap-1 entries in their
-	// original order and put the disclosure last.
-	//
-	// The count is returned BY the function that performs the swap, not
-	// derived by comparing the lists afterwards. A before/after length
-	// comparison cannot see this at all: the list is the same length on
-	// both sides, so the only honest place to count is here, where the
-	// decision to drop an entry is actually made. An earlier version of
-	// this file did compare lengths, in a helper nothing called; it would
-	// have reported zero for every displacement it was written to count.
-	kept := append([]string(nil), limitations[:contractsv1.ContextFabricLimitationsMaxCount-1]...)
-	return append(kept, retrievalDegradedLimitation), len(limitations) - (contractsv1.ContextFabricLimitationsMaxCount - 1)
+	return appendBoundedLimitations(limitations, []string{retrievalDegradedLimitation})
 }

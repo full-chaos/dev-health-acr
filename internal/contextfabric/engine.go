@@ -425,7 +425,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// carrying no label, so a composition bug fails loudly here rather
 	// than shipping an unlabeled historical answer.
 	result.Temporal = composeTemporalLabel(interpretation, result.Coverage, facts.TemporalGrain)
-	result.Limitations = appendTemporalLimitations(result.Limitations, interpretation)
+	temporallyLimited, temporalDisplaced := appendTemporalLimitations(result.Limitations, interpretation)
+	result.Limitations = temporallyLimited
+	result.LimitationsDisplaced += temporalDisplaced
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, fmt.Errorf("%w: %v", ErrInvalidResult, err)
 	}

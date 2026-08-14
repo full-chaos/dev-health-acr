@@ -376,24 +376,14 @@ func temporalLimitationsFor(axis TemporalAxis) []string {
 }
 
 // appendTemporalLimitations adds the standing historical disclosures to a
-// result's own limitations, skipping any already present so a re-composed
-// result never accumulates duplicates (Limitations is bounded and required
-// to be unique by the result contract).
-func appendTemporalLimitations(limitations []string, interpretation InterpretedQuestion) []string {
-	axis := interpretation.TimeContext.Axis
-	if axis == TemporalCurrent {
-		return limitations
-	}
-	existing := make(map[string]struct{}, len(limitations))
-	for _, limitation := range limitations {
-		existing[limitation] = struct{}{}
-	}
-	for _, limitation := range temporalLimitationsFor(axis) {
-		if _, ok := existing[limitation]; ok {
-			continue
-		}
-		limitations = append(limitations, limitation)
-		existing[limitation] = struct{}{}
-	}
-	return limitations
+// result's own limitations.
+//
+// It routes through appendBoundedLimitations, which owns the cap, the
+// dedup and the displacement count. Before that it appended directly, so
+// a full limitation list on a historical axis overflowed the contract and
+// cost the entire answer (round-17 finding 1) -- the same defect the
+// degradation disclosure's own appender had already been fixed for, at
+// the one site the fix had not reached.
+func appendTemporalLimitations(limitations []string, interpretation InterpretedQuestion) (composed []string, displaced int) {
+	return appendBoundedLimitations(limitations, temporalLimitationsFor(interpretation.TimeContext.Axis))
 }

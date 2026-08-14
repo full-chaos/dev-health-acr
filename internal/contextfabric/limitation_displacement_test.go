@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -181,5 +182,83 @@ func TestEngineRecordsNoDisplacementWhenThereIsRoom(t *testing.T) {
 	}
 	if got, want := len(result.Limitations), contractsv1.ContextFabricLimitationsMaxCount; got != want {
 		t.Errorf("result carries %d limitations, want %d (cap-1 model caveats plus the disclosure)", got, want)
+	}
+}
+
+// TestDegradedHistoricalAnswerAtCapStillReturns is round-17 finding 1: the
+// same defect class as the main-at-250 repro, re-entering through the
+// append site the displacement fix did not cover.
+//
+// CHAOS-3781 adds standing historical disclosures to every non-current
+// answer. Appended after the cap handling, they pushed a full list over
+// ContextFabricLimitationsMaxCount and the whole investigation died at
+// validation -- an answer lost to a disclosure, exactly what displacement
+// exists to prevent.
+//
+// Drives the REAL Investigate path, at the cap, on a historical axis, with
+// retrieval degraded, so every appender runs in the order production uses.
+func TestDegradedHistoricalAnswerAtCapStillReturns(t *testing.T) {
+	// Before the harness clock (time.Unix(100)), so the axis is genuinely
+	// historical rather than a future bound the engine refuses.
+	asOf := time.Unix(50, 0).UTC()
+	engine, request := engineForDegradationOnAxis(t, true, modelLimitations(contractsv1.ContextFabricLimitationsMaxCount),
+		TimeContext{Axis: TemporalValidTime, AsOf: &asOf})
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_hist_cap"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() = %v, want an answer: a disclosure must cost a caveat, never the answer", err)
+	}
+
+	if got, want := len(result.Limitations), contractsv1.ContextFabricLimitationsMaxCount; got > want {
+		t.Errorf("result carries %d limitations, over the cap %d", got, want)
+	}
+	if !hasRetrievalDegradedLimitation(result.Limitations) {
+		t.Error("the degradation disclosure was lost")
+	}
+	// Every standing historical disclosure must survive too: they are the
+	// statements a reader cannot reconstruct from anything else.
+	for _, disclosure := range temporalLimitationsFor(TemporalValidTime) {
+		if !alreadyStates(result.Limitations, disclosure) {
+			t.Errorf("historical disclosure was lost: %q", disclosure)
+		}
+	}
+	// One displacement per disclosure that had to be forced in.
+	wantDisplaced := 1 + len(temporalLimitationsFor(TemporalValidTime))
+	if result.LimitationsDisplaced != wantDisplaced {
+		t.Errorf("result.LimitationsDisplaced = %d, want %d", result.LimitationsDisplaced, wantDisplaced)
+	}
+}
+
+// TestServiceDisclosuresCannotFillTheCap pins the premise
+// appendBoundedLimitations' unreachable branch rests on: there are always
+// fewer service-authored disclosures than the cap, so a full list always
+// holds a model caveat to displace. If a future disclosure set ever grew
+// toward the cap, that branch would start silently dropping disclosures.
+func TestServiceDisclosuresCannotFillTheCap(t *testing.T) {
+	total := len(serviceAuthoredLimitations()) + 1 // plus the degradation disclosure
+	if total >= contractsv1.ContextFabricLimitationsMaxCount {
+		t.Fatalf("%d service-authored disclosures against a cap of %d: appendBoundedLimitations can no longer guarantee a displaceable model caveat",
+			total, contractsv1.ContextFabricLimitationsMaxCount)
+	}
+}
+
+// TestServiceDisclosuresAreNeverDisplaced proves the preference, not just
+// that something gave way. A disclosure displaced to make room for another
+// disclosure is a net loss of exactly the statements nothing else in the
+// document carries.
+func TestServiceDisclosuresAreNeverDisplaced(t *testing.T) {
+	limitations := modelLimitations(contractsv1.ContextFabricLimitationsMaxCount - 1)
+	limitations = append(limitations, retrievalDegradedLimitation)
+
+	composed, displaced := appendBoundedLimitations(limitations, temporalLimitationsFor(TemporalObservedTime))
+
+	if !hasRetrievalDegradedLimitation(composed) {
+		t.Error("the degradation disclosure was displaced to make room for a historical one")
+	}
+	if displaced != len(temporalLimitationsFor(TemporalObservedTime)) {
+		t.Errorf("displaced = %d, want %d", displaced, len(temporalLimitationsFor(TemporalObservedTime)))
+	}
+	if len(composed) != contractsv1.ContextFabricLimitationsMaxCount {
+		t.Errorf("composed %d limitations, want the cap %d", len(composed), contractsv1.ContextFabricLimitationsMaxCount)
 	}
 }
