@@ -105,3 +105,62 @@ func TestQuestionEchoCannotComposeThenReject(t *testing.T) {
 		}
 	}
 }
+
+// TestQuestionBoundsAreCountedInRunesNotBytes closes codex round-14 F2.
+//
+// Every case above is ASCII, where runes and bytes coincide, so a future
+// change from utf8.RuneCountInString to len() would keep them all green while
+// rejecting a perfectly legal question of 8000 accented characters -- and
+// would do it identically at both doors, so even the coupling assertion would
+// stay green. JSON Schema maxLength counts CHARACTERS, so a byte-based check
+// silently under-admits every non-ASCII caller.
+//
+// "é" is deliberately 2 bytes: at the bound, 8000 runes is 16000 bytes, so a
+// byte-based implementation rejects it unmistakably.
+func TestQuestionBoundsAreCountedInRunesNotBytes(t *testing.T) {
+	const multibyte = "é"
+	atMax := strings.Repeat(multibyte, 8000)
+	pastMax := strings.Repeat(multibyte, 8001)
+
+	if len(atMax) != 16000 {
+		t.Fatalf("fixture is not multibyte: %d bytes for 8000 runes", len(atMax))
+	}
+
+	t.Run("hosted door admits the rune maximum", func(t *testing.T) {
+		if err := validQuestionRequest(t, atMax).Validate(); err != nil {
+			t.Errorf("a question of exactly 8000 multibyte runes is rejected (%v); the bound is being counted in bytes", err)
+		}
+		if err := validQuestionRequest(t, pastMax).Validate(); err == nil {
+			t.Error("a question of 8001 multibyte runes is accepted; the bound is not enforced in runes")
+		}
+	})
+
+	t.Run("mcp door admits the rune maximum", func(t *testing.T) {
+		maximum := MCPInvestigationQuestionMaxLength
+		if err := (MCPInvestigateQuestionRequest{Question: strings.Repeat(multibyte, maximum)}).Validate(); err != nil {
+			t.Errorf("a question of exactly %d multibyte runes is rejected (%v); the bound is being counted in bytes", maximum, err)
+		}
+		if err := (MCPInvestigateQuestionRequest{Question: strings.Repeat(multibyte, maximum+1)}).Validate(); err == nil {
+			t.Errorf("a question of %d multibyte runes is accepted; the bound is not enforced in runes", maximum+1)
+		}
+	})
+
+	t.Run("echo survives the rune maximum", func(t *testing.T) {
+		request := validQuestionRequest(t, atMax)
+		if err := request.Validate(); err != nil {
+			t.Fatalf("precondition: the multibyte question must be admitted at the door: %v", err)
+		}
+		result := closureResult()
+		result.Question = atMax
+		if err := result.Validate(); err != nil {
+			t.Errorf("a multibyte question admitted at the door is rejected when echoed into the result (%v); the two sides disagree on how characters are counted", err)
+		}
+	})
+
+	t.Run("padding is still rejected in runes", func(t *testing.T) {
+		padded := " " + atMax + " "
+		if err := validQuestionRequest(t, padded).Validate(); err == nil {
+			t.Error("a padded multibyte question at the rune maximum is accepted; padding must be measured raw for multibyte text too")
+		}
+	})
+}

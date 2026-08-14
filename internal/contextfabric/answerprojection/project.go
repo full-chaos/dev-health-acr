@@ -137,11 +137,11 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		RequestID:     result.RequestID,
 		GeneratedAt:   result.GeneratedAt,
 		Status:        result.Status,
-		Question:      result.Question,
+		Question:      storedText(result.Question),
 		Reused:        result.Reused,
 		// Verbatim. These two fields are the answer.
-		DirectJudgment:     clamp.text(result.DirectJudgment, contractsv1.ContextFabricProjectedJudgmentMaxLength),
-		CurrentState:       clamp.text(result.CurrentState, contractsv1.ContextFabricProjectedJudgmentMaxLength),
+		DirectJudgment:     clamp.text(storedText(result.DirectJudgment), contractsv1.ContextFabricProjectedJudgmentMaxLength),
+		CurrentState:       clamp.text(storedText(result.CurrentState), contractsv1.ContextFabricProjectedJudgmentMaxLength),
 		StrongestPressures: distinctStrings(result.StrongestPressures),
 		// Never truncated: a surface that reported a different set of
 		// committed subjects answered a different question.
@@ -298,9 +298,9 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 			DriverID:      driver.DriverID,
 			Standing:      driver.Standing,
 			Category:      driver.Category,
-			Title:         driver.Title,
-			Summary:       driver.Summary,
-			Qualification: driver.Qualification,
+			Title:         storedText(driver.Title),
+			Summary:       storedText(driver.Summary),
+			Qualification: storedText(driver.Qualification),
 			Confidence:    driver.Confidence,
 			// EvidenceRefIDs is a REQUIRED array; copying a canonical
 			// empty slice with append(nil, ...) would yield nil and
@@ -378,7 +378,7 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 	return &contractsv1.ContextFabricProjectedCohort{
 		Kind:      canonical.Kind,
 		Total:     len(canonical.Members),
-		Rationale: clamp.text(canonical.Rationale, contractsv1.ContextFabricProjectedCohortRationaleMaxLength),
+		Rationale: clamp.text(storedText(canonical.Rationale), contractsv1.ContextFabricProjectedCohortRationaleMaxLength),
 		Complete:  canonical.Complete,
 		Members:   members,
 	}, len(canonical.Members) - len(members), reasonsOmitted
@@ -408,7 +408,7 @@ func projectClarification(result contractsv1.ContextFabricInvestigationResult, b
 		})
 	}
 	return &contractsv1.ContextFabricProjectedClarification{
-		Prompt:     clamp.text(result.SubjectResolution.ClarificationPrompt, contractsv1.ContextFabricProjectedClarificationPromptMaxLength),
+		Prompt:     clamp.text(storedText(result.SubjectResolution.ClarificationPrompt), contractsv1.ContextFabricProjectedClarificationPromptMaxLength),
 		Candidates: candidates,
 	}, len(canonical) - retain, reasonsOmitted
 }
@@ -559,6 +559,25 @@ func boundedNarrative(values []string, clamp *clamper) ([]string, int) {
 	return survivors, omitted
 }
 
+// storedText normalizes a bounded text value read from storage.
+//
+// Canonical STORED reads measure bounded text on the trimmed value, because
+// padded rows were legally writable before the bound was enforced raw and
+// those rows are immutable (CHAOS-3746 round 13, world (b)). The projection
+// contract measures the SAME fields raw, so copying a legacy value verbatim
+// produced a projection the projection's own validator rejected: a row that
+// reads back perfectly well became unservable, 500 from the hosted route and
+// an internal error from the MCP tool (codex round-14 F1).
+//
+// Trimming here is NORMALIZATION of legal legacy data, not repair of model
+// output. Whitespace padding carries no content, so removing it changes
+// nothing a reader can observe except the length -- unlike truncation, which
+// would cut real characters off a value that was never too long. That is also
+// why trimming must happen BEFORE clamping: clamp.text would otherwise count
+// a padded-but-not-oversized value as shortened, telling a consumer content
+// was lost when only whitespace was.
+func storedText(value string) string { return strings.TrimSpace(value) }
+
 // clamper shortens oversize values and COUNTS how many it shortened.
 //
 // Clamping used to be silent (codex round-5 R5-3): a legacy judgment twice
@@ -684,7 +703,7 @@ func projectCoverage(result contractsv1.ContextFabricInvestigationResult, clamp 
 		entries = append(entries, contractsv1.ContextFabricProjectedCoverage{
 			Source: clamp.text(name, contractsv1.ContextFabricProjectedCoverageSourceMaxLength),
 			State:  source.State,
-			Reason: clamp.text(source.Reason, contractsv1.ContextFabricProjectedCoverageReasonMaxLength),
+			Reason: clamp.text(storedText(source.Reason), contractsv1.ContextFabricProjectedCoverageReasonMaxLength),
 		})
 	}
 	return entries, omitted
