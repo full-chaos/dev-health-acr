@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -551,48 +552,28 @@ func mergeFactRequirements(groups ...[]FactRequirement) []FactRequirement {
 	return result
 }
 
-// retrievalDegradedLimitation is the fixed, non-interpolated limitation added
-// when a retrieval mechanism was unavailable for a resolution (codex round-1
-// F4). Deliberately a constant rather than a format string -- see the fold in
-// Investigate for why it names no cause.
+// retrievalDegradedLimitation, retrievalDegradedLimitationLegacy and
+// isRetrievalDegradedLimitation now live in contracts/v1 and are aliased
+// here (CHAOS-3746).
 //
-// It describes the ANSWER'S PROVENANCE ("when this answer was produced"),
-// not the current request. That phrasing is load-bearing rather than
-// stylistic: a REUSED answer carries this limitation forward verbatim from
-// the run that produced it (orchestrator ruling on codex round-1 F4 --
-// stripping it would hide known degradation behind a clean-looking serve),
-// and the earlier wording, "for this investigation", pointed ambiguously at
-// the current request in exactly that case.
-const retrievalDegradedLimitation = "One retrieval mechanism was unavailable when this answer was produced, so fewer candidate subjects may have been considered than usual."
+// The move is what the answer projection needed: it must recognise this
+// limitation on a stored row, and it may not import this package --
+// answerprojection is import-pure so both the hosted API and the MCP
+// sidecar can call it. See context_fabric_limitations.go for what each
+// string means and why both spellings are permanent.
+//
+// REBASE-TIME OBLIGATION (CHAOS-3778, carried deliberately): a REUSED
+// answer must carry its stored limitation forward VERBATIM -- including
+// the legacy spelling -- and must not have one synthesized for it. That
+// behavior lives on CHAOS-3786's reuse path. The ordering it relies on is
+// already traced: Engine.tryReuse returns before ResolveSubjects runs, so
+// a reuse hit computes no marker of its own.
+const (
+	retrievalDegradedLimitation       = contractsv1.ContextFabricRetrievalDegradedLimitation
+	retrievalDegradedLimitationLegacy = contractsv1.ContextFabricRetrievalDegradedLimitationLegacy
+)
 
-// retrievalDegradedLimitationLegacy is the wording used before the phrasing
-// above replaced it.
-//
-// BOTH STRINGS EXIST IN THE WILD, permanently. An InvestigationResult is
-// immutable and CHAOS-3782's answer reuse keys on its stored bytes, so results
-// written before the change keep this spelling verbatim -- nothing rewrites a
-// stored row, and nothing may treat one as malformed. Every check for "is this
-// the retrieval-degradation limitation" must therefore accept either form; see
-// isRetrievalDegradedLimitation, which is the single place that knows both
-// spellings.
-const retrievalDegradedLimitationLegacy = "One retrieval mechanism was unavailable for this investigation, so fewer candidate subjects may have been considered than usual."
-
-// REBASE-TIME OBLIGATION (CHAOS-3778, carried deliberately): a REUSED answer
-// must carry its stored limitation forward VERBATIM -- including the legacy
-// spelling -- and must not have one synthesized for it. That behavior lives on
-// CHAOS-3786's reuse path, which this branch's base predates, so its pinning
-// test lands with the ship-time rebase rather than being guessed at here. The
-// ordering it relies on is already traced: Engine.tryReuse returns before
-// ResolveSubjects runs, so a reuse hit computes no marker of its own.
-//
-// isRetrievalDegradedLimitation reports whether a limitation string is either
-// spelling of the retrieval-degradation limitation.
-//
-// Exists so no caller compares against ONE constant and silently stops
-// recognizing answers written by the other -- the anchor/alias drift class.
-func isRetrievalDegradedLimitation(limitation string) bool {
-	return limitation == retrievalDegradedLimitation || limitation == retrievalDegradedLimitationLegacy
-}
+var isRetrievalDegradedLimitation = contractsv1.IsContextFabricRetrievalDegradedLimitation
 
 // hasRetrievalDegradedLimitation reports whether any limitation in the slice
 // is one of the two spellings.
