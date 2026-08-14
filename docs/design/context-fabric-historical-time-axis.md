@@ -78,9 +78,14 @@ correct shape per axis:
 - `range` — ordered `start`/`end` both required; `as_of` forbidden.
 
 The axis is therefore already fully activated by existing fields. CHAOS-3781 adds **service-level**
-bounds the contract deliberately does not own (per `ErrUnsupportedTimeAxis`'s own doc comment: the
-wire contract's accepted axes are unchanged; what is unsupported is this engine's ability to
-answer).
+bounds the contract deliberately does not own: the wire contract's accepted axes are unchanged, and
+what CHAOS-3781 changed is this engine's ability to answer them.
+
+As shipped, all three historical axes ARE answered. The sentinel that used to refuse them,
+`ErrUnsupportedTimeAxis`, is retired and deliberately not replaced by an equivalent (see its
+tombstone comment in `internal/contextfabric/ports.go`). What replaced it is narrower on purpose:
+`ErrInvalidTimeBound` refuses only bounds this service will not read — a time in the future, or a
+range wider than the supported window — never "historical questions are unsupported".
 
 New engine-level validation, replacing `requireCurrentTimeAxis`:
 

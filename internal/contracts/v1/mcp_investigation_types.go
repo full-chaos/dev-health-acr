@@ -25,11 +25,22 @@ const (
 //
 // Two omissions are deliberate.
 //
-// There is no time-axis field. The engine can only answer questions about
-// current state today (contextfabric.ErrUnsupportedTimeAxis), so offering
-// the knob would advertise a capability that does not exist and would be
-// silently ignored -- an ignored option is a lie told in a schema.
-// CHAOS-3781 owns the historical axis; the field arrives with it.
+// There is no time-axis field. The reason has CHANGED, and the distinction
+// matters to anyone reading this before adding one.
+//
+// It was originally that the engine could not answer a historical question
+// at all. That is no longer true: CHAOS-3781 removed the refusal from the
+// engine, the providers and the route, and all three axes (valid_time,
+// observed_time, range) are answered now, bounded only by
+// contextfabric.ErrInvalidTimeBound -- a future instant, or a range wider
+// than the service reads. The sentinel that justified this paragraph,
+// ErrUnsupportedTimeAxis, is RETIRED and deliberately not replaced.
+//
+// What remains is a SURFACE decision, not a capability one: this tool pins
+// the axis to current when it builds the investigation request (see
+// internal/mcp/investigate_question.go), so no caller option is silently
+// ignored. Adding the field is a contract change that must ship with the
+// plumbing to honour it -- it is no longer blocked on the engine.
 //
 // There are no subject hints. Hints are a Workbench affordance for a UI
 // that already resolved an entity the user clicked. An agent has no
