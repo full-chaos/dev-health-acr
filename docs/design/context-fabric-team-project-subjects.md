@@ -270,6 +270,61 @@ history the CHAOS-3781 temporal axis exists to answer over.
   driver-admission signals (no `relationMeaningTable` entry), adding entries
   there would mean hand-authoring JSON that asserts behavior no producer emits.
 
+## 8c. Test invariant: termination must not be satisfiable by the defect
+
+This branch produced three separate instances of one bug class before anyone
+named it, so the rule is recorded here rather than left as three patches.
+
+**The class.** A test loop that stops on an OBSERVED SIGNAL can be ended by the
+very defect it exists to catch, and then passes. The three instances:
+
+1. an exactly-once loop that broke on the first sighting, so a duplicate
+   emitted on a later tick could never be counted;
+2. its replacement, which treated an UNCHANGED CHECKPOINT as caught-up -- but a
+   batch that publishes while leaving the cursor unmoved satisfies exactly that
+   condition, which is the defect the test hunts;
+3. a fixture too small to reach the code path under test, so the assertion was
+   true with nothing to observe.
+
+Note the shape of (2): it was written specifically to fix (1). Hand-authoring a
+replacement termination condition is itself a reliable way to author a new
+vacuity, which is the argument for the rule below over case-by-case care.
+
+**The invariant.** Every loop in this branch's tests that can exit early on a
+signal MUST carry a post-loop assertion keyed to a FIXTURE-KNOWN QUANTITY, so
+the signal firing early converts into a failure rather than a pass. Preferably,
+remove the signal: derive the bound from the fixture's own size and run it out
+with no early exit at all (`subOmittedRowsBeyondTheSkipBoundStillConverge` does
+this -- 5200 keys is 10,400 rows, ~52 pages, ≤50 absorbed per tick, so 120
+ticks is far past need, and a quiet-tail check proves exhaustion was reached
+rather than assumed).
+
+**The carve-out, and its condition.** A silent cap exit
+(`TestTeamsProjectsSourceAgainstLiveClickHouse`, capped at 64 pages) is legal
+ONLY for existence-only claims -- "at least one team, one project, both edge
+types". It cannot support a completeness claim, and does not make one. **Adding
+any completeness assertion there requires converting the bound to a
+construction-derived one first.**
+
+**Evidence the rule holds branch-wide** (nine sites; `for range` over a fixed
+collection is excluded -- it has no termination condition to satisfy):
+
+| Site | Class | Evidence |
+| --- | --- | --- |
+| `subOmittedRowsBeyondTheSkipBoundStillConverge` | construction | bound from fixture size; no early exit; quiet-tail proves exhaustion |
+| `subAmbiguousRowsDoNotStallPagination` | signal, proven immune | the stall defect forces `!available` early → `found=false` → fail. Mutation-proven |
+| `subTiedOwnershipAssertionsResolveDeterministically` | construction | fixed 8 runs, no exit |
+| `TestTeamsProjectsSourceAgainstLiveClickHouse` | signal, proven immune | producing nothing fails on `no team subjects projected`. Mutation-proven. Existence-only (see carve-out) |
+| `TestOmissionTelemetryCountsDistinctKeysAcrossTheRun` | construction | fixed 2 calls |
+| `TestProjectionWorkerIgnoresProgressWhenSourceIsGenuinelyCaughtUp` | construction | fixed 3 ticks |
+| fixture generators (3 sites) | construction | data generation, no termination condition |
+| `clickhouse_test.go` paged-catch-up loop *(pre-existing)* | signal, proven immune | post-loop `len(seenRepos) != repoCount` and work-item counts vs fixture totals |
+| `clickhouse_test.go` tied-timestamp loop *(pre-existing)* | signal, proven immune | post-loop `len(seen) != workItemCount` + `sort.StringsAreSorted` |
+
+A signal-terminated loop with a real immunity proof is legitimate and should
+NOT be converted for uniformity; that is churn, not rigor. What is not
+negotiable is that the proof exists and is stated.
+
 ## 9. What this issue does NOT do
 
 - **No new fact providers, no new `FactKind`.** `project` gets **zero**

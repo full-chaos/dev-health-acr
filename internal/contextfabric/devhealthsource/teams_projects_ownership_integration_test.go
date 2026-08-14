@@ -13,6 +13,16 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
+// TERMINATION RULE for every loop in this file (four of the branch's nine
+// early-exit sites live here). A loop that stops on an OBSERVED SIGNAL can be
+// ended by the very defect it exists to catch, and then passes -- this branch
+// produced three instances of that before it was named, including one written
+// to fix another. So: prefer a bound derived from the fixture's own size with
+// no early exit; if a loop does exit on a signal, it MUST carry a post-loop
+// assertion keyed to a fixture-known quantity, so the signal firing early
+// becomes a failure rather than a pass. Full statement, carve-out and the
+// nine-site evidence table: docs/design/context-fabric-team-project-subjects.md §8c.
+//
 // The ownership aggregation is the one producer in this issue whose
 // correctness lives entirely in SQL -- a GROUP BY, an argMax and two joins --
 // so the package's fake cannot test it at all: fakeClient returns canned rows
