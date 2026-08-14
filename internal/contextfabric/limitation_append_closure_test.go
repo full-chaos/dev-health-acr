@@ -16,8 +16,24 @@ import (
 // and a listed entry matching nothing fails too. Keyed by enclosing
 // function so ordinary edits above a site do not churn the list.
 var auditedLimitationWrites = map[string]string{
-	"Investigate#composed":          "the retrieval-degradation appender's own output, unpacked one line above from appendBoundedLimitations",
-	"Investigate#temporallyLimited": "the historical-disclosure appender's own output, unpacked one line above from appendTemporalLimitations, which delegates to appendBoundedLimitations",
+	"Synthesize#cloneSlice": "an INTERMEDIATE, not a list that reaches a consumer: this is the model's own draft list entering the synthesized result, and Investigate then passes result.Limitations through appendTemporalLimitations UNCONDITIONALLY -- it is called on every axis, current included, and appendBoundedLimitations normalizes an already-over-cap input -- before Validate runs",
+}
+
+// boundedLimitationAppenders are the functions that own the cap. Anything a
+// Limitations field resolves to must be one of these, or an audited
+// exception.
+//
+// withRetrievalDegradation and appendTemporalLimitations are here rather
+// than audited because each is a thin wrapper that does nothing but call
+// appendBoundedLimitations with its own fixed disclosure -- they ARE the
+// bounded path, under narrower names. Both were previously audited
+// exemptions; resolving locals to their source (codex round-4 F2) made the
+// exemptions unnecessary, which is the better outcome: a guard that
+// understands the code needs fewer promises about it.
+var boundedLimitationAppenders = map[string]bool{
+	"appendBoundedLimitations":  true,
+	"appendTemporalLimitations": true,
+	"withRetrievalDegradation":  true,
 }
 
 // TestEveryLimitationAppendIsBounded closes the CLASS behind round-17
@@ -68,6 +84,30 @@ func TestEveryLimitationAppendIsBounded(t *testing.T) {
 						}
 					}
 				}
+				// A composite literal is the OTHER way a list reaches a
+				// result, and the way the selector walk below cannot see:
+				// `InvestigationResult{... Limitations: x ...}` is a
+				// KeyValueExpr, never an assignment to a .Limitations
+				// field. terminalResult composes exactly that way, so
+				// before this the whole terminal path was outside the
+				// guard (codex round-4 F2).
+				if literal, ok := node.(*ast.CompositeLit); ok {
+					for _, element := range literal.Elts {
+						field, ok := element.(*ast.KeyValueExpr)
+						if !ok {
+							continue
+						}
+						key, ok := field.Key.(*ast.Ident)
+						if !ok || key.Name != "Limitations" {
+							continue
+						}
+						writes = append(writes, write{
+							function: enclosingFunctionName(file, field.Pos()),
+							value:    resolveLimitationSource(file, field.Value, field.Pos()),
+							position: fileSet.Position(field.Pos()).String(),
+						})
+					}
+				}
 				assignment, ok := node.(*ast.AssignStmt)
 				if !ok {
 					return true
@@ -79,7 +119,7 @@ func TestEveryLimitationAppendIsBounded(t *testing.T) {
 					}
 					value := "?"
 					if len(assignment.Rhs) == 1 {
-						value = limitationWriteSource(assignment.Rhs[0])
+						value = resolveLimitationSource(file, assignment.Rhs[0], assignment.Pos())
 					}
 					writes = append(writes, write{
 						function: enclosingFunctionName(file, assignment.Pos()),
@@ -100,7 +140,7 @@ func TestEveryLimitationAppendIsBounded(t *testing.T) {
 	}
 
 	for _, w := range writes {
-		if w.value == "appendBoundedLimitations" || w.value == "appendTemporalLimitations" {
+		if boundedLimitationAppenders[w.value] {
 			continue
 		}
 		key := w.function + "#" + w.value
@@ -116,6 +156,79 @@ func TestEveryLimitationAppendIsBounded(t *testing.T) {
 			t.Errorf("auditedLimitationWrites lists %q, which matches no Limitations assignment; remove it rather than leaving an exemption that describes nothing", key)
 		}
 	}
+}
+
+// resolveLimitationSource names what ultimately feeds a Limitations field,
+// following LOCAL VARIABLES to the expression that last wrote them.
+//
+// The property this guard defends is "no list reaches a result unbounded",
+// not "no selector write happens". A local defeats the shallow reading
+// twice over: terminalResult builds `limitations` with a raw literal, raw-
+// appends to it, passes it THROUGH appendTemporalLimitations, and only then
+// puts it in the result literal. Naming the immediate expression would call
+// that unbounded (it is an identifier) and would equally call an un-appended
+// local bounded. Neither answers the question.
+//
+// So an identifier resolves to the source of its latest write BEFORE the use
+// site, transitively -- `limitations = temporallyLimited` resolves on to
+// `appendTemporalLimitations`. What matters is the LAST thing to touch the
+// list before it reaches the result: a raw append that happens earlier is
+// fine precisely because the appender still normalizes it afterwards, and a
+// raw append moved AFTER the appender resolves to "append" and fails.
+//
+// Depth is capped rather than cycle-detected; Go locals in this package do
+// not chain deeply, and a runaway chain should read as unresolved (which
+// fails) rather than hang.
+func resolveLimitationSource(file *ast.File, expression ast.Expr, use token.Pos) string {
+	for depth := 0; depth < 8; depth++ {
+		identifier, ok := expression.(*ast.Ident)
+		if !ok {
+			return limitationWriteSource(expression)
+		}
+		source, pos, found := latestLocalWrite(file, identifier.Name, use)
+		if !found {
+			// A parameter, a package-level value, or something written
+			// only after this point. Unresolvable is not safe-by-default:
+			// it is reported under the identifier's own name so it must be
+			// audited deliberately.
+			return identifier.Name
+		}
+		expression, use = source, pos
+	}
+	return "?"
+}
+
+// latestLocalWrite finds the assignment to name closest before use, within
+// the function enclosing use. Both `:=` and `=` count; for a multi-value
+// right-hand side (`a, b := f()`) every target resolves to that one call,
+// which is exactly how appendTemporalLimitations' two results are unpacked.
+func latestLocalWrite(file *ast.File, name string, use token.Pos) (ast.Expr, token.Pos, bool) {
+	var (
+		best      ast.Expr
+		bestPos   token.Pos
+		bestFound bool
+	)
+	ast.Inspect(file, func(node ast.Node) bool {
+		assignment, ok := node.(*ast.AssignStmt)
+		if !ok || assignment.Pos() >= use {
+			return true
+		}
+		for index, target := range assignment.Lhs {
+			identifier, ok := target.(*ast.Ident)
+			if !ok || identifier.Name != name {
+				continue
+			}
+			source := assignment.Rhs[0]
+			if len(assignment.Rhs) == len(assignment.Lhs) {
+				source = assignment.Rhs[index]
+			}
+			if !bestFound || assignment.Pos() > bestPos {
+				best, bestPos, bestFound = source, assignment.Pos(), true
+			}
+		}
+		return true
+	})
+	return best, bestPos, bestFound
 }
 
 // limitationWriteSource names what a Limitations assignment is fed from:
