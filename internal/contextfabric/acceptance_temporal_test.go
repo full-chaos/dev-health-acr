@@ -181,8 +181,15 @@ func TestAC_3781_3_ASubjectAbsentAtThatTimeIsNotAnswered(t *testing.T) {
 	if len(result.SubjectResolution.Committed) != 0 {
 		t.Fatalf("committed = %#v, want nothing committed for a time before the subject existed", result.SubjectResolution.Committed)
 	}
-	if !factsCalled {
-		t.Fatal("the fact path was skipped entirely; this test cannot prove no current-state facts leaked in")
+	// The acceptance criterion is that no current-state fact answers a
+	// question about a time the subject did not exist for. This used to be
+	// proved by letting the fact read run and asserting it was handed zero
+	// subjects. CHAOS-3810 gives the same criterion a STRICTLY STRONGER
+	// proof: an investigation that commits nothing terminates before the
+	// fact read, so there is no read to leak through. Asserting the read
+	// still happens would now be asserting the defect.
+	if factsCalled {
+		t.Fatal("the canonical fact read ran for a subject that did not exist at the requested time; it must not be reached at all")
 	}
 }
 

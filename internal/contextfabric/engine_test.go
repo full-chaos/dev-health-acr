@@ -690,9 +690,19 @@ type countingGraphReader struct {
 	discoverCalls int
 }
 
+// ResolveSubjects COMMITS a subject, which is load-bearing rather than
+// incidental. The tests built on this double assert that the fact read and
+// the synthesis actually ran, and under CHAOS-3810 an investigation that
+// commits nothing terminates in clarification_required/no_match before
+// reaching either. Committing nothing here used to reach the fact read
+// anyway -- precisely the defect CHAOS-3810 removed -- so a double that
+// commits nothing can no longer express "the engine did the work".
 func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion) (SubjectResolution, error) {
 	g.resolveCalls++
-	return SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, nil
+	return SubjectResolution{
+		Candidates: []SubjectCandidate{},
+		Committed:  []SubjectRef{{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}},
+	}, nil
 }
 
 func (g *countingGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
