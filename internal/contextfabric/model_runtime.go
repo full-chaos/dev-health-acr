@@ -507,6 +507,25 @@ type RuntimeAnswerSynthesizer struct {
 	Options RuntimeAnswerSynthesizerOptions
 }
 
+// StaticResultVersions implements ResultVersionProvider (CHAOS-3810), so a
+// terminal result Engine composes without a model call still reports the
+// backend, projection, and query versions this synthesizer would have
+// stamped. The receipt-derived fields (interpretation/synthesis versions,
+// model identity) are deliberately left empty: no model ran, and Engine
+// fills them with its own "unwired" placeholder rather than borrowing a
+// value from a call that never happened.
+func (r RuntimeAnswerSynthesizer) StaticResultVersions() VersionSet {
+	return VersionSet{
+		ServiceVersion:          strings.TrimSpace(r.Options.ServiceVersion),
+		ContractVersion:         InvestigationResultSchemaV1,
+		Backend:                 strings.TrimSpace(r.Options.Backend),
+		BackendVersion:          strings.TrimSpace(r.Options.BackendVersion),
+		ProjectionVersion:       strings.TrimSpace(r.Options.ProjectionVersion),
+		QueryVersion:            strings.TrimSpace(r.Options.QueryVersion),
+		CanonicalServiceVersion: strings.TrimSpace(r.Options.CanonicalServiceVersion),
+	}
+}
+
 func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal storage.Principal, input SynthesisInput) (InvestigationResult, error) {
 	if r.Runtime == nil {
 		return InvestigationResult{}, ErrModelUnavailable

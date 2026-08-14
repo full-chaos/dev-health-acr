@@ -601,7 +601,12 @@ func validateCanonicalFactRequest(request CanonicalFactRequest) error {
 	}
 	allowed := investigationScopeSubjectSet(request)
 	if len(allowed) == 0 {
-		return errors.New("canonical fact request requires discovered subjects or a cohort")
+		// CHAOS-3810/CHAOS-3811: classified, not bare. The rejection itself
+		// is correct -- a fact read with no subject is meaningless -- but as
+		// an unclassified error it reached the investigation route's final
+		// fallthrough and surfaced as a 500 internal_error with
+		// retryable=false. See ErrNoInvestigationSubjects.
+		return fmt.Errorf("%w: canonical fact request requires discovered subjects or a cohort", ErrNoInvestigationSubjects)
 	}
 	// Codex round-8 F1: subject UNIQUENESS is decided here too, before any
 	// pruning short-circuit -- the same family as the round-5 scope fix.

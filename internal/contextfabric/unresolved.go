@@ -1,0 +1,221 @@
+package contextfabric
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+// ErrNoInvestigationSubjects (CHAOS-3810/CHAOS-3811) classifies the one
+// failure this ticket exists to make impossible: a canonical fact read
+// attempted with neither a discovered subject nor a cohort.
+//
+// It is the sentinel form of validateCanonicalFactRequest's "canonical fact
+// request requires discovered subjects or a cohort" rejection, which used to
+// travel to the route as a bare, unclassified error -- straight into
+// writeContextFabricError's final fallthrough, i.e. a 500 internal_error with
+// retryable=false and a log line carrying nothing but failure_class. That was
+// the observable symptom of the resolution defect: every real-corpus
+// investigation 500'd.
+//
+// Engine.Investigate now converts an unresolved/ambiguous resolution into its
+// contract outcome BEFORE the fact read (see resolveTerminalStatus), so this
+// sentinel should be unreachable from the investigation path. It stays, and
+// is asserted at the fact-read call site, because "unreachable" is a claim
+// about today's control flow: if a future path reaches the fact read with no
+// subjects, it must fail as a NAMED, classified condition rather than
+// rediscovering the 500 fallthrough.
+var ErrNoInvestigationSubjects = errors.New("context fabric investigation has no discovered subjects or cohort")
+
+// ResultVersionProvider is optionally implemented by an AnswerSynthesizer
+// that can report the STATIC half of the version set it would stamp on a
+// synthesized result -- everything that does not come from a model receipt
+// (service/backend/projection/query/canonical-service versions).
+//
+// It exists for the terminal results Engine composes WITHOUT a model call
+// (clarification_required / no_match): those results still describe a real
+// graph read and must not misreport the backend they read as "unwired" just
+// because no synthesis ran. Receipt-derived fields (InterpretationVersion,
+// SynthesisVersion, ModelIdentity) are deliberately NOT part of this
+// interface -- no model produced the result, so Engine fills them with the
+// same "unwired" placeholder it already uses for an unwired ModelIdentity.
+//
+// Optional by design: a synthesizer that does not implement it (every test
+// double, and any future implementation) simply yields "unwired" for the
+// static fields too. A missing version string is a diagnosability loss, never
+// a correctness one, so this must not be a required port method.
+type ResultVersionProvider interface {
+	StaticResultVersions() VersionSet
+}
+
+// The fixed, non-interpolated limitations a terminal result carries. Same
+// discipline as retrievalDegradedLimitation: answer-facing prose that names
+// no subject, no term, no mechanism, and no error text.
+const (
+	clarificationRequiredLimitation = "The question matched more than one authorized subject, so no canonical facts were read until the intended subject is confirmed."
+	noMatchLimitation               = "No authorized subject in this organization's graph matched the question, so no canonical facts were read."
+)
+
+// fallbackClarificationPrompt is used only when a GraphReader marked a
+// resolution ambiguous, the caller allowed clarification, and the backend
+// supplied no prompt of its own. It names no candidate (the machine-readable
+// candidate list already carries them, receipt-bound and authorization-
+// checked), so it is safe to emit for any resolution.
+//
+// It exists so "ambiguous + AllowClarification" ALWAYS converts to
+// clarification_required. Without it the contract's own requirement that a
+// clarification result carry a prompt
+// (ContextFabricInvestigationResult.Validate) would silently downgrade such a
+// resolution to no_match -- telling a caller that nothing matched when in
+// fact several things did.
+const fallbackClarificationPrompt = "Several authorized subjects matched this question. Confirm which one you mean, using the candidate receipts in this result."
+
+// terminalResult composes the model-free result for an investigation that
+// resolved no subject to read facts for.
+//
+// It is deliberately deterministic and calls no model: with no committed
+// subject there is no canonical fact to ground an answer in, so there is
+// nothing for a synthesizer to say that would not be invention. It is also
+// what makes the outcome reachable when the model runtime is down -- an
+// ambiguous question must not need a healthy LLM to be told it is ambiguous.
+//
+// The result is persisted like any other (immutable store), which is what
+// lets the caller's follow-up bind one of the offered candidates back through
+// PriorSubjectReceipts -- the clarification loop only closes if the candidate
+// receipts are retrievable.
+func (e *Engine) terminalResult(
+	ctx context.Context,
+	principal storage.Principal,
+	request InvestigationRequest,
+	interpretation InterpretedQuestion,
+	resolution SubjectResolution,
+	graphContext GraphContext,
+	watermark SourceWatermarkSnapshot,
+	epoch RebuildEpoch,
+) (InvestigationResult, error) {
+	status, limitation := resolveTerminalStatus(request, &resolution)
+	coverage := graphContext.Coverage
+	if coverage.Sources == nil {
+		coverage.Sources = []SourceObservation{}
+	}
+	if coverage.DegradedReasons == nil {
+		coverage.DegradedReasons = []string{}
+	}
+	limitations := []string{limitation}
+	// Same fold Investigate applies to a synthesized result: a retrieval
+	// mechanism that was unavailable narrowed THIS resolution, and that is
+	// even more load-bearing here -- it may be the reason the resolution
+	// found nothing to commit.
+	if resolution.RetrievalDegraded {
+		limitations = append(limitations, retrievalDegradedLimitation)
+		coverage.Partial = true
+	}
+	answer := statusSentence(status)
+	if status == InvestigationClarificationRequired && resolution.ClarificationPrompt != "" {
+		answer += " " + resolution.ClarificationPrompt
+	}
+	result := InvestigationResult{
+		SchemaVersion: InvestigationResultSchemaV1,
+		ResultID:      e.newResultID(),
+		RequestID:     request.RequestID,
+		GeneratedAt:   e.now().UTC(),
+		Status:        status,
+		Question:      request.Question,
+		// Reused is explicitly false for the same reason Investigate sets
+		// it explicitly on a fresh synthesized result: only tryReuse's own
+		// return value may ever carry true.
+		Reused:            false,
+		Interpretation:    interpretation,
+		SubjectResolution: resolution,
+		Cohort:            graphContext.Cohort,
+		// Every answer-bearing field stays empty by construction, not by
+		// omission: an investigation with no committed subject has read no
+		// canonical fact, so it has nothing to judge, no driver to rank,
+		// and no evidence to cite. Paths and driver candidates the graph
+		// may have discovered are deliberately dropped rather than
+		// forwarded -- they describe subjects this result never committed
+		// to, and a fact-shaped driver could not close to a ClaimedFact
+		// bundle that was never read.
+		DirectJudgment:      "",
+		CurrentState:        "",
+		StrongestPressures:  []string{},
+		Drivers:             []DriverJudgment{},
+		RemainingWork:       []Finding{},
+		ReadinessGaps:       []Finding{},
+		Paths:               []RelationshipPath{},
+		Conflicts:           []Finding{},
+		Limitations:         limitations,
+		EvidenceRefIDs:      []string{},
+		ClaimedFacts:        []ClaimedFact{},
+		Coverage:            coverage,
+		Versions:            e.terminalVersions(),
+		DeterministicAnswer: answer,
+		Warnings:            []string{},
+	}
+	if err := result.Validate(); err != nil {
+		return InvestigationResult{}, fmt.Errorf("%w: %w", ErrInvalidResult, err)
+	}
+	if e.results != nil {
+		// Keyed exactly as Investigate keys its own Save (CHAOS-3781): on the
+		// CLAMPED REQUEST context, which is the value tryReuse keyed its
+		// lookup with. Investigate replaces request.TimeContext with the
+		// clamped value before any of this runs, so the request this function
+		// received already carries it -- re-clamping here could only
+		// introduce a difference, and a terminal result saved under a key no
+		// lookup will ever form is a row the clarification loop cannot reach.
+		if err := e.results.Save(ctx, principal, result, watermark, epoch, TimeAxisKeyFor(request.TimeContext)); err != nil {
+			return InvestigationResult{}, fmt.Errorf("save investigation result: %w", err)
+		}
+	}
+	return result, nil
+}
+
+// resolveTerminalStatus decides which contract status an investigation with
+// no committed subject carries, and may fill in a clarification prompt the
+// backend left empty. It invents no status: the v1 enum is
+// complete/partial/degraded/clarification_required/no_match, complete and
+// partial both require a direct judgment (which needs canonical facts), and
+// degraded describes limited coverage of an answer that still exists -- so
+// the only two outcomes available here are the two named below.
+//
+// AllowClarification=false with ambiguous candidates resolves to no_match,
+// NOT to a refusal or a new status. Two facts of the existing contract force
+// it: ContextFabricInvestigationResult.Validate rejects a
+// clarification_required result that carries no prompt, and a caller that set
+// AllowClarification=false has declined the only thing a prompt could ask
+// for. The candidates stay attached to the result either way -- they are
+// ranked and receipt-bound, so even a no_match caller can bind one through
+// PriorSubjectReceipts on a follow-up.
+func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution) (InvestigationStatus, string) {
+	if len(resolution.Candidates) == 0 || !request.Options.AllowClarification {
+		return InvestigationNoMatch, noMatchLimitation
+	}
+	if strings.TrimSpace(resolution.ClarificationPrompt) == "" {
+		resolution.ClarificationPrompt = fallbackClarificationPrompt
+	}
+	return InvestigationClarificationRequired, clarificationRequiredLimitation
+}
+
+// terminalVersions builds the version set for a model-free terminal result:
+// the synthesizer's static versions when it can report them (see
+// ResultVersionProvider), Engine's own service/contract versions, and the
+// "unwired" placeholder for everything only a model receipt could supply.
+func (e *Engine) terminalVersions() VersionSet {
+	var versions VersionSet
+	if provider, ok := e.synthesizer.(ResultVersionProvider); ok {
+		versions = provider.StaticResultVersions()
+	}
+	versions.ServiceVersion = nonEmptyVersion(versions.ServiceVersion, e.serviceVersion)
+	versions.ContractVersion = InvestigationResultSchemaV1
+	versions.Backend = nonEmptyVersion(versions.Backend, "")
+	versions.ProjectionVersion = nonEmptyVersion(versions.ProjectionVersion, "")
+	versions.QueryVersion = nonEmptyVersion(versions.QueryVersion, "")
+	versions.CanonicalServiceVersion = nonEmptyVersion(versions.CanonicalServiceVersion, "")
+	versions.InterpretationVersion = nonEmptyVersion(versions.InterpretationVersion, "")
+	versions.SynthesisVersion = nonEmptyVersion(versions.SynthesisVersion, "")
+	versions.ModelIdentity = nonEmptyVersion(versions.ModelIdentity, "")
+	return versions
+}

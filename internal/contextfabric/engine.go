@@ -340,11 +340,41 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	graphContext.Resolution = resolution
 
+	// CHAOS-3810: an investigation that resolved NO subject to read facts for
+	// terminates here, in its own contract outcome, and never reaches the
+	// fact read.
+	//
+	// This is the blocker's control-flow half. Resolution legitimately fails
+	// toward ambiguity under uncertainty (see
+	// graphrank.ResolveFromMergedCandidates), but nothing converted that
+	// ambiguity into the contract outcome that describes it: the engine
+	// carried on with zero committed subjects, validateCanonicalFactRequest
+	// rejected the fact request as invalid, and the resulting unclassified
+	// error fell through the route's classifier to a 500. An outcome the
+	// contract has always had a status for was being reported as an ACR
+	// outage.
+	//
+	// Checked on the SUBJECT LIST, not on Committed alone: a subjectless
+	// cohort discovery commits nothing yet has perfectly good subjects to
+	// read facts for, and it must keep running.
+	subjects := investigationSubjects(resolution, graphContext.Cohort)
+	if len(subjects) == 0 {
+		return e.terminalResult(ctx, principal, request, interpretation, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch)
+	}
+
 	factRequest := CanonicalFactRequest{
 		Question:     interpretation,
-		Subjects:     investigationSubjects(resolution, graphContext.Cohort),
+		Subjects:     subjects,
 		Cohort:       graphContext.Cohort,
 		Requirements: mergeFactRequirements(interpretation.FactRequirements, graphContext.FactRequirements),
+	}
+	// The invariant, asserted rather than assumed (CHAOS-3810). The guard
+	// above is what makes this unreachable today; this is what keeps it
+	// unreachable. A future edit that reintroduces a path to the fact read
+	// with no subjects fails here as a NAMED condition the route classifies,
+	// instead of rediscovering the unclassified 500.
+	if len(factRequest.Subjects) == 0 {
+		return InvestigationResult{}, fmt.Errorf("%w: read canonical facts", ErrNoInvestigationSubjects)
 	}
 	facts, err := e.facts.ReadFacts(ctx, principal, factRequest)
 	if err != nil {

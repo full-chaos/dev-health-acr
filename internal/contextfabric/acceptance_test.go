@@ -557,20 +557,17 @@ func TestAcceptanceAmbiguousSubjectRequestsClarification(t *testing.T) {
 		DeterministicAnswer: "placeholder", Warnings: []string{},
 	}
 
-	// Facts must not be read for an ambiguous, uncommitted subject -- but
-	// Engine unconditionally calls facts.ReadFacts today whenever there is
-	// no cohort either, which would fail validateCanonicalFactRequest with
-	// zero subjects. Model that safely: an ambiguous-only resolution
-	// yields zero investigation subjects, so the fact reader must itself
-	// tolerate (and here, must not even be invoked with any requirement).
-	safeFacts := factReaderFunc(func(_ context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
-		if len(request.Subjects) != 0 {
-			t.Fatalf("fact request subjects = %#v, want none for an ambiguous, uncommitted resolution", request.Subjects)
-		}
-		return CanonicalFactBundle{Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Version: "ops-v1"}, nil
-	})
-	_ = facts
-	engine := buildAcceptanceEngine(t, graph, safeFacts, interpretation, draft, nil)
+	// CHAOS-3810: this test used to pass for the wrong reason. Engine
+	// unconditionally called facts.ReadFacts even with zero investigation
+	// subjects, which validateCanonicalFactRequest rejects, so the test
+	// substituted a lenient fact reader ("safeFacts") that accepted a
+	// subjectless request and returned an empty bundle -- exercising a fact
+	// read that cannot happen in production, and letting the MODEL choose the
+	// clarification_required status. The real engine now terminates before
+	// the fact read, so the strict reader above (which fails the test if
+	// called at all) is the one wired, and the status below is the engine's
+	// own decision rather than the draft's.
+	engine := buildAcceptanceEngine(t, graph, facts, interpretation, draft, nil)
 
 	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
 	if err != nil {
