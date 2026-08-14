@@ -129,12 +129,18 @@ func (e *Engine) terminalResult(
 		coverage.DegradedReasons = []string{}
 	}
 	limitations := []string{limitation}
-	// Same fold Investigate applies to a synthesized result: a retrieval
-	// mechanism that was unavailable narrowed THIS resolution, and that is
-	// even more load-bearing here -- it may be the reason the resolution
-	// found nothing to commit.
+	// Same fold Investigate applies to a synthesized result, through the
+	// same bounded wrapper: a retrieval mechanism that was unavailable
+	// narrowed THIS resolution, and that is even more load-bearing here --
+	// it may be the reason the resolution found nothing to commit.
+	//
+	// withRetrievalDegradation rather than a raw append (codex round-5 F1):
+	// a hand-rolled append here would be a second place the cap is handled,
+	// which is the exact shape of round-17 finding 1, and it would drop the
+	// displacement count on the floor.
+	degradedDisplaced := 0
 	if resolution.RetrievalDegraded {
-		limitations = append(limitations, retrievalDegradedLimitation)
+		limitations, degradedDisplaced = withRetrievalDegradation(limitations)
 		coverage.Partial = true
 	}
 	// CHAOS-3781: a terminal answer speaks for a time too, and says so in
@@ -191,7 +197,7 @@ func (e *Engine) terminalResult(
 		Paths:                []RelationshipPath{},
 		Conflicts:            []Finding{},
 		Limitations:          limitations,
-		LimitationsDisplaced: temporalDisplaced,
+		LimitationsDisplaced: degradedDisplaced + temporalDisplaced,
 		EvidenceRefIDs:       []string{},
 		ClaimedFacts:         []ClaimedFact{},
 		Coverage:             coverage,
