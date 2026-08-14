@@ -85,6 +85,19 @@ func MergeMechanisms(sets ...[]contextfabric.MatchMechanism) []contextfabric.Mat
 	return merged
 }
 
+// HasMechanism reports whether mechanisms contains want. Unlike a bare loop
+// it filters through the contract's own enum first (MergeMechanisms), so an
+// unrecognized value that happens to stringify like a real one can never
+// answer true -- the same authority rule MergeMechanisms' doc comment states.
+func HasMechanism(mechanisms []contextfabric.MatchMechanism, want contextfabric.MatchMechanism) bool {
+	for _, mechanism := range MergeMechanisms(mechanisms) {
+		if mechanism == want {
+			return true
+		}
+	}
+	return false
+}
+
 // DistinctMechanismCount counts recognized, deduplicated mechanisms.
 //
 // "Distinct" means distinct ENUM MEMBERS, not distinct queries or distinct

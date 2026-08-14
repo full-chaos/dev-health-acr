@@ -26,20 +26,36 @@ func termIndexedTruncatingFulltextConn(pools map[string][]row) *fakeConn {
 	}}
 }
 
-// TestResolveSubjectsTruncatedExactLabelMatchDoesNotAutoCommit is the Codex
-// round-3-review escape path (a) probe: graphrank.NodeCandidate forces
-// Confidence to 1.0 whenever a hybrid-search hit's own label/name exactly
-// (case-insensitively) equals the search term -- regardless of what
-// Relevance the backend set. falkorgraph's truncation fix floor-caps
-// Relevance on a truncated call (R2-1), but NodeCandidate's exact-match
-// override reads that floor-capped value, sees it doesn't matter, and
-// promotes to 1.0 anyway -- completely bypassing the cap.
+// TestResolveSubjectsTruncatedExactLabelMatchAutoCommits SUPERSEDES
+// TestResolveSubjectsTruncatedExactLabelMatchDoesNotAutoCommit (Codex
+// round-3-review escape path (a)), which asserted the exact opposite. The
+// reversal is deliberate and is CHAOS-3810's blocker fix -- recorded here
+// rather than by deleting the old test, so the change of ruling is visible
+// to the next reader instead of looking like drift.
+//
+// What round 3 got right and this keeps: an inflated RELEVANCE SCORE must
+// not auto-commit under truncation, because a score only ranks candidates
+// against each other and truncation means an unseen competitor may have
+// outranked the survivor. Escape path (b) (the merge overwrite) is
+// untouched and still pinned by the sibling test below.
+//
+// What round 3 got wrong: it treated NodeCandidate's exact label/name match
+// the same way. String equality is not a ranking -- the search term IS this
+// subject's label, which no unseen row can outrank; only a row carrying the
+// IDENTICAL label could genuinely compete, and uniqueness of the exact match
+// is checked separately (see the duplicate-label test below, and
+// graphrank.ResolveFromMergedCandidates' exactIndex comment).
+//
+// The cost of the round-3 reading was total: falkorgraph floor-caps every
+// candidate on a truncated call, and a real 20k+ subject corpus with
+// MaxSubjectCandidates=10 truncates on essentially every search, so NOTHING
+// ever auto-committed on a real corpus -- every investigation reached the
+// canonical fact read with zero committed subjects and 500'd.
 //
 // MaxSubjectCandidates=1: the query "Widget" has 2 real candidates
 // (Widget, Other), so the combined query is truncated to the ONE survivor
-// -- which happens to be named EXACTLY "Widget", the search term itself.
-// Before the round-3-review fix, this committed at Confidence=1.0.
-func TestResolveSubjectsTruncatedExactLabelMatchDoesNotAutoCommit(t *testing.T) {
+// -- named EXACTLY "Widget", the search term itself.
+func TestResolveSubjectsTruncatedExactLabelMatchAutoCommits(t *testing.T) {
 	widget := fulltextRow("incident", "widget_subject", "Widget", "Widget", nil)
 	other := fulltextRow("incident", "other_subject", "Other", "Other Widget", nil)
 	fake := truncatingFulltextConn([]row{widget, other})
@@ -51,18 +67,9 @@ func TestResolveSubjectsTruncatedExactLabelMatchDoesNotAutoCommit(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
-	if len(resolution.Committed) != 0 {
-		t.Fatalf("ResolveSubjects() committed %#v -- an exact label match surviving a TRUNCATED search must not auto-commit at Confidence=1.0 just because its name happened to equal the search term (Codex round-3 review, escape path a)", resolution.Committed)
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "widget_subject" {
+		t.Fatalf("ResolveSubjects() committed %#v -- the unique exact label match must auto-commit even though the search truncated (CHAOS-3810)", resolution.Committed)
 	}
-	// Positive assertion (Codex round-4 review): "nothing committed" alone
-	// passes vacuously if the truncated survivor never became a candidate
-	// at all (e.g. a fake-conn bug silently returning nothing). The
-	// truncation-surviving "widget_subject" -- with NodeCandidate's exact
-	// label-match override still forcing its Confidence to 1.0 (this fix
-	// deliberately does NOT suppress that override; it only stops the
-	// RESOLUTION from trusting an inflated confidence under truncation) --
-	// must actually be PRESENT, in the ambiguous state, not silently
-	// dropped.
 	var widgetCandidate *contextfabric.SubjectCandidate
 	for i := range resolution.Candidates {
 		if resolution.Candidates[i].Subject.CanonicalID == "widget_subject" {
@@ -71,13 +78,45 @@ func TestResolveSubjectsTruncatedExactLabelMatchDoesNotAutoCommit(t *testing.T) 
 		}
 	}
 	if widgetCandidate == nil {
-		t.Fatalf("ResolveSubjects() candidates = %#v, want the truncation-surviving widget_subject present -- \"nothing committed\" must not pass vacuously because no candidate was found at all", resolution.Candidates)
+		t.Fatalf("ResolveSubjects() candidates = %#v, want the committed widget_subject present in the candidate list too", resolution.Candidates)
 	}
 	if widgetCandidate.Confidence != 1 {
-		t.Fatalf("widget_subject confidence = %v, want exactly 1 (NodeCandidate's exact label-match override still fires -- this fix gates the COMMIT decision, not the override itself)", widgetCandidate.Confidence)
+		t.Fatalf("widget_subject confidence = %v, want exactly 1 (NodeCandidate's exact label-match override)", widgetCandidate.Confidence)
 	}
-	if widgetCandidate.State != contextfabric.ResolutionAmbiguous {
-		t.Fatalf("widget_subject State = %v, want ResolutionAmbiguous", widgetCandidate.State)
+	if widgetCandidate.State != contextfabric.ResolutionCommitted {
+		t.Fatalf("widget_subject State = %v, want ResolutionCommitted", widgetCandidate.State)
+	}
+}
+
+// TestResolveSubjectsTruncatedDuplicateExactLabelsStillClarify is the
+// uniqueness half of the rule above: when the retained set holds TWO
+// subjects whose labels both equal the term exactly, the term does not
+// identify one subject and the resolution must still fall to clarification.
+// Without this, "exact match commits" would degenerate into "whichever
+// same-named subject the backend returned first commits".
+func TestResolveSubjectsTruncatedDuplicateExactLabelsStillClarify(t *testing.T) {
+	widgetA := fulltextRow("incident", "widget_subject_a", "Widget", "Widget", nil)
+	widgetB := fulltextRow("incident", "widget_subject_b", "Widget", "Widget", nil)
+	other := fulltextRow("incident", "other_subject", "Other", "Other Widget", nil)
+	fake := truncatingFulltextConn([]row{widgetA, widgetB, other})
+	adapter := newFakeAdapter(t, fake)
+	request, interpreted := openQuestionRequest("Widget")
+	// Both same-labelled subjects survive the LIMIT; the third row is what
+	// makes the call report truncation.
+	request.Options.MaxSubjectCandidates = 2
+
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("ResolveSubjects() committed %#v -- two subjects sharing the exact label must clarify, not commit", resolution.Committed)
+	}
+	if resolution.ClarificationPrompt == "" {
+		t.Fatal("ResolveSubjects() produced no clarification prompt for two identically-labelled subjects")
+	}
+	if len(resolution.Candidates) != 2 {
+		t.Fatalf("ResolveSubjects() candidates = %#v, want both identically-labelled subjects retained", resolution.Candidates)
 	}
 }
 
