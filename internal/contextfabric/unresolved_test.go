@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -297,5 +298,86 @@ func TestTerminalResultFallsBackToUnwiredWithoutAVersionProvider(t *testing.T) {
 	}
 	if err := result.Validate(); err != nil {
 		t.Fatalf("result.Validate() = %v", err)
+	}
+}
+
+// CHAOS-3810 codex round-1 P2. A no_match result reached WITH candidates
+// attached (the caller disallowed clarification) must not claim that nothing
+// matched -- the candidates it names are in the same payload. The status
+// ruling is unchanged; only the prose is keyed on candidates-present.
+func TestNoMatchProseDoesNotClaimAbsenceWhenCandidatesArePresent(t *testing.T) {
+	t.Parallel()
+	graph := &acceptanceGraphReader{resolution: ambiguousResolution(""), context: emptyGraphContext()}
+	engine := buildTerminalEngine(t, graph, nil)
+	request := validInvestigationRequest()
+	request.Options.AllowClarification = false
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Fatalf("Status = %q, want no_match (the status ruling is unchanged)", result.Status)
+	}
+	if len(result.SubjectResolution.Candidates) == 0 {
+		t.Fatal("the honesty valve is missing: candidates must stay attached")
+	}
+	for _, limitation := range result.Limitations {
+		if limitation == noMatchLimitation {
+			t.Fatalf("Limitations = %#v, want the ambiguous wording, not the absence wording, while %d candidates are attached", result.Limitations, len(result.SubjectResolution.Candidates))
+		}
+	}
+	if !slices.Contains(result.Limitations, ambiguousNoClarificationLimitation) {
+		t.Fatalf("Limitations = %#v, want the ambiguous-and-clarification-unavailable wording", result.Limitations)
+	}
+	if strings.Contains(result.DeterministicAnswer, "No investigation subject could be resolved") {
+		t.Fatalf("DeterministicAnswer = %q, want it not to claim absence while candidates are attached", result.DeterministicAnswer)
+	}
+	if !strings.Contains(result.DeterministicAnswer, "more than one authorized subject matched") {
+		t.Fatalf("DeterministicAnswer = %q, want it to state what actually happened", result.DeterministicAnswer)
+	}
+}
+
+// The other direction: genuine absence must keep the absence wording. A fix
+// that made every no_match say "several matched" would be the same defect
+// mirrored.
+func TestNoMatchProseKeepsAbsenceWordingWhenNothingMatched(t *testing.T) {
+	t.Parallel()
+	graph := &acceptanceGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		context:    emptyGraphContext(),
+	}
+	engine := buildTerminalEngine(t, graph, nil)
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !slices.Contains(result.Limitations, noMatchLimitation) {
+		t.Fatalf("Limitations = %#v, want the absence wording when nothing matched", result.Limitations)
+	}
+	if !strings.Contains(result.DeterministicAnswer, "No investigation subject could be resolved") {
+		t.Fatalf("DeterministicAnswer = %q, want the absence sentence", result.DeterministicAnswer)
+	}
+}
+
+// The synthesized (model) path shares statusSentence, so it inherits the same
+// rule: a model-authored no_match over a resolution that produced candidates
+// but committed none must not claim absence either.
+func TestStatusSentenceNoMatchIsCandidateAware(t *testing.T) {
+	t.Parallel()
+	if got := statusSentence(InvestigationNoMatch, false); !strings.Contains(got, "could be resolved") {
+		t.Fatalf("statusSentence(no_match, false) = %q, want the absence sentence", got)
+	}
+	got := statusSentence(InvestigationNoMatch, true)
+	if strings.Contains(got, "No investigation subject could be resolved") {
+		t.Fatalf("statusSentence(no_match, true) = %q, want it not to claim absence", got)
+	}
+	if !strings.Contains(got, "more than one authorized subject matched") {
+		t.Fatalf("statusSentence(no_match, true) = %q, want it to state that several matched", got)
+	}
+	// It must not guess a cause: only the engine's terminal path knows one.
+	if strings.Contains(got, "clarification was not allowed") {
+		t.Fatalf("statusSentence(no_match, true) = %q, want no asserted cause on the shared path", got)
 	}
 }

@@ -564,7 +564,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		// the opposite of an already-validated claim, e.g. "on track"
 		// prose next to a principal driver whose claimed fact says
 		// release_ready=false).
-		DirectJudgment:     composeDirectJudgment(draft),
+		DirectJudgment:     composeDirectJudgment(draft, unresolvedCandidates(input)),
 		CurrentState:       composeCurrentState(draft),
 		StrongestPressures: cloneSlice(draft.StrongestPressures),
 		Drivers:            cloneSlice(draft.Drivers),
@@ -582,7 +582,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		// the only reading of "deterministic" that can't itself introduce
 		// a fresh, unchecked claim -- draft.DeterministicAnswer (whatever
 		// prose the model produced) is deliberately discarded here.
-		DeterministicAnswer: composeDeterministicAnswer(draft),
+		DeterministicAnswer: composeDeterministicAnswer(draft, unresolvedCandidates(input)),
 		Warnings:            cloneSlice(draft.Warnings),
 		Versions: VersionSet{
 			ServiceVersion:          nonEmptyVersion(r.Options.ServiceVersion, "unwired"),
@@ -655,9 +655,9 @@ func truncateAtSentenceBoundary(text string, maxRunes int) string {
 // prose) is never read. Distinct from composeDeterministicAnswer in
 // content, not just name -- this is the short judgment sentence alone,
 // without the trailing claimed-fact restatement DeterministicAnswer adds.
-func composeDirectJudgment(draft SynthesisDraft) string {
+func composeDirectJudgment(draft SynthesisDraft, unresolvedCandidates bool) string {
 	var b strings.Builder
-	b.WriteString(statusSentence(draft.Status))
+	b.WriteString(statusSentence(draft.Status, unresolvedCandidates))
 	if titles := principalDriverTitles(draft.Drivers); len(titles) > 0 {
 		b.WriteString(" Principal driver: ")
 		b.WriteString(strings.Join(titles, "; "))
@@ -685,9 +685,9 @@ func composeCurrentState(draft SynthesisDraft) string {
 // model prose) and cannot itself diverge from a canonical fact value
 // because every value it renders came from ClaimedFacts, which
 // ValidateAgainst already proved equal to the canonical fact bundle.
-func composeDeterministicAnswer(draft SynthesisDraft) string {
+func composeDeterministicAnswer(draft SynthesisDraft, unresolvedCandidates bool) string {
 	var b strings.Builder
-	b.WriteString(statusSentence(draft.Status))
+	b.WriteString(statusSentence(draft.Status, unresolvedCandidates))
 	if titles := principalDriverTitles(draft.Drivers); len(titles) > 0 {
 		b.WriteString(" Principal driver(s): ")
 		b.WriteString(strings.Join(titles, "; "))
@@ -701,7 +701,26 @@ func composeDeterministicAnswer(draft SynthesisDraft) string {
 	return truncateAtSentenceBoundary(strings.TrimSpace(b.String()), deterministicAnswerMaxLength)
 }
 
-func statusSentence(status InvestigationStatus) string {
+// statusSentence renders the one-sentence status prose every composed
+// answer field opens with.
+//
+// unresolvedCandidates reports that the resolution produced candidates but
+// committed none. It exists for CHAOS-3810 codex round-1 P2: the no_match
+// sentence claimed definitive ABSENCE ("no subject could be resolved") even
+// when two perfectly good candidates were sitting in the very same result,
+// which is the same honesty class as a notice that contradicts the data
+// beside it. With candidates present the sentence states what is actually
+// true -- several matched, none could be confirmed -- and points at them.
+//
+// It deliberately does NOT name a cause. The engine's terminal path knows
+// the cause (the caller disallowed clarification) and says so in its own
+// limitation; a model-authored no_match with candidates may have any number
+// of reasons, and asserting one here would be a guess.
+func unresolvedCandidates(input SynthesisInput) bool {
+	return len(input.Graph.Resolution.Committed) == 0 && len(input.Graph.Resolution.Candidates) > 0
+}
+
+func statusSentence(status InvestigationStatus, unresolvedCandidates bool) string {
 	switch status {
 	case InvestigationComplete:
 		return "This investigation is complete."
@@ -712,6 +731,9 @@ func statusSentence(status InvestigationStatus) string {
 	case InvestigationClarificationRequired:
 		return "Clarification is required before this question can be answered."
 	case InvestigationNoMatch:
+		if unresolvedCandidates {
+			return "No single subject could be confirmed for this question: more than one authorized subject matched, and the matching candidates are listed in this result."
+		}
 		return "No investigation subject could be resolved for this question."
 	default:
 		return "This investigation could not produce a complete answer."

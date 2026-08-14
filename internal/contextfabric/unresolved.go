@@ -56,7 +56,16 @@ type ResultVersionProvider interface {
 // no subject, no term, no mechanism, and no error text.
 const (
 	clarificationRequiredLimitation = "The question matched more than one authorized subject, so no canonical facts were read until the intended subject is confirmed."
-	noMatchLimitation               = "No authorized subject in this organization's graph matched the question, so no canonical facts were read."
+	// noMatchLimitation states ABSENCE, so it may only be used when the
+	// resolution genuinely produced no candidate at all.
+	noMatchLimitation = "No authorized subject in this organization's graph matched the question, so no canonical facts were read."
+	// ambiguousNoClarificationLimitation is the same status, honestly
+	// worded (CHAOS-3810 codex round-1 P2). A no_match result reached with
+	// candidates attached -- the caller disallowed clarification -- must
+	// not claim nothing matched while the candidates it names sit in the
+	// same payload. Here the engine DOES know the cause, so unlike
+	// statusSentence it names it.
+	ambiguousNoClarificationLimitation = "The question matched more than one authorized subject and this request did not allow clarification, so no subject was confirmed and no canonical facts were read. The matching candidates are listed in this result."
 )
 
 // fallbackClarificationPrompt is used only when a GraphReader marked a
@@ -113,7 +122,7 @@ func (e *Engine) terminalResult(
 		limitations = append(limitations, retrievalDegradedLimitation)
 		coverage.Partial = true
 	}
-	answer := statusSentence(status)
+	answer := statusSentence(status, len(resolution.Candidates) > 0)
 	if status == InvestigationClarificationRequired && resolution.ClarificationPrompt != "" {
 		answer += " " + resolution.ClarificationPrompt
 	}
@@ -190,8 +199,11 @@ func (e *Engine) terminalResult(
 // ranked and receipt-bound, so even a no_match caller can bind one through
 // PriorSubjectReceipts on a follow-up.
 func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution) (InvestigationStatus, string) {
-	if len(resolution.Candidates) == 0 || !request.Options.AllowClarification {
+	if len(resolution.Candidates) == 0 {
 		return InvestigationNoMatch, noMatchLimitation
+	}
+	if !request.Options.AllowClarification {
+		return InvestigationNoMatch, ambiguousNoClarificationLimitation
 	}
 	if strings.TrimSpace(resolution.ClarificationPrompt) == "" {
 		resolution.ClarificationPrompt = fallbackClarificationPrompt
