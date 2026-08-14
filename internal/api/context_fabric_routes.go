@@ -9,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // ContextFabricInvestigationsPath is the consumer-neutral ACR investigation
@@ -65,7 +66,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 			return
 		}
-		result, err := investigator.Investigate(r.Context(), principal, request)
+		result, err := investigateRecovered(r.Context(), investigator, principal, request)
 		if err != nil {
 			a.writeContextFabricError(w, r, err)
 			return
@@ -91,6 +92,38 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
 }
 
+// errContextFabricPanic classifies a panic that escaped the investigator
+// (CHAOS-3810 codex round-1 P3). It is a FIXED sentinel carrying nothing from
+// the panic value: a panic value is arbitrary, caller-influenced data, so it
+// must never become part of an error the classifier, the log line, or the
+// response body can render.
+var errContextFabricPanic = errors.New("context fabric investigation panicked")
+
+// investigateRecovered calls the investigator and converts a panic into
+// errContextFabricPanic, so a panic exits through writeContextFabricError
+// like every other failure -- with a stage and a bounded classification --
+// instead of reaching the global recovery middleware, which writes a 500
+// carrying no context-fabric signal at all.
+//
+// The recovered value is deliberately DROPPED: not logged, not wrapped, not
+// stringified. The global middleware never logged it either (App.recovery-
+// Middleware records only the request ID and status), so nothing is lost by
+// handling the panic here; what is gained is failure_stage and
+// failure_classification on a failure that previously had neither. The stage
+// resolves to "unknown" -- a panic carries no stage, and inventing one would
+// be a guess.
+//
+// Scope is exactly the investigator call. A panic anywhere else in the
+// handler still reaches the global middleware unchanged.
+func investigateRecovered(ctx context.Context, investigator contextfabric.Investigator, principal storage.Principal, request contextfabric.InvestigationRequest) (result contextfabric.InvestigationResult, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result, err = contextfabric.InvestigationResult{}, errContextFabricPanic
+		}
+	}()
+	return investigator.Investigate(ctx, principal, request)
+}
+
 // Bounded failure classifications for the investigation endpoint
 // (CHAOS-3811). Each value names the SENTINEL the classifier matched, never
 // anything derived from the error's own text: a raw provider, driver, or
@@ -112,6 +145,7 @@ const (
 	contextFabricClassModelOutput         = "model_output_invalid"
 	contextFabricClassNoSubjects          = "no_investigation_subjects"
 	contextFabricClassInvalidResult       = "invalid_result"
+	contextFabricClassPanic               = "panic"
 	contextFabricClassUnclassified        = "unclassified"
 	contextFabricInvestigationFailureName = "context_fabric_investigation"
 )
@@ -228,6 +262,13 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	// real-corpus investigation landed in the fallthrough below, which is
 	// exactly why nobody could tell an unresolved subject apart from a
 	// genuine ACR fault.
+	// A panic that escaped the investigator. The sentinel is unique and
+	// wraps nothing, so its position among the ACR-side classifications
+	// cannot affect any other branch.
+	if errors.Is(err, errContextFabricPanic) {
+		a.writeContextFabricFailure(w, r, err, contextFabricClassPanic, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
+		return
+	}
 	if errors.Is(err, contextfabric.ErrNoInvestigationSubjects) {
 		a.writeContextFabricFailure(w, r, err, contextFabricClassNoSubjects, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
 		return

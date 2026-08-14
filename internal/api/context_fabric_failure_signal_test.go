@@ -140,3 +140,68 @@ func TestContextFabricInvestigationFailureLogsNeverCarryRawCauseText(t *testing.
 		t.Fatalf("failure_stage = %v, want \"graph\"", got)
 	}
 }
+
+// CHAOS-3810 codex round-1 P3. A panic inside the investigator used to skip
+// the endpoint's one exit point entirely: the global recovery middleware
+// wrote a 500 with no failure_stage and no failure_classification, so the
+// single most alarming failure mode was the least diagnosable one.
+//
+// The panic value is arbitrary, caller-influenced data. It must reach neither
+// the classification, nor the log line, nor the body -- only the closed enum
+// pair does.
+func TestContextFabricInvestigationPanicExitsThroughTheOneFailurePath(t *testing.T) {
+	const panicSecret = "dial tcp 10.9.8.7:16379: falkordb-primary credentials rejected"
+	app, token, logs := newContextFabricTestAppWithLogs(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		panic(errors.New(panicSecret))
+	}))
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, investigationRequest(t, token))
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 body=%s", response.Code, response.Body.String())
+	}
+	entry := decodeFailureLog(t, logs.String())
+	if got := entry["failure_classification"]; got != "panic" {
+		t.Fatalf("failure_classification = %v, want \"panic\"", got)
+	}
+	if got := entry["failure_stage"]; got != "unknown" {
+		t.Fatalf("failure_stage = %v, want \"unknown\": a panic carries no stage", got)
+	}
+	if got := entry["failure_class"]; got != "context_fabric_investigation" {
+		t.Fatalf("failure_class = %v, want the endpoint's own failure class", got)
+	}
+	for _, fragment := range []string{"10.9.8.7", "falkordb", "credentials"} {
+		if strings.Contains(logs.String(), fragment) {
+			t.Fatalf("panic value fragment %q reached the logs:\n%s", fragment, logs.String())
+		}
+		if strings.Contains(response.Body.String(), fragment) {
+			t.Fatalf("panic value fragment %q reached the response body: %s", fragment, response.Body.String())
+		}
+	}
+	// The response is still the ordinary opaque envelope, not a panic report.
+	if !strings.Contains(response.Body.String(), "internal_error") {
+		t.Fatalf("body = %s, want the standard internal_error envelope", response.Body.String())
+	}
+}
+
+// A non-error panic value (a bare string) must be handled identically -- the
+// recovery must not depend on the value being an error.
+func TestContextFabricInvestigationPanicWithANonErrorValueIsClassifiedToo(t *testing.T) {
+	app, token, logs := newContextFabricTestAppWithLogs(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		panic("bare string panic at 10.9.8.7")
+	}))
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, investigationRequest(t, token))
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", response.Code)
+	}
+	if got := decodeFailureLog(t, logs.String())["failure_classification"]; got != "panic" {
+		t.Fatalf("failure_classification = %v, want \"panic\"", got)
+	}
+	if strings.Contains(logs.String(), "10.9.8.7") {
+		t.Fatalf("panic value reached the logs:\n%s", logs.String())
+	}
+}
