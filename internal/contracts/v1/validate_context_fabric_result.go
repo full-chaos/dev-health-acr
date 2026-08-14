@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func (s ContextFabricSubjectRef) Validate() error {
@@ -82,7 +83,7 @@ func (c ContextFabricCohort) validateStored() error {
 }
 
 func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
-	if !validContextFabricSubjectKind(c.Kind) || (c.Kind != ContextFabricSubjectTeam && c.Kind != ContextFabricSubjectProject) || c.Members == nil || len(c.Members) > 250 || len(c.Exclusions) > 250 || !stringLengthBetween(strings.TrimSpace(c.Rationale), 1, 4000) || (c.Complete && c.Truncated) {
+	if !validContextFabricSubjectKind(c.Kind) || (c.Kind != ContextFabricSubjectTeam && c.Kind != ContextFabricSubjectProject) || c.Members == nil || len(c.Members) > 250 || len(c.Exclusions) > 250 || !boundedText(c.Rationale, 1, 4000, bounds) || (c.Complete && c.Truncated) {
 		return fmt.Errorf("cohort violates v1 bounds")
 	}
 	seen := make(map[string]struct{}, len(c.Members))
@@ -145,6 +146,19 @@ type contextFabricBounds struct {
 	// permanently unreadable to fix a defect that only new writes can
 	// introduce.
 	closedFindingKinds bool
+	// rawTextLength measures a bounded text field's length on the RAW value
+	// rather than the trimmed one. TRUE on writes, FALSE on stored reads
+	// (codex round-13 F2). Every bounded text field was measured after
+	// TrimSpace, so a value padded past the schema maximum -- raw 130,
+	// trimmed 128 -- validated while being schema-invalid.
+	//
+	// Reads stay on the trimmed basis because the pre-branch write validator
+	// ALSO trimmed (merge-base 81ac259b, validate_context_fabric_result.go:181,
+	// a form dating to cd9b338/CHAOS-3770), so padded rows were legally
+	// writable for the whole life of these fields and may exist in immutable
+	// storage. Rejecting them on read would break reading data the service
+	// itself accepted.
+	rawTextLength bool
 
 	cohortInclusionReasons      int
 	cohortInclusionReasonLength int
@@ -177,6 +191,7 @@ const contextFabricRelationshipPathMaxNodes = 51
 // contextFabricWriteBounds matches the published JSON Schema exactly.
 var contextFabricWriteBounds = contextFabricBounds{
 	closedFindingKinds:          true,
+	rawTextLength:               true,
 	cohortInclusionReasons:      32,
 	cohortInclusionReasonLength: 1000,
 	narrativeCount:              ContextFabricLimitationsMaxCount,
@@ -202,6 +217,7 @@ var contextFabricWriteBounds = contextFabricBounds{
 // It exists ONLY so already-persisted rows stay readable.
 var contextFabricLegacyBounds = contextFabricBounds{
 	closedFindingKinds:          false,
+	rawTextLength:               false,
 	cohortInclusionReasons:      50,
 	cohortInclusionReasonLength: 1024,
 	narrativeCount:              250,
@@ -254,7 +270,7 @@ func (e ContextFabricCohortExclusion) validate(bounds contextFabricBounds) error
 	if err := e.Subject.Validate(); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
-	if !stringLengthBetween(strings.TrimSpace(e.Reason), 1, bounds.cohortExclusionReasonLength) {
+	if !boundedText(e.Reason, 1, bounds.cohortExclusionReasonLength, bounds) {
 		return fmt.Errorf("cohort exclusion reason violates v1 bounds")
 	}
 	return nil
@@ -269,7 +285,7 @@ func (p ContextFabricRelationshipPath) validateStored() error {
 }
 
 func (p ContextFabricRelationshipPath) validate(bounds contextFabricBounds) error {
-	if !stringLengthBetween(p.PathID, 8, 256) || len(p.Nodes) < 2 || len(p.Nodes) > contextFabricRelationshipPathMaxNodes || len(p.Edges) != len(p.Nodes)-1 || !stringLengthBetween(strings.TrimSpace(p.WhyRelevant), 1, bounds.pathWhyRelevantLength) || !boundedEvidenceRefs(p.EvidenceRefIDs, bounds.pathEvidenceRefs, false) {
+	if !stringLengthBetween(p.PathID, 8, 256) || len(p.Nodes) < 2 || len(p.Nodes) > contextFabricRelationshipPathMaxNodes || len(p.Edges) != len(p.Nodes)-1 || !boundedText(p.WhyRelevant, 1, bounds.pathWhyRelevantLength, bounds) || !boundedEvidenceRefs(p.EvidenceRefIDs, bounds.pathEvidenceRefs, false) {
 		return fmt.Errorf("relationship path violates v1 bounds")
 	}
 	if !uniqueSubjects(p.Nodes) {
@@ -314,7 +330,7 @@ func (d ContextFabricDriverJudgment) Validate() error {
 }
 
 func (d ContextFabricDriverJudgment) validate(bounds contextFabricBounds) error {
-	if !stringLengthBetween(d.DriverID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !validDriverStanding(d.Standing) || !validDriverCategory(ContextFabricDriverCategory(d.Category)) || !stringLengthBetween(strings.TrimSpace(d.Title), 1, ContextFabricDriverTitleMaxLength) || !stringLengthBetween(strings.TrimSpace(d.Summary), 1, ContextFabricDriverSummaryMaxLength) || !validDerivationMethod(d.Derivation) || !validEpistemicStatus(d.EpistemicStatus) || d.Confidence < 0 || d.Confidence > 1 || !stringLengthBetween(d.Qualification, 0, ContextFabricDriverQualificationMaxLength) {
+	if !stringLengthBetween(d.DriverID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !validDriverStanding(d.Standing) || !validDriverCategory(ContextFabricDriverCategory(d.Category)) || !boundedText(d.Title, 1, ContextFabricDriverTitleMaxLength, bounds) || !boundedText(d.Summary, 1, ContextFabricDriverSummaryMaxLength, bounds) || !validDerivationMethod(d.Derivation) || !validEpistemicStatus(d.EpistemicStatus) || d.Confidence < 0 || d.Confidence > 1 || !stringLengthBetween(d.Qualification, 0, ContextFabricDriverQualificationMaxLength) {
 		return fmt.Errorf("driver judgment violates v1 bounds")
 	}
 	if len(d.AffectedSubjects) < ContextFabricDriverAffectedSubjectsMinCount || len(d.AffectedSubjects) > ContextFabricDriverAffectedSubjectsMaxCount || !uniqueSubjects(d.AffectedSubjects) || len(d.PathIDs) > ContextFabricDriverPathIDsMaxCount || !uniqueTrimmedStrings(d.PathIDs, ContextFabricIdentifierRefMaxLength) || !boundedEvidenceRefs(d.EvidenceRefIDs, bounds.nestedEvidenceRefs, true) {
@@ -350,7 +366,7 @@ func (f ContextFabricFinding) Validate() error {
 }
 
 func (f ContextFabricFinding) validate(bounds contextFabricBounds) error {
-	if !stringLengthBetween(f.FindingID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !stringLengthBetween(strings.TrimSpace(f.Kind), 1, ContextFabricFindingKindMaxLength) || !stringLengthBetween(strings.TrimSpace(f.Summary), 1, ContextFabricFindingSummaryMaxLength) || len(f.Subjects) > ContextFabricFindingSubjectsMaxCount || !uniqueSubjects(f.Subjects) || !boundedEvidenceRefs(f.EvidenceRefIDs, bounds.nestedEvidenceRefs, false) {
+	if !stringLengthBetween(f.FindingID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !boundedText(f.Kind, 1, ContextFabricFindingKindMaxLength, bounds) || !boundedText(f.Summary, 1, ContextFabricFindingSummaryMaxLength, bounds) || len(f.Subjects) > ContextFabricFindingSubjectsMaxCount || !uniqueSubjects(f.Subjects) || !boundedEvidenceRefs(f.EvidenceRefIDs, bounds.nestedEvidenceRefs, false) {
 		return fmt.Errorf("finding violates v1 bounds")
 	}
 	if len(f.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount || !uniqueTrimmedStrings(f.ClaimedFactIDs, ContextFabricIdentifierRefMaxLength) {
@@ -491,12 +507,25 @@ func (v ContextFabricVersionSet) Validate() error {
 	return nil
 }
 
+// boundedText enforces a text field's length against the maximum the schema
+// publishes. Writes measure the RAW value; stored reads measure the trimmed
+// one -- see contextFabricBounds.rawTextLength for why the two differ.
+//
+// The minimum is always applied to the trimmed value: a field of nothing but
+// whitespace is empty in every sense, and always was.
+func boundedText(value string, minimum, maximum int, bounds contextFabricBounds) bool {
+	if bounds.rawTextLength && utf8.RuneCountInString(value) > maximum {
+		return false
+	}
+	return stringLengthBetween(strings.TrimSpace(value), minimum, maximum)
+}
+
 func (q ContextFabricInterpretedQuestion) Validate() error {
 	return q.validate(contextFabricWriteBounds)
 }
 
 func (q ContextFabricInterpretedQuestion) validate(bounds contextFabricBounds) error {
-	if !validInvestigationShape(q.Shape) || !stringLengthBetween(strings.TrimSpace(q.RequestedJudgment), 1, ContextFabricRequestedJudgmentMaxLength) || len(q.SubjectTerms) > bounds.interpretationTerms || len(q.ComparisonTerms) > bounds.interpretationTerms || !uniqueTrimmedStrings(q.SubjectTerms, ContextFabricSubjectOrComparisonTermMaxLength) || !uniqueTrimmedStrings(q.ComparisonTerms, ContextFabricSubjectOrComparisonTermMaxLength) || len(q.FactRequirements) > ContextFabricFactRequirementsMaxCount || !stringLengthBetween(q.ClarificationReason, 0, ContextFabricClarificationReasonMaxLength) {
+	if !validInvestigationShape(q.Shape) || !boundedText(q.RequestedJudgment, 1, ContextFabricRequestedJudgmentMaxLength, bounds) || len(q.SubjectTerms) > bounds.interpretationTerms || len(q.ComparisonTerms) > bounds.interpretationTerms || !uniqueTrimmedStrings(q.SubjectTerms, ContextFabricSubjectOrComparisonTermMaxLength) || !uniqueTrimmedStrings(q.ComparisonTerms, ContextFabricSubjectOrComparisonTermMaxLength) || len(q.FactRequirements) > ContextFabricFactRequirementsMaxCount || !stringLengthBetween(q.ClarificationReason, 0, ContextFabricClarificationReasonMaxLength) {
 		return fmt.Errorf("interpreted question violates v1 bounds")
 	}
 	if err := q.TimeContext.Validate(); err != nil {

@@ -459,7 +459,13 @@ func TestAcceptanceConflictIsPreservedNotResolvedAway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
-	if len(result.Conflicts) != 1 || result.Conflicts[0].Kind != "narrative" {
+	// Identity is pinned on the FindingID, which is unique in this corpus,
+	// rather than on Kind (self-found in round 13). The reclassification to
+	// "narrative" -- a value several fixtures share -- had weakened this into
+	// exactly the round-9 F5 shape: an assertion that accepts any plausible
+	// value instead of the one the test actually stored. Kind stays as a
+	// secondary check.
+	if len(result.Conflicts) != 1 || result.Conflicts[0].FindingID != "finding_conflict01" || result.Conflicts[0].Kind != "narrative" {
 		t.Fatalf("Conflicts = %#v, want the conflict preserved in the result", result.Conflicts)
 	}
 }

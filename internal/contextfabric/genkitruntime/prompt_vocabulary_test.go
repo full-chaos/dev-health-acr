@@ -21,9 +21,11 @@ import (
 // against the REAL validators rather than against a second copy of the
 // vocabulary, which would just be another list to drift.
 //
-// Exhaustiveness is asserted only where the prompt genuinely claims a
-// complete set -- see TestSynthesisPromptStandingIsADeliberateSubset for the
-// one place it does not.
+// Exhaustiveness is asserted where the prompt genuinely claims a complete
+// set: fact kinds and driver category, both now interpolated. See
+// TestSynthesisPromptStandingIsADeliberateSubset for the one place the prompt
+// deliberately states a NARROWER set than the contract accepts, and the
+// queued residual for derivation + epistemic_status, which are still prose.
 
 // promptVocabulary extracts the comma-separated vocabulary the prompt states
 // after prefix, stopping at the end of the sentence or at a parenthetical.
@@ -261,5 +263,64 @@ func TestFindingKindObeysTheSameClosedSetAsDriverCategory(t *testing.T) {
 	}
 	if err := invented.Validate(); err == nil {
 		t.Error("a finding kind outside the closed set is accepted, so the prompt's \"no exceptions\" is not enforced")
+	}
+}
+
+// TestSynthesisPromptCategoryListIsTheWholeVocabulary is the exhaustiveness
+// half for driver category (codex round-13 F1), matching what the fact-kind
+// list already has. Omitting a legal category is silent underuse: the model
+// simply never selects it, and nothing surfaces that.
+//
+// Interpolated, so this holds by construction; the assertion keeps it that
+// way if someone re-inlines the prose.
+func TestSynthesisPromptCategoryListIsTheWholeVocabulary(t *testing.T) {
+	vocabulary := contractsv1.ContextFabricDriverCategoryVocabulary()
+	want := make([]string, 0, len(vocabulary))
+	for _, category := range vocabulary {
+		want = append(want, string(category))
+	}
+	got := promptVocabulary(t, synthesisSystemPrompt,
+		"A driver's category MUST be exactly one of this closed set -- no other spelling is accepted: ")
+
+	if strings.Join(got, ", ") != strings.Join(want, ", ") {
+		t.Errorf("the synthesis prompt's driver-category list is not the declared vocabulary, in order:\n  prompt: %v\n  go:     %v", got, want)
+	}
+}
+
+// TestSynthesisPromptFirstFourteenClaimHolds pins a sentence the prompt makes
+// about the vocabulary's SHAPE rather than its members: "The first fourteen
+// are canonical-fact-shaped".
+//
+// That is two claims -- a count and an ORDER -- and interpolating the list
+// does not protect either. Reordering the declaration so that relationship or
+// narrative moved earlier, or adding a fifteenth fact-shaped category, would
+// leave the prompt telling the model something false about which categories
+// require a claimed fact, with every other assertion here still green.
+func TestSynthesisPromptFirstFourteenClaimHolds(t *testing.T) {
+	const claimed = 14
+
+	if !strings.Contains(synthesisSystemPrompt, "The first fourteen are canonical-fact-shaped") {
+		t.Fatal("the prompt no longer makes the 'first fourteen' claim; this assertion is stale and must be updated deliberately")
+	}
+
+	vocabulary := contractsv1.ContextFabricDriverCategoryVocabulary()
+	requiresFact := make([]bool, 0, len(vocabulary))
+	total := 0
+	for _, category := range vocabulary {
+		_, required := contractsv1.ContextFabricDriverCategoryRequiresClaimedFact(category)
+		requiresFact = append(requiresFact, required)
+		if required {
+			total++
+		}
+	}
+
+	if total != claimed {
+		t.Errorf("the prompt says fourteen categories are canonical-fact-shaped, but %d are", total)
+	}
+	for i, required := range requiresFact {
+		if want := i < claimed; required != want {
+			t.Errorf("category %q is at position %d and requires-claimed-fact=%v, which breaks the prompt's claim that exactly the FIRST %d are canonical-fact-shaped",
+				vocabulary[i], i, required, claimed)
+		}
 	}
 }

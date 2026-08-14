@@ -69,9 +69,15 @@ func TestFindingKindStaysReadableForStoredRows(t *testing.T) {
 	}
 
 	// Leniency is about the VOCABULARY, not about abandoning the field's
-	// other bounds: a stored row still cannot carry an empty or oversized
-	// kind, because those were always enforced and no row can exist that
-	// violates them.
+	// other bounds: a stored row still cannot carry an empty kind, nor one
+	// oversized AFTER TRIMMING, because those were always enforced.
+	//
+	// Corrected in codex round 13: an earlier version of this comment said
+	// no row could exist violating any of these, which was false for a value
+	// padded past the maximum -- the old write path trimmed before
+	// measuring, so raw-oversized rows were legally writable. That case is
+	// covered by TestFindingKindLengthIsMeasuredRawOnWrite, which is why the
+	// fixtures below trim to nothing or exceed the bound after trimming.
 	for _, malformed := range []string{"", "   ", strings.Repeat("x", ContextFabricFindingKindMaxLength+1)} {
 		if err := probeFinding(malformed).validate(contextFabricLegacyBounds); err == nil {
 			t.Errorf("the stored-read path accepts kind %q, which was never writable, so no stored row can legitimately carry it", malformed)
@@ -99,5 +105,91 @@ func TestFindingKindVocabularyMatchesTheDriverCategoryEnum(t *testing.T) {
 	}
 	if strings.Join(findingEnum, ",") != strings.Join(declared, ",") {
 		t.Errorf("the published Finding.kind enum and the Go vocabulary differ:\n  schema: %v\n  go:     %v", findingEnum, declared)
+	}
+}
+
+// TestFindingKindLengthIsMeasuredRawOnWrite closes codex round-13 F2.
+//
+// The length check measured strings.TrimSpace(f.Kind), so a value padded past
+// the schema's maxLength passed validation: raw 130 with trimmed 128 is
+// schema-invalid but was accepted. My round-12 comment justified stored-read
+// leniency with "no row could ever have been written carrying them", and for
+// the PADDED case that justification was false -- which is why the rule is
+// restated here from evidence rather than from intent.
+//
+// EVIDENCE, world (b): the pre-branch write validator ALSO trimmed before
+// measuring. At merge-base 81ac259b, validate_context_fabric_result.go:181
+// reads stringLengthBetween(strings.TrimSpace(f.Kind), 1,
+// ContextFabricFindingKindMaxLength), and that form dates to the field's
+// introduction in cd9b338 (CHAOS-3770). So a raw-130 finding kind was
+// legally writable for the whole life of the field, and rows carrying one may
+// exist in storage. Rejecting them on READ would break reading data the
+// service itself accepted.
+//
+// The rule, corrected: writes measure the RAW value, stored reads measure the
+// trimmed value. The schema keeps describing the write contract, exactly as
+// it does for the 250x4000 narrative allowance.
+func TestFindingKindLengthIsMeasuredRawOnWrite(t *testing.T) {
+	// Raw 130, trimmed 128: schema-invalid, but legally writable before now.
+	padded := " " + strings.Repeat("x", ContextFabricFindingKindMaxLength) + " "
+	if len([]rune(padded)) != ContextFabricFindingKindMaxLength+2 {
+		t.Fatalf("fixture is not padded past the bound: raw %d", len([]rune(padded)))
+	}
+	if len([]rune(strings.TrimSpace(padded))) != ContextFabricFindingKindMaxLength {
+		t.Fatal("fixture does not trim back to exactly the bound, so it would not isolate the padding")
+	}
+
+	if err := probeFinding(padded).validate(contextFabricLegacyBounds); err != nil {
+		t.Errorf("a stored row carrying a raw-oversized kind is no longer readable (%v); such rows were legally writable, and they are immutable", err)
+	}
+	if err := probeFinding(padded).Validate(); err == nil {
+		t.Error("the write path accepts a kind whose RAW length exceeds the schema maximum, so the service can emit a document that violates its own contract")
+	}
+}
+
+// TestPaddedTextIsRejectedOnWriteAcrossTheClass is the class half: the padded
+// hole was never specific to Finding.Kind. Every field measured after
+// TrimSpace had it, and a bound that only holds after trimming is not the
+// bound the schema publishes.
+func TestPaddedTextIsRejectedOnWriteAcrossTheClass(t *testing.T) {
+	pad := func(value string, bound int) string {
+		return " " + value + strings.Repeat(" ", bound) // raw > bound, trims back under it
+	}
+
+	t.Run("driver title", func(t *testing.T) {
+		driver := probeDriverJudgment()
+		driver.Title = pad("Title", ContextFabricDriverTitleMaxLength)
+		if err := driver.Validate(); err == nil {
+			t.Error("write path accepts a driver title padded past the schema maximum")
+		}
+		if err := driver.validate(contextFabricLegacyBounds); err != nil {
+			t.Errorf("stored read rejects a padded driver title that was legally writable: %v", err)
+		}
+	})
+
+	t.Run("finding summary", func(t *testing.T) {
+		finding := probeFinding("narrative")
+		finding.Summary = pad("Summary.", ContextFabricFindingSummaryMaxLength)
+		if err := finding.Validate(); err == nil {
+			t.Error("write path accepts a finding summary padded past the schema maximum")
+		}
+		if err := finding.validate(contextFabricLegacyBounds); err != nil {
+			t.Errorf("stored read rejects a padded finding summary that was legally writable: %v", err)
+		}
+	})
+}
+
+// probeDriverJudgment is a driver that validates cleanly, so a probe changing
+// one text field measures that field alone.
+func probeDriverJudgment() ContextFabricDriverJudgment {
+	return ContextFabricDriverJudgment{
+		DriverID: "driver_probe_0001", Standing: ContextFabricDriverPrincipal, Category: "status",
+		Title: "Probe title", Summary: "Probe summary.",
+		AffectedSubjects: []ContextFabricSubjectRef{{Kind: ContextFabricSubjectProject, CanonicalID: "project_probe", Label: "Probe"}},
+		EvidenceRefIDs:   []string{"evidence_probe_0001"},
+		ClaimedFactIDs:   []string{"claim_probe_00001"},
+		Derivation:       ContextFabricDerivationCanonicalStructured,
+		EpistemicStatus:  ContextFabricEpistemicObserved,
+		Confidence:       0.5, Current: true,
 	}
 }

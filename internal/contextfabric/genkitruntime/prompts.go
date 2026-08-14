@@ -53,12 +53,29 @@ var contextFabricFactKindList = func() string {
 	return strings.Join(kinds, ", ")
 }()
 
+// contextFabricDriverCategoryList renders the closed driver-category
+// vocabulary in published order (codex round-13 F1).
+//
+// This list was hardcoded while validation derived from the declaration. The
+// exhaustiveness residual queued after round 11 covered it, but round 12
+// created ContextFabricDriverCategoryVocabulary() to enforce Finding.Kind --
+// so the accessor that made this fix cheap already exists, and the same
+// interpolation used for fact kinds applies unchanged.
+var contextFabricDriverCategoryList = func() string {
+	vocabulary := contractsv1.ContextFabricDriverCategoryVocabulary()
+	categories := make([]string, 0, len(vocabulary))
+	for _, category := range vocabulary {
+		categories = append(categories, string(category))
+	}
+	return strings.Join(categories, ", ")
+}()
+
 var synthesisSystemPrompt = fmt.Sprintf(`You are the bounded synthesis layer for FullChaos Context Fabric.
 Return a direct, useful engineering answer grounded only in the supplied subject resolution, graph paths, canonical facts, coverage, and evidence references.
 Do not explain what the system could query next when the supplied data supports an answer.
 Do not invent facts, entity IDs, path IDs, evidence IDs, measurements, relationships, staffing claims, or source coverage.
 Every non-withheld driver must close to supplied evidence or a supplied relationship path. A finding is stricter and has no path alternative: every finding MUST carry at least one evidence_ref_id, so omit a finding entirely rather than returning one with an empty evidence list.
-A driver's category MUST be exactly one of this closed set -- no other spelling is accepted: status, actual_completion, work, blockers, reviews, continuous_integration, deployments, incidents, health, workload, investment, readiness, operational_deficiency, source_health, relationship, narrative. The first fourteen are canonical-fact-shaped: a driver or finding in one of them MUST cite at least one entry in claimed_facts of the matching kind via claimed_fact_ids. relationship and narrative never require a claim. A finding's "kind" field (in remaining_work, readiness_gaps, and conflicts) is governed by the SAME closed set and the SAME rule as a driver's category, with no exceptions: a finding whose kind is one of the fourteen canonical-fact-shaped values MUST carry claimed_fact_ids resolving to claimed_facts entries of that kind. If you cannot supply that claim, either give the finding the kind relationship or narrative, or omit the finding entirely. A claimed fact must restate a field and value taken verbatim from the supplied canonical_facts input -- never a value you infer, round, or reword -- and must be about a subject the citing driver or finding itself names in affected_subjects/subjects (a claim about a different subject than the one the driver is about is not valid grounding for that driver). If the canonical facts do not contain the field a judgment would need, do not make that judgment; note the gap as a limitation instead.
+A driver's category MUST be exactly one of this closed set -- no other spelling is accepted: %s. The first fourteen are canonical-fact-shaped: a driver or finding in one of them MUST cite at least one entry in claimed_facts of the matching kind via claimed_fact_ids. relationship and narrative never require a claim. A finding's "kind" field (in remaining_work, readiness_gaps, and conflicts) is governed by the SAME closed set and the SAME rule as a driver's category, with no exceptions: a finding whose kind is one of the fourteen canonical-fact-shaped values MUST carry claimed_fact_ids resolving to claimed_facts entries of that kind. If you cannot supply that claim, either give the finding the kind relationship or narrative, or omit the finding entirely. A claimed fact must restate a field and value taken verbatim from the supplied canonical_facts input -- never a value you infer, round, or reword -- and must be about a subject the citing driver or finding itself names in affected_subjects/subjects (a claim about a different subject than the one the driver is about is not valid grounding for that driver). If the canonical facts do not contain the field a judgment would need, do not make that judgment; note the gap as a limitation instead.
 Three more fields are closed vocabularies -- no other spelling is accepted. A driver's standing MUST be one of: principal, contributing, withheld (a withheld driver MUST also carry a non-empty qualification). Every derivation MUST be one of: canonical_structured, deterministic_projection, graph_associated, model_extracted, rule_inferred. Every epistemic_status MUST be one of: observed, source_asserted, inferred, disputed, superseded, unknown. A claimed fact's kind MUST be one of: %s.
 Identifier and range rules: every driver_id, finding_id, and claim_id MUST be at least 8 and at most 256 characters long and unique within your answer; claimed_fact_ids on a driver or finding MUST each match the claim_id of an entry you actually returned in claimed_facts; confidence MUST be a number between 0 and 1 inclusive.
 Length and count limits, all enforced -- an answer that exceeds any of them is rejected in full, so respect them instead of writing something more thorough that will be discarded. A driver's title is at most 512 characters and its summary at most 4000; a driver's qualification is at most 2000. Every driver MUST name at least 1 and at most 250 affected_subjects, with no duplicates. A finding's kind is at most 128 characters and its summary at most 4000, with at most 250 subjects. A claimed fact's field is at most 128 characters and MUST have no leading or trailing whitespace. A driver or finding carries at most 250 path_ids and at most 250 claimed_fact_ids, each at most 256 characters, and at most 200 evidence_ref_ids each -- every evidence_ref_id is itself at most 256 characters; the result-level evidence_ref_ids list holds at most 500. Every subject reference you write (in affected_subjects, subjects, or a claimed fact's subject) has a canonical ID at most 256 characters and a label at most 512 characters. A claimed fact's string value is at most 4000 characters. Return at most 50 drivers, at most 50 strongest_pressures (each at most 2000 characters), and at most 250 each of remaining_work, readiness_gaps and conflicts, at most %d limitations (each limitation at most %d characters), and at most %d warnings (each warning at most %d characters). You may restate at most 250 claimed_facts. direct_judgment and current_state are at most %d characters each and deterministic_answer at most %d.
@@ -67,6 +84,7 @@ Distinguish four kinds of grounding and do not blur them: a canonical observatio
 direct_judgment, current_state, and deterministic_answer are advisory only and are NOT returned to the caller verbatim -- ACR recomposes them server-side from your validated status/drivers/claimed_facts. Still write them carefully and consistently with your structured output: a receipt/evaluator may compare them against it later.
 Preserve conflicts, stale or unavailable sources, and uncertainty.
 Return only the requested structured output.`,
+	contextFabricDriverCategoryList,
 	contextFabricFactKindList,
 	contractsv1.ContextFabricLimitationsMaxCount, contractsv1.ContextFabricLimitationMaxLength,
 	contractsv1.ContextFabricWarningsMaxCount, contractsv1.ContextFabricWarningMaxLength,
