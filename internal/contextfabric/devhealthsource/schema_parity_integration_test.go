@@ -67,6 +67,9 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 		}
 	}
 
+	// devhealthschema:not-a-production-replica these are INSERT statements seeding rows into tables
+	// devhealthschema.DDL already created; the table name is an argument
+	// selecting where the row goes. No schema is declared here.
 	mustSeed("repos", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
 		repoID, orgID, repoSlug, "github", at)
 	mustSeed("work_items parent", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -107,6 +110,9 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 	// actually scanned a row, not just that the batch as a whole is
 	// non-empty.
 	wantCanonicalID := map[string]string{
+		// devhealthschema:not-a-production-replica this maps each table to the canonical ID its row is
+		// expected to project to. Keyed BY table on purpose, and it mirrors no
+		// column type, engine or sort key -- it is an assertion about output.
 		"repos":                                "repository:" + repoID,
 		"work_items":                           "work_item:WI-CHILD",
 		"git_pull_requests":                    "pull_request:" + repoID + ":4242",

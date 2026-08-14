@@ -415,3 +415,89 @@ func TestR6_1_EveryProjectionTimestampIsBounded(t *testing.T) {
 		})
 	}
 }
+
+// deepNest exists only to drive the walk past its depth cap. Each level is
+// an exported pointer field, which is exactly what the walk follows.
+type deepNest struct {
+	Next  *deepNest
+	Stamp time.Time
+}
+
+// nestDeep builds a chain of the requested depth carrying stamp at the bottom.
+func nestDeep(levels int, stamp time.Time) *deepNest {
+	node := &deepNest{Stamp: stamp}
+	for level := 0; level < levels; level++ {
+		// Every level carries an ordinary stamp: since round-7 F2 a
+		// present zero is itself refused, so a chain of zero-stamped
+		// nodes would fail for that reason instead of the depth cap.
+		node = &deepNest{Next: node, Stamp: stamp}
+	}
+	return node
+}
+
+// TestR7_F1_TheWalkRefusesWhatItCannotReach is round-7 F1, red→green.
+//
+// The cap used to return nil, so a timestamp nested past it was ACCEPTED --
+// the walk reported success having examined less than the value it was
+// given. An unchecked instant is exactly what R6-1 exists to prevent, so
+// reaching the cap now refuses the batch.
+//
+// The two halves matter together: refusing past the cap is only tolerable
+// if real payloads sit comfortably inside it, so this also pins the
+// headroom rather than assuming it.
+func TestR7_F1_TheWalkRefusesWhatItCannotReach(t *testing.T) {
+	t.Parallel()
+	ordinary := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+
+	// A real batch must validate, or the cap is too tight to ship.
+	if err := validContextFabricProjectionBatch().Validate(); err != nil {
+		t.Fatalf("a real projection batch does not fit inside the walk's depth cap: %v", err)
+	}
+
+	// Shallow enough to reach: an unrepresentable stamp is still caught.
+	if err := validateRepresentableInstants(nestDeep(2, time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC))); err == nil {
+		t.Fatal("an unrepresentable instant within reach was not caught")
+	}
+	if err := validateRepresentableInstants(nestDeep(2, ordinary)); err != nil {
+		t.Fatalf("an ordinary instant within reach was refused: %v", err)
+	}
+
+	// Past the cap: refused REGARDLESS of the value, because the walk
+	// cannot see it. Accepting here would be a claim the walk cannot back.
+	if err := validateRepresentableInstants(nestDeep(projectionInstantWalkDepth+2, ordinary)); err == nil {
+		t.Fatalf("a value nested past the depth cap was accepted; its timestamps were never examined, so acceptance asserts something the walk did not check")
+	}
+}
+
+// TestR7_F2_APresentZeroTimestampIsRefusedInProjections is round-7 F2,
+// red→green — the projection-ingress half of the rule R6-2 established at
+// the engine boundary.
+//
+// The semantics are evidence-backed, not assumed. All three production
+// producers were swept: every nullable timestamp goes through validity.go's
+// (isNotNull, ifNull) pair whose optionalTime returns NIL rather than a
+// zero, no bare time.Time scan target is fed by a Nullable or LEFT-joined
+// column, and episodes cannot carry a zero EndedAt because the column is
+// NOT NULL and episodes are recorded post-hoc. So no legitimate producer
+// loses anything here.
+//
+// The contract already drew this line elsewhere -- validateTimeRange skips
+// nil and errors on IsZero -- so the walk was the piece disagreeing with
+// the rule around it.
+func TestR7_F2_APresentZeroTimestampIsRefusedInProjections(t *testing.T) {
+	t.Parallel()
+
+	// Bare walk: a present zero is refused wherever it sits.
+	if err := validateRepresentableInstants(struct{ Stamp time.Time }{}); err == nil {
+		t.Fatal("a present zero timestamp was accepted; the zero time is year 1 and absence is a nil pointer, not a zero value")
+	}
+	// A NIL pointer remains absent and legal -- the distinction is the
+	// whole point, so it is asserted rather than left implied.
+	if err := validateRepresentableInstants(struct{ Stamp *time.Time }{}); err != nil {
+		t.Fatalf("a nil timestamp pointer was refused, but nil is how this contract expresses absence: %v", err)
+	}
+	// A pointer TO a zero is refused, matching validateTimeRange.
+	if err := validateRepresentableInstants(struct{ Stamp *time.Time }{Stamp: &time.Time{}}); err == nil {
+		t.Fatal("a pointer to the zero time was accepted; validateTimeRange already rejects exactly this")
+	}
+}

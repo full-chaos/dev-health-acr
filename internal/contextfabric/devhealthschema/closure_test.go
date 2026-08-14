@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
@@ -412,7 +413,23 @@ func TestNoSecondPhysicalSourceOutsideTheDeclaration(t *testing.T) {
 
 	// rivalTableThreshold is how many declared tables a single file must
 	// name as literals before it is treated as mirroring the declaration.
-	const rivalTableThreshold = 4
+	//
+	// Round-7 F4 lowered this from 4 to 3, and the number is MEASURED
+	// rather than tuned by feel: swept over the whole repository,
+	// thresholds 4 and 3 trip on exactly the same four files, because no
+	// file here names precisely three declared tables. So the tighter
+	// bound is free -- it strictly widens detection at zero cost in false
+	// positives.
+	//
+	// 2 was measured too and rejected: it pulls in files that legitimately
+	// mention a pair of tables, which would mean handing exemptions to
+	// ordinary code. An exemption granted to quiet a false positive is
+	// worse than a slightly looser threshold, because it is permanent and
+	// covers whatever is later written beside it.
+	//
+	// Re-measure if the declaration grows; the reasoning is "no file sits
+	// at 3", not "3 feels right".
+	const rivalTableThreshold = 3
 
 	var offences []string
 	// sanctionedSightings proves the detection still fires: the
@@ -444,32 +461,56 @@ func TestNoSecondPhysicalSourceOutsideTheDeclaration(t *testing.T) {
 		// the declaration, and counting those made this fire on
 		// devhealthsource/tables.go, which is the very code the
 		// declaration exists to serve.
-		named := 0
-		for _, table := range declaredNames {
-			quoted := `"` + table + `"`
-			if strings.Contains(contents, quoted+":") || strings.Contains(contents, quoted+",") {
-				named++
+		// Round-7 F3: attribute every sighting to its LINE, so an
+		// exemption covers only what it sits next to.
+		//
+		// This block used to count file-wide and then return early if the
+		// file held ANY exemption anywhere -- while its own comment claimed
+		// the mechanism was line-scoped. It was not, so a rival four-table
+		// declaration added elsewhere in an already-exempt file was
+		// ignored. Same defect the fragment pass had at R6-4, in the
+		// sibling that was fixed one round earlier: proof that a fix
+		// applied to one pass has to be applied to the class.
+		exempt := exemptedLines(contents)
+		namedTables := map[string]struct{}{}
+		unexemptTables := map[string]struct{}{}
+		for index, line := range strings.Split(contents, "\n") {
+			// A line that names a table while CALLING the renderer is
+			// USING the single source, not rivaling it -- the one shape
+			// that is definitionally not a second declaration. Excluded
+			// on principle rather than by pattern-guessing.
+			if strings.Contains(line, "devhealthschema.DDL(") {
+				continue
+			}
+			for _, table := range declaredNames {
+				if !namesDeclaredTable(line, table) {
+					continue
+				}
+				namedTables[table] = struct{}{}
+				if _, ok := exempt[index+1]; !ok {
+					unexemptTables[table] = struct{}{}
+				}
 			}
 		}
-		if named < rivalTableThreshold {
+		if len(namedTables) < rivalTableThreshold {
 			return nil
 		}
 		if strings.Contains(filepath.ToSlash(path), "internal/contextfabric/devhealthschema/") {
 			// The declaration and its own tests are the sanctioned
 			// source -- and seeing them proves the detection works.
+			// Counted BEFORE exemptions, so the anchor measures the
+			// detector rather than the opt-outs.
 			sanctionedSightings++
+			return nil
+		}
+		if len(unexemptTables) < rivalTableThreshold {
 			return nil
 		}
 		relative, relErr := filepath.Rel(root, path)
 		if relErr != nil {
 			relative = path
 		}
-		// Legitimate consumers -- a guard listing the tables it renders,
-		// say -- opt out through the same line-scoped mechanism as DDL.
-		if len(exemptedLines(contents)) > 0 {
-			return nil
-		}
-		offences = append(offences, fmt.Sprintf("%s names %d declared tables as literals", relative, named))
+		offences = append(offences, fmt.Sprintf("%s names %d declared tables as literals outside any exemption window", relative, len(unexemptTables)))
 		return nil
 	})
 	if err != nil {
@@ -489,6 +530,45 @@ func TestNoSecondPhysicalSourceOutsideTheDeclaration(t *testing.T) {
 			strings.Join(offences, "\n  "))
 	}
 }
+
+// namesDeclaredTable reports whether one line names a declared table as a
+// complete Go string literal in a DECLARATION shape.
+//
+// Round-7 F4 widened this. It used to accept only `"table":` and `"table",`,
+// which read a map key and a composite-literal member but MISSED a struct or
+// slice member that closes immediately -- `{Name: "repos"}` -- so a rival
+// built from structs rather than maps escaped a check written against maps.
+// That is the enumerate-the-shapes game this branch has already lost twice,
+// so the terminator set is now every character that can structurally follow
+// a literal, plus end of line, rather than the two that happened to be in
+// mind when it was written.
+//
+// It stays anchored to a CLOSING context rather than accepting a bare
+// occurrence, because a bare match fires on SQL text inside producers' query
+// strings -- measured on devhealthsource/tables.go, which is the very code
+// the declaration exists to serve.
+func namesDeclaredTable(line, table string) bool {
+	return declarationShape(table).MatchString(line)
+}
+
+// declarationShape caches one compiled pattern per table: the sweep runs it
+// over every line of every Go file in the repository, so compiling inside
+// the loop would dominate the test's runtime.
+func declarationShape(table string) *regexp.Regexp {
+	declarationShapeMu.Lock()
+	defer declarationShapeMu.Unlock()
+	if pattern, ok := declarationShapes[table]; ok {
+		return pattern
+	}
+	pattern := regexp.MustCompile(regexp.QuoteMeta(`"`+table+`"`) + `\s*([:,)}\]]|$)`)
+	declarationShapes[table] = pattern
+	return pattern
+}
+
+var (
+	declarationShapeMu sync.Mutex
+	declarationShapes  = map[string]*regexp.Regexp{}
+)
 
 // TestEveryPhysicalFacetHasOneSource is closure half (a): every declared
 // table carries a complete physical definition, and there is nowhere else

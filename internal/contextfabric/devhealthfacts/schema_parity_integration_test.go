@@ -80,6 +80,9 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 	// Each seed names its columns: the declared tables carry every column
 	// the readers touch, and a positional list would break the moment one
 	// is added.
+	// devhealthschema:not-a-production-replica these are INSERT statements seeding rows into tables
+	// devhealthschema.DDL already created; the table name is an argument
+	// selecting where the row goes. No schema is declared here.
 	seed("repos", `INSERT INTO repos (id, org_id, repo, provider) VALUES (?, ?, ?, ?)`,
 		repoID, orgID, "acme/service", "github")
 	seed("work_items", `INSERT INTO work_items (work_item_id, org_id, repo_id, status, title, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -104,6 +107,9 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		orgID, "repo", repoID, day, at)
 	seed("estimate_coverage_metrics_daily", `INSERT INTO estimate_coverage_metrics_daily (org_id, team_id, day, computed_at) VALUES (?, ?, ?, ?)`,
 		orgID, "CHAOS", day, at)
+	// devhealthschema:not-a-production-replica the seeding block continues here, past the reach of
+	// the marker above it. Same INSERT-into-an-already-created-table shape:
+	// the table name selects a destination, it declares nothing.
 	seed("capacity_forecasts", `INSERT INTO capacity_forecasts (org_id, team_id, computed_at) VALUES (?, ?, ?)`,
 		orgID, "CHAOS", at)
 	seed("investment_metrics_daily", `INSERT INTO investment_metrics_daily (org_id, team_id, day, computed_at) VALUES (?, ?, ?, ?)`,

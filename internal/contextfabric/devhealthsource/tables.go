@@ -42,6 +42,9 @@ var entityTables = []entityTable{
 	{name: "operational_incidents", query: queryIncidents},
 	{name: "work_item_dependencies", query: queryWorkItemDependencies},
 	{name: "work_items_hierarchy", query: queryWorkItemHierarchy},
+	// devhealthschema:not-a-production-replica registry TAIL -- the same producer list continues here,
+	// past the reach of the marker on the declaration above. Still a
+	// table-to-query pairing that mirrors no column type, engine or sort key.
 	{name: "work_graph_deployment_incident_edges", query: queryDeploymentIncidentEdges},
 	{name: "git_pull_request_reviews", query: queryPullRequestReviews},
 	{name: "ci_pipeline_runs", query: queryCIRuns},

@@ -610,3 +610,49 @@ Two anchor details are load-bearing and easy to get wrong:
   guards (substring `replacing` vs the loop's `HasPrefix`). Deriving it the
   same way is circular: both counts fall to zero together and the anchor
   agrees that nothing needed checking.
+
+## 12. Round-7 — two rules the earlier rounds had half-applied
+
+**A check that cannot reach something must refuse it, not accept it.** The
+reflective walk capped traversal at 8 levels and returned nil there, so a
+timestamp nested deeper was ACCEPTED — the validator reported success having
+examined less than the value it was handed. That is the fails-toward-fine
+shape again: indistinguishable from a clean result. Reaching the cap is now
+an error, which makes the cap self-reporting; a type that genuinely nests
+deeper breaks a test rather than quietly losing its bound.
+
+**Nil is absent, zero is malformed — everywhere, not just at the engine.**
+R6-2 established this at the engine boundary and the walk still skipped
+present zeros. The semantics were settled with evidence rather than
+symmetry: all three production producers were swept, every nullable
+timestamp goes through `validity.go`'s `(isNotNull, ifNull)` pair whose
+`optionalTime` returns nil and never inspects the value, no bare `time.Time`
+scan target is fed by a Nullable or LEFT-joined column, and episodes cannot
+carry a zero `EndedAt` because the column is NOT NULL and episodes are
+recorded post-hoc. Decisively, `validateTimeRange` ALREADY skips nil and
+errors on `IsZero()` — so the walk was the piece disagreeing with the rule
+around it, and no legitimate producer loses anything.
+
+**A fix applied to one pass has to be applied to the class — including the
+fix that said so.** R6-4 line-scoped the fragment pass's exemptions; the
+rival pass was still file-wide a round later, while its own comment claimed
+otherwise. Any exemption anywhere in a file silenced the whole file. Now
+every sighting is attributed to its line and an exemption covers only what
+it sits beside.
+
+Line-scoping immediately surfaced what the file-wide skip had been hiding:
+legitimate table-name literals outside every window — seeding INSERTs, a
+producer registry's tail, a table→canonical-ID expectation map. Each now
+carries its own marker and reason, which is the mechanism working rather
+than a cost of it. One case was NOT marked but excluded on principle: a line
+naming a table while calling `devhealthschema.DDL(...)` is USING the single
+source, definitionally not a rival.
+
+**The rival threshold is measured, not tuned.** Lowered 4 → 3 after sweeping
+the repository: thresholds 4 and 3 trip on exactly the same four files,
+because no file names precisely three declared tables, so the tighter bound
+is free. 2 was measured and rejected — it pulls in files that legitimately
+mention a pair of tables, and an exemption handed out to quiet a false
+positive is permanent and covers whatever is written beside it later.
+Re-measure if the declaration grows; the reasoning is "no file sits at 3",
+not "3 feels right".

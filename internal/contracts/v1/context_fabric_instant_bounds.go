@@ -29,6 +29,18 @@ import (
 // nest a few levels at most (batch -> slice -> struct -> optional pointer),
 // so this is generous while making a pathological or cyclic shape
 // terminate rather than hang a validator.
+//
+// Round-7 F1: reaching the cap is an ERROR, not a stopping point. The walk
+// used to return nil there, which silently ACCEPTED every timestamp below
+// the cap -- so a field nested one level too deep would have been admitted
+// unchecked, and the validator would have reported success having examined
+// less than it claimed. That is the same fails-toward-fine shape as a sweep
+// whose pattern stopped matching: indistinguishable from a clean result.
+//
+// Failing loud makes the cap self-reporting. A future type that genuinely
+// nests deeper breaks a test rather than quietly losing its bound, and
+// whoever adds it decides deliberately between restructuring the type and
+// raising this number -- with the walk still total either way.
 const projectionInstantWalkDepth = 8
 
 var timeType = reflect.TypeOf(time.Time{})
@@ -36,17 +48,42 @@ var timeType = reflect.TypeOf(time.Time{})
 // validateRepresentableInstants reports the first timestamp anywhere in
 // value that cannot survive conversion to epoch nanoseconds.
 //
-// A nil pointer is ABSENT and skipped. A non-nil ZERO timestamp is NOT
-// skipped here -- callers that treat a present zero as meaningful validate
-// it themselves; what this refuses is only the unrepresentable, so it
-// composes with the existing zero checks instead of duplicating them.
+// A nil pointer is ABSENT and skipped. A PRESENT ZERO is refused (round-7
+// F2), for the same reason the engine boundary refuses one: the zero time
+// is year 1, which is outside the representable range, and a pointer
+// already expresses absence.
+//
+// Evidence for the semantics, rather than assumption -- swept all three
+// production producers (devhealthsource clickhouse.go, tables.go,
+// episodes.go):
+//
+//   - No producer can emit a zero today. Every nullable timestamp goes
+//     through validity.go's (isNotNull, ifNull) pair, whose optionalTime
+//     returns NIL when absent and never inspects the value; no bare
+//     time.Time scan target is fed by a Nullable or LEFT-joined column.
+//   - Absence is already expressed exclusively as a nil pointer on
+//     ValidFrom/ValidTo.
+//   - The contract ALREADY draws this line: validateTimeRange skips nil
+//     and errors on value.IsZero(), so a pointer-to-zero is explicitly
+//     illegal while a nil pointer is explicitly legal.
+//   - Episodes cannot carry a zero EndedAt for an unfinished episode --
+//     the Postgres column is NOT NULL with a CHECK, and ACR records
+//     episodes post-hoc, so no in-progress state exists to need a
+//     sentinel.
+//
+// So this refuses nothing any producer legitimately emits, and it makes
+// the walk agree with the rule the rest of the contract already applies.
 func validateRepresentableInstants(value any) error {
 	return walkInstants(reflect.ValueOf(value), "", 0)
 }
 
 func walkInstants(value reflect.Value, path string, depth int) error {
-	if depth > projectionInstantWalkDepth || !value.IsValid() {
+	if !value.IsValid() {
 		return nil
+	}
+	if depth > projectionInstantWalkDepth {
+		return fmt.Errorf("%s nests deeper than the walk examines (%d levels); its timestamps would be admitted unchecked, so the batch is refused rather than partially validated",
+			instantPathLabel(path), projectionInstantWalkDepth)
 	}
 	switch value.Kind() {
 	case reflect.Pointer, reflect.Interface:
@@ -71,8 +108,11 @@ func walkInstants(value reflect.Value, path string, depth int) error {
 	case reflect.Struct:
 		if value.Type() == timeType {
 			instant, ok := value.Interface().(time.Time)
-			if !ok || instant.IsZero() || representableInstant(instant) {
+			if !ok || representableInstant(instant) {
 				return nil
+			}
+			if instant.IsZero() {
+				return fmt.Errorf("%s is present but zero; absence is expressed as a nil pointer, and the zero time is year 1 -- outside the representable range", instantPathLabel(path))
 			}
 			return fmt.Errorf("%s is outside the representable range (%s..%s)",
 				instantPathLabel(path), minRepresentableInstant.Format("2006-01-02"), maxRepresentableInstant.Format("2006-01-02"))
