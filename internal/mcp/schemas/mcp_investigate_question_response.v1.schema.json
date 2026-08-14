@@ -1892,7 +1892,9 @@
                 "BLOCKS",
                 "PART_OF",
                 "RELATES_TO",
-                "DUPLICATES"
+                "DUPLICATES",
+                "BELONGS_TO_PROJECT",
+                "OWNED_BY_TEAM"
               ]
             },
             "from": {
@@ -2885,7 +2887,9 @@
                 "BLOCKS",
                 "PART_OF",
                 "RELATES_TO",
-                "DUPLICATES"
+                "DUPLICATES",
+                "BELONGS_TO_PROJECT",
+                "OWNED_BY_TEAM"
               ]
             },
             "from": {
