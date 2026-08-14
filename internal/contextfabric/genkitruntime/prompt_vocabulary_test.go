@@ -216,3 +216,50 @@ func TestSynthesisPromptStandingIsADeliberateSubset(t *testing.T) {
 		}
 	}
 }
+
+// TestFindingKindObeysTheSameClosedSetAsDriverCategory pins the sentence the
+// synthesis prompt actually makes: a finding's "kind" field is "governed by
+// the SAME closed set and the SAME rule as a driver's category, with no
+// exceptions".
+//
+// Codex round 12 found that sentence was false -- Finding.Validate checked
+// only length, and the schema left the field unrestricted, so a model could
+// return kind "source_disagreement" and produce a result that validated. The
+// round-11 probe missed it because it exercised DriverJudgment.Category only,
+// which WAS enforced. The claim is a claim about two fields, so it is now
+// checked on both.
+func TestFindingKindObeysTheSameClosedSetAsDriverCategory(t *testing.T) {
+	categories := promptVocabulary(t, synthesisSystemPrompt,
+		"A driver's category MUST be exactly one of this closed set -- no other spelling is accepted: ")
+
+	for _, category := range categories {
+		finding := contractsv1.ContextFabricFinding{
+			FindingID: "finding_probe_001",
+			Kind:      category,
+			Summary:   "Probe summary.",
+			Subjects: []contractsv1.ContextFabricSubjectRef{
+				{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_probe", Label: "Probe"},
+			},
+			EvidenceRefIDs: []string{"evidence_probe_0001"},
+			ClaimedFactIDs: []string{"claim_probe_00001"},
+		}
+		if err := finding.Validate(); err != nil {
+			t.Errorf("the prompt says a finding's kind obeys the driver-category set, but %q is rejected as a finding kind: %v", category, err)
+		}
+	}
+
+	// And the set must actually be CLOSED for findings, not merely permissive
+	// enough to accept the listed members.
+	invented := contractsv1.ContextFabricFinding{
+		FindingID: "finding_probe_001",
+		Kind:      "source_disagreement",
+		Summary:   "Probe summary.",
+		Subjects: []contractsv1.ContextFabricSubjectRef{
+			{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_probe", Label: "Probe"},
+		},
+		EvidenceRefIDs: []string{"evidence_probe_0001"},
+	}
+	if err := invented.Validate(); err == nil {
+		t.Error("a finding kind outside the closed set is accepted, so the prompt's \"no exceptions\" is not enforced")
+	}
+}

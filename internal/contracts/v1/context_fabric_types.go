@@ -394,6 +394,55 @@ const (
 	ContextFabricDriverCategoryNarrative    ContextFabricDriverCategory = "narrative"
 )
 
+// contextFabricDriverCategories is the closed driver-category vocabulary in
+// published order -- the SINGLE declaration validDriverCategory derives from,
+// and now also the vocabulary ContextFabricFinding.Kind is checked against.
+//
+// Finding.Kind is the category-equivalent field for findings and has always
+// been governed by the same closed set in the synthesis prompt and in
+// ContextFabricDriverCategoryRequiresClaimedFact. It was simply never
+// ENFORCED (codex round-12): Finding.validate checked only non-emptiness and
+// length, and the published schema left the field an unrestricted string
+// while DriverJudgment.category carried this exact enum. A model could emit
+// kind "source_disagreement" with valid evidence and produce a canonical
+// result that validated -- the prompt advertising a closed set the contract
+// did not keep.
+//
+// Unexported behind an accessor for the same reason as the fact-kind
+// vocabulary: an exported array var's elements are assignable, and a caller
+// mutating the vocabulary would desynchronize validation from the schema and
+// the prompt.
+var contextFabricDriverCategories = [...]ContextFabricDriverCategory{
+	ContextFabricDriverCategoryStatus,
+	ContextFabricDriverCategoryCompletion,
+	ContextFabricDriverCategoryWork,
+	ContextFabricDriverCategoryBlockers,
+	ContextFabricDriverCategoryReviews,
+	ContextFabricDriverCategoryCI,
+	ContextFabricDriverCategoryDeployments,
+	ContextFabricDriverCategoryIncidents,
+	ContextFabricDriverCategoryHealth,
+	ContextFabricDriverCategoryWorkload,
+	ContextFabricDriverCategoryInvestment,
+	ContextFabricDriverCategoryReadiness,
+	ContextFabricDriverCategoryDeficiency,
+	ContextFabricDriverCategorySourceHealth,
+	ContextFabricDriverCategoryRelationship,
+	ContextFabricDriverCategoryNarrative,
+}
+
+// ContextFabricDriverCategoryCount is the size of the closed driver-category
+// vocabulary, as a compile-time constant.
+const ContextFabricDriverCategoryCount = len(contextFabricDriverCategories)
+
+// ContextFabricDriverCategoryVocabulary returns the closed driver-category
+// vocabulary in published order. The return type is an ARRAY, so the value is
+// copied to the caller -- see ContextFabricFactKindVocabulary for why that
+// matters.
+func ContextFabricDriverCategoryVocabulary() [ContextFabricDriverCategoryCount]ContextFabricDriverCategory {
+	return contextFabricDriverCategories
+}
+
 // contextFabricDriverCategoryFactKind is the closed Category->FactKind
 // table. See ContextFabricDriverCategoryRequiresClaimedFact.
 var contextFabricDriverCategoryFactKind = map[ContextFabricDriverCategory]ContextFabricFactKind{

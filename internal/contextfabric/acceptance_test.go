@@ -448,7 +448,7 @@ func TestAcceptanceConflictIsPreservedNotResolvedAway(t *testing.T) {
 	})
 	draft := bootstrapDraft(project)
 	draft.Conflicts = []Finding{{
-		FindingID: "finding_conflict01", Kind: "source_disagreement",
+		FindingID: "finding_conflict01", Kind: "narrative",
 		Summary:        "Work-item status reports in-progress while the linked deployment shows already-released.",
 		Subjects:       []SubjectRef{project},
 		EvidenceRefIDs: []string{"evidence_status_0001"},
@@ -459,7 +459,7 @@ func TestAcceptanceConflictIsPreservedNotResolvedAway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
-	if len(result.Conflicts) != 1 || result.Conflicts[0].Kind != "source_disagreement" {
+	if len(result.Conflicts) != 1 || result.Conflicts[0].Kind != "narrative" {
 		t.Fatalf("Conflicts = %#v, want the conflict preserved in the result", result.Conflicts)
 	}
 }

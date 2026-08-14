@@ -102,8 +102,16 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// which is what let the 50-vs-64 drift sit unnoticed.
 		"common#$defs.InterpretedQuestion.properties.fact_requirements.maxItems": ContextFabricFactRequirementsMaxCount,
 		"common#$defs.FactRequirement.properties.parameters.maxProperties":       ContextFabricFactRequirementParametersMaxCount,
-		"common#$defs.SubjectCandidate.properties.evidence_ref_ids.maxItems":     contextFabricWriteBounds.candidateEvidenceRefs,
-		"common#$defs.CohortExclusion.properties.reason.maxLength":               contextFabricWriteBounds.cohortExclusionReasonLength,
+		// Also unprobeable, for the same honest reason (codex round-12):
+		// Finding.kind is a closed vocabulary, so no filler string of any
+		// length is a valid value and the probe cannot isolate the length
+		// bound. Mapped rather than left to the Finding.properties
+		// classification, which would have absorbed it silently -- the
+		// measurement showed it sliding from proved into the residual
+		// bucket the moment the vocabulary closed.
+		"common#$defs.Finding.properties.kind.maxLength":                     ContextFabricFindingKindMaxLength,
+		"common#$defs.SubjectCandidate.properties.evidence_ref_ids.maxItems": contextFabricWriteBounds.candidateEvidenceRefs,
+		"common#$defs.CohortExclusion.properties.reason.maxLength":           contextFabricWriteBounds.cohortExclusionReasonLength,
 		// Disproved as "schema-only" by boundProbes below: the validator
 		// rejects a value one past each of these, so they are compared
 		// numerically rather than excused (codex round-6 F1).
@@ -406,6 +414,17 @@ func driveField(value reflect.Value, path string, size int, keyword string) bool
 			return driveField(field.Index(0), rest, size, keyword)
 		}
 		return driveField(field, rest, size, keyword)
+	}
+	// A field whose value is a CLOSED VOCABULARY cannot be driven to a
+	// length at all: filler text of any size is rejected for not being a
+	// member, so the probe would "reject" at both N and N+1 and measure
+	// nothing (codex round-12). Type-checked, exactly like the fact
+	// requirement case in uniquifyElement, so it cannot silently capture a
+	// different shape's field that happens to be called "kind" -- Finding's
+	// kind is the driver-category vocabulary, ClaimedFact's and
+	// FactRequirement's are the fact-kind one.
+	if rest == "" && value.Type() == reflect.TypeOf(ContextFabricFinding{}) && name == "kind" {
+		return false
 	}
 	switch {
 	case isElement && field.Kind() == reflect.Slice:

@@ -642,10 +642,28 @@ func modelFacingBounds() []boundCase {
 			over:     func() error { return findingWithID(contractsv1.ContextFabricModelMintedIDMaxLength + 1).Validate() },
 		},
 		{
+			// Finding.Kind became a CLOSED VOCABULARY in codex round 12, so
+			// no filler string of any length is a valid kind and the length
+			// bound can no longer be probed at its own value on the write
+			// path. Same shape as interpretation.fact_requirements.max_count:
+			// atLimit proves the bound does not block the real achievable
+			// ceiling -- the longest legal vocabulary member -- rather than
+			// pretending a 128-character kind is constructible.
+			//
+			// over's rejection is now OVERDETERMINED on this path (too long
+			// AND not a member). The length bound's own proof lives where it
+			// is still the operative check: contracts/v1's
+			// TestFindingKindStaysReadableForStoredRows asserts an
+			// over-length kind is rejected even on the lenient stored-read
+			// path, where the vocabulary is deliberately not enforced.
+			//
+			// mentions carries no number (self-found, same defect as the
+			// round-9 fact_requirements case): a literal here is what the
+			// derived phrase check exists to prevent.
 			name: "synthesis/finding kind max length", registryName: "synthesis.finding.kind.max_length",
 			limit: contractsv1.ContextFabricFindingKindMaxLength, prompt: synthesisSystemPrompt,
-			mentions: []string{"kind is at most 128"},
-			atLimit:  func() error { return findingWithKind(contractsv1.ContextFabricFindingKindMaxLength).Validate() },
+			mentions: []string{"kind is at most"},
+			atLimit:  func() error { return findingWithLongestLegalKind().Validate() },
 			over:     func() error { return findingWithKind(contractsv1.ContextFabricFindingKindMaxLength + 1).Validate() },
 		},
 		{
@@ -1252,6 +1270,27 @@ func findingN(index int) contractsv1.ContextFabricFinding {
 func findingWithID(length int) contractsv1.ContextFabricFinding {
 	finding := baseFinding()
 	finding.FindingID = filler(length)
+	return finding
+}
+
+// findingWithLongestLegalKind builds a finding carrying the longest member of
+// the closed driver-category vocabulary -- the largest kind a model can
+// legally produce, and therefore the real ceiling the length bound must not
+// block.
+func findingWithLongestLegalKind() contractsv1.ContextFabricFinding {
+	finding := baseFinding()
+	finding.Kind = ""
+	for _, category := range contractsv1.ContextFabricDriverCategoryVocabulary() {
+		if len(string(category)) > len(finding.Kind) {
+			finding.Kind = string(category)
+		}
+	}
+	// The longest member is canonical-fact-shaped, so it requires a claimed
+	// fact for value-level closure. Supplying one keeps this probe measuring
+	// the LENGTH ceiling rather than failing on an unrelated rule.
+	if _, required := contractsv1.ContextFabricDriverCategoryRequiresClaimedFact(contractsv1.ContextFabricDriverCategory(finding.Kind)); required && len(finding.ClaimedFactIDs) == 0 {
+		finding.ClaimedFactIDs = []string{"claim_probe_00001"}
+	}
 	return finding
 }
 

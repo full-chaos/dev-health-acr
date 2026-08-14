@@ -368,18 +368,16 @@ func validModelIdentity(value string) bool {
 // makes that bypass structurally impossible: every category is either a
 // known fact-shaped one (requires a claim) or a known narrative one
 // (relationship/narrative -- doesn't), never an unrecognized third thing.
+// validDriverCategory derives from contextFabricDriverCategories rather than
+// restating the vocabulary in a second switch, so the accepted set and the
+// declared set cannot drift apart.
 func validDriverCategory(value ContextFabricDriverCategory) bool {
-	switch value {
-	case ContextFabricDriverCategoryStatus, ContextFabricDriverCategoryCompletion, ContextFabricDriverCategoryWork,
-		ContextFabricDriverCategoryBlockers, ContextFabricDriverCategoryReviews, ContextFabricDriverCategoryCI,
-		ContextFabricDriverCategoryDeployments, ContextFabricDriverCategoryIncidents, ContextFabricDriverCategoryHealth,
-		ContextFabricDriverCategoryWorkload, ContextFabricDriverCategoryInvestment, ContextFabricDriverCategoryReadiness,
-		ContextFabricDriverCategoryDeficiency, ContextFabricDriverCategorySourceHealth,
-		ContextFabricDriverCategoryRelationship, ContextFabricDriverCategoryNarrative:
-		return true
-	default:
-		return false
+	for _, category := range contextFabricDriverCategories {
+		if category == value {
+			return true
+		}
 	}
+	return false
 }
 
 func allStringsInSet[T ~string](values []T, valid func(T) bool) bool {

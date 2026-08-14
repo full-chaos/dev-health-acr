@@ -52,7 +52,7 @@ func TestSynthesisDraftValidateAgainstRejectsFindingWithSubjectOutsideInvestigat
 	draft := validSynthesisDraftFixture(input)
 	invented := SubjectRef{Kind: SubjectProject, CanonicalID: "project_invented_by_model", Label: "Invented Project"}
 	draft.ReadinessGaps = []Finding{{
-		FindingID: "finding_12345678", Kind: "readiness_gap", Summary: "Invented finding.",
+		FindingID: "finding_12345678", Kind: "narrative", Summary: "Invented finding.",
 		Subjects: []SubjectRef{invented}, EvidenceRefIDs: []string{"evidence_release_1234"},
 	}}
 	if err := draft.ValidateAgainst(input); err == nil || !strings.Contains(err.Error(), "outside the investigation") {

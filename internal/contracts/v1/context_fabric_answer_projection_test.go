@@ -337,7 +337,7 @@ func TestRequiredEvidenceRefsStillRejectNil(t *testing.T) {
 		t.Error("driver with nil required evidence references was accepted")
 	}
 	finding := ContextFabricFinding{
-		FindingID: "finding_12345678", Kind: "required_acceptance", Summary: "Summary.", EvidenceRefIDs: nil,
+		FindingID: "finding_12345678", Kind: "narrative", Summary: "Summary.", EvidenceRefIDs: nil,
 	}
 	if err := finding.Validate(); err == nil {
 		t.Error("finding with nil required evidence references was accepted")

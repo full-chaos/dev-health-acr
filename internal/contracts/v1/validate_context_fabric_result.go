@@ -130,9 +130,22 @@ func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
 // of persisted data. The looseness cannot grow, because no NEW row can be
 // created at a legacy size.
 //
-// Every field here corresponds to a schema bound that TestSchemaAndGoBoundsAgree
-// checks, so this struct cannot quietly drift from the contract again.
+// Every NUMERIC field here corresponds to a schema bound that
+// TestSchemaAndGoBoundsAgree checks, so this struct cannot quietly drift from
+// the contract again. closedFindingKinds is the one non-numeric member: a
+// vocabulary gate rather than a size, carried here because bounds is already
+// the channel that distinguishes a write from a stored read, and adding a
+// second leniency channel would leave two places to consult.
 type contextFabricBounds struct {
+	// closedFindingKinds enforces the driver-category vocabulary on
+	// ContextFabricFinding.Kind. TRUE on writes, FALSE on stored reads
+	// (codex round-12): the write path never enforced this, so a stored row
+	// may legitimately carry an out-of-vocabulary kind, and those rows are
+	// immutable -- tightening the read path would make real answers
+	// permanently unreadable to fix a defect that only new writes can
+	// introduce.
+	closedFindingKinds bool
+
 	cohortInclusionReasons      int
 	cohortInclusionReasonLength int
 	narrativeCount              int
@@ -163,6 +176,7 @@ const contextFabricRelationshipPathMaxNodes = 51
 
 // contextFabricWriteBounds matches the published JSON Schema exactly.
 var contextFabricWriteBounds = contextFabricBounds{
+	closedFindingKinds:          true,
 	cohortInclusionReasons:      32,
 	cohortInclusionReasonLength: 1000,
 	narrativeCount:              ContextFabricLimitationsMaxCount,
@@ -187,6 +201,7 @@ var contextFabricWriteBounds = contextFabricBounds{
 // contextFabricLegacyBounds is what the Go validator alone used to accept.
 // It exists ONLY so already-persisted rows stay readable.
 var contextFabricLegacyBounds = contextFabricBounds{
+	closedFindingKinds:          false,
 	cohortInclusionReasons:      50,
 	cohortInclusionReasonLength: 1024,
 	narrativeCount:              250,
@@ -340,6 +355,17 @@ func (f ContextFabricFinding) validate(bounds contextFabricBounds) error {
 	}
 	if len(f.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount || !uniqueTrimmedStrings(f.ClaimedFactIDs, ContextFabricIdentifierRefMaxLength) {
 		return fmt.Errorf("finding claimed fact references violate v1 bounds")
+	}
+	// Finding.Kind is the category-equivalent field for findings and is
+	// governed by the SAME closed vocabulary as DriverJudgment.Category --
+	// the synthesis prompt has always said so, and
+	// ContextFabricDriverCategoryRequiresClaimedFact has always read it that
+	// way. Nothing enforced it (codex round-12), so a model could return
+	// kind "source_disagreement" with valid evidence and produce a result
+	// that validated. Closed on writes, deliberately not on stored reads --
+	// see contextFabricBounds.closedFindingKinds.
+	if bounds.closedFindingKinds && !validDriverCategory(ContextFabricDriverCategory(f.Kind)) {
+		return fmt.Errorf("finding kind %q is not in the closed v1 vocabulary", f.Kind)
 	}
 	// See the matching comment in ContextFabricDriverJudgment.Validate --
 	// Finding.Kind is the category-equivalent field for findings.
