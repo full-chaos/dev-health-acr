@@ -361,6 +361,20 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 // 'What|...|readiness?' returns exactly the same 915 nodes as
 // 'What|...|readiness'. Rewriting them would shift the candidate sets (and
 // so the lexical relevance numbers) of every search that already works.
+// hasLexicalContent reports whether text yields at least one search term --
+// i.e. whether it carries anything a retrieval mechanism could act ON.
+//
+// This is the single predicate the hybrid path gates BOTH of its mechanisms
+// on (see hybridSearchNodes): it delegates to tokenizeForFulltext, the same
+// function whose result fulltextSearchNodes checks for emptiness, so the
+// lexical arm and the vector arm can never disagree about whether a term
+// means anything. Written as a named predicate rather than an inline length
+// check precisely so the agreement is structural and a future edit to one
+// arm cannot quietly desynchronize the other.
+func hasLexicalContent(text string) bool {
+	return len(tokenizeForFulltext(text)) > 0
+}
+
 func tokenizeForFulltext(text string) []string {
 	fields := strings.FieldsFunc(text, func(r rune) bool {
 		switch r {

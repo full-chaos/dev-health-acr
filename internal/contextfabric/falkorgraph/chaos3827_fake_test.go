@@ -41,6 +41,7 @@ import (
 	"testing"
 	"unicode"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
 
@@ -259,5 +260,117 @@ func TestFulltextSearchPurePunctuationQuestionResolvesToNoCandidates(t *testing.
 	}
 	if queried {
 		t.Fatalf("fulltextSearchNodes() sent a query for a question that produced no terms")
+	}
+}
+
+// chaos3827MeaninglessTerm tokenizes to zero search terms -- it carries no
+// letter and no digit anywhere.
+const chaos3827MeaninglessTerm = "???"
+
+// TestCHAOS3827_TermWithNoLexicalContentNeverReachesVectorRetrieval is the
+// codex round-1 High: the lexical arm's len(terms)==0 early return correctly
+// produces no candidates, but with an embedder configured the SAME term used
+// to flow straight on into vector retrieval, where an embedding of raw
+// punctuation returns whatever its nearest neighbours happen to be. Those
+// neighbours are arbitrary -- nothing about "???" makes them more or less
+// related -- yet they arrive as ordinary above-floor candidates, so
+// resolution reaches clarification or no-match holding garbage instead of
+// holding nothing. Before CHAOS-3827 this path hard-errored at the lexical
+// step, so the leak is newly reachable and belongs to this branch.
+//
+// The rule: a term with no lexical content yields NO candidates at all, and
+// the text is never embedded in the first place -- an embedding of pure
+// punctuation carries no subject meaning, and returning its neighbours is
+// exactly the "meaningless input must not manufacture candidates" posture
+// AC-3778-4's similarity floor exists to hold.
+//
+// The fake below is deliberately hostile: an OPERATIONAL fence, a healthy
+// embedder, and a vector row at distance 0.0 (a PERFECT similarity, the
+// strongest candidate the band can express). Every reason to skip the vector
+// step other than the term's own emptiness is removed, so this test can only
+// pass because of the guard.
+func TestCHAOS3827_TermWithNoLexicalContentNeverReachesVectorRetrieval(t *testing.T) {
+	vectorQueried := false
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if !strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			return nil, nil
+		}
+		vectorQueried = true
+		return []row{{
+			"node":  &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p1", propLabel: "Arbitrary Neighbour"}},
+			"score": 0.0,
+		}}, nil
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	embedder := &stubEmbedder{vector: make([]float32, 8)}
+	adapter := vectorAdapter(t, fake, embedder, 0.55)
+
+	candidates, truncated, degraded, err := adapter.hybridSearchNodes(context.Background(), "k", "org", chaos3827MeaninglessTerm, 5, &resolutionFence{}, temporalFilter{})
+	if err != nil {
+		t.Fatalf("hybridSearchNodes(%q) error = %v, want nil", chaos3827MeaninglessTerm, err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("hybridSearchNodes(%q) = %#v, want NO candidates -- a term with no lexical content must not manufacture subjects out of an embedding of punctuation", chaos3827MeaninglessTerm, candidates)
+	}
+	if embedder.calls != 0 {
+		t.Fatalf("the embedder was invoked %d times for a term with no lexical content; the text must never be embedded at all", embedder.calls)
+	}
+	if vectorQueried {
+		t.Fatalf("a vector query was issued for a term with no lexical content")
+	}
+	if truncated {
+		t.Fatalf("hybridSearchNodes(%q) reported truncated=true having retrieved nothing", chaos3827MeaninglessTerm)
+	}
+	if degraded {
+		t.Fatalf("hybridSearchNodes(%q) reported degraded=true; no mechanism was withheld by a fault here -- the input carried nothing to retrieve ON, which is not a degradation and must not mark the answer", chaos3827MeaninglessTerm)
+	}
+}
+
+// TestCHAOS3827_GuardDoesNotSuppressVectorForARealTerm is the other half of
+// the predicate, and the reason the guard keys off tokenizeForFulltext rather
+// than off the lexical RESULT: a genuine word that simply has no full-text
+// hit (zero lexical candidates, the fake returns none) must still reach
+// vector retrieval -- that no-match-lexically-but-close-semantically case is
+// the entire point of the vector arm. A guard written against "no candidates
+// came back" would pass the test above and silently repeal AC-3778's
+// mechanism for every question it matters most for.
+func TestCHAOS3827_GuardDoesNotSuppressVectorForARealTerm(t *testing.T) {
+	vectorQueried := false
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if !strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			return nil, nil // no lexical hit for this term
+		}
+		vectorQueried = true
+		return []row{{
+			"node":  &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p1", propLabel: "Authentication"}},
+			"score": 0.0,
+		}}, nil
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	embedder := &stubEmbedder{vector: make([]float32, 8)}
+	adapter := vectorAdapter(t, fake, embedder, 0.55)
+
+	candidates, _, degraded, err := adapter.hybridSearchNodes(context.Background(), "k", "org", "auth", 5, &resolutionFence{}, temporalFilter{})
+	if err != nil {
+		t.Fatalf("hybridSearchNodes(\"auth\") error = %v", err)
+	}
+	if embedder.calls != 1 {
+		t.Fatalf("the embedder was invoked %d times for a real term, want 1 -- a term with lexical content must still be embedded even when full-text found nothing", embedder.calls)
+	}
+	if !vectorQueried {
+		t.Fatalf("no vector query was issued for a real term that had no lexical hit -- that is precisely the case the vector arm exists to cover")
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("hybridSearchNodes(\"auth\") returned %d candidates, want the 1 vector neighbour", len(candidates))
+	}
+	if candidates[0].Mechanism != contextfabric.MatchVector {
+		t.Fatalf("candidate mechanism = %q, want vector", candidates[0].Mechanism)
+	}
+	if degraded {
+		t.Fatalf("hybridSearchNodes(\"auth\") reported degraded=true with a healthy embedder and an operational fence")
 	}
 }
