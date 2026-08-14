@@ -117,5 +117,5 @@ WHERE rn = 1`)
 	if omittedUnrepresentableCount > 0 && retentionReason == "" {
 		retentionReason = unrepresentableValueReason
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery, OmittedCount: omittedUnrepresentableCount}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery, OmittedCount: omittedUnrepresentableCount}, nil
 }

@@ -74,7 +74,7 @@ WHERE d.org_id = {org_id:String} AND d.target_work_item_id IN {ids:Array(String)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: QueryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }
 
 // RequiredChildrenProvider implements contextfabric.FactProvider for
@@ -131,5 +131,5 @@ WHERE d.org_id = {org_id:String} AND d.source_work_item_id IN {ids:Array(String)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item required children", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: QueryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

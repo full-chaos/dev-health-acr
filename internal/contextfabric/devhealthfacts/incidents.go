@@ -101,7 +101,7 @@ WHERE i.org_id = {org_id:String} AND i.id IN {ids:Array(String)} AND i.is_delete
 	}
 	state, retentionReason := timeBound.retentionState(rowCount)
 	result := contextfabric.FactProviderResult{
-		Facts: facts, State: state, Reason: retentionReason, Version: queryVersion,
+		Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion,
 		Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery,
 	}
 	// Retention wins over the severity note: with no rows at all there is

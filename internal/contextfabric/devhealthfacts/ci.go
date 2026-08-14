@@ -68,5 +68,5 @@ WHERE c.org_id = {org_id:String} AND c.run_id IN {ids:Array(String)}` + timeBoun
 		return contextfabric.FactProviderResult{}, readFailure("query ci pipeline runs", scanErr)
 	}
 	state, retentionReason := timeBound.retentionState(rowCount)
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

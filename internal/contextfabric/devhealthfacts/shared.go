@@ -12,10 +12,18 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
-// queryVersion is this package's query_version-equivalent: every
+// QueryVersion is this package's query_version-equivalent: every
 // FactProviderResult and FactCapability this package produces carries it,
 // so a consumer can tell exactly which SQL/column shape produced a fact.
-const queryVersion = "devhealthfacts.clickhouse.v1"
+//
+// Exported (CHAOS-3810 codex round-1 P1) for the same reason
+// devhealthsource.ClickHouseSourceVersion is: hosted composition stamps it
+// into InvestigationResult.Versions.QueryVersion, and a result that reports
+// "unwired" for a version whose authority exists in this repository cannot
+// be attributed across a rebuild. There is deliberately ONE name for this
+// value -- a second, unexported alias would be the anchor/alias drift this
+// package's own comments warn about elsewhere.
+const QueryVersion = "devhealthfacts.clickhouse.v1"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -194,7 +202,7 @@ func newCapability(kind contextfabric.FactKind, name string, subjectKinds []cont
 	return contextfabric.FactCapability{
 		Kind:                  kind,
 		Name:                  name,
-		Version:               queryVersion,
+		Version:               QueryVersion,
 		SupportedSubjectKinds: subjectKinds,
 		RequiresEvidence:      true,
 		Timeout:               defaultTimeout,

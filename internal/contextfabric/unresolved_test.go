@@ -235,3 +235,67 @@ func TestReadFactsWithoutSubjectsIsClassifiedNotBare(t *testing.T) {
 		t.Fatalf("ReadFacts() error = %v, want errors.Is(err, ErrNoInvestigationSubjects) so the route can classify it instead of falling through to a 500", err)
 	}
 }
+
+// CHAOS-3810 codex round-1 P1: a terminal result composed with a real
+// RuntimeAnswerSynthesizer must carry that synthesizer's static versions,
+// not the placeholder. Only the receipt-derived fields -- which no model
+// produced, because no model ran -- may read "unwired".
+func TestTerminalResultCarriesTheSynthesizersStaticVersions(t *testing.T) {
+	t.Parallel()
+	synthesizer := RuntimeAnswerSynthesizer{Options: RuntimeAnswerSynthesizerOptions{
+		ServiceVersion: "acr-test-1.2.3", Backend: "graph", BackendVersion: "falkor-1",
+		ProjectionVersion: "projection-v9", QueryVersion: "query-v9", CanonicalServiceVersion: "ops-v9",
+	}}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: RuntimeQuestionInterpreter{Runtime: fakeModelRuntime{interpreted: bootstrapInterpretation(), draft: SynthesisDraft{}, receipt: acceptanceReceipt()}},
+		Graph:       &acceptanceGraphReader{resolution: ambiguousResolution("Which one?"), context: emptyGraphContext()},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			t.Fatal("ReadFacts must not run for a terminal result")
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizer,
+	}, EngineOptions{
+		ServiceVersion: "engine-fallback",
+		Now:            func() time.Time { return time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC) },
+		NewResultID:    func() string { return "result_terminal0003" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	versions := result.Versions
+	if versions.ServiceVersion != "acr-test-1.2.3" || versions.Backend != "graph" || versions.BackendVersion != "falkor-1" ||
+		versions.ProjectionVersion != "projection-v9" || versions.QueryVersion != "query-v9" || versions.CanonicalServiceVersion != "ops-v9" {
+		t.Fatalf("Versions = %#v, want the synthesizer's static versions verbatim", versions)
+	}
+	// Receipt-derived only: no model ran, so these are honestly unwired.
+	if versions.InterpretationVersion != "unwired" || versions.SynthesisVersion != "unwired" || versions.ModelIdentity != "unwired" {
+		t.Fatalf("Versions = %#v, want the receipt-derived fields to read \"unwired\"", versions)
+	}
+}
+
+// The fallback stays: a synthesizer that does not implement
+// ResultVersionProvider still produces a contract-valid terminal result, with
+// the placeholder standing in for what nothing could report.
+func TestTerminalResultFallsBackToUnwiredWithoutAVersionProvider(t *testing.T) {
+	t.Parallel()
+	engine := buildTerminalEngine(t, &acceptanceGraphReader{resolution: ambiguousResolution("Which one?"), context: emptyGraphContext()}, nil)
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Versions.Backend != "unwired" || result.Versions.QueryVersion != "unwired" || result.Versions.CanonicalServiceVersion != "unwired" {
+		t.Fatalf("Versions = %#v, want the placeholder when the synthesizer reports no static versions", result.Versions)
+	}
+	if result.Versions.ServiceVersion != "terminal-test" {
+		t.Fatalf("ServiceVersion = %q, want Engine's own service version as the fallback", result.Versions.ServiceVersion)
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("result.Validate() = %v", err)
+	}
+}

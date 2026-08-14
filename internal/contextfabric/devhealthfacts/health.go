@@ -78,7 +78,7 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}, nil
 }
 
 // readScope runs the compounding_risk_daily query for one scope ('repo' or

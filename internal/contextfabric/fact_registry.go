@@ -14,7 +14,12 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-const canonicalFactRegistryVersion = "context-fabric-facts.v1"
+// CanonicalFactRegistryVersion is the canonical-service version every
+// CanonicalFactBundle this registry produces carries. Exported (CHAOS-3810
+// codex round-1 P1) so hosted composition can stamp the SAME value on a
+// terminal result, which reads no bundle and therefore has none to copy --
+// see RuntimeAnswerSynthesizerOptions.CanonicalServiceVersion.
+const CanonicalFactRegistryVersion = "context-fabric-facts.v1"
 
 // maxCanonicalFactsPerBundle bounds how many CanonicalFacts one
 // CanonicalFactBundle may carry, across ALL providers that contributed to
@@ -206,7 +211,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 	bundle := CanonicalFactBundle{
 		Facts:      []CanonicalFact{},
 		Coverage:   Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
-		Version:    canonicalFactRegistryVersion,
+		Version:    CanonicalFactRegistryVersion,
 		Versions:   map[FactKind]string{},
 		Watermarks: map[FactKind]string{},
 	}

@@ -103,7 +103,7 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
 	}
 
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: truncated}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: QueryVersion, Truncated: truncated}, nil
 }
 
 // MembershipProvider implements contextfabric.FactProvider for
@@ -199,5 +199,5 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
 	}
 
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: truncated}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: QueryVersion, Truncated: truncated}, nil
 }

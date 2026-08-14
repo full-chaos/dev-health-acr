@@ -58,7 +58,7 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item status", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: QueryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }
 
 // WorkProvider implements contextfabric.FactProvider for FactWork -- minimal
@@ -108,7 +108,7 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}`)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item work descriptors", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: queryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: QueryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }
 
 // ActualCompletionProvider implements contextfabric.FactProvider for
@@ -189,5 +189,5 @@ WHERE w.org_id = {org_id:String} AND w.work_item_id IN {ids:Array(String)}` + ti
 		return contextfabric.FactProviderResult{}, readFailure("query work item actual completion", scanErr)
 	}
 	state, retentionReason := timeBound.retentionState(rowCount)
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: queryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }
