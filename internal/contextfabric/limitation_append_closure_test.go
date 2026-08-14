@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"strings"
 	"testing"
 )
@@ -20,8 +21,8 @@ import (
 // This list is meant to stay SHORT. Every entry is a place the cap is not
 // mechanically enforced, i.e. a place round-17 finding 1 could recur.
 var auditedLimitationWrites = map[string]string{
-	"terminalResult#composite literal": "the SEED, not an addition: a one-element list holding the single fixed terminal disclosure resolveTerminalStatus chose. Every list has to start somewhere, and everything added after it goes through the bounded appender, which also normalizes an already-over-cap input -- so the seed cannot be the write that overflows the contract",
-	"Synthesize#cloneSlice":            "an INTERMEDIATE, not a list that reaches a consumer: this is the model's own draft list entering the synthesized result, and Investigate then passes result.Limitations through appendTemporalLimitations UNCONDITIONALLY -- it is called on every axis, current included, and appendBoundedLimitations normalizes an already-over-cap input -- before Validate runs",
+	"terminalResult#composite literal []string": "the SEED, not an addition: a one-element list holding the single fixed terminal disclosure resolveTerminalStatus chose. Every list has to start somewhere, and everything added after it goes through the bounded appender, which also normalizes an already-over-cap input -- so the seed cannot be the write that overflows the contract",
+	"Synthesize#cloneSlice":                     "an INTERMEDIATE, not a list that reaches a consumer: this is the model's own draft list entering the synthesized result, and Investigate then passes result.Limitations through appendTemporalLimitations UNCONDITIONALLY -- it is called on every axis, current included, and appendBoundedLimitations normalizes an already-over-cap input -- before Validate runs",
 }
 
 // boundedLimitationPrimitive owns the cap. It is the only function allowed
@@ -95,7 +96,7 @@ func TestEveryLimitationAppendIsBounded(t *testing.T) {
 				if callsFunction(function.Body, boundedLimitationPrimitive) {
 					sawPrimitive = true
 				}
-				writes = append(writes, limitationWritesIn(fileSet, function)...)
+				writes = append(writes, limitationWritesIn(t, fileSet, function)...)
 			}
 		}
 	}
@@ -173,24 +174,39 @@ type limitationWrite struct{ function, value, position string }
 // appear" is only sound when such writes exist; when they do not, the alias
 // read IS the write, and skipping it let `var local = packageLimitations`
 // reach a result with nothing reported anywhere.
-func limitationWritesIn(fileSet *token.FileSet, function *ast.FuncDecl) []limitationWrite {
+// Identity is the DECLARATION, never the spelling (codex round-8 P1).
+// Keying by name let shadowing evade the guard: in
+// `for k, m := range m { … result.Limitations = m }` the inner binding and
+// the outer variable are different entities that happen to share a spelling,
+// and one map entry for "m" made each alias path defer to the other.
+// go/parser's object resolution gives each declaration its own *ast.Object,
+// so the two are simply not the same key.
+func limitationWritesIn(t *testing.T, fileSet *token.FileSet, function *ast.FuncDecl) []limitationWrite {
+	t.Helper()
 	var (
 		writes   []limitationWrite
-		destined = map[string]bool{}
+		destined = map[*ast.Object]bool{}
 		direct   []limitationWrite
 	)
 	// Gathered FIRST: whether an identifier is written in this function
 	// decides how a read of it is treated below.
-	locals := localWritesIn(function)
-	writtenLocally := map[string]bool{}
+	locals := localWritesIn(t, fileSet, function)
+	writtenLocally := map[*ast.Object]bool{}
 	for _, local := range locals {
-		writtenLocally[local.name] = true
+		writtenLocally[local.object] = true
 	}
 	record := func(value ast.Expr, pos token.Pos) {
 		if identifier, ok := value.(*ast.Ident); ok {
-			destined[identifier.Name] = true
-			if writtenLocally[identifier.Name] {
-				return
+			// A nil Obj means the identifier is not declared in this
+			// function at all -- package-level, imported, or a builtin. It
+			// is deliberately NOT entered into the destined set: every such
+			// identifier would collide on the nil key. It is reported at
+			// this read instead, which is the round-7 F1 rule.
+			if identifier.Obj != nil {
+				destined[identifier.Obj] = true
+				if writtenLocally[identifier.Obj] {
+					return
+				}
 			}
 			// Nothing in this function ever wrote it, so there is no later
 			// site that will answer for it.
@@ -253,11 +269,11 @@ func limitationWritesIn(fileSet *token.FileSet, function *ast.FuncDecl) []limita
 	for changed := true; changed; {
 		changed = false
 		for _, local := range locals {
-			if !destined[local.name] {
+			if !destined[local.object] {
 				continue
 			}
-			if named, ok := local.source.(*ast.Ident); ok && !destined[named.Name] {
-				destined[named.Name] = true
+			if named, ok := local.source.(*ast.Ident); ok && named.Obj != nil && !destined[named.Obj] {
+				destined[named.Obj] = true
 				changed = true
 			}
 		}
@@ -265,7 +281,7 @@ func limitationWritesIn(fileSet *token.FileSet, function *ast.FuncDecl) []limita
 
 	// Every write to every destined local, judged individually.
 	for _, local := range locals {
-		if !destined[local.name] {
+		if !destined[local.object] {
 			continue
 		}
 		// A destined local fed from another local is not a write of new
@@ -273,7 +289,11 @@ func limitationWritesIn(fileSet *token.FileSet, function *ast.FuncDecl) []limita
 		// this function, so there really is a later site to judge. An
 		// identifier from outside the function has no such site, so the
 		// read is reported here under its own name.
-		if named, ok := local.source.(*ast.Ident); ok && writtenLocally[named.Name] {
+		//
+		// Compared by DECLARATION: a shadowing binding that reads the
+		// variable it shadows is two entities, and only the outer one's own
+		// writes can answer for it.
+		if named, ok := local.source.(*ast.Ident); ok && named.Obj != nil && writtenLocally[named.Obj] {
 			continue
 		}
 		writes = append(writes, limitationWrite{
@@ -285,8 +305,13 @@ func limitationWritesIn(fileSet *token.FileSet, function *ast.FuncDecl) []limita
 	return writes
 }
 
-// localWrite is one place a named local receives a value.
+// localWrite is one place a local receives a value.
+//
+// object is the identity: two bindings that share a spelling but not a
+// declaration are different locals, and the guard must not confuse them.
+// name is carried for human-readable messages only, never for lookups.
 type localWrite struct {
+	object *ast.Object
 	name   string
 	source ast.Expr
 	pos    token.Pos
@@ -348,14 +373,28 @@ type localWrite struct {
 //   - copy(x, raw) and element assignment x[i] = s. Both mutate in place
 //     without producing a value, so neither can grow a list past the cap,
 //     which is the property being defended.
-func localWritesIn(function *ast.FuncDecl) []localWrite {
+func localWritesIn(t *testing.T, fileSet *token.FileSet, function *ast.FuncDecl) []localWrite {
+	t.Helper()
 	var writes []localWrite
+	// Object resolution is what makes shadowing visible, so its absence is
+	// a silent unsoundness rather than a missing nicety: every binding
+	// would collapse onto a nil key. Fail loudly instead.
+	add := func(identifier *ast.Ident, source ast.Expr, pos token.Pos) {
+		if identifier.Name == "_" {
+			return
+		}
+		if identifier.Obj == nil {
+			t.Fatalf("%s: local %q has no resolved declaration; this guard distinguishes shadowed bindings by *ast.Object, so unresolved parsing would silently merge them",
+				fileSet.Position(identifier.Pos()), identifier.Name)
+		}
+		writes = append(writes, localWrite{identifier.Obj, identifier.Name, source, pos})
+	}
 	ast.Inspect(function.Body, func(node ast.Node) bool {
 		switch declaration := node.(type) {
 		case *ast.AssignStmt:
 			for index, target := range declaration.Lhs {
 				if identifier, ok := target.(*ast.Ident); ok {
-					writes = append(writes, localWrite{identifier.Name, assignmentSource(declaration, index), declaration.Pos()})
+					add(identifier, assignmentSource(declaration, index), declaration.Pos())
 				}
 			}
 		case *ast.ValueSpec:
@@ -367,7 +406,7 @@ func localWritesIn(function *ast.FuncDecl) []localWrite {
 				if len(declaration.Values) == len(declaration.Names) {
 					source = declaration.Values[index]
 				}
-				writes = append(writes, localWrite{name.Name, source, declaration.Pos()})
+				add(name, source, declaration.Pos())
 			}
 		case *ast.RangeStmt:
 			// Both bindings take their value FROM the ranged expression, so
@@ -375,11 +414,9 @@ func localWritesIn(function *ast.FuncDecl) []localWrite {
 			// and assigning the element into a field is a write of whatever
 			// built those lists.
 			for _, target := range []ast.Expr{declaration.Key, declaration.Value} {
-				identifier, ok := target.(*ast.Ident)
-				if !ok || identifier.Name == "_" {
-					continue
+				if identifier, ok := target.(*ast.Ident); ok {
+					add(identifier, declaration.X, declaration.Pos())
 				}
-				writes = append(writes, localWrite{identifier.Name, declaration.X, declaration.Pos()})
 			}
 		}
 		return true
@@ -430,6 +467,15 @@ func limitationWriteSource(expression ast.Expr) string {
 			return selector.Sel.Name
 		}
 	case *ast.CompositeLit:
+		// Typed, not bare. The audit list is keyed by function#value, and a
+		// bare "composite literal" made ONE exemption cover EVERY literal in
+		// that function: the audited `[]string{limitation}` seed silently
+		// exempted an unrelated raw `[][]string{…}` a few lines away. Found
+		// while mutation-testing round 8 -- the mutation passed for that
+		// reason rather than the one under test.
+		if value.Type != nil {
+			return "composite literal " + types.ExprString(value.Type)
+		}
 		return "composite literal"
 	case *ast.Ident:
 		return value.Name
