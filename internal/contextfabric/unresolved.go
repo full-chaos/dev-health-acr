@@ -137,6 +137,25 @@ func (e *Engine) terminalResult(
 		limitations = append(limitations, retrievalDegradedLimitation)
 		coverage.Partial = true
 	}
+	// CHAOS-3781: a terminal answer speaks for a time too, and says so in
+	// the same two ways a synthesized one does.
+	//
+	// The label is not optional decoration -- the result contract REFUSES a
+	// non-current axis carrying no temporal label, so a terminal result
+	// composed without one cannot validate. Omitting it turned every
+	// historical question that resolved no subject into the validation
+	// failure (and the 500) that CHAOS-3810 exists to remove, on the one
+	// axis where the terminal outcome is most likely: a subject that did
+	// not exist at the requested time resolves to nothing by construction.
+	//
+	// The grain argument is the zero TemporalGrain because this path read
+	// no canonical facts at all. That is not a placeholder -- it is the
+	// input temporalCoverage already interprets as "no source gave this
+	// answer any temporal precision", yielding GrainNone and
+	// CoverageComplete=false, which is exactly true of a result composed
+	// without a fact read.
+	temporallyLimited, temporalDisplaced := appendTemporalLimitations(limitations, interpretation)
+	limitations = temporallyLimited
 	answer := statusSentence(status, resolution)
 	if status == InvestigationClarificationRequired && resolution.ClarificationPrompt != "" {
 		answer += " " + resolution.ClarificationPrompt
@@ -163,21 +182,23 @@ func (e *Engine) terminalResult(
 		// forwarded -- they describe subjects this result never committed
 		// to, and a fact-shaped driver could not close to a ClaimedFact
 		// bundle that was never read.
-		DirectJudgment:      "",
-		CurrentState:        "",
-		StrongestPressures:  []string{},
-		Drivers:             []DriverJudgment{},
-		RemainingWork:       []Finding{},
-		ReadinessGaps:       []Finding{},
-		Paths:               []RelationshipPath{},
-		Conflicts:           []Finding{},
-		Limitations:         limitations,
-		EvidenceRefIDs:      []string{},
-		ClaimedFacts:        []ClaimedFact{},
-		Coverage:            coverage,
-		Versions:            e.terminalVersions(),
-		DeterministicAnswer: answer,
-		Warnings:            []string{},
+		DirectJudgment:       "",
+		CurrentState:         "",
+		StrongestPressures:   []string{},
+		Drivers:              []DriverJudgment{},
+		RemainingWork:        []Finding{},
+		ReadinessGaps:        []Finding{},
+		Paths:                []RelationshipPath{},
+		Conflicts:            []Finding{},
+		Limitations:          limitations,
+		LimitationsDisplaced: temporalDisplaced,
+		EvidenceRefIDs:       []string{},
+		ClaimedFacts:         []ClaimedFact{},
+		Coverage:             coverage,
+		Temporal:             composeTemporalLabel(interpretation, coverage, ""),
+		Versions:             e.terminalVersions(),
+		DeterministicAnswer:  answer,
+		Warnings:             []string{},
 	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))

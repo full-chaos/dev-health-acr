@@ -504,3 +504,96 @@ func TestSingleUncommittedCandidateProseIsNotPlural(t *testing.T) {
 		})
 	}
 }
+
+// A terminal result composed for a HISTORICAL question must state the time it
+// speaks for, exactly as a synthesized one does (CHAOS-3781 AC-3781-2).
+//
+// Found while rebasing CHAOS-3810 onto CHAOS-3781. The two changes are
+// individually correct and jointly wrong: CHAOS-3810 terminates a resolution
+// that committed nothing BEFORE the fact read, and CHAOS-3781 made the result
+// contract refuse a non-current axis carrying no temporal label. The terminal
+// composer set no label, so every historical question that resolved no
+// subject failed validation and reached the route as the 500 CHAOS-3810
+// exists to remove -- on the axis where the terminal outcome is most likely,
+// since a subject that did not exist at the requested time resolves to
+// nothing by construction.
+//
+// The label a terminal result carries is deliberately the weakest true one:
+// GrainNone and CoverageComplete=false, because this path read no canonical
+// facts at all.
+func TestTerminalResultLabelsTheTimeAHistoricalAnswerSpeaksFor(t *testing.T) {
+	t.Parallel()
+	asOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	for _, testCase := range []struct {
+		name string
+		time TimeContext
+	}{
+		{"valid time", TimeContext{Axis: TemporalValidTime, AsOf: &asOf}},
+		{"observed time", TimeContext{Axis: TemporalObservedTime, AsOf: &asOf}},
+		{"range", TimeContext{Axis: TemporalRange, Start: &asOf, End: &asOf}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			engine := buildHistoricalTerminalEngine(t, testCase.time)
+			request := validInvestigationRequest()
+			request.TimeContext = testCase.time
+
+			result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+			if err != nil {
+				t.Fatalf("Investigate() error = %v, want a no_match result: a historical question that resolves nothing is still answerable", err)
+			}
+			if result.Status != InvestigationNoMatch {
+				t.Fatalf("Status = %q, want no_match", result.Status)
+			}
+			if result.Temporal == nil {
+				t.Fatal("a terminal historical answer must state the time it speaks for (AC-3781-2)")
+			}
+			if result.Temporal.Requested.Axis != testCase.time.Axis {
+				t.Fatalf("labeled axis = %q, want the requested %q", result.Temporal.Requested.Axis, testCase.time.Axis)
+			}
+			if result.Temporal.Grain != GrainNone {
+				t.Fatalf("Grain = %q, want none: this path read no canonical facts, so it has no temporal precision to claim", result.Temporal.Grain)
+			}
+			if result.Temporal.CoverageComplete {
+				t.Fatal("CoverageComplete = true, but no source spoke for the requested time at all")
+			}
+			// The standing historical disclosures ride along, through the one
+			// bounded appender, exactly as they do on the synthesized path.
+			if !slices.Contains(result.Limitations, temporalLimitations[0]) {
+				t.Fatalf("Limitations = %#v, want the standing historical disclosure", result.Limitations)
+			}
+		})
+	}
+}
+
+// buildHistoricalTerminalEngine is buildTerminalEngine with an interpreter
+// that reports the given historical axis, so the terminal path is reached with
+// a non-current interpretation.
+func buildHistoricalTerminalEngine(t *testing.T, timeContext TimeContext) *Engine {
+	t.Helper()
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return historicalInterpretation(timeContext), nil
+		}),
+		Graph: &acceptanceGraphReader{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+			context:    emptyGraphContext(),
+		},
+		Facts: factReaderFunc(func(_ context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
+			t.Fatalf("ReadFacts called with %#v -- an investigation with no committed subject must never reach the canonical fact read", request)
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			t.Fatal("Synthesize called -- a terminal clarification/no_match result must be composed without a model call")
+			return InvestigationResult{}, nil
+		}),
+	}, EngineOptions{
+		ServiceVersion: "terminal-test",
+		Now:            func() time.Time { return time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC) },
+		NewResultID:    func() string { return "result_terminal0001" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	return engine
+}
