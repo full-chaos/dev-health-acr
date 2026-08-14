@@ -410,6 +410,24 @@ var contextFabricSynthesisCollectionBoundsUncoveredByDiagnosis = map[string]stru
 	"synthesis.warnings.item_max_length":            {},
 	"synthesis.evidence_ref_ids.max_count":          {},
 	"synthesis.claimed_facts.max_count":             {},
+	// CHAOS-3746 registered the three narrative caps, and they are
+	// undiagnosable for a STRONGER reason than the collection caps above,
+	// not the same one. Those are model-authored values that simply reach
+	// no Diagnose* call. These three are not model-authored at all:
+	// internal/contextfabric composes direct_judgment, current_state and
+	// deterministic_answer server-side (composeDirectJudgment and
+	// siblings) from already-validated status/drivers/claimed_facts, and
+	// truncates each at its own constant. The draft's own prose for these
+	// fields is never read. No model output can violate one, so there is
+	// no rejection to attribute a name to -- which is also why the prompt
+	// tells the model these fields are advisory.
+	//
+	// They stay in the registry rather than being removed from it because
+	// the prompt does state their limits, and the registry is the one
+	// place a stated limit is checked against the enforced one.
+	"synthesis.direct_judgment.max_length":      {},
+	"synthesis.current_state.max_length":        {},
+	"synthesis.deterministic_answer.max_length": {},
 }
 
 // TestContextFabricModelFacingBoundRegistryDiagnosisCoverage is
