@@ -10,6 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -503,23 +504,29 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 	return nil
 }
 
-// maxCoverageReasonLength mirrors ContextFabricSourceObservation's own
-// 2000-character bound on Reason. Every coverage reason this package emits
-// funnels through appendFactCoverage, so clamping here is what keeps a
-// long provider reason -- or, since CHAOS-3783, a provider reason with a
+// maxCoverageReasonLength READS ContextFabricSourceObservation's own bound
+// on Reason rather than restating it. Every coverage reason this package
+// emits funnels through appendFactCoverage, so clamping here is what keeps
+// a long provider reason -- or, since CHAOS-3783, a provider reason with a
 // planner narrowing note prefixed onto it -- from pushing the finished
 // result past its own contract and failing validation for the whole
 // investigation. Truncating an explanation is strictly better than losing
 // the answer that carried it.
-const maxCoverageReasonLength = 2000
+//
+// It was a hand-copied literal whose comment claimed it "mirrors" the
+// contract (CHAOS-3746). A mirror holds only until one side moves:
+// narrowing the contract would have left this clamp emitting results the
+// validator rejects in full, which is the whole answer lost over an
+// explanation.
+const maxCoverageReasonLength = contractsv1.ContextFabricSourceObservationReasonMaxLength
 
 // maxCoverageDegradedReasonLength is ContextFabricCoverage's own bound on one
-// DegradedReasons entry. It happens to equal the Reason bound, but they are
-// separate contract limits on separate strings and a degraded entry is a
-// LONGER string than the reason it is built from (it carries a "<kind>: "
-// prefix), so they are clamped independently rather than sharing one
-// constant by coincidence.
-const maxCoverageDegradedReasonLength = 2000
+// DegradedReasons entry, read the same way. It happens to equal the Reason
+// bound, but they are separate contract limits on separate strings and a
+// degraded entry is a LONGER string than the reason it is built from (it
+// carries a "<kind>: " prefix), so they are derived independently rather
+// than sharing one constant by coincidence.
+const maxCoverageDegradedReasonLength = contractsv1.ContextFabricCoverageDegradedReasonMaxLength
 
 // coarsestGrain returns whichever of two grains speaks for the LARGER
 // span, because an answer is only as precise as its least precise

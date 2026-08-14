@@ -423,7 +423,7 @@ func (o ContextFabricSourceObservation) validate(requireTrimmed bool) error {
 	if requireTrimmed && strings.TrimSpace(o.Source) != o.Source {
 		return fmt.Errorf("source observation name must be trimmed")
 	}
-	if !stringLengthBetween(strings.TrimSpace(o.Source), 1, 128) || !validSourceState(o.State) || !stringLengthBetween(o.Watermark, 0, 512) || !stringLengthBetween(o.Reason, 0, 2000) {
+	if !stringLengthBetween(strings.TrimSpace(o.Source), 1, 128) || !validSourceState(o.State) || !stringLengthBetween(o.Watermark, 0, 512) || !stringLengthBetween(o.Reason, 0, ContextFabricSourceObservationReasonMaxLength) {
 		return fmt.Errorf("source observation violates v1 bounds")
 	}
 	if o.ObservedAt != nil && o.ObservedAt.IsZero() {
@@ -458,7 +458,7 @@ func (c ContextFabricCoverage) validate(bounds contextFabricBounds) error {
 	// JSON (as InvestigationResultStore implementations now do on every
 	// Get -- CHAOS-3755 finding M2) even though nothing was ever actually
 	// invalid.
-	if c.Sources == nil || len(c.Sources) > bounds.coverageEntries || len(c.DegradedReasons) > bounds.coverageEntries || !uniqueTrimmedStrings(c.DegradedReasons, 2000) {
+	if c.Sources == nil || len(c.Sources) > bounds.coverageEntries || len(c.DegradedReasons) > bounds.coverageEntries || !uniqueTrimmedStrings(c.DegradedReasons, ContextFabricCoverageDegradedReasonMaxLength) {
 		return fmt.Errorf("coverage violates v1 bounds")
 	}
 	seen := make(map[string]struct{}, len(c.Sources))

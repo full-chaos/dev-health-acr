@@ -588,6 +588,28 @@ type ContextFabricTemporalLabel struct {
 	CoverageComplete bool `json:"coverage_complete"`
 }
 
+// ContextFabricSourceObservationReasonMaxLength and
+// ContextFabricCoverageDegradedReasonMaxLength are the contract's own
+// bounds on the two coverage explanation strings.
+//
+// Named because internal/contextfabric clamps every reason it emits to
+// them before composing a result (fact_registry.go's appendFactCoverage),
+// and until CHAOS-3746 that clamp was a hand-copied 2000 whose comment
+// said it "mirrors" this bound. A mirror is not a derivation: widening
+// the contract would leave the clamp shortening explanations for no
+// reason, and narrowing it would let the clamp emit a result the
+// validator then rejects in full -- losing the answer, not just the
+// explanation.
+//
+// They are equal today and still separate constants, because they bound
+// different strings: a degraded entry is BUILT from a reason and is
+// strictly longer (it carries a "<kind>: " prefix), so sharing one
+// constant would be a coincidence dressed as a relation.
+const (
+	ContextFabricSourceObservationReasonMaxLength = 2000
+	ContextFabricCoverageDegradedReasonMaxLength  = 2000
+)
+
 // ContextFabricSerializedBytesMin and ContextFabricSerializedBytesMax bound
 // ContextFabricInvestigationOptions.MaxSerializedBytes: the largest single
 // investigation response this service will serve.
