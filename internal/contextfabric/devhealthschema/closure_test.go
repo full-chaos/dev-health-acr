@@ -649,22 +649,37 @@ const renderCallMarker = "devhealthschema.DDL("
 // people to silence it, and an exemption added to quiet it covers whatever
 // is written beside it forever after.
 //
-// So the end of the call is found by BALANCING parentheses, and string
-// literals are skipped whole: a paren inside "repos)" or `repos)` is text,
-// not structure. A call left unbalanced at end of line continues onto the
-// next one, so everything after it on this line is inside the call and is
-// masked with it.
+// Round-11: the masker now runs over a LEXED VIEW.
+//
+// Balancing alone was not enough, because the scan still FOUND call sites
+// in raw text. Two failures followed from that, one in each direction: the
+// marker appearing inside a multiline raw literal opened a mask that ran
+// to end of file and hid every later rival, and a `)` inside a comment
+// within a genuine call closed the mask early and exposed its own
+// arguments as a rival.
+//
+// All three round-11 findings had this one root -- raw text where a lexed
+// view is required -- so there is ONE lexer, built once per file and used
+// by the call-site finder, the balancer and the function-span tracker.
+// Three local patches would have been the fix-the-pass mistake this file
+// has spent four rounds learning to stop making.
+//
+// The view is the same length as the source, so every offset, line number
+// and exemption window is unchanged.
 func maskRenderCalls(source string) string {
+	view := codeView(source)
 	var masked strings.Builder
+	consumed := 0
 	for {
-		start := strings.Index(source, renderCallMarker)
-		if start < 0 {
-			masked.WriteString(source)
+		next := strings.Index(view[consumed:], renderCallMarker)
+		if next < 0 {
+			masked.WriteString(source[consumed:])
 			return masked.String()
 		}
-		masked.WriteString(source[:start])
+		start := consumed + next
+		masked.WriteString(source[consumed:start])
 		open := start + len(renderCallMarker) - 1
-		end := matchingParen(source, open)
+		end := matchingParen(view, open)
 		if end < 0 {
 			// Unbalanced through end of file: everything after the call
 			// opens is inside it.
@@ -672,7 +687,7 @@ func maskRenderCalls(source string) string {
 			return masked.String()
 		}
 		masked.WriteString(blankKeepingLines(source[start : end+1]))
-		source = source[end+1:]
+		consumed = end + 1
 	}
 }
 
@@ -689,20 +704,78 @@ func blankKeepingLines(span string) string {
 	}, span)
 }
 
-// matchingParen returns the index of the parenthesis closing the one at
-// open, or -1 when the line does not contain it.
-func matchingParen(line string, open int) int {
-	depth := 0
-	for index := open; index < len(line); index++ {
-		switch line[index] {
-		case '"':
-			index = skipInterpretedLiteral(line, index)
-		case '`':
-			offset := strings.IndexByte(line[index+1:], '`')
-			if offset < 0 {
-				return -1 // raw literal continues onto the next line
+// codeView returns source with the CONTENT of comments, string literals and
+// rune literals blanked out, preserving length and newlines so every offset
+// still refers to the same place.
+//
+// This file needs it for its own sake, not only for fixtures: matchingParen
+// below contains `case '(':` and `case ')':`, so counting parentheses in raw
+// text would count those rune literals as structure. The same applies to
+// braces inside a regex literal, which is exactly how the span tracker came
+// to end before the function it was scoping (round-11 F3).
+//
+// The asymmetry between the two string forms is deliberate: a RAW literal
+// may span lines, so its scan runs through the rest of the file, while an
+// INTERPRETED literal cannot contain a raw newline, so its scan stops at
+// one. Without that stop a single unterminated quote would swallow every
+// remaining line.
+func codeView(source string) string {
+	view := []byte(source)
+	blank := func(from, to int) {
+		for index := from; index < to && index < len(view); index++ {
+			if view[index] != '\n' {
+				view[index] = ' '
 			}
+		}
+	}
+	for index := 0; index < len(source); index++ {
+		switch {
+		case strings.HasPrefix(source[index:], "//"):
+			stop := strings.IndexByte(source[index:], '\n')
+			if stop < 0 {
+				stop = len(source) - index
+			}
+			blank(index, index+stop)
+			index += stop - 1
+		case strings.HasPrefix(source[index:], "/*"):
+			stop := strings.Index(source[index+2:], "*/")
+			if stop < 0 {
+				blank(index, len(source))
+				return string(view)
+			}
+			blank(index, index+2+stop+2)
+			index += 2 + stop + 1
+		case source[index] == '"':
+			close := skipInterpretedLiteral(source, index)
+			blank(index, close+1)
+			index = close
+		case source[index] == '`':
+			offset := strings.IndexByte(source[index+1:], '`')
+			if offset < 0 {
+				blank(index, len(source))
+				return string(view)
+			}
+			blank(index, index+1+offset+1)
 			index += 1 + offset
+		case source[index] == '\'':
+			close := skipRuneLiteral(source, index)
+			blank(index, close+1)
+			index = close
+		}
+	}
+	return string(view)
+}
+
+// matchingParen returns the index of the parenthesis closing the one at
+// open, or -1 when the source does not contain it.
+//
+// It runs on the lexed view, so it counts structure only -- no literal or
+// comment skipping of its own, because there is nothing left in the view to
+// skip.
+func matchingParen(view string, open int) int {
+	depth := 0
+	for index := open; index < len(view); index++ {
+		switch view[index] {
 		case '(':
 			depth++
 		case ')':
@@ -715,6 +788,24 @@ func matchingParen(line string, open int) int {
 	return -1
 }
 
+// skipRuneLiteral returns the index of the quote closing the rune literal
+// opened at quote, honouring backslash escapes.
+func skipRuneLiteral(source string, quote int) int {
+	for index := quote + 1; index < len(source); index++ {
+		if source[index] == '\\' {
+			index++
+			continue
+		}
+		if source[index] == '\n' {
+			return index - 1
+		}
+		if source[index] == '\'' {
+			return index
+		}
+	}
+	return len(source) - 1
+}
+
 // skipInterpretedLiteral returns the index of the quote closing the one at
 // quote, honouring backslash escapes.
 func skipInterpretedLiteral(source string, quote int) int {
@@ -724,9 +815,8 @@ func skipInterpretedLiteral(source string, quote int) int {
 			continue
 		}
 		// A Go interpreted literal cannot contain a raw newline, so an
-		// unterminated quote ends at end of line. Without this the scan
-		// would swallow the rest of the FILE now that it runs over whole
-		// source rather than one line.
+		// unterminated quote ends at end of line. See codeView on why the
+		// raw form deliberately does not stop here.
 		if source[index] == '\n' {
 			return index - 1
 		}
@@ -862,6 +952,27 @@ func TestSpellingRecognitionCoversEveryLiteralForm(t *testing.T) {
 	}
 }
 
+// recognizerFunctions is the sanctioned span, named EXPLICITLY.
+//
+// Round-11 F3: the span used to be keyed to one function name, so a helper
+// factored out of the recognizer landed OUTSIDE it and a natural refactor
+// would have been reported as a rival comparison -- the wording said
+// "outside the recognizer" while the mechanism meant "outside one
+// function". Naming the set makes the two agree, and adding a helper to it
+// is then a deliberate, reviewed act rather than an accident.
+var recognizerFunctions = map[string]struct{}{
+	"namesDeclaredTable": {},
+	"declarationShape":   {},
+}
+
+// functionName matches a top-level function declaration on the lexed view.
+//
+// The span FAILS LOUD if the recognizer is renamed or moved: the scan then
+// finds no sanctioned site, sanctioned < 2 fires, and this test fails
+// rather than silently sanctioning nothing -- or everything. That is the
+// right direction for a check whose whole purpose is to notice an absence.
+var functionName = regexp.MustCompile(`^func (?:\([^)]*\) )?(\w+)\(`)
+
 // TestSpellingComparisonsExistOnlyInTheRecognizer makes the
 // single-implementation claim TRUE rather than merely honest.
 //
@@ -869,78 +980,150 @@ func TestSpellingRecognitionCoversEveryLiteralForm(t *testing.T) {
 // (TestDeclarationExposesNoSecondSource), so it strengthens an established
 // pattern rather than inventing machinery.
 //
-// A COMPARISON is not a CONSTRUCTION. The per-form anchor legitimately
-// builds quoted names to FEED the recognizer, and flagging those would
-// make this test unusable and invite the exemption that quiets it -- the
-// false-positive cost this branch has now paid twice. So an offence needs
-// BOTH signals on one line: source that wraps a table variable in a quote
-// character, AND a comparison verb applied to it.
+// THE RULE IS ANY QUOTE-WRAP OUTSIDE THE RECOGNIZER, with no list of
+// comparison verbs. A verb list was written first and then deleted: it is
+// the enumerate-the-shapes game this file has lost four times
+// (terminators, literal forms, call granularity, and verbs themselves),
+// and it was unnecessary -- MEASURED, exactly two quote-wrap constructions
+// exist in this package and both are inside the recognizer, while the
+// per-form anchor's fixtures produce quote-then-backtick and do not match
+// the wrap pattern at all. Dropping the list is strictly stronger: it
+// catches a comparison through ANY verb, including ones nobody
+// enumerated, and a construction stashed for comparison elsewhere.
 //
-// DECLARED NON-COVERAGE: a comparison split across lines, or hidden behind
-// a helper that performs the quote-wrap out of sight, is not seen. This is
-// a source-text check and inherits the same boundary already ratified for
-// the detector itself.
+// Round-11 F2 widened the scan from this file to the whole PACKAGE: a
+// comparison added in a sibling file was invisible, which made the claim
+// true of one file rather than of the code.
+//
+// DECLARED NON-COVERAGE: a quote character held in a VARIABLE -- q := "\""
+// then strings.Contains(contents, q+table+q) -- splits the wrap across
+// lines and is not seen. Named rather than left implied. Deleting the verb
+// list does not close it and nothing source-level can, because the quote
+// never appears beside the name; closing it needs the runtime guard
+// already scoped and rejected.
 func TestSpellingComparisonsExistOnlyInTheRecognizer(t *testing.T) {
 	t.Parallel()
-	contents, err := os.ReadFile(filepath.Join(repoRoot(t), "internal", "contextfabric", "devhealthschema", "closure_test.go"))
+	directory := filepath.Join(repoRoot(t), "internal", "contextfabric", "devhealthschema")
+	entries, err := os.ReadDir(directory)
 	if err != nil {
-		t.Fatalf("read the closure suite: %v", err)
+		t.Fatalf("read the package directory: %v", err)
 	}
 
 	// The two ways Go source can wrap a value in a string-literal quote.
 	quoteWrap := regexp.MustCompile("(`\"`|\"`\")\\s*\\+|\\+\\s*(`\"`|\"`\")")
-	// QuoteMeta counts: escaping a name for a pattern is the construction
-	// step of a comparison, and it is where the recognizer itself does the
-	// wrapping -- so a rule that omitted it would not even see the one
-	// site it exists to permit, which is how the non-vacuity guard below
-	// caught this on its first run.
-	comparison := regexp.MustCompile(`strings\.(Contains|HasPrefix|HasSuffix)|MatchString|regexp\.(MustCompile|QuoteMeta)|==`)
 
 	sanctioned := 0
 	var offences []string
-	inRecognizer := false
-	recognizerDepth := 0
-	for index, line := range strings.Split(string(contents), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "//") {
-			continue // comments discuss these shapes on purpose
-		}
-		// Span tracking by BRACE DEPTH, not by a bare "}" line: the
-		// recognizer contains a nested if-block, and matching the first
-		// closing brace ended the span early -- putting the recognizer's
-		// own two constructions OUTSIDE it. The non-vacuity guard caught
-		// that on the first run, which is the whole reason it exists.
-		if !inRecognizer && strings.HasPrefix(trimmed, "func declarationShape(") {
-			inRecognizer = true
-			recognizerDepth = 0
-		}
-		if inRecognizer {
-			recognizerDepth += strings.Count(line, "{") - strings.Count(line, "}")
-		}
-		// The line is classified while still inside the span, then the
-		// span closes if its braces balanced on this line.
-		insideRecognizer := inRecognizer
-		if inRecognizer && recognizerDepth <= 0 {
-			inRecognizer = false
-		}
-		if !quoteWrap.MatchString(line) || !comparison.MatchString(line) {
+	scanned := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
 			continue
 		}
-		if insideRecognizer {
-			sanctioned++
-			continue
+		raw, readErr := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if readErr != nil {
+			t.Fatalf("read %s: %v", entry.Name(), readErr)
 		}
-		offences = append(offences, fmt.Sprintf("closure_test.go:%d compares a table name as a literal outside the recognizer: %s", index+1, trimmed))
+		scanned++
+		contents := string(raw)
+		// Brace counting runs on the LEXED view (round-11 F3): the
+		// recognizer's own regex literal contains a `}`, which ended the
+		// span before the function it was scoping -- the guard was
+		// mis-scoped against its own target.
+		viewLines := strings.Split(codeView(contents), "\n")
+		sourceLines := strings.Split(contents, "\n")
+		function := ""
+		depth := 0
+		for index, viewLine := range viewLines {
+			if depth <= 0 {
+				if match := functionName.FindStringSubmatch(viewLine); match != nil {
+					function = match[1]
+				}
+			}
+			depth += strings.Count(viewLine, "{") - strings.Count(viewLine, "}")
+			inRecognizer := false
+			if _, ok := recognizerFunctions[function]; ok {
+				inRecognizer = true
+			}
+			if depth <= 0 {
+				function = ""
+			}
+			if index >= len(sourceLines) {
+				continue
+			}
+			line := sourceLines[index]
+			if strings.HasPrefix(strings.TrimSpace(line), "//") {
+				continue // comments discuss these shapes on purpose
+			}
+			if !quoteWrap.MatchString(line) {
+				continue
+			}
+			if inRecognizer {
+				sanctioned++
+				continue
+			}
+			offences = append(offences, fmt.Sprintf("%s:%d wraps a table name in quotes outside the recognizer: %s", entry.Name(), index+1, strings.TrimSpace(line)))
+		}
 	}
 
-	// NON-VACUITY: the recognizer builds exactly two quoted forms, and
-	// this scan must still see both. Zero means it has stopped matching
-	// the site it exists to permit, so a clean result would prove nothing.
+	// NON-VACUITY, both axes. The recognizer builds exactly two quoted
+	// forms and this scan must still see both; zero means it has stopped
+	// matching the site it exists to permit. The file count guards the
+	// widening itself -- a directory read that returned nothing would
+	// otherwise be a clean pass over no code at all.
+	if scanned == 0 {
+		t.Fatal("the package scan read no Go files, so a clean result proves nothing")
+	}
 	if sanctioned < 2 {
-		t.Fatalf("the scan found %d sanctioned literal comparisons inside the recognizer, expected both spelling forms; it has stopped matching its own permitted site, so a clean result proves nothing", sanctioned)
+		t.Fatalf("the scan found %d sanctioned quote-wraps inside the recognizer, expected both spelling forms; it has stopped matching its own permitted site, so a clean result proves nothing", sanctioned)
 	}
 	if len(offences) > 0 {
 		t.Fatalf("spelling recognition must have exactly ONE implementation -- a pass comparing literals itself is how the same defect recurred three times:\n  %s", strings.Join(offences, "\n  "))
+	}
+}
+
+// TestCodeViewBlanksWhatIsNotStructure verifies the round-11 lexer
+// directly, because the two guards that depend on it cannot fully
+// demonstrate it themselves.
+//
+// HONEST SCOPE, stated rather than implied. F1's four end-to-end proofs
+// exercise this lexer through the masker in both directions. F3's
+// brace-counting half is NOT reproducible as a red in the current layout:
+// the recognizer's brace-bearing regex literal sits AFTER its two
+// quote-wrap lines, so raw counting happens not to mis-scope them today.
+// That is an accident of ordering, not a property -- move the pattern
+// above the wraps and the span ends early again. So the lexer is verified
+// at the mechanism level here instead of through a contrived arrangement
+// of the code under test.
+func TestCodeViewBlanksWhatIsNotStructure(t *testing.T) {
+	t.Parallel()
+	source := "a := regexp.MustCompile(`[}]`)\n" +
+		"b := ')' // a paren ) in a comment\n" +
+		"c := \"a ( b\"\n" +
+		"d := {\n"
+	view := codeView(source)
+
+	if len(view) != len(source) {
+		t.Fatalf("the view is %d bytes for %d bytes of source; every offset, line number and exemption window depends on them being equal", len(view), len(source))
+	}
+	if strings.Count(view, "\n") != strings.Count(source, "\n") {
+		t.Fatal("the view lost a newline, so line numbers would shift")
+	}
+	// Structure OUTSIDE literals and comments survives.
+	if !strings.Contains(view, "regexp.MustCompile(") || !strings.Contains(view, "d := {") {
+		t.Fatalf("the view blanked real structure: %q", view)
+	}
+	// Everything inside a literal or comment is text, not structure.
+	for _, kind := range []struct {
+		name  string
+		count int
+	}{
+		{"}", strings.Count(view, "}")},
+		{"(", strings.Count(view, "(") - 1}, // the MustCompile call is real
+		{")", strings.Count(view, ")") - 1},
+	} {
+		if kind.count != 0 {
+			t.Errorf("%d %q survived in the view; a brace or paren inside a literal or comment counts as structure and mis-scopes both the balancer and the span tracker", kind.count, kind.name)
+		}
 	}
 }
 

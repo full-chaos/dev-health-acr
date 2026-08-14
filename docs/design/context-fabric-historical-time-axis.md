@@ -659,7 +659,7 @@ not "3 feels right".
 
 ## 13. Evidence hygiene — the ledger
 
-Four rounds of this branch produced a defect class that was never in the
+Five rounds of this branch produced a defect class that was never in the
 product code: **defects in my own evidence**. They are recorded because the
 fixes are cheap and the failure mode is invisible.
 
