@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -203,5 +204,77 @@ func TestContextFabricInvestigationPanicWithANonErrorValueIsClassifiedToo(t *tes
 	}
 	if strings.Contains(logs.String(), "10.9.8.7") {
 		t.Fatalf("panic value reached the logs:\n%s", logs.String())
+	}
+}
+
+// CHAOS-3811 codex round-2 F3. A panic used to lose to both context checks:
+// racing a client disconnect it returned with no log at all, and under an
+// exceeded deadline it was reported as a timeout. The failure mode P3 exists
+// to make visible was therefore invisible exactly when a request was already
+// going badly.
+//
+// The LOG must fire regardless of context state. The RESPONSE still obeys the
+// cancellation rule -- a disconnected client has nothing to receive.
+//
+// The cancellation is triggered INSIDE the investigator, immediately before
+// the panic, rather than on the request handed to ServeHTTP: a context
+// canceled before the handler runs never reaches the investigator at all (the
+// credential lookup fails first and answers 503), so that arrangement would
+// prove nothing. This ordering is deterministic -- no sleeps, no deadlines
+// racing real work.
+func TestContextFabricInvestigationPanicIsLoggedEvenWhenTheRequestIsCanceled(t *testing.T) {
+	var cancel context.CancelFunc
+	app, token, logs := newContextFabricTestAppWithLogs(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		cancel()
+		panic("panic racing a client disconnect at 10.9.8.7")
+	}))
+	response := httptest.NewRecorder()
+	request := investigationRequest(t, token)
+	ctx, cancelRequest := context.WithCancel(request.Context())
+	cancel = cancelRequest
+	defer cancelRequest()
+
+	app.Handler().ServeHTTP(response, request.WithContext(ctx))
+
+	entry := decodeFailureLog(t, logs.String())
+	if got := entry["failure_classification"]; got != "panic" {
+		t.Fatalf("failure_classification = %v, want \"panic\" even though the request was canceled", got)
+	}
+	if got := entry["http_status"]; got != float64(http.StatusInternalServerError) {
+		t.Fatalf("http_status = %v, want 500", got)
+	}
+	if response.Body.Len() != 0 {
+		t.Fatalf("body = %s, want no response written to a canceled request", response.Body.String())
+	}
+	if strings.Contains(logs.String(), "10.9.8.7") {
+		t.Fatalf("panic value reached the logs:\n%s", logs.String())
+	}
+}
+
+// The deadline half of F3, exercised directly against the classifier: an
+// expired request context must not turn a panic into a timeout. Called
+// directly rather than through ServeHTTP because an already-expired context
+// fails authentication long before the investigator runs -- and manufacturing
+// the race with a short deadline plus a sleeping investigator would be a
+// wall-clock flake, which this wave is in the business of removing.
+func TestContextFabricInvestigationPanicUnderAnExceededDeadlineIsNotReportedAsATimeout(t *testing.T) {
+	app, token, logs := newContextFabricTestAppWithLogs(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		return contextfabric.InvestigationResult{}, nil
+	}))
+	response := httptest.NewRecorder()
+	request := investigationRequest(t, token)
+	ctx, cancel := context.WithDeadline(request.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	app.writeContextFabricError(response, request.WithContext(ctx), errContextFabricPanic)
+
+	if got := decodeFailureLog(t, logs.String())["failure_classification"]; got != "panic" {
+		t.Fatalf("failure_classification = %v, want \"panic\": the request did not run out of time, it broke", got)
+	}
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, not 504: an exceeded deadline must not mask a panic", response.Code)
+	}
+	if !strings.Contains(response.Body.String(), "internal_error") {
+		t.Fatalf("body = %s, want the internal_error envelope, not a timeout envelope", response.Body.String())
 	}
 }

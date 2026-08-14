@@ -151,6 +151,26 @@ const (
 )
 
 func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, err error) {
+	// A panic is classified FIRST, ahead of both context checks (CHAOS-3811
+	// codex round-2 F3). It lost twice to them before: a panic racing a
+	// client disconnect returned at the cancellation check with no log at
+	// all, and a panic under an exceeded deadline was reported as a timeout
+	// -- so the failure mode P3 exists to make visible was invisible exactly
+	// when a request was already going badly.
+	//
+	// The LOG fires regardless of context state, because observability is
+	// the whole point of the branch; the RESPONSE still obeys the
+	// cancellation rule below, since a disconnected client has nothing to
+	// receive. Under an exceeded deadline the response is written and says
+	// panic, not timeout: the request did not run out of time, it broke.
+	if errors.Is(err, errContextFabricPanic) {
+		a.logContextFabricFailure(r, err, contextFabricClassPanic, http.StatusInternalServerError)
+		if errors.Is(r.Context().Err(), context.Canceled) {
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
+		return
+	}
 	if errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) {
 		return
 	}
@@ -262,13 +282,6 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	// real-corpus investigation landed in the fallthrough below, which is
 	// exactly why nobody could tell an unresolved subject apart from a
 	// genuine ACR fault.
-	// A panic that escaped the investigator. The sentinel is unique and
-	// wraps nothing, so its position among the ACR-side classifications
-	// cannot affect any other branch.
-	if errors.Is(err, errContextFabricPanic) {
-		a.writeContextFabricFailure(w, r, err, contextFabricClassPanic, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
-		return
-	}
 	if errors.Is(err, contextfabric.ErrNoInvestigationSubjects) {
 		a.writeContextFabricFailure(w, r, err, contextFabricClassNoSubjects, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
 		return
@@ -297,19 +310,32 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 // Warn, so a spike in refusals is still visible without drowning the error
 // stream.
 func (a *App) writeContextFabricFailure(w http.ResponseWriter, r *http.Request, err error, classification string, status int, code, message string, retryable bool, details map[string]any) {
+	a.logContextFabricFailure(r, err, classification, status)
+	writeError(w, r, status, code, message, retryable, details)
+}
+
+// logContextFabricFailure emits the one structured failure line. It is split
+// out from writeContextFabricFailure so the panic branch can record a failure
+// whose RESPONSE is deliberately skipped (a canceled request has no reader)
+// without the log depending on whether anything was written.
+//
+// The logger is called with context.WithoutCancel: slog handlers may consult
+// the context, and this line must survive the very cancellation that makes it
+// worth having. RequestID is read from the same context, which carries its
+// values either way.
+func (a *App) logContextFabricFailure(r *http.Request, err error, classification string, status int) {
 	stage, _ := contextfabric.FailureStage(err)
 	level := slog.LevelWarn
 	if status >= http.StatusInternalServerError || classification == contextFabricClassUnclassified {
 		level = slog.LevelError
 	}
-	a.logger.Log(r.Context(), level, "context fabric investigation failed",
+	a.logger.Log(context.WithoutCancel(r.Context()), level, "context fabric investigation failed",
 		"request_id", RequestID(r.Context()),
 		"failure_class", contextFabricInvestigationFailureName,
 		"failure_stage", string(stage),
 		"failure_classification", classification,
 		"http_status", status,
 	)
-	writeError(w, r, status, code, message, retryable, details)
 }
 
 // writeContextFabricRejectionError writes the shared 422 response shape for
