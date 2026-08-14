@@ -126,6 +126,64 @@ func TestTokenizeForFulltextTrimsLeadingMetacharacters(t *testing.T) {
 	}
 }
 
+// chaos3827AlwaysBrokenRunes are the six runes live-probed as a RediSearch
+// syntax error in EVERY position -- leading-glued, trailing-glued, and bare
+// (`{foo`/`foo{`, `[foo`/`foo[`, `;foo`/`foo;`, `}`/`]`, and `~`, which
+// trailing-glued errors and leading-glued silently becomes a fuzzy match).
+// Because no working query can contain them anywhere, removing them is pure
+// error recovery: it cannot change the result set -- and so cannot change
+// the lexical relevance -- of any query that works today. That is exactly
+// why they are stripped as separators while a general trailing trim is not:
+// a trailing trim would rewrite "readiness?", which RediSearch ACCEPTS and
+// which live returns the identical result set to the bare word.
+const chaos3827AlwaysBrokenRunes = "{}[];~"
+
+// chaos3827BracketQuestion is the residual live repro found while probing
+// CHAOS-3827: with only the leading trim in place this tokenizes to
+// `What|is|the|status|of|Q3]|readiness?`, which FalkorDB rejects outright
+// (live: syntax error), so the bracketed question still killed the whole
+// search. After the six runes join the separator set it tokenizes to
+// `What|is|the|status|of|Q3|readiness?` -- live: 905 nodes.
+const chaos3827BracketQuestion = `What is the status of [Q3] readiness?`
+
+func TestTokenizeForFulltextStripsAlwaysBrokenRunes(t *testing.T) {
+	t.Run("bracketed question keeps both real words", func(t *testing.T) {
+		got := tokenizeForFulltext(chaos3827BracketQuestion)
+		want := []string{"What", "is", "the", "status", "of", "Q3", "readiness?"}
+		if len(got) != len(want) {
+			t.Fatalf("tokenizeForFulltext(%q) = %#v, want %#v", chaos3827BracketQuestion, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("tokenizeForFulltext(%q)[%d] = %q, want %q (full: %#v)", chaos3827BracketQuestion, i, got[i], want[i], got)
+			}
+		}
+	})
+	t.Run("no term carries an always-broken rune in any position", func(t *testing.T) {
+		texts := []string{
+			chaos3827BracketQuestion,
+			"deploy {config} now", "list [items] here", "a;b", "roughly ~5 days",
+			"trailing brace foo} and bracket foo] and semicolon foo; and tilde foo~",
+		}
+		for _, text := range texts {
+			for _, term := range tokenizeForFulltext(text) {
+				if strings.ContainsAny(term, chaos3827AlwaysBrokenRunes) {
+					t.Fatalf("tokenizeForFulltext(%q) produced term %q carrying one of %q -- live-verified as a RediSearch syntax error in every position, so it can only fail the whole query",
+						text, term, chaos3827AlwaysBrokenRunes)
+				}
+			}
+		}
+	})
+	t.Run("stripping a broken rune never swallows the word beside it", func(t *testing.T) {
+		for _, text := range []string{"{foo}", "[foo]", ";foo;", "~foo~", "foo]"} {
+			got := tokenizeForFulltext(text)
+			if len(got) != 1 || got[0] != "foo" {
+				t.Fatalf("tokenizeForFulltext(%q) = %#v, want [\"foo\"] -- the rune is unusable, the word beside it is not", text, got)
+			}
+		}
+	})
+}
+
 func TestTokenizeForFulltextPurePunctuationYieldsNoTerms(t *testing.T) {
 	for _, text := range []string{"?", "??? !!!", "-- ...", "|%@\"'*-():", " . , ; "} {
 		if got := tokenizeForFulltext(text); len(got) != 0 {
@@ -149,22 +207,28 @@ func TestFulltextSearchQueryStringHasNoBarePunctuationElement(t *testing.T) {
 	}}
 	adapter := newFakeAdapter(t, fake)
 
-	candidates, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", chaos3827Question, 10, temporalFilter{})
-	if err != nil {
-		t.Fatalf("fulltextSearchNodes() error = %v", err)
-	}
-	if len(candidates) != 1 {
-		t.Fatalf("fulltextSearchNodes() returned %d candidates, want 1", len(candidates))
-	}
-	if captured == "" {
-		t.Fatalf("fulltextSearchNodes() issued no query carrying a $query parameter")
-	}
-	for _, element := range strings.Split(captured, "|") {
-		if !hasLetterOrDigit(element) {
-			t.Fatalf("fulltextSearchNodes() built query %q with element %q carrying no letter or digit -- RediSearch rejects that whole query as a syntax error", captured, element)
+	for _, question := range []string{chaos3827Question, chaos3827BracketQuestion} {
+		captured = ""
+		candidates, _, err := adapter.fulltextSearchNodes(context.Background(), "test-key", "org-1", question, 10, temporalFilter{})
+		if err != nil {
+			t.Fatalf("fulltextSearchNodes(%q) error = %v", question, err)
 		}
-		if first := []rune(element)[0]; !unicode.IsLetter(first) && !unicode.IsDigit(first) {
-			t.Fatalf("fulltextSearchNodes() built query %q with element %q starting on a metacharacter -- live-verified as a RediSearch syntax error (`{foo`) or a silent fuzzy rewrite (`~foo`)", captured, element)
+		if len(candidates) != 1 {
+			t.Fatalf("fulltextSearchNodes(%q) returned %d candidates, want 1", question, len(candidates))
+		}
+		if captured == "" {
+			t.Fatalf("fulltextSearchNodes(%q) issued no query carrying a $query parameter", question)
+		}
+		for _, element := range strings.Split(captured, "|") {
+			if !hasLetterOrDigit(element) {
+				t.Fatalf("fulltextSearchNodes() built query %q with element %q carrying no letter or digit -- RediSearch rejects that whole query as a syntax error", captured, element)
+			}
+			if first := []rune(element)[0]; !unicode.IsLetter(first) && !unicode.IsDigit(first) {
+				t.Fatalf("fulltextSearchNodes() built query %q with element %q starting on a metacharacter -- live-verified as a RediSearch syntax error (`{foo`) or a silent fuzzy rewrite (`~foo`)", captured, element)
+			}
+			if strings.ContainsAny(element, chaos3827AlwaysBrokenRunes) {
+				t.Fatalf("fulltextSearchNodes() built query %q with element %q carrying one of %q -- live-verified as a RediSearch syntax error in every position", captured, element, chaos3827AlwaysBrokenRunes)
+			}
 		}
 	}
 }

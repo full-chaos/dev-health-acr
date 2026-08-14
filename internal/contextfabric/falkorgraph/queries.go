@@ -366,6 +366,24 @@ func tokenizeForFulltext(text string) []string {
 		switch r {
 		case '|', '%', '@', '"', '\'', '*', '-', '(', ')', ':':
 			return true
+		// CHAOS-3827 residual: these six are live-verified as a RediSearch
+		// syntax error in EVERY position -- leading-glued, trailing-glued
+		// and bare alike (`{foo`/`foo{`, `[foo`/`foo[`, `;foo`/`foo;`, and
+		// `~`, which errors trailing-glued and silently fuzzes
+		// leading-glued). The leading trim below cannot reach the trailing
+		// case, so a bracketed question still failed outright: `What is the
+		// status of [Q3] readiness?` tokenized to
+		// `What|is|the|status|of|Q3]|readiness?`, which the dev graph
+		// rejects, versus 905 nodes for the same query with the bracket
+		// gone. Because NO working query can contain any of these runes
+		// anywhere, dropping them is error recovery only: it cannot change
+		// the result set -- and so cannot change the lexical relevance -- of
+		// any query that works today. That is what separates them from a
+		// blanket trailing trim, which would rewrite the WORKING
+		// "readiness?" (live: identical result set to the bare word) and is
+		// therefore deliberately not done.
+		case '{', '}', '[', ']', ';', '~':
+			return true
 		}
 		return r == ' ' || r == '\t' || r == '\n' || r == '\r'
 	})
