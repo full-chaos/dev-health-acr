@@ -73,7 +73,12 @@ import (
 //     "CREATE " + "TABLE repos". Deliberately adversarial; no natural code
 //     looks like this.
 //   - A table name assembled at runtime from parts, so it appears nowhere
-//     as a literal.
+//     as a literal. This is now the ONLY residual of the rival sweep:
+//     rounds 7 and 8 closed shape (any structural terminator), threshold
+//     (measured at 3), granularity (line-scoped exemptions, masked
+//     renderer spans) and spelling (both Go literal forms), so what is
+//     left is not a gap in which literals are recognized but the case
+//     where no literal exists to recognize.
 //   - Helper indirection -- a shared helper that takes a table name and
 //     builds the DDL out of sight of both passes. Closing this needs a
 //     RUNTIME guard rather than a source one, since only execution reveals
@@ -477,11 +482,20 @@ func TestNoSecondPhysicalSourceOutsideTheDeclaration(t *testing.T) {
 		for index, line := range strings.Split(contents, "\n") {
 			// A line that names a table while CALLING the renderer is
 			// USING the single source, not rivaling it -- the one shape
-			// that is definitionally not a second declaration. Excluded
-			// on principle rather than by pattern-guessing.
-			if strings.Contains(line, "devhealthschema.DDL(") {
-				continue
-			}
+			// that is definitionally not a second declaration.
+			//
+			// Round-8 F1: mask the CALL SPAN, do not skip the line. The
+			// exclusion used to drop the whole line, which excluded more
+			// than the ratified principle covers: literals sitting BESIDE
+			// the call, on the same line, became invisible too. The
+			// principle is about the call's own arguments, so only they
+			// are removed and everything else on the line still counts.
+			//
+			// DECLARED NON-COVERAGE: a renderer call whose own arguments
+			// are built at runtime rather than written as literals -- the
+			// masked span then hides nothing, because there was no literal
+			// in it to hide.
+			line = renderCall.ReplaceAllString(line, "")
 			for _, table := range declaredNames {
 				if !namesDeclaredTable(line, table) {
 					continue
@@ -531,6 +545,11 @@ func TestNoSecondPhysicalSourceOutsideTheDeclaration(t *testing.T) {
 	}
 }
 
+// renderCall matches one devhealthschema.DDL(...) call so its span can be
+// masked out of a line. Non-greedy to the first closing parenthesis: the
+// call takes table names, never nested calls, so the first `)` ends it.
+var renderCall = regexp.MustCompile(`devhealthschema\.DDL\([^)]*\)`)
+
 // namesDeclaredTable reports whether one line names a declared table as a
 // complete Go string literal in a DECLARATION shape.
 //
@@ -560,7 +579,21 @@ func declarationShape(table string) *regexp.Regexp {
 	if pattern, ok := declarationShapes[table]; ok {
 		return pattern
 	}
-	pattern := regexp.MustCompile(regexp.QuoteMeta(`"`+table+`"`) + `\s*([:,)}\]]|$)`)
+	// Round-8 F2: interpreted AND raw literals. The matcher used to cover
+	// `"table"` only, so a rival keyed by backtick raw strings produced
+	// zero sightings while the DDL sweep, seeing no CREATE TABLE, also
+	// found nothing -- clean on both passes. This is round 5's raw-string
+	// lesson mirrored: there it corrupted markers, here it hid a rival.
+	// Both spellings now carry the identical follow-set discipline.
+	// DECLARED NON-COVERAGE: a name that is never written as a literal at
+	// all -- assembled by concatenation or fmt.Sprintf -- matches neither
+	// spelling. Go has exactly TWO string literal forms, so literal
+	// SPELLING coverage is now complete; what remains outside is names
+	// that are not literals, which is the standing runtime-assembly
+	// residual already declared above.
+	quoted := regexp.QuoteMeta(`"` + table + `"`)
+	raw := regexp.QuoteMeta("`" + table + "`")
+	pattern := regexp.MustCompile(`(` + quoted + `|` + raw + `)\s*([:,)}\]]|$)`)
 	declarationShapes[table] = pattern
 	return pattern
 }
