@@ -52,7 +52,21 @@ import contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 // nothing downstream can recover that: a displaced list and a list that
 // had room are the same length and carry the same disclosures.
 func appendBoundedLimitations(limitations []string, additions []string) (composed []string, displaced int) {
-	composed = limitations
+	// Normalize BEFORE adding anything. An input already over the cap can
+	// reach here: SynthesisDraft.ValidateAgainst does not check the
+	// top-level collection counts (the documented CHAOS-3790 gap), so a
+	// model that returned too many limitations is caught only by the
+	// composed result's own Validate -- which is the too-late rejection
+	// this whole mechanism exists to avoid.
+	//
+	// The single-purpose appender this replaced normalized for free, by
+	// taking limitations[:cap-1]. Generalising it into a splice preserved
+	// the overflow instead, so the round-17 rewrite lost that property
+	// (round-18 fix A). It is restored deliberately here rather than as a
+	// side effect, and every trimmed entry is counted in the SAME
+	// accounting as everything else this function drops -- a trim is a
+	// loss like any other, and silent loss is the defect, not the size.
+	composed, displaced = normalizeToCapacity(limitations)
 	for _, addition := range additions {
 		if alreadyStates(composed, addition) {
 			continue
@@ -133,4 +147,33 @@ func serviceAuthoredLimitations() []string {
 
 func withRetrievalDegradation(limitations []string) (composed []string, displaced int) {
 	return appendBoundedLimitations(limitations, []string{retrievalDegradedLimitation})
+}
+
+// normalizeToCapacity brings an over-cap list down to the contract's limit
+// by dropping MODEL-authored caveats from the end, and reports how many it
+// dropped.
+//
+// Only model caveats, under the same discipline as displacement: bringing
+// a list to size by discarding service-authored disclosures would remove
+// exactly the statements a reader cannot reconstruct from anywhere else in
+// the document.
+func normalizeToCapacity(limitations []string) (composed []string, trimmed int) {
+	if len(limitations) <= contractsv1.ContextFabricLimitationsMaxCount {
+		return limitations, 0
+	}
+	composed = append([]string(nil), limitations...)
+	for len(composed) > contractsv1.ContextFabricLimitationsMaxCount {
+		index := lastModelAuthoredLimitation(composed)
+		if index < 0 {
+			// Unreachable for the same reason the displacement branch is:
+			// there are far fewer service-authored disclosures than the
+			// cap (TestServiceDisclosuresCannotFillTheCap). Returning the
+			// list as-is keeps the loss visible as a validation failure
+			// rather than silently discarding a disclosure to hide it.
+			return composed, trimmed
+		}
+		composed = append(composed[:index], composed[index+1:]...)
+		trimmed++
+	}
+	return composed, trimmed
 }

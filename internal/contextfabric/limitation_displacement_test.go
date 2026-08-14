@@ -262,3 +262,77 @@ func TestServiceDisclosuresAreNeverDisplaced(t *testing.T) {
 		t.Errorf("composed %d limitations, want the cap %d", len(composed), contractsv1.ContextFabricLimitationsMaxCount)
 	}
 }
+
+// TestOverCapInputIsNormalizedAndCounted is round-18 fix A.
+//
+// The single-purpose appender this one replaced took limitations[:cap-1]
+// and so NORMALIZED an over-cap input on its way past. Generalising it
+// into a splice preserved the overflow instead: 101 model limitations went
+// in, the degradation disclosure swapped one for itself, the temporal
+// disclosures preserved the overflow, and the whole investigation died at
+// validation. A regression I introduced while closing round 17.
+//
+// The draft really can arrive over-cap: SynthesisDraft.ValidateAgainst
+// does not check the top-level collection counts (that is the documented
+// CHAOS-3790 gap), so only the composed result's own Validate catches it
+// -- which is exactly the too-late rejection displacement exists to avoid.
+//
+// Normalization is not silent: every trimmed entry is counted in the same
+// displacement accounting as everything else the appender drops.
+func TestOverCapInputIsNormalizedAndCounted(t *testing.T) {
+	const overflow = 1
+	asOf := time.Unix(50, 0).UTC()
+	engine, request := engineForDegradationOnAxis(t, true,
+		modelLimitations(contractsv1.ContextFabricLimitationsMaxCount+overflow),
+		TimeContext{Axis: TemporalValidTime, AsOf: &asOf})
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_overcap"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() = %v, want an answer: an over-cap draft must cost caveats, never the answer", err)
+	}
+
+	if got, want := len(result.Limitations), contractsv1.ContextFabricLimitationsMaxCount; got != want {
+		t.Errorf("result carries %d limitations, want the cap %d", got, want)
+	}
+	if !hasRetrievalDegradedLimitation(result.Limitations) {
+		t.Error("the degradation disclosure was lost")
+	}
+	for _, disclosure := range temporalLimitationsFor(TemporalValidTime) {
+		if !alreadyStates(result.Limitations, disclosure) {
+			t.Errorf("historical disclosure was lost: %q", disclosure)
+		}
+	}
+	// The overflow trim plus one displacement per forced-in disclosure.
+	// Nothing may be dropped without appearing here.
+	wantDisplaced := overflow + 1 + len(temporalLimitationsFor(TemporalValidTime))
+	if result.LimitationsDisplaced != wantDisplaced {
+		t.Errorf("result.LimitationsDisplaced = %d, want %d: an entry was dropped without being counted", result.LimitationsDisplaced, wantDisplaced)
+	}
+}
+
+// TestNormalizationTrimsOnlyModelCaveats keeps the trim under the same
+// discipline as the displacement: an over-cap list must not be brought
+// down to size by discarding the disclosures, which are the entries
+// nothing else in the document carries.
+func TestNormalizationTrimsOnlyModelCaveats(t *testing.T) {
+	over := modelLimitations(contractsv1.ContextFabricLimitationsMaxCount)
+	over = append(over, retrievalDegradedLimitation)
+	over = append(over, temporalLimitationsFor(TemporalValidTime)...)
+
+	composed, displaced := appendBoundedLimitations(over, nil)
+
+	if len(composed) != contractsv1.ContextFabricLimitationsMaxCount {
+		t.Fatalf("normalized to %d entries, want the cap %d", len(composed), contractsv1.ContextFabricLimitationsMaxCount)
+	}
+	if displaced != len(over)-contractsv1.ContextFabricLimitationsMaxCount {
+		t.Errorf("displaced = %d, want %d", displaced, len(over)-contractsv1.ContextFabricLimitationsMaxCount)
+	}
+	if !hasRetrievalDegradedLimitation(composed) {
+		t.Error("normalization trimmed the degradation disclosure")
+	}
+	for _, disclosure := range temporalLimitationsFor(TemporalValidTime) {
+		if !alreadyStates(composed, disclosure) {
+			t.Errorf("normalization trimmed a historical disclosure: %q", disclosure)
+		}
+	}
+}
