@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -720,6 +721,21 @@ func blankKeepingLines(span string) string {
 // one. Without that stop a single unterminated quote would swallow every
 // remaining line.
 func codeView(source string) string {
+	return lexView(source, true)
+}
+
+// commentFreeView blanks comments but KEEPS literal content, for the one
+// consumer that must read literals: the quote-wrap scanner cannot decode a
+// literal whose content has been blanked (round-13 F3).
+func commentFreeView(source string) string {
+	return lexView(source, false)
+}
+
+// lexView is the single lexer. blankLiterals distinguishes its two
+// consumers: structure scanning wants literals gone, literal scanning
+// wants only comments gone. Both preserve length and newlines, so the two
+// views and the source share every offset.
+func lexView(source string, blankLiterals bool) string {
 	view := []byte(source)
 	blank := func(from, to int) {
 		for index := from; index < to && index < len(view); index++ {
@@ -747,19 +763,27 @@ func codeView(source string) string {
 			index += 2 + stop + 1
 		case source[index] == '"':
 			close := skipInterpretedLiteral(source, index)
-			blank(index, close+1)
+			if blankLiterals {
+				blank(index, close+1)
+			}
 			index = close
 		case source[index] == '`':
 			offset := strings.IndexByte(source[index+1:], '`')
 			if offset < 0 {
-				blank(index, len(source))
+				if blankLiterals {
+					blank(index, len(source))
+				}
 				return string(view)
 			}
-			blank(index, index+1+offset+1)
+			if blankLiterals {
+				blank(index, index+1+offset+1)
+			}
 			index += 1 + offset
 		case source[index] == '\'':
 			close := skipRuneLiteral(source, index)
-			blank(index, close+1)
+			if blankLiterals {
+				blank(index, close+1)
+			}
 			index = close
 		}
 	}
@@ -956,32 +980,49 @@ func TestSpellingRecognitionCoversEveryLiteralForm(t *testing.T) {
 // literal whose CONTENT is a single quote character -- the construction
 // that wraps a table name in quotes, in ANY spelling.
 //
-// Round-12 F1: this used to be a regexp over two backtick-based source
-// shapes, so `strings.EqualFold(line, "\""+table+"\"")` walked past the
-// guard -- the quote is right there beside the name, just spelled as an
-// escaped interpreted literal. That is the literal-forms lesson landing on
-// the guard's own pattern, a fifth turn of the enumerate-the-shapes game.
+// Round-12 F1: this used to match two backtick-based SOURCE SHAPES, so
+// `strings.EqualFold(line, "\""+table+"\"")` walked past -- the quote sits
+// right there beside the name, spelled as an escaped interpreted literal.
+// So the spelling is not matched at all: the literal is DECODED and
+// compared by content, and escaped-interpreted, raw and mixed
+// concatenation all reduce to the same content.
 //
-// So the spelling is no longer enumerated: each literal is found with the
-// same lexer the other passes use, its content is DECODED, and a literal
-// whose content is one quote character next to a `+` is a wrap. Escaped
-// interpreted, raw, or any mixture reduce to the same decoded content, so
-// there is nothing left to spell differently.
+// Round-13: decoding is strconv.Unquote, not a hand-rolled loop. Mine
+// dropped a backslash and kept the next byte, so "\x22" decoded to x22 and
+// escaped the guard -- I had written a hand-rolled decoder while arguing
+// against hand-rolled enumerations, the same defect one layer down. The
+// standard library's decoder is definitionally complete over Go's escape
+// forms, and an error simply means the token was not a literal.
 //
-// Measured before adopting: it finds exactly the two constructions this
-// package already has, both inside the recognizer -- no false positives.
+// The two arguments are two VIEWS of the same line at identical offsets:
+// literals are read from the comment-free view (their content must
+// survive), and adjacency is tested on the structure view, where comments
+// are already blank. That closes the inline-comment false positive of
+// round-13 F3 -- `n := 1 // display "\"" + name` is a comment, not a wrap.
 //
-// DECLARED NON-COVERAGE, distinct from the variable-split residual: a
-// quote assembled at RUNTIME (string(rune(34)), a constant defined
-// elsewhere) has no literal to decode. Like the variable split, that is
-// beyond any source-text check.
-func wrapsAQuoteCharacter(line string) bool {
-	for _, literal := range stringLiterals(line) {
-		if literal.content != `"` && literal.content != "`" {
+// DECLARED NON-COVERAGE: a quote produced at RUNTIME has no literal to
+// decode -- fmt.Sprintf("%q", table) is the instance most likely to be
+// written, alongside string(rune(34)) or a quote constant defined
+// elsewhere. Named concretely, because an abstract category with its
+// likeliest member unnamed invites a "we declared that" defence for a case
+// nobody actually pictured.
+func wrapsAQuoteCharacter(literalLine, structureLine string) bool {
+	for _, literal := range stringLiterals(literalLine) {
+		if literal.end >= len(literalLine) {
 			continue
 		}
-		before := strings.TrimSpace(line[:literal.start])
-		after := strings.TrimSpace(line[literal.end+1:])
+		content, err := strconv.Unquote(literalLine[literal.start : literal.end+1])
+		if err != nil {
+			continue // not a literal Go can read: not a wrap
+		}
+		if content != `"` && content != "`" {
+			continue
+		}
+		if literal.start > len(structureLine) || literal.end+1 > len(structureLine) {
+			continue
+		}
+		before := strings.TrimSpace(structureLine[:literal.start])
+		after := strings.TrimSpace(structureLine[literal.end+1:])
 		if strings.HasSuffix(before, "+") || strings.HasPrefix(after, "+") {
 			return true
 		}
@@ -989,11 +1030,11 @@ func wrapsAQuoteCharacter(line string) bool {
 	return false
 }
 
-// literalSpan is one string literal and its decoded content.
+// literalSpan is one string literal's extent. Its content is decoded by
+// strconv.Unquote at the point of use rather than carried here.
 type literalSpan struct {
-	start   int
-	end     int
-	content string
+	start int
+	end   int
 }
 
 // stringLiterals returns every string literal on a line, skipping rune
@@ -1007,7 +1048,7 @@ func stringLiterals(line string) []literalSpan {
 			if closing >= len(line) || closing <= index || line[closing] != '"' {
 				return spans // unterminated: nothing further is a literal
 			}
-			spans = append(spans, literalSpan{index, closing, unescapeInterpreted(line[index+1 : closing])})
+			spans = append(spans, literalSpan{index, closing})
 			index = closing
 		case '`':
 			offset := strings.IndexByte(line[index+1:], '`')
@@ -1015,26 +1056,13 @@ func stringLiterals(line string) []literalSpan {
 				return spans
 			}
 			closing := index + 1 + offset
-			spans = append(spans, literalSpan{index, closing, line[index+1 : closing]})
+			spans = append(spans, literalSpan{index, closing})
 			index = closing
 		case '\'':
 			index = skipRuneLiteral(line, index)
 		}
 	}
 	return spans
-}
-
-// unescapeInterpreted decodes backslash escapes far enough to compare a
-// literal's content against a quote character.
-func unescapeInterpreted(text string) string {
-	var decoded strings.Builder
-	for index := 0; index < len(text); index++ {
-		if text[index] == '\\' && index+1 < len(text) {
-			index++
-		}
-		decoded.WriteByte(text[index])
-	}
-	return decoded.String()
 }
 
 // recognizerFunctions is the sanctioned span, named EXPLICITLY.
@@ -1113,6 +1141,7 @@ func TestSpellingComparisonsExistOnlyInTheRecognizer(t *testing.T) {
 		// span before the function it was scoping -- the guard was
 		// mis-scoped against its own target.
 		viewLines := strings.Split(codeView(contents), "\n")
+		literalLines := strings.Split(commentFreeView(contents), "\n")
 		sourceLines := strings.Split(contents, "\n")
 		function := ""
 		depth := 0
@@ -1133,13 +1162,13 @@ func TestSpellingComparisonsExistOnlyInTheRecognizer(t *testing.T) {
 			if index >= len(sourceLines) {
 				continue
 			}
-			line := sourceLines[index]
-			if strings.HasPrefix(strings.TrimSpace(line), "//") {
-				continue // comments discuss these shapes on purpose
-			}
-			if !wrapsAQuoteCharacter(line) {
+			// Comments are already blank in both views, so a full-line
+			// comment check is no longer needed -- and an INLINE comment
+			// can no longer masquerade as a wrap (round-13 F3).
+			if !wrapsAQuoteCharacter(literalLines[index], viewLines[index]) {
 				continue
 			}
+			line := sourceLines[index]
 			if inRecognizer {
 				sanctioned++
 				continue
@@ -1185,16 +1214,22 @@ func TestSpellingComparisonsExistOnlyInTheRecognizer(t *testing.T) {
 // unterminated-construct asymmetry flagged there as the most likely to be
 // wrong.
 //
-// CASE STRENGTH IS NOT UNIFORM, and saying so is the point of the ledger.
-// A mutation matrix over the lexer (escapes disabled, block comments
-// disabled, rune literals disabled, interpreted literals allowed past a
-// newline, newlines blanked) fails these cases for their own reasons and
-// confirms they can fail at all. TWO cases are regression guards rather
-// than discriminators: "escaped backslash ends the literal" survives the
-// escape mutation because both readings close the literal in the same
-// place, and "CRLF line endings" pins offset and newline preservation,
-// which no plausible mutation of this lexer breaks. They are kept for what
-// they pin, not claimed as proofs.
+// EVERY CASE HERE IS FALSIFIABLE, and getting to that claim took a
+// correction worth recording.
+//
+// Round 12 ran a mutation matrix (escapes disabled, block comments
+// disabled, rune literals disabled, interpreted literals past a newline,
+// newlines blanked) and I labelled two cases -- "escaped backslash ends
+// the literal" and "CRLF line endings" -- as regression guards that no
+// plausible mutation could break. Round 13 added a SIXTH mutation, leaving
+// string literals unlexed entirely, and BOTH of them failed under it.
+//
+// So the label was wrong, and wrong in the specific way the matrix exists
+// to catch: "no plausible mutation breaks this" meant "no mutation I
+// thought of breaks this". A claim about the space of possible regressions
+// cannot be established by enumerating the ones that occurred to me --
+// which is the same error as an absence audit, one level up, and it is why
+// the reviewer attacking matrix completeness was the right call.
 func TestCodeViewBlanksWhatIsNotStructure(t *testing.T) {
 	t.Parallel()
 
@@ -1244,6 +1279,21 @@ func TestCodeViewBlanksWhatIsNotStructure(t *testing.T) {
 			source:  "/* ) /* still comment */ real := (\n",
 			survive: []string{"real := ("},
 			blanked: []string{"still comment"},
+		},
+		{
+			// Round-13 F4: comment delimiters INSIDE literals. Without a
+			// case here, a regression treating /* or */ as structural
+			// wherever it appears would pass the whole matrix.
+			name:    "comment delimiters inside literals are text",
+			source:  "a := \"/* ) not a comment\"\nb := `*/ ) still text`\nreal := (\n",
+			survive: []string{"real := ("},
+			blanked: []string{"not a comment", "still text"},
+		},
+		{
+			name:    "comment delimiter inside a rune literal",
+			source:  "a := '{'\nb := \"/*\"\nreal := (\n",
+			survive: []string{"real := ("},
+			blanked: []string{"{"},
 		},
 		{
 			name:    "CRLF line endings",
