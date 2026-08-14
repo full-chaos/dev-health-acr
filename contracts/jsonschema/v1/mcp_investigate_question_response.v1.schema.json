@@ -171,6 +171,9 @@
           },
           "maxItems": 100
         },
+        "temporal": {
+          "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/TemporalLabel"
+        },
         "coverage_partial": {
           "type": "boolean"
         },
@@ -724,7 +727,8 @@
                 "no_data",
                 "truncated",
                 "conflicted",
-                "not_applicable"
+                "not_applicable",
+                "pruned"
               ]
             },
             "reason": {
@@ -735,6 +739,167 @@
           "required": [
             "source",
             "state"
+          ]
+        },
+        "TemporalLabel": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The time an answer actually speaks for on a historical time axis (CHAOS-3781, AC-3781-2). Absent on the current axis. Effective is always narrower than or equal to requested; an answer may speak for less time than was asked about, never more.",
+          "properties": {
+            "requested": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/TimeContext"
+                },
+                {
+                  "properties": {
+                    "axis": {
+                      "enum": [
+                        "valid_time",
+                        "observed_time",
+                        "range"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "effective": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/TimeContext"
+                },
+                {
+                  "properties": {
+                    "axis": {
+                      "enum": [
+                        "valid_time",
+                        "observed_time",
+                        "range"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "grain": {
+              "type": "string",
+              "enum": [
+                "instant",
+                "day",
+                "none"
+              ]
+            },
+            "coverage_complete": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "requested",
+            "effective",
+            "grain",
+            "coverage_complete"
+          ]
+        },
+        "TimeContext": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "axis": {
+              "type": "string",
+              "enum": [
+                "current",
+                "valid_time",
+                "observed_time",
+                "range"
+              ]
+            },
+            "as_of": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "start": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "end": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "axis"
+          ],
+          "oneOf": [
+            {
+              "properties": {
+                "axis": {
+                  "const": "current"
+                }
+              },
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "as_of"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "start"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "end"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "properties": {
+                "axis": {
+                  "enum": [
+                    "valid_time",
+                    "observed_time"
+                  ]
+                }
+              },
+              "required": [
+                "as_of"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "start"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "end"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "properties": {
+                "axis": {
+                  "const": "range"
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ],
+              "not": {
+                "required": [
+                  "as_of"
+                ]
+              }
+            }
           ]
         },
         "BoundSubjectReceipt": {

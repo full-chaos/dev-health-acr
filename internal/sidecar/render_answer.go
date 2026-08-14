@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -34,6 +35,13 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 	b.writeLine("# Answer")
 	b.writeLine(fmt.Sprintf("- Status: %s", safeInline(string(projection.Status))))
 	b.writeLine(fmt.Sprintf("- Result ID: %s", safeInline(projection.ResultID)))
+	// Before the judgment, never after it. A historical answer whose axis
+	// appears below the prose is an answer the reader has already read as
+	// current -- and the "Current state" heading further down actively
+	// asserts that it is. The label goes where the axis is known first.
+	for _, line := range temporalLines(projection.Temporal) {
+		b.writeLine(line)
+	}
 	if projection.CoveragePartial {
 		b.writeLine("- Coverage: partial")
 	}
@@ -317,5 +325,60 @@ func scalarValueText(value contractsv1.ContextFabricScalarValue) string {
 		return "null"
 	default:
 		return "unknown"
+	}
+}
+
+// temporalLines renders CHAOS-3781's temporal label as header lines, or
+// nothing at all when the answer is about current state.
+//
+// Every value here is structural -- a closed-vocabulary axis, a closed
+// grain, and RFC 3339 instants the service composed itself -- so these are
+// inline-escaped rather than wrapped as untrusted data. No model authors
+// any part of this label: what time an answer covers is a fact about which
+// reads ran (see ContextFabricTemporalLabel's doc comment).
+//
+// Both the requested and the effective time are shown when they differ.
+// Showing only the effective one would silently answer a different question
+// than the caller asked; showing only the requested one would repeat the
+// H6 defect, claiming coverage the sources could not give.
+func temporalLines(label *contractsv1.ContextFabricTemporalLabel) []string {
+	if label == nil {
+		return nil
+	}
+	lines := []string{
+		fmt.Sprintf("- Answers for: %s, %s", safeInline(string(label.Effective.Axis)), safeInline(describeTimeContext(label.Effective))),
+	}
+	if requested := describeTimeContext(label.Requested); requested != describeTimeContext(label.Effective) {
+		lines = append(lines, fmt.Sprintf("- Requested: %s", safeInline(requested)))
+	}
+	lines = append(lines, fmt.Sprintf("- Time grain: %s", safeInline(string(label.Grain))))
+	if !label.CoverageComplete {
+		// Stated as a fact, not a hedge: at least one source told the
+		// service it cannot speak for this time, and its own limitation
+		// is listed further down.
+		lines = append(lines, "- At least one source could not answer for this time; see the limitations.")
+	}
+	return lines
+}
+
+// describeTimeContext renders the instants of one time context. The axis
+// decides which fields exist, and the contract already validated that
+// pairing, so a missing pointer here means the caller passed something the
+// contract would have rejected -- reported as such rather than rendered as
+// a plausible-looking blank.
+func describeTimeContext(timeContext contractsv1.ContextFabricTimeContext) string {
+	switch timeContext.Axis {
+	case contractsv1.ContextFabricTemporalRange:
+		if timeContext.Start == nil || timeContext.End == nil {
+			return "unstated range"
+		}
+		return timeContext.Start.UTC().Format(time.RFC3339) + " to " + timeContext.End.UTC().Format(time.RFC3339)
+	case contractsv1.ContextFabricTemporalValidTime, contractsv1.ContextFabricTemporalObservedTime:
+		if timeContext.AsOf == nil {
+			return "unstated instant"
+		}
+		return "as of " + timeContext.AsOf.UTC().Format(time.RFC3339)
+	default:
+		return "current"
 	}
 }

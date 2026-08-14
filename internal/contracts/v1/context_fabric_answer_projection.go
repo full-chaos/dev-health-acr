@@ -97,6 +97,22 @@ type ContextFabricAnswerProjection struct {
 	// judgment rests on canonical observations, not prose.
 	KeyFacts        []ContextFabricProjectedFact     `json:"key_facts"`
 	CoverageSummary []ContextFabricProjectedCoverage `json:"coverage_summary"`
+	// Temporal is CHAOS-3781's temporal label, copied verbatim, and like
+	// Limitations it is never dropped. Nil means the answer is about
+	// current state.
+	//
+	// The projection carries no Interpretation, so before this field a
+	// bounded consumer had no way at all to tell a historical answer from
+	// a current one: the same drivers, the same current_state, the same
+	// judgment, with nothing marking which time they spoke for. That is
+	// the H6 defect AC-3781-2 closed on the canonical result, reappearing
+	// one layer out on the only surface an agent actually reads.
+	//
+	// It is the canonical ContextFabricTemporalLabel, not a projected
+	// variant of one. Every other sub-shape here is genuinely narrower
+	// than its canonical counterpart; this one is not, and a narrowed copy
+	// would only create a second place for the axis-shape rules to drift.
+	Temporal *ContextFabricTemporalLabel `json:"temporal,omitempty"`
 	// CoveragePartial and Limitations are never dropped. A bounded
 	// consumer must always be able to see that an answer was incomplete.
 	CoveragePartial bool     `json:"coverage_partial"`

@@ -83,6 +83,8 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	"#/$defs/ProjectionBudget":       "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectionBudget",
 	"#/$defs/ScalarValue":            "#/$defs/context_fabric_answer_projection.v1/$defs/ScalarValue",
 	"#/$defs/SubjectRef":             "#/$defs/context_fabric_answer_projection.v1/$defs/SubjectRef",
+	"#/$defs/TemporalLabel":          "#/$defs/context_fabric_answer_projection.v1/$defs/TemporalLabel",
+	"#/$defs/TimeContext":            "#/$defs/context_fabric_answer_projection.v1/$defs/TimeContext",
 	"#/$defs/VersionSet":             "#/$defs/context_fabric_answer_projection.v1/$defs/VersionSet",
 }
 

@@ -151,6 +151,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		PrincipalDrivers:  drivers,
 		KeyFacts:          facts,
 		CoverageSummary:   coverage,
+		Temporal:          projectTemporal(result),
 		CoveragePartial:   result.Coverage.Partial,
 		Limitations:       limitations,
 		Warnings:          warnings,
@@ -757,4 +758,44 @@ func distinctStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+// projectTemporal copies CHAOS-3781's temporal label, and copies it whole.
+//
+// It is never narrowed, clamped, or budgeted. What time an answer speaks
+// for is not detail a consumer can trade away for a shorter response: an
+// answer about March read as an answer about today is wrong, not merely
+// abbreviated, so there is no budget under which dropping this is the
+// right call.
+//
+// The pointer is deep-copied rather than shared because Project must not
+// alias the caller's result -- see TestProjectDoesNotMutateTheCanonicalResult.
+// ContextFabricTemporalLabel holds only value fields and time pointers, and
+// the time pointers are themselves replaced here, so a shallow struct copy
+// plus fresh instants is a complete one.
+func projectTemporal(result contractsv1.ContextFabricInvestigationResult) *contractsv1.ContextFabricTemporalLabel {
+	if result.Temporal == nil {
+		return nil
+	}
+	label := *result.Temporal
+	label.Requested = copyTimeContext(result.Temporal.Requested)
+	label.Effective = copyTimeContext(result.Temporal.Effective)
+	return &label
+}
+
+func copyTimeContext(source contractsv1.ContextFabricTimeContext) contractsv1.ContextFabricTimeContext {
+	copied := contractsv1.ContextFabricTimeContext{Axis: source.Axis}
+	if source.AsOf != nil {
+		instant := *source.AsOf
+		copied.AsOf = &instant
+	}
+	if source.Start != nil {
+		instant := *source.Start
+		copied.Start = &instant
+	}
+	if source.End != nil {
+		instant := *source.End
+		copied.End = &instant
+	}
+	return copied
 }

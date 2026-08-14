@@ -59,6 +59,23 @@ func (p ContextFabricAnswerProjection) Validate() error {
 	if err := p.validateCoverage(); err != nil {
 		return err
 	}
+	// The same label the canonical result carries, so the same rules
+	// govern it: this calls ContextFabricTemporalLabel.Validate rather
+	// than restating the axis-shape and narrowing invariants, which is
+	// the reason the field is not a projected variant.
+	//
+	// The converse rule the result enforces -- a non-current axis REQUIRES
+	// a label -- cannot be stated here, because the projection carries no
+	// interpretation to read the axis from. It is closed structurally
+	// instead: Project copies this field from an already-valid result, so
+	// a historical answer cannot reach a projection without one unless
+	// Project drops it, which is what
+	// TestEveryHistoricalResultProjectsItsTemporalLabel proves it does not.
+	if p.Temporal != nil {
+		if err := p.Temporal.Validate(); err != nil {
+			return fmt.Errorf("temporal: %w", err)
+		}
+	}
 	if len(p.Limitations) > ContextFabricProjectedNarrativeMaxCount || !uniqueTrimmedStrings(p.Limitations, 2000) {
 		return fmt.Errorf("answer projection limitations violate v1 bounds")
 	}

@@ -223,6 +223,21 @@ agent-facing tool schema does not carry graph-projection vocabulary no
 answer consumer uses. The resulting enum-drift risk is closed mechanically
 by `TestAnswerProjectionVocabulariesMatchTheCanonicalOnes`.
 
+The projection carries CHAOS-3781's temporal label verbatim, and never
+budgets it away. It is the ONE canonical shape the projection reuses whole
+rather than narrowing (`TemporalLabel` and `TimeContext` are embedded
+byte-identically, which `TestAnswerProjectionReusedShapesMatchTheCanonicalOnes`
+enforces). The reason is not symmetry: the projection carries no
+interpretation, so before this a bounded consumer could not tell a March
+answer from today's -- same drivers, same `current_state`, same judgment,
+and the sidecar rendering printing a "Current state" heading over all of
+it. That is the H6 defect AC-3781-2 closed on the canonical result,
+reappearing on the only surface an agent reads. The result contract's
+converse rule (a non-current axis REQUIRES a label) cannot be restated at
+the projection, which has no axis to test against; it is closed
+structurally instead, by `Project` copying from an already-valid result --
+see `TestEveryHistoricalResultProjectsItsTemporalLabel`.
+
 Result retrieval (`GET /api/v1/context-fabric/investigations/{result_id}`)
 reads the same immutable store the engine writes through, surfaced as
 `api.RuntimeDependencies.InvestigationResults`. Not-found is classified

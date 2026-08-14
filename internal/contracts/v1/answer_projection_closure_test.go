@@ -216,8 +216,8 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		untrusted     []string
 		expectedPaths int
 	}{
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 58},
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 129},
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 67},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 139},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -275,7 +275,14 @@ func trustedBecauseClosed(path string) bool {
 	// Closed vocabularies.
 	case "kind", "state", "status", "standing", "category", "shape", "role",
 		"axis", "derivation", "epistemic_status", "type", "availability",
-		"provenance", "outcome", "source_state":
+		"provenance", "outcome", "source_state",
+		// CHAOS-3781: "grain" is ContextFabricTemporalGrain (instant,
+		// day, none) and "match_mechanisms" is the closed set of ways a
+		// candidate was matched. Both are validated against their own
+		// closed vocabulary before a result is stored, so neither can
+		// carry model prose -- see validContextFabricTemporalGrain and
+		// validMatchMechanisms.
+		"grain", "match_mechanisms":
 		return true
 	// Opaque identifiers and digests: frozen handles, never prose.
 	case "result_id", "request_id", "receipt_id", "driver_id", "claim_id",

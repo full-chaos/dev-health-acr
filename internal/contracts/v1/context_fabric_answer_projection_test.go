@@ -391,7 +391,7 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 	// checked. Pinning makes both directions fail loudly -- a rename
 	// shrinks the set, a newly reused shape grows it -- and each forces a
 	// deliberate update rather than silent drift.
-	expected := []string{"BoundSubjectReceipt", "ScalarValue", "SubjectRef", "VersionSet"}
+	expected := []string{"BoundSubjectReceipt", "ScalarValue", "SubjectRef", "TemporalLabel", "TimeContext", "VersionSet"}
 	if !reflect.DeepEqual(shared, expected) {
 		t.Fatalf("the set of reused shapes changed: got %v, pinned %v.\nA shape that vanished was renamed or stopped being reused; a new one must be added deliberately.", shared, expected)
 	}
