@@ -137,6 +137,9 @@ import (
 //
 // A check added here without an entry above is the R6-5 defect returning.
 //
+//	TestSpellingComparisonsExistOnlyInTheRecognizer
+//	    sanctioned < 2 -- the source scan stopped seeing the recognizer's
+//	    own two constructions, so a clean result proves nothing
 //	TestSpellingRecognitionCoversEveryLiteralForm
 //	    one case per literal form that ONLY that form satisfies, plus a
 //	    negative control -- the repo-level anchors cannot tell "both forms
@@ -144,7 +147,16 @@ import (
 //
 // SPELLING RECOGNITION HAS EXACTLY ONE IMPLEMENTATION (round 9).
 //
-// Both passes call namesDeclaredTable; neither compares literals itself.
+// Both passes call namesDeclaredTable, and
+// TestSpellingComparisonsExistOnlyInTheRecognizer ENFORCES it rather than
+// asking to be believed: no literal comparison against a declared table
+// name may exist outside the recognizer.
+//
+// The distinction is deliberate. A per-form anchor proves the recognizer
+// still understands both spellings; it cannot prove a pass still CALLS it,
+// because a pass rewired to compare literals inline leaves the recognizer
+// perfectly correct. Stating "both passes call it" as an invariant while
+// nothing checked it would have been this file's third false prose claim.
 // This is the class closure for a defect that recurred three times on this
 // detector -- round 7 widened terminators, round 8 added raw literals,
 // and the round-8 self-audit found line 322 still interpreted-only. Each
@@ -302,8 +314,15 @@ func TestNoTestAuthorsDeclaredTableDDL(t *testing.T) {
 		// machinery: it removes a per-LINE assumption exactly as the
 		// recognizer consolidation removed a per-PASS one.
 		//
-		// Offences are still attributed to a line, derived from the match
-		// offset, so exemption windows keep working unchanged.
+		// Offences are attributed to the line where the PHRASE begins,
+		// derived from the match offset -- never the line carrying the
+		// name. That is the same rule the fragment pass uses, so one
+		// convention covers both passes rather than two.
+		//
+		// It matters only when phrase and name fall in different exemption
+		// windows, which needs a CREATE TABLE separated from its own name
+		// by more than the window. Rare is not the same as stated, so it
+		// is stated: the phrase line governs.
 		for _, match := range createTablePattern.FindAllStringSubmatchIndex(contents, -1) {
 			name := contents[match[2]:match[3]]
 			if _, isDeclared := declared[name]; !isDeclared {
@@ -513,7 +532,23 @@ func TestNoSecondPhysicalSourceOutsideTheDeclaration(t *testing.T) {
 		exempt := exemptedLines(contents)
 		namedTables := map[string]struct{}{}
 		unexemptTables := map[string]struct{}{}
-		for index, line := range strings.Split(contents, "\n") {
+		// Round-10 F1: mask the WHOLE FILE once, then split. Masking used
+		// to run per line, so a call left unbalanced at end of line masked
+		// only its own line and every following argument line was scanned
+		// UNMASKED -- an ordinary multiline DDL( ... ) call had its
+		// arguments reported as a rival.
+		//
+		// My round-9 note claimed the continuation was handled. It was
+		// not: the state could not survive a function called once per
+		// line, and the red proof I wrote used a SINGLE-LINE nested call,
+		// so it never exercised the shape the claim was about. A test that
+		// cannot fail for the claimed reason does not support the claim.
+		//
+		// Masking replaces the span with spaces and keeps newlines, so
+		// byte offsets and line numbers stay exactly as they were and
+		// exemption windows are unaffected.
+		masked := maskRenderCalls(contents)
+		for index, line := range strings.Split(masked, "\n") {
 			// A line that names a table while CALLING the renderer is
 			// USING the single source, not rivaling it -- the one shape
 			// that is definitionally not a second declaration.
@@ -529,7 +564,6 @@ func TestNoSecondPhysicalSourceOutsideTheDeclaration(t *testing.T) {
 			// are built at runtime rather than written as literals -- the
 			// masked span then hides nothing, because there was no literal
 			// in it to hide.
-			line = maskRenderCalls(line)
 			for _, table := range declaredNames {
 				if !namesDeclaredTable(line, table) {
 					continue
@@ -620,19 +654,39 @@ const renderCallMarker = "devhealthschema.DDL("
 // not structure. A call left unbalanced at end of line continues onto the
 // next one, so everything after it on this line is inside the call and is
 // masked with it.
-func maskRenderCalls(line string) string {
+func maskRenderCalls(source string) string {
+	var masked strings.Builder
 	for {
-		start := strings.Index(line, renderCallMarker)
+		start := strings.Index(source, renderCallMarker)
 		if start < 0 {
-			return line
+			masked.WriteString(source)
+			return masked.String()
 		}
+		masked.WriteString(source[:start])
 		open := start + len(renderCallMarker) - 1
-		end := matchingParen(line, open)
+		end := matchingParen(source, open)
 		if end < 0 {
-			return line[:start]
+			// Unbalanced through end of file: everything after the call
+			// opens is inside it.
+			masked.WriteString(blankKeepingLines(source[start:]))
+			return masked.String()
 		}
-		line = line[:start] + line[end+1:]
+		masked.WriteString(blankKeepingLines(source[start : end+1]))
+		source = source[end+1:]
 	}
+}
+
+// blankKeepingLines replaces every character except newlines with a space,
+// so a masked span keeps the byte offsets and line count of what it
+// replaced. Line-scoped exemptions and offset-derived line numbers both
+// depend on that.
+func blankKeepingLines(span string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' {
+			return r
+		}
+		return ' '
+	}, span)
 }
 
 // matchingParen returns the index of the parenthesis closing the one at
@@ -663,17 +717,24 @@ func matchingParen(line string, open int) int {
 
 // skipInterpretedLiteral returns the index of the quote closing the one at
 // quote, honouring backslash escapes.
-func skipInterpretedLiteral(line string, quote int) int {
-	for index := quote + 1; index < len(line); index++ {
-		if line[index] == '\\' {
+func skipInterpretedLiteral(source string, quote int) int {
+	for index := quote + 1; index < len(source); index++ {
+		if source[index] == '\\' {
 			index++
 			continue
 		}
-		if line[index] == '"' {
+		// A Go interpreted literal cannot contain a raw newline, so an
+		// unterminated quote ends at end of line. Without this the scan
+		// would swallow the rest of the FILE now that it runs over whole
+		// source rather than one line.
+		if source[index] == '\n' {
+			return index - 1
+		}
+		if source[index] == '"' {
 			return index
 		}
 	}
-	return len(line) - 1
+	return len(source) - 1
 }
 
 // namesDeclaredTable reports whether one line names a declared table as a
@@ -774,10 +835,112 @@ func TestSpellingRecognitionCoversEveryLiteralForm(t *testing.T) {
 		}
 	}
 
-	// Negative control: without it, a recognizer that matched everything
+	// NEGATIVE CONTROLS. Without them a recognizer that matched everything
 	// would satisfy both cases above and this anchor would prove nothing.
-	if namesDeclaredTable("	FROM "+table+" WHERE org_id = ?", table) {
-		t.Error("a bare word inside SQL text was treated as a declaration-shaped literal; the recognizer now matches too much, which produces false positives rather than escapes")
+	//
+	// Round-10 F2: one control is not enough, and the one that was here
+	// was the weaker half. A bare unquoted word only proves the recognizer
+	// requires QUOTING -- strip the follow-set entirely and it still passes,
+	// because an unquoted word has no quotes either. The follow-set is the
+	// other half of the recognizer and needs its own control.
+	//
+	// So each spelling form also gets a literal that IS correctly quoted
+	// and is followed by an INVALID terminator. The follow-set lives per
+	// alternative in the pattern, so one control per form is what covers it.
+	controls := []struct {
+		name string
+		line string
+	}{
+		{"bare word", "	FROM " + table + " WHERE org_id = ?"},
+		{"interpreted literal, invalid terminator", `	SELECT "` + table + `" FROM other`},
+		{"raw literal, invalid terminator", "	SELECT `" + table + "` FROM other"},
+	}
+	for _, control := range controls {
+		if namesDeclaredTable(control.line, table) {
+			t.Errorf("%s was treated as a declaration-shaped literal (%q); the recognizer now matches too much, and THIS direction produces false positives, which get silenced with permanent exemptions", control.name, control.line)
+		}
+	}
+}
+
+// TestSpellingComparisonsExistOnlyInTheRecognizer makes the
+// single-implementation claim TRUE rather than merely honest.
+//
+// It follows this file's existing source-parse-for-absence shape
+// (TestDeclarationExposesNoSecondSource), so it strengthens an established
+// pattern rather than inventing machinery.
+//
+// A COMPARISON is not a CONSTRUCTION. The per-form anchor legitimately
+// builds quoted names to FEED the recognizer, and flagging those would
+// make this test unusable and invite the exemption that quiets it -- the
+// false-positive cost this branch has now paid twice. So an offence needs
+// BOTH signals on one line: source that wraps a table variable in a quote
+// character, AND a comparison verb applied to it.
+//
+// DECLARED NON-COVERAGE: a comparison split across lines, or hidden behind
+// a helper that performs the quote-wrap out of sight, is not seen. This is
+// a source-text check and inherits the same boundary already ratified for
+// the detector itself.
+func TestSpellingComparisonsExistOnlyInTheRecognizer(t *testing.T) {
+	t.Parallel()
+	contents, err := os.ReadFile(filepath.Join(repoRoot(t), "internal", "contextfabric", "devhealthschema", "closure_test.go"))
+	if err != nil {
+		t.Fatalf("read the closure suite: %v", err)
+	}
+
+	// The two ways Go source can wrap a value in a string-literal quote.
+	quoteWrap := regexp.MustCompile("(`\"`|\"`\")\\s*\\+|\\+\\s*(`\"`|\"`\")")
+	// QuoteMeta counts: escaping a name for a pattern is the construction
+	// step of a comparison, and it is where the recognizer itself does the
+	// wrapping -- so a rule that omitted it would not even see the one
+	// site it exists to permit, which is how the non-vacuity guard below
+	// caught this on its first run.
+	comparison := regexp.MustCompile(`strings\.(Contains|HasPrefix|HasSuffix)|MatchString|regexp\.(MustCompile|QuoteMeta)|==`)
+
+	sanctioned := 0
+	var offences []string
+	inRecognizer := false
+	recognizerDepth := 0
+	for index, line := range strings.Split(string(contents), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "//") {
+			continue // comments discuss these shapes on purpose
+		}
+		// Span tracking by BRACE DEPTH, not by a bare "}" line: the
+		// recognizer contains a nested if-block, and matching the first
+		// closing brace ended the span early -- putting the recognizer's
+		// own two constructions OUTSIDE it. The non-vacuity guard caught
+		// that on the first run, which is the whole reason it exists.
+		if !inRecognizer && strings.HasPrefix(trimmed, "func declarationShape(") {
+			inRecognizer = true
+			recognizerDepth = 0
+		}
+		if inRecognizer {
+			recognizerDepth += strings.Count(line, "{") - strings.Count(line, "}")
+		}
+		// The line is classified while still inside the span, then the
+		// span closes if its braces balanced on this line.
+		insideRecognizer := inRecognizer
+		if inRecognizer && recognizerDepth <= 0 {
+			inRecognizer = false
+		}
+		if !quoteWrap.MatchString(line) || !comparison.MatchString(line) {
+			continue
+		}
+		if insideRecognizer {
+			sanctioned++
+			continue
+		}
+		offences = append(offences, fmt.Sprintf("closure_test.go:%d compares a table name as a literal outside the recognizer: %s", index+1, trimmed))
+	}
+
+	// NON-VACUITY: the recognizer builds exactly two quoted forms, and
+	// this scan must still see both. Zero means it has stopped matching
+	// the site it exists to permit, so a clean result would prove nothing.
+	if sanctioned < 2 {
+		t.Fatalf("the scan found %d sanctioned literal comparisons inside the recognizer, expected both spelling forms; it has stopped matching its own permitted site, so a clean result proves nothing", sanctioned)
+	}
+	if len(offences) > 0 {
+		t.Fatalf("spelling recognition must have exactly ONE implementation -- a pass comparing literals itself is how the same defect recurred three times:\n  %s", strings.Join(offences, "\n  "))
 	}
 }
 

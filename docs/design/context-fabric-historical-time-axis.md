@@ -656,3 +656,40 @@ mention a pair of tables, and an exemption handed out to quiet a false
 positive is permanent and covers whatever is written beside it later.
 Re-measure if the declaration grows; the reasoning is "no file sits at 3",
 not "3 feels right".
+
+## 13. Evidence hygiene — the ledger
+
+Four rounds of this branch produced a defect class that was never in the
+product code: **defects in my own evidence**. They are recorded because the
+fixes are cheap and the failure mode is invisible.
+
+- **Round 6**: a red proof injected its bypass INSIDE an exemption window,
+  so both halves proved nothing. Re-placed clear of every marker.
+- **Round 7**: a mutation left an unused variable, so the "pre-fix" run was
+  a BUILD FAILURE that a boolean read as "not green".
+- **Round 8**: a mutation never applied — the patch used four tabs where
+  the file had three — so "pre-fix" and "fixed" were the same code.
+- **Round 9**: a fixture went into a production file, but the sweep under
+  test only scans `*_test.go`. "Not caught" actually meant "never scanned".
+- **Round 10**: the round-9 masking claim ("an unbalanced call continues
+  onto the next line, so the remainder is masked with it") was FALSE. The
+  state could not survive a function called once per line — and the red
+  proof used a single-line nested call, so it never exercised the shape the
+  claim described. Confirmed by re-running that exact shape this round: it
+  passes, and always did.
+
+Three standing rules came out of it:
+
+1. **A mutation must assert it applied.** A silent no-op patch makes
+   "pre-fix" and "fixed" identical and both look like success.
+2. **Verdicts are READ from output, never inferred from a boolean.** Every
+   ambiguous result above was a build failure or a mis-target that a
+   boolean reported as a clean pass.
+3. **A proof must exercise the shape the claim describes.** Round 10's
+   lesson: a test that cannot fail for the claimed reason does not support
+   the claim, however green it is.
+
+One judgement worth keeping: at round 9 I declined to self-assess the
+paren balancer by reading it, because judging one's own parser by
+inspection is the same audit shape that had already failed repeatedly here.
+Round 10 found a real defect in exactly that code — through execution.
