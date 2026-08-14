@@ -1290,10 +1290,32 @@ func TestCodeViewBlanksWhatIsNotStructure(t *testing.T) {
 			blanked: []string{"not a comment", "still text"},
 		},
 		{
-			name:    "comment delimiter inside a rune literal",
-			source:  "a := '{'\nb := \"/*\"\nreal := (\n",
+			// Round-14: the rune leg of the delimiter matrix, which the
+			// case here before covered not at all -- it held a brace
+			// (duplicating existing rune coverage), and its "/*" was an
+			// INTERPRETED string, so nothing exercised rune handling of
+			// delimiter characters.
+			//
+			// Falsifiable through content blanking rather than comment
+			// formation: if rune literals stop being lexed, the / and *
+			// survive in the view. Note that a rune literal cannot form
+			// a comment delimiter in valid Go anyway -- the closing quote
+			// always separates the two characters -- so blanking is the
+			// property worth asserting, not accidental comment opening.
+			name:    "comment delimiters inside rune literals",
+			source:  "a := '/'\nb := '*'\nreal := (\n",
 			survive: []string{"real := ("},
-			blanked: []string{"{"},
+			blanked: []string{"/", "*"},
+		},
+		{
+			// The dangerous rune contents: a QUOTE or BACKTICK inside a
+			// rune literal. Unlexed, either opens a phantom string -- the
+			// backtick one runs to EOF -- and swallows the real structure
+			// below it. This is the rune-literal risk that actually bites.
+			name:    "quote characters inside rune literals",
+			source:  "a := '\"'\nb := '`'\nreal := (\n",
+			survive: []string{"real := ("},
+			blanked: []string{},
 		},
 		{
 			name:    "CRLF line endings",
