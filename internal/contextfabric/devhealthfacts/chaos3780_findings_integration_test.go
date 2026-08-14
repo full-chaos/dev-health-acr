@@ -88,6 +88,9 @@ func newCHAOS3780IntegrationClient(t *testing.T, ctx context.Context) (query *ru
 	return query, direct
 }
 
+// devhealthschema:not-a-production-replica the table names passed to devhealthschema.DDL below
+// select what to render; the schema itself is the declaration's, not this
+// file's.
 // createCHAOS3780Tables creates every source table CHAOS-3780's providers
 // read, with the real production engine, sort key, and nullability shape
 // (verified against the live dev ClickHouse instance during the Codex

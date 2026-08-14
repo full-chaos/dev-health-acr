@@ -347,3 +347,71 @@ func TestR5_3_ProjectionIngestRejectsUnrepresentableTimestamps(t *testing.T) {
 		t.Fatalf("an ordinary validity window was refused: %v", err)
 	}
 }
+
+// TestR6_1_EveryProjectionTimestampIsBounded is round-6 R6-1, red→green.
+//
+// R5-3 above bounded entities and tombstones by HAND, and the hand list
+// missed contents and episodes -- so an episode ending in year 9999 still
+// wrapped through UnixNano, which is the same enumerate-by-inspection miss
+// this branch has now made in five places.
+//
+// The fix derives the enumeration instead of writing it, so this test
+// asserts the DERIVATION rather than a longer list: the batch validator
+// must reject an unrepresentable instant wherever it sits, including in
+// the collections nobody remembered.
+func TestR6_1_EveryProjectionTimestampIsBounded(t *testing.T) {
+	t.Parallel()
+	farFuture := time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+	farPast := time.Date(1, 1, 2, 0, 0, 0, 0, time.UTC)
+	observed := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	subject := ContextFabricSubjectRef{Kind: ContextFabricSubjectWorkItem, CanonicalID: "work_item:WI-1", Label: "WI-1"}
+	scope := ContextFabricAuthorizationScope{RepositorySlugs: []string{"acme/svc"}}
+
+	// The baseline must be VALID, or every case below would pass for the
+	// wrong reason -- reporting an unrelated field as proof of the bound.
+	if err := validContextFabricProjectionBatch().Validate(); err != nil {
+		t.Fatalf("the baseline batch is invalid, so no case below would prove anything: %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		corrupt func(*ContextFabricProjectionBatch)
+	}{
+		{"episode ended_at", func(batch *ContextFabricProjectionBatch) {
+			batch.Episodes = []ContextFabricEpisodeProjection{{
+				EpisodeID: "episode_12345678", Subject: subject, Goal: "ship", Outcome: "done", Summary: "s",
+				Authorization: scope, EvidenceRefIDs: []string{"evidence_12345678"},
+				StartedAt: observed, EndedAt: farFuture, SourceVersion: "source-v1",
+			}}
+		}},
+		{"episode started_at", func(batch *ContextFabricProjectionBatch) {
+			batch.Episodes = []ContextFabricEpisodeProjection{{
+				EpisodeID: "episode_12345678", Subject: subject, Goal: "ship", Outcome: "done", Summary: "s",
+				Authorization: scope, EvidenceRefIDs: []string{"evidence_12345678"},
+				StartedAt: farPast, EndedAt: observed, SourceVersion: "source-v1",
+			}}
+		}},
+		{"content observed_at", func(batch *ContextFabricProjectionBatch) {
+			batch.Contents = []ContextFabricContentProjection{{
+				ContentID: "content_12345678", Subject: subject, Title: "t", Body: "b", ContentDigest: "sha256:abc",
+				Authorization: scope, EvidenceRefIDs: []string{"evidence_12345678"},
+				// Untrusted must be TRUE or Validate refuses the content for
+				// the untrusted-content rule instead, and this case would go
+				// green with the bound removed -- which the red proof caught.
+				ObservedAt: farFuture, SourceVersion: "source-v1", Untrusted: true,
+			}}
+		}},
+		{"batch generated_at", func(batch *ContextFabricProjectionBatch) {
+			batch.GeneratedAt = farFuture
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			batch := validContextFabricProjectionBatch()
+			test.corrupt(&batch)
+			if err := batch.Validate(); err == nil {
+				t.Fatalf("%s outside the representable range was accepted; it wraps rather than fails on conversion to epoch nanoseconds", test.name)
+			}
+		})
+	}
+}

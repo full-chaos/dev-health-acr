@@ -63,8 +63,21 @@ func (b ContextFabricProjectionBatch) Validate() error {
 	if err := validateProjectionTombstones(b.Tombstones); err != nil {
 		return err
 	}
+	// R6-1: every timestamp this batch carries must survive conversion to
+	// epoch nanoseconds. Derived by reflection over the batch rather than
+	// checked per type, because the per-type hand list added in R5-3
+	// covered entities and tombstones and silently missed contents and
+	// episodes -- and a field added later would be missed the same way.
+	// This walk finds whatever the batch actually contains.
+	if err := validateRepresentableInstants(b); err != nil {
+		return fmt.Errorf("projection batch %w", errUnrepresentableInstant(err))
+	}
 	return nil
 }
+
+// errUnrepresentableInstant keeps the message shape stable for callers
+// that match on it.
+func errUnrepresentableInstant(err error) error { return err }
 
 func (s ContextFabricAuthorizationScope) Validate() error {
 	if len(s.RepositorySlugs) > 200 || len(s.ProjectIDs) > 200 || len(s.TeamIDs) > 200 || !uniqueTrimmedStrings(s.RepositorySlugs, 512) || !uniqueTrimmedStrings(s.ProjectIDs, 256) || !uniqueTrimmedStrings(s.TeamIDs, 256) {

@@ -545,6 +545,19 @@ func TestR5_4_AnOutOfRangeInterpretedTimeIsRefusedAtTheEngineBoundary(t *testing
 		{"interpreted as year 1", TimeContext{Axis: TemporalValidTime, AsOf: &yearOne}},
 		{"interpreted as year 9999", TimeContext{Axis: TemporalValidTime, AsOf: &yearNineThousand}},
 		{"interpreted range out of range", TimeContext{Axis: TemporalRange, Start: &yearOne, End: &yearNineThousand}},
+		// Round-6 R6-2. A non-nil pointer to the ZERO time is not absent,
+		// it is a present instant asserting year 1 -- and the range check
+		// above let it through, because the old guard skipped every zero
+		// value on the assumption that a zero meant "not supplied". Only
+		// NIL means that. A zero that reached the graph predicate would
+		// admit on a window starting in year 1, which is every row.
+		{"interpreted as a present zero instant", TimeContext{Axis: TemporalValidTime, AsOf: &time.Time{}}},
+		//
+		// There is deliberately NO range case here. A zero endpoint in a
+		// range is refused by the span and ordering rules whatever the zero
+		// rule does -- measured, not assumed: the case was written, and it
+		// stayed green with the fix reverted. Keeping it would have looked
+		// like coverage of the zero rule while proving the 400-day bound.
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()

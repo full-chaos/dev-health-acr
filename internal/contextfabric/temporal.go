@@ -85,8 +85,27 @@ func resolveTimeContext(timeContext TimeContext, now time.Time) (TimeContext, er
 	// ship today is not a bound; it is a property of that implementation.
 	// The engine owns this guarantee, so the engine checks it.
 	for _, instant := range []*time.Time{timeContext.AsOf, timeContext.Start, timeContext.End} {
-		if instant != nil && !instant.IsZero() && !contractsv1.RepresentableInstant(*instant) {
-			return timeContext, fmt.Errorf("%w: instant is outside the representable range", ErrInvalidTimeBound)
+		if instant == nil {
+			// nil is ABSENT, and absence is legitimate: each axis
+			// requires only its own bounds, checked per-axis below.
+			continue
+		}
+		// R6-2: a NON-NIL ZERO timestamp is INVALID INPUT, not absence.
+		//
+		// The previous guard skipped IsZero values, so a bare
+		// interpreter returning &time.Time{} -- year 1, the zero value,
+		// trivially produced by any struct literal -- walked straight
+		// past the representability check and wrapped at UnixNano
+		// exactly as an explicit year-1 would have. The skip was written
+		// to mean "unset", but a pointer already expresses unset, so it
+		// only ever weakened the check.
+		//
+		// A present zero therefore fails closed here, with the same
+		// refusal an out-of-range value gets: an interpreter that meant
+		// "no time" should send nil, and one that sent a zero instant
+		// asserted a time this system cannot represent.
+		if instant.IsZero() || !contractsv1.RepresentableInstant(*instant) {
+			return timeContext, fmt.Errorf("%w: instant is absent-as-zero or outside the representable range", ErrInvalidTimeBound)
 		}
 	}
 	horizon := now.Add(futureSkewTolerance)

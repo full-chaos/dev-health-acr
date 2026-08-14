@@ -15,6 +15,10 @@ type entityTable struct {
 	query func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) (rows []candidate, truncated bool, err error)
 }
 
+// devhealthschema:not-a-production-replica this is the PRODUCER REGISTRY -- it pairs each table
+// with the query that reads it. It mirrors no column types,
+// engines or sort keys, so it cannot drift from production the way a rival
+// schema declaration would; devhealthschema remains the only physical source.
 // entityTables is the bounded, documented coverage of canonical Dev Health
 // data this source projects today. Every table here is one this repository
 // already reads for context packets (internal/contextpacket/source_queries.go);

@@ -89,6 +89,46 @@ import (
 // Cross-package second sources are NOT on this list. They were a stated
 // limit until round 5 rated them High, and TestNoSecondPhysicalSourceOutsideTheDeclaration
 // now closes them mechanically.
+//
+// NON-VACUITY REGISTER (CHAOS-3781 round-6 R6-5).
+//
+// Every check in this file is an ABSENCE assertion: it passes by finding
+// nothing. That shape cannot distinguish "nothing is wrong" from "the check
+// stopped working", so a silent failure here is indistinguishable from
+// success -- the closure would go on reporting that the drift class is
+// closed while checking nothing at all.
+//
+// Round 5 fixed that for ONE pass. Round 6 then found the second pass and
+// the version-column check unguarded: fixing the instance and not the class,
+// inside the very round that named the pattern. So the rule is now stated as
+// a class, and EVERY check below carries a guard or an explicit reason it
+// cannot fail silently:
+//
+//	TestNoTestAuthorsDeclaredTableDDL
+//	    input:  len(declared) == 0            -- empty declaration
+//	    pass 1: nonDeclaredSightings == 0     -- strict pattern died
+//	    pass 2: fragmentSightings == 0        -- fragment pattern died
+//	TestNoSecondPhysicalSourceOutsideTheDeclaration
+//	    input:  len(declaredNames) == 0       -- nothing to derive from
+//	    detect: sanctionedSightings == 0      -- detection died
+//	TestReplacingMergeTreeDeclarationsCarryTheirVersionColumn
+//	    expected == 0, and examined != expected, both derived at runtime
+//	TestEveryPhysicalFacetHasOneSource
+//	    len(ProductionColumns) == 0 guards the input; beyond that it CANNOT
+//	    pass silently, because it asserts on every table it iterates rather
+//	    than filtering to a subset -- a missing engine is an error, not a
+//	    skipped iteration.
+//	TestDeclarationExposesNoSecondSource
+//	    len(declarations) == 0 catches a pattern that stopped matching, and
+//	    the sanctioned-maps-still-present loop catches the file being
+//	    renamed or gutted underneath it.
+//
+// The exemption mechanism needs no anchor of its own: if exemptionPattern
+// stopped matching, every exempted site would be REPORTED. It fails loud by
+// construction, which is the property the rest of this file has to assert
+// explicitly.
+//
+// A check added here without an entry above is the R6-5 defect returning.
 
 // repoRoot walks up from this package to the module root.
 func repoRoot(t *testing.T) string {
@@ -143,7 +183,17 @@ var createTableFragment = regexp.MustCompile(`(?i)CREATE\s+TABLE`)
 // Legitimate uses are tests where a declared table's NAME is incidental --
 // input to a SQL parser or migration replayer, say -- rather than a
 // fixture that production readers run against.
-var exemptionPattern = regexp.MustCompile(`devhealthschema:not-a-production-replica\s+(\S+(?:\s+\S+){4,})`)
+var exemptionPattern = regexp.MustCompile(`devhealthschema:not-a-production-replica[^\n]{40,}`)
+
+// The reason must be on the SAME LINE as the marker and at least 40
+// characters of it (round-6 R6-4). A word count was gamed by "a b c d e",
+// so length on one line is the cheap mechanical floor.
+//
+// Beyond that floor, reason QUALITY is reviewer-owned and deliberately not
+// machine-checked: any heuristic strong enough to judge a justification is
+// strong enough to be gamed by someone writing to the heuristic, and a
+// test that appears to validate reasoning it cannot validate is worse than
+// one that states the limit.
 
 // exemptionWindowLines is how far an exemption reaches from its own line.
 // Wide enough to cover a statement and its comment block, narrow enough
@@ -173,11 +223,20 @@ func TestNoTestAuthorsDeclaredTableDDL(t *testing.T) {
 	for table := range devhealthschema.ProductionColumns {
 		declared[table] = struct{}{}
 	}
+	// NON-VACUITY, input side (R6-5). Both passes compare against this set,
+	// so an empty declaration makes every sighting "not ours" and the sweep
+	// passes repo-wide while protecting nothing. The sighting anchors below
+	// cannot see this: they would both still be non-zero.
+	if len(declared) == 0 {
+		t.Fatal("the declaration owns no tables, so this sweep has nothing to protect and would pass vacuously")
+	}
 
 	var offences []string
 	// nonDeclaredSightings proves the patterns still match real DDL. See
 	// the assertion below for why a sweep without it is worthless.
 	nonDeclaredSightings := 0
+	// fragmentSightings anchors the second pass (R6-5).
+	fragmentSightings := 0
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -232,8 +291,26 @@ func TestNoTestAuthorsDeclaredTableDDL(t *testing.T) {
 		// and it is not the ordinary-drift shape this closure targets --
 		// someone adding a new hand-written fixture writes a file that
 		// does not call the renderer at all.
-		if !createTableFragment.MatchString(contents) || strings.Contains(contents, "devhealthschema.DDL(") {
+		if !createTableFragment.MatchString(contents) {
 			return nil
+		}
+		fragmentSightings++
+		if strings.Contains(contents, "devhealthschema.DDL(") {
+			return nil
+		}
+		// R6-4: the window applies HERE too. This used to skip the whole
+		// file whenever any exemption existed anywhere in it, so one
+		// justified parser-input statement re-opened the file-wide hole
+		// that R5-2 had just closed on the other pass -- the same
+		// discipline applied to one sibling and not the other.
+		//
+		// A fragment finding is attributed to the line of the phrase, so
+		// an exemption covers it only if it covers that line.
+		fragmentLines := []int{}
+		for index, line := range strings.Split(contents, "\n") {
+			if createTableFragment.MatchString(line) {
+				fragmentLines = append(fragmentLines, index+1)
+			}
 		}
 		for table := range declared {
 			if !strings.Contains(contents, `"`+table+`"`) {
@@ -242,12 +319,13 @@ func TestNoTestAuthorsDeclaredTableDDL(t *testing.T) {
 			if pass1Reported(offences, relative, table) {
 				continue
 			}
-			var anyExempt bool
-			for range exempt {
-				anyExempt = true
-				break
+			unexempt := 0
+			for _, line := range fragmentLines {
+				if _, ok := exempt[line]; !ok {
+					unexempt++
+				}
 			}
-			if anyExempt {
+			if unexempt == 0 {
 				continue
 			}
 			offences = append(offences, fmt.Sprintf("%s builds CREATE TABLE and names the declared table %q", relative, table))
@@ -266,6 +344,14 @@ func TestNoTestAuthorsDeclaredTableDDL(t *testing.T) {
 	// this one did not.
 	if nonDeclaredSightings == 0 {
 		t.Fatal("the CREATE TABLE pattern matched nothing anywhere in the repository, including tables the declaration does not own -- it has stopped matching real DDL, so a clean result proves nothing")
+	}
+	// R6-5: the FRAGMENT pattern needs its own anchor. nonDeclaredSightings
+	// only proves createTablePattern still fires; the newer fragment pass
+	// could have died silently beside it -- which is the
+	// fix-the-instance-not-the-class pattern recurring INSIDE the round
+	// that named it.
+	if fragmentSightings == 0 {
+		t.Fatal("the CREATE TABLE fragment pattern matched nothing anywhere in the repository -- the second pass has stopped matching, so its half of the sweep proves nothing")
 	}
 
 	if len(offences) > 0 {
@@ -286,22 +372,53 @@ func pass1Reported(offences []string, relative, table string) bool {
 	return false
 }
 
-// TestNoSecondPhysicalSourceOutsideTheDeclaration is the round-5 R5-1
-// amendment: cross-package second sources were "clean by observation"
-// after round 4 -- I had grepped once and found none, which says nothing
-// about tomorrow. Now it is clean by standing test.
+// TestNoSecondPhysicalSourceOutsideTheDeclaration closes the
+// cross-package hole, with its derivation INVERTED per round-6 R6-3.
 //
-// A second declaration elsewhere would not trip the DDL sweep at all: a
-// fixture rendered from a rival column map contains no CREATE TABLE
-// literal of its own, so both passes miss it entirely, while the fixture
-// drifts exactly as the hand-written ones did.
+// Round 5 detected rivals by enumerating Go shapes -- map[string][]Column
+// and friends. Codex showed the obvious escapes: map[string][]struct{...},
+// or a type alias, or any other spelling of the same idea. Enumerating
+// more shapes would be the same losing game this branch has already lost
+// four times, so the derivation is inverted to the branch's own founding
+// rule: DERIVE FROM THE DECLARATION.
+//
+// A rival physical source must NAME the tables it mirrors -- that is what
+// makes it a rival rather than an unrelated map. So the signal is declared
+// table names appearing together as string literals outside
+// devhealthschema, whatever Go shape holds them. The name set comes from
+// ProductionColumns, so a table added to the declaration is protected
+// without anyone updating a pattern.
+//
+// Threshold: a file naming SEVERAL declared tables as literals is
+// mirroring the declaration; one or two is ordinary code referring to a
+// table it reads. The threshold is what keeps this from firing on every
+// provider, and it is stated rather than tuned silently.
+//
+// RESIDUAL, stated honestly: a rival that builds its table names at
+// runtime names none of them literally and escapes -- the same accepted
+// class as concat-assembled DDL. A source doing that is deliberately
+// hiding, which is review's job, not this test's.
 func TestNoSecondPhysicalSourceOutsideTheDeclaration(t *testing.T) {
 	t.Parallel()
 	root := repoRoot(t)
-	// The shapes a rival physical-schema source would take.
-	rivals := regexp.MustCompile(`map\[string\]\[\]Column\b|\bProductionColumns\s*=|\bEngineFull\s*=|map\[string\]\[\]columnSpec\b`)
+
+	declaredNames := make([]string, 0, len(devhealthschema.ProductionColumns))
+	for table := range devhealthschema.ProductionColumns {
+		declaredNames = append(declaredNames, table)
+	}
+	if len(declaredNames) == 0 {
+		t.Fatal("the declaration is empty, so this sweep has nothing to derive from and would pass vacuously")
+	}
+
+	// rivalTableThreshold is how many declared tables a single file must
+	// name as literals before it is treated as mirroring the declaration.
+	const rivalTableThreshold = 4
 
 	var offences []string
+	// sanctionedSightings proves the detection still fires: the
+	// declaration itself names every table and must always be seen.
+	sanctionedSightings := 0
+
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -316,35 +433,59 @@ func TestNoSecondPhysicalSourceOutsideTheDeclaration(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		// The declaration itself is the sanctioned source.
-		if strings.Contains(filepath.ToSlash(path), "internal/contextfabric/devhealthschema/") {
-			return nil
-		}
 		raw, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return readErr
 		}
-		for index, line := range strings.Split(string(raw), "\n") {
-			// A reference to the declaration is the point; only a
-			// DECLARATION of a rival is an offence.
-			if strings.Contains(line, "devhealthschema.") {
-				continue
-			}
-			if rivals.MatchString(line) {
-				relative, relErr := filepath.Rel(root, path)
-				if relErr != nil {
-					relative = path
-				}
-				offences = append(offences, fmt.Sprintf("%s:%d %s", relative, index+1, strings.TrimSpace(line)))
+		contents := string(raw)
+		// Count only names in a DECLARATION shape -- a map key
+		// (`"table":`) or a composite-literal member (`"table",`).
+		// A producer naming tables inside SQL strings is not mirroring
+		// the declaration, and counting those made this fire on
+		// devhealthsource/tables.go, which is the very code the
+		// declaration exists to serve.
+		named := 0
+		for _, table := range declaredNames {
+			quoted := `"` + table + `"`
+			if strings.Contains(contents, quoted+":") || strings.Contains(contents, quoted+",") {
+				named++
 			}
 		}
+		if named < rivalTableThreshold {
+			return nil
+		}
+		if strings.Contains(filepath.ToSlash(path), "internal/contextfabric/devhealthschema/") {
+			// The declaration and its own tests are the sanctioned
+			// source -- and seeing them proves the detection works.
+			sanctionedSightings++
+			return nil
+		}
+		relative, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			relative = path
+		}
+		// Legitimate consumers -- a guard listing the tables it renders,
+		// say -- opt out through the same line-scoped mechanism as DDL.
+		if len(exemptedLines(contents)) > 0 {
+			return nil
+		}
+		offences = append(offences, fmt.Sprintf("%s names %d declared tables as literals", relative, named))
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("walk repository: %v", err)
 	}
+
+	// NON-VACUITY (round-6 R6-3(a), self-found): without this, a broken
+	// detection passes repo-wide while checking nothing -- and this sweep
+	// closes the hole the DDL passes are structurally blind to, so a
+	// silent pass here is the worst kind.
+	if sanctionedSightings == 0 {
+		t.Fatal("the declaration's own files were not detected as naming declared tables; the detection has stopped working, so a clean result proves nothing")
+	}
+
 	if len(offences) > 0 {
-		t.Fatalf("a second physical-schema source exists outside devhealthschema; a fixture built from it carries no CREATE TABLE literal, so the DDL sweep cannot see it drift:\n  %s",
+		t.Fatalf("a second physical-schema source appears to exist outside devhealthschema; a fixture built from one carries no CREATE TABLE literal, so the DDL sweep cannot see it drift:\n  %s",
 			strings.Join(offences, "\n  "))
 	}
 }
@@ -443,10 +584,12 @@ func TestDeclarationExposesNoSecondSource(t *testing.T) {
 func TestReplacingMergeTreeDeclarationsCarryTheirVersionColumn(t *testing.T) {
 	t.Parallel()
 	versioned := regexp.MustCompile(`^ReplacingMergeTree\((\w+)\)`)
+	examined := 0
 	for table, engine := range devhealthschema.EngineFull {
 		if !strings.HasPrefix(engine, "ReplacingMergeTree") {
 			continue
 		}
+		examined++
 		match := versioned.FindStringSubmatch(engine)
 		if match == nil {
 			t.Errorf("%s is a ReplacingMergeTree with no version column in its declaration (%q) -- FINAL would keep an arbitrary row among those sharing a sort key, not the newest", table, engine)
@@ -463,5 +606,35 @@ func TestReplacingMergeTreeDeclarationsCarryTheirVersionColumn(t *testing.T) {
 		if !found {
 			t.Errorf("%s versions on %q but does not declare that column; the rendered DDL would not compile", table, match[1])
 		}
+	}
+
+	// NON-VACUITY (round 6, self-found -- review did not raise this one).
+	//
+	// Every iteration above is skipped unless the engine is a
+	// ReplacingMergeTree, so an emptied EngineFull, or engine strings that
+	// changed spelling, would leave the body unexecuted and this test green
+	// having checked nothing -- guarding the R4-1 invariant in name only.
+	//
+	// The expected count is DERIVED from the declaration at runtime. A
+	// literal 13 here would re-enter the hand-enumerated-constant drift
+	// class this whole file exists to close, inside the closure's own test.
+	//
+	// It is derived with a DELIBERATELY DIFFERENT predicate from the loop's.
+	// Deriving it with the same strings.HasPrefix would be circular: both
+	// counts would fall to zero together and the anchor would cheerfully
+	// agree that nothing needed checking. A looser substring match cannot
+	// fall silent in step with the stricter prefix match, so a rename shows
+	// up as a MISMATCH rather than as mutual silence.
+	expected := 0
+	for _, engine := range devhealthschema.EngineFull {
+		if strings.Contains(strings.ToLower(engine), "replacing") {
+			expected++
+		}
+	}
+	if expected == 0 {
+		t.Fatal("the declaration contains no ReplacingMergeTree engine at all -- either it is empty or the probed engine strings have changed, so this guard proves nothing about FINAL's dedup semantics")
+	}
+	if examined != expected {
+		t.Fatalf("this guard examined %d ReplacingMergeTree declarations but the declaration contains %d -- the engine-prefix match has drifted from the declaration's own spelling and is silently skipping tables", examined, expected)
 	}
 }

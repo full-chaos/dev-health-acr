@@ -14,8 +14,8 @@ func writeMigration(t *testing.T, dir, name, content string) {
 	}
 }
 
-// devhealthschema:not-a-production-replica this DDL is INPUT to the migration
-// parser under test, never a fixture any Context Fabric reader queries. The
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration parser under test,
+// never a fixture any Context Fabric reader queries. The
 // table names are incidental; the test asserts how statements are replayed.
 func TestReplayMigrationsDir_CreateAddDropColumnDropTable(t *testing.T) {
 	dir := t.TempDir()
@@ -62,8 +62,8 @@ DROP TABLE IF EXISTS widgets_legacy;
 	}
 }
 
-// devhealthschema:not-a-production-replica this DDL is INPUT to the migration
-// parser under test, never a fixture any Context Fabric reader queries. The
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration parser under test,
+// never a fixture any Context Fabric reader queries. The
 // table names are incidental; the test asserts how statements are replayed.
 func TestReplayMigrationsDir_DropTableRemovesAllColumns(t *testing.T) {
 	dir := t.TempDir()
@@ -85,8 +85,8 @@ CREATE TABLE IF NOT EXISTS incidents (
 	}
 }
 
-// devhealthschema:not-a-production-replica this DDL is INPUT to the migration
-// parser under test, never a fixture any Context Fabric reader queries. The
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration parser under test,
+// never a fixture any Context Fabric reader queries. The
 // table names are incidental; the test asserts how statements are replayed.
 func TestReplayMigrationsDir_MultipleClausesInOneAlter(t *testing.T) {
 	dir := t.TempDir()
@@ -121,8 +121,8 @@ ALTER TABLE repos
 // into the neutral default branch of applyAlterTable, which left the OLD name in the schema
 // and never added the NEW one -- a seed using either name would be graded against the wrong
 // truth (the old name incorrectly still "exists"; the new name incorrectly does not).
-// devhealthschema:not-a-production-replica this DDL is INPUT to the migration
-// parser under test, never a fixture any Context Fabric reader queries. The
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration parser under test,
+// never a fixture any Context Fabric reader queries. The
 // table names are incidental; the test asserts how statements are replayed.
 func TestReplayMigrationsDir_RenameColumn(t *testing.T) {
 	dir := t.TempDir()
@@ -234,8 +234,8 @@ func TestVerifySeedAgainstSchema_UnknownTable(t *testing.T) {
 	}
 }
 
-// devhealthschema:not-a-production-replica this DDL is INPUT to the migration
-// parser under test, never a fixture any Context Fabric reader queries. The
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration parser under test,
+// never a fixture any Context Fabric reader queries. The
 // table names are incidental; the test asserts how statements are replayed.
 func TestRunVerifySeedSchema_EndToEnd(t *testing.T) {
 	migrations := t.TempDir()
@@ -271,8 +271,8 @@ VALUES ('00000000-0000-0000-0000-000000000001', 'deadbeef', '2026-01-01 00:00:00
 // core ask: unattributed DDL on a table the seed actually inserts into must fail the run, not
 // just print a warning -- this replay's picture of that table's columns may be wrong, which
 // is exactly the condition that let a seed pass here and fail against the real schema.
-// devhealthschema:not-a-production-replica this DDL is INPUT to the migration
-// parser under test, never a fixture any Context Fabric reader queries. The
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration parser under test,
+// never a fixture any Context Fabric reader queries. The
 // table names are incidental; the test asserts how statements are replayed.
 func TestRunVerifySeedSchema_FailsClosedWhenUnhandledDDLTouchesSeededTable(t *testing.T) {
 	migrations := t.TempDir()
@@ -305,8 +305,8 @@ INSERT INTO git_commits (repo_id, hash) VALUES ('r', 'h');
 // half: a note about a table the seed genuinely never inserts into cannot affect this run's
 // verdict, so it must stay a warning, not a failure (avoiding an unrelated-migration-shaped
 // denial of service on every seed change).
-// devhealthschema:not-a-production-replica this DDL is INPUT to the migration
-// parser under test, never a fixture any Context Fabric reader queries. The
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration parser under test,
+// never a fixture any Context Fabric reader queries. The
 // table names are incidental; the test asserts how statements are replayed.
 func TestRunVerifySeedSchema_WarnsButPassesWhenUnhandledDDLTouchesUnrelatedTable(t *testing.T) {
 	migrations := t.TempDir()

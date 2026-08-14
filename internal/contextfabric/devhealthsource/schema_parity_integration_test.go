@@ -25,6 +25,10 @@ func productionSchemaDDL() []string {
 	return devhealthschema.DDL(sourceSchemaTables...)
 }
 
+// devhealthschema:not-a-production-replica this list names WHICH declared tables to render;
+// every column type, engine and sort key still comes from
+// devhealthschema.DDL. Naming a subset is the point of the guard, not a rival
+// source of schema truth.
 // sourceSchemaTables are the tables devhealthsource's producers read. Named
 // explicitly rather than taking every declared table, so this guard keeps
 // asserting exactly its own package's surface as devhealthschema grows to

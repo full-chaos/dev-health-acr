@@ -34,6 +34,10 @@ import (
 // same conversion rules on the way in, so a wrongly-typed seed fails to
 // insert rather than silently proving the wrong thing.
 
+// devhealthschema:not-a-production-replica this list names WHICH declared tables to render;
+// every column type, engine and sort key still comes from
+// devhealthschema.DDL. Naming a subset is the point of the guard, not a rival
+// source of schema truth.
 // factSchemaTables are the tables this package's providers read. Rendered
 // from devhealthschema so a column added to a provider's SELECT without
 // being declared there fails loudly rather than silently going unasserted.

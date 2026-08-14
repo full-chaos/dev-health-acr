@@ -569,3 +569,44 @@ migration registration, and the unbounded-count surfacing.
   correctly excluded — the fix must not weaken AC-3781-4.
 - **F6** is proved against real Postgres: an interpreted-historical answer
   is found by the identical wire request that produced it.
+
+## 11. Round-6 hardening — three durable rules
+
+Rounds 2–5 are recorded in their commit messages; round 6 changed three
+things that outlive this branch, so they belong here.
+
+**Timestamp ingress is derived, not enumerated.** R5-3 bounded projection
+timestamps to the representable epoch-nanosecond range by listing the
+fields that carry one — and the list missed `Contents` and `Episodes`, the
+fifth hand-enumeration miss on this branch. The list is now computed:
+`validateRepresentableInstants` walks a projection value reflectively and
+bounds every `time.Time` it actually contains, including fields nobody has
+added yet. The general rule the branch keeps re-learning: when a check must
+cover "all of X", derive X from the type or the declaration; a list written
+by inspection is an absence audit, and absence audits are unfalsifiable.
+
+**Nil is absent; zero is a present year-1 instant.** The engine's time-bound
+guard used to skip every zero value on the assumption that zero meant "not
+supplied". Only `nil` means that. A non-nil `*time.Time` pointing at the
+zero value asserts year 1, and reaching the graph predicate it would admit
+on a window that starts before all data — every row. The guard now refuses a
+present zero and skips only nil.
+
+**Every absence check states why it cannot fail silently.** The schema
+closure passes by finding nothing, which cannot distinguish "nothing is
+wrong" from "the check stopped working". Round 5 added a non-vacuity anchor
+to one pass; round 6 found the sibling pass and the version-column check
+still unguarded — fixing the instance and not the class, inside the round
+that named the pattern. `closure_test.go` now carries a NON-VACUITY REGISTER
+naming every check and its guard, or the structural reason it fails loud. A
+check added without a register entry is the defect returning.
+
+Two anchor details are load-bearing and easy to get wrong:
+
+- The version-column anchor derives its expected count from `EngineFull` at
+  runtime. A literal `13` would re-enter the hand-enumerated-constant drift
+  class inside the closure's own test.
+- It derives that count with a **different predicate** than the loop it
+  guards (substring `replacing` vs the loop's `HasPrefix`). Deriving it the
+  same way is circular: both counts fall to zero together and the anchor
+  agrees that nothing needed checking.
