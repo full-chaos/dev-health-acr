@@ -524,13 +524,39 @@ func TestSingleUncommittedCandidateProseIsNotPlural(t *testing.T) {
 func TestTerminalResultLabelsTheTimeAHistoricalAnswerSpeaksFor(t *testing.T) {
 	t.Parallel()
 	asOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	// The EXACT disclosure set per axis, not a containment check. Which
+	// disclosures a given axis carries is the whole substance of the
+	// composition: "contains the standing one" passes just as happily when
+	// the observed-time disclosure is missing from observed_time, or when it
+	// leaks onto valid_time and range, and those are the two ways this can
+	// actually be wrong. An exact set fails on both.
 	for _, testCase := range []struct {
-		name string
-		time TimeContext
+		name            string
+		time            TimeContext
+		wantLabel       bool
+		wantLimitations []string
 	}{
-		{"valid time", TimeContext{Axis: TemporalValidTime, AsOf: &asOf}},
-		{"observed time", TimeContext{Axis: TemporalObservedTime, AsOf: &asOf}},
-		{"range", TimeContext{Axis: TemporalRange, Start: &asOf, End: &asOf}},
+		{
+			name: "valid time", time: TimeContext{Axis: TemporalValidTime, AsOf: &asOf}, wantLabel: true,
+			wantLimitations: []string{noMatchLimitation, temporalLimitations[0]},
+		},
+		{
+			// The ONLY axis that carries the substitution disclosure: it is
+			// answered on the valid-time window, and the answer says so.
+			name: "observed time", time: TimeContext{Axis: TemporalObservedTime, AsOf: &asOf}, wantLabel: true,
+			wantLimitations: []string{noMatchLimitation, temporalLimitations[0], observedTimeLimitation},
+		},
+		{
+			name: "range", time: TimeContext{Axis: TemporalRange, Start: &asOf, End: &asOf}, wantLabel: true,
+			wantLimitations: []string{noMatchLimitation, temporalLimitations[0]},
+		},
+		{
+			// The negative control. A current-axis terminal result must
+			// carry NO temporal label and NO historical disclosure -- both
+			// would be false statements about an answer that speaks for now.
+			name: "current", time: TimeContext{Axis: TemporalCurrent}, wantLabel: false,
+			wantLimitations: []string{noMatchLimitation},
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -540,27 +566,31 @@ func TestTerminalResultLabelsTheTimeAHistoricalAnswerSpeaksFor(t *testing.T) {
 
 			result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
 			if err != nil {
-				t.Fatalf("Investigate() error = %v, want a no_match result: a historical question that resolves nothing is still answerable", err)
+				t.Fatalf("Investigate() error = %v, want a no_match result: a question that resolves nothing is still answerable", err)
 			}
 			if result.Status != InvestigationNoMatch {
 				t.Fatalf("Status = %q, want no_match", result.Status)
 			}
-			if result.Temporal == nil {
-				t.Fatal("a terminal historical answer must state the time it speaks for (AC-3781-2)")
+			if !testCase.wantLabel {
+				if result.Temporal != nil {
+					t.Fatalf("Temporal = %#v, want none: a current-axis answer speaks for now and has no time to state", result.Temporal)
+				}
+			} else {
+				if result.Temporal == nil {
+					t.Fatal("a terminal historical answer must state the time it speaks for (AC-3781-2)")
+				}
+				if result.Temporal.Requested.Axis != testCase.time.Axis {
+					t.Fatalf("labeled axis = %q, want the requested %q", result.Temporal.Requested.Axis, testCase.time.Axis)
+				}
+				if result.Temporal.Grain != GrainNone {
+					t.Fatalf("Grain = %q, want none: this path read no canonical facts, so it has no temporal precision to claim", result.Temporal.Grain)
+				}
+				if result.Temporal.CoverageComplete {
+					t.Fatal("CoverageComplete = true, but no source spoke for the requested time at all")
+				}
 			}
-			if result.Temporal.Requested.Axis != testCase.time.Axis {
-				t.Fatalf("labeled axis = %q, want the requested %q", result.Temporal.Requested.Axis, testCase.time.Axis)
-			}
-			if result.Temporal.Grain != GrainNone {
-				t.Fatalf("Grain = %q, want none: this path read no canonical facts, so it has no temporal precision to claim", result.Temporal.Grain)
-			}
-			if result.Temporal.CoverageComplete {
-				t.Fatal("CoverageComplete = true, but no source spoke for the requested time at all")
-			}
-			// The standing historical disclosures ride along, through the one
-			// bounded appender, exactly as they do on the synthesized path.
-			if !slices.Contains(result.Limitations, temporalLimitations[0]) {
-				t.Fatalf("Limitations = %#v, want the standing historical disclosure", result.Limitations)
+			if !slices.Equal(result.Limitations, testCase.wantLimitations) {
+				t.Fatalf("Limitations =\n%#v\nwant exactly\n%#v", result.Limitations, testCase.wantLimitations)
 			}
 		})
 	}
