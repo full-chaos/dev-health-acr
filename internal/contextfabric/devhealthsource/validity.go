@@ -73,8 +73,52 @@ func requiredTime(value time.Time) *time.Time {
 // Both nil on both sides yields (nil, nil) -- an unbounded edge, which
 // the read side admits at every time and counts as unbounded rather than
 // silently trusting.
+//
+// CHAOS-3825: the two endpoint windows can be DISJOINT, and then that
+// intersection is EMPTY -- the later start falls after the earlier end,
+// so the naive pair is inverted. This is ordinary data, not corruption: a
+// pull request review submitted after its pull request merged is a
+// post-merge approval, which GitHub allows and dev ClickHouse holds today
+// (35 rows for one organization, tables.go:610's shape).
+//
+// Left inverted, that pair is rejected by
+// ContextFabricRelationshipProjection ("valid_to precedes valid_from"),
+// and because ContextFabricProjectionBatch.Validate() is all-or-nothing,
+// ONE such row poisons the whole batch: NextProjectionBatch errors, the
+// coordinator holds its checkpoint, and the same poisoned page rebuilds
+// every tick -- the organization's projection is wedged forever. That is
+// the identical wedge shape queryWorkItemHierarchy's self-reference
+// filter (tables.go) already exists to prevent, reached through the
+// temporal axis instead.
+//
+// An empty intersection is represented as the DEGENERATE half-open
+// window [later-start, later-start): the association never held while
+// both endpoints were valid, and a zero-width half-open interval states
+// exactly that. The contract accepts it (only a STRICTLY earlier end is
+// rejected), no time-filtered read admits it (no instant satisfies
+// valid_from <= t < valid_to when the bounds are equal), and a structural
+// read that ignores the temporal axis still sees the edge.
+//
+// The collapse is the ONLY bound this function invents. It never widens a
+// window into an interval the source did not assert -- taking either
+// endpoint's own end would claim the association held while the other end
+// did not exist -- and it never drops the edge, which would silently lose
+// a real association. Note the guard is deliberately strict (Before, not
+// !After): a window that is ALREADY zero-width because the endpoints
+// merely touch is untouched, since it is already the representation this
+// returns.
 func edgeValidity(fromValidFrom, fromValidTo, toValidFrom, toValidTo *time.Time) (validFrom, validTo *time.Time) {
-	return laterTime(fromValidFrom, toValidFrom), earlierTime(fromValidTo, toValidTo)
+	validFrom, validTo = laterTime(fromValidFrom, toValidFrom), earlierTime(fromValidTo, toValidTo)
+	if validFrom != nil && validTo != nil && validTo.Before(*validFrom) {
+		// A COPY, not the valid_from pointer itself: callers pass
+		// pointers they also hold as an endpoint entity's own window
+		// (tables.go:610 passes the review entity's ValidFrom straight
+		// in), so aliasing the two bounds would let an adjustment to one
+		// silently move the other.
+		collapsed := *validFrom
+		validTo = &collapsed
+	}
+	return validFrom, validTo
 }
 
 func laterTime(a, b *time.Time) *time.Time {
