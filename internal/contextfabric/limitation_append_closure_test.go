@@ -166,16 +166,35 @@ type limitationWrite struct{ function, value, position string }
 // transitively, so `result.Limitations = composed` reaches back to whatever
 // wrote `composed`. Then report EVERY write to any destined local, with no
 // attempt to decide which one wins.
+//
+// An identifier that is NEVER WRITTEN inside this function -- a package-level
+// slice, a parameter, anything from outside -- is judged at the point it is
+// read (codex round-7 F1). Deferring to "its own writes are judged where they
+// appear" is only sound when such writes exist; when they do not, the alias
+// read IS the write, and skipping it let `var local = packageLimitations`
+// reach a result with nothing reported anywhere.
 func limitationWritesIn(fileSet *token.FileSet, function *ast.FuncDecl) []limitationWrite {
 	var (
 		writes   []limitationWrite
 		destined = map[string]bool{}
 		direct   []limitationWrite
 	)
+	// Gathered FIRST: whether an identifier is written in this function
+	// decides how a read of it is treated below.
+	locals := localWritesIn(function)
+	writtenLocally := map[string]bool{}
+	for _, local := range locals {
+		writtenLocally[local.name] = true
+	}
 	record := func(value ast.Expr, pos token.Pos) {
 		if identifier, ok := value.(*ast.Ident); ok {
 			destined[identifier.Name] = true
-			return
+			if writtenLocally[identifier.Name] {
+				return
+			}
+			// Nothing in this function ever wrote it, so there is no later
+			// site that will answer for it.
+			value = identifier
 		}
 		direct = append(direct, limitationWrite{
 			function: function.Name.Name,
@@ -229,11 +248,6 @@ func limitationWritesIn(fileSet *token.FileSet, function *ast.FuncDecl) []limita
 	})
 	writes = append(writes, direct...)
 
-	// Every way a local is written, gathered ONCE and reused for both the
-	// closure and the reporting below, so the two can never disagree about
-	// what counts as a write.
-	locals := localWritesIn(function)
-
 	// Transitive closure over locals, to a fixpoint. Bounded by the number
 	// of writes, so a chain cannot loop.
 	for changed := true; changed; {
@@ -254,10 +268,12 @@ func limitationWritesIn(fileSet *token.FileSet, function *ast.FuncDecl) []limita
 		if !destined[local.name] {
 			continue
 		}
-		// A destined local fed from another destined local is not a write
-		// of new content; the source's own writes are judged where they
-		// appear.
-		if named, ok := local.source.(*ast.Ident); ok && destined[named.Name] {
+		// A destined local fed from another local is not a write of new
+		// content -- but ONLY when that other local is itself written in
+		// this function, so there really is a later site to judge. An
+		// identifier from outside the function has no such site, so the
+		// read is reported here under its own name.
+		if named, ok := local.source.(*ast.Ident); ok && writtenLocally[named.Name] {
 			continue
 		}
 		writes = append(writes, limitationWrite{
@@ -276,37 +292,62 @@ type localWrite struct {
 	pos    token.Pos
 }
 
-// localWritesIn gathers every write to a named local inside one function,
-// in BOTH forms Go offers.
+// localWritesIn gathers every write to a named local inside one function.
 //
-// `x := e` and `x = e` are *ast.AssignStmt. `var x = e` is an *ast.ValueSpec
-// and is a different node entirely -- scanning only assignments (codex
-// round-6 P1) let a raw append hide in a var line, including via a helper
-// whose result the caller never writes to a field. Both forms are the same
-// thing to this guard, so both are collected here rather than at the two
-// places that consume them.
+// THE COMPLETENESS CRITERION, which is this guard's closure argument:
+// the walker covers every write form the AST CAN see -- assignments,
+// declaration initializers, range bindings, and alias reads of identifiers
+// the function never writes. What the AST cannot see is named out of scope
+// below, with the reason. After that, a new evasion has to be either a
+// member of the named AST-invisible class or a bug in this walker; it
+// cannot be an unenumerated statement kind.
+//
+// The forms, and the node each one actually is:
+//
+//   - `x := e`, `x = e`               *ast.AssignStmt
+//   - `var x = e`, `var ( x = e )`    *ast.ValueSpec (a DIFFERENT node --
+//     scanning only assignments, codex round-6 P1, let a raw append hide
+//     in a var line)
+//   - `for _, x := range e`           *ast.RangeStmt (neither of the above,
+//     codex round-7 F2)
+//   - a read of an identifier written nowhere in this function -- handled
+//     by limitationWritesIn, which reports it at the read.
 //
 // A valueless `var x []string` is deliberately not a write: it declares an
 // empty list, which cannot be the write that overflows a cap. Anything later
 // added to it arrives as an assignment and is judged then.
 //
-// WRITE FORMS THIS WALKER DOES NOT SEE, and why each is acceptable:
+// EVERY OTHER go/ast statement and spec kind, swept once against the
+// criterion and dismissed with the reason it cannot carry a write:
 //
-//   - mutation through a pointer or a helper that takes &x. An AST walk
-//     cannot follow it, and nothing in this package composes limitations
-//     that way. This is the one real blind spot.
+//   - BadStmt: only in code that does not compile.
+//   - EmptyStmt, BranchStmt (break/continue/goto): no value, no target.
+//   - IncDecStmt: numeric only; cannot hold a slice.
+//   - SendStmt (ch <- x): writes to a channel, not to a name. The matching
+//     receive is an AssignStmt and is seen there.
+//   - ExprStmt: evaluates and discards. A bare `append(x, …)` writes
+//     nothing; `mutate(&x)` is the AST-invisible class below.
+//   - ImportSpec, TypeSpec: bind packages and types, not values.
+//   - DeclStmt, BlockStmt, LabeledStmt, IfStmt, ForStmt, SwitchStmt,
+//     CaseClause, SelectStmt, CommClause, GoStmt, DeferStmt: containers or
+//     wrappers. ast.Inspect descends into all of them, so any assignment,
+//     initializer or range binding inside -- including in an if-init, a
+//     for-post, a select's comm clause, or a deferred closure body -- is
+//     collected by the cases above.
+//   - TypeSwitchStmt (`switch v := x.(type)`): its Assign field IS an
+//     AssignStmt, so the binding is already collected.
+//   - ReturnStmt: returns values rather than naming them. A composite
+//     literal inside one is reached by the literal walk; a returned list
+//     is judged at the caller, as that call's result.
+//
+// WRITE FORMS THE AST CANNOT SEE, out of scope with the reason:
+//
+//   - mutation through a pointer, or a helper taking &x. An AST walk cannot
+//     follow it. This is the one real blind spot, and nothing in this
+//     package composes limitations that way.
 //   - copy(x, raw) and element assignment x[i] = s. Both mutate in place
-//     without producing a value; neither can grow a list past the cap,
+//     without producing a value, so neither can grow a list past the cap,
 //     which is the property being defended.
-//   - a package-level var feeding a field. Reachable only by being named in
-//     a field write or a local write, both of which ARE seen; the value it
-//     was built from is out of function scope by construction.
-//
-// Covered without needing a special case, contrary to what they look like:
-// a composite literal inside a return statement (the literal walk reaches
-// every node in the body, return statements included), and a function call
-// flowing straight into the field (recorded as a direct write named for its
-// callee, which is not a bounded appender unless it is one).
 func localWritesIn(function *ast.FuncDecl) []localWrite {
 	var writes []localWrite
 	ast.Inspect(function.Body, func(node ast.Node) bool {
@@ -327,6 +368,18 @@ func localWritesIn(function *ast.FuncDecl) []localWrite {
 					source = declaration.Values[index]
 				}
 				writes = append(writes, localWrite{name.Name, source, declaration.Pos()})
+			}
+		case *ast.RangeStmt:
+			// Both bindings take their value FROM the ranged expression, so
+			// that expression is the source: ranging a slice of raw lists
+			// and assigning the element into a field is a write of whatever
+			// built those lists.
+			for _, target := range []ast.Expr{declaration.Key, declaration.Value} {
+				identifier, ok := target.(*ast.Ident)
+				if !ok || identifier.Name == "_" {
+					continue
+				}
+				writes = append(writes, localWrite{identifier.Name, declaration.X, declaration.Pos()})
 			}
 		}
 		return true
@@ -382,6 +435,19 @@ func limitationWriteSource(expression ast.Expr) string {
 		return value.Name
 	case *ast.SelectorExpr:
 		return value.Sel.Name
+	case *ast.TypeAssertExpr:
+		// `switch v := x.(type)` and `v := x.([]string)`.
+		return "type assertion on " + limitationWriteSource(value.X)
+	case *ast.UnaryExpr:
+		if value.Op == token.ARROW {
+			// `v := <-ch`, including a select comm clause.
+			return "channel receive from " + limitationWriteSource(value.X)
+		}
+	case *ast.IndexExpr:
+		return "element of " + limitationWriteSource(value.X)
 	}
+	// Named shapes matter beyond diagnostics: the audit list is keyed by
+	// function#value, so two different unresolved writes in one function
+	// sharing a bare "?" would let auditing one silently exempt the other.
 	return "?"
 }
