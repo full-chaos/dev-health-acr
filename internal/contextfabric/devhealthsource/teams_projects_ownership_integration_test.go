@@ -2,6 +2,8 @@ package devhealthsource_test
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -512,34 +514,72 @@ func subOmittedRowsBeyondTheSkipBoundStillConverge(t *testing.T, ctx context.Con
 		t.Fatalf("NewProjectionWorker: %v", err)
 	}
 
+	// Codex round-4 F3: the earlier version of this loop broke on the FIRST
+	// sighting of the edge, so a duplicate emitted on any later tick was
+	// never counted -- the exactly-once claim could not fail. It also checked
+	// only that a cursor was never REVISITED, which a backwards jump passes.
+	// Run to genuinely caught-up, count every emission, and check the cursor
+	// orders forward.
 	const wantEdge = "relationship:project_team:PROJ-PAST-BOUND:TEAM-GITHUB:native"
-	seenCursors := map[string]int{}
 	published := 0
-	for tick := 0; tick < 60; tick++ {
+	var previous cursorPosition
+	ticks := 0
+	for ; ticks < 200; ticks++ {
 		before := checkpoints.checkpoint.Cursor
 		if _, err := worker.RunOnce(ctx, fixture.orgID, devhealthsource.TeamsProjectsSourceName); err != nil {
-			t.Fatalf("tick %d: %v", tick, err)
+			t.Fatalf("tick %d: %v", ticks, err)
 		}
-		after := checkpoints.checkpoint.Cursor
 		for _, batch := range backend.applied {
 			if hasRelationship(batch, wantEdge) {
 				published++
 			}
 		}
 		backend.applied = nil
-		if published > 0 {
-			break
-		}
+		after := checkpoints.checkpoint.Cursor
 		if after == before {
-			t.Fatalf("tick %d: durable cursor stuck at %q with the edge still unreached -- more consecutive omitted pages than the in-process bound is a permanent stall, not a slow catch-up", tick, before)
+			break // genuinely caught up: no batch, no progress
 		}
-		if seenCursors[after]++; seenCursors[after] > 1 {
-			t.Fatalf("tick %d: durable cursor revisited %q -- progress is not monotonic", tick, after)
+		current := decodeCursorPosition(t, after)
+		if !previous.zero() && !current.after(previous) {
+			t.Fatalf("tick %d: cursor went from %+v to %+v -- progress must order strictly forward, not merely differ", ticks, previous, current)
 		}
+		previous = current
+	}
+	if ticks == 200 {
+		t.Fatal("never reached caught-up within 200 ticks")
 	}
 	if published != 1 {
-		t.Fatalf("the edge beyond the omitted block was published %d times, want exactly 1", published)
+		t.Fatalf("the edge beyond the omitted block was published %d times across the WHOLE run, want exactly 1", published)
 	}
+}
+
+// cursorPosition mirrors the source's opaque cursor payload so the test can
+// assert forward ordering rather than mere difference.
+type cursorPosition struct {
+	Since time.Time `json:"since"`
+	After string    `json:"after"`
+}
+
+func (c cursorPosition) zero() bool { return c.Since.IsZero() && c.After == "" }
+
+func (c cursorPosition) after(previous cursorPosition) bool {
+	if c.Since.After(previous.Since) {
+		return true
+	}
+	return c.Since.Equal(previous.Since) && c.After > previous.After
+}
+
+func decodeCursorPosition(t *testing.T, cursor string) cursorPosition {
+	t.Helper()
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		t.Fatalf("decode cursor %q: %v", cursor, err)
+	}
+	var position cursorPosition
+	if err := json.Unmarshal(raw, &position); err != nil {
+		t.Fatalf("parse cursor %q: %v", cursor, err)
+	}
+	return position
 }
 
 // seedOversizedAmbiguousBlock writes more consecutive ambiguity-only rows

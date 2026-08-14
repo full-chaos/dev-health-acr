@@ -369,6 +369,7 @@ func TestProjectionWorkerRefusesALaterDifferentVersionAfterAClaimSurvivedFailure
 // advanced cursor.
 type consumedWithoutPublishingStub struct {
 	progressCursor string
+	sourceVersion  string
 	batch          ProjectionBatch
 	calls          []ProjectionCheckpoint
 	progressCalls  int
@@ -382,12 +383,16 @@ func (s *consumedWithoutPublishingStub) NextProjectionBatch(_ context.Context, c
 	return ProjectionBatch{}, false, nil
 }
 
-func (s *consumedWithoutPublishingStub) ConsumedWithoutPublishing(_ context.Context, checkpoint ProjectionCheckpoint) (string, bool, error) {
+func (s *consumedWithoutPublishingStub) ConsumedWithoutPublishing(_ context.Context, checkpoint ProjectionCheckpoint) (ConsumedProgress, bool, error) {
 	s.progressCalls++
 	if checkpoint.Cursor == s.progressCursor {
-		return "", false, nil
+		return ConsumedProgress{}, false, nil
 	}
-	return s.progressCursor, true, nil
+	version := s.sourceVersion
+	if version == "" {
+		version = s.batch.SourceVersion
+	}
+	return ConsumedProgress{NextCursor: s.progressCursor, SourceVersion: version}, true, nil
 }
 
 // TestProjectionWorkerPersistsProgressOverUnpublishableRows is CHAOS-3802
@@ -448,9 +453,9 @@ func (*caughtUpStub) NextProjectionBatch(context.Context, ProjectionCheckpoint) 
 	return ProjectionBatch{}, false, nil
 }
 
-func (s *caughtUpStub) ConsumedWithoutPublishing(context.Context, ProjectionCheckpoint) (string, bool, error) {
+func (s *caughtUpStub) ConsumedWithoutPublishing(context.Context, ProjectionCheckpoint) (ConsumedProgress, bool, error) {
 	s.progressCalls++
-	return "", false, nil
+	return ConsumedProgress{}, false, nil
 }
 
 // TestProjectionWorkerIgnoresProgressWhenSourceIsGenuinelyCaughtUp keeps the
@@ -498,5 +503,85 @@ func TestProjectionWorkerWithoutProgressCapabilityIsUnchanged(t *testing.T) {
 	}
 	if len(store.saved) != 0 || run.NextCursor != "" || run.Applied {
 		t.Fatalf("a source without the progress capability must be unaffected; saved=%d run=%+v", len(store.saved), run)
+	}
+}
+
+// TestProjectionWorkerRefusesProgressUnderAChangedSourceVersion is codex
+// round-4 F1 -- a hole neither the design nor my own review caught.
+//
+// RunOnce returns through the progress path BEFORE the source-version check
+// the batch path performs, and the progress CAS preserved whatever version was
+// already stored. So after a producer's identity changes, omitted rows could
+// advance the durable cursor under the PRIOR version -- and any row the NEW
+// version would make publishable (precisely what a relaxed join or corrected
+// id space does, which is what past version bumps in this repository were)
+// ends up behind that cursor, unreachable, with no rebuild ever triggered.
+//
+// Progress must therefore carry the identity that derived it and obey the same
+// mismatch rule as a batch.
+func TestProjectionWorkerRefusesProgressUnderAChangedSourceVersion(t *testing.T) {
+	t.Parallel()
+
+	source := &consumedWithoutPublishingStub{progressCursor: "cursor_advanced", sourceVersion: "producer.v2"}
+	source.batch = validProjectionBatch()
+	store := &checkpointStoreStub{checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "src", Cursor: "cursor_start", SourceVersion: "producer.v1"}}
+	worker, err := NewProjectionWorker(source, &projectionBackendStub{}, store, ProjectionWorkerOptions{})
+	if err != nil {
+		t.Fatalf("NewProjectionWorker: %v", err)
+	}
+	_, err = worker.RunOnce(context.Background(), "org_1", "src")
+	if !errors.Is(err, ErrProjectionSourceVersionChanged) {
+		t.Fatalf("RunOnce error = %v, want ErrProjectionSourceVersionChanged -- progress under a stale producer identity must force a rebuild, not advance quietly", err)
+	}
+	if len(store.saved) != 0 {
+		t.Fatalf("the durable cursor was written %d times under a changed source version", len(store.saved))
+	}
+	if store.checkpoint.Cursor != "cursor_start" {
+		t.Fatalf("durable cursor moved to %q under a changed source version", store.checkpoint.Cursor)
+	}
+}
+
+// TestProjectionWorkerClaimsTheSourceVersionAlongsideProgress is the positive
+// half: a first run (empty stored version) must both advance AND claim, so a
+// later different identity cannot walk through the empty-version allowance.
+func TestProjectionWorkerClaimsTheSourceVersionAlongsideProgress(t *testing.T) {
+	t.Parallel()
+
+	source := &consumedWithoutPublishingStub{progressCursor: "cursor_advanced", sourceVersion: "producer.v1"}
+	source.batch = validProjectionBatch()
+	store := &checkpointStoreStub{checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "src", Cursor: "cursor_start"}}
+	worker, err := NewProjectionWorker(source, &projectionBackendStub{}, store, ProjectionWorkerOptions{})
+	if err != nil {
+		t.Fatalf("NewProjectionWorker: %v", err)
+	}
+	if _, err := worker.RunOnce(context.Background(), "org_1", "src"); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if store.checkpoint.Cursor != "cursor_advanced" {
+		t.Fatalf("cursor = %q, want cursor_advanced", store.checkpoint.Cursor)
+	}
+	if store.checkpoint.SourceVersion != "producer.v1" {
+		t.Fatalf("source version = %q, want the progress-reporting producer identity claimed alongside the advance", store.checkpoint.SourceVersion)
+	}
+}
+
+// TestProjectionWorkerRefusesProgressWithoutASourceVersion pins the third
+// branch: a source that cannot name its identity gets no progress at all.
+func TestProjectionWorkerRefusesProgressWithoutASourceVersion(t *testing.T) {
+	t.Parallel()
+
+	source := &consumedWithoutPublishingStub{progressCursor: "cursor_advanced", sourceVersion: " "}
+	source.batch = validProjectionBatch()
+	source.batch.SourceVersion = " "
+	store := &checkpointStoreStub{checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "src", Cursor: "cursor_start"}}
+	worker, err := NewProjectionWorker(source, &projectionBackendStub{}, store, ProjectionWorkerOptions{})
+	if err != nil {
+		t.Fatalf("NewProjectionWorker: %v", err)
+	}
+	if _, err := worker.RunOnce(context.Background(), "org_1", "src"); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if len(store.saved) != 0 || store.checkpoint.Cursor != "cursor_start" {
+		t.Fatalf("progress without a named producer identity must not move the cursor; saved=%d cursor=%q", len(store.saved), store.checkpoint.Cursor)
 	}
 }

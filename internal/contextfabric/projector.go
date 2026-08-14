@@ -157,15 +157,33 @@ func (w *ProjectionWorker) persistConsumedProgress(ctx context.Context, checkpoi
 	if !ok {
 		return "", false, nil
 	}
-	advanced, ok, err := reporter.ConsumedWithoutPublishing(ctx, checkpoint)
+	progress, ok, err := reporter.ConsumedWithoutPublishing(ctx, checkpoint)
 	if err != nil {
 		return "", false, fmt.Errorf("read consumed projection progress: %w", err)
 	}
-	if !ok || strings.TrimSpace(advanced) == "" || advanced == checkpoint.Cursor {
+	if !ok || strings.TrimSpace(progress.NextCursor) == "" || progress.NextCursor == checkpoint.Cursor {
 		return "", false, nil
 	}
+	// A source that cannot name the identity its progress was derived under
+	// gets no progress at all. Silently advancing under an unknown producer
+	// identity is the failure this guard exists to prevent.
+	if strings.TrimSpace(progress.SourceVersion) == "" {
+		return "", false, nil
+	}
+	// The same rule the batch path applies at the batch's own SourceVersion
+	// (see the CHAOS-3779 H2-residual comment above): a stored version that
+	// differs means the producer's identity semantics changed, so the durable
+	// cursor must NOT move -- rows the new version would publish sit behind
+	// it. Recovery is the existing rebuild path, not a quiet advance.
+	if checkpoint.SourceVersion != "" && checkpoint.SourceVersion != progress.SourceVersion {
+		return "", false, fmt.Errorf("%w: org %s source %s checkpoint source_version %q, progress source_version %q", ErrProjectionSourceVersionChanged, checkpoint.OrgID, checkpoint.Source, checkpoint.SourceVersion, progress.SourceVersion)
+	}
 	updated := checkpoint
-	updated.Cursor = advanced
+	updated.Cursor = progress.NextCursor
+	// Claim the version alongside the advance, exactly as the batch path
+	// claims it before applying: after this, an empty stored version can no
+	// longer wave a different producer identity through.
+	updated.SourceVersion = progress.SourceVersion
 	updated.UpdatedAt = w.now().UTC()
 	if err := w.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, checkpoint, updated); err != nil {
 		if errors.Is(err, ErrProjectionConflict) {
@@ -173,7 +191,7 @@ func (w *ProjectionWorker) persistConsumedProgress(ctx context.Context, checkpoi
 		}
 		return "", false, fmt.Errorf("advance projection checkpoint over unpublishable rows: %w", err)
 	}
-	return advanced, true, nil
+	return progress.NextCursor, true, nil
 }
 
 // Run continuously projects one organization/source pair until cancellation.

@@ -50,6 +50,10 @@ type sourcePlan struct {
 	// nothing publishable, so the owning source can offer it to the worker as
 	// durable progress (contextfabric.ProjectionProgress). Optional.
 	recordConsumed func(orgID, cursor string)
+
+	// dropConsumed invalidates any recorded progress for an organization,
+	// called whenever a call publishes a batch. Optional.
+	dropConsumed func(orgID string)
 }
 
 func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
@@ -133,6 +137,7 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
+	p.forgetConsumed(orgID)
 	p.observeBatch(ctx, batch, all)
 	return batch, true, nil
 }
@@ -175,6 +180,10 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 			if err != nil {
 				return contextfabric.ProjectionBatch{}, false, err
 			}
+			// This call published something, so any progress memo recorded by
+			// an earlier iteration no longer describes it -- see
+			// forgetConsumed for the invariant.
+			p.forgetConsumed(orgID)
 			p.observeBatch(ctx, batch, all)
 			return batch, true, nil
 		}
@@ -266,6 +275,12 @@ func (e *tableReadError) Unwrap() []error { return []error{contextfabric.ErrUnav
 func (p sourcePlan) noteConsumed(orgID, cursor string) {
 	if p.recordConsumed != nil {
 		p.recordConsumed(orgID, cursor)
+	}
+}
+
+func (p sourcePlan) forgetConsumed(orgID string) {
+	if p.dropConsumed != nil {
+		p.dropConsumed(orgID)
 	}
 }
 

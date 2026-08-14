@@ -3,6 +3,7 @@ package devhealthsource_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -584,8 +585,8 @@ func TestConsumedProgressIsRefusedWhenItDoesNotMatchTheCheckpoint(t *testing.T) 
 	// Asked about a DIFFERENT position than the memo was recorded for.
 	stale := checkpoint
 	stale.Cursor = testCursor(t, at.Add(time.Hour), "somewhere-else")
-	if cursor, ok, err := source.ConsumedWithoutPublishing(context.Background(), stale); err != nil || ok {
-		t.Fatalf("a memo recorded at another checkpoint must be refused, got cursor=%q ok=%v err=%v", cursor, ok, err)
+	if progress, ok, err := source.ConsumedWithoutPublishing(context.Background(), stale); err != nil || ok {
+		t.Fatalf("a memo recorded at another checkpoint must be refused, got %+v ok=%v err=%v", progress, ok, err)
 	}
 }
 
@@ -609,11 +610,119 @@ func TestConsumedProgressIsReportedOnceForItsOwnCheckpoint(t *testing.T) {
 	if _, available, err := source.NextProjectionBatch(context.Background(), checkpoint); err != nil || available {
 		t.Fatalf("expected an all-omitted read to publish nothing; available=%v err=%v", available, err)
 	}
-	cursor, ok, err := source.ConsumedWithoutPublishing(context.Background(), checkpoint)
-	if err != nil || !ok || cursor == "" || cursor == startCursor {
-		t.Fatalf("progress for this checkpoint must be offered and must move; cursor=%q ok=%v err=%v", cursor, ok, err)
+	progress, ok, err := source.ConsumedWithoutPublishing(context.Background(), checkpoint)
+	if err != nil || !ok || progress.NextCursor == "" || progress.NextCursor == startCursor {
+		t.Fatalf("progress for this checkpoint must be offered and must move; %+v ok=%v err=%v", progress, ok, err)
+	}
+	// Codex round-4 F1: progress must name the producer identity that derived
+	// it, or the worker cannot tell a stale-version advance from a valid one.
+	if progress.SourceVersion != devhealthsource.TeamsProjectsSourceVersion {
+		t.Fatalf("progress source version = %q, want %q", progress.SourceVersion, devhealthsource.TeamsProjectsSourceVersion)
 	}
 	if _, ok, _ := source.ConsumedWithoutPublishing(context.Background(), checkpoint); ok {
 		t.Fatal("the memo must be consumed on read, so a failed CAS re-derives progress rather than replaying a stale one")
+	}
+}
+
+// TestProgressMemoDoesNotSurviveAPublishedBatch is codex round-4 F2's first
+// half (self-found pre-verdict, then sharpened).
+//
+// noteConsumed fires on the skip path, but a LATER iteration of the same
+// paging loop can find payload and return a batch. Left alone, the memo then
+// claims "consumed and published nothing" about a call that published
+// something -- so the invariant the progress path's safety rests on is not
+// held, whatever the odds of hitting it.
+func TestProgressMemoDoesNotSurviveAPublishedBatch(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
+	// A WHOLE PAGE of ambiguous rows must come first, or the very first
+	// iteration finds payload, the skip path never runs, no memo is ever
+	// recorded, and this test passes with nothing to observe. Mutation-testing
+	// caught exactly that in an earlier draft: removing the clearing changed
+	// no result, because there was never a memo to clear.
+	rows := make([][]any, 0, 260)
+	for i := 0; i < 250; i++ {
+		rows = append(rows, ambiguousProjectTeamRow(
+			fmt.Sprintf("p-omitted-%03d", i), "team-a", "native", "github", fmt.Sprintf("SHARED-%03d", i), at.Add(time.Duration(i)*time.Second)))
+	}
+	rows = append(rows, projectTeamRow("p-published", "team-b", "native", at.Add(time.Hour), 1, time.Unix(0, 0).UTC(), at.Add(time.Hour)))
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", rows: rows, cursorOf: func(row []any) (time.Time, string) {
+			return row[6].(time.Time), row[0].(string) + ":" + row[1].(string) + ":" + row[2].(string)
+		}},
+	}}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: testCursor(t, time.Unix(0, 0).UTC(), "")}
+	batch, available, err := source.NextProjectionBatch(context.Background(), checkpoint)
+	if err != nil || !available {
+		t.Fatalf("expected a published batch; available=%v err=%v", available, err)
+	}
+	if len(batch.Relationships) == 0 {
+		t.Fatal("fixture published nothing, so this test cannot observe the invariant it exists for")
+	}
+	if progress, ok, err := source.ConsumedWithoutPublishing(context.Background(), checkpoint); err != nil || ok {
+		t.Fatalf("a call that published a batch must leave no progress memo, got %+v ok=%v err=%v", progress, ok, err)
+	}
+}
+
+// TestProgressMemoIsDiscardedByAFromScratchRun is F2's second half, and the
+// rebuild angle codex sharpened: Coordinator.Rebuild purges the backend and
+// resets the checkpoint to an empty cursor, so a memo recorded at an empty
+// cursor would match the post-rebuild checkpoint exactly and skip a backfill
+// the purge made mandatory. A reset is observable as Cursor == "", so the next
+// call drops the memo before any progress can be offered -- no new durable
+// discriminator needed.
+//
+// The fixture CHANGES between the two runs on purpose. An earlier draft of
+// this test cleared the memo itself and then asserted it was gone, which
+// tested the test helper rather than the production path -- the very
+// wrong-reason-green shape this batch exists to fix, reproduced inside its own
+// fix. Emptying the source between runs means the second call records no memo
+// of its own, so the ONLY thing that could answer here is a surviving memo
+// from before the reset.
+func TestProgressMemoIsDiscardedByAFromScratchRun(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
+	// More rows than the per-table snapshot cap, so the from-scratch call
+	// takes the OVERSIZED fallback into the paging path -- the only path that
+	// records a memo. A small fixture would take the plain full-snapshot path,
+	// record nothing, and make this test vacuous; the guard below says so
+	// out loud rather than passing quietly.
+	ambiguous := make([][]any, 0, 200)
+	for i := 0; i < 200; i++ {
+		ambiguous = append(ambiguous, ambiguousProjectTeamRow(
+			fmt.Sprintf("p%03d", i), "team-a", "native", "github", fmt.Sprintf("KEY-%03d", i), at.Add(time.Duration(i)*time.Second)))
+	}
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", rows: ambiguous},
+	}}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	fromScratch := contextfabric.ProjectionCheckpoint{OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName}
+	if _, available, err := source.NextProjectionBatch(context.Background(), fromScratch); err != nil || available {
+		t.Fatalf("expected an all-omitted from-scratch read to publish nothing; available=%v err=%v", available, err)
+	}
+	// Prove the first run really did leave a memo, or the assertion below
+	// could pass for having nothing to discard.
+	if _, ok, _ := source.ConsumedWithoutPublishing(context.Background(), fromScratch); !ok {
+		t.Fatal("fixture recorded no memo, so this test cannot observe a reset discarding one")
+	}
+	if _, available, err := source.NextProjectionBatch(context.Background(), fromScratch); err != nil || available {
+		t.Fatalf("re-priming read: available=%v err=%v", available, err)
+	}
+
+	// The rebuild: the source now has nothing to project, so the next
+	// from-scratch call records no memo of its own.
+	client.tables[0].rows = nil
+	if _, available, err := source.NextProjectionBatch(context.Background(), fromScratch); err != nil || available {
+		t.Fatalf("post-reset read: available=%v err=%v", available, err)
+	}
+	if progress, ok, err := source.ConsumedWithoutPublishing(context.Background(), fromScratch); err != nil || ok {
+		t.Fatalf("a memo from before a reset must never move the post-reset cursor, got %+v ok=%v err=%v", progress, ok, err)
 	}
 }

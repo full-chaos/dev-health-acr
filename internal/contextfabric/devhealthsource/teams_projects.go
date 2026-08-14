@@ -111,22 +111,51 @@ type consumedProgress struct{ from, to string }
 //
 // The memo is consumed on read. If the worker's CAS then fails, the next tick
 // simply re-derives the same progress by re-reading the same rows.
-func (s *TeamsProjectsSource) ConsumedWithoutPublishing(_ context.Context, checkpoint contextfabric.ProjectionCheckpoint) (string, bool, error) {
+func (s *TeamsProjectsSource) ConsumedWithoutPublishing(_ context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ConsumedProgress, bool, error) {
 	if s == nil || !s.enabled {
-		return "", false, nil
+		return contextfabric.ConsumedProgress{}, false, nil
 	}
 	orgID := strings.TrimSpace(checkpoint.OrgID)
 	s.consumedMu.Lock()
 	defer s.consumedMu.Unlock()
 	progress, ok := s.consumed[orgID]
 	if !ok {
-		return "", false, nil
+		return contextfabric.ConsumedProgress{}, false, nil
 	}
 	delete(s.consumed, orgID)
 	if progress.from != checkpoint.Cursor || progress.to == "" || progress.to == checkpoint.Cursor {
-		return "", false, nil
+		return contextfabric.ConsumedProgress{}, false, nil
 	}
-	return progress.to, true, nil
+	return contextfabric.ConsumedProgress{NextCursor: progress.to, SourceVersion: TeamsProjectsSourceVersion}, true, nil
+}
+
+// forgetConsumed drops any memo for this organization.
+//
+// Called at the START of a from-scratch call and whenever a call returns a
+// batch, which together enforce the memo's whole invariant: a memo may exist
+// ONLY for a call that published nothing from the checkpoint it names.
+//
+// Both halves close real holes (CHAOS-3802, self-found then sharpened by codex
+// round-4 F2). noteConsumed fires on the skip path, but a LATER iteration of
+// the same paging loop can find payload and return a batch -- leaving behind a
+// memo that claims "published nothing" about a call that published something.
+// Separately, Coordinator.Rebuild purges the backend and resets the checkpoint
+// to an empty cursor, and a surviving memo recorded at an empty cursor would
+// then match the post-rebuild checkpoint exactly and skip a backfill the purge
+// made mandatory.
+//
+// Clearing on from-scratch is what makes a rebuild safe without a new
+// persisted discriminator: a reset is observable as Cursor == "", so the very
+// next call drops the memo before any progress can be offered. A rebuild
+// generation counter would cover the same hazard but needs a new durable
+// checkpoint field -- schema, contract and migration -- for a condition
+// existing state already marks unambiguously. The source-version binding
+// (ConsumedProgress.SourceVersion) covers the orthogonal producer-identity
+// hazard, so between them no window is left for one discriminator to close.
+func (s *TeamsProjectsSource) forgetConsumed(orgID string) {
+	s.consumedMu.Lock()
+	defer s.consumedMu.Unlock()
+	delete(s.consumed, strings.TrimSpace(orgID))
 }
 
 func (s *TeamsProjectsSource) recordConsumed(fromCursor string) func(orgID, cursor string) {
@@ -219,7 +248,14 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	if !s.enabled {
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
-	ledger := s.ledgerFor(strings.TrimSpace(checkpoint.OrgID), checkpoint.Cursor == "")
+	fromScratch := checkpoint.Cursor == ""
+	if fromScratch {
+		// A reset (first run, or what Coordinator.Rebuild leaves behind)
+		// invalidates any memo: it was derived from a cursor space that no
+		// longer describes what still needs projecting.
+		s.forgetConsumed(checkpoint.OrgID)
+	}
+	ledger := s.ledgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logAmbiguousProjectKeys(ctx, s.logger, checkpoint.OrgID, ledger.count())
 	return sourcePlan{
 		client:         s.client,
@@ -228,6 +264,7 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		tables:         teamsProjectsTables(ledger),
 		now:            s.now,
 		recordConsumed: s.recordConsumed(checkpoint.Cursor),
+		dropConsumed:   s.forgetConsumed,
 		// No seed: the synthesized Organization entity belongs to
 		// ClickHouseProjectionSource's full snapshot and must be projected
 		// exactly once per organization, not once per source.

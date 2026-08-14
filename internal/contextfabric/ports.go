@@ -536,7 +536,25 @@ type ProjectionSource interface {
 // publishable candidate at all -- so there is no unreconciled state in the
 // range being passed over.
 type ProjectionProgress interface {
-	ConsumedWithoutPublishing(context.Context, ProjectionCheckpoint) (nextCursor string, ok bool, err error)
+	ConsumedWithoutPublishing(context.Context, ProjectionCheckpoint) (ConsumedProgress, bool, error)
+}
+
+// ConsumedProgress is what a source reports about rows it consumed without
+// publishing. SourceVersion is not optional decoration: progress MUST be bound
+// to the producer identity that derived it (CHAOS-3802 codex round-4 F1).
+//
+// Without that binding, progress persisted after a source-version bump
+// advances the durable cursor under the PRIOR version -- and rows the NEW
+// version would publish (a relaxed join, a corrected id space; exactly what
+// past version bumps in this repository did) are then unreachable behind the
+// advanced cursor, silently, with no rebuild triggered. Reporting the version
+// lets the worker apply the same rule the batch path already applies: a
+// mismatch against a non-empty stored version is
+// ErrProjectionSourceVersionChanged and forces a rebuild, never a quiet
+// advance.
+type ConsumedProgress struct {
+	NextCursor    string
+	SourceVersion string
 }
 
 // ProjectionCheckpointStore advances only after the backend has durably
