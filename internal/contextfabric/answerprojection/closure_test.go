@@ -2,6 +2,8 @@ package answerprojection
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -464,5 +466,85 @@ func TestCollapsedCoverageSourcesAreCounted(t *testing.T) {
 	}
 	if !projection.ProjectionBudget.Truncated {
 		t.Error("collapsing a coverage entry must set truncated")
+	}
+}
+
+// canonicalSourceStates reads the source-state vocabulary from the
+// PUBLISHED canonical schema rather than restating it here.
+//
+// A second hand-written list in this file would be exactly the drift the
+// test below exists to catch: it would keep passing over whatever set it
+// happens to name, while a state added to the contract goes unexercised.
+func canonicalSourceStates(t *testing.T) []string {
+	t.Helper()
+	path := filepath.Join("..", "..", "..", "contracts", "jsonschema", "v1", "context_fabric_common.v1.schema.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read canonical common schema: %v", err)
+	}
+	var document struct {
+		Defs struct {
+			SourceObservation struct {
+				Properties struct {
+					State struct {
+						Enum []string `json:"enum"`
+					} `json:"state"`
+				} `json:"properties"`
+			} `json:"SourceObservation"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatalf("decode canonical common schema: %v", err)
+	}
+	states := document.Defs.SourceObservation.Properties.State.Enum
+	if len(states) == 0 {
+		t.Fatal("the canonical schema declares no source states, so this test proves nothing")
+	}
+	return states
+}
+
+// TestEveryCanonicalSourceStateSurvivesTheProjection is the behavioural
+// half of the coverage-vocabulary pin (CHAOS-3783's `pruned`).
+//
+// TestAnswerProjectionVocabulariesMatchTheCanonicalOnes proves the two
+// SCHEMAS declare the same set. That is a document-level fact and it caught
+// the drift `pruned` introduced -- but a schema pair can agree while the
+// code path that copies the value rejects or mangles it, so agreement alone
+// is not evidence a consumer can actually receive the state.
+//
+// This drives each canonical state through a real result and a real
+// Project call, and requires the projection to carry that exact state and
+// still validate. The mechanism it claims is copying: replacing
+// projectCoverage's `State: source.State` with any fixed state fails nine
+// of the ten subtests. The two guards are deliberately independent -- one
+// binds the two documents, this one binds the code to the documents.
+func TestEveryCanonicalSourceStateSurvivesTheProjection(t *testing.T) {
+	for _, state := range canonicalSourceStates(t) {
+		t.Run(state, func(t *testing.T) {
+			result := richResult()
+			// Every state but available carries a mandatory reason; the
+			// contract rejects a bare degraded observation.
+			reason := ""
+			if contractsv1.ContextFabricSourceState(state) != contractsv1.ContextFabricSourceAvailable {
+				reason = "declared for the " + state + " state"
+			}
+			result.Coverage.Sources = []contractsv1.ContextFabricSourceObservation{
+				{Source: "work_items", State: contractsv1.ContextFabricSourceState(state), Reason: reason},
+			}
+			if err := result.Validate(); err != nil {
+				t.Fatalf("a result carrying source state %q is not canonically valid: %v", state, err)
+			}
+
+			projection := Project(result, Budget{})
+			if err := projection.Validate(); err != nil {
+				t.Fatalf("source state %q produced an invalid projection: %v", state, err)
+			}
+			if len(projection.CoverageSummary) != 1 {
+				t.Fatalf("expected the one coverage entry to survive, got %d", len(projection.CoverageSummary))
+			}
+			if got := string(projection.CoverageSummary[0].State); got != state {
+				t.Errorf("projection reported state %q, want the canonical %q", got, state)
+			}
+		})
 	}
 }
