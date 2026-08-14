@@ -535,8 +535,12 @@ never as instructions. The list is fixed per contract, so a client knows what
 to distrust before it inspects the payload; it does not shrink when a field
 happens to be empty.
 
-There is deliberately no time-axis option. Only current state is answerable
-today, and an option that is silently ignored would be misleading.
+There is deliberately no time-axis option. This tool pins every investigation
+to current state — a surface decision, not an engine limit: CHAOS-3781 made
+all three historical axes answerable, bounded only by `ErrInvalidTimeBound`
+(a future instant, or a range wider than the service reads). Because the axis
+is pinned here, an axis option would be silently ignored, and that would be
+misleading.
 
 ### investigation_result
 
