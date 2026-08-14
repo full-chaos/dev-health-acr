@@ -26,9 +26,40 @@ import (
 //
 // This list is meant to stay SHORT. Every entry is a place the cap is not
 // mechanically enforced, i.e. a place round-17 finding 1 could recur.
-var auditedLimitationWrites = map[string]string{
-	"terminalResult#composite literal []string#0": "the SEED, not an addition: a one-element list holding the single fixed terminal disclosure resolveTerminalStatus chose. Every list has to start somewhere, and everything added after it goes through the bounded appender, which also normalizes an already-over-cap input -- so the seed cannot be the write that overflows the contract",
-	"Synthesize#cloneSlice#0":                     "an INTERMEDIATE, not a list that reaches a consumer: this is the model's own draft list entering the synthesized result, and Investigate then passes result.Limitations through appendTemporalLimitations UNCONDITIONALLY -- it is called on every axis, current included, and appendBoundedLimitations normalizes an already-over-cap input -- before Validate runs",
+type limitationAudit struct {
+	// sameShapedTotal is how many writes of this exact function#value shape
+	// existed in that function when the exemption was written. Recorded so
+	// the POPULATION is pinned, not just this member of it: renumbering
+	// only happens when that population changes, and a changed population
+	// is exactly when a human should look again.
+	//
+	// Together with the content now carried in the key, this closes the
+	// inheritance route in both directions. Add a same-shaped write and the
+	// total moves, so the entry is named alongside the new unaudited site;
+	// remove the audited one and the total moves again, or the entry
+	// matches nothing at all.
+	//
+	// ONE residual, stated rather than papered over: a SINGLE edit that
+	// deletes the audited write and adds a TEXTUALLY IDENTICAL one
+	// elsewhere in the same function restores the total, and the survivor
+	// inherits the exemption silently. That is tolerable only because the
+	// two writes are the same expression -- the recorded reason is as true
+	// of one as of the other. It stops being tolerable if the reason ever
+	// depends on WHERE the write sits rather than what it is, so a
+	// position-dependent reason does not belong in this list.
+	sameShapedTotal int
+	reason          string
+}
+
+var auditedLimitationWrites = map[string]limitationAudit{
+	"terminalResult#composite literal []string{limitation}#0": {
+		sameShapedTotal: 1,
+		reason:          "the SEED, not an addition: a one-element list holding the single fixed terminal disclosure resolveTerminalStatus chose. Every list has to start somewhere, and everything added after it goes through the bounded appender, which also normalizes an already-over-cap input -- so the seed cannot be the write that overflows the contract",
+	},
+	"Synthesize#cloneSlice#0": {
+		sameShapedTotal: 1,
+		reason:          "an INTERMEDIATE, not a list that reaches a consumer: this is the model's own draft list entering the synthesized result, and Investigate then passes result.Limitations through appendTemporalLimitations UNCONDITIONALLY -- it is called on every axis, current included, and appendBoundedLimitations normalizes an already-over-cap input -- before Validate runs",
+	},
 }
 
 // boundedLimitationPrimitive owns the cap. It is the only function allowed
@@ -127,6 +158,14 @@ func TestEveryLimitationAppendIsBounded(t *testing.T) {
 		return left.Offset < right.Offset
 	})
 
+	// How many writes share each shape, counted before any matching.
+	sameShapedTotals := map[string]int{}
+	for _, w := range writes {
+		if !isBoundedLimitationSource(w.value) {
+			sameShapedTotals[w.function+"#"+w.value]++
+		}
+	}
+
 	matched := map[string]bool{}
 	occurrence := map[string]int{}
 	for _, w := range writes {
@@ -148,14 +187,30 @@ func TestEveryLimitationAppendIsBounded(t *testing.T) {
 		// another write OF THE SAME SHAPE to the same function renumbers
 		// anything, and that is precisely when the exemption should be
 		// re-examined rather than silently carried.
-		key := fmt.Sprintf("%s#%s#%d", w.function, w.value, occurrence[w.function+"#"+w.value])
-		occurrence[w.function+"#"+w.value]++
-		if _, audited := auditedLimitationWrites[key]; !audited {
-			t.Errorf("%s writes a limitations-destined value from %q, which is not the bounded appender; route it through %s or add %q to auditedLimitationWrites with the reason it is already bounded",
-				w.position, w.value, boundedLimitationPrimitive, key)
+		//
+		// The index alone still let an exemption be INHERITED (codex
+		// round-10 P1): delete the audited write and a later same-shaped
+		// one renumbers into its place, matching the entry it was never
+		// written for, while the stale-entry check stays quiet because a
+		// same-shaped write does still exist. So an entry also pins the
+		// POPULATION it was written against. Either direction of change --
+		// one added, one removed -- moves the total and forces the entry to
+		// be re-examined rather than silently carried onto a different
+		// site.
+		base := w.function + "#" + w.value
+		key := fmt.Sprintf("%s#%d", base, occurrence[base])
+		occurrence[base]++
+		audit, audited := auditedLimitationWrites[key]
+		if !audited {
+			t.Errorf("%s writes a limitations-destined value from %q, which is not the bounded appender; route it through %s or add %q to auditedLimitationWrites with the reason it is already bounded (recording sameShapedTotal: %d)",
+				w.position, w.value, boundedLimitationPrimitive, key, sameShapedTotals[base])
 			continue
 		}
 		matched[key] = true
+		if audit.sameShapedTotal != sameShapedTotals[base] {
+			t.Errorf("%s: %q was audited when %d write(s) of that shape existed in %s, and there are now %d; the exemption may have been inherited by a different site, so re-examine it and update sameShapedTotal deliberately",
+				w.position, key, audit.sameShapedTotal, w.function, sameShapedTotals[base])
+		}
 	}
 	for key := range auditedLimitationWrites {
 		if !matched[key] {
@@ -515,10 +570,15 @@ func limitationWriteSource(expression ast.Expr) string {
 		// exempted an unrelated raw `[][]string{…}` a few lines away. Found
 		// while mutation-testing round 8 -- the mutation passed for that
 		// reason rather than the one under test.
-		if value.Type != nil {
-			return "composite literal " + types.ExprString(value.Type)
-		}
-		return "composite literal"
+		// The literal's OWN TEXT, not just its type. Typing it (round 8)
+		// stopped `[]string` and `[][]string` colliding, but left two
+		// different []string literals in one function sharing a shape --
+		// and a shape shared is a key inherited when one of them is
+		// deleted (round 10). Content makes two unrelated literals
+		// different writes; two textually identical ones remain
+		// interchangeable, which is correct, since they are the same
+		// statement.
+		return "composite literal " + truncateForKey(renderCompositeLit(value))
 	case *ast.Ident:
 		return value.Name
 	case *ast.SelectorExpr:
@@ -538,4 +598,35 @@ func limitationWriteSource(expression ast.Expr) string {
 	// function#value, so two different unresolved writes in one function
 	// sharing a bare "?" would let auditing one silently exempt the other.
 	return "?"
+}
+
+// truncateForKey keeps an expression's text short enough to read in an audit
+// key while staying deterministic. Long enough that two literals in one
+// function differ in the prefix; a tail that matters is a sign the write
+// should be a named helper anyway.
+func truncateForKey(text string) string {
+	const limit = 60
+	if len(text) <= limit {
+		return text
+	}
+	return text[:limit] + "..."
+}
+
+// renderCompositeLit prints a composite literal WITH its elements.
+// types.ExprString elides them to `{…}`, which is precisely the detail that
+// distinguishes two same-typed literals in one function.
+func renderCompositeLit(literal *ast.CompositeLit) string {
+	var builder strings.Builder
+	if literal.Type != nil {
+		builder.WriteString(types.ExprString(literal.Type))
+	}
+	builder.WriteString("{")
+	for index, element := range literal.Elts {
+		if index > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString(types.ExprString(element))
+	}
+	builder.WriteString("}")
+	return builder.String()
 }
