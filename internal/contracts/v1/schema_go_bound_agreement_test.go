@@ -37,11 +37,32 @@ type goBound struct {
 	why string
 }
 
-// asymmetricBounds names schema bounds that intentionally differ from the
-// Go value, with the reason. It is empty by design: every disagreement
-// found so far was a defect, not a decision. An entry here is a claim that
-// a reviewer decided the two SHOULD differ.
-var asymmetricBounds = map[string]goBound{}
+// asymmetricBounds names schema bounds the behavioural probe cannot judge,
+// with the reason. Every entry is a claim that a reviewer looked and found
+// the two sides agree despite what the probe measured -- it is not a place
+// to park a disagreement.
+//
+// It was empty until round 18, when enumerating the minimum-side keywords
+// reached the first bound of this shape. That is worth keeping in mind
+// before adding a second: every disagreement found before this one was a
+// defect.
+var asymmetricBounds = map[string]goBound{
+	// An OPTIONAL string with a minLength. The Go field is
+	// `model_identity,omitempty`, so an empty Go string serializes to an
+	// ABSENT property -- and model_identity is not in VersionSet.required,
+	// so absence is exactly what the schema permits. minLength binds only
+	// a property that is present, which is precisely what Go enforces:
+	// `v.ModelIdentity != "" && !validModelIdentity(...)`.
+	//
+	// The probe reports "Go accepts 0" because it can only drive the Go
+	// value to the empty string, which it cannot distinguish from the
+	// absent field that empty string actually becomes. The two sides
+	// agree; the instrument cannot express the difference.
+	"common#$defs.VersionSet.properties.model_identity.minLength": {
+		value: 1,
+		why:   "optional field: an empty Go string is an omitted JSON property, which the schema allows, and minLength binds only a present one",
+	},
+}
 
 // TestSchemaAndGoBoundsAgree proves the write-path Go bounds match the
 // published schema for every bound the answer surface depends on.
@@ -64,7 +85,14 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// The displaced count can never exceed the list it counts drops
 		// from, so it derives from the same write bound rather than
 		// naming a number of its own.
-		"result#properties.limitations_displaced.maximum":       contextFabricWriteBounds.narrativeCount,
+		"result#properties.limitations_displaced.maximum": contextFabricWriteBounds.narrativeCount,
+		// The floor is mapped explicitly, not left to the pattern
+		// classifier. The "result#properties." catch-all would otherwise
+		// swallow it as "bounded by the shared helpers", which is not true
+		// of this field: Go rejects a negative count with its own clause.
+		// Round-18's ruled mutation (minimum 0 -> 1) passed against that
+		// catch-all before this entry existed.
+		"result#properties.limitations_displaced.minimum":       0,
 		"result#properties.limitations.items.maxLength":         contextFabricWriteBounds.narrativeLength,
 		"result#properties.warnings.maxItems":                   contextFabricWriteBounds.narrativeCount,
 		"result#properties.warnings.items.maxLength":            contextFabricWriteBounds.narrativeLength,
@@ -132,6 +160,7 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 	}
 
 	checked, proved := 0, 0
+	exempted := make(map[string]bool, len(asymmetricBounds))
 	unmapped := make([]string, 0, len(discovered))
 	for _, bound := range discovered {
 		// PREFERRED: prove agreement behaviourally. A probe that accepts a
@@ -140,9 +169,40 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// comparison, done without anyone transcribing a number (codex
 		// round-8 F1). This is what makes the check derive from the
 		// declaration rather than from a hand-maintained table.
-		if probe, probeable := genericProbe(bound.path); probeable {
+		// A reviewed decision short-circuits the instrument. Consulted
+		// BEFORE the probe, because the probe is exactly what an entry
+		// here exists to overrule -- and because asymmetricBounds was
+		// declared and never read until round 18, which nothing noticed
+		// only because it was empty.
+		if entry, exempt := asymmetricBounds[bound.path]; exempt {
+			exempted[bound.path] = true
+			if entry.why == "" {
+				t.Errorf("%s is listed in asymmetricBounds with no reason; an unexplained exemption is indistinguishable from the defect", bound.path)
+			}
+			if entry.value != bound.value {
+				t.Errorf("%s: asymmetricBounds records %d, the schema now says %d; the exemption was written against a different bound", bound.path, entry.value, bound.value)
+			}
+			continue
+		}
+		// A MINIMUM inverts the probe. "At the bound is accepted, one past
+		// it is rejected" is the whole comparison, and for a minimum "past
+		// it" means one BELOW, not one above (round-18 fix B). Probing a
+		// minimum in the maximum direction measures nothing: a minLength
+		// of 1 obviously accepts length 2, which reads as "Go accepts
+		// beyond the schema" and is simply the wrong question.
+		//
+		// A minimum of 0 constrains nothing and has no value below it to
+		// reject, so it is not probeable at all and falls through to the
+		// declarative checks rather than manufacturing a proof.
+		leaf := bound.path[strings.LastIndex(bound.path, ".")+1:]
+		minimumSide := strings.HasPrefix(leaf, "min")
+		probedValue := bound.value + 1
+		if minimumSide {
+			probedValue = bound.value - 1
+		}
+		if probe, probeable := genericProbe(bound.path); probeable && !(minimumSide && bound.value == 0) {
 			atBound := probe.apply(bound.value)
-			pastBound := probe.apply(bound.value + 1)
+			pastBound := probe.apply(probedValue)
 			switch {
 			case errors.Is(atBound, errProbeUnreachable) || errors.Is(pastBound, errProbeUnreachable):
 				// UNREACHABLE IS NOT A REJECTION. A probe that cannot build
@@ -161,8 +221,12 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 			case atBound == nil && pastBound == nil:
 				// Go accepts beyond the schema: the service can emit a
 				// document violating its own contract.
-				t.Errorf("%s: schema says %d but Go accepts %d; the service can emit a document that violates its own contract",
-					bound.path, bound.value, bound.value+1)
+				direction := "but Go accepts"
+				if minimumSide {
+					direction = "as a minimum but Go accepts"
+				}
+				t.Errorf("%s: schema says %d %s %d; the service can emit a document that violates its own contract",
+					bound.path, bound.value, direction, probedValue)
 				continue
 			case atBound != nil:
 				// The probe cannot isolate this bound (a cross-field
@@ -193,6 +257,14 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 	// The denominator is reported explicitly: "classified the rest" hid how
 	// large the residual bucket actually is, and that bucket is where the
 	// round-9 fact_requirements drift was sitting.
+	// The other side of the exemption list: an entry matching no
+	// discovered bound describes nothing, and would quietly keep excusing
+	// a path that no longer exists.
+	for path := range asymmetricBounds {
+		if !exempted[path] {
+			t.Errorf("asymmetricBounds lists %q, which matches no schema bound; remove it rather than leaving an exemption that describes nothing", path)
+		}
+	}
 	t.Logf("%d schema bounds: %d proved behaviourally, %d compared declaratively, %d classified by pattern",
 		len(discovered), proved, checked, len(discovered)-proved-checked)
 }
@@ -272,7 +344,7 @@ type discoveredBound struct {
 // while the Go write path enforced 100, past a guard written precisely to
 // catch that. A keyword this file does not know about is a bound nothing
 // checks.
-var boundKeywords = []string{"maxItems", "maxLength", "maxProperties", "maximum"}
+var boundKeywords = []string{"maxItems", "maxLength", "maxProperties", "maximum", "minItems", "minLength", "minimum"}
 
 // schemaBounds enumerates every maxItems/maxLength in both canonical
 // documents, as "<document>#<dotted path>.<keyword>".
@@ -294,7 +366,9 @@ func schemaBounds(t *testing.T, documents map[string]map[string]any) []discovere
 			}
 			for key, child := range value {
 				switch key {
-				case "maxItems", "maxLength", "maxProperties", "maximum", "description", "title", "$comment", "$schema", "$id":
+				case "maxItems", "maxLength", "maxProperties", "maximum",
+					"minItems", "minLength", "minimum",
+					"description", "title", "$comment", "$schema", "$id":
 					continue
 				}
 				walk(document, child, path+"."+key)
