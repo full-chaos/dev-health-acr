@@ -461,6 +461,38 @@ func TestDisplacedLimitationCountMustBeCoherent(t *testing.T) {
 		}
 	})
 
+	// Round-17 finding 2: the three invariants, each pinned separately.
+	t.Run("a legacy-era displaced row stays readable", func(t *testing.T) {
+		// 250 limitations with the disclosure last is what a row written
+		// before the cap narrowed looks like. The write path must reject
+		// it -- the cap is 100 now -- and the stored path must accept it,
+		// because the row is immutable and was legal when written.
+		legacy := make([]string, 0, 250)
+		for i := 0; i < 249; i++ {
+			legacy = append(legacy, "Legacy-era caveat number "+strconv.Itoa(i)+".")
+		}
+		legacy = append(legacy, ContextFabricRetrievalDegradedLimitation)
+
+		result := base
+		result.Limitations = legacy
+		result.LimitationsDisplaced = 1
+		if err := result.ValidateStored(); err != nil {
+			t.Errorf("a legitimate 250-era displaced row was rejected on the lenient path: %v", err)
+		}
+		if err := result.Validate(); err == nil {
+			t.Error("the write path accepted a 250-entry limitation list; the cap is 100")
+		}
+	})
+
+	t.Run("a displaced count above the era's own ceiling is rejected", func(t *testing.T) {
+		result := base
+		result.Limitations = full
+		result.LimitationsDisplaced = 251
+		if err := result.ValidateStored(); err == nil {
+			t.Error("a displaced count past the legacy ceiling was accepted")
+		}
+	})
+
 	t.Run("legacy rows carrying zero stay readable", func(t *testing.T) {
 		result := base
 		result.LimitationsDisplaced = 0

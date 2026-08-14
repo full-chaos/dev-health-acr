@@ -57,10 +57,14 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 	// below rather than a numeric comparison.
 	goBoundsByPath := map[string]int{
 		// Result-level answer text and collections.
-		"result#properties.direct_judgment.maxLength":           contextFabricWriteBounds.judgmentLength,
-		"result#properties.current_state.maxLength":             contextFabricWriteBounds.judgmentLength,
-		"result#properties.deterministic_answer.maxLength":      contextFabricWriteBounds.deterministicAnswerLength,
-		"result#properties.limitations.maxItems":                contextFabricWriteBounds.narrativeCount,
+		"result#properties.direct_judgment.maxLength":      contextFabricWriteBounds.judgmentLength,
+		"result#properties.current_state.maxLength":        contextFabricWriteBounds.judgmentLength,
+		"result#properties.deterministic_answer.maxLength": contextFabricWriteBounds.deterministicAnswerLength,
+		"result#properties.limitations.maxItems":           contextFabricWriteBounds.narrativeCount,
+		// The displaced count can never exceed the list it counts drops
+		// from, so it derives from the same write bound rather than
+		// naming a number of its own.
+		"result#properties.limitations_displaced.maximum":       contextFabricWriteBounds.narrativeCount,
 		"result#properties.limitations.items.maxLength":         contextFabricWriteBounds.narrativeLength,
 		"result#properties.warnings.maxItems":                   contextFabricWriteBounds.narrativeCount,
 		"result#properties.warnings.items.maxLength":            contextFabricWriteBounds.narrativeLength,
@@ -262,7 +266,13 @@ type discoveredBound struct {
 
 // boundKeywords are the schema keywords that state a size the Go write path
 // must agree with.
-var boundKeywords = []string{"maxItems", "maxLength", "maxProperties"}
+// "maximum" joins them for CHAOS-3746 round-17 finding 2. Enumerating
+// only the collection and string keywords left every integer bound
+// invisible: limitations_displaced shipped with a schema maximum of 250
+// while the Go write path enforced 100, past a guard written precisely to
+// catch that. A keyword this file does not know about is a bound nothing
+// checks.
+var boundKeywords = []string{"maxItems", "maxLength", "maxProperties", "maximum"}
 
 // schemaBounds enumerates every maxItems/maxLength in both canonical
 // documents, as "<document>#<dotted path>.<keyword>".
@@ -284,7 +294,7 @@ func schemaBounds(t *testing.T, documents map[string]map[string]any) []discovere
 			}
 			for key, child := range value {
 				switch key {
-				case "maxItems", "maxLength", "maxProperties", "description", "title", "$comment", "$schema", "$id":
+				case "maxItems", "maxLength", "maxProperties", "maximum", "description", "title", "$comment", "$schema", "$id":
 					continue
 				}
 				walk(document, child, path+"."+key)

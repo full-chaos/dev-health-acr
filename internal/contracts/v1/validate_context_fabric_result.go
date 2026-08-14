@@ -665,7 +665,21 @@ func (r ContextFabricInvestigationResult) validate(bounds contextFabricBounds) e
 		return fmt.Errorf("result displaced-limitation count violates v1 bounds")
 	}
 	if r.LimitationsDisplaced > 0 {
-		if len(r.Limitations) != ContextFabricLimitationsMaxCount || !HasContextFabricRetrievalDegradedLimitation(r.Limitations) {
+		// "The list was full" is evaluated against the cap the ROW WAS
+		// WRITTEN UNDER, not today's (round-17 finding 2). A displacement
+		// only ever happens at a cap, so on the write path this is exactly
+		// the current cap; on the lenient stored path it is anything from
+		// the current cap up to the legacy ceiling, which is what a
+		// 250-era displaced row legitimately looks like. Demanding the
+		// current cap on both paths made a perfectly good stored answer
+		// unreadable -- the same mistake the padded-text bounds made
+		// before rawTextLength split them.
+		//
+		// The two ends are derived, not restated: the floor is the write
+		// cap and the ceiling is whichever cap this validation is running
+		// under, so on the write path the pair collapses to equality.
+		full := len(r.Limitations) >= ContextFabricLimitationsMaxCount && len(r.Limitations) <= bounds.narrativeCount
+		if !full || !HasContextFabricRetrievalDegradedLimitation(r.Limitations) {
 			return fmt.Errorf("result claims displaced limitations without the full list and disclosure that would require one")
 		}
 	}
