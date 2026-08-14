@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -135,6 +136,27 @@ import (
 // explicitly.
 //
 // A check added here without an entry above is the R6-5 defect returning.
+//
+//	TestSpellingRecognitionCoversEveryLiteralForm
+//	    one case per literal form that ONLY that form satisfies, plus a
+//	    negative control -- the repo-level anchors cannot tell "both forms
+//	    work" from "one form works" (round-9 F3)
+//
+// SPELLING RECOGNITION HAS EXACTLY ONE IMPLEMENTATION (round 9).
+//
+// Both passes call namesDeclaredTable; neither compares literals itself.
+// This is the class closure for a defect that recurred three times on this
+// detector -- round 7 widened terminators, round 8 added raw literals,
+// and the round-8 self-audit found line 322 still interpreted-only. Each
+// time a pass-local comparison was widened while a sibling kept its own
+// narrower one, which is the same error in three costumes: fixing the pass
+// in front of me rather than the class the principle names.
+//
+// Consolidation removes the possibility structurally rather than promising
+// vigilance, so nothing further follows it. A new pass that compares
+// literals itself, instead of calling the recognizer, is the defect
+// returning -- and the per-form anchor above is what makes a silently
+// narrowed recognizer fail loudly.
 
 // repoRoot walks up from this package to the module root.
 func repoRoot(t *testing.T) string {
@@ -270,17 +292,29 @@ func TestNoTestAuthorsDeclaredTableDDL(t *testing.T) {
 		exempt := exemptedLines(contents)
 
 		// Pass 1: a CREATE TABLE naming a declared table directly.
-		for index, line := range strings.Split(contents, "\n") {
-			for _, match := range createTablePattern.FindAllStringSubmatch(line, -1) {
-				if _, isDeclared := declared[match[1]]; !isDeclared {
-					nonDeclaredSightings++
-					continue
-				}
-				if _, ok := exempt[index+1]; ok {
-					continue
-				}
-				offences = append(offences, fmt.Sprintf("%s:%d hand-writes CREATE TABLE %s", relative, index+1, match[1]))
+		//
+		// Round-9 F2 (multiline half): this scanned LINE BY LINE, so a
+		// name on the line after the phrase -- ordinary in a multiline raw
+		// DDL string -- was invisible to it, and pass 2 could not see the
+		// name either because a bare word inside a raw string is not a
+		// literal in any spelling. The pattern's own \s+ already spans
+		// newlines, so scanning the whole file closes the case without new
+		// machinery: it removes a per-LINE assumption exactly as the
+		// recognizer consolidation removed a per-PASS one.
+		//
+		// Offences are still attributed to a line, derived from the match
+		// offset, so exemption windows keep working unchanged.
+		for _, match := range createTablePattern.FindAllStringSubmatchIndex(contents, -1) {
+			name := contents[match[2]:match[3]]
+			if _, isDeclared := declared[name]; !isDeclared {
+				nonDeclaredSightings++
+				continue
 			}
+			line := 1 + strings.Count(contents[:match[0]], "\n")
+			if _, ok := exempt[line]; ok {
+				continue
+			}
+			offences = append(offences, fmt.Sprintf("%s:%d hand-writes CREATE TABLE %s", relative, line, name))
 		}
 
 		// Pass 2 (R5-1): the phrase anywhere in a file that also names a
@@ -319,7 +353,7 @@ func TestNoTestAuthorsDeclaredTableDDL(t *testing.T) {
 			}
 		}
 		for table := range declared {
-			if !strings.Contains(contents, `"`+table+`"`) {
+			if !fileNamesDeclaredTable(contents, table) {
 				continue
 			}
 			if pass1Reported(offences, relative, table) {
@@ -495,7 +529,7 @@ func TestNoSecondPhysicalSourceOutsideTheDeclaration(t *testing.T) {
 			// are built at runtime rather than written as literals -- the
 			// masked span then hides nothing, because there was no literal
 			// in it to hide.
-			line = renderCall.ReplaceAllString(line, "")
+			line = maskRenderCalls(line)
 			for _, table := range declaredNames {
 				if !namesDeclaredTable(line, table) {
 					continue
@@ -545,10 +579,102 @@ func TestNoSecondPhysicalSourceOutsideTheDeclaration(t *testing.T) {
 	}
 }
 
-// renderCall matches one devhealthschema.DDL(...) call so its span can be
-// masked out of a line. Non-greedy to the first closing parenthesis: the
-// call takes table names, never nested calls, so the first `)` ends it.
-var renderCall = regexp.MustCompile(`devhealthschema\.DDL\([^)]*\)`)
+// fileNamesDeclaredTable reports whether ANY line of contents names the
+// table, through the SAME recognizer the rival sweep uses.
+//
+// Round-9 F2 (self-found at round 8, confirmed independently): this pass
+// used to ask strings.Contains(contents, `"table"`) -- interpreted form
+// only -- so fmt.Sprintf with a raw-literal name escaped it while pass 1
+// missed the non-adjacent name and the rival sweep needed three tables.
+// One recognizer now answers the spelling question for every pass.
+func fileNamesDeclaredTable(contents, table string) bool {
+	for _, line := range strings.Split(contents, "\n") {
+		if namesDeclaredTable(line, table) {
+			return true
+		}
+	}
+	return false
+}
+
+// renderCallMarker opens a devhealthschema.DDL(...) call.
+const renderCallMarker = "devhealthschema.DDL("
+
+// maskRenderCalls removes every devhealthschema.DDL(...) SPAN from a line,
+// leaving everything around it intact.
+//
+// Round-9 F1: this used to be a regexp ending at the FIRST `)`, on the
+// stated assumption that the call takes table names and never nested
+// calls. DDL(strings.TrimSpace("repos"), "ci_pipeline_runs", ...) breaks
+// that: masking stopped inside the nested call and left the remaining
+// arguments visible, so a legitimate render was reported as a RIVAL.
+//
+// That direction matters. Every earlier defect in this series was an
+// escape; this one is a FALSE POSITIVE, and false positives are how
+// permanent exemptions get minted -- the same long-term cost that argued
+// against lowering the threshold to 2. A detector that cries wolf trains
+// people to silence it, and an exemption added to quiet it covers whatever
+// is written beside it forever after.
+//
+// So the end of the call is found by BALANCING parentheses, and string
+// literals are skipped whole: a paren inside "repos)" or `repos)` is text,
+// not structure. A call left unbalanced at end of line continues onto the
+// next one, so everything after it on this line is inside the call and is
+// masked with it.
+func maskRenderCalls(line string) string {
+	for {
+		start := strings.Index(line, renderCallMarker)
+		if start < 0 {
+			return line
+		}
+		open := start + len(renderCallMarker) - 1
+		end := matchingParen(line, open)
+		if end < 0 {
+			return line[:start]
+		}
+		line = line[:start] + line[end+1:]
+	}
+}
+
+// matchingParen returns the index of the parenthesis closing the one at
+// open, or -1 when the line does not contain it.
+func matchingParen(line string, open int) int {
+	depth := 0
+	for index := open; index < len(line); index++ {
+		switch line[index] {
+		case '"':
+			index = skipInterpretedLiteral(line, index)
+		case '`':
+			offset := strings.IndexByte(line[index+1:], '`')
+			if offset < 0 {
+				return -1 // raw literal continues onto the next line
+			}
+			index += 1 + offset
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return index
+			}
+		}
+	}
+	return -1
+}
+
+// skipInterpretedLiteral returns the index of the quote closing the one at
+// quote, honouring backslash escapes.
+func skipInterpretedLiteral(line string, quote int) int {
+	for index := quote + 1; index < len(line); index++ {
+		if line[index] == '\\' {
+			index++
+			continue
+		}
+		if line[index] == '"' {
+			return index
+		}
+	}
+	return len(line) - 1
+}
 
 // namesDeclaredTable reports whether one line names a declared table as a
 // complete Go string literal in a DECLARATION shape.
@@ -602,6 +728,58 @@ var (
 	declarationShapeMu sync.Mutex
 	declarationShapes  = map[string]*regexp.Regexp{}
 )
+
+// TestSpellingRecognitionCoversEveryLiteralForm is the round-9 F3 anchor:
+// NON-VACUITY APPLIED PER FORM.
+//
+// sanctionedSightings proves the recognizer still fires, but not that each
+// SPELLING still fires: deleting the raw alternative leaves interpreted
+// schema-map keys matching, so the repo-level anchor stays green while raw
+// coverage dies silently. That is the vacuity shape one level down -- an
+// anchor that cannot distinguish "both forms work" from "one form works".
+//
+// DESIGN FACT behind the shape of this test: the repository contains ZERO
+// raw-literal declaration-shaped table names -- measured, every .go file,
+// not assumed -- so there is no legitimate raw sanctioned SITE to anchor
+// on. The alternative to a fixture would be writing a raw-literal site
+// into production code purely to be observed by a test, which is worse
+// than a fixture: it changes shipping code to satisfy a guard.
+//
+// So the anchor asserts the RECOGNIZER directly, one case per form, on a
+// table name DERIVED from the declaration rather than hardcoded.
+func TestSpellingRecognitionCoversEveryLiteralForm(t *testing.T) {
+	t.Parallel()
+	if len(devhealthschema.ProductionColumns) == 0 {
+		t.Fatal("the declaration is empty, so this anchor has no name to test with")
+	}
+	names := make([]string, 0, len(devhealthschema.ProductionColumns))
+	for table := range devhealthschema.ProductionColumns {
+		names = append(names, table)
+	}
+	sort.Strings(names)
+	table := names[0]
+
+	// Go has exactly two string literal forms. Each gets a case that ONLY
+	// that form satisfies, so removing either alternative fails here.
+	forms := []struct {
+		name string
+		line string
+	}{
+		{"interpreted", `	"` + table + `": {},`},
+		{"raw", "	`" + table + "`: {},"},
+	}
+	for _, form := range forms {
+		if !namesDeclaredTable(form.line, table) {
+			t.Errorf("the %s literal form is no longer recognized (%q); a rival written that way would be invisible while the other form kept the repo-level anchor green", form.name, form.line)
+		}
+	}
+
+	// Negative control: without it, a recognizer that matched everything
+	// would satisfy both cases above and this anchor would prove nothing.
+	if namesDeclaredTable("	FROM "+table+" WHERE org_id = ?", table) {
+		t.Error("a bare word inside SQL text was treated as a declaration-shaped literal; the recognizer now matches too much, which produces false positives rather than escapes")
+	}
+}
 
 // TestEveryPhysicalFacetHasOneSource is closure half (a): every declared
 // table carries a complete physical definition, and there is nowhere else
