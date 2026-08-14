@@ -952,6 +952,91 @@ func TestSpellingRecognitionCoversEveryLiteralForm(t *testing.T) {
 	}
 }
 
+// wrapsAQuoteCharacter reports whether a line concatenates a string
+// literal whose CONTENT is a single quote character -- the construction
+// that wraps a table name in quotes, in ANY spelling.
+//
+// Round-12 F1: this used to be a regexp over two backtick-based source
+// shapes, so `strings.EqualFold(line, "\""+table+"\"")` walked past the
+// guard -- the quote is right there beside the name, just spelled as an
+// escaped interpreted literal. That is the literal-forms lesson landing on
+// the guard's own pattern, a fifth turn of the enumerate-the-shapes game.
+//
+// So the spelling is no longer enumerated: each literal is found with the
+// same lexer the other passes use, its content is DECODED, and a literal
+// whose content is one quote character next to a `+` is a wrap. Escaped
+// interpreted, raw, or any mixture reduce to the same decoded content, so
+// there is nothing left to spell differently.
+//
+// Measured before adopting: it finds exactly the two constructions this
+// package already has, both inside the recognizer -- no false positives.
+//
+// DECLARED NON-COVERAGE, distinct from the variable-split residual: a
+// quote assembled at RUNTIME (string(rune(34)), a constant defined
+// elsewhere) has no literal to decode. Like the variable split, that is
+// beyond any source-text check.
+func wrapsAQuoteCharacter(line string) bool {
+	for _, literal := range stringLiterals(line) {
+		if literal.content != `"` && literal.content != "`" {
+			continue
+		}
+		before := strings.TrimSpace(line[:literal.start])
+		after := strings.TrimSpace(line[literal.end+1:])
+		if strings.HasSuffix(before, "+") || strings.HasPrefix(after, "+") {
+			return true
+		}
+	}
+	return false
+}
+
+// literalSpan is one string literal and its decoded content.
+type literalSpan struct {
+	start   int
+	end     int
+	content string
+}
+
+// stringLiterals returns every string literal on a line, skipping rune
+// literals so an apostrophe cannot open a phantom string.
+func stringLiterals(line string) []literalSpan {
+	var spans []literalSpan
+	for index := 0; index < len(line); index++ {
+		switch line[index] {
+		case '"':
+			closing := skipInterpretedLiteral(line, index)
+			if closing >= len(line) || closing <= index || line[closing] != '"' {
+				return spans // unterminated: nothing further is a literal
+			}
+			spans = append(spans, literalSpan{index, closing, unescapeInterpreted(line[index+1 : closing])})
+			index = closing
+		case '`':
+			offset := strings.IndexByte(line[index+1:], '`')
+			if offset < 0 {
+				return spans
+			}
+			closing := index + 1 + offset
+			spans = append(spans, literalSpan{index, closing, line[index+1 : closing]})
+			index = closing
+		case '\'':
+			index = skipRuneLiteral(line, index)
+		}
+	}
+	return spans
+}
+
+// unescapeInterpreted decodes backslash escapes far enough to compare a
+// literal's content against a quote character.
+func unescapeInterpreted(text string) string {
+	var decoded strings.Builder
+	for index := 0; index < len(text); index++ {
+		if text[index] == '\\' && index+1 < len(text) {
+			index++
+		}
+		decoded.WriteByte(text[index])
+	}
+	return decoded.String()
+}
+
 // recognizerFunctions is the sanctioned span, named EXPLICITLY.
 //
 // Round-11 F3: the span used to be keyed to one function name, so a helper
@@ -981,7 +1066,8 @@ var functionName = regexp.MustCompile(`^func (?:\([^)]*\) )?(\w+)\(`)
 // pattern rather than inventing machinery.
 //
 // THE RULE IS ANY QUOTE-WRAP OUTSIDE THE RECOGNIZER, with no list of
-// comparison verbs. A verb list was written first and then deleted: it is
+// comparison verbs and no list of literal spellings (round-12 F1: the
+// wrap is found by DECODING literals, not by matching their source form). A verb list was written first and then deleted: it is
 // the enumerate-the-shapes game this file has lost four times
 // (terminators, literal forms, call granularity, and verbs themselves),
 // and it was unnecessary -- MEASURED, exactly two quote-wrap constructions
@@ -1008,9 +1094,6 @@ func TestSpellingComparisonsExistOnlyInTheRecognizer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the package directory: %v", err)
 	}
-
-	// The two ways Go source can wrap a value in a string-literal quote.
-	quoteWrap := regexp.MustCompile("(`\"`|\"`\")\\s*\\+|\\+\\s*(`\"`|\"`\")")
 
 	sanctioned := 0
 	var offences []string
@@ -1054,7 +1137,7 @@ func TestSpellingComparisonsExistOnlyInTheRecognizer(t *testing.T) {
 			if strings.HasPrefix(strings.TrimSpace(line), "//") {
 				continue // comments discuss these shapes on purpose
 			}
-			if !quoteWrap.MatchString(line) {
+			if !wrapsAQuoteCharacter(line) {
 				continue
 			}
 			if inRecognizer {
@@ -1094,36 +1177,122 @@ func TestSpellingComparisonsExistOnlyInTheRecognizer(t *testing.T) {
 // above the wraps and the span ends early again. So the lexer is verified
 // at the mechanism level here instead of through a contrived arrangement
 // of the code under test.
+//
+// Round-12 F2: because this test IS the evidence standing in for that
+// unmanufacturable red, its coverage has to span the lexer's whole claimed
+// surface. Every behaviour asserted below was published as design INTENT
+// in the round-12 record; each now has a case, including the
+// unterminated-construct asymmetry flagged there as the most likely to be
+// wrong.
+//
+// CASE STRENGTH IS NOT UNIFORM, and saying so is the point of the ledger.
+// A mutation matrix over the lexer (escapes disabled, block comments
+// disabled, rune literals disabled, interpreted literals allowed past a
+// newline, newlines blanked) fails these cases for their own reasons and
+// confirms they can fail at all. TWO cases are regression guards rather
+// than discriminators: "escaped backslash ends the literal" survives the
+// escape mutation because both readings close the literal in the same
+// place, and "CRLF line endings" pins offset and newline preservation,
+// which no plausible mutation of this lexer breaks. They are kept for what
+// they pin, not claimed as proofs.
 func TestCodeViewBlanksWhatIsNotStructure(t *testing.T) {
 	t.Parallel()
-	source := "a := regexp.MustCompile(`[}]`)\n" +
-		"b := ')' // a paren ) in a comment\n" +
-		"c := \"a ( b\"\n" +
-		"d := {\n"
-	view := codeView(source)
 
-	if len(view) != len(source) {
-		t.Fatalf("the view is %d bytes for %d bytes of source; every offset, line number and exemption window depends on them being equal", len(view), len(source))
-	}
-	if strings.Count(view, "\n") != strings.Count(source, "\n") {
-		t.Fatal("the view lost a newline, so line numbers would shift")
-	}
-	// Structure OUTSIDE literals and comments survives.
-	if !strings.Contains(view, "regexp.MustCompile(") || !strings.Contains(view, "d := {") {
-		t.Fatalf("the view blanked real structure: %q", view)
-	}
-	// Everything inside a literal or comment is text, not structure.
-	for _, kind := range []struct {
-		name  string
-		count int
+	// structure counts what must SURVIVE; text counts what must not.
+	for _, test := range []struct {
+		name    string
+		source  string
+		survive []string
+		blanked []string
 	}{
-		{"}", strings.Count(view, "}")},
-		{"(", strings.Count(view, "(") - 1}, // the MustCompile call is real
-		{")", strings.Count(view, ")") - 1},
+		{
+			name:    "line comment",
+			source:  "b := ')' // a paren ) in a comment\n",
+			survive: []string{"b :="},
+			blanked: []string{")"},
+		},
+		{
+			name:    "raw literal spanning lines",
+			source:  "a := `{\nnot ) structure\n}`\nreal := (\n",
+			survive: []string{"real := ("},
+			blanked: []string{"{", "}"},
+		},
+		{
+			name:    "escaped quote does not end the literal",
+			source:  "a := \"x \\\" still ) inside\" + real(\n",
+			survive: []string{"real("},
+			blanked: []string{"inside"},
+		},
+		{
+			name:    "escaped backslash ends the literal",
+			source:  "a := \"x\\\\\" + real(\n",
+			survive: []string{"real("},
+			blanked: []string{"x"},
+		},
+		{
+			name: "rune literal escapes",
+			// The brace lives INSIDE a rune literal and appears nowhere
+			// else, so this case fails if rune literals stop being lexed
+			// -- without it the case asserted only survival and could not
+			// fail for its own reason.
+			source:  "a := '\\'' \nb := '{'\nreal := (\n",
+			survive: []string{"real := ("},
+			blanked: []string{"{"},
+		},
+		{
+			name:    "block comment, not nested",
+			source:  "/* ) /* still comment */ real := (\n",
+			survive: []string{"real := ("},
+			blanked: []string{"still comment"},
+		},
+		{
+			name:    "CRLF line endings",
+			source:  "a := \"x )\"\r\nreal := (\r\n",
+			survive: []string{"real := ("},
+			blanked: []string{"x )"},
+		},
+		{
+			name:    "unterminated block comment at EOF",
+			source:  "real := (\n/* ) unterminated\nmore ) text\n",
+			survive: []string{"real := ("},
+			blanked: []string{"unterminated", "more ) text"},
+		},
+		{
+			name:    "unterminated interpreted literal stops at the newline",
+			source:  "a := \"oops )\nreal := (\n",
+			survive: []string{"real := ("},
+			blanked: []string{"oops"},
+		},
+		{
+			name:    "unterminated raw literal runs to EOF",
+			source:  "real := (\na := `oops )\nmore ) text\n",
+			survive: []string{"real := ("},
+			blanked: []string{"oops", "more ) text"},
+		},
 	} {
-		if kind.count != 0 {
-			t.Errorf("%d %q survived in the view; a brace or paren inside a literal or comment counts as structure and mis-scopes both the balancer and the span tracker", kind.count, kind.name)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			view := codeView(test.source)
+
+			// Offsets and line numbers must survive, or every consumer of
+			// the view reports the wrong place.
+			if len(view) != len(test.source) {
+				t.Fatalf("view is %d bytes for %d bytes of source; every offset and exemption window depends on them being equal", len(view), len(test.source))
+			}
+			if strings.Count(view, "\n") != strings.Count(test.source, "\n") {
+				t.Fatalf("view has %d newlines, source has %d; line numbers would shift", strings.Count(view, "\n"), strings.Count(test.source, "\n"))
+			}
+			for _, fragment := range test.survive {
+				if !strings.Contains(view, fragment) {
+					t.Errorf("the view blanked real structure %q: %q", fragment, view)
+				}
+			}
+			for _, fragment := range test.blanked {
+				if strings.Contains(view, fragment) {
+					t.Errorf("%q survived in the view; a paren or brace inside a literal or comment counts as structure and mis-scopes both the balancer and the span tracker: %q", fragment, view)
+				}
+			}
+		})
 	}
 }
 
