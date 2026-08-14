@@ -41,12 +41,24 @@ const (
 	minTimeout = 1 * time.Second
 	maxTimeout = 2 * time.Minute
 	// redirectDrainBytes bounds the ONLY hosted response body this client
-	// reads outside the configured ceiling: the few bytes of an
-	// unexpected redirect, drained so the connection can be reused before
-	// the request is failed. It is deliberately tiny and fixed rather than
-	// operator-tunable -- nothing here is parsed or returned, so a larger
-	// value would buy nothing and a smaller one would not change the
-	// outcome either.
+	// reads outside the configured ceiling: the body of an unexpected
+	// redirect, which is discarded before the request is failed.
+	//
+	// The drain is BEST-EFFORT connection reuse, and the distinction is
+	// load-bearing rather than pedantic. A redirect body within this bound
+	// is read to EOF, so net/http can keep the connection; a larger one is
+	// deliberately left unread, which costs the connection and nothing
+	// else. That trade is the point -- reading an unbounded body to save a
+	// socket would hand a hostile or broken server exactly the unmetered
+	// read the ceiling exists to prevent.
+	//
+	// Losing the connection has no correctness consequence here: the body
+	// is discarded, an ErrUnexpectedRedirect is returned, and no state
+	// crosses the boundary. Only a reconnect is paid.
+	//
+	// Fixed rather than operator-tunable because nothing is kept, and
+	// deliberately small: the audit in response_ceiling_test.go accepts
+	// this exemption only while the bound stays negligible.
 	redirectDrainBytes      = 4096
 	minResponseBytes        = 8 << 10 // 8 KiB
 	maxResponseBytesCeil    = 8 << 20 // 8 MiB

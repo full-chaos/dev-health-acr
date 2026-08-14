@@ -69,9 +69,25 @@ func TestSidecarCeilingClearsTheServingBudget(t *testing.T) {
 // matches a real site fails too. An audited exemption that quietly stopped
 // describing the code would be worse than no list at all.
 var auditedBoundedBodyReads = map[string]string{
-	"callPublic#redirectDrainBytes":      "unexpected-redirect drain: the body is discarded into io.Discard, never parsed and never returned, and the request fails immediately afterwards. Bounded by a fixed few KiB rather than the operator ceiling because nothing is kept -- the read exists only so the connection can be reused.",
+	"callPublic#redirectDrainBytes":      "unexpected-redirect drain: the body is discarded into io.Discard, never parsed and never returned, and the request fails immediately afterwards. Bounded rather than read through the operator ceiling because nothing is kept. Best-effort reuse: a body within the bound is read to EOF and the connection survives; a larger one forfeits the connection rather than being read unbounded, which costs a reconnect and nothing else.",
 	"callWithHeaders#redirectDrainBytes": "the same drain on the transport path, for the same reason.",
 }
+
+// auditedBoundValues pins the VALUE behind each audited bound, not only
+// the site that uses it (round-17 finding 3).
+//
+// Keying the audit on the expression alone meant redirectDrainBytes could
+// grow to any size and still pass: the exemption said "an audited bound",
+// and any number satisfied that. The exemption is only justified while the
+// bound stays negligible against the ceiling it sidesteps, so the value is
+// asserted too.
+var auditedBoundValues = map[string]int{"redirectDrainBytes": redirectDrainBytes}
+
+// maxAuditedBoundBytes is how large an audited non-ceiling bound may be
+// before it stops being negligible and has to be justified again on its
+// own terms. Set well above today's drain and far below the ceiling: this
+// is a tripwire against silent growth, not a second tuning knob.
+const maxAuditedBoundBytes = 64 << 10
 
 // bodyConsumption is one place a hosted response body is used as a value.
 type bodyConsumption struct {
@@ -183,6 +199,16 @@ func TestEveryHostedResponseBodyFlowsThroughABound(t *testing.T) {
 				continue
 			}
 			matched[key] = true
+			expression := strings.TrimPrefix(consumption.bound, "bounded:")
+			value, known := auditedBoundValues[expression]
+			if !known {
+				t.Errorf("%s is audited but its bound %q has no pinned value; add it to auditedBoundValues so growth cannot pass the audit unnoticed", consumption.position, expression)
+				continue
+			}
+			if value <= 0 || value > maxAuditedBoundBytes {
+				t.Errorf("%s bounds a response body at %d bytes, outside the negligible range this exemption rests on (1..%d): an audited bound that grew this far needs justifying against the ceiling on its own terms, not by inheriting an old audit",
+					consumption.position, value, maxAuditedBoundBytes)
+			}
 		default:
 			t.Errorf("%s consumes a hosted response body without any bound; every read must flow through readLimited or an audited io.LimitReader, whatever verb does the reading", consumption.position)
 		}
