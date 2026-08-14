@@ -361,23 +361,132 @@ func TestNoMatchProseKeepsAbsenceWordingWhenNothingMatched(t *testing.T) {
 	}
 }
 
-// The synthesized (model) path shares statusSentence, so it inherits the same
-// rule: a model-authored no_match over a resolution that produced candidates
-// but committed none must not claim absence either.
-func TestStatusSentenceNoMatchIsCandidateAware(t *testing.T) {
+// The synthesized (model) path shares statusSentence, so it inherits every
+// rule below. no_match is FOUR states, not one (codex rounds 1-2), and the
+// sentence must name the one that actually happened without guessing a cause.
+func TestStatusSentenceNoMatchDescribesTheActualResolutionState(t *testing.T) {
 	t.Parallel()
-	if got := statusSentence(InvestigationNoMatch, false); !strings.Contains(got, "could be resolved") {
-		t.Fatalf("statusSentence(no_match, false) = %q, want the absence sentence", got)
+	subject := SubjectRef{Kind: SubjectProject, CanonicalID: "project_x", Label: "X"}
+	candidate := func(id string) SubjectCandidate {
+		return SubjectCandidate{ReceiptID: "receipt_" + id, Subject: SubjectRef{Kind: SubjectProject, CanonicalID: id, Label: id}, State: ResolutionAmbiguous, Confidence: 0.5}
 	}
-	got := statusSentence(InvestigationNoMatch, true)
-	if strings.Contains(got, "No investigation subject could be resolved") {
-		t.Fatalf("statusSentence(no_match, true) = %q, want it not to claim absence", got)
+	cases := []struct {
+		name       string
+		resolution SubjectResolution
+		want       string
+		reject     []string
+	}{
+		{
+			name:       "nothing matched",
+			resolution: SubjectResolution{},
+			want:       "No investigation subject could be resolved",
+		},
+		{
+			name:       "one uncommitted candidate",
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{candidate("a")}},
+			want:       "One authorized subject matched",
+			reject:     []string{"more than one", "No investigation subject could be resolved"},
+		},
+		{
+			name:       "several uncommitted candidates",
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{candidate("a"), candidate("b")}},
+			want:       "more than one authorized subject matched",
+			reject:     []string{"No investigation subject could be resolved"},
+		},
+		{
+			// Contract-legal and shipped: the acceptance corpus's no-data
+			// case commits a subject, reads facts that return no rows, and
+			// takes no_match. Absence prose there is false twice over.
+			name:       "committed subject with no canonical data",
+			resolution: SubjectResolution{Committed: []SubjectRef{subject}, Candidates: []SubjectCandidate{}},
+			want:       "no canonical data was found",
+			reject:     []string{"No investigation subject could be resolved", "more than one", "One authorized subject matched"},
+		},
 	}
-	if !strings.Contains(got, "more than one authorized subject matched") {
-		t.Fatalf("statusSentence(no_match, true) = %q, want it to state that several matched", got)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			got := statusSentence(InvestigationNoMatch, testCase.resolution)
+			if !strings.Contains(got, testCase.want) {
+				t.Fatalf("statusSentence(no_match, %s) = %q, want it to contain %q", testCase.name, got, testCase.want)
+			}
+			for _, rejected := range testCase.reject {
+				if strings.Contains(got, rejected) {
+					t.Fatalf("statusSentence(no_match, %s) = %q, must not contain %q", testCase.name, got, rejected)
+				}
+			}
+			// Cause-free on the shared path in every branch: only the
+			// engine's terminal path knows a cause.
+			if strings.Contains(got, "clarification") {
+				t.Fatalf("statusSentence(no_match, %s) = %q, want no asserted cause on the shared path", testCase.name, got)
+			}
+		})
 	}
-	// It must not guess a cause: only the engine's terminal path knows one.
-	if strings.Contains(got, "clarification was not allowed") {
-		t.Fatalf("statusSentence(no_match, true) = %q, want no asserted cause on the shared path", got)
+}
+
+// CHAOS-3810 codex round-2 F1. Exactly ONE uncommitted candidate is a
+// reachable state -- a lone candidate that misses the 0.72 gate is left
+// uncommitted by ResolveFromMergedCandidates -- and prose claiming "more than
+// one" beside a single listed candidate contradicts the payload it travels
+// with, the same defect class as claiming absence beside candidates.
+func singleCandidateResolution(prompt string) SubjectResolution {
+	subject := SubjectRef{Kind: SubjectProject, CanonicalID: "project_lonely", Label: "Ask Dev (Platform)"}
+	return SubjectResolution{
+		Candidates: []SubjectCandidate{{
+			ReceiptID: "receipt_single00001", Subject: subject, State: ResolutionAmbiguous,
+			MatchReasons: []string{"Matched the subject term below the commit threshold."}, Confidence: 0.6, EvidenceRefIDs: []string{},
+		}},
+		Committed:           []SubjectRef{},
+		ClarificationPrompt: prompt,
+	}
+}
+
+func TestSingleUncommittedCandidateProseIsNotPlural(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name               string
+		allowClarification bool
+		wantStatus         InvestigationStatus
+		wantLimitation     string
+	}{
+		{name: "clarification allowed", allowClarification: true, wantStatus: InvestigationClarificationRequired, wantLimitation: clarificationRequiredLimitationOne},
+		{name: "clarification disallowed", allowClarification: false, wantStatus: InvestigationNoMatch, wantLimitation: ambiguousNoClarificationLimitationOne},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			graph := &acceptanceGraphReader{resolution: singleCandidateResolution(""), context: emptyGraphContext()}
+			engine := buildTerminalEngine(t, graph, nil)
+			request := validInvestigationRequest()
+			request.Options.AllowClarification = testCase.allowClarification
+
+			result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+			if err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			if result.Status != testCase.wantStatus {
+				t.Fatalf("Status = %q, want %q", result.Status, testCase.wantStatus)
+			}
+			if len(result.SubjectResolution.Candidates) != 1 {
+				t.Fatalf("Candidates = %#v, want exactly one", result.SubjectResolution.Candidates)
+			}
+			if !slices.Contains(result.Limitations, testCase.wantLimitation) {
+				t.Fatalf("Limitations = %#v, want the single-candidate wording", result.Limitations)
+			}
+			for _, limitation := range result.Limitations {
+				if strings.Contains(limitation, "more than one") {
+					t.Fatalf("Limitations = %#v, claim plurality with exactly one candidate attached", result.Limitations)
+				}
+			}
+			if strings.Contains(result.DeterministicAnswer, "more than one") {
+				t.Fatalf("DeterministicAnswer = %q, claims plurality with exactly one candidate attached", result.DeterministicAnswer)
+			}
+			// The prompt the caller is asked to act on must agree too.
+			if strings.Contains(result.SubjectResolution.ClarificationPrompt, "Several") {
+				t.Fatalf("ClarificationPrompt = %q, claims plurality with exactly one candidate", result.SubjectResolution.ClarificationPrompt)
+			}
+			if err := result.Validate(); err != nil {
+				t.Fatalf("result.Validate() = %v", err)
+			}
+		})
 	}
 }

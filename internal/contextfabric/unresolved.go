@@ -54,18 +54,30 @@ type ResultVersionProvider interface {
 // The fixed, non-interpolated limitations a terminal result carries. Same
 // discipline as retrievalDegradedLimitation: answer-facing prose that names
 // no subject, no term, no mechanism, and no error text.
+// The terminal limitations. Every one is a fixed, non-interpolated string
+// (same discipline as retrievalDegradedLimitation), which is why a count
+// distinction needs its own constant rather than a formatted number.
+//
+// Each pair exists because of CHAOS-3810 codex round-2 F1: a single
+// uncommitted candidate is a real, reachable state -- one candidate that
+// misses the 0.72 lone-candidate gate is left uncommitted by
+// ResolveFromMergedCandidates -- and plural prose beside exactly one listed
+// candidate is the same contradiction round-1 P2 fixed for absence prose.
+// Unlike statusSentence, which is shared with the model-authored path and
+// must stay cause-free, these are written by the engine, which KNOWS the
+// cause and names it.
 const (
-	clarificationRequiredLimitation = "The question matched more than one authorized subject, so no canonical facts were read until the intended subject is confirmed."
+	clarificationRequiredLimitationOne = "One authorized subject matched the question but could not be confirmed as its subject, so no canonical facts were read until it is confirmed."
+	clarificationRequiredLimitation    = "The question matched more than one authorized subject, so no canonical facts were read until the intended subject is confirmed."
 	// noMatchLimitation states ABSENCE, so it may only be used when the
 	// resolution genuinely produced no candidate at all.
 	noMatchLimitation = "No authorized subject in this organization's graph matched the question, so no canonical facts were read."
-	// ambiguousNoClarificationLimitation is the same status, honestly
-	// worded (CHAOS-3810 codex round-1 P2). A no_match result reached with
-	// candidates attached -- the caller disallowed clarification -- must
+	// The ambiguous-and-clarification-unavailable pair (CHAOS-3810 codex
+	// round-1 P2): a no_match result reached WITH candidates attached must
 	// not claim nothing matched while the candidates it names sit in the
-	// same payload. Here the engine DOES know the cause, so unlike
-	// statusSentence it names it.
-	ambiguousNoClarificationLimitation = "The question matched more than one authorized subject and this request did not allow clarification, so no subject was confirmed and no canonical facts were read. The matching candidates are listed in this result."
+	// same payload.
+	ambiguousNoClarificationLimitationOne = "One authorized subject matched the question but could not be confirmed, and this request did not allow clarification, so no subject was confirmed and no canonical facts were read. That candidate is listed in this result."
+	ambiguousNoClarificationLimitation    = "The question matched more than one authorized subject and this request did not allow clarification, so no subject was confirmed and no canonical facts were read. The matching candidates are listed in this result."
 )
 
 // fallbackClarificationPrompt is used only when a GraphReader marked a
@@ -80,7 +92,10 @@ const (
 // (ContextFabricInvestigationResult.Validate) would silently downgrade such a
 // resolution to no_match -- telling a caller that nothing matched when in
 // fact several things did.
-const fallbackClarificationPrompt = "Several authorized subjects matched this question. Confirm which one you mean, using the candidate receipts in this result."
+const (
+	fallbackClarificationPromptOne = "One authorized subject matched this question but could not be confirmed. Confirm it, using the candidate receipt in this result."
+	fallbackClarificationPrompt    = "Several authorized subjects matched this question. Confirm which one you mean, using the candidate receipts in this result."
+)
 
 // terminalResult composes the model-free result for an investigation that
 // resolved no subject to read facts for.
@@ -122,7 +137,7 @@ func (e *Engine) terminalResult(
 		limitations = append(limitations, retrievalDegradedLimitation)
 		coverage.Partial = true
 	}
-	answer := statusSentence(status, len(resolution.Candidates) > 0)
+	answer := statusSentence(status, resolution)
 	if status == InvestigationClarificationRequired && resolution.ClarificationPrompt != "" {
 		answer += " " + resolution.ClarificationPrompt
 	}
@@ -202,11 +217,27 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 	if len(resolution.Candidates) == 0 {
 		return InvestigationNoMatch, noMatchLimitation
 	}
+	// Exactly one uncommitted candidate is a REACHABLE state, not a
+	// theoretical one: ResolveFromMergedCandidates leaves a lone candidate
+	// uncommitted whenever it misses the 0.72 gate. Prose that says "more
+	// than one" beside a single listed candidate contradicts the payload it
+	// travels with (codex round-2 F1).
+	single := len(resolution.Candidates) == 1
 	if !request.Options.AllowClarification {
+		if single {
+			return InvestigationNoMatch, ambiguousNoClarificationLimitationOne
+		}
 		return InvestigationNoMatch, ambiguousNoClarificationLimitation
 	}
 	if strings.TrimSpace(resolution.ClarificationPrompt) == "" {
-		resolution.ClarificationPrompt = fallbackClarificationPrompt
+		if single {
+			resolution.ClarificationPrompt = fallbackClarificationPromptOne
+		} else {
+			resolution.ClarificationPrompt = fallbackClarificationPrompt
+		}
+	}
+	if single {
+		return InvestigationClarificationRequired, clarificationRequiredLimitationOne
 	}
 	return InvestigationClarificationRequired, clarificationRequiredLimitation
 }

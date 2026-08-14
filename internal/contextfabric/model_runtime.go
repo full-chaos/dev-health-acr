@@ -564,7 +564,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		// the opposite of an already-validated claim, e.g. "on track"
 		// prose next to a principal driver whose claimed fact says
 		// release_ready=false).
-		DirectJudgment:     composeDirectJudgment(draft, unresolvedCandidates(input)),
+		DirectJudgment:     composeDirectJudgment(draft, input.Graph.Resolution),
 		CurrentState:       composeCurrentState(draft),
 		StrongestPressures: cloneSlice(draft.StrongestPressures),
 		Drivers:            cloneSlice(draft.Drivers),
@@ -582,7 +582,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		// the only reading of "deterministic" that can't itself introduce
 		// a fresh, unchecked claim -- draft.DeterministicAnswer (whatever
 		// prose the model produced) is deliberately discarded here.
-		DeterministicAnswer: composeDeterministicAnswer(draft, unresolvedCandidates(input)),
+		DeterministicAnswer: composeDeterministicAnswer(draft, input.Graph.Resolution),
 		Warnings:            cloneSlice(draft.Warnings),
 		Versions: VersionSet{
 			ServiceVersion:          nonEmptyVersion(r.Options.ServiceVersion, "unwired"),
@@ -655,9 +655,9 @@ func truncateAtSentenceBoundary(text string, maxRunes int) string {
 // prose) is never read. Distinct from composeDeterministicAnswer in
 // content, not just name -- this is the short judgment sentence alone,
 // without the trailing claimed-fact restatement DeterministicAnswer adds.
-func composeDirectJudgment(draft SynthesisDraft, unresolvedCandidates bool) string {
+func composeDirectJudgment(draft SynthesisDraft, resolution SubjectResolution) string {
 	var b strings.Builder
-	b.WriteString(statusSentence(draft.Status, unresolvedCandidates))
+	b.WriteString(statusSentence(draft.Status, resolution))
 	if titles := principalDriverTitles(draft.Drivers); len(titles) > 0 {
 		b.WriteString(" Principal driver: ")
 		b.WriteString(strings.Join(titles, "; "))
@@ -685,9 +685,9 @@ func composeCurrentState(draft SynthesisDraft) string {
 // model prose) and cannot itself diverge from a canonical fact value
 // because every value it renders came from ClaimedFacts, which
 // ValidateAgainst already proved equal to the canonical fact bundle.
-func composeDeterministicAnswer(draft SynthesisDraft, unresolvedCandidates bool) string {
+func composeDeterministicAnswer(draft SynthesisDraft, resolution SubjectResolution) string {
 	var b strings.Builder
-	b.WriteString(statusSentence(draft.Status, unresolvedCandidates))
+	b.WriteString(statusSentence(draft.Status, resolution))
 	if titles := principalDriverTitles(draft.Drivers); len(titles) > 0 {
 		b.WriteString(" Principal driver(s): ")
 		b.WriteString(strings.Join(titles, "; "))
@@ -704,23 +704,35 @@ func composeDeterministicAnswer(draft SynthesisDraft, unresolvedCandidates bool)
 // statusSentence renders the one-sentence status prose every composed
 // answer field opens with.
 //
-// unresolvedCandidates reports that the resolution produced candidates but
-// committed none. It exists for CHAOS-3810 codex round-1 P2: the no_match
-// sentence claimed definitive ABSENCE ("no subject could be resolved") even
-// when two perfectly good candidates were sitting in the very same result,
-// which is the same honesty class as a notice that contradicts the data
-// beside it. With candidates present the sentence states what is actually
-// true -- several matched, none could be confirmed -- and points at them.
+// It takes the RESOLUTION, not a derived flag, because no_match is not one
+// state (CHAOS-3810 codex rounds 1-2). Three separate defects came from
+// rendering one fixed sentence for it:
 //
-// It deliberately does NOT name a cause. The engine's terminal path knows
-// the cause (the caller disallowed clarification) and says so in its own
-// limitation; a model-authored no_match with candidates may have any number
-// of reasons, and asserting one here would be a guess.
-func unresolvedCandidates(input SynthesisInput) bool {
-	return len(input.Graph.Resolution.Committed) == 0 && len(input.Graph.Resolution.Candidates) > 0
-}
-
-func statusSentence(status InvestigationStatus, unresolvedCandidates bool) string {
+//   - round-1 P2: "no subject could be resolved" was rendered while
+//     candidates sat in the same payload;
+//   - round-2 F1: the replacement said "more than one authorized subject
+//     matched", which is false for a single uncommitted candidate -- one
+//     weak candidate that misses the 0.72 gate reaches exactly this path;
+//   - round-2 F2: with a COMMITTED subject the absence sentence is false
+//     twice over. no_match with committed subjects is contract-legal and
+//     shipped: the acceptance corpus's own no-data case
+//     (TestAcceptanceNoDataProducesNoMatchNotAnError) commits a subject,
+//     reads facts that return no rows, and takes no_match with the
+//     limitation "No canonical data was observed for this subject." No
+//     validator couples the status to subject_resolution (the enum check in
+//     validate_context_fabric_helpers.go and ValidateAgainst are the only
+//     constraints), and the JSON Schema's enum carries no coupling either.
+//     So no_match means "nothing to answer with", NOT "no subject was
+//     found", and the prose has to say which one happened.
+//
+// Passing the resolution rather than a bool is deliberate: every derived
+// flag so far has been the thing that went stale when a new case appeared.
+//
+// It states no CAUSE in any branch. The engine's terminal path knows the
+// cause (the caller disallowed clarification) and says so in its own
+// limitation; a model-authored no_match may have any number of reasons, and
+// asserting one here would be a guess.
+func statusSentence(status InvestigationStatus, resolution SubjectResolution) string {
 	switch status {
 	case InvestigationComplete:
 		return "This investigation is complete."
@@ -731,10 +743,16 @@ func statusSentence(status InvestigationStatus, unresolvedCandidates bool) strin
 	case InvestigationClarificationRequired:
 		return "Clarification is required before this question can be answered."
 	case InvestigationNoMatch:
-		if unresolvedCandidates {
+		switch {
+		case len(resolution.Committed) > 0:
+			return "The subject of this question was resolved, but no canonical data was found to answer it."
+		case len(resolution.Candidates) == 1:
+			return "One authorized subject matched this question but could not be confirmed as its subject; that candidate is listed in this result."
+		case len(resolution.Candidates) > 1:
 			return "No single subject could be confirmed for this question: more than one authorized subject matched, and the matching candidates are listed in this result."
+		default:
+			return "No investigation subject could be resolved for this question."
 		}
-		return "No investigation subject could be resolved for this question."
 	default:
 		return "This investigation could not produce a complete answer."
 	}
