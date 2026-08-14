@@ -745,7 +745,16 @@ func statusSentence(status InvestigationStatus, resolution SubjectResolution) st
 	case InvestigationNoMatch:
 		switch {
 		case len(resolution.Committed) > 0:
-			return "The subject of this question was resolved, but no canonical data was found to answer it."
+			// Count-NEUTRAL, deliberately. Committing more than one subject
+			// is routine rather than exotic: FinalizeExactResolution commits
+			// EVERY resolved caller hint, so two subject hints produce two
+			// committed subjects, and the phase-3 fast path does the same for
+			// multiple receipt-derived hints. A singular "the subject" would
+			// have been the round-2 F1 plurality defect reintroduced on the
+			// branch that fixed F2 -- and a fourth pair of singular/plural
+			// constants would only grow a constant census that is already
+			// long enough to be its own hazard.
+			return "This question's subjects were resolved, but no canonical data was found to answer it."
 		case len(resolution.Candidates) == 1:
 			return "One authorized subject matched this question but could not be confirmed as its subject; that candidate is listed in this result."
 		case len(resolution.Candidates) > 1:

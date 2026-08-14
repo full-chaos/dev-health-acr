@@ -402,6 +402,20 @@ func TestStatusSentenceNoMatchDescribesTheActualResolutionState(t *testing.T) {
 			want:       "no canonical data was found",
 			reject:     []string{"No investigation subject could be resolved", "more than one", "One authorized subject matched"},
 		},
+		{
+			// Multi-commit is ROUTINE, not exotic: FinalizeExactResolution
+			// commits every resolved caller hint, so two hints commit two
+			// subjects and the candidate list holds those same subjects.
+			// The sentence must be count-neutral -- "the subject" would be
+			// the round-2 F1 plurality defect on the branch that fixed F2.
+			name: "several committed subjects with no canonical data",
+			resolution: SubjectResolution{
+				Committed:  []SubjectRef{subject, {Kind: SubjectProject, CanonicalID: "project_y", Label: "Y"}},
+				Candidates: []SubjectCandidate{candidate("x"), candidate("y")},
+			},
+			want:   "no canonical data was found",
+			reject: []string{"The subject of this question", "No investigation subject could be resolved", "more than one authorized subject matched", "One authorized subject matched"},
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
