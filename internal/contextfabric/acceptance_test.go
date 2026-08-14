@@ -69,9 +69,17 @@ type acceptanceGraphReader struct {
 	context     GraphContext
 	err         error
 	lastRequest InvestigationRequest
+	// Call counters. A test that asserts something did NOT happen needs
+	// these to also prove the engine got far enough for it to have been
+	// possible: "the fact read never ran" is satisfied just as well by an
+	// engine that resolved nothing at all, or by a stub that short-circuits
+	// to an outcome without ever querying the graph.
+	resolveCalls  int
+	discoverCalls int
 }
 
 func (g *acceptanceGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion) (SubjectResolution, error) {
+	g.resolveCalls++
 	g.lastRequest = request
 	if g.err != nil {
 		return SubjectResolution{}, g.err
@@ -80,6 +88,7 @@ func (g *acceptanceGraphReader) ResolveSubjects(_ context.Context, _ storage.Pri
 }
 
 func (g *acceptanceGraphReader) DiscoverContext(_ context.Context, _ storage.Principal, _ GraphDiscoveryRequest) (GraphContext, error) {
+	g.discoverCalls++
 	if g.err != nil {
 		return GraphContext{}, g.err
 	}
