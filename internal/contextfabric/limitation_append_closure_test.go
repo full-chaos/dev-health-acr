@@ -208,6 +208,10 @@ func limitationWritesIn(fileSet *token.FileSet, function *ast.FuncDecl) []limita
 				record(assignmentSource(assignment, index), assignment.Pos())
 			}
 		}
+		// `var r = InvestigationResult{...}` reaches the composite-literal
+		// branch above on its own, so nothing is needed for the FIELD side
+		// here; what ValueSpec adds is the LOCAL side, handled by
+		// localWritesIn below.
 		// A raw append straight onto a Limitations field never appears as a
 		// value worth resolving, so it is named on sight.
 		if call, ok := node.(*ast.CallExpr); ok {
@@ -225,53 +229,105 @@ func limitationWritesIn(fileSet *token.FileSet, function *ast.FuncDecl) []limita
 	})
 	writes = append(writes, direct...)
 
+	// Every way a local is written, gathered ONCE and reused for both the
+	// closure and the reporting below, so the two can never disagree about
+	// what counts as a write.
+	locals := localWritesIn(function)
+
 	// Transitive closure over locals, to a fixpoint. Bounded by the number
-	// of assignments, so a chain cannot loop.
+	// of writes, so a chain cannot loop.
 	for changed := true; changed; {
 		changed = false
-		ast.Inspect(function.Body, func(node ast.Node) bool {
-			assignment, ok := node.(*ast.AssignStmt)
-			if !ok {
-				return true
+		for _, local := range locals {
+			if !destined[local.name] {
+				continue
 			}
-			for index, target := range assignment.Lhs {
-				identifier, ok := target.(*ast.Ident)
-				if !ok || !destined[identifier.Name] {
-					continue
-				}
-				source := assignmentSource(assignment, index)
-				if named, ok := source.(*ast.Ident); ok && !destined[named.Name] {
-					destined[named.Name] = true
-					changed = true
-				}
+			if named, ok := local.source.(*ast.Ident); ok && !destined[named.Name] {
+				destined[named.Name] = true
+				changed = true
 			}
-			return true
-		})
+		}
 	}
 
 	// Every write to every destined local, judged individually.
-	ast.Inspect(function.Body, func(node ast.Node) bool {
-		assignment, ok := node.(*ast.AssignStmt)
-		if !ok {
-			return true
+	for _, local := range locals {
+		if !destined[local.name] {
+			continue
 		}
-		for index, target := range assignment.Lhs {
-			identifier, ok := target.(*ast.Ident)
-			if !ok || !destined[identifier.Name] {
-				continue
+		// A destined local fed from another destined local is not a write
+		// of new content; the source's own writes are judged where they
+		// appear.
+		if named, ok := local.source.(*ast.Ident); ok && destined[named.Name] {
+			continue
+		}
+		writes = append(writes, limitationWrite{
+			function: function.Name.Name,
+			value:    limitationWriteSource(local.source),
+			position: fileSet.Position(local.pos).String(),
+		})
+	}
+	return writes
+}
+
+// localWrite is one place a named local receives a value.
+type localWrite struct {
+	name   string
+	source ast.Expr
+	pos    token.Pos
+}
+
+// localWritesIn gathers every write to a named local inside one function,
+// in BOTH forms Go offers.
+//
+// `x := e` and `x = e` are *ast.AssignStmt. `var x = e` is an *ast.ValueSpec
+// and is a different node entirely -- scanning only assignments (codex
+// round-6 P1) let a raw append hide in a var line, including via a helper
+// whose result the caller never writes to a field. Both forms are the same
+// thing to this guard, so both are collected here rather than at the two
+// places that consume them.
+//
+// A valueless `var x []string` is deliberately not a write: it declares an
+// empty list, which cannot be the write that overflows a cap. Anything later
+// added to it arrives as an assignment and is judged then.
+//
+// WRITE FORMS THIS WALKER DOES NOT SEE, and why each is acceptable:
+//
+//   - mutation through a pointer or a helper that takes &x. An AST walk
+//     cannot follow it, and nothing in this package composes limitations
+//     that way. This is the one real blind spot.
+//   - copy(x, raw) and element assignment x[i] = s. Both mutate in place
+//     without producing a value; neither can grow a list past the cap,
+//     which is the property being defended.
+//   - a package-level var feeding a field. Reachable only by being named in
+//     a field write or a local write, both of which ARE seen; the value it
+//     was built from is out of function scope by construction.
+//
+// Covered without needing a special case, contrary to what they look like:
+// a composite literal inside a return statement (the literal walk reaches
+// every node in the body, return statements included), and a function call
+// flowing straight into the field (recorded as a direct write named for its
+// callee, which is not a bounded appender unless it is one).
+func localWritesIn(function *ast.FuncDecl) []localWrite {
+	var writes []localWrite
+	ast.Inspect(function.Body, func(node ast.Node) bool {
+		switch declaration := node.(type) {
+		case *ast.AssignStmt:
+			for index, target := range declaration.Lhs {
+				if identifier, ok := target.(*ast.Ident); ok {
+					writes = append(writes, localWrite{identifier.Name, assignmentSource(declaration, index), declaration.Pos()})
+				}
 			}
-			source := assignmentSource(assignment, index)
-			// A destined local fed from another destined local is not a
-			// write of new content; the source's own writes are judged
-			// where they appear.
-			if named, ok := source.(*ast.Ident); ok && destined[named.Name] {
-				continue
+		case *ast.ValueSpec:
+			if len(declaration.Values) == 0 {
+				return true
 			}
-			writes = append(writes, limitationWrite{
-				function: function.Name.Name,
-				value:    limitationWriteSource(source),
-				position: fileSet.Position(assignment.Pos()).String(),
-			})
+			for index, name := range declaration.Names {
+				source := declaration.Values[0]
+				if len(declaration.Values) == len(declaration.Names) {
+					source = declaration.Values[index]
+				}
+				writes = append(writes, localWrite{name.Name, source, declaration.Pos()})
+			}
 		}
 		return true
 	})
