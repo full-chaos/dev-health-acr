@@ -155,6 +155,10 @@ func TestCHAOS3783PruningMeasurement(t *testing.T) {
 		}
 		return subjects
 	}
+	// devhealthschema:not-a-production-replica these table names are ARGUMENTS to a discovery helper,
+	// selecting which table to read subjects from. No column type, engine or
+	// sort key is mirrored here, so this cannot drift from production the way
+	// a rival schema declaration would.
 	repositories := discover("repos", "toString(id)", contextfabric.SubjectRepository, "repository:")
 	workItems := discover("work_items", "work_item_id", contextfabric.SubjectWorkItem, "work_item:")
 	teams := discover("capacity_forecasts", "team_id", contextfabric.SubjectTeam, "team:")
