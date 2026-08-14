@@ -1,10 +1,12 @@
 package contextfabric
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"go/types"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -14,15 +16,19 @@ import (
 // safe.
 //
 // Two-sided, like the sidecar's body-read audit: an unlisted raw write
-// fails, and a listed entry matching nothing fails too. Keyed by enclosing
-// function plus what the write is fed from, so ordinary edits above a site
-// do not churn the list.
+// fails, and a listed entry matching nothing fails too.
+//
+// Keyed by enclosing function, what the write is fed from, and WHICH
+// occurrence of that shape it is -- the trailing index is what makes an
+// entry cover one site rather than every write that resembles it. Edits
+// elsewhere in the file do not churn these keys; see the matching loop for
+// why an index beats a line number or an offset.
 //
 // This list is meant to stay SHORT. Every entry is a place the cap is not
 // mechanically enforced, i.e. a place round-17 finding 1 could recur.
 var auditedLimitationWrites = map[string]string{
-	"terminalResult#composite literal []string": "the SEED, not an addition: a one-element list holding the single fixed terminal disclosure resolveTerminalStatus chose. Every list has to start somewhere, and everything added after it goes through the bounded appender, which also normalizes an already-over-cap input -- so the seed cannot be the write that overflows the contract",
-	"Synthesize#cloneSlice":                     "an INTERMEDIATE, not a list that reaches a consumer: this is the model's own draft list entering the synthesized result, and Investigate then passes result.Limitations through appendTemporalLimitations UNCONDITIONALLY -- it is called on every axis, current included, and appendBoundedLimitations normalizes an already-over-cap input -- before Validate runs",
+	"terminalResult#composite literal []string#0": "the SEED, not an addition: a one-element list holding the single fixed terminal disclosure resolveTerminalStatus chose. Every list has to start somewhere, and everything added after it goes through the bounded appender, which also normalizes an already-over-cap input -- so the seed cannot be the write that overflows the contract",
+	"Synthesize#cloneSlice#0":                     "an INTERMEDIATE, not a list that reaches a consumer: this is the model's own draft list entering the synthesized result, and Investigate then passes result.Limitations through appendTemporalLimitations UNCONDITIONALLY -- it is called on every axis, current included, and appendBoundedLimitations normalizes an already-over-cap input -- before Validate runs",
 }
 
 // boundedLimitationPrimitive owns the cap. It is the only function allowed
@@ -110,12 +116,40 @@ func TestEveryLimitationAppendIsBounded(t *testing.T) {
 
 	verifyBoundedWrappers(t, functions)
 
+	// Source order, so the occurrence index below is deterministic:
+	// ParseDir hands back files in map order, and writes are gathered
+	// field-side before local-side within a function.
+	sort.Slice(writes, func(i, j int) bool {
+		left, right := fileSet.Position(writes[i].pos), fileSet.Position(writes[j].pos)
+		if left.Filename != right.Filename {
+			return left.Filename < right.Filename
+		}
+		return left.Offset < right.Offset
+	})
+
 	matched := map[string]bool{}
+	occurrence := map[string]int{}
 	for _, w := range writes {
 		if isBoundedLimitationSource(w.value) {
 			continue
 		}
-		key := w.function + "#" + w.value
+		// SITE-UNIQUE (codex round-9 P1). function#value alone matched
+		// every write that happened to share a shape: the audited seed
+		// exempted a second raw []string literal in the same function, and
+		// the position was captured for the message but thrown away at
+		// matching time. The trailing index is which occurrence of that
+		// shape this is, so an exemption can never cover more than the one
+		// site it was written for.
+		//
+		// An index rather than a line number or a byte offset because it is
+		// what survives edits ELSEWHERE: adding a comment, a statement, or
+		// a whole function above the site shifts every line and offset in
+		// the file but leaves the occurrence count untouched. Only adding
+		// another write OF THE SAME SHAPE to the same function renumbers
+		// anything, and that is precisely when the exemption should be
+		// re-examined rather than silently carried.
+		key := fmt.Sprintf("%s#%s#%d", w.function, w.value, occurrence[w.function+"#"+w.value])
+		occurrence[w.function+"#"+w.value]++
 		if _, audited := auditedLimitationWrites[key]; !audited {
 			t.Errorf("%s writes a limitations-destined value from %q, which is not the bounded appender; route it through %s or add %q to auditedLimitationWrites with the reason it is already bounded",
 				w.position, w.value, boundedLimitationPrimitive, key)
@@ -156,7 +190,12 @@ func verifyBoundedWrappers(t *testing.T, functions map[string]*ast.FuncDecl) {
 	}
 }
 
-type limitationWrite struct{ function, value, position string }
+type limitationWrite struct {
+	function, value, position string
+	// pos orders writes deterministically so the occurrence index below is
+	// stable; the printed position string is for humans.
+	pos token.Pos
+}
 
 // limitationWritesIn reports every write, inside ONE function, to a value
 // that reaches a result's Limitations.
@@ -216,6 +255,7 @@ func limitationWritesIn(t *testing.T, fileSet *token.FileSet, function *ast.Func
 			function: function.Name.Name,
 			value:    limitationWriteSource(value),
 			position: fileSet.Position(pos).String(),
+			pos:      pos,
 		})
 	}
 
@@ -256,6 +296,7 @@ func limitationWritesIn(t *testing.T, fileSet *token.FileSet, function *ast.Func
 						function: function.Name.Name,
 						value:    "append",
 						position: fileSet.Position(call.Pos()).String(),
+						pos:      call.Pos(),
 					})
 				}
 			}
@@ -300,6 +341,7 @@ func limitationWritesIn(t *testing.T, fileSet *token.FileSet, function *ast.Func
 			function: function.Name.Name,
 			value:    limitationWriteSource(local.source),
 			position: fileSet.Position(local.pos).String(),
+			pos:      local.pos,
 		})
 	}
 	return writes
