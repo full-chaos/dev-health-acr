@@ -60,108 +60,188 @@ func TestSidecarCeilingClearsTheServingBudget(t *testing.T) {
 	}
 }
 
-// TestEveryHostedResponseBodyIsReadThroughTheCeiling asserts the PREMISE
-// the test above rests on, at the source level.
+// auditedBoundedBodyReads are the hosted response body consumptions that
+// are deliberately bounded by something other than the configured ceiling.
 //
-// The margin proves the ceiling is big enough. It proves nothing about
-// whether the ceiling is applied. A third read path -- one io.ReadAll on a
-// response body -- would leave the arithmetic above true and correct while
-// the guarantee it describes no longer holds anywhere.
-//
-// So this pins the shape rather than the behaviour: readLimited is called
-// at exactly the two call sites that exist (the transport read and the
-// lifecycle read), and every one passes the configured ceiling rather than
-// a local number. Adding a hosted read path is then a deliberate act that
-// updates this test, not an omission nobody notices.
-func TestEveryHostedResponseBodyIsReadThroughTheCeiling(t *testing.T) {
-	const expectedCallSites = 2
+// Each entry is a CLAIM, keyed by the function it lives in and the bound it
+// applies, and the guard below is two-sided: a body consumption that is not
+// the ceiling and not listed here fails, and an entry here that no longer
+// matches a real site fails too. An audited exemption that quietly stopped
+// describing the code would be worse than no list at all.
+var auditedBoundedBodyReads = map[string]string{
+	"callPublic#redirectDrainBytes":      "unexpected-redirect drain: the body is discarded into io.Discard, never parsed and never returned, and the request fails immediately afterwards. Bounded by a fixed few KiB rather than the operator ceiling because nothing is kept -- the read exists only so the connection can be reused.",
+	"callWithHeaders#redirectDrainBytes": "the same drain on the transport path, for the same reason.",
+}
 
+// bodyConsumption is one place a hosted response body is used as a value.
+type bodyConsumption struct {
+	function string
+	// bound is "ceiling" when the read goes through readLimited with the
+	// configured limit, "bounded:<expr>" for an explicit io.LimitReader,
+	// and "" when nothing bounds it at all.
+	bound    string
+	position string
+}
+
+// TestEveryHostedResponseBodyFlowsThroughABound asserts the PREMISE the
+// margin test rests on, and asserts it as a CLASS rather than by naming
+// verbs (round-16 finding 2).
+//
+// The margin proves the ceiling is large enough. It proves nothing about
+// whether the ceiling is applied, and the previous version of this guard
+// checked only for readLimited call sites and bare io.ReadAll -- so
+// io.Copy, io.ReadFull, bufio.NewReader, or anything else reading a body
+// would have walked straight past it. Two io.Copy sites already existed in
+// this package while that guard reported everything was fine.
+//
+// So this works on the BODY HANDLE instead of on the reading verb: every
+// use of a `*.Body` selector as a value must either flow into readLimited
+// (the configured ceiling) or into an explicit io.LimitReader that is
+// listed in auditedBoundedBodyReads with a reason. Closing a body is not a
+// consumption and is excluded. Whatever new verb someone reaches for, the
+// body still has to reach it through one of those two paths.
+func TestEveryHostedResponseBodyFlowsThroughABound(t *testing.T) {
 	fileSet := token.NewFileSet()
 	packages, err := parser.ParseDir(fileSet, ".", nil, 0)
 	if err != nil {
 		t.Fatalf("parse package directory: %v", err)
 	}
 
-	type callSite struct {
-		file     string
-		argument string
-	}
-	var sites []callSite
-	var bodyReads []string
+	var consumptions []bodyConsumption
+	matched := map[string]bool{}
 
 	for _, pkg := range packages {
 		for fileName, file := range pkg.Files {
 			if strings.HasSuffix(fileName, "_test.go") {
 				continue
 			}
+			// bounded/closed record the Body selectors already accounted
+			// for, keyed by source position so a second use of the same
+			// expression elsewhere is still its own consumption.
+			bounded := map[token.Pos]string{}
+			closed := map[token.Pos]bool{}
 			ast.Inspect(file, func(node ast.Node) bool {
 				call, ok := node.(*ast.CallExpr)
 				if !ok {
 					return true
 				}
-				switch function := call.Fun.(type) {
+				switch fun := call.Fun.(type) {
 				case *ast.Ident:
-					if function.Name == "readLimited" && len(call.Args) == 2 {
-						sites = append(sites, callSite{file: fileName, argument: exprText(fileSet, call.Args[1])})
+					if fun.Name == "readLimited" && len(call.Args) == 2 {
+						if pos, ok := bodySelectorPos(call.Args[0]); ok {
+							bounded[pos] = "ceiling:" + exprText(fileSet, call.Args[1])
+						}
 					}
 				case *ast.SelectorExpr:
-					// An io.ReadAll whose reader is NOT an io.LimitReader
-					// is the shape that bypasses every ceiling in this
-					// package, so it is named explicitly: the failure then
-					// says what went wrong rather than only that a count
-					// moved. Every existing read here is already wrapped,
-					// including readLimited's own, so the wrapped form is
-					// the convention this pins rather than an exemption.
-					if identifier, ok := function.X.(*ast.Ident); ok && identifier.Name == "io" && function.Sel.Name == "ReadAll" {
-						if len(call.Args) != 1 || !isLimitReaderCall(call.Args[0]) {
-							bodyReads = append(bodyReads, fileSet.Position(call.Pos()).String())
+					if isPackageCall(fun, "io", "LimitReader") && len(call.Args) == 2 {
+						if pos, ok := bodySelectorPos(call.Args[0]); ok {
+							bounded[pos] = "bounded:" + exprText(fileSet, call.Args[1])
+						}
+					}
+					// A Close() on the body is not a consumption.
+					if fun.Sel.Name == "Close" {
+						if pos, ok := bodySelectorPos(fun.X); ok {
+							closed[pos] = true
 						}
 					}
 				}
 				return true
 			})
+
+			ast.Inspect(file, func(node ast.Node) bool {
+				selector, ok := node.(*ast.SelectorExpr)
+				if !ok || selector.Sel.Name != "Body" {
+					return true
+				}
+				if closed[selector.Pos()] {
+					return true
+				}
+				consumptions = append(consumptions, bodyConsumption{
+					function: enclosingFunction(file, selector.Pos()),
+					bound:    bounded[selector.Pos()],
+					position: fileSet.Position(selector.Pos()).String(),
+				})
+				return true
+			})
 		}
 	}
 
-	if len(bodyReads) > 0 {
-		t.Errorf("unbounded io.ReadAll at %v; a read that is not wrapped in io.LimitReader ignores every ceiling this package configures", bodyReads)
+	if len(consumptions) == 0 {
+		t.Fatal("found no hosted response body consumption at all; the walker is not reaching the client code and would pass over any evasion")
 	}
-	if len(sites) != expectedCallSites {
-		t.Fatalf("readLimited has %d call sites, pinned %d: %+v.\nA new hosted read path must pass the configured ceiling and update this pin; a vanished one means the ceiling stopped being applied somewhere.",
-			len(sites), expectedCallSites, sites)
+
+	for _, consumption := range consumptions {
+		switch {
+		case strings.HasPrefix(consumption.bound, "ceiling:"):
+			if limit := strings.TrimPrefix(consumption.bound, "ceiling:"); limit != "c.cfg.MaxResponseBytes" {
+				t.Errorf("%s reads the body through readLimited with %q rather than the configured ceiling: a local number cannot be tuned by an operator and is invisible to the margin check", consumption.position, limit)
+			}
+		case strings.HasPrefix(consumption.bound, "bounded:"):
+			key := consumption.function + "#" + strings.TrimPrefix(consumption.bound, "bounded:")
+			if _, audited := auditedBoundedBodyReads[key]; !audited {
+				t.Errorf("%s bounds a response body by %q, which is not the configured ceiling and is not audited; add %q to auditedBoundedBodyReads with the reason its own bound is adequate", consumption.position, consumption.bound, key)
+				continue
+			}
+			matched[key] = true
+		default:
+			t.Errorf("%s consumes a hosted response body without any bound; every read must flow through readLimited or an audited io.LimitReader, whatever verb does the reading", consumption.position)
+		}
 	}
-	for _, site := range sites {
-		if site.argument != "c.cfg.MaxResponseBytes" {
-			t.Errorf("%s reads with limit %q, not the configured ceiling: a local number cannot be tuned by an operator and is invisible to the margin check above", site.file, site.argument)
+
+	// The other side: a stale exemption is a lie about audited code.
+	for key := range auditedBoundedBodyReads {
+		if !matched[key] {
+			t.Errorf("auditedBoundedBodyReads lists %q, which matches no bounded body read; remove it rather than leaving an exemption that describes nothing", key)
 		}
 	}
 }
 
+// bodySelectorPos reports the position of expression when it is a `*.Body`
+// selector, which is how a hosted response body is always reached here.
+func bodySelectorPos(expression ast.Expr) (token.Pos, bool) {
+	selector, ok := expression.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "Body" {
+		return token.NoPos, false
+	}
+	return selector.Pos(), true
+}
+
+func isPackageCall(selector *ast.SelectorExpr, pkg, name string) bool {
+	identifier, ok := selector.X.(*ast.Ident)
+	return ok && identifier.Name == pkg && selector.Sel.Name == name
+}
+
+// enclosingFunction names the function a position sits in, so an audited
+// exemption is keyed by where it lives rather than by a line number that
+// moves whenever anything above it changes.
+func enclosingFunction(file *ast.File, pos token.Pos) string {
+	name := "?"
+	ast.Inspect(file, func(node ast.Node) bool {
+		function, ok := node.(*ast.FuncDecl)
+		if !ok {
+			return true
+		}
+		if function.Pos() <= pos && pos <= function.End() {
+			name = function.Name.Name
+		}
+		return true
+	})
+	return name
+}
+
 // exprText renders an expression back to source text for the assertions
-// above. Only the selector shapes this test cares about need to render
-// exactly; anything else renders well enough to name in a failure.
+// above. Only the selector and identifier shapes this test compares need
+// to render exactly; anything else renders well enough to name in a
+// failure message.
 func exprText(fileSet *token.FileSet, expression ast.Expr) string {
 	switch value := expression.(type) {
 	case *ast.SelectorExpr:
 		return exprText(fileSet, value.X) + "." + value.Sel.Name
 	case *ast.Ident:
 		return value.Name
+	case *ast.BasicLit:
+		return value.Value
 	default:
 		return fileSet.Position(expression.Pos()).String()
 	}
-}
-
-// isLimitReaderCall reports whether expression is io.LimitReader(...). The
-// wrapper is what makes a read bounded; ReadAll over anything else is not.
-func isLimitReaderCall(expression ast.Expr) bool {
-	call, ok := expression.(*ast.CallExpr)
-	if !ok {
-		return false
-	}
-	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	identifier, ok := selector.X.(*ast.Ident)
-	return ok && identifier.Name == "io" && selector.Sel.Name == "LimitReader"
 }

@@ -198,7 +198,7 @@ func (c *LifecycleClient) callPublic(ctx context.Context, path string, request a
 	}
 	defer httpResponse.Body.Close()
 	if httpResponse.StatusCode >= http.StatusMultipleChoices && httpResponse.StatusCode < http.StatusBadRequest {
-		_, _ = io.Copy(io.Discard, io.LimitReader(httpResponse.Body, 4096))
+		_, _ = io.Copy(io.Discard, io.LimitReader(httpResponse.Body, redirectDrainBytes))
 		return &APIError{HTTPStatus: httpResponse.StatusCode, Message: "hosted API returned an unexpected redirect, which the client does not follow", RequestID: sanitizeMessage(httpResponse.Header.Get("X-Request-ID")), sentinel: ErrUnexpectedRedirect}
 	}
 	data, truncated, err := readLimited(httpResponse.Body, c.cfg.MaxResponseBytes)

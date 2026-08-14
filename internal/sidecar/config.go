@@ -38,8 +38,16 @@ const (
 	defaultSidecarVersion      = "dev"
 	defaultLogLevel            = slog.LevelInfo
 
-	minTimeout              = 1 * time.Second
-	maxTimeout              = 2 * time.Minute
+	minTimeout = 1 * time.Second
+	maxTimeout = 2 * time.Minute
+	// redirectDrainBytes bounds the ONLY hosted response body this client
+	// reads outside the configured ceiling: the few bytes of an
+	// unexpected redirect, drained so the connection can be reused before
+	// the request is failed. It is deliberately tiny and fixed rather than
+	// operator-tunable -- nothing here is parsed or returned, so a larger
+	// value would buy nothing and a smaller one would not change the
+	// outcome either.
+	redirectDrainBytes      = 4096
 	minResponseBytes        = 8 << 10 // 8 KiB
 	maxResponseBytesCeil    = 8 << 20 // 8 MiB
 	minRequestBodyBytes     = 1 << 10 // 1 KiB
