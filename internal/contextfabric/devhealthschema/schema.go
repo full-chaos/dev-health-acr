@@ -211,6 +211,7 @@ var ProductionColumns = map[string][]Column{
 	"repos": {
 		{Name: "id", Type: "UUID"},
 		{Name: "repo", Type: "String"},
+		{Name: "ref", Type: "Nullable(String)"},
 		{Name: "created_at", Type: "DateTime64(3, 'UTC')"},
 		{Name: "last_synced", Type: "DateTime64(3, 'UTC')"},
 		{Name: "org_id", Type: "String"},
