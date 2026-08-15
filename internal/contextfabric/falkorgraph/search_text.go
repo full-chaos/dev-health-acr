@@ -51,12 +51,20 @@ const (
 	capBodyHead         = 1200
 	capEnvironment      = 60
 	capReleaseRef       = 80
-	capPipelineName     = 200
-	capIncidentTitle    = 300
-	capDescriptionHead  = 800
-	capTeamName         = 120
-	capTeamDescription  = 300
-	capProjectTitle     = 200
+	// capDeploymentLabel bounds the deployment node label the template
+	// keeps when environment is empty -- the producer labels such a
+	// deployment with the raw deployment ID (devhealthsource tables.go),
+	// which no other cap touches. 120 runes is the slug-class precedent
+	// (capBranch, capProjectName) and keeps the environment-less variant
+	// under the §0 (c) floor by the same arithmetic as every other
+	// template.
+	capDeploymentLabel = 120
+	capPipelineName    = 200
+	capIncidentTitle   = 300
+	capDescriptionHead = 800
+	capTeamName        = 120
+	capTeamDescription = 300
+	capProjectTitle    = 200
 	// capHandles bounds the retrieval-handles line (aliases + previous
 	// names). 120 runes is generous against live data (a ticket key, a
 	// team id + native key, a project key) while keeping the LARGEST
@@ -194,8 +202,13 @@ func pullRequestSearchText(entity contextfabric.EntityProjection, includeBodies 
 //
 //	<environment[≤60]> deployment <release_ref[≤80]>
 //	repo: <repo_slug[≤200]>
+//
+// When environment is empty the head falls back to the producer label --
+// the raw deployment ID -- capped in-composition (capDeploymentLabel) like
+// every other field, so the floor arithmetic holds for ANY label this
+// adapter is handed.
 func deploymentSearchText(entity contextfabric.EntityProjection) string {
-	head := entity.Subject.Label
+	head := capRunes(entity.Subject.Label, capDeploymentLabel)
 	if environment := propText(entity, "environment"); environment != "" {
 		head = capRunes(environment, capEnvironment) + " deployment"
 	}

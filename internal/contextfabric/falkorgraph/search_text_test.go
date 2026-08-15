@@ -246,6 +246,23 @@ func TestEveryCompleteTemplateFitsUnderTheFloor(t *testing.T) {
 				entity.Subject.Kind, runes, embedprovider.MinimumMaxTextRunes)
 		}
 	}
+	// An environment-less deployment keeps its producer label as the head --
+	// the raw deployment ID (devhealthsource tables.go), the one field the
+	// fixture loop above never exercises uncapped because its deployment
+	// carries an environment. The label must be capped IN-COMPOSITION like
+	// every other field, or a long deployment ID reopens the lexical/vector
+	// divergence the floor exists to close.
+	deployment := contextfabric.EntityProjection{
+		Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectDeployment, CanonicalID: "deployment:deploy-oversize", Label: oversize},
+		Properties: map[string]contextfabric.ScalarValue{
+			"release_ref": scalar(oversize), "repo": scalar(oversize),
+		},
+	}
+	got := subjectSearchText(deployment, true)
+	if runes := utf8.RuneCountInString(got); runes > embedprovider.MinimumMaxTextRunes {
+		t.Errorf("environment-less deployment maximal template is %d runes, above the %d floor",
+			runes, embedprovider.MinimumMaxTextRunes)
+	}
 }
 
 // TestOrganizationIsSkippedFromEmbeddingAndCounted (§2 organization + §7
