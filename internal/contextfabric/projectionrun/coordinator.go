@@ -514,8 +514,8 @@ const (
 	// operator needs to see this is not "wait for the dependency to come
 	// back".
 	failureClassBudgetExceeded = "query_budget_exceeded"
-	failureClassInvalidResult = "invalid_result"
-	failureClassUnclassified  = "unclassified"
+	failureClassInvalidResult  = "invalid_result"
+	failureClassUnclassified   = "unclassified"
 )
 
 // ClassifyFailure is classifyOutcomeError exported for the projector binary,
