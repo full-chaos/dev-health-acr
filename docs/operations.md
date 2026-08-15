@@ -221,6 +221,22 @@ answer, but only from canonical fact sources; the graph half contributes
 whatever unbounded elements it holds, disclosed in the answer's coverage as
 `context-fabric:graph-validity-windows`.
 
+**A rebuild is likewise REQUIRED after deploying CHAOS-3833 phase 2**
+(`ClickHouseSourceVersion` v4 → v5, `TeamsProjectsSourceVersion` v1 → v2,
+embed composition tag `t1` → `t2`). The producers emit the embed-text v2
+fields (ticket-key aliases, PR body heads, joined PR titles, pipeline
+names, tags, project keys) and the per-kind search-text templates compose
+them; an already-projected graph holds text — and vectors — no current
+recomposition could reproduce. Three independent fences make the window
+safe until the rebuild runs: `ErrProjectionSourceVersionChanged` refuses
+every projection tick, the tagged identity stamp fails every stored
+vector closed to lexical retrieval, and the persisted
+`embed_retrieval_identity` reuse dimension stops stored answers from
+being reused across the change (see the two-phase rollout gate above —
+phase 1 must be fully drained BEFORE this deploy). Run
+`acr-projector rebuild --org <organization-id>` for every projected
+organization; the rebuild reprojects and re-embeds in one pass.
+
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is
 confirmed reset. If `acr-projector` crashes mid-rebuild, ordinary `serve`
@@ -371,8 +387,10 @@ byte-for-byte what it was before.
 | `ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR` | `0.55` | Absolute cosine similarity below which a neighbour is **dropped, not scored**. See the hazard note below. |
 | `ACR_CONTEXT_FABRIC_EMBED_TIMEOUT` | `250ms` | Bounds one embeddings call. |
 | `ACR_CONTEXT_FABRIC_EMBED_MAX_BATCH` | `64` | Texts per request at projection time. |
-| `ACR_CONTEXT_FABRIC_EMBED_MAX_TEXT_RUNES` | `2000` | Runes of one node's search text that are embedded. |
+| `ACR_CONTEXT_FABRIC_EMBED_MAX_TEXT_RUNES` | `2000` | Runes of one node's search text that are embedded. **Semantic, immutable-per-corpus** (CHAOS-3833): the value is a component of the composition tag, so changing it fails every stored vector closed and requires the paired rebuild. Validation floor is 2,000 — the largest complete per-kind template — so the lexical and vector arms always index byte-identical text for templated kinds; a lower value fails startup loudly. |
 | `ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES` | `0` | The SDK's own in-client retry loop. |
+| `ACR_CONTEXT_FABRIC_EMBED_PROVIDER_LOCALITY` | *(unset — `remote`)* | Where embedded text ends up: `local` (same trust zone) or `remote` (the provider is a NEW reader of the text, outside the graph's authorization scope). **An explicit declaration, never inferred from URL shape** — a loopback URL can front a tunnel, a non-loopback URL can be a same-host container. Unset means `remote`, so free-text bodies stay off until an operator affirmatively declares the endpoint local. Any other value fails startup. **Semantic when it changes the effective body gate** — pair the change with a rebuild. |
+| `ACR_CONTEXT_FABRIC_EMBED_INCLUDE_BODIES` | *(unset — follows locality)* | Whether free-text body heads (PR body, incident description) join the composed search text — BOTH retrieval arms, which always index identical text. Set explicitly to override the locality default; `true` with a remote locality is the recorded tenant opt-in for transmitting body text to a remote provider (pair it with the provider's data-usage/retention statement in your deployment docs). **Semantic, immutable-per-corpus**: a flip moves the composition tag and requires the paired rebuild. |
 | `ACR_CONTEXT_FABRIC_EMBED_EXPECT_RESPONSE_MODEL` | *(unset)* | The model id the **server reports**, when it legitimately differs from the id sent. This *retargets* the serving-model check; it cannot disable it. Leave unset unless a provider is known to rename its own id. |
 | `ACR_CONTEXT_FABRIC_EMBED_ALLOW_INSECURE_BASE_URL` | `false` | Permits a plaintext `http://` base URL. Required for a loopback embedder. **Never set this for a base URL that leaves the trust boundary** — the credential travels as a bearer token. |
 
