@@ -551,7 +551,11 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 		a.recordVectorDegraded(ctx, orgID)
 		return lexical, truncated, true, nil
 	}
-	vectorCandidates, vectorTruncated, err := a.vectorSearchNodes(ctx, key, orgID, vectors[0], a.similarityFloor, limit)
+	// CHAOS-3834: a.overFetchMultiplier is the calibrated per-identity K
+	// (zero when uncalibrated, which vectorSearchNodesWithOverFetch already
+	// treats as multiplier 1 -- byte-identical to the pre-CHAOS-3834
+	// vectorSearchNodes call this replaces).
+	vectorCandidates, vectorTruncated, err := a.vectorSearchNodesWithOverFetch(ctx, key, orgID, vectors[0], a.similarityFloor, limit, a.overFetchMultiplier)
 	if err != nil {
 		// A graph-side failure of the vector step degrades the same way an
 		// embedder failure does. The lexical answer is still a real answer.
@@ -632,14 +636,41 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 	// wraps Embedder in a read-path cache (CHAOS-3841) that implements only
 	// the two-method port, so anything not captured now is unreachable
 	// after wrapping. See EmbedderOptions' field docs.
-	return EmbedderOptions{
+	options := EmbedderOptions{
 		Embedder:            embedder,
 		SimilarityFloor:     embedder.SimilarityFloor(),
 		MaxTextRunes:        embedder.MaxTextRunes(),
 		ApplyDocumentPrefix: embedder.ApplyDocumentPrefix,
 		ApplyQueryPrefix:    embedder.ApplyQueryPrefix,
 		PrefixTagComponent:  embedder.PrefixTagComponent(),
-	}, nil
+	}
+	// CHAOS-3834: override with a calibrated per-identity RetrievalPolicy
+	// when this deployment's exact embed retrieval identity has one.
+	// EmbedRetrievalIdentityFromEnv is the single authority for that string
+	// (identity.String()+"#"+compositionTag) -- reusing it here, rather than
+	// re-deriving the composition tag, means the policy lookup key can never
+	// drift from the key migration 0014's embed_retrieval_identity column
+	// persists for the same deployment. Configured(lookup) already holds at
+	// this point (checked above), so this never returns EmbedRetrievalIdentityNone.
+	identity, err := EmbedRetrievalIdentityFromEnv(lookup)
+	if err != nil {
+		return EmbedderOptions{}, err
+	}
+	if policy, ok := LookupRetrievalPolicy(identity); ok {
+		// A calibrated entry's zero fields still mean "unchanged from
+		// today's default" (RetrievalPolicy's doc comment) -- e.g. the
+		// shipped openai/text-embedding-3-large entry deliberately leaves
+		// OverFetchMultiplier at 0 ("K unchanged"). Only SimilarityFloor
+		// needs the extra guard below, mirroring attachEmbedder's own
+		// floor validation: a policy bug that let a zero tau through must
+		// not silently disable the AC-3778-4 no-match guard.
+		if policy.SimilarityFloor > 0 && policy.SimilarityFloor < 1 {
+			options.SimilarityFloor = policy.SimilarityFloor
+		}
+		options.OverFetchMultiplier = policy.OverFetchMultiplier
+		options.EfRuntime = policy.EfRuntime
+	}
+	return options, nil
 }
 
 // resolutionFence memoizes the AC-3778-7 fence verification for the lifetime

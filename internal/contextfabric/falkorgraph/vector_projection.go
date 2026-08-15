@@ -560,7 +560,14 @@ func (a *Adapter) ensureVectorIndex(ctx context.Context, key string) error {
 	}
 	switch state {
 	case vectorIndexAbsent:
-		if err := a.createVectorIndex(ctx, key, want); err != nil {
+		// CHAOS-3834: a.efRuntime is the calibrated per-identity HNSW value
+		// (RetrievalPolicy), applied only here -- at CREATE time -- because
+		// the pinned FalkorDB module has no per-query efRuntime (see
+		// RetrievalPolicy's doc comment). Zero (no calibrated policy for
+		// this identity) omits the clause exactly as createVectorIndex
+		// always has, so an uncalibrated identity's first bootstrap is
+		// byte-for-byte unchanged.
+		if err := a.createVectorIndexWithOptions(ctx, key, want, hnswIndexOptions{EfRuntime: a.efRuntime}); err != nil {
 			return err
 		}
 		// Index creation is asynchronous, so wait for it exactly as bootstrap

@@ -19,7 +19,17 @@ import (
 // (migration 0014). Its own dimension rather than a suffix on the embed
 // retrieval identity, so a reuse miss stays attributable to policy-vs-embed
 // specifically.
-const RetrievalPolicyVersion = "rp1"
+//
+// CHAOS-3834 (embed-text spec §5 L4 / §6 T4) bumped this rp1 -> rp2: the
+// per-embedder-identity RetrievalPolicy table (retrieval_policy.go) went
+// from empty (every identity ran the single global, env-configured tau) to
+// carrying a calibrated entry for
+// "openai/text-embedding-3-large#t2:r2000:b0:pnone" that changes its
+// effective tau and EfRuntime default. Per the "T4 only bumps the constant
+// when it changes tau/K/HNSW defaults" rule, any FUTURE edit to an existing
+// table entry, or addition of a new one, bumps this constant again in the
+// same changeset -- see retrieval_policy.go's package doc comment.
+const RetrievalPolicyVersion = "rp2"
 
 // EmbedRetrievalIdentityNone is the persisted embed-retrieval-identity value
 // for a deployment with NO embedder configured. A literal, never the empty

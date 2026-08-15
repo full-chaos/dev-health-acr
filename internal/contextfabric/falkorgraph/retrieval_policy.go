@@ -1,0 +1,167 @@
+package falkorgraph
+
+import "github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
+
+// RetrievalPolicy is the CHAOS-3834 per-embedder-identity retrieval-time
+// configuration (embed-text spec v2 §5 L2/L3/L4, §6 T4): the similarity
+// floor tau, the ANN over-fetch multiplier K, and the HNSW efRuntime this
+// identity has been CALIBRATED to use, replacing the single global
+// embedprovider.DefaultSimilarityFloor-derived defaults for identities that
+// have a measured entry in retrievalPolicyTable.
+//
+// A zero field means "not calibrated for this dimension": the caller keeps
+// whatever it already had (the env-configured SimilarityFloor, multiplier 1,
+// the server's own efRuntime default) rather than this policy overriding it
+// with a literal zero -- a floor of 0 would disable the AC-3778-4 no-match
+// guard entirely, a multiplier of 0 is already vectorSearchNodesWithOverFetch's
+// own "treat as 1" sentinel, and an efRuntime of 0 is createVectorIndexWithOptions'
+// own "omit the clause, let the server default apply" sentinel. Every zero
+// value in this type therefore composes correctly with the code it feeds
+// without a separate "was this set" flag.
+//
+// EfRuntime IS NOT A PER-QUERY PARAMETER. CHAOS-3832 verified live (§7 D3,
+// graph module 42002) that the pinned FalkorDB module has no per-query
+// efRuntime knob at all -- efRuntime is read ONLY from the vector index's
+// CREATE OPTIONS clause (createVectorIndexWithOptions), fixed for the life
+// of that index. Consequences for this field specifically:
+//
+//   - ensureVectorIndex applies a policy's EfRuntime ONLY when it creates a
+//     brand-new index (an organization bootstrapping for the first time, or
+//     one that just ran `acr-projector rebuild --org`, which drops and
+//     recreates the index as a side effect). It is never consulted again
+//     once an index exists.
+//   - An EXISTING organization's index does NOT pick up a changed EfRuntime
+//     automatically. Changing this field for an identity that organizations
+//     are already running under is an OPERATIONAL action, not a code
+//     deploy: an operator must explicitly rebuild the affected indexes
+//     (the CHAOS-3832 sweep tooling's recreateVectorIndexWithOptions, or an
+//     `acr-projector rebuild --org` if a full re-embed is also warranted)
+//     to make the new value take effect. A policy-table edit alone changes
+//     what NEW indexes are built with; it does not reach into a running
+//     FalkorDB and rewrite one.
+//   - Because of that asymmetry, EfRuntime deliberately does NOT join
+//     RetrievalPolicyVersion's "vectors remain valid, only stored answers
+//     need invalidating" story on quite the same terms as SimilarityFloor/K:
+//     bumping RetrievalPolicyVersion when EfRuntime changes still correctly
+//     invalidates stored ANSWERS (they may have been ranked under
+//     lower-recall retrieval), but it does NOT by itself change what any
+//     already-built index actually searches with. The version bump and the
+//     operational rebuild are two separate, both-required steps -- exactly
+//     the "coupling rule" §4 states for multi-layer changes.
+type RetrievalPolicy struct {
+	// SimilarityFloor is tau. See embedprovider.DefaultSimilarityFloor for
+	// the AC-3778-4 no-match guard this gates, and CHAOS-3834's measurement
+	// basis (embed-text spec §5 L4 / §6 T4) for why a single global tau
+	// could not be calibrated as a precision cliff and instead becomes a
+	// low RECALL GATE per identity.
+	SimilarityFloor float64
+	// OverFetchMultiplier is K, in spec §5 L3's `(multiplier*limit)+1`
+	// formula (vectorSearchNodesWithOverFetch). Sizes the pool the tau/org
+	// post-filters draw from, so a low recall-gate tau (which lets more
+	// candidates survive per query) has enough headroom to still return a
+	// full top-K after filtering.
+	OverFetchMultiplier int
+	// EfRuntime is the HNSW runtime search-breadth parameter this identity's
+	// vector index should be BUILT with. See the type doc comment above --
+	// this is an index-build-time value, not a per-query one.
+	EfRuntime int
+}
+
+// calibratedIdentityText2Large is the CHAOS-3834 measured entry's key, built
+// from EmbedCompositionTag -- the SAME authority composition.go's write path
+// and read fence use -- rather than a hand-typed literal. CHAOS-3835 bumps
+// embedTextTemplateVersion (t2 -> t3), which changes what EmbedCompositionTag
+// returns; deriving the key here means this entry keeps matching the live
+// tag automatically instead of silently going stale (falling back to
+// uncalibrated defaults with no error). The r2000/b0/pnone components mirror
+// the measurement basis below: embedprovider.DefaultMaxTextRunes (the
+// deployment this identity was measured against never overrode it),
+// includeBodies=false, and no prefix family (normalizes to "pnone" inside
+// EmbedCompositionTag). See TestCalibratedEntryKeyMatchesLiveCompositionTag,
+// which pins this relationship so a future change that reverts to a literal
+// fails loudly.
+var calibratedIdentityText2Large = "openai/text-embedding-3-large#" +
+	EmbedCompositionTag(embedprovider.DefaultMaxTextRunes, false, "")
+
+// retrievalPolicyTable is keyed by the EXACT string form the write path
+// stamps and the read fence compares: EmbedderIdentity.String() + "#" +
+// EmbedCompositionTag(...) -- byte-identical to what
+// EmbedRetrievalIdentityFromEnv computes and to what migration 0014's
+// embed_retrieval_identity column persists. Using that same string as the
+// policy key (rather than, say, provider+model alone) means a policy is
+// scoped to one exact composition -- a rune-cap or body-gate flip that
+// changes the tag is semantically a different corpus, and rightly falls
+// back to the conservative default until it is calibrated in its own right.
+//
+// An identity with NO entry here is UNCALIBRATED: LookupRetrievalPolicy
+// reports found=false and every caller keeps today's conservative,
+// env-configured behavior. Adding an entry -- or changing one already
+// present -- is a retrieval-policy default change and must bump
+// RetrievalPolicyVersion in the SAME changeset (see that constant's doc
+// comment), so every previously stored answer for organizations running
+// this identity stops being reused until freshly generated under the new
+// policy.
+var retrievalPolicyTable = map[string]RetrievalPolicy{
+	// CHAOS-3834 measurement basis (2026-08-15, first full-universe oracle
+	// baseline, identity openai/text-embedding-3-large#t2:r2000:b0:pnone,
+	// top-20, 30 scored cases): hit=5, floor_loss=21 -- tau=0.55 (the
+	// embedprovider.DefaultSimilarityFloor-derived value this identity was
+	// running under) rejected the CORRECT subject in 70% of scored cases.
+	// S+ (correct-pair) and S- (best-wrong-neighbor) distributions OVERLAP
+	// at every candidate tau on this identity's measured text (repository
+	// kind: medians 0.531/0.531 identical; work_item kind: S+ median 0.391
+	// vs S- median 0.467, i.e. INVERTED) -- so tau cannot work as a
+	// precision cliff here; CalibrateFromReport run against this
+	// measurement's shape (see tau_calibration.go and
+	// TestCalibrateFromReport_SyntheticOverlappingDistributions) recommends
+	// a tau in the 0.30 band as a low RECALL GATE, leaving adjudication to
+	// hybrid ranking + corroboration downstream (graphrank), not to the
+	// floor.
+	//
+	// *** RATIFIED (CHAOS-3834) ***. tau=0.30 is the decided RECALL-channel
+	// value: the v2 oracle baseline decomposition attributes 21/30 misses to
+	// floor_loss at the prior tau=0.55, and S+/S- score distributions
+	// overlap at every candidate tau on this identity's measured text -- so
+	// tau cannot serve as a precision knob here; precision comes from
+	// hybrid ranking + corroboration adjudication downstream (graphrank),
+	// not the floor. efRuntime=200 is the decided recall knee from the
+	// CHAOS-3832 sweep (recall@20 0.979 vs 0.853 at the server default 10,
+	// same index-build cost). Evidence: oracle-report-v2-baseline; decision
+	// recorded on CHAOS-3834. Values remain configurable as implemented --
+	// changing them is still the one-line diff this table exists to make
+	// possible, it is simply no longer pending confirmation.
+	calibratedIdentityText2Large: {
+		// 0.30: inside the recall-gate band the measurement aggregates
+		// support (tau=0.30 passed 24/30 correct and 29/30 best-wrong
+		// neighbors in the cited baseline). Strictly a floor, not a
+		// commit threshold -- graphrank's vectorRelevanceCeiling (0.70)
+		// and the corroboration requirement for anything above it are
+		// unchanged by this policy.
+		SimilarityFloor: 0.30,
+		// K unchanged (spec instruction for this initial entry): 0 keeps
+		// vectorSearchNodesWithOverFetch's existing multiplier-1 behavior
+		// byte-identical to pre-CHAOS-3834 over-fetch sizing. A lower tau
+		// admits more candidates per query without needing a wider raw
+		// fetch to still fill top-K; revisit only if post-deployment
+		// truncation telemetry says otherwise.
+		OverFetchMultiplier: 0,
+		// 200: CHAOS-3832's measured efRuntime/efConstruction sweep knee
+		// for this corpus size -- recall@20 rose 0.853 -> 0.979 at the
+		// same index-build cost between efRuntime 10 (the server default)
+		// and 200. See the type doc comment: this value governs only
+		// NEWLY CREATED indexes until an operator runs the CHAOS-3832
+		// recreate tooling against organizations already on this
+		// identity.
+		EfRuntime: 200,
+	},
+}
+
+// LookupRetrievalPolicy returns the calibrated RetrievalPolicy for embedIdentity
+// (the identity.String()+"#"+compositionTag form -- see retrievalPolicyTable's
+// doc comment), and false when no calibrated entry exists. A false result
+// means "keep the current conservative defaults": callers must not zero out
+// whatever they already had.
+func LookupRetrievalPolicy(embedIdentity string) (RetrievalPolicy, bool) {
+	policy, ok := retrievalPolicyTable[embedIdentity]
+	return policy, ok
+}
