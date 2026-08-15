@@ -58,7 +58,10 @@ index options were re-verified unchanged afterward.
   OPTIONS clause `createVectorIndex` always sent (test-proven). No production
   call site passes a non-zero value.
 - `dropVectorIndex` / `recreateVectorIndexWithOptions` (`vector.go`): not
-  called from any production path; the sweep/probe primitive.
+  called from any production path; the sweep/probe primitive. Reads the
+  pre-drop HNSW options first and, if the post-drop create fails, restores
+  them rather than leaving the index absent — reported loudly either way
+  (Luna round-1 finding 2b).
 - `vectorSearchNodesWithOverFetch` (`vector.go`): generalizes
   `vectorSearchNodes` with an explicit multiplier. `vectorSearchNodes` now
   delegates with multiplier=1, rendering byte-identical Cypher to before
@@ -68,17 +71,32 @@ index options were re-verified unchanged afterward.
   post-filters beyond the caller's `limit`, never from the raw server row
   count.
 - `RecallAtK`, `cosineSimilarity`, `BruteForceTopK` (`hnsw_recall.go`): pure,
-  fully unit-tested, no live dependency.
+  fully unit-tested, no live dependency. `ScoredID`, `TieExpandedTop`, and
+  `RecallAtKTieTolerant` add tie-tolerant comparison at the k-th boundary
+  (Luna round-1 finding 3) — real in this corpus, not a hypothetical: 78% of
+  it is near-duplicate `ci_pipeline_run` text (spec §1), which projects to
+  near- or exactly-identical embeddings.
 - `RunHNSWSweep`, `vectorSweepSeedTopK`, `SweepBuildPoint`, `SweepResult`
   (`hnsw_sweep.go`): the live sweep runner — recreates the index once per
   distinct (M, efConstruction, efRuntime) point, runs every seed query
-  against it, and reports recall@K relative to a caller-chosen reference
-  point plus p50/p95 query latency and index build time.
+  against it, and reports recall@K (tie-tolerant, relative to the reference
+  point's own overfetched top-K) plus p50/p95 query latency, index build
+  time, and — Luna round-1 finding 1 — `Queries`/`SkippedSeeds` so partial
+  coverage is always visible rather than silently folded into a clean-looking
+  number. A point where every seed's query fails (`Queries==0`) still
+  delivers its diagnostic result but makes `RunHNSWSweep` return a non-nil
+  error: a zero-coverage sweep is not a valid measurement and must not read
+  as a green pass.
+- `isSweepTargetSafe` + `protectedSweepGraphKeys` (`hnsw_sweep.go`): the
+  safety gate the live probe uses, rewritten per Luna round-1 finding 2 —
+  an EXACT-match denylist against a hardcoded, known-precious production
+  key (this lane's live org graph), not a substring heuristic. The `"copy"`
+  substring check is kept as a SECOND, independent condition, never the
+  sole gate.
 - `hnsw_sweep_live_test.go`: the runnable live probe, gated behind dedicated
   `ACR_TEST_HNSW_SWEEP_*` env vars (never a production `ACR_CONTEXT_FABRIC_*`
-  name) and a hard safety check — it refuses to run unless
-  `ACR_TEST_HNSW_SWEEP_CONFIRM_COPY=1` is set AND the target graph key
-  contains `"copy"`.
+  name), the safety gate above, and (finding 1) rejects any point with
+  `SkippedSeeds > 0` rather than merely logging it.
 
 ### Scoping note: what this measures vs. T1's harness
 
@@ -123,6 +141,21 @@ organization, work_item), every seed present in every point's result set. k=20.
 Reference point: M=16, efConstruction=512, efRuntime=200 (top of the swept
 range — see §2's scoping note for why this is "best-in-range", not a true
 brute-force oracle).
+
+**Metric note (Luna round-1 finding 3, disclosed honestly).** This run's
+numbers were computed with the ORIGINAL strict top-K comparison (the manual
+driver script captured ids only, not scores), before `RecallAtKTieTolerant`
+existed. Given this corpus is 78% near-duplicate `ci_pipeline_run` text with
+correspondingly tied/near-tied embeddings (spec §1), some fraction of the
+gap below 1.0 at every non-reference point is very likely boundary-tie noise
+rather than a genuine ANN miss — the fixed tooling (`RunHNSWSweep`, now
+tie-tolerant and score-aware) would very likely report SOMEWHAT higher
+recall at every point, though the RELATIVE ordering across points (which is
+what the §4 recommendation rests on) is unlikely to flip, since the same
+tie-boundary noise affects every point's comparison against the same
+reference. Re-running with the fixed tool is the correct way to get an exact
+number; not done here to avoid a second live-contention round on top of the
+one already documented below. Flagged as a residual (§5).
 
 **Methodology note on this specific run.** The automated Go tool
 (`hnsw_sweep_live_test.go`) hit a real limit twice under host contention
@@ -236,3 +269,12 @@ change (spec §4, "Retrieval-policy changes without re-embedding").
 - This sweep's 58-seed self-query set is a reasonable spread across kinds but
   is NOT the T1 paraphrase corpus; treat its recall numbers as ANN-fidelity
   signal, not as a stand-in for AC-3778-2's lift measurement.
+- **§3's reported numbers predate the tie-tolerant recall fix** (Luna round-1
+  finding 3): they were computed with a strict top-K comparison, before
+  `RecallAtKTieTolerant`/`TieExpandedTop` existed. A re-run with the now-fixed
+  `RunHNSWSweep` against a fresh `GRAPH.COPY` is the correct way to get an
+  exact number — likely somewhat HIGHER recall at every non-reference point,
+  given this corpus's known near-duplicate density, with the relative
+  ordering across points unlikely to change. Not re-run in this changeset to
+  avoid a second live-contention round; flagged here rather than silently
+  left as if the numbers were final.
