@@ -351,6 +351,57 @@ func TestDedupeHardNegativesLimitZeroReturnsNone(t *testing.T) {
 	}
 }
 
+// TestSummarizeHardNegatives_UnsaturatedCapDoesNotReportTruncation proves the
+// common case is unaffected: fewer distinct negatives than the cap means
+// truncated=false and aboveTauCount matches exactly what got serialized.
+func TestSummarizeHardNegatives_UnsaturatedCapDoesNotReportTruncation(t *testing.T) {
+	negatives := []hardNegative{
+		{Kind: "project", CanonicalID: "p1", Similarity: 0.90},
+		{Kind: "project", CanonicalID: "p2", Similarity: 0.10},
+	}
+	capped, aboveTauCount, truncated := summarizeHardNegatives(negatives, 0.55, 5)
+	if truncated {
+		t.Fatal("truncated = true, want false -- only 2 distinct negatives, well under the cap of 5")
+	}
+	if len(capped) != 2 {
+		t.Fatalf("len(capped) = %d, want 2", len(capped))
+	}
+	if aboveTauCount != 1 {
+		t.Fatalf("aboveTauCount = %d, want 1 (only p1 at 0.90 clears tau=0.55)", aboveTauCount)
+	}
+}
+
+// TestSummarizeHardNegatives_TruncatedCaseReportsTheCompleteAboveTauCount is
+// the codex round-2 P2 fix's harness-side pinning test: more distinct
+// negatives than the cap, several above tau but NOT all serialized --
+// aboveTauCount must reflect the COMPLETE count (4), not len(capped) (2).
+func TestSummarizeHardNegatives_TruncatedCaseReportsTheCompleteAboveTauCount(t *testing.T) {
+	negatives := []hardNegative{
+		{Kind: "project", CanonicalID: "p1", Similarity: 0.99},
+		{Kind: "project", CanonicalID: "p2", Similarity: 0.95},
+		{Kind: "project", CanonicalID: "p3", Similarity: 0.90},
+		{Kind: "project", CanonicalID: "p4", Similarity: 0.85},
+		{Kind: "project", CanonicalID: "p5", Similarity: 0.10}, // below tau
+	}
+	capped, aboveTauCount, truncated := summarizeHardNegatives(negatives, 0.55, 2)
+	if !truncated {
+		t.Fatal("truncated = false, want true -- 5 distinct negatives exceed the cap of 2")
+	}
+	if len(capped) != 2 {
+		t.Fatalf("len(capped) = %d, want 2 (still capped for serialization)", len(capped))
+	}
+	if aboveTauCount != 4 {
+		t.Fatalf("aboveTauCount = %d, want 4 (p1-p4 all clear tau=0.55; the cap must not shrink this count)", aboveTauCount)
+	}
+	// The capped list itself must still be the HIGHEST-similarity entries
+	// (dedupeHardNegatives' own contract), so a truncated-but-not-saturated
+	// downstream case can trust it without the total (see
+	// tau_calibration.go's "unsaturated needs no total" reasoning).
+	if capped[0].CanonicalID != "p1" || capped[1].CanonicalID != "p2" {
+		t.Fatalf("capped = %+v, want the top-2 by similarity (p1, p2)", capped)
+	}
+}
+
 func TestWriteFileMode0600OverwritesAPreExistingLoosePermission(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "report.json")
 	// Pre-create the path at a world-readable mode -- the exact scenario

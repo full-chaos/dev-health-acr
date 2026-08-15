@@ -331,17 +331,44 @@ func (a *Adapter) vectorSearchNodes(ctx context.Context, key, orgID string, vect
 // vectorSearchNodesWithOverFetch generalizes vectorSearchNodes with an
 // explicit over-fetch multiplier (CHAOS-3832 T2 / spec §5 L3). vectorSearchNodes
 // calls this with multiplier=1, which renders the IDENTICAL `limit+1` raw
-// fetch size it always requested -- production behavior is unchanged byte for
-// byte (TestVectorSearchNodesDelegatesToOverFetchMultiplierOne).
+// fetch size AND the identical `limit`-sized returned candidate set it always
+// requested -- production behavior is unchanged byte for byte
+// (TestVectorSearchNodesDelegatesToOverFetchMultiplierOne).
 //
 // L3's formula, exactly: the raw ANN fetch size is `(multiplier * limit) + 1`.
-// The multiplier widens the POOL the org/tau post-filters below draw from; the
-// trailing `+1` is unchanged and stays the ONLY truncation-detection sentinel
-// -- truncated is still derived from whether more than `limit` rows SURVIVE
-// the filters below, never from the raw multiplier*limit+1 the server
-// returned, so a wider pool can only ever recover more genuine candidates, it
-// can never itself manufacture a truncated=true a narrower pool would not
-// also have reported (review round 2 rec 2's caveat, restated here as code).
+// codex round-2 P2: the multiplier must widen the RETURNED candidate pool too,
+// not just the raw fetch. The earlier version fetched a wider pool but then
+// unconditionally sliced the tau-surviving result back down to `limit` BEFORE
+// returning -- since db.idx.vector.queryNodes' rows are already ORDER BY
+// score ASC (closest first), that slice ALWAYS keeps exactly the `limit`
+// closest-by-raw-cosine-distance survivors, regardless of multiplier. A
+// subject that is genuinely farther than `limit` other DISTINCT subjects by
+// raw vector distance could therefore never reach a caller's ranking --
+// including graphrank's ResolveFromMergedCandidates, which is DESIGNED to
+// rank the full merged candidate set (corroboration across mechanisms and
+// terms) and truncate LAST (see that function's doc comment) -- because this
+// function discarded it first, before graphrank ever saw it existed. No
+// multiplier could ever fix that: over-fetching the RAW query is pointless if
+// the RETURNED set is clipped back to the same size regardless.
+//
+// So the returned-candidate cap widens WITH the multiplier: `multiplier *
+// limit`, not `limit`. At multiplier=1 that is exactly `limit` (unchanged).
+// At multiplier>1, up to multiplier*limit tau-surviving candidates now flow
+// out to hybridSearchNodes -> ResolveSubjects -> ResolveFromMergedCandidates,
+// which is the ONLY place cross-mechanism ranking can happen (this function
+// has no visibility into the lexical arm, other search terms, or
+// corroboration) and already truncates to the FINAL response size
+// (request.Options.MaxSubjectCandidates) after that ranking -- exactly the
+// "rank first, truncate last" architecture this fix aligns with rather than
+// duplicates.
+//
+// The trailing `+1` sentinel is unchanged in spirit, just re-scaled: it now
+// sits one past the WIDENED cap (multiplier*limit+1 raw rows fetched),
+// so truncated is still derived from whether more than the returned cap of
+// candidates SURVIVE the filters below, never from the raw fetch size itself
+// -- a wider pool can only ever recover more genuine candidates, it can never
+// itself manufacture a truncated=true a narrower pool would not also have
+// reported (review round 2 rec 2's caveat, restated here as code).
 //
 // multiplier <= 0 is treated as 1 (the production default), never as a
 // zero-or-negative fetch size.
@@ -355,7 +382,10 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 	if multiplier <= 0 {
 		multiplier = 1
 	}
-	fetchK := multiplier*limit + 1
+	// returnCap is how many tau-surviving candidates this call may return --
+	// see the doc comment above for why this is no longer always `limit`.
+	returnCap := multiplier * limit
+	fetchK := returnCap + 1
 	cypher := fmt.Sprintf(
 		"CALL db.idx.vector.queryNodes('%s', '%s', %d, vecf32($vec)) YIELD node, score "+
 			"WHERE node.%s = $org "+
@@ -367,8 +397,8 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 		return nil, false, safeDependencyError("vector search context graph", err)
 	}
 	// Codex round-1 F1: the tau filter runs BEFORE the truncation decision and
-	// before the top-limit slice, and truncation is derived from how many rows
-	// SURVIVED tau -- never from how many the server returned.
+	// before the top-returnCap slice, and truncation is derived from how many
+	// rows SURVIVED tau -- never from how many the server returned.
 	//
 	// The earlier order had it backwards, and the consequence was not
 	// cosmetic. A query whose every row fell below the similarity floor
@@ -380,11 +410,11 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 	// found nothing must have authority over nothing.
 	//
 	// Deriving truncation from survivors is sound because the k-NN result is
-	// ordered by ascending distance: if the (limit+1)th row falls below tau,
-	// every row beyond it is further away and therefore also below tau, so no
-	// genuine competitor was cut off. Only a full limit+1 rows ALL clearing
-	// tau means the corpus may hold above-floor candidates this budget could
-	// not show.
+	// ordered by ascending distance: if the (returnCap+1)th row falls below
+	// tau, every row beyond it is further away and therefore also below tau,
+	// so no genuine competitor was cut off. Only a full returnCap+1 rows ALL
+	// clearing tau means the corpus may hold above-floor candidates this
+	// (already widened, see the function doc comment) budget could not show.
 	type survivor struct {
 		node       *node
 		similarity float64
@@ -406,9 +436,9 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 		}
 		survivors = append(survivors, survivor{node: n, similarity: similarity})
 	}
-	truncated := len(survivors) > limit
+	truncated := len(survivors) > returnCap
 	if truncated {
-		survivors = survivors[:limit]
+		survivors = survivors[:returnCap]
 	}
 	candidates := make([]graphrank.CandidateNode, 0, len(survivors))
 	for _, s := range survivors {

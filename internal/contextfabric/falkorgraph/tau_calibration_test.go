@@ -6,6 +6,113 @@ import (
 )
 
 func floatPtr(v float64) *float64 { return &v }
+func intPtr(v int) *int           { return &v }
+
+// TestCalibrateFromReport_TruncatedSaturatedCaseWithTotalSizesKFromTotal is
+// the codex round-2 P2 fix's positive pinning test: "truncated + total ->
+// size K from the total". A single scored case's serialized HardNegatives
+// are capped at 2, both clearing tau (saturated -- the capped list gives no
+// way to tell 2 from 200), but the harness ALSO reported the complete
+// above-tau total (20) via HardNegativeAboveTauCount. CalibrateFromReport
+// must trust that total, not the capped list length, when sizing K.
+func TestCalibrateFromReport_TruncatedSaturatedCaseWithTotalSizesKFromTotal(t *testing.T) {
+	report := CalibrationReport{
+		TopK: 5,
+		Cases: []CalibrationCase{{
+			Cause:                     "hit",
+			CorrectSimilarity:         floatPtr(0.90),
+			HardNegatives:             []CalibrationHardNegative{{Kind: "k", CanonicalID: "n1", Similarity: 0.95}, {Kind: "k", CanonicalID: "n2", Similarity: 0.92}},
+			HardNegativeAboveTauCount: intPtr(20),
+			HardNegativesTruncated:    true,
+		}},
+	}
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+	if err != nil {
+		t.Fatalf("CalibrateFromReport: %v", err)
+	}
+	if !result.KApplyReady {
+		t.Fatalf("KApplyReady = false, want true -- the harness provided a complete total for the one saturated case, K sizing should proceed")
+	}
+	if result.NearDuplicateP90 != 20 {
+		t.Fatalf("NearDuplicateP90 = %d, want 20 (sized from HardNegativeAboveTauCount, not len(HardNegatives)=2)", result.NearDuplicateP90)
+	}
+	// multiplier = ceil((TopK + P90) / TopK) = ceil((5+20)/5) = 5.
+	if result.Policy.OverFetchMultiplier != 5 {
+		t.Fatalf("OverFetchMultiplier = %d, want 5 (sized from the total, not the capped list)", result.Policy.OverFetchMultiplier)
+	}
+}
+
+// TestCalibrateFromReport_TruncatedSaturatedCaseWithoutTotalRefusesToSizeK
+// is the fix's negative pinning test: "truncated without a total -> refuse".
+// Identical fixture to the positive test above, except
+// HardNegativeAboveTauCount is nil (the harness did not provide a total --
+// an older report, or a harness that skipped it). CalibrateFromReport must
+// NOT silently size K from the saturated, capped list (that is exactly the
+// pre-fix bug): it must report KApplyReady=false and force
+// OverFetchMultiplier to 0 rather than a confident-looking but potentially
+// under-sized number.
+func TestCalibrateFromReport_TruncatedSaturatedCaseWithoutTotalRefusesToSizeK(t *testing.T) {
+	report := CalibrationReport{
+		TopK: 5,
+		Cases: []CalibrationCase{{
+			Cause:                  "hit",
+			CorrectSimilarity:      floatPtr(0.90),
+			HardNegatives:          []CalibrationHardNegative{{Kind: "k", CanonicalID: "n1", Similarity: 0.95}, {Kind: "k", CanonicalID: "n2", Similarity: 0.92}},
+			HardNegativesTruncated: true,
+			// HardNegativeAboveTauCount intentionally nil.
+		}},
+	}
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+	if err != nil {
+		t.Fatalf("CalibrateFromReport: %v", err)
+	}
+	if result.KApplyReady {
+		t.Fatal("KApplyReady = true, want false -- the harness reported truncation but no total; sizing K from the capped, saturated list would silently under-size it")
+	}
+	if result.Policy.OverFetchMultiplier != 0 {
+		t.Fatalf("OverFetchMultiplier = %d, want 0 (forced to \"unchanged\" -- insufficient data, not a silent guess)", result.Policy.OverFetchMultiplier)
+	}
+	if result.KInsufficientDataNote == "" {
+		t.Fatal("KInsufficientDataNote is empty, want a human-facing explanation when K sizing is refused")
+	}
+	// tau (the OTHER half of the policy) must be entirely unaffected by K's
+	// refusal -- this gate is scoped to K alone.
+	if result.Policy.SimilarityFloor <= 0 {
+		t.Fatalf("SimilarityFloor = %v, want the recall-gate tau still computed normally", result.Policy.SimilarityFloor)
+	}
+}
+
+// TestCalibrateFromReport_TruncatedUnsaturatedCaseNeedsNoTotal proves the
+// "else" branch: a case can be truncated (the harness capped its serialized
+// list) WITHOUT being saturated (at least one serialized entry already
+// falls below tau) -- and dedupeHardNegatives sorts descending before
+// capping, so everything beyond the cap is <= the smallest serialized
+// entry. A not-saturated capped count is therefore ALREADY the exact total,
+// truncated or not, and needs no HardNegativeAboveTauCount to be trusted.
+func TestCalibrateFromReport_TruncatedUnsaturatedCaseNeedsNoTotal(t *testing.T) {
+	report := CalibrationReport{
+		TopK: 5,
+		Cases: []CalibrationCase{{
+			Cause:             "hit",
+			CorrectSimilarity: floatPtr(0.90),
+			HardNegatives:     []CalibrationHardNegative{{Kind: "k", CanonicalID: "n1", Similarity: 0.95}, {Kind: "k", CanonicalID: "n2", Similarity: 0.10}},
+			// n2 (0.10) falls below the ~0.90 tau this single-sample report
+			// resolves to -- the capped list is NOT saturated.
+			HardNegativesTruncated: true,
+			// HardNegativeAboveTauCount intentionally nil -- must not be needed.
+		}},
+	}
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+	if err != nil {
+		t.Fatalf("CalibrateFromReport: %v", err)
+	}
+	if !result.KApplyReady {
+		t.Fatalf("KApplyReady = false, want true -- an unsaturated capped list is already exact, no total needed")
+	}
+	if result.NearDuplicateP90 != 1 {
+		t.Fatalf("NearDuplicateP90 = %d, want 1 (only n1 clears tau; n2 is below it and provably nothing beyond the cap could clear tau either)", result.NearDuplicateP90)
+	}
+}
 
 // TestCalibrateFromReport_DeterministicRecallGate locks in the exact
 // nearest-rank arithmetic recallGateThreshold implements, against a small
@@ -157,6 +264,51 @@ func TestCalibrateFromReport_SyntheticOverlappingDistributions(t *testing.T) {
 	}
 	if result.SMinusSampleSize != 30 {
 		t.Fatalf("SMinusSampleSize = %d, want 30", result.SMinusSampleSize)
+	}
+	// codex round-2 P1 pinning: this fixture's S+/S- ranges OVERLAP by
+	// construction (the defining property it is shaped after), so the
+	// recall-gate tau above admits most impostors too -- the shipped
+	// openai/text-embedding-3-large entry's own real measurement has a
+	// reject rate of ~0.067, far below NegativeGateRejectThreshold. The
+	// tool must NOT silently bless this as an apply-ready policy.
+	if result.ApplyReady {
+		t.Fatalf("ApplyReady = true, want false: an overlapping S+/S- distribution's reject rate (%.4f) must fail the negative gate, not silently pass", result.HardNegativeRejectRate)
+	}
+	if result.NegativeGateNote == "" {
+		t.Fatal("NegativeGateNote is empty, want a human-facing explanation when the gate fails")
+	}
+}
+
+// TestCalibrateFromReport_WellSeparatedDistributionPassesTheNegativeGate is
+// the codex round-2 P1 fix's companion positive case: an S+/S- distribution
+// that DOES cleanly separate at the recommended tau (no overlap at all --
+// every S- sits well below every S+) must report ApplyReady=true. This is
+// NOT a claim that CHAOS-3834's real measured identity looks like this --
+// it proves the gate itself is a genuine two-sided check, not a constant
+// false dressed up as fail-closed.
+func TestCalibrateFromReport_WellSeparatedDistributionPassesTheNegativeGate(t *testing.T) {
+	var cases []CalibrationCase
+	for i := 0; i < 30; i++ {
+		// S+ high (0.80-0.95), S- low (0.05-0.20) -- no overlap at any tau.
+		sPlus := 0.80 + float64(i)*(0.15/29.0)
+		sMinus := 0.05 + float64(i)*(0.15/29.0)
+		cases = append(cases, CalibrationCase{
+			Cause: "hit", CorrectSimilarity: floatPtr(sPlus), BestWrongSimilarity: floatPtr(sMinus),
+		})
+	}
+	report := CalibrationReport{TopK: 20, Cases: cases}
+
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+	if err != nil {
+		t.Fatalf("CalibrateFromReport: %v", err)
+	}
+	t.Logf("well-separated recommendation: tau=%.4f achievedRecall=%.4f hardNegRejectRate=%.4f",
+		result.Policy.SimilarityFloor, result.AchievedRecall, result.HardNegativeRejectRate)
+	if !result.ApplyReady {
+		t.Fatalf("ApplyReady = false, want true: reject rate %.4f should clear the %.4f threshold on a cleanly-separated distribution", result.HardNegativeRejectRate, NegativeGateRejectThreshold)
+	}
+	if result.NegativeGateNote == "" {
+		t.Fatal("NegativeGateNote is empty, want a human-facing explanation even when the gate passes")
 	}
 }
 

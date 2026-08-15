@@ -2,6 +2,7 @@ package falkorgraph
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 )
@@ -35,11 +36,29 @@ type CalibrationHardNegative struct {
 
 // CalibrationCase mirrors one entry of oracle_live_test.go's oracleCaseResult
 // -- only the fields the calibration math reads.
+//
+// HardNegativesTruncated mirrors oracleCaseResult's field of the same name
+// (codex round-2 P2): true when the harness's harvest for this case held
+// more distinct wrong subjects than HardNegatives serializes, i.e.
+// HardNegatives here is a CAPPED view, not the complete set. A report from
+// before this field existed decodes it as false (Go's json zero value),
+// which CalibrateFromReport treats as "complete" -- the same trust an old
+// report always got, not a new hazard.
+//
+// HardNegativeAboveTauCount mirrors the sibling field, INCLUDING its pointer
+// type: nil means "this report did not compute a total" (old report, or a
+// harness variant that skips it), distinguishable from present-and-zero.
+// CalibrateFromReport DOES read this for a truncated, saturated case (see
+// that function's doc comment) -- trusting it as this case's near-duplicate
+// count rather than refusing outright, subject to the cross-tau caveat
+// documented on oracleCaseResult's copy of this field.
 type CalibrationCase struct {
-	Cause               string                    `json:"cause"`
-	CorrectSimilarity   *float64                  `json:"correct_similarity,omitempty"`
-	BestWrongSimilarity *float64                  `json:"best_wrong_similarity,omitempty"`
-	HardNegatives       []CalibrationHardNegative `json:"hard_negatives,omitempty"`
+	Cause                     string                    `json:"cause"`
+	CorrectSimilarity         *float64                  `json:"correct_similarity,omitempty"`
+	BestWrongSimilarity       *float64                  `json:"best_wrong_similarity,omitempty"`
+	HardNegatives             []CalibrationHardNegative `json:"hard_negatives,omitempty"`
+	HardNegativeAboveTauCount *int                      `json:"hard_negative_above_tau_count,omitempty"`
+	HardNegativesTruncated    bool                      `json:"hard_negatives_truncated"`
 }
 
 // CalibrationReport mirrors oracle_live_test.go's oracleReport -- only the
@@ -78,6 +97,27 @@ type CalibrationResult struct {
 	// full RetrievalPolicy entry set EfRuntime from that separate input.
 	Policy RetrievalPolicy
 
+	// ApplyReady is FAIL-CLOSED (codex round-2 P1): false whenever
+	// HardNegativeRejectRate falls below NegativeGateRejectThreshold. tau/K
+	// above remain valid RECALL-CHANNEL diagnostics either way -- this does
+	// NOT reopen tau as a precision knob, and CHAOS-3834's ratified design is
+	// unchanged: tau is still picked from S+ recall alone (recallGateThreshold),
+	// never re-derived from the negative pool. What changes is that a caller
+	// can no longer treat Policy as apply-ready without checking this field
+	// first: a recall-gate tau that also admits most impostors (the shipped
+	// distribution's own reject rate is well below the threshold) needs an
+	// explicit human decision that precision will come from hybrid ranking +
+	// corroboration downstream, not a silent pass from this tool. The
+	// hand-written calibratedIdentityText2Large entry in retrieval_policy.go
+	// IS that explicit human decision -- it is not auto-applied output of
+	// this function and is therefore not itself gated by ApplyReady; see its
+	// doc comment for the sequencing-gate ruling recorded on CHAOS-3834.
+	ApplyReady bool
+	// NegativeGateNote explains the ApplyReady verdict in one sentence, set
+	// on BOTH outcomes, so a caller logging or printing this result never has
+	// to re-derive the reasoning from the raw rate and threshold.
+	NegativeGateNote string
+
 	SPlusSampleSize        int
 	SMinusSampleSize       int
 	HardNegativeSampleSize int
@@ -97,7 +137,36 @@ type CalibrationResult struct {
 	// estimate Policy.OverFetchMultiplier is sized from. See the function
 	// doc comment for the exact formula and the ambiguity it resolves.
 	NearDuplicateP90 int
+
+	// KApplyReady is a SEPARATE fail-closed gate from ApplyReady above,
+	// for a different hazard (codex round-2 P2): Policy.OverFetchMultiplier
+	// is sized from a per-case near-duplicate COUNT, which is only trustworthy
+	// when every scored case's hard-negative harvest is complete. When at
+	// least one case was truncated by the harness (CalibrationCase.
+	// HardNegativesTruncated) AND every one of its serialized entries already
+	// clears the recommended tau -- meaning the true count beyond the cap is
+	// UNKNOWN, not merely small -- sizing K from that case's count would
+	// silently under-estimate the density the same way the pre-fix bug did.
+	// KApplyReady is false in that case, and Policy.OverFetchMultiplier is
+	// forced to 0 ("unchanged"/no confident recommendation) rather than a
+	// number that looks precise but rests on censored data. tau/K's OTHER
+	// component (SimilarityFloor) is entirely unaffected -- this gate is
+	// scoped to K alone.
+	KApplyReady bool
+	// KInsufficientDataNote explains the KApplyReady verdict in one sentence,
+	// set on BOTH outcomes, mirroring NegativeGateNote's pattern.
+	KInsufficientDataNote string
 }
+
+// NegativeGateRejectThreshold is the spec §5 L4 test criterion's negative
+// half, made an explicit, checkable constant (codex round-2 P1): at least
+// this fraction of the combined S-/hard-negative pool must fall at or below
+// the recommended tau for CalibrateFromReport to report ApplyReady=true.
+// This does NOT feed back into how tau is chosen (recallGateThreshold reads
+// S+ only, unchanged) -- it is a SEPARATE, fail-closed check on the tau that
+// comes out, so a recall-gate value that also happens to admit most
+// impostors cannot silently pass as a ready-to-apply policy.
+const NegativeGateRejectThreshold = 0.90
 
 var (
 	// ErrNoCorrectSimilaritySamples reports that the report carries no S+
@@ -164,7 +233,18 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 	// zero in the distribution percentileInt draws from -- silently
 	// omitting such cases would bias the density estimate upward by
 	// counting only the crowded cases.
-	var perScoredCaseHardNegatives [][]float64
+	// scoredCaseHardNegatives pairs a scored case's harvested similarities
+	// with whether the HARNESS truncated that harvest (codex round-2 P2) --
+	// carried per-case, not just as a report-wide flag, because K-sizing
+	// safety is a per-case question: one truncated case with a saturated
+	// (fully-above-tau) capped list poisons the density estimate even if
+	// every other case's harvest was complete.
+	type scoredCaseHardNegatives struct {
+		similarities  []float64
+		truncated     bool
+		aboveTauCount *int
+	}
+	var perScoredCaseHardNegatives []scoredCaseHardNegatives
 
 	for _, c := range report.Cases {
 		if c.BestWrongSimilarity != nil {
@@ -179,7 +259,9 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 			similarities[i] = hn.Similarity
 			hardNegatives = append(hardNegatives, hn.Similarity)
 		}
-		perScoredCaseHardNegatives = append(perScoredCaseHardNegatives, similarities)
+		perScoredCaseHardNegatives = append(perScoredCaseHardNegatives, scoredCaseHardNegatives{
+			similarities: similarities, truncated: c.HardNegativesTruncated, aboveTauCount: c.HardNegativeAboveTauCount,
+		})
 	}
 
 	if len(sPlus) == 0 {
@@ -210,9 +292,20 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 	}
 
 	nearDupCounts := make([]int, len(perScoredCaseHardNegatives))
-	for i, similarities := range perScoredCaseHardNegatives {
+	// kInsufficientData is codex round-2 P2's refusal signal: a case whose
+	// harness harvest was truncated AND whose every serialized entry
+	// already clears tau means the true near-duplicate count for that case
+	// is UNKNOWN (could be far higher than what fit in the cap), not merely
+	// small. Sizing K's P90 estimate from that case's local (capped) count
+	// anyway would silently repeat the exact under-sizing bug this fix
+	// closes -- UNLESS the harness also gave us the complete total
+	// (aboveTauCount present), in which case that total is trusted directly
+	// instead of refusing: "truncated + total -> size K from the total",
+	// "truncated without a total -> refuse", per the fix's two-sided design.
+	kInsufficientData := false
+	for i, scored := range perScoredCaseHardNegatives {
 		count := 0
-		for _, s := range similarities {
+		for _, s := range scored.similarities {
 			// A hard negative only competes for a top-K slot if it would
 			// actually be RETRIEVED at tau -- aboveSimilarityFloor, the same
 			// strict predicate production's vectorSearchNodesWithOverFetch
@@ -222,16 +315,54 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 				count++
 			}
 		}
+		if scored.truncated && count == len(scored.similarities) {
+			// The capped list is saturated (every serialized entry clears
+			// tau): entries beyond the cap could ALSO clear it, so `count`
+			// is not trustworthy as-is. Note this is the ONLY unsafe case --
+			// see the "else" reasoning below.
+			if scored.aboveTauCount != nil {
+				count = *scored.aboveTauCount
+			} else {
+				kInsufficientData = true
+			}
+		}
+		// Not saturated (or not truncated at all) needs no correction: the
+		// full harvest is sorted DESCENDING before truncation
+		// (dedupeHardNegatives), so every entry beyond the cap has
+		// similarity <= the smallest SERIALIZED entry. If that smallest
+		// serialized entry already falls at-or-below tau (not saturated),
+		// everything past the cap does too -- `count` is already the exact
+		// total, truncated harvest or not.
 		nearDupCounts[i] = count
 	}
 	p90 := percentileInt(nearDupCounts, 0.90)
 
+	kApplyReady := !kInsufficientData
+	kNote := "K sized from complete per-case hard-negative data (no scored case's harvest was truncated at its own tau-clearing boundary)"
+	if kInsufficientData {
+		kNote = "K NOT sized: at least one scored case's hard-negative harvest was truncated by the harness (HardNegativesTruncated) and every serialized entry already clears tau -- the true near-duplicate count beyond the cap is unknown, so OverFetchMultiplier falls back to 0 (unchanged) rather than a confident-looking but potentially under-sized value. Rerun the oracle harness with a higher ACR_TEST_ORACLE_HARD_NEGATIVES for this identity, or size K by hand from the full offline harvest."
+	}
+
 	multiplier := 1
-	if report.TopK > 0 && p90 > 0 {
+	if !kInsufficientData && report.TopK > 0 && p90 > 0 {
 		multiplier = int(math.Ceil(float64(report.TopK+p90) / float64(report.TopK)))
 		if multiplier < 1 {
 			multiplier = 1
 		}
+	}
+
+	applyReady := rejectRate >= NegativeGateRejectThreshold
+	note := fmt.Sprintf(
+		"negative gate PASSED: hard-negative reject rate %.4f clears the %.4f threshold; recall-gate tau is apply-ready",
+		rejectRate, NegativeGateRejectThreshold,
+	)
+	if !applyReady {
+		note = fmt.Sprintf(
+			"negative gate FAILED: hard-negative reject rate %.4f is below the %.4f threshold -- recall-only tau; "+
+				"precision must come from hybrid/corroboration adjudication, not this floor; human ratification required "+
+				"before this tau ships as a policy",
+			rejectRate, NegativeGateRejectThreshold,
+		)
 	}
 
 	return CalibrationResult{
@@ -241,6 +372,10 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 			// the density estimate found no reason to widen the fetch.
 			OverFetchMultiplier: overFetchMultiplierOrUnchanged(multiplier),
 		},
+		ApplyReady:             applyReady,
+		NegativeGateNote:       note,
+		KApplyReady:            kApplyReady,
+		KInsufficientDataNote:  kNote,
 		SPlusSampleSize:        len(sPlus),
 		SMinusSampleSize:       len(sMinus),
 		HardNegativeSampleSize: len(hardNegatives),

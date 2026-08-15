@@ -140,6 +140,21 @@ var retrievalPolicyTable = map[string]RetrievalPolicy{
 	// recorded on CHAOS-3834. Values remain configurable as implemented --
 	// changing them is still the one-line diff this table exists to make
 	// possible, it is simply no longer pending confirmation.
+	//
+	// SEQUENCING GATE (codex round-2 P1): tau_calibration.go's
+	// CalibrateFromReport reports this same identity's measured hard-negative
+	// reject rate as FAR below NegativeGateRejectThreshold (ApplyReady=false)
+	// -- tau=0.30 is a RECALL channel, not a precision knob, and admits most
+	// impostors by design (adjudication is owned by hybrid ranking +
+	// corroboration downstream, per the ratified conclusion above). This
+	// entry is NOT the tool's auto-applied output and is therefore NOT gated
+	// by ApplyReady: it is the explicit human ratification decision
+	// ApplyReady=false is asking for, made by chris on CHAOS-3834, recorded
+	// here by hand rather than mechanically emitted. The no-match/false-
+	// friend controls this entry's precision actually depends on (hybrid
+	// ranking + corroboration) must pass at THIS exact policy before any
+	// index-recreate/trial conclusions are drawn -- see the CHAOS-3834
+	// ship-time record for that sequencing.
 	calibratedIdentityText2Large: {
 		// 0.30: inside the recall-gate band the measurement aggregates
 		// support (tau=0.30 passed 24/30 correct and 29/30 best-wrong

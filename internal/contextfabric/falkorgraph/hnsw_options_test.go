@@ -433,3 +433,79 @@ func TestVectorSearchNodesWithOverFetchTruncationStillDerivedFromSurvivors(t *te
 		t.Fatalf("expected 2 candidates, got %d", len(candidates))
 	}
 }
+
+// TestVectorSearchNodesWithOverFetch_ReturnsBeyondLimitWhenMultiplierWidensThePool
+// is the codex round-2 P2 fix's pinning test. The bug: the widened raw-fetch
+// pool was tau-filtered then unconditionally sliced back down to `limit`
+// BEFORE returning -- since db.idx.vector.queryNodes rows are already ORDER
+// BY score ASC, that slice always kept exactly the `limit` closest-by-raw-
+// distance survivors, so a subject ranked beyond `limit` by raw cosine
+// distance could NEVER reach the caller (and therefore could never reach
+// graphrank's cross-mechanism ranking) for ANY multiplier.
+//
+// This fixture has 5 tau-surviving rows (ranks 1-5 by ascending distance) at
+// limit=2. At multiplier=1 (returnCap=2*1=2, byte-identical to pre-fix), only
+// ranks 1-2 are returned -- the mutation/regression guard for the default
+// path. At multiplier=3 (returnCap=2*3=6 >= 5), ALL FIVE survive, including
+// ranks 3-5 that the old code discarded unconditionally: the widened pool
+// now actually reaches the caller instead of being clipped straight back
+// down to `limit`.
+func TestVectorSearchNodesWithOverFetch_ReturnsBeyondLimitWhenMultiplierWidensThePool(t *testing.T) {
+	rows := func(n int) []row {
+		out := make([]row, n)
+		for i := 0; i < n; i++ {
+			out[i] = row{
+				"node": &node{Properties: map[string]interface{}{
+					propKind: "project", propCanonicalID: fmt.Sprintf("p%d", i+1), propLabel: fmt.Sprintf("Rank %d", i+1),
+				}},
+				// Ascending distance -- rank 1 is closest, matching
+				// db.idx.vector.queryNodes' own ORDER BY score ASC.
+				"score": float64(i) * 0.01,
+			}
+		}
+		return out
+	}
+
+	t.Run("multiplier=1: byte-identical to pre-fix, still clipped to limit", func(t *testing.T) {
+		fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+			return rows(5), nil
+		}}
+		adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0}}, 0.55)
+		candidates, truncated, err := adapter.vectorSearchNodesWithOverFetch(context.Background(), "k", "org", []float32{1, 0}, 0.55, 2, 1)
+		if err != nil {
+			t.Fatalf("vectorSearchNodesWithOverFetch: %v", err)
+		}
+		if len(candidates) != 2 {
+			t.Fatalf("multiplier=1: len(candidates) = %d, want 2 (unchanged default-path behavior)", len(candidates))
+		}
+		if !truncated {
+			t.Fatal("multiplier=1: truncated = false, want true -- 5 survivors exceed the returnCap of 2")
+		}
+	})
+
+	t.Run("multiplier=3: the widened pool actually flows out, rank 3-5 included", func(t *testing.T) {
+		fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+			return rows(5), nil
+		}}
+		adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0}}, 0.55)
+		candidates, truncated, err := adapter.vectorSearchNodesWithOverFetch(context.Background(), "k", "org", []float32{1, 0}, 0.55, 2, 3)
+		if err != nil {
+			t.Fatalf("vectorSearchNodesWithOverFetch: %v", err)
+		}
+		if truncated {
+			t.Fatal("multiplier=3: truncated = true, want false -- all 5 survivors fit inside the returnCap of 6")
+		}
+		if len(candidates) != 5 {
+			t.Fatalf("multiplier=3: len(candidates) = %d, want 5 -- the widened pool (returnCap=6) must not be clipped back to `limit`=2", len(candidates))
+		}
+		got := make(map[string]bool, len(candidates))
+		for _, c := range candidates {
+			got[c.Name] = true
+		}
+		for _, wantLabel := range []string{"Rank 3", "Rank 4", "Rank 5"} {
+			if !got[wantLabel] {
+				t.Fatalf("candidate %q (raw rank beyond `limit`=2) is missing -- multiplier>1 must let it reach the caller for cross-mechanism ranking, not discard it here", wantLabel)
+			}
+		}
+	})
+}

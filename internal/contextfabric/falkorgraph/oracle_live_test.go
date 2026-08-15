@@ -341,7 +341,10 @@ func TestExactSearchOracleDecomposesRetrievalMisses(t *testing.T) {
 		}
 		result.CorrectSimilarity = bestCorrectSimilarity
 		result.BestWrongSimilarity = bestWrongSimilarity
-		result.HardNegatives = dedupeHardNegatives(hardNegatives, hardNegativeCount)
+		capped, aboveTauCount, truncated := summarizeHardNegatives(hardNegatives, tau, hardNegativeCount)
+		result.HardNegatives = capped
+		result.HardNegativeAboveTauCount = &aboveTauCount
+		result.HardNegativesTruncated = truncated
 		report.Cases = append(report.Cases, result)
 
 		dist := report.PerKind[testCase.ExpectKind]
@@ -403,7 +406,46 @@ type oracleCaseResult struct {
 	Cause               oracleMissCause `json:"cause"`
 	CorrectSimilarity   *float64        `json:"correct_similarity,omitempty"`
 	BestWrongSimilarity *float64        `json:"best_wrong_similarity,omitempty"`
-	HardNegatives       []hardNegative  `json:"hard_negatives,omitempty"`
+	// HardNegatives is CAPPED at ACR_TEST_ORACLE_HARD_NEGATIVES (default 5)
+	// -- see HardNegativeAboveTauCount below for the complete count this
+	// list may be a truncated view of.
+	HardNegatives []hardNegative `json:"hard_negatives,omitempty"`
+	// HardNegativeAboveTauCount is the COMPLETE count of DISTINCT wrong
+	// subjects (deduped across this case's terms, same rule
+	// dedupeHardNegatives applies) whose similarity clears this run's OWN
+	// tau (aboveSimilarityFloor's strict predicate) -- codex round-2 P2
+	// sibling finding: HardNegatives above is capped at hardNegativeCount
+	// (default 5) with NO metadata distinguishing "this case genuinely has
+	// few near-duplicates" from "this case has many, only the top 5 got
+	// serialized". tau_calibration.go's near-duplicate density estimate
+	// (OverFetchMultiplier) reads len(case.HardNegatives) as if it were the
+	// complete count; on a truncated case that silently UNDER-sizes K. This
+	// field carries the true total so the calibration tool can read it
+	// directly INSTEAD of the possibly-censored list length. Computed from
+	// the FULL per-case harvest before HardNegatives is capped, so it is
+	// exact regardless of hardNegativeCount.
+	//
+	// A POINTER, deliberately: nil (omitted from JSON) means "this run did
+	// not compute the total" (a report from before this field existed, or a
+	// future harness variant that skips it), distinguishable from a
+	// present-and-zero count ("computed, and genuinely zero negatives clear
+	// tau"). The tool-side fix (tau_calibration.go) trusts a present value
+	// and refuses to size K from a truncated, saturated case that has none.
+	//
+	// Caveat this field does NOT resolve: it counts above THIS run's tau
+	// (report.Tau), not whatever tau CalibrateFromReport ultimately
+	// recommends for the SAME report -- a case-count computed at one tau
+	// cannot know exactly how many negatives would clear a DIFFERENT tau.
+	// CHAOS-3834's recall-gate tau is expected to be lower than a
+	// precision-cliff report's own applied floor, so this count is a valid
+	// LOWER BOUND for that direction (a lower tau admits at least as many),
+	// but the tool-side fix does not attempt to correct for the mismatch --
+	// see tau_calibration.go's doc comment on how it consumes this field.
+	HardNegativeAboveTauCount *int `json:"hard_negative_above_tau_count,omitempty"`
+	// HardNegativesTruncated is true when HardNegativeAboveTauCount's full
+	// deduped list exceeds hardNegativeCount, i.e. HardNegatives above is
+	// genuinely a truncated view for this case, not the complete set.
+	HardNegativesTruncated bool `json:"hard_negatives_truncated"`
 	// UsedTermFallback is true when this case had no authored subject_terms
 	// and therefore ran through the pre-CHAOS-3831 whole-question fallback
 	// -- NOT production parity (codex round-1 finding 7: this must be
@@ -518,6 +560,31 @@ func dedupeHardNegatives(negatives []hardNegative, limit int) []hardNegative {
 		out = out[:limit]
 	}
 	return out
+}
+
+// summarizeHardNegatives is the codex round-2 P2 fix's harness-side pure
+// function, extracted out of the big live-driver loop specifically so it is
+// unit-testable without a real graph/embedder (see oracle_test.go). It dedupes
+// the FULL harvest first via a limit that can never itself truncate (dedup
+// only ever REDUCES count -- len(negatives) is a safe upper bound on distinct
+// subjects), so aboveTauCount/truncated are computed from the COMPLETE
+// per-case set, then caps what actually gets serialized in `capped`. See
+// oracleCaseResult.HardNegativeAboveTauCount's doc comment for why the
+// calibration tool needs the complete count instead of len(capped).
+func summarizeHardNegatives(negatives []hardNegative, tau float64, cap int) (capped []hardNegative, aboveTauCount int, truncated bool) {
+	full := dedupeHardNegatives(negatives, len(negatives))
+	for _, n := range full {
+		if aboveSimilarityFloor(n.Similarity, tau) {
+			aboveTauCount++
+		}
+	}
+	truncated = len(full) > cap
+	if truncated {
+		capped = full[:cap]
+	} else {
+		capped = full
+	}
+	return capped, aboveTauCount, truncated
 }
 
 func sortedKinds(perKind map[string]*kindDistribution) []string {

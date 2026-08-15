@@ -66,6 +66,24 @@ func TestCalibrateRetrievalPolicyFromReportFile(t *testing.T) {
 		result.SPlusSampleSize, result.SMinusSampleSize, result.HardNegativeSampleSize)
 	t.Logf("  achieved recall=%.4f  hard-negative reject rate=%.4f  near-duplicate p90=%d",
 		result.AchievedRecall, result.HardNegativeRejectRate, result.NearDuplicateP90)
+	// codex round-2 P1: this tool is FAIL-CLOSED on the negative gate --
+	// ApplyReady=false means the recall-gate tau above is a diagnostic, not a
+	// ready-to-apply policy. Surfaced loudly here because this test's log
+	// output IS the human-facing artifact operators read before writing a
+	// retrieval_policy.go table entry.
+	if result.ApplyReady {
+		t.Logf("  NEGATIVE GATE: PASSED -- %s", result.NegativeGateNote)
+	} else {
+		t.Logf("  NEGATIVE GATE: FAILED -- NOT APPLY-READY -- %s", result.NegativeGateNote)
+	}
+	// codex round-2 P2: a SEPARATE fail-closed gate on K specifically -- see
+	// KApplyReady's doc comment. Surfaced the same way as the negative gate,
+	// for the same reason (this log output is what an operator reads).
+	if result.KApplyReady {
+		t.Logf("  K SIZING: RELIABLE -- %s", result.KInsufficientDataNote)
+	} else {
+		t.Logf("  K SIZING: INSUFFICIENT DATA -- OverFetchMultiplier forced to 0 -- %s", result.KInsufficientDataNote)
+	}
 
 	if outputPath := os.Getenv("ACR_TEST_CALIBRATION_OUTPUT"); outputPath != "" {
 		encodedResult, err := json.MarshalIndent(result, "", "  ")
