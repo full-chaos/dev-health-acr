@@ -173,6 +173,12 @@ func TestRecreateVectorIndexWithOptionsRunsDropCreatePoll(t *testing.T) {
 			return nil, nil
 		},
 		indexesFunc: func(ctx context.Context, graphKey string) ([]indexStatus, error) {
+			// Called TWICE by recreateVectorIndexWithOptions: once up front
+			// to capture the pre-drop options for a possible restore (Luna
+			// round-1 finding 2b), once by pollVectorIndexOperational at the
+			// end. Both report the same OPERATIONAL row here since this test
+			// is not exercising the restore path (see the dedicated restore
+			// tests below).
 			calls = append(calls, "poll")
 			return []indexStatus{{
 				Label: labelSubject, Status: "OPERATIONAL",
@@ -186,8 +192,14 @@ func TestRecreateVectorIndexWithOptionsRunsDropCreatePoll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recreateVectorIndexWithOptions: %v", err)
 	}
-	if len(calls) != 3 || calls[0] != "drop" || calls[1] != "create" || calls[2] != "poll" {
-		t.Fatalf("calls = %v, want [drop create poll] in that order", calls)
+	want := []string{"poll", "drop", "create", "poll"}
+	if len(calls) != len(want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Fatalf("calls = %v, want %v", calls, want)
+		}
 	}
 }
 
@@ -211,6 +223,93 @@ func TestRecreateVectorIndexWithOptionsStopsIfDropFails(t *testing.T) {
 	}
 	if created {
 		t.Fatal("create must never run after a failed drop")
+	}
+}
+
+// Luna round-1 finding 2b: when the CREATE half of a recreate cycle fails
+// after a successful DROP, the ORIGINAL pre-drop options must be restored
+// rather than leaving the target with no vector index at all.
+func TestRecreateVectorIndexWithOptionsRestoresOriginalOptionsIfNewCreateFails(t *testing.T) {
+	var creates []string
+	firstCreateFailed := false
+	fake := &fakeConn{
+		queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+			if strings.HasPrefix(cypher, "CREATE VECTOR INDEX") {
+				creates = append(creates, cypher)
+				if strings.Contains(cypher, "efRuntime:999") {
+					firstCreateFailed = true
+					return nil, errors.New("ERR simulated create failure")
+				}
+			}
+			return nil, nil
+		},
+		indexesFunc: func(ctx context.Context, graphKey string) ([]indexStatus, error) {
+			// Before the first create attempts anything, the pre-drop read
+			// reports the ORIGINAL configuration this test expects restored.
+			if !firstCreateFailed {
+				return []indexStatus{{
+					Label: labelSubject, Status: "OPERATIONAL",
+					Types: map[string][]string{propEmbedding: {"VECTOR"}},
+					Options: map[string]interface{}{propEmbedding: map[string]interface{}{
+						"dimension": int64(768), "M": int64(16), "efConstruction": int64(200), "efRuntime": int64(10),
+					}},
+				}}, nil
+			}
+			// After the failed create + restore attempt, report OPERATIONAL
+			// so pollVectorIndexOperational's best-effort wait succeeds.
+			return []indexStatus{{
+				Label: labelSubject, Status: "OPERATIONAL",
+				Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+				Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(768)}},
+			}}, nil
+		},
+	}
+	adapter := newFakeAdapter(t, fake)
+	err := adapter.recreateVectorIndexWithOptions(context.Background(), "k", 768, hnswIndexOptions{EfRuntime: 999})
+	if err == nil {
+		t.Fatal("expected an error reporting the original create failure, even though restore succeeded")
+	}
+	if !strings.Contains(err.Error(), "restored the original options") || !strings.Contains(err.Error(), "successfully") {
+		t.Fatalf("error must report the successful restore, got: %v", err)
+	}
+	if len(creates) != 2 {
+		t.Fatalf("expected exactly 2 CREATE attempts (new options, then restore), got %d: %v", len(creates), creates)
+	}
+	if !strings.Contains(creates[0], "efRuntime:999") {
+		t.Fatalf("first create should attempt the NEW options, got %q", creates[0])
+	}
+	if !strings.Contains(creates[1], "M:16") || !strings.Contains(creates[1], "efConstruction:200") || !strings.Contains(creates[1], "efRuntime:10") {
+		t.Fatalf("second create should restore the ORIGINAL options, got %q", creates[1])
+	}
+}
+
+// If BOTH the new create and the restore attempt fail, the index is
+// genuinely absent -- that must be reported loudly, not swallowed.
+func TestRecreateVectorIndexWithOptionsReportsLoudlyWhenRestoreAlsoFails(t *testing.T) {
+	fake := &fakeConn{
+		queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+			if strings.HasPrefix(cypher, "CREATE VECTOR INDEX") {
+				return nil, errors.New("ERR simulated create failure")
+			}
+			return nil, nil
+		},
+		indexesFunc: func(ctx context.Context, graphKey string) ([]indexStatus, error) {
+			return []indexStatus{{
+				Label: labelSubject, Status: "OPERATIONAL",
+				Types: map[string][]string{propEmbedding: {"VECTOR"}},
+				Options: map[string]interface{}{propEmbedding: map[string]interface{}{
+					"dimension": int64(768), "efRuntime": int64(10),
+				}},
+			}}, nil
+		},
+	}
+	adapter := newFakeAdapter(t, fake)
+	err := adapter.recreateVectorIndexWithOptions(context.Background(), "k", 768, hnswIndexOptions{EfRuntime: 999})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "ABSENT") || !strings.Contains(err.Error(), "manual intervention required") {
+		t.Fatalf("a double failure must be reported loudly with an explicit ABSENT/manual-intervention message, got: %v", err)
 	}
 }
 

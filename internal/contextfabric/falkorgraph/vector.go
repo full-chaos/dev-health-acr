@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
@@ -94,6 +95,10 @@ type hnswIndexOptions struct {
 	EfRuntime      int
 }
 
+func (o hnswIndexOptions) String() string {
+	return fmt.Sprintf("M=%d,efConstruction=%d,efRuntime=%d", o.M, o.EfConstruction, o.EfRuntime)
+}
+
 // createVectorIndex creates the per-organization vector index on
 // Subject.embedding with the server's default HNSW parameters. It is the
 // single production call site (ensureVectorIndex) and is unchanged by
@@ -170,6 +175,35 @@ func (a *Adapter) dropVectorIndex(ctx context.Context, key string) error {
 	return safeDependencyError("drop vector index", err)
 }
 
+// currentVectorIndexHNSWOptions reads the M/efConstruction/efRuntime the
+// TARGET key's vector index currently reports, best-effort: any index row
+// found on Subject.embedding is read regardless of its Status (unlike
+// vectorIndexDimension's strict OPERATIONAL allowlist), because this is used
+// only to capture "whatever was there before" for a possible restore, not to
+// make a production trust decision. ok=false means no vector index exists on
+// this key at all (nothing to restore to).
+func (a *Adapter) currentVectorIndexHNSWOptions(ctx context.Context, key string) (hnswIndexOptions, bool, error) {
+	indexes, err := a.api.indexes(ctx, key)
+	if err != nil {
+		return hnswIndexOptions{}, false, safeDependencyError("inspect vector index before recreate", err)
+	}
+	for _, index := range indexes {
+		if index.Label != labelSubject {
+			continue
+		}
+		types, ok := index.Types[propEmbedding]
+		if !ok {
+			continue
+		}
+		for _, indexType := range types {
+			if strings.EqualFold(indexType, "VECTOR") {
+				return index.HNSWOptions(), true, nil
+			}
+		}
+	}
+	return hnswIndexOptions{}, false, nil
+}
+
 // recreateVectorIndexWithOptions drops (tolerating absence) and recreates the
 // vector index with the given HNSW parameters, then polls to OPERATIONAL --
 // the CHAOS-3832 measurement primitive behind the T2 sweep. It never touches
@@ -178,14 +212,38 @@ func (a *Adapter) dropVectorIndex(ctx context.Context, key string) error {
 // probe confirmed a node's post-recreate nearest-neighbor result is byte-for-
 // byte identical to its pre-recreate result).
 //
+// RESTORE ON FAILURE (Luna round-1 finding 2b): the pre-drop options are read
+// FIRST, before anything destructive happens. If the CREATE half of the cycle
+// fails, this attempts to recreate the index with the ORIGINAL options rather
+// than leave the target with no vector index at all -- a dropped-and-never-
+// restored index is a silent retrieval regression on whatever graph this ran
+// against, on top of whatever caused the create to fail in the first place.
+// A failed restore is reported LOUDLY (wrapped into the returned error, never
+// swallowed) rather than merely logged, because at that point the index is
+// genuinely absent and needs an operator's attention.
+//
 // Not called from any production path. The only callers are the sweep runner
 // and its tests/live probe.
 func (a *Adapter) recreateVectorIndexWithOptions(ctx context.Context, key string, dimension int, opts hnswIndexOptions) error {
+	original, hadOriginal, err := a.currentVectorIndexHNSWOptions(ctx, key)
+	if err != nil {
+		return fmt.Errorf("read current vector index options before recreate: %w", err)
+	}
 	if err := a.dropVectorIndex(ctx, key); err != nil {
 		return err
 	}
 	if err := a.createVectorIndexWithOptions(ctx, key, dimension, opts); err != nil {
-		return err
+		if !hadOriginal {
+			return fmt.Errorf("create vector index with new options failed, and no prior index existed to restore: %w", err)
+		}
+		if restoreErr := a.createVectorIndexWithOptions(ctx, key, dimension, original); restoreErr != nil {
+			return fmt.Errorf("create vector index with new options failed (%v) AND restoring the original options (%s) ALSO failed (%v) -- "+
+				"the vector index on key %q is now ABSENT, manual intervention required", err, original, restoreErr, key)
+		}
+		// Best-effort: wait for the restored index, but the failure below is
+		// secondary to having already reported the original create failure.
+		_ = a.pollVectorIndexOperational(ctx, key)
+		return fmt.Errorf("create vector index with new options (%s) failed: %w -- restored the original options (%s) successfully", opts, err, original)
 	}
 	return a.pollVectorIndexOperational(ctx, key)
 }
