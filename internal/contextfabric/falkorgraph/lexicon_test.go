@@ -46,10 +46,8 @@ func TestExpandWithLexicon_AddsOtherGroupMembersOnce(t *testing.T) {
 	if got == text {
 		t.Fatalf("expandWithLexicon(%q) did not widen a text containing the lexicon phrase \"PR\"", text)
 	}
-	for _, want := range []string{"pull request", "merge request"} {
-		if !strings.Contains(strings.ToLower(got), want) {
-			t.Fatalf("expandWithLexicon(%q) = %q, want it to contain synonym %q", text, got, want)
-		}
+	if !strings.Contains(strings.ToLower(got), "pull request") {
+		t.Fatalf("expandWithLexicon(%q) = %q, want it to contain synonym %q", text, got, "pull request")
 	}
 	added := strings.TrimPrefix(got, text)
 	if hasWholeWord(added, "pr") {

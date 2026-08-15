@@ -21,12 +21,24 @@ import (
 
 // domainLexiconGroups is the closed vocabulary itself: each inner slice is a
 // set of phrases this corpus treats as interchangeable ways to name the SAME
-// concept. Entries are drawn from this codebase's own vocabulary (subject
-// kind names, ClickHouse column/table naming) and ordinary domain shorthand
-// -- never from any withheld corpus or question text. Extending a group, or
-// adding a new one, is a deliberate, reviewed edit here, exactly like
-// composition.go's idOnlyGeneratedPrefixDigits' own "closed vocabulary,
-// extend explicitly" rule.
+// concept. Extending a group, or adding a new one, is a deliberate, reviewed
+// edit here, exactly like composition.go's idOnlyGeneratedPrefixDigits' own
+// "closed vocabulary, extend explicitly" rule.
+//
+// GROUNDING RULE (codex/team-lead ratification rider 2): every entry is
+// justified against something the BACKEND ITSELF stores or names --
+// contractsv1's SubjectKind constants, a §2 embed-text TEMPLATE's own
+// literal fixed text (spec doc, re-verified against composition.go /
+// search_text.go for this ticket), or a stored FIELD VALUE the spec's live
+// ClickHouse population probe (§1) documented -- never invented from
+// general domain familiarity, and never from the withheld corpus. A phrase
+// this codebase's own vocabulary does not support was trimmed rather than
+// kept on "it's common industry usage" grounds alone (e.g. "merge request",
+// "build", "workflow run" were considered and dropped -- no stored template
+// or field value evidences them here; GitLab connectivity exists at the
+// PROJECT level (spec §1 project_key population) but nothing confirms
+// GitLab-sourced PRs populate the SAME git_pull_requests-derived
+// pull_request kind under that vocabulary).
 //
 // Order is fixed (declaration order of both the outer slice and each inner
 // slice) and expandWithLexicon walks it deterministically, so two calls
@@ -34,12 +46,41 @@ import (
 // for the query text to be a stable cache key (embedcache) and for the
 // RediSearch query string to be reproducible across identical requests.
 var domainLexiconGroups = [][]string{
-	{"pr", "pull request", "merge request"},
+	// "PR #<number> <title>" is the pull_request template's own literal,
+	// fixed lead-in (spec §2) -- "PR" is in every indexed pull_request's
+	// search_text verbatim; "pull request" is contractsv1.ContextFabricSubjectPullRequest
+	// ("pull_request") space-rendered.
+	{"pr", "pull request"},
+	// work_item_id carries a PROVIDER PREFIX the codebase explicitly
+	// derives an alias from (composition.go's ticket-key rule): "linear:"
+	// (Linear's own product vocabulary is "issue", 100% of live ids today)
+	// and "jira:" (Jira's own product vocabulary is "ticket", a supported-
+	// but-not-yet-observed prefix per the same rule). "work item" is
+	// contractsv1.ContextFabricSubjectWorkItem ("work_item") space-rendered.
 	{"ticket", "issue", "work item"},
+	// contractsv1.ContextFabricSubjectRepository is literally "repository";
+	// every kind's own template names its repository field "repo:"
+	// (search_text.go's repo_slug field label, spec §2).
 	{"repo", "repository"},
-	{"ci run", "pipeline", "pipeline run", "build", "workflow run"},
+	// "CI run <pipeline_name> ..." is the ci_pipeline_run template's own
+	// literal, fixed lead-in (spec §2) -- "CI run" is in every indexed
+	// ci_pipeline_run's search_text verbatim; "pipeline" is half the kind
+	// name (contractsv1.ContextFabricSubjectCIRun == "ci_pipeline_run") and
+	// literally the ClickHouse column name (pipeline_name, spec §1).
+	{"ci run", "pipeline", "pipeline run"},
+	// "<environment> deployment <release_ref>" is the deployment template's
+	// own literal, fixed text (spec §2) -- "deployment" is in every indexed
+	// deployment's search_text verbatim; "release" is one of the SAME
+	// kind's own stored `environment` field's four live values
+	// (spec §1: "publishing/github-pages/release/ci").
 	{"deploy", "deployment", "release"},
+	// "<state> review of PR #<number>: <title>" is the pull_request_review
+	// template's own literal, fixed text (spec §2) -- "review" is in every
+	// indexed pull_request_review's search_text verbatim.
 	{"review", "code review"},
+	// contractsv1.ContextFabricSubjectOrganization is literally
+	// "organization"; "org" is the codebase's own universal abbreviation
+	// for it (storage.Principal.OrgID, every propOrgID-keyed query).
 	{"org", "organization"},
 }
 
