@@ -543,7 +543,10 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 		a.recordVectorDegraded(ctx, orgID)
 		return lexical, truncated, true, nil
 	}
-	vectors, embedErr := a.embedder.Embed(ctx, []string{term})
+	// CHAOS-3836 seam: the query-side task prefix wraps the term's
+	// TRANSMISSION to the model only -- the lexical arm above already
+	// searched the unprefixed term, and nothing prefixed is ever stored.
+	vectors, embedErr := a.embedder.Embed(ctx, []string{a.queryPrefixed(term)})
 	if embedErr != nil || len(vectors) != 1 {
 		a.recordVectorDegraded(ctx, orgID)
 		return lexical, truncated, true, nil
@@ -619,7 +622,19 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 	if err != nil {
 		return EmbedderOptions{}, err
 	}
-	return EmbedderOptions{Embedder: embedder, SimilarityFloor: embedder.SimilarityFloor()}, nil
+	// Capabilities are captured HERE, off the concrete embedder, because
+	// this is the last point the concrete type is visible: the hosted API
+	// wraps Embedder in a read-path cache (CHAOS-3841) that implements only
+	// the two-method port, so anything not captured now is unreachable
+	// after wrapping. See EmbedderOptions' field docs.
+	return EmbedderOptions{
+		Embedder:            embedder,
+		SimilarityFloor:     embedder.SimilarityFloor(),
+		MaxTextRunes:        embedder.MaxTextRunes(),
+		ApplyDocumentPrefix: embedder.ApplyDocumentPrefix,
+		ApplyQueryPrefix:    embedder.ApplyQueryPrefix,
+		PrefixTagComponent:  embedder.PrefixTagComponent(),
+	}, nil
 }
 
 // resolutionFence memoizes the AC-3778-7 fence verification for the lifetime

@@ -282,17 +282,17 @@ func TestOrganizationIsSkippedFromEmbeddingAndCounted(t *testing.T) {
 // node stamp is the ONE identity string suffixed with it.
 func TestCompositionTagAndStampCarryTheSemanticConfig(t *testing.T) {
 	t.Parallel()
-	if got := EmbedCompositionTag(2000, false); got != "t2:r2000:b0:pnone" {
+	if got := EmbedCompositionTag(2000, false, ""); got != "t2:r2000:b0:pnone" {
 		t.Fatalf("EmbedCompositionTag = %q, want the canonical literal t2:r2000:b0:pnone", got)
 	}
-	if got := EmbedCompositionTag(4096, true); got != "t2:r4096:b1:pnone" {
+	if got := EmbedCompositionTag(4096, true, ""); got != "t2:r4096:b1:pnone" {
 		t.Fatalf("EmbedCompositionTag = %q, want t2:r4096:b1:pnone", got)
 	}
 
 	fake := &fakeConn{}
 	embedder := &stubEmbedder{vector: []float32{1, 0, 0, 0}}
 	adapter := vectorAdapter(t, fake, embedder, 0.55)
-	want := embedder.Identity().String() + "#" + EmbedCompositionTag(embedprovider.DefaultMaxTextRunes, false)
+	want := embedder.Identity().String() + "#" + EmbedCompositionTag(embedprovider.DefaultMaxTextRunes, false, "")
 	if got := adapter.stampedEmbedderIdentity(embedder.Identity()); got != want {
 		t.Fatalf("stampedEmbedderIdentity = %q, want %q", got, want)
 	}
@@ -330,7 +330,7 @@ func TestWriteStampAndReadVerifyUseTheSameTaggedIdentity(t *testing.T) {
 	if _, err := adapter.verifyStoredEmbedderIdentity(context.Background(), "key", "org"); err != nil {
 		t.Fatalf("verifyStoredEmbedderIdentity: %v", err)
 	}
-	wantSuffix := "#" + EmbedCompositionTag(embedprovider.DefaultMaxTextRunes, false)
+	wantSuffix := "#" + EmbedCompositionTag(embedprovider.DefaultMaxTextRunes, false, "")
 	if stamped == "" || !strings.HasSuffix(stamped, wantSuffix) {
 		t.Fatalf("write stamp %q must carry the composition tag suffix %q", stamped, wantSuffix)
 	}
@@ -359,7 +359,7 @@ func TestEmbedRetrievalIdentityFromEnvTracksTheSemanticConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EmbedRetrievalIdentityFromEnv: %v", err)
 	}
-	want := "openai/text-embedding-3-large#" + EmbedCompositionTag(embedprovider.DefaultMaxTextRunes, false)
+	want := "openai/text-embedding-3-large#" + EmbedCompositionTag(embedprovider.DefaultMaxTextRunes, false, "")
 	if got != want {
 		t.Fatalf("identity = %q, want %q", got, want)
 	}

@@ -68,6 +68,17 @@ func (c Config) resolvedPrefixFamily() PrefixFamily {
 	return c.PrefixFamily
 }
 
+// PrefixTagComponent derives this configuration's contribution to the
+// embed-text composition tag ("pnone", "pnomic"), leading "p" included. It
+// lives on Config as well as on *Embedder (which delegates here) because one
+// consumer -- falkorgraph.EmbedRetrievalIdentityFromEnv, composing the
+// answer-reuse discriminator -- holds only the Config, never a constructed
+// Embedder; deriving the component in two places would let the reuse key and
+// the node stamp disagree about the same deployment.
+func (c Config) PrefixTagComponent() string {
+	return "p" + string(c.resolvedPrefixFamily())
+}
+
 func validPrefixFamily(family PrefixFamily) bool {
 	_, ok := knownPrefixFamilies[family]
 	return ok

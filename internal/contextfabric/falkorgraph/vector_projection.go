@@ -178,7 +178,7 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		//
 		// If that clear fails, R2-3 applies and the batch fails.
 		a.recordVectorDegraded(ctx, batch.OrgID)
-		stale, staleSkipped := collectEmbedTargets(batch, embedMaxRunes(a.embedder), a.config.IncludeEmbedBodies)
+		stale, staleSkipped := collectEmbedTargets(batch, a.embedBudgetRunes(), a.config.IncludeEmbedBodies)
 		if err := a.clearNodeVectors(ctx, key, batch.OrgID, stale); err != nil {
 			return err
 		}
@@ -186,7 +186,7 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		return nil
 	}
 	identity := a.embedder.Identity()
-	targets, skipped := collectEmbedTargets(batch, embedMaxRunes(a.embedder), a.config.IncludeEmbedBodies)
+	targets, skipped := collectEmbedTargets(batch, a.embedBudgetRunes(), a.config.IncludeEmbedBodies)
 	if len(targets) == 0 {
 		// Codex round-4 F2: a relationship-only or tombstone-only batch is
 		// valid and produces no embedding targets. It must still report, so
@@ -197,9 +197,16 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		a.recordVectorProjection(ctx, batch.OrgID, 0, 0, skipped)
 		return nil
 	}
+	// CHAOS-3836 seam: the document-side task prefix is applied to the text
+	// HANDED TO Embed, never to target.text -- target.text is the composed
+	// search_text both retrieval arms share byte-identically (spec §0), and
+	// clearNodeVectors/writeNodeVector keep addressing targets by kind/id.
+	// No pre-truncation here: ApplyDocumentPrefix budgets the prefix into
+	// MaxTextRunes itself, and collectEmbedTargets' own caps are a
+	// composition property, not a transmission one.
 	texts := make([]string, 0, len(targets))
 	for _, target := range targets {
-		texts = append(texts, target.text)
+		texts = append(texts, a.documentPrefixed(target.text))
 	}
 	vectors, err := a.embedder.Embed(ctx, texts)
 	if err != nil || len(vectors) != len(targets) {
@@ -323,12 +330,12 @@ func (a *Adapter) writeNodeVector(ctx context.Context, key, orgID string, target
 // stampedEmbedderIdentity is the ONE string both identity-comparing sites
 // use -- writeNodeVector's stamp and verifyStoredEmbedderIdentity's
 // expectation -- "<provider>/<model>#<composition tag>". The tag is computed
-// from this adapter's own effective semantic configuration (rune cap from
-// the embedder, body gate from Config), the same authority
-// EmbedRetrievalIdentityFromEnv derives the persisted answer-reuse
-// dimension from.
+// from this adapter's own effective semantic configuration (rune cap and
+// prefix component captured at construction, body gate from Config), the
+// same authority EmbedRetrievalIdentityFromEnv derives the persisted
+// answer-reuse dimension from.
 func (a *Adapter) stampedEmbedderIdentity(identity contextfabric.EmbedderIdentity) string {
-	return identity.String() + "#" + EmbedCompositionTag(embedMaxRunes(a.embedder), a.config.IncludeEmbedBodies)
+	return identity.String() + "#" + EmbedCompositionTag(a.embedBudgetRunes(), a.config.IncludeEmbedBodies, a.embedPrefixTagComponent())
 }
 
 // embedMaxRunes reads the per-text truncation budget from the concrete

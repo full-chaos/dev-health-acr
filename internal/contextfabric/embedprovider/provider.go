@@ -137,7 +137,7 @@ func (e *Embedder) ApplyQueryPrefix(text string) string {
 // literal only; it does not compose or write the tag itself -- falkorgraph's
 // identity/vector_projection code owns that.
 func (e *Embedder) PrefixTagComponent() string {
-	return "p" + string(e.config.resolvedPrefixFamily())
+	return e.config.PrefixTagComponent()
 }
 
 // Embed returns one vector per input text, in input order.
