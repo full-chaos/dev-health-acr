@@ -109,12 +109,25 @@ index options were re-verified unchanged afterward.
   the round-1 `"copy"` substring heuristic is REMOVED entirely — Luna named
   it as adding nothing once the derivation-based comparison exists.
   Underivable inputs (empty prefix/org id/expected key) REFUSE, never pass
-  silently.
+  silently. The prefix argument this function receives must come from a
+  SINGLE source (Luna round-3 finding 1, see below) — `isSweepTargetSafe`
+  itself has no opinion on where its `graphPrefix` argument came from, so
+  the correctness of the whole gate depends on the caller wiring that
+  correctly, which round 2's live test did not.
 - `hnsw_sweep_live_test.go`: the runnable live probe, gated behind dedicated
   `ACR_TEST_HNSW_SWEEP_*` env vars (never a production `ACR_CONTEXT_FABRIC_*`
   name) — now including `_ORG_ID`, `_GRAPH_PREFIX`, and
-  `_EXPECTED_COPY_KEY`, all required for the derivation-based safety gate —
-  and (finding 1) rejects any point with `SkippedSeeds > 0` rather than
+  `_EXPECTED_COPY_KEY`, all required for the derivation-based safety gate.
+  `_GRAPH_PREFIX` is now read into `graphConfig.GraphPrefix` (the same field
+  production reads to derive a graph key) via `hnswSweepLookup`, and the
+  safety check reads the CONSTRUCTED config's field, never the environment a
+  second time (Luna round-3 finding 1: round 2's live test read
+  `ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX` directly for the safety derivation
+  while `hnswSweepLookup` separately hardcoded an unused placeholder for
+  `graphConfig.GraphPrefix` — two divergent sources for what should be one
+  fact, and a typo'd or mismatched env value could derive the WRONG
+  "production key," letting the REAL one through). And (finding 1) rejects
+  any point with `SkippedSeeds > 0` rather than
   merely logging it.
 
 ### Scoping note: what this measures vs. T1's harness
