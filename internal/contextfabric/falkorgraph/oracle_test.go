@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -404,26 +405,36 @@ func TestFetchEmbedderFenceCorpusRequiresAnEmbedder(t *testing.T) {
 func TestFetchEmbedderFenceCorpusScopesToOrgAndIdentityAndDecodesRows(t *testing.T) {
 	var capturedCypher string
 	var capturedParams map[string]interface{}
+	fenceRows := []row{
+		// Valid.
+		{"n": &node{Properties: map[string]interface{}{
+			propKind: "project", propCanonicalID: "p1", propLabel: "Auth",
+			propEmbedding: []interface{}{1.0, 0.0, 0.0},
+		}}},
+		// Missing canonical id -- skipped, not fatal.
+		{"n": &node{Properties: map[string]interface{}{
+			propKind: "project", propEmbedding: []interface{}{1.0, 0.0, 0.0},
+		}}},
+		// Malformed embedding -- skipped, not fatal.
+		{"n": &node{Properties: map[string]interface{}{
+			propKind: "project", propCanonicalID: "p2", propEmbedding: "not-a-vector",
+		}}},
+		// Not a node at all -- skipped, not fatal.
+		{"n": "unexpected"},
+	}
+	// CHAOS-3849: fetchEmbedderFenceCorpus now runs a count(n) verification
+	// query under the identical predicate BEFORE paginating, so the fake must
+	// answer both query shapes it issues -- the aggregate count (1 usable +
+	// 3 skipped-malformed = 4, matching fenceRows below) and the paginated
+	// row-returning fetch -- rather than handing back node rows for every
+	// call regardless of what was asked.
 	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
 		capturedCypher = cypher
 		capturedParams = params
-		return []row{
-			// Valid.
-			{"n": &node{Properties: map[string]interface{}{
-				propKind: "project", propCanonicalID: "p1", propLabel: "Auth",
-				propEmbedding: []interface{}{1.0, 0.0, 0.0},
-			}}},
-			// Missing canonical id -- skipped, not fatal.
-			{"n": &node{Properties: map[string]interface{}{
-				propKind: "project", propEmbedding: []interface{}{1.0, 0.0, 0.0},
-			}}},
-			// Malformed embedding -- skipped, not fatal.
-			{"n": &node{Properties: map[string]interface{}{
-				propKind: "project", propCanonicalID: "p2", propEmbedding: "not-a-vector",
-			}}},
-			// Not a node at all -- skipped, not fatal.
-			{"n": "unexpected"},
-		}, nil
+		if strings.Contains(cypher, "count(") {
+			return []row{{"total": int64(len(fenceRows))}}, nil
+		}
+		return fenceRows, nil
 	}}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0}}, 0.5)
 	corpus, err := adapter.fetchEmbedderFenceCorpus(context.Background(), "key", "org-1")
@@ -456,5 +467,110 @@ func TestFetchEmbedderFenceCorpusScopesToOrgAndIdentityAndDecodesRows(t *testing
 		if !strings.Contains(capturedCypher, want) {
 			t.Fatalf("cypher %q missing expected predicate on %q", capturedCypher, want)
 		}
+	}
+}
+
+// resultSetSizeFakeConn simulates FalkorDB's RESULTSET_SIZE behavior
+// (CHAOS-3849) against an org of `total` fence-passing Subject rows: a
+// row-returning query with no SKIP is silently capped at `serverCap` rows
+// (no error -- the real server's own behavior, observed live), while a
+// row-returning query carrying an explicit SKIP/LIMIT (fetchEmbedderFenceCorpus's
+// post-fix pagination) is answered as a genuine page of the full `total`-row
+// dataset. The count(*) aggregate always reports the true `total`, matching
+// FalkorDB's documented exemption for aggregate scalar results.
+func resultSetSizeFakeConn(total, serverCap int) *fakeConn {
+	buildRow := func(i int) row {
+		return row{"n": &node{Properties: map[string]interface{}{
+			propKind: "project", propCanonicalID: fmt.Sprintf("p%06d", i),
+			propEmbedding: []interface{}{1.0, 0.0, 0.0},
+		}}}
+	}
+	return &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "count(") {
+			return []row{{"total": int64(total)}}, nil
+		}
+		if strings.Contains(cypher, "SKIP") {
+			skip, _ := params["skip"].(int)
+			limit, _ := params["limit"].(int)
+			if skip >= total {
+				return nil, nil
+			}
+			end := skip + limit
+			if end > total {
+				end = total
+			}
+			rows := make([]row, 0, end-skip)
+			for i := skip; i < end; i++ {
+				rows = append(rows, buildRow(i))
+			}
+			return rows, nil
+		}
+		// The PRE-FIX shape: one unbounded `RETURN n` query, with no SKIP/LIMIT
+		// at all -- exactly what the server itself silently truncates.
+		n := total
+		if n > serverCap {
+			n = serverCap
+		}
+		rows := make([]row, 0, n)
+		for i := 0; i < n; i++ {
+			rows = append(rows, buildRow(i))
+		}
+		return rows, nil
+	}}
+}
+
+// TestFetchEmbedderFenceCorpusPaginatesPastResultSetSizeCap is the CHAOS-3849
+// regression for the silent-truncation defect: fetchEmbedderFenceCorpus must
+// return the FULL org- and identity-scoped corpus (here 12,000 rows) even
+// though a single unbounded query against this fixture would silently come
+// back with only serverCap=10,000 (FalkorDB's dev-default RESULTSET_SIZE) and
+// no error at all -- observed live against a real 35,986-vector org. Run
+// against the pre-fix single-query body, this fixture makes
+// fetchEmbedderFenceCorpus return exactly 10,000 rows with err==nil (a
+// silently shrunken universe, not a failure); run against the fix, it must
+// paginate to all 12,000.
+func TestFetchEmbedderFenceCorpusPaginatesPastResultSetSizeCap(t *testing.T) {
+	const total = 12000
+	const serverCap = 10000 // FalkorDB's dev-default RESULTSET_SIZE.
+
+	fake := resultSetSizeFakeConn(total, serverCap)
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0}}, 0.5)
+
+	corpus, err := adapter.fetchEmbedderFenceCorpus(context.Background(), "key", "org-1")
+	if err != nil {
+		t.Fatalf("fetchEmbedderFenceCorpus: %v", err)
+	}
+	if len(corpus) != total {
+		t.Fatalf("got %d corpus entries, want all %d -- the corpus IS the full org- and identity-scoped result set (oracle.go's own contract); a count stuck at the RESULTSET_SIZE cap (%d) means truncation is silently narrowing it again",
+			len(corpus), total, serverCap)
+	}
+}
+
+// TestFetchEmbedderFenceCorpusHardFailsOnCountMismatch is the CHAOS-3849
+// closure-guarantee half of the fix: fetchEmbedderFenceCorpus must hard-fail
+// with errOracleCorpusSizeMismatch (not silently return a short corpus)
+// whenever the assembled row count disagrees with the independent count(n)
+// verification -- the guard that turns ANY future silent cap (config drift,
+// a driver change) into a loud failure instead of a shrunken universe.
+func TestFetchEmbedderFenceCorpusHardFailsOnCountMismatch(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "count(") {
+			// The count query claims 5 rows exist...
+			return []row{{"total": int64(5)}}, nil
+		}
+		// ...but the paginated fetch only ever hands back 3, and then a short
+		// page, ending the loop -- simulating a fetch/count disagreement
+		// (e.g. a future silent cap) rather than a clean pagination.
+		return []row{
+			{"n": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p1", propEmbedding: []interface{}{1.0, 0.0}}}},
+			{"n": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p2", propEmbedding: []interface{}{1.0, 0.0}}}},
+			{"n": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p3", propEmbedding: []interface{}{1.0, 0.0}}}},
+		}, nil
+	}}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0}}, 0.5)
+
+	_, err := adapter.fetchEmbedderFenceCorpus(context.Background(), "key", "org-1")
+	if !errors.Is(err, errOracleCorpusSizeMismatch) {
+		t.Fatalf("fetchEmbedderFenceCorpus() error = %v, want errOracleCorpusSizeMismatch", err)
 	}
 }

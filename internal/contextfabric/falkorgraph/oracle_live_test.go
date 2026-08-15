@@ -23,9 +23,14 @@ import (
 //	ACR_TEST_AMBIGUITY_ORG=<org-id> \
 //	ACR_TEST_FALKOR_ADDR=host:port \
 //	ACR_TEST_EMBED_BASE_URL=... ACR_TEST_EMBED_MODEL=... ACR_TEST_EMBED_DIMENSION=... \
+//	[ACR_TEST_EMBED_API_KEY=...] \
 //	[ACR_TEST_ORACLE_TOPK=20] [ACR_TEST_ORACLE_HARD_NEGATIVES=5] [ACR_TEST_ORACLE_OUTPUT=/path/to/report.json] \
 //	[ACR_TEST_ORACLE_INCLUDE_RAW_TEXT=false] \
 //	  go test ./internal/contextfabric/falkorgraph -run ExactSearchOracle -v
+//
+// ACR_TEST_EMBED_API_KEY is OPTIONAL (see benchmarkLookup): keyless local
+// embedders remain supported; set it only to reach a real remote embedder
+// that requires a credential.
 //
 // PRECONDITION, checked once before any case is scored (codex round-1 finding
 // 1): the ORG-LEVEL AC-3778-7 fence (ensureVectorReadable) must pass. That

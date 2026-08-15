@@ -21,7 +21,15 @@ import (
 //	ACR_TEST_AMBIGUITY_ORG=<org-id> \
 //	ACR_TEST_FALKOR_ADDR=host:port \
 //	ACR_TEST_EMBED_BASE_URL=... ACR_TEST_EMBED_MODEL=... ACR_TEST_EMBED_DIMENSION=... \
+//	[ACR_TEST_EMBED_API_KEY=...] \
 //	  go test ./internal/contextfabric/falkorgraph -run AmbiguityBenchmark -v
+//
+// ACR_TEST_EMBED_API_KEY is OPTIONAL: a keyless local embedder is still
+// supported (benchmarkLookup reports "not set" and the credential-free
+// client path in embedprovider.newClientOptions applies). Set it to reach a
+// real remote embedder that requires a credential -- without it,
+// newClientOptions actively strips the Authorization header rather than
+// falling back to an ambient OPENAI_API_KEY, so a remote embedder 401s.
 //
 // EVERY input is a dedicated ACR_TEST_* name, never the production
 // ACR_CONTEXT_FABRIC_* names (codex round-1 F6). The earlier version documented
@@ -300,6 +308,16 @@ func benchmarkLookup(key string) (string, bool) {
 			return v, true
 		}
 		return "ambiguity-benchmark", true
+	case embedprovider.EnvAPIKey:
+		// OPTIONAL: keyless local embedders remain supported (value("")
+		// reports ok=false when unset, which EmbedderFromEnv/ConfigFromEnv
+		// already treat as "no credential configured", not an error). A real
+		// remote embedder needs this set -- embedprovider.newClientOptions
+		// actively DELETES the Authorization header when the configured key
+		// is empty, deliberately never falling back to an ambient
+		// OPENAI_API_KEY (see its doc comment), so without this case a
+		// benchmark run against a real remote embedder 401s.
+		return value("ACR_TEST_EMBED_API_KEY")
 	case embedprovider.EnvSimilarityFloor:
 		return value("ACR_TEST_EMBED_SIMILARITY_FLOOR")
 	case embedprovider.EnvAllowInsecureBaseURL:
@@ -307,4 +325,29 @@ func benchmarkLookup(key string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// TestBenchmarkLookupEmbedAPIKey is the CHAOS-3849 regression: without a
+// case for embedprovider.EnvAPIKey, benchmarkLookup falls through to its
+// default branch and reports no credential at all, no matter what
+// ACR_TEST_EMBED_API_KEY holds. embedprovider.newClientOptions then treats
+// that as "credential-free by design" and actively DELETES the
+// Authorization header rather than falling back to an ambient
+// OPENAI_API_KEY (see its doc comment), so the benchmark/oracle harness
+// would 401 against any real remote embedder that requires a key.
+func TestBenchmarkLookupEmbedAPIKey(t *testing.T) {
+	t.Run("set returns the configured value", func(t *testing.T) {
+		t.Setenv("ACR_TEST_EMBED_API_KEY", "test-only-key-value")
+		got, ok := benchmarkLookup(embedprovider.EnvAPIKey)
+		if !ok || got != "test-only-key-value" {
+			t.Fatalf("benchmarkLookup(EnvAPIKey) = (%q, %v), want (\"test-only-key-value\", true)", got, ok)
+		}
+	})
+	t.Run("unset reports not-configured, not an error", func(t *testing.T) {
+		t.Setenv("ACR_TEST_EMBED_API_KEY", "")
+		got, ok := benchmarkLookup(embedprovider.EnvAPIKey)
+		if ok || got != "" {
+			t.Fatalf("benchmarkLookup(EnvAPIKey) = (%q, %v), want (\"\", false) when ACR_TEST_EMBED_API_KEY is unset -- keyless local embedders must remain supported", got, ok)
+		}
+	})
 }

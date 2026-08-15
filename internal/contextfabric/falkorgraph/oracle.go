@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 
@@ -126,6 +127,14 @@ func decodeVectorProperty(value interface{}) ([]float64, bool) {
 // scope the corpus to, and no query vector to rank it against either.
 var errOracleEmbedderRequired = errors.New("exact-search oracle requires an embedder to define the embedder-fence-passing corpus")
 
+// oracleFetchBatchSize bounds each page of fetchEmbedderFenceCorpus's
+// row-returning query, well under FalkorDB's server-config RESULTSET_SIZE
+// (dev default 10,000; CHAOS-3849). A single unbounded `RETURN n` over a
+// large org is SILENTLY truncated at that limit -- no error, just fewer rows
+// than exist -- so every page must stay comfortably below it regardless of
+// what a given deployment's RESULTSET_SIZE happens to be set to.
+const oracleFetchBatchSize = 5000
+
 // fetchEmbedderFenceCorpus reads every Subject node in this organization that
 // carries an embedding written under the CURRENTLY configured embedder
 // identity -- exactly the corpus db.idx.vector.queryNodes searches once the
@@ -140,10 +149,36 @@ var errOracleEmbedderRequired = errors.New("exact-search oracle requires an embe
 // Brute force has no top-k to filter after, so there is nothing to
 // over-fetch: the corpus IS the full org- and identity-scoped result set.
 //
+// CHAOS-3849: a single `MATCH ... RETURN n` with no LIMIT is silently capped
+// by FalkorDB's server-config RESULTSET_SIZE (dev default 10,000) -- observed
+// live, 10,000 of 35,986 rows returned with no error at all. That silently
+// shrinks the oracle's own contract ("the corpus IS the full org- and
+// identity-scoped result set", above) into an arbitrary prefix of it, which
+// would read as a mass ANN loss the ANN path never actually has. Two
+// independent guards close this:
+//
+//  1. Pagination: rows are fetched oracleFetchBatchSize at a time (well under
+//     RESULTSET_SIZE) behind a stable ORDER BY n.kind, n.canonical_id --
+//     stable because (org, kind, canonical_id) is the Subject uniqueness
+//     constraint (identity.go's bootstrap), so no two Subject rows in one
+//     org's graph can tie on it and no page boundary can duplicate or skip a
+//     row. Fetching continues until a short page (fewer than
+//     oracleFetchBatchSize rows) is seen.
+//  2. Verification: count(n) -- an AGGREGATE, and so NOT subject to
+//     RESULTSET_SIZE (a scalar row, not a bulk result set) -- is run under
+//     the identical predicate, and the assembled corpus size plus the
+//     skipped-malformed count from step 1 must equal it exactly, or the
+//     fetch hard-fails via errOracleCorpusSizeMismatch. This is the closure
+//     guarantee: ANY future silent cap (RESULTSET_SIZE config drift, a
+//     driver change that reintroduces an implicit limit, ...) becomes a loud
+//     failure here instead of a quietly shrunken universe.
+//
 // Malformed rows (a missing kind/canonical-id/embedding, or an embedding that
-// fails decodeVectorProperty) are skipped rather than failing the whole
+// fails decodeVectorProperty) are still skipped rather than failing the whole
 // fetch -- one corrupt node must not blank out a 36k-vector baseline the rest
-// of the corpus could still support.
+// of the corpus could still support -- but the skipped count is now load-
+// bearing: it is part of what step 2 reconciles against count(n), and is
+// logged (slog, Warn) whenever it is nonzero.
 func (a *Adapter) fetchEmbedderFenceCorpus(ctx context.Context, key, orgID string) ([]oracleVector, error) {
 	if a.embedder == nil {
 		return nil, errOracleEmbedderRequired
@@ -154,35 +189,118 @@ func (a *Adapter) fetchEmbedderFenceCorpus(ctx context.Context, key, orgID strin
 	// matches nothing the write path ever stamped, which would blank the
 	// oracle corpus and read as "ANN lost everything".
 	identity := a.stampedEmbedderIdentity(a.embedder.Identity())
+	predicateParams := map[string]interface{}{"org": orgID, "identity": identity}
+
+	expected, err := a.countEmbedderFenceCorpus(ctx, key, predicateParams)
+	if err != nil {
+		return nil, err
+	}
+
 	cypher := fmt.Sprintf(
-		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s = $identity RETURN n",
+		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s = $identity "+
+			"RETURN n ORDER BY n.%s, n.%s SKIP $skip LIMIT $limit",
+		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity, propKind, propCanonicalID,
+	)
+
+	corpus := make([]oracleVector, 0, expected)
+	skippedMalformed := 0
+	for skip := 0; ; skip += oracleFetchBatchSize {
+		pageParams := map[string]interface{}{
+			"org": orgID, "identity": identity, "skip": skip, "limit": oracleFetchBatchSize,
+		}
+		rows, err := a.api.query(ctx, key, cypher, pageParams, true)
+		if err != nil {
+			return nil, safeDependencyError("fetch exact-search oracle corpus", err)
+		}
+		for _, r := range rows {
+			n, ok := r["n"].(*node)
+			if !ok || n == nil {
+				skippedMalformed++
+				continue
+			}
+			kind := propStringValue(n.Properties[propKind])
+			canonicalID := propStringValue(n.Properties[propCanonicalID])
+			if kind == "" || canonicalID == "" {
+				skippedMalformed++
+				continue
+			}
+			vector, ok := decodeVectorProperty(n.Properties[propEmbedding])
+			if !ok || len(vector) == 0 {
+				skippedMalformed++
+				continue
+			}
+			corpus = append(corpus, oracleVector{
+				Kind: kind, CanonicalID: canonicalID,
+				Label: propStringValue(n.Properties[propLabel]), Vector: vector,
+			})
+		}
+		if len(rows) < oracleFetchBatchSize {
+			break
+		}
+	}
+
+	if skippedMalformed > 0 {
+		slog.Default().Warn("context_fabric: exact-search oracle corpus fetch skipped malformed Subject row(s)",
+			"org", orgID, "skipped_malformed", skippedMalformed, "usable", len(corpus))
+	}
+
+	if assembled := len(corpus) + skippedMalformed; assembled != expected {
+		return nil, fmt.Errorf("%w: assembled %d usable + %d skipped-malformed = %d rows, but count(n) reports %d for org %s (a FalkorDB RESULTSET_SIZE truncation or a fetch/count race is the likely cause)",
+			errOracleCorpusSizeMismatch, len(corpus), skippedMalformed, assembled, expected, orgID)
+	}
+
+	return corpus, nil
+}
+
+// errOracleCorpusSizeMismatch is the CHAOS-3849 closure guarantee:
+// fetchEmbedderFenceCorpus hard-fails with this (wrapped with counts) rather
+// than silently returning a truncated corpus whenever the assembled row
+// count disagrees with the independent count(n) check. See
+// fetchEmbedderFenceCorpus's doc comment.
+var errOracleCorpusSizeMismatch = errors.New("exact-search oracle corpus assembly does not match its own count(*) verification")
+
+// countEmbedderFenceCorpus runs the aggregate count(*) counterpart of
+// fetchEmbedderFenceCorpus's row-returning query, under the IDENTICAL
+// predicate. An aggregate result is a single scalar row, not a bulk result
+// set, so it is NOT subject to FalkorDB's RESULTSET_SIZE cap -- this is what
+// makes it a trustworthy verification oracle for the paginated fetch rather
+// than just another query that could itself be silently truncated.
+func (a *Adapter) countEmbedderFenceCorpus(ctx context.Context, key string, predicateParams map[string]interface{}) (int, error) {
+	cypher := fmt.Sprintf(
+		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s = $identity RETURN count(n) AS total",
 		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity,
 	)
-	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": orgID, "identity": identity}, true)
+	rows, err := a.api.query(ctx, key, cypher, predicateParams, true)
 	if err != nil {
-		return nil, safeDependencyError("fetch exact-search oracle corpus", err)
+		return 0, safeDependencyError("count exact-search oracle corpus", err)
 	}
-	corpus := make([]oracleVector, 0, len(rows))
-	for _, r := range rows {
-		n, ok := r["n"].(*node)
-		if !ok || n == nil {
-			continue
-		}
-		kind := propStringValue(n.Properties[propKind])
-		canonicalID := propStringValue(n.Properties[propCanonicalID])
-		if kind == "" || canonicalID == "" {
-			continue
-		}
-		vector, ok := decodeVectorProperty(n.Properties[propEmbedding])
-		if !ok || len(vector) == 0 {
-			continue
-		}
-		corpus = append(corpus, oracleVector{
-			Kind: kind, CanonicalID: canonicalID,
-			Label: propStringValue(n.Properties[propLabel]), Vector: vector,
-		})
+	if len(rows) != 1 {
+		return 0, fmt.Errorf("exact-search oracle corpus count query returned %d rows, want exactly 1", len(rows))
 	}
-	return corpus, nil
+	total, ok := intFromCount(rows[0]["total"])
+	if !ok {
+		return 0, fmt.Errorf("exact-search oracle corpus count query returned a non-numeric total: %#v", rows[0]["total"])
+	}
+	return total, nil
+}
+
+// intFromCount converts a decoded count(*) scalar into an int, accepting
+// every numeric shape the client boundary can plausibly hand back for an
+// aggregate -- the same defensive posture indexStatus.embeddingOption
+// already takes for a different aggregate-shaped value (that one verified
+// live to vary between int64/int/float64), rather than assuming count(n)
+// always decodes as exactly one of them.
+func intFromCount(value interface{}) (int, bool) {
+	switch v := value.(type) {
+	case int64:
+		return int(v), true
+	case int:
+		return v, true
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
+	}
 }
 
 // bruteForceRank scores every member of corpus against query by true cosine
