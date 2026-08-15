@@ -406,8 +406,8 @@ func TestOrganizationIsSkippedFromEmbeddingAndCounted(t *testing.T) {
 	workItem := fullTemplateEntities()[0]
 	batch := contextfabric.ProjectionBatch{OrgID: "org-1", Entities: []contextfabric.EntityProjection{org, workItem}}
 	targets, skipped := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, false)
-	if skipped != 1 {
-		t.Fatalf("skipped = %d, want the organization node counted exactly once", skipped)
+	if skipped.Kind != 1 || skipped.IDOnly != 0 {
+		t.Fatalf("skipped = %+v, want the organization node counted exactly once under the Kind reason", skipped)
 	}
 	for _, target := range targets {
 		if target.kind == string(contextfabric.SubjectOrganization) {
@@ -428,11 +428,11 @@ func TestOrganizationIsSkippedFromEmbeddingAndCounted(t *testing.T) {
 // node stamp is the ONE identity string suffixed with it.
 func TestCompositionTagAndStampCarryTheSemanticConfig(t *testing.T) {
 	t.Parallel()
-	if got := EmbedCompositionTag(2000, false, ""); got != "t2:r2000:b0:pnone" {
-		t.Fatalf("EmbedCompositionTag = %q, want the canonical literal t2:r2000:b0:pnone", got)
+	if got := EmbedCompositionTag(2000, false, ""); got != "t3:r2000:b0:pnone" {
+		t.Fatalf("EmbedCompositionTag = %q, want the canonical literal t3:r2000:b0:pnone", got)
 	}
-	if got := EmbedCompositionTag(4096, true, ""); got != "t2:r4096:b1:pnone" {
-		t.Fatalf("EmbedCompositionTag = %q, want t2:r4096:b1:pnone", got)
+	if got := EmbedCompositionTag(4096, true, ""); got != "t3:r4096:b1:pnone" {
+		t.Fatalf("EmbedCompositionTag = %q, want t3:r4096:b1:pnone", got)
 	}
 
 	fake := &fakeConn{}

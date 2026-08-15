@@ -26,6 +26,27 @@ type embedTarget struct {
 	text        string
 }
 
+// embedSkipCounts tallies, BY REASON, subjects the embed pass deliberately
+// left unvectored in one batch (spec §7 D2: "the count must be
+// distinguishable from other gating ... its own reason label"). Kind and
+// IDOnly are independent counters rather than one combined number, because
+// they are operationally different facts an operator must be able to tell
+// apart: Kind says "this whole subject KIND is out of embed scope"
+// (today: organization, CHAOS-3833); IDOnly says "this ROW carries no
+// name to be found by" (CHAOS-3835). Collapsing them would make a sudden
+// rise in one indistinguishable from the other -- the same reasoning that
+// keeps RecordVectorRetrievalDegraded and RecordVectorRetrievalSuppressed
+// as two signals rather than one with a string.
+type embedSkipCounts struct {
+	Kind   int
+	IDOnly int
+}
+
+// Total is the combined count, for callers (accounting against the
+// organization's total node count) that only need "how many were
+// deliberately unembedded", not the breakdown.
+func (c embedSkipCounts) Total() int { return c.Kind + c.IDOnly }
+
 // collectEmbedTargets gathers the (node, search text) pairs a batch just
 // wrote, from the BATCH ITSELF rather than by reading the graph back.
 //
@@ -62,16 +83,26 @@ type embedTarget struct {
 // Results are deduplicated and ordered deterministically so a replay of the
 // same batch issues byte-identical requests.
 //
-// The second return value counts nodes DELIBERATELY skipped by the kind
-// skip-list (CHAOS-3833, spec §2/§7 D2) -- today only the organization
-// node, whose text is a raw org UUID: its vector is pure noise and the
-// organization resolves via ExactHint. The count is REPORTED through
-// RecordVectorProjection, never inferred: a skipped node is otherwise
-// indistinguishable from a healthy corpus. Skipped kinds stay fully
-// lexical (the write path still composes their search_text).
-func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int, includeBodies bool) ([]embedTarget, int) {
+// The second return value counts nodes DELIBERATELY skipped, BY REASON
+// (embedSkipCounts; spec §2/§7 D2, extended by CHAOS-3835 §6.5 T5):
+//   - Kind -- the whole-kind skip-list (CHAOS-3833) -- today only the
+//     organization node, whose text is a raw org UUID: its vector is pure
+//     noise and the organization resolves via ExactHint.
+//   - IDOnly -- the CHAOS-3835 per-row id-only skip (isPureIdentifierSubject)
+//     -- today only ci_pipeline_run rows whose name/branch carry no content
+//     beyond a bare identifier.
+//
+// Both counts are REPORTED through RecordVectorProjection, never inferred:
+// a skipped node is otherwise indistinguishable from a healthy corpus.
+// Skipped subjects stay fully lexical (the write path still composes their
+// search_text) and, for the id-only reason, must ALSO receive no
+// embedder-identity stamp -- collectEmbedTargets never adds them to
+// byKey, so writeNodeVector never runs for them and they stay invisible to
+// the read-side fence's IS NOT NULL predicate (verifyStoredEmbedderIdentity).
+func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int, includeBodies bool) ([]embedTarget, embedSkipCounts) {
 	byKey := make(map[string]embedTarget)
-	skippedKeys := make(map[string]struct{})
+	skippedKindKeys := make(map[string]struct{})
+	skippedIDOnlyKeys := make(map[string]struct{})
 	add := func(kind contextfabric.SubjectKind, canonicalID, text string) {
 		text = strings.TrimSpace(text)
 		if text == "" || strings.TrimSpace(canonicalID) == "" {
@@ -85,7 +116,18 @@ func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int, incl
 	}
 	for _, entity := range batch.Entities {
 		if embedKindSkipped(entity.Subject.Kind) {
-			skippedKeys[string(entity.Subject.Kind)+"\x00"+entity.Subject.CanonicalID] = struct{}{}
+			skippedKindKeys[string(entity.Subject.Kind)+"\x00"+entity.Subject.CanonicalID] = struct{}{}
+			continue
+		}
+		if isPureIdentifierSubject(entity) {
+			// CHAOS-3835: a record-level decision, checked BEFORE the text is
+			// even composed for embedding -- the row never reaches add(), so
+			// it can never become a byKey entry, never get a vector, and
+			// never get an embedder-identity stamp. The write path still
+			// composes and stores this row's ordinary search_text
+			// (subjectMergeAttrs), so lexical retrieval is unaffected; only
+			// the embed decision changes.
+			skippedIDOnlyKeys[string(entity.Subject.Kind)+"\x00"+entity.Subject.CanonicalID] = struct{}{}
 			continue
 		}
 		add(entity.Subject.Kind, entity.Subject.CanonicalID, subjectSearchText(entity, includeBodies))
@@ -106,14 +148,17 @@ func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int, incl
 		}
 		return targets[i].kind < targets[j].kind
 	})
-	return targets, len(skippedKeys)
+	return targets, embedSkipCounts{Kind: len(skippedKindKeys), IDOnly: len(skippedIDOnlyKeys)}
 }
 
 // embedKindSkipped is the CHAOS-3833 embed kind skip-list. Membership is a
 // COMPOSITION decision (spec §4 Layer B): adding or removing a kind changes
 // which texts have vectors, so it must ride an embedTextTemplateVersion
-// bump like any template change. T5 (CHAOS-3835) extends the skip decision
-// to id-only CI-run texts by the same mechanism.
+// bump like any template change. CHAOS-3835 (T5) extends the skip decision
+// to id-only CI-run texts via isPureIdentifierSubject -- a RECORD-level
+// decision rather than a kind-wide one, so it is a separate function and a
+// separate reported reason (embedSkipCounts.IDOnly), not a member of this
+// list.
 func embedKindSkipped(kind contextfabric.SubjectKind) bool {
 	return kind == contextfabric.SubjectOrganization
 }

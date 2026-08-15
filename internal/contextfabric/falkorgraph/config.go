@@ -141,13 +141,24 @@ type GraphTelemetry interface {
 	// the organization's node count is what tells an operator how much of the
 	// corpus is currently vectorless.
 	//
-	// skipped (CHAOS-3833, spec §7 D2) counts nodes the embed pass
-	// DELIBERATELY left unembedded (the kind skip-list -- today, the
-	// organization node). Without it a skipped node is indistinguishable
-	// from a healthy corpus: the read path reports degraded=false over a
-	// partially embedded graph, so "N nodes deliberately unembedded" must
-	// be a reported number, never an inference.
-	RecordVectorProjection(ctx context.Context, orgID string, embedded, cleared, skipped int)
+	// skippedKind and skippedIDOnly (spec §7 D2) count nodes the embed pass
+	// DELIBERATELY left unembedded, BY REASON:
+	//   - skippedKind (CHAOS-3833): the whole-kind skip-list (today, the
+	//     organization node).
+	//   - skippedIDOnly (CHAOS-3835): the per-row id-only skip (today,
+	//     ci_pipeline_run rows whose name/branch carry no content beyond a
+	//     bare identifier).
+	//
+	// Two counters, not one combined number: they are operationally
+	// different facts (kind-wide vs a per-row content decision), and
+	// collapsing them would make a rise in one indistinguishable from a
+	// rise in the other -- the reasoning that already keeps
+	// RecordVectorRetrievalDegraded and RecordVectorRetrievalSuppressed
+	// separate. Without either, a skipped node is indistinguishable from a
+	// healthy corpus: the read path reports degraded=false over a
+	// partially embedded graph, so "N nodes deliberately unembedded, by
+	// reason" must be a reported number, never an inference.
+	RecordVectorProjection(ctx context.Context, orgID string, embedded, cleared, skippedKind, skippedIDOnly int)
 }
 
 // NoopTelemetry discards every signal. Callers that want no telemetry pass
@@ -155,10 +166,10 @@ type GraphTelemetry interface {
 // a decision in the source rather than an omission.
 type NoopTelemetry struct{}
 
-func (NoopTelemetry) RecordObservationTraversalDegraded(context.Context, string, int) {}
-func (NoopTelemetry) RecordVectorRetrievalDegraded(context.Context, string)           {}
-func (NoopTelemetry) RecordVectorRetrievalSuppressed(context.Context, string)         {}
-func (NoopTelemetry) RecordVectorProjection(context.Context, string, int, int, int)   {}
+func (NoopTelemetry) RecordObservationTraversalDegraded(context.Context, string, int)    {}
+func (NoopTelemetry) RecordVectorRetrievalDegraded(context.Context, string)              {}
+func (NoopTelemetry) RecordVectorRetrievalSuppressed(context.Context, string)            {}
+func (NoopTelemetry) RecordVectorProjection(context.Context, string, int, int, int, int) {}
 
 // SlogTelemetry is the production GraphTelemetry: structured operational logs
 // through log/slog, the repository's standard.
@@ -194,14 +205,22 @@ func (t SlogTelemetry) RecordVectorRetrievalSuppressed(_ context.Context, orgID 
 // RecordVectorProjection logs at Warn when anything was cleared -- a cleared
 // vector means a node just became invisible to vector search -- and at Debug
 // otherwise, so steady-state projection does not generate noise.
-func (t SlogTelemetry) RecordVectorProjection(_ context.Context, orgID string, embedded, cleared, skipped int) {
+//
+// skippedKind and skippedIDOnly log under separate, closed-vocabulary keys
+// (CHAOS-3835 §7 D2) rather than one combined field -- an operator grepping
+// for a specific reason must not have to guess which one moved -- and,
+// like every field here, carry no raw search text: only counts and the
+// organization id.
+func (t SlogTelemetry) RecordVectorProjection(_ context.Context, orgID string, embedded, cleared, skippedKind, skippedIDOnly int) {
 	if cleared > 0 {
 		t.logger().Warn("context_fabric: projection batch cleared stale vectors",
-			"org_id", orgID, "embedded", embedded, "cleared", cleared, "skipped", skipped)
+			"org_id", orgID, "embedded", embedded, "cleared", cleared,
+			"skipped_kind", skippedKind, "skipped_id_only", skippedIDOnly)
 		return
 	}
 	t.logger().Debug("context_fabric: projection batch embedded nodes",
-		"org_id", orgID, "embedded", embedded, "cleared", cleared, "skipped", skipped)
+		"org_id", orgID, "embedded", embedded, "cleared", cleared,
+		"skipped_kind", skippedKind, "skipped_id_only", skippedIDOnly)
 }
 
 func (c Config) validate() error {

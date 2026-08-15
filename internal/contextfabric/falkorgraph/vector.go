@@ -587,11 +587,16 @@ func (a *Adapter) recordVectorSuppressed(ctx context.Context, orgID string) {
 // recordVectorProjection reports one batch's vector outcome (codex round-3
 // F2). Called on EVERY embedding path -- success, clear, and skip -- so the
 // cleared count is a complete accounting rather than a best-effort one.
-func (a *Adapter) recordVectorProjection(ctx context.Context, orgID string, embedded, cleared, skipped int) {
+//
+// skipped carries the CHAOS-3835 (§7 D2) reason breakdown (kind skip-list
+// vs id-only) rather than one combined number, so the telemetry sink can
+// report -- or a caller inspecting embedSkipCounts.Total() can still get --
+// the complete accounting either way.
+func (a *Adapter) recordVectorProjection(ctx context.Context, orgID string, embedded, cleared int, skipped embedSkipCounts) {
 	if a.config.Telemetry == nil {
 		return
 	}
-	a.config.Telemetry.RecordVectorProjection(ctx, orgID, embedded, cleared, skipped)
+	a.config.Telemetry.RecordVectorProjection(ctx, orgID, embedded, cleared, skipped.Kind, skipped.IDOnly)
 }
 
 // EmbedderFromEnv builds the optional vector-retrieval dependencies from the

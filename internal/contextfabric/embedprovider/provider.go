@@ -131,7 +131,7 @@ func (e *Embedder) ApplyQueryPrefix(text string) string {
 
 // PrefixTagComponent is this embedder's contribution to the embed-text
 // composition tag (embed-text spec §4 Layer C, e.g. the "pnomic" in
-// "t2:r2000:b1:pnomic"). Changing the configured prefix family changes vector
+// "t3:r2000:b1:pnomic"). Changing the configured prefix family changes vector
 // semantics exactly like a rune-cap or body-gate change, so it must fold into
 // the same write-stamp/read-fence discriminator. This package exposes the
 // literal only; it does not compose or write the tag itself -- falkorgraph's
