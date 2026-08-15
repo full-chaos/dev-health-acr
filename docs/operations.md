@@ -320,6 +320,40 @@ carries `credential_masked` only (last 4 characters, e.g. `********wxyz`).
 | --- | --- | --- |
 | `ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE` | *(unset — disabled)* | Staleness window (1m–24h when set). A stored investigation result older than this is never reused, regardless of whether every other reuse condition holds. Leaving this unset disables answer reuse entirely: every Investigate call runs fresh, exactly as if `pginvestigation.WithAnswerReuse` were never passed. |
 
+**Retrieval discriminators (CHAOS-3833).** Every reuse-participating row
+additionally persists two conjunctive equality dimensions (migration `0014`):
+the **embed retrieval identity** (`<provider>/<model>#<composition tag>`, or
+the literal `none` when no embedder is configured) and the **retrieval policy
+version** (`rp1`; bumped in code whenever tau/K/HNSW retrieval defaults
+change). Both are computed from the running binary's configuration at save
+and lookup time, so a deploy that changes embed-text semantics or retrieval
+policy stops matching stored answers **atomically with the deploy** — no
+epoch bump or operator action required for the reuse side. Pre-`0014` rows
+hold NULL in both columns and never match.
+
+**Two-phase rollout gate — REQUIRED for any embed-semantic change.** The
+fail-closed property above holds **per replica**, not per fleet: the
+migration framework deliberately tolerates an older binary against a newer
+schema during a rolling deploy, and a pre-`0014` binary runs the
+predicate-less lookup — the new columns are simply never compared — so an
+undrained old replica happily reuses pre-change answers after the migration
+lands. Therefore any change to embed-text composition or semantic embed
+configuration (Layer B/C: templates, the composition tag, rune cap, body
+gate, prefix selector) must roll out in two phases:
+
+1. **Phase 1 — persistence and enforcement, unchanged semantics.** Deploy
+   the binary that persists and compares `embed_retrieval_identity` /
+   `retrieval_policy_version` (with migration `0014` applied), with NO
+   semantic change active. **Drain the fleet completely** — verify no
+   predicate-less replica still serves traffic before proceeding. This
+   drain step is load-bearing, not ceremonial: it is the only thing that
+   closes the old-replica reuse window.
+2. **Phase 2 — semantic activation.** Deploy the composition/config change.
+   Every replica now computes a moved discriminator, so stored pre-change
+   answers stop matching fleet-wide at the moment of the deploy, and the
+   node-side identity stamp independently fails vectors closed to lexical
+   until the prescribed `acr-projector rebuild --org` runs per organization.
+
 ### Vector and semantic retrieval (CHAOS-3778)
 
 Vector retrieval is **opt-in and off by default**. It is enabled by setting a

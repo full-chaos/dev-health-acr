@@ -891,7 +891,7 @@ type snapshotCapturingResultStore struct {
 	savedEpoch    RebuildEpoch
 }
 
-func (s *snapshotCapturingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string) error {
+func (s *snapshotCapturingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity) error {
 	s.saveCalled = true
 	s.savedSnapshot = reuseSnapshot
 	s.savedEpoch = reuseEpoch
@@ -1080,7 +1080,7 @@ type keyRecordingResultStore struct {
 	savedKey string
 }
 
-func (s *keyRecordingResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, timeAxisKey string) error {
+func (s *keyRecordingResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, timeAxisKey string, _ ReuseRetrievalIdentity) error {
 	s.saved = result
 	s.savedKey = timeAxisKey
 	return nil
@@ -1254,5 +1254,108 @@ func TestF1_UnclampedRequestsKeyIdenticallyAcrossArrivals(t *testing.T) {
 	}
 	if !result.Reused {
 		t.Fatal("an ordinary historical request stopped reusing across arrivals; clamping never fires for a past as_of, so its key must not move")
+	}
+}
+
+// retrievalRecordingResultStore records the CHAOS-3833 retrieval identity
+// Save was given, so a test can assert lookup and save carry the same
+// deployment-current pair.
+type retrievalRecordingResultStore struct {
+	saveCalled     bool
+	savedRetrieval ReuseRetrievalIdentity
+}
+
+func (s *retrievalRecordingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, retrieval ReuseRetrievalIdentity) error {
+	s.saveCalled = true
+	s.savedRetrieval = retrieval
+	return nil
+}
+
+func (s *retrievalRecordingResultStore) Get(context.Context, storage.Principal, string) (InvestigationResult, error) {
+	return InvestigationResult{}, nil
+}
+
+// TestCHAOS3833_RetrievalIdentityFlowsToBothLookupAndSave proves the
+// one-options-field symmetry the P1-2 closure depends on: the SAME
+// EngineOptions.ReuseRetrievalIdentity value appears in every lookup's
+// ReuseKey (as the two conjunctive dimensions) AND as Save's explicit
+// retrieval parameter -- so the persisted columns and the compared
+// predicates cannot drift within one process. A fresh investigation is
+// driven end to end so both sides actually run.
+func TestCHAOS3833_RetrievalIdentityFlowsToBothLookupAndSave(t *testing.T) {
+	t.Parallel()
+
+	retrieval := ReuseRetrievalIdentity{
+		EmbedRetrievalIdentity: "lmstudio/nomic-embed-text#t1:r2000:b0:pnone",
+		RetrievalPolicyVersion: "rp1",
+	}
+	store := &retrievalRecordingResultStore{}
+	var lookupKeys []ReuseKey
+	gate := reuseGateFunc(func(_ context.Context, _ storage.Principal, key ReuseKey) (InvestigationResult, bool, error) {
+		lookupKeys = append(lookupKeys, key)
+		return InvestigationResult{}, false, nil
+	})
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreterFunc(func(_ context.Context, _ storage.Principal, request InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{
+				Shape: ShapeSingleSubject, RequestedJudgment: "status",
+				TimeContext:      request.TimeContext,
+				FactRequirements: []FactRequirement{{Kind: FactStatus}},
+			}, nil
+		}),
+		Graph: graphReaderStub{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+			context: GraphContext{
+				DriverCandidates: []DriverJudgment{}, EvidenceRefIDs: []string{}, FactRequirements: []FactRequirement{},
+				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+			},
+		},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{
+				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+			}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{
+				Status: InvestigationComplete, DirectJudgment: "Fine.", CurrentState: "Nominal.",
+				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
+				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+				ClaimedFacts:        []ClaimedFact{},
+				Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				DeterministicAnswer: "Fine.", Warnings: []string{},
+				Versions: VersionSet{
+					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+					InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+				},
+			}, nil
+		}),
+		Results: store, ReuseGate: gate,
+	}, EngineOptions{
+		ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(200, 0).UTC() },
+		NewResultID:            func() string { return "result_retrieval01" },
+		ReuseRetrievalIdentity: retrieval,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	if _, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest()); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(lookupKeys) != 1 {
+		t.Fatalf("FindReusable called %d times, want 1", len(lookupKeys))
+	}
+	if lookupKeys[0].EmbedRetrievalIdentity != retrieval.EmbedRetrievalIdentity {
+		t.Errorf("lookup key EmbedRetrievalIdentity = %q, want %q", lookupKeys[0].EmbedRetrievalIdentity, retrieval.EmbedRetrievalIdentity)
+	}
+	if lookupKeys[0].RetrievalPolicyVersion != retrieval.RetrievalPolicyVersion {
+		t.Errorf("lookup key RetrievalPolicyVersion = %q, want %q", lookupKeys[0].RetrievalPolicyVersion, retrieval.RetrievalPolicyVersion)
+	}
+	if !store.saveCalled {
+		t.Fatal("Save was never called")
+	}
+	if store.savedRetrieval != retrieval {
+		t.Errorf("Save retrieval = %+v, want %+v", store.savedRetrieval, retrieval)
 	}
 }

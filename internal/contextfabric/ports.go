@@ -169,7 +169,16 @@ type InvestigationResultStore interface {
 	// The key's job is REQUEST identity; interpretation identity is
 	// covered separately by condition 6's re-resolution against the
 	// stored Interpretation.
-	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string) error
+	//
+	// The ReuseRetrievalIdentity is the deployment-CURRENT pair of
+	// CHAOS-3833 retrieval discriminators (see that type's doc comment).
+	// Save persists them so FindReusable's conjunctive equality
+	// predicates have a stored side to compare against -- an in-memory
+	// key field alone would leave every stored row with nothing to match.
+	// Explicit parameter for the same reason as the snapshot and epoch:
+	// a caller who forgets it must fail to compile, and an implementation
+	// must never substitute a value it derived some other way.
+	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity) error
 	Get(context.Context, storage.Principal, string) (InvestigationResult, error)
 }
 
@@ -254,12 +263,62 @@ type SourceWatermarkSnapshot map[string]string
 // opaque digest would destroy the per-condition diagnosability the
 // six-condition policy depends on -- a reuse miss must stay attributable
 // to a specific condition.
+// EmbedRetrievalIdentity and RetrievalPolicyVersion are the CHAOS-3833
+// sixth and seventh dimensions (embed-text spec v2 §4, review P1-2
+// closure). Both are CONJUNCTIVE equality dimensions, persisted on every
+// reuse-participating row (migration 0014), and both are computed from
+// the RUNNING binary's configuration at save and lookup time -- which is
+// what makes them immune to the deploy->rebuild race an epoch bump
+// cannot close: the discriminator changes atomically with deployed
+// config.
+//
+// EmbedRetrievalIdentity is the canonical
+// "<provider>/<model>#<composition tag>" of the configured embedder --
+// or the literal "none" when no embedder is configured, never the empty
+// string. It moves when the embedder, the embed-text composition, or any
+// semantic embed config (rune cap, body gate, prefix selector) changes.
+// It is deliberately NOT appended into ModelIdentities: that chain's
+// members are ALTERNATIVES (`model_identity = ANY(...)`), so an appended
+// entry is never actually compared for a row stored under a bare LLM
+// identity -- a disjunctive dimension cannot carry a conjunctive
+// constraint. It is also NOT composed into ProjectionVersion, whose
+// contract is "which source versions built the graph"; folding
+// retrieval-config semantics into it would destroy the per-dimension
+// diagnosability this type's other doc comments repeatedly name as
+// load-bearing.
+//
+// RetrievalPolicyVersion covers retrieval-policy changes that reinterpret
+// EXISTING vectors without re-embedding (tau, K/over-fetch, HNSW
+// parameters): no node stamp moves, so stored answers derived under the
+// old policy need their own dimension to stop matching. Its own column
+// rather than a suffix on the embed identity, so a reuse miss stays
+// attributable to policy-vs-embed specifically.
 type ReuseKey struct {
-	QuestionHash      string
-	ContractVersion   string
-	ProjectionVersion string
-	ModelIdentities   []string
-	TimeAxisKey       string
+	QuestionHash           string
+	ContractVersion        string
+	ProjectionVersion      string
+	ModelIdentities        []string
+	TimeAxisKey            string
+	EmbedRetrievalIdentity string
+	RetrievalPolicyVersion string
+}
+
+// ReuseRetrievalIdentity carries the deployment-CURRENT values of the two
+// CHAOS-3833 retrieval discriminators, computed once at composition time
+// from the running binary's configuration. Engine uses the SAME value on
+// both sides -- inside the ReuseKey a lookup builds AND as Save's
+// explicit parameter -- so the persisted column and the compared
+// predicate can never drift apart within one process. Either field left
+// empty means "this deployment does not participate in retrieval-keyed
+// reuse": Save persists SQL NULL (the row never becomes reusable under
+// the conjunctive predicates) and FindReusable reports an ordinary miss.
+type ReuseRetrievalIdentity struct {
+	// EmbedRetrievalIdentity is "<provider>/<model>#<composition tag>",
+	// or the literal "none" when no embedder is configured.
+	EmbedRetrievalIdentity string
+	// RetrievalPolicyVersion is the manually bumped retrieval-policy
+	// constant (e.g. "rp1") -- see falkorgraph.RetrievalPolicyVersion.
+	RetrievalPolicyVersion string
 }
 
 // AnswerReuseGate finds a stored InvestigationResult eligible for reuse

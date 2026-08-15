@@ -6,6 +6,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 )
 
 // CHAOS-3810 codex round-1 P1. The composed version identity was half-filled:
@@ -50,6 +51,29 @@ func TestContextFabricSynthesizerOptionsCarryEveryStaticVersion(t *testing.T) {
 	} {
 		if strings.TrimSpace(value) == "" || value == "unwired" {
 			t.Fatalf("%s = %q, want a real version: composition has an authority for it", name, value)
+		}
+	}
+}
+
+// TestContextFabricProjectionVersionComposesEverySourceVersion pins the
+// CHAOS-3833 P1-2 fix: the projection version reuse compares against must
+// compose ALL of devhealthsource's producer version constants. The
+// pre-fix form omitted TeamsProjectsSourceVersion (behind a comment that
+// went stale when CHAOS-3802 turned the stub into a real producer), so a
+// teams/projects-only producer change would not have moved the reuse key.
+// Asserted against the authorities, not a repeated literal, for the same
+// reason as the test above; strings.Contains rather than an exact
+// composition so a future FOURTH source version fails this test only if
+// it is forgotten, not merely reordered.
+func TestContextFabricProjectionVersionComposesEverySourceVersion(t *testing.T) {
+	t.Parallel()
+	for _, sourceVersion := range []string{
+		devhealthsource.ClickHouseSourceVersion,
+		devhealthsource.EpisodesSourceVersion,
+		devhealthsource.TeamsProjectsSourceVersion,
+	} {
+		if !strings.Contains(contextFabricProjectionVersion, sourceVersion) {
+			t.Fatalf("contextFabricProjectionVersion = %q, missing source version %q", contextFabricProjectionVersion, sourceVersion)
 		}
 	}
 }

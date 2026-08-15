@@ -323,6 +323,13 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		ProjectionVersion: e.reuseProjectionVersion,
 		ModelIdentities:   modelIdentities,
 		TimeAxisKey:       timeAxisKey,
+		// CHAOS-3833: the SAME deployment-current values Save persists,
+		// from the same EngineOptions field, so lookup and save cannot
+		// drift within one process. Conjunctive equality on the gate side
+		// means a pre-0014 row (NULL columns) or a row saved under
+		// different embed-text/retrieval-policy semantics never matches.
+		EmbedRetrievalIdentity: e.reuseRetrievalIdentity.EmbedRetrievalIdentity,
+		RetrievalPolicyVersion: e.reuseRetrievalIdentity.RetrievalPolicyVersion,
 	}
 	candidate, ok, err := e.reuseGate.FindReusable(ctx, principal, key)
 	if err != nil || !ok {

@@ -229,7 +229,7 @@ func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) 
 	require.NoError(t, err)
 	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
 	require.NoError(t, err)
-	require.NoError(t, store.Save(ctx, principal, interpretedHistorical, snapshot, &epoch, currentAxisKey))
+	require.NoError(t, store.Save(ctx, principal, interpretedHistorical, snapshot, &epoch, currentAxisKey, testReuseRetrievalIdentity))
 
 	// A byte-identical follow-up request -- same text, same current axis --
 	// must find it. Before F6 this was a permanent miss.
@@ -241,6 +241,9 @@ func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) 
 		// result was stored under.
 		ModelIdentities: []string{interpretedHistorical.Versions.ModelIdentity},
 		TimeAxisKey:     currentAxisKey,
+		// CHAOS-3833: the same pair Save persisted, compared conjunctively.
+		EmbedRetrievalIdentity: testReuseRetrievalIdentity.EmbedRetrievalIdentity,
+		RetrievalPolicyVersion: testReuseRetrievalIdentity.RetrievalPolicyVersion,
 	}
 	reused, found, err := store.FindReusable(ctx, principal, lookup)
 	require.NoError(t, err)
