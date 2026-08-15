@@ -4,15 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"go/ast"
-	"go/parser"
-	"go/token"
+	"go/constant"
+	"go/types"
 	"os"
-	"path/filepath"
-	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/tools/go/packages"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
@@ -571,99 +570,98 @@ var benchmarkLookupEnvVarFor = map[string]string{
 	embedprovider.EnvIncludeBodies:       "ACR_TEST_EMBED_INCLUDE_BODIES",
 }
 
-// embedproviderPackageDir resolves the on-disk directory of the sibling
-// embedprovider package by walking from THIS test file's own path via
-// runtime.Caller(0), rather than assuming a working directory or doing
-// GOPATH/module-aware resolution (go/build.Import does not reliably resolve
-// a module-mode import path without a populated build context) -- stable
-// regardless of where `go test` is invoked from.
-func embedproviderPackageDir(t *testing.T) string {
-	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller(0) could not resolve this test file's own path")
-	}
-	// .../internal/contextfabric/falkorgraph/ambiguity_benchmark_live_test.go
-	// -> .../internal/contextfabric/embedprovider (sibling package directory).
-	dir := filepath.Join(filepath.Dir(thisFile), "..", "embedprovider")
-	info, err := os.Stat(dir)
-	if err != nil {
-		t.Fatalf("resolve embedprovider package directory relative to %s: %v", thisFile, err)
-	}
-	if !info.IsDir() {
-		t.Fatalf("%s (resolved from %s) is not a directory", dir, thisFile)
-	}
-	return dir
-}
+// embedproviderImportPath is the package packages.Load resolves for
+// discoverEmbedproviderEnvVars, below -- an import path, not a filesystem
+// path, so resolution goes through the SAME module-aware machinery
+// `go build`/`go test` use, unlike round 4's manual filesystem-relative walk
+// from runtime.Caller(0).
+const embedproviderImportPath = "github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 
-// discoverEmbedproviderEnvVars is the CHAOS-3849 round-4 review finding 1
-// fix. It parses every non-test .go file in the embedprovider package
-// directory with go/parser and collects the name of every top-level const
-// whose identifier starts with "Env" and whose declared value is a bare
-// string literal -- the exact shape every embedprovider.Env* constant takes
-// today (config.go's const block). This is what
-// TestBenchmarkLookupCoversEveryEmbedproviderEnvVar iterates over, NOT the
-// hand-maintained embedproviderEnvVars slice: a 16th Env* constant added to
-// that package is picked up here automatically, with no test file for a
-// human to remember to touch, closing the round-3 review finding 1 gap (a
-// hardcoded slice a future constant could silently slip past).
+// discoverEmbedproviderEnvVars is the CHAOS-3849 round-5 fix (round 3 on
+// this closure test's class: hardcoded list -> static go/parser AST ->
+// compiler semantics via go/types -- no more syntactic patches). It loads
+// the embedprovider package with golang.org/x/tools/go/packages
+// (NeedTypes|NeedTypesInfo) and reads every exported package-scope object
+// whose name starts with "Env" and whose TYPE-CHECKED value is a string
+// constant, via go/constant.StringVal(obj.Val()). This is what
+// TestBenchmarkLookupCoversEveryEmbedproviderEnvVar iterates over, NOT any
+// hand-maintained list: a new Env* constant is picked up here automatically,
+// with no test file for a human to remember to touch.
+//
+// This is STRUCTURAL closure, not another syntactic approximation -- for two
+// reasons, both required by the round-5 review:
+//
+//	(a) The value comes from the type-checker's own constant evaluator
+//	    (types.Const.Val()), not from pattern-matching source syntax against
+//	    one hardcoded shape. Round 4's go/parser walk only recognized a BARE
+//	    *ast.BasicLit string -- `const EnvNew = envPrefix + "NEW"`
+//	    (concatenation), a type-aliased constant, a parenthesized literal, an
+//	    iota-based continuation, or a value assembled from a constant
+//	    declared in a DIFFERENT file of the same package would all have been
+//	    silently excluded, each one a distinct syntactic form someone would
+//	    eventually have to notice and patch this discovery function for.
+//	    Every one of those is a legal Go constant expression that
+//	    type-checks to a single computed string value, and go/types hands
+//	    back exactly that computed value regardless of which spelling
+//	    produced it -- there is no second form to special-case, because the
+//	    type checker has already reduced all of them to the same
+//	    representation this code reads.
+//	(b) packages.Load runs through the SAME `go list`-driven build machinery
+//	    `go build`/`go test` themselves use, so it applies the ACTIVE build
+//	    configuration (GOOS/GOARCH, build tags) when deciding which files
+//	    belong to the package -- an Env* constant in a file excluded by a
+//	    build constraint on this platform is excluded from
+//	    pkg.Types.Scope() exactly as it would be from the real build. Round
+//	    4's parser.ParseDir walked every .go file in the directory
+//	    unconditionally, with no notion of "inactive for this build" at all,
+//	    so an inactive-platform constant would have over-collected and could
+//	    have spuriously failed CI on a different GOOS/GOARCH.
+//
+// A load error is a hard test failure (t.Fatalf), never a skip: this
+// closure test must run in CI, and a load failure silently skipping it
+// would be the same "quietly measures nothing" failure mode the CHAOS-3831
+// harness had before its own credential/timeout fixes (round 1/2 of this
+// same ticket) -- no special GOFLAGS/env handling was needed here in
+// practice (packages.Load works against this repo's ordinary module
+// context), but a failure surfaces loudly rather than degrading to an
+// empty, silently-passing set.
 func discoverEmbedproviderEnvVars(t *testing.T) []string {
 	t.Helper()
-	dir := embedproviderPackageDir(t)
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, func(info os.FileInfo) bool {
-		return !strings.HasSuffix(info.Name(), "_test.go")
-	}, 0)
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo,
+	}
+	pkgs, err := packages.Load(cfg, embedproviderImportPath)
 	if err != nil {
-		t.Fatalf("parse embedprovider package at %s: %v", dir, err)
+		t.Fatalf("packages.Load(%s): %v", embedproviderImportPath, err)
 	}
-	if len(pkgs) == 0 {
-		t.Fatalf("no Go package found at %s -- embedproviderPackageDir resolved the wrong path", dir)
+	if n := packages.PrintErrors(pkgs); n > 0 {
+		t.Fatalf("packages.Load(%s) reported %d package error(s) (printed above) -- embedprovider did not type-check cleanly", embedproviderImportPath, n)
 	}
+	if len(pkgs) != 1 || pkgs[0].Types == nil {
+		t.Fatalf("packages.Load(%s) returned %d package(s) with usable type information, want exactly 1", embedproviderImportPath, len(pkgs))
+	}
+	scope := pkgs[0].Types.Scope()
 	var names []string
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
-			for _, decl := range file.Decls {
-				genDecl, ok := decl.(*ast.GenDecl)
-				if !ok || genDecl.Tok != token.CONST {
-					continue
-				}
-				for _, spec := range genDecl.Specs {
-					valueSpec, ok := spec.(*ast.ValueSpec)
-					if !ok {
-						continue
-					}
-					for i, nameIdent := range valueSpec.Names {
-						if !nameIdent.IsExported() || !strings.HasPrefix(nameIdent.Name, "Env") {
-							continue
-						}
-						if i >= len(valueSpec.Values) {
-							continue // no literal on this spec line (e.g. an iota continuation) -- not the Env* shape this package uses.
-						}
-						lit, ok := valueSpec.Values[i].(*ast.BasicLit)
-						if !ok || lit.Kind != token.STRING {
-							continue // only a bare string-literal constant is an env-var lookup name.
-						}
-						// The map this feeds (benchmarkLookupEnvVarFor) and
-						// benchmarkLookup's own switch are both keyed by the
-						// constant's STRING VALUE (e.g.
-						// "ACR_CONTEXT_FABRIC_EMBED_API_KEY"), which is the
-						// actual env-var name passed to a lookup func at
-						// runtime -- not the Go identifier ("EnvAPIKey"),
-						// which exists only at compile time and is never
-						// looked up against anything.
-						value, err := strconv.Unquote(lit.Value)
-						if err != nil {
-							t.Fatalf("unquote string literal for %s in %s: %v", nameIdent.Name, dir, err)
-						}
-						names = append(names, value)
-					}
-				}
-			}
+	for _, name := range scope.Names() {
+		if !ast.IsExported(name) || !strings.HasPrefix(name, "Env") {
+			continue
 		}
+		constObj, ok := scope.Lookup(name).(*types.Const)
+		if !ok {
+			continue // an Env*-prefixed non-const at package scope is not a lookup key.
+		}
+		basic, ok := constObj.Type().Underlying().(*types.Basic)
+		if !ok || basic.Info()&types.IsString == 0 {
+			continue // only a string-kind constant is an env-var lookup name.
+		}
+		// constant.StringVal reads the type checker's OWN evaluated value --
+		// this is the line that makes (a) above true: it is identical
+		// whether the source wrote a bare literal, a concatenation, an
+		// alias, or an iota-derived expression.
+		names = append(names, constant.StringVal(constObj.Val()))
 	}
 	if len(names) == 0 {
-		t.Fatalf("parsed %s but found zero exported Env*-prefixed string constants -- the parser walk is broken, not that embedprovider suddenly has none", dir)
+		t.Fatalf("loaded %s but found zero exported Env*-prefixed string constants -- the package load is broken, not that embedprovider suddenly has none", embedproviderImportPath)
 	}
 	sort.Strings(names)
 	return names
