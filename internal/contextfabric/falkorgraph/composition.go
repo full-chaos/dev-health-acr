@@ -30,13 +30,16 @@ const RetrievalPolicyVersion = "rp1"
 const EmbedRetrievalIdentityNone = "none"
 
 // embedTextTemplateVersion names the per-kind embed-text COMPOSITION the
-// write path currently produces (spec §4 Layer B). "t1" is the pre-CHAOS-3833
-// composition (entitySearchText = Label + Aliases + PreviousNames; content =
-// title + body; episode = goal/outcome/summary). Any change to what any
-// kind's composed text contains bumps this constant, which moves the
-// composition tag, which fails the read fence closed and moves the
-// answer-reuse key -- both through the one string below.
-const embedTextTemplateVersion = "t1"
+// write path currently produces (spec §4 Layer B). "t2" is CHAOS-3833's
+// per-kind template set (search_text.go), including the organization embed
+// skip-list; "t1" was the pre-CHAOS-3833 composition (entitySearchText =
+// Label + Aliases + PreviousNames for every kind; content = title + body;
+// episode = goal/outcome/summary). Any change to what any kind's composed
+// text contains -- template edit, cap move, skip-list membership, prefix
+// implementation -- bumps this constant, which moves the composition tag,
+// which fails the read fence closed and moves the answer-reuse key, both
+// through the one string below.
+const embedTextTemplateVersion = "t2"
 
 // embedPrefixSelector names the model prefix pair applied to embed texts
 // (spec L6). No prefixes are implemented yet, so the selector is the fixed
@@ -85,5 +88,9 @@ func EmbedRetrievalIdentityFromEnv(lookup func(string) (string, bool)) (string, 
 	if err != nil {
 		return "", err
 	}
-	return cfg.Provider + "/" + cfg.Model + "#" + EmbedCompositionTag(cfg.MaxTextRunes, false), nil
+	includeBodies, err := embedprovider.BodiesIncluded(lookup)
+	if err != nil {
+		return "", err
+	}
+	return cfg.Provider + "/" + cfg.Model + "#" + EmbedCompositionTag(cfg.MaxTextRunes, includeBodies), nil
 }

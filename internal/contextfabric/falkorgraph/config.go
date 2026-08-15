@@ -30,6 +30,7 @@ import (
 	"time"
 
 	acrconfig "github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 )
 
 const (
@@ -79,6 +80,16 @@ type Config struct {
 	MaxResults     int
 	PoolSize       int
 	AllowInsecure  bool // permit TLS=false outside development; see validate()
+	// IncludeEmbedBodies is the CHAOS-3833 §3 body gate's EFFECTIVE value
+	// (embedprovider.BodiesIncluded): whether free-text body heads (PR
+	// body, incident description) join the ONE shared search-text
+	// composition. It lives on the graph Config, not on the embedder,
+	// because BOTH retrieval arms index the same composed text -- the
+	// write path composes search_text with this value whether or not an
+	// embedder is configured. It is SEMANTIC configuration: its value is
+	// a component of the embed composition tag, so a flip moves the
+	// stamped identity and forces the prescribed rebuild.
+	IncludeEmbedBodies bool
 	// Telemetry is optional (nil-safe), same contract as
 	// zepgraph.GraphTelemetry.
 	Telemetry GraphTelemetry
@@ -129,7 +140,14 @@ type GraphTelemetry interface {
 	// count long before anything else notices, and the running total against
 	// the organization's node count is what tells an operator how much of the
 	// corpus is currently vectorless.
-	RecordVectorProjection(ctx context.Context, orgID string, embedded, cleared int)
+	//
+	// skipped (CHAOS-3833, spec §7 D2) counts nodes the embed pass
+	// DELIBERATELY left unembedded (the kind skip-list -- today, the
+	// organization node). Without it a skipped node is indistinguishable
+	// from a healthy corpus: the read path reports degraded=false over a
+	// partially embedded graph, so "N nodes deliberately unembedded" must
+	// be a reported number, never an inference.
+	RecordVectorProjection(ctx context.Context, orgID string, embedded, cleared, skipped int)
 }
 
 // NoopTelemetry discards every signal. Callers that want no telemetry pass
@@ -140,7 +158,7 @@ type NoopTelemetry struct{}
 func (NoopTelemetry) RecordObservationTraversalDegraded(context.Context, string, int) {}
 func (NoopTelemetry) RecordVectorRetrievalDegraded(context.Context, string)           {}
 func (NoopTelemetry) RecordVectorRetrievalSuppressed(context.Context, string)         {}
-func (NoopTelemetry) RecordVectorProjection(context.Context, string, int, int)        {}
+func (NoopTelemetry) RecordVectorProjection(context.Context, string, int, int, int)   {}
 
 // SlogTelemetry is the production GraphTelemetry: structured operational logs
 // through log/slog, the repository's standard.
@@ -176,14 +194,14 @@ func (t SlogTelemetry) RecordVectorRetrievalSuppressed(_ context.Context, orgID 
 // RecordVectorProjection logs at Warn when anything was cleared -- a cleared
 // vector means a node just became invisible to vector search -- and at Debug
 // otherwise, so steady-state projection does not generate noise.
-func (t SlogTelemetry) RecordVectorProjection(_ context.Context, orgID string, embedded, cleared int) {
+func (t SlogTelemetry) RecordVectorProjection(_ context.Context, orgID string, embedded, cleared, skipped int) {
 	if cleared > 0 {
 		t.logger().Warn("context_fabric: projection batch cleared stale vectors",
-			"org_id", orgID, "embedded", embedded, "cleared", cleared)
+			"org_id", orgID, "embedded", embedded, "cleared", cleared, "skipped", skipped)
 		return
 	}
 	t.logger().Debug("context_fabric: projection batch embedded nodes",
-		"org_id", orgID, "embedded", embedded, "cleared", cleared)
+		"org_id", orgID, "embedded", embedded, "cleared", cleared, "skipped", skipped)
 }
 
 func (c Config) validate() error {
@@ -265,16 +283,26 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// CHAOS-3833: the §3 body gate resolves from embedprovider's locality/
+	// include-bodies variables here, in the ONE place both construction
+	// sites (the hosted API's reader and acr-projector's backend) build
+	// their Config, so the two processes cannot compose different text
+	// from the same environment.
+	includeBodies, err := embedprovider.BodiesIncluded(lookup)
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
-		Addr:           envString(lookup, EnvAddr, ""),
-		Password:       password,
-		TLS:            envBool(lookup, EnvTLS, true),
-		GraphPrefix:    envString(lookup, EnvGraphPrefix, "acr-cf"),
-		RequestTimeout: timeout,
-		MaxAttempts:    maxAttempts,
-		MaxResults:     maxResults,
-		PoolSize:       poolSize,
-		AllowInsecure:  envBool(lookup, EnvAllowInsecure, false),
+		Addr:               envString(lookup, EnvAddr, ""),
+		Password:           password,
+		TLS:                envBool(lookup, EnvTLS, true),
+		GraphPrefix:        envString(lookup, EnvGraphPrefix, "acr-cf"),
+		RequestTimeout:     timeout,
+		MaxAttempts:        maxAttempts,
+		MaxResults:         maxResults,
+		PoolSize:           poolSize,
+		AllowInsecure:      envBool(lookup, EnvAllowInsecure, false),
+		IncludeEmbedBodies: includeBodies,
 	}, nil
 }
 

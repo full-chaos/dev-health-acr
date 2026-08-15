@@ -189,7 +189,7 @@ func referencedSubjectStubMergeCypher(alias, kindLabelValue, attrsParam string) 
 // simply by whether entityOwned is non-nil -- no read-modify-write, no
 // COALESCE trick, no second query. This replaces
 // zepgraph.mergedSubjectAttributes' two-round-trip read-then-merge outright.
-func subjectMergeAttrs(subject contextfabric.SubjectRef, authorization contextfabric.AuthorizationScope, evidence []string, observedAt time.Time, validFrom, validTo *time.Time, sourceVersion string, entityOwned *contextfabric.EntityProjection) map[string]interface{} {
+func subjectMergeAttrs(subject contextfabric.SubjectRef, authorization contextfabric.AuthorizationScope, evidence []string, observedAt time.Time, validFrom, validTo *time.Time, sourceVersion string, entityOwned *contextfabric.EntityProjection, includeBodies bool) map[string]interface{} {
 	attrs := map[string]interface{}{
 		propLabel:         subject.Label,
 		propAuthzRepos:    authorizationValue(authorization.RepositorySlugs),
@@ -254,7 +254,11 @@ func subjectMergeAttrs(subject contextfabric.SubjectRef, authorization contextfa
 		for k, v := range entityOwned.Properties {
 			attrs[propPropertyPrefix+safeName(k)] = scalarValue(v)
 		}
-		attrs[propSearchText] = entitySearchText(*entityOwned)
+		// CHAOS-3833: the ONE per-kind composition both retrieval arms
+		// index -- see search_text.go. includeBodies is the §3 body
+		// gate's effective value from Config, identical to what
+		// collectEmbedTargets composes with.
+		attrs[propSearchText] = subjectSearchText(*entityOwned, includeBodies)
 	}
 	return attrs
 }
@@ -284,7 +288,7 @@ func authorizationValue(values []string) interface{} {
 }
 
 func (a *Adapter) projectEntity(ctx context.Context, key, orgID string, entity contextfabric.EntityProjection) error {
-	attrs := subjectMergeAttrs(entity.Subject, entity.Authorization, entity.EvidenceRefIDs, entity.ObservedAt, entity.ValidFrom, entity.ValidTo, entity.SourceVersion, &entity)
+	attrs := subjectMergeAttrs(entity.Subject, entity.Authorization, entity.EvidenceRefIDs, entity.ObservedAt, entity.ValidFrom, entity.ValidTo, entity.SourceVersion, &entity, a.config.IncludeEmbedBodies)
 	cypher := ownedSubjectMergeCypher("n", kindLabel(entity.Subject.Kind)) + " SET n += $attrs"
 	params := subjectMergeParams("n", entity.Subject, orgID)
 	params["attrs"] = attrs
@@ -296,8 +300,8 @@ func (a *Adapter) projectRelationship(ctx context.Context, key, orgID string, re
 	// nil/nil validity: these are referenced STUBS, and a relationship's
 	// own window is not its endpoints' window (round-1 F3). The edge
 	// itself still carries the window, below.
-	fromAttrs := subjectMergeAttrs(relationship.From, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, nil, nil, relationship.SourceVersion, nil)
-	toAttrs := subjectMergeAttrs(relationship.To, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, nil, nil, relationship.SourceVersion, nil)
+	fromAttrs := subjectMergeAttrs(relationship.From, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, nil, nil, relationship.SourceVersion, nil, a.config.IncludeEmbedBodies)
+	toAttrs := subjectMergeAttrs(relationship.To, relationship.Authorization, relationship.EvidenceRefIDs, relationship.ObservedAt, nil, nil, relationship.SourceVersion, nil, a.config.IncludeEmbedBodies)
 	edgeAttrs := map[string]interface{}{
 		propRelationshipID: relationship.RelationshipID, propRelationType: graphrank.NormalizeRelation(string(relationship.Type)),
 		"derivation": string(relationship.Derivation), "epistemic_status": string(relationship.EpistemicStatus),
@@ -333,7 +337,7 @@ func (a *Adapter) projectRelationship(ctx context.Context, key, orgID string, re
 }
 
 func (a *Adapter) projectContent(ctx context.Context, key, orgID string, content contextfabric.ContentProjection) error {
-	subjectAttrs := subjectMergeAttrs(content.Subject, content.Authorization, content.EvidenceRefIDs, content.ObservedAt, nil, nil, content.SourceVersion, nil)
+	subjectAttrs := subjectMergeAttrs(content.Subject, content.Authorization, content.EvidenceRefIDs, content.ObservedAt, nil, nil, content.SourceVersion, nil, a.config.IncludeEmbedBodies)
 	documentSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectDocument, CanonicalID: "content:" + content.ContentID, Label: content.Title}
 	documentAttrs := map[string]interface{}{
 		propLabel: content.Title, propAuthzRepos: authorizationValue(content.Authorization.RepositorySlugs),
@@ -378,7 +382,7 @@ func (a *Adapter) projectEpisode(ctx context.Context, key, orgID string, episode
 	// (round-1 F3). A work item does not stop being valid because an
 	// episode about it ended. The episode node itself keeps the window,
 	// below.
-	subjectAttrs := subjectMergeAttrs(episode.Subject, episode.Authorization, episode.EvidenceRefIDs, episode.EndedAt, nil, nil, episode.SourceVersion, nil)
+	subjectAttrs := subjectMergeAttrs(episode.Subject, episode.Authorization, episode.EvidenceRefIDs, episode.EndedAt, nil, nil, episode.SourceVersion, nil, a.config.IncludeEmbedBodies)
 	episodeSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectEpisode, CanonicalID: "episode:" + episode.EpisodeID, Label: episode.EpisodeID}
 	summary := episodeSearchText(episode)
 	episodeAttrs := map[string]interface{}{

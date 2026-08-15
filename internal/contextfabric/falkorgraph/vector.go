@@ -584,11 +584,11 @@ func (a *Adapter) recordVectorSuppressed(ctx context.Context, orgID string) {
 // recordVectorProjection reports one batch's vector outcome (codex round-3
 // F2). Called on EVERY embedding path -- success, clear, and skip -- so the
 // cleared count is a complete accounting rather than a best-effort one.
-func (a *Adapter) recordVectorProjection(ctx context.Context, orgID string, embedded, cleared int) {
+func (a *Adapter) recordVectorProjection(ctx context.Context, orgID string, embedded, cleared, skipped int) {
 	if a.config.Telemetry == nil {
 		return
 	}
-	a.config.Telemetry.RecordVectorProjection(ctx, orgID, embedded, cleared)
+	a.config.Telemetry.RecordVectorProjection(ctx, orgID, embedded, cleared, skipped)
 }
 
 // EmbedderFromEnv builds the optional vector-retrieval dependencies from the
