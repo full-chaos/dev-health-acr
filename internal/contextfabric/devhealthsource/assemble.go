@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
 )
 
 // sourcePlan is the batch-assembly engine every ClickHouse-backed
@@ -246,15 +247,30 @@ func (e *ProducerRejection) Error() string { return e.Reason }
 //
 // This mirrors operationError's shape (bounded Error(), real Unwrap()) rather
 // than inventing a second convention: the message names only the
-// classification and which table failed, while Unwrap keeps both
-// ErrUnavailable -- the coordinator's retry signal -- and the original cause
-// inspectable.
+// classification and which table failed, while Unwrap keeps both the
+// classification sentinel -- the coordinator's retry signal -- and the
+// original cause inspectable.
+//
+// CHAOS-3848: a ClickHouse TOO_MANY_BYTES/TOO_MANY_ROWS exception (the query
+// exceeded its own configured read budget) is classified as
+// ErrQueryBudgetExceeded instead of ErrUnavailable. It is a PERMANENT
+// condition for the current query/data shape, not a transient dependency
+// outage -- the coordinator's identical-retry-with-backoff behavior is
+// unchanged (checkpoint still held for replay), but the class it logs now
+// names the real cause instead of masquerading as one it isn't.
+// runtimeclickhouse.QueryBudgetExceededCode returns the driver's numeric
+// exception code only, never its Message: the message is unbounded
+// query/row-shaped driver text, and this error's own Error() reaches the
+// coordinator's logs.
 type tableReadError struct {
 	table string
 	cause error
 }
 
 func (e *tableReadError) Error() string {
+	if code, exceeded := runtimeclickhouse.QueryBudgetExceededCode(e.cause); exceeded {
+		return fmt.Sprintf("%s: read %s (clickhouse exception code %d)", contextfabric.ErrQueryBudgetExceeded.Error(), e.table, code)
+	}
 	message := contextfabric.ErrUnavailable.Error() + ": read " + e.table
 	// A producer-authored refusal is safe to surface and is the one thing an
 	// operator can actually act on -- ProducerRejection's text is a fixed
@@ -270,7 +286,12 @@ func (e *tableReadError) Error() string {
 
 // Unwrap returns both so errors.Is answers for the classification AND the
 // cause; a single-error Unwrap could only preserve one of them.
-func (e *tableReadError) Unwrap() []error { return []error{contextfabric.ErrUnavailable, e.cause} }
+func (e *tableReadError) Unwrap() []error {
+	if runtimeclickhouse.IsQueryBudgetExceeded(e.cause) {
+		return []error{contextfabric.ErrQueryBudgetExceeded, e.cause}
+	}
+	return []error{contextfabric.ErrUnavailable, e.cause}
+}
 
 func (p sourcePlan) noteConsumed(orgID, cursor string) {
 	if p.recordConsumed != nil {

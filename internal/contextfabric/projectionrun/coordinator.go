@@ -507,8 +507,15 @@ const (
 	failureClassRebuildNeeded = "rebuild_required"
 	failureClassUnavailable   = "dependency_unavailable"
 	failureClassRateLimited   = "dependency_rate_limited"
-	failureClassInvalidResult = "invalid_result"
-	failureClassUnclassified  = "unclassified"
+	// failureClassBudgetExceeded (CHAOS-3848) is a permanent per-query
+	// condition (e.g. ClickHouse TOO_MANY_BYTES/TOO_MANY_ROWS), distinct
+	// from failureClassUnavailable's transient-dependency-outage meaning:
+	// identical retry against unchanged data fails the identical way, so an
+	// operator needs to see this is not "wait for the dependency to come
+	// back".
+	failureClassBudgetExceeded = "query_budget_exceeded"
+	failureClassInvalidResult  = "invalid_result"
+	failureClassUnclassified   = "unclassified"
 )
 
 // ClassifyFailure is classifyOutcomeError exported for the projector binary,
@@ -549,6 +556,10 @@ var failureClasses = []struct {
 	{ErrOrgLocked, failureClassLocked},
 	{contextfabric.ErrProjectionSourceVersionChanged, failureClassRebuildNeeded},
 	{contextfabric.ErrRateLimited, failureClassRateLimited},
+	// Must precede ErrUnavailable: a query-budget error is a permanent
+	// per-query condition, and letting the more generic sentinel match
+	// first would silently reclassify it as a transient dependency outage.
+	{contextfabric.ErrQueryBudgetExceeded, failureClassBudgetExceeded},
 	{contextfabric.ErrUnavailable, failureClassUnavailable},
 	{contextfabric.ErrInvalidResult, failureClassInvalidResult},
 }

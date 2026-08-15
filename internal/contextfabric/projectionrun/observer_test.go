@@ -48,6 +48,41 @@ func TestR4_F3_ObserverNeverLogsRawErrorText(t *testing.T) {
 	}
 }
 
+// TestQueryBudgetExceededObservesDistinctlyAndBoundedly is CHAOS-3848's
+// part-2 closure test at the observer boundary: a mocked ClickHouse
+// TOO_MANY_BYTES (Code 307) failure, wrapped exactly as
+// devhealthsource.tableReadError wraps one, must log failure_class =
+// "query_budget_exceeded" -- not "dependency_unavailable" -- and the
+// exception's own numeric code and message text must still never reach the
+// log line (F3's guarantee applies to this failure class exactly as it does
+// to every other one).
+func TestQueryBudgetExceededObservesDistinctlyAndBoundedly(t *testing.T) {
+	var buffer bytes.Buffer
+	observer := SlogObserver{Logger: slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+
+	observer.ObserveProjectionOutcome(Outcome{
+		OrgID: "org_1", Source: "devhealth", Duration: time.Second,
+		Err: fmt.Errorf("read pull_requests (clickhouse exception code 307): %w", contextfabric.ErrQueryBudgetExceeded),
+	})
+
+	logged := buffer.String()
+	var record map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(logged)), &record); err != nil {
+		t.Fatalf("log line is not valid JSON: %v", err)
+	}
+	if record["failure_class"] != failureClassBudgetExceeded {
+		t.Fatalf("failure_class = %v, want %q", record["failure_class"], failureClassBudgetExceeded)
+	}
+	if record["failure_class"] == failureClassUnavailable {
+		t.Fatal("a query-budget failure must not classify as dependency_unavailable")
+	}
+	for _, leak := range []string{"17987654", "Limit for read exceeded", "307"} {
+		if strings.Contains(logged, leak) {
+			t.Fatalf("raw exception detail leaked into telemetry (%q): %s", leak, logged)
+		}
+	}
+}
+
 // The vocabulary is closed and each known failure maps to its own class, so
 // "unclassified" genuinely means "a failure this vocabulary does not name"
 // rather than "classification is not wired".
@@ -62,6 +97,7 @@ func TestR4_F3_KnownFailuresClassifyDistinctly(t *testing.T) {
 		{ErrOrgLocked, failureClassLocked},
 		{contextfabric.ErrProjectionSourceVersionChanged, failureClassRebuildNeeded},
 		{contextfabric.ErrRateLimited, failureClassRateLimited},
+		{contextfabric.ErrQueryBudgetExceeded, failureClassBudgetExceeded},
 		{contextfabric.ErrUnavailable, failureClassUnavailable},
 		{contextfabric.ErrInvalidResult, failureClassInvalidResult},
 		{errors.New("something new"), failureClassUnclassified},

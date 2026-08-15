@@ -8,7 +8,7 @@ sentinel="${ACR_CONTAINER_SECRET_SENTINEL:-ACR_CONTAINER_SECRET_SENTINEL_9b4f4fe
 # Must stay on the version ACR actually ships against -- the same digest the
 # compose stack and the Helm chart's bundled PostgreSQL use. A harness pinned to
 # an older major verifies migrations no deployment ever runs.
-postgres_image='docker.io/library/postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15'
+postgres_image='docker.io/library/postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44'
 tmp_dir="$(mktemp -d)"
 git_workspace=""
 migration_network=""

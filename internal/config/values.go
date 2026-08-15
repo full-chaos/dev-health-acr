@@ -51,6 +51,18 @@ func intValue(lookup lookupEnv, key string, fallback int) (int, error) {
 	return parsed, nil
 }
 
+func uint64Value(lookup lookupEnv, key string, fallback uint64) (uint64, error) {
+	value, ok := lookup(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return parsed, nil
+}
+
 func parseLogLevel(value string) (slog.Level, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "debug":

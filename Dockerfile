@@ -44,7 +44,7 @@ RUN --mount=type=cache,id=acr-go-build-${BUILD_CACHE_ID},target=/root/.cache/go-
     cp /out/acr-mcp /out-mcp-root/usr/local/bin/ && \
     find /out-api-root /out-mcp-root -exec touch -d "@${SOURCE_DATE_EPOCH}" {} +
 
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35 AS acr-api
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a AS acr-api
 
 ARG VERSION=0.0.0-dev
 ARG COMMIT=unknown
@@ -64,7 +64,7 @@ EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/acr-api"]
 CMD ["serve"]
 
-FROM cgr.dev/chainguard/git:latest@sha256:0690687448b0beca8c84f52a26ddc3b088623f617def56348194fde48f8573cd AS acr-mcp-base
+FROM cgr.dev/chainguard/git:latest@sha256:1b4f1c9410cbe711951dfa4b1dcbdf1ff1b0888e88a97e0feb36907eaa90ffaf AS acr-mcp-base
 
 FROM build AS acr-mcp-root
 COPY --from=acr-mcp-base / /mcp-root

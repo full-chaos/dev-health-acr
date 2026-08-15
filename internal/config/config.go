@@ -38,17 +38,24 @@ const (
 // Config contains only process-level configuration. Credentials and request
 // identity are resolved by dedicated services and must never be stored here.
 type Config struct {
-	Environment                    string
-	ListenAddress                  string
-	LogLevel                       slog.Level
-	RequestTimeout                 time.Duration
-	ReadHeaderTimeout              time.Duration
-	ReadTimeout                    time.Duration
-	WriteTimeout                   time.Duration
-	IdleTimeout                    time.Duration
-	ShutdownTimeout                time.Duration
-	ClickHouseDSN                  string
-	ClickHouseCACertPath           string
+	Environment          string
+	ListenAddress        string
+	LogLevel             slog.Level
+	RequestTimeout       time.Duration
+	ReadHeaderTimeout    time.Duration
+	ReadTimeout          time.Duration
+	WriteTimeout         time.Duration
+	IdleTimeout          time.Duration
+	ShutdownTimeout      time.Duration
+	ClickHouseDSN        string
+	ClickHouseCACertPath string
+	// ClickHouseMaxBytesToRead (CHAOS-3848, ACR_CLICKHOUSE_MAX_BYTES_TO_READ)
+	// is the per-query max_bytes_to_read ceiling handed to every production
+	// ClickHouse client (internal/runtime/clickhouse.Options.MaxBytesToRead).
+	// Falls back to runtimeclickhouse.DefaultMaxBytesToRead when unset; an
+	// explicitly configured zero is rejected by Validate rather than silently
+	// reinterpreted as "unset".
+	ClickHouseMaxBytesToRead       uint64
 	PostgresDSN                    string
 	PostgresPoolerAdminDSN         string
 	PostgresConnectionKind         string
@@ -266,6 +273,9 @@ func (c Config) Validate() error {
 	}
 	if c.RequestsPerMinute < 1 {
 		return errors.New("ACR_REQUESTS_PER_MINUTE must be positive")
+	}
+	if c.ClickHouseMaxBytesToRead == 0 {
+		return errors.New("ACR_CLICKHOUSE_MAX_BYTES_TO_READ must be positive")
 	}
 	// Zero (unset) means answer reuse is disabled -- a valid, deliberate
 	// state, not a bounds violation. Any other value must be a sane

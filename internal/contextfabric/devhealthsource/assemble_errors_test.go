@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -77,6 +78,60 @@ func TestClickHouseSourceSharesTheSameBoundedClassification(t *testing.T) {
 	}
 	if !errors.Is(err, contextfabric.ErrUnavailable) || !errors.Is(err, rawDriverError) {
 		t.Errorf("classification or cause lost: %v", err)
+	}
+}
+
+// budgetExceededError stands in for the real ClickHouse driver exception
+// CHAOS-3848 fixes classification for: TOO_MANY_BYTES (Code 307), the
+// exception clickhouse-go's native driver returns when a query reads more
+// bytes than max_bytes_to_read allows. Its Message deliberately carries
+// server-side detail (limits, byte counts) the same way a real one would, so
+// the leak assertions below exercise the real risk, not a sanitized stand-in.
+var budgetExceededError = &clickhousedriver.Exception{
+	Code:    307,
+	Name:    "DB::Exception",
+	Message: "Limit for read exceeded: 17987654 bytes read, maximum 16777216 bytes",
+}
+
+// TestQueryBudgetExceededClassifiesDistinctlyFromUnavailable is CHAOS-3848's
+// part-2 closure test. Pre-fix, tableReadError had exactly one
+// classification path: every cause -- a connection drop, a malformed
+// statement, or a permanent per-query budget exception -- wrapped
+// ErrUnavailable, so budgetExceededError() (a real TOO_MANY_BYTES exception)
+// classified identically to a transient dependency outage. This asserts the
+// budget-specific sentinel instead, and that ErrUnavailable is no longer
+// also satisfied -- a single error should not answer to two different retry
+// stories.
+func TestQueryBudgetExceededClassifiesDistinctlyFromUnavailable(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repos", err: budgetExceededError}}}
+	source, err := devhealthsource.NewClickHouseProjectionSource(client)
+	if err != nil {
+		t.Fatalf("NewClickHouseProjectionSource: %v", err)
+	}
+	_, _, err = source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: liveOrgID, Source: devhealthsource.SourceName})
+	if err == nil {
+		t.Fatal("a query-budget failure must surface as an error")
+	}
+
+	if !errors.Is(err, contextfabric.ErrQueryBudgetExceeded) {
+		t.Errorf("a TOO_MANY_BYTES exception must classify as ErrQueryBudgetExceeded, got: %v", err)
+	}
+	if errors.Is(err, contextfabric.ErrUnavailable) {
+		t.Errorf("a permanent budget exception must NOT also classify as ErrUnavailable (that reads as transient), got: %v", err)
+	}
+	if !errors.Is(err, budgetExceededError) {
+		t.Error("the underlying cause must stay inspectable via errors.Is")
+	}
+
+	message := err.Error()
+	if !strings.Contains(message, "307") {
+		t.Errorf("error string should name the bounded ClickHouse exception code, got: %s", message)
+	}
+	for _, leaked := range []string{"17987654", "16777216", "Limit for read exceeded"} {
+		if strings.Contains(message, leaked) {
+			t.Errorf("error string leaks raw driver exception text %q: %s", leaked, message)
+		}
 	}
 }
 

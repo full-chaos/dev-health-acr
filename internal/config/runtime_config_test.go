@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
 )
 
 func TestLoad_requires_complete_runtime_when_backing_stores_are_explicit(t *testing.T) {
@@ -259,6 +261,65 @@ func TestLoad_acceptsPgBouncerConnectionKindWithAdminDSN(t *testing.T) {
 	}
 	if cfg.PostgresConnectionKind != "pgbouncer" || cfg.PostgresPoolerAdminDSN != "postgres://pooler-admin" {
 		t.Fatalf("unexpected PostgreSQL connection kind configuration: %#v", cfg)
+	}
+}
+
+// TestLoad_defaultsClickHouseMaxBytesToRead is CHAOS-3848's part-1 closure
+// test: pre-fix, Config had no ClickHouseMaxBytesToRead field at all, so an
+// unset environment left the value that reached
+// internal/runtime/clickhouse.Options at its Go zero (0), which
+// applyOptions's own defaultPositiveUint64 fallback happened to paper over
+// -- but nothing pinned that the CONFIGURED default was the raised 64 MiB
+// ceiling rather than the stale 16 MiB one. This fails red against the old
+// 16 MiB constant and green against runtimeclickhouse.DefaultMaxBytesToRead.
+func TestLoad_defaultsClickHouseMaxBytesToRead(t *testing.T) {
+	// Given
+	values := completeRuntimeEnvironment()
+
+	// When
+	cfg, err := load(mapLookup(values))
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ClickHouseMaxBytesToRead != runtimeclickhouse.DefaultMaxBytesToRead {
+		t.Fatalf("ClickHouseMaxBytesToRead = %d, want default %d", cfg.ClickHouseMaxBytesToRead, runtimeclickhouse.DefaultMaxBytesToRead)
+	}
+}
+
+func TestLoad_appliesConfiguredClickHouseMaxBytesToRead(t *testing.T) {
+	// Given
+	values := completeRuntimeEnvironment()
+	values["ACR_CLICKHOUSE_MAX_BYTES_TO_READ"] = "33554432" // 32 MiB
+
+	// When
+	cfg, err := load(mapLookup(values))
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ClickHouseMaxBytesToRead != 32<<20 {
+		t.Fatalf("ClickHouseMaxBytesToRead = %d, want %d", cfg.ClickHouseMaxBytesToRead, uint64(32<<20))
+	}
+}
+
+func TestLoad_rejectsInvalidClickHouseMaxBytesToRead(t *testing.T) {
+	for _, value := range []string{"0", "-1", "not-a-number"} {
+		t.Run(value, func(t *testing.T) {
+			// Given
+			values := completeRuntimeEnvironment()
+			values["ACR_CLICKHOUSE_MAX_BYTES_TO_READ"] = value
+
+			// When
+			_, err := load(mapLookup(values))
+
+			// Then
+			if err == nil || !strings.Contains(err.Error(), "ACR_CLICKHOUSE_MAX_BYTES_TO_READ") {
+				t.Fatalf("load() error = %v, want ACR_CLICKHOUSE_MAX_BYTES_TO_READ rejection", err)
+			}
+		})
 	}
 }
 

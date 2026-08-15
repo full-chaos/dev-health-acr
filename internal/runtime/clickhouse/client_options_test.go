@@ -102,8 +102,31 @@ func TestApplyOptions_applies_default_execution_limits(t *testing.T) {
 	applyOptions(configured, Options{})
 
 	// Then
-	if _, exists := configured.Settings["readonly"]; exists || configured.Settings["max_execution_time"] != uint(10) || configured.Settings["max_result_rows"] != uint(1_000) || configured.Settings["max_bytes_to_read"] != uint64(16<<20) {
+	if _, exists := configured.Settings["readonly"]; exists || configured.Settings["max_execution_time"] != uint(10) || configured.Settings["max_result_rows"] != uint(1_000) || configured.Settings["max_bytes_to_read"] != uint64(64<<20) {
 		t.Fatalf("query settings = %#v, want bounded limits without a client read-only override", configured.Settings)
+	}
+}
+
+// TestApplyOptions_appliesConfiguredMaxBytesToRead pins CHAOS-3848's config
+// plumbing at the layer that would have silently swallowed it: a caller that
+// sets Options.MaxBytesToRead must see the EXACT configured value reach the
+// driver's Settings, not just "some default". Before CHAOS-3848,
+// Options.MaxBytesToRead existed on the struct but nothing outside this
+// package (and its tests) ever set it, so this override path had no
+// production caller -- this test would still have passed on the old code
+// (the field was always plumbed inside applyOptions), which is why part 1's
+// real closure test lives in internal/config, pinning that the CONFIGURED
+// value actually reaches this struct in the first place.
+func TestApplyOptions_appliesConfiguredMaxBytesToRead(t *testing.T) {
+	// Given
+	configured := &clickhousedriver.Options{}
+
+	// When
+	applyOptions(configured, Options{MaxBytesToRead: 64 << 20})
+
+	// Then
+	if configured.Settings["max_bytes_to_read"] != uint64(64<<20) {
+		t.Fatalf("max_bytes_to_read = %v, want %d", configured.Settings["max_bytes_to_read"], uint64(64<<20))
 	}
 }
 

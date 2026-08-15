@@ -532,7 +532,14 @@ A sanitized log beside an unsanitized one provides no guarantee at all.
 **Tick failures report a class, not an error string.** `failure_class` is one
 of `canceled`, `checkpoint_conflict`, `organization_locked`,
 `rebuild_required`, `dependency_unavailable`, `dependency_rate_limited`,
-`invalid_result`, or `unclassified`. The underlying error's own text is never
+`query_budget_exceeded`, `invalid_result`, or `unclassified`.
+`query_budget_exceeded` (CHAOS-3848) is a canonical-source query that
+exceeded its own configured read budget (e.g. ClickHouse
+`max_bytes_to_read`/`max_result_rows` -- `ACR_CLICKHOUSE_MAX_BYTES_TO_READ`).
+Unlike `dependency_unavailable`, it is a PERMANENT condition for the current
+query shape and data volume: identical retry against unchanged data fails
+the identical way, so it is distinguished from a transient dependency
+outage rather than folded into it. The underlying error's own text is never
 logged, at any level: a source or checkpoint-store error is unbounded
 dependency output, and a guarantee that held only at some log levels would make
 leaking depend on deployment configuration. For dependency-specific detail,

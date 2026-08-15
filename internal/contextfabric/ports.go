@@ -39,6 +39,18 @@ var (
 	// runtime specifically) and this one both reachable from one
 	// vendor-neutral check.
 	ErrRateLimited = errors.New("context fabric dependency rate limited")
+	// ErrQueryBudgetExceeded identifies a canonical source query that
+	// exceeded its own configured read budget (e.g. ClickHouse
+	// max_bytes_to_read/max_result_rows). CHAOS-3848: this used to satisfy
+	// only ErrUnavailable, which reads to an operator as a transient
+	// dependency outage. It is the opposite -- a PERMANENT condition for the
+	// current query shape and data volume until the budget or the query
+	// itself changes, since retrying the identical query against unchanged
+	// data fails the identical way every time. Distinct from ErrUnavailable
+	// so the failure names itself; both still hold the checkpoint for
+	// replay, because "budget-exceeded but unresolved" is not safe to skip
+	// past either.
+	ErrQueryBudgetExceeded = errors.New("context fabric canonical source query exceeded its read budget")
 	// ErrUnsupportedTimeAxis is RETIRED by CHAOS-3781 and deliberately
 	// not replaced by an equivalent.
 	//
