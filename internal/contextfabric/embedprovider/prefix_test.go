@@ -118,7 +118,7 @@ func TestUnrecognizedPrefixFamilyFailsValidation(t *testing.T) {
 func TestApplyDocumentPrefixNeverExceedsMaxTextRunesAfterPrefixing(t *testing.T) {
 	cfg := testConfig("http://localhost:1")
 	cfg.PrefixFamily = PrefixFamilyNomic
-	cfg.MaxTextRunes = 64
+	cfg.MaxTextRunes = MinimumMaxTextRunes
 	embedder, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -144,7 +144,7 @@ func TestApplyDocumentPrefixNeverExceedsMaxTextRunesAfterPrefixing(t *testing.T)
 func TestApplyQueryPrefixNeverExceedsMaxTextRunesAfterPrefixing(t *testing.T) {
 	cfg := testConfig("http://localhost:1")
 	cfg.PrefixFamily = PrefixFamilyNomic
-	cfg.MaxTextRunes = 64
+	cfg.MaxTextRunes = MinimumMaxTextRunes
 	embedder, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -169,7 +169,7 @@ func TestApplyQueryPrefixNeverExceedsMaxTextRunesAfterPrefixing(t *testing.T) {
 func TestDocumentAndQueryPrefixesShareTheSameOutputCeilingDespiteDifferingLengths(t *testing.T) {
 	cfg := testConfig("http://localhost:1")
 	cfg.PrefixFamily = PrefixFamilyNomic
-	cfg.MaxTextRunes = 64
+	cfg.MaxTextRunes = MinimumMaxTextRunes
 	embedder, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -240,7 +240,7 @@ func TestApplyQueryPrefixIsIdempotent(t *testing.T) {
 func TestApplyDocumentPrefixBudgetsAnAlreadyPrefixedOverBudgetInput(t *testing.T) {
 	cfg := testConfig("http://localhost:1")
 	cfg.PrefixFamily = PrefixFamilyNomic
-	cfg.MaxTextRunes = 64
+	cfg.MaxTextRunes = MinimumMaxTextRunes
 	embedder, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -265,7 +265,7 @@ func TestApplyDocumentPrefixBudgetsAnAlreadyPrefixedOverBudgetInput(t *testing.T
 func TestApplyQueryPrefixBudgetsAnAlreadyPrefixedOverBudgetInput(t *testing.T) {
 	cfg := testConfig("http://localhost:1")
 	cfg.PrefixFamily = PrefixFamilyNomic
-	cfg.MaxTextRunes = 64
+	cfg.MaxTextRunes = MinimumMaxTextRunes
 	embedder, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)

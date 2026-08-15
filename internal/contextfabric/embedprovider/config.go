@@ -74,6 +74,24 @@ const (
 	// embedded, so a single large document cannot dominate a projection
 	// batch's latency or the server's context window.
 	DefaultMaxTextRunes = 2000
+	// MinimumMaxTextRunes is the validation FLOOR for MaxTextRunes
+	// (CHAOS-3833, embed-text spec §0 (c)): 2,000 conservatively covers
+	// the largest COMPLETE per-kind template (~1,860 runes, pull_request),
+	// so at every configuration that passes validation the embed-side
+	// truncation can only ever touch UNBOUNDED compositions (episodes) --
+	// never a templated kind. That is what makes the lexical/vector
+	// byte-identity claim UNCONDITIONAL: below this floor, lexical would
+	// index text the vector arm silently truncated away, reopening the
+	// exact divergence the shared composition exists to close. An
+	// unconditional invariant is checked once, here, at config load; a
+	// cap-scoped claim would have to be re-derived at every reasoning
+	// site and WILL be forgotten. A deployment that had lowered the env
+	// below this fails validation loudly at startup (runbook-documented;
+	// strictly better than silently amputating the highest-value text).
+	// Test seams that need tiny caps construct the truncation directly
+	// rather than through config validation. 2,000 runes sits comfortably
+	// inside every supported embedding model's context window.
+	MinimumMaxTextRunes = 2000
 )
 
 const maximumProviderOrModelLength = 256
@@ -111,7 +129,64 @@ const (
 	// by default and must never be set for a base URL that leaves the trust
 	// boundary, because the credential travels as a bearer token.
 	EnvAllowInsecureBaseURL = "ACR_CONTEXT_FABRIC_EMBED_ALLOW_INSECURE_BASE_URL"
+	// EnvProviderLocality declares where embedded text ends up (CHAOS-3833,
+	// embed-text spec §3): "local" (same trust zone -- the text never
+	// leaves the deployment) or "remote" (a new reader outside the graph's
+	// authorization scope). UNSET means "remote", so free-text bodies
+	// default OFF until an operator affirmatively declares the endpoint
+	// local. This is an EXPLICIT, fail-closed configuration decision --
+	// NEVER inferred from URL shape: a loopback URL can front an ssh
+	// tunnel or provider gateway, and a non-loopback URL can be a
+	// same-host container address. URL heuristics lie in both directions.
+	// Any value other than "local", "remote", or unset is a configuration
+	// error, not a default.
+	EnvProviderLocality = "ACR_CONTEXT_FABRIC_EMBED_PROVIDER_LOCALITY"
+	// EnvIncludeBodies overrides the locality-derived body default
+	// (CHAOS-3833, spec §3): free-text bodies (PR body head, incident
+	// description head) join the composed search text only when this
+	// resolves true. Explicitly setting it true with a remote/unset
+	// locality is the documented tenant opt-in for transmitting body text
+	// to a remote provider; setting it false keeps bodies out even for a
+	// local endpoint. It is SEMANTIC config: the effective value joins the
+	// composition tag, so a flip moves the stamped identity, fails stored
+	// vectors closed to lexical, and invalidates answer reuse until the
+	// prescribed rebuild.
+	EnvIncludeBodies = "ACR_CONTEXT_FABRIC_EMBED_INCLUDE_BODIES"
 )
+
+// BodiesIncluded resolves the §3 body gate from the environment: the
+// explicit EnvIncludeBodies wins when set; otherwise locality decides
+// (local => on, remote/unset => off). It is deliberately independent of
+// Configured/ConfigFromEnv because the ONE shared composition needs the
+// gate's value even in a deployment with no embedder at all -- both
+// retrieval arms must always index the identical text, so the gate cannot
+// vary with whether an embedder happens to be constructed.
+//
+// Fail closed on garbage: an unparseable locality or gate value is an
+// error, never a silent default -- a deployment that thinks it declared
+// its endpoint local must not silently run with bodies off (or, worse,
+// the reverse).
+func BodiesIncluded(lookup func(string) (string, bool)) (bool, error) {
+	locality := strings.ToLower(strings.TrimSpace(envString(lookup, EnvProviderLocality, "remote")))
+	var localityLocal bool
+	switch locality {
+	case "local":
+		localityLocal = true
+	case "remote":
+		localityLocal = false
+	default:
+		return false, errors.New(EnvProviderLocality + ` must be "local" or "remote"`)
+	}
+	value, ok := lookup(EnvIncludeBodies)
+	if !ok || strings.TrimSpace(value) == "" {
+		return localityLocal, nil
+	}
+	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	if err != nil {
+		return false, errors.New(EnvIncludeBodies + " must be a boolean")
+	}
+	return parsed, nil
+}
 
 // Config is the provider-shaped embedder configuration.
 type Config struct {
@@ -242,8 +317,11 @@ func (c Config) validate() error {
 	if c.MaxBatch < 1 || c.MaxBatch > 512 {
 		return errors.New("embedder max batch must be between one and five hundred twelve")
 	}
-	if c.MaxTextRunes < 32 || c.MaxTextRunes > 32768 {
-		return errors.New("embedder max text runes must be between thirty-two and thirty-two thousand seven hundred sixty-eight")
+	// Floor raised 32 -> 2000 by CHAOS-3833 -- see MinimumMaxTextRunes for
+	// why this is the byte-identity invariant's load-bearing bound. The
+	// 32768 upper bound is unchanged.
+	if c.MaxTextRunes < MinimumMaxTextRunes || c.MaxTextRunes > 32768 {
+		return errors.New("embedder max text runes must be between two thousand and thirty-two thousand seven hundred sixty-eight")
 	}
 	if c.MaxTransportRetries < 0 || c.MaxTransportRetries > 5 {
 		return errors.New("embedder max transport retries must be between zero and five")
