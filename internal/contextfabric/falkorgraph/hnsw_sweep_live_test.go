@@ -70,16 +70,20 @@ func TestLiveHNSWSweep(t *testing.T) {
 	if expectedCopyKey == "" {
 		t.Skip("ACR_TEST_HNSW_SWEEP_EXPECTED_COPY_KEY is not set (must independently restate ACR_TEST_HNSW_SWEEP_GRAPH_KEY)")
 	}
-	graphPrefix := os.Getenv("ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX")
-	if graphPrefix == "" {
+	// SINGLE SOURCE FOR THE PREFIX (Luna round-3 finding 1): presence is
+	// checked here, but the VALUE that reaches isSweepTargetSafe below is
+	// read from graphConfig.GraphPrefix AFTER construction, never from this
+	// (or any other) direct os.Getenv call. Round 2's fix read this env var
+	// TWICE, independently -- once (wrongly hardcoded, ignoring this var
+	// entirely) via hnswSweepLookup for graphConfig.GraphPrefix, and once
+	// directly here for the safety derivation. Two reads of what is meant to
+	// be the same fact can diverge; a config field read once cannot.
+	if os.Getenv("ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX") == "" {
 		t.Skip("ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX is not set (needed to derive and refuse the org's production graph key)")
 	}
 	orgID := os.Getenv("ACR_TEST_HNSW_SWEEP_ORG_ID")
 	if orgID == "" {
 		t.Skip("ACR_TEST_HNSW_SWEEP_ORG_ID is not set (needed to derive and refuse the org's production graph key)")
-	}
-	if safe, reason := isSweepTargetSafe(key, expectedCopyKey, graphPrefix, orgID); !safe {
-		t.Fatalf("refusing to run RunHNSWSweep's destructive drop/recreate cycle: %s", reason)
 	}
 	dimensionRaw := os.Getenv("ACR_TEST_HNSW_SWEEP_DIMENSION")
 	if dimensionRaw == "" {
@@ -106,6 +110,17 @@ func TestLiveHNSWSweep(t *testing.T) {
 	graphConfig, err := ConfigFromEnv(hnswSweepLookup)
 	if err != nil {
 		t.Fatalf("graph configuration: %v", err)
+	}
+	// isSweepTargetSafe derives from graphConfig.GraphPrefix -- the field
+	// hnswSweepLookup populated from ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX, and
+	// the SAME field production reads to derive a graph key (projection.go,
+	// reader.go, via identity.go's graphKey()). Reading the already-
+	// constructed config here rather than the environment a second time is
+	// the fix itself (Luna round-3 finding 1): there is exactly one place
+	// the prefix is decided, so there is nothing left for a second read to
+	// diverge from.
+	if safe, reason := isSweepTargetSafe(key, expectedCopyKey, graphConfig.GraphPrefix, orgID); !safe {
+		t.Fatalf("refusing to run RunHNSWSweep's destructive drop/recreate cycle: %s", reason)
 	}
 	adapter, err := New(graphConfig)
 	if err != nil {
@@ -184,7 +199,18 @@ func hnswSweepLookup(key string) (string, bool) {
 	case EnvAllowInsecure:
 		return "true", true
 	case EnvGraphPrefix:
-		return "acr-cf-hnsw-sweep-unused", true // no key is ever DERIVED via this prefix; the raw key comes from ACR_TEST_HNSW_SWEEP_GRAPH_KEY.
+		// SINGLE SOURCE (Luna round-3 finding 1): this MUST be the same
+		// ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX value the safety derivation in
+		// TestLiveHNSWSweep reads (via the CONSTRUCTED graphConfig.GraphPrefix,
+		// not a second direct env read). The pre-fix value here was a
+		// hardcoded, unused placeholder -- completely disconnected from
+		// whatever the operator set for the safety check, which is exactly
+		// what let a typo'd or mismatched prefix source derive the WRONG
+		// "production key" and pass a real one through. There is deliberately
+		// no fallback default: an unset prefix must surface as a missing
+		// value (TestLiveHNSWSweep skips before this is ever reached), never
+		// silently resolve to a value nobody chose.
+		return value("ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX")
 	case EnvRequestTimeout:
 		// The default 30s (config.go) is tuned for a request-path query, not
 		// an HNSW index build -- live-measured (CHAOS-3832 §7 D3 probe):
@@ -207,5 +233,54 @@ func hnswSweepLookup(key string) (string, bool) {
 		return "115s", true
 	default:
 		return "", false
+	}
+}
+
+// Luna round-3 finding 1's closure test: hnswSweepLookup's EnvGraphPrefix
+// case is the ONLY place ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX may reach the
+// adapter's config -- graphConfig.GraphPrefix (what TestLiveHNSWSweep now
+// feeds to isSweepTargetSafe) must equal EXACTLY what the operator declared,
+// never a hardcoded stub that ignores it. This is the wiring-level proof;
+// TestIsSweepTargetSafeAcceptsTheRealProductionKeyWhenDerivedFromAWrongPrefixSource
+// below proves the CONSEQUENCE of getting this wrong.
+func TestHNSWSweepLookupGraphPrefixIsTheSingleSourceOfTruth(t *testing.T) {
+	t.Setenv("ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX", "acr-cf")
+	cfg, err := ConfigFromEnv(hnswSweepLookup)
+	if err != nil {
+		t.Fatalf("ConfigFromEnv: %v", err)
+	}
+	if cfg.GraphPrefix != "acr-cf" {
+		t.Fatalf("graphConfig.GraphPrefix = %q, want the operator-declared ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX value %q -- "+
+			"a divergent source here is exactly what let the round-2 safety derivation compare against the WRONG "+
+			"production key (Luna round-3 finding 1)", cfg.GraphPrefix, "acr-cf")
+	}
+}
+
+// The consequence, demonstrated directly against isSweepTargetSafe's own
+// semantics with no revert needed: deriving from a prefix source that has
+// diverged from what production actually uses -- exactly what
+// hnswSweepLookup's pre-fix hardcoded stub did, and equally what an
+// UNVALIDATED, independently-typed prefix env var would do on a typo --
+// lets the REAL production key through; deriving from the correct,
+// single-sourced prefix rejects it.
+func TestIsSweepTargetSafeAcceptsTheRealProductionKeyWhenDerivedFromAWrongPrefixSource(t *testing.T) {
+	orgID := "70d529e0-3c06-4597-8480-794fd02328b6"
+	realPrefix := "acr-cf"
+	wrongPrefixSource := "acr-cf-hnsw-sweep-unused" // hnswSweepLookup's pre-fix hardcoded stub, verbatim.
+	productionKey := graphKey(realPrefix, orgID)
+
+	// The exact round-3 exploit: the operator (by mistake) sets BOTH target
+	// and expectedCopyKey to the REAL production key.
+	wronglySafe, _ := isSweepTargetSafe(productionKey, productionKey, wrongPrefixSource, orgID)
+	if !wronglySafe {
+		t.Fatal("setup invariant broken: deriving from the wrong prefix source must reproduce the round-3 vulnerability (accepting the real production key)")
+	}
+
+	correctlyUnsafe, reason := isSweepTargetSafe(productionKey, productionKey, realPrefix, orgID)
+	if correctlyUnsafe {
+		t.Fatal("deriving from the correct, single-sourced prefix must reject the real production key")
+	}
+	if reason == "" {
+		t.Fatal("expected a non-empty rejection reason")
 	}
 }
