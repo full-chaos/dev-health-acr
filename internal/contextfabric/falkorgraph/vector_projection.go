@@ -263,7 +263,16 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		if err := a.clearNodeVectors(ctx, key, batch.OrgID, append(stale, staleIDOnly...)); err != nil {
 			return err
 		}
-		a.recordVectorProjection(ctx, batch.OrgID, 0, len(stale)+len(staleIDOnly), staleSkipped)
+		// Round-2 finding 1: `cleared` reports only the DIMENSION-MISMATCH
+		// clear (stale, len(stale)) -- a genuine "this vector is now
+		// invalid" event worth a Warn. staleIDOnly's clear happened (the
+		// call above includes it) but is a ROUTINE, DETERMINISTIC
+		// consequence of every id-only skip, already visible via
+		// staleSkipped.IDOnly at Info (RecordVectorProjection's own
+		// skippedIDOnly precedence). Folding it into `cleared` made the
+		// T5 skip population (~22% of a live corpus) masquerade as a mass
+		// stale-vector event on every batch that touched one.
+		a.recordVectorProjection(ctx, batch.OrgID, 0, len(stale), staleSkipped)
 		return nil
 	}
 	identity := a.embedder.Identity()
@@ -283,7 +292,11 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		if err := a.clearNodeVectors(ctx, key, batch.OrgID, idOnlyTargets); err != nil {
 			return err
 		}
-		a.recordVectorProjection(ctx, batch.OrgID, 0, len(idOnlyTargets), skipped)
+		// Round-2 finding 1: NOT len(idOnlyTargets) -- nothing here is a
+		// genuine stale/error clear (there was nothing to embed at all), so
+		// `cleared` stays 0. The id-only clear attempt is already fully
+		// accounted for via skipped.IDOnly (Info).
+		a.recordVectorProjection(ctx, batch.OrgID, 0, 0, skipped)
 		return nil
 	}
 	// CHAOS-3836 seam: the document-side task prefix is applied to the text
@@ -317,7 +330,11 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		if err := a.clearNodeVectors(ctx, key, batch.OrgID, toClear); err != nil {
 			return err
 		}
-		a.recordVectorProjection(ctx, batch.OrgID, 0, len(toClear), skipped)
+		// Round-2 finding 1: `cleared` is len(targets) -- the genuine
+		// embed-failure clear -- not len(toClear). idOnlyTargets' clear is
+		// the same routine, already-reported-via-skipped.IDOnly event as
+		// every other commit path in this function.
+		a.recordVectorProjection(ctx, batch.OrgID, 0, len(targets), skipped)
 		return nil
 	}
 	for index, target := range targets {
@@ -328,11 +345,15 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 			// id-only-skipped set, for the same finding-1 reason as every
 			// other commit path in this function.
 			a.recordVectorDegraded(ctx, batch.OrgID)
-			toClear := append(append([]embedTarget{}, targets[index:]...), idOnlyTargets...)
+			remaining := targets[index:]
+			toClear := append(append([]embedTarget{}, remaining...), idOnlyTargets...)
 			if clearErr := a.clearNodeVectors(ctx, key, batch.OrgID, toClear); clearErr != nil {
 				return clearErr
 			}
-			a.recordVectorProjection(ctx, batch.OrgID, index, len(toClear), skipped)
+			// Round-2 finding 1: `cleared` is len(remaining) -- the genuine
+			// write-failure clear -- not len(toClear); see the finding-1
+			// comment above.
+			a.recordVectorProjection(ctx, batch.OrgID, index, len(remaining), skipped)
 			return nil
 		}
 	}
@@ -344,7 +365,14 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 	if err := a.clearNodeVectors(ctx, key, batch.OrgID, idOnlyTargets); err != nil {
 		return err
 	}
-	a.recordVectorProjection(ctx, batch.OrgID, len(targets), len(idOnlyTargets), skipped)
+	// Round-2 finding 1: `cleared` stays 0 -- a fully successful batch has
+	// no genuine stale/error clear; the id-only clear above is the same
+	// routine event skipped.IDOnly already reports at Info. Reporting it
+	// again here as `cleared` would trigger RecordVectorProjection's Warn
+	// path on the routine, deterministic consequence of every id-only skip
+	// -- exactly the T5-population-reads-as-mass-vector-loss defect this
+	// finding closes.
+	a.recordVectorProjection(ctx, batch.OrgID, len(targets), 0, skipped)
 	return nil
 }
 

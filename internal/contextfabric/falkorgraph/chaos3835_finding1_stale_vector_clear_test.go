@@ -84,8 +84,13 @@ func TestEmbedProjectionBatchClearsStaleVectorWhenSubjectBecomesIDOnly(t *testin
 	if !found {
 		t.Fatalf("a subject that just became id-only must have its stale vector AND identity cleared -- no clear query named ci_pipeline_run:run-42, got clears for %v", clearedIDs)
 	}
-	if telemetry.cleared != 1 {
-		t.Errorf("telemetry.cleared = %d, want 1 (the id-only-skipped row's attempted clear)", telemetry.cleared)
+	// Round-2 finding 1: the id-only clear ATTEMPT must not be reported
+	// under `cleared` -- that field means "genuine stale/error clear" and
+	// this is a routine, deterministic consequence of the id-only skip
+	// itself, already visible via skippedIDOnly. The clear still fires
+	// (proven above); it just doesn't masquerade as a Warn-worthy event.
+	if telemetry.cleared != 0 {
+		t.Errorf("telemetry.cleared = %d, want 0 -- an id-only clear is routine, not a genuine stale/error clear (round-2 finding 1)", telemetry.cleared)
 	}
 	if telemetry.skippedIDOnly != 1 {
 		t.Errorf("telemetry.skippedIDOnly = %d, want 1", telemetry.skippedIDOnly)
@@ -162,7 +167,10 @@ func TestEmbedProjectionBatchClearsIDOnlySubjectAlongsideASuccessfulEmbed(t *tes
 	if telemetry.embedded != 1 {
 		t.Errorf("telemetry.embedded = %d, want 1", telemetry.embedded)
 	}
-	if telemetry.cleared != 1 {
-		t.Errorf("telemetry.cleared = %d, want 1 (the id-only row's attempted clear)", telemetry.cleared)
+	// Round-2 finding 1: same reasoning as the len(targets)==0 test above --
+	// the id-only clear is routine and must not inflate `cleared`, which
+	// reports only genuine stale/error clears.
+	if telemetry.cleared != 0 {
+		t.Errorf("telemetry.cleared = %d, want 0 -- an id-only clear is routine, not a genuine stale/error clear (round-2 finding 1)", telemetry.cleared)
 	}
 }

@@ -141,6 +141,17 @@ type GraphTelemetry interface {
 	// the organization's node count is what tells an operator how much of the
 	// corpus is currently vectorless.
 	//
+	// CHAOS-3835 round-2 finding 1: cleared counts ONLY genuine stale/error
+	// clears -- a dimension mismatch, an embed failure, or a mid-batch write
+	// failure. It deliberately EXCLUDES the routine clear every id-only-
+	// skipped subject also receives (vector_projection.go's finding-1 fix):
+	// that clear is a deterministic, mechanical consequence of the id-only
+	// skip decision itself, not a symptom of anything breaking, and it is
+	// already fully accounted for via skippedIDOnly. Folding it into cleared
+	// would make the id-only population (a large, steady fraction of a live
+	// ci_pipeline_run corpus) masquerade as a mass stale-vector event on
+	// every batch that touched one.
+	//
 	// skippedKind and skippedIDOnly (spec §7 D2) count nodes the embed pass
 	// DELIBERATELY left unembedded, BY REASON:
 	//   - skippedKind (CHAOS-3833): the whole-kind skip-list (today, the
