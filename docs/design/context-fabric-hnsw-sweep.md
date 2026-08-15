@@ -159,6 +159,54 @@ index options were re-verified unchanged afterward.
   production itself would use, or the run is skipped (empty refuses, never
   defaults).
 
+### CHAOS-3831 oracle integration — absolute recall is now measurable
+
+`RunHNSWSweep` (`hnsw_sweep.go`) now consumes CHAOS-3831's exact-search
+oracle (`oracle.go`: `fetchEmbedderFenceCorpus`, `bruteForceRank`,
+`topKInclusive`) as its PREFERRED reference source, precomputed once, before
+any index in the sweep is touched, via `buildOracleCorrectSets`:
+
+- **Oracle mode** (this adapter has an embedder configured): every seed's
+  TRUE top-K is the exact brute-force cosine ranking over the SAME org- and
+  identity-fence-scoped corpus the ANN index serves — an ABSOLUTE number,
+  not "relative to the best setting this sweep happened to test." Because
+  the oracle ranks the whole corpus with no top-k window, there is nothing
+  to truncate — the round-2 finding-3 escalation/bound
+  (`referenceTopKTieComplete`) simply does not apply on this path.
+- **Fallback mode** (no embedder configured): unchanged, byte-identical
+  behavior to before this integration — the reference POINT's own tie-
+  complete ANN top-K stands in for "correct," and every other point is
+  measured relative to it.
+
+**Tie handling, reconciled, not double-counted.** Both modes solve the same
+boundary-tie problem with the tool built for their own data: `topKInclusive`
+(oracle.go, descending similarity) is AUTHORITATIVE for the oracle-
+referenced comparison; `TieExpandedTop`/`RecallAtKTieTolerant`
+(`hnsw_recall.go`, ascending distance) remain AUTHORITATIVE for the fallback
+comparison. Exactly one of the two ever runs for a given `RunHNSWSweep`
+call — never both on the same comparison.
+
+**What this means for §3's published table below**: it was measured BEFORE
+this integration, with the (now fallback-only) relative metric AND the
+pre-tie-tolerance strict comparison (§0's own disclosed caveat). It stays
+published as a historical record — explicitly labeled **relative,
+strict-metric (historical)** — not re-run in this changeset. A future run
+with an embedder attached would report ABSOLUTE recall per point (no
+`RecallAtK=1.0`-by-construction anywhere), which is expected to differ from
+the numbers below; §5's residuals already flagged this exact gap before
+CHAOS-3831 landed.
+
+**Validated** (`hnsw_sweep_test.go`): `TestRunHNSWSweepOracleModeCanDisagreeWithFallbackMode`
+runs the identical fixture — same seed, same two ANN build points, same
+mocked ANN responses — through both modes and shows they can reach OPPOSITE
+conclusions about which setting is better, because the fallback reference
+point's own ANN answer happened to be suboptimal against the true oracle
+ranking. `TestBuildOracleCorrectSetsReturnsFalseWithoutAnEmbedder` and
+`TestRunHNSWSweepFailsHardOnARealOracleFetchError` cover the two "no oracle"
+states this integration must not conflate: absent embedder (expected,
+silent fallback trigger) vs. a configured embedder whose corpus fetch
+errors (a real failure, hard error, before any index is touched).
+
 ### Scoping note: what this measures vs. T1's harness
 
 This tool measures **ANN-algorithm recall** — how much of a higher-fidelity
@@ -189,7 +237,13 @@ highest-fidelity setting this sweep's own range reaches" rather than a true
 brute-force oracle — see the scoping note above for why that is the correct
 boundary for T2 rather than a shortcut around one.
 
-## 3. Live sweep results
+## 3. Live sweep results (relative, strict-metric — HISTORICAL)
+
+**This table predates the CHAOS-3831 oracle integration** (see above): it
+was run in fallback/relative mode (no embedder attached) with the
+pre-tie-tolerance strict comparison. Kept as the historical record of the
+first live run, not re-run for this integration. A future run with an
+embedder attached reports ABSOLUTE recall per point instead.
 
 Ran 2026-08-14 against `acr-cf-3832-sweep-copy-run2` (verified `GRAPH.COPY`
 of the live org graph, 35,987/35,987 nodes with embeddings both before and
