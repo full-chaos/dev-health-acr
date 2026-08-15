@@ -383,71 +383,17 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 	}
 
 	nearDupCounts := make([]int, len(perScoredCaseHardNegatives))
-	// kInsufficientData is codex round-2 P2's refusal signal: a case whose
-	// harness harvest was truncated AND whose every serialized entry
-	// already clears tau means the true near-duplicate count for that case
-	// is UNKNOWN (could be far higher than what fit in the cap), not merely
-	// small. Sizing K's P90 estimate from that case's local (capped) count
-	// anyway would silently repeat the exact under-sizing bug this fix
-	// closes -- UNLESS the harness also gave us the complete total
-	// (aboveTauCount present), in which case that total is trusted directly
-	// instead of refusing: "truncated + total -> size K from the total",
-	// "truncated without a total -> refuse", per the fix's two-sided design.
+	// kInsufficientData is codex round-2 P2's refusal signal, now driven by
+	// hardNegativeCaseCount's exhaustive decision table (codex round-5 FIX
+	// B) rather than ad-hoc nested conditionals -- see that function's doc
+	// comment for the full table and why round-4's len(similarities)>0
+	// guard was a real, reachable bug (ACR_TEST_ORACLE_HARD_NEGATIVES=0).
 	kInsufficientData := false
 	for i, scored := range perScoredCaseHardNegatives {
-		count := 0
-		for _, s := range scored.similarities {
-			// A hard negative only competes for a top-K slot if it would
-			// actually be RETRIEVED at tau -- aboveSimilarityFloor, the same
-			// strict predicate production's vectorSearchNodesWithOverFetch
-			// applies (see the doc comment there for why this must be the
-			// single shared authority).
-			if aboveSimilarityFloor(s, tau) {
-				count++
-			}
+		count, sufficient := hardNegativeCaseCount(scored.similarities, tau, scored.truncated, scored.aboveTauCount, report.Tau)
+		if !sufficient {
+			kInsufficientData = true
 		}
-		if scored.truncated && len(scored.similarities) > 0 && count == len(scored.similarities) {
-			// The capped list is saturated (every serialized entry clears
-			// tau): entries beyond the cap could ALSO clear it, so `count`
-			// is not trustworthy as-is. Note this is the ONLY unsafe case --
-			// see the "else" reasoning below.
-			//
-			// The len(similarities) > 0 guard (codex round-4 follow-up,
-			// self-caught in mutation testing): a case with ZERO harvested
-			// hard negatives is trivially "complete" -- dedupeHardNegatives
-			// never produces an empty capped view of a non-empty full list,
-			// so an empty list is real density signal ("nothing crowds this
-			// correct answer"), not a censored one -- REGARDLESS of what the
-			// truncated flag says (including FIX B's new nil-defaults-to-true
-			// posture). Without this guard, 0==len(nil) is vacuously true for
-			// EVERY case that never harvested a hard negative at all, which
-			// would make FIX B's conservative default flag nearly every
-			// ordinary report as K-insufficient.
-			//
-			// codex round-3 P2: the harness computed aboveTauCount at
-			// report.Tau -- the RUN's own applied floor, NOT this function's
-			// just-recommended tau. Trusting it unconditionally was wrong: if
-			// the recommended tau is LOWER (CHAOS-3834's whole recall-gate
-			// direction), negatives sitting BETWEEN the two floors are
-			// invisible to a count measured at the higher report.Tau, so K
-			// would still be silently under-sized even with a "total"
-			// present. The total is trustworthy ONLY when report.Tau is the
-			// EXACT tau this function just recommended -- i.e. the harness
-			// was re-run (or already happened to run) AT this identity's
-			// recommended floor, not its original default.
-			if scored.aboveTauCount != nil && report.Tau == tau {
-				count = *scored.aboveTauCount
-			} else {
-				kInsufficientData = true
-			}
-		}
-		// Not saturated (or not truncated at all) needs no correction: the
-		// full harvest is sorted DESCENDING before truncation
-		// (dedupeHardNegatives), so every entry beyond the cap has
-		// similarity <= the smallest SERIALIZED entry. If that smallest
-		// serialized entry already falls at-or-below tau (not saturated),
-		// everything past the cap does too -- `count` is already the exact
-		// total, truncated harvest or not.
 		nearDupCounts[i] = count
 	}
 	p90 := percentileInt(nearDupCounts, 0.90)
@@ -501,6 +447,99 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 		HardNegativeRejectRate: rejectRate,
 		NearDuplicateP90:       p90,
 	}, nil
+}
+
+// hardNegativeCaseCount is codex round-5 FIX B's EXHAUSTIVE decision table
+// for ONE scored case's near-duplicate count -- the value CalibrateFromReport
+// feeds into percentileInt's K-sizing distribution. Restructured as an
+// explicit table (not nested ad-hoc conditionals) after round-4's
+// len(similarities)>0 guard turned out to silently bypass BOTH the
+// total-consumption AND the refusal branch for a specific, reachable input
+// shape it never considered: ACR_TEST_ORACLE_HARD_NEGATIVES=0 makes the
+// harness stamp truncated=true with an EMPTY capped list and a VALID
+// nonzero total -- the guard's blanket "empty list means safe, count=0"
+// assumption was wrong for exactly that cell, silently reporting
+// KApplyReady=true with K unchanged despite arbitrarily many real
+// near-duplicates.
+//
+// Dimensions and every reachable combination (truncated is already resolved
+// from the tri-state nil/true/false HardNegativesTruncated field to a bool
+// one level up in CalibrateFromReport -- nil resolves to true, "assume
+// truncated"; this function does not re-derive that, it only consumes the
+// resolved value):
+//
+//	truncated | list      | saturated  | verdict
+//	----------|-----------|------------|--------------------------------------
+//	false     | empty     | (n/a)      | SAFE: count=0. Genuinely zero hard
+//	          |           |            | negatives were harvested and the
+//	          |           |            | harness explicitly said this is
+//	          |           |            | complete -- real density signal
+//	          |           |            | ("nothing crowds this correct
+//	          |           |            | answer"), trusted as-is.
+//	false     | nonempty  | either     | SAFE: count=local. The harness
+//	          |           |            | explicitly reported this harvest as
+//	          |           |            | complete -- trusted even if every
+//	          |           |            | local entry happens to clear tau
+//	          |           |            | (round-2 P2's original intent,
+//	          |           |            | round-4's explicit-false test pins
+//	          |           |            | this).
+//	true      | empty     | (n/a)      | UNSAFE by itself: an empty list under
+//	          |           |            | "truncated" carries ZERO local
+//	          |           |            | information (there is nothing to
+//	          |           |            | check saturation against) -- this is
+//	          |           |            | the round-5 regression cell.
+//	          |           |            | Resolved via total (see below).
+//	true      | nonempty  | no         | SAFE: count=local. dedupeHardNegatives
+//	          |           |            | sorts the full harvest DESCENDING
+//	          |           |            | before capping, so if the smallest
+//	          |           |            | SERIALIZED entry already falls
+//	          |           |            | at-or-below tau, every entry beyond
+//	          |           |            | the cap does too (they can only be
+//	          |           |            | smaller) -- the sort-order-exactness
+//	          |           |            | shortcut, count is already exact
+//	          |           |            | regardless of the cap.
+//	true      | nonempty  | yes        | UNSAFE by itself: every serialized
+//	          |           |            | entry clears tau, so entries beyond
+//	          |           |            | the cap could ALSO clear it -- the
+//	          |           |            | true count is unknown, not merely
+//	          |           |            | small (round-2 P2's original case).
+//	          |           |            | Resolved via total (see below).
+//
+// The two UNSAFE rows share ONE resolution (round-3 P2's cross-tau guard):
+// aboveTauCount is trusted ONLY when present AND measured at EXACTLY this
+// run's recommended tau (reportTau == tau) -- a total measured at a
+// DIFFERENT tau (typically the report's original, higher default floor)
+// cannot see negatives sitting between the two floors, so trusting it
+// unconditionally would silently under-size K again. Present-and-matching
+// -> count=total, sufficient=true ("truncated + total -> size from the
+// total"). Otherwise -> count=0, sufficient=false ("truncated without a
+// [matching] total -> refuse"), and CalibrateFromReport's caller sees
+// KApplyReady=false.
+func hardNegativeCaseCount(similarities []float64, tau float64, truncated bool, aboveTauCount *int, reportTau float64) (count int, sufficient bool) {
+	local := 0
+	for _, s := range similarities {
+		// A hard negative only competes for a top-K slot if it would
+		// actually be RETRIEVED at tau -- aboveSimilarityFloor, the same
+		// strict predicate production's vectorSearchNodesWithOverFetch
+		// applies (see the doc comment there for why this must be the
+		// single shared authority).
+		if aboveSimilarityFloor(s, tau) {
+			local++
+		}
+	}
+	// saturated is deliberately false whenever the list is empty (rather
+	// than the vacuously-true 0==0) -- see the table above: an empty list
+	// is its OWN row, not a degenerate case of saturation, precisely
+	// because treating it as such was round-4's bug.
+	saturated := len(similarities) > 0 && local == len(similarities)
+	needsTotal := truncated && (len(similarities) == 0 || saturated)
+	if !needsTotal {
+		return local, true
+	}
+	if aboveTauCount != nil && reportTau == tau {
+		return *aboveTauCount, true
+	}
+	return 0, false
 }
 
 // overFetchMultiplierOrUnchanged maps a computed multiplier of 1 (no

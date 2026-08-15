@@ -10,6 +10,24 @@ import (
 	"testing"
 )
 
+// embedQueryTerms embeds terms through the SAME query-prefixing path
+// production uses (Adapter.queryPrefixed, vector.go's hybridSearchNodes) --
+// codex round-5 FIX A: this is the single authority for query-side
+// prefixing; the oracle harness must never re-derive it or skip it, or a
+// report stamped with a prefixed identity (e.g. ACR_TEST_EMBED_PREFIX_FAMILY=nomic)
+// would measure a DIFFERENT query space than what production actually
+// embeds -- tau/K calibrated against unprefixed queries while production
+// queries prefixed ones. Extracted as its own method (not inlined at the
+// call site) so it is unit-testable with a fake embedder, without a live
+// embedder/graph connection -- see TestEmbedQueryTerms_AppliesTheSameQueryPrefixProductionUses.
+func (a *Adapter) embedQueryTerms(ctx context.Context, terms []string) ([][]float32, error) {
+	prefixed := make([]string, len(terms))
+	for i, term := range terms {
+		prefixed[i] = a.queryPrefixed(term)
+	}
+	return a.embedder.Embed(ctx, prefixed)
+}
+
 // TestExactSearchOracleDecomposesRetrievalMisses is the CHAOS-3831 (embed-text
 // spec §5 L1 / §6 T1) exact-search oracle measurement.
 //
@@ -279,7 +297,7 @@ func TestExactSearchOracleDecomposesRetrievalMisses(t *testing.T) {
 			continue
 		}
 
-		vectors, err := adapter.embedder.Embed(ctx, activeTerms)
+		vectors, err := adapter.embedQueryTerms(ctx, activeTerms)
 		if err != nil {
 			t.Fatalf("embed subject terms for %q: %v", testCase.Question, err)
 		}

@@ -6,6 +6,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -732,6 +734,14 @@ func TestCalibrationRunner_GatePassingReportWritesArtifact(t *testing.T) {
 		sMinus := 0.05 + float64(i)*(0.15/29.0)
 		cases = append(cases, CalibrationCase{
 			Cause: "hit", CorrectSimilarity: floatPtr(sPlus), BestWrongSimilarity: floatPtr(sMinus),
+			// HardNegativesTruncated explicitly false (codex round-5 FIX B's
+			// exhaustive table): a real harness ALWAYS sets this via
+			// summarizeHardNegatives, so a case with zero hard negatives is
+			// stamped complete, not left absent. An absent field here would
+			// now correctly resolve to "unsafe, unknown completeness" under
+			// the round-5 table -- this fixture wants "clears both gates",
+			// so it must look like real harness output, not a legacy report.
+			HardNegativesTruncated: boolPtr(false),
 		})
 	}
 	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: 20, Cases: cases}
@@ -744,5 +754,179 @@ func TestCalibrationRunner_GatePassingReportWritesArtifact(t *testing.T) {
 	}
 	if _, err := os.Stat(outputPath); err != nil {
 		t.Fatalf("output file missing at %s, want it written when both gates pass: %v", outputPath, err)
+	}
+}
+
+// TestRunCalibrationRunner_TauIsPrintedRoundTrippable is the codex round-5
+// FIX C pinning test: the runner's re-run instruction line must print tau
+// in a form that parses back to the EXACT same float64 as the
+// recommendation, not %.4f's lossy rounding. Fixture: S+={0.3},
+// TargetRecall=1.0 -> tau = Nextafter(0.3, -Inf), a value with far more
+// than 4 decimal digits of precision, so this test actually distinguishes
+// round-trippable formatting from %.4f rather than coincidentally passing
+// either way.
+func TestRunCalibrationRunner_TauIsPrintedRoundTrippable(t *testing.T) {
+	report := CalibrationReport{
+		EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension,
+		Cases: []CalibrationCase{{Cause: "hit", CorrectSimilarity: floatPtr(0.3)}},
+	}
+	opts := CalibrationOptions{TargetRecall: 1.0, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}
+
+	wantResult, err := CalibrateFromReport(report, opts)
+	if err != nil {
+		t.Fatalf("CalibrateFromReport: %v", err)
+	}
+
+	fake := runFakeCalibrationRunner(t, report, opts, "")
+	const marker = "precisely "
+	var printedTau string
+	for _, line := range fake.logs {
+		if idx := strings.Index(line, marker); idx >= 0 {
+			printedTau = line[idx+len(marker):]
+		}
+	}
+	if printedTau == "" {
+		t.Fatalf("no re-run tau instruction line found in logs: %v", fake.logs)
+	}
+
+	// Sanity: this fixture's tau must NOT already equal its own %.4f
+	// rendering, or this test would pass regardless of which format the
+	// runner actually used.
+	if printedTau == fmt.Sprintf("%.4f", wantResult.Policy.SimilarityFloor) {
+		t.Fatalf("printed tau %q equals its own %%.4f rendering -- fixture must produce a tau with more precision to make this test meaningful", printedTau)
+	}
+
+	parsed, err := strconv.ParseFloat(printedTau, 64)
+	if err != nil {
+		t.Fatalf("strconv.ParseFloat(%q): %v", printedTau, err)
+	}
+	if parsed != wantResult.Policy.SimilarityFloor {
+		t.Fatalf("printed tau %q parses back to %v, want EXACTLY %v (bit-identical to the recommendation) -- a lossy format would silently break the round-2/round-3 exact re-run workflow", printedTau, parsed, wantResult.Policy.SimilarityFloor)
+	}
+}
+
+// TestHardNegativeCaseCount_ExhaustiveDecisionTable is the codex round-5
+// FIX B pinning test: every REACHABLE (truncated, list, saturated, total)
+// combination in hardNegativeCaseCount's decision table, enumerated
+// explicitly -- see that function's doc comment for the table this mirrors.
+// tau=0.5 throughout; "above" means strictly > 0.5, "below" means <= 0.5.
+//
+// This specifically pins the round-5 regression cell (truncated=true,
+// EMPTY list): round-4's len(similarities)>0 guard silently bypassed BOTH
+// the total-consumption and the refusal branch for this exact shape
+// (ACR_TEST_ORACLE_HARD_NEGATIVES=0), returning count=0/sufficient=true
+// when the true answer depended entirely on whether a total was present.
+func TestHardNegativeCaseCount_ExhaustiveDecisionTable(t *testing.T) {
+	const tau = 0.5
+	unsaturated := []float64{0.6, 0.4} // one above tau, one at-or-below -- NOT saturated
+	saturated := []float64{0.6, 0.7}   // both above tau -- saturated
+
+	cases := []struct {
+		name          string
+		similarities  []float64
+		truncated     bool
+		aboveTauCount *int
+		reportTau     float64
+		wantCount     int
+		wantSuff      bool
+	}{
+		// Row 1: truncated=false, list=empty -> SAFE, count=0.
+		{"not-truncated/empty", nil, false, nil, 0, 0, true},
+
+		// Row 2: truncated=false, list=nonempty, unsaturated -> SAFE, count=local.
+		{"not-truncated/nonempty/unsaturated", unsaturated, false, nil, 0, 1, true},
+
+		// Row 3: truncated=false, list=nonempty, saturated -> SAFE, count=local
+		// (trusted even though it LOOKS saturated -- the harness said complete).
+		{"not-truncated/nonempty/saturated", saturated, false, nil, 0, 2, true},
+
+		// Row 4-6: truncated=true, list=EMPTY -- the round-5 regression cell.
+		// No local information at all; resolution depends entirely on total.
+		{"truncated/empty/no-total", nil, true, nil, 0, 0, false},
+		{"truncated/empty/total-matching-tau", nil, true, intPtr(30), tau, 30, true},
+		{"truncated/empty/total-mismatched-tau", nil, true, intPtr(30), 0.9, 0, false},
+
+		// Row 7: truncated=true, list=nonempty, UNSATURATED -> SAFE via the
+		// sort-order-exactness shortcut, regardless of total (present or not).
+		{"truncated/nonempty/unsaturated/no-total", unsaturated, true, nil, 0, 1, true},
+		{"truncated/nonempty/unsaturated/total-present-but-unneeded", unsaturated, true, intPtr(99), tau, 1, true},
+
+		// Row 8-10: truncated=true, list=nonempty, SATURATED -- round-2/3's
+		// original case. Resolution depends entirely on total.
+		{"truncated/nonempty/saturated/no-total", saturated, true, nil, 0, 0, false},
+		{"truncated/nonempty/saturated/total-matching-tau", saturated, true, intPtr(50), tau, 50, true},
+		{"truncated/nonempty/saturated/total-mismatched-tau", saturated, true, intPtr(50), 0.9, 0, false},
+	}
+
+	seen := make(map[string]bool, len(cases))
+	for _, c := range cases {
+		c := c
+		if seen[c.name] {
+			t.Fatalf("duplicate case name %q in the table", c.name)
+		}
+		seen[c.name] = true
+		t.Run(c.name, func(t *testing.T) {
+			count, sufficient := hardNegativeCaseCount(c.similarities, tau, c.truncated, c.aboveTauCount, c.reportTau)
+			if count != c.wantCount || sufficient != c.wantSuff {
+				t.Fatalf("hardNegativeCaseCount(...) = (%d, %t), want (%d, %t)", count, sufficient, c.wantCount, c.wantSuff)
+			}
+		})
+	}
+}
+
+// TestCalibrateFromReport_OverFetchMultiplierGate_ExhaustiveCells tabulates
+// the OTHER branchy decision surface in this file (codex round-5's closing
+// instruction): the conjunction gating OverFetchMultiplier's computed value,
+// `!kInsufficientData && report.TopK > 0 && p90 > 0`. Three independent
+// booleans, each capable of forcing the "unchanged" (1, rendered 0) default
+// on its own -- exactly the shape that made hardNegativeCaseCount's
+// untabulated version hide a reachable bug. This table covers every
+// (TopK>0, p90>0) cell with kInsufficientData=false; the kInsufficientData=true
+// cell (forces "unchanged" regardless of TopK/p90) is already covered by
+// TestCalibrateFromReport_TruncatedSaturatedCaseWithoutTotalRefusesToSizeK
+// (TopK=5, a case whose near-dup count would be nonzero if computed) rather
+// than duplicated here.
+func TestCalibrateFromReport_OverFetchMultiplierGate_ExhaustiveCells(t *testing.T) {
+	sPlusValues := []float64{0.50, 0.10, 0.90, 0.30, 0.70, 0.20, 1.00, 0.40, 0.80, 0.60} // tau resolves to 0.20 at 0.90 target
+
+	buildReport := func(topK int, withHardNegatives bool) CalibrationReport {
+		var cases []CalibrationCase
+		for _, s := range sPlusValues {
+			c := CalibrationCase{Cause: "hit", CorrectSimilarity: floatPtr(s), HardNegativesTruncated: boolPtr(false)}
+			if withHardNegatives {
+				// One hard negative per case, comfortably above the ~0.20
+				// tau this fixture resolves to -- guarantees p90 > 0.
+				c.HardNegatives = []CalibrationHardNegative{{Kind: "k", CanonicalID: "id", Similarity: 0.25}}
+			}
+			cases = append(cases, c)
+		}
+		return CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: topK, Cases: cases}
+	}
+	opts := CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}
+
+	cases := []struct {
+		name              string
+		topK              int
+		withHardNegatives bool
+		wantMultiplier    int
+	}{
+		{"TopK<=0, p90>0 -> unchanged (spec: TopK<=0 always recommends 1, regardless of density)", 0, true, 0},
+		{"TopK<=0, p90==0 -> unchanged", 0, false, 0},
+		{"TopK>0, p90==0 -> unchanged (no density signal to widen for)", 20, false, 0},
+		{"TopK>0, p90>0 -> computed from the density formula", 20, true, 2}, // ceil((20+1)/20) = 2
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			result, err := CalibrateFromReport(buildReport(c.topK, c.withHardNegatives), opts)
+			if err != nil {
+				t.Fatalf("CalibrateFromReport: %v", err)
+			}
+			if !result.KApplyReady {
+				t.Fatalf("KApplyReady = false, want true -- this fixture's cases are all explicitly complete (HardNegativesTruncated=false)")
+			}
+			if result.Policy.OverFetchMultiplier != c.wantMultiplier {
+				t.Fatalf("OverFetchMultiplier = %d, want %d (TopK=%d, hard negatives=%t)", result.Policy.OverFetchMultiplier, c.wantMultiplier, c.topK, c.withHardNegatives)
+			}
+		})
 	}
 }

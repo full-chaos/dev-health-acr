@@ -37,10 +37,22 @@ func runCalibrationRunner(t runnerT, report CalibrationReport, opts CalibrationO
 		t.Fatalf("CalibrateFromReport: %v", err)
 	}
 
+	// codex round-5 FIX C: tau is printed ROUND-TRIPPABLE (strconv.FormatFloat
+	// with 'g'/-1 precision -- the shortest decimal string that parses back
+	// to the EXACT same float64 bits), not %.4f. The round-3/round-2
+	// "re-run at the recommended tau" workflow requires a FOLLOW-UP report's
+	// Tau field to EXACTLY equal this run's recommendation
+	// (recallGateThreshold's Nextafter output, e.g. 0.29999999999999993,
+	// never a clean decimal) before CalibrateFromReport trusts a total --
+	// %.4f prints "0.3000", which an operator could paste verbatim into the
+	// next report and never see it match, silently landing back in the
+	// "insufficient data" branch with no obvious cause.
+	tauExact := strconv.FormatFloat(result.Policy.SimilarityFloor, 'g', -1, 64)
 	t.Logf("CHAOS-3834 calibration recommendation (target recall=%.2f, target identity=%s dim=%d):",
 		opts.TargetRecall, opts.TargetEmbedIdentity, opts.TargetDimension)
-	t.Logf("  SimilarityFloor(tau)=%.4f  OverFetchMultiplier(K)=%d  (EfRuntime is NOT set by this tool -- see CHAOS-3832's efRuntime sweep)",
-		result.Policy.SimilarityFloor, result.Policy.OverFetchMultiplier)
+	t.Logf("  SimilarityFloor(tau)=%s  OverFetchMultiplier(K)=%d  (EfRuntime is NOT set by this tool -- see CHAOS-3832's efRuntime sweep)",
+		tauExact, result.Policy.OverFetchMultiplier)
+	t.Logf("  For an EXACT re-run at this tau (required to trust a hard-negative total on the next pass): set the next report's \"tau\" field to precisely %s", tauExact)
 	t.Logf("  S+ samples=%d  S- samples=%d  hard-negative samples=%d",
 		result.SPlusSampleSize, result.SMinusSampleSize, result.HardNegativeSampleSize)
 	t.Logf("  achieved recall=%.4f  hard-negative reject rate=%.4f  near-duplicate p90=%d",
