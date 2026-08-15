@@ -3,7 +3,15 @@ package falkorgraph
 import (
 	"context"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -503,16 +511,16 @@ func TestBenchmarkLookupOptionalEmbedProviderEnvVars(t *testing.T) {
 	}
 }
 
-// embedproviderEnvVars is the CHAOS-3849 round-3 review finding 3 closure
-// list: every embedprovider.Env* configuration key that exists today. The
-// package exports no list of its own (see the finding), so this is
-// maintained by hand -- but TestBenchmarkLookupCoversEveryEmbedproviderEnvVar
-// below makes an omission from benchmarkLookup LOUD rather than silent: a
-// future embedprovider Env* addition not also added to both this slice AND
-// benchmarkLookup's switch fails a test, instead of quietly defaulting a
-// benchmark/oracle run's embedder configuration away from what was asked of
-// it. Keep in sync with the const block in
-// internal/contextfabric/embedprovider/config.go.
+// embedproviderEnvVars is a small, human-readable CROSS-CHECK list of every
+// embedprovider.Env* configuration key expected to exist today -- NOT the
+// closure guarantee itself (see TestBenchmarkLookupCoversEveryEmbedproviderEnvVar
+// below, which is round-4-hardened to need no such list: it binds directly
+// to discoverEmbedproviderEnvVars' parsed output, so a NEW constant is
+// caught with zero human list-maintenance). This slice exists only so
+// TestEmbedproviderEnvVarsListMatchesPackageSource can flag drift between
+// what a reader of this file expects and what the source package actually
+// declares, in either direction -- it plays no role in whether the closure
+// test itself catches an omission.
 var embedproviderEnvVars = []string{
 	embedprovider.EnvProvider,
 	embedprovider.EnvBaseURL,
@@ -531,15 +539,21 @@ var embedproviderEnvVars = []string{
 	embedprovider.EnvIncludeBodies,
 }
 
-// benchmarkLookupEnvVarFor is embedproviderEnvVars' companion: the exact
-// ACR_TEST_* variable name benchmarkLookup's switch reads for each
-// production key, EXCEPT EnvAllowInsecureBaseURL (see
-// TestBenchmarkLookupCoversEveryEmbedproviderEnvVar) which has no dedicated
-// variable at all -- benchmarkLookup answers it with a fixed policy value
-// regardless of environment. Kept as its own map (rather than merged into
-// benchmarkLookup itself) so the closure test's expectation is written
-// independently of the switch it is checking -- a copy-paste of the switch
-// into the test would prove nothing.
+// benchmarkLookupEnvVarFor is the exact ACR_TEST_* variable name
+// benchmarkLookup's switch reads for each production key, EXCEPT
+// EnvAllowInsecureBaseURL (see TestBenchmarkLookupCoversEveryEmbedproviderEnvVar)
+// which has no dedicated variable at all -- benchmarkLookup answers it with
+// a fixed policy value regardless of environment. Kept as its own map
+// (rather than merged into benchmarkLookup itself) so the closure test's
+// expectation is written independently of the switch it is checking -- a
+// copy-paste of the switch into the test would prove nothing. This map is
+// necessarily still hand-maintained: the ACR_TEST_* name for a given
+// production key is an arbitrary choice benchmarkLookup's author makes, not
+// something derivable from parsing embedprovider's source -- but a NEW key
+// missing from this map still fails TestBenchmarkLookupCoversEveryEmbedproviderEnvVar
+// loudly (see that test), it just cannot ALSO be round-tripped until a human
+// adds the entry here to match whatever benchmarkLookup's own case ends up
+// using.
 var benchmarkLookupEnvVarFor = map[string]string{
 	embedprovider.EnvProvider:            "ACR_TEST_EMBED_PROVIDER",
 	embedprovider.EnvBaseURL:             "ACR_TEST_EMBED_BASE_URL",
@@ -557,30 +571,165 @@ var benchmarkLookupEnvVarFor = map[string]string{
 	embedprovider.EnvIncludeBodies:       "ACR_TEST_EMBED_INCLUDE_BODIES",
 }
 
+// embedproviderPackageDir resolves the on-disk directory of the sibling
+// embedprovider package by walking from THIS test file's own path via
+// runtime.Caller(0), rather than assuming a working directory or doing
+// GOPATH/module-aware resolution (go/build.Import does not reliably resolve
+// a module-mode import path without a populated build context) -- stable
+// regardless of where `go test` is invoked from.
+func embedproviderPackageDir(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) could not resolve this test file's own path")
+	}
+	// .../internal/contextfabric/falkorgraph/ambiguity_benchmark_live_test.go
+	// -> .../internal/contextfabric/embedprovider (sibling package directory).
+	dir := filepath.Join(filepath.Dir(thisFile), "..", "embedprovider")
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("resolve embedprovider package directory relative to %s: %v", thisFile, err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("%s (resolved from %s) is not a directory", dir, thisFile)
+	}
+	return dir
+}
+
+// discoverEmbedproviderEnvVars is the CHAOS-3849 round-4 review finding 1
+// fix. It parses every non-test .go file in the embedprovider package
+// directory with go/parser and collects the name of every top-level const
+// whose identifier starts with "Env" and whose declared value is a bare
+// string literal -- the exact shape every embedprovider.Env* constant takes
+// today (config.go's const block). This is what
+// TestBenchmarkLookupCoversEveryEmbedproviderEnvVar iterates over, NOT the
+// hand-maintained embedproviderEnvVars slice: a 16th Env* constant added to
+// that package is picked up here automatically, with no test file for a
+// human to remember to touch, closing the round-3 review finding 1 gap (a
+// hardcoded slice a future constant could silently slip past).
+func discoverEmbedproviderEnvVars(t *testing.T) []string {
+	t.Helper()
+	dir := embedproviderPackageDir(t)
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, dir, func(info os.FileInfo) bool {
+		return !strings.HasSuffix(info.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse embedprovider package at %s: %v", dir, err)
+	}
+	if len(pkgs) == 0 {
+		t.Fatalf("no Go package found at %s -- embedproviderPackageDir resolved the wrong path", dir)
+	}
+	var names []string
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				genDecl, ok := decl.(*ast.GenDecl)
+				if !ok || genDecl.Tok != token.CONST {
+					continue
+				}
+				for _, spec := range genDecl.Specs {
+					valueSpec, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for i, nameIdent := range valueSpec.Names {
+						if !nameIdent.IsExported() || !strings.HasPrefix(nameIdent.Name, "Env") {
+							continue
+						}
+						if i >= len(valueSpec.Values) {
+							continue // no literal on this spec line (e.g. an iota continuation) -- not the Env* shape this package uses.
+						}
+						lit, ok := valueSpec.Values[i].(*ast.BasicLit)
+						if !ok || lit.Kind != token.STRING {
+							continue // only a bare string-literal constant is an env-var lookup name.
+						}
+						// The map this feeds (benchmarkLookupEnvVarFor) and
+						// benchmarkLookup's own switch are both keyed by the
+						// constant's STRING VALUE (e.g.
+						// "ACR_CONTEXT_FABRIC_EMBED_API_KEY"), which is the
+						// actual env-var name passed to a lookup func at
+						// runtime -- not the Go identifier ("EnvAPIKey"),
+						// which exists only at compile time and is never
+						// looked up against anything.
+						value, err := strconv.Unquote(lit.Value)
+						if err != nil {
+							t.Fatalf("unquote string literal for %s in %s: %v", nameIdent.Name, dir, err)
+						}
+						names = append(names, value)
+					}
+				}
+			}
+		}
+	}
+	if len(names) == 0 {
+		t.Fatalf("parsed %s but found zero exported Env*-prefixed string constants -- the parser walk is broken, not that embedprovider suddenly has none", dir)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// TestEmbedproviderEnvVarsListMatchesPackageSource is a CROSS-CHECK, not the
+// closure guarantee itself (see TestBenchmarkLookupCoversEveryEmbedproviderEnvVar,
+// which binds directly to discoverEmbedproviderEnvVars and needs no human
+// list-maintenance to catch a new constant): it keeps the small,
+// human-readable embedproviderEnvVars slice honest against the dynamically
+// parsed set, failing in EITHER direction -- an entry in the slice that no
+// longer exists in the package, or a constant in the package missing from
+// the slice -- so the slice never quietly goes stale as documentation even
+// though it is not what makes the closure test itself bite.
+func TestEmbedproviderEnvVarsListMatchesPackageSource(t *testing.T) {
+	discovered := discoverEmbedproviderEnvVars(t)
+	discoveredSet := make(map[string]bool, len(discovered))
+	for _, name := range discovered {
+		discoveredSet[name] = true
+	}
+	listedSet := make(map[string]bool, len(embedproviderEnvVars))
+	for _, name := range embedproviderEnvVars {
+		listedSet[name] = true
+	}
+	for _, name := range discovered {
+		if !listedSet[name] {
+			t.Errorf("embedprovider defines %s but embedproviderEnvVars does not list it -- add it there (and to benchmarkLookupEnvVarFor / benchmarkLookup's switch if it needs a case)", name)
+		}
+	}
+	for _, name := range embedproviderEnvVars {
+		if !discoveredSet[name] {
+			t.Errorf("embedproviderEnvVars lists %s but embedprovider no longer defines a matching exported Env*-prefixed string constant -- remove it", name)
+		}
+	}
+}
+
 // TestBenchmarkLookupCoversEveryEmbedproviderEnvVar is the round-3 class-
-// closure test (review finding 3): for every key in embedproviderEnvVars,
-// benchmarkLookup must be a REAL mapping, not the unmapped default branch --
-// which ALSO returns ("", false) for an unset optional field, so the two are
-// indistinguishable from a bare "is it falsy" check. This proves mapping by
-// ROUND-TRIPPING a unique sentinel through each key's dedicated ACR_TEST_*
-// variable (benchmarkLookupEnvVarFor, written independently of
-// benchmarkLookup's own switch) via t.Setenv and confirming benchmarkLookup
-// echoes it back -- an unmapped key would fall to the default branch and
-// return ("", false) instead of the sentinel, failing the test.
+// closure test (review finding 3), made round-4-DYNAMIC (review finding 1):
+// it iterates discoverEmbedproviderEnvVars' PARSED output, not a hardcoded
+// list, so a future embedprovider Env* addition is discovered automatically
+// and fails this test with zero human list-maintenance if benchmarkLookup
+// (or this file's benchmarkLookupEnvVarFor) has not been updated for it.
+//
+// For every discovered key, benchmarkLookup must be a REAL mapping, not the
+// unmapped default branch -- which ALSO returns ("", false) for an unset
+// optional field, so the two are indistinguishable from a bare "is it
+// falsy" check. This proves mapping by ROUND-TRIPPING a unique sentinel
+// through each key's dedicated ACR_TEST_* variable (benchmarkLookupEnvVarFor,
+// written independently of benchmarkLookup's own switch) via t.Setenv and
+// confirming benchmarkLookup echoes it back -- an unmapped key would fall to
+// the default branch and return ("", false) instead of the sentinel,
+// failing the test.
 //
 // EnvAllowInsecureBaseURL is the one exception: benchmarkLookup deliberately
 // answers it with a fixed policy value ("true", true) regardless of any
 // environment variable (see its case), so it is checked for that fixed value
 // instead of a sentinel round-trip, which would fail against a correctly
-// mapped but intentionally non-configurable key.
-//
-// A key present in embedprovider's const block but missing from
-// embedproviderEnvVars would not be caught by this test -- that half of the
-// closure is embedproviderEnvVars' own doc-comment obligation, not something
-// a test in this package can enumerate without the source package exporting
-// a list (see that comment).
+// mapped but intentionally non-configurable key. A discovered key that is
+// NEITHER in benchmarkLookupEnvVarFor NOR EnvAllowInsecureBaseURL fails
+// immediately with a message naming both possibilities, since a brand new
+// constant's intended shape (round-tripped vs. fixed-value) is not something
+// this test can infer on its own -- a human must decide and update
+// benchmarkLookupEnvVarFor (or this test's exception) to match whatever
+// benchmarkLookup ends up doing.
 func TestBenchmarkLookupCoversEveryEmbedproviderEnvVar(t *testing.T) {
-	for _, key := range embedproviderEnvVars {
+	for _, key := range discoverEmbedproviderEnvVars(t) {
 		key := key
 		t.Run(key, func(t *testing.T) {
 			if key == embedprovider.EnvAllowInsecureBaseURL {
@@ -592,7 +741,7 @@ func TestBenchmarkLookupCoversEveryEmbedproviderEnvVar(t *testing.T) {
 			}
 			envName, known := benchmarkLookupEnvVarFor[key]
 			if !known {
-				t.Fatalf("embedproviderEnvVars lists %s but benchmarkLookupEnvVarFor does not -- both must be kept in sync", key)
+				t.Fatalf("embedprovider defines %s but neither benchmarkLookupEnvVarFor nor this test's fixed-value exception knows about it -- benchmarkLookup needs a case for it, and this test needs updating to check for it (a sentinel round-trip via a new ACR_TEST_* name, or a fixed-value check like EnvAllowInsecureBaseURL's)", key)
 			}
 			sentinel := "sentinel-value-for-" + key
 			t.Setenv(envName, sentinel)
