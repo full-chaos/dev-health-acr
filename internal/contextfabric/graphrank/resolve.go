@@ -9,6 +9,72 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+// questionProvenanceMarker is the BOUNDED provenance CHAOS-3838's
+// question-level SearchQuestion pass records as a candidate's MatchedTerms
+// entry (and folds into its ReceiptID derivation), in place of the raw
+// question text (codex round-1 P1, fix A).
+//
+// The raw question is caller-supplied free text with no length bound --
+// unlike an interpretation's extracted SubjectTerms, which are short
+// phrases -- and contractsv1's SubjectCandidate.Validate() rejects any
+// MatchedTerms entry over 512 characters (matchedTermLength,
+// contextFabricWriteBounds, internal/contracts/v1/validate_context_fabric_result.go).
+// That bound is unexported and therefore cannot be referenced directly from
+// here; this literal is deliberately far under it, and
+// TestResolveSubjects_SearchQuestionOversizedQuestionStaysContractValid
+// cross-checks against the REAL exported Validate() (never a mirrored
+// numeric constant), so a future contract tightening trips a test here
+// rather than silently reintroducing the P1.
+//
+// Bracket-wrapped and lowercase so it cannot plausibly collide with a real
+// extracted subject term (SubjectTerms are short bare phrases -- "auth
+// service", "PR 52" -- never bracket-wrapped). A coincidental collision
+// would just dedupe under MergeCandidates' UniqueSorted union, which is
+// harmless, not a correctness bug -- this is a legibility choice, not a
+// uniqueness guarantee this package enforces.
+const questionProvenanceMarker = "[full question]"
+
+// matchedTermsCap mirrors contractsv1's own unexported MatchedTerms entry
+// count bound (matchedTerms:32, contextFabricWriteBounds) -- see
+// questionProvenanceMarker's doc comment for why it is mirrored rather than
+// referenced, and which test cross-checks it against the real Validate().
+const matchedTermsCap = 32
+
+// capMatchedTermsAfterQuestionMerge enforces matchedTermsCap on every
+// candidate the question-level pass touched (codex round-1 P1, fix A,
+// second half). A candidate already carrying matchedTermsCap real,
+// user-meaningful extracted terms overflows by exactly one once
+// questionProvenanceMarker unions in; the marker -- synthetic, not
+// something a caller typed -- is the entry dropped to restore the bound,
+// never a real term.
+//
+// Walks the WHOLE map rather than tracking which keys the question pass
+// touched: cheap at resolution scale (at most a few dozen candidates), and
+// simpler than threading a touched-set through mergeSearchResults for a
+// property that is a pure function of each candidate's own final
+// MatchedTerms. A candidate that already exceeded the cap from real terms
+// ALONE (a pre-existing, this-ticket-unrelated gap: mergeSearchResults'
+// shared per-term path has never capped MatchedTerms) is left as-is here --
+// this function's job is only to keep a PREVIOUSLY-valid candidate valid
+// after the question marker unions in, not to retrofit a bound onto
+// per-term merging this ticket did not touch.
+func capMatchedTermsAfterQuestionMerge(candidatesBySubject map[string]contextfabric.SubjectCandidate) {
+	for key, candidate := range candidatesBySubject {
+		if len(candidate.MatchedTerms) <= matchedTermsCap {
+			continue
+		}
+		trimmed := make([]string, 0, len(candidate.MatchedTerms))
+		for _, term := range candidate.MatchedTerms {
+			if term == questionProvenanceMarker {
+				continue
+			}
+			trimmed = append(trimmed, term)
+		}
+		candidate.MatchedTerms = trimmed
+		candidatesBySubject[key] = candidate
+	}
+}
+
 // ResolveDeps carries the backend I/O ResolveSubjects needs. Every function
 // field is required.
 type ResolveDeps struct {
@@ -193,7 +259,23 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 			if degraded {
 				retrievalDegraded = true
 			}
-			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, question, results, candidatesBySubject, observationParentKey, observationBlocked)
+			// codex round-1 P1 (fix A): mergeSearchResults' term parameter
+			// becomes MatchedTerms/ReceiptID provenance (NodeCandidate) --
+			// the raw QUESTION, unlike an extracted subject term, is
+			// caller-supplied free text with no length bound, and
+			// contractsv1's SubjectCandidate.Validate() rejects any
+			// MatchedTerms entry over 512 chars. Passing the raw question
+			// here made a >512-char question produce an INVALID resolution
+			// (a 500 downstream). questionProvenanceMarker is the bounded,
+			// contract-safe substitute -- see its own doc comment.
+			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, questionProvenanceMarker, results, candidatesBySubject, observationParentKey, observationBlocked)
+			// codex round-1 P1, second half: a candidate already at the
+			// 32-entry MatchedTerms cap from real per-term finds would
+			// overflow to 33 once the marker above unioned in. The marker
+			// -- synthetic provenance, not something a caller typed -- is
+			// exactly the one entry that must give way; every real,
+			// user-meaningful extracted term survives.
+			capMatchedTermsAfterQuestionMerge(candidatesBySubject)
 		}
 	}
 	if traversalDegraded > 0 && deps.TraversalDegraded != nil {

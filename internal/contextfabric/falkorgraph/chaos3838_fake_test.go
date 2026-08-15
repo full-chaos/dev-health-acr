@@ -289,3 +289,96 @@ func TestResolveSubjects_QuestionUnionPlusLexiconExpansionCorroboratesIntoCommit
 		t.Fatalf("candidate.Confidence = %v, want >= %v (the corroborated commit gate)", candidate.Confidence, graphrank.CorroboratedFloor)
 	}
 }
+
+// --- codex round-1 P2 (fix B): guard the BOUNDED bytes, not the raw question ---
+
+// TestQuestionVectorSearchNodes_PunctuationBeyondTheCapNeverEmbeds is the P2
+// regression proof: a question carrying real word content ("auth") only
+// PAST the embed truncation point must never reach the embedder -- before
+// the fix, hasLexicalContent ran on the unbounded question (which DOES
+// contain "auth" somewhere), passed, and Embed silently truncated to pure
+// punctuation before transmitting it, embedding meaningless bytes into an
+// arbitrary nearest-neighbor query. MUTATION CHECK: reverting
+// questionVectorSearchNodes' guard to `hasLexicalContent(question)` (the
+// unbounded input) makes this fail -- embedder.calls becomes 1.
+func TestQuestionVectorSearchNodes_PunctuationBeyondTheCapNeverEmbeds(t *testing.T) {
+	const maxRunes = 20
+	question := strings.Repeat(".", maxRunes) + " auth service reliability" // "auth" etc. sit well past the cap
+	fake := &fakeConn{}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(4)}, nil
+	}
+	adapter := newFakeAdapter(t, fake)
+	embedder := &stubEmbedder{vector: []float32{1, 0, 0, 0}}
+	adapter.attachEmbedder(EmbedderOptions{Embedder: embedder, SimilarityFloor: 0.55, MaxTextRunes: maxRunes})
+
+	candidates, truncated, degraded, err := adapter.questionVectorSearchNodes(context.Background(), "test-key", "org-1", question, 10, &resolutionFence{}, temporalFilter{})
+	if err != nil {
+		t.Fatalf("questionVectorSearchNodes() error = %v", err)
+	}
+	if candidates != nil || truncated || degraded {
+		t.Fatalf("questionVectorSearchNodes() = (%v, truncated=%v, degraded=%v), want (nil, false, false) -- the bounded bytes are pure punctuation", candidates, truncated, degraded)
+	}
+	if embedder.calls != 0 {
+		t.Fatalf("embedder.calls = %d, want 0 -- content past the embed truncation cap must never make it to the provider", embedder.calls)
+	}
+}
+
+// TestQuestionVectorSearchNodes_ContentWithinTheCapProceeds is
+// PunctuationBeyondTheCap's positive companion: real word content that
+// survives truncation (sits WITHIN the cap) must still proceed normally --
+// the fix must not become a blanket "any punctuation-prefixed question is
+// rejected" over-correction.
+func TestQuestionVectorSearchNodes_ContentWithinTheCapProceeds(t *testing.T) {
+	const maxRunes = 40
+	question := "..... auth service reliability question" // "auth" sits inside the first 40 runes
+	if len([]rune(question)) > maxRunes {
+		t.Fatalf("test fixture bug: question is %d runes, want <= %d so its content survives truncation", len([]rune(question)), maxRunes)
+	}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if !strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			return nil, nil
+		}
+		return []row{{
+			"node":  &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p1", propLabel: "Auth"}},
+			"score": 0.10,
+		}}, nil
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(4)}, nil
+	}
+	adapter := newFakeAdapter(t, fake)
+	embedder := &stubEmbedder{vector: []float32{1, 0, 0, 0}}
+	adapter.attachEmbedder(EmbedderOptions{Embedder: embedder, SimilarityFloor: 0.55, MaxTextRunes: maxRunes})
+
+	candidates, _, degraded, err := adapter.questionVectorSearchNodes(context.Background(), "test-key", "org-1", question, 10, &resolutionFence{}, temporalFilter{})
+	if err != nil {
+		t.Fatalf("questionVectorSearchNodes() error = %v", err)
+	}
+	if degraded {
+		t.Fatal("degraded = true, want false for content that survives truncation")
+	}
+	if embedder.calls != 1 {
+		t.Fatalf("embedder.calls = %d, want exactly 1 -- content within the cap must still be embedded", embedder.calls)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %#v, want 1", candidates)
+	}
+}
+
+// TestBoundedQueryText_NoPrefixTruncatesToTheEmbedBudget pins
+// boundedQueryText's no-prefix branch directly: transmitted and substance
+// are identical (no prefix to strip) and both are truncated to
+// a.embedBudgetRunes(), via embedprovider's own TruncateRunes -- never a
+// re-derived cap.
+func TestBoundedQueryText_NoPrefixTruncatesToTheEmbedBudget(t *testing.T) {
+	adapter := newFakeAdapter(t, &fakeConn{})
+	adapter.attachEmbedder(EmbedderOptions{Embedder: &stubEmbedder{vector: []float32{1, 0}}, SimilarityFloor: 0.55, MaxTextRunes: 5})
+	got := adapter.boundedQueryText("hello world")
+	if got.transmitted != got.substance {
+		t.Fatalf("boundedQueryText() = %+v, want transmitted == substance with no prefix configured", got)
+	}
+	if want := "hello"; got.transmitted != want {
+		t.Fatalf("boundedQueryText().transmitted = %q, want %q (truncated to MaxTextRunes=5)", got.transmitted, want)
+	}
+}

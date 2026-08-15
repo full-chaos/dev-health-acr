@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -554,4 +555,134 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// --- codex round-1 P1 (fix A): bounded question provenance ---
+
+// TestResolveSubjects_SearchQuestionOversizedQuestionStaysContractValid is
+// the codex round-1 P1 regression proof: before the fix, mergeSearchResults
+// was called with the raw QUESTION as its term/provenance argument, which
+// NodeCandidate records verbatim into SubjectCandidate.MatchedTerms --
+// contractsv1's Validate() rejects any entry over 512 characters, so a
+// realistic (513-8000 char) free-text question made the question-level pass
+// produce an INVALID resolution. MUTATION CHECK: reverting
+// mergeSearchResults' call site (resolve.go) to pass `question` instead of
+// `questionProvenanceMarker` makes this fail -- Validate() returns an error
+// and/or a MatchedTerms entry exceeds 512 chars.
+func TestResolveSubjects_SearchQuestionOversizedQuestionStaysContractValid(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_big", Label: "Big Question Target"}
+	// TrimSpace matters here: ResolveSubjects trims request.Question before
+	// calling deps.SearchQuestion, and the fixture's map key must match
+	// exactly what that call receives.
+	oversized := strings.TrimSpace(strings.Repeat("why did this incident happen and what changed before it started ", 150)) // well over 512, into the thousands
+	if len(oversized) <= 512 {
+		t.Fatalf("test fixture bug: oversized question is only %d chars, want > 512", len(oversized))
+	}
+	request := testRequest()
+	request.Question = oversized
+	backend := &fakeGraphBackend{
+		enableSearchQuestion: true,
+		searchResults:        map[string][]CandidateNode{"alpha": {}},
+		searchQuestionResults: map[string][]CandidateNode{
+			oversized: {candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.65, "*")},
+		},
+	}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("alpha"), backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Candidates) != 1 {
+		t.Fatalf("resolution.Candidates = %#v, want 1", resolution.Candidates)
+	}
+	candidate := resolution.Candidates[0]
+	if err := candidate.Validate(); err != nil {
+		t.Fatalf("candidate.Validate() = %v, want a contract-valid candidate despite a %d-char question", err, len(oversized))
+	}
+	for _, term := range candidate.MatchedTerms {
+		if len(term) > 512 {
+			t.Fatalf("MatchedTerms entry %q is %d chars, want <= 512 (contractsv1's matchedTermLength bound)", term, len(term))
+		}
+	}
+	if !containsString(candidate.MatchedTerms, questionProvenanceMarker) {
+		t.Fatalf("MatchedTerms = %v, want the bounded provenance marker %q present", candidate.MatchedTerms, questionProvenanceMarker)
+	}
+}
+
+// TestResolveSubjects_SearchQuestionDropsMarkerRatherThanRealTermsAtCap is
+// the codex round-1 P1 fix's second half: a candidate already carrying
+// matchedTermsCap (32) real, user-meaningful extracted terms must not
+// overflow to 33 once questionProvenanceMarker unions in via the
+// question-level pass -- the marker is dropped, every real term survives,
+// and the result stays contract-valid.
+func TestResolveSubjects_SearchQuestionDropsMarkerRatherThanRealTermsAtCap(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_full", Label: "Full Terms Target"}
+	terms := make([]string, matchedTermsCap)
+	searchResults := make(map[string][]CandidateNode, matchedTermsCap)
+	for i := range terms {
+		terms[i] = fmt.Sprintf("term%02d", i)
+		searchResults[terms[i]] = []CandidateNode{candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.6, "*")}
+	}
+	request := testRequest()
+	backend := &fakeGraphBackend{
+		enableSearchQuestion: true,
+		searchResults:        searchResults,
+		searchQuestionResults: map[string][]CandidateNode{
+			request.Question: {candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.65, "*")},
+		},
+	}
+	resolution, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(terms...), backend.deps())
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Candidates) != 1 {
+		t.Fatalf("resolution.Candidates = %#v, want 1", resolution.Candidates)
+	}
+	candidate := resolution.Candidates[0]
+	if err := candidate.Validate(); err != nil {
+		t.Fatalf("candidate.Validate() = %v, want valid at exactly the %d-term cap", err, matchedTermsCap)
+	}
+	if len(candidate.MatchedTerms) != matchedTermsCap {
+		t.Fatalf("len(MatchedTerms) = %d, want exactly %d (marker dropped, every real term kept)", len(candidate.MatchedTerms), matchedTermsCap)
+	}
+	for _, term := range terms {
+		if !containsString(candidate.MatchedTerms, term) {
+			t.Fatalf("MatchedTerms = %v, missing real term %q -- the synthetic marker must be dropped before any real, user-typed term", candidate.MatchedTerms, term)
+		}
+	}
+	if containsString(candidate.MatchedTerms, questionProvenanceMarker) {
+		t.Fatalf("MatchedTerms = %v, want the question marker dropped once the real-term cap is already full", candidate.MatchedTerms)
+	}
+}
+
+// TestQuestionProvenanceMarkerRespectsContractBounds cross-checks
+// questionProvenanceMarker and matchedTermsCap against the REAL exported
+// contractsv1 validator (via contextfabric.SubjectCandidate.Validate(), the
+// type alias for it) rather than a duplicated numeric literal, so a future
+// tightening of the unexported contract bounds trips this test rather than
+// silently reintroducing the P1 the two constants exist to prevent.
+func TestQuestionProvenanceMarkerRespectsContractBounds(t *testing.T) {
+	t.Parallel()
+	if len(questionProvenanceMarker) > 512 {
+		t.Fatalf("questionProvenanceMarker is %d chars, want well under the contract's per-entry bound", len(questionProvenanceMarker))
+	}
+	terms := make([]string, matchedTermsCap+1)
+	for i := range terms {
+		terms[i] = fmt.Sprintf("term%03d", i)
+	}
+	base := contextfabric.SubjectCandidate{
+		ReceiptID: "receipt_12345678", Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "p1", Label: "P1"},
+		State: contextfabric.ResolutionProposed, MatchReasons: []string{"test"}, Confidence: 0.5,
+	}
+	atCap := base
+	atCap.MatchedTerms = terms[:matchedTermsCap]
+	if err := atCap.Validate(); err != nil {
+		t.Fatalf("a candidate at exactly matchedTermsCap=%d MatchedTerms entries failed Validate(): %v -- matchedTermsCap no longer matches the real contract bound", matchedTermsCap, err)
+	}
+	overCap := base
+	overCap.MatchedTerms = terms[:matchedTermsCap+1]
+	if err := overCap.Validate(); err == nil {
+		t.Fatalf("a candidate with matchedTermsCap+1=%d MatchedTerms entries passed Validate() -- matchedTermsCap is now UNDER the real contract bound, capMatchedTermsAfterQuestionMerge is dropping the marker too aggressively", matchedTermsCap+1)
+	}
 }
