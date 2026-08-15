@@ -432,15 +432,18 @@ type oracleCaseResult struct {
 	// tau"). The tool-side fix (tau_calibration.go) trusts a present value
 	// and refuses to size K from a truncated, saturated case that has none.
 	//
-	// Caveat this field does NOT resolve: it counts above THIS run's tau
-	// (report.Tau), not whatever tau CalibrateFromReport ultimately
-	// recommends for the SAME report -- a case-count computed at one tau
-	// cannot know exactly how many negatives would clear a DIFFERENT tau.
-	// CHAOS-3834's recall-gate tau is expected to be lower than a
-	// precision-cliff report's own applied floor, so this count is a valid
-	// LOWER BOUND for that direction (a lower tau admits at least as many),
-	// but the tool-side fix does not attempt to correct for the mismatch --
-	// see tau_calibration.go's doc comment on how it consumes this field.
+	// Cross-tau caveat (codex round-3 P2): this count is measured at THIS
+	// run's tau (report.Tau), not whatever tau CalibrateFromReport
+	// ultimately recommends for the SAME report -- a case-count computed at
+	// one tau cannot know exactly how many negatives would clear a
+	// DIFFERENT one (negatives sitting BETWEEN the two floors are invisible
+	// to it). The tool-side fix does NOT attempt to adjust for the mismatch
+	// mathematically -- it requires report.Tau to EXACTLY equal the
+	// recommended tau before trusting this field at all, and refuses (fails
+	// closed on K) otherwise. See tau_calibration.go's doc comment on how it
+	// consumes this field. In practice this means the total is usable only
+	// when the harness is RE-RUN at a previously recommended tau, not on
+	// the first pass against a report's original default floor.
 	HardNegativeAboveTauCount *int `json:"hard_negative_above_tau_count,omitempty"`
 	// HardNegativesTruncated is true when HardNegativeAboveTauCount's full
 	// deduped list exceeds hardNegativeCount, i.e. HardNegatives above is

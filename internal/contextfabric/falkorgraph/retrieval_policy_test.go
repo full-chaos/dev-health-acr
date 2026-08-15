@@ -20,9 +20,10 @@ func TestRetrievalPolicyVersionBumpedByCHAOS3834(t *testing.T) {
 
 // TestLookupRetrievalPolicy_KnownIdentityReturnsCalibratedEntry proves the
 // shipped openai/text-embedding-3-large entry is reachable by exactly the
-// identity string form the write path stamps (identity.String()+"#"+tag).
+// identity string form the write path stamps (identity.String()+"#"+tag) AT
+// its measured dimension (3072).
 func TestLookupRetrievalPolicy_KnownIdentityReturnsCalibratedEntry(t *testing.T) {
-	policy, ok := LookupRetrievalPolicy("openai/text-embedding-3-large#t2:r2000:b0:pnone")
+	policy, ok := LookupRetrievalPolicy("openai/text-embedding-3-large#t2:r2000:b0:pnone", 3072)
 	if !ok {
 		t.Fatal("LookupRetrievalPolicy() ok = false, want true for the calibrated CHAOS-3834 entry")
 	}
@@ -35,26 +36,34 @@ func TestLookupRetrievalPolicy_KnownIdentityReturnsCalibratedEntry(t *testing.T)
 }
 
 // TestLookupRetrievalPolicy_UnknownIdentityKeepsConservativeDefault proves
-// an uncalibrated identity -- any identity string with no table entry, be
-// it a different model, a different dimension, or a different composition
-// tag on the SAME model -- reports found=false and the zero RetrievalPolicy,
-// which every caller must treat as "change nothing".
+// an uncalibrated (identity, dimension) pair -- a different model, a
+// different composition tag on the SAME model, or (codex round-3 P1) the
+// SAME identity+tag at a DIFFERENT dimension -- reports found=false and the
+// zero RetrievalPolicy, which every caller must treat as "change nothing".
 func TestLookupRetrievalPolicy_UnknownIdentityKeepsConservativeDefault(t *testing.T) {
-	for _, identity := range []string{
-		"openai/text-embedding-3-small#t2:r2000:b0:pnone",
-		"lmstudio/nomic-embed-text#t2:r2000:b0:pnomic",
+	for _, tc := range []struct {
+		identity  string
+		dimension int
+	}{
+		{"openai/text-embedding-3-small#t2:r2000:b0:pnone", 3072},
+		{"lmstudio/nomic-embed-text#t2:r2000:b0:pnomic", 768},
 		// Same model, DIFFERENT composition tag -- must NOT match the
 		// calibrated entry; a policy is scoped to one exact composition.
-		"openai/text-embedding-3-large#t3:r2000:b0:pnone",
-		"openai/text-embedding-3-large#t2:r2000:b1:pnone",
-		"none",
+		{"openai/text-embedding-3-large#t3:r2000:b0:pnone", 3072},
+		{"openai/text-embedding-3-large#t2:r2000:b1:pnone", 3072},
+		// Same model, SAME composition tag, DIFFERENT dimension (codex
+		// round-3 P1) -- a BYO endpoint truncating text-embedding-3-large
+		// to 1536 via OpenAI's `dimensions` param must NOT silently
+		// inherit the 3072-measured calibration.
+		{"openai/text-embedding-3-large#t2:r2000:b0:pnone", 1536},
+		{"none", 0},
 	} {
-		policy, ok := LookupRetrievalPolicy(identity)
+		policy, ok := LookupRetrievalPolicy(tc.identity, tc.dimension)
 		if ok {
-			t.Errorf("LookupRetrievalPolicy(%q) ok = true, want false (no calibrated entry)", identity)
+			t.Errorf("LookupRetrievalPolicy(%q, %d) ok = true, want false (no calibrated entry)", tc.identity, tc.dimension)
 		}
 		if policy != (RetrievalPolicy{}) {
-			t.Errorf("LookupRetrievalPolicy(%q) = %+v, want the zero value on a miss", identity, policy)
+			t.Errorf("LookupRetrievalPolicy(%q, %d) = %+v, want the zero value on a miss", tc.identity, tc.dimension, policy)
 		}
 	}
 }
@@ -72,24 +81,31 @@ func TestLookupRetrievalPolicy_UnknownIdentityKeepsConservativeDefault(t *testin
 // So the pinned literal does NOT move with the live tag. This test is the
 // loud tripwire instead: it independently recomputes what
 // EmbedCompositionTag currently produces for this identity and asserts the
-// table still has a calibrated entry under that EXACT live string. Today
-// (embedTextTemplateVersion == "t2") the live tag and the pinned literal
-// agree, so this passes. The day a composition parameter changes -- CHAOS-
-// 3835's t2 -> t3 template-version bump, or any future rune-cap/body-gate/
-// prefix change -- the live tag stops matching the pinned literal and this
-// test fails LOUDLY at integration, exactly the point: it forces an
-// explicit human decision (recalibrate against the new composition, or
-// record an explicit inheritance decision as a new pinned entry) instead of
-// the identity silently falling back to uncalibrated defaults (a silent
-// miss) or silently inheriting an unvalidated calibration (a silent
-// auto-inherit) -- either of which this test now catches.
+// table still has a calibrated entry under that EXACT live string AT the
+// measured dimension (3072, codex round-3 P1). Today (embedTextTemplateVersion
+// == "t2") the live tag and the pinned literal agree, so this passes. The
+// day a composition parameter changes -- CHAOS-3835's t2 -> t3
+// template-version bump, or any future rune-cap/body-gate/prefix change --
+// the live tag stops matching the pinned literal and this test fails
+// LOUDLY at integration, exactly the point: it forces an explicit human
+// decision (recalibrate against the new composition, or record an explicit
+// inheritance decision as a new pinned entry) instead of the identity
+// silently falling back to uncalibrated defaults (a silent miss) or
+// silently inheriting an unvalidated calibration (a silent auto-inherit) --
+// either of which this test now catches. The companion assertion below
+// proves the SAME live identity+tag at a DIFFERENT dimension does NOT
+// resolve -- the key-shape change itself is covered, not just the
+// composition-tag drift the original test targeted.
 func TestCalibratedEntryDriftsLoudlyWithCompositionTag(t *testing.T) {
 	liveTag := EmbedCompositionTag(embedprovider.DefaultMaxTextRunes, false, "")
 	liveIdentity := "openai/text-embedding-3-large#" + liveTag
-	if _, ok := LookupRetrievalPolicy(liveIdentity); !ok {
-		t.Fatalf("LookupRetrievalPolicy(%q) ok = false: the live composition tag no longer matches the CHAOS-3834 measurement-pinned entry (%q). "+
+	if _, ok := LookupRetrievalPolicy(liveIdentity, 3072); !ok {
+		t.Fatalf("LookupRetrievalPolicy(%q, 3072) ok = false: the live composition tag no longer matches the CHAOS-3834 measurement-pinned entry (%q). "+
 			"Composition changed -- recalibrate this identity against the new composition, or record an explicit inheritance decision as a new pinned entry. "+
 			"Do not silently repoint the pinned key at the new tag.", liveIdentity, calibratedIdentityText2Large)
+	}
+	if _, ok := LookupRetrievalPolicy(liveIdentity, 1536); ok {
+		t.Fatalf("LookupRetrievalPolicy(%q, 1536) ok = true, want false -- the calibrated entry is pinned to dimension 3072 and must not match a different width", liveIdentity)
 	}
 }
 
@@ -125,6 +141,30 @@ func TestEmbedderFromEnv_CalibratedIdentityOverridesDefaults(t *testing.T) {
 	}
 	if options.OverFetchMultiplier != 0 {
 		t.Fatalf("OverFetchMultiplier = %d, want 0 (K unchanged per the shipped entry)", options.OverFetchMultiplier)
+	}
+}
+
+// TestEmbedderFromEnv_MismatchedDimensionKeepsConservativeDefaults is the
+// codex round-3 P1 fix's end-to-end pinning test: the SAME provider/model/
+// composition as the calibrated entry, but a DIFFERENT configured dimension
+// (1536 instead of the measured 3072 -- e.g. a BYO endpoint truncating
+// text-embedding-3-large via OpenAI's `dimensions` param). EmbedderFromEnv
+// must NOT apply the 3072-measured tau/efRuntime to this deployment.
+func TestEmbedderFromEnv_MismatchedDimensionKeepsConservativeDefaults(t *testing.T) {
+	options, err := EmbedderFromEnv(fakeEmbedderEnv(map[string]string{
+		embedprovider.EnvDimension: "1536",
+	}))
+	if err != nil {
+		t.Fatalf("EmbedderFromEnv: %v", err)
+	}
+	if options.SimilarityFloor != embedprovider.DefaultSimilarityFloor {
+		t.Fatalf("SimilarityFloor = %v, want the uncalibrated default %v -- the 3072-measured calibration must not apply at dimension 1536", options.SimilarityFloor, embedprovider.DefaultSimilarityFloor)
+	}
+	if options.EfRuntime != 0 {
+		t.Fatalf("EfRuntime = %d, want 0 (no calibrated policy at this dimension => server default applies)", options.EfRuntime)
+	}
+	if options.OverFetchMultiplier != 0 {
+		t.Fatalf("OverFetchMultiplier = %d, want 0", options.OverFetchMultiplier)
 	}
 }
 

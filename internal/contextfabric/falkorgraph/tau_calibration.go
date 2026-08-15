@@ -49,9 +49,13 @@ type CalibrationHardNegative struct {
 // type: nil means "this report did not compute a total" (old report, or a
 // harness variant that skips it), distinguishable from present-and-zero.
 // CalibrateFromReport DOES read this for a truncated, saturated case (see
-// that function's doc comment) -- trusting it as this case's near-duplicate
-// count rather than refusing outright, subject to the cross-tau caveat
-// documented on oracleCaseResult's copy of this field.
+// that function's doc comment) -- trusting it ONLY when the report-level
+// Tau field EXACTLY equals the tau this function just recommended (codex
+// round-3 P2: a total measured at a DIFFERENT tau, e.g. the report's
+// original higher default, cannot see negatives sitting between the two
+// floors, so trusting it unconditionally would silently under-size K again).
+// See oracleCaseResult's copy of this field for the cross-tau caveat this
+// exact-match requirement closes.
 type CalibrationCase struct {
 	Cause                     string                    `json:"cause"`
 	CorrectSimilarity         *float64                  `json:"correct_similarity,omitempty"`
@@ -175,6 +179,19 @@ var (
 	ErrNoCorrectSimilaritySamples = errors.New("calibration report has no correct-pair similarity samples")
 	// ErrInvalidTargetRecall reports a TargetRecall outside (0, 1].
 	ErrInvalidTargetRecall = errors.New("calibration target recall must be in (0, 1]")
+	// ErrNoFeasibleFloor reports that the recall target forces a tau outside
+	// floorApplicable's (0, 1) range (codex round-3 P2) -- e.g. TargetRecall
+	// near 1.0 against an S+ sample at or below 0 (a genuinely low- or
+	// negative-similarity correct pair the harness's UNCLAMPED
+	// trueCosineSimilarity can report; production's own CosineFromDistance is
+	// clamped to [0,1], but this oracle-side value is not). A tau this low is
+	// not a usable recall-gate value at all: floorApplicable is the SAME
+	// predicate EmbedderFromEnv gates a calibrated SimilarityFloor on before
+	// ever applying it, so a result this function returned as
+	// ApplyReady=true here would be silently ignored there -- returning an
+	// error instead of a CalibrationResult makes that inapplicability loud
+	// at calibration time, not silently discovered later at deploy time.
+	ErrNoFeasibleFloor = errors.New("calibration target recall forces a similarity floor outside the applicable (0,1) range -- no feasible policy")
 )
 
 // CalibrateFromReport computes a recommended (tau, K) RetrievalPolicy from
@@ -269,6 +286,17 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 	}
 
 	tau, achievedRecall := recallGateThreshold(sPlus, opts.TargetRecall)
+	// codex round-3 P2: validate BEFORE building a result, not after -- a
+	// high TargetRecall against a low- or negative-similarity S+ sample can
+	// push tau to or below 0 (or, in principle, to or above 1). floorApplicable
+	// is production's own applicability check (EmbedderFromEnv gates a
+	// calibrated SimilarityFloor on it before ever using it), so a tau
+	// outside it is not a policy this function can honestly recommend at
+	// all -- return the error, never a CalibrationResult that LOOKS
+	// apply-ready but that production would silently refuse to apply.
+	if !floorApplicable(tau) {
+		return CalibrationResult{}, ErrNoFeasibleFloor
+	}
 
 	wrongPool := make([]float64, 0, len(sMinus)+len(hardNegatives))
 	wrongPool = append(wrongPool, sMinus...)
@@ -320,7 +348,19 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 			// tau): entries beyond the cap could ALSO clear it, so `count`
 			// is not trustworthy as-is. Note this is the ONLY unsafe case --
 			// see the "else" reasoning below.
-			if scored.aboveTauCount != nil {
+			//
+			// codex round-3 P2: the harness computed aboveTauCount at
+			// report.Tau -- the RUN's own applied floor, NOT this function's
+			// just-recommended tau. Trusting it unconditionally was wrong: if
+			// the recommended tau is LOWER (CHAOS-3834's whole recall-gate
+			// direction), negatives sitting BETWEEN the two floors are
+			// invisible to a count measured at the higher report.Tau, so K
+			// would still be silently under-sized even with a "total"
+			// present. The total is trustworthy ONLY when report.Tau is the
+			// EXACT tau this function just recommended -- i.e. the harness
+			// was re-run (or already happened to run) AT this identity's
+			// recommended floor, not its original default.
+			if scored.aboveTauCount != nil && report.Tau == tau {
 				count = *scored.aboveTauCount
 			} else {
 				kInsufficientData = true
@@ -340,7 +380,10 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 	kApplyReady := !kInsufficientData
 	kNote := "K sized from complete per-case hard-negative data (no scored case's harvest was truncated at its own tau-clearing boundary)"
 	if kInsufficientData {
-		kNote = "K NOT sized: at least one scored case's hard-negative harvest was truncated by the harness (HardNegativesTruncated) and every serialized entry already clears tau -- the true near-duplicate count beyond the cap is unknown, so OverFetchMultiplier falls back to 0 (unchanged) rather than a confident-looking but potentially under-sized value. Rerun the oracle harness with a higher ACR_TEST_ORACLE_HARD_NEGATIVES for this identity, or size K by hand from the full offline harvest."
+		kNote = fmt.Sprintf(
+			"K NOT sized: at least one scored case's hard-negative harvest was truncated by the harness (HardNegativesTruncated) and every serialized entry already clears the recommended tau (%.4f) -- the true near-duplicate count beyond the cap is unknown, so OverFetchMultiplier falls back to 0 (unchanged) rather than a confident-looking but potentially under-sized value. If a total was reported, it was measured at report.Tau=%.4f, which does not exactly match the recommended tau -- counts measured at a different tau are not usable here; re-run the oracle harness at the recommended tau, raise ACR_TEST_ORACLE_HARD_NEGATIVES for this identity, or size K by hand from the full offline harvest.",
+			tau, report.Tau,
+		)
 	}
 
 	multiplier := 1

@@ -468,6 +468,25 @@ func aboveSimilarityFloor(similarity, tau float64) bool {
 	return similarity > tau
 }
 
+// floorApplicable is the SINGLE production authority for "is this value a
+// usable SimilarityFloor at all" -- strictly inside (0, 1), matching
+// attachEmbedder's own out-of-range fallback (adapter.go: "a value outside
+// that range is replaced by embedprovider.DefaultSimilarityFloor rather than
+// accepted, because a floor of 0 would silently disable the AC-3778-4
+// no-match guard"). A floor at or below 0 admits everything (no guard at
+// all); a floor at or above 1 admits nothing (no candidate could ever clear
+// it, including a perfect match) -- neither is a usable similarity floor.
+//
+// tau_calibration.go's CalibrateFromReport (codex round-3 P2) calls this
+// EXACT function to validate a computed recall-gate tau BEFORE returning it
+// as a recommendation, so a caller can never receive an ApplyReady=true
+// result whose SimilarityFloor this same predicate -- the one
+// EmbedderFromEnv itself gates on just below -- would silently refuse to
+// apply.
+func floorApplicable(floor float64) bool {
+	return floor > 0 && floor < 1
+}
+
 // hybridSearchNodes is the ResolveDeps.Search implementation: the lexical
 // full-text step and, when an embedder is configured, the vector step beside
 // it, merged into ONE candidate list.
@@ -696,11 +715,18 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 	// drift from the key migration 0014's embed_retrieval_identity column
 	// persists for the same deployment. Configured(lookup) already holds at
 	// this point (checked above), so this never returns EmbedRetrievalIdentityNone.
+	//
+	// cfg.Dimension is passed SEPARATELY (codex round-3 P1): dimension is
+	// deliberately excluded from EmbedRetrievalIdentityFromEnv's persisted
+	// string (EmbedderIdentity.String()'s own doc comment explains why), but
+	// a calibrated tau/efRuntime entry is measured against ONE specific
+	// width -- LookupRetrievalPolicy folds it back in for the policy lookup
+	// specifically, without changing what gets persisted for answer reuse.
 	identity, err := EmbedRetrievalIdentityFromEnv(lookup)
 	if err != nil {
 		return EmbedderOptions{}, err
 	}
-	if policy, ok := LookupRetrievalPolicy(identity); ok {
+	if policy, ok := LookupRetrievalPolicy(identity, cfg.Dimension); ok {
 		// A calibrated entry's zero fields still mean "unchanged from
 		// today's default" (RetrievalPolicy's doc comment) -- e.g. the
 		// shipped openai/text-embedding-3-large entry deliberately leaves
@@ -723,7 +749,7 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 		// operator value to preserve for either, so the calibrated table
 		// stays the sole source for both, unconditionally.
 		if explicitFloor, ok := lookup(embedprovider.EnvSimilarityFloor); !(ok && strings.TrimSpace(explicitFloor) != "") {
-			if policy.SimilarityFloor > 0 && policy.SimilarityFloor < 1 {
+			if floorApplicable(policy.SimilarityFloor) {
 				options.SimilarityFloor = policy.SimilarityFloor
 			}
 		}

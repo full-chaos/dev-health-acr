@@ -8,16 +8,19 @@ import (
 func floatPtr(v float64) *float64 { return &v }
 func intPtr(v int) *int           { return &v }
 
-// TestCalibrateFromReport_TruncatedSaturatedCaseWithTotalSizesKFromTotal is
-// the codex round-2 P2 fix's positive pinning test: "truncated + total ->
-// size K from the total". A single scored case's serialized HardNegatives
-// are capped at 2, both clearing tau (saturated -- the capped list gives no
-// way to tell 2 from 200), but the harness ALSO reported the complete
-// above-tau total (20) via HardNegativeAboveTauCount. CalibrateFromReport
-// must trust that total, not the capped list length, when sizing K.
-func TestCalibrateFromReport_TruncatedSaturatedCaseWithTotalSizesKFromTotal(t *testing.T) {
+// TestCalibrateFromReport_TruncatedSaturatedCaseWithMatchingTauSizesKFromTotal
+// is the codex round-2 P2 fix's positive pinning test, TIGHTENED by codex
+// round-3 P2 (see TestCalibrateFromReport_TruncatedSaturatedCaseWithMismatchedTauRefusesToSizeK
+// for the sibling that proves the tightening): "truncated + total measured
+// at the SAME tau this run recommends -> size K from the total". report.Tau
+// is set to the EXACT tau recallGateThreshold computes for this fixture
+// (single S+ sample 0.90, TargetRecall 0.90 -> tau = Nextafter(0.90, -Inf)),
+// simulating a harness re-run AT the previously recommended floor.
+func TestCalibrateFromReport_TruncatedSaturatedCaseWithMatchingTauSizesKFromTotal(t *testing.T) {
+	wantTau, _ := recallGateThreshold([]float64{0.90}, 0.90)
 	report := CalibrationReport{
 		TopK: 5,
+		Tau:  wantTau,
 		Cases: []CalibrationCase{{
 			Cause:                     "hit",
 			CorrectSimilarity:         floatPtr(0.90),
@@ -31,7 +34,7 @@ func TestCalibrateFromReport_TruncatedSaturatedCaseWithTotalSizesKFromTotal(t *t
 		t.Fatalf("CalibrateFromReport: %v", err)
 	}
 	if !result.KApplyReady {
-		t.Fatalf("KApplyReady = false, want true -- the harness provided a complete total for the one saturated case, K sizing should proceed")
+		t.Fatalf("KApplyReady = false, want true -- report.Tau exactly matches the recommended tau, the total should be trusted")
 	}
 	if result.NearDuplicateP90 != 20 {
 		t.Fatalf("NearDuplicateP90 = %d, want 20 (sized from HardNegativeAboveTauCount, not len(HardNegatives)=2)", result.NearDuplicateP90)
@@ -39,6 +42,38 @@ func TestCalibrateFromReport_TruncatedSaturatedCaseWithTotalSizesKFromTotal(t *t
 	// multiplier = ceil((TopK + P90) / TopK) = ceil((5+20)/5) = 5.
 	if result.Policy.OverFetchMultiplier != 5 {
 		t.Fatalf("OverFetchMultiplier = %d, want 5 (sized from the total, not the capped list)", result.Policy.OverFetchMultiplier)
+	}
+}
+
+// TestCalibrateFromReport_TruncatedSaturatedCaseWithMismatchedTauRefusesToSizeK
+// is the codex round-3 P2 fix's pinning test: a total measured at a
+// DIFFERENT tau than this run recommends must NOT be trusted, even though
+// it is present -- ruling's exact scenario (report tau 0.55, recommended
+// ~0.30-ish band). Negatives sitting between the two floors are invisible
+// to a count taken at the higher report.Tau, so using it anyway would
+// silently repeat the under-sizing bug this whole fix chain closes.
+func TestCalibrateFromReport_TruncatedSaturatedCaseWithMismatchedTauRefusesToSizeK(t *testing.T) {
+	sPlusValues := []float64{0.50, 0.10, 0.90, 0.30, 0.70, 0.20, 1.00, 0.40, 0.80, 0.60} // tau resolves to ~0.20 at 0.90 target
+	var cases []CalibrationCase
+	for i, s := range sPlusValues {
+		c := CalibrationCase{Cause: "hit", CorrectSimilarity: floatPtr(s)}
+		if i == 0 {
+			c.HardNegatives = []CalibrationHardNegative{{Kind: "k", CanonicalID: "n1", Similarity: 0.95}, {Kind: "k", CanonicalID: "n2", Similarity: 0.92}}
+			c.HardNegativeAboveTauCount = intPtr(20)
+			c.HardNegativesTruncated = true
+		}
+		cases = append(cases, c)
+	}
+	report := CalibrationReport{TopK: 5, Tau: 0.55, Cases: cases} // report.Tau (0.55) != the ~0.20 tau this run recommends
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+	if err != nil {
+		t.Fatalf("CalibrateFromReport: %v", err)
+	}
+	if result.KApplyReady {
+		t.Fatal("KApplyReady = true, want false -- the total was measured at report.Tau=0.55, which does not match the recommended tau (~0.20); trusting it anyway risks under-sizing K")
+	}
+	if result.Policy.OverFetchMultiplier != 0 {
+		t.Fatalf("OverFetchMultiplier = %d, want 0 (refused, not silently sized from a mismatched-tau total)", result.Policy.OverFetchMultiplier)
 	}
 }
 
@@ -204,6 +239,40 @@ func TestCalibrateFromReport_NoCorrectSimilaritySamplesIsAnError(t *testing.T) {
 	}}
 	if _, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90}); err != ErrNoCorrectSimilaritySamples {
 		t.Fatalf("err = %v, want ErrNoCorrectSimilaritySamples", err)
+	}
+}
+
+// TestCalibrateFromReport_NonPositiveFloorIsAnError is the codex round-3 P2
+// fix's pinning test: a 100% TargetRecall against a genuinely low/negative
+// S+ sample (the oracle harness's trueCosineSimilarity is UNCLAMPED, unlike
+// production's CosineFromDistance -- see ErrNoFeasibleFloor's doc comment)
+// forces tau to or below 0, a value floorApplicable -- the SAME predicate
+// EmbedderFromEnv gates a calibrated SimilarityFloor on -- would silently
+// refuse to ever apply. CalibrateFromReport must return ErrNoFeasibleFloor
+// here, never a CalibrationResult that looks like a usable recommendation.
+func TestCalibrateFromReport_NonPositiveFloorIsAnError(t *testing.T) {
+	report := CalibrationReport{Cases: []CalibrationCase{
+		{Cause: "hit", CorrectSimilarity: floatPtr(-0.05)},
+		{Cause: "hit", CorrectSimilarity: floatPtr(0.50)},
+	}}
+	_, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 1.0})
+	if err != ErrNoFeasibleFloor {
+		t.Fatalf("err = %v, want ErrNoFeasibleFloor (S+ sample -0.05 with a 100%% recall target forces tau <= 0)", err)
+	}
+}
+
+// TestCalibrateFromReport_ZeroFloorIsAnError is the boundary case: an S+
+// sample of EXACTLY 0.0 also forces tau <= 0 via the Nextafter nudge
+// (tau ends up a tiny negative value strictly below the sample), so this
+// must fail the SAME way a negative sample does, not silently round up to
+// something floorApplicable would accept.
+func TestCalibrateFromReport_ZeroFloorIsAnError(t *testing.T) {
+	report := CalibrationReport{Cases: []CalibrationCase{
+		{Cause: "hit", CorrectSimilarity: floatPtr(0.0)},
+	}}
+	_, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 1.0})
+	if err != ErrNoFeasibleFloor {
+		t.Fatalf("err = %v, want ErrNoFeasibleFloor (a single S+ sample of exactly 0.0 forces tau <= 0)", err)
 	}
 }
 

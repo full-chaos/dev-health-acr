@@ -1,5 +1,7 @@
 package falkorgraph
 
+import "fmt"
+
 // RetrievalPolicy is the CHAOS-3834 per-embedder-identity retrieval-time
 // configuration (embed-text spec v2 §5 L2/L3/L4, §6 T4): the similarity
 // floor tau, the ANN over-fetch multiplier K, and the HNSW efRuntime this
@@ -91,17 +93,37 @@ type RetrievalPolicy struct {
 // concern). Whether CHAOS-3834's t2 entry should be recalibrated or
 // explicitly inherited for t3 is a decision CHAOS-3835's integration makes,
 // not something this table decides on its own.
-const calibratedIdentityText2Large = "openai/text-embedding-3-large#t2:r2000:b0:pnone"
+//
+// The trailing "#d3072" is codex round-3 P1: EmbedderIdentity.String()
+// deliberately EXCLUDES Dimension (see that method's doc comment -- the
+// node-identity stamp/read-fence checks dimension separately and
+// numerically), and EmbedRetrievalIdentityFromEnv's persisted answer-reuse
+// identity inherits that same exclusion. But a calibrated tau/efRuntime
+// entry has NO separate numeric dimension check the way the read fence
+// does -- without this suffix, a BYO endpoint serving "the same"
+// provider/model at a DIFFERENT width (e.g. OpenAI's `dimensions` param
+// truncating text-embedding-3-large to 1536, or a serving lookalike) would
+// silently inherit tau=0.30/efRuntime=200, numbers measured specifically
+// against 3072-wide vectors' cosine-similarity distribution. Same
+// exact-measurement invariant as the composition-tag pin above, applied to
+// the identity side: this entry is scoped to dimension 3072 exactly, and an
+// unmatched width falls back to the conservative, uncalibrated defaults
+// like any other uncalibrated identity.
+const calibratedIdentityText2Large = "openai/text-embedding-3-large#t2:r2000:b0:pnone#d3072"
 
-// retrievalPolicyTable is keyed by the EXACT string form the write path
-// stamps and the read fence compares: EmbedderIdentity.String() + "#" +
-// EmbedCompositionTag(...) -- byte-identical to what
-// EmbedRetrievalIdentityFromEnv computes and to what migration 0014's
-// embed_retrieval_identity column persists. Using that same string as the
-// policy key (rather than, say, provider+model alone) means a policy is
-// scoped to one exact composition -- a rune-cap or body-gate flip that
-// changes the tag is semantically a different corpus, and rightly falls
-// back to the conservative default until it is calibrated in its own right.
+// retrievalPolicyTable is keyed by EmbedRetrievalIdentityFromEnv's persisted
+// string (identity.String() + "#" + EmbedCompositionTag(...), byte-identical
+// to what migration 0014's embed_retrieval_identity column persists) PLUS a
+// "#d<dimension>" suffix (codex round-3 P1 -- see calibratedIdentityText2Large's
+// doc comment for why dimension, which EmbedderIdentity.String() deliberately
+// excludes, must still be part of THIS key). Using the full composed string
+// as the policy key (rather than, say, provider+model alone) means a policy
+// is scoped to one exact composition AND width -- a rune-cap/body-gate flip
+// or a dimension change is semantically a different corpus/measurement, and
+// rightly falls back to the conservative default until calibrated in its
+// own right. LookupRetrievalPolicy is the single authority that composes
+// this suffix onto a live identity string; the table's own keys embed it as
+// a literal, matching the composition-tag component's existing pin.
 //
 // An identity with NO entry here is UNCALIBRATED: LookupRetrievalPolicy
 // reports found=false and every caller keeps today's conservative,
@@ -181,12 +203,19 @@ var retrievalPolicyTable = map[string]RetrievalPolicy{
 	},
 }
 
-// LookupRetrievalPolicy returns the calibrated RetrievalPolicy for embedIdentity
-// (the identity.String()+"#"+compositionTag form -- see retrievalPolicyTable's
-// doc comment), and false when no calibrated entry exists. A false result
-// means "keep the current conservative defaults": callers must not zero out
-// whatever they already had.
-func LookupRetrievalPolicy(embedIdentity string) (RetrievalPolicy, bool) {
-	policy, ok := retrievalPolicyTable[embedIdentity]
+// LookupRetrievalPolicy returns the calibrated RetrievalPolicy for
+// embedIdentity (the identity.String()+"#"+compositionTag form -- see
+// retrievalPolicyTable's doc comment) AT dimension, and false when no
+// calibrated entry exists for that exact (identity, dimension) pair. A
+// false result means "keep the current conservative defaults": callers must
+// not zero out whatever they already had.
+//
+// dimension is a SEPARATE parameter, not folded into embedIdentity by the
+// caller, so this function is the single place the "#d<dimension>" suffix
+// format is composed (codex round-3 P1) -- the same "single authority"
+// posture EmbedCompositionTag already holds for the composition-tag
+// component, now extended to the dimension component too.
+func LookupRetrievalPolicy(embedIdentity string, dimension int) (RetrievalPolicy, bool) {
+	policy, ok := retrievalPolicyTable[fmt.Sprintf("%s#d%d", embedIdentity, dimension)]
 	return policy, ok
 }
