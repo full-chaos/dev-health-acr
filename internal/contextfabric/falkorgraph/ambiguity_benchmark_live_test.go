@@ -22,6 +22,7 @@ import (
 //	ACR_TEST_FALKOR_ADDR=host:port \
 //	ACR_TEST_EMBED_BASE_URL=... ACR_TEST_EMBED_MODEL=... ACR_TEST_EMBED_DIMENSION=... \
 //	[ACR_TEST_EMBED_API_KEY=...] \
+//	[ACR_TEST_EMBED_TIMEOUT=45s] [ACR_TEST_EMBED_MAX_TRANSPORT_RETRIES=5] \
 //	  go test ./internal/contextfabric/falkorgraph -run AmbiguityBenchmark -v
 //
 // ACR_TEST_EMBED_API_KEY is OPTIONAL: a keyless local embedder is still
@@ -30,6 +31,14 @@ import (
 // real remote embedder that requires a credential -- without it,
 // newClientOptions actively strips the Authorization header rather than
 // falling back to an ambient OPENAI_API_KEY, so a remote embedder 401s.
+//
+// ACR_TEST_EMBED_TIMEOUT and ACR_TEST_EMBED_MAX_TRANSPORT_RETRIES are also
+// OPTIONAL (CHAOS-3849 round 2): unset, both fall through to
+// embedprovider's own defaults (250ms / 0 retries), which are deliberately
+// loopback-tuned for a local embedder and too tight for a real network call
+// -- a benchmark run against a remote embedder needs both raised (production
+// runs remote embedders at 45s / 5 retries) or every embed call fails with
+// "context deadline exceeded".
 //
 // EVERY input is a dedicated ACR_TEST_* name, never the production
 // ACR_CONTEXT_FABRIC_* names (codex round-1 F6). The earlier version documented
@@ -318,6 +327,21 @@ func benchmarkLookup(key string) (string, bool) {
 		// OPENAI_API_KEY (see its doc comment), so without this case a
 		// benchmark run against a real remote embedder 401s.
 		return value("ACR_TEST_EMBED_API_KEY")
+	case embedprovider.EnvTimeout:
+		// OPTIONAL (CHAOS-3849 round 2): unset falls through to
+		// embedprovider.DefaultTimeout (250ms), which is deliberately
+		// loopback-tuned -- bounding one COLD local-embedder call, not a
+		// network round trip (see DefaultTimeout's doc comment). A remote
+		// OpenAI-shaped embedder cannot complete in 250ms, so a benchmark run
+		// against one needs this raised (production runs it at 45s) or every
+		// embed call fails with "context deadline exceeded".
+		return value("ACR_TEST_EMBED_TIMEOUT")
+	case embedprovider.EnvMaxTransportRetries:
+		// OPTIONAL (CHAOS-3849 round 2): unset falls through to
+		// embedprovider.DefaultMaxTransportRetries (0), sensible only for a
+		// local embedder where a retry buys nothing but latency (see its doc
+		// comment). Production runs remote embedders at 5.
+		return value("ACR_TEST_EMBED_MAX_TRANSPORT_RETRIES")
 	case embedprovider.EnvSimilarityFloor:
 		return value("ACR_TEST_EMBED_SIMILARITY_FLOOR")
 	case embedprovider.EnvAllowInsecureBaseURL:
@@ -350,4 +374,43 @@ func TestBenchmarkLookupEmbedAPIKey(t *testing.T) {
 			t.Fatalf("benchmarkLookup(EnvAPIKey) = (%q, %v), want (\"\", false) when ACR_TEST_EMBED_API_KEY is unset -- keyless local embedders must remain supported", got, ok)
 		}
 	})
+}
+
+// TestBenchmarkLookupEmbedTimeoutAndRetries is the CHAOS-3849 round-2
+// regression: without cases for embedprovider.EnvTimeout and
+// embedprovider.EnvMaxTransportRetries, benchmarkLookup falls through to its
+// default branch and reports neither configured, no matter what
+// ACR_TEST_EMBED_TIMEOUT / ACR_TEST_EMBED_MAX_TRANSPORT_RETRIES hold --
+// silently pinning every benchmark/oracle run to
+// embedprovider.DefaultTimeout (250ms, deliberately loopback-tuned for a
+// COLD LOCAL embedder call) and DefaultMaxTransportRetries (0). A real
+// remote embedder cannot complete within 250ms, so a run against one fails
+// every embed call with "context deadline exceeded" -- observed live
+// against a real 35,986-vector org once the round-1 credential fix got past
+// the 401.
+func TestBenchmarkLookupEmbedTimeoutAndRetries(t *testing.T) {
+	tests := []struct {
+		name   string
+		envKey string
+		key    string
+	}{
+		{"timeout", "ACR_TEST_EMBED_TIMEOUT", embedprovider.EnvTimeout},
+		{"max transport retries", "ACR_TEST_EMBED_MAX_TRANSPORT_RETRIES", embedprovider.EnvMaxTransportRetries},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+" set returns the configured value", func(t *testing.T) {
+			t.Setenv(tt.envKey, "45s")
+			got, ok := benchmarkLookup(tt.key)
+			if !ok || got != "45s" {
+				t.Fatalf("benchmarkLookup(%s) = (%q, %v), want (\"45s\", true)", tt.key, got, ok)
+			}
+		})
+		t.Run(tt.name+" unset reports not-configured, not an error", func(t *testing.T) {
+			t.Setenv(tt.envKey, "")
+			got, ok := benchmarkLookup(tt.key)
+			if ok || got != "" {
+				t.Fatalf("benchmarkLookup(%s) = (%q, %v), want (\"\", false) when %s is unset -- loopback-default local-embedder runs must remain supported", tt.key, got, ok, tt.envKey)
+			}
+		})
+	}
 }
