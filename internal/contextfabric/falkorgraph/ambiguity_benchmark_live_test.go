@@ -56,6 +56,28 @@ type ambiguityCase struct {
 	Question   string `json:"question"`
 	ExpectKind string `json:"expect_kind"`
 	ExpectID   string `json:"expect_id"`
+	// SubjectTerms is OPTIONAL: the subject term(s) production's
+	// QuestionInterpreter would have extracted from Question (CHAOS-3831 /
+	// embed-text spec §5 L1). When absent, effectiveSubjectTerms falls back
+	// to embedding the WHOLE question as a single term -- the pre-CHAOS-3831
+	// behavior, kept for a corpus that has not been annotated yet. That
+	// fallback is NOT parity: production never embeds a raw, un-interpreted
+	// question, only the terms an interpretation step extracted from it, so
+	// a corpus without this field understates (or misstates) production in a
+	// way that will not match a real deployment's hybrid recall. See
+	// loadAmbiguityCorpus, which logs how many cases fell back.
+	SubjectTerms []string `json:"subject_terms,omitempty"`
+}
+
+// effectiveSubjectTerms is the harness-parity seam: it returns exactly what
+// graphrank.SubjectTerms would receive as interpreted.SubjectTerms in
+// production, given this case's authored terms (or the pre-parity
+// whole-question fallback -- see the SubjectTerms field doc).
+func (c ambiguityCase) effectiveSubjectTerms() []string {
+	if len(c.SubjectTerms) > 0 {
+		return c.SubjectTerms
+	}
+	return []string{c.Question}
 }
 
 // benchmarkOutcome counts one run over the corpus.
@@ -105,6 +127,20 @@ func loadAmbiguityCorpus(t *testing.T) []ambiguityCase {
 	if len(corpus) < 50 {
 		t.Fatalf("ambiguity corpus has %d cases; AC-3778-1 requires at least 50", len(corpus))
 	}
+	// CHAOS-3831 / embed-text spec §5 L1: a case with no subject_terms
+	// measures the harness's pre-parity fallback (the whole question embedded
+	// as one term), not production. That is a legitimate corpus to run, but
+	// the gap must be visible rather than silently narrowing the measured
+	// lift, so it is counted and logged once here rather than per-case.
+	fallback := 0
+	for _, c := range corpus {
+		if len(c.SubjectTerms) == 0 {
+			fallback++
+		}
+	}
+	if fallback > 0 {
+		t.Logf("AC-3831 harness-parity NOTICE: %d/%d corpus cases have no subject_terms and will use the whole-question fallback, which is NOT production parity (see ambiguityCase.SubjectTerms doc)", fallback, len(corpus))
+	}
 	return corpus
 }
 
@@ -119,7 +155,13 @@ func runCorpus(ctx context.Context, t *testing.T, adapter *Adapter, principal st
 				MaxSubjectCandidates: 10, AllowClarification: true,
 			},
 		}
-		interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{testCase.Question}}
+		// CHAOS-3831 / L1: production never searches the raw question text --
+		// QuestionInterpreter extracts subject terms first, and ResolveSubjects
+		// searches those (graphrank.SubjectTerms), one deps.Search call per
+		// term. effectiveSubjectTerms is this harness's parity seam for that
+		// step; see the ambiguityCase.SubjectTerms field doc for what it does
+		// when a corpus has not supplied extracted terms.
+		interpreted := contextfabric.InterpretedQuestion{SubjectTerms: testCase.effectiveSubjectTerms()}
 		resolution, err := adapter.ResolveSubjects(ctx, principal, request, interpreted)
 		if err != nil {
 			t.Fatalf("ResolveSubjects(%q): %v", testCase.Question, err)
