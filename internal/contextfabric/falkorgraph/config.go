@@ -52,7 +52,15 @@ var (
 	// creation are NOT idempotent server-side (verified), so bootstrap
 	// treats this as success for the concurrent-bootstrap race rather than
 	// as a failure.
-	errAlreadyExists               = errors.New("context fabric graph schema object already exists")
+	errAlreadyExists = errors.New("context fabric graph schema object already exists")
+	// errIndexNotFound classifies FalkorDB's "no such index" rejection from a
+	// DROP INDEX / DROP VECTOR INDEX against a property that was never
+	// indexed (verified live: "Unable to drop index on :Subject(embedding):
+	// no such index"). Symmetric with errAlreadyExists: dropping an
+	// already-absent index is treated as success by callers (CHAOS-3832's
+	// index recreate), the same idempotent posture createVectorIndex already
+	// takes on an already-indexed property.
+	errIndexNotFound               = errors.New("context fabric graph schema object does not exist")
 	errConstraintBootstrapFailed   = errors.New("context fabric graph constraint bootstrap failed")
 	errConstraintBootstrapTimedOut = errors.New("context fabric graph constraint bootstrap timed out waiting for OPERATIONAL status")
 	errAdapterRequiresConn         = errors.New("falkordb graph connection is required")
