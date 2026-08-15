@@ -24,16 +24,34 @@ func TestIsPureIdentifierTextDetectorTable(t *testing.T) {
 		// Positive: pure number.
 		{"pure number", "12345", true},
 		{"pure number with leading/trailing space", "  12345  ", true},
-		// Positive: id/build-handle shape (letters, one separator, digits).
-		{"ticket-key shape", "CHAOS-1725", true},
-		{"short project code and hyphen digits", "ABC-1", true},
+		// Positive: closed-vocabulary generated-id prefix + digits
+		// (finding 3: run/build/pipeline/job/ci ONLY, enumerated).
+		{"generated-id prefix shape", "run-123", true},
 		{"underscore separator id shape", "run_12345", true},
 		{"multiple id-shaped tokens", "run-12345 build-6789", true},
-		// Positive, unicode: the primitive must be Unicode-aware, not
-		// ASCII-only -- fullwidth digits and non-Latin letters must be
-		// recognized exactly like their ASCII equivalents.
+		{"pipeline prefix", "pipeline-89", true},
+		{"job prefix", "job-12", true},
+		{"ci prefix", "ci-345", true},
+		// Positive: hex/UUID-shaped tokens.
+		{"hex digest with digits", "deadbeef01", true},
+		{"uuid shape", "550e8400-e29b-41d4-a716-446655440000", true},
+		// Positive, unicode: pure-digit detection must be Unicode-aware, not
+		// ASCII-only -- fullwidth digits recognized like ASCII ones.
 		{"unicode fullwidth digits", "１２３４５", true},
-		{"unicode letters with hyphen-digit id shape", "构建-12345", true},
+		// Negative (finding 3, recall-first doctrine): a letter run +
+		// separator + digits is NOT, by itself, id-only any more -- only the
+		// enumerated generated-id prefixes are. A ticket key or an
+		// unenumerated prefix is treated as carrying semantic content, so it
+		// stays embedded rather than being suppressed.
+		{"ticket-key shape is no longer id-only (finding 3)", "CHAOS-1725", false},
+		{"short project code and hyphen digits is no longer id-only (finding 3)", "ABC-1", false},
+		{"non-english letters with hyphen-digit shape is no longer id-only (finding 3)", "构建-12345", false},
+		// Negative (finding 3): semantic branch/release names that the OLD
+		// over-broad matcher misclassified as id-only, suppressing paraphrase
+		// retrieval over them.
+		{"semantic release name", "release-2025", false},
+		{"semantic sprint name", "sprint-42", false},
+		{"semantic branch name", "fix-login-bug", false},
 		// Negative: mixed real content alongside an id token -- exactly the
 		// ticket's "CI 123 fix login" class (minus the "CI" kind-prefix
 		// boilerplate, which this primitive is never handed -- see
@@ -44,6 +62,10 @@ func TestIsPureIdentifierTextDetectorTable(t *testing.T) {
 		{"bare word with no digits", "smoke", false},
 		{"real multi-word name", "Agent local Context Fabric smoke", false},
 		{"letters touching digits with no separator stay real content", "log4j", false},
+		// Negative: an all-hex-letter English word must not false-positive as
+		// a hex digest just because every character happens to fall in
+		// [a-fA-F] -- the digit-presence requirement is what excludes it.
+		{"all-hex-letter english word stays real content", "decade", false},
 		// Edge: empty text is explicitly NOT this function's concern -- it
 		// is a distinct, already-existing gating reason and must never be
 		// double-counted under the id-only label.
@@ -157,7 +179,7 @@ func TestCollectEmbedTargetsSkipsIDOnlyCIRunsAndCountsThemSeparately(t *testing.
 		OrgID:    "org-1",
 		Entities: []contextfabric.EntityProjection{idOnlyRun, namedRun, org},
 	}
-	targets, skipped := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, false)
+	targets, _, skipped := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, false)
 
 	if skipped.Kind != 1 {
 		t.Errorf("skipped.Kind = %d, want 1 (the organization node)", skipped.Kind)

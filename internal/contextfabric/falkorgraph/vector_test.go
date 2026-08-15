@@ -251,7 +251,7 @@ func TestCollectEmbedTargetsMatchesTheProjectedSearchTextAndSkipsEdges(t *testin
 			To:             contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "r", Label: "repo"},
 		}},
 	}
-	targets, skipped := collectEmbedTargets(batch, 2000, false)
+	targets, _, skipped := collectEmbedTargets(batch, 2000, false)
 	if len(targets) != 1 {
 		t.Fatalf("expected exactly one target (the entity, never the edge), got %d", len(targets))
 	}

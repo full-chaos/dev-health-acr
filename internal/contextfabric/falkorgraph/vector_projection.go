@@ -99,10 +99,25 @@ func (c embedSkipCounts) Total() int { return c.Kind + c.IDOnly }
 // embedder-identity stamp -- collectEmbedTargets never adds them to
 // byKey, so writeNodeVector never runs for them and they stay invisible to
 // the read-side fence's IS NOT NULL predicate (verifyStoredEmbedderIdentity).
-func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int, includeBodies bool) ([]embedTarget, embedSkipCounts) {
+//
+// The third return value is the id-only-skipped set AS CLEARABLE TARGETS
+// (kind + canonicalID only -- text is irrelevant to a clear). A subject can
+// carry a STALE vector from a PRIOR batch, written back when its name/branch
+// still had content, that a later batch's id-only verdict must not let
+// survive: this batch never calls add() for that row, so nothing here would
+// otherwise touch its old embedding, and a stale vector paired with a
+// composition tag that still matches the CURRENT adapter would pass the
+// read-side fence (verifyStoredEmbedderIdentity) and get served against
+// search_text that no longer has any relationship to it. The caller
+// (embedProjectionBatch) is responsible for feeding this slice through the
+// SAME clearNodeVectors mechanism every other stale-vector path already
+// uses, on every commit branch -- clearing a row with no prior vector is an
+// idempotent no-op (clearNodeVectors' SET ... = NULL), so doing it
+// unconditionally is always safe.
+func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int, includeBodies bool) ([]embedTarget, []embedTarget, embedSkipCounts) {
 	byKey := make(map[string]embedTarget)
 	skippedKindKeys := make(map[string]struct{})
-	skippedIDOnlyKeys := make(map[string]struct{})
+	skippedIDOnly := make(map[string]embedTarget)
 	add := func(kind contextfabric.SubjectKind, canonicalID, text string) {
 		text = strings.TrimSpace(text)
 		if text == "" || strings.TrimSpace(canonicalID) == "" {
@@ -126,8 +141,11 @@ func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int, incl
 			// never get an embedder-identity stamp. The write path still
 			// composes and stores this row's ordinary search_text
 			// (subjectMergeAttrs), so lexical retrieval is unaffected; only
-			// the embed decision changes.
-			skippedIDOnlyKeys[string(entity.Subject.Kind)+"\x00"+entity.Subject.CanonicalID] = struct{}{}
+			// the embed decision changes. It IS, however, a clear candidate
+			// (see the doc comment above) -- a prior batch may have left a
+			// vector on this exact kind/canonicalID.
+			key := string(entity.Subject.Kind) + "\x00" + entity.Subject.CanonicalID
+			skippedIDOnly[key] = embedTarget{kind: string(entity.Subject.Kind), canonicalID: entity.Subject.CanonicalID}
 			continue
 		}
 		add(entity.Subject.Kind, entity.Subject.CanonicalID, subjectSearchText(entity, includeBodies))
@@ -148,7 +166,17 @@ func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int, incl
 		}
 		return targets[i].kind < targets[j].kind
 	})
-	return targets, embedSkipCounts{Kind: len(skippedKindKeys), IDOnly: len(skippedIDOnlyKeys)}
+	idOnlyTargets := make([]embedTarget, 0, len(skippedIDOnly))
+	for _, target := range skippedIDOnly {
+		idOnlyTargets = append(idOnlyTargets, target)
+	}
+	sort.Slice(idOnlyTargets, func(i, j int) bool {
+		if idOnlyTargets[i].kind == idOnlyTargets[j].kind {
+			return idOnlyTargets[i].canonicalID < idOnlyTargets[j].canonicalID
+		}
+		return idOnlyTargets[i].kind < idOnlyTargets[j].kind
+	})
+	return targets, idOnlyTargets, embedSkipCounts{Kind: len(skippedKindKeys), IDOnly: len(skippedIDOnly)}
 }
 
 // embedKindSkipped is the CHAOS-3833 embed kind skip-list. Membership is a
@@ -227,15 +255,19 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		//
 		// If that clear fails, R2-3 applies and the batch fails.
 		a.recordVectorDegraded(ctx, batch.OrgID)
-		stale, staleSkipped := collectEmbedTargets(batch, a.embedBudgetRunes(), a.config.IncludeEmbedBodies)
-		if err := a.clearNodeVectors(ctx, key, batch.OrgID, stale); err != nil {
+		stale, staleIDOnly, staleSkipped := collectEmbedTargets(batch, a.embedBudgetRunes(), a.config.IncludeEmbedBodies)
+		// The id-only-skipped set rides the SAME clear as everything else
+		// this branch is already invalidating (finding 1: a row that just
+		// became id-only must not keep a stale vector any more than a row
+		// whose dimension went stale does).
+		if err := a.clearNodeVectors(ctx, key, batch.OrgID, append(stale, staleIDOnly...)); err != nil {
 			return err
 		}
-		a.recordVectorProjection(ctx, batch.OrgID, 0, len(stale), staleSkipped)
+		a.recordVectorProjection(ctx, batch.OrgID, 0, len(stale)+len(staleIDOnly), staleSkipped)
 		return nil
 	}
 	identity := a.embedder.Identity()
-	targets, skipped := collectEmbedTargets(batch, a.embedBudgetRunes(), a.config.IncludeEmbedBodies)
+	targets, idOnlyTargets, skipped := collectEmbedTargets(batch, a.embedBudgetRunes(), a.config.IncludeEmbedBodies)
 	if len(targets) == 0 {
 		// Codex round-4 F2: a relationship-only or tombstone-only batch is
 		// valid and produces no embedding targets. It must still report, so
@@ -243,7 +275,15 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		// and never "a batch ran and had nothing to embed". An observability
 		// gap that looks identical to inactivity is the same class of defect
 		// as round-3 F2.
-		a.recordVectorProjection(ctx, batch.OrgID, 0, 0, skipped)
+		//
+		// Finding 1: even with no EMBED target this batch, an id-only-skipped
+		// row may carry a vector a PRIOR batch wrote before it went id-only.
+		// That must still be cleared here -- this branch commits (advances
+		// the watermark) just like the others.
+		if err := a.clearNodeVectors(ctx, key, batch.OrgID, idOnlyTargets); err != nil {
+			return err
+		}
+		a.recordVectorProjection(ctx, batch.OrgID, 0, len(idOnlyTargets), skipped)
 		return nil
 	}
 	// CHAOS-3836 seam: the document-side task prefix is applied to the text
@@ -270,26 +310,41 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		// So the vector is CLEARED instead. A node with no vector degrades
 		// honestly to lexical retrieval; a node with a stale vector lies.
 		a.recordVectorDegraded(ctx, batch.OrgID)
-		if err := a.clearNodeVectors(ctx, key, batch.OrgID, targets); err != nil {
+		// Finding 1: the id-only-skipped set is invalidated the same as
+		// everything else in this batch -- clear it alongside targets rather
+		// than leaving whatever those rows carried from a prior batch.
+		toClear := append(append([]embedTarget{}, targets...), idOnlyTargets...)
+		if err := a.clearNodeVectors(ctx, key, batch.OrgID, toClear); err != nil {
 			return err
 		}
-		a.recordVectorProjection(ctx, batch.OrgID, 0, len(targets), skipped)
+		a.recordVectorProjection(ctx, batch.OrgID, 0, len(toClear), skipped)
 		return nil
 	}
 	for index, target := range targets {
 		if err := a.writeNodeVector(ctx, key, batch.OrgID, target, vectors[index], identity); err != nil {
 			// Same reasoning, mid-batch: targets before this one carry fresh
 			// vectors and are fine; this one and everything after it still
-			// carry yesterday's, so clear exactly those.
+			// carry yesterday's, so clear exactly those -- plus the
+			// id-only-skipped set, for the same finding-1 reason as every
+			// other commit path in this function.
 			a.recordVectorDegraded(ctx, batch.OrgID)
-			if clearErr := a.clearNodeVectors(ctx, key, batch.OrgID, targets[index:]); clearErr != nil {
+			toClear := append(append([]embedTarget{}, targets[index:]...), idOnlyTargets...)
+			if clearErr := a.clearNodeVectors(ctx, key, batch.OrgID, toClear); clearErr != nil {
 				return clearErr
 			}
-			a.recordVectorProjection(ctx, batch.OrgID, index, len(targets)-index, skipped)
+			a.recordVectorProjection(ctx, batch.OrgID, index, len(toClear), skipped)
 			return nil
 		}
 	}
-	a.recordVectorProjection(ctx, batch.OrgID, len(targets), 0, skipped)
+	// Finding 1: a fully successful batch still must not let an id-only-
+	// skipped row keep a vector a PRIOR batch wrote before it went id-only --
+	// the success path was the ORIGINAL gap: every failure/degrade branch
+	// above already clears something, but a clean run previously never
+	// touched idOnlyTargets at all.
+	if err := a.clearNodeVectors(ctx, key, batch.OrgID, idOnlyTargets); err != nil {
+		return err
+	}
+	a.recordVectorProjection(ctx, batch.OrgID, len(targets), len(idOnlyTargets), skipped)
 	return nil
 }
 

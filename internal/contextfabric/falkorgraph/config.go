@@ -203,8 +203,15 @@ func (t SlogTelemetry) RecordVectorRetrievalSuppressed(_ context.Context, orgID 
 }
 
 // RecordVectorProjection logs at Warn when anything was cleared -- a cleared
-// vector means a node just became invisible to vector search -- and at Debug
-// otherwise, so steady-state projection does not generate noise.
+// vector means a node just became invisible to vector search. Otherwise, a
+// batch that deliberately SKIPPED any subject (skippedKind or skippedIDOnly
+// nonzero) logs at Info: internal/contextfabric/AGENTS.md's "the skip is a
+// REPORTED count ... never an inference" requires the count to actually
+// reach an operator running at the default ACR_LOG_LEVEL=info, and Debug
+// does not (round-1 finding: a nonzero skip count logged at Debug is
+// invisible in production, indistinguishable from "nothing was skipped").
+// A batch with nothing cleared and nothing skipped -- ordinary steady-state
+// embedding -- stays at Debug so healthy operation does not generate noise.
 //
 // skippedKind and skippedIDOnly log under separate, closed-vocabulary keys
 // (CHAOS-3835 §7 D2) rather than one combined field -- an operator grepping
@@ -212,15 +219,20 @@ func (t SlogTelemetry) RecordVectorRetrievalSuppressed(_ context.Context, orgID 
 // like every field here, carry no raw search text: only counts and the
 // organization id.
 func (t SlogTelemetry) RecordVectorProjection(_ context.Context, orgID string, embedded, cleared, skippedKind, skippedIDOnly int) {
-	if cleared > 0 {
+	switch {
+	case cleared > 0:
 		t.logger().Warn("context_fabric: projection batch cleared stale vectors",
 			"org_id", orgID, "embedded", embedded, "cleared", cleared,
 			"skipped_kind", skippedKind, "skipped_id_only", skippedIDOnly)
-		return
+	case skippedKind > 0 || skippedIDOnly > 0:
+		t.logger().Info("context_fabric: projection batch skipped subjects",
+			"org_id", orgID, "embedded", embedded, "cleared", cleared,
+			"skipped_kind", skippedKind, "skipped_id_only", skippedIDOnly)
+	default:
+		t.logger().Debug("context_fabric: projection batch embedded nodes",
+			"org_id", orgID, "embedded", embedded, "cleared", cleared,
+			"skipped_kind", skippedKind, "skipped_id_only", skippedIDOnly)
 	}
-	t.logger().Debug("context_fabric: projection batch embedded nodes",
-		"org_id", orgID, "embedded", embedded, "cleared", cleared,
-		"skipped_kind", skippedKind, "skipped_id_only", skippedIDOnly)
 }
 
 func (c Config) validate() error {

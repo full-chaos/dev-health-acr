@@ -92,7 +92,7 @@ func TestDefaultPrefixFamilyIsBehaviorNeutral(t *testing.T) {
 	if err := adapter.embedProjectionBatch(context.Background(), "k", batch); err != nil {
 		t.Fatalf("embedProjectionBatch: %v", err)
 	}
-	targets, _ := collectEmbedTargets(batch, adapter.embedBudgetRunes(), adapter.config.IncludeEmbedBodies)
+	targets, _, _ := collectEmbedTargets(batch, adapter.embedBudgetRunes(), adapter.config.IncludeEmbedBodies)
 	if len(embedder.texts) != 1 || len(targets) != 1 {
 		t.Fatalf("expected exactly one embedded text, got %d (targets %d)", len(embedder.texts), len(targets))
 	}
@@ -147,7 +147,7 @@ func TestConfiguredPrefixFamilyWrapsTransmissionOnly(t *testing.T) {
 	if err := adapter.embedProjectionBatch(context.Background(), "k", batch); err != nil {
 		t.Fatalf("embedProjectionBatch: %v", err)
 	}
-	targets, _ := collectEmbedTargets(batch, adapter.embedBudgetRunes(), adapter.config.IncludeEmbedBodies)
+	targets, _, _ := collectEmbedTargets(batch, adapter.embedBudgetRunes(), adapter.config.IncludeEmbedBodies)
 	if len(embedder.texts) != 1 || len(targets) != 1 {
 		t.Fatalf("expected exactly one embedded text, got %d (targets %d)", len(embedder.texts), len(targets))
 	}
