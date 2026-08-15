@@ -35,12 +35,23 @@ type embedTarget struct {
 // search_text it was derived from always agree.
 //
 // The text used is byte-for-byte the same value projection.go writes to
-// propSearchText for each node kind (entitySearchText for entities,
-// title+body for content, the summary for episodes). That identity is the
-// point: lexical and vector retrieval must search the SAME corpus so their
+// propSearchText for each node kind -- the ONE per-kind composition
+// (subjectSearchText for entities, contentSearchText for content,
+// episodeSearchText for episodes; CHAOS-3833 closed the content path's
+// inlined duplicate of that expression). That identity is the point:
+// lexical and vector retrieval must search the SAME corpus so their
 // agreement measures a difference in MECHANISM and nothing else (see
 // docs/design/context-fabric-vector-retrieval.md §3 and graphrank's
-// DistinctMechanismCount).
+// DistinctMechanismCount). The one owned divergence is the embed-side
+// MaxTextRunes tail truncation of the UNBOUNDED compositions -- the class
+// the subjectSearchText switch defines by routing (see search_text.go's
+// header): episode text, content text, and any entity kind without a
+// declared template, whose lexical arm indexes the full composed text
+// while this pass embeds its first MaxTextRunes runes. The validation
+// floor (embedprovider.MinimumMaxTextRunes) covers every complete
+// template, so a templated kind is never truncated and the
+// mechanism-agreement claim is exact for templated kinds, a shared-prefix
+// statement for everything else.
 //
 // Relationships are deliberately absent. TRD §19.4.4 forbids a model in the
 // write path of an EDGE; embedding a node's label is not creating an edge, and
@@ -50,8 +61,17 @@ type embedTarget struct {
 //
 // Results are deduplicated and ordered deterministically so a replay of the
 // same batch issues byte-identical requests.
-func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int) []embedTarget {
+//
+// The second return value counts nodes DELIBERATELY skipped by the kind
+// skip-list (CHAOS-3833, spec §2/§7 D2) -- today only the organization
+// node, whose text is a raw org UUID: its vector is pure noise and the
+// organization resolves via ExactHint. The count is REPORTED through
+// RecordVectorProjection, never inferred: a skipped node is otherwise
+// indistinguishable from a healthy corpus. Skipped kinds stay fully
+// lexical (the write path still composes their search_text).
+func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int, includeBodies bool) ([]embedTarget, int) {
 	byKey := make(map[string]embedTarget)
+	skippedKeys := make(map[string]struct{})
 	add := func(kind contextfabric.SubjectKind, canonicalID, text string) {
 		text = strings.TrimSpace(text)
 		if text == "" || strings.TrimSpace(canonicalID) == "" {
@@ -64,11 +84,14 @@ func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int) []em
 		}
 	}
 	for _, entity := range batch.Entities {
-		add(entity.Subject.Kind, entity.Subject.CanonicalID, entitySearchText(entity))
+		if embedKindSkipped(entity.Subject.Kind) {
+			skippedKeys[string(entity.Subject.Kind)+"\x00"+entity.Subject.CanonicalID] = struct{}{}
+			continue
+		}
+		add(entity.Subject.Kind, entity.Subject.CanonicalID, subjectSearchText(entity, includeBodies))
 	}
 	for _, content := range batch.Contents {
-		add(contextfabric.SubjectDocument, "content:"+content.ContentID,
-			strings.TrimSpace(content.Title+"\n"+content.Body))
+		add(contextfabric.SubjectDocument, "content:"+content.ContentID, contentSearchText(content))
 	}
 	for _, episode := range batch.Episodes {
 		add(contextfabric.SubjectEpisode, "episode:"+episode.EpisodeID, episodeSearchText(episode))
@@ -83,7 +106,16 @@ func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int) []em
 		}
 		return targets[i].kind < targets[j].kind
 	})
-	return targets
+	return targets, len(skippedKeys)
+}
+
+// embedKindSkipped is the CHAOS-3833 embed kind skip-list. Membership is a
+// COMPOSITION decision (spec §4 Layer B): adding or removing a kind changes
+// which texts have vectors, so it must ride an embedTextTemplateVersion
+// bump like any template change. T5 (CHAOS-3835) extends the skip decision
+// to id-only CI-run texts by the same mechanism.
+func embedKindSkipped(kind contextfabric.SubjectKind) bool {
+	return kind == contextfabric.SubjectOrganization
 }
 
 // embedProjectionBatch writes one vector per node this batch authored.
@@ -150,15 +182,15 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		//
 		// If that clear fails, R2-3 applies and the batch fails.
 		a.recordVectorDegraded(ctx, batch.OrgID)
-		stale := collectEmbedTargets(batch, embedMaxRunes(a.embedder))
+		stale, staleSkipped := collectEmbedTargets(batch, a.embedBudgetRunes(), a.config.IncludeEmbedBodies)
 		if err := a.clearNodeVectors(ctx, key, batch.OrgID, stale); err != nil {
 			return err
 		}
-		a.recordVectorProjection(ctx, batch.OrgID, 0, len(stale))
+		a.recordVectorProjection(ctx, batch.OrgID, 0, len(stale), staleSkipped)
 		return nil
 	}
 	identity := a.embedder.Identity()
-	targets := collectEmbedTargets(batch, embedMaxRunes(a.embedder))
+	targets, skipped := collectEmbedTargets(batch, a.embedBudgetRunes(), a.config.IncludeEmbedBodies)
 	if len(targets) == 0 {
 		// Codex round-4 F2: a relationship-only or tombstone-only batch is
 		// valid and produces no embedding targets. It must still report, so
@@ -166,12 +198,19 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		// and never "a batch ran and had nothing to embed". An observability
 		// gap that looks identical to inactivity is the same class of defect
 		// as round-3 F2.
-		a.recordVectorProjection(ctx, batch.OrgID, 0, 0)
+		a.recordVectorProjection(ctx, batch.OrgID, 0, 0, skipped)
 		return nil
 	}
+	// CHAOS-3836 seam: the document-side task prefix is applied to the text
+	// HANDED TO Embed, never to target.text -- target.text is the composed
+	// search_text both retrieval arms share byte-identically (spec §0), and
+	// clearNodeVectors/writeNodeVector keep addressing targets by kind/id.
+	// No pre-truncation here: ApplyDocumentPrefix budgets the prefix into
+	// MaxTextRunes itself, and collectEmbedTargets' own caps are a
+	// composition property, not a transmission one.
 	texts := make([]string, 0, len(targets))
 	for _, target := range targets {
-		texts = append(texts, target.text)
+		texts = append(texts, a.documentPrefixed(target.text))
 	}
 	vectors, err := a.embedder.Embed(ctx, texts)
 	if err != nil || len(vectors) != len(targets) {
@@ -189,7 +228,7 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 		if err := a.clearNodeVectors(ctx, key, batch.OrgID, targets); err != nil {
 			return err
 		}
-		a.recordVectorProjection(ctx, batch.OrgID, 0, len(targets))
+		a.recordVectorProjection(ctx, batch.OrgID, 0, len(targets), skipped)
 		return nil
 	}
 	for index, target := range targets {
@@ -201,11 +240,11 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 			if clearErr := a.clearNodeVectors(ctx, key, batch.OrgID, targets[index:]); clearErr != nil {
 				return clearErr
 			}
-			a.recordVectorProjection(ctx, batch.OrgID, index, len(targets)-index)
+			a.recordVectorProjection(ctx, batch.OrgID, index, len(targets)-index, skipped)
 			return nil
 		}
 	}
-	a.recordVectorProjection(ctx, batch.OrgID, len(targets), 0)
+	a.recordVectorProjection(ctx, batch.OrgID, len(targets), 0, skipped)
 	return nil
 }
 
@@ -274,13 +313,33 @@ func (a *Adapter) writeNodeVector(ctx context.Context, key, orgID string, target
 	)
 	params := map[string]interface{}{
 		"org": orgID, "kind": target.kind, "id": target.canonicalID,
-		"vec": vectorParam(vector), "identity": identity.String(), "dimension": int64(identity.Dimension),
+		// CHAOS-3833: the stamp is identity#compositionTag -- the ONE
+		// string the read fence compares (verifyStoredEmbedderIdentity),
+		// suffixed rather than stored as a second property, because a
+		// second property is a second comparison that can drift from the
+		// first. Text-lineage changes (template, rune cap, body gate,
+		// prefix selector) move the tag; the fence then fails closed to
+		// lexical until the prescribed rebuild. The clear paths
+		// (clearNodeVectors) stay identity-AGNOSTIC by design and are
+		// untouched.
+		"vec": vectorParam(vector), "identity": a.stampedEmbedderIdentity(identity), "dimension": int64(identity.Dimension),
 	}
 	_, err := a.api.query(ctx, key, cypher, params, false)
 	if err != nil {
 		return safeDependencyError("write node embedding", err)
 	}
 	return nil
+}
+
+// stampedEmbedderIdentity is the ONE string both identity-comparing sites
+// use -- writeNodeVector's stamp and verifyStoredEmbedderIdentity's
+// expectation -- "<provider>/<model>#<composition tag>". The tag is computed
+// from this adapter's own effective semantic configuration (rune cap and
+// prefix component captured at construction, body gate from Config), the
+// same authority EmbedRetrievalIdentityFromEnv derives the persisted
+// answer-reuse dimension from.
+func (a *Adapter) stampedEmbedderIdentity(identity contextfabric.EmbedderIdentity) string {
+	return identity.String() + "#" + EmbedCompositionTag(a.embedBudgetRunes(), a.config.IncludeEmbedBodies, a.embedPrefixTagComponent())
 }
 
 // embedMaxRunes reads the per-text truncation budget from the concrete
@@ -517,7 +576,11 @@ func (a *Adapter) vectorIndexDimension(ctx context.Context, key string) (int, ve
 // first. It runs once per graph key per process, cached, so a full scan in the
 // worst case is paid once rather than per request.
 func (a *Adapter) verifyStoredEmbedderIdentity(ctx context.Context, key, orgID string) (bool, error) {
-	identity := a.embedder.Identity().String()
+	// CHAOS-3833: the expectation carries the composition tag, so a vector
+	// embedded under different TEXT semantics fails this fence exactly as
+	// a vector from a different model does -- identity matches were never
+	// enough once text lineage could move independently of the model.
+	identity := a.stampedEmbedderIdentity(a.embedder.Identity())
 	// Codex round-2 R2-2: the predicate is anchored on the EMBEDDING being
 	// present, not on the identity being present.
 	//

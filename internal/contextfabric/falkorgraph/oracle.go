@@ -148,7 +148,12 @@ func (a *Adapter) fetchEmbedderFenceCorpus(ctx context.Context, key, orgID strin
 	if a.embedder == nil {
 		return nil, errOracleEmbedderRequired
 	}
-	identity := a.embedder.Identity().String()
+	// The TAGGED identity (CHAOS-3833): writeNodeVector stamps and the read
+	// fence verifies identity.String()+"#"+composition-tag, so the corpus
+	// predicate must compare the same string -- the bare Identity().String()
+	// matches nothing the write path ever stamped, which would blank the
+	// oracle corpus and read as "ANN lost everything".
+	identity := a.stampedEmbedderIdentity(a.embedder.Identity())
 	cypher := fmt.Sprintf(
 		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s = $identity RETURN n",
 		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity,

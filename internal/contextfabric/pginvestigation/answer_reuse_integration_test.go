@@ -51,11 +51,24 @@ func mustReuseStore(t *testing.T, db *sql.DB, maxAge time.Duration) *pginvestiga
 	return store
 }
 
+// testReuseRetrievalIdentity is the CHAOS-3833 deployment-current retrieval
+// discriminator pair every reuse-participating Save and lookup in this file
+// shares -- mirroring how production threads ONE EngineOptions value to both
+// sides. Tests that want the retrieval dimension to MISS build a divergent
+// value explicitly.
+var testReuseRetrievalIdentity = contextfabric.ReuseRetrievalIdentity{
+	EmbedRetrievalIdentity: "none",
+	RetrievalPolicyVersion: "rp1",
+}
+
 func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKey {
 	return contextfabric.ReuseKey{
-		QuestionHash:      contextfabric.QuestionHash(result.Question),
-		ContractVersion:   result.Versions.ContractVersion,
-		ProjectionVersion: result.Versions.ProjectionVersion,
+		// CHAOS-3833: the same pair Save persisted, compared conjunctively.
+		EmbedRetrievalIdentity: testReuseRetrievalIdentity.EmbedRetrievalIdentity,
+		RetrievalPolicyVersion: testReuseRetrievalIdentity.RetrievalPolicyVersion,
+		QuestionHash:           contextfabric.QuestionHash(result.Question),
+		ContractVersion:        result.Versions.ContractVersion,
+		ProjectionVersion:      result.Versions.ProjectionVersion,
 		// A single-member chain: the exact identity this result was
 		// stored under. Most tests in this file want the baseline "the
 		// key that was actually stored still matches" case; CHAOS-3786
@@ -86,7 +99,7 @@ func saveWithReuseSnapshot(t *testing.T, ctx context.Context, store *pginvestiga
 	require.NoError(t, err)
 	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
 	require.NoError(t, err)
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext)))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity))
 }
 
 // TestFindReusable_HappyPathRoundTrip proves the baseline: a result saved
@@ -128,7 +141,7 @@ func TestF1_SaveLeavesReuseColumnsNullWithoutAThreadedSnapshot(t *testing.T) {
 	// Deliberately NOT using saveWithReuseSnapshot -- plain Save with a
 	// nil reuse snapshot and a nil epoch, exactly what a Save call from a
 	// caller that doesn't know about answer reuse would pass.
-	require.NoError(t, store.Save(ctx, principal, result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})))
+	require.NoError(t, store.Save(ctx, principal, result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), testReuseRetrievalIdentity))
 
 	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
@@ -580,7 +593,7 @@ func TestAC_3782_4_RebuildBetweenSnapshotAndSaveIsCaughtByEpochNotTimestamp(t *t
 	// exactly what a timestamp-only check would have called "fresh" --
 	// but carries the STALE epoch captured before the rebuild.
 	result := reusableResult("result_reuse_epoch_race01", principal.OrgID, "Did the mid-flight rebuild get caught?")
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext)))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity))
 
 	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
@@ -627,7 +640,7 @@ func TestFindReusable_NilEpochAtSaveIsNeverReusable(t *testing.T) {
 	require.NoError(t, err)
 
 	result := reusableResult("result_reuse_epoch_nil01", principal.OrgID, "Was the no-epoch save left unreusable?")
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, nil, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext)))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, nil, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity))
 
 	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
@@ -706,9 +719,117 @@ func TestSave_EmptyModelIdentityPersistsAsNeverReusable(t *testing.T) {
 
 	result := reusableResult("result_reuse_no_model_id01", principal.OrgID, "Was the empty model identity save left unreusable?")
 	result.Versions.ModelIdentity = ""
-	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext)))
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity))
 
 	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.False(t, ok, "expected a Save with an empty model identity to never be reusable")
+}
+
+// TestFindReusable_EmbedRetrievalIdentityIsConjunctive is the CHAOS-3833
+// P1-2 closure at the store level: the embed retrieval identity is a
+// dedicated EQUALITY dimension, so a stored answer stops matching the
+// moment the deployment's embed-text semantics move (a new composition
+// tag) -- during the deploy->rebuild window included, which is exactly
+// the window the epoch fence cannot cover (the epoch only bumps when the
+// operator eventually rebuilds).
+func TestFindReusable_EmbedRetrievalIdentityIsConjunctive(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-embed-identity"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_embed_id01", principal.OrgID, "Does an embed semantic change invalidate reuse?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	// Same everything, different embed retrieval identity -- what a
+	// post-deploy binary computes after a composition-tag flip.
+	changed := reuseKeyFor(result)
+	changed.EmbedRetrievalIdentity = "openai/text-embedding-3-large#t2:r2000:b1:pnone"
+	_, ok, err := store.FindReusable(ctx, principal, changed)
+	require.NoError(t, err)
+	require.False(t, ok, "expected a changed embed retrieval identity to miss conjunctively")
+
+	// And the unchanged identity still hits -- the dimension
+	// discriminates, it does not blanket-disable.
+	_, ok, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.True(t, ok, "expected the identical embed retrieval identity to still match")
+}
+
+// TestFindReusable_RetrievalPolicyVersionIsConjunctive: the policy-version
+// twin of the test above (spec §4 R3). A tau/K/HNSW default change bumps
+// the constant, moves the lookup value, and every answer stored under the
+// old policy stops matching -- with no node stamp moving and no rebuild.
+func TestFindReusable_RetrievalPolicyVersionIsConjunctive(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-policy-version"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_policy01", principal.OrgID, "Does a retrieval policy change invalidate reuse?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	changed := reuseKeyFor(result)
+	changed.RetrievalPolicyVersion = "rp2"
+	_, ok, err := store.FindReusable(ctx, principal, changed)
+	require.NoError(t, err)
+	require.False(t, ok, "expected a changed retrieval policy version to miss conjunctively")
+}
+
+// TestFindReusable_PreMigrationNullRetrievalColumnsNeverMatch pins the
+// per-replica fail-closed property migration 0014's header documents:
+// every pre-migration row holds NULL in both new columns, and NULL never
+// satisfies an equality predicate, so a predicate-carrying binary can
+// never reuse a pre-change answer. Simulated by NULLing the columns on a
+// row saved through the current binary -- byte-for-byte what a pre-0014
+// row looks like to this query.
+func TestFindReusable_PreMigrationNullRetrievalColumnsNeverMatch(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-pre-migration"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_premigration01", principal.OrgID, "Is a pre-migration row unreusable?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	_, err := db.ExecContext(ctx, `
+UPDATE acr.context_fabric_investigation_results
+   SET embed_retrieval_identity = NULL, retrieval_policy_version = NULL
+ WHERE result_id = $1`, result.ResultID)
+	require.NoError(t, err)
+
+	_, ok, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.False(t, ok, "expected a pre-0014-shaped row (NULL retrieval columns) to never match the conjunctive predicates")
+}
+
+// TestFindReusable_EmptyRetrievalKeyFieldsMissWithoutQuerying: a
+// composition that never supplied the discriminators must produce an
+// ordinary miss, never a lookup that silently ignores the dimensions --
+// the same fail-closed convention as an empty question hash.
+func TestFindReusable_EmptyRetrievalKeyFieldsMissWithoutQuerying(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-empty-retrieval-key"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_emptykey01", principal.OrgID, "Does an empty retrieval key fail closed?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	missing := reuseKeyFor(result)
+	missing.EmbedRetrievalIdentity = ""
+	_, ok, err := store.FindReusable(ctx, principal, missing)
+	require.NoError(t, err)
+	require.False(t, ok, "expected an empty embed retrieval identity in the key to miss")
+
+	missing = reuseKeyFor(result)
+	missing.RetrievalPolicyVersion = ""
+	_, ok, err = store.FindReusable(ctx, principal, missing)
+	require.NoError(t, err)
+	require.False(t, ok, "expected an empty retrieval policy version in the key to miss")
 }

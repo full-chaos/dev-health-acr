@@ -62,6 +62,49 @@ Three constants carry the acceptance bars, and none of them may be moved casuall
 
 `embedprovider` verifies the `model` field of every embeddings RESPONSE against the configured model and fails closed on mismatch, including when the field is absent. This is not defensive polish: LM Studio with several embedding models loaded silently ignores the request's `model` and serves another, and the dimension check only catches that when the widths differ -- two same-width models would produce silent mixed-vector corruption stamped with the identity of the model that was asked for. Normalization is exactly trim + ASCII case-fold; anything else is a mismatch (`ExpectResponseModel` retargets the comparison, it cannot weaken it).
 
+Embed-text v2 (CHAOS-3833): `falkorgraph/search_text.go` is the ONE
+per-kind search-text composition both retrieval arms index -- the write
+path (`subjectMergeAttrs`) and the embedding pass (`collectEmbedTargets`)
+call the same `subjectSearchText` with the same §3 body-gate value
+(`Config.IncludeEmbedBodies`, from `embedprovider.BodiesIncluded`:
+explicit `EMBED_PROVIDER_LOCALITY`/`EMBED_INCLUDE_BODIES` config, unset ⇒
+remote ⇒ bodies OFF, never URL-inferred). Every field is capped INSIDE
+the composition, and `embedprovider.MinimumMaxTextRunes` (2,000, the
+validation floor) covers the largest complete template -- which is what
+makes lexical/vector byte-identity UNCONDITIONAL for templated kinds. The
+boundary of that claim is the `subjectSearchText` switch itself, defined by
+ROUTING rather than a prose list: byte-identity holds for exactly the kinds
+the switch declares a template for; every other composition -- episode
+text, content text, and any entity kind without a declared template, which
+falls through to the uncapped `entitySearchText` fallback (decision and
+metric today, every future kind until given a template) -- is unbounded and
+carries the shared-prefix guarantee instead (lexical indexes the full
+composed text, vector its first MaxTextRunes runes of the SAME composition;
+deliberately uncapped because capping the shared composition would regress
+lexical retrieval, the spec's own T3 rollback criterion). No template may
+drop aliases or previous names
+(`retrievalHandles`) -- a renamed subject must stay resolvable by its
+previous name. The organization kind is embed-SKIPPED (raw-UUID text is
+vector noise; it stays lexical), and the skip is a REPORTED count
+(`RecordVectorProjection`'s `skipped` dimension), never an inference.
+Three discriminators version the text lineage: producer field changes
+ride the SourceVersion rebuild path (`ClickHouseSourceVersion` v5,
+`TeamsProjectsSourceVersion` v2); adapter composition and semantic
+runtime config (rune cap, body gate, prefix selector) fold into the
+composition tag (`EmbedCompositionTag`, a readable literal like
+`t2:r2000:b0:pnone`) suffixed onto the ONE stamped-and-verified identity
+string (`stampedEmbedderIdentity` -- never a second property that could
+drift); and the same `provider/model#tag` value, plus
+`RetrievalPolicyVersion` (`rp1`, bumped when tau/K/HNSW defaults change),
+persists as two CONJUNCTIVE answer-reuse dimensions (migration `0014`,
+`ReuseKey.EmbedRetrievalIdentity`/`RetrievalPolicyVersion`) -- dedicated
+equality columns, deliberately NOT members of the disjunctive
+model-identity chain and NOT folded into ProjectionVersion, so a
+Layer-B/C deploy invalidates reuse atomically with the deploy and a miss
+stays attributable to its dimension. The fleet-wide guarantee needs the
+two-phase rollout in docs/operations.md: persistence/enforcement first
+under unchanged semantics, full drain, then the semantic flip.
+
 FalkorDB's vector score is a cosine DISTANCE (0 = identical), verified live. It must never reach `graphrank.ResultConfidence` -- see the D11-class regression in `graphrank/vector_ladder_regression_test.go`. Embeddings are projection artifacts, so the existing epoch/rebuild machinery covers them; a dimension change disables vector retrieval for that organization until `acr-projector rebuild --org` runs, and a stale-dimension vector is never queried.
 
 Historical time axis (CHAOS-3781): the H6 refusal of every non-current axis

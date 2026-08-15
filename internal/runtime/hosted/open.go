@@ -232,6 +232,16 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		return nil, nil, nil, nil, fmt.Errorf("load context fabric embed query cache configuration: %w", err)
 	}
 	embedderOptions.Embedder = embedcache.Wrap(embedderOptions.Embedder, embedCacheConfig)
+	// CHAOS-3833: the deployment-current embed retrieval identity for
+	// answer reuse, derived from the SAME embedprovider configuration the
+	// embedder above was built from ("none" when vector retrieval is off).
+	// Threaded into EngineOptions below so every Save persists it and
+	// every reuse lookup compares it conjunctively -- see
+	// contextfabric.ReuseKey's CHAOS-3833 doc comment.
+	embedRetrievalIdentity, err := falkorgraph.EmbedRetrievalIdentityFromEnv(os.LookupEnv)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("load context fabric embed retrieval identity: %w", err)
+	}
 	graphReader, err := falkorgraph.NewWithEmbedder(graphConfig, embedderOptions)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("initialize context fabric graph adapter: %w", err)
@@ -360,6 +370,14 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// doc comment for why this is a chain, not a single value.
 		ReuseProjectionVersion: contextFabricProjectionVersion,
 		ReuseModelIdentities:   contextFabricReuseModelIdentities(os.LookupEnv),
+		// CHAOS-3833: one options field carries both retrieval
+		// discriminators to BOTH sides (every Save and every lookup key),
+		// so the persisted columns and the compared predicates cannot
+		// drift within this process.
+		ReuseRetrievalIdentity: contextfabric.ReuseRetrievalIdentity{
+			EmbedRetrievalIdentity: embedRetrievalIdentity,
+			RetrievalPolicyVersion: falkorgraph.RetrievalPolicyVersion,
+		},
 	})
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("initialize context fabric engine: %w", err)
@@ -420,17 +438,23 @@ func contextFabricSynthesizerOptions(serviceVersion string) contextfabric.Runtim
 // defeating AC-3782-7's version-mismatch guarantee for this specific
 // dimension.
 //
-// devhealthsource.ClickHouseSourceVersion and .EpisodesSourceVersion are
-// the two real, deliberately-bumped identities devhealthsource itself
-// already uses to force a rebuild when its own projection mapping
-// changes (see ClickHouseSourceVersion's doc comment) -- composing them
-// is the most direct, already-established authority available, short of
-// this binary (acr-api, the READ side) somehow tracking every
-// possible acr-projector (the WRITE side, a different binary) source
-// version live, which nothing here has a channel for. TeamsProjectsSource
-// has no version constant (CHAOS-3779: still a stub returning zero rows)
-// and is intentionally omitted.
-const contextFabricProjectionVersion = devhealthsource.ClickHouseSourceVersion + "+" + devhealthsource.EpisodesSourceVersion
+// devhealthsource.ClickHouseSourceVersion, .EpisodesSourceVersion, and
+// .TeamsProjectsSourceVersion are the real, deliberately-bumped identities
+// devhealthsource itself already uses to force a rebuild when its own
+// projection mapping changes (see ClickHouseSourceVersion's doc comment) --
+// composing them is the most direct, already-established authority
+// available, short of this binary (acr-api, the READ side) somehow tracking
+// every possible acr-projector (the WRITE side, a different binary) source
+// version live, which nothing here has a channel for.
+//
+// ALL source versions compose here (CHAOS-3833, embed-text spec v2 §4
+// P1-2). The previous form omitted TeamsProjectsSourceVersion -- the
+// omission comment ("still a stub returning zero rows") had gone stale the
+// moment CHAOS-3802 made it a real producer -- so a teams/projects-only
+// producer change would not have moved the reuse key at all, and stored
+// answers would have kept reusing across a semantic change to those
+// subjects' projection.
+const contextFabricProjectionVersion = devhealthsource.ClickHouseSourceVersion + "+" + devhealthsource.EpisodesSourceVersion + "+" + devhealthsource.TeamsProjectsSourceVersion
 
 // contextFabricReuseModelIdentities computes the CURRENT deployment-default
 // model CHAIN's identities, primary first and then the fallback (if

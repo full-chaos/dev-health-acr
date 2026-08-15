@@ -543,7 +543,10 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 		a.recordVectorDegraded(ctx, orgID)
 		return lexical, truncated, true, nil
 	}
-	vectors, embedErr := a.embedder.Embed(ctx, []string{term})
+	// CHAOS-3836 seam: the query-side task prefix wraps the term's
+	// TRANSMISSION to the model only -- the lexical arm above already
+	// searched the unprefixed term, and nothing prefixed is ever stored.
+	vectors, embedErr := a.embedder.Embed(ctx, []string{a.queryPrefixed(term)})
 	if embedErr != nil || len(vectors) != 1 {
 		a.recordVectorDegraded(ctx, orgID)
 		return lexical, truncated, true, nil
@@ -584,11 +587,11 @@ func (a *Adapter) recordVectorSuppressed(ctx context.Context, orgID string) {
 // recordVectorProjection reports one batch's vector outcome (codex round-3
 // F2). Called on EVERY embedding path -- success, clear, and skip -- so the
 // cleared count is a complete accounting rather than a best-effort one.
-func (a *Adapter) recordVectorProjection(ctx context.Context, orgID string, embedded, cleared int) {
+func (a *Adapter) recordVectorProjection(ctx context.Context, orgID string, embedded, cleared, skipped int) {
 	if a.config.Telemetry == nil {
 		return
 	}
-	a.config.Telemetry.RecordVectorProjection(ctx, orgID, embedded, cleared)
+	a.config.Telemetry.RecordVectorProjection(ctx, orgID, embedded, cleared, skipped)
 }
 
 // EmbedderFromEnv builds the optional vector-retrieval dependencies from the
@@ -619,7 +622,19 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 	if err != nil {
 		return EmbedderOptions{}, err
 	}
-	return EmbedderOptions{Embedder: embedder, SimilarityFloor: embedder.SimilarityFloor()}, nil
+	// Capabilities are captured HERE, off the concrete embedder, because
+	// this is the last point the concrete type is visible: the hosted API
+	// wraps Embedder in a read-path cache (CHAOS-3841) that implements only
+	// the two-method port, so anything not captured now is unreachable
+	// after wrapping. See EmbedderOptions' field docs.
+	return EmbedderOptions{
+		Embedder:            embedder,
+		SimilarityFloor:     embedder.SimilarityFloor(),
+		MaxTextRunes:        embedder.MaxTextRunes(),
+		ApplyDocumentPrefix: embedder.ApplyDocumentPrefix,
+		ApplyQueryPrefix:    embedder.ApplyQueryPrefix,
+		PrefixTagComponent:  embedder.PrefixTagComponent(),
+	}, nil
 }
 
 // resolutionFence memoizes the AC-3778-7 fence verification for the lifetime

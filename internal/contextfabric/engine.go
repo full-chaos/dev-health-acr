@@ -39,6 +39,16 @@ type EngineOptions struct {
 	// empty, same "reuse effectively disabled" convention as
 	// ReuseProjectionVersion.
 	ReuseModelIdentities []string
+	// ReuseRetrievalIdentity (CHAOS-3833) is the deployment-CURRENT pair
+	// of retrieval discriminators -- embed retrieval identity and
+	// retrieval policy version -- computed by composition from the same
+	// configuration the graph adapter's own stamping and retrieval use.
+	// Engine threads the identical value into every lookup's ReuseKey AND
+	// into every Save, so the persisted columns and the compared
+	// predicates cannot drift within one process. Either field left empty
+	// disables retrieval-keyed reuse participation (rows persist NULL and
+	// lookups miss), the same fail-closed convention as the fields above.
+	ReuseRetrievalIdentity ReuseRetrievalIdentity
 }
 
 type EngineDependencies struct {
@@ -136,6 +146,7 @@ type Engine struct {
 	reuseModelIdentityResolver ReuseModelIdentityResolver
 	reuseProjectionVersion     string
 	reuseModelIdentities       []string
+	reuseRetrievalIdentity     ReuseRetrievalIdentity
 	serviceVersion             string
 	now                        func() time.Time
 	newResultID                func() string
@@ -161,7 +172,8 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
 		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
-		serviceVersion: options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
+		reuseRetrievalIdentity: options.ReuseRetrievalIdentity,
+		serviceVersion:         options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
 	}, nil
 }
 
@@ -472,7 +484,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// interpreted one: the lookup runs before Interpret and can only
 		// know the former, so keying Save on the latter would reopen the
 		// same asymmetry from the other side.
-		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, TimeAxisKeyFor(clampedRequestTime)); err != nil {
+		if err := e.results.Save(ctx, principal, result, reuseWatermarkSnapshot, reuseEpoch, TimeAxisKeyFor(clampedRequestTime), e.reuseRetrievalIdentity); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 	}

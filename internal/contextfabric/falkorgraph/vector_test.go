@@ -251,12 +251,15 @@ func TestCollectEmbedTargetsMatchesTheProjectedSearchTextAndSkipsEdges(t *testin
 			To:             contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "r", Label: "repo"},
 		}},
 	}
-	targets := collectEmbedTargets(batch, 2000)
+	targets, skipped := collectEmbedTargets(batch, 2000, false)
 	if len(targets) != 1 {
 		t.Fatalf("expected exactly one target (the entity, never the edge), got %d", len(targets))
 	}
-	if targets[0].text != entitySearchText(entity) {
-		t.Fatalf("embedded text %q must equal the projected search text %q", targets[0].text, entitySearchText(entity))
+	if skipped != 0 {
+		t.Fatalf("expected no skipped nodes, got %d", skipped)
+	}
+	if targets[0].text != subjectSearchText(entity, false) {
+		t.Fatalf("embedded text %q must equal the projected search text %q", targets[0].text, subjectSearchText(entity, false))
 	}
 }
 
@@ -986,6 +989,7 @@ type recordingTelemetry struct {
 	suppressed  int
 	embedded    int
 	cleared     int
+	skipped     int
 	projections int
 }
 
@@ -996,10 +1000,11 @@ func (r *recordingTelemetry) RecordVectorRetrievalDegraded(context.Context, stri
 func (r *recordingTelemetry) RecordVectorRetrievalSuppressed(context.Context, string) {
 	r.suppressed++
 }
-func (r *recordingTelemetry) RecordVectorProjection(_ context.Context, _ string, embedded, cleared int) {
+func (r *recordingTelemetry) RecordVectorProjection(_ context.Context, _ string, embedded, cleared, skipped int) {
 	r.projections++
 	r.embedded += embedded
 	r.cleared += cleared
+	r.skipped += skipped
 }
 
 func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {

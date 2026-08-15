@@ -109,7 +109,7 @@ func NewStore(db *sql.DB, opts ...StoreOption) (*Store, error) {
 // identical payload is treated as success (idempotent retry); a replay
 // under the same result_id with a DIFFERENT payload is rejected, since that
 // would silently overwrite an immutable record.
-func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string) error {
+func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, retrieval contextfabric.ReuseRetrievalIdentity) error {
 	if s == nil || s.db == nil {
 		return errors.New("pginvestigation: store is not configured")
 	}
@@ -130,6 +130,21 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		return fmt.Errorf("pginvestigation: marshal investigation result: %w", err)
 	}
 	questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch := s.reuseColumnsFor(result, reuseSnapshot, reuseEpoch)
+	// CHAOS-3833: the two retrieval discriminators are persisted if and
+	// only if this row participates in reuse at all (question_hash
+	// resolved non-NULL) AND composition supplied both values -- an empty
+	// value maps to SQL NULL, the same "this row never becomes reusable"
+	// sentinel the model-identity column already uses, because
+	// FindReusable's conjunctive equality predicates can never match NULL.
+	var embedRetrievalIdentity, retrievalPolicyVersion sql.NullString
+	if questionHash.Valid {
+		if retrieval.EmbedRetrievalIdentity != "" {
+			embedRetrievalIdentity = sql.NullString{String: retrieval.EmbedRetrievalIdentity, Valid: true}
+		}
+		if retrieval.RetrievalPolicyVersion != "" {
+			retrievalPolicyVersion = sql.NullString{String: retrieval.RetrievalPolicyVersion, Valid: true}
+		}
+	}
 	// CHAOS-3781: the axis key is supplied by Engine from the CLAMPED
 	// EFFECTIVE request context, matching exactly what FindReusable will
 	// key with. It is NOT re-derived from result.Interpretation here -- an
@@ -151,11 +166,12 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 
 	insertResult, err := s.db.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT (result_id) DO NOTHING`,
 		resultID, orgID, payload, result.GeneratedAt,
-		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch, timeAxisKey)
+		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch, timeAxisKey,
+		embedRetrievalIdentity, retrievalPolicyVersion)
 	if err != nil {
 		return fmt.Errorf("save investigation result: %w", sanitizeError(err))
 	}
@@ -438,6 +454,13 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	if orgID == "" || questionHash == "" || len(key.ModelIdentities) == 0 || strings.TrimSpace(key.TimeAxisKey) == "" {
 		return contextfabric.InvestigationResult{}, false, nil
 	}
+	// CHAOS-3833: a composition that never supplied the retrieval
+	// discriminators must miss, not run a lookup that ignores them --
+	// the same fail-closed convention as an empty question hash or an
+	// empty identity chain above.
+	if strings.TrimSpace(key.EmbedRetrievalIdentity) == "" || strings.TrimSpace(key.RetrievalPolicyVersion) == "" {
+		return contextfabric.InvestigationResult{}, false, nil
+	}
 
 	// Codex round-1 F6: the staleness window uses created_at (DB
 	// clock_timestamp(), migration 0009) against DB now() -- NEVER
@@ -470,6 +493,14 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	// model_identity value matches if it is ANY element of the chain, not
 	// only if it equals a single primary identity -- see
 	// ReuseKey.ModelIdentities' doc comment.
+	// CHAOS-3833: embed_retrieval_identity and retrieval_policy_version
+	// are CONJUNCTIVE equality predicates alongside the other exact
+	// dimensions -- deliberately NOT inside the ANY() chain, whose members
+	// are alternatives. Every pre-migration row holds NULL in both
+	// columns, and NULL = <anything> is never true, so a replica running
+	// this query can never reuse a pre-change answer (per-replica
+	// fail-closed; the fleet-wide guarantee additionally needs the
+	// two-phase rollout gate documented in docs/operations.md).
 	row := s.db.QueryRowContext(ctx, `
 SELECT payload, source_watermarks
 FROM acr.context_fabric_investigation_results
@@ -479,6 +510,8 @@ WHERE org_id = $1
   AND projection_version = $4
   AND model_identity = ANY($5)
   AND time_axis_key = $7
+  AND embed_retrieval_identity = $8
+  AND retrieval_policy_version = $9
   AND source_watermarks IS NOT NULL
   AND invalidation_epoch IS NOT NULL
   AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -493,7 +526,8 @@ WHERE org_id = $1
 -- SELECTION deterministic; it carries no freshness meaning of its own.
 ORDER BY created_at DESC, result_id DESC
 LIMIT 1`,
-		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds(), key.TimeAxisKey)
+		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds(), key.TimeAxisKey,
+		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion)
 	var payload, sourceWatermarks []byte
 	switch err := row.Scan(&payload, &sourceWatermarks); {
 	case errors.Is(err, sql.ErrNoRows):

@@ -442,8 +442,15 @@ func TestFetchEmbedderFenceCorpusScopesToOrgAndIdentityAndDecodesRows(t *testing
 	if capturedParams["org"] != "org-1" {
 		t.Fatalf("org predicate not bound: %+v", capturedParams)
 	}
-	if capturedParams["identity"] != "stub/stub-embed" {
-		t.Fatalf("identity predicate not bound to the configured embedder's identity: %+v", capturedParams)
+	// The corpus predicate must compare the TAGGED stamp -- the string
+	// writeNodeVector writes and the read fence verifies (CHAOS-3833) --
+	// asserted against the adapter's own stamp authority, not a repeated
+	// literal, so a tag-composition change cannot silently split the two.
+	if want := adapter.stampedEmbedderIdentity(adapter.embedder.Identity()); capturedParams["identity"] != want {
+		t.Fatalf("identity predicate = %v, want the stamped identity %q", capturedParams["identity"], want)
+	}
+	if identity, _ := capturedParams["identity"].(string); !strings.HasPrefix(identity, "stub/stub-embed#") {
+		t.Fatalf("identity predicate not bound to the configured embedder's tagged identity: %+v", capturedParams)
 	}
 	for _, want := range []string{propOrgID, propEmbedding, propEmbedderIdentity} {
 		if !strings.Contains(capturedCypher, want) {

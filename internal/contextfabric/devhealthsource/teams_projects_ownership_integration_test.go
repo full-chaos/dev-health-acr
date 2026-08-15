@@ -166,8 +166,8 @@ func newOwnershipFixture(t *testing.T, ctx context.Context, query contextpacket.
 		}
 	}
 	seedTeam := func(id, provider string) {
-		mustSeed("teams "+id, `INSERT INTO teams VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, id+" name", "", at, orgID, provider, id, uint8(1))
+		mustSeed("teams "+id, `INSERT INTO teams VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, id+" name", "", at, orgID, provider, id, []string{}, uint8(1))
 	}
 	seedProject := func(id, provider, key string) {
 		mustSeed("projects "+id, `INSERT INTO projects VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -441,8 +441,8 @@ func subAmbiguityGuardIsScopedToOneOrganization(t *testing.T, ctx context.Contex
 	// organization's provider and project_key.
 	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', 'CROSS-ORG-KEY', 'other org project', 1, 'started', '', ?)`,
 		"PROJ-OTHER-ORG", otherOrg, at)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO teams VALUES (?, ?, '', ?, ?, 'github', ?, 1)`,
-		"TEAM-OTHER-ORG", "other org team", at, otherOrg, "TEAM-OTHER-ORG")
+	mustExec(t, ctx, fixture.direct, `INSERT INTO teams VALUES (?, ?, '', ?, ?, 'github', ?, ?, 1)`,
+		"TEAM-OTHER-ORG", "other org team", at, otherOrg, "TEAM-OTHER-ORG", []string{})
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-OTHER-ORG', ?, 'CROSS-ORG-KEY', 'native', ?, NULL, ?)`,
 		otherOrg, "PROJ-OTHER-ORG", ownershipFirstSeen, at)
 

@@ -54,12 +54,12 @@ func NewStore() *Store {
 // overwrites an existing entry: an identical replay under the same
 // result_id succeeds idempotently, a divergent one errors.
 //
-// reuseSnapshot and reuseEpoch are accepted to satisfy
-// contextfabric.InvestigationResultStore but otherwise ignored: this
-// test/dev store does not implement CHAOS-3782 answer reuse
-// (contextfabric.AnswerReuseGate), so there is no reuse-key bookkeeping
-// to populate.
-func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string) error {
+// reuseSnapshot, reuseEpoch, and the CHAOS-3833 retrieval identity are
+// accepted to satisfy contextfabric.InvestigationResultStore but
+// otherwise ignored: this test/dev store does not implement CHAOS-3782
+// answer reuse (contextfabric.AnswerReuseGate), so there is no reuse-key
+// bookkeeping to populate.
+func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, _ contextfabric.ReuseRetrievalIdentity) error {
 	if s == nil {
 		return errors.New("memoryinvestigation: store is not configured")
 	}

@@ -221,6 +221,22 @@ answer, but only from canonical fact sources; the graph half contributes
 whatever unbounded elements it holds, disclosed in the answer's coverage as
 `context-fabric:graph-validity-windows`.
 
+**A rebuild is likewise REQUIRED after deploying CHAOS-3833 phase 2**
+(`ClickHouseSourceVersion` v4 → v5, `TeamsProjectsSourceVersion` v1 → v2,
+embed composition tag `t1` → `t2`). The producers emit the embed-text v2
+fields (ticket-key aliases, PR body heads, joined PR titles, pipeline
+names, tags, project keys) and the per-kind search-text templates compose
+them; an already-projected graph holds text — and vectors — no current
+recomposition could reproduce. Three independent fences make the window
+safe until the rebuild runs: `ErrProjectionSourceVersionChanged` refuses
+every projection tick, the tagged identity stamp fails every stored
+vector closed to lexical retrieval, and the persisted
+`embed_retrieval_identity` reuse dimension stops stored answers from
+being reused across the change (see the two-phase rollout gate above —
+phase 1 must be fully drained BEFORE this deploy). Run
+`acr-projector rebuild --org <organization-id>` for every projected
+organization; the rebuild reprojects and re-embeds in one pass.
+
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is
 confirmed reset. If `acr-projector` crashes mid-rebuild, ordinary `serve`
@@ -320,6 +336,40 @@ carries `credential_masked` only (last 4 characters, e.g. `********wxyz`).
 | --- | --- | --- |
 | `ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE` | *(unset — disabled)* | Staleness window (1m–24h when set). A stored investigation result older than this is never reused, regardless of whether every other reuse condition holds. Leaving this unset disables answer reuse entirely: every Investigate call runs fresh, exactly as if `pginvestigation.WithAnswerReuse` were never passed. |
 
+**Retrieval discriminators (CHAOS-3833).** Every reuse-participating row
+additionally persists two conjunctive equality dimensions (migration `0014`):
+the **embed retrieval identity** (`<provider>/<model>#<composition tag>`, or
+the literal `none` when no embedder is configured) and the **retrieval policy
+version** (`rp1`; bumped in code whenever tau/K/HNSW retrieval defaults
+change). Both are computed from the running binary's configuration at save
+and lookup time, so a deploy that changes embed-text semantics or retrieval
+policy stops matching stored answers **atomically with the deploy** — no
+epoch bump or operator action required for the reuse side. Pre-`0014` rows
+hold NULL in both columns and never match.
+
+**Two-phase rollout gate — REQUIRED for any embed-semantic change.** The
+fail-closed property above holds **per replica**, not per fleet: the
+migration framework deliberately tolerates an older binary against a newer
+schema during a rolling deploy, and a pre-`0014` binary runs the
+predicate-less lookup — the new columns are simply never compared — so an
+undrained old replica happily reuses pre-change answers after the migration
+lands. Therefore any change to embed-text composition or semantic embed
+configuration (Layer B/C: templates, the composition tag, rune cap, body
+gate, prefix selector) must roll out in two phases:
+
+1. **Phase 1 — persistence and enforcement, unchanged semantics.** Deploy
+   the binary that persists and compares `embed_retrieval_identity` /
+   `retrieval_policy_version` (with migration `0014` applied), with NO
+   semantic change active. **Drain the fleet completely** — verify no
+   predicate-less replica still serves traffic before proceeding. This
+   drain step is load-bearing, not ceremonial: it is the only thing that
+   closes the old-replica reuse window.
+2. **Phase 2 — semantic activation.** Deploy the composition/config change.
+   Every replica now computes a moved discriminator, so stored pre-change
+   answers stop matching fleet-wide at the moment of the deploy, and the
+   node-side identity stamp independently fails vectors closed to lexical
+   until the prescribed `acr-projector rebuild --org` runs per organization.
+
 ### Vector and semantic retrieval (CHAOS-3778)
 
 Vector retrieval is **opt-in and off by default**. It is enabled by setting a
@@ -337,8 +387,11 @@ byte-for-byte what it was before.
 | `ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR` | `0.55` | Absolute cosine similarity below which a neighbour is **dropped, not scored**. See the hazard note below. |
 | `ACR_CONTEXT_FABRIC_EMBED_TIMEOUT` | `250ms` | Bounds one embeddings call. |
 | `ACR_CONTEXT_FABRIC_EMBED_MAX_BATCH` | `64` | Texts per request at projection time. |
-| `ACR_CONTEXT_FABRIC_EMBED_MAX_TEXT_RUNES` | `2000` | Runes of one node's search text that are embedded. |
+| `ACR_CONTEXT_FABRIC_EMBED_MAX_TEXT_RUNES` | `2000` | Runes of one node's search text that are embedded. **Semantic, immutable-per-corpus** (CHAOS-3833): the value is a component of the composition tag, so changing it fails every stored vector closed and requires the paired rebuild. Validation floor is 2,000 — the largest complete per-kind template — so the lexical and vector arms always index byte-identical text for templated kinds; a lower value fails startup loudly. |
 | `ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES` | `0` | The SDK's own in-client retry loop. |
+| `ACR_CONTEXT_FABRIC_EMBED_PROVIDER_LOCALITY` | *(unset — `remote`)* | Where embedded text ends up: `local` (same trust zone) or `remote` (the provider is a NEW reader of the text, outside the graph's authorization scope). **An explicit declaration, never inferred from URL shape** — a loopback URL can front a tunnel, a non-loopback URL can be a same-host container. Unset means `remote`, so free-text bodies stay off until an operator affirmatively declares the endpoint local. Any other value fails startup. **Semantic when it changes the effective body gate** — pair the change with a rebuild. |
+| `ACR_CONTEXT_FABRIC_EMBED_INCLUDE_BODIES` | *(unset — follows locality)* | Whether free-text body heads (PR body, incident description) join the composed search text — BOTH retrieval arms, which always index identical text. Set explicitly to override the locality default; `true` with a remote locality is the recorded tenant opt-in for transmitting body text to a remote provider (pair it with the provider's data-usage/retention statement in your deployment docs). **Semantic, immutable-per-corpus**: a flip moves the composition tag and requires the paired rebuild. |
+| `ACR_CONTEXT_FABRIC_EMBED_PREFIX_FAMILY` | *(unset — `none`)* | Task-prefix pair some embedding models are trained to require (CHAOS-3836): closed vocabulary, `none` or `nomic`. `nomic` prepends `search_document: ` / `search_query: ` to the text **transmitted** to the model on the write and read paths respectively — the stored search text both retrieval arms share is never prefixed. **Explicit configuration, never inferred from the model id**; an unrecognized value fails startup. **Semantic, immutable-per-corpus**: the family is the `p…` component of the composition tag, so changing it fails stored vectors closed and requires the paired rebuild. |
 | `ACR_CONTEXT_FABRIC_EMBED_EXPECT_RESPONSE_MODEL` | *(unset)* | The model id the **server reports**, when it legitimately differs from the id sent. This *retargets* the serving-model check; it cannot disable it. Leave unset unless a provider is known to rename its own id. |
 | `ACR_CONTEXT_FABRIC_EMBED_ALLOW_INSECURE_BASE_URL` | `false` | Permits a plaintext `http://` base URL. Required for a loopback embedder. **Never set this for a base URL that leaves the trust boundary** — the credential travels as a bearer token. |
 
