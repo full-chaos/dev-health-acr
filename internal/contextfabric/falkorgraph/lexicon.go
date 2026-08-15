@@ -1,0 +1,157 @@
+package falkorgraph
+
+import (
+	"regexp"
+	"strings"
+)
+
+// This file is the CHAOS-3838 (embed-text spec v2 §5 L13, §6 T8) query-side
+// domain lexicon: a CLOSED, code-owned vocabulary of short-hand/canonical
+// phrase pairs a caller's question commonly uses interchangeably with this
+// corpus's own vocabulary ("PR" for "pull request", "ticket" for "issue" or
+// "work item", ...). Static only -- no LLM expansion in this ticket (spec:
+// "static domain lexicon first").
+//
+// Single authority (CHAOS-3838 design constraint): this is the ONE table
+// both retrieval arms read. queries.go's fulltextSearchNodes widens its
+// RediSearch OR-query with it; vector.go's hybridSearchNodes/SearchQuestion
+// widen the text handed to the embedder with it. Neither arm keeps its own
+// copy or its own matching logic -- extending coverage means editing
+// domainLexiconGroups here, once, and both arms pick it up.
+
+// domainLexiconGroups is the closed vocabulary itself: each inner slice is a
+// set of phrases this corpus treats as interchangeable ways to name the SAME
+// concept. Entries are drawn from this codebase's own vocabulary (subject
+// kind names, ClickHouse column/table naming) and ordinary domain shorthand
+// -- never from any withheld corpus or question text. Extending a group, or
+// adding a new one, is a deliberate, reviewed edit here, exactly like
+// composition.go's idOnlyGeneratedPrefixDigits' own "closed vocabulary,
+// extend explicitly" rule.
+//
+// Order is fixed (declaration order of both the outer slice and each inner
+// slice) and expandWithLexicon walks it deterministically, so two calls
+// against the same text always produce the same expansion string -- required
+// for the query text to be a stable cache key (embedcache) and for the
+// RediSearch query string to be reproducible across identical requests.
+var domainLexiconGroups = [][]string{
+	{"pr", "pull request", "merge request"},
+	{"ticket", "issue", "work item"},
+	{"repo", "repository"},
+	{"ci run", "pipeline", "pipeline run", "build", "workflow run"},
+	{"deploy", "deployment", "release"},
+	{"review", "code review"},
+	{"org", "organization"},
+}
+
+// lexiconGroup pairs a domainLexiconGroups entry with one precompiled,
+// case-insensitive, whole-phrase matcher per member phrase.
+type lexiconGroup struct {
+	phrases  []string
+	matchers []*regexp.Regexp
+}
+
+// compiledLexicon is built once at package init, not per call -- expansion
+// runs on the hot read path (once per resolved term, plus once per
+// resolution for the question), and every regexp here is fixed, code-owned
+// literal text with no caller input in it.
+var compiledLexicon = compileLexicon(domainLexiconGroups)
+
+func compileLexicon(groups [][]string) []lexiconGroup {
+	compiled := make([]lexiconGroup, 0, len(groups))
+	for _, group := range groups {
+		lg := lexiconGroup{phrases: group, matchers: make([]*regexp.Regexp, len(group))}
+		for i, phrase := range group {
+			// \b...\b anchors the match to whole-word/whole-phrase
+			// boundaries so "pr" does not match inside "principal", and a
+			// multi-word phrase like "pull request" only matches that exact
+			// run of words, not a stem or a superset.
+			lg.matchers[i] = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(phrase) + `\b`)
+		}
+		compiled = append(compiled, lg)
+	}
+	return compiled
+}
+
+// expandWithLexicon returns text widened with any domain-lexicon synonym
+// phrases matched WITHIN it, for building a wider RETRIEVAL QUERY only.
+//
+// Byte-identical to text when no lexicon phrase is found -- the common case
+// for most terms/questions -- so a caller that does not match anything pays
+// no behavior change at all: the RediSearch query is unchanged, the embedded
+// text is unchanged, and the embedcache (T11) key is unchanged (still a
+// cache hit for a repeated unmatched term).
+//
+// CALLERS MUST NEVER key confidence/relevance scoring off this function's
+// output. fulltextSearchNodes' matched-term coverage and any embedding
+// similarity threshold were measured/calibrated against the ORIGINAL term
+// text; this function exists only to widen what gets FOUND, never to change
+// how confidently a find is scored. See queries.go's fulltextSearchNodes and
+// vector.go's hybridSearchNodes for how each arm keeps that boundary.
+func expandWithLexicon(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return text
+	}
+	seen := make(map[string]struct{})
+	var additions []string
+	for _, group := range compiledLexicon {
+		matched := false
+		for i, matcher := range group.matchers {
+			if matcher.MatchString(text) {
+				matched = true
+				seen[strings.ToLower(group.phrases[i])] = struct{}{}
+			}
+		}
+		if !matched {
+			continue
+		}
+		for _, phrase := range group.phrases {
+			key := strings.ToLower(phrase)
+			if _, already := seen[key]; already {
+				continue
+			}
+			seen[key] = struct{}{}
+			additions = append(additions, phrase)
+		}
+	}
+	if len(additions) == 0 {
+		return text
+	}
+	return text + " " + strings.Join(additions, " ")
+}
+
+// applyLexiconToVectorArm controls whether the domain lexicon also widens
+// the VECTOR arm's embedded query text (the "dual-arm" half of L13), versus
+// staying lexical-only. Kept as a single, deliberately easy-to-flip seam --
+// not deleted now that it is measured -- because CHAOS-3829 (parked) may
+// change the corroboration commit geometry, at which point this is exactly
+// the knob a future re-measurement would flip first.
+//
+// MEASURED DECISION (CHAOS-3838 freeze, live ambiguity benchmark, same
+// 50-case corpus, tau=0.30/efR=200 policy): lexical-only (false) produced
+// MORE corroborated-but-blocked candidates than dual-arm (true) -- 25/50 vs
+// 23/50 -- with IDENTICAL AC-3778-2/3/4 outcomes either way (lift +0.0pp
+// both configurations; wrong-commits 1->0 both; 20/20 no-match controls
+// clean both). Dual-arm's own risk (CHAOS-3834's tau=0.30/efRuntime=200 was
+// calibrated against BARE-term/question embeddings, with no fresh S+/S-
+// distribution for lexicon-widened embed text) bought no offsetting
+// upside on this corpus, so lexical-only ships: equal or better measured
+// breadth at lower calibration risk. See the freeze report for the full
+// numbers and for why NEITHER setting clears the lift bar (a distinct,
+// structural finding: every corroborated candidate on this corpus competed
+// against another candidate in the same resolution, and a corroborated
+// confidence's 0.86 ceiling can never clear the 0.88 top-of-two commit
+// gate against ANY competitor -- CHAOS-3829 territory, not this ticket's
+// to fix).
+const applyLexiconToVectorArm = false
+
+// vectorQueryText returns the text a query-side vector search should embed:
+// lexicon-expanded when applyLexiconToVectorArm is on, the bare input
+// otherwise. Both vector.go call sites (hybridSearchNodes' per-term embed,
+// questionVectorSearchNodes' question embed) go through this ONE function,
+// so they can never independently drift on which mode is live.
+func vectorQueryText(text string) string {
+	if !applyLexiconToVectorArm {
+		return text
+	}
+	return expandWithLexicon(text)
+}

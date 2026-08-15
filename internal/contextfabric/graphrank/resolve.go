@@ -45,6 +45,22 @@ type ResolveDeps struct {
 	// TraversalDegraded optionally reports how many Traverse calls in this
 	// ResolveSubjects call ended in ObservationTraversalErrored. May be nil.
 	TraversalDegraded func(ctx context.Context, orgID string, count int)
+	// SearchQuestion optionally runs ONE additional retrieval pass over the
+	// full interpreted QUESTION text, rather than one extracted subject
+	// term (CHAOS-3838 / spec L11 -- the "union" read-side lever). Nil
+	// means this backend has no such capability (or a configured mechanism
+	// declined -- e.g. vector retrieval is off), and ResolveSubjects treats
+	// that exactly like "found nothing", never as an error.
+	//
+	// Called AT MOST ONCE per ResolveSubjects call, after every per-term
+	// Search call has already run -- never once per term -- which is what
+	// keeps this to the ticket's stated budget of one extra provider call
+	// per resolution rather than one per term. Its result merges into the
+	// SAME candidatesBySubject map, through the SAME NodeCandidate/
+	// MergeCandidates/traversal path every per-term Search result does, so
+	// a subject the question-level pass finds competes and corroborates
+	// identically to one a term-level pass finds -- see mergeSearchResults.
+	SearchQuestion func(ctx context.Context, question string, limit int) (candidates []CandidateNode, truncated bool, degraded bool, err error)
 }
 
 // ResolveSubjects resolves the committed/candidate subjects for an
@@ -153,54 +169,31 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 		if degraded {
 			retrievalDegraded = true
 		}
-		for _, node := range results {
-			candidate, ok := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal)
-			if !ok {
-				continue
+		traversalDegraded += mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked)
+	}
+	// CHAOS-3838 (spec L11): the question-level pass runs AT MOST ONCE,
+	// AFTER every per-term pass above, never interleaved with it. Ordering
+	// matters for determinism, not just budget: MergeCandidates' winner/
+	// loser choice is order-sensitive on an exact confidence TIE (the
+	// earlier-processed candidate wins ties), so running this after the
+	// term loop means every per-term-only resolution keeps byte-identical
+	// output to before this ticket, and the question pass can only ever
+	// ADD subjects or lose a tie to one a term already found -- never
+	// silently reorder which of two tied term-level finds "wins".
+	if deps.SearchQuestion != nil {
+		question := strings.TrimSpace(request.Question)
+		if question != "" {
+			results, truncated, degraded, err := deps.SearchQuestion(ctx, question, request.Options.MaxSubjectCandidates)
+			if err != nil {
+				return contextfabric.SubjectResolution{}, err
 			}
-			key := SubjectKey(candidate.Subject)
-			// CHAOS-3778: MergeCandidates replaces a plain "keep the higher
-			// confidence" here. The higher-confidence finding still supplies
-			// the spine and the base confidence, so nothing about a
-			// single-mechanism candidate changes; what is new is that the
-			// loser's MECHANISMS survive instead of being discarded, which is
-			// the whole signal the corroborated band reads (see
-			// MergeCandidates and CorroboratedConfidence).
-			if current, exists := candidatesBySubject[key]; exists {
-				candidatesBySubject[key] = MergeCandidates(current, candidate)
-			} else {
-				candidatesBySubject[key] = candidate
+			if truncated {
+				searchTruncated = true
 			}
-			// Observation-to-entity traversal: a hybrid match on a document
-			// or episode node means the term appeared in text *about* some
-			// canonical entity, not necessarily that the caller is asking
-			// about the document/episode itself. Walk back to whichever
-			// entity that observation is attached to and propose it as an
-			// additional candidate (never a replacement -- a caller may
-			// genuinely mean the document or episode).
-			if IsObservationSubjectKind(candidate.Subject.Kind) {
-				traversed, outcome := deps.Traverse(ctx, term, node)
-				switch outcome {
-				case ObservationParentFound:
-					observationBlocked[key] = true
-					traversedKey := SubjectKey(traversed.Subject)
-					observationParentKey[key] = traversedKey
-					// Same merge rule as the direct-hit path above: a parent
-					// that BOTH a direct search and a traversal proposed must
-					// keep both mechanisms, because that pairing is exactly
-					// what the corroborated band is meant to reward.
-					if current, exists := candidatesBySubject[traversedKey]; exists {
-						candidatesBySubject[traversedKey] = MergeCandidates(current, traversed)
-					} else {
-						candidatesBySubject[traversedKey] = traversed
-					}
-				case ObservationTraversalErrored:
-					observationBlocked[key] = true
-					traversalDegraded++
-				case ObservationNoParent:
-					// Confirmed: no parent. Leave eligible.
-				}
+			if degraded {
+				retrievalDegraded = true
 			}
+			traversalDegraded += mergeSearchResults(ctx, principal, request, deps, question, results, candidatesBySubject, observationParentKey, observationBlocked)
 		}
 	}
 	if traversalDegraded > 0 && deps.TraversalDegraded != nil {
@@ -209,4 +202,81 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	resolution := ResolveFromMergedCandidates(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated)
 	resolution.RetrievalDegraded = retrievalDegraded
 	return resolution, nil
+}
+
+// mergeSearchResults is the ONE per-node ingestion path shared by
+// ResolveSubjects' per-term Search loop and its single question-level
+// SearchQuestion call (CHAOS-3838): convert each result node to a
+// SubjectCandidate, merge it into candidatesBySubject (CHAOS-3778's
+// mechanism-preserving MergeCandidates, never a plain confidence
+// comparison), and -- for an observation node (document/episode) -- walk
+// traversal back to whichever canonical entity it is attached to and merge
+// that too. Extracted verbatim from ResolveSubjects' original per-term loop
+// body so the term path and the question path CANNOT independently drift on
+// how a found node becomes a candidate; the only difference between the two
+// callers is which term/results pair they hand in.
+//
+// term is the provenance label recorded on every SubjectCandidate this call
+// produces (NodeCandidate's ReceiptID derivation, MatchedTerms, and its own
+// "does this equal the node's own name/label" exact-match check) -- the
+// per-term loop passes the extracted subject term; the question-level call
+// passes the full question text, which will essentially never equal a
+// node's own name, so it correctly never claims the MatchExact bump on its
+// own.
+//
+// Returns the count of ObservationTraversalErrored outcomes this call
+// produced, for the caller to fold into ResolveSubjects' own running total
+// (TraversalDegraded's single aggregate report covers both passes).
+func mergeSearchResults(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, term string, results []CandidateNode, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool) int {
+	traversalErrored := 0
+	for _, node := range results {
+		candidate, ok := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal)
+		if !ok {
+			continue
+		}
+		key := SubjectKey(candidate.Subject)
+		// CHAOS-3778: MergeCandidates replaces a plain "keep the higher
+		// confidence" here. The higher-confidence finding still supplies
+		// the spine and the base confidence, so nothing about a
+		// single-mechanism candidate changes; what is new is that the
+		// loser's MECHANISMS survive instead of being discarded, which is
+		// the whole signal the corroborated band reads (see
+		// MergeCandidates and CorroboratedConfidence).
+		if current, exists := candidatesBySubject[key]; exists {
+			candidatesBySubject[key] = MergeCandidates(current, candidate)
+		} else {
+			candidatesBySubject[key] = candidate
+		}
+		// Observation-to-entity traversal: a hybrid match on a document or
+		// episode node means the term appeared in text *about* some
+		// canonical entity, not necessarily that the caller is asking about
+		// the document/episode itself. Walk back to whichever entity that
+		// observation is attached to and propose it as an additional
+		// candidate (never a replacement -- a caller may genuinely mean the
+		// document or episode).
+		if IsObservationSubjectKind(candidate.Subject.Kind) {
+			traversed, outcome := deps.Traverse(ctx, term, node)
+			switch outcome {
+			case ObservationParentFound:
+				observationBlocked[key] = true
+				traversedKey := SubjectKey(traversed.Subject)
+				observationParentKey[key] = traversedKey
+				// Same merge rule as the direct-hit path above: a parent
+				// that BOTH a direct search and a traversal proposed must
+				// keep both mechanisms, because that pairing is exactly
+				// what the corroborated band is meant to reward.
+				if current, exists := candidatesBySubject[traversedKey]; exists {
+					candidatesBySubject[traversedKey] = MergeCandidates(current, traversed)
+				} else {
+					candidatesBySubject[traversedKey] = traversed
+				}
+			case ObservationTraversalErrored:
+				observationBlocked[key] = true
+				traversalErrored++
+			case ObservationNoParent:
+				// Confirmed: no parent. Leave eligible.
+			}
+		}
+	}
+	return traversalErrored
 }

@@ -284,9 +284,37 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 	// more aggressive splitter applied directly to the ORIGINAL question
 	// text (Codex R2-2), independently of terms (which stays
 	// RediSearch-query-syntax-safe, for the Cypher query string below).
+	//
+	// CHAOS-3838 (spec L13): deliberately anchored to the ORIGINAL text,
+	// never to the lexicon-expanded query built below. Confidence is a
+	// promise about how much of THIS query's own terms a candidate covers;
+	// widening the denominator with synonym words the caller never typed
+	// would dilute -- never improve -- the coverage ratio of every
+	// candidate that matches only the original term, silently demoting
+	// results that worked before this ticket. Expansion is allowed to find
+	// MORE candidates (via queryTerms below); it must never change how
+	// confidently an already-findable one scores.
 	matchTerms := fulltextWords(text)
 	termCount := len(matchTerms)
-	query := strings.Join(terms, "|")
+	// CHAOS-3838 (spec L13): the RediSearch OR-query is built from the
+	// lexicon-widened text, so a candidate whose own text carries only the
+	// synonym ("pull request") and not the caller's literal term ("PR") can
+	// still be FOUND. queryTerms stays EXACTLY `terms` -- same slice, same
+	// order, same case -- whenever expandWithLexicon(text) matches nothing
+	// (the common case), so this call's query string, and every existing
+	// caller/test that depends on it, is byte-identical to before this
+	// ticket. Only a real lexicon match re-tokenizes the widened text, in
+	// which case queryTerms is `terms` PLUS the (order-preserved) synonym
+	// tokens appended after them -- a harmless OR-duplicate is possible
+	// (e.g. a synonym phrase re-tokenizing a word already in text) but is
+	// never de-duplicated or reordered here, since RediSearch OR tolerates
+	// a repeated term and reordering would cost the byte-identity guarantee
+	// above for no benefit.
+	queryTerms := terms
+	if expanded := expandWithLexicon(text); expanded != text {
+		queryTerms = tokenizeForFulltext(expanded)
+	}
+	query := strings.Join(queryTerms, "|")
 	// Codex R2-1: request one more row than the caller's budget so a
 	// truncated result set can be told apart from a genuinely complete one
 	// (see this function's doc comment).

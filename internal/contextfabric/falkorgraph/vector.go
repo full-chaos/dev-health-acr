@@ -609,7 +609,13 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 	// CHAOS-3836 seam: the query-side task prefix wraps the term's
 	// TRANSMISSION to the model only -- the lexical arm above already
 	// searched the unprefixed term, and nothing prefixed is ever stored.
-	vectors, embedErr := a.embedder.Embed(ctx, []string{a.queryPrefixed(term)})
+	//
+	// CHAOS-3838 (spec L13, dual-arm): vectorQueryText widens term with the
+	// domain lexicon before prefixing, same closed vocabulary the lexical
+	// arm's query widened with above -- byte-identical to term when nothing
+	// in it matches, so this is a no-op (including for the embedcache key)
+	// for every term the lexicon has no opinion about.
+	vectors, embedErr := a.embedder.Embed(ctx, []string{a.queryPrefixed(vectorQueryText(term))})
 	if embedErr != nil || len(vectors) != 1 {
 		a.recordVectorDegraded(ctx, orgID)
 		return lexical, truncated, true, nil
@@ -626,6 +632,68 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 		return lexical, truncated, true, nil
 	}
 	return append(lexical, vectorCandidates...), truncated || vectorTruncated, false, nil
+}
+
+// questionVectorSearchNodes is the ResolveDeps.SearchQuestion implementation
+// (CHAOS-3838 / spec L11): ONE additional vector-only search per resolution,
+// embedding the full interpreted QUESTION text rather than an extracted
+// subject term. reader.go's ResolveSubjects wires this to run exactly once
+// per ResolveSubjects call -- see graphrank.ResolveSubjects' SearchQuestion
+// handling -- unioning its candidates into the SAME candidatesBySubject
+// merge every per-term hybridSearchNodes call already feeds.
+//
+// Vector-only, deliberately: L11 is a recall lever for the mechanism that
+// already runs per term (MatchVector), not a second lexical pass. Adding a
+// lexical arm over raw question text here would duplicate DiscoverContext's
+// own full-text-over-question step (cohort discovery, a different purpose)
+// for no additional corroboration value: MergeMechanisms dedups by ENUM
+// MEMBER, so a term-embed find and a question-embed find of the same
+// subject merge into ONE MatchVector entry, never two (mechanism.go's
+// DistinctMechanismCount doc comment) -- corroboration still requires a
+// genuinely distinct mechanism. L13's lexical-arm expansion is what
+// supplies that second mechanism; this function's whole job is finding MORE
+// subjects for it to potentially corroborate.
+//
+// Mirrors hybridSearchNodes' three fail-open guards, in the same order, so
+// the two paths can never silently disagree about when vector retrieval is
+// available: no embedder configured (nothing expected, degraded=false), a
+// historical time axis (vector has no validity window, degraded=true), and
+// an unreadable AC-3778-7 fence (degraded=true). The fence and temporal
+// filter are the SAME instances hybridSearchNodes' calls already share for
+// this resolution -- one fence probe per resolution, not one per call.
+func (a *Adapter) questionVectorSearchNodes(ctx context.Context, key, orgID, question string, limit int, fence *resolutionFence, temporal temporalFilter) ([]graphrank.CandidateNode, bool, bool, error) {
+	if !hasLexicalContent(question) {
+		// Same reasoning as hybridSearchNodes' identical guard: meaningless
+		// input must not manufacture arbitrary nearest-neighbor candidates,
+		// and this is a property of the question, not a fault, so
+		// degraded stays false.
+		return nil, false, false, nil
+	}
+	if a.embedder == nil {
+		return nil, false, false, nil
+	}
+	if temporal.active {
+		a.recordVectorSuppressed(ctx, orgID)
+		return nil, false, true, nil
+	}
+	if !fence.readable(ctx, a, key, orgID) {
+		a.recordVectorDegraded(ctx, orgID)
+		return nil, false, true, nil
+	}
+	// CHAOS-3838 (spec L13, dual-arm): same vectorQueryText seam
+	// hybridSearchNodes' term embed uses, so the question and every term
+	// widen (or don't) under the identical rule.
+	vectors, embedErr := a.embedder.Embed(ctx, []string{a.queryPrefixed(vectorQueryText(question))})
+	if embedErr != nil || len(vectors) != 1 {
+		a.recordVectorDegraded(ctx, orgID)
+		return nil, false, true, nil
+	}
+	candidates, truncated, err := a.vectorSearchNodesWithOverFetch(ctx, key, orgID, vectors[0], a.similarityFloor, limit, a.overFetchMultiplier)
+	if err != nil {
+		a.recordVectorDegraded(ctx, orgID)
+		return nil, false, true, nil
+	}
+	return candidates, truncated, false, nil
 }
 
 // recordVectorDegraded reports a vector-retrieval degradation to telemetry.
