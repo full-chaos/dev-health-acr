@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -202,6 +203,16 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 // contextfabric.OrgModelRuntimeEvictor -- open() wires it into
 // api.RuntimeDependencies.OrgModelRuntimeEvictor so the DELETE model-config
 // route can purge a cached runtime immediately (Codex round-1 finding F4).
+// falkorGraphTelemetry builds the falkorgraph.GraphTelemetry sink this
+// package wires into every graph adapter it constructs. Factored out to a
+// named, directly-testable function (CHAOS-3835 round-4 finding 3) rather
+// than an inline SlogTelemetry{Logger: ...} literal, so a unit test can
+// assert the wiring -- "the constructed sink carries the passed-in logger"
+// -- without needing a graph backend configured or a live connection.
+func falkorGraphTelemetry(logger *slog.Logger) falkorgraph.GraphTelemetry {
+	return falkorgraph.SlogTelemetry{Logger: logger}
+}
+
 func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigStore *pgmodelconfig.Store) (contextfabric.Investigator, *pginvestigation.Store, contextfabric.OrgModelRuntimeEvictor, contextfabric.ReuseInvalidator, error) {
 	if !request.config.EnableContextFabricInvestigations || !falkorgraph.Configured(os.LookupEnv) {
 		return nil, nil, nil, nil, nil
@@ -213,7 +224,19 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// Codex round-3 F2: supply a real telemetry sink. Left nil, every graph
 	// signal -- including the per-request vector-degradation signal -- was
 	// discarded, while documentation claimed operators could observe it.
-	graphConfig.Telemetry = falkorgraph.SlogTelemetry{}
+	//
+	// CHAOS-3835 round-4 finding 3: the sink must carry THIS process's
+	// configured logger (request.options.Logger -- the same one every
+	// other sink in this function already uses, e.g. NewSlogEngineTelemetry
+	// below), not slog.Default() -- SlogTelemetry{} (no Logger) falls back
+	// to slog.Default(), which ignores ACR_LOG_LEVEL and whatever handler
+	// main.go actually configured. Every signal this package emits --
+	// including the CHAOS-3835 id-only skip counts, whose entire purpose is
+	// being visible at the operator's configured level -- was reaching a
+	// DIFFERENT, unconfigured logger instead, satisfying
+	// internal/contextfabric/AGENTS.md's "reported, never inferred"
+	// invariant only cosmetically.
+	graphConfig.Telemetry = falkorGraphTelemetry(request.options.Logger)
 	// CHAOS-3778: vector retrieval is optional. An unconfigured embedder
 	// leaves the lexical retrieval path exactly as it was.
 	embedderOptions, err := falkorgraph.EmbedderFromEnv(os.LookupEnv)

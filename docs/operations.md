@@ -237,6 +237,47 @@ phase 1 must be fully drained BEFORE this deploy). Run
 `acr-projector rebuild --org <organization-id>` for every projected
 organization; the rebuild reprojects and re-embeds in one pass.
 
+**A rebuild is likewise REQUIRED after deploying CHAOS-3835**
+(embed composition tag `t2` → `t3`, the T5 id-only skip decision —
+`isPureIdentifierSubject`, `id_only.go`). **This deploy does NOT bump
+`ClickHouseSourceVersion` or `TeamsProjectsSourceVersion`** — unlike every
+rebuild above, it changes no producer field; T5's decision reads fields
+the graph already has (`pipeline_name`, `branch`, and the aliases/previous
+names `retrievalHandles` composes), only whether a row gets EMBEDDED at
+all. That means `ErrProjectionSourceVersionChanged` does **not** fire this
+time: ordinary `serve` ticks keep running normally, and the ONLY fence
+protecting correctness is the tagged identity stamp — a `t2`-tagged vector
+fails `verifyStoredEmbedderIdentity` under a `t3`-configured adapter, so a
+vector-enabled organization degrades to lexical-only retrieval on this
+deploy, immediately and safely (never a stale or mismatched vector
+served).
+
+The operational consequence: that degradation is **not
+self-healing**. Every rebuild above eventually resolves itself because its
+`SourceVersion` fence forces a full reproject on the next tick regardless
+of operator action; this one has no such backstop. `devhealthsource`'s
+incremental cursor only revisits a row whose CANONICAL SOURCE changed
+since the last sync — a `ci_pipeline_run` row that is already fully
+synced and stays unchanged is never handed to `collectEmbedTargets` again
+by an ordinary tick, so its stale `t2` vector and identity stamp are never
+refreshed on their own. Left un-rebuilt, a vector-enabled organization
+stays lexical-only **indefinitely**, not just until the next tick. Run
+`acr-projector rebuild --org <organization-id>` for every vector-enabled
+organization after this deploy; the persisted `embed_retrieval_identity`
+reuse dimension stops stored answers from being reused across the tag
+change in the meantime, the same mechanism as CHAOS-3833 phase 2 above.
+
+Expect the rebuild to report **fewer embedded subjects than before**, plus
+a nonzero id-only skip count (`RecordVectorProjection`'s `skippedIDOnly`
+field, surfaced at Info when nonzero) for organizations with
+`ci_pipeline_run` rows. This is the T5 population the skip targets — rows
+whose `pipeline_name`/`branch`/aliases carry no content beyond a bare
+identifier, roughly 22% of that kind's live corpus per the embed-text spec
+v2 measurement — correctly excluded from embedding, not evidence of lost
+data: those rows keep their ordinary lexical `search_text` and stay fully
+reachable by exact and fulltext retrieval; only the (previously noisy)
+vector is withheld.
+
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is
 confirmed reset. If `acr-projector` crashes mid-rebuild, ordinary `serve`

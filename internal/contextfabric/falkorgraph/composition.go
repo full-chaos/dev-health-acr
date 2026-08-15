@@ -30,16 +30,21 @@ const RetrievalPolicyVersion = "rp1"
 const EmbedRetrievalIdentityNone = "none"
 
 // embedTextTemplateVersion names the per-kind embed-text COMPOSITION the
-// write path currently produces (spec §4 Layer B). "t2" is CHAOS-3833's
-// per-kind template set (search_text.go), including the organization embed
-// skip-list; "t1" was the pre-CHAOS-3833 composition (entitySearchText =
-// Label + Aliases + PreviousNames for every kind; content = title + body;
-// episode = goal/outcome/summary). Any change to what any kind's composed
-// text contains -- template edit, cap move, skip-list membership, prefix
-// implementation -- bumps this constant, which moves the composition tag,
-// which fails the read fence closed and moves the answer-reuse key, both
-// through the one string below.
-const embedTextTemplateVersion = "t2"
+// write path currently produces (spec §4 Layer B). "t3" is CHAOS-3835's
+// (T5) id-only skip decision (isPureIdentifierSubject, id_only.go): which
+// ROWS get embedded is exactly as much a composition fact as which FIELDS
+// do, per embedKindSkipped's own doc comment, so it rides the same
+// discriminator. "t2" was CHAOS-3833's per-kind template set
+// (search_text.go), including the organization embed skip-list; "t1" was
+// the pre-CHAOS-3833 composition (entitySearchText = Label + Aliases +
+// PreviousNames for every kind; content = title + body; episode =
+// goal/outcome/summary). Any change to what any kind's composed text
+// contains, or to which rows get embedded at all -- template edit, cap
+// move, skip-list membership, id-only detector rule, prefix implementation
+// -- bumps this constant, which moves the composition tag, which fails the
+// read fence closed and moves the answer-reuse key, both through the one
+// string below.
+const embedTextTemplateVersion = "t3"
 
 // EmbedPrefixTagComponentNone is the prefix component of the composition tag
 // for a deployment with no prefix family configured -- the value
@@ -53,7 +58,7 @@ const EmbedPrefixTagComponentNone = "p" + string(embedprovider.PrefixFamilyNone)
 
 // EmbedCompositionTag is the canonical composition-tag literal (spec §4
 // Layer C): template version, embed rune cap, body gate, prefix component --
-// e.g. "t2:r2000:b0:pnone". A LITERAL, not a hash, so an operator can read a
+// e.g. "t3:r2000:b0:pnone". A LITERAL, not a hash, so an operator can read a
 // stamp (or a persisted reuse row) and know exactly what produced it.
 //
 // prefixTagComponent is embedprovider's PrefixTagComponent literal, leading

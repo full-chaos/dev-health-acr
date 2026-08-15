@@ -251,12 +251,12 @@ func TestCollectEmbedTargetsMatchesTheProjectedSearchTextAndSkipsEdges(t *testin
 			To:             contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "r", Label: "repo"},
 		}},
 	}
-	targets, skipped := collectEmbedTargets(batch, 2000, false)
+	targets, _, skipped := collectEmbedTargets(batch, 2000, false)
 	if len(targets) != 1 {
 		t.Fatalf("expected exactly one target (the entity, never the edge), got %d", len(targets))
 	}
-	if skipped != 0 {
-		t.Fatalf("expected no skipped nodes, got %d", skipped)
+	if skipped.Total() != 0 {
+		t.Fatalf("expected no skipped nodes, got %+v", skipped)
 	}
 	if targets[0].text != subjectSearchText(entity, false) {
 		t.Fatalf("embedded text %q must equal the projected search text %q", targets[0].text, subjectSearchText(entity, false))
@@ -985,12 +985,14 @@ func TestR2_3_ApplyProjectionBatchDoesNotWriteTheWatermarkOnUnreconciledVectors(
 // recordingTelemetry captures every graph signal so a test can assert what an
 // operator would actually see.
 type recordingTelemetry struct {
-	degraded    int
-	suppressed  int
-	embedded    int
-	cleared     int
-	skipped     int
-	projections int
+	degraded      int
+	suppressed    int
+	embedded      int
+	cleared       int
+	skipped       int
+	skippedKind   int
+	skippedIDOnly int
+	projections   int
 }
 
 func (r *recordingTelemetry) RecordObservationTraversalDegraded(context.Context, string, int) {}
@@ -1000,11 +1002,13 @@ func (r *recordingTelemetry) RecordVectorRetrievalDegraded(context.Context, stri
 func (r *recordingTelemetry) RecordVectorRetrievalSuppressed(context.Context, string) {
 	r.suppressed++
 }
-func (r *recordingTelemetry) RecordVectorProjection(_ context.Context, _ string, embedded, cleared, skipped int) {
+func (r *recordingTelemetry) RecordVectorProjection(_ context.Context, _ string, embedded, cleared, skippedKind, skippedIDOnly int) {
 	r.projections++
 	r.embedded += embedded
 	r.cleared += cleared
-	r.skipped += skipped
+	r.skipped += skippedKind + skippedIDOnly
+	r.skippedKind += skippedKind
+	r.skippedIDOnly += skippedIDOnly
 }
 
 func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {

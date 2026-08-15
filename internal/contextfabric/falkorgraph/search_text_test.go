@@ -206,7 +206,7 @@ func TestWriteAndEmbedPathsComposeByteIdenticalText(t *testing.T) {
 	for _, includeBodies := range []bool{false, true} {
 		entities := fullTemplateEntities()
 		batch := contextfabric.ProjectionBatch{OrgID: "org", Entities: entities}
-		targets, _ := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, includeBodies)
+		targets, _, _ := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, includeBodies)
 		embedText := map[string]string{}
 		for _, target := range targets {
 			embedText[target.canonicalID] = target.text
@@ -288,7 +288,7 @@ func TestUnboundedContentCompositionSharesItsTruncationPrefix(t *testing.T) {
 		t.Fatalf("fixture must exceed the floor to exercise the split, got %d runes", runes)
 	}
 	batch := contextfabric.ProjectionBatch{OrgID: "org", Contents: []contextfabric.ContentProjection{content}}
-	targets, _ := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, false)
+	targets, _, _ := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, false)
 	if len(targets) != 1 {
 		t.Fatalf("expected exactly one embed target, got %d", len(targets))
 	}
@@ -342,7 +342,7 @@ func TestFallbackKindCompositionSharesItsTruncationPrefix(t *testing.T) {
 		t.Fatalf("fixture must exceed the floor to exercise the split, got %d runes", runes)
 	}
 	batch := contextfabric.ProjectionBatch{OrgID: "org", Entities: []contextfabric.EntityProjection{entity}}
-	targets, _ := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, true)
+	targets, _, _ := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, true)
 	if len(targets) != 1 {
 		t.Fatalf("expected exactly one embed target, got %d", len(targets))
 	}
@@ -380,7 +380,7 @@ func TestEpisodeCompositionSharesItsTruncationPrefix(t *testing.T) {
 		t.Fatalf("fixture must exceed the floor to exercise the split, got %d runes", runes)
 	}
 	batch := contextfabric.ProjectionBatch{OrgID: "org", Episodes: []contextfabric.EpisodeProjection{episode}}
-	targets, _ := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, false)
+	targets, _, _ := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, false)
 	if len(targets) != 1 {
 		t.Fatalf("expected exactly one embed target, got %d", len(targets))
 	}
@@ -405,9 +405,9 @@ func TestOrganizationIsSkippedFromEmbeddingAndCounted(t *testing.T) {
 	}
 	workItem := fullTemplateEntities()[0]
 	batch := contextfabric.ProjectionBatch{OrgID: "org-1", Entities: []contextfabric.EntityProjection{org, workItem}}
-	targets, skipped := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, false)
-	if skipped != 1 {
-		t.Fatalf("skipped = %d, want the organization node counted exactly once", skipped)
+	targets, _, skipped := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, false)
+	if skipped.Kind != 1 || skipped.IDOnly != 0 {
+		t.Fatalf("skipped = %+v, want the organization node counted exactly once under the Kind reason", skipped)
 	}
 	for _, target := range targets {
 		if target.kind == string(contextfabric.SubjectOrganization) {
@@ -428,11 +428,11 @@ func TestOrganizationIsSkippedFromEmbeddingAndCounted(t *testing.T) {
 // node stamp is the ONE identity string suffixed with it.
 func TestCompositionTagAndStampCarryTheSemanticConfig(t *testing.T) {
 	t.Parallel()
-	if got := EmbedCompositionTag(2000, false, ""); got != "t2:r2000:b0:pnone" {
-		t.Fatalf("EmbedCompositionTag = %q, want the canonical literal t2:r2000:b0:pnone", got)
+	if got := EmbedCompositionTag(2000, false, ""); got != "t3:r2000:b0:pnone" {
+		t.Fatalf("EmbedCompositionTag = %q, want the canonical literal t3:r2000:b0:pnone", got)
 	}
-	if got := EmbedCompositionTag(4096, true, ""); got != "t2:r4096:b1:pnone" {
-		t.Fatalf("EmbedCompositionTag = %q, want t2:r4096:b1:pnone", got)
+	if got := EmbedCompositionTag(4096, true, ""); got != "t3:r4096:b1:pnone" {
+		t.Fatalf("EmbedCompositionTag = %q, want t3:r4096:b1:pnone", got)
 	}
 
 	fake := &fakeConn{}
