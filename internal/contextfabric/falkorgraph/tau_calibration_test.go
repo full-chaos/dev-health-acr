@@ -50,6 +50,46 @@ func TestCalibrateFromReport_SingleSample(t *testing.T) {
 	}
 }
 
+// TestCalibrateFromReport_HundredPercentTargetIsActuallyAchievable pins the
+// codex round-1 P1 fix directly: a 100% TargetRecall must produce a tau that
+// production's STRICT aboveSimilarityFloor predicate (similarity > tau, not
+// >=) actually retrieves every sample against, not one that claims 100% while
+// silently dropping the boundary sample. Before the fix, tau was set to the
+// exact minimum S+ sample; that sample could never clear its own floor in
+// production (X > X is always false), so a "100%" recommendation was
+// provably unachievable -- the bug's own description ("9/10 claimed vs 8/10
+// actual"). This asserts both halves of the fix: the reported AchievedRecall
+// is honest (every sample genuinely clears the returned tau under the SAME
+// predicate production uses), and the recall guarantee still holds (100%
+// target really does deliver 100%, not "100% claimed, 90% delivered").
+func TestCalibrateFromReport_HundredPercentTargetIsActuallyAchievable(t *testing.T) {
+	samples := []float64{0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00}
+	cases := make([]CalibrationCase, len(samples))
+	for i, s := range samples {
+		cases[i] = CalibrationCase{Cause: "hit", CorrectSimilarity: floatPtr(s)}
+	}
+	result, err := CalibrateFromReport(CalibrationReport{Cases: cases}, CalibrationOptions{TargetRecall: 1.0})
+	if err != nil {
+		t.Fatalf("CalibrateFromReport: %v", err)
+	}
+	if !almostEqual(result.AchievedRecall, 1.0) {
+		t.Fatalf("AchievedRecall = %v, want 1.0 (100%% target must actually deliver 100%%)", result.AchievedRecall)
+	}
+	// The pinned boundary check: the minimum sample (0.10, this report's tau
+	// candidate) must genuinely clear the returned tau under production's
+	// OWN predicate, not merely be numerically close to it.
+	min := samples[0]
+	if !aboveSimilarityFloor(min, result.Policy.SimilarityFloor) {
+		t.Fatalf("aboveSimilarityFloor(%v, tau=%v) = false, want true -- the sample AchievedRecall counts as recalled must actually be retrievable in production, not just claimed", min, result.Policy.SimilarityFloor)
+	}
+	// And the boundary sample itself, handed straight to tau, must NOT read
+	// as recalled -- the exact codex round-1 P1 regression this test exists
+	// to catch (a tau equal to a real sample can never retrieve that sample).
+	if aboveSimilarityFloor(min, min) {
+		t.Fatal("aboveSimilarityFloor(min, min) = true, want false -- a sample exactly at tau is never counted as recalled")
+	}
+}
+
 func TestCalibrateFromReport_NoCorrectSimilaritySamplesIsAnError(t *testing.T) {
 	report := CalibrationReport{Cases: []CalibrationCase{
 		{Cause: "subject_missing"},

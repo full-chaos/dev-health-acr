@@ -400,7 +400,7 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 			continue
 		}
 		similarity := embedprovider.CosineFromDistance(distance)
-		if similarity <= tau {
+		if !aboveSimilarityFloor(similarity, tau) {
 			// AC-3778-4: not close enough to be evidence of anything.
 			continue
 		}
@@ -422,6 +422,20 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 		candidates = append(candidates, candidate)
 	}
 	return candidates, truncated, nil
+}
+
+// aboveSimilarityFloor is the SINGLE production predicate for "does this
+// similarity clear the tau floor" -- STRICTLY greater than tau, never >=. A
+// candidate whose similarity exactly EQUALS tau is dropped here exactly like
+// one below it (AC-3778-4: "not close enough" includes the boundary itself).
+//
+// tau_calibration.go's recall/hard-negative/reject-rate accounting (codex
+// round-1 P1) calls this EXACT function rather than re-deriving its own
+// comparison, so calibration math can never silently disagree with what
+// production actually retrieves -- see
+// TestCalibrateFromReport_BoundarySampleAtTauNotCountedAsRecalled.
+func aboveSimilarityFloor(similarity, tau float64) bool {
+	return similarity > tau
 }
 
 // hybridSearchNodes is the ResolveDeps.Search implementation: the lexical
@@ -664,8 +678,24 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 		// needs the extra guard below, mirroring attachEmbedder's own
 		// floor validation: a policy bug that let a zero tau through must
 		// not silently disable the AC-3778-4 no-match guard.
-		if policy.SimilarityFloor > 0 && policy.SimilarityFloor < 1 {
-			options.SimilarityFloor = policy.SimilarityFloor
+		//
+		// Precedence, evaluated per knob (codex round-1 P1: an unconditional
+		// override silently discarded an operator's explicit
+		// ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR, which is
+		// measurement-integrity critical for live harnesses that pin their
+		// own floor). The calibrated table is a DEFAULT, not a forced
+		// override: it applies only where the operator supplied no explicit
+		// value for that specific knob. SimilarityFloor has an env knob
+		// (EnvSimilarityFloor) to check against; "explicit" mirrors envFloat's
+		// own definition (set AND non-blank) so a blank env var does not
+		// count as an override. OverFetchMultiplier and EfRuntime have no
+		// env-configurable source anywhere in embedprovider -- there is no
+		// operator value to preserve for either, so the calibrated table
+		// stays the sole source for both, unconditionally.
+		if explicitFloor, ok := lookup(embedprovider.EnvSimilarityFloor); !(ok && strings.TrimSpace(explicitFloor) != "") {
+			if policy.SimilarityFloor > 0 && policy.SimilarityFloor < 1 {
+				options.SimilarityFloor = policy.SimilarityFloor
+			}
 		}
 		options.OverFetchMultiplier = policy.OverFetchMultiplier
 		options.EfRuntime = policy.EfRuntime

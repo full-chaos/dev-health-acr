@@ -81,10 +81,12 @@ type CalibrationResult struct {
 	SPlusSampleSize        int
 	SMinusSampleSize       int
 	HardNegativeSampleSize int
-	// AchievedRecall is the ACTUAL fraction of S+ >= Policy.SimilarityFloor
-	// -- always >= TargetRecall by construction (see the function doc
-	// comment's rounding rule), reported so a caller can see the margin
-	// rather than re-deriving it.
+	// AchievedRecall is the ACTUAL fraction of S+ that STRICTLY clear
+	// Policy.SimilarityFloor (aboveSimilarityFloor's predicate, mirroring
+	// production's own -- see recallGateThreshold's doc comment) -- always
+	// >= TargetRecall by construction (see the function doc comment's
+	// rounding rule and tau's Nextafter nudge), reported so a caller can see
+	// the margin rather than re-deriving it.
 	AchievedRecall float64
 	// HardNegativeRejectRate is the fraction of the combined S-/hard-negative
 	// pool that falls BELOW Policy.SimilarityFloor -- the spec §5 L4 test
@@ -110,13 +112,18 @@ var (
 // one oracle report, per spec §5 L4 / §6 T4's recall-gate framing.
 //
 // TAU: the largest value such that AT LEAST opts.TargetRecall of the S+
-// (correct-pair) samples are >= it. Computed via the nearest-rank method on
+// (correct-pair) samples STRICTLY CLEAR it under production's own floor
+// predicate (aboveSimilarityFloor -- similarity > tau, never >=; see
+// vectorSearchNodesWithOverFetch). Computed via the nearest-rank method on
 // the ascending-sorted S+ sample: excludeCount = floor((1-TargetRecall) *
-// n), tau = the (excludeCount)-th smallest sample (0-indexed) -- so exactly
-// n-excludeCount samples are >= tau, and floor() (rather than round or
-// ceil) guarantees n-excludeCount >= TargetRecall*n, i.e. AchievedRecall
-// never undershoots the target. A single-sample report yields tau = that
-// sample and AchievedRecall = 1.0.
+// n), then tau is nudged one float64 ULP below the (excludeCount)-th
+// smallest sample (0-indexed) via math.Nextafter -- so exactly n-excludeCount
+// samples clear it, INCLUDING that boundary sample itself (production would
+// otherwise drop a candidate whose similarity exactly equals tau, making the
+// un-nudged value claim a sample it could never actually retrieve). floor()
+// (rather than round or ceil) guarantees n-excludeCount >= TargetRecall*n,
+// i.e. AchievedRecall never undershoots the target. A single-sample report
+// yields tau just below that sample and AchievedRecall = 1.0.
 //
 // K (OverFetchMultiplier): sized to the observed near-duplicate density
 // AT THE RECOMMENDED TAU, per spec §5 L4 ("K sized to the observed tie/
@@ -188,7 +195,14 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 	if len(wrongPool) > 0 {
 		below := 0
 		for _, w := range wrongPool {
-			if w < tau {
+			// Mirrors aboveSimilarityFloor (vector.go), production's single
+			// floor predicate: a wrong-pool sample is REJECTED (production
+			// drops it) whenever it does NOT clear tau, i.e. w <= tau, not
+			// just w < tau -- an at-tau wrong sample is dropped in
+			// production exactly like a below-tau one (codex round-1 P1
+			// sibling: the un-mirrored `<` here undercounted rejection at
+			// the boundary the same way the old recall math overcounted it).
+			if !aboveSimilarityFloor(w, tau) {
 				below++
 			}
 		}
@@ -199,7 +213,12 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 	for i, similarities := range perScoredCaseHardNegatives {
 		count := 0
 		for _, s := range similarities {
-			if s >= tau {
+			// A hard negative only competes for a top-K slot if it would
+			// actually be RETRIEVED at tau -- aboveSimilarityFloor, the same
+			// strict predicate production's vectorSearchNodesWithOverFetch
+			// applies (see the doc comment there for why this must be the
+			// single shared authority).
+			if aboveSimilarityFloor(s, tau) {
 				count++
 			}
 		}
@@ -257,6 +276,20 @@ const quantileEpsilon = 1e-9
 // recallGateThreshold returns (tau, achievedRecall) for samples under the
 // nearest-rank recall-gate method described in CalibrateFromReport's doc
 // comment. samples must be non-empty.
+//
+// tau is NOT the nearest-rank sample's exact value -- it is nudged one
+// float64 ULP below it via math.Nextafter (codex round-1 P1: production's
+// floor predicate, aboveSimilarityFloor, is STRICT, so a candidate whose
+// similarity exactly equals tau is DROPPED, never retrieved; setting tau to
+// the sample's own value therefore claimed that sample -- and made a 100%
+// TargetRecall provably unachievable, since the minimum sample IS tau and
+// tau can never clear itself). Nextafter is exact regardless of magnitude
+// (no epsilon-collision risk the way a fixed constant would have), and moves
+// tau just far enough that the boundary sample -- and any sample tied with
+// it -- legitimately clears the SAME strict predicate production applies,
+// which is what achievedRecall below counts directly rather than deriving
+// from rank position (so ties at the boundary are never split across
+// "counted"/"not counted" by an arbitrary index cut).
 func recallGateThreshold(samples []float64, targetRecall float64) (float64, float64) {
 	sorted := append([]float64(nil), samples...)
 	sort.Float64s(sorted)
@@ -268,8 +301,14 @@ func recallGateThreshold(samples []float64, targetRecall float64) (float64, floa
 	if excludeCount < 0 {
 		excludeCount = 0
 	}
-	tau := sorted[excludeCount]
-	achievedRecall := float64(n-excludeCount) / float64(n)
+	tau := math.Nextafter(sorted[excludeCount], math.Inf(-1))
+	survived := 0
+	for _, s := range sorted {
+		if aboveSimilarityFloor(s, tau) {
+			survived++
+		}
+	}
+	achievedRecall := float64(survived) / float64(n)
 	return tau, achievedRecall
 }
 

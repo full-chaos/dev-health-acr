@@ -1,7 +1,5 @@
 package falkorgraph
 
-import "github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
-
 // RetrievalPolicy is the CHAOS-3834 per-embedder-identity retrieval-time
 // configuration (embed-text spec v2 §5 L2/L3/L4, §6 T4): the similarity
 // floor tau, the ANN over-fetch multiplier K, and the HNSW efRuntime this
@@ -67,21 +65,33 @@ type RetrievalPolicy struct {
 	EfRuntime int
 }
 
-// calibratedIdentityText2Large is the CHAOS-3834 measured entry's key, built
-// from EmbedCompositionTag -- the SAME authority composition.go's write path
-// and read fence use -- rather than a hand-typed literal. CHAOS-3835 bumps
-// embedTextTemplateVersion (t2 -> t3), which changes what EmbedCompositionTag
-// returns; deriving the key here means this entry keeps matching the live
-// tag automatically instead of silently going stale (falling back to
-// uncalibrated defaults with no error). The r2000/b0/pnone components mirror
-// the measurement basis below: embedprovider.DefaultMaxTextRunes (the
-// deployment this identity was measured against never overrode it),
-// includeBodies=false, and no prefix family (normalizes to "pnone" inside
-// EmbedCompositionTag). See TestCalibratedEntryKeyMatchesLiveCompositionTag,
-// which pins this relationship so a future change that reverts to a literal
-// fails loudly.
-var calibratedIdentityText2Large = "openai/text-embedding-3-large#" +
-	EmbedCompositionTag(embedprovider.DefaultMaxTextRunes, false, "")
+// calibratedIdentityText2Large is the CHAOS-3834 measured entry's key.
+//
+// codex round-1 P2 REVERSED the earlier CHAOS-3835-contact fix, which had
+// derived this key from EmbedCompositionTag so it would auto-follow a future
+// composition-tag bump. That auto-following was itself the bug: the
+// calibration below (tau=0.30, efRuntime=200) was measured against t2's
+// composed text specifically -- the S+/S- distributions, floor_loss, and
+// near-duplicate density all describe WHAT t2 PRODUCES. A t3 composition
+// (CHAOS-3835 changes what text gets embedded) is a DIFFERENT corpus by this
+// table's own scoping rule (see retrievalPolicyTable's doc comment below: "a
+// rune-cap or body-gate flip ... is semantically a different corpus, and
+// rightly falls back to the conservative default until calibrated in its own
+// right"). Auto-rekeying this entry onto t3 would silently apply t2-measured
+// numbers to un-measured t3 text -- trading the original silent-miss hazard
+// for an equally silent, never-validated auto-inherit.
+//
+// So the key is PINNED to the literal composition it was measured against.
+// A future composition-tag bump (t2 -> t3) does NOT move this entry with it;
+// instead it makes TestCalibratedEntryDriftsLoudlyWithCompositionTag fail
+// LOUDLY at integration, forcing an explicit human decision -- recalibrate
+// against the new composition, or record an explicit inheritance decision as
+// a new pinned entry -- rather than silently missing (the original
+// contact-check concern) or silently auto-inheriting (this reversal's
+// concern). Whether CHAOS-3834's t2 entry should be recalibrated or
+// explicitly inherited for t3 is a decision CHAOS-3835's integration makes,
+// not something this table decides on its own.
+const calibratedIdentityText2Large = "openai/text-embedding-3-large#t2:r2000:b0:pnone"
 
 // retrievalPolicyTable is keyed by the EXACT string form the write path
 // stamps and the read fence compares: EmbedderIdentity.String() + "#" +

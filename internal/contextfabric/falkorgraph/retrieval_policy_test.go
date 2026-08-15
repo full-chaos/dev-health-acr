@@ -59,25 +59,37 @@ func TestLookupRetrievalPolicy_UnknownIdentityKeepsConservativeDefault(t *testin
 	}
 }
 
-// TestCalibratedEntryKeyMatchesLiveCompositionTag pins the CHAOS-3835 contact
-// fix: the shipped calibrated entry's key must be DERIVED from
-// EmbedCompositionTag, the same authority composition.go's write path and
-// read fence use, not a hand-typed literal that could silently drift out of
-// sync with a future template-version bump (e.g. CHAOS-3835's t2 -> t3).
-// This test recomputes the live tag independently and asserts the table
-// actually has an entry under it -- if a future edit reverts
-// calibratedIdentityText2Large to a literal, or the template version moves
-// without this key following it, LookupRetrievalPolicy would report
-// found=false and this test fails loudly instead of the identity silently
-// falling back to uncalibrated defaults in production.
-func TestCalibratedEntryKeyMatchesLiveCompositionTag(t *testing.T) {
+// TestCalibratedEntryDriftsLoudlyWithCompositionTag is the codex round-1 P2
+// REPLACEMENT for the CHAOS-3835-contact fix's original approach (deriving
+// the entry key from EmbedCompositionTag so it auto-followed a template-
+// version bump). Auto-following was reversed: this table's calibration is
+// measurement-pinned to t2's composed text specifically (see
+// calibratedIdentityText2Large's doc comment), so auto-rekeying onto an
+// un-measured future composition would silently apply numbers that were
+// never validated against it -- trading a silent MISS for an equally silent,
+// unvalidated auto-INHERIT.
+//
+// So the pinned literal does NOT move with the live tag. This test is the
+// loud tripwire instead: it independently recomputes what
+// EmbedCompositionTag currently produces for this identity and asserts the
+// table still has a calibrated entry under that EXACT live string. Today
+// (embedTextTemplateVersion == "t2") the live tag and the pinned literal
+// agree, so this passes. The day a composition parameter changes -- CHAOS-
+// 3835's t2 -> t3 template-version bump, or any future rune-cap/body-gate/
+// prefix change -- the live tag stops matching the pinned literal and this
+// test fails LOUDLY at integration, exactly the point: it forces an
+// explicit human decision (recalibrate against the new composition, or
+// record an explicit inheritance decision as a new pinned entry) instead of
+// the identity silently falling back to uncalibrated defaults (a silent
+// miss) or silently inheriting an unvalidated calibration (a silent
+// auto-inherit) -- either of which this test now catches.
+func TestCalibratedEntryDriftsLoudlyWithCompositionTag(t *testing.T) {
 	liveTag := EmbedCompositionTag(embedprovider.DefaultMaxTextRunes, false, "")
-	wantKey := "openai/text-embedding-3-large#" + liveTag
-	if calibratedIdentityText2Large != wantKey {
-		t.Fatalf("calibratedIdentityText2Large = %q, want %q (derived from the live EmbedCompositionTag builder)", calibratedIdentityText2Large, wantKey)
-	}
-	if _, ok := LookupRetrievalPolicy(wantKey); !ok {
-		t.Fatalf("LookupRetrievalPolicy(%q) ok = false, want true -- the calibrated entry must be reachable under the CURRENT composition tag, not a stale one", wantKey)
+	liveIdentity := "openai/text-embedding-3-large#" + liveTag
+	if _, ok := LookupRetrievalPolicy(liveIdentity); !ok {
+		t.Fatalf("LookupRetrievalPolicy(%q) ok = false: the live composition tag no longer matches the CHAOS-3834 measurement-pinned entry (%q). "+
+			"Composition changed -- recalibrate this identity against the new composition, or record an explicit inheritance decision as a new pinned entry. "+
+			"Do not silently repoint the pinned key at the new tag.", liveIdentity, calibratedIdentityText2Large)
 	}
 }
 
@@ -113,6 +125,56 @@ func TestEmbedderFromEnv_CalibratedIdentityOverridesDefaults(t *testing.T) {
 	}
 	if options.OverFetchMultiplier != 0 {
 		t.Fatalf("OverFetchMultiplier = %d, want 0 (K unchanged per the shipped entry)", options.OverFetchMultiplier)
+	}
+}
+
+// TestEmbedderFromEnv_ExplicitSimilarityFloorSurvivesCalibratedTableMatch is
+// the codex round-1 P1 fix's pinning test (vector.go's EmbedderFromEnv): an
+// operator-set ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR must survive a
+// calibrated-identity match, not be silently discarded by the table's
+// default. The calibrated table is a DEFAULT per knob, not a forced
+// override -- it fills in only where the operator supplied no explicit value
+// for that specific knob; measurement-integrity-critical for live harnesses
+// that pin their own floor. Mutation check: reverting EmbedderFromEnv's
+// explicit-value guard to an unconditional `options.SimilarityFloor =
+// policy.SimilarityFloor` makes this test observe 0.30 instead of 0.81 and
+// fail.
+func TestEmbedderFromEnv_ExplicitSimilarityFloorSurvivesCalibratedTableMatch(t *testing.T) {
+	options, err := EmbedderFromEnv(fakeEmbedderEnv(map[string]string{
+		embedprovider.EnvSimilarityFloor: "0.81",
+	}))
+	if err != nil {
+		t.Fatalf("EmbedderFromEnv: %v", err)
+	}
+	if options.SimilarityFloor != 0.81 {
+		t.Fatalf("SimilarityFloor = %v, want the explicitly configured 0.81 to survive the calibrated-identity match untouched, not the table's 0.30", options.SimilarityFloor)
+	}
+	// OverFetchMultiplier and EfRuntime have NO env-configurable source
+	// anywhere in embedprovider -- there is no operator value to preserve
+	// for either, so the calibrated table stays authoritative for both even
+	// when the floor is explicitly pinned.
+	if options.EfRuntime != 200 {
+		t.Fatalf("EfRuntime = %d, want the calibrated 200 (unaffected by the floor override)", options.EfRuntime)
+	}
+	if options.OverFetchMultiplier != 0 {
+		t.Fatalf("OverFetchMultiplier = %d, want 0 (K unchanged, unaffected by the floor override)", options.OverFetchMultiplier)
+	}
+}
+
+// TestEmbedderFromEnv_BlankSimilarityFloorEnvIsNotExplicit proves a blank
+// (set-but-whitespace) env var does not count as an operator override,
+// mirroring embedprovider's own envFloat definition of "explicit" (set AND
+// non-blank) -- so the calibrated-identity match still applies the table
+// default in that case, exactly like the unset case.
+func TestEmbedderFromEnv_BlankSimilarityFloorEnvIsNotExplicit(t *testing.T) {
+	options, err := EmbedderFromEnv(fakeEmbedderEnv(map[string]string{
+		embedprovider.EnvSimilarityFloor: "   ",
+	}))
+	if err != nil {
+		t.Fatalf("EmbedderFromEnv: %v", err)
+	}
+	if options.SimilarityFloor != 0.30 {
+		t.Fatalf("SimilarityFloor = %v, want the calibrated 0.30 -- a blank env var is not an explicit override", options.SimilarityFloor)
 	}
 }
 

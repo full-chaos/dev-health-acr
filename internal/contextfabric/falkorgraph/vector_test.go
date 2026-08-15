@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -110,6 +111,55 @@ func TestAC_3778_4_NeighborsBelowTheSimilarityFloorAreDroppedNotScored(t *testin
 	}
 	if len(candidates) != 0 {
 		t.Fatalf("a sub-floor neighbor must be dropped, got %d candidates", len(candidates))
+	}
+}
+
+// TestAC_3778_4_NeighborAtExactlyTheSimilarityFloorIsDroppedNotScored pins
+// aboveSimilarityFloor's STRICT predicate at the production call site: a
+// candidate whose similarity exactly EQUALS tau is dropped exactly like one
+// below it, never scored. Distance 0.45 -> similarity 1-0.45 = 0.55, exactly
+// the configured floor. codex round-1 P1 sibling check: if
+// vectorSearchNodesWithOverFetch's `!aboveSimilarityFloor(...)` guard ever
+// regressed to a non-strict `similarity < tau`, this exact-equality row would
+// wrongly survive as a candidate.
+func TestAC_3778_4_NeighborAtExactlyTheSimilarityFloorIsDroppedNotScored(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if !strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			return nil, nil
+		}
+		// Distance 0.45 -> similarity exactly 0.55, equal to the floor below.
+		return []row{{
+			"node":  &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p1", propLabel: "Unrelated"}},
+			"score": 0.45,
+		}}, nil
+	}}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0, 0}}, 0.55)
+	candidates, truncated, err := adapter.vectorSearchNodes(context.Background(), "k", "org", []float32{1, 0, 0, 0}, 0.55, 5)
+	if err != nil {
+		t.Fatalf("vectorSearchNodes: %v", err)
+	}
+	if truncated {
+		t.Fatal("a single at-floor row must not read as a truncated result set")
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("a neighbor exactly AT the similarity floor must be dropped (strict >, never >=), got %d candidates", len(candidates))
+	}
+}
+
+// TestAboveSimilarityFloor_BoundaryIsStrict pins the shared production
+// predicate directly: equal-to-tau is NOT above the floor, and the smallest
+// possible float64 step above tau IS. tau_calibration.go's recall/reject-
+// rate/near-duplicate accounting all call this exact function (codex
+// round-1 P1), so this is the single point of truth their pinning tests rely
+// on.
+func TestAboveSimilarityFloor_BoundaryIsStrict(t *testing.T) {
+	tau := 0.30
+	if aboveSimilarityFloor(tau, tau) {
+		t.Fatal("aboveSimilarityFloor(tau, tau) = true, want false -- a sample exactly at tau must not be counted as clearing it")
+	}
+	justAbove := math.Nextafter(tau, math.Inf(1))
+	if !aboveSimilarityFloor(justAbove, tau) {
+		t.Fatal("aboveSimilarityFloor(one ULP above tau, tau) = false, want true")
 	}
 }
 
