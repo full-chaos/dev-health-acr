@@ -331,17 +331,44 @@ func (a *Adapter) vectorSearchNodes(ctx context.Context, key, orgID string, vect
 // vectorSearchNodesWithOverFetch generalizes vectorSearchNodes with an
 // explicit over-fetch multiplier (CHAOS-3832 T2 / spec §5 L3). vectorSearchNodes
 // calls this with multiplier=1, which renders the IDENTICAL `limit+1` raw
-// fetch size it always requested -- production behavior is unchanged byte for
-// byte (TestVectorSearchNodesDelegatesToOverFetchMultiplierOne).
+// fetch size AND the identical `limit`-sized returned candidate set it always
+// requested -- production behavior is unchanged byte for byte
+// (TestVectorSearchNodesDelegatesToOverFetchMultiplierOne).
 //
 // L3's formula, exactly: the raw ANN fetch size is `(multiplier * limit) + 1`.
-// The multiplier widens the POOL the org/tau post-filters below draw from; the
-// trailing `+1` is unchanged and stays the ONLY truncation-detection sentinel
-// -- truncated is still derived from whether more than `limit` rows SURVIVE
-// the filters below, never from the raw multiplier*limit+1 the server
-// returned, so a wider pool can only ever recover more genuine candidates, it
-// can never itself manufacture a truncated=true a narrower pool would not
-// also have reported (review round 2 rec 2's caveat, restated here as code).
+// codex round-2 P2: the multiplier must widen the RETURNED candidate pool too,
+// not just the raw fetch. The earlier version fetched a wider pool but then
+// unconditionally sliced the tau-surviving result back down to `limit` BEFORE
+// returning -- since db.idx.vector.queryNodes' rows are already ORDER BY
+// score ASC (closest first), that slice ALWAYS keeps exactly the `limit`
+// closest-by-raw-cosine-distance survivors, regardless of multiplier. A
+// subject that is genuinely farther than `limit` other DISTINCT subjects by
+// raw vector distance could therefore never reach a caller's ranking --
+// including graphrank's ResolveFromMergedCandidates, which is DESIGNED to
+// rank the full merged candidate set (corroboration across mechanisms and
+// terms) and truncate LAST (see that function's doc comment) -- because this
+// function discarded it first, before graphrank ever saw it existed. No
+// multiplier could ever fix that: over-fetching the RAW query is pointless if
+// the RETURNED set is clipped back to the same size regardless.
+//
+// So the returned-candidate cap widens WITH the multiplier: `multiplier *
+// limit`, not `limit`. At multiplier=1 that is exactly `limit` (unchanged).
+// At multiplier>1, up to multiplier*limit tau-surviving candidates now flow
+// out to hybridSearchNodes -> ResolveSubjects -> ResolveFromMergedCandidates,
+// which is the ONLY place cross-mechanism ranking can happen (this function
+// has no visibility into the lexical arm, other search terms, or
+// corroboration) and already truncates to the FINAL response size
+// (request.Options.MaxSubjectCandidates) after that ranking -- exactly the
+// "rank first, truncate last" architecture this fix aligns with rather than
+// duplicates.
+//
+// The trailing `+1` sentinel is unchanged in spirit, just re-scaled: it now
+// sits one past the WIDENED cap (multiplier*limit+1 raw rows fetched),
+// so truncated is still derived from whether more than the returned cap of
+// candidates SURVIVE the filters below, never from the raw fetch size itself
+// -- a wider pool can only ever recover more genuine candidates, it can never
+// itself manufacture a truncated=true a narrower pool would not also have
+// reported (review round 2 rec 2's caveat, restated here as code).
 //
 // multiplier <= 0 is treated as 1 (the production default), never as a
 // zero-or-negative fetch size.
@@ -355,7 +382,10 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 	if multiplier <= 0 {
 		multiplier = 1
 	}
-	fetchK := multiplier*limit + 1
+	// returnCap is how many tau-surviving candidates this call may return --
+	// see the doc comment above for why this is no longer always `limit`.
+	returnCap := multiplier * limit
+	fetchK := returnCap + 1
 	cypher := fmt.Sprintf(
 		"CALL db.idx.vector.queryNodes('%s', '%s', %d, vecf32($vec)) YIELD node, score "+
 			"WHERE node.%s = $org "+
@@ -367,8 +397,8 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 		return nil, false, safeDependencyError("vector search context graph", err)
 	}
 	// Codex round-1 F1: the tau filter runs BEFORE the truncation decision and
-	// before the top-limit slice, and truncation is derived from how many rows
-	// SURVIVED tau -- never from how many the server returned.
+	// before the top-returnCap slice, and truncation is derived from how many
+	// rows SURVIVED tau -- never from how many the server returned.
 	//
 	// The earlier order had it backwards, and the consequence was not
 	// cosmetic. A query whose every row fell below the similarity floor
@@ -380,11 +410,11 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 	// found nothing must have authority over nothing.
 	//
 	// Deriving truncation from survivors is sound because the k-NN result is
-	// ordered by ascending distance: if the (limit+1)th row falls below tau,
-	// every row beyond it is further away and therefore also below tau, so no
-	// genuine competitor was cut off. Only a full limit+1 rows ALL clearing
-	// tau means the corpus may hold above-floor candidates this budget could
-	// not show.
+	// ordered by ascending distance: if the (returnCap+1)th row falls below
+	// tau, every row beyond it is further away and therefore also below tau,
+	// so no genuine competitor was cut off. Only a full returnCap+1 rows ALL
+	// clearing tau means the corpus may hold above-floor candidates this
+	// (already widened, see the function doc comment) budget could not show.
 	type survivor struct {
 		node       *node
 		similarity float64
@@ -400,15 +430,15 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 			continue
 		}
 		similarity := embedprovider.CosineFromDistance(distance)
-		if similarity <= tau {
+		if !aboveSimilarityFloor(similarity, tau) {
 			// AC-3778-4: not close enough to be evidence of anything.
 			continue
 		}
 		survivors = append(survivors, survivor{node: n, similarity: similarity})
 	}
-	truncated := len(survivors) > limit
+	truncated := len(survivors) > returnCap
 	if truncated {
-		survivors = survivors[:limit]
+		survivors = survivors[:returnCap]
 	}
 	candidates := make([]graphrank.CandidateNode, 0, len(survivors))
 	for _, s := range survivors {
@@ -422,6 +452,39 @@ func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID
 		candidates = append(candidates, candidate)
 	}
 	return candidates, truncated, nil
+}
+
+// aboveSimilarityFloor is the SINGLE production predicate for "does this
+// similarity clear the tau floor" -- STRICTLY greater than tau, never >=. A
+// candidate whose similarity exactly EQUALS tau is dropped here exactly like
+// one below it (AC-3778-4: "not close enough" includes the boundary itself).
+//
+// tau_calibration.go's recall/hard-negative/reject-rate accounting (codex
+// round-1 P1) calls this EXACT function rather than re-deriving its own
+// comparison, so calibration math can never silently disagree with what
+// production actually retrieves -- see
+// TestCalibrateFromReport_BoundarySampleAtTauNotCountedAsRecalled.
+func aboveSimilarityFloor(similarity, tau float64) bool {
+	return similarity > tau
+}
+
+// floorApplicable is the SINGLE production authority for "is this value a
+// usable SimilarityFloor at all" -- strictly inside (0, 1), matching
+// attachEmbedder's own out-of-range fallback (adapter.go: "a value outside
+// that range is replaced by embedprovider.DefaultSimilarityFloor rather than
+// accepted, because a floor of 0 would silently disable the AC-3778-4
+// no-match guard"). A floor at or below 0 admits everything (no guard at
+// all); a floor at or above 1 admits nothing (no candidate could ever clear
+// it, including a perfect match) -- neither is a usable similarity floor.
+//
+// tau_calibration.go's CalibrateFromReport (codex round-3 P2) calls this
+// EXACT function to validate a computed recall-gate tau BEFORE returning it
+// as a recommendation, so a caller can never receive an ApplyReady=true
+// result whose SimilarityFloor this same predicate -- the one
+// EmbedderFromEnv itself gates on just below -- would silently refuse to
+// apply.
+func floorApplicable(floor float64) bool {
+	return floor > 0 && floor < 1
 }
 
 // hybridSearchNodes is the ResolveDeps.Search implementation: the lexical
@@ -551,7 +614,11 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 		a.recordVectorDegraded(ctx, orgID)
 		return lexical, truncated, true, nil
 	}
-	vectorCandidates, vectorTruncated, err := a.vectorSearchNodes(ctx, key, orgID, vectors[0], a.similarityFloor, limit)
+	// CHAOS-3834: a.overFetchMultiplier is the calibrated per-identity K
+	// (zero when uncalibrated, which vectorSearchNodesWithOverFetch already
+	// treats as multiplier 1 -- byte-identical to the pre-CHAOS-3834
+	// vectorSearchNodes call this replaces).
+	vectorCandidates, vectorTruncated, err := a.vectorSearchNodesWithOverFetch(ctx, key, orgID, vectors[0], a.similarityFloor, limit, a.overFetchMultiplier)
 	if err != nil {
 		// A graph-side failure of the vector step degrades the same way an
 		// embedder failure does. The lexical answer is still a real answer.
@@ -599,6 +666,22 @@ func (a *Adapter) recordVectorProjection(ctx context.Context, orgID string, embe
 	a.config.Telemetry.RecordVectorProjection(ctx, orgID, embedded, cleared, skipped.Kind, skipped.IDOnly)
 }
 
+// recordVectorIndexEfRuntimeMismatch reports an existing vector index's
+// efRuntime disagreeing with the calibrated policy to telemetry (codex
+// round-9 P2 wiring fix -- see ensureVectorIndex's doc comment and
+// GraphTelemetry.RecordVectorIndexEfRuntimeMismatch's doc comment). A
+// silent no-op when Telemetry is unset, matching every sibling recordX
+// method's nil-safe contract: an operator who declined telemetry
+// (NoopTelemetry, or simply never setting Config.Telemetry) sees nothing,
+// rather than this diagnostic falling back to an unconfigured global
+// default that bypasses whatever sink/level they actually configured.
+func (a *Adapter) recordVectorIndexEfRuntimeMismatch(ctx context.Context, key string, policyEfRuntime, indexEfRuntime int) {
+	if a.config.Telemetry == nil {
+		return
+	}
+	a.config.Telemetry.RecordVectorIndexEfRuntimeMismatch(ctx, key, policyEfRuntime, indexEfRuntime)
+}
+
 // EmbedderFromEnv builds the optional vector-retrieval dependencies from the
 // environment (CHAOS-3778).
 //
@@ -632,14 +715,64 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 	// wraps Embedder in a read-path cache (CHAOS-3841) that implements only
 	// the two-method port, so anything not captured now is unreachable
 	// after wrapping. See EmbedderOptions' field docs.
-	return EmbedderOptions{
+	options := EmbedderOptions{
 		Embedder:            embedder,
 		SimilarityFloor:     embedder.SimilarityFloor(),
 		MaxTextRunes:        embedder.MaxTextRunes(),
 		ApplyDocumentPrefix: embedder.ApplyDocumentPrefix,
 		ApplyQueryPrefix:    embedder.ApplyQueryPrefix,
 		PrefixTagComponent:  embedder.PrefixTagComponent(),
-	}, nil
+	}
+	// CHAOS-3834: override with a calibrated per-identity RetrievalPolicy
+	// when this deployment's exact embed retrieval identity has one.
+	// EmbedRetrievalIdentityFromEnv is the single authority for that string
+	// (identity.String()+"#"+compositionTag) -- reusing it here, rather than
+	// re-deriving the composition tag, means the policy lookup key can never
+	// drift from the key migration 0014's embed_retrieval_identity column
+	// persists for the same deployment. Configured(lookup) already holds at
+	// this point (checked above), so this never returns EmbedRetrievalIdentityNone.
+	//
+	// cfg.Dimension is passed SEPARATELY (codex round-3 P1): dimension is
+	// deliberately excluded from EmbedRetrievalIdentityFromEnv's persisted
+	// string (EmbedderIdentity.String()'s own doc comment explains why), but
+	// a calibrated tau/efRuntime entry is measured against ONE specific
+	// width -- LookupRetrievalPolicy folds it back in for the policy lookup
+	// specifically, without changing what gets persisted for answer reuse.
+	identity, err := EmbedRetrievalIdentityFromEnv(lookup)
+	if err != nil {
+		return EmbedderOptions{}, err
+	}
+	if policy, ok := LookupRetrievalPolicy(identity, cfg.Dimension); ok {
+		// A calibrated entry's zero fields still mean "unchanged from
+		// today's default" (RetrievalPolicy's doc comment) -- e.g. the
+		// shipped openai/text-embedding-3-large entry deliberately leaves
+		// OverFetchMultiplier at 0 ("K unchanged"). Only SimilarityFloor
+		// needs the extra guard below, mirroring attachEmbedder's own
+		// floor validation: a policy bug that let a zero tau through must
+		// not silently disable the AC-3778-4 no-match guard.
+		//
+		// Precedence, evaluated per knob (codex round-1 P1: an unconditional
+		// override silently discarded an operator's explicit
+		// ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR, which is
+		// measurement-integrity critical for live harnesses that pin their
+		// own floor). The calibrated table is a DEFAULT, not a forced
+		// override: it applies only where the operator supplied no explicit
+		// value for that specific knob. SimilarityFloor has an env knob
+		// (EnvSimilarityFloor) to check against; "explicit" mirrors envFloat's
+		// own definition (set AND non-blank) so a blank env var does not
+		// count as an override. OverFetchMultiplier and EfRuntime have no
+		// env-configurable source anywhere in embedprovider -- there is no
+		// operator value to preserve for either, so the calibrated table
+		// stays the sole source for both, unconditionally.
+		if explicitFloor, ok := lookup(embedprovider.EnvSimilarityFloor); !(ok && strings.TrimSpace(explicitFloor) != "") {
+			if floorApplicable(policy.SimilarityFloor) {
+				options.SimilarityFloor = policy.SimilarityFloor
+			}
+		}
+		options.OverFetchMultiplier = policy.OverFetchMultiplier
+		options.EfRuntime = policy.EfRuntime
+	}
+	return options, nil
 }
 
 // resolutionFence memoizes the AC-3778-7 fence verification for the lifetime

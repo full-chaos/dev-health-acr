@@ -10,6 +10,24 @@ import (
 	"testing"
 )
 
+// embedQueryTerms embeds terms through the SAME query-prefixing path
+// production uses (Adapter.queryPrefixed, vector.go's hybridSearchNodes) --
+// codex round-5 FIX A: this is the single authority for query-side
+// prefixing; the oracle harness must never re-derive it or skip it, or a
+// report stamped with a prefixed identity (e.g. ACR_TEST_EMBED_PREFIX_FAMILY=nomic)
+// would measure a DIFFERENT query space than what production actually
+// embeds -- tau/K calibrated against unprefixed queries while production
+// queries prefixed ones. Extracted as its own method (not inlined at the
+// call site) so it is unit-testable with a fake embedder, without a live
+// embedder/graph connection -- see TestEmbedQueryTerms_AppliesTheSameQueryPrefixProductionUses.
+func (a *Adapter) embedQueryTerms(ctx context.Context, terms []string) ([][]float32, error) {
+	prefixed := make([]string, len(terms))
+	for i, term := range terms {
+		prefixed[i] = a.queryPrefixed(term)
+	}
+	return a.embedder.Embed(ctx, prefixed)
+}
+
 // TestExactSearchOracleDecomposesRetrievalMisses is the CHAOS-3831 (embed-text
 // spec §5 L1 / §6 T1) exact-search oracle measurement.
 //
@@ -202,8 +220,20 @@ func TestExactSearchOracleDecomposesRetrievalMisses(t *testing.T) {
 	t.Logf("oracle corpus: %d embedder-fence-passing subject vectors for org %s", len(corpusVectors), orgID)
 
 	tau := adapter.similarityFloor
+	// codex round-4 FIX A: stamp the SAME identity string
+	// LookupRetrievalPolicy's caller composes (EmbedRetrievalIdentityFromEnv,
+	// not EmbedderIdentity.String() alone -- that form excludes the
+	// composition tag) plus the dimension the embedder that produced these
+	// similarities actually reports, so CalibrateFromReport can refuse a
+	// report minted against the wrong embedding space before trusting
+	// anything else in it.
+	embedIdentity, err := EmbedRetrievalIdentityFromEnv(benchmarkLookup)
+	if err != nil {
+		t.Fatalf("embed retrieval identity: %v", err)
+	}
 	report := &oracleReport{
 		Total: len(corpus), TopK: topK, Tau: tau, RawTextIncluded: includeRawText,
+		EmbedIdentity: embedIdentity, EmbedDimension: embedderOptions.Embedder.Identity().Dimension,
 		PerKind: map[string]*kindDistribution{},
 	}
 
@@ -267,7 +297,7 @@ func TestExactSearchOracleDecomposesRetrievalMisses(t *testing.T) {
 			continue
 		}
 
-		vectors, err := adapter.embedder.Embed(ctx, activeTerms)
+		vectors, err := adapter.embedQueryTerms(ctx, activeTerms)
 		if err != nil {
 			t.Fatalf("embed subject terms for %q: %v", testCase.Question, err)
 		}
@@ -341,7 +371,10 @@ func TestExactSearchOracleDecomposesRetrievalMisses(t *testing.T) {
 		}
 		result.CorrectSimilarity = bestCorrectSimilarity
 		result.BestWrongSimilarity = bestWrongSimilarity
-		result.HardNegatives = dedupeHardNegatives(hardNegatives, hardNegativeCount)
+		capped, aboveTauCount, truncated := summarizeHardNegatives(hardNegatives, tau, hardNegativeCount)
+		result.HardNegatives = capped
+		result.HardNegativeAboveTauCount = &aboveTauCount
+		result.HardNegativesTruncated = &truncated
 		report.Cases = append(report.Cases, result)
 
 		dist := report.PerKind[testCase.ExpectKind]
@@ -403,7 +436,62 @@ type oracleCaseResult struct {
 	Cause               oracleMissCause `json:"cause"`
 	CorrectSimilarity   *float64        `json:"correct_similarity,omitempty"`
 	BestWrongSimilarity *float64        `json:"best_wrong_similarity,omitempty"`
-	HardNegatives       []hardNegative  `json:"hard_negatives,omitempty"`
+	// HardNegatives is CAPPED at ACR_TEST_ORACLE_HARD_NEGATIVES (default 5)
+	// -- see HardNegativeAboveTauCount below for the complete count this
+	// list may be a truncated view of.
+	HardNegatives []hardNegative `json:"hard_negatives,omitempty"`
+	// HardNegativeAboveTauCount is the COMPLETE count of DISTINCT wrong
+	// subjects (deduped across this case's terms, same rule
+	// dedupeHardNegatives applies) whose similarity clears this run's OWN
+	// tau (aboveSimilarityFloor's strict predicate) -- codex round-2 P2
+	// sibling finding: HardNegatives above is capped at hardNegativeCount
+	// (default 5) with NO metadata distinguishing "this case genuinely has
+	// few near-duplicates" from "this case has many, only the top 5 got
+	// serialized". tau_calibration.go's near-duplicate density estimate
+	// (OverFetchMultiplier) reads len(case.HardNegatives) as if it were the
+	// complete count; on a truncated case that silently UNDER-sizes K. This
+	// field carries the true total so the calibration tool can read it
+	// directly INSTEAD of the possibly-censored list length. Computed from
+	// the FULL per-case harvest before HardNegatives is capped, so it is
+	// exact regardless of hardNegativeCount.
+	//
+	// A POINTER, deliberately: nil (omitted from JSON) means "this run did
+	// not compute the total" (a report from before this field existed, or a
+	// future harness variant that skips it), distinguishable from a
+	// present-and-zero count ("computed, and genuinely zero negatives clear
+	// tau"). The tool-side fix (tau_calibration.go) trusts a present value
+	// and refuses to size K from a truncated, saturated case that has none.
+	//
+	// Cross-tau caveat (codex round-3 P2): this count is measured at THIS
+	// run's tau (report.Tau), not whatever tau CalibrateFromReport
+	// ultimately recommends for the SAME report -- a case-count computed at
+	// one tau cannot know exactly how many negatives would clear a
+	// DIFFERENT one (negatives sitting BETWEEN the two floors are invisible
+	// to it). The tool-side fix does NOT attempt to adjust for the mismatch
+	// mathematically -- it requires report.Tau to EXACTLY equal the
+	// recommended tau before trusting this field at all, and refuses (fails
+	// closed on K) otherwise. See tau_calibration.go's doc comment on how it
+	// consumes this field. In practice this means the total is usable only
+	// when the harness is RE-RUN at a previously recommended tau, not on
+	// the first pass against a report's original default floor.
+	HardNegativeAboveTauCount *int `json:"hard_negative_above_tau_count,omitempty"`
+	// HardNegativesTruncated is true when HardNegativeAboveTauCount's full
+	// deduped list exceeds hardNegativeCount, i.e. HardNegatives above is
+	// genuinely a truncated view for this case, not the complete set.
+	//
+	// A POINTER (codex round-4 FIX B, tightening round-2 P2): this driver
+	// ALWAYS sets it explicitly (see summarizeHardNegatives below), so every
+	// report this harness writes carries a present value. The pointer type
+	// exists so the calibration tool can tell "this run explicitly measured
+	// completeness" apart from "no report ever set this at all" (a
+	// pre-CHAOS-3834 report, including a prior baseline run before this
+	// field existed) -- a plain bool's zero value (false) made every legacy
+	// report silently read as "complete", resurrecting the exact
+	// censored-list under-sizing bug round-2 P2 closed. See
+	// CalibrationCase.HardNegativesTruncated's doc comment for how the tool
+	// now treats nil as "assume truncated", the worst case, not the
+	// optimistic pre-fix default.
+	HardNegativesTruncated *bool `json:"hard_negatives_truncated,omitempty"`
 	// UsedTermFallback is true when this case had no authored subject_terms
 	// and therefore ran through the pre-CHAOS-3831 whole-question fallback
 	// -- NOT production parity (codex round-1 finding 7: this must be
@@ -455,6 +543,17 @@ type oracleReport struct {
 	// oracle side -- recorded so a report is self-describing without
 	// cross-referencing the run's environment.
 	Tau float64 `json:"tau"`
+	// EmbedIdentity and EmbedDimension stamp this report with the embed
+	// retrieval identity string (EmbedRetrievalIdentityFromEnv's form) and
+	// embedding width the similarities in this report were ACTUALLY
+	// measured against (codex round-4 FIX A, exact-measurement class --
+	// the artifact-side twin of round-1's composition-tag pin and round-3's
+	// dimension pin). CalibrateFromReport requires BOTH to match its
+	// caller's target identity/dimension before trusting anything else in
+	// this report -- a recommendation minted from one embedding space must
+	// never be silently applied to a DIFFERENT one.
+	EmbedIdentity  string `json:"embed_identity"`
+	EmbedDimension int    `json:"embed_dimension"`
 	// RawTextIncluded records whether Question/Label fields below are raw
 	// text or a redacted digest (codex round-1 finding 8) -- see
 	// ACR_TEST_ORACLE_INCLUDE_RAW_TEXT.
@@ -518,6 +617,31 @@ func dedupeHardNegatives(negatives []hardNegative, limit int) []hardNegative {
 		out = out[:limit]
 	}
 	return out
+}
+
+// summarizeHardNegatives is the codex round-2 P2 fix's harness-side pure
+// function, extracted out of the big live-driver loop specifically so it is
+// unit-testable without a real graph/embedder (see oracle_test.go). It dedupes
+// the FULL harvest first via a limit that can never itself truncate (dedup
+// only ever REDUCES count -- len(negatives) is a safe upper bound on distinct
+// subjects), so aboveTauCount/truncated are computed from the COMPLETE
+// per-case set, then caps what actually gets serialized in `capped`. See
+// oracleCaseResult.HardNegativeAboveTauCount's doc comment for why the
+// calibration tool needs the complete count instead of len(capped).
+func summarizeHardNegatives(negatives []hardNegative, tau float64, cap int) (capped []hardNegative, aboveTauCount int, truncated bool) {
+	full := dedupeHardNegatives(negatives, len(negatives))
+	for _, n := range full {
+		if aboveSimilarityFloor(n.Similarity, tau) {
+			aboveTauCount++
+		}
+	}
+	truncated = len(full) > cap
+	if truncated {
+		capped = full[:cap]
+	} else {
+		capped = full
+	}
+	return capped, aboveTauCount, truncated
 }
 
 func sortedKinds(perKind map[string]*kindDistribution) []string {

@@ -81,6 +81,39 @@ func prefixSeamAdapter(t *testing.T, options EmbedderOptions) (*Adapter, *captur
 	return adapter, embedder
 }
 
+// TestEmbedQueryTerms_AppliesTheSameQueryPrefixProductionUses is the codex
+// round-5 FIX A pinning test: oracle_live_test.go's embedQueryTerms (the
+// oracle harness's ONLY embedding call) must transmit exactly what
+// hybridSearchNodes' production read path transmits -- the query-prefixed
+// term, never the raw one -- so a report stamped under a prefixed identity
+// (ACR_TEST_EMBED_PREFIX_FAMILY=nomic) measures the SAME query space
+// production actually embeds against.
+func TestEmbedQueryTerms_AppliesTheSameQueryPrefixProductionUses(t *testing.T) {
+	t.Parallel()
+	t.Run("configured prefix family: terms are prefixed", func(t *testing.T) {
+		adapter, embedder := prefixSeamAdapter(t, EmbedderOptions{
+			ApplyQueryPrefix: func(s string) string { return "query: " + s },
+		})
+		if _, err := adapter.embedQueryTerms(context.Background(), []string{"auth service"}); err != nil {
+			t.Fatalf("embedQueryTerms: %v", err)
+		}
+		want := "query: auth service"
+		if len(embedder.texts) != 1 || embedder.texts[0] != want {
+			t.Fatalf("embedded text = %v, want [%q] -- the oracle must embed through the SAME query-prefix path production's hybridSearchNodes uses", embedder.texts, want)
+		}
+	})
+
+	t.Run("unprefixed (default) family: terms are unchanged", func(t *testing.T) {
+		adapter, embedder := prefixSeamAdapter(t, EmbedderOptions{})
+		if _, err := adapter.embedQueryTerms(context.Background(), []string{"auth service"}); err != nil {
+			t.Fatalf("embedQueryTerms: %v", err)
+		}
+		if len(embedder.texts) != 1 || embedder.texts[0] != "auth service" {
+			t.Fatalf("embedded text = %v, want [\"auth service\"] unchanged -- the default family is behavior-neutral", embedder.texts)
+		}
+	})
+}
+
 // With no captured capabilities (a zero EmbedderOptions beyond the port
 // itself), both paths transmit the composed text verbatim and the stamp
 // carries "pnone" -- byte-for-byte the pre-CHAOS-3836 behavior.

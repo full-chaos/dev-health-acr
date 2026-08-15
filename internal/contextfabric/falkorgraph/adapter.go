@@ -45,6 +45,17 @@ type Adapter struct {
 	prefixTagComponent  string
 	embedTextRunes      int
 
+	// overFetchMultiplier and efRuntime are the CHAOS-3834 per-identity
+	// RetrievalPolicy values, captured the same way as similarityFloor:
+	// zero means "no calibrated policy for this identity", which
+	// vectorSearchNodesWithOverFetch and ensureVectorIndex already treat as
+	// their respective pre-CHAOS-3834 defaults (multiplier 1, the server's
+	// own efRuntime default). See EmbedderOptions' field docs and
+	// RetrievalPolicy's doc comment (retrieval_policy.go) for why EfRuntime
+	// specifically only ever affects a NEWLY CREATED index.
+	overFetchMultiplier int
+	efRuntime           int
+
 	bootstrapMu   sync.RWMutex
 	bootstrapDone map[string]bool
 }
@@ -84,6 +95,17 @@ type EmbedderOptions struct {
 	// the configured prefix family ("pnone", "pnomic"). Empty normalizes to
 	// EmbedPrefixTagComponentNone inside EmbedCompositionTag.
 	PrefixTagComponent string
+
+	// OverFetchMultiplier and EfRuntime are the CHAOS-3834 per-identity
+	// RetrievalPolicy values (retrieval_policy.go), resolved by
+	// EmbedderFromEnv from LookupRetrievalPolicy against this deployment's
+	// exact embed retrieval identity. Zero means "not calibrated": the
+	// adapter falls back to multiplier 1 and the server's own efRuntime
+	// default, respectively -- byte-identical to pre-CHAOS-3834 behavior.
+	// See RetrievalPolicy's doc comment for why EfRuntime specifically only
+	// ever governs a NEWLY CREATED vector index.
+	OverFetchMultiplier int
+	EfRuntime           int
 }
 
 func New(config Config) (*Adapter, error) {
@@ -121,6 +143,8 @@ func (a *Adapter) attachEmbedder(options EmbedderOptions) {
 	a.applyQueryPrefix = options.ApplyQueryPrefix
 	a.prefixTagComponent = options.PrefixTagComponent
 	a.embedTextRunes = options.MaxTextRunes
+	a.overFetchMultiplier = options.OverFetchMultiplier
+	a.efRuntime = options.EfRuntime
 }
 
 // documentPrefixed applies the captured document-side task prefix, or returns

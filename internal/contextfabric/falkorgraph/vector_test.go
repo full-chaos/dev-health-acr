@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // stubEmbedder is a fully in-process contextfabric.Embedder double.
@@ -113,6 +115,55 @@ func TestAC_3778_4_NeighborsBelowTheSimilarityFloorAreDroppedNotScored(t *testin
 	}
 }
 
+// TestAC_3778_4_NeighborAtExactlyTheSimilarityFloorIsDroppedNotScored pins
+// aboveSimilarityFloor's STRICT predicate at the production call site: a
+// candidate whose similarity exactly EQUALS tau is dropped exactly like one
+// below it, never scored. Distance 0.45 -> similarity 1-0.45 = 0.55, exactly
+// the configured floor. codex round-1 P1 sibling check: if
+// vectorSearchNodesWithOverFetch's `!aboveSimilarityFloor(...)` guard ever
+// regressed to a non-strict `similarity < tau`, this exact-equality row would
+// wrongly survive as a candidate.
+func TestAC_3778_4_NeighborAtExactlyTheSimilarityFloorIsDroppedNotScored(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if !strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			return nil, nil
+		}
+		// Distance 0.45 -> similarity exactly 0.55, equal to the floor below.
+		return []row{{
+			"node":  &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p1", propLabel: "Unrelated"}},
+			"score": 0.45,
+		}}, nil
+	}}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0, 0}}, 0.55)
+	candidates, truncated, err := adapter.vectorSearchNodes(context.Background(), "k", "org", []float32{1, 0, 0, 0}, 0.55, 5)
+	if err != nil {
+		t.Fatalf("vectorSearchNodes: %v", err)
+	}
+	if truncated {
+		t.Fatal("a single at-floor row must not read as a truncated result set")
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("a neighbor exactly AT the similarity floor must be dropped (strict >, never >=), got %d candidates", len(candidates))
+	}
+}
+
+// TestAboveSimilarityFloor_BoundaryIsStrict pins the shared production
+// predicate directly: equal-to-tau is NOT above the floor, and the smallest
+// possible float64 step above tau IS. tau_calibration.go's recall/reject-
+// rate/near-duplicate accounting all call this exact function (codex
+// round-1 P1), so this is the single point of truth their pinning tests rely
+// on.
+func TestAboveSimilarityFloor_BoundaryIsStrict(t *testing.T) {
+	tau := 0.30
+	if aboveSimilarityFloor(tau, tau) {
+		t.Fatal("aboveSimilarityFloor(tau, tau) = true, want false -- a sample exactly at tau must not be counted as clearing it")
+	}
+	justAbove := math.Nextafter(tau, math.Inf(1))
+	if !aboveSimilarityFloor(justAbove, tau) {
+		t.Fatal("aboveSimilarityFloor(one ULP above tau, tau) = false, want true")
+	}
+}
+
 // The D11-class rule at the adapter boundary: a vector candidate declares
 // Relevance and leaves Score nil, so the raw distance can never reach
 // ResultConfidence.
@@ -152,6 +203,90 @@ func TestVectorCandidateDeclaresRelevanceAndNeverCarriesTheRawDistance(t *testin
 	// And confirm the confidence graphrank would compute is order-correct.
 	if got := graphrank.ResultConfidence(candidate.Relevance, candidate.Score); got != vectorRelevanceCeiling {
 		t.Fatalf("ResultConfidence = %v, want %v", got, vectorRelevanceCeiling)
+	}
+}
+
+// TestResolveSubjects_OverFetchLetsACorroboratedCandidateBeyondRawVectorRankWin
+// is the codex round-2 P2 fix's end-to-end proof, through the REAL caller
+// contract (graphrank.ResolveSubjects, exactly as reader.go's ResolveSubjects
+// wires it -- not a hand-rolled shortcut). Fixture: three subjects all clear
+// tau, but "target" is raw-vector rank 3 (two other, DISTINCT subjects are
+// closer by cosine distance) while MaxSubjectCandidates=2. "target" is ALSO
+// found lexically (the same term), so once it reaches graphrank at all it is
+// corroborated (MatchLexical + MatchVector), which -- per the D11-class
+// invariant (vectorRelevanceCeiling's doc comment) -- guarantees Confidence
+// in [0.72, 0.86], strictly above ANY single-mechanism vector candidate's
+// ceiling of 0.70. So the only question this test needs to settle is whether
+// "target" reaches graphrank's ranking AT ALL: before the fix it could not
+// (vectorSearchNodesWithOverFetch discarded anything past raw rank `limit`,
+// for any multiplier); with the fix and a calibrated multiplier=3
+// (returnCap=6 >= 3), it does, and then wins the final top-2 truncation on
+// ranking, not raw ANN position -- proving the widened pool genuinely flows
+// through cross-mechanism ranking (ResolveFromMergedCandidates' documented
+// "rank first, truncate last" architecture), not just through this
+// function's own local slice.
+func TestResolveSubjects_OverFetchLetsACorroboratedCandidateBeyondRawVectorRankWin(t *testing.T) {
+	vectorRows := []row{
+		{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "closer-a", propLabel: "Closer A", propSearchText: "unrelated"}}, "score": 0.00},
+		{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "closer-b", propLabel: "Closer B", propSearchText: "unrelated"}}, "score": 0.05},
+		{"node": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "target", propLabel: "Target Project", propSearchText: "target project"}}, "score": 0.10},
+	}
+	lexicalRows := []row{
+		fulltextRow("project", "target", "Target Project", "target project", nil),
+	}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "db.idx.vector.queryNodes"):
+			return vectorRows, nil
+		case strings.Contains(cypher, "db.idx.fulltext.queryNodes"):
+			return lexicalRows, nil
+		default:
+			return nil, nil
+		}
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(2)}, nil
+	}
+	adapter := newFakeAdapter(t, fake)
+	adapter.attachEmbedder(EmbedderOptions{Embedder: &stubEmbedder{vector: []float32{1, 0}}, SimilarityFloor: 0.55, OverFetchMultiplier: 3})
+
+	request := contextfabric.InvestigationRequest{
+		Question: "target project",
+		Options: contextfabric.InvestigationOptions{
+			MaxSubjectCandidates: 2, MaxCohortMembers: 10, MaxRelationshipPaths: 10,
+			MaxDrivers: 10, MaxEvidenceRefs: 50, MaxSerializedBytes: 262144, AllowClarification: true,
+		},
+	}
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status",
+		SubjectTerms: []string{"target project"},
+		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+	}
+
+	resolution, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	var target *contextfabric.SubjectCandidate
+	for i, c := range resolution.Candidates {
+		if c.Subject.CanonicalID == "target" {
+			target = &resolution.Candidates[i]
+		}
+	}
+	if target == nil {
+		t.Fatalf("resolution.Candidates = %#v, want \"target\" present -- raw vector rank 3 beyond MaxSubjectCandidates=2, but corroborated (lexical+vector) once the over-fetched pool reaches ranking", resolution.Candidates)
+	}
+	// The precise assertion, not just presence: "target" is ALSO found
+	// lexically regardless of the vector-arm fix, so merely appearing in
+	// Candidates is not proof of anything -- lexical alone could put it
+	// there. What only the fix can produce is BOTH mechanisms recorded on
+	// it, proving the vector arm's over-fetched pool (not just the lexical
+	// arm) is what reached ranking for this subject.
+	if !graphrank.HasMechanism(target.MatchMechanisms, contextfabric.MatchVector) {
+		t.Fatalf("target.MatchMechanisms = %v, want MatchVector present -- the widened vector pool must have reached ranking for this candidate, not just the independent lexical hit", target.MatchMechanisms)
+	}
+	if !graphrank.HasMechanism(target.MatchMechanisms, contextfabric.MatchLexical) {
+		t.Fatalf("target.MatchMechanisms = %v, want MatchLexical present too (this fixture's corroboration setup)", target.MatchMechanisms)
 	}
 }
 
@@ -993,6 +1128,19 @@ type recordingTelemetry struct {
 	skippedKind   int
 	skippedIDOnly int
 	projections   int
+
+	// efRuntimeMismatches records every RecordVectorIndexEfRuntimeMismatch
+	// call verbatim (codex round-9 P2 wiring fix's test double) -- a slice,
+	// not just a count, so a test can assert the exact key/policy/index
+	// values reported, not merely that SOMETHING fired.
+	efRuntimeMismatches []efRuntimeMismatchRecord
+}
+
+// efRuntimeMismatchRecord is one recorded
+// RecordVectorIndexEfRuntimeMismatch call's arguments.
+type efRuntimeMismatchRecord struct {
+	key                             string
+	policyEfRuntime, indexEfRuntime int
 }
 
 func (r *recordingTelemetry) RecordObservationTraversalDegraded(context.Context, string, int) {}
@@ -1009,6 +1157,9 @@ func (r *recordingTelemetry) RecordVectorProjection(_ context.Context, _ string,
 	r.skipped += skippedKind + skippedIDOnly
 	r.skippedKind += skippedKind
 	r.skippedIDOnly += skippedIDOnly
+}
+func (r *recordingTelemetry) RecordVectorIndexEfRuntimeMismatch(_ context.Context, key string, policyEfRuntime, indexEfRuntime int) {
+	r.efRuntimeMismatches = append(r.efRuntimeMismatches, efRuntimeMismatchRecord{key, policyEfRuntime, indexEfRuntime})
 }
 
 func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {

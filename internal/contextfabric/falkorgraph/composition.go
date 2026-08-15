@@ -19,7 +19,29 @@ import (
 // (migration 0014). Its own dimension rather than a suffix on the embed
 // retrieval identity, so a reuse miss stays attributable to policy-vs-embed
 // specifically.
-const RetrievalPolicyVersion = "rp1"
+//
+// CHAOS-3834 (embed-text spec §5 L4 / §6 T4) bumped this rp1 -> rp2: the
+// per-embedder-identity RetrievalPolicy table (retrieval_policy.go) went
+// from empty (every identity ran the single global, env-configured tau) to
+// carrying a calibrated entry for
+// "openai/text-embedding-3-large#t2:r2000:b0:pnone" that changes its
+// effective tau and EfRuntime default. Per the "T4 only bumps the constant
+// when it changes tau/K/HNSW defaults" rule, any FUTURE edit to an existing
+// table entry, or addition of a new one, bumps this constant again in the
+// same changeset -- see retrieval_policy.go's package doc comment.
+//
+// CHAOS-3835 integration (codex round-9 P1's t3 inheritance commit) bumped
+// this rp2 -> rp3: the calibrated entry's KEY moved from the t2-tagged
+// identity to the t3-tagged one (calibratedIdentityText3Large,
+// retrieval_policy.go), an explicit inheritance decision rather than a
+// re-measurement -- see that constant's doc comment for the inheritance
+// rationale. The rp2 -> rp3 bump is what CHAOS-3834's table-entry-change
+// rule requires here even though the SEMANTIC values (tau=0.30,
+// efRuntime=200) are unchanged: a t3-tagged deployment's effective policy
+// genuinely changes from this changeset (miss -> hit), which is exactly
+// the "vectors remain valid, only stored answers need invalidating"
+// scenario this constant exists to signal.
+const RetrievalPolicyVersion = "rp3"
 
 // EmbedRetrievalIdentityNone is the persisted embed-retrieval-identity value
 // for a deployment with NO embedder configured. A literal, never the empty

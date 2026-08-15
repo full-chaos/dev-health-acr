@@ -1359,3 +1359,114 @@ func TestCHAOS3833_RetrievalIdentityFlowsToBothLookupAndSave(t *testing.T) {
 		t.Errorf("Save retrieval = %+v, want %+v", store.savedRetrieval, retrieval)
 	}
 }
+
+// storedUnderPolicyVersionGate simulates ONE previously-stored answer, saved
+// under savedPolicyVersion, and reports a hit only when a lookup's
+// ReuseKey.RetrievalPolicyVersion matches it exactly -- the conjunctive
+// equality predicate migration 0014 adds (store.go's
+// `AND retrieval_policy_version = $m`). Used below to prove that a
+// RetrievalPolicyVersion change, by itself, turns a would-have-been-a-hit
+// into a miss.
+func storedUnderPolicyVersionGate(savedPolicyVersion string, candidate InvestigationResult) reuseGateFunc {
+	return func(_ context.Context, _ storage.Principal, key ReuseKey) (InvestigationResult, bool, error) {
+		if key.RetrievalPolicyVersion != savedPolicyVersion {
+			return InvestigationResult{}, false, nil
+		}
+		return candidate, true, nil
+	}
+}
+
+// TestCHAOS3834_RetrievalPolicyVersionChangeInvalidatesStoredAnswerReuse is
+// CHAOS-3834's fail-pre proof that RetrievalPolicyVersion PARTICIPATES in
+// the reuse key: with every other request property held identical, only
+// changing the deployment's current RetrievalPolicyVersion turns a stored
+// answer from reusable into a miss. This is exactly the mechanism a
+// tau/K/HNSW default change (spec §4 R3) depends on -- a policy bump like
+// CHAOS-3834's own rp1->rp2 must not let organizations keep serving
+// answers derived under the OLD policy. Run this test against a build that
+// dropped RetrievalPolicyVersion from ReuseKey (or stopped comparing it)
+// and the "changed version" subtest fails: the stale candidate would still
+// come back as a hit.
+func TestCHAOS3834_RetrievalPolicyVersionChangeInvalidatesStoredAnswerReuse(t *testing.T) {
+	t.Parallel()
+
+	project, candidate := reusableCandidate()
+	// Simulates a row Save persisted while the deployment ran RetrievalPolicyVersion "rp1".
+	gate := storedUnderPolicyVersionGate("rp1", candidate)
+
+	buildEngine := func(t *testing.T, currentPolicyVersion string) *Engine {
+		t.Helper()
+		engine, err := NewEngine(EngineDependencies{
+			Interpreter: interpreterFunc(func(_ context.Context, _ storage.Principal, request InvestigationRequest) (InterpretedQuestion, error) {
+				return InterpretedQuestion{
+					Shape: ShapeSingleSubject, RequestedJudgment: "status",
+					TimeContext:      request.TimeContext,
+					FactRequirements: []FactRequirement{{Kind: FactStatus}},
+				}, nil
+			}),
+			Graph: graphReaderStub{
+				resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+				context: GraphContext{
+					DriverCandidates: []DriverJudgment{}, EvidenceRefIDs: []string{}, FactRequirements: []FactRequirement{},
+					Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				},
+			},
+			Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+				return CanonicalFactBundle{
+					Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+					Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+				}, nil
+			}),
+			Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+				return InvestigationResult{
+					Status: InvestigationComplete, DirectJudgment: "Fine.", CurrentState: "Nominal.",
+					StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
+					Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+					ClaimedFacts:        []ClaimedFact{},
+					Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+					DeterministicAnswer: "Fine.", Warnings: []string{},
+					Versions: VersionSet{
+						Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+						InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+					},
+				}, nil
+			}),
+			Results: &resultStoreStub{}, ReuseGate: gate,
+		}, EngineOptions{
+			ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(200, 0).UTC() },
+			NewResultID: func() string { return "result_fresh_00001" },
+			ReuseRetrievalIdentity: ReuseRetrievalIdentity{
+				EmbedRetrievalIdentity: "openai/text-embedding-3-large#t2:r2000:b0:pnone",
+				RetrievalPolicyVersion: currentPolicyVersion,
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewEngine() error = %v", err)
+		}
+		return engine
+	}
+
+	t.Run("unchanged version still reuses the stored answer", func(t *testing.T) {
+		t.Parallel()
+		engine := buildEngine(t, "rp1")
+		result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		if !result.Reused {
+			t.Fatal("Investigate() result.Reused = false, want true when the current RetrievalPolicyVersion matches the stored row's")
+		}
+	})
+
+	t.Run("changed version misses -- the stale answer is not reused", func(t *testing.T) {
+		t.Parallel()
+		engine := buildEngine(t, "rp2")
+		result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		if result.Reused {
+			t.Fatal("Investigate() result.Reused = true, want false: a RetrievalPolicyVersion change must invalidate reuse, never silently serve a pre-policy answer")
+		}
+	})
+}
