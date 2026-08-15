@@ -17,10 +17,14 @@ import (
 // so lexical and vector search byte-identical text for every templated kind;
 // that identity is what makes their agreement a statement about MECHANISM
 // (graphrank.DistinctMechanismCount). The only remaining divergence is the
-// embed-side MaxTextRunes tail truncation of UNBOUNDED compositions
-// (episodes) -- embedprovider.MinimumMaxTextRunes guarantees no templated
-// kind can ever be truncated, because every complete template fits under the
-// validation floor.
+// embed-side MaxTextRunes tail truncation of the UNBOUNDED compositions --
+// episode text (episodeSearchText) AND content text (contentSearchText,
+// title+body; both in projection.go): the lexical arm indexes the full
+// composed text, the vector arm the first MaxTextRunes runes of the SAME
+// composition, so for those two kinds the agreement is a shared-prefix
+// statement, not byte-identity. embedprovider.MinimumMaxTextRunes guarantees
+// no templated kind can ever be truncated, because every complete template
+// fits under the validation floor.
 //
 // Rules, applied uniformly (spec §2): deterministic field order; fixed
 // template per kind; per-field rune caps INSIDE the composition so the

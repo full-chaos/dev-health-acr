@@ -265,6 +265,42 @@ func TestEveryCompleteTemplateFitsUnderTheFloor(t *testing.T) {
 	}
 }
 
+// TestUnboundedContentCompositionSharesItsTruncationPrefix pins the SCOPED
+// guarantee that actually holds for the two unbounded compositions, on the
+// content path: both arms derive from the ONE contentSearchText expression;
+// lexical stores the FULL text (deliberately uncapped -- capping the shared
+// composition would regress lexical retrieval, the spec's T3 rollback
+// criterion), and the embed arm gets exactly the first MaxTextRunes runes of
+// that same string, so the truncation-window prefix is byte-identical
+// between arms.
+func TestUnboundedContentCompositionSharesItsTruncationPrefix(t *testing.T) {
+	t.Parallel()
+	content := contextfabric.ContentProjection{
+		ContentID: "doc-1", Title: "Session hardening runbook",
+		Body: strings.Repeat("х", 3*embedprovider.MinimumMaxTextRunes), // multi-byte: the cap is a RUNE cap
+	}
+	lexical := contentSearchText(content)
+	if runes := utf8.RuneCountInString(lexical); runes <= embedprovider.MinimumMaxTextRunes {
+		t.Fatalf("fixture must exceed the floor to exercise the split, got %d runes", runes)
+	}
+	batch := contextfabric.ProjectionBatch{OrgID: "org", Contents: []contextfabric.ContentProjection{content}}
+	targets, _ := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, false)
+	if len(targets) != 1 {
+		t.Fatalf("expected exactly one embed target, got %d", len(targets))
+	}
+	embedded := targets[0].text
+	if want := embedprovider.TruncateRunes(lexical, embedprovider.MinimumMaxTextRunes); embedded != want {
+		t.Errorf("embed text is not the first %d runes of the lexical composition:\n got %q\nwant %q",
+			embedprovider.MinimumMaxTextRunes, embedded, want)
+	}
+	if !strings.HasPrefix(lexical, embedded) {
+		t.Error("the embedded text must be a byte prefix of the lexical composition")
+	}
+	if lexical == embedded {
+		t.Error("lexical must retain the full unbounded composition, not the truncated head")
+	}
+}
+
 // TestOrganizationIsSkippedFromEmbeddingAndCounted (§2 organization + §7
 // D2): the organization node -- a raw org UUID, pure vector noise -- is
 // never embedded, stays fully lexical, and the skip is a REPORTED count,

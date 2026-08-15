@@ -520,11 +520,18 @@ func relationshipFact(relationship contextfabric.RelationshipProjection) string 
 
 // contentSearchText and episodeSearchText exist so the projection write path
 // and CHAOS-3778's embedding pass derive their text from ONE expression rather
-// than two identical-looking ones. The lexical index and the vector index must
-// search byte-identical corpora -- that is what makes their agreement a
-// statement about MECHANISM rather than about which text each happened to see
-// (see graphrank.DistinctMechanismCount). Two copies of the concatenation
-// would be one edit away from silently breaking that.
+// than two identical-looking ones. Both are UNBOUNDED compositions,
+// deliberately uncapped (CHAOS-3833 review, ratified): the lexical arm
+// indexes the full text today, and capping the shared composition would
+// regress lexical retrieval -- the spec's own T3 rollback criterion. The two
+// arms therefore share the composition, not its full extent: lexical stores
+// all of it, the embed side the first MaxTextRunes runes of the SAME string
+// (collectEmbedTargets), so their agreement is a shared-prefix statement for
+// these two kinds and exact byte-identity only for the templated kinds
+// (search_text.go). One expression is still what makes even the prefix claim
+// a statement about MECHANISM rather than about which text each arm happened
+// to see (see graphrank.DistinctMechanismCount) -- two copies of the
+// concatenation would be one edit away from silently breaking it.
 func contentSearchText(content contextfabric.ContentProjection) string {
 	return strings.TrimSpace(content.Title + "\n" + content.Body)
 }

@@ -43,11 +43,13 @@ type embedTarget struct {
 // agreement measures a difference in MECHANISM and nothing else (see
 // docs/design/context-fabric-vector-retrieval.md §3 and graphrank's
 // DistinctMechanismCount). The one owned divergence is the embed-side
-// MaxTextRunes tail truncation of UNBOUNDED compositions (episodes) --
-// the validation floor (embedprovider.MinimumMaxTextRunes) covers every
-// complete template, so a templated kind is never truncated and the
+// MaxTextRunes tail truncation of the UNBOUNDED compositions -- episode
+// AND content text, whose lexical arm indexes the full composed text
+// while this pass embeds its first MaxTextRunes runes -- the validation
+// floor (embedprovider.MinimumMaxTextRunes) covers every complete
+// template, so a templated kind is never truncated and the
 // mechanism-agreement claim is exact for those kinds, a shared-prefix
-// statement for episodes.
+// statement for episodes and content.
 //
 // Relationships are deliberately absent. TRD §19.4.4 forbids a model in the
 // write path of an EDGE; embedding a node's label is not creating an edge, and
