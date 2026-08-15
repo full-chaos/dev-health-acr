@@ -1,6 +1,11 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
+)
 
 func TestLoadProjectorDefaults(t *testing.T) {
 	cfg, err := loadProjector(mapLookup(nil))
@@ -18,6 +23,37 @@ func TestLoadProjectorDefaults(t *testing.T) {
 	}
 	if cfg.RequireBackingStores {
 		t.Fatal("development must not require backing stores by default")
+	}
+	// CHAOS-3848: acr-projector is the binary that was actually wedged --
+	// it must inherit the same raised default acr-api does, via the shared
+	// loadHostedRuntimeValues path.
+	if cfg.ClickHouseMaxBytesToRead != runtimeclickhouse.DefaultMaxBytesToRead {
+		t.Fatalf("ClickHouseMaxBytesToRead = %d, want default %d", cfg.ClickHouseMaxBytesToRead, runtimeclickhouse.DefaultMaxBytesToRead)
+	}
+}
+
+func TestLoadProjector_appliesConfiguredClickHouseMaxBytesToRead(t *testing.T) {
+	// Given
+	// When
+	cfg, err := loadProjector(mapLookup(map[string]string{"ACR_CLICKHOUSE_MAX_BYTES_TO_READ": "33554432"}))
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ClickHouseMaxBytesToRead != 32<<20 {
+		t.Fatalf("ClickHouseMaxBytesToRead = %d, want %d", cfg.ClickHouseMaxBytesToRead, uint64(32<<20))
+	}
+}
+
+func TestLoadProjector_rejectsInvalidClickHouseMaxBytesToRead(t *testing.T) {
+	for _, value := range []string{"0", "-1", "garbage"} {
+		t.Run(value, func(t *testing.T) {
+			_, err := loadProjector(mapLookup(map[string]string{"ACR_CLICKHOUSE_MAX_BYTES_TO_READ": value}))
+			if err == nil || !strings.Contains(err.Error(), "ACR_CLICKHOUSE_MAX_BYTES_TO_READ") {
+				t.Fatalf("loadProjector() error = %v, want ACR_CLICKHOUSE_MAX_BYTES_TO_READ rejection", err)
+			}
+		})
 	}
 }
 

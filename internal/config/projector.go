@@ -38,6 +38,7 @@ type ProjectorConfig struct {
 
 	ClickHouseDSN                  string
 	ClickHouseCACertPath           string
+	ClickHouseMaxBytesToRead       uint64
 	PostgresDSN                    string
 	PostgresPoolerAdminDSN         string
 	PostgresConnectionKind         string
@@ -90,6 +91,7 @@ func loadProjector(lookup lookupEnv) (ProjectorConfig, error) {
 		return ProjectorConfig{}, err
 	}
 	cfg.ClickHouseDSN, cfg.ClickHouseCACertPath = hosted.ClickHouseDSN, hosted.ClickHouseCACertPath
+	cfg.ClickHouseMaxBytesToRead = hosted.ClickHouseMaxBytesToRead
 	cfg.PostgresDSN, cfg.PostgresPoolerAdminDSN = hosted.PostgresDSN, hosted.PostgresPoolerAdminDSN
 	cfg.PostgresConnectionKind = hosted.PostgresConnectionKind
 	cfg.PostgresMaxOpenConns, cfg.PostgresMaxIdleConns = hosted.PostgresMaxOpenConns, hosted.PostgresMaxIdleConns
@@ -143,6 +145,9 @@ func (c ProjectorConfig) Validate() error {
 	}
 	if c.Concurrency < 1 {
 		return fmt.Errorf("%s must be at least 1", envContextFabricConcurrency)
+	}
+	if c.ClickHouseMaxBytesToRead == 0 {
+		return errors.New("ACR_CLICKHOUSE_MAX_BYTES_TO_READ must be positive")
 	}
 	if c.RequireBackingStores {
 		if strings.TrimSpace(c.ClickHouseDSN) == "" {

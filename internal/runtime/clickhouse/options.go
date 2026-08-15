@@ -10,6 +10,16 @@ import (
 
 const defaultMaxExecutionTime uint = 10
 
+// DefaultMaxBytesToRead is the read-budget ceiling applied when Options.MaxBytesToRead
+// is unset (zero). CHAOS-3848: the previous 16 MiB default was sized before
+// CHAOS-3833's enriched projection rows (PR body heads, labels, descriptions)
+// pushed a routine 200-row pull_requests batch to ~17 MiB of granule reads,
+// which ClickHouse rejects with Code 307 (TOO_MANY_BYTES) on every retry --
+// a permanent wedge, not a transient one. 64 MiB is four times the old
+// ceiling: real headroom for v2 row widths while remaining a genuine guard
+// against an unbounded scan.
+const DefaultMaxBytesToRead uint64 = 64 << 20
+
 func applyOptions(configured *clickhousedriver.Options, options Options) {
 	configured.TLS = mergeTLS(options.TLS, configured.TLS)
 	configured.DialTimeout = optionDuration(options.DialTimeout, configured.DialTimeout, 5*time.Second)
@@ -23,7 +33,7 @@ func applyOptions(configured *clickhousedriver.Options, options Options) {
 	configured.Settings = cloneSettings(configured.Settings)
 	configured.Settings["max_execution_time"] = maxExecutionTime(options)
 	configured.Settings["max_result_rows"] = defaultPositiveUint(options.MaxResultRows, 1_000)
-	configured.Settings["max_bytes_to_read"] = defaultPositiveUint64(options.MaxBytesToRead, 16<<20)
+	configured.Settings["max_bytes_to_read"] = defaultPositiveUint64(options.MaxBytesToRead, DefaultMaxBytesToRead)
 }
 
 func queryTimeoutForOptions(options Options) time.Duration {

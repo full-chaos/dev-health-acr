@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 )
 
@@ -17,6 +18,9 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, requiredByEnvironmen
 		return err
 	}
 	cfg.ClickHouseCACertPath = stringValue(lookup, "ACR_CLICKHOUSE_CA_BUNDLE", "")
+	if cfg.ClickHouseMaxBytesToRead, err = uint64Value(lookup, "ACR_CLICKHOUSE_MAX_BYTES_TO_READ", runtimeclickhouse.DefaultMaxBytesToRead); err != nil {
+		return err
+	}
 	if cfg.PostgresDSN, err = SecretValue(lookup, "ACR_POSTGRES_DSN"); err != nil {
 		return err
 	}
@@ -119,6 +123,7 @@ func (c Config) SafeAttributes() []any {
 		"local_composition_ready", c.LocalCompositionReady,
 		"clickhouse_configured", c.ClickHouseDSN != "",
 		"clickhouse_ca_bundle_configured", c.ClickHouseCACertPath != "",
+		"clickhouse_max_bytes_to_read", c.ClickHouseMaxBytesToRead,
 		"postgres_configured", c.PostgresDSN != "",
 		"postgres_pooler_admin_configured", c.PostgresPoolerAdminDSN != "",
 		"postgres_max_idle_conns_configured", c.PostgresMaxIdleConnsConfigured,
