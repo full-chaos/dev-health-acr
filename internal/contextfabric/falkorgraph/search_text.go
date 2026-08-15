@@ -250,6 +250,31 @@ func deploymentSearchText(entity contextfabric.EntityProjection) string {
 	)
 }
 
+// ciRunPipelineNameField and ciRunBranchField are the SINGLE authority for
+// extracting and capping ci_pipeline_run's pipeline_name/branch fields --
+// called by BOTH ciRunSearchText below (the composer) and id_only.go's
+// isPureIdentifierCIRun (the id-only decision).
+//
+// CHAOS-3835 round-3 finding 2: the id-only decision used to classify
+// propText(entity, "pipeline_name")/"branch" directly -- the UNCAPPED
+// property value -- while the composer classified (and embedded)
+// capRunes(propText(...), capPipelineName/capBranch). A field whose
+// uncapped bytes are id-shaped but whose CAPPED bytes are not (or the
+// reverse) could then diverge from what the row actually embeds. Giving
+// both call sites the exact same extraction+cap function makes that
+// divergence impossible by construction rather than by a comment asking
+// two independent call sites to stay in sync -- the same class of defect
+// round-2 finding 2 closed for retrievalHandles (which was already
+// single-sourced: both paths call retrievalHandles(entity) directly, and
+// that function caps internally).
+func ciRunPipelineNameField(entity contextfabric.EntityProjection) string {
+	return capRunes(propText(entity, "pipeline_name"), capPipelineName)
+}
+
+func ciRunBranchField(entity contextfabric.EntityProjection) string {
+	return capRunes(propText(entity, "branch"), capBranch)
+}
+
 // ciRunSearchText (spec §2), one line:
 //
 //	CI run <pipeline_name[≤200]> branch: <branch[≤120]> repo: <repo_slug[≤200]>
@@ -263,8 +288,8 @@ func ciRunSearchText(entity contextfabric.EntityProjection) string {
 	return composeLines(
 		joinFields(" ",
 			"CI run",
-			capRunes(propText(entity, "pipeline_name"), capPipelineName),
-			labeledField("branch: ", capRunes(propText(entity, "branch"), capBranch)),
+			ciRunPipelineNameField(entity),
+			labeledField("branch: ", ciRunBranchField(entity)),
 			labeledField("repo: ", capRunes(propText(entity, "repo"), capRepoSlug))),
 		retrievalHandles(entity),
 	)

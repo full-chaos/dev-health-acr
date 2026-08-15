@@ -45,37 +45,45 @@ var idOnlyGeneratedPrefixDigits = regexp.MustCompile(`(?i)^(?:run|build|pipeline
 
 // isHexShapedToken reports whether token is a bare hex-digest shape (a git
 // short/full SHA, a hex build hash) -- ASCII hex characters only, at least
-// one actual DIGIT among them, and long enough to not collide with a short
-// real word.
+// TWO digits among them, and long enough to not collide with a short real
+// word.
 //
-// The digit requirement is load-bearing: without it, an all-hex-letter
-// English word ("decade", "cafe", "faced" -- every character in [a-fA-F])
-// would false-positive as an id shape and lose retrieval, exactly the
-// over-broad failure mode finding 3 exists to close. Requiring a digit
-// keeps the match on the fail-safe side -- it can only make the detector
-// skip LESS, never more.
+// CHAOS-3835 round-3 finding 1: a single-digit requirement let all-hex-
+// letter English words that happen to carry exactly one digit
+// ("decade2", "facade1", "beaded1" -- every letter in [a-fA-F], one
+// trailing digit) false-positive as an id shape, the same over-broad
+// failure mode finding 3 exists to close, one digit short of what the
+// original fix caught. RULING (recall-first tiebreak): a missed digest
+// costs one row a noisy embed; a missed semantic name costs recall
+// entirely. Ambiguity resolves toward EMBED, so the bar moves up, not the
+// direction that skips more. Two digits is still generous against the
+// live corpus's real hex ids -- a git short SHA (7-10 hex chars) drawn
+// from a roughly-uniform hex alphabet has a >99.9% chance of carrying two
+// or more digits; the residual all-letter-or-single-digit SHA that slips
+// through and gets embedded anyway is the cheap failure this tradeoff
+// accepts.
 //
-// The length floor (6) is conservative against the shortest hex ids the
-// live corpus's CI tooling actually produces (short SHAs run 7-10 hex
-// chars); it exists only to keep a 3-4 character coincidental hex-letter
-// token ("dad", "bad", "b2b") from tripping the digit-presence check on a
-// token too short to plausibly be a generated id.
+// The length floor (7, up from 6) follows the same tightening: it no
+// longer needs to independently guard short coincidental tokens now that
+// the two-digit bar does most of that work, but shortening it back below
+// the shortest real short-SHA convention would just readmit the class of
+// token the floor exists to exclude.
 func isHexShapedToken(token string) bool {
-	if len(token) < 6 {
+	if len(token) < 7 {
 		return false
 	}
-	hasDigit := false
+	digitCount := 0
 	for _, r := range token {
 		switch {
 		case r >= '0' && r <= '9':
-			hasDigit = true
+			digitCount++
 		case r >= 'a' && r <= 'f', r >= 'A' && r <= 'F':
 			// hex letter -- keep scanning.
 		default:
 			return false
 		}
 	}
-	return hasDigit
+	return digitCount >= 2
 }
 
 // isPureIdentifierToken reports whether one token matches the CLOSED
@@ -166,8 +174,13 @@ func isPureIdentifierText(text string) bool {
 // row's id-only verdict will silently stop matching what actually gets
 // embedded -- exactly the gap this finding closes.
 func isPureIdentifierCIRun(entity contextfabric.EntityProjection) bool {
-	name := propText(entity, "pipeline_name")
-	branch := propText(entity, "branch")
+	// CHAOS-3835 round-3 finding 2: name and branch are read through the
+	// SAME ciRunPipelineNameField/ciRunBranchField ciRunSearchText itself
+	// calls (search_text.go) -- classifying the composer's own capped
+	// bytes, not a re-derived uncapped read of the same property, so the
+	// two can never disagree about what the row actually embeds.
+	name := ciRunPipelineNameField(entity)
+	branch := ciRunBranchField(entity)
 	handles := retrievalHandles(entity)
 	nameIsIDOnly := name == "" || isPureIdentifierText(name)
 	branchIsIDOnly := branch == "" || isPureIdentifierText(branch)

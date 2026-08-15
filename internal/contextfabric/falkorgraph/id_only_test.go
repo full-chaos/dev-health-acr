@@ -66,6 +66,18 @@ func TestIsPureIdentifierTextDetectorTable(t *testing.T) {
 		// a hex digest just because every character happens to fall in
 		// [a-fA-F] -- the digit-presence requirement is what excludes it.
 		{"all-hex-letter english word stays real content", "decade", false},
+		// Negative (round-3 finding 1, recall-first tiebreak): an all-hex-
+		// letter English word carrying exactly ONE digit must also stay
+		// real content -- the round-1 digit-presence bar (>=1) let these
+		// through; the round-3 bar (>=2 digits, length >=7) excludes them.
+		{"hex-letter word plus one trailing digit (round-3 finding 1)", "decade2", false},
+		{"hex-letter word plus one trailing digit, second case (round-3 finding 1)", "facade1", false},
+		{"hex-letter word plus one trailing digit, third case (round-3 finding 1)", "beaded1", false},
+		// Positive (round-3 finding 1): a real short-SHA-shaped token with
+		// two or more digits still skips -- the tightened bar must not
+		// overshoot into refusing genuine hex ids.
+		{"short-sha-shaped token with two digits (round-3 finding 1)", "a3f9c21", true},
+		{"full 40-char sha (round-3 finding 1)", "a94a8fe5ccb19ba61c4c0873d391e987982fbbd", true},
 		// Edge: empty text is explicitly NOT this function's concern -- it
 		// is a distinct, already-existing gating reason and must never be
 		// double-counted under the id-only label.
