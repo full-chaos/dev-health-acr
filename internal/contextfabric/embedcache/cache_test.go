@@ -382,6 +382,72 @@ func TestConcurrentIdenticalMissesCoalesceToOneProviderCall(t *testing.T) {
 	}
 }
 
+// TestCoalescedWaitersDoNotShareAVectorBackingArray is codex round 2's
+// surviving finding: singleflight.Group hands every coalesced waiter the
+// SAME value, so without a per-waiter clone, two callers riding one
+// in-flight request would share a backing array -- one mutating "its own"
+// result would silently corrupt the other's, and a later cache hit too.
+func TestCoalescedWaitersDoNotShareAVectorBackingArray(t *testing.T) {
+	block := make(chan struct{})
+	inner := &fakeEmbedder{
+		identity: contextfabric.EmbedderIdentity{Provider: "openai", Model: "text-embedding-3-large"},
+		block:    block,
+	}
+	cache := New(inner, 0)
+	ctx := context.Background()
+	const text = "which projects are behind"
+
+	var wg sync.WaitGroup
+	var a, b [][]float32
+	var errA, errB error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		a, errA = cache.Embed(ctx, []string{text})
+	}()
+	go func() {
+		defer wg.Done()
+		b, errB = cache.Embed(ctx, []string{text})
+	}()
+	// Give both goroutines time to join the same in-flight singleflight
+	// call before releasing the leader.
+	time.Sleep(100 * time.Millisecond)
+	close(block)
+	wg.Wait()
+
+	if errA != nil || errB != nil {
+		t.Fatalf("errors: a=%v b=%v", errA, errB)
+	}
+	if inner.callCount() != 1 {
+		t.Fatalf("inner embedder called %d times, want 1 (both callers must have coalesced)", inner.callCount())
+	}
+	original := a[0][0]
+	if b[0][0] != original {
+		t.Fatalf("a and b started with different values (%v vs %v) -- test precondition broken", a[0][0], b[0][0])
+	}
+
+	// Mutate a's "own" returned vector.
+	a[0][0] = -9999
+
+	if b[0][0] != original {
+		t.Fatalf("mutating a's returned vector changed b's: b=%v, want unchanged %v", b[0][0], original)
+	}
+
+	// A subsequent cache hit for the same text must also be unaffected --
+	// proof that maybeCache stored an isolated copy, not a view into
+	// either waiter's backing array.
+	hit, err := cache.Embed(ctx, []string{text})
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if inner.callCount() != 1 {
+		t.Fatalf("inner embedder called %d times, want 1 (the third call must be a cache hit)", inner.callCount())
+	}
+	if hit[0][0] != original {
+		t.Fatalf("cache hit after a's mutation returned %v, want unchanged %v", hit[0][0], original)
+	}
+}
+
 func TestConcurrentUseIsSafe(t *testing.T) {
 	inner := &fakeEmbedder{identity: contextfabric.EmbedderIdentity{Provider: "openai", Model: "text-embedding-3-large"}}
 	cache := New(inner, 8)

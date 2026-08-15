@@ -165,7 +165,17 @@ func (c *Cache) embedAndCache(ctx context.Context, key cacheKey, texts []string)
 		return nil, err
 	}
 	outcome := value.(embedOutcome)
-	return outcome.vectors, outcome.err
+	// codex round 2, the surviving HIGH: singleflight.Group hands the SAME
+	// value -- one embedOutcome, wrapping the provider's own [][]float32 --
+	// to every coalesced waiter. Returning outcome.vectors directly would
+	// let two callers that both rode the same in-flight request share a
+	// backing array: one mutating "its own" result would silently corrupt
+	// what every other waiter sees. Every waiter -- leader included, so
+	// there is exactly one code path to reason about, not a leader/
+	// follower split -- gets its OWN clone. The value cached via
+	// maybeCache above was already isolated by put's own copy; this clone
+	// is solely about what crosses back out of this function.
+	return cloneVectors(outcome.vectors), outcome.err
 }
 
 // maybeCache stores a result only when it is unambiguously reusable by a
@@ -206,6 +216,27 @@ func (c *Cache) maybeCache(ctx context.Context, key cacheKey, vectors [][]float3
 // (identity, text) pairs can never render to the same string.
 func singleflightKey(key cacheKey) string {
 	return strconv.Itoa(len(key.identity)) + ":" + key.identity + ":" + key.text
+}
+
+// cloneVectors deep-copies a [][]float32 so the caller shares no backing
+// array with whatever produced it -- the outer slice AND every inner
+// vector. Nil-ness is preserved per element (a nil inner vector clones to
+// nil, not an empty non-nil slice), matching whatever inner.Embed actually
+// returned rather than normalizing it.
+func cloneVectors(vectors [][]float32) [][]float32 {
+	if vectors == nil {
+		return nil
+	}
+	out := make([][]float32, len(vectors))
+	for i, v := range vectors {
+		if v == nil {
+			continue
+		}
+		clone := make([]float32, len(v))
+		copy(clone, v)
+		out[i] = clone
+	}
+	return out
 }
 
 // Metrics returns a snapshot of hit/miss counts accumulated since
