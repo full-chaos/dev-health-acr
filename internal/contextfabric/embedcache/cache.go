@@ -28,10 +28,12 @@ package embedcache
 import (
 	"container/list"
 	"context"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"golang.org/x/sync/singleflight"
 )
 
 // DefaultMaxEntries bounds the cache when no size is configured. It is a
@@ -73,6 +75,12 @@ type Cache struct {
 	order *list.List
 	items map[cacheKey]*list.Element
 
+	// group coalesces concurrent identical misses (codex round 1, finding
+	// 4): N simultaneous cold requests for the SAME (identity, text) share
+	// ONE call to inner.Embed rather than each paying its own provider
+	// round-trip. Zero value is ready to use.
+	group singleflight.Group
+
 	hits   atomic.Uint64
 	misses atomic.Uint64
 }
@@ -104,9 +112,9 @@ func (c *Cache) Identity() contextfabric.EmbedderIdentity {
 
 // Embed caches only single-text calls; every other call (the projection
 // batch shape) passes straight through uncached. Only a successful,
-// well-shaped result -- exactly one vector for the one input text -- is
-// ever stored: an error or a malformed response is never cached, so a
-// transient provider fault is never replayed as a permanent one.
+// well-shaped result -- exactly one non-empty vector for the one input
+// text, produced by a request that was not already canceled or past its
+// deadline -- is ever stored. See maybeCache.
 func (c *Cache) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	if len(texts) != 1 {
 		return c.inner.Embed(ctx, texts)
@@ -117,16 +125,97 @@ func (c *Cache) Embed(ctx context.Context, texts []string) ([][]float32, error) 
 		return [][]float32{vector}, nil
 	}
 	c.misses.Add(1)
-	vectors, err := c.inner.Embed(ctx, texts)
-	if err != nil || len(vectors) != 1 {
-		return vectors, err
+	return c.embedAndCache(ctx, key, texts)
+}
+
+// embedOutcome carries a coalesced call's result through singleflight.Group,
+// which shares ONE value across every waiter. The outcome is encoded here
+// rather than in Do's own error return, so a coalesced provider error is
+// delivered to every waiter exactly as inner.Embed produced it, not
+// reinterpreted by singleflight's own error-propagation semantics (the same
+// posture modelruntimeresolver.Resolver takes for the same reason).
+type embedOutcome struct {
+	vectors [][]float32
+	err     error
+}
+
+// embedAndCache runs inner.Embed for key exactly once across however many
+// callers are concurrently asking for the SAME (identity, text) pair
+// (codex round 1, finding 4), then decides whether the result is safe to
+// keep for the next caller.
+//
+// Only the caller that becomes the singleflight LEADER supplies the ctx an
+// in-flight call actually runs under; a caller that joins an already
+// in-flight request waits on the leader's outcome rather than starting a
+// second provider call under its own ctx. That is an accepted, narrow
+// consequence of coalescing at all, not an oversight -- the alternative
+// (one provider call per waiter) is exactly the multiplication this exists
+// to prevent.
+func (c *Cache) embedAndCache(ctx context.Context, key cacheKey, texts []string) ([][]float32, error) {
+	value, err, _ := c.group.Do(singleflightKey(key), func() (interface{}, error) {
+		vectors, embedErr := c.inner.Embed(ctx, texts)
+		c.maybeCache(ctx, key, vectors, embedErr)
+		return embedOutcome{vectors: vectors, err: embedErr}, nil
+	})
+	if err != nil {
+		// Do's own function above always returns a nil error (the outcome
+		// carries embedErr instead), so reaching this means Do itself
+		// malfunctioned -- defensive, not a path this package's own logic
+		// can produce.
+		return nil, err
+	}
+	outcome := value.(embedOutcome)
+	return outcome.vectors, outcome.err
+}
+
+// maybeCache stores a result only when it is unambiguously reusable by a
+// later, unrelated caller:
+//   - no error from the provider;
+//   - the request had not already been canceled or exceeded its deadline
+//     at the moment this decision is made (codex round 1, finding 2) --
+//     caching whatever a canceled call happened to return would let a
+//     request's own cancellation silently determine what every FUTURE
+//     caller for this text receives;
+//   - exactly one vector for the one input text, and that vector
+//     non-empty (codex round 1, finding 3) -- an empty vector is not a
+//     smaller valid answer, it is the malformed-response shape
+//     ErrResponseShape exists to name, and the graph read path
+//     (falkorgraph.vectorSearchNodes) treats a zero-length vector as
+//     silently finding nothing rather than erroring, so caching one would
+//     replay a fault as a permanent, undiagnosable "no match".
+//
+// Any other shape is left uncached, so the next caller gets a fresh
+// attempt rather than a replayed fault.
+func (c *Cache) maybeCache(ctx context.Context, key cacheKey, vectors [][]float32, err error) {
+	if err != nil || ctx.Err() != nil {
+		return
+	}
+	if len(vectors) != 1 || len(vectors[0]) == 0 {
+		return
 	}
 	c.put(key, vectors[0])
-	return vectors, nil
+}
+
+// singleflightKey renders key as a string singleflight.Group can dedupe on,
+// WITHOUT a plain delimiter join. "identity\x00text" would need an argument
+// that no possible identity or text value could ever contain "\x00" -- an
+// argument this package would have to keep re-proving as those values'
+// sources change. A length-prefixed encoding needs no such argument: the
+// decimal length before the first ':' pins exactly where identity ends
+// regardless of what characters identity or text contain, so two distinct
+// (identity, text) pairs can never render to the same string.
+func singleflightKey(key cacheKey) string {
+	return strconv.Itoa(len(key.identity)) + ":" + key.identity + ":" + key.text
 }
 
 // Metrics returns a snapshot of hit/miss counts accumulated since
-// construction.
+// construction. Hits and Misses are two INDEPENDENT atomic loads, not a
+// single transactional read -- under concurrent traffic the pair can be
+// momentarily inconsistent (e.g. a hit landing between the two loads is
+// reflected in one field but not yet the other). That is acceptable for an
+// observability counter and deliberately not fixed with a lock: a lock here
+// would serialize every Metrics() caller against Embed for a guarantee
+// nothing in this package needs.
 func (c *Cache) Metrics() Metrics {
 	return Metrics{Hits: c.hits.Load(), Misses: c.misses.Load()}
 }

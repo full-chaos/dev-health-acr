@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
@@ -22,6 +23,10 @@ type fakeEmbedder struct {
 	// sequence.
 	nextErr     error
 	nextVectors [][]float32
+	// block, when non-nil, is waited on BEFORE the call is counted or
+	// answered -- it lets a coalescing test hold the singleflight leader
+	// open while other goroutines join the same in-flight call.
+	block chan struct{}
 }
 
 func (f *fakeEmbedder) Identity() contextfabric.EmbedderIdentity {
@@ -31,6 +36,12 @@ func (f *fakeEmbedder) Identity() contextfabric.EmbedderIdentity {
 }
 
 func (f *fakeEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	f.mu.Lock()
+	block := f.block
+	f.mu.Unlock()
+	if block != nil {
+		<-block
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
@@ -261,6 +272,113 @@ func TestReturnedVectorIsNotAliasedWithCacheStorage(t *testing.T) {
 	}
 	if inner.callCount() != 1 {
 		t.Fatalf("inner embedder called %d times, want 1", inner.callCount())
+	}
+}
+
+// TestCanceledContextIsNeverCached is codex round 1 finding 2: a result
+// produced while ctx was already canceled or past its deadline must not be
+// cached, even though the fake embedder (like a real one might, under a
+// race) still happily returned a well-shaped vector.
+func TestCanceledContextIsNeverCached(t *testing.T) {
+	inner := &fakeEmbedder{identity: contextfabric.EmbedderIdentity{Provider: "openai", Model: "text-embedding-3-large"}}
+	cache := New(inner, 0)
+	const text = "which projects are behind"
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := cache.Embed(canceled, []string{text}); err != nil {
+		t.Fatalf("Embed with a canceled context: %v", err)
+	}
+	if inner.callCount() != 1 {
+		t.Fatalf("inner embedder called %d times, want 1", inner.callCount())
+	}
+
+	// A fresh, non-canceled request for the SAME text must still be a
+	// miss: the canceled call's result must never have been stored.
+	if _, err := cache.Embed(context.Background(), []string{text}); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if inner.callCount() != 2 {
+		t.Fatalf("inner embedder called %d times, want 2 (a canceled-context result must never be cached)", inner.callCount())
+	}
+	metrics := cache.Metrics()
+	if metrics.Hits != 0 {
+		t.Fatalf("metrics = %+v, want 0 hits", metrics)
+	}
+}
+
+// TestEmptyVectorIsNeverCached is codex round 1 finding 3: a response that
+// pairs the one input text with a zero-length vector is the malformed shape
+// ErrResponseShape exists to name, and must never be cached -- caching it
+// would replay a fault as a permanent, silent "no match" on the graph read
+// path (falkorgraph.vectorSearchNodes treats an empty vector as finding
+// nothing, not as an error).
+func TestEmptyVectorIsNeverCached(t *testing.T) {
+	for name, vectors := range map[string][][]float32{
+		"nil vector":   {nil},
+		"empty vector": {{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			inner := &fakeEmbedder{identity: contextfabric.EmbedderIdentity{Provider: "openai", Model: "text-embedding-3-large"}}
+			cache := New(inner, 0)
+			ctx := context.Background()
+			const text = "which projects are behind"
+
+			inner.nextVectors = vectors
+			if _, err := cache.Embed(ctx, []string{text}); err != nil {
+				t.Fatalf("Embed: %v", err)
+			}
+			if _, err := cache.Embed(ctx, []string{text}); err != nil {
+				t.Fatalf("second Embed: %v", err)
+			}
+			if inner.callCount() != 2 {
+				t.Fatalf("inner embedder called %d times, want 2 (%s must never be cached)", inner.callCount(), name)
+			}
+		})
+	}
+}
+
+// TestConcurrentIdenticalMissesCoalesceToOneProviderCall is codex round 1
+// finding 4: N simultaneous cold requests for the SAME (identity, text)
+// must share ONE provider round-trip, not multiply it.
+func TestConcurrentIdenticalMissesCoalesceToOneProviderCall(t *testing.T) {
+	block := make(chan struct{})
+	inner := &fakeEmbedder{
+		identity: contextfabric.EmbedderIdentity{Provider: "openai", Model: "text-embedding-3-large"},
+		block:    block,
+	}
+	cache := New(inner, 0)
+	ctx := context.Background()
+	const text = "which projects are behind"
+	const concurrency = 20
+
+	var wg sync.WaitGroup
+	results := make([][][]float32, concurrency)
+	errs := make([]error, concurrency)
+	wg.Add(concurrency)
+	for i := 0; i < concurrency; i++ {
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = cache.Embed(ctx, []string{text})
+		}(i)
+	}
+	// Give every goroutine time to reach and join the in-flight
+	// singleflight call before releasing the leader.
+	time.Sleep(100 * time.Millisecond)
+	close(block)
+	wg.Wait()
+
+	if inner.callCount() != 1 {
+		t.Fatalf("inner embedder called %d times, want 1 (concurrent identical misses must coalesce)", inner.callCount())
+	}
+	for i := range errs {
+		if errs[i] != nil {
+			t.Fatalf("goroutine %d: %v", i, errs[i])
+		}
+		if len(results[i]) != 1 || results[i][0][0] != results[0][0][0] {
+			t.Fatalf("goroutine %d result %v diverged from goroutine 0 result %v", i, results[i], results[0])
+		}
 	}
 }
 
