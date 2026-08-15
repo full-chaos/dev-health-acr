@@ -1,9 +1,12 @@
 package falkorgraph
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -378,6 +381,60 @@ func TestCalibrateFromReport_TargetRecallJustAboveExactBoundaryStillPreservesThe
 	}
 }
 
+// TestCalibrateFromReport_TargetRecallOneULPAboveExactBoundaryStillPreservesTheInvariant
+// is the codex round-7 P2 pinning test -- the SAME 10-sample fixture again,
+// TargetRecall = math.Nextafter(0.9, +Inf) this time (one float64 ULP above
+// 0.9, not the round-6 test's ~1e-11-scale gap). The round-6 fix
+// (snapNearIntegerBoundary, an 8-ULP tolerance window) OVERCORRECTED for
+// exactly this shape: (1-target)*10 lands a few ULPs BELOW 1.0 for
+// perfectly legitimate reasons (target is genuinely, if infinitesimally,
+// more demanding than 0.9), but the snap's tolerance window treated that as
+// noise and rounded it UP to 1.0 anyway, excluding one sample it should not
+// have and reproducing the exact same class of invariant violation from a
+// different direction. The round-7 fix removed all epsilon/ULP prediction
+// in favor of post-hoc measurement, which this pins.
+func TestCalibrateFromReport_TargetRecallOneULPAboveExactBoundaryStillPreservesTheInvariant(t *testing.T) {
+	cases := []CalibrationCase{}
+	for _, s := range []float64{0.50, 0.10, 0.90, 0.30, 0.70, 0.20, 1.00, 0.40, 0.80, 0.60} {
+		cases = append(cases, CalibrationCase{Cause: "hit", CorrectSimilarity: floatPtr(s)})
+	}
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: cases}
+	targetRecall := math.Nextafter(0.9, math.Inf(1))
+
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: targetRecall, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
+	if err != nil {
+		t.Fatalf("CalibrateFromReport: %v", err)
+	}
+	if result.AchievedRecall < targetRecall {
+		t.Fatalf("AchievedRecall = %v, want >= TargetRecall %v -- the documented invariant must hold even when the target sits one ULP above a clean decimal boundary", result.AchievedRecall, targetRecall)
+	}
+}
+
+// TestRecallGateThreshold_InvariantHoldsAcrossRandomizedTargets is the
+// codex round-7 P2 property-style trio member: dozens of randomized
+// (sample-count, TargetRecall) pairs, asserting recallGateThreshold's
+// documented invariant (AchievedRecall >= TargetRecall) holds for every
+// one -- not just the three specific boundary values the other tests in
+// this trio pin by hand. A fixed seed keeps the run deterministic.
+func TestRecallGateThreshold_InvariantHoldsAcrossRandomizedTargets(t *testing.T) {
+	rng := rand.New(rand.NewSource(20260815))
+	for trial := 0; trial < 50; trial++ {
+		n := 1 + rng.Intn(30)
+		samples := make([]float64, n)
+		for i := range samples {
+			samples[i] = rng.Float64()
+		}
+		target := rng.Float64()
+		if target <= 0 {
+			target += 1e-9
+		}
+		_, achievedRecall := recallGateThreshold(samples, target)
+		if achievedRecall < target {
+			t.Fatalf("trial %d (n=%d, target=%v): achievedRecall=%v -- AchievedRecall must always be >= TargetRecall", trial, n, target, achievedRecall)
+		}
+	}
+}
+
 // A single S+ sample is its own tau, with achieved recall trivially 1.0.
 func TestCalibrateFromReport_SingleSample(t *testing.T) {
 	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: []CalibrationCase{{Cause: "hit", CorrectSimilarity: floatPtr(0.42)}}}
@@ -477,9 +534,18 @@ func TestCalibrateFromReport_ZeroFloorIsAnError(t *testing.T) {
 	}
 }
 
+// TestCalibrateFromReport_InvalidTargetRecallIsAnError is the single
+// validation-site test for TargetRecall (codex round-7 P2 FIX C extends this
+// existing table rather than adding a parallel test, per the ruling's
+// "single validation site" -- one check, one test covering everything that
+// check must reject). NaN and the two infinities are the round-7 additions:
+// strconv.ParseFloat accepts the literal string "NaN"/"Inf"/"-Inf" from an
+// env var, and NaN in particular fails BOTH a bare `<= 0` and `> 1` range
+// check (every comparison against NaN is false), so a range-only guard would
+// have silently let it through into rank arithmetic downstream.
 func TestCalibrateFromReport_InvalidTargetRecallIsAnError(t *testing.T) {
 	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: []CalibrationCase{{CorrectSimilarity: floatPtr(0.5)}}}
-	for _, target := range []float64{0, -0.1, 1.1} {
+	for _, target := range []float64{0, -0.1, 1.1, -1, math.NaN(), math.Inf(1), math.Inf(-1)} {
 		if _, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: target, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}); err != ErrInvalidTargetRecall {
 			t.Fatalf("TargetRecall=%v: err = %v, want ErrInvalidTargetRecall", target, err)
 		}
@@ -734,8 +800,20 @@ func (f *fakeRunnerT) Fatalf(format string, args ...interface{}) {
 
 // runFakeCalibrationRunner runs runCalibrationRunner against a fakeRunnerT
 // and returns whether it failed (called Fatalf) -- true if the run halted
-// at a Fatalf the way a real failing *testing.T would.
+// at a Fatalf the way a real failing *testing.T would. reportPath is empty
+// for every EXISTING caller (they build `report` directly in memory, no
+// source file to collide with outputPath) -- see
+// runFakeCalibrationRunnerWithReportPath for the codex round-7 P2 tests
+// that specifically need a real reportPath.
 func runFakeCalibrationRunner(t *testing.T, report CalibrationReport, opts CalibrationOptions, outputPath string) *fakeRunnerT {
+	t.Helper()
+	return runFakeCalibrationRunnerWithReportPath(t, report, opts, "", outputPath)
+}
+
+// runFakeCalibrationRunnerWithReportPath is runFakeCalibrationRunner with an
+// explicit reportPath, for tests that need to exercise the
+// input-path/output-path collision check (codex round-7 P2).
+func runFakeCalibrationRunnerWithReportPath(t *testing.T, report CalibrationReport, opts CalibrationOptions, reportPath, outputPath string) *fakeRunnerT {
 	t.Helper()
 	fake := &fakeRunnerT{}
 	func() {
@@ -746,7 +824,7 @@ func runFakeCalibrationRunner(t *testing.T, report CalibrationReport, opts Calib
 				}
 			}
 		}()
-		runCalibrationRunner(fake, report, opts, outputPath)
+		runCalibrationRunner(fake, report, opts, reportPath, outputPath)
 	}()
 	return fake
 }
@@ -859,6 +937,161 @@ func TestCalibrationRunner_StaleArtifactIsRemovedOnAFailingRun(t *testing.T) {
 	}
 	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
 		t.Fatalf("stale artifact still exists at %s (err=%v) after a failing run, want it removed -- a downstream reader must never see a prior run's file as if it were this run's output", outputPath, err)
+	}
+}
+
+// TestCalibrationRunner_SameReportAndOutputPathIsRefused is the codex
+// round-7 P2 pinning test: ACR_TEST_CALIBRATION_REPORT and the output path
+// resolving to the SAME file must refuse to run at all -- round-6's
+// stale-artifact removal would otherwise DELETE THE SOURCE REPORT before
+// ever using it, and a gate-passing run would silently overwrite it with
+// the policy JSON either way. Fixture deliberately clears BOTH readiness
+// gates (it would otherwise succeed and overwrite the file), so this test
+// is specifically about the collision check firing, not incidentally
+// riding along on an unrelated gate failure. The report file's content
+// must be BYTE-IDENTICAL afterward -- "refused" means untouched, not
+// "removed then not replaced".
+func TestCalibrationRunner_SameReportAndOutputPathIsRefused(t *testing.T) {
+	var cases []CalibrationCase
+	for i := 0; i < 30; i++ {
+		sPlus := 0.80 + float64(i)*(0.15/29.0)
+		sMinus := 0.05 + float64(i)*(0.15/29.0)
+		cases = append(cases, CalibrationCase{
+			Cause: "hit", CorrectSimilarity: floatPtr(sPlus), BestWrongSimilarity: floatPtr(sMinus),
+			HardNegativesTruncated: boolPtr(false),
+		})
+	}
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: 20, Cases: cases}
+	opts := CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}
+
+	sharedPath := filepath.Join(t.TempDir(), "report.json")
+	originalContent, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("json.Marshal(report): %v", err)
+	}
+	if err := os.WriteFile(sharedPath, originalContent, 0o600); err != nil {
+		t.Fatalf("write the source report file: %v", err)
+	}
+
+	fake := runFakeCalibrationRunnerWithReportPath(t, report, opts, sharedPath, sharedPath)
+	if !fake.failed {
+		t.Fatalf("runCalibrationRunner did not call Fatalf, want it to refuse when report path == output path; logs: %v", fake.logs)
+	}
+	after, err := os.ReadFile(sharedPath)
+	if err != nil {
+		t.Fatalf("source report file missing at %s after a refused run, want it UNTOUCHED: %v", sharedPath, err)
+	}
+	if string(after) != string(originalContent) {
+		t.Fatalf("source report file at %s was modified by a refused run, want it byte-identical to what was written before the call", sharedPath)
+	}
+}
+
+// TestCalibrationRunner_DifferentReportAndOutputPathStillWorks is the
+// companion negative-of-the-negative case: a NORMAL run (report path and
+// output path genuinely different, the common case every other test in
+// this file already exercises) must not be affected by the round-7 P2
+// collision check at all -- it only fires on an actual match.
+func TestCalibrationRunner_DifferentReportAndOutputPathStillWorks(t *testing.T) {
+	var cases []CalibrationCase
+	for i := 0; i < 30; i++ {
+		sPlus := 0.80 + float64(i)*(0.15/29.0)
+		sMinus := 0.05 + float64(i)*(0.15/29.0)
+		cases = append(cases, CalibrationCase{
+			Cause: "hit", CorrectSimilarity: floatPtr(sPlus), BestWrongSimilarity: floatPtr(sMinus),
+			HardNegativesTruncated: boolPtr(false),
+		})
+	}
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: 20, Cases: cases}
+	opts := CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}
+
+	dir := t.TempDir()
+	reportPath := filepath.Join(dir, "report.json")
+	outputPath := filepath.Join(dir, "policy.json")
+	if err := os.WriteFile(reportPath, []byte(`{"irrelevant": "source content, never re-read"}`), 0o600); err != nil {
+		t.Fatalf("write the source report file: %v", err)
+	}
+
+	fake := runFakeCalibrationRunnerWithReportPath(t, report, opts, reportPath, outputPath)
+	if fake.failed {
+		t.Fatalf("runCalibrationRunner called Fatalf, want it to complete -- report path and output path are genuinely different; logs: %v", fake.logs)
+	}
+	if _, err := os.Stat(outputPath); err != nil {
+		t.Fatalf("output file missing at %s: %v", outputPath, err)
+	}
+}
+
+// TestCalibrationRunner_WrittenArtifactRoundTripsProvenance is the codex
+// round-7 P2 FIX D pinning test: the artifact runCalibrationRunner writes to
+// outputPath must be a CalibrationArtifact carrying full provenance
+// (identity, dimension, target recall, the source report's own tau, and the
+// source report's path/content hash) that survives a JSON round-trip --
+// not a bare CalibrationResult, which carries none of it and would let a
+// file from one embedding space or TargetRecall silently pass as another's.
+func TestCalibrationRunner_WrittenArtifactRoundTripsProvenance(t *testing.T) {
+	var cases []CalibrationCase
+	for i := 0; i < 30; i++ {
+		sPlus := 0.80 + float64(i)*(0.15/29.0)
+		sMinus := 0.05 + float64(i)*(0.15/29.0)
+		cases = append(cases, CalibrationCase{
+			Cause: "hit", CorrectSimilarity: floatPtr(sPlus), BestWrongSimilarity: floatPtr(sMinus),
+			HardNegativesTruncated: boolPtr(false),
+		})
+	}
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: 20, Tau: 0.55, Cases: cases}
+	opts := CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}
+
+	dir := t.TempDir()
+	reportPath := filepath.Join(dir, "report.json")
+	outputPath := filepath.Join(dir, "policy.json")
+	if err := os.WriteFile(reportPath, []byte(`{"irrelevant": "source content, never re-read"}`), 0o600); err != nil {
+		t.Fatalf("write the source report file: %v", err)
+	}
+
+	fake := runFakeCalibrationRunnerWithReportPath(t, report, opts, reportPath, outputPath)
+	if fake.failed {
+		t.Fatalf("runCalibrationRunner called Fatalf, want it to complete; logs: %v", fake.logs)
+	}
+
+	written, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read written artifact at %s: %v", outputPath, err)
+	}
+	var artifact CalibrationArtifact
+	if err := json.Unmarshal(written, &artifact); err != nil {
+		t.Fatalf("json.Unmarshal(written artifact): %v", err)
+	}
+
+	if artifact.TargetEmbedIdentity != testEmbedIdentity {
+		t.Errorf("TargetEmbedIdentity = %q, want %q", artifact.TargetEmbedIdentity, testEmbedIdentity)
+	}
+	if artifact.TargetDimension != testDimension {
+		t.Errorf("TargetDimension = %d, want %d", artifact.TargetDimension, testDimension)
+	}
+	if artifact.TargetRecall != 0.90 {
+		t.Errorf("TargetRecall = %v, want 0.90", artifact.TargetRecall)
+	}
+	if artifact.ReportTau != report.Tau {
+		t.Errorf("ReportTau = %v, want the source report's own tau %v", artifact.ReportTau, report.Tau)
+	}
+	if artifact.SourceReportPath != reportPath {
+		t.Errorf("SourceReportPath = %q, want %q", artifact.SourceReportPath, reportPath)
+	}
+	wantEncoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("json.Marshal(report): %v", err)
+	}
+	wantSum := sha256.Sum256(wantEncoded)
+	wantHash := hex.EncodeToString(wantSum[:])
+	if artifact.SourceReportSHA256 != wantHash {
+		t.Errorf("SourceReportSHA256 = %q, want %q (sha256 of the source report's own JSON encoding)", artifact.SourceReportSHA256, wantHash)
+	}
+	// The underlying CalibrationResult (embedded) must also have survived --
+	// provenance is ADDED, not a replacement for the recommendation itself.
+	if !artifact.ApplyReady {
+		t.Errorf("ApplyReady = false in the round-tripped artifact, want true (this fixture's negative gate should pass)")
+	}
+	if artifact.Policy.SimilarityFloor == 0 {
+		t.Errorf("Policy.SimilarityFloor = 0 in the round-tripped artifact, want the recommended tau")
 	}
 }
 

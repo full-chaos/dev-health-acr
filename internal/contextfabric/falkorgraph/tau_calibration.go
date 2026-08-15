@@ -1,6 +1,9 @@
 package falkorgraph
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -202,6 +205,75 @@ type CalibrationResult struct {
 	KInsufficientDataNote string
 }
 
+// CalibrationArtifact wraps a CalibrationResult with the provenance a
+// WRITTEN, on-disk artifact needs (codex round-7 P2 FIX D) -- a bare
+// CalibrationResult carries the RECOMMENDATION but nothing that identifies
+// what it was recommended FOR: no embedding identity, no dimension, no
+// target recall, nothing tying it back to the source report. Two files
+// written by two runs against DIFFERENT embedding spaces (or different
+// TargetRecall values) are byte-for-byte indistinguishable as
+// CalibrationResult JSON, despite CalibrateFromReport itself refusing to
+// MIX spaces at generation time (ErrEmbeddingIdentityMismatch) -- that check
+// guards the run that PRODUCES the file, not a later run, script, or human
+// that picks the file back up days afterward with no memory of which
+// identity it was for. This is the same exact-measurement class already
+// enforced everywhere else in this package (round-1's composition-tag pin,
+// round-3's dimension pin, round-4's report-side identity stamp): the
+// blessed artifact itself now carries enough provenance that a swapped or
+// stale file is a mismatch a caller can DETECT, not just a mismatch this
+// tool avoided producing.
+type CalibrationArtifact struct {
+	CalibrationResult
+
+	// TargetEmbedIdentity, TargetDimension, and TargetRecall are the
+	// CalibrationOptions this artifact was computed FOR -- a caller re-
+	// reading this file later re-derives ITS OWN identity/dimension the
+	// same way CalibrateFromReport's caller did and compares before
+	// trusting Policy, exactly mirroring the generation-time check.
+	TargetEmbedIdentity string  `json:"target_embed_identity"`
+	TargetDimension     int     `json:"target_dimension"`
+	TargetRecall        float64 `json:"target_recall"`
+
+	// ReportTau is the SOURCE report's own tau (CalibrationReport.Tau) --
+	// what the run that PRODUCED the similarities this artifact was
+	// calibrated from was itself already filtering with, carried through so
+	// the artifact alone (without the report file still being around)
+	// answers "was this measured at a floor consistent with its own
+	// recommendation" the way the report-side field always could.
+	ReportTau float64 `json:"report_tau"`
+
+	// SourceReportPath is the source report's own path on disk (empty when
+	// the report was built in memory rather than read from a file -- e.g.
+	// every synthetic-fixture test in this package). SourceReportSHA256 is
+	// the SHA-256 of the source report's own JSON encoding, ALWAYS present
+	// when the report itself is non-empty -- a path can go stale (the file
+	// moved, renamed, or was deleted since), but the hash identifies the
+	// EXACT measurement data this artifact was calibrated from regardless of
+	// where -- or whether -- that file still exists.
+	SourceReportPath   string `json:"source_report_path,omitempty"`
+	SourceReportSHA256 string `json:"source_report_sha256,omitempty"`
+}
+
+// NewCalibrationArtifact builds the provenance-carrying wrapper a written
+// artifact uses (see CalibrationArtifact's doc comment) from a
+// CalibrateFromReport call's own inputs and result -- reportPath is the
+// SOURCE report's path on disk (empty when the report was built in memory).
+func NewCalibrationArtifact(result CalibrationResult, report CalibrationReport, opts CalibrationOptions, reportPath string) CalibrationArtifact {
+	artifact := CalibrationArtifact{
+		CalibrationResult:   result,
+		TargetEmbedIdentity: opts.TargetEmbedIdentity,
+		TargetDimension:     opts.TargetDimension,
+		TargetRecall:        opts.TargetRecall,
+		ReportTau:           report.Tau,
+		SourceReportPath:    reportPath,
+	}
+	if encoded, err := json.Marshal(report); err == nil {
+		sum := sha256.Sum256(encoded)
+		artifact.SourceReportSHA256 = hex.EncodeToString(sum[:])
+	}
+	return artifact
+}
+
 // NegativeGateRejectThreshold is the spec §5 L4 test criterion's negative
 // half, made an explicit, checkable constant (codex round-2 P1): at least
 // this fraction of the combined S-/hard-negative pool must fall at or below
@@ -217,8 +289,18 @@ var (
 	// data at all (every case has a nil CorrectSimilarity) -- calibration has
 	// nothing to set a recall gate against.
 	ErrNoCorrectSimilaritySamples = errors.New("calibration report has no correct-pair similarity samples")
-	// ErrInvalidTargetRecall reports a TargetRecall outside (0, 1].
-	ErrInvalidTargetRecall = errors.New("calibration target recall must be in (0, 1]")
+	// ErrInvalidTargetRecall reports a TargetRecall outside (0, 1], INCLUDING
+	// non-finite values (codex round-7 P2 FIX C -- strconv.ParseFloat happily
+	// accepts the literal string "NaN", and NaN fails BOTH range comparisons
+	// below (<=0 is false, >1 is false), so a bare range check silently lets
+	// NaN through; everything downstream that turns TargetRecall into a rank
+	// (recallGateThreshold's excludeCount, ultimately math.Round((1-NaN)*n))
+	// is then implementation-defined rather than a defined error. +Inf and
+	// -Inf are equally nonsensical as a recall target and are rejected the
+	// same way, at the same site, for the same reason: this is the ONE place
+	// TargetRecall gets validated, so every caller -- the live test harness's
+	// env-var parse included -- gets the same fail-closed behavior for free.
+	ErrInvalidTargetRecall = errors.New("calibration target recall must be a finite number in (0, 1]")
 	// ErrNoFeasibleFloor reports that the recall target forces a tau outside
 	// floorApplicable's (0, 1) range (codex round-3 P2) -- e.g. TargetRecall
 	// near 1.0 against an S+ sample at or below 0 (a genuinely low- or
@@ -287,7 +369,7 @@ var (
 // an underspecified spec bullet; see this lane's report for the ambiguity
 // note.
 func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (CalibrationResult, error) {
-	if opts.TargetRecall <= 0 || opts.TargetRecall > 1 {
+	if math.IsNaN(opts.TargetRecall) || math.IsInf(opts.TargetRecall, 0) || opts.TargetRecall <= 0 || opts.TargetRecall > 1 {
 		return CalibrationResult{}, ErrInvalidTargetRecall
 	}
 	// codex round-4 FIX A: checked BEFORE anything in the report is trusted
@@ -576,43 +658,31 @@ func overFetchMultiplierOrUnchanged(multiplier int) int {
 	return multiplier
 }
 
-// snapNearIntegerBoundary nudges a floating-point PRODUCT back onto the
-// nearest integer ONLY when it is within a few float64 ULPs of that
-// integer -- i.e. only when the deviation is genuine float64 REPRESENTATION
-// noise (e.g. 0.9*10 evaluating to 9.000000000000002 or 8.999999999999998
-// instead of the real-number-exact 9.0), never when the value is a
-// genuinely different number that merely happens to sit close to an
-// integer BY CONSTRUCTION.
-//
-// codex round-6 P3: the PREDECESSOR of this function was a single fixed
-// constant (quantileEpsilon = 1e-9) added/subtracted unconditionally before
-// floor()/ceil(). That constant is roughly 1e6 times LARGER than genuine
-// float64 noise at these magnitudes (~1 ULP near 1.0 is ~2.22e-16), so it
-// silently swallowed real inputs too: TargetRecall=0.90000000001 with
-// n=10 samples computes (1-TargetRecall)*n = 0.9999999999 -- a REAL value
-// 1e-10 away from 1.0, not noise -- but the fixed epsilon (1e-9 > 1e-10)
-// pushed it up to 1.0000000009 before flooring, excluding one MORE sample
-// than the caller actually asked for and violating recallGateThreshold's
-// own documented invariant (AchievedRecall >= TargetRecall always).
-//
-// The tolerance here is magnitude-relative (computed from math.Nextafter at
-// the SAME value being tested, not a fixed constant), so it scales
-// correctly regardless of how large the product is, and a caller-supplied
-// value that is genuinely a few ULPs away from its own intent is preserved
-// exactly rather than silently re-pointed at a neighboring integer.
-func snapNearIntegerBoundary(raw float64) float64 {
-	nearest := math.Round(raw)
-	ulp := math.Nextafter(nearest, math.Inf(1)) - nearest
-	const ulpTolerance = 8 // a handful of ULPs of slack for compounded rounding across the multiply/subtract chain, still ~1e6x tighter than the old fixed constant
-	if math.Abs(raw-nearest) <= ulpTolerance*ulp {
-		return nearest
-	}
-	return raw
-}
-
 // recallGateThreshold returns (tau, achievedRecall) for samples under the
 // nearest-rank recall-gate method described in CalibrateFromReport's doc
 // comment. samples must be non-empty.
+//
+// codex round-7 P2 ENDS the quantile-boundary epsilon/ULP guessing game
+// STRUCTURALLY -- this was round 3 of the same enumeration: round 1 used a
+// single fixed epsilon (1e-9) that was ~1e6x coarser than genuine float64
+// noise, silently swallowing a genuinely-different, merely-close
+// TargetRecall; round 2 replaced it with a magnitude-relative ULP-scale
+// snap, which then OVERCORRECTED in the opposite direction for a
+// TargetRecall one ULP ABOVE a clean decimal (Nextafter(0.9, +Inf)), where
+// the raw product is already a few ULPs BELOW 1.0 for entirely legitimate
+// reasons and the snap wrongly rounded it up anyway. No predictive
+// epsilon/ULP reasoning survives here at all now: excludeCount starts from
+// the SIMPLEST possible candidate (math.Round, no tolerance window, no
+// judgment call about "is this noise") and the documented invariant
+// (AchievedRecall >= TargetRecall, ALWAYS) is enforced POST-HOC BY
+// MEASUREMENT below -- while the ACTUAL achieved recall (recallAtTau, the
+// SAME strict predicate production applies) falls short of the target, the
+// candidate is relaxed by one and re-measured. This makes the invariant
+// true BY CONSTRUCTION for every float64 input, not by predicting which
+// way float64 rounding went: the loop can only ever REDUCE excludeCount
+// (bounded below by 0), and excludeCount=0 always achieves recall 1.0 >=
+// any valid TargetRecall in (0,1], so both termination and correctness
+// follow from the loop's own shape.
 //
 // tau is NOT the nearest-rank sample's exact value -- it is nudged one
 // float64 ULP below it via math.Nextafter (codex round-1 P1: production's
@@ -620,18 +690,17 @@ func snapNearIntegerBoundary(raw float64) float64 {
 // similarity exactly equals tau is DROPPED, never retrieved; setting tau to
 // the sample's own value therefore claimed that sample -- and made a 100%
 // TargetRecall provably unachievable, since the minimum sample IS tau and
-// tau can never clear itself). Nextafter is exact regardless of magnitude
-// (no epsilon-collision risk the way a fixed constant would have), and moves
-// tau just far enough that the boundary sample -- and any sample tied with
-// it -- legitimately clears the SAME strict predicate production applies,
-// which is what achievedRecall below counts directly rather than deriving
-// from rank position (so ties at the boundary are never split across
+// tau can never clear itself). Nextafter is exact regardless of magnitude,
+// and moves tau just far enough that the boundary sample -- and any sample
+// tied with it -- legitimately clears the SAME strict predicate production
+// applies, which is what recallAtTau counts directly (never derived from
+// rank position, so ties at the boundary are never split across
 // "counted"/"not counted" by an arbitrary index cut).
 func recallGateThreshold(samples []float64, targetRecall float64) (float64, float64) {
 	sorted := append([]float64(nil), samples...)
 	sort.Float64s(sorted)
 	n := len(sorted)
-	excludeCount := int(math.Floor(snapNearIntegerBoundary((1 - targetRecall) * float64(n))))
+	excludeCount := int(math.Round((1 - targetRecall) * float64(n)))
 	if excludeCount >= n {
 		excludeCount = n - 1
 	}
@@ -639,14 +708,29 @@ func recallGateThreshold(samples []float64, targetRecall float64) (float64, floa
 		excludeCount = 0
 	}
 	tau := math.Nextafter(sorted[excludeCount], math.Inf(-1))
+	achievedRecall := recallAtTau(sorted, tau)
+	for achievedRecall < targetRecall && excludeCount > 0 {
+		excludeCount--
+		tau = math.Nextafter(sorted[excludeCount], math.Inf(-1))
+		achievedRecall = recallAtTau(sorted, tau)
+	}
+	return tau, achievedRecall
+}
+
+// recallAtTau is the exact measurement recallGateThreshold's post-hoc
+// invariant-enforcement loop uses: the ACTUAL fraction of sorted (assumed
+// already ascending) that clears tau under aboveSimilarityFloor, the SAME
+// strict predicate production's vectorSearchNodesWithOverFetch applies --
+// so this can never disagree with what production would actually retrieve,
+// and never relies on rank position or any float64 rounding assumption.
+func recallAtTau(sorted []float64, tau float64) float64 {
 	survived := 0
 	for _, s := range sorted {
 		if aboveSimilarityFloor(s, tau) {
 			survived++
 		}
 	}
-	achievedRecall := float64(survived) / float64(n)
-	return tau, achievedRecall
+	return float64(survived) / float64(len(sorted))
 }
 
 // percentileInt returns the CONVENTIONAL nearest-rank fraction-th percentile
@@ -660,6 +744,16 @@ func recallGateThreshold(samples []float64, targetRecall float64) (float64, floa
 // callers need opposite ends of their respective distributions. Returns 0
 // for an empty input (no cases carried hard negatives at all -- no density
 // signal, no widening).
+//
+// No epsilon/ULP correction here (codex round-7 P2 removed the shared
+// snapNearIntegerBoundary helper this used to call): unlike
+// recallGateThreshold, this function has no documented, tested correctness
+// invariant to defend -- it is a density ESTIMATE K is sized from, not a
+// hard guarantee -- so a plain ceil is the simplest, most defensible
+// choice, and fraction is always CalibrateFromReport's own hardcoded 0.90
+// constant, for which fraction*n is exact float64 arithmetic at every n
+// this package's tests exercise (verified: 0.9*10, *20, *30... all land on
+// the exact integer, no representation error to correct for).
 func percentileInt(counts []int, fraction float64) int {
 	if len(counts) == 0 {
 		return 0
@@ -667,7 +761,7 @@ func percentileInt(counts []int, fraction float64) int {
 	sorted := append([]int(nil), counts...)
 	sort.Ints(sorted)
 	n := len(sorted)
-	rank := int(math.Ceil(snapNearIntegerBoundary(fraction * float64(n))))
+	rank := int(math.Ceil(fraction * float64(n)))
 	if rank < 1 {
 		rank = 1
 	}

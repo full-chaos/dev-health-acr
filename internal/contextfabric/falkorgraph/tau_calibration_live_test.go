@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 )
@@ -23,27 +24,76 @@ type runnerT interface {
 	Fatalf(format string, args ...interface{})
 }
 
+// resolvePathForIdentity resolves path to an absolute, symlink-free form for
+// IDENTITY comparison (codex round-7 P2 -- "resolve both paths ... before
+// any removal"). A path that does not exist yet (the common case for
+// outputPath on a first run) cannot be evaluated by filepath.EvalSymlinks,
+// which errors on a missing file -- that is not a resolution failure here,
+// it just means the path has no symlink to resolve, so the absolute form
+// alone is the correct identity to compare against. Only a genuine
+// filepath.Abs failure (a malformed path) is reported as an error.
+func resolvePathForIdentity(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved, nil
+	}
+	return abs, nil
+}
+
 // runCalibrationRunner is TestCalibrateRetrievalPolicyFromReportFile's core
 // logic, taking an ALREADY-PARSED report/options/output-path rather than
 // reading them from the environment or disk -- extracted (codex round-4
 // FIX C) so the FAIL-and-write-no-artifact behavior on a gate failure is
 // unit-testable (see TestCalibrationRunner_GateFailingReportFailsAndWritesNoArtifact
 // and its sibling in tau_calibration_test.go) without a real
-// ACR_TEST_CALIBRATION_REPORT file on disk.
-func runCalibrationRunner(t runnerT, report CalibrationReport, opts CalibrationOptions, outputPath string) {
+// ACR_TEST_CALIBRATION_REPORT file on disk. reportPath is the SOURCE
+// report's own path on disk (empty when the caller built `report` directly
+// in memory, e.g. every non-live test in this package) -- carried through
+// solely so the same-path collision check below has something to compare
+// outputPath against; it is never read again here (the caller already
+// parsed `report` from it).
+func runCalibrationRunner(t runnerT, report CalibrationReport, opts CalibrationOptions, reportPath, outputPath string) {
 	t.Helper()
-	// codex round-6 P2: remove any EXISTING artifact at outputPath FIRST,
-	// before any measurement runs, so every exit path (pass, gate-fail,
-	// crash mid-run below) leaves either a fresh artifact or NO artifact --
-	// never a STALE one. Without this, a prior successful run's file at
-	// this same path survives untouched through a LATER gate-failing run,
-	// and a downstream consumer reading outputPath sees that stale
-	// artifact as if it were the current (failed) run's output -- exactly
-	// defeating the round-4 FIX C file-presence contract this file exists
-	// to uphold. A missing file is not an error (the common case, nothing
-	// to clean up); any OTHER removal failure IS one -- proceeding without
-	// being sure the stale file is gone would silently reopen the hazard.
 	if outputPath != "" {
+		// codex round-7 P2: input==output would DELETE THE SOURCE REPORT.
+		// Checked and Fatalf'd BEFORE any removal -- round-6's stale-artifact
+		// removal (below) would otherwise delete reportPath itself when both
+		// env vars point at the same file (a plausible operator mistake, or
+		// a deliberate-but-wrong "write the policy back over the report"
+		// intent): a gate-failing run would leave NOTHING at all (the
+		// report gone, no replacement written), and a gate-passing run
+		// would silently REPLACE the raw measurement data with the policy
+		// JSON, destroying the report either way. Resolved to absolute,
+		// symlink-free form (not a raw string compare) so two different
+		// spellings of the SAME file (a relative vs. absolute path, or a
+		// symlink) are still caught.
+		if reportPath != "" {
+			resolvedReport, err := resolvePathForIdentity(reportPath)
+			if err != nil {
+				t.Fatalf("resolve report path %s for the input/output collision check: %v", reportPath, err)
+			}
+			resolvedOutput, err := resolvePathForIdentity(outputPath)
+			if err != nil {
+				t.Fatalf("resolve output path %s for the input/output collision check: %v", outputPath, err)
+			}
+			if resolvedReport == resolvedOutput {
+				t.Fatalf("ACR_TEST_CALIBRATION_REPORT and the output path both resolve to %s -- refusing to run: writing the calibration result there would destroy the source report this run just read (a gate failure would delete it with nothing to replace it; a gate pass would silently overwrite it with the policy JSON). Use a different output path.", resolvedReport)
+			}
+		}
+		// codex round-6 P2: remove any EXISTING artifact at outputPath
+		// (now proven distinct from reportPath) FIRST, before any
+		// measurement runs, so every exit path (pass, gate-fail, a crash
+		// mid-run below) leaves either a fresh artifact or NO artifact --
+		// never a STALE one. Without this, a prior successful run's file at
+		// this same path survives untouched through a LATER gate-failing
+		// run, and a downstream consumer reading outputPath sees that stale
+		// artifact as if it were the current (failed) run's output. A
+		// missing file is not an error (the common case, nothing to clean
+		// up); any OTHER removal failure IS one -- proceeding without being
+		// sure the stale file is gone would silently reopen that hazard.
 		if err := os.Remove(outputPath); err != nil && !os.IsNotExist(err) {
 			t.Fatalf("remove stale artifact at %s before running: %v", outputPath, err)
 		}
@@ -116,12 +166,18 @@ func runCalibrationRunner(t runnerT, report CalibrationReport, opts CalibrationO
 	}
 
 	if outputPath != "" {
-		encodedResult, err := json.MarshalIndent(result, "", "  ")
+		// codex round-7 P2 FIX D: the written artifact is a
+		// CalibrationArtifact, not a bare CalibrationResult -- see its doc
+		// comment. Without this, a file swapped between two embedding
+		// spaces (or two TargetRecall values) is silently indistinguishable
+		// from the correct one to whatever reads outputPath back later.
+		artifact := NewCalibrationArtifact(result, report, opts, reportPath)
+		encodedResult, err := json.MarshalIndent(artifact, "", "  ")
 		if err != nil {
-			t.Fatalf("encode calibration result: %v", err)
+			t.Fatalf("encode calibration artifact: %v", err)
 		}
 		if err := writeFileMode0600(outputPath, encodedResult); err != nil {
-			t.Fatalf("write calibration result to %s: %v", outputPath, err)
+			t.Fatalf("write calibration artifact to %s: %v", outputPath, err)
 		}
 		t.Logf("calibration result written to %s", outputPath)
 	}
@@ -199,5 +255,5 @@ func TestCalibrateRetrievalPolicyFromReportFile(t *testing.T) {
 		TargetRecall:        targetRecall,
 		TargetEmbedIdentity: targetEmbedIdentity,
 		TargetDimension:     targetDimension,
-	}, os.Getenv("ACR_TEST_CALIBRATION_OUTPUT"))
+	}, reportPath, os.Getenv("ACR_TEST_CALIBRATION_OUTPUT"))
 }
