@@ -59,9 +59,12 @@ index options were re-verified unchanged afterward.
   call site passes a non-zero value.
 - `dropVectorIndex` / `recreateVectorIndexWithOptions` (`vector.go`): not
   called from any production path; the sweep/probe primitive. Reads the
-  pre-drop HNSW options first and, if the post-drop create fails, restores
-  them rather than leaving the index absent — reported loudly either way
-  (Luna round-1 finding 2b).
+  pre-drop HNSW options first and, if EITHER the post-drop create errors OR
+  the create succeeds but the subsequent poll times out, restores the
+  original options (re-dropping the unconfirmed new index first, so the
+  restore's create cannot be silently no-op'd by FalkorDB's idempotent
+  already-indexed tolerance) — reported loudly either way (Luna round-1
+  finding 2b, extended round-2 finding 2 to cover the poll-failure half).
 - `vectorSearchNodesWithOverFetch` (`vector.go`): generalizes
   `vectorSearchNodes` with an explicit multiplier. `vectorSearchNodes` now
   delegates with multiplier=1, rendering byte-identical Cypher to before
@@ -76,27 +79,43 @@ index options were re-verified unchanged afterward.
   (Luna round-1 finding 3) — real in this corpus, not a hypothetical: 78% of
   it is near-duplicate `ci_pipeline_run` text (spec §1), which projects to
   near- or exactly-identical embeddings.
-- `RunHNSWSweep`, `vectorSweepSeedTopK`, `SweepBuildPoint`, `SweepResult`
-  (`hnsw_sweep.go`): the live sweep runner — recreates the index once per
-  distinct (M, efConstruction, efRuntime) point, runs every seed query
-  against it, and reports recall@K (tie-tolerant, relative to the reference
-  point's own overfetched top-K) plus p50/p95 query latency, index build
-  time, and — Luna round-1 finding 1 — `Queries`/`SkippedSeeds` so partial
-  coverage is always visible rather than silently folded into a clean-looking
-  number. A point where every seed's query fails (`Queries==0`) still
-  delivers its diagnostic result but makes `RunHNSWSweep` return a non-nil
-  error: a zero-coverage sweep is not a valid measurement and must not read
-  as a green pass.
-- `isSweepTargetSafe` + `protectedSweepGraphKeys` (`hnsw_sweep.go`): the
-  safety gate the live probe uses, rewritten per Luna round-1 finding 2 —
-  an EXACT-match denylist against a hardcoded, known-precious production
-  key (this lane's live org graph), not a substring heuristic. The `"copy"`
-  substring check is kept as a SECOND, independent condition, never the
-  sole gate.
+- `RunHNSWSweep`, `vectorSweepSeedTopK`, `referenceTopKTieComplete`,
+  `SweepBuildPoint`, `SweepResult` (`hnsw_sweep.go`): the live sweep runner —
+  recreates the index once per distinct (M, efConstruction, efRuntime) point,
+  runs every seed query against it, and reports recall@K (tie-tolerant,
+  relative to the reference point's own top-K) plus p50/p95 query latency,
+  index build time, and — Luna round-1 finding 1 — `Queries`/`SkippedSeeds`
+  so partial coverage is always visible rather than silently folded into a
+  clean-looking number. A point where every seed's query fails
+  (`Queries==0`) still delivers its diagnostic result but makes
+  `RunHNSWSweep` return a non-nil error: a zero-coverage sweep is not a valid
+  measurement and must not read as a green pass. The reference build's
+  top-K fetch (`referenceTopKTieComplete`) ESCALATES past the initial 2x
+  overfetch window while the k-th boundary score is still tied with the
+  window's own last row, up to `maxReferenceTieMultiplier` (64x) — a tie
+  group larger than 2x was previously silently truncated (Luna round-2
+  finding 3); a tie group that never resolves within the bound fails that
+  seed closed (routed through the same `SkippedSeeds` accounting finding 1
+  established, not a separate error path).
+- `isSweepTargetSafe` (`hnsw_sweep.go`): the safety gate the live probe
+  uses, rewritten per Luna round-2 finding 1 — FAIL-CLOSED against the org's
+  ACTUAL production graph key, DERIVED at runtime via `graphKey()` (the
+  SAME derivation `identity.go` uses for every real read/write), never a
+  hardcoded list. Round-1's fix (an exact-match denylist of ONE known key)
+  still failed open for a different prefix or a different, unlisted org — a
+  derivation-based comparison cannot, because there is nothing to have
+  forgotten to list. The target must ALSO exactly equal an independently
+  operator-declared `expectedCopyKey` (a "state your intent twice" check);
+  the round-1 `"copy"` substring heuristic is REMOVED entirely — Luna named
+  it as adding nothing once the derivation-based comparison exists.
+  Underivable inputs (empty prefix/org id/expected key) REFUSE, never pass
+  silently.
 - `hnsw_sweep_live_test.go`: the runnable live probe, gated behind dedicated
   `ACR_TEST_HNSW_SWEEP_*` env vars (never a production `ACR_CONTEXT_FABRIC_*`
-  name), the safety gate above, and (finding 1) rejects any point with
-  `SkippedSeeds > 0` rather than merely logging it.
+  name) — now including `_ORG_ID`, `_GRAPH_PREFIX`, and
+  `_EXPECTED_COPY_KEY`, all required for the derivation-based safety gate —
+  and (finding 1) rejects any point with `SkippedSeeds > 0` rather than
+  merely logging it.
 
 ### Scoping note: what this measures vs. T1's harness
 
