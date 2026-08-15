@@ -36,7 +36,18 @@ type Config struct {
 // value that parses to something out of bounds, the same posture
 // embedprovider.ConfigFromEnv and falkorgraph.ConfigFromEnv take for their
 // own bounded integers.
+//
+// EnvEnabled is checked FIRST and short-circuits every other lookup (codex
+// round 1, finding 1). A disabled cache must be bulletproof-inert: nothing
+// else on this package's env surface may turn "the cache is off" into a
+// hosted-startup failure. Before this fix, an unrelated, stale, or
+// hand-typo'd ACR_CONTEXT_FABRIC_EMBED_QUERY_CACHE_SIZE value failed
+// ConfigFromEnv even when the cache was never going to be constructed,
+// taking down the lexical-only retrieval path it was never near.
 func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
+	if !envBool(lookup, EnvEnabled, false) {
+		return Config{Enabled: false, MaxEntries: DefaultMaxEntries}, nil
+	}
 	maxEntries, err := envInt(lookup, EnvMaxEntries, DefaultMaxEntries)
 	if err != nil {
 		return Config{}, err
@@ -45,7 +56,7 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, errors.New(EnvMaxEntries + " must be between one and sixty-five thousand five hundred thirty-six")
 	}
 	return Config{
-		Enabled:    envBool(lookup, EnvEnabled, false),
+		Enabled:    true,
 		MaxEntries: maxEntries,
 	}, nil
 }

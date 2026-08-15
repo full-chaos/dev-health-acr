@@ -44,11 +44,55 @@ func TestConfigFromEnvHonorsEnabledAndSize(t *testing.T) {
 }
 
 func TestConfigFromEnvRejectsOutOfBoundsSize(t *testing.T) {
-	if _, err := ConfigFromEnv(lookupFrom(map[string]string{EnvMaxEntries: "0"})); err == nil {
+	if _, err := ConfigFromEnv(lookupFrom(map[string]string{
+		EnvEnabled:    "true",
+		EnvMaxEntries: "0",
+	})); err == nil {
 		t.Fatal("expected an error for a zero cache size")
 	}
-	if _, err := ConfigFromEnv(lookupFrom(map[string]string{EnvMaxEntries: "not-a-number"})); err == nil {
+	if _, err := ConfigFromEnv(lookupFrom(map[string]string{
+		EnvEnabled:    "true",
+		EnvMaxEntries: "not-a-number",
+	})); err == nil {
 		t.Fatal("expected an error for a non-integer cache size")
+	}
+}
+
+// TestDisabledConfigIgnoresGarbageSize is codex round 1 finding 1: a
+// disabled cache must be bulletproof-inert. An unrelated, stale, or
+// malformed EnvMaxEntries must never fail startup for a deployment that
+// never opted into the cache.
+func TestDisabledConfigIgnoresGarbageSize(t *testing.T) {
+	cases := map[string]string{
+		"unset":            "",
+		"zero":             "0",
+		"negative":         "-5",
+		"non-integer":      "banana",
+		"way out of range": "999999999",
+	}
+	for name, size := range cases {
+		t.Run(name, func(t *testing.T) {
+			values := map[string]string{EnvEnabled: "false"}
+			if size != "" {
+				values[EnvMaxEntries] = size
+			}
+			cfg, err := ConfigFromEnv(lookupFrom(values))
+			if err != nil {
+				t.Fatalf("ConfigFromEnv with EnvEnabled=false must never error on EnvMaxEntries=%q, got: %v", size, err)
+			}
+			if cfg.Enabled {
+				t.Fatal("cache must stay disabled")
+			}
+		})
+	}
+	// Same proof again with EnvEnabled entirely unset (the real default
+	// startup shape), not just explicitly "false".
+	cfg, err := ConfigFromEnv(lookupFrom(map[string]string{EnvMaxEntries: "not-a-number"}))
+	if err != nil {
+		t.Fatalf("ConfigFromEnv with EnvEnabled unset must never error on a garbage EnvMaxEntries, got: %v", err)
+	}
+	if cfg.Enabled {
+		t.Fatal("cache must default disabled")
 	}
 }
 
