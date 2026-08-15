@@ -232,6 +232,60 @@ func TestApplyQueryPrefixIsIdempotent(t *testing.T) {
 	}
 }
 
+// Round-2 review: an ALREADY-prefixed input that is still over budget (e.g.
+// handed in from outside this package, not produced by a prior call) must
+// still land exactly at the ceiling with the prefix intact -- the
+// idempotency guard must not become a way to smuggle an over-long text past
+// the budget.
+func TestApplyDocumentPrefixBudgetsAnAlreadyPrefixedOverBudgetInput(t *testing.T) {
+	cfg := testConfig("http://localhost:1")
+	cfg.PrefixFamily = PrefixFamilyNomic
+	cfg.MaxTextRunes = 64
+	embedder, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	alreadyPrefixed := embedder.DocumentPrefix() + strings.Repeat("x", cfg.MaxTextRunes*2)
+	got := embedder.ApplyDocumentPrefix(alreadyPrefixed)
+	if n := len([]rune(got)); n != cfg.MaxTextRunes {
+		t.Fatalf("got %d runes, want exactly %d (the ceiling)", n, cfg.MaxTextRunes)
+	}
+	if !strings.HasPrefix(got, embedder.DocumentPrefix()) {
+		t.Fatalf("result %q lost its document prefix", got)
+	}
+	if again := TruncateRunes(got, cfg.MaxTextRunes); again != got {
+		t.Fatalf("Embed's own truncation is NOT a no-op: got %q, retruncated %q", got, again)
+	}
+	// And it is still a fixed point under a further application.
+	if twice := embedder.ApplyDocumentPrefix(got); twice != got {
+		t.Fatalf("not a fixed point: once=%q twice=%q", got, twice)
+	}
+}
+
+func TestApplyQueryPrefixBudgetsAnAlreadyPrefixedOverBudgetInput(t *testing.T) {
+	cfg := testConfig("http://localhost:1")
+	cfg.PrefixFamily = PrefixFamilyNomic
+	cfg.MaxTextRunes = 64
+	embedder, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	alreadyPrefixed := embedder.QueryPrefix() + strings.Repeat("y", cfg.MaxTextRunes*2)
+	got := embedder.ApplyQueryPrefix(alreadyPrefixed)
+	if n := len([]rune(got)); n != cfg.MaxTextRunes {
+		t.Fatalf("got %d runes, want exactly %d (the ceiling)", n, cfg.MaxTextRunes)
+	}
+	if !strings.HasPrefix(got, embedder.QueryPrefix()) {
+		t.Fatalf("result %q lost its query prefix", got)
+	}
+	if again := TruncateRunes(got, cfg.MaxTextRunes); again != got {
+		t.Fatalf("Embed's own truncation is NOT a no-op: got %q, retruncated %q", got, again)
+	}
+	if twice := embedder.ApplyQueryPrefix(got); twice != got {
+		t.Fatalf("not a fixed point: once=%q twice=%q", got, twice)
+	}
+}
+
 // The no-prefix family is trivially idempotent (nothing is ever prepended),
 // covered for completeness alongside the nomic idempotency tests above.
 func TestApplyPrefixWithNoFamilyConfiguredIsIdempotent(t *testing.T) {

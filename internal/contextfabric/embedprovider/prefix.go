@@ -114,26 +114,36 @@ func applyPrefixWithBudget(prefix, text string, maxRunes int) string {
 	if prefix == "" {
 		return text
 	}
-	// Idempotency guard (round-1 review P2): a second application of the
-	// same prefix must be a no-op, not "prefix + prefix + text". Detecting
-	// "already carries this exact prefix" and returning text UNCHANGED --
-	// not re-truncated -- is what makes repeat calls a true no-op rather
-	// than a slowly-shrinking one.
-	//
-	// The guard's theoretical false positive -- real text that legitimately
-	// BEGINS with the literal prefix string, e.g. a PR titled exactly
-	// "search_document: implement the indexer" -- is accepted. Skipping a
-	// redundant prefix on that text still leaves it carrying the correct
-	// task-prefix token exactly once, which is the actual requirement; the
-	// alternative of no guard at all corrupts every genuinely double-applied
-	// call, and a wiring or composition-tag mistake making that happen is
-	// both more likely and more damaging than this coincidence.
-	if strings.HasPrefix(text, prefix) {
-		return text
-	}
 	budget := maxRunes - utf8.RuneCountInString(prefix)
 	if budget < 0 {
 		budget = 0
+	}
+	// Idempotency guard (round-1 review P2), round-2 correction: a second
+	// application of the same prefix must be a no-op, not
+	// "prefix + prefix + text" -- but "already carries this prefix" is NOT
+	// license to skip the budget too. An already-prefixed input can still be
+	// over-budget (e.g. handed in from outside this package's own previous
+	// call), and returning it unchanged in that case would let Embed's
+	// TruncateRunes fire on it after all, silently cutting from the tail --
+	// exactly the failure this function exists to prevent, just reached via
+	// the guard meant to prevent a DIFFERENT failure. So the already-prefixed
+	// branch still re-applies the SAME budget to the REMAINDER after the
+	// prefix, not to the whole string: split the prefix off, truncate what's
+	// left to budget, rejoin. Applied to this function's own output, that
+	// truncation is always a no-op (the remainder is already <= budget),
+	// which is exactly what makes this a true idempotent fixed point rather
+	// than a skip that happens to look like one.
+	//
+	// The guard's theoretical false positive -- real text that legitimately
+	// BEGINS with the literal prefix string, e.g. a PR titled exactly
+	// "search_document: implement the indexer" -- is accepted. Budget-fitting
+	// that text once is indistinguishable from budget-fitting a genuinely
+	// re-applied prefix, and a wiring or composition-tag mistake causing a
+	// real double-application is both more likely and more damaging than
+	// this coincidence.
+	if strings.HasPrefix(text, prefix) {
+		remainder := strings.TrimPrefix(text, prefix)
+		return prefix + TruncateRunes(remainder, budget)
 	}
 	return prefix + TruncateRunes(text, budget)
 }
