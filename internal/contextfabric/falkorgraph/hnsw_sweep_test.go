@@ -558,6 +558,14 @@ func TestRunHNSWSweepOracleModeCanDisagreeWithFallbackMode(t *testing.T) {
 	fake := &fakeConn{
 		queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
 			switch {
+			// CHAOS-3849: fetchEmbedderFenceCorpus now issues a count(n)
+			// verification query under the same predicate before paginating
+			// the row-returning fetch -- the fake must answer that shape
+			// distinctly (a single aggregate row) rather than handing back
+			// corpusRows for both query shapes, which would trip the
+			// mismatch guard instead of exercising the intended fixture.
+			case strings.Contains(cypher, "embedder_identity") && strings.Contains(cypher, "count("):
+				return []row{{"total": int64(len(corpusRows))}}, nil
 			case strings.Contains(cypher, "embedder_identity"):
 				// The oracle corpus fetch -- independent of any ANN build.
 				return corpusRows, nil

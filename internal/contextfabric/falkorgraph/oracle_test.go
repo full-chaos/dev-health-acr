@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -404,26 +405,36 @@ func TestFetchEmbedderFenceCorpusRequiresAnEmbedder(t *testing.T) {
 func TestFetchEmbedderFenceCorpusScopesToOrgAndIdentityAndDecodesRows(t *testing.T) {
 	var capturedCypher string
 	var capturedParams map[string]interface{}
+	fenceRows := []row{
+		// Valid.
+		{"n": &node{Properties: map[string]interface{}{
+			propKind: "project", propCanonicalID: "p1", propLabel: "Auth",
+			propEmbedding: []interface{}{1.0, 0.0, 0.0},
+		}}},
+		// Missing canonical id -- skipped, not fatal.
+		{"n": &node{Properties: map[string]interface{}{
+			propKind: "project", propEmbedding: []interface{}{1.0, 0.0, 0.0},
+		}}},
+		// Malformed embedding -- skipped, not fatal.
+		{"n": &node{Properties: map[string]interface{}{
+			propKind: "project", propCanonicalID: "p2", propEmbedding: "not-a-vector",
+		}}},
+		// Not a node at all -- skipped, not fatal.
+		{"n": "unexpected"},
+	}
+	// CHAOS-3849: fetchEmbedderFenceCorpus now runs a count(n) verification
+	// query under the identical predicate BEFORE paginating, so the fake must
+	// answer both query shapes it issues -- the aggregate count (1 usable +
+	// 3 skipped-malformed = 4, matching fenceRows below) and the paginated
+	// row-returning fetch -- rather than handing back node rows for every
+	// call regardless of what was asked.
 	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
 		capturedCypher = cypher
 		capturedParams = params
-		return []row{
-			// Valid.
-			{"n": &node{Properties: map[string]interface{}{
-				propKind: "project", propCanonicalID: "p1", propLabel: "Auth",
-				propEmbedding: []interface{}{1.0, 0.0, 0.0},
-			}}},
-			// Missing canonical id -- skipped, not fatal.
-			{"n": &node{Properties: map[string]interface{}{
-				propKind: "project", propEmbedding: []interface{}{1.0, 0.0, 0.0},
-			}}},
-			// Malformed embedding -- skipped, not fatal.
-			{"n": &node{Properties: map[string]interface{}{
-				propKind: "project", propCanonicalID: "p2", propEmbedding: "not-a-vector",
-			}}},
-			// Not a node at all -- skipped, not fatal.
-			{"n": "unexpected"},
-		}, nil
+		if strings.Contains(cypher, "count(") {
+			return []row{{"total": int64(len(fenceRows))}}, nil
+		}
+		return fenceRows, nil
 	}}
 	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0}}, 0.5)
 	corpus, err := adapter.fetchEmbedderFenceCorpus(context.Background(), "key", "org-1")
@@ -455,6 +466,270 @@ func TestFetchEmbedderFenceCorpusScopesToOrgAndIdentityAndDecodesRows(t *testing
 	for _, want := range []string{propOrgID, propEmbedding, propEmbedderIdentity} {
 		if !strings.Contains(capturedCypher, want) {
 			t.Fatalf("cypher %q missing expected predicate on %q", capturedCypher, want)
+		}
+	}
+}
+
+// resultSetSizeFakeConn simulates FalkorDB's RESULTSET_SIZE behavior
+// (CHAOS-3849) against an org of `total` fence-passing Subject rows: a
+// row-returning query with no SKIP is silently capped at `serverCap` rows
+// (no error -- the real server's own behavior, observed live), while a
+// row-returning query carrying an explicit SKIP/LIMIT (fetchEmbedderFenceCorpus's
+// post-fix pagination) is answered as a genuine page of the full `total`-row
+// dataset. The count(*) aggregate always reports the true `total`, matching
+// FalkorDB's documented exemption for aggregate scalar results.
+func resultSetSizeFakeConn(total, serverCap int) *fakeConn {
+	buildRow := func(i int) row {
+		return row{"n": &node{Properties: map[string]interface{}{
+			propKind: "project", propCanonicalID: fmt.Sprintf("p%06d", i),
+			propEmbedding: []interface{}{1.0, 0.0, 0.0},
+		}}}
+	}
+	return &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "count(") {
+			return []row{{"total": int64(total)}}, nil
+		}
+		if strings.Contains(cypher, "SKIP") {
+			skip, _ := params["skip"].(int)
+			limit, _ := params["limit"].(int)
+			if skip >= total {
+				return nil, nil
+			}
+			end := skip + limit
+			if end > total {
+				end = total
+			}
+			rows := make([]row, 0, end-skip)
+			for i := skip; i < end; i++ {
+				rows = append(rows, buildRow(i))
+			}
+			return rows, nil
+		}
+		// The PRE-FIX shape: one unbounded `RETURN n` query, with no SKIP/LIMIT
+		// at all -- exactly what the server itself silently truncates.
+		n := total
+		if n > serverCap {
+			n = serverCap
+		}
+		rows := make([]row, 0, n)
+		for i := 0; i < n; i++ {
+			rows = append(rows, buildRow(i))
+		}
+		return rows, nil
+	}}
+}
+
+// TestFetchEmbedderFenceCorpusPaginatesPastResultSetSizeCap is the CHAOS-3849
+// regression for the silent-truncation defect: fetchEmbedderFenceCorpus must
+// return the FULL org- and identity-scoped corpus (here 12,000 rows) even
+// though a single unbounded query against this fixture would silently come
+// back with only serverCap=10,000 (FalkorDB's dev-default RESULTSET_SIZE) and
+// no error at all -- observed live against a real 35,986-vector org. Run
+// against the pre-fix single-query body, this fixture makes
+// fetchEmbedderFenceCorpus return exactly 10,000 rows with err==nil (a
+// silently shrunken universe, not a failure); run against the fix, it must
+// paginate to all 12,000.
+func TestFetchEmbedderFenceCorpusPaginatesPastResultSetSizeCap(t *testing.T) {
+	const total = 12000
+	const serverCap = 10000 // FalkorDB's dev-default RESULTSET_SIZE.
+
+	fake := resultSetSizeFakeConn(total, serverCap)
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0, 0}}, 0.5)
+
+	corpus, err := adapter.fetchEmbedderFenceCorpus(context.Background(), "key", "org-1")
+	if err != nil {
+		t.Fatalf("fetchEmbedderFenceCorpus: %v", err)
+	}
+	if len(corpus) != total {
+		t.Fatalf("got %d corpus entries, want all %d -- the corpus IS the full org- and identity-scoped result set (oracle.go's own contract); a count stuck at the RESULTSET_SIZE cap (%d) means truncation is silently narrowing it again",
+			len(corpus), total, serverCap)
+	}
+}
+
+// TestFetchEmbedderFenceCorpusHardFailsOnCountMismatch is the CHAOS-3849
+// closure-guarantee half of the fix: fetchEmbedderFenceCorpus must hard-fail
+// with errOracleCorpusSizeMismatch (not silently return a short corpus)
+// whenever the assembled row count disagrees with the independent count(n)
+// verification -- the guard that turns ANY future silent cap (config drift,
+// a driver change) into a loud failure instead of a shrunken universe.
+func TestFetchEmbedderFenceCorpusHardFailsOnCountMismatch(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "count(") {
+			// The count query claims 5 rows exist...
+			return []row{{"total": int64(5)}}, nil
+		}
+		// ...but the paginated fetch only ever hands back 3, and then a short
+		// page, ending the loop -- simulating a fetch/count disagreement
+		// (e.g. a future silent cap) rather than a clean pagination.
+		return []row{
+			{"n": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p1", propEmbedding: []interface{}{1.0, 0.0}}}},
+			{"n": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p2", propEmbedding: []interface{}{1.0, 0.0}}}},
+			{"n": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "p3", propEmbedding: []interface{}{1.0, 0.0}}}},
+		}, nil
+	}}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0}}, 0.5)
+
+	_, err := adapter.fetchEmbedderFenceCorpus(context.Background(), "key", "org-1")
+	if !errors.Is(err, errOracleCorpusSizeMismatch) {
+		t.Fatalf("fetchEmbedderFenceCorpus() error = %v, want errOracleCorpusSizeMismatch", err)
+	}
+}
+
+// TestFetchEmbedderFenceCorpusExcludesNullKeyedRowsFromBothQueries is the
+// CHAOS-3849 round-3 (review finding 2) regression, hardened in round 4
+// (review finding 2 continued -- the round-3 fixture only exercised the
+// canonical_id guard, so removing JUST the subject_kind guard from both
+// queries would have evaded it entirely): FalkorDB's uniqueness constraint
+// on (org, kind, canonical_id) does not apply to a row whose kind OR
+// canonical_id is NULL, so such a row is NOT covered by the ORDER BY
+// n.kind, n.canonical_id totality guarantee fetchEmbedderFenceCorpus's other
+// pagination proof rests on. Its position under that ORDER BY across two
+// SEPARATE query executions (one per SKIP/LIMIT page) is unspecified, so it
+// can be duplicated onto both sides of a page boundary while the row it
+// displaced is never returned by either page -- and because the duplicate
+// lands in skippedMalformed (its NULL field decodes to ""), the arithmetic
+// still balances against count(n): len(corpus)+skippedMalformed == expected,
+// so errOracleCorpusSizeMismatch never fires. The corpus is short exactly
+// one real subject and nothing catches it on size alone.
+//
+// Two independent subtests cover this, one per guarded property -- a row
+// with a NULL canonical_id (valid kind) only needs the canonical_id guard to
+// be excluded, and a row with a NULL kind (valid canonical_id) only needs
+// the kind guard; each subtest's fixture is blind to the OTHER guard, so
+// removing either guard alone is caught by exactly one subtest's behavioral
+// check. A THIRD, cheap static check (assertBothNullGuardsPresent) runs
+// after every query this test issues and independently requires BOTH
+// guards to be textually present in every cypher string, regardless of
+// which subtest issued it -- catching a single-guard removal even in the
+// subtest whose own fixture would not otherwise react to it.
+func TestFetchEmbedderFenceCorpusExcludesNullKeyedRowsFromBothQueries(t *testing.T) {
+	t.Run("canonical_id NULL, kind present", func(t *testing.T) {
+		malformed := row{"n": &node{Properties: map[string]interface{}{
+			propKind: "project", propEmbedding: []interface{}{1.0, 0.0}, // canonical_id absent -- NULL server-side.
+		}}}
+		testFetchEmbedderFenceCorpusExcludesOneNullGuardedRowType(t, propCanonicalID, malformed)
+	})
+	t.Run("kind NULL, canonical_id present", func(t *testing.T) {
+		malformed := row{"n": &node{Properties: map[string]interface{}{
+			propCanonicalID: "null-kind-row", propEmbedding: []interface{}{1.0, 0.0}, // kind absent -- NULL server-side.
+		}}}
+		testFetchEmbedderFenceCorpusExcludesOneNullGuardedRowType(t, propKind, malformed)
+	})
+}
+
+// testFetchEmbedderFenceCorpusExcludesOneNullGuardedRowType runs one
+// guarded-property scenario for
+// TestFetchEmbedderFenceCorpusExcludesNullKeyedRowsFromBothQueries.
+// guardedProp is the ONE property (propKind or propCanonicalID) whose
+// IS NOT NULL clause is what excludes malformed from the predicate -- the
+// fake's "is this cypher guarded" check below deliberately looks at
+// guardedProp ALONE, so this reproduces the exact evasion the round-4 review
+// finding described: a cypher missing only the OTHER guard still reads as
+// "guarded" to THIS fixture and is answered honestly, which is why
+// assertBothNullGuardsPresent (a static, fixture-independent check) also
+// runs against every captured cypher before this returns.
+func testFetchEmbedderFenceCorpusExcludesOneNullGuardedRowType(t *testing.T, guardedProp string, malformed row) {
+	t.Helper()
+	const wellFormedTotal = oracleFetchBatchSize // exactly one full page, forcing a second (short) page every time.
+
+	wellFormed := func(i int) row {
+		return row{"n": &node{Properties: map[string]interface{}{
+			propKind: "project", propCanonicalID: fmt.Sprintf("r%05d", i),
+			propEmbedding: []interface{}{1.0, 0.0},
+		}}}
+	}
+	guardedQuery := func(cypher string) bool {
+		return strings.Contains(cypher, guardedProp+" IS NOT NULL")
+	}
+
+	var capturedCyphers []string
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		capturedCyphers = append(capturedCyphers, cypher)
+		guarded := guardedQuery(cypher)
+		if strings.Contains(cypher, "count(") {
+			if guarded {
+				return []row{{"total": int64(wellFormedTotal)}}, nil // NULL-keyed row excluded by the predicate.
+			}
+			return []row{{"total": int64(wellFormedTotal + 1)}}, nil // includes the one NULL-keyed row.
+		}
+		skip, _ := params["skip"].(int)
+		if guarded {
+			// Real-predicate-equivalent paging: the NULL-keyed row was never
+			// a candidate, so there is nothing unstable to order.
+			if skip >= wellFormedTotal {
+				return nil, nil
+			}
+			end := skip + oracleFetchBatchSize
+			if end > wellFormedTotal {
+				end = wellFormedTotal
+			}
+			rows := make([]row, 0, end-skip)
+			for i := skip; i < end; i++ {
+				rows = append(rows, wellFormed(i))
+			}
+			return rows, nil
+		}
+		// UNGUARDED corruption: the NULL-keyed row's position under
+		// ORDER BY n.kind, n.canonical_id is unspecified -- simulated here as
+		// landing on BOTH page boundaries (duplicated), while the well-formed
+		// row it displaced (the last index) is never returned by either page.
+		switch skip {
+		case 0:
+			rows := make([]row, 0, oracleFetchBatchSize)
+			for i := 0; i < wellFormedTotal-1; i++ {
+				rows = append(rows, wellFormed(i))
+			}
+			rows = append(rows, malformed) // fills the page to exactly oracleFetchBatchSize, so pagination continues.
+			return rows, nil
+		case oracleFetchBatchSize:
+			return []row{malformed}, nil // short page: ends pagination.
+		default:
+			return nil, nil
+		}
+	}}
+
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0}}, 0.5)
+
+	corpus, err := adapter.fetchEmbedderFenceCorpus(context.Background(), "key", "org-1")
+	if err != nil {
+		t.Fatalf("fetchEmbedderFenceCorpus: %v", err)
+	}
+	missingID := fmt.Sprintf("r%05d", wellFormedTotal-1)
+	found := false
+	for _, v := range corpus {
+		if v.CanonicalID == missingID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("%s is missing from the corpus (%d entries) -- a NULL-keyed row's non-total ordering across a SKIP/LIMIT page boundary silently dropped a real subject while count(*) still balanced, which the size-only closure check cannot catch on its own; the %s IS NOT NULL predicate must be present on both the count and page queries", missingID, len(corpus), guardedProp)
+	}
+	if len(corpus) != wellFormedTotal {
+		t.Fatalf("got %d corpus entries, want exactly %d (the NULL-keyed row excluded by both queries, not merely skipped-and-recounted)", len(corpus), wellFormedTotal)
+	}
+
+	assertBothNullGuardsPresent(t, capturedCyphers)
+}
+
+// assertBothNullGuardsPresent is the round-4 review finding 2 static
+// safety net: independent of whichever single guard a given subtest's
+// fixture happens to exercise behaviorally, every cypher this package sends
+// for the corpus fetch must carry BOTH the kind and canonical_id
+// IS NOT NULL clauses -- catching a regression to only one of the two guards
+// even from the subtest whose own fixture is blind to that specific
+// omission (see testFetchEmbedderFenceCorpusExcludesOneNullGuardedRowType's
+// doc comment).
+func assertBothNullGuardsPresent(t *testing.T, cyphers []string) {
+	t.Helper()
+	if len(cyphers) == 0 {
+		t.Fatal("no cypher was captured to check for the NULL guards")
+	}
+	for _, cypher := range cyphers {
+		if !strings.Contains(cypher, propKind+" IS NOT NULL") {
+			t.Fatalf("cypher %q is missing the %s IS NOT NULL guard", cypher, propKind)
+		}
+		if !strings.Contains(cypher, propCanonicalID+" IS NOT NULL") {
+			t.Fatalf("cypher %q is missing the %s IS NOT NULL guard", cypher, propCanonicalID)
 		}
 	}
 }
