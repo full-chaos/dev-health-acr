@@ -52,7 +52,11 @@ type Column struct {
 // real table, so a seed that lists values without naming columns lands
 // them where production would.
 //
-// Read from dev-health-clickhouse-1 (database `default`) on 2026-08-13.
+// Read from dev-health-clickhouse-1 (database `default`) on 2026-08-13;
+// CHAOS-3833's embed-text columns (work_items type/native_team_key/
+// project_name/labels, git_pull_requests.body, ci_pipeline_runs.
+// pipeline_name, repos.tags, teams.project_keys,
+// operational_incidents.description) read the same way on 2026-08-14.
 // Regenerate with the query in this package's doc, and see
 // devhealthsource's freshness test, which fails when production drifts
 // from what is declared here.
@@ -89,6 +93,10 @@ var ProductionColumns = map[string][]Column{
 		{Name: "finished_at", Type: "Nullable(DateTime64(3, 'UTC'))"},
 		{Name: "last_synced", Type: "DateTime64(3, 'UTC')"},
 		{Name: "org_id", Type: "String"},
+		// CHAOS-3833: pipeline_name sits at production position 9 --
+		// AFTER org_id (8) and before branch (17); several unread columns
+		// between them are omitted per this package's scope rule.
+		{Name: "pipeline_name", Type: "Nullable(String)"},
 		{Name: "branch", Type: "Nullable(String)"},
 	},
 	"compounding_risk_daily": {
@@ -138,6 +146,9 @@ var ProductionColumns = map[string][]Column{
 		{Name: "repo_id", Type: "UUID"},
 		{Name: "number", Type: "UInt32"},
 		{Name: "title", Type: "Nullable(String)"},
+		// CHAOS-3833: body is production position 4, between title and
+		// state.
+		{Name: "body", Type: "Nullable(String)"},
 		{Name: "state", Type: "Nullable(String)"},
 		{Name: "created_at", Type: "DateTime64(3, 'UTC')"},
 		{Name: "merged_at", Type: "Nullable(DateTime64(3, 'UTC'))"},
@@ -175,6 +186,11 @@ var ProductionColumns = map[string][]Column{
 		{Name: "normalized_severity", Type: "Nullable(String)"},
 		{Name: "service_id", Type: "Nullable(String)"},
 		{Name: "title", Type: "String"},
+		// CHAOS-3833: description is production position 26, between
+		// title (25) and started_at (27). 0% populated in live data today
+		// but the natural incident payload when a real provider ships --
+		// see the incident template in the embed-text spec.
+		{Name: "description", Type: "Nullable(String)"},
 		{Name: "started_at", Type: "Nullable(DateTime64(6, 'UTC'))"},
 		{Name: "resolved_at", Type: "Nullable(DateTime64(6, 'UTC'))"},
 		{Name: "is_deleted", Type: "UInt8"},
@@ -224,6 +240,11 @@ var ProductionColumns = map[string][]Column{
 		{Name: "repo", Type: "String"},
 		{Name: "ref", Type: "Nullable(String)"},
 		{Name: "created_at", Type: "DateTime64(3, 'UTC')"},
+		// CHAOS-3833: tags is production position 6, between created_at
+		// (4; unread settings at 5 omitted) and last_synced (7). A JSON
+		// array rendered as a string (e.g. `["github","Go"]`), parsed by
+		// the producer -- NOT Array(String), unlike teams.project_keys.
+		{Name: "tags", Type: "Nullable(String)"},
 		{Name: "last_synced", Type: "DateTime64(3, 'UTC')"},
 		{Name: "org_id", Type: "String"},
 		{Name: "provider", Type: "String"},
@@ -268,6 +289,11 @@ var ProductionColumns = map[string][]Column{
 		{Name: "org_id", Type: "String"},
 		{Name: "provider", Type: "String"},
 		{Name: "native_team_key", Type: "Nullable(String)"},
+		// CHAOS-3833: project_keys is production position 12, after
+		// native_team_key (10; unread parent_team_id at 11 omitted) and
+		// before is_active (14). A real Array(String), scanned as
+		// []string.
+		{Name: "project_keys", Type: "Array(String)"},
 		{Name: "is_active", Type: "UInt8"},
 	},
 	"projects": {
@@ -306,14 +332,25 @@ var ProductionColumns = map[string][]Column{
 		{Name: "repo_id", Type: "UUID"},
 		{Name: "work_item_id", Type: "String"},
 		{Name: "title", Type: "String"},
+		// CHAOS-3833: type is production position 6 (title is 4; unread
+		// description at 5 omitted), before status (7).
+		{Name: "type", Type: "String"},
 		{Name: "status", Type: "String"},
 		// CHAOS-3802: queryWorkItemProjects selects project_id and joins it
 		// to projects.id. Position 10 in production, i.e. before created_at.
 		{Name: "project_id", Type: "String"},
+		// CHAOS-3833: native_team_key (11) and project_name (12) follow
+		// project_id (10) directly in production.
+		{Name: "native_team_key", Type: "String"},
+		{Name: "project_name", Type: "String"},
 		{Name: "created_at", Type: "DateTime64(3)"},
 		{Name: "updated_at", Type: "DateTime64(3)"},
 		{Name: "completed_at", Type: "Nullable(DateTime64(3))"},
 		{Name: "closed_at", Type: "Nullable(DateTime64(3))"},
+		// CHAOS-3833: labels is production position 20, between closed_at
+		// (19) and parent_id (24; unread story_points/sprint_* between
+		// them omitted). A real Array(String), scanned as []string.
+		{Name: "labels", Type: "Array(String)"},
 		{Name: "parent_id", Type: "String"},
 		{Name: "url", Type: "String"},
 		{Name: "last_synced", Type: "DateTime64(3)"},
