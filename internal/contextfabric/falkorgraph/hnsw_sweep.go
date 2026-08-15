@@ -80,6 +80,85 @@ func (a *Adapter) vectorSweepSeedTopK(ctx context.Context, key, seedCanonicalID 
 	return scored, elapsed, nil
 }
 
+// idsOfScored extracts just the ids from a ScoredID slice, in the same
+// order -- the shape every recall comparison below actually needs the
+// candidate side in (scores matter only for the REFERENCE side of a
+// comparison, never the candidate side, in either mode).
+func idsOfScored(scored []ScoredID) []string {
+	ids := make([]string, len(scored))
+	for i, s := range scored {
+		ids[i] = s.ID
+	}
+	return ids
+}
+
+// buildOracleCorrectSets precomputes every seed's "correct" answer set for
+// the CHAOS-3831 exact-search oracle, ONCE, before any index in points is
+// touched -- unlike the fallback mode's reference POINT, the oracle ranking
+// does not depend on efConstruction/efRuntime/M at all, so there is nothing
+// to rebuild per point and no reason to defer this past the first build.
+//
+// usingOracle=false with a nil error means no embedder is configured on this
+// adapter -- the expected, documented trigger for RunHNSWSweep's fallback
+// mode, never an error. A configured embedder whose corpus fetch fails IS an
+// error: that is a broken measurement, not an absent one, and must not be
+// silently downgraded to "just use the fallback".
+//
+// Each seed's correct set is topKInclusive's tie-inclusive prefix (oracle.go)
+// of bruteForceRank's exact ranking over the WHOLE corpus -- authoritative
+// for tie handling on this path (see RunHNSWSweep's doc comment). A seed
+// entirely absent from the corpus (no usable embedding under the current
+// identity) is simply omitted from the returned map; RunHNSWSweep's caller
+// treats that the same as any other per-seed exclusion.
+func (a *Adapter) buildOracleCorrectSets(ctx context.Context, key, orgID string, seeds []string, k int) (map[string][]oracleMatch, bool, error) {
+	if a.embedder == nil {
+		return nil, false, nil
+	}
+	corpus, err := a.fetchEmbedderFenceCorpus(ctx, key, orgID)
+	if err != nil {
+		return nil, false, err
+	}
+	byCanonicalID := make(map[string]oracleVector, len(corpus))
+	for _, v := range corpus {
+		byCanonicalID[v.CanonicalID] = v
+	}
+	correct := make(map[string][]oracleMatch, len(seeds))
+	for _, seed := range seeds {
+		subject, ok := byCanonicalID[seed]
+		if !ok {
+			continue
+		}
+		correct[seed] = topKInclusive(bruteForceRank(subject.Vector, corpus), k)
+	}
+	return correct, true, nil
+}
+
+// oracleRecallAtK is RecallAtKTieTolerant's oracle-mode counterpart: what
+// fraction of candidateIDs' first k entries fall within correct (an already
+// tie-inclusive set, see buildOracleCorrectSets/topKInclusive). Denominator
+// stays k, matching RecallAtK/RecallAtKTieTolerant's own convention, so
+// numbers from either mode stay comparable.
+func oracleRecallAtK(correct []oracleMatch, candidateIDs []string, k int) float64 {
+	if k <= 0 || len(correct) == 0 {
+		return 0
+	}
+	present := make(map[string]bool, len(correct))
+	for _, m := range correct {
+		present[m.CanonicalID] = true
+	}
+	top := candidateIDs
+	if len(top) > k {
+		top = top[:k]
+	}
+	hits := 0
+	for _, id := range top {
+		if present[id] {
+			hits++
+		}
+	}
+	return float64(hits) / float64(k)
+}
+
 // SweepBuildPoint is one HNSW index build configuration -- the parameters
 // that require recreateVectorIndexWithOptions to change (spec §5 L2). M is
 // fixed at the production value (16) unless overridden; a sweep normally
@@ -187,28 +266,51 @@ func (a *Adapter) referenceTopKTieComplete(ctx context.Context, key, seed string
 }
 
 // RunHNSWSweep recreates the vector index at each of points (deduplicated,
-// reference point always included even if the caller omitted it), runs every
-// seedCanonicalIDs query against each build, and reports each build's
-// recall@K RELATIVE TO the reference point's own top-K results -- so the
-// reference point always reports RecallAtK=1.0 by construction; that is the
-// expected, correct output, not a bug in the metric.
+// reference point always included even if the caller omitted it) and runs
+// every seedCanonicalIDs query against each build.
+//
+// REFERENCE SOURCE (CHAOS-3831 integration). Two modes, chosen automatically:
+//
+//   - ORACLE mode, when this adapter has an embedder configured: every
+//     seed's TRUE top-K is precomputed ONCE, before any index is touched,
+//     via fetchEmbedderFenceCorpus + bruteForceRank (oracle.go) -- the exact
+//     brute-force cosine ranking over the SAME org- and identity-fence-
+//     scoped corpus the ANN index serves. Because the oracle ranks the
+//     WHOLE corpus with no top-k window at all, there is no truncation risk
+//     to bound (contrast the fallback mode's referenceTopKTieComplete,
+//     which must escalate an ANN query's OWN limited window). EVERY point,
+//     including what would have been "the reference" in fallback mode, is
+//     measured against this fixed, real answer -- RecallAtK is no longer
+//     artificially pinned to 1.0 anywhere; it is an absolute number.
+//   - FALLBACK (relative-to-best) mode, when no embedder is configured:
+//     unchanged from before this integration. The reference POINT's own
+//     ANN top-K (tie-complete, see referenceTopKTieComplete) stands in for
+//     "correct", and every other point is measured relative to it --
+//     RecallAtK is a RELATIVE number, and the reference point reports 1.0
+//     by construction. This is the documented no-oracle fallback; it never
+//     needs an embedder or a corpus fetch.
+//
+// TIE HANDLING, RECONCILED (Luna round-1 finding 3 vs CHAOS-3831's own
+// topKInclusive): both modes solve the SAME boundary-tie problem but with
+// different data (oracle mode's oracleMatch/descending-similarity vs
+// fallback mode's ScoredID/ascending-distance), so each mode uses the tool
+// built for its own data rather than converting between them --
+// topKInclusive (oracle.go) is AUTHORITATIVE for the oracle-referenced
+// comparison, TieExpandedTop/RecallAtKTieTolerant (hnsw_recall.go) remain
+// AUTHORITATIVE for the fallback comparison. Exactly one of the two ever
+// runs for a given RunHNSWSweep call -- never both on the same comparison --
+// so there is no double-counting between them.
 //
 // dimension must match the embedder identity already stamped on the graph's
 // vector index (AC-3778-7) -- RunHNSWSweep does not verify this itself; the
 // caller is expected to have read it via vectorIndexDimension first, exactly
 // as ensureVectorIndex does before ANY vector-index write.
 //
-// The FIRST build recreates the index at the reference point and captures
-// every seed's SCORED top-K (tie-complete, see referenceTopKTieComplete) as
-// the comparison baseline; every subsequent build is measured against that
-// baseline via RecallAtKTieTolerant, not the strict RecallAtK, so a swap
-// between two equally-close (tied-score) neighbors at the boundary is never
-// misread as a miss. Recreation order after the reference follows points'
-// given order.
-//
 // A seed whose query errors at a point is EXCLUDED from that point's
 // Queries/recall contribution and counted in SkippedSeeds instead -- a query
 // failure must never read as "perfect disagreement" or "perfect agreement".
+// In oracle mode, a seed absent from the corpus (no usable embedding under
+// the current identity) is excluded the same way, at every point.
 //
 // FAIL-CLOSED ON ZERO COVERAGE (Luna round-1 finding 1): if EVERY seed's
 // query errors at a point (Queries==0), that point's diagnostic result is
@@ -218,7 +320,10 @@ func (a *Adapter) referenceTopKTieComplete(ctx context.Context, key, seed string
 // wrong) is a false-fine measurement-fails-toward-fine failure, not a valid
 // 0.0 recall. This mirrors the mid-sweep-failure contract below: results
 // already computed are never discarded, but the caller cannot mistake a
-// zero-coverage point for a real one.
+// zero-coverage point for a real one. A REAL oracle failure (an embedder IS
+// configured but the corpus fetch errors) is a hard error before any index
+// is touched -- distinct from "no embedder configured", which is the
+// expected, documented fallback trigger, never an error.
 //
 // onResult, when non-nil, is called synchronously right after each point's
 // result is computed -- BEFORE the whole sweep finishes. A multi-point live
@@ -229,13 +334,18 @@ func (a *Adapter) referenceTopKTieComplete(ctx context.Context, key, seed string
 // result computed so far ALONGSIDE a non-nil error on a mid-sweep failure,
 // for a caller that does not pass onResult.
 func (a *Adapter) RunHNSWSweep(
-	ctx context.Context, key string, dimension int,
+	ctx context.Context, key, orgID string, dimension int,
 	seedCanonicalIDs []string, k int, reference SweepBuildPoint, points []SweepBuildPoint,
 	onResult func(SweepResult),
 ) ([]SweepResult, error) {
 	ordered := dedupeSweepPoints(reference, points)
 
-	referenceTop := make(map[string][]ScoredID, len(seedCanonicalIDs))
+	oracleCorrect, usingOracle, err := a.buildOracleCorrectSets(ctx, key, orgID, seedCanonicalIDs, k)
+	if err != nil {
+		return nil, fmt.Errorf("build exact-search oracle reference: %w", err)
+	}
+
+	referenceTop := make(map[string][]ScoredID, len(seedCanonicalIDs)) // fallback mode only.
 	results := make([]SweepResult, 0, len(ordered))
 	for _, point := range ordered {
 		buildStart := a.now()
@@ -244,13 +354,32 @@ func (a *Adapter) RunHNSWSweep(
 		}
 		buildTime := a.now().Sub(buildStart)
 
-		isReference := point == reference
+		isReference := point == reference && !usingOracle // the RecallAtK=1.0 special case is fallback-mode-only.
 
 		latencies := make([]time.Duration, 0, len(seedCanonicalIDs))
 		var recallSum float64
 		contributing := 0
 		skipped := 0
 		for _, seed := range seedCanonicalIDs {
+			if usingOracle {
+				top, latency, err := a.vectorSweepSeedTopK(ctx, key, seed, k)
+				if err != nil {
+					skipped++
+					continue
+				}
+				latencies = append(latencies, latency)
+				correct, ok := oracleCorrect[seed]
+				if !ok {
+					// No usable embedding for this seed under the current
+					// identity -- excluded, not a hit or a miss, at every
+					// point identically (precomputed once, above).
+					skipped++
+					continue
+				}
+				recallSum += oracleRecallAtK(correct, idsOfScored(top), k)
+				contributing++
+				continue
+			}
 			if isReference {
 				// referenceTopKTieComplete grows its fetch until the k-th
 				// boundary's tie group is PROVEN complete (Luna round-2
@@ -289,11 +418,7 @@ func (a *Adapter) RunHNSWSweep(
 				skipped++
 				continue
 			}
-			candidateIDs := make([]string, len(top))
-			for i, s := range top {
-				candidateIDs[i] = s.ID
-			}
-			recallSum += RecallAtKTieTolerant(base, candidateIDs, k)
+			recallSum += RecallAtKTieTolerant(base, idsOfScored(top), k)
 			contributing++
 		}
 

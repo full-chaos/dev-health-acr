@@ -195,7 +195,7 @@ func TestLiveHNSWSweep(t *testing.T) {
 				r.Point, r.SkippedSeeds, r.Queries+r.SkippedSeeds)
 		}
 	}
-	results, err := adapter.RunHNSWSweep(ctx, key, dimension, seeds, 20, reference, points, logResult)
+	results, err := adapter.RunHNSWSweep(ctx, key, orgID, dimension, seeds, 20, reference, points, logResult)
 	if err != nil {
 		t.Fatalf("RunHNSWSweep: %v (completed %d/%d points before failing, all logged above)", err, len(results), len(points)+1)
 	}

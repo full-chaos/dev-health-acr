@@ -191,7 +191,7 @@ func TestRunHNSWSweepReferencePointReportsPerfectRecall(t *testing.T) {
 		},
 	}
 	adapter := newFakeAdapter(t, fake)
-	results, err := adapter.RunHNSWSweep(context.Background(), "k", 4,
+	results, err := adapter.RunHNSWSweep(context.Background(), "k", "org", 4,
 		[]string{"seed-a", "seed-b"}, 2, reference, []SweepBuildPoint{degraded}, nil)
 	if err != nil {
 		t.Fatalf("RunHNSWSweep: %v", err)
@@ -260,7 +260,7 @@ func TestRunHNSWSweepDeliversResultsIncrementallyAndPreservesThemOnAMidSweepFail
 	adapter.config.RequestTimeout = 10 * time.Millisecond // fail the "bad" poll fast, not after 30s.
 
 	var delivered []SweepBuildPoint
-	results, err := adapter.RunHNSWSweep(context.Background(), "k", 4,
+	results, err := adapter.RunHNSWSweep(context.Background(), "k", "org", 4,
 		[]string{"seed-a"}, 1, reference, []SweepBuildPoint{ok, bad},
 		func(r SweepResult) { delivered = append(delivered, r.Point) })
 
@@ -300,7 +300,7 @@ func TestRunHNSWSweepExcludesFailedQueriesRatherThanScoringThem(t *testing.T) {
 		},
 	}
 	adapter := newFakeAdapter(t, fake)
-	results, err := adapter.RunHNSWSweep(context.Background(), "k", 4,
+	results, err := adapter.RunHNSWSweep(context.Background(), "k", "org", 4,
 		[]string{"good-seed", "bad-seed"}, 1, reference, nil, nil)
 	if err != nil {
 		t.Fatalf("RunHNSWSweep: %v", err)
@@ -341,7 +341,7 @@ func TestRunHNSWSweepFailsClosedOnZeroQueryCoverage(t *testing.T) {
 	}
 	adapter := newFakeAdapter(t, fake)
 	var delivered []SweepResult
-	results, err := adapter.RunHNSWSweep(context.Background(), "k", 4,
+	results, err := adapter.RunHNSWSweep(context.Background(), "k", "org", 4,
 		[]string{"seed-a", "seed-b"}, 2, reference, nil,
 		func(r SweepResult) { delivered = append(delivered, r) })
 
@@ -399,7 +399,7 @@ func TestRunHNSWSweepTieToleranceAtTheBoundaryDoesNotCountAsAMiss(t *testing.T) 
 		},
 	}
 	adapter := newFakeAdapter(t, fake)
-	results, err := adapter.RunHNSWSweep(context.Background(), "k", 4,
+	results, err := adapter.RunHNSWSweep(context.Background(), "k", "org", 4,
 		[]string{"seed-a"}, 2, reference, []SweepBuildPoint{tiedPoint}, nil)
 	if err != nil {
 		t.Fatalf("RunHNSWSweep: %v", err)
@@ -451,7 +451,7 @@ func TestRunHNSWSweepReferenceTieCompletionEscalatesPastTheInitialWindow(t *test
 	adapter := newFakeAdapter(t, fake)
 	// No other points -- this test is only about the reference build's own
 	// tie-completion fetch escalating past referenceOverfetch.
-	results, err := adapter.RunHNSWSweep(context.Background(), "k", 4,
+	results, err := adapter.RunHNSWSweep(context.Background(), "k", "org", 4,
 		[]string{"seed-a"}, 2, reference, nil, nil)
 	if err != nil {
 		t.Fatalf("RunHNSWSweep: %v", err)
@@ -499,7 +499,7 @@ func TestRunHNSWSweepReferenceTieCompletionFailsClosedWhenUnbounded(t *testing.T
 		},
 	}
 	adapter := newFakeAdapter(t, fake)
-	results, err := adapter.RunHNSWSweep(context.Background(), "k", 4,
+	results, err := adapter.RunHNSWSweep(context.Background(), "k", "org", 4,
 		[]string{"seed-a"}, 2, reference, nil, nil)
 	if err == nil {
 		t.Fatal("an unresolved reference tie group must fail closed (via the zero-coverage check), not report a silent measurement")
@@ -510,5 +510,169 @@ func TestRunHNSWSweepReferenceTieCompletionFailsClosedWhenUnbounded(t *testing.T
 	wantMaxK := 2 * maxReferenceTieMultiplier
 	if lastRequestedK != wantMaxK {
 		t.Fatalf("last requested k = %d, want the bounded ceiling %d (k=2 * maxReferenceTieMultiplier)", lastRequestedK, wantMaxK)
+	}
+}
+
+// CHAOS-3831 integration: with an embedder attached, RunHNSWSweep must
+// switch its reference from "relative to the best-tested ANN setting" to
+// the TRUE exact-search oracle (fetchEmbedderFenceCorpus + bruteForceRank).
+//
+// This fixture is built so the two modes DISAGREE about which of two build
+// points is better, by construction: the fallback mode's "reference" point
+// happens to return an ANN result that is ITSELF suboptimal per the true
+// oracle ranking, so relative mode scores it 1.0 (self-defined as correct)
+// while a strictly-better point scores lower relative to it. Oracle mode
+// has no such blind spot -- it knows the true answer independent of any ANN
+// setting -- and correctly reports the opposite ordering. Same underlying
+// ANN responses, same seed, same points; only the reference source differs.
+//
+// True cosine ranking of query [1,0] over the corpus below (k=2, so s1's
+// trivial self-match at similarity 1.0 always ranks first and the SECOND
+// slot is the real signal): s1 (1.0) > nodeB (0.9939) > nodeA (0.7071) >
+// nodeC (-1.0) -- the true top-2 is {s1, nodeB}.
+func TestRunHNSWSweepOracleModeCanDisagreeWithFallbackMode(t *testing.T) {
+	seed := "s1"
+	good := SweepBuildPoint{EfRuntime: 200} // the fallback mode's designated reference point.
+	bad := SweepBuildPoint{EfRuntime: 10}
+
+	corpusRows := []row{
+		{"n": &node{Properties: map[string]interface{}{
+			propKind: "k", propCanonicalID: "s1", propLabel: "S1",
+			propEmbedding: []float64{1, 0}, propEmbedderIdentity: "stub/stub-embed",
+		}}},
+		{"n": &node{Properties: map[string]interface{}{
+			propKind: "k", propCanonicalID: "nodeA", propLabel: "A",
+			propEmbedding: []float64{0.5, 0.5}, propEmbedderIdentity: "stub/stub-embed",
+		}}},
+		{"n": &node{Properties: map[string]interface{}{
+			propKind: "k", propCanonicalID: "nodeB", propLabel: "B",
+			propEmbedding: []float64{0.9, 0.1}, propEmbedderIdentity: "stub/stub-embed",
+		}}},
+		{"n": &node{Properties: map[string]interface{}{
+			propKind: "k", propCanonicalID: "nodeC", propLabel: "C",
+			propEmbedding: []float64{-1, 0}, propEmbedderIdentity: "stub/stub-embed",
+		}}},
+	}
+
+	var currentBuild SweepBuildPoint
+	fake := &fakeConn{
+		queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+			switch {
+			case strings.Contains(cypher, "embedder_identity"):
+				// The oracle corpus fetch -- independent of any ANN build.
+				return corpusRows, nil
+			case strings.HasPrefix(cypher, "CREATE VECTOR INDEX"):
+				if strings.Contains(cypher, "efRuntime:200") {
+					currentBuild = good
+				} else {
+					currentBuild = bad
+				}
+			case strings.Contains(cypher, "db.idx.vector.queryNodes"):
+				// The ANN's OWN top-2 for each build -- deliberately WRONG
+				// (misses nodeB, the true 2nd-best) at the "good" point, and
+				// exactly right at "bad" -- an ANN quirk, not an oracle bug.
+				if currentBuild == good {
+					return []row{{"id": "s1", "score": 0.0}, {"id": "nodeA", "score": 0.3}}, nil
+				}
+				return []row{{"id": "s1", "score": 0.0}, {"id": "nodeB", "score": 0.1}}, nil
+			}
+			return nil, nil
+		},
+		indexesFunc: func(ctx context.Context, graphKey string) ([]indexStatus, error) {
+			return []indexStatus{{
+				Label: labelSubject, Status: "OPERATIONAL",
+				Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+				Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(2)}},
+			}}, nil
+		},
+	}
+
+	// FALLBACK mode: no embedder attached.
+	fallbackAdapter := newFakeAdapter(t, fake)
+	fallbackResults, err := fallbackAdapter.RunHNSWSweep(context.Background(), "k", "org", 2,
+		[]string{seed}, 2, good, []SweepBuildPoint{bad}, nil)
+	if err != nil {
+		t.Fatalf("fallback RunHNSWSweep: %v", err)
+	}
+	fallbackByPoint := map[SweepBuildPoint]float64{}
+	for _, r := range fallbackResults {
+		fallbackByPoint[r.Point] = r.RecallAtK
+	}
+	if fallbackByPoint[good] != 1.0 {
+		t.Fatalf("fallback mode: good's RecallAtK = %v, want 1.0 by construction (it IS the reference)", fallbackByPoint[good])
+	}
+	if fallbackByPoint[bad] != 0.5 {
+		t.Fatalf("fallback mode: bad's RecallAtK = %v, want 0.5 (only the trivial self-match overlaps good's own, suboptimal, top-2)", fallbackByPoint[bad])
+	}
+
+	// ORACLE mode: embedder attached -- RunHNSWSweep must switch its
+	// reference source automatically, with NO other input changed.
+	oracleAdapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0}}, 0.1)
+	oracleResults, err := oracleAdapter.RunHNSWSweep(context.Background(), "k", "org", 2,
+		[]string{seed}, 2, good, []SweepBuildPoint{bad}, nil)
+	if err != nil {
+		t.Fatalf("oracle RunHNSWSweep: %v", err)
+	}
+	oracleByPoint := map[SweepBuildPoint]float64{}
+	for _, r := range oracleResults {
+		oracleByPoint[r.Point] = r.RecallAtK
+	}
+	// THE POINT: the ordering INVERTS. Fallback mode (blind to ground truth)
+	// preferred "good"; oracle mode (which knows the true answer) correctly
+	// prefers "bad".
+	if oracleByPoint[good] != 0.5 {
+		t.Fatalf("oracle mode: good's RecallAtK = %v, want 0.5 (its own ANN result missed the true 2nd-best neighbor, nodeB)", oracleByPoint[good])
+	}
+	if oracleByPoint[bad] != 1.0 {
+		t.Fatalf("oracle mode: bad's RecallAtK = %v, want 1.0 (its ANN result exactly matches the true top-2)", oracleByPoint[bad])
+	}
+	if oracleByPoint[good] == fallbackByPoint[good] || oracleByPoint[bad] == fallbackByPoint[bad] {
+		t.Fatal("oracle-referenced recall must differ from relative-to-best recall on this fixture -- that IS the switch being validated")
+	}
+}
+
+// No embedder configured -> the documented, expected fallback trigger, never
+// an error.
+func TestBuildOracleCorrectSetsReturnsFalseWithoutAnEmbedder(t *testing.T) {
+	adapter := newFakeAdapter(t, &fakeConn{})
+	correct, usingOracle, err := adapter.buildOracleCorrectSets(context.Background(), "k", "org", []string{"s1"}, 2)
+	if err != nil {
+		t.Fatalf("no embedder configured must not error, got: %v", err)
+	}
+	if usingOracle {
+		t.Fatal("usingOracle must be false without an embedder")
+	}
+	if correct != nil {
+		t.Fatalf("correct = %v, want nil without an embedder", correct)
+	}
+}
+
+// A CONFIGURED embedder whose corpus fetch fails is a REAL error -- a broken
+// measurement, never silently downgraded to the fallback. RunHNSWSweep must
+// fail before touching any index (no CREATE/DROP calls at all).
+func TestRunHNSWSweepFailsHardOnARealOracleFetchError(t *testing.T) {
+	var indexTouched bool
+	fake := &fakeConn{
+		queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+			if strings.Contains(cypher, "embedder_identity") {
+				return nil, errors.New("ERR simulated corpus fetch failure")
+			}
+			if strings.Contains(cypher, "VECTOR INDEX") {
+				indexTouched = true
+			}
+			return nil, nil
+		},
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: []float32{1, 0}}, 0.1)
+	results, err := adapter.RunHNSWSweep(context.Background(), "k", "org", 2,
+		[]string{"s1"}, 2, SweepBuildPoint{EfRuntime: 200}, nil, nil)
+	if err == nil {
+		t.Fatal("a real oracle corpus-fetch failure must be a hard error, never silently downgraded to the fallback")
+	}
+	if results != nil {
+		t.Fatalf("results = %v, want nil -- nothing was measured before the oracle build failed", results)
+	}
+	if indexTouched {
+		t.Fatal("no vector index operation must run before the oracle reference is successfully built")
 	}
 }
