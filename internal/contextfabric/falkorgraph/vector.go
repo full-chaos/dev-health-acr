@@ -2,6 +2,7 @@ package falkorgraph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -78,8 +79,27 @@ func vectorRelevanceFromSimilarity(similarity, tau float64) float64 {
 	return vectorRelevanceFloor + (vectorRelevanceCeiling-vectorRelevanceFloor)*proportion
 }
 
+// hnswIndexOptions carries the HNSW build parameters FalkorDB's vector index
+// accepts beyond dimension/similarityFunction (CHAOS-3832, measurement-only:
+// see hnsw_sweep.go). A zero field is OMITTED from the OPTIONS clause rather
+// than sent as a literal 0, so the server's own default applies -- verified
+// live that the production index (created with a bare hnswIndexOptions{})
+// reports the server defaults back via db.indexes() (M:16, efConstruction:200,
+// efRuntime:10 on the pinned graph module 42002). Production bootstrap
+// (ensureVectorIndex) always passes the zero value; nothing here changes what
+// createVectorIndex has always sent.
+type hnswIndexOptions struct {
+	M              int
+	EfConstruction int
+	EfRuntime      int
+}
+
 // createVectorIndex creates the per-organization vector index on
-// Subject.embedding.
+// Subject.embedding with the server's default HNSW parameters. It is the
+// single production call site (ensureVectorIndex) and is unchanged by
+// CHAOS-3832 -- a thin wrapper over createVectorIndexWithOptions passing the
+// zero hnswIndexOptions, which was verified to render the IDENTICAL OPTIONS
+// clause this function always sent (TestCreateVectorIndexZeroOptionsCypherUnchanged).
 //
 // Verified live (graph module 42002) that the Cypher form below works and that
 // creation is NOT idempotent -- a repeat call errors "Attribute 'embedding' is
@@ -90,9 +110,28 @@ func vectorRelevanceFromSimilarity(similarity, tau float64) float64 {
 // Subject.search_text, and both keep working. The two are independent
 // retrieval mechanisms over the same nodes, which is precisely the design.
 func (a *Adapter) createVectorIndex(ctx context.Context, key string, dimension int) error {
+	return a.createVectorIndexWithOptions(ctx, key, dimension, hnswIndexOptions{})
+}
+
+// createVectorIndexWithOptions is createVectorIndex generalized to accept
+// explicit HNSW parameters (CHAOS-3832 T2, measurement-only: no production
+// caller passes a non-zero hnswIndexOptions today). Every non-zero field is
+// appended to the OPTIONS clause; a zero field is left out so the server picks
+// its own default rather than this code silently pinning one.
+func (a *Adapter) createVectorIndexWithOptions(ctx context.Context, key string, dimension int, opts hnswIndexOptions) error {
+	clause := fmt.Sprintf("dimension:%d, similarityFunction:'%s'", dimension, vectorSimilarityCosine)
+	if opts.M > 0 {
+		clause += fmt.Sprintf(", M:%d", opts.M)
+	}
+	if opts.EfConstruction > 0 {
+		clause += fmt.Sprintf(", efConstruction:%d", opts.EfConstruction)
+	}
+	if opts.EfRuntime > 0 {
+		clause += fmt.Sprintf(", efRuntime:%d", opts.EfRuntime)
+	}
 	cypher := fmt.Sprintf(
-		"CREATE VECTOR INDEX FOR (n:%s) ON (n.%s) OPTIONS {dimension:%d, similarityFunction:'%s'}",
-		labelSubject, propEmbedding, dimension, vectorSimilarityCosine,
+		"CREATE VECTOR INDEX FOR (n:%s) ON (n.%s) OPTIONS {%s}",
+		labelSubject, propEmbedding, clause,
 	)
 	_, err := a.api.query(ctx, key, cypher, nil, false)
 	if err == nil {
@@ -102,6 +141,53 @@ func (a *Adapter) createVectorIndex(ctx context.Context, key string, dimension i
 		return nil
 	}
 	return safeDependencyError("bootstrap vector index", err)
+}
+
+// dropVectorIndex removes the vector index on Subject.embedding, leaving the
+// embedding/embedder_identity/embedder_dimension NODE PROPERTIES untouched --
+// verified live (CHAOS-3832 §7 D3 probe): dropping the index does not clear a
+// single node's stored vector, only the index structure over it. Recreating
+// the index afterward (createVectorIndexWithOptions) re-indexes those SAME
+// property values with no re-embedding involved.
+//
+// Dropping an already-absent index is treated as success -- errIndexNotFound
+// classifies FalkorDB's "no such index" rejection -- mirroring
+// createVectorIndex's already-exists tolerance in the opposite direction, so a
+// caller can call dropVectorIndex unconditionally before recreating.
+//
+// Never called from any production path today: ensureVectorIndex only
+// creates, it never drops. This exists for the CHAOS-3832 sweep tooling
+// (hnsw_sweep.go) and its live probe.
+func (a *Adapter) dropVectorIndex(ctx context.Context, key string) error {
+	cypher := fmt.Sprintf("DROP VECTOR INDEX FOR (n:%s) ON (n.%s)", labelSubject, propEmbedding)
+	_, err := a.api.query(ctx, key, cypher, nil, false)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, errIndexNotFound) {
+		return nil
+	}
+	return safeDependencyError("drop vector index", err)
+}
+
+// recreateVectorIndexWithOptions drops (tolerating absence) and recreates the
+// vector index with the given HNSW parameters, then polls to OPERATIONAL --
+// the CHAOS-3832 measurement primitive behind the T2 sweep. It never touches
+// node properties, so it is safe to run repeatedly over the SAME stored
+// vectors while sweeping efConstruction/efRuntime/M combinations (§7 D3: live
+// probe confirmed a node's post-recreate nearest-neighbor result is byte-for-
+// byte identical to its pre-recreate result).
+//
+// Not called from any production path. The only callers are the sweep runner
+// and its tests/live probe.
+func (a *Adapter) recreateVectorIndexWithOptions(ctx context.Context, key string, dimension int, opts hnswIndexOptions) error {
+	if err := a.dropVectorIndex(ctx, key); err != nil {
+		return err
+	}
+	if err := a.createVectorIndexWithOptions(ctx, key, dimension, opts); err != nil {
+		return err
+	}
+	return a.pollVectorIndexOperational(ctx, key)
 }
 
 // vectorParam converts a float32 vector into the ONLY list shape
@@ -158,17 +244,42 @@ func vectorParam(vector []float32) []interface{} {
 // competing candidate have been cut off", and a sub-floor neighbor is by
 // definition not one.
 func (a *Adapter) vectorSearchNodes(ctx context.Context, key, orgID string, vector []float32, tau float64, limit int) ([]graphrank.CandidateNode, bool, error) {
+	return a.vectorSearchNodesWithOverFetch(ctx, key, orgID, vector, tau, limit, 1)
+}
+
+// vectorSearchNodesWithOverFetch generalizes vectorSearchNodes with an
+// explicit over-fetch multiplier (CHAOS-3832 T2 / spec §5 L3). vectorSearchNodes
+// calls this with multiplier=1, which renders the IDENTICAL `limit+1` raw
+// fetch size it always requested -- production behavior is unchanged byte for
+// byte (TestVectorSearchNodesDelegatesToOverFetchMultiplierOne).
+//
+// L3's formula, exactly: the raw ANN fetch size is `(multiplier * limit) + 1`.
+// The multiplier widens the POOL the org/tau post-filters below draw from; the
+// trailing `+1` is unchanged and stays the ONLY truncation-detection sentinel
+// -- truncated is still derived from whether more than `limit` rows SURVIVE
+// the filters below, never from the raw multiplier*limit+1 the server
+// returned, so a wider pool can only ever recover more genuine candidates, it
+// can never itself manufacture a truncated=true a narrower pool would not
+// also have reported (review round 2 rec 2's caveat, restated here as code).
+//
+// multiplier <= 0 is treated as 1 (the production default), never as a
+// zero-or-negative fetch size.
+func (a *Adapter) vectorSearchNodesWithOverFetch(ctx context.Context, key, orgID string, vector []float32, tau float64, limit, multiplier int) ([]graphrank.CandidateNode, bool, error) {
 	if len(vector) == 0 {
 		return nil, false, nil
 	}
 	if limit <= 0 || limit > a.config.MaxResults {
 		limit = a.config.MaxResults
 	}
+	if multiplier <= 0 {
+		multiplier = 1
+	}
+	fetchK := multiplier*limit + 1
 	cypher := fmt.Sprintf(
 		"CALL db.idx.vector.queryNodes('%s', '%s', %d, vecf32($vec)) YIELD node, score "+
 			"WHERE node.%s = $org "+
 			"RETURN node, score ORDER BY score ASC",
-		labelSubject, propEmbedding, limit+1, propOrgID,
+		labelSubject, propEmbedding, fetchK, propOrgID,
 	)
 	rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"vec": vectorParam(vector), "org": orgID}, true)
 	if err != nil {
