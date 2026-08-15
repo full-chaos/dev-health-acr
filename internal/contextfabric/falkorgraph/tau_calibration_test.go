@@ -1,12 +1,182 @@
 package falkorgraph
 
 import (
+	"encoding/json"
+	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
 func floatPtr(v float64) *float64 { return &v }
 func intPtr(v int) *int           { return &v }
+func boolPtr(v bool) *bool        { return &v }
+
+// testEmbedIdentity/testDimension are the SHARED target identity/dimension
+// every synthetic-fixture test in this file uses (codex round-4 FIX A):
+// CalibrateFromReport now requires the report's own EmbedIdentity/
+// EmbedDimension to match CalibrationOptions.TargetEmbedIdentity/
+// TargetDimension before doing anything else, so every fixture below
+// stamps both to the same pair -- these tests exercise the calibration
+// MATH, not the identity gate (which has its own dedicated tests, see
+// TestCalibrateFromReport_MismatchedEmbedIdentityIsAnError and siblings).
+const (
+	testEmbedIdentity = "test/embed#t2:r2000:b0:pnone"
+	testDimension     = 8
+)
+
+// TestCalibrateFromReport_MismatchedEmbedIdentityIsAnError is the codex
+// round-4 FIX A negative pinning test: a report measured against ONE
+// embedding identity, handed to CalibrateFromReport with a DIFFERENT target
+// identity, must refuse -- not silently mint a recommendation from the
+// wrong embedding space.
+func TestCalibrateFromReport_MismatchedEmbedIdentityIsAnError(t *testing.T) {
+	report := CalibrationReport{
+		EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension,
+		Cases: []CalibrationCase{{Cause: "hit", CorrectSimilarity: floatPtr(0.5)}},
+	}
+	_, err := CalibrateFromReport(report, CalibrationOptions{
+		TargetRecall: 0.90, TargetEmbedIdentity: "lmstudio/nomic-embed-text#t2:r2000:b0:pnomic", TargetDimension: 768,
+	})
+	if err != ErrEmbeddingIdentityMismatch {
+		t.Fatalf("err = %v, want ErrEmbeddingIdentityMismatch (identity string differs)", err)
+	}
+}
+
+// TestCalibrateFromReport_MismatchedDimensionIsAnError is the sibling case:
+// the SAME identity string, but a different measured width -- must refuse
+// exactly like a differing identity string does (round-3's dimension pin,
+// enforced here on the artifact side too).
+func TestCalibrateFromReport_MismatchedDimensionIsAnError(t *testing.T) {
+	report := CalibrationReport{
+		EmbedIdentity: testEmbedIdentity, EmbedDimension: 1536,
+		Cases: []CalibrationCase{{Cause: "hit", CorrectSimilarity: floatPtr(0.5)}},
+	}
+	_, err := CalibrateFromReport(report, CalibrationOptions{
+		TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension,
+	})
+	if err != ErrEmbeddingIdentityMismatch {
+		t.Fatalf("err = %v, want ErrEmbeddingIdentityMismatch (dimension differs: 1536 vs %d)", err, testDimension)
+	}
+}
+
+// TestCalibrateFromReport_AbsentReportEmbedIdentityIsAnError proves ABSENCE
+// is not innocence: a report with no identity stamp at all (a pre-CHAOS-3834
+// report, or a harness variant that omits the field) must refuse the SAME
+// way a mismatch does, not "proceed since we can't prove it's wrong".
+func TestCalibrateFromReport_AbsentReportEmbedIdentityIsAnError(t *testing.T) {
+	report := CalibrationReport{
+		// EmbedIdentity/EmbedDimension intentionally left zero.
+		Cases: []CalibrationCase{{Cause: "hit", CorrectSimilarity: floatPtr(0.5)}},
+	}
+	_, err := CalibrateFromReport(report, CalibrationOptions{
+		TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension,
+	})
+	if err != ErrEmbeddingIdentityMismatch {
+		t.Fatalf("err = %v, want ErrEmbeddingIdentityMismatch (report carries no identity stamp)", err)
+	}
+}
+
+// TestCalibrateFromReport_AbsentTargetEmbedIdentityIsAnError proves the
+// caller side of the same rule: calibrating with no stated target identity
+// is exactly the hazard this fix closes, not a supported "don't care" mode.
+func TestCalibrateFromReport_AbsentTargetEmbedIdentityIsAnError(t *testing.T) {
+	report := CalibrationReport{
+		EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension,
+		Cases: []CalibrationCase{{Cause: "hit", CorrectSimilarity: floatPtr(0.5)}},
+	}
+	_, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+	if err != ErrEmbeddingIdentityMismatch {
+		t.Fatalf("err = %v, want ErrEmbeddingIdentityMismatch (caller supplied no target identity)", err)
+	}
+}
+
+// TestCalibrateFromReport_MatchingEmbedIdentityProceeds is the positive
+// companion: identity AND dimension both agree, so CalibrateFromReport
+// proceeds to a normal recommendation instead of refusing.
+func TestCalibrateFromReport_MatchingEmbedIdentityProceeds(t *testing.T) {
+	report := CalibrationReport{
+		EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension,
+		Cases: []CalibrationCase{{Cause: "hit", CorrectSimilarity: floatPtr(0.5)}},
+	}
+	result, err := CalibrateFromReport(report, CalibrationOptions{
+		TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension,
+	})
+	if err != nil {
+		t.Fatalf("CalibrateFromReport: %v, want a normal recommendation (identity/dimension both match)", err)
+	}
+	if result.Policy.SimilarityFloor <= 0 {
+		t.Fatalf("SimilarityFloor = %v, want a computed tau", result.Policy.SimilarityFloor)
+	}
+}
+
+// TestCalibrateFromReport_JSONWithoutTruncatedFieldAssumesTruncated is the
+// codex round-4 FIX B pinning test, at the JSON boundary specifically (the
+// ruling's own framing: "JSON without the field"): a report JSON with NO
+// hard_negatives_truncated key at all -- exactly what a pre-CHAOS-3834
+// report (or this morning's v2 baseline) looks like -- must decode
+// HardNegativesTruncated as nil, and CalibrateFromReport must treat nil as
+// "assume truncated" for a saturated case, refusing K rather than silently
+// trusting a capped list as complete (the pre-fix hazard a plain bool's
+// false zero-value caused).
+func TestCalibrateFromReport_JSONWithoutTruncatedFieldAssumesTruncated(t *testing.T) {
+	raw := fmt.Sprintf(`{
+		"embed_identity": %q, "embed_dimension": %d, "top_k": 5,
+		"cases": [{"cause":"hit","correct_similarity":0.90,
+			"hard_negatives":[
+				{"kind":"k","canonical_id":"n1","similarity":0.95},
+				{"kind":"k","canonical_id":"n2","similarity":0.92}
+			]
+		}]
+	}`, testEmbedIdentity, testDimension)
+	var report CalibrationReport
+	if err := json.Unmarshal([]byte(raw), &report); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if report.Cases[0].HardNegativesTruncated != nil {
+		t.Fatalf("HardNegativesTruncated = %v, want nil -- the JSON carries no hard_negatives_truncated key at all", *report.Cases[0].HardNegativesTruncated)
+	}
+	result, err := CalibrateFromReport(report, CalibrationOptions{
+		TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension,
+	})
+	if err != nil {
+		t.Fatalf("CalibrateFromReport: %v", err)
+	}
+	if result.KApplyReady {
+		t.Fatal("KApplyReady = true, want false -- no completeness signal at all must be treated as truncated (worst case), not silently trusted as complete")
+	}
+	if result.KInsufficientDataNote == "" {
+		t.Fatal("KInsufficientDataNote is empty, want a re-run explanation")
+	}
+}
+
+// TestCalibrateFromReport_ExplicitFalseTruncatedIsTrustedAsComplete is the
+// companion positive case: an EXPLICIT false (present, not absent) must
+// still be trusted, exactly as round-2 P2 always intended -- FIX B changes
+// only what absence means, not what an explicit value means.
+func TestCalibrateFromReport_ExplicitFalseTruncatedIsTrustedAsComplete(t *testing.T) {
+	report := CalibrationReport{
+		EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: 5,
+		Cases: []CalibrationCase{{
+			Cause: "hit", CorrectSimilarity: floatPtr(0.90),
+			HardNegatives:          []CalibrationHardNegative{{Kind: "k", CanonicalID: "n1", Similarity: 0.95}, {Kind: "k", CanonicalID: "n2", Similarity: 0.92}},
+			HardNegativesTruncated: boolPtr(false),
+		}},
+	}
+	result, err := CalibrateFromReport(report, CalibrationOptions{
+		TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension,
+	})
+	if err != nil {
+		t.Fatalf("CalibrateFromReport: %v", err)
+	}
+	if !result.KApplyReady {
+		t.Fatalf("KApplyReady = false, want true -- an EXPLICIT false completeness signal must be trusted even though every serialized entry clears tau")
+	}
+	if result.NearDuplicateP90 != 2 {
+		t.Fatalf("NearDuplicateP90 = %d, want 2 (the explicitly-complete count)", result.NearDuplicateP90)
+	}
+}
 
 // TestCalibrateFromReport_TruncatedSaturatedCaseWithMatchingTauSizesKFromTotal
 // is the codex round-2 P2 fix's positive pinning test, TIGHTENED by codex
@@ -18,7 +188,7 @@ func intPtr(v int) *int           { return &v }
 // simulating a harness re-run AT the previously recommended floor.
 func TestCalibrateFromReport_TruncatedSaturatedCaseWithMatchingTauSizesKFromTotal(t *testing.T) {
 	wantTau, _ := recallGateThreshold([]float64{0.90}, 0.90)
-	report := CalibrationReport{
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension,
 		TopK: 5,
 		Tau:  wantTau,
 		Cases: []CalibrationCase{{
@@ -26,10 +196,10 @@ func TestCalibrateFromReport_TruncatedSaturatedCaseWithMatchingTauSizesKFromTota
 			CorrectSimilarity:         floatPtr(0.90),
 			HardNegatives:             []CalibrationHardNegative{{Kind: "k", CanonicalID: "n1", Similarity: 0.95}, {Kind: "k", CanonicalID: "n2", Similarity: 0.92}},
 			HardNegativeAboveTauCount: intPtr(20),
-			HardNegativesTruncated:    true,
+			HardNegativesTruncated:    boolPtr(true),
 		}},
 	}
-	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
 	if err != nil {
 		t.Fatalf("CalibrateFromReport: %v", err)
 	}
@@ -60,12 +230,12 @@ func TestCalibrateFromReport_TruncatedSaturatedCaseWithMismatchedTauRefusesToSiz
 		if i == 0 {
 			c.HardNegatives = []CalibrationHardNegative{{Kind: "k", CanonicalID: "n1", Similarity: 0.95}, {Kind: "k", CanonicalID: "n2", Similarity: 0.92}}
 			c.HardNegativeAboveTauCount = intPtr(20)
-			c.HardNegativesTruncated = true
+			c.HardNegativesTruncated = boolPtr(true)
 		}
 		cases = append(cases, c)
 	}
-	report := CalibrationReport{TopK: 5, Tau: 0.55, Cases: cases} // report.Tau (0.55) != the ~0.20 tau this run recommends
-	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: 5, Tau: 0.55, Cases: cases} // report.Tau (0.55) != the ~0.20 tau this run recommends
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
 	if err != nil {
 		t.Fatalf("CalibrateFromReport: %v", err)
 	}
@@ -87,17 +257,17 @@ func TestCalibrateFromReport_TruncatedSaturatedCaseWithMismatchedTauRefusesToSiz
 // OverFetchMultiplier to 0 rather than a confident-looking but potentially
 // under-sized number.
 func TestCalibrateFromReport_TruncatedSaturatedCaseWithoutTotalRefusesToSizeK(t *testing.T) {
-	report := CalibrationReport{
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension,
 		TopK: 5,
 		Cases: []CalibrationCase{{
 			Cause:                  "hit",
 			CorrectSimilarity:      floatPtr(0.90),
 			HardNegatives:          []CalibrationHardNegative{{Kind: "k", CanonicalID: "n1", Similarity: 0.95}, {Kind: "k", CanonicalID: "n2", Similarity: 0.92}},
-			HardNegativesTruncated: true,
+			HardNegativesTruncated: boolPtr(true),
 			// HardNegativeAboveTauCount intentionally nil.
 		}},
 	}
-	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
 	if err != nil {
 		t.Fatalf("CalibrateFromReport: %v", err)
 	}
@@ -125,7 +295,7 @@ func TestCalibrateFromReport_TruncatedSaturatedCaseWithoutTotalRefusesToSizeK(t 
 // entry. A not-saturated capped count is therefore ALREADY the exact total,
 // truncated or not, and needs no HardNegativeAboveTauCount to be trusted.
 func TestCalibrateFromReport_TruncatedUnsaturatedCaseNeedsNoTotal(t *testing.T) {
-	report := CalibrationReport{
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension,
 		TopK: 5,
 		Cases: []CalibrationCase{{
 			Cause:             "hit",
@@ -133,11 +303,11 @@ func TestCalibrateFromReport_TruncatedUnsaturatedCaseNeedsNoTotal(t *testing.T) 
 			HardNegatives:     []CalibrationHardNegative{{Kind: "k", CanonicalID: "n1", Similarity: 0.95}, {Kind: "k", CanonicalID: "n2", Similarity: 0.10}},
 			// n2 (0.10) falls below the ~0.90 tau this single-sample report
 			// resolves to -- the capped list is NOT saturated.
-			HardNegativesTruncated: true,
+			HardNegativesTruncated: boolPtr(true),
 			// HardNegativeAboveTauCount intentionally nil -- must not be needed.
 		}},
 	}
-	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
 	if err != nil {
 		t.Fatalf("CalibrateFromReport: %v", err)
 	}
@@ -160,9 +330,9 @@ func TestCalibrateFromReport_DeterministicRecallGate(t *testing.T) {
 	for _, s := range []float64{0.50, 0.10, 0.90, 0.30, 0.70, 0.20, 1.00, 0.40, 0.80, 0.60} {
 		cases = append(cases, CalibrationCase{Cause: "hit", CorrectSimilarity: floatPtr(s)})
 	}
-	report := CalibrationReport{Cases: cases}
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: cases}
 
-	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
 	if err != nil {
 		t.Fatalf("CalibrateFromReport: %v", err)
 	}
@@ -179,8 +349,8 @@ func TestCalibrateFromReport_DeterministicRecallGate(t *testing.T) {
 
 // A single S+ sample is its own tau, with achieved recall trivially 1.0.
 func TestCalibrateFromReport_SingleSample(t *testing.T) {
-	report := CalibrationReport{Cases: []CalibrationCase{{Cause: "hit", CorrectSimilarity: floatPtr(0.42)}}}
-	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: []CalibrationCase{{Cause: "hit", CorrectSimilarity: floatPtr(0.42)}}}
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
 	if err != nil {
 		t.Fatalf("CalibrateFromReport: %v", err)
 	}
@@ -210,7 +380,7 @@ func TestCalibrateFromReport_HundredPercentTargetIsActuallyAchievable(t *testing
 	for i, s := range samples {
 		cases[i] = CalibrationCase{Cause: "hit", CorrectSimilarity: floatPtr(s)}
 	}
-	result, err := CalibrateFromReport(CalibrationReport{Cases: cases}, CalibrationOptions{TargetRecall: 1.0})
+	result, err := CalibrateFromReport(CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: cases}, CalibrationOptions{TargetRecall: 1.0, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
 	if err != nil {
 		t.Fatalf("CalibrateFromReport: %v", err)
 	}
@@ -233,11 +403,11 @@ func TestCalibrateFromReport_HundredPercentTargetIsActuallyAchievable(t *testing
 }
 
 func TestCalibrateFromReport_NoCorrectSimilaritySamplesIsAnError(t *testing.T) {
-	report := CalibrationReport{Cases: []CalibrationCase{
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: []CalibrationCase{
 		{Cause: "subject_missing"},
 		{Cause: "vector_missing"},
 	}}
-	if _, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90}); err != ErrNoCorrectSimilaritySamples {
+	if _, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}); err != ErrNoCorrectSimilaritySamples {
 		t.Fatalf("err = %v, want ErrNoCorrectSimilaritySamples", err)
 	}
 }
@@ -251,11 +421,11 @@ func TestCalibrateFromReport_NoCorrectSimilaritySamplesIsAnError(t *testing.T) {
 // refuse to ever apply. CalibrateFromReport must return ErrNoFeasibleFloor
 // here, never a CalibrationResult that looks like a usable recommendation.
 func TestCalibrateFromReport_NonPositiveFloorIsAnError(t *testing.T) {
-	report := CalibrationReport{Cases: []CalibrationCase{
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: []CalibrationCase{
 		{Cause: "hit", CorrectSimilarity: floatPtr(-0.05)},
 		{Cause: "hit", CorrectSimilarity: floatPtr(0.50)},
 	}}
-	_, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 1.0})
+	_, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 1.0, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
 	if err != ErrNoFeasibleFloor {
 		t.Fatalf("err = %v, want ErrNoFeasibleFloor (S+ sample -0.05 with a 100%% recall target forces tau <= 0)", err)
 	}
@@ -267,19 +437,19 @@ func TestCalibrateFromReport_NonPositiveFloorIsAnError(t *testing.T) {
 // must fail the SAME way a negative sample does, not silently round up to
 // something floorApplicable would accept.
 func TestCalibrateFromReport_ZeroFloorIsAnError(t *testing.T) {
-	report := CalibrationReport{Cases: []CalibrationCase{
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: []CalibrationCase{
 		{Cause: "hit", CorrectSimilarity: floatPtr(0.0)},
 	}}
-	_, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 1.0})
+	_, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 1.0, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
 	if err != ErrNoFeasibleFloor {
 		t.Fatalf("err = %v, want ErrNoFeasibleFloor (a single S+ sample of exactly 0.0 forces tau <= 0)", err)
 	}
 }
 
 func TestCalibrateFromReport_InvalidTargetRecallIsAnError(t *testing.T) {
-	report := CalibrationReport{Cases: []CalibrationCase{{CorrectSimilarity: floatPtr(0.5)}}}
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: []CalibrationCase{{CorrectSimilarity: floatPtr(0.5)}}}
 	for _, target := range []float64{0, -0.1, 1.1} {
-		if _, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: target}); err != ErrInvalidTargetRecall {
+		if _, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: target, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}); err != ErrInvalidTargetRecall {
 			t.Fatalf("TargetRecall=%v: err = %v, want ErrInvalidTargetRecall", target, err)
 		}
 	}
@@ -312,9 +482,9 @@ func TestCalibrateFromReport_SyntheticOverlappingDistributions(t *testing.T) {
 			BestWrongSimilarity: floatPtr(sMinus),
 		})
 	}
-	report := CalibrationReport{TopK: 20, Cases: cases}
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: 20, Cases: cases}
 
-	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
 	if err != nil {
 		t.Fatalf("CalibrateFromReport: %v", err)
 	}
@@ -365,9 +535,9 @@ func TestCalibrateFromReport_WellSeparatedDistributionPassesTheNegativeGate(t *t
 			Cause: "hit", CorrectSimilarity: floatPtr(sPlus), BestWrongSimilarity: floatPtr(sMinus),
 		})
 	}
-	report := CalibrationReport{TopK: 20, Cases: cases}
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: 20, Cases: cases}
 
-	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
 	if err != nil {
 		t.Fatalf("CalibrateFromReport: %v", err)
 	}
@@ -399,10 +569,16 @@ func TestCalibrateFromReport_OverFetchRespondsToNearDuplicateDensity(t *testing.
 			for n := 0; n < i; n++ {
 				negatives = append(negatives, CalibrationHardNegative{Kind: "work_item", CanonicalID: "wi", Similarity: 0.25})
 			}
-			cases = append(cases, CalibrationCase{Cause: "hit", CorrectSimilarity: floatPtr(s), HardNegatives: negatives})
+			// HardNegativesTruncated explicitly false (codex round-4 FIX B):
+			// this fixture's per-case negatives ARE the complete harvest by
+			// construction, and the density math this test pins is
+			// orthogonal to the completeness gate -- an explicit false, not
+			// an absent field, is what "known complete" looks like now that
+			// nil means "assume truncated".
+			cases = append(cases, CalibrationCase{Cause: "hit", CorrectSimilarity: floatPtr(s), HardNegatives: negatives, HardNegativesTruncated: boolPtr(false)})
 		}
-		report := CalibrationReport{TopK: 20, Cases: cases}
-		result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+		report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: 20, Cases: cases}
+		result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
 		if err != nil {
 			t.Fatalf("CalibrateFromReport: %v", err)
 		}
@@ -422,8 +598,8 @@ func TestCalibrateFromReport_OverFetchRespondsToNearDuplicateDensity(t *testing.
 		for _, s := range sPlusValues {
 			cases = append(cases, CalibrationCase{Cause: "hit", CorrectSimilarity: floatPtr(s)})
 		}
-		report := CalibrationReport{TopK: 20, Cases: cases}
-		result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90})
+		report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: 20, Cases: cases}
+		result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
 		if err != nil {
 			t.Fatalf("CalibrateFromReport: %v", err)
 		}
@@ -448,10 +624,10 @@ func TestCalibrateFromReport_HardNegativeRejectRate(t *testing.T) {
 				HardNegatives: []CalibrationHardNegative{{Kind: "k", CanonicalID: "id", Similarity: negativeSimilarity}},
 			})
 		}
-		return CalibrationReport{TopK: 20, Cases: cases}
+		return CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: 20, Cases: cases}
 	}
 
-	below, err := CalibrateFromReport(build(0.05), CalibrationOptions{TargetRecall: 0.90})
+	below, err := CalibrateFromReport(build(0.05), CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
 	if err != nil {
 		t.Fatalf("CalibrateFromReport: %v", err)
 	}
@@ -459,7 +635,7 @@ func TestCalibrateFromReport_HardNegativeRejectRate(t *testing.T) {
 		t.Fatalf("HardNegativeRejectRate = %v, want 1.0 for negatives entirely below tau", below.HardNegativeRejectRate)
 	}
 
-	above, err := CalibrateFromReport(build(0.99), CalibrationOptions{TargetRecall: 0.90})
+	above, err := CalibrateFromReport(build(0.99), CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
 	if err != nil {
 		t.Fatalf("CalibrateFromReport: %v", err)
 	}
@@ -469,3 +645,104 @@ func TestCalibrateFromReport_HardNegativeRejectRate(t *testing.T) {
 }
 
 func almostEqual(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
+
+// fakeRunnerT is a MINIMAL runnerT double: it records whether Fatalf was
+// called and panics with fakeRunnerTFatal instead of calling
+// runtime.Goexit() the way the real *testing.T does -- runFakeCalibrationRunner
+// below recovers exactly that sentinel, so execution stops at the Fatalf
+// call site (matching real behavior: the artifact-writing code after it
+// never runs) WITHOUT the failure propagating to the actual *testing.T
+// running this test (see runnerT's doc comment for why a real t.Run
+// subtest can't be used to observe this).
+type fakeRunnerT struct {
+	failed bool
+	logs   []string
+}
+
+func (f *fakeRunnerT) Helper() {}
+func (f *fakeRunnerT) Logf(format string, args ...interface{}) {
+	f.logs = append(f.logs, fmt.Sprintf(format, args...))
+}
+
+type fakeRunnerTFatal struct{}
+
+func (f *fakeRunnerT) Fatalf(format string, args ...interface{}) {
+	f.failed = true
+	f.logs = append(f.logs, fmt.Sprintf(format, args...))
+	panic(fakeRunnerTFatal{})
+}
+
+// runFakeCalibrationRunner runs runCalibrationRunner against a fakeRunnerT
+// and returns whether it failed (called Fatalf) -- true if the run halted
+// at a Fatalf the way a real failing *testing.T would.
+func runFakeCalibrationRunner(t *testing.T, report CalibrationReport, opts CalibrationOptions, outputPath string) *fakeRunnerT {
+	t.Helper()
+	fake := &fakeRunnerT{}
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(fakeRunnerTFatal); !ok {
+					panic(r) // not ours -- a genuine bug, must not be swallowed
+				}
+			}
+		}()
+		runCalibrationRunner(fake, report, opts, outputPath)
+	}()
+	return fake
+}
+
+// TestCalibrationRunner_GateFailingReportFailsAndWritesNoArtifact is the
+// codex round-4 FIX C pinning test: a report that fails a readiness gate
+// must make runCalibrationRunner call Fatalf (not merely log a warning and
+// continue), and must NOT write anything to the requested output path.
+// Fixture: the SyntheticOverlappingDistributions shape, whose reject rate
+// (~0.067) is known to be far below NegativeGateRejectThreshold
+// (ApplyReady=false).
+func TestCalibrationRunner_GateFailingReportFailsAndWritesNoArtifact(t *testing.T) {
+	var cases []CalibrationCase
+	for i := 0; i < 30; i++ {
+		sPlus := 0.20 + float64(i)*(0.45/29.0)
+		sMinus := 0.23 + float64(i)*(0.45/29.0)
+		cases = append(cases, CalibrationCase{
+			Cause: "floor_loss", CorrectSimilarity: floatPtr(sPlus), BestWrongSimilarity: floatPtr(sMinus),
+		})
+	}
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: 20, Cases: cases}
+	opts := CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}
+	outputPath := filepath.Join(t.TempDir(), "policy.json")
+
+	fake := runFakeCalibrationRunner(t, report, opts, outputPath)
+	if !fake.failed {
+		t.Fatalf("runCalibrationRunner did not call Fatalf, want it to -- this fixture's negative gate is known to fail (ApplyReady=false); logs: %v", fake.logs)
+	}
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Fatalf("output file exists at %s (err=%v), want NONE written on a failing gate", outputPath, err)
+	}
+}
+
+// TestCalibrationRunner_GatePassingReportWritesArtifact is the companion
+// positive case: a report that clears BOTH readiness gates makes
+// runCalibrationRunner complete WITHOUT calling Fatalf, and writes the
+// artifact to the requested path. Fixture: the WellSeparatedDistribution
+// shape (reject rate 1.0, clears NegativeGateRejectThreshold).
+func TestCalibrationRunner_GatePassingReportWritesArtifact(t *testing.T) {
+	var cases []CalibrationCase
+	for i := 0; i < 30; i++ {
+		sPlus := 0.80 + float64(i)*(0.15/29.0)
+		sMinus := 0.05 + float64(i)*(0.15/29.0)
+		cases = append(cases, CalibrationCase{
+			Cause: "hit", CorrectSimilarity: floatPtr(sPlus), BestWrongSimilarity: floatPtr(sMinus),
+		})
+	}
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: 20, Cases: cases}
+	opts := CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}
+	outputPath := filepath.Join(t.TempDir(), "policy.json")
+
+	fake := runFakeCalibrationRunner(t, report, opts, outputPath)
+	if fake.failed {
+		t.Fatalf("runCalibrationRunner called Fatalf, want it to complete -- this fixture clears both readiness gates; logs: %v", fake.logs)
+	}
+	if _, err := os.Stat(outputPath); err != nil {
+		t.Fatalf("output file missing at %s, want it written when both gates pass: %v", outputPath, err)
+	}
+}

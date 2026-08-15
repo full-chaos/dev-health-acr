@@ -202,8 +202,20 @@ func TestExactSearchOracleDecomposesRetrievalMisses(t *testing.T) {
 	t.Logf("oracle corpus: %d embedder-fence-passing subject vectors for org %s", len(corpusVectors), orgID)
 
 	tau := adapter.similarityFloor
+	// codex round-4 FIX A: stamp the SAME identity string
+	// LookupRetrievalPolicy's caller composes (EmbedRetrievalIdentityFromEnv,
+	// not EmbedderIdentity.String() alone -- that form excludes the
+	// composition tag) plus the dimension the embedder that produced these
+	// similarities actually reports, so CalibrateFromReport can refuse a
+	// report minted against the wrong embedding space before trusting
+	// anything else in it.
+	embedIdentity, err := EmbedRetrievalIdentityFromEnv(benchmarkLookup)
+	if err != nil {
+		t.Fatalf("embed retrieval identity: %v", err)
+	}
 	report := &oracleReport{
 		Total: len(corpus), TopK: topK, Tau: tau, RawTextIncluded: includeRawText,
+		EmbedIdentity: embedIdentity, EmbedDimension: embedderOptions.Embedder.Identity().Dimension,
 		PerKind: map[string]*kindDistribution{},
 	}
 
@@ -344,7 +356,7 @@ func TestExactSearchOracleDecomposesRetrievalMisses(t *testing.T) {
 		capped, aboveTauCount, truncated := summarizeHardNegatives(hardNegatives, tau, hardNegativeCount)
 		result.HardNegatives = capped
 		result.HardNegativeAboveTauCount = &aboveTauCount
-		result.HardNegativesTruncated = truncated
+		result.HardNegativesTruncated = &truncated
 		report.Cases = append(report.Cases, result)
 
 		dist := report.PerKind[testCase.ExpectKind]
@@ -448,7 +460,20 @@ type oracleCaseResult struct {
 	// HardNegativesTruncated is true when HardNegativeAboveTauCount's full
 	// deduped list exceeds hardNegativeCount, i.e. HardNegatives above is
 	// genuinely a truncated view for this case, not the complete set.
-	HardNegativesTruncated bool `json:"hard_negatives_truncated"`
+	//
+	// A POINTER (codex round-4 FIX B, tightening round-2 P2): this driver
+	// ALWAYS sets it explicitly (see summarizeHardNegatives below), so every
+	// report this harness writes carries a present value. The pointer type
+	// exists so the calibration tool can tell "this run explicitly measured
+	// completeness" apart from "no report ever set this at all" (a
+	// pre-CHAOS-3834 report, including a prior baseline run before this
+	// field existed) -- a plain bool's zero value (false) made every legacy
+	// report silently read as "complete", resurrecting the exact
+	// censored-list under-sizing bug round-2 P2 closed. See
+	// CalibrationCase.HardNegativesTruncated's doc comment for how the tool
+	// now treats nil as "assume truncated", the worst case, not the
+	// optimistic pre-fix default.
+	HardNegativesTruncated *bool `json:"hard_negatives_truncated,omitempty"`
 	// UsedTermFallback is true when this case had no authored subject_terms
 	// and therefore ran through the pre-CHAOS-3831 whole-question fallback
 	// -- NOT production parity (codex round-1 finding 7: this must be
@@ -500,6 +525,17 @@ type oracleReport struct {
 	// oracle side -- recorded so a report is self-describing without
 	// cross-referencing the run's environment.
 	Tau float64 `json:"tau"`
+	// EmbedIdentity and EmbedDimension stamp this report with the embed
+	// retrieval identity string (EmbedRetrievalIdentityFromEnv's form) and
+	// embedding width the similarities in this report were ACTUALLY
+	// measured against (codex round-4 FIX A, exact-measurement class --
+	// the artifact-side twin of round-1's composition-tag pin and round-3's
+	// dimension pin). CalibrateFromReport requires BOTH to match its
+	// caller's target identity/dimension before trusting anything else in
+	// this report -- a recommendation minted from one embedding space must
+	// never be silently applied to a DIFFERENT one.
+	EmbedIdentity  string `json:"embed_identity"`
+	EmbedDimension int    `json:"embed_dimension"`
 	// RawTextIncluded records whether Question/Label fields below are raw
 	// text or a redacted digest (codex round-1 finding 8) -- see
 	// ACR_TEST_ORACLE_INCLUDE_RAW_TEXT.

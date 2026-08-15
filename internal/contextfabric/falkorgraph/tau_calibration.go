@@ -37,32 +37,37 @@ type CalibrationHardNegative struct {
 // CalibrationCase mirrors one entry of oracle_live_test.go's oracleCaseResult
 // -- only the fields the calibration math reads.
 //
-// HardNegativesTruncated mirrors oracleCaseResult's field of the same name
-// (codex round-2 P2): true when the harness's harvest for this case held
-// more distinct wrong subjects than HardNegatives serializes, i.e.
-// HardNegatives here is a CAPPED view, not the complete set. A report from
-// before this field existed decodes it as false (Go's json zero value),
-// which CalibrateFromReport treats as "complete" -- the same trust an old
-// report always got, not a new hazard.
+// HardNegativesTruncated mirrors oracleCaseResult's field of the same name,
+// INCLUDING its pointer type (codex round-4 FIX B, tightening round-2 P2):
+// nil means the harness reported NO completeness signal at all for this
+// case -- a report from before this field existed (including a pre-CHAOS-3834
+// baseline), or a harness variant that omits it. CalibrateFromReport treats
+// nil as "ASSUME TRUNCATED" (the WORST case), never as "assume complete" --
+// a plain bool's zero value (false) was the pre-fix hazard: it made every
+// legacy report silently read as "complete" and resurrected the exact
+// censored-list under-sizing bug this whole fix chain closes. A PRESENT
+// false means the harness explicitly measured and reported a complete
+// harvest for this case; a present true is the same explicit truncation
+// signal round-2 P2 always had.
 //
 // HardNegativeAboveTauCount mirrors the sibling field, INCLUDING its pointer
 // type: nil means "this report did not compute a total" (old report, or a
 // harness variant that skips it), distinguishable from present-and-zero.
-// CalibrateFromReport DOES read this for a truncated, saturated case (see
-// that function's doc comment) -- trusting it ONLY when the report-level
-// Tau field EXACTLY equals the tau this function just recommended (codex
-// round-3 P2: a total measured at a DIFFERENT tau, e.g. the report's
-// original higher default, cannot see negatives sitting between the two
-// floors, so trusting it unconditionally would silently under-size K again).
-// See oracleCaseResult's copy of this field for the cross-tau caveat this
-// exact-match requirement closes.
+// CalibrateFromReport DOES read this for a truncated (or unknown-truncation)
+// saturated case (see that function's doc comment) -- trusting it ONLY when
+// the report-level Tau field EXACTLY equals the tau this function just
+// recommended (codex round-3 P2: a total measured at a DIFFERENT tau, e.g.
+// the report's original higher default, cannot see negatives sitting
+// between the two floors, so trusting it unconditionally would silently
+// under-size K again). See oracleCaseResult's copy of this field for the
+// cross-tau caveat this exact-match requirement closes.
 type CalibrationCase struct {
 	Cause                     string                    `json:"cause"`
 	CorrectSimilarity         *float64                  `json:"correct_similarity,omitempty"`
 	BestWrongSimilarity       *float64                  `json:"best_wrong_similarity,omitempty"`
 	HardNegatives             []CalibrationHardNegative `json:"hard_negatives,omitempty"`
 	HardNegativeAboveTauCount *int                      `json:"hard_negative_above_tau_count,omitempty"`
-	HardNegativesTruncated    bool                      `json:"hard_negatives_truncated"`
+	HardNegativesTruncated    *bool                     `json:"hard_negatives_truncated,omitempty"`
 }
 
 // CalibrationReport mirrors oracle_live_test.go's oracleReport -- only the
@@ -71,10 +76,22 @@ type CalibrationCase struct {
 // diagnostic (the report's OWN tau, i.e. what the run that PRODUCED these
 // similarities was already filtering with -- CalibrateFromReport computes
 // its own recommended tau independently of it).
+//
+// EmbedIdentity/EmbedDimension mirror oracleReport's fields of the same
+// name (codex round-4 FIX A, exact-measurement class -- the artifact-side
+// twin of round-1's composition-tag pin and round-3's dimension pin): the
+// embed retrieval identity string (EmbedRetrievalIdentityFromEnv's form)
+// and embedding width this report's similarities were ACTUALLY measured
+// against. See CalibrationOptions.TargetEmbedIdentity's doc comment for how
+// CalibrateFromReport uses them -- a report with no stamp, or one that does
+// not match the caller's target, is refused before any number in it is
+// trusted.
 type CalibrationReport struct {
-	TopK  int               `json:"top_k"`
-	Tau   float64           `json:"tau"`
-	Cases []CalibrationCase `json:"cases"`
+	TopK           int               `json:"top_k"`
+	Tau            float64           `json:"tau"`
+	EmbedIdentity  string            `json:"embed_identity"`
+	EmbedDimension int               `json:"embed_dimension"`
+	Cases          []CalibrationCase `json:"cases"`
 }
 
 // CalibrationOptions parameterizes CalibrateFromReport.
@@ -86,6 +103,22 @@ type CalibrationOptions struct {
 	// by hybrid ranking + corroboration downstream", not a precision cliff).
 	// Must be in (0, 1].
 	TargetRecall float64
+
+	// TargetEmbedIdentity and TargetDimension are the embed retrieval
+	// identity string and embedding width the CALLER intends to apply this
+	// recommendation to (codex round-4 FIX A) -- e.g. what
+	// EmbedRetrievalIdentityFromEnv and a live embedder's Identity().Dimension
+	// report for the deployment this calibration is FOR. Both are REQUIRED:
+	// CalibrateFromReport returns ErrEmbeddingIdentityMismatch when either is
+	// empty/zero, when report.EmbedIdentity/EmbedDimension is empty/zero (a
+	// report with no stamp at all -- ABSENCE is not innocence, see that
+	// error's doc comment), or when the two disagree. A recommendation
+	// minted from one embedding space must never be silently handed to
+	// LookupRetrievalPolicy for a DIFFERENT one -- this is the artifact-side
+	// half of the same exact-measurement invariant retrieval_policy.go's
+	// pinned table keys enforce on the CONSUMING side.
+	TargetEmbedIdentity string
+	TargetDimension     int
 }
 
 // CalibrationResult is CalibrateFromReport's recommendation plus the
@@ -192,6 +225,20 @@ var (
 	// error instead of a CalibrationResult makes that inapplicability loud
 	// at calibration time, not silently discovered later at deploy time.
 	ErrNoFeasibleFloor = errors.New("calibration target recall forces a similarity floor outside the applicable (0,1) range -- no feasible policy")
+	// ErrEmbeddingIdentityMismatch reports that report.EmbedIdentity/
+	// EmbedDimension is absent, or does not exactly match
+	// opts.TargetEmbedIdentity/TargetDimension (codex round-4 FIX A --
+	// exact-measurement class, artifact side). A report with no identity
+	// stamp at all (pre-CHAOS-3834, or a harness variant that omits the
+	// field) is treated the SAME as a mismatch, never as "unknown, proceed
+	// anyway": a recommendation minted from an unstamped or wrong embedding
+	// space must never reach a caller that then hands it to
+	// LookupRetrievalPolicy for a DIFFERENT target identity/dimension than
+	// what actually produced these similarities. A caller that omits its
+	// own target (opts.TargetEmbedIdentity == "" or TargetDimension <= 0)
+	// gets the SAME error -- calibrating without saying what it is FOR is
+	// exactly the hazard this closes, not a mode this function supports.
+	ErrEmbeddingIdentityMismatch = errors.New("calibration report's embed identity/dimension is missing or does not match the target identity/dimension")
 )
 
 // CalibrateFromReport computes a recommended (tau, K) RetrievalPolicy from
@@ -236,6 +283,15 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 	if opts.TargetRecall <= 0 || opts.TargetRecall > 1 {
 		return CalibrationResult{}, ErrInvalidTargetRecall
 	}
+	// codex round-4 FIX A: checked BEFORE anything in the report is trusted
+	// -- a report minted from the wrong embedding space (or with no
+	// identity stamp at all) must never reach the S+/S-/hard-negative math
+	// below, let alone come back looking like a usable recommendation.
+	if opts.TargetEmbedIdentity == "" || opts.TargetDimension <= 0 ||
+		report.EmbedIdentity == "" || report.EmbedDimension <= 0 ||
+		report.EmbedIdentity != opts.TargetEmbedIdentity || report.EmbedDimension != opts.TargetDimension {
+		return CalibrationResult{}, ErrEmbeddingIdentityMismatch
+	}
 
 	var sPlus, sMinus []float64
 	var hardNegatives []float64
@@ -276,8 +332,15 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 			similarities[i] = hn.Similarity
 			hardNegatives = append(hardNegatives, hn.Similarity)
 		}
+		// codex round-4 FIX B: nil (no completeness signal reported at all)
+		// resolves to true -- ASSUME TRUNCATED, the worst case -- not false.
+		// See CalibrationCase.HardNegativesTruncated's doc comment.
+		truncated := true
+		if c.HardNegativesTruncated != nil {
+			truncated = *c.HardNegativesTruncated
+		}
 		perScoredCaseHardNegatives = append(perScoredCaseHardNegatives, scoredCaseHardNegatives{
-			similarities: similarities, truncated: c.HardNegativesTruncated, aboveTauCount: c.HardNegativeAboveTauCount,
+			similarities: similarities, truncated: truncated, aboveTauCount: c.HardNegativeAboveTauCount,
 		})
 	}
 
@@ -343,11 +406,23 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 				count++
 			}
 		}
-		if scored.truncated && count == len(scored.similarities) {
+		if scored.truncated && len(scored.similarities) > 0 && count == len(scored.similarities) {
 			// The capped list is saturated (every serialized entry clears
 			// tau): entries beyond the cap could ALSO clear it, so `count`
 			// is not trustworthy as-is. Note this is the ONLY unsafe case --
 			// see the "else" reasoning below.
+			//
+			// The len(similarities) > 0 guard (codex round-4 follow-up,
+			// self-caught in mutation testing): a case with ZERO harvested
+			// hard negatives is trivially "complete" -- dedupeHardNegatives
+			// never produces an empty capped view of a non-empty full list,
+			// so an empty list is real density signal ("nothing crowds this
+			// correct answer"), not a censored one -- REGARDLESS of what the
+			// truncated flag says (including FIX B's new nil-defaults-to-true
+			// posture). Without this guard, 0==len(nil) is vacuously true for
+			// EVERY case that never harvested a hard negative at all, which
+			// would make FIX B's conservative default flag nearly every
+			// ordinary report as K-insufficient.
 			//
 			// codex round-3 P2: the harness computed aboveTauCount at
 			// report.Tau -- the RUN's own applied floor, NOT this function's
