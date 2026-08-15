@@ -205,9 +205,10 @@ func bruteForceRank(query []float64, corpus []oracleVector) []oracleMatch {
 // findVector returns the corpus entry for (kind, canonicalID), if the
 // corresponding subject was embeddable and fence-passing. ok=false covers
 // both "never existed" and "existed but has no usable vector under the
-// current identity" -- the oracle_live_test.go driver reports that case as
-// its own miss cause (no_vector), distinct from text_loss, because it is not
-// a statement about embedding SEMANTICS at all.
+// current identity" -- callers that need to tell those apart (the
+// oracle_live_test.go driver's subject_missing vs vector_missing causes) use
+// subjectExistence instead, because neither is a statement about embedding
+// SEMANTICS the way text_loss/ann_loss are.
 func findVector(corpus []oracleVector, kind, canonicalID string) (oracleVector, bool) {
 	for _, candidate := range corpus {
 		if candidate.Kind == kind && candidate.CanonicalID == canonicalID {
@@ -242,6 +243,88 @@ func containsANNCandidate(candidates []graphrank.CandidateNode, kind, canonicalI
 		}
 	}
 	return false
+}
+
+// aboveFloor mirrors vectorSearchNodes' AC-3778-4 drop rule EXACTLY -- a
+// similarity AT OR BELOW tau is dropped, never scored (vector.go's
+// `if similarity <= tau { continue }`) -- so a recall@K check run over this
+// filtered slice answers the same question the real floor asks, rather than
+// "what would recall be with no floor at all" (codex round-1 finding 2).
+// ranked is assumed already sorted descending; filtering preserves that
+// order.
+//
+// S+/S- reporting deliberately does NOT go through this filter -- L4's tau
+// calibration needs the RAW similarity of the correct pair, sub-floor
+// included, to see how many correct pairs the current floor is discarding.
+// Only the retrievability check (oracleHit) applies the floor.
+func aboveFloor(ranked []oracleMatch, tau float64) []oracleMatch {
+	out := make([]oracleMatch, 0, len(ranked))
+	for _, m := range ranked {
+		if m.Similarity > tau {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// topKInclusive returns the prefix of a DESCENDING-sorted ranking needed to
+// answer "is this row within the top K" without being sensitive to how ties
+// AT the K-th boundary happen to be ordered (codex round-1 finding 3).
+//
+// bruteForceRank's own tie-break is deterministic (kind then canonical ID)
+// but that ordering has no reason to agree with how a real ANN server orders
+// an exact tie, and duplicate/near-duplicate search text (the corpus has
+// plenty -- see the embed-text spec §1's "1,121 near-clones" for
+// pull_request_review) produces genuine floating-point ties routinely. A
+// plain ranked[:k] slice would silently read a tied correct answer as a miss
+// purely because of which side of the tie bruteForceRank's arbitrary
+// tie-break put it on. Every row whose similarity EQUALS the K-th row's
+// similarity is included instead, so a boundary tie can never read as a
+// miss -- this can only ever WIDEN the set a recall check passes, never
+// narrow it.
+func topKInclusive(ranked []oracleMatch, k int) []oracleMatch {
+	if k <= 0 {
+		return nil
+	}
+	if k >= len(ranked) {
+		return ranked
+	}
+	boundary := ranked[k-1].Similarity
+	end := k
+	for end < len(ranked) && ranked[end].Similarity == boundary {
+		end++
+	}
+	return ranked[:end]
+}
+
+// subjectExistence distinguishes a corpus-authoring error (the expected
+// subject never existed in the graph at all) from a genuine projection
+// coverage gap (the subject exists but carries no usable embedding) --
+// codex round-1 finding 4. findVector alone cannot tell these apart: it only
+// reports "not in the fence-passing corpus", which is true of both.
+//
+// This must only be called once the caller has already confirmed the
+// ORG-LEVEL AC-3778-7 fence passes (ensureVectorReadable). Under a passed
+// fence, any node that DOES carry an embedding is guaranteed to carry the
+// CURRENT identity (that is what the fence verifies), so "exists, has an
+// embedding property, but is absent from fetchEmbedderFenceCorpus's result"
+// cannot happen -- reported as embedded=false defensively rather than
+// assumed impossible, since a defensive false negative here is far cheaper
+// than a wrong panic.
+//
+// temporalFilter{} (the zero value) is deliberately inactive: this is an
+// existence check against the current graph, not a historical-axis query --
+// the oracle has no time axis of its own to bind.
+func (a *Adapter) subjectExistence(ctx context.Context, key, orgID, kind, canonicalID string) (exists, embedded bool, err error) {
+	n, err := a.nodeByKindID(ctx, key, orgID, kind, canonicalID, temporalFilter{})
+	if err != nil {
+		return false, false, err
+	}
+	if n == nil {
+		return false, false, nil
+	}
+	_, hasVector := decodeVectorProperty(n.Properties[propEmbedding])
+	return true, hasVector, nil
 }
 
 // bestWrongNeighbor returns the highest-similarity entry in a

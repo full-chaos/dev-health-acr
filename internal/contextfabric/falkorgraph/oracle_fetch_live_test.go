@@ -116,4 +116,54 @@ func TestLiveFetchEmbedderFenceCorpusScopesToOrgAndIdentity(t *testing.T) {
 	if diff := ranked[0].Similarity - 1.0; diff > 1e-6 || diff < -1e-6 {
 		t.Fatalf("exact-match true cosine = %v, want 1.0", ranked[0].Similarity)
 	}
+
+	// Codex round-1 finding 1's precondition, proven against the SAME real
+	// server and the SAME stale-identity write: ensureVectorReadable (the
+	// org-level fence oracle_live_test.go checks before scoring any case)
+	// must report the org UNREADABLE once ANY node carries a mismatched
+	// identity -- not merely exclude that one node from the corpus. This is
+	// the fence fetchEmbedderFenceCorpus alone cannot stand in for: a
+	// per-row filter is not the same statement as "production would degrade
+	// to lexical-only for this whole org right now".
+	if adapter.ensureVectorReadable(ctx, key, orgID) {
+		t.Fatal("ensureVectorReadable() = true with a stale-identity node present; the org-level fence must fail closed, matching production's own read-path gate")
+	}
+}
+
+// TestLiveEnsureVectorReadablePassesOnAConsistentIdentity is the converse
+// control for the fence above: a corpus written entirely under the current
+// identity must NOT trip the org-level gate, so
+// TestExactSearchOracleDecomposesRetrievalMisses's precondition check does
+// not fail closed on every healthy org.
+func TestLiveEnsureVectorReadablePassesOnAConsistentIdentity(t *testing.T) {
+	embedder := &axisEmbedder{vectors: map[string][]float32{}}
+	adapter := startVectorLiveAdapter(t, embedder, 0.55)
+
+	orgID := "live-oracle-fence-ok-" + time.Now().UTC().Format("20060102T150405.000000000")
+	observed := time.Now().UTC()
+	projection := contextfabric.EntityProjection{
+		Subject: contextfabric.SubjectRef{
+			Kind: contextfabric.SubjectProject, CanonicalID: "auth", Label: "Authentication Service",
+		},
+		Authorization:  contextfabric.AuthorizationScope{RepositorySlugs: []string{"full-chaos/dev-health-acr"}},
+		EvidenceRefIDs: []string{"evidence_oracle_1234"}, ObservedAt: observed, SourceVersion: "v1",
+	}
+	embedder.vectors[entitySearchText(projection)] = []float32{1, 0, 0, 0}
+	batch := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_oracle_00000002", OrgID: orgID,
+		Source: "oracle-live-test", SourceVersion: "v1", Cursor: "cursor-1", NextCursor: "cursor-2",
+		GeneratedAt:   observed,
+		Entities:      []contextfabric.EntityProjection{projection},
+		Relationships: []contextfabric.RelationshipProjection{}, Contents: []contextfabric.ContentProjection{},
+		Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+	if _, err := adapter.ApplyProjectionBatch(context.Background(), batch); err != nil {
+		t.Fatalf("ApplyProjectionBatch(): %v", err)
+	}
+
+	key := graphKey(adapter.config.GraphPrefix, orgID)
+	ctx := context.Background()
+	if !adapter.ensureVectorReadable(ctx, key, orgID) {
+		t.Fatal("ensureVectorReadable() = false on a corpus with a single, current-identity vector; the fence must not fail closed on a healthy org")
+	}
 }

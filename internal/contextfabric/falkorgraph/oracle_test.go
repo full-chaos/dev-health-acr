@@ -196,6 +196,158 @@ func TestBestWrongNeighborReportsNoneForASingleNodeCorpus(t *testing.T) {
 	}
 }
 
+func TestAboveFloorDropsAtOrBelowTauKeepsStrictlyGreater(t *testing.T) {
+	ranked := []oracleMatch{
+		{oracleVector: oracleVector{CanonicalID: "above"}, Similarity: 0.56},
+		{oracleVector: oracleVector{CanonicalID: "at-tau"}, Similarity: 0.55},
+		{oracleVector: oracleVector{CanonicalID: "below"}, Similarity: 0.10},
+	}
+	got := aboveFloor(ranked, 0.55)
+	if len(got) != 1 || got[0].CanonicalID != "above" {
+		t.Fatalf("aboveFloor(0.55) = %+v, want only %q (a similarity AT tau must be dropped, matching vector.go's <= tau rule)", got, "above")
+	}
+}
+
+func TestTopKInclusiveIncludesBoundaryTies(t *testing.T) {
+	// Two entries tied at the K=2 boundary similarity (0.5): a plain
+	// ranked[:2] slice would arbitrarily keep one and drop the other.
+	ranked := []oracleMatch{
+		{oracleVector: oracleVector{CanonicalID: "first"}, Similarity: 0.9},
+		{oracleVector: oracleVector{CanonicalID: "tied-a"}, Similarity: 0.5},
+		{oracleVector: oracleVector{CanonicalID: "tied-b"}, Similarity: 0.5},
+		{oracleVector: oracleVector{CanonicalID: "far"}, Similarity: 0.1},
+	}
+	got := topKInclusive(ranked, 2)
+	if len(got) != 3 {
+		t.Fatalf("topKInclusive(k=2) = %+v, want 3 entries (both boundary ties included)", got)
+	}
+	ids := map[string]bool{}
+	for _, m := range got {
+		ids[m.CanonicalID] = true
+	}
+	if !ids["tied-a"] || !ids["tied-b"] {
+		t.Fatalf("topKInclusive dropped a boundary tie: %+v", got)
+	}
+	if ids["far"] {
+		t.Fatalf("topKInclusive included a row past the boundary: %+v", got)
+	}
+}
+
+func TestTopKInclusiveNoTieMatchesPlainSlice(t *testing.T) {
+	ranked := []oracleMatch{
+		{oracleVector: oracleVector{CanonicalID: "a"}, Similarity: 0.9},
+		{oracleVector: oracleVector{CanonicalID: "b"}, Similarity: 0.5},
+		{oracleVector: oracleVector{CanonicalID: "c"}, Similarity: 0.1},
+	}
+	got := topKInclusive(ranked, 2)
+	if len(got) != 2 || got[0].CanonicalID != "a" || got[1].CanonicalID != "b" {
+		t.Fatalf("topKInclusive(k=2) with no tie = %+v, want [a b]", got)
+	}
+}
+
+func TestTopKInclusiveKAtOrPastLength(t *testing.T) {
+	ranked := []oracleMatch{{oracleVector: oracleVector{CanonicalID: "a"}, Similarity: 0.9}}
+	if got := topKInclusive(ranked, 5); len(got) != 1 {
+		t.Fatalf("k past length: got %+v, want the whole (1-entry) ranking", got)
+	}
+	if got := topKInclusive(ranked, 0); got != nil {
+		t.Fatalf("k=0: got %+v, want nil", got)
+	}
+	if got := topKInclusive(nil, 5); got != nil {
+		t.Fatalf("empty ranking: got %+v, want nil", got)
+	}
+}
+
+func TestSubjectExistenceDistinguishesMissingFromUnembedded(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch params["id"] {
+		case "exists-embedded":
+			return []row{{"n": &node{Properties: map[string]interface{}{
+				propKind: "project", propCanonicalID: "exists-embedded", propEmbedding: []interface{}{1.0, 0.0},
+			}}}}, nil
+		case "exists-unembedded":
+			return []row{{"n": &node{Properties: map[string]interface{}{
+				propKind: "project", propCanonicalID: "exists-unembedded",
+			}}}}, nil
+		default:
+			return nil, nil // not found
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+
+	exists, embedded, err := adapter.subjectExistence(context.Background(), "key", "org", "project", "exists-embedded")
+	if err != nil || !exists || !embedded {
+		t.Fatalf("exists-embedded: exists=%v embedded=%v err=%v, want true/true/nil", exists, embedded, err)
+	}
+	exists, embedded, err = adapter.subjectExistence(context.Background(), "key", "org", "project", "exists-unembedded")
+	if err != nil || !exists || embedded {
+		t.Fatalf("exists-unembedded: exists=%v embedded=%v err=%v, want true/false/nil", exists, embedded, err)
+	}
+	exists, embedded, err = adapter.subjectExistence(context.Background(), "key", "org", "project", "missing")
+	if err != nil || exists || embedded {
+		t.Fatalf("missing: exists=%v embedded=%v err=%v, want false/false/nil", exists, embedded, err)
+	}
+}
+
+func TestRedactTextIncludeRawReturnsVerbatim(t *testing.T) {
+	if got := redactText("what is the auth project doing", true); got != "what is the auth project doing" {
+		t.Fatalf("includeRaw=true must return the text unchanged, got %q", got)
+	}
+}
+
+func TestRedactTextDefaultHidesRawContent(t *testing.T) {
+	raw := "contact jane.doe@example.com about the auth work"
+	got := redactText(raw, false)
+	if got == raw {
+		t.Fatal("redactText(includeRaw=false) must not return the raw text")
+	}
+	if strings.Contains(got, "jane.doe") || strings.Contains(got, "example.com") {
+		t.Fatalf("redacted output leaks raw content: %q", got)
+	}
+	if !strings.HasPrefix(got, "sha256:") {
+		t.Fatalf("redacted output = %q, want a sha256: prefix", got)
+	}
+}
+
+func TestRedactTextIsStableAndDistinguishing(t *testing.T) {
+	a := redactText("question one", false)
+	b := redactText("question one", false)
+	c := redactText("question two", false)
+	if a != b {
+		t.Fatalf("redactText is not deterministic: %q vs %q", a, b)
+	}
+	if a == c {
+		t.Fatal("two different inputs redacted to the same digest")
+	}
+}
+
+func TestDedupeHardNegativesKeepsHighestSimilarityPerSubjectAndCapsAtLimit(t *testing.T) {
+	negatives := []hardNegative{
+		{Kind: "project", CanonicalID: "p1", Similarity: 0.4},
+		{Kind: "project", CanonicalID: "p1", Similarity: 0.7}, // same subject, higher similarity -- must win
+		{Kind: "project", CanonicalID: "p2", Similarity: 0.6},
+		{Kind: "project", CanonicalID: "p3", Similarity: 0.5},
+	}
+	got := dedupeHardNegatives(negatives, 2)
+	if len(got) != 2 {
+		t.Fatalf("got %d entries, want 2 (capped at limit): %+v", len(got), got)
+	}
+	if got[0].CanonicalID != "p1" || got[0].Similarity != 0.7 {
+		t.Fatalf("top entry = %+v, want p1 at 0.7 (the higher of its two duplicate observations)", got[0])
+	}
+	if got[1].CanonicalID != "p2" {
+		t.Fatalf("second entry = %+v, want p2", got[1])
+	}
+}
+
+func TestDedupeHardNegativesLimitZeroReturnsNone(t *testing.T) {
+	negatives := []hardNegative{{Kind: "project", CanonicalID: "p1", Similarity: 0.9}}
+	got := dedupeHardNegatives(negatives, 0)
+	if len(got) != 0 {
+		t.Fatalf("limit=0 must return no hard negatives, got %+v", got)
+	}
+}
+
 func TestFetchEmbedderFenceCorpusRequiresAnEmbedder(t *testing.T) {
 	adapter := newFakeAdapter(t, &fakeConn{})
 	_, err := adapter.fetchEmbedderFenceCorpus(context.Background(), "key", "org")
