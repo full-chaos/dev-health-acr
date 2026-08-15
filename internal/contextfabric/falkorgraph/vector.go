@@ -666,6 +666,22 @@ func (a *Adapter) recordVectorProjection(ctx context.Context, orgID string, embe
 	a.config.Telemetry.RecordVectorProjection(ctx, orgID, embedded, cleared, skipped.Kind, skipped.IDOnly)
 }
 
+// recordVectorIndexEfRuntimeMismatch reports an existing vector index's
+// efRuntime disagreeing with the calibrated policy to telemetry (codex
+// round-9 P2 wiring fix -- see ensureVectorIndex's doc comment and
+// GraphTelemetry.RecordVectorIndexEfRuntimeMismatch's doc comment). A
+// silent no-op when Telemetry is unset, matching every sibling recordX
+// method's nil-safe contract: an operator who declined telemetry
+// (NoopTelemetry, or simply never setting Config.Telemetry) sees nothing,
+// rather than this diagnostic falling back to an unconfigured global
+// default that bypasses whatever sink/level they actually configured.
+func (a *Adapter) recordVectorIndexEfRuntimeMismatch(ctx context.Context, key string, policyEfRuntime, indexEfRuntime int) {
+	if a.config.Telemetry == nil {
+		return
+	}
+	a.config.Telemetry.RecordVectorIndexEfRuntimeMismatch(ctx, key, policyEfRuntime, indexEfRuntime)
+}
+
 // EmbedderFromEnv builds the optional vector-retrieval dependencies from the
 // environment (CHAOS-3778).
 //

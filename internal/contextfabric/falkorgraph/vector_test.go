@@ -1128,6 +1128,19 @@ type recordingTelemetry struct {
 	skippedKind   int
 	skippedIDOnly int
 	projections   int
+
+	// efRuntimeMismatches records every RecordVectorIndexEfRuntimeMismatch
+	// call verbatim (codex round-9 P2 wiring fix's test double) -- a slice,
+	// not just a count, so a test can assert the exact key/policy/index
+	// values reported, not merely that SOMETHING fired.
+	efRuntimeMismatches []efRuntimeMismatchRecord
+}
+
+// efRuntimeMismatchRecord is one recorded
+// RecordVectorIndexEfRuntimeMismatch call's arguments.
+type efRuntimeMismatchRecord struct {
+	key                             string
+	policyEfRuntime, indexEfRuntime int
 }
 
 func (r *recordingTelemetry) RecordObservationTraversalDegraded(context.Context, string, int) {}
@@ -1144,6 +1157,9 @@ func (r *recordingTelemetry) RecordVectorProjection(_ context.Context, _ string,
 	r.skipped += skippedKind + skippedIDOnly
 	r.skippedKind += skippedKind
 	r.skippedIDOnly += skippedIDOnly
+}
+func (r *recordingTelemetry) RecordVectorIndexEfRuntimeMismatch(_ context.Context, key string, policyEfRuntime, indexEfRuntime int) {
+	r.efRuntimeMismatches = append(r.efRuntimeMismatches, efRuntimeMismatchRecord{key, policyEfRuntime, indexEfRuntime})
 }
 
 func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {

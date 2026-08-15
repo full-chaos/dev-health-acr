@@ -1,11 +1,10 @@
 package falkorgraph
 
 import (
-	"bytes"
 	"context"
-	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 )
@@ -312,29 +311,31 @@ func TestEnsureVectorIndex_AppliesPolicyEfRuntimeOnlyAtCreate(t *testing.T) {
 	})
 }
 
-// captureDefaultSlog swaps slog.Default() for a handler writing to a buffer
-// for the duration of fn, mirroring modelprovider's
-// TestGenkitDebugLoggingNeverCarriesGenerationContentOnACRsPath -- ACR calls
-// slog.Default() directly at every Warn call site in this package (reader.go,
-// oracle.go, and now vector_projection.go), never slog.SetDefault, so this is
-// the only way a test observes what gets logged.
-func captureDefaultSlog(t *testing.T, fn func()) string {
+// newFakeAdapterWithTelemetry is newFakeAdapter's sibling for tests that need
+// to observe telemetry (codex round-9 P2 wiring fix): identical Config
+// otherwise, with Telemetry set so recordVectorIndexEfRuntimeMismatch (and
+// every other recordX wrapper) actually reaches the injected double instead
+// of nil-safely no-op'ing.
+func newFakeAdapterWithTelemetry(t *testing.T, fake *fakeConn, telemetry GraphTelemetry) *Adapter {
 	t.Helper()
-	var buf bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	defer slog.SetDefault(previous)
-	fn()
-	return buf.String()
+	adapter, err := newWithAPI(Config{
+		Addr: "fake:6379", GraphPrefix: "acr-cf-fake", RequestTimeout: time.Second,
+		MaxAttempts: 1, MaxResults: 25, PoolSize: 1, AllowInsecure: true, Telemetry: telemetry,
+	}, fake)
+	if err != nil {
+		t.Fatalf("newWithAPI() error = %v", err)
+	}
+	return adapter
 }
 
 // TestEnsureVectorIndex_WarnsWhenExistingIndexEfRuntimeDiffersFromPolicy is
-// the codex round-8 P2 Fix B(3) pinning test: FalkorDB's db.indexes()
-// introspection already exposes the built efRuntime (indexStatus.HNSWOptions,
-// conn.go), so a policy/actual mismatch on an EXISTING, OPERATIONAL index is
-// detectable -- ensureVectorIndex must log a Warn about it (detection, never
-// a compare-and-recreate) rather than staying silent about the gap the
-// mandatory CHAOS-3832/3835 rebuild is meant to close.
+// the codex round-8 P2 Fix B(3) pinning test, updated for round-9 P2's
+// wiring fix: FalkorDB's db.indexes() introspection already exposes the
+// built efRuntime (indexStatus.HNSWOptions, conn.go), so a policy/actual
+// mismatch on an EXISTING, OPERATIONAL index is detectable -- ensureVectorIndex
+// must report it through the CONFIGURED telemetry sink (detection, never a
+// compare-and-recreate), not a bare slog.Default() call that bypasses
+// whatever sink/level an operator actually configured.
 func TestEnsureVectorIndex_WarnsWhenExistingIndexEfRuntimeDiffersFromPolicy(t *testing.T) {
 	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
 		return nil, nil
@@ -346,22 +347,25 @@ func TestEnsureVectorIndex_WarnsWhenExistingIndexEfRuntimeDiffersFromPolicy(t *t
 			Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(8), "efRuntime": int64(10)}},
 		}}, nil
 	}
-	adapter := newFakeAdapter(t, fake)
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
 	adapter.attachEmbedder(EmbedderOptions{Embedder: &stubEmbedder{vector: make([]float32, 8)}, SimilarityFloor: 0.55, EfRuntime: 200})
 
-	logged := captureDefaultSlog(t, func() {
-		if err := adapter.ensureVectorIndex(context.Background(), "graphkey"); err != nil {
-			t.Fatalf("ensureVectorIndex: %v", err)
-		}
-	})
-	if !strings.Contains(logged, "efRuntime does not match") {
-		t.Fatalf("log output = %q, want a Warn about the built index's efRuntime (10) disagreeing with the calibrated policy (200)", logged)
+	if err := adapter.ensureVectorIndex(context.Background(), "graphkey"); err != nil {
+		t.Fatalf("ensureVectorIndex: %v", err)
+	}
+	if len(telemetry.efRuntimeMismatches) != 1 {
+		t.Fatalf("efRuntimeMismatches = %v, want exactly one report of the built index's efRuntime (10) disagreeing with the calibrated policy (200)", telemetry.efRuntimeMismatches)
+	}
+	got := telemetry.efRuntimeMismatches[0]
+	if got.key != "graphkey" || got.policyEfRuntime != 200 || got.indexEfRuntime != 10 {
+		t.Fatalf("efRuntimeMismatches[0] = %+v, want {key:graphkey policyEfRuntime:200 indexEfRuntime:10}", got)
 	}
 }
 
 // TestEnsureVectorIndex_NoWarnWhenExistingIndexEfRuntimeMatchesPolicy is the
 // negative control: the SAME shape as the test above, but the built index's
-// efRuntime already equals the policy's -- nothing to warn about.
+// efRuntime already equals the policy's -- nothing to report.
 func TestEnsureVectorIndex_NoWarnWhenExistingIndexEfRuntimeMatchesPolicy(t *testing.T) {
 	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
 		return nil, nil
@@ -373,23 +377,22 @@ func TestEnsureVectorIndex_NoWarnWhenExistingIndexEfRuntimeMatchesPolicy(t *test
 			Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(8), "efRuntime": int64(200)}},
 		}}, nil
 	}
-	adapter := newFakeAdapter(t, fake)
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
 	adapter.attachEmbedder(EmbedderOptions{Embedder: &stubEmbedder{vector: make([]float32, 8)}, SimilarityFloor: 0.55, EfRuntime: 200})
 
-	logged := captureDefaultSlog(t, func() {
-		if err := adapter.ensureVectorIndex(context.Background(), "graphkey"); err != nil {
-			t.Fatalf("ensureVectorIndex: %v", err)
-		}
-	})
-	if strings.Contains(logged, "efRuntime does not match") {
-		t.Fatalf("log output = %q, want no efRuntime-mismatch Warn -- the built index already matches the policy", logged)
+	if err := adapter.ensureVectorIndex(context.Background(), "graphkey"); err != nil {
+		t.Fatalf("ensureVectorIndex: %v", err)
+	}
+	if len(telemetry.efRuntimeMismatches) != 0 {
+		t.Fatalf("efRuntimeMismatches = %v, want none -- the built index already matches the policy", telemetry.efRuntimeMismatches)
 	}
 }
 
 // TestEnsureVectorIndex_NoWarnWhenNoCalibratedEfRuntimePolicy is the
 // companion negative control for a.efRuntime==0 (no calibrated policy at
-// all for this identity): nothing to compare against, so no Warn regardless
-// of what the existing index reports.
+// all for this identity): nothing to compare against, so no report
+// regardless of what the existing index reports.
 func TestEnsureVectorIndex_NoWarnWhenNoCalibratedEfRuntimePolicy(t *testing.T) {
 	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
 		return nil, nil
@@ -401,15 +404,42 @@ func TestEnsureVectorIndex_NoWarnWhenNoCalibratedEfRuntimePolicy(t *testing.T) {
 			Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(8), "efRuntime": int64(10)}},
 		}}, nil
 	}
-	adapter := newFakeAdapter(t, fake)
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
 	adapter.attachEmbedder(EmbedderOptions{Embedder: &stubEmbedder{vector: make([]float32, 8)}, SimilarityFloor: 0.55}) // EfRuntime: 0 -- no calibrated policy
 
-	logged := captureDefaultSlog(t, func() {
-		if err := adapter.ensureVectorIndex(context.Background(), "graphkey"); err != nil {
-			t.Fatalf("ensureVectorIndex: %v", err)
-		}
-	})
-	if strings.Contains(logged, "efRuntime does not match") {
-		t.Fatalf("log output = %q, want no efRuntime-mismatch Warn -- a.efRuntime is 0 (no calibrated policy), nothing to compare against", logged)
+	if err := adapter.ensureVectorIndex(context.Background(), "graphkey"); err != nil {
+		t.Fatalf("ensureVectorIndex: %v", err)
 	}
+	if len(telemetry.efRuntimeMismatches) != 0 {
+		t.Fatalf("efRuntimeMismatches = %v, want none -- a.efRuntime is 0 (no calibrated policy), nothing to compare against", telemetry.efRuntimeMismatches)
+	}
+}
+
+// TestEnsureVectorIndex_EfRuntimeMismatchIsSilentWithNoTelemetryConfigured is
+// the codex round-9 P2 wiring fix's nil-safety pinning test: an adapter with
+// NO Telemetry configured (newFakeAdapter, matching every other recordX
+// wrapper's nil-safe contract) must not panic and must not fall back to an
+// unconfigured global sink -- it simply reports nothing, exactly like an
+// operator who explicitly declined telemetry via NoopTelemetry would see.
+func TestEnsureVectorIndex_EfRuntimeMismatchIsSilentWithNoTelemetryConfigured(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		return nil, nil
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{{
+			Label: labelSubject, EntityType: "NODE", Status: "OPERATIONAL",
+			Types:   map[string][]string{propEmbedding: {"VECTOR"}},
+			Options: map[string]interface{}{propEmbedding: map[string]interface{}{"dimension": int64(8), "efRuntime": int64(10)}},
+		}}, nil
+	}
+	adapter := newFakeAdapter(t, fake) // no Telemetry
+	adapter.attachEmbedder(EmbedderOptions{Embedder: &stubEmbedder{vector: make([]float32, 8)}, SimilarityFloor: 0.55, EfRuntime: 200})
+
+	if err := adapter.ensureVectorIndex(context.Background(), "graphkey"); err != nil {
+		t.Fatalf("ensureVectorIndex: %v", err)
+	}
+	// No assertion beyond "it did not panic" -- Config.Telemetry is nil here,
+	// so recordVectorIndexEfRuntimeMismatch's nil check must have short-
+	// circuited before touching a.config.Telemetry.
 }

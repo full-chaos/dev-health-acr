@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -624,17 +623,24 @@ func (a *Adapter) ensureVectorIndex(ctx context.Context, key string) error {
 		// verified live (indexStatus.HNSWOptions(), conn.go, the same read
 		// recreateVectorIndexWithOptions uses to capture "whatever was there
 		// before" a possible restore) -- so a policy/actual mismatch on an
-		// operational index is at least loud in the logs at bootstrap time,
-		// once per key (this whole branch runs only inside bootstrapSchema's
+		// operational index is at least loud at bootstrap time, once per key
+		// (this whole branch runs only inside bootstrapSchema's
 		// bootstrapDone-guarded, once-per-process-per-key path), rather than
 		// silently invisible until someone thinks to check. a.efRuntime==0
 		// means no calibrated policy at all for this identity -- nothing to
 		// compare against, so skip. A read failure here is diagnostic-only
 		// and must not fail bootstrap over it.
+		//
+		// codex round-9 P2 wiring fix: reported through
+		// recordVectorIndexEfRuntimeMismatch (telemetry), NOT a bare
+		// slog.Default() call -- the earlier direct call bypassed whatever
+		// sink/level an operator configured via Config.Telemetry, same class
+		// as CHAOS-3835's telemetry fix elsewhere in this package. Nil-safe:
+		// an operator who declined telemetry sees nothing, rather than this
+		// falling back to an unconfigured global default.
 		if a.efRuntime != 0 {
 			if current, ok, hnswErr := a.currentVectorIndexHNSWOptions(ctx, key); hnswErr == nil && ok && current.EfRuntime != a.efRuntime {
-				slog.Default().Warn("context_fabric: existing vector index efRuntime does not match the calibrated retrieval policy -- run the CHAOS-3832/CHAOS-3835 index rebuild to apply it",
-					"key", key, "policy_ef_runtime", a.efRuntime, "index_ef_runtime", current.EfRuntime)
+				a.recordVectorIndexEfRuntimeMismatch(ctx, key, a.efRuntime, current.EfRuntime)
 			}
 		}
 		return nil

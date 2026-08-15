@@ -170,6 +170,18 @@ type GraphTelemetry interface {
 	// partially embedded graph, so "N nodes deliberately unembedded, by
 	// reason" must be a reported number, never an inference.
 	RecordVectorProjection(ctx context.Context, orgID string, embedded, cleared, skippedKind, skippedIDOnly int)
+	// RecordVectorIndexEfRuntimeMismatch fires when bootstrap discovers a
+	// pre-existing OPERATIONAL vector index whose built efRuntime disagrees
+	// with the calibrated CHAOS-3834 policy (round-8 P2's detection-only
+	// Warn, round-9 P2 wiring fix). key is the graph key (graphKey's hashed
+	// form), not an organization ID -- ensureVectorIndex runs at bootstrap,
+	// before any per-request organization context reaches this deep, and
+	// the hashed key is the only identifier available at that point (a
+	// one-way hash of orgID, per graphKey's doc comment -- it cannot be
+	// reversed back to orgID here). See ensureVectorIndex's doc comment for
+	// the CHAOS-3832/3835 rebuild path this signal is asking an operator to
+	// run, and why this is DETECTION only, never a compare-and-recreate.
+	RecordVectorIndexEfRuntimeMismatch(ctx context.Context, key string, policyEfRuntime, indexEfRuntime int)
 }
 
 // NoopTelemetry discards every signal. Callers that want no telemetry pass
@@ -177,10 +189,11 @@ type GraphTelemetry interface {
 // a decision in the source rather than an omission.
 type NoopTelemetry struct{}
 
-func (NoopTelemetry) RecordObservationTraversalDegraded(context.Context, string, int)    {}
-func (NoopTelemetry) RecordVectorRetrievalDegraded(context.Context, string)              {}
-func (NoopTelemetry) RecordVectorRetrievalSuppressed(context.Context, string)            {}
-func (NoopTelemetry) RecordVectorProjection(context.Context, string, int, int, int, int) {}
+func (NoopTelemetry) RecordObservationTraversalDegraded(context.Context, string, int)      {}
+func (NoopTelemetry) RecordVectorRetrievalDegraded(context.Context, string)                {}
+func (NoopTelemetry) RecordVectorRetrievalSuppressed(context.Context, string)              {}
+func (NoopTelemetry) RecordVectorProjection(context.Context, string, int, int, int, int)   {}
+func (NoopTelemetry) RecordVectorIndexEfRuntimeMismatch(context.Context, string, int, int) {}
 
 // SlogTelemetry is the production GraphTelemetry: structured operational logs
 // through log/slog, the repository's standard.
@@ -244,6 +257,17 @@ func (t SlogTelemetry) RecordVectorProjection(_ context.Context, orgID string, e
 			"org_id", orgID, "embedded", embedded, "cleared", cleared,
 			"skipped_kind", skippedKind, "skipped_id_only", skippedIDOnly)
 	}
+}
+
+// RecordVectorIndexEfRuntimeMismatch logs through the CONFIGURED logger
+// (t.Logger, falling back to slog.Default() only when unset -- t.logger()'s
+// existing contract), not a bare slog.Default() call at the ensureVectorIndex
+// call site (codex round-9 P2 wiring fix): the earlier direct call bypassed
+// whatever sink/level an operator configured via Config.Telemetry, the same
+// class of gap CHAOS-3835's telemetry fix closed elsewhere in this package.
+func (t SlogTelemetry) RecordVectorIndexEfRuntimeMismatch(_ context.Context, key string, policyEfRuntime, indexEfRuntime int) {
+	t.logger().Warn("context_fabric: existing vector index efRuntime does not match the calibrated retrieval policy -- run the CHAOS-3832/CHAOS-3835 index rebuild to apply it",
+		"key", key, "policy_ef_runtime", policyEfRuntime, "index_ef_runtime", indexEfRuntime)
 }
 
 func (c Config) validate() error {
