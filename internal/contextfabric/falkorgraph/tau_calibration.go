@@ -155,7 +155,7 @@ type CalibrationResult struct {
 	// distribution's own reject rate is well below the threshold) needs an
 	// explicit human decision that precision will come from hybrid ranking +
 	// corroboration downstream, not a silent pass from this tool. The
-	// hand-written calibratedIdentityText2Large entry in retrieval_policy.go
+	// hand-written calibratedIdentityText3Large entry in retrieval_policy.go
 	// IS that explicit human decision -- it is not auto-applied output of
 	// this function and is therefore not itself gated by ApplyReady; see its
 	// doc comment for the sequencing-gate ruling recorded on CHAOS-3834.
@@ -171,7 +171,7 @@ type CalibrationResult struct {
 	// ApplyReady=false here -- that is not a contradiction this field needs
 	// to resolve, it is this field measuring a narrower thing (tau-level
 	// precision) than the T4 recall-channel design ever claims to provide.
-	// A human-ratified table entry (see calibratedIdentityText2Large) may
+	// A human-ratified table entry (see calibratedIdentityText3Large) may
 	// therefore knowingly supersede an ApplyReady=false verdict: this
 	// function's fail-closed default protects an AUTOMATED caller that
 	// never asked chris; it does not, and cannot, encode the recall-channel

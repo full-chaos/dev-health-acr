@@ -286,7 +286,7 @@ against the pinned FalkorDB module — there is no per-query knob at all):
 when it CREATES a brand-new index, never against one that already exists.
 An organization whose index was built before CHAOS-3834's calibrated
 table entry shipped **keeps server-default ANN behavior (`efRuntime=10`)
-even after `RetrievalPolicyVersion` bumps to `rp2` and every stored
+even after `RetrievalPolicyVersion` bumps to `rp3` and every stored
 answer for that identity has been invalidated** — the version bump and
 the `t2`→`t3` composition change reach that organization immediately, but
 the ANN search breadth does not. CHAOS-3834 and CHAOS-3835 deploy
@@ -304,7 +304,7 @@ running the rebuild.
 
 **The calibrated retrieval-policy table entry auto-applies with no
 opt-in flag.** `retrievalPolicyTable`'s shipped
-`openai/text-embedding-3-large#t2:r2000:b0:pnone#d3072` entry (tau=0.30,
+`openai/text-embedding-3-large#t3:r2000:b0:pnone#d3072` entry (tau=0.30,
 K unchanged, efRuntime=200) applies automatically the moment a
 deployment's provider, model, composition tag, and dimension match it
 exactly — the exact-identity pinning IS the safety mechanism: any other
@@ -315,12 +315,15 @@ table's tau per-knob. The entry's constants are chris-ratified for the
 CHAOS-3834 T4 measurement program; the no-match/false-friend controls
 its precision actually depends on (hybrid ranking + corroboration) are
 the sequencing gate recorded on CHAOS-3834, tracked operationally rather
-than encoded as a second flag. **This key is `t2`-scoped and therefore
-un-matched once a deployment's live composition tag moves to `t3`** —
-see the `t3` calibration-inheritance decision recorded on CHAOS-3834
-(the entry this deployment's own CHAOS-3835 rebuild above needs to
-match against) for the follow-up entry that restores the match under
-`t3`.
+than encoded as a second flag. **This key is `t3`-scoped** — it
+INHERITS the original t2-measured tau/efRuntime values by an explicit
+decision recorded on CHAOS-3834 at CHAOS-3835 integration (T5's id-only
+skip changes no embedded text for any subject still embedded; it only
+removes whole subjects from the population), not a re-measurement. The
+pre-inheritance t2 key was dropped entirely — see
+`calibratedIdentityText3Large`'s doc comment in `retrieval_policy.go` for
+the full inheritance rationale and its validation plan (the post-rebuild
+oracle re-measure).
 
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is

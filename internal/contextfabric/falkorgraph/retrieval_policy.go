@@ -67,32 +67,49 @@ type RetrievalPolicy struct {
 	EfRuntime int
 }
 
-// calibratedIdentityText2Large is the CHAOS-3834 measured entry's key.
+// calibratedIdentityText3Large is the CHAOS-3834 measured entry's key.
 //
 // codex round-1 P2 REVERSED the earlier CHAOS-3835-contact fix, which had
 // derived this key from EmbedCompositionTag so it would auto-follow a future
 // composition-tag bump. That auto-following was itself the bug: the
 // calibration below (tau=0.30, efRuntime=200) was measured against t2's
 // composed text specifically -- the S+/S- distributions, floor_loss, and
-// near-duplicate density all describe WHAT t2 PRODUCES. A t3 composition
-// (CHAOS-3835 changes what text gets embedded) is a DIFFERENT corpus by this
-// table's own scoping rule (see retrievalPolicyTable's doc comment below: "a
-// rune-cap or body-gate flip ... is semantically a different corpus, and
-// rightly falls back to the conservative default until calibrated in its own
-// right"). Auto-rekeying this entry onto t3 would silently apply t2-measured
-// numbers to un-measured t3 text -- trading the original silent-miss hazard
-// for an equally silent, never-validated auto-inherit.
+// near-duplicate density all describe WHAT t2 PRODUCES. So the key was
+// PINNED to the literal composition it was measured against, deliberately
+// NOT auto-following a future composition-tag bump: instead,
+// TestCalibratedEntryDriftsLoudlyWithCompositionTag was designed to fail
+// LOUDLY the day the live tag drifted, forcing an explicit human decision --
+// recalibrate against the new composition, or record an explicit inheritance
+// decision as a new pinned entry -- rather than silently missing or silently
+// auto-inheriting.
 //
-// So the key is PINNED to the literal composition it was measured against.
-// A future composition-tag bump (t2 -> t3) does NOT move this entry with it;
-// instead it makes TestCalibratedEntryDriftsLoudlyWithCompositionTag fail
-// LOUDLY at integration, forcing an explicit human decision -- recalibrate
-// against the new composition, or record an explicit inheritance decision as
-// a new pinned entry -- rather than silently missing (the original
-// contact-check concern) or silently auto-inheriting (this reversal's
-// concern). Whether CHAOS-3834's t2 entry should be recalibrated or
-// explicitly inherited for t3 is a decision CHAOS-3835's integration makes,
-// not something this table decides on its own.
+// T3 INHERITANCE (codex round-9 P1, CHAOS-3835 integration -- the explicit
+// decision the round-1 P2 doc comment above deferred to this integration):
+// this entry is now keyed to t3, NOT t2. CHAOS-3835's t2 -> t3 composition
+// change is narrower than a typical template-version bump: T5's id-only
+// skip decision (isPureIdentifierSubject) does not alter what text gets
+// COMPOSED for any subject that still gets embedded -- it only removes
+// whole subjects (ci_pipeline_run rows whose pipeline_name/branch/aliases
+// carry no content beyond a bare identifier) from the embedded population
+// entirely. Every subject t2 measured a genuine S+/S- signal against text
+// t3 still composes IDENTICALLY -- the t2-measured tau=0.30/efRuntime=200
+// calibration therefore describes the t3 corpus too, MINUS a population of
+// pure-noise vectors this measurement never depended on (an S+/S- pair
+// built from a bare identifier's own embedding was never a source of the
+// signal tau=0.30 was calibrated against). This is an EXPLICIT INHERITANCE
+// decision, not a re-measurement: validation is the POST-REBUILD oracle
+// re-measure (run the CHAOS-3831 harness again against a t3-rebuilt
+// organization once CHAOS-3835's rebuild has run; a materially different
+// result there is the trigger to revisit this inheritance, not a reason to
+// have withheld it now). Decision recorded on CHAOS-3834.
+//
+// The OLD t2-keyed entry is DROPPED entirely, not kept alongside this one:
+// a t3-constant binary (embedTextTemplateVersion, composition.go) can never
+// produce a t2-tagged EmbedCompositionTag again, so a t2 key is permanently
+// unreachable from any live deployment -- keeping it would only grow the
+// table with a key nothing can ever look up. See
+// TestLookupRetrievalPolicy_UnknownIdentityKeepsConservativeDefault's
+// explicit t2-now-misses case for the pinning test on this.
 //
 // The trailing "#d3072" is codex round-3 P1: EmbedderIdentity.String()
 // deliberately EXCLUDES Dimension (see that method's doc comment -- the
@@ -109,12 +126,12 @@ type RetrievalPolicy struct {
 // the identity side: this entry is scoped to dimension 3072 exactly, and an
 // unmatched width falls back to the conservative, uncalibrated defaults
 // like any other uncalibrated identity.
-const calibratedIdentityText2Large = "openai/text-embedding-3-large#t2:r2000:b0:pnone#d3072"
+const calibratedIdentityText3Large = "openai/text-embedding-3-large#t3:r2000:b0:pnone#d3072"
 
 // retrievalPolicyTable is keyed by EmbedRetrievalIdentityFromEnv's persisted
 // string (identity.String() + "#" + EmbedCompositionTag(...), byte-identical
 // to what migration 0014's embed_retrieval_identity column persists) PLUS a
-// "#d<dimension>" suffix (codex round-3 P1 -- see calibratedIdentityText2Large's
+// "#d<dimension>" suffix (codex round-3 P1 -- see calibratedIdentityText3Large's
 // doc comment for why dimension, which EmbedderIdentity.String() deliberately
 // excludes, must still be part of THIS key). Using the full composed string
 // as the policy key (rather than, say, provider+model alone) means a policy
@@ -136,7 +153,14 @@ const calibratedIdentityText2Large = "openai/text-embedding-3-large#t2:r2000:b0:
 var retrievalPolicyTable = map[string]RetrievalPolicy{
 	// CHAOS-3834 measurement basis (2026-08-15, first full-universe oracle
 	// baseline, identity openai/text-embedding-3-large#t2:r2000:b0:pnone,
-	// top-20, 30 scored cases): hit=5, floor_loss=21 -- tau=0.55 (the
+	// top-20, 30 scored cases) -- MEASURED against t2 text; the entry below
+	// is KEYED to t3, an explicit inheritance decision at CHAOS-3835
+	// integration, not a re-measurement. See calibratedIdentityText3Large's
+	// doc comment for the inheritance rationale and validation plan; the
+	// numbers and reasoning below describe the ORIGINAL t2 measurement this
+	// inheritance carries forward unchanged.
+	//
+	// hit=5, floor_loss=21 -- tau=0.55 (the
 	// embedprovider.DefaultSimilarityFloor-derived value this identity was
 	// running under) rejected the CORRECT subject in 70% of scored cases.
 	// S+ (correct-pair) and S- (best-wrong-neighbor) distributions OVERLAP
@@ -189,7 +213,7 @@ var retrievalPolicyTable = map[string]RetrievalPolicy{
 	// tau value could ever pass a tau-level precision gate on this text),
 	// and precision is enforced DOWNSTREAM by hybrid ranking + corroboration
 	// adjudication (graphrank), never by the floor. This entry auto-applies
-	// unconditionally for its exact pinned identity (provider+model+t2-tag+
+	// unconditionally for its exact pinned identity (provider+model+t3-tag+
 	// 3072-dim) -- no opt-in flag -- because the exact-identity pinning IS
 	// the safety mechanism: retrievalPolicyTable's doc comment above
 	// explains why any OTHER deployment shape (different provider, model,
@@ -199,7 +223,7 @@ var retrievalPolicyTable = map[string]RetrievalPolicy{
 	// EmbedderFromEnv). The no-match/false-friend controls this entry's
 	// actual precision depends on remain the sequencing gate recorded on
 	// CHAOS-3834, tracked operationally, not encoded as a second flag here.
-	calibratedIdentityText2Large: {
+	calibratedIdentityText3Large: {
 		// 0.30: inside the recall-gate band the measurement aggregates
 		// support (tau=0.30 passed 24/30 correct and 29/30 best-wrong
 		// neighbors in the cited baseline). Strictly a floor, not a
@@ -239,7 +263,7 @@ var retrievalPolicyTable = map[string]RetrievalPolicy{
 // tag+dimension falls to the conservative default by construction, so a
 // second gate on top of that exact match would only ever matter for the
 // ONE deployment this entry was measured against and ratified for -- see
-// calibratedIdentityText2Large's doc comment for the tool-vs-table doctrine
+// calibratedIdentityText3Large's doc comment for the tool-vs-table doctrine
 // split (ApplyReady measures tau-level precision; this entry is a ratified
 // recall-channel decision that is EXPECTED to fail that gate).
 //
