@@ -82,7 +82,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	}
 	runtime.closers = append(runtime.closers, clickhouseClient.Close)
 
-	backend, falkorCheck, err := openProjectionBackend()
+	backend, falkorCheck, err := openProjectionBackend(logger)
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
@@ -178,7 +178,17 @@ const probeOrg, probeSource = "acr-projector-readiness-probe", "readiness"
 // when it isn't: an unconfigured FalkorDB endpoint is an accepted,
 // intentionally-disabled state (see ADR 0009's "Deployment topology"), not a
 // startup failure.
-func openProjectionBackend() (contextfabric.ProjectionBackend, func(context.Context) error, error) {
+// falkorGraphTelemetry builds the falkorgraph.GraphTelemetry sink this
+// binary wires into every graph adapter it constructs. Factored out to a
+// named, directly-testable function (CHAOS-3835 round-4 finding 3) rather
+// than an inline SlogTelemetry{Logger: logger} literal, so a unit test can
+// assert the wiring -- "the constructed sink carries the passed-in logger"
+// -- without needing FALKOR_ADDR configured or a live connection.
+func falkorGraphTelemetry(logger *slog.Logger) falkorgraph.GraphTelemetry {
+	return falkorgraph.SlogTelemetry{Logger: logger}
+}
+
+func openProjectionBackend(logger *slog.Logger) (contextfabric.ProjectionBackend, func(context.Context) error, error) {
 	if !falkorgraph.Configured(os.LookupEnv) {
 		return nil, nil, nil
 	}
@@ -189,7 +199,17 @@ func openProjectionBackend() (contextfabric.ProjectionBackend, func(context.Cont
 	// Codex round-3 F2: supply a real telemetry sink. Left nil, every graph
 	// signal -- including the vector cleared/embedded counts that make a
 	// re-embedding backlog visible -- was discarded.
-	falkorConfig.Telemetry = falkorgraph.SlogTelemetry{}
+	//
+	// CHAOS-3835 round-4 finding 3: the sink must carry THIS process's
+	// configured logger, not slog.Default() -- SlogTelemetry{} (no Logger)
+	// falls back to slog.Default(), which ignores ACR_LOG_LEVEL and the
+	// JSON handler main.go actually wires up to stdout. Every signal this
+	// package emits -- including the CHAOS-3835 id-only skip counts, whose
+	// entire purpose is being visible at the operator's configured level --
+	// was reaching a DIFFERENT, unconfigured logger instead, satisfying
+	// internal/contextfabric/AGENTS.md's "reported, never inferred"
+	// invariant only cosmetically.
+	falkorConfig.Telemetry = falkorGraphTelemetry(logger)
 	// CHAOS-3778: the projector writes embeddings only when an embedder is
 	// configured. It must agree with the hosted reader (both use
 	// EmbedderFromEnv) -- writing vectors nothing queries is wasted work, and

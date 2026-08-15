@@ -211,6 +211,39 @@ func embedKindSkipped(kind contextfabric.SubjectKind) bool {
 // (contextfabric.Embedder.Embed takes a slice for exactly this reason).
 func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch contextfabric.ProjectionBatch) error {
 	if a.embedder == nil {
+		// CHAOS-3835 round-4 finding 1: no embedder configured (e.g.
+		// ACR_CONTEXT_FABRIC_EMBED_BASE_URL unset) does NOT mean this
+		// batch has nothing to do to the graph's vector state. A subject
+		// may already carry a vector + embedder-identity stamp from an
+		// EARLIER batch, written while an embedder WAS configured; if
+		// THIS batch's projection makes that same subject id-only, the
+		// stale vector must still be cleared, or it survives the entire
+		// disabled interval and -- verified against ensureVectorReadable/
+		// verifyStoredEmbedderIdentity -- passes the read fence again the
+		// moment the embedder is RE-ENABLED with the same identity and
+		// dimension: the fence only compares the stored identity string
+		// to the CURRENTLY configured embedder, it never asks "should
+		// this specific row have a vector at all". While disabled, reads
+		// are safe (ensureVectorReadable/vectorIndexUsable both return
+		// false when a.embedder is nil, so nothing is ever served from a
+		// stale vector during the interval itself) -- the danger is
+		// entirely in what re-enabling later finds.
+		//
+		// collectEmbedTargets and clearNodeVectors need no embedder --
+		// collection is pure batch inspection and the clear is a plain
+		// graph write -- so both run here exactly as they do on every
+		// other commit path in this function. Embedding itself (Embed,
+		// writeNodeVector, the index/dimension checks below) still
+		// requires the embedder and stays out of this branch.
+		_, idOnlyTargets, skipped := collectEmbedTargets(batch, a.embedBudgetRunes(), a.config.IncludeEmbedBodies)
+		if err := a.clearNodeVectors(ctx, key, batch.OrgID, idOnlyTargets); err != nil {
+			return err
+		}
+		// embedded=0 (no embedder, nothing was ever going to be embedded
+		// this batch); cleared=0 for the same round-2 finding-1 reason as
+		// every other id-only-only clear in this file (routine, not a
+		// genuine stale/error event -- already covered by skipped.IDOnly).
+		a.recordVectorProjection(ctx, batch.OrgID, 0, 0, skipped)
 		return nil
 	}
 	// Codex round-2 R2-1: the write side re-verifies the index every batch

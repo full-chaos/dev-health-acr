@@ -44,32 +44,49 @@ var idOnlyUUID = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 var idOnlyGeneratedPrefixDigits = regexp.MustCompile(`(?i)^(?:run|build|pipeline|job|ci)[-_]\p{Nd}+$`)
 
 // isHexShapedToken reports whether token is a bare hex-digest shape (a git
-// short/full SHA, a hex build hash) -- ASCII hex characters only, at least
-// TWO digits among them, and long enough to not collide with a short real
-// word.
+// full/long SHA, a hex build hash) -- ASCII hex characters only, at least
+// TWO digits among them, and AT LEAST 12 CHARACTERS LONG.
 //
-// CHAOS-3835 round-3 finding 1: a single-digit requirement let all-hex-
-// letter English words that happen to carry exactly one digit
-// ("decade2", "facade1", "beaded1" -- every letter in [a-fA-F], one
-// trailing digit) false-positive as an id shape, the same over-broad
-// failure mode finding 3 exists to close, one digit short of what the
-// original fix caught. RULING (recall-first tiebreak): a missed digest
-// costs one row a noisy embed; a missed semantic name costs recall
-// entirely. Ambiguity resolves toward EMBED, so the bar moves up, not the
-// direction that skips more. Two digits is still generous against the
-// live corpus's real hex ids -- a git short SHA (7-10 hex chars) drawn
-// from a roughly-uniform hex alphabet has a >99.9% chance of carrying two
-// or more digits; the residual all-letter-or-single-digit SHA that slips
-// through and gets embedded anyway is the cheap failure this tradeoff
-// accepts.
+// CHAOS-3835 rounds 1, 3, and 4 all found a counterexample to whatever
+// (length, digit-count) pair the previous round picked: round 1 was a bare
+// digit-presence check ("decade", "cafe" -- zero digits, false-positived);
+// round 3 raised the bar to >=1 digit -> >=2 ("decade22", "facade12" --
+// still an all-hex-letter word plus exactly one trailing digit, still
+// false-positived at THAT round's length floor of 7). Every finite
+// (length, digit-count) pair drawn from a FIXED short length has an
+// all-hex-letter counterexample, because English words of that length
+// exist and nothing stops one of them from ending in the right number of
+// digits. Patching the length/digit pair again would only produce round
+// 5's counterexample.
 //
-// The length floor (7, up from 6) follows the same tightening: it no
-// longer needs to independently guard short coincidental tokens now that
-// the two-digit bar does most of that work, but shortening it back below
-// the shortest real short-SHA convention would just readmit the class of
-// token the floor exists to exclude.
+// ROUND 4 ENDS THE CLASS instead of extending it: the length floor moves
+// to 12. No English (or any natural-language) word is twelve or more
+// characters of PURE a-f letters -- the collision class dies by length
+// alone, not by tuning against specific examples. The two-digit
+// requirement stays (belt-and-suspenders against a 12+ character token
+// that is somehow still hex-letter-heavy).
+//
+// This DELIBERATELY makes 7-11 character short-SHA-shaped tokens
+// ("a3f9c21", "deadbeef01") NOT hex-shaped by this function any more --
+// they now embed. RULING (recall-first, stated as a residual rather than
+// re-litigated per round): a short-sha-shaped token that gets embedded
+// anyway is a single noisy vector, the cheap failure; a semantic name
+// wrongly suppressed is a permanent recall loss for every future
+// paraphrase query against it, the expensive one. Git's own default short
+// SHA is 7 characters and full SHAs are 40, so this residual affects only
+// the narrow band a caller explicitly abbreviated a hash into -- full
+// SHAs (40 hex chars) and any 12+ character hex-shaped token (long build
+// hashes, non-abbreviated digests) still skip via the length floor.
+//
+// The vocabulary this file's closed set draws from is CLOSED as of this
+// round: pure digits (idOnlyPureDigits), UUID-shaped (idOnlyUUID), a
+// 12+-character 2+-digit hex digest (this function), and the enumerated
+// generated-id prefixes (idOnlyGeneratedPrefixDigits). Do not add another
+// shape heuristic to patch a future short counterexample -- extend the
+// enumerated prefix list (a code-owned, reviewed decision) instead, the
+// same way idOnlyGeneratedPrefixDigits itself is extended.
 func isHexShapedToken(token string) bool {
-	if len(token) < 7 {
+	if len(token) < 12 {
 		return false
 	}
 	digitCount := 0

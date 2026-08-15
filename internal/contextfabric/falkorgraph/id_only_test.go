@@ -32,8 +32,10 @@ func TestIsPureIdentifierTextDetectorTable(t *testing.T) {
 		{"pipeline prefix", "pipeline-89", true},
 		{"job prefix", "job-12", true},
 		{"ci prefix", "ci-345", true},
-		// Positive: hex/UUID-shaped tokens.
-		{"hex digest with digits", "deadbeef01", true},
+		// Positive: hex/UUID-shaped tokens. isHexShapedToken's floor is 12
+		// characters as of round 4 (see id_only.go) -- "deadbeef01" (10
+		// chars) is BELOW that floor and moved to the negative group below.
+		{"12-char hex digest with digits", "a3f9c21b99ff", true},
 		{"uuid shape", "550e8400-e29b-41d4-a716-446655440000", true},
 		// Positive, unicode: pure-digit detection must be Unicode-aware, not
 		// ASCII-only -- fullwidth digits recognized like ASCII ones.
@@ -69,15 +71,31 @@ func TestIsPureIdentifierTextDetectorTable(t *testing.T) {
 		// Negative (round-3 finding 1, recall-first tiebreak): an all-hex-
 		// letter English word carrying exactly ONE digit must also stay
 		// real content -- the round-1 digit-presence bar (>=1) let these
-		// through; the round-3 bar (>=2 digits, length >=7) excludes them.
+		// through; round 3's bar (>=2 digits, length >=7) STILL let
+		// "decade22"/"facade12" through (see round-4 finding 2 below).
 		{"hex-letter word plus one trailing digit (round-3 finding 1)", "decade2", false},
 		{"hex-letter word plus one trailing digit, second case (round-3 finding 1)", "facade1", false},
 		{"hex-letter word plus one trailing digit, third case (round-3 finding 1)", "beaded1", false},
-		// Positive (round-3 finding 1): a real short-SHA-shaped token with
-		// two or more digits still skips -- the tightened bar must not
-		// overshoot into refusing genuine hex ids.
-		{"short-sha-shaped token with two digits (round-3 finding 1)", "a3f9c21", true},
-		{"full 40-char sha (round-3 finding 1)", "a94a8fe5ccb19ba61c4c0873d391e987982fbbd", true},
+		// Negative (round-4 finding 2): round 3's counterexample --
+		// all-hex-letter words with two trailing digits, which passed
+		// round 3's (length>=7, digits>=2) bar. Round 4 ends the class by
+		// length (>=12) rather than picking another digit-count bar that
+		// a future word would defeat -- no natural-language word is 12+
+		// characters of pure a-f, so these now correctly stay real
+		// content instead of getting patched individually.
+		{"hex-letter word plus two trailing digits (round-4 finding 2)", "decade22", false},
+		{"hex-letter word plus two trailing digits, second case (round-4 finding 2)", "facade12", false},
+		// Negative (round-4 finding 2): a real short-SHA-shaped token
+		// UNDER the 12-character floor now DELIBERATELY embeds -- the
+		// recall-first residual the ruling accepts (a short-sha noise
+		// vector is the cheap failure; see id_only.go's isHexShapedToken
+		// doc for the full tradeoff).
+		{"short-sha-shaped token under the 12-char floor now embeds (round-4 finding 2)", "a3f9c21", false},
+		{"10-char hex digest under the 12-char floor now embeds (round-4 finding 2)", "deadbeef01", false},
+		// Positive (round-4 finding 2): a full 40-char sha, and any
+		// 12+-character 2+-digit hex token, still skip -- the tightened
+		// floor must not overshoot into refusing genuine long hex ids.
+		{"full 40-char sha (round-4 finding 2)", "a94a8fe5ccb19ba61c4c0873d391e987982fbbd", true},
 		// Edge: empty text is explicitly NOT this function's concern -- it
 		// is a distinct, already-existing gating reason and must never be
 		// double-counted under the id-only label.
