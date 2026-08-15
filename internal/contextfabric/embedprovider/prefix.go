@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // PrefixFamily names one closed-vocabulary task-prefix convention.
@@ -87,10 +88,52 @@ func prefixFamilyError(family PrefixFamily) error {
 	return fmt.Errorf("embedder prefix family %q is not recognized; valid values: %s", family, sortedPrefixFamilyNames())
 }
 
-// applyPrefix prepends prefix to text, unless prefix is empty.
-func applyPrefix(prefix, text string) string {
+// applyPrefixWithBudget prepends prefix to text, truncating text FIRST so the
+// prefixed result never exceeds maxRunes (round-1 review P1).
+//
+// Both ApplyDocumentPrefix and ApplyQueryPrefix already run downstream of
+// Embed's own TruncateRunes(text, MaxTextRunes) call in embedChunk. Without
+// this budgeting, a caller that truncated to MaxTextRunes and then prepended
+// a prefix would hand Embed a text LONGER than MaxTextRunes, and Embed's
+// truncation would silently cut retrieval-bearing runes off the TAIL to make
+// room for the prefix it never knew was there -- worse, the two prefixes in
+// PrefixPair differ in length ("search_document: " vs "search_query: "), so
+// the two arms would lose a different number of runes for the same
+// underlying text, which is exactly the kind of arm-specific divergence the
+// embed-text spec's byte-identity design (§0(c)) exists to rule out.
+//
+// Budgeting the PREFIX side of the arithmetic instead makes the guarantee
+// unconditional: whatever text a caller hands in, and whether or not it was
+// pre-truncated, the combined result is provably <= maxRunes, so Embed's own
+// truncation is a no-op on the text this package composes. A negative budget
+// (a prefix longer than maxRunes) clamps to zero rather than panicking --
+// Config.validate's 2,000-rune floor and this package's short, fixed
+// prefixes make that case unreachable in practice, but a defensive clamp
+// costs nothing.
+func applyPrefixWithBudget(prefix, text string, maxRunes int) string {
 	if prefix == "" {
 		return text
 	}
-	return prefix + text
+	// Idempotency guard (round-1 review P2): a second application of the
+	// same prefix must be a no-op, not "prefix + prefix + text". Detecting
+	// "already carries this exact prefix" and returning text UNCHANGED --
+	// not re-truncated -- is what makes repeat calls a true no-op rather
+	// than a slowly-shrinking one.
+	//
+	// The guard's theoretical false positive -- real text that legitimately
+	// BEGINS with the literal prefix string, e.g. a PR titled exactly
+	// "search_document: implement the indexer" -- is accepted. Skipping a
+	// redundant prefix on that text still leaves it carrying the correct
+	// task-prefix token exactly once, which is the actual requirement; the
+	// alternative of no guard at all corrupts every genuinely double-applied
+	// call, and a wiring or composition-tag mistake making that happen is
+	// both more likely and more damaging than this coincidence.
+	if strings.HasPrefix(text, prefix) {
+		return text
+	}
+	budget := maxRunes - utf8.RuneCountInString(prefix)
+	if budget < 0 {
+		budget = 0
+	}
+	return prefix + TruncateRunes(text, budget)
 }

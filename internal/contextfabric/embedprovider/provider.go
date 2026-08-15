@@ -94,20 +94,39 @@ func (e *Embedder) QueryPrefix() string { return e.prefixes.Query }
 // exists only at the call site, exactly like the existing MaxTextRunes /
 // embedMaxRunes split, where this package exposes the budget and the caller
 // applies TruncateRunes before Embed. The write-path caller composing SUBJECT
-// text for storage embedding calls ApplyDocumentPrefix (after truncation, so
-// the fixed prefix never eats into the retrieval-bearing budget the embed-text
-// spec §0(c) sizes against a template's complete text) immediately before
-// that text reaches Embed.
+// text for storage embedding calls this immediately before that text reaches
+// Embed.
+//
+// CALLERS MUST NOT ALSO PRE-TRUNCATE TO MaxTextRunes FOR THIS PURPOSE
+// (round-1 review P1 correction: an earlier revision of this doc comment
+// said the opposite). This method budgets the prefix into MaxTextRunes
+// itself -- text is truncated to (MaxTextRunes - len(DocumentPrefix)) runes
+// BEFORE the prefix is prepended -- so the combined result is always <=
+// MaxTextRunes and Embed's own internal truncation is provably a no-op on
+// it. Pre-truncating to the FULL MaxTextRunes first and then prepending
+// would make the prefixed text LONGER than MaxTextRunes, so Embed's
+// truncation would cut retrieval-bearing runes off the tail to make room for
+// a prefix it never knew was there -- and by a different amount than
+// ApplyQueryPrefix would cut, since the two prefixes differ in length. A
+// caller MAY still truncate first for an unrelated reason (e.g. a shared
+// composition budget upstream of prefixing); doing so is harmless, because
+// this method's own truncation only ever shrinks further, never grows, what
+// it is handed.
+//
+// Idempotent: a text that already begins with DocumentPrefix is returned
+// unchanged rather than prefixed again (round-1 review P2). See
+// applyPrefixWithBudget for the accepted false-positive this implies.
 func (e *Embedder) ApplyDocumentPrefix(text string) string {
-	return applyPrefix(e.prefixes.Document, text)
+	return applyPrefixWithBudget(e.prefixes.Document, text, e.config.MaxTextRunes)
 }
 
 // ApplyQueryPrefix prepends QueryPrefix to text, or returns text unchanged
 // when no family is configured. The read-path caller embedding a QUESTION
-// for search calls this on the extracted term immediately before Embed. See
-// ApplyDocumentPrefix for why this package cannot apply it internally.
+// for search calls this on the extracted term immediately before Embed.
+// Same budgeting and idempotency contract as ApplyDocumentPrefix; see its
+// doc comment.
 func (e *Embedder) ApplyQueryPrefix(text string) string {
-	return applyPrefix(e.prefixes.Query, text)
+	return applyPrefixWithBudget(e.prefixes.Query, text, e.config.MaxTextRunes)
 }
 
 // PrefixTagComponent is this embedder's contribution to the embed-text
