@@ -506,6 +506,19 @@ func sortedKinds(perKind map[string]*kindDistribution) []string {
 // mandatory env var. Mode 0600 (owner-only): even with the codex round-1
 // finding 8 redaction default, Kind/CanonicalID/similarities are graph
 // content, not meant for a shared-readable file.
+//
+// Codex round-2 finding: os.WriteFile's mode argument is applied by the
+// OS-level open(2) call's CREATE flag only -- it has no effect on a file
+// that already exists at outputPath (a rerun against a reused output path,
+// e.g. an orchestrator overwriting yesterday's report). A pre-existing
+// 0644 file -- or one created before this posture existed, or under a
+// permissive umask -- would silently stay world-readable, including any
+// opt-in raw text (ACR_TEST_ORACLE_INCLUDE_RAW_TEXT). writeFileMode0600
+// closes this by opening with O_TRUNC (so a reused path is genuinely
+// overwritten, not appended) and then EXPLICITLY Chmod-ing the open file
+// descriptor to 0600 regardless of what permissions it already had -- this
+// is the one step that fixes the file's mode independent of whether it was
+// just created, already existed, or was affected by umask.
 func writeOracleReport(t *testing.T, report *oracleReport) {
 	t.Helper()
 	outputPath := os.Getenv("ACR_TEST_ORACLE_OUTPUT")
@@ -516,8 +529,30 @@ func writeOracleReport(t *testing.T, report *oracleReport) {
 	if err != nil {
 		t.Fatalf("encode oracle report: %v", err)
 	}
-	if err := os.WriteFile(outputPath, encoded, 0o600); err != nil {
+	if err := writeFileMode0600(outputPath, encoded); err != nil {
 		t.Fatalf("write oracle report to %s: %v", outputPath, err)
 	}
 	t.Logf("oracle report written to %s (raw_text_included=%v)", outputPath, report.RawTextIncluded)
+}
+
+// writeFileMode0600 writes data to path and guarantees the result is mode
+// 0600, whether path is newly created or already existed under some other
+// (possibly world-readable) mode. O_CREATE's mode argument only governs a
+// NEW file's initial permissions -- an existing file keeps its own mode no
+// matter what is passed there -- so the explicit Chmod after open is not
+// redundant with it; Chmod is the only call in this sequence that acts on
+// an already-existing file's permissions.
+func writeFileMode0600(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := f.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	return f.Close()
 }

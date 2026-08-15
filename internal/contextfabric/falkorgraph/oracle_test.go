@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -345,6 +347,49 @@ func TestDedupeHardNegativesLimitZeroReturnsNone(t *testing.T) {
 	got := dedupeHardNegatives(negatives, 0)
 	if len(got) != 0 {
 		t.Fatalf("limit=0 must return no hard negatives, got %+v", got)
+	}
+}
+
+func TestWriteFileMode0600OverwritesAPreExistingLoosePermission(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "report.json")
+	// Pre-create the path at a world-readable mode -- the exact scenario
+	// codex round-2 flagged: os.WriteFile's mode argument only governs a
+	// NEW file, so overwriting a report left behind at 0644 (an earlier
+	// run, a permissive umask, a reused ACR_TEST_ORACLE_OUTPUT path) must
+	// not silently keep that mode.
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("pre-create fixture: %v", err)
+	}
+	if err := writeFileMode0600(path, []byte(`{"fresh":true}`)); err != nil {
+		t.Fatalf("writeFileMode0600: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode = %o, want 0600 (must be enforced on overwrite, not only on creation)", got)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(content) != `{"fresh":true}` {
+		t.Fatalf("content = %q, want the fresh write (O_TRUNC must discard the stale content)", content)
+	}
+}
+
+func TestWriteFileMode0600OnANewFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "report.json")
+	if err := writeFileMode0600(path, []byte("data")); err != nil {
+		t.Fatalf("writeFileMode0600: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode = %o, want 0600", got)
 	}
 }
 
