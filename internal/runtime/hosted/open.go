@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedcache"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
@@ -219,6 +220,18 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("load context fabric embedder configuration: %w", err)
 	}
+	// CHAOS-3841: an optional LRU over the READ path's single-text (query)
+	// Embed calls only -- see embedcache's package doc. Wired here, not in
+	// falkorgraph.EmbedderFromEnv, so acr-projector's batch-embedding writer
+	// (cmd/acr-projector/runtime.go) never carries this cache: it is a
+	// read-path concern, and EmbedderFromEnv is the one construction point
+	// both binaries share. Wrap is a no-op (returns embedderOptions.Embedder
+	// unchanged) when the cache is not enabled or no embedder is configured.
+	embedCacheConfig, err := embedcache.ConfigFromEnv(os.LookupEnv)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("load context fabric embed query cache configuration: %w", err)
+	}
+	embedderOptions.Embedder = embedcache.Wrap(embedderOptions.Embedder, embedCacheConfig)
 	graphReader, err := falkorgraph.NewWithEmbedder(graphConfig, embedderOptions)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("initialize context fabric graph adapter: %w", err)
