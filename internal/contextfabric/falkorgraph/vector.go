@@ -212,15 +212,28 @@ func (a *Adapter) currentVectorIndexHNSWOptions(ctx context.Context, key string)
 // probe confirmed a node's post-recreate nearest-neighbor result is byte-for-
 // byte identical to its pre-recreate result).
 //
-// RESTORE ON FAILURE (Luna round-1 finding 2b): the pre-drop options are read
-// FIRST, before anything destructive happens. If the CREATE half of the cycle
-// fails, this attempts to recreate the index with the ORIGINAL options rather
-// than leave the target with no vector index at all -- a dropped-and-never-
-// restored index is a silent retrieval regression on whatever graph this ran
-// against, on top of whatever caused the create to fail in the first place.
-// A failed restore is reported LOUDLY (wrapped into the returned error, never
-// swallowed) rather than merely logged, because at that point the index is
-// genuinely absent and needs an operator's attention.
+// RESTORE ON FAILURE (Luna round-1 finding 2b, extended round-2 finding 2):
+// the pre-drop options are read FIRST, before anything destructive happens.
+// ANY failure AFTER the drop -- the CREATE erroring, OR create succeeding but
+// pollVectorIndexOperational timing out/erroring -- takes the restore path.
+// Round-1's fix only checked the create error and returned bare on a poll
+// failure, which left the ORIGINAL config unrecovered exactly when the new
+// index never confirmed operational: a dropped-and-never-restored (or
+// restored-to-the-WRONG-config) index is a silent retrieval regression on
+// top of whatever caused the failure. A failed restore is reported LOUDLY
+// (wrapped into the returned error, never swallowed) rather than merely
+// logged, because at that point the index is genuinely absent or in an
+// unknown state and needs an operator's attention.
+//
+// The restore itself re-drops before recreating with the original options
+// -- necessary, not decorative: if the new-options CREATE actually
+// succeeded and only the POLL failed, an index already exists on the key,
+// and createVectorIndexWithOptions('...',  original) would hit FalkorDB's
+// "already indexed" rejection and be silently treated as success (the same
+// idempotent tolerance createVectorIndex relies on) WITHOUT ever changing
+// the index's options back to original -- a restore that reports success
+// while doing nothing. Dropping first removes that stale new-options index
+// so the restore's create is the one that actually takes effect.
 //
 // Not called from any production path. The only callers are the sweep runner
 // and its tests/live probe.
@@ -232,20 +245,30 @@ func (a *Adapter) recreateVectorIndexWithOptions(ctx context.Context, key string
 	if err := a.dropVectorIndex(ctx, key); err != nil {
 		return err
 	}
-	if err := a.createVectorIndexWithOptions(ctx, key, dimension, opts); err != nil {
-		if !hadOriginal {
-			return fmt.Errorf("create vector index with new options failed, and no prior index existed to restore: %w", err)
+
+	createAndPoll := func(target hnswIndexOptions) error {
+		if err := a.createVectorIndexWithOptions(ctx, key, dimension, target); err != nil {
+			return err
 		}
-		if restoreErr := a.createVectorIndexWithOptions(ctx, key, dimension, original); restoreErr != nil {
-			return fmt.Errorf("create vector index with new options failed (%v) AND restoring the original options (%s) ALSO failed (%v) -- "+
-				"the vector index on key %q is now ABSENT, manual intervention required", err, original, restoreErr, key)
-		}
-		// Best-effort: wait for the restored index, but the failure below is
-		// secondary to having already reported the original create failure.
-		_ = a.pollVectorIndexOperational(ctx, key)
-		return fmt.Errorf("create vector index with new options (%s) failed: %w -- restored the original options (%s) successfully", opts, err, original)
+		return a.pollVectorIndexOperational(ctx, key)
 	}
-	return a.pollVectorIndexOperational(ctx, key)
+
+	failure := createAndPoll(opts)
+	if failure == nil {
+		return nil
+	}
+	if !hadOriginal {
+		return fmt.Errorf("recreate vector index with new options (%s) failed: %w, and no prior index existed to restore", opts, failure)
+	}
+	if dropErr := a.dropVectorIndex(ctx, key); dropErr != nil {
+		return fmt.Errorf("recreate vector index with new options (%s) failed (%v), AND could not drop it to attempt a restore (%v) -- "+
+			"the vector index on key %q is in an UNKNOWN state, manual intervention required", opts, failure, dropErr, key)
+	}
+	if restoreErr := createAndPoll(original); restoreErr != nil {
+		return fmt.Errorf("recreate vector index with new options (%s) failed (%v) AND restoring the original options (%s) ALSO failed (%v) -- "+
+			"the vector index on key %q is now ABSENT, manual intervention required", opts, failure, original, restoreErr, key)
+	}
+	return fmt.Errorf("recreate vector index with new options (%s) failed: %w -- restored the original options (%s) successfully", opts, failure, original)
 }
 
 // vectorParam converts a float32 vector into the ONLY list shape

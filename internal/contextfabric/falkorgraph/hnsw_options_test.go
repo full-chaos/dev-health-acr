@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // extractFetchK pulls the raw k FalkorDB is asked for out of a
@@ -313,7 +314,57 @@ func TestRecreateVectorIndexWithOptionsReportsLoudlyWhenRestoreAlsoFails(t *test
 	}
 }
 
-// The over-fetch formula, exactly: raw fetch size = (multiplier * limit) + 1.
+// Luna round-2 finding 2: a CREATE that SUCCEEDS but whose subsequent poll
+// times out must ALSO trigger the restore path -- round-1's fix only
+// checked the create error and returned bare on a poll failure, leaving the
+// original configuration unrecovered.
+func TestRecreateVectorIndexWithOptionsRestoresOriginalOptionsIfPollFailsAfterASuccessfulCreate(t *testing.T) {
+	var currentIsNewOptions bool
+	var creates []string
+	fake := &fakeConn{
+		queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+			if strings.HasPrefix(cypher, "CREATE VECTOR INDEX") {
+				creates = append(creates, cypher)
+				currentIsNewOptions = strings.Contains(cypher, "efRuntime:999")
+				return nil, nil // the CREATE itself succeeds both times.
+			}
+			return nil, nil
+		},
+		indexesFunc: func(ctx context.Context, graphKey string) ([]indexStatus, error) {
+			if currentIsNewOptions {
+				// The new-options index never reports OPERATIONAL -> its
+				// poll times out, even though its CREATE call succeeded.
+				return nil, nil
+			}
+			// Seen by the pre-drop read AND the restore's poll.
+			return []indexStatus{{
+				Label: labelSubject, Status: "OPERATIONAL",
+				Types: map[string][]string{propEmbedding: {"VECTOR"}},
+				Options: map[string]interface{}{propEmbedding: map[string]interface{}{
+					"dimension": int64(768), "M": int64(16), "efConstruction": int64(200), "efRuntime": int64(10),
+				}},
+			}}, nil
+		},
+	}
+	adapter := newFakeAdapter(t, fake)
+	adapter.config.RequestTimeout = 10 * time.Millisecond // fail the new-options poll fast, not after 30s.
+
+	err := adapter.recreateVectorIndexWithOptions(context.Background(), "k", 768, hnswIndexOptions{EfRuntime: 999})
+	if err == nil {
+		t.Fatal("expected an error reporting the poll timeout, even though restore succeeded")
+	}
+	if !strings.Contains(err.Error(), "restored the original options") || !strings.Contains(err.Error(), "successfully") {
+		t.Fatalf("a poll failure after a SUCCESSFUL create must still trigger the restore path, got: %v", err)
+	}
+	if len(creates) != 2 {
+		t.Fatalf("expected exactly 2 CREATE attempts (new options, then restore), got %d: %v", len(creates), creates)
+	}
+	if !strings.Contains(creates[1], "efRuntime:10") {
+		t.Fatalf("the restore's create should target the ORIGINAL options, got %q", creates[1])
+	}
+}
+
+// The over-fetch formula, exactly: raw fetch size = (multiplier × limit) + 1.
 func TestVectorSearchNodesWithOverFetchFormula(t *testing.T) {
 	cases := []struct {
 		multiplier, limit, wantFetchK int
