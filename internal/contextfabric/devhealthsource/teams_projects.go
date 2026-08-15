@@ -27,7 +27,13 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // required bumping ClickHouseSourceVersion to v4 and forcing
 // ErrProjectionSourceVersionChanged (a full rebuild) on every already-projected
 // organization, for content none of them asked for.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v1"
+//
+// v2 (CHAOS-3833, embed-text spec v2 §2/§4 Layer A): queryTeams emits the
+// canonicalized project_keys property the team template composes. An
+// already-projected organization's team nodes carry text without it, so
+// the bump forces the same deliberate rebuild ClickHouseSourceVersion v5
+// forces for its own producers -- one operator action covers both.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v2"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -285,14 +291,15 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 // DateTime64's timezone is display metadata; the comparison is on ticks.
 func queryTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const rowKey = "id"
-	statement := `SELECT id, name, ifNull(description, ''), provider, ifNull(native_team_key, ''), is_active, updated_at
+	statement := `SELECT id, name, ifNull(description, ''), provider, ifNull(native_team_key, ''), is_active, updated_at, project_keys
 FROM teams FINAL
 WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) + orderBy("updated_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var id, name, description, provider, nativeKey string
+		var projectKeys []string
 		var isActive uint8
 		var observedAt time.Time
-		if err := r.Scan(&id, &name, &description, &provider, &nativeKey, &isActive, &observedAt); err != nil {
+		if err := r.Scan(&id, &name, &description, &provider, &nativeKey, &isActive, &observedAt, &projectKeys); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
@@ -305,6 +312,11 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) +
 		if description != "" && description != name {
 			properties["description"] = stringScalar(description)
 		}
+		// CHAOS-3833 (embed-text spec §2): the team template's
+		// project_keys line, canonicalized at the producer (sorted,
+		// deduplicated, capped, joined) so an unordered source array never
+		// yields two different texts for the same row.
+		setStringProperty(properties, "project_keys", joinedSortedList(projectKeys, 10, 80, ", "), 0)
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject,
 			// falkorgraph's entitySearchText is Label + Aliases +

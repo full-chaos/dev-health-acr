@@ -109,15 +109,15 @@ func TestProducersEmitClosedValidityWindows(t *testing.T) {
 		case "FROM work_items AS w":
 			// A completed work item: valid from creation to completion.
 			tables[index].rows = [][]any{{"WIDGET-101", "repo-1", "example-org/widget-service",
-				"Investigate checkout flake", "done", "", at, created, uint8(1), ended}}
+				"Investigate checkout flake", "done", "", at, created, uint8(1), ended, "", "", "", []string{}}}
 		case "FROM git_pull_requests AS p":
 			// A merged pull request.
 			tables[index].rows = [][]any{{"repo-1", "example-org/widget-service", uint32(1042),
-				"Typed session tokens", "merged", at, created, uint8(1), ended}}
+				"Typed session tokens", "merged", at, created, uint8(1), ended, "", ""}}
 		case "FROM operational_incidents AS i":
 			// A resolved incident.
 			tables[index].rows = [][]any{{"incident-1", "repo-1", "example-org/widget-service",
-				"Widget incident", "resolved", "low", at, uint8(0), uint8(1), created, uint8(1), ended}}
+				"Widget incident", "resolved", "low", at, uint8(0), uint8(1), created, uint8(1), ended, ""}}
 		default:
 			tables[index].rows = nil
 		}
@@ -149,7 +149,7 @@ func TestProducersLeaveOpenIntervalsUnbounded(t *testing.T) {
 	for index, table := range tables {
 		if table.match == "FROM work_items AS w" {
 			tables[index].rows = [][]any{{"WIDGET-101", "repo-1", "example-org/widget-service",
-				"Investigate checkout flake", "in_progress", "", at, created, uint8(0), zeroTime}}
+				"Investigate checkout flake", "in_progress", "", at, created, uint8(0), zeroTime, "", "", "", []string{}}}
 			continue
 		}
 		tables[index].rows = nil
@@ -157,7 +157,7 @@ func TestProducersLeaveOpenIntervalsUnbounded(t *testing.T) {
 	// ci_pipeline_runs is not part of baseTables. A run still executing:
 	// started, never finished.
 	tables = append(tables, fakeTable{match: "FROM ci_pipeline_runs AS c", rows: [][]any{
-		{"run-1", "repo-1", "main", "running", "example-org/widget-service", at, created, uint8(0), zeroTime}}})
+		{"run-1", "repo-1", "main", "running", "example-org/widget-service", at, created, uint8(0), zeroTime, ""}}})
 	batch := projectOneBatch(t, tables)
 
 	for _, subject := range []string{"work_item:WIDGET-101", "ci_pipeline_run:run-1"} {
@@ -227,8 +227,14 @@ func TestSourceVersionIsBumpedForValidityWindows(t *testing.T) {
 	if devhealthsource.ClickHouseSourceVersion == "devhealthsource.clickhouse.v3" {
 		t.Fatal("emitting validity windows changes what this producer projects; the source version must advance past v3 so ErrProjectionSourceVersionChanged forces a rebuild")
 	}
-	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v4" {
-		t.Fatalf("ClickHouseSourceVersion = %q, want devhealthsource.clickhouse.v4", devhealthsource.ClickHouseSourceVersion)
+	// CHAOS-3833 advanced past CHAOS-3781's v4 for the same reason on a
+	// different axis: the embed-text producer fields change what this
+	// producer projects, so v4 must be as unreachable as v3 is.
+	if devhealthsource.ClickHouseSourceVersion == "devhealthsource.clickhouse.v4" {
+		t.Fatal("emitting the embed-text fields changes what this producer projects; the source version must advance past v4 so ErrProjectionSourceVersionChanged forces a rebuild")
+	}
+	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v5" {
+		t.Fatalf("ClickHouseSourceVersion = %q, want devhealthsource.clickhouse.v5", devhealthsource.ClickHouseSourceVersion)
 	}
 }
 
@@ -391,7 +397,7 @@ func TestPostMergeReviewEdgeCollapsesToADegenerateWindow(t *testing.T) {
 	}
 	tables = append(tables, fakeTable{match: "FROM git_pull_request_reviews AS r", rows: [][]any{
 		{"review-1", "repo-1", uint32(1042), "approved", submitted, "example-org/widget-service",
-			pullRequestCreated, uint8(1), pullRequestMerged}}})
+			pullRequestCreated, uint8(1), pullRequestMerged, "Typed session tokens"}}})
 	batch := projectOneBatch(t, tables)
 
 	// The review itself is untouched: a submitted review is never

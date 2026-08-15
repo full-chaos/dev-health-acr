@@ -37,8 +37,11 @@ func TestTeamsProjectsSourceDisabledIsANoop(t *testing.T) {
 // queryProjects SELECT, so a change to either statement's projection list
 // without a matching change here fails at Scan rather than silently
 // asserting the wrong column.
-func teamRow(id, name, description, provider, nativeKey string, isActive uint8, updatedAt time.Time) []any {
-	return []any{id, name, description, provider, nativeKey, isActive, updatedAt}
+func teamRow(id, name, description, provider, nativeKey string, isActive uint8, updatedAt time.Time, projectKeys ...string) []any {
+	// projectKeys is variadic so the many callers that predate CHAOS-3833
+	// stay unchanged; an omitted argument models a team with no
+	// project_keys (a nil Array(String) scan).
+	return []any{id, name, description, provider, nativeKey, isActive, updatedAt, []string(projectKeys)}
 }
 
 func projectRow(id, name, projectKey, provider, state, url string, isActive uint8, updatedAt time.Time) []any {

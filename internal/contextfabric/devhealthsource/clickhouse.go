@@ -18,7 +18,21 @@ import (
 // onto every batch it produces. Checkpoints and telemetry are keyed by it.
 const SourceName = "dev_health_clickhouse"
 
-// ClickHouseSourceVersion is bumped to v4 by CHAOS-3781: every producer in
+// ClickHouseSourceVersion is bumped to v5 by CHAOS-3833 (embed-text spec v2
+// §2/§4 Layer A): the producers emit the per-kind embed-text fields --
+// work_items gains the first-colon ticket-key ALIAS plus type/labels/
+// project_name/native_team_key properties, git_pull_requests gains
+// number/repo/branch and the 1,200-rune body head, deployments gain
+// release_ref/repo, ci_pipeline_runs gain pipeline_name/repo,
+// git_pull_request_reviews gain the joined PR title/number/repo, incidents
+// gain the 800-rune description head, and repos gain parsed tags. Aliases
+// and properties feed the shared search-text composition, so
+// already-projected graphs hold nodes whose text (and vectors) no
+// identical-looking recomposition could reproduce; the bump forces
+// ErrProjectionSourceVersionChanged until the operator-prescribed
+// `acr-projector rebuild --org` reprojects (and re-embeds) every row.
+//
+// (v4, CHAOS-3781: every producer in
 // tables.go now emits a VALID-TIME window (ValidFrom/ValidTo) derived from
 // its source row's own immutable interval columns -- see validity.go for
 // the mapping and the half-open convention.
@@ -33,7 +47,7 @@ const SourceName = "dev_health_clickhouse"
 // remove. Forcing ErrProjectionSourceVersionChanged makes the
 // operator-prescribed rebuild (acr-projector rebuild --org) happen
 // deliberately; only a rebuilt graph can honestly answer on a non-current
-// axis.
+// axis.)
 //
 // (v3, CHAOS-3785: queryWorkItems,
 // queryWorkItemDependencies, and queryWorkItemHierarchy relax their repos
@@ -56,7 +70,7 @@ const SourceName = "dev_health_clickhouse"
 // (v2, CHAOS-3779 codex round-2 H2 residual: queryWorkItemDependencies'
 // RelationshipID began embedding relationship_type (previously (source,
 // target) only), and queryWorkItemHierarchy was a new producer.)
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v4"
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v5"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and
