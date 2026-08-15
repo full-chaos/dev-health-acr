@@ -25,6 +25,9 @@ import (
 //	ACR_TEST_EMBED_BASE_URL=... ACR_TEST_EMBED_MODEL=... ACR_TEST_EMBED_DIMENSION=... \
 //	[ACR_TEST_EMBED_API_KEY=...] \
 //	[ACR_TEST_EMBED_TIMEOUT=45s] [ACR_TEST_EMBED_MAX_TRANSPORT_RETRIES=5] \
+//	[ACR_TEST_EMBED_MAX_BATCH=...] [ACR_TEST_EMBED_MAX_TEXT_RUNES=...] \
+//	[ACR_TEST_EMBED_PREFIX_FAMILY=...] [ACR_TEST_EMBED_EXPECT_RESPONSE_MODEL=...] \
+//	[ACR_TEST_EMBED_PROVIDER_LOCALITY=local|remote] [ACR_TEST_EMBED_INCLUDE_BODIES=true|false] \
 //	[ACR_TEST_ORACLE_TOPK=20] [ACR_TEST_ORACLE_HARD_NEGATIVES=5] [ACR_TEST_ORACLE_OUTPUT=/path/to/report.json] \
 //	[ACR_TEST_ORACLE_INCLUDE_RAW_TEXT=false] \
 //	  go test ./internal/contextfabric/falkorgraph -run ExactSearchOracle -v
@@ -39,6 +42,19 @@ import (
 // which are too tight for a real remote embedder call -- set both (production
 // runs remote embedders at 45s / 5 retries) or the oracle's own embed calls
 // fail with "context deadline exceeded" against real network latency.
+//
+// ACR_TEST_EMBED_MAX_BATCH, ACR_TEST_EMBED_MAX_TEXT_RUNES,
+// ACR_TEST_EMBED_PREFIX_FAMILY, ACR_TEST_EMBED_EXPECT_RESPONSE_MODEL,
+// ACR_TEST_EMBED_PROVIDER_LOCALITY, and ACR_TEST_EMBED_INCLUDE_BODIES are
+// also OPTIONAL (CHAOS-3849 round 3, review finding 3, see benchmarkLookup):
+// each maps to its production embedprovider.Env* counterpart and left unset
+// falls through to embedprovider's own default. PREFIX_FAMILY and
+// INCLUDE_BODIES are SEMANTIC, identity-bearing (CHAOS-3833/3836)
+// configuration -- an oracle run against a production deployment that sets
+// either needs the SAME value here, or fetchEmbedderFenceCorpus's stamped
+// identity predicate will not match what that deployment actually wrote,
+// and the corpus reads empty for reasons that have nothing to do with
+// retrieval quality.
 //
 // PRECONDITION, checked once before any case is scored (codex round-1 finding
 // 1): the ORG-LEVEL AC-3778-7 fence (ensureVectorReadable) must pass. That

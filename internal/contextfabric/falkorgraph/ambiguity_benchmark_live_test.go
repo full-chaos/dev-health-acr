@@ -23,6 +23,9 @@ import (
 //	ACR_TEST_EMBED_BASE_URL=... ACR_TEST_EMBED_MODEL=... ACR_TEST_EMBED_DIMENSION=... \
 //	[ACR_TEST_EMBED_API_KEY=...] \
 //	[ACR_TEST_EMBED_TIMEOUT=45s] [ACR_TEST_EMBED_MAX_TRANSPORT_RETRIES=5] \
+//	[ACR_TEST_EMBED_MAX_BATCH=...] [ACR_TEST_EMBED_MAX_TEXT_RUNES=...] \
+//	[ACR_TEST_EMBED_PREFIX_FAMILY=...] [ACR_TEST_EMBED_EXPECT_RESPONSE_MODEL=...] \
+//	[ACR_TEST_EMBED_PROVIDER_LOCALITY=local|remote] [ACR_TEST_EMBED_INCLUDE_BODIES=true|false] \
 //	  go test ./internal/contextfabric/falkorgraph -run AmbiguityBenchmark -v
 //
 // ACR_TEST_EMBED_API_KEY is OPTIONAL: a keyless local embedder is still
@@ -39,6 +42,19 @@ import (
 // -- a benchmark run against a remote embedder needs both raised (production
 // runs remote embedders at 45s / 5 retries) or every embed call fails with
 // "context deadline exceeded".
+//
+// ACR_TEST_EMBED_MAX_BATCH, ACR_TEST_EMBED_MAX_TEXT_RUNES,
+// ACR_TEST_EMBED_PREFIX_FAMILY, ACR_TEST_EMBED_EXPECT_RESPONSE_MODEL,
+// ACR_TEST_EMBED_PROVIDER_LOCALITY, and ACR_TEST_EMBED_INCLUDE_BODIES are
+// also OPTIONAL (CHAOS-3849 round 3, review finding 3): each maps to its
+// production embedprovider.Env* counterpart. Left unset, each falls through
+// to embedprovider's own default for that field (see benchmarkLookup's
+// per-case comments) -- correct for most runs. PREFIX_FAMILY and
+// INCLUDE_BODIES are the two that matter most: both are SEMANTIC,
+// identity-bearing (CHAOS-3833/3836) configuration that changes what text is
+// actually embedded, so a run against a production deployment that sets
+// either of these needs the SAME value here, or the harness measures a
+// different embedding function than the one being evaluated.
 //
 // EVERY input is a dedicated ACR_TEST_* name, never the production
 // ACR_CONTEXT_FABRIC_* names (codex round-1 F6). The earlier version documented
@@ -344,6 +360,55 @@ func benchmarkLookup(key string) (string, bool) {
 		return value("ACR_TEST_EMBED_MAX_TRANSPORT_RETRIES")
 	case embedprovider.EnvSimilarityFloor:
 		return value("ACR_TEST_EMBED_SIMILARITY_FLOOR")
+	case embedprovider.EnvMaxBatch:
+		// OPTIONAL (CHAOS-3849 round 3, review finding 3): unset falls
+		// through to embedprovider.DefaultMaxBatch. Not identity-bearing --
+		// a batch-size mismatch changes request shape, not what gets
+		// embedded -- but still worth matching production so a benchmark run
+		// measures the same request pattern, not an artificially
+		// smaller/larger one.
+		return value("ACR_TEST_EMBED_MAX_BATCH")
+	case embedprovider.EnvMaxTextRunes:
+		// OPTIONAL (CHAOS-3849 round 3, review finding 3): unset falls
+		// through to embedprovider.DefaultMaxTextRunes. A mismatch here
+		// changes which characters of a long text actually reach the
+		// embedder (TruncateRunes), silently altering what gets embedded
+		// without any error.
+		return value("ACR_TEST_EMBED_MAX_TEXT_RUNES")
+	case embedprovider.EnvPrefixFamily:
+		// OPTIONAL (CHAOS-3849 round 3, review finding 3): unset means
+		// PrefixFamilyNone (see the constant's own doc comment). This is
+		// SEMANTIC, identity-bearing configuration (CHAOS-3836) -- the
+		// applied task-prefix pair changes what text is actually embedded,
+		// so a harness left on PrefixFamilyNone against a production
+		// deployment that configures a real family measures a different
+		// embedding function entirely, silently.
+		return value("ACR_TEST_EMBED_PREFIX_FAMILY")
+	case embedprovider.EnvExpectResponseModel:
+		// OPTIONAL (CHAOS-3849 round 3, review finding 3): unset means the
+		// server must report exactly EnvModel's id (see its own doc
+		// comment). Only needs setting for a provider known to rename its
+		// own id in the response; leaving it unset is the correct default
+		// for most harness runs, not an omission.
+		return value("ACR_TEST_EMBED_EXPECT_RESPONSE_MODEL")
+	case embedprovider.EnvProviderLocality:
+		// OPTIONAL (CHAOS-3849 round 3, review finding 3): unset means
+		// "remote" (see BodiesIncluded's doc comment) -- a SEMANTIC,
+		// identity-bearing (CHAOS-3833) fail-closed default, not an
+		// omission by itself. Mapped so a harness run against a genuinely
+		// local test embedder can affirmatively declare that, matching
+		// whatever production declares for the SAME endpoint rather than
+		// silently taking the fail-closed default regardless of what
+		// production is actually configured to do.
+		return value("ACR_TEST_EMBED_PROVIDER_LOCALITY")
+	case embedprovider.EnvIncludeBodies:
+		// OPTIONAL (CHAOS-3849 round 3, review finding 3): unset means the
+		// locality-derived default applies (see BodiesIncluded). SEMANTIC,
+		// identity-bearing (CHAOS-3833): the effective value joins the
+		// composition tag, so a harness silently defaulting this away from
+		// production's value measures a different composed search text,
+		// not merely a differently-configured one.
+		return value("ACR_TEST_EMBED_INCLUDE_BODIES")
 	case embedprovider.EnvAllowInsecureBaseURL:
 		return "true", true
 	default:
@@ -376,40 +441,165 @@ func TestBenchmarkLookupEmbedAPIKey(t *testing.T) {
 	})
 }
 
-// TestBenchmarkLookupEmbedTimeoutAndRetries is the CHAOS-3849 round-2
-// regression: without cases for embedprovider.EnvTimeout and
-// embedprovider.EnvMaxTransportRetries, benchmarkLookup falls through to its
-// default branch and reports neither configured, no matter what
-// ACR_TEST_EMBED_TIMEOUT / ACR_TEST_EMBED_MAX_TRANSPORT_RETRIES hold --
-// silently pinning every benchmark/oracle run to
-// embedprovider.DefaultTimeout (250ms, deliberately loopback-tuned for a
-// COLD LOCAL embedder call) and DefaultMaxTransportRetries (0). A real
-// remote embedder cannot complete within 250ms, so a run against one fails
-// every embed call with "context deadline exceeded" -- observed live
-// against a real 35,986-vector org once the round-1 credential fix got past
-// the 401.
-func TestBenchmarkLookupEmbedTimeoutAndRetries(t *testing.T) {
+// TestBenchmarkLookupOptionalEmbedProviderEnvVars is the CHAOS-3849 round-2
+// AND round-3 regression, folded into one table: without a benchmarkLookup
+// case, each of these embedprovider Env* keys falls through to the default
+// branch and reports "not configured" no matter what its dedicated
+// ACR_TEST_* variable holds, silently pinning every benchmark/oracle run to
+// embedprovider's own default for that field instead of a value the harness
+// operator actually asked for.
+//
+//   - EnvTimeout / EnvMaxTransportRetries (round 2): embedprovider.DefaultTimeout
+//     (250ms) is deliberately loopback-tuned for a COLD LOCAL embedder call,
+//     not a network round trip; DefaultMaxTransportRetries is 0. A real
+//     remote embedder cannot complete within 250ms, so a run against one
+//     fails every embed call with "context deadline exceeded" -- observed
+//     live against a real 35,986-vector org once the round-1 credential fix
+//     got past the 401.
+//   - EnvMaxBatch / EnvMaxTextRunes / EnvPrefixFamily / EnvExpectResponseModel /
+//     EnvProviderLocality / EnvIncludeBodies (round-3 review finding 3): any
+//     of these silently defaulting can shift the TEST embedder's semantics
+//     -- and PrefixFamily/IncludeBodies specifically shift its STAMPED
+//     IDENTITY (CHAOS-3833/3836 composition tag) -- away from what
+//     production actually runs, invalidating a measurement without an
+//     error, not merely mistiming it.
+//
+// The retries case uses "5" (a valid integer), not a duration string:
+// MaxTransportRetries is parsed with envInt (config.go), so a value like
+// "45s" this lookup-translation layer would happily echo back is exactly
+// the kind of thing that only breaks one layer downstream, in ConfigFromEnv,
+// where this test could not see it fail.
+func TestBenchmarkLookupOptionalEmbedProviderEnvVars(t *testing.T) {
 	tests := []struct {
-		name   string
-		envKey string
-		key    string
+		name      string
+		envKey    string
+		key       string
+		wantValue string
 	}{
-		{"timeout", "ACR_TEST_EMBED_TIMEOUT", embedprovider.EnvTimeout},
-		{"max transport retries", "ACR_TEST_EMBED_MAX_TRANSPORT_RETRIES", embedprovider.EnvMaxTransportRetries},
+		{"timeout", "ACR_TEST_EMBED_TIMEOUT", embedprovider.EnvTimeout, "45s"},
+		{"max transport retries", "ACR_TEST_EMBED_MAX_TRANSPORT_RETRIES", embedprovider.EnvMaxTransportRetries, "5"},
+		{"max batch", "ACR_TEST_EMBED_MAX_BATCH", embedprovider.EnvMaxBatch, "32"},
+		{"max text runes", "ACR_TEST_EMBED_MAX_TEXT_RUNES", embedprovider.EnvMaxTextRunes, "4000"},
+		{"prefix family", "ACR_TEST_EMBED_PREFIX_FAMILY", embedprovider.EnvPrefixFamily, "e5"},
+		{"expect response model", "ACR_TEST_EMBED_EXPECT_RESPONSE_MODEL", embedprovider.EnvExpectResponseModel, "text-embedding-3-small-v2"},
+		{"provider locality", "ACR_TEST_EMBED_PROVIDER_LOCALITY", embedprovider.EnvProviderLocality, "local"},
+		{"include bodies", "ACR_TEST_EMBED_INCLUDE_BODIES", embedprovider.EnvIncludeBodies, "true"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+" set returns the configured value", func(t *testing.T) {
-			t.Setenv(tt.envKey, "45s")
+			t.Setenv(tt.envKey, tt.wantValue)
 			got, ok := benchmarkLookup(tt.key)
-			if !ok || got != "45s" {
-				t.Fatalf("benchmarkLookup(%s) = (%q, %v), want (\"45s\", true)", tt.key, got, ok)
+			if !ok || got != tt.wantValue {
+				t.Fatalf("benchmarkLookup(%s) = (%q, %v), want (%q, true)", tt.key, got, ok, tt.wantValue)
 			}
 		})
 		t.Run(tt.name+" unset reports not-configured, not an error", func(t *testing.T) {
 			t.Setenv(tt.envKey, "")
 			got, ok := benchmarkLookup(tt.key)
 			if ok || got != "" {
-				t.Fatalf("benchmarkLookup(%s) = (%q, %v), want (\"\", false) when %s is unset -- loopback-default local-embedder runs must remain supported", tt.key, got, ok, tt.envKey)
+				t.Fatalf("benchmarkLookup(%s) = (%q, %v), want (\"\", false) when %s is unset -- embedprovider's own default for this field must remain reachable", tt.key, got, ok, tt.envKey)
+			}
+		})
+	}
+}
+
+// embedproviderEnvVars is the CHAOS-3849 round-3 review finding 3 closure
+// list: every embedprovider.Env* configuration key that exists today. The
+// package exports no list of its own (see the finding), so this is
+// maintained by hand -- but TestBenchmarkLookupCoversEveryEmbedproviderEnvVar
+// below makes an omission from benchmarkLookup LOUD rather than silent: a
+// future embedprovider Env* addition not also added to both this slice AND
+// benchmarkLookup's switch fails a test, instead of quietly defaulting a
+// benchmark/oracle run's embedder configuration away from what was asked of
+// it. Keep in sync with the const block in
+// internal/contextfabric/embedprovider/config.go.
+var embedproviderEnvVars = []string{
+	embedprovider.EnvProvider,
+	embedprovider.EnvBaseURL,
+	embedprovider.EnvModel,
+	embedprovider.EnvDimension,
+	embedprovider.EnvAPIKey,
+	embedprovider.EnvSimilarityFloor,
+	embedprovider.EnvTimeout,
+	embedprovider.EnvMaxBatch,
+	embedprovider.EnvMaxTextRunes,
+	embedprovider.EnvPrefixFamily,
+	embedprovider.EnvExpectResponseModel,
+	embedprovider.EnvMaxTransportRetries,
+	embedprovider.EnvAllowInsecureBaseURL,
+	embedprovider.EnvProviderLocality,
+	embedprovider.EnvIncludeBodies,
+}
+
+// benchmarkLookupEnvVarFor is embedproviderEnvVars' companion: the exact
+// ACR_TEST_* variable name benchmarkLookup's switch reads for each
+// production key, EXCEPT EnvAllowInsecureBaseURL (see
+// TestBenchmarkLookupCoversEveryEmbedproviderEnvVar) which has no dedicated
+// variable at all -- benchmarkLookup answers it with a fixed policy value
+// regardless of environment. Kept as its own map (rather than merged into
+// benchmarkLookup itself) so the closure test's expectation is written
+// independently of the switch it is checking -- a copy-paste of the switch
+// into the test would prove nothing.
+var benchmarkLookupEnvVarFor = map[string]string{
+	embedprovider.EnvProvider:            "ACR_TEST_EMBED_PROVIDER",
+	embedprovider.EnvBaseURL:             "ACR_TEST_EMBED_BASE_URL",
+	embedprovider.EnvModel:               "ACR_TEST_EMBED_MODEL",
+	embedprovider.EnvDimension:           "ACR_TEST_EMBED_DIMENSION",
+	embedprovider.EnvAPIKey:              "ACR_TEST_EMBED_API_KEY",
+	embedprovider.EnvSimilarityFloor:     "ACR_TEST_EMBED_SIMILARITY_FLOOR",
+	embedprovider.EnvTimeout:             "ACR_TEST_EMBED_TIMEOUT",
+	embedprovider.EnvMaxBatch:            "ACR_TEST_EMBED_MAX_BATCH",
+	embedprovider.EnvMaxTextRunes:        "ACR_TEST_EMBED_MAX_TEXT_RUNES",
+	embedprovider.EnvPrefixFamily:        "ACR_TEST_EMBED_PREFIX_FAMILY",
+	embedprovider.EnvExpectResponseModel: "ACR_TEST_EMBED_EXPECT_RESPONSE_MODEL",
+	embedprovider.EnvMaxTransportRetries: "ACR_TEST_EMBED_MAX_TRANSPORT_RETRIES",
+	embedprovider.EnvProviderLocality:    "ACR_TEST_EMBED_PROVIDER_LOCALITY",
+	embedprovider.EnvIncludeBodies:       "ACR_TEST_EMBED_INCLUDE_BODIES",
+}
+
+// TestBenchmarkLookupCoversEveryEmbedproviderEnvVar is the round-3 class-
+// closure test (review finding 3): for every key in embedproviderEnvVars,
+// benchmarkLookup must be a REAL mapping, not the unmapped default branch --
+// which ALSO returns ("", false) for an unset optional field, so the two are
+// indistinguishable from a bare "is it falsy" check. This proves mapping by
+// ROUND-TRIPPING a unique sentinel through each key's dedicated ACR_TEST_*
+// variable (benchmarkLookupEnvVarFor, written independently of
+// benchmarkLookup's own switch) via t.Setenv and confirming benchmarkLookup
+// echoes it back -- an unmapped key would fall to the default branch and
+// return ("", false) instead of the sentinel, failing the test.
+//
+// EnvAllowInsecureBaseURL is the one exception: benchmarkLookup deliberately
+// answers it with a fixed policy value ("true", true) regardless of any
+// environment variable (see its case), so it is checked for that fixed value
+// instead of a sentinel round-trip, which would fail against a correctly
+// mapped but intentionally non-configurable key.
+//
+// A key present in embedprovider's const block but missing from
+// embedproviderEnvVars would not be caught by this test -- that half of the
+// closure is embedproviderEnvVars' own doc-comment obligation, not something
+// a test in this package can enumerate without the source package exporting
+// a list (see that comment).
+func TestBenchmarkLookupCoversEveryEmbedproviderEnvVar(t *testing.T) {
+	for _, key := range embedproviderEnvVars {
+		key := key
+		t.Run(key, func(t *testing.T) {
+			if key == embedprovider.EnvAllowInsecureBaseURL {
+				got, ok := benchmarkLookup(key)
+				if !ok || got != "true" {
+					t.Fatalf("benchmarkLookup(%s) = (%q, %v), want the fixed policy value (\"true\", true) -- benchmarkLookup has no case for this key, or its case regressed", key, got, ok)
+				}
+				return
+			}
+			envName, known := benchmarkLookupEnvVarFor[key]
+			if !known {
+				t.Fatalf("embedproviderEnvVars lists %s but benchmarkLookupEnvVarFor does not -- both must be kept in sync", key)
+			}
+			sentinel := "sentinel-value-for-" + key
+			t.Setenv(envName, sentinel)
+			got, ok := benchmarkLookup(key)
+			if !ok || got != sentinel {
+				t.Fatalf("benchmarkLookup(%s) = (%q, %v) with %s=%q set, want (%q, true) -- benchmarkLookup has no case mapping this embedprovider Env* key to its ACR_TEST_* variable, so it silently defaults instead of erroring",
+					key, got, ok, envName, sentinel, sentinel)
 			}
 		})
 	}

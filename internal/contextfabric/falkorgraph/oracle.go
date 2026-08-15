@@ -173,12 +173,34 @@ const oracleFetchBatchSize = 5000
 //     driver change that reintroduces an implicit limit, ...) becomes a loud
 //     failure here instead of a quietly shrunken universe.
 //
-// Malformed rows (a missing kind/canonical-id/embedding, or an embedding that
-// fails decodeVectorProperty) are still skipped rather than failing the whole
-// fetch -- one corrupt node must not blank out a 36k-vector baseline the rest
-// of the corpus could still support -- but the skipped count is now load-
-// bearing: it is part of what step 2 reconciles against count(n), and is
-// logged (slog, Warn) whenever it is nonzero.
+// Parameterized $skip/$limit is exercised live against real FalkorDB, not
+// merely against fakeConn: the 2026-08-15 06:04 run paginated a real
+// 35,986-vector org to exactly that count across 8 pages of
+// oracleFetchBatchSize, and the count(n) closure check passed -- a server
+// that rejected parameterized SKIP/LIMIT would have errored the fetch, not
+// silently returned the right total, so this is not a "fix it back to a
+// literal" candidate.
+//
+// Both this query AND countEmbedderFenceCorpus's also require
+// n.<kind>/n.<canonical-id> IS NOT NULL (CHAOS-3849 round 3): FalkorDB's own
+// uniqueness constraint on (org, kind, canonical_id) does not apply to a row
+// where kind or canonical_id is NULL, so a NULL-keyed row is not covered by
+// the ORDER BY's totality guarantee in point 1 above and could duplicate or
+// vanish across a page boundary while the row COUNT stayed accidentally
+// balanced -- a corruption the count(n) check alone cannot catch, because it
+// only verifies the total, not that the total was assembled correctly.
+// Excluding NULL-keyed rows at the predicate level, identically on both
+// queries, removes them from consideration on both sides of the closure
+// check instead of relying on pagination to order what the constraint does
+// not cover.
+//
+// Malformed rows (a present-but-undecodable kind/canonical-id/embedding --
+// NULL-keyed rows are now excluded by the predicate above, not encountered
+// here) are still skipped rather than failing the whole fetch -- one corrupt
+// node must not blank out a 36k-vector baseline the rest of the corpus could
+// still support -- but the skipped count is now load-bearing: it is part of
+// what step 2 reconciles against count(n), and is logged (slog, Warn)
+// whenever it is nonzero.
 func (a *Adapter) fetchEmbedderFenceCorpus(ctx context.Context, key, orgID string) ([]oracleVector, error) {
 	if a.embedder == nil {
 		return nil, errOracleEmbedderRequired
@@ -198,8 +220,9 @@ func (a *Adapter) fetchEmbedderFenceCorpus(ctx context.Context, key, orgID strin
 
 	cypher := fmt.Sprintf(
 		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s = $identity "+
+			"AND n.%s IS NOT NULL AND n.%s IS NOT NULL "+
 			"RETURN n ORDER BY n.%s, n.%s SKIP $skip LIMIT $limit",
-		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity, propKind, propCanonicalID,
+		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity, propKind, propCanonicalID, propKind, propCanonicalID,
 	)
 
 	corpus := make([]oracleVector, 0, expected)
@@ -218,6 +241,10 @@ func (a *Adapter) fetchEmbedderFenceCorpus(ctx context.Context, key, orgID strin
 				skippedMalformed++
 				continue
 			}
+			// The predicate's IS NOT NULL guards keep a NULL-keyed row out of
+			// rows entirely (round 3); this still catches the narrower case
+			// of a present-but-non-string or empty-string kind/canonical-id,
+			// which decodes to "" here without having been NULL server-side.
 			kind := propStringValue(n.Properties[propKind])
 			canonicalID := propStringValue(n.Properties[propCanonicalID])
 			if kind == "" || canonicalID == "" {
@@ -261,14 +288,20 @@ var errOracleCorpusSizeMismatch = errors.New("exact-search oracle corpus assembl
 
 // countEmbedderFenceCorpus runs the aggregate count(*) counterpart of
 // fetchEmbedderFenceCorpus's row-returning query, under the IDENTICAL
-// predicate. An aggregate result is a single scalar row, not a bulk result
-// set, so it is NOT subject to FalkorDB's RESULTSET_SIZE cap -- this is what
-// makes it a trustworthy verification oracle for the paginated fetch rather
-// than just another query that could itself be silently truncated.
+// predicate -- including the CHAOS-3849 round-3 NULL-key guards on kind and
+// canonical-id, which must match the paginated query exactly or the two
+// sides of the closure check would be counting different row sets, not
+// verifying the same one. An aggregate result is a single scalar row, not a
+// bulk result set, so it is NOT subject to FalkorDB's RESULTSET_SIZE cap --
+// this is what makes it a trustworthy verification oracle for the paginated
+// fetch rather than just another query that could itself be silently
+// truncated.
 func (a *Adapter) countEmbedderFenceCorpus(ctx context.Context, key string, predicateParams map[string]interface{}) (int, error) {
 	cypher := fmt.Sprintf(
-		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s = $identity RETURN count(n) AS total",
-		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity,
+		"MATCH (n:%s {%s:$org}) WHERE n.%s IS NOT NULL AND n.%s = $identity "+
+			"AND n.%s IS NOT NULL AND n.%s IS NOT NULL "+
+			"RETURN count(n) AS total",
+		labelSubject, propOrgID, propEmbedding, propEmbedderIdentity, propKind, propCanonicalID,
 	)
 	rows, err := a.api.query(ctx, key, cypher, predicateParams, true)
 	if err != nil {
