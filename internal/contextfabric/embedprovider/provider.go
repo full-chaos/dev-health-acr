@@ -19,6 +19,7 @@ type Embedder struct {
 	client   openai.Client
 	config   Config
 	identity contextfabric.EmbedderIdentity
+	prefixes PrefixPair
 }
 
 var _ contextfabric.Embedder = (*Embedder)(nil)
@@ -38,6 +39,9 @@ func New(cfg Config) (*Embedder, error) {
 			Model:     strings.TrimSpace(cfg.Model),
 			Dimension: cfg.Dimension,
 		},
+		// validate() already rejected any unrecognized family, so this
+		// lookup always hits.
+		prefixes: knownPrefixFamilies[cfg.resolvedPrefixFamily()],
 	}, nil
 }
 
@@ -66,6 +70,75 @@ func (e *Embedder) MaxTextRunes() int { return e.config.MaxTextRunes }
 
 // MaxBatch exposes the per-request batch bound.
 func (e *Embedder) MaxBatch() int { return e.config.MaxBatch }
+
+// DocumentPrefix returns the task prefix this embedder's configured
+// PrefixFamily requires on document-side (storage) text, or "" when no
+// family is configured (CHAOS-3836; spec §6 T6). It lives on the embedder,
+// not on the graph adapter, for the same reason SimilarityFloor does: a task
+// prefix is a property of the EMBEDDING MODEL, so it must travel with the
+// model rather than with the caller composing text for it. See
+// ApplyDocumentPrefix.
+func (e *Embedder) DocumentPrefix() string { return e.prefixes.Document }
+
+// QueryPrefix returns the task prefix this embedder's configured
+// PrefixFamily requires on query-side (search) text, or "" when no family is
+// configured. See ApplyQueryPrefix.
+func (e *Embedder) QueryPrefix() string { return e.prefixes.Query }
+
+// ApplyDocumentPrefix prepends DocumentPrefix to text, or returns text
+// unchanged when no family is configured.
+//
+// This package does not call it itself: Embed has no way to know whether the
+// texts it is handed are document-side (the write/projection path, batched)
+// or query-side (the read path, one question at a time) -- that distinction
+// exists only at the call site, exactly like the existing MaxTextRunes /
+// embedMaxRunes split, where this package exposes the budget and the caller
+// applies TruncateRunes before Embed. The write-path caller composing SUBJECT
+// text for storage embedding calls this immediately before that text reaches
+// Embed.
+//
+// CALLERS MUST NOT ALSO PRE-TRUNCATE TO MaxTextRunes FOR THIS PURPOSE
+// (round-1 review P1 correction: an earlier revision of this doc comment
+// said the opposite). This method budgets the prefix into MaxTextRunes
+// itself -- text is truncated to (MaxTextRunes - len(DocumentPrefix)) runes
+// BEFORE the prefix is prepended -- so the combined result is always <=
+// MaxTextRunes and Embed's own internal truncation is provably a no-op on
+// it. Pre-truncating to the FULL MaxTextRunes first and then prepending
+// would make the prefixed text LONGER than MaxTextRunes, so Embed's
+// truncation would cut retrieval-bearing runes off the tail to make room for
+// a prefix it never knew was there -- and by a different amount than
+// ApplyQueryPrefix would cut, since the two prefixes differ in length. A
+// caller MAY still truncate first for an unrelated reason (e.g. a shared
+// composition budget upstream of prefixing); doing so is harmless, because
+// this method's own truncation only ever shrinks further, never grows, what
+// it is handed.
+//
+// Idempotent: a text that already begins with DocumentPrefix is returned
+// unchanged rather than prefixed again (round-1 review P2). See
+// applyPrefixWithBudget for the accepted false-positive this implies.
+func (e *Embedder) ApplyDocumentPrefix(text string) string {
+	return applyPrefixWithBudget(e.prefixes.Document, text, e.config.MaxTextRunes)
+}
+
+// ApplyQueryPrefix prepends QueryPrefix to text, or returns text unchanged
+// when no family is configured. The read-path caller embedding a QUESTION
+// for search calls this on the extracted term immediately before Embed.
+// Same budgeting and idempotency contract as ApplyDocumentPrefix; see its
+// doc comment.
+func (e *Embedder) ApplyQueryPrefix(text string) string {
+	return applyPrefixWithBudget(e.prefixes.Query, text, e.config.MaxTextRunes)
+}
+
+// PrefixTagComponent is this embedder's contribution to the embed-text
+// composition tag (embed-text spec §4 Layer C, e.g. the "pnomic" in
+// "t2:r2000:b1:pnomic"). Changing the configured prefix family changes vector
+// semantics exactly like a rune-cap or body-gate change, so it must fold into
+// the same write-stamp/read-fence discriminator. This package exposes the
+// literal only; it does not compose or write the tag itself -- falkorgraph's
+// identity/vector_projection code owns that.
+func (e *Embedder) PrefixTagComponent() string {
+	return "p" + string(e.config.resolvedPrefixFamily())
+}
 
 // Embed returns one vector per input text, in input order.
 //
