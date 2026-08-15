@@ -71,13 +71,18 @@ explicit `EMBED_PROVIDER_LOCALITY`/`EMBED_INCLUDE_BODIES` config, unset ⇒
 remote ⇒ bodies OFF, never URL-inferred). Every field is capped INSIDE
 the composition, and `embedprovider.MinimumMaxTextRunes` (2,000, the
 validation floor) covers the largest complete template -- which is what
-makes lexical/vector byte-identity UNCONDITIONAL for templated kinds; the
-only owned divergence is the embed-side tail truncation of the unbounded
-compositions, episode AND content text (lexical indexes the full composed
-text, vector its first MaxTextRunes runes of the SAME composition -- a
-shared-prefix guarantee for those two kinds, deliberately uncapped because
-capping the shared composition would regress lexical retrieval, the spec's
-own T3 rollback criterion). No template may drop aliases or previous names
+makes lexical/vector byte-identity UNCONDITIONAL for templated kinds. The
+boundary of that claim is the `subjectSearchText` switch itself, defined by
+ROUTING rather than a prose list: byte-identity holds for exactly the kinds
+the switch declares a template for; every other composition -- episode
+text, content text, and any entity kind without a declared template, which
+falls through to the uncapped `entitySearchText` fallback (decision and
+metric today, every future kind until given a template) -- is unbounded and
+carries the shared-prefix guarantee instead (lexical indexes the full
+composed text, vector its first MaxTextRunes runes of the SAME composition;
+deliberately uncapped because capping the shared composition would regress
+lexical retrieval, the spec's own T3 rollback criterion). No template may
+drop aliases or previous names
 (`retrievalHandles`) -- a renamed subject must stay resolvable by its
 previous name. The organization kind is embed-SKIPPED (raw-UUID text is
 vector noise; it stays lexical), and the skip is a REPORTED count

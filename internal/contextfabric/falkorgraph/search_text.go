@@ -14,17 +14,25 @@ import (
 // composition -- the ONE derivation both retrieval arms index. The write path
 // (subjectMergeAttrs -> propSearchText) and the embedding pass
 // (collectEmbedTargets) call the SAME function with the SAME body-gate value,
-// so lexical and vector search byte-identical text for every templated kind;
-// that identity is what makes their agreement a statement about MECHANISM
-// (graphrank.DistinctMechanismCount). The only remaining divergence is the
-// embed-side MaxTextRunes tail truncation of the UNBOUNDED compositions --
-// episode text (episodeSearchText) AND content text (contentSearchText,
-// title+body; both in projection.go): the lexical arm indexes the full
+// so lexical and vector search byte-identical text for every templated kind.
+//
+// The BOUNDARY of that byte-identity claim is the subjectSearchText switch
+// itself, never a list kept in prose: it holds for exactly the kinds the
+// switch declares a §2 template for, because every template caps every
+// field and embedprovider.MinimumMaxTextRunes covers the largest complete
+// template, so the embed-side truncation can never touch templated text.
+// EVERY composition outside the switch is UNBOUNDED and carries the weaker
+// shared-prefix guarantee instead: the lexical arm indexes the full
 // composed text, the vector arm the first MaxTextRunes runes of the SAME
-// composition, so for those two kinds the agreement is a shared-prefix
-// statement, not byte-identity. embedprovider.MinimumMaxTextRunes guarantees
-// no templated kind can ever be truncated, because every complete template
-// fits under the validation floor.
+// composition. That class is defined by ROUTING, so it cannot silently grow
+// stale as kinds are added -- it is episode text (episodeSearchText),
+// content text (contentSearchText), and any entity kind without a declared
+// template, which falls through to the uncapped entitySearchText fallback
+// (label + up to 100 aliases + 100 previous names of up to 512 runes each
+// under v1 validation; decision and metric today, and every future kind
+// until it is given a template here). Either way the arms share ONE
+// derivation, so their agreement is a statement about MECHANISM
+// (graphrank.DistinctMechanismCount); only its scope differs.
 //
 // Rules, applied uniformly (spec §2): deterministic field order; fixed
 // template per kind; per-field rune caps INSIDE the composition so the
@@ -97,10 +105,17 @@ const (
 )
 
 // subjectSearchText composes one entity's search text. Kinds without a
-// declared template (organization among them) keep the pre-CHAOS-3833
-// composition (entitySearchText: Label + Aliases + PreviousNames) -- the
-// organization node still carries lexical text; it is the EMBED pass that
-// skips it (collectEmbedTargets), not the write path.
+// declared template (organization, decision, and metric among them) keep
+// the pre-CHAOS-3833 composition (entitySearchText: Label + Aliases +
+// PreviousNames) -- the organization node still carries lexical text; it is
+// the EMBED pass that skips it (collectEmbedTargets), not the write path.
+// The default arm is also the DEFINITION of the shared-prefix class (see
+// the file header): a fallback-routed kind's composition is unbounded, so
+// lexical indexes all of it and the vector arm its first MaxTextRunes
+// runes. Deliberately uncapped -- lexical indexes the full fallback text
+// today and capping it would regress lexical retrieval, the spec's T3
+// rollback criterion; declaring a capped template here is the one move that
+// promotes a kind into the byte-identity class.
 //
 // NO RETRIEVAL HANDLE IS EVER DROPPED: every template composes the
 // entity's aliases AND previous names (retrievalHandles) -- templates

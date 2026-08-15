@@ -2,6 +2,7 @@ package falkorgraph
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -298,6 +299,51 @@ func TestUnboundedContentCompositionSharesItsTruncationPrefix(t *testing.T) {
 	}
 	if lexical == embedded {
 		t.Error("lexical must retain the full unbounded composition, not the truncated head")
+	}
+}
+
+// TestFallbackKindCompositionSharesItsTruncationPrefix pins the shared-prefix
+// guarantee for the third member of the unbounded class: an entity kind the
+// subjectSearchText switch declares no template for (decision here) routes to
+// the uncapped entitySearchText fallback, and v1 validation admits up to 100
+// aliases plus 100 previous names of up to 512 runes each -- unbounded by
+// construction, so the two arms share the composition's first MaxTextRunes
+// runes byte-identically while lexical retains the full text. The class is
+// defined by the switch's routing, so this holds for decision, metric, and
+// any future kind until it is given a template.
+func TestFallbackKindCompositionSharesItsTruncationPrefix(t *testing.T) {
+	t.Parallel()
+	entity := contextfabric.EntityProjection{
+		Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectDecision, CanonicalID: "decision:d-1", Label: strings.Repeat("д", 512)},
+	}
+	for i := 0; i < 100; i++ {
+		// Index prefixes keep the handles unique (a v1 bound); each is
+		// exactly the 512-rune validation maximum, multi-byte on purpose.
+		entity.Aliases = append(entity.Aliases, fmt.Sprintf("a%03d-", i)+strings.Repeat("д", 507))
+		entity.PreviousNames = append(entity.PreviousNames, fmt.Sprintf("p%03d-", i)+strings.Repeat("д", 507))
+	}
+	lexical := subjectSearchText(entity, true)
+	if lexical != entitySearchText(entity) {
+		t.Fatal("a template-less kind must route to the entitySearchText fallback")
+	}
+	if runes := utf8.RuneCountInString(lexical); runes <= embedprovider.MinimumMaxTextRunes {
+		t.Fatalf("fixture must exceed the floor to exercise the split, got %d runes", runes)
+	}
+	batch := contextfabric.ProjectionBatch{OrgID: "org", Entities: []contextfabric.EntityProjection{entity}}
+	targets, _ := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, true)
+	if len(targets) != 1 {
+		t.Fatalf("expected exactly one embed target, got %d", len(targets))
+	}
+	embedded := targets[0].text
+	if want := embedprovider.TruncateRunes(lexical, embedprovider.MinimumMaxTextRunes); embedded != want {
+		t.Errorf("embed text is not the first %d runes of the fallback composition:\n got %q\nwant %q",
+			embedprovider.MinimumMaxTextRunes, embedded, want)
+	}
+	if !strings.HasPrefix(lexical, embedded) {
+		t.Error("the embedded text must be a byte prefix of the lexical composition")
+	}
+	if lexical == embedded {
+		t.Error("lexical must retain the full unbounded fallback composition, not the truncated head")
 	}
 }
 
