@@ -109,26 +109,55 @@ index options were re-verified unchanged afterward.
   the round-1 `"copy"` substring heuristic is REMOVED entirely — Luna named
   it as adding nothing once the derivation-based comparison exists.
   Underivable inputs (empty prefix/org id/expected key) REFUSE, never pass
-  silently. The prefix argument this function receives must come from a
-  SINGLE source (Luna round-3 finding 1, see below) — `isSweepTargetSafe`
-  itself has no opinion on where its `graphPrefix` argument came from, so
-  the correctness of the whole gate depends on the caller wiring that
-  correctly, which round 2's live test did not.
+  silently. `isSweepTargetSafe` itself has no opinion on where its
+  `graphPrefix` argument came from — the correctness of the whole gate
+  depends on the CALLER wiring that correctly, which took three rounds to
+  get right (see the class-closure argument below).
 - `hnsw_sweep_live_test.go`: the runnable live probe, gated behind dedicated
-  `ACR_TEST_HNSW_SWEEP_*` env vars (never a production `ACR_CONTEXT_FABRIC_*`
-  name) — now including `_ORG_ID`, `_GRAPH_PREFIX`, and
-  `_EXPECTED_COPY_KEY`, all required for the derivation-based safety gate.
-  `_GRAPH_PREFIX` is now read into `graphConfig.GraphPrefix` (the same field
-  production reads to derive a graph key) via `hnswSweepLookup`, and the
-  safety check reads the CONSTRUCTED config's field, never the environment a
-  second time (Luna round-3 finding 1: round 2's live test read
-  `ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX` directly for the safety derivation
-  while `hnswSweepLookup` separately hardcoded an unused placeholder for
-  `graphConfig.GraphPrefix` — two divergent sources for what should be one
-  fact, and a typo'd or mismatched env value could derive the WRONG
-  "production key," letting the REAL one through). And (finding 1) rejects
-  any point with `SkippedSeeds > 0` rather than
+  `ACR_TEST_HNSW_SWEEP_*` env vars for every CONNECTION/CREDENTIAL input
+  (`_ADDR`, `_PASSWORD`) plus `_GRAPH_KEY`, `_EXPECTED_COPY_KEY`, `_ORG_ID`.
+  **`ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX` — production's OWN variable —
+  is required and read directly, with no dedicated test-side name at all.**
+  And (finding 1) rejects any point with `SkippedSeeds > 0` rather than
   merely logging it.
+
+  **Class closure (Luna round-3 addendum).** Three consecutive rounds broke
+  this same gate — round 1 a substring heuristic, round 2 a hardcoded
+  denylist, round 3 a hardcoded/parallel PREFIX SOURCE feeding an otherwise-
+  correct derivation (`hnswSweepLookup`'s `EnvGraphPrefix` case hardcoded an
+  unused placeholder for `graphConfig.GraphPrefix` while the live test
+  separately read `ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX` directly for the safety
+  derivation — two independent reads of what should be one fact, so a
+  typo'd or stale env value derived the WRONG "production key" and let the
+  REAL one through). The defect class: *the gate's notion of the protected
+  key is derived from anything other than what production itself reads.*
+  Closing it means tracing every input the derivation touches to its
+  production source:
+    - **orgID** has no static production source to diverge from — a real
+      `Principal`'s org id is per-request, never ambient config (there is no
+      `ACR_CONTEXT_FABRIC_ORG_ID`). It is inherently sweep-declared.
+    - **graphPrefix** DOES have exactly one static production source:
+      `ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX` (`EnvGraphPrefix`), which
+      `cmd/acr-projector/runtime.go` and `internal/runtime/hosted/open.go`
+      both hand straight to `falkorgraph.ConfigFromEnv(os.LookupEnv)` — no
+      translation layer in production. `hnswSweepLookup`'s `EnvGraphPrefix`
+      case now reads that literal variable name directly — no
+      `ACR_TEST_HNSW_SWEEP_*` prefix variable exists at all, so there is no
+      second place this value could be typed into and diverge. This is a
+      deliberate, narrow exception to "every input is a dedicated
+      `ACR_TEST_*` name": that discipline exists to stop `ADDR`/`PASSWORD`/
+      credentials reaching a real endpoint by accident, and doesn't apply to
+      a value the safety GATE needs to equal production's own.
+    - **expectedCopyKey** is a confirmation mechanism (state the target
+      twice), not a shadow of any production value — nothing to diverge
+      from.
+
+  With `graphPrefix` single-sourced from production's own variable, and
+  `orgID`/`expectedCopyKey` each having no production analog to diverge
+  from, no misconfiguration of a sweep-specific input can redirect
+  `isSweepTargetSafe`'s derivation: `graphPrefix` is always the value
+  production itself would use, or the run is skipped (empty refuses, never
+  defaults).
 
 ### Scoping note: what this measures vs. T1's harness
 
