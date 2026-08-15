@@ -125,28 +125,40 @@ const (
 // name after this change exactly as before (pinned by the live
 // prior-canonical-metadata invariant test).
 func subjectSearchText(entity contextfabric.EntityProjection, includeBodies bool) string {
+	var text string
 	switch entity.Subject.Kind {
 	case contextfabric.SubjectWorkItem:
-		return workItemSearchText(entity)
+		text = workItemSearchText(entity)
 	case contextfabric.SubjectPullRequest:
-		return pullRequestSearchText(entity, includeBodies)
+		text = pullRequestSearchText(entity, includeBodies)
 	case contextfabric.SubjectDeployment:
-		return deploymentSearchText(entity)
+		text = deploymentSearchText(entity)
 	case contractsv1.ContextFabricSubjectCIRun:
-		return ciRunSearchText(entity)
+		text = ciRunSearchText(entity)
 	case contractsv1.ContextFabricSubjectPullRequestReview:
-		return pullRequestReviewSearchText(entity)
+		text = pullRequestReviewSearchText(entity)
 	case contextfabric.SubjectIncident:
-		return incidentSearchText(entity, includeBodies)
+		text = incidentSearchText(entity, includeBodies)
 	case contextfabric.SubjectTeam:
-		return teamSearchText(entity)
+		text = teamSearchText(entity)
 	case contextfabric.SubjectProject:
-		return projectSearchText(entity)
+		text = projectSearchText(entity)
 	case contextfabric.SubjectRepository:
-		return repositorySearchText(entity)
+		text = repositorySearchText(entity)
 	default:
-		return entitySearchText(entity)
+		text = entitySearchText(entity)
 	}
+	// The trim is part of the composition, applied at the ONE routing point
+	// so it covers every arm of the switch -- templated compositions
+	// (composeLines) and the fallback alike. The v1 schema admits a
+	// leading-whitespace label, and entitySearchText preserves raw parts;
+	// without this trim, lexical would index the whitespace head that the
+	// embed pass trims away before truncating (collectEmbedTargets), and
+	// the shared-prefix guarantee would silently be false at the first
+	// byte. Trimming here makes the embed pass's own TrimSpace provably a
+	// no-op for entity text -- the same never-diverge pattern as the
+	// CHAOS-3836 prefix budgeting.
+	return strings.TrimSpace(text)
 }
 
 // retrievalHandles is the union of an entity's aliases and previous names,

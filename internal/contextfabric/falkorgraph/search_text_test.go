@@ -277,10 +277,13 @@ func TestEveryCompleteTemplateFitsUnderTheFloor(t *testing.T) {
 func TestUnboundedContentCompositionSharesItsTruncationPrefix(t *testing.T) {
 	t.Parallel()
 	content := contextfabric.ContentProjection{
-		ContentID: "doc-1", Title: "Session hardening runbook",
+		ContentID: "doc-1", Title: "  Session hardening runbook", // leading whitespace: the composition must trim it for BOTH arms
 		Body: strings.Repeat("х", 3*embedprovider.MinimumMaxTextRunes), // multi-byte: the cap is a RUNE cap
 	}
 	lexical := contentSearchText(content)
+	if lexical != strings.TrimSpace(lexical) {
+		t.Fatal("the content composition must already be trimmed -- the embed pass's TrimSpace must be a no-op")
+	}
 	if runes := utf8.RuneCountInString(lexical); runes <= embedprovider.MinimumMaxTextRunes {
 		t.Fatalf("fixture must exceed the floor to exercise the split, got %d runes", runes)
 	}
@@ -313,8 +316,14 @@ func TestUnboundedContentCompositionSharesItsTruncationPrefix(t *testing.T) {
 // any future kind until it is given a template.
 func TestFallbackKindCompositionSharesItsTruncationPrefix(t *testing.T) {
 	t.Parallel()
+	// The v1 schema admits a leading-whitespace label (aliases and previous
+	// names are validation-trimmed, the label is not), and entitySearchText
+	// preserves raw parts -- so the whitespace sits at the very head of the
+	// composition, exactly where a lexical/vector trim disagreement would
+	// break the shared prefix at byte zero. Multi-byte runes adjacent to
+	// the whitespace on purpose.
 	entity := contextfabric.EntityProjection{
-		Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectDecision, CanonicalID: "decision:d-1", Label: strings.Repeat("д", 512)},
+		Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectDecision, CanonicalID: "decision:d-1", Label: " \t\n" + strings.Repeat("д", 512) + " \t"},
 	}
 	for i := 0; i < 100; i++ {
 		// Index prefixes keep the handles unique (a v1 bound); each is
@@ -323,8 +332,11 @@ func TestFallbackKindCompositionSharesItsTruncationPrefix(t *testing.T) {
 		entity.PreviousNames = append(entity.PreviousNames, fmt.Sprintf("p%03d-", i)+strings.Repeat("д", 507))
 	}
 	lexical := subjectSearchText(entity, true)
-	if lexical != entitySearchText(entity) {
-		t.Fatal("a template-less kind must route to the entitySearchText fallback")
+	if lexical != strings.TrimSpace(entitySearchText(entity)) {
+		t.Fatal("a template-less kind must route to the entitySearchText fallback, trimmed at the routing point")
+	}
+	if lexical != strings.TrimSpace(lexical) {
+		t.Fatal("the composed text must already be trimmed -- the embed pass's TrimSpace must be a no-op")
 	}
 	if runes := utf8.RuneCountInString(lexical); runes <= embedprovider.MinimumMaxTextRunes {
 		t.Fatalf("fixture must exceed the floor to exercise the split, got %d runes", runes)
@@ -344,6 +356,41 @@ func TestFallbackKindCompositionSharesItsTruncationPrefix(t *testing.T) {
 	}
 	if lexical == embedded {
 		t.Error("lexical must retain the full unbounded fallback composition, not the truncated head")
+	}
+}
+
+// TestEpisodeCompositionSharesItsTruncationPrefix pins the same guarantee on
+// the remaining unbounded composition: episode text is trimmed inside
+// episodeSearchText itself, so a leading-whitespace goal cannot split the
+// arms, and the embed side gets exactly the first MaxTextRunes runes of the
+// identical composition.
+func TestEpisodeCompositionSharesItsTruncationPrefix(t *testing.T) {
+	t.Parallel()
+	episode := contextfabric.EpisodeProjection{
+		EpisodeID: "ep-1",
+		Goal:      "  Stabilize checkout latency", // leading whitespace: trimmed by the composition for BOTH arms
+		Outcome:   "resolved",
+		Summary:   strings.Repeat("х", 3*embedprovider.MinimumMaxTextRunes),
+	}
+	lexical := episodeSearchText(episode)
+	if lexical != strings.TrimSpace(lexical) {
+		t.Fatal("the episode composition must already be trimmed -- the embed pass's TrimSpace must be a no-op")
+	}
+	if runes := utf8.RuneCountInString(lexical); runes <= embedprovider.MinimumMaxTextRunes {
+		t.Fatalf("fixture must exceed the floor to exercise the split, got %d runes", runes)
+	}
+	batch := contextfabric.ProjectionBatch{OrgID: "org", Episodes: []contextfabric.EpisodeProjection{episode}}
+	targets, _ := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, false)
+	if len(targets) != 1 {
+		t.Fatalf("expected exactly one embed target, got %d", len(targets))
+	}
+	embedded := targets[0].text
+	if want := embedprovider.TruncateRunes(lexical, embedprovider.MinimumMaxTextRunes); embedded != want {
+		t.Errorf("embed text is not the first %d runes of the episode composition:\n got %q\nwant %q",
+			embedprovider.MinimumMaxTextRunes, embedded, want)
+	}
+	if !strings.HasPrefix(lexical, embedded) {
+		t.Error("the embedded text must be a byte prefix of the lexical composition")
 	}
 }
 
