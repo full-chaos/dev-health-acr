@@ -159,6 +159,24 @@ type CalibrationResult struct {
 	// IS that explicit human decision -- it is not auto-applied output of
 	// this function and is therefore not itself gated by ApplyReady; see its
 	// doc comment for the sequencing-gate ruling recorded on CHAOS-3834.
+	//
+	// WHAT THIS FIELD ACTUALLY MEASURES (codex round-8 P1, chris-ratified
+	// doctrine-split resolution): ApplyReady's criteria are TAU-LEVEL
+	// PRECISION -- the PRE-T4 doctrine where tau itself must act as the
+	// no-match barrier a candidate clears to be trusted, measured entirely
+	// from HardNegativeRejectRate. Under the RATIFIED T4 design a
+	// measurement can be a legitimate, ship-ready RECALL channel (tau picked
+	// from S+ survival alone, precision deferred to downstream hybrid
+	// ranking + corroboration adjudication) and STILL correctly report
+	// ApplyReady=false here -- that is not a contradiction this field needs
+	// to resolve, it is this field measuring a narrower thing (tau-level
+	// precision) than the T4 recall-channel design ever claims to provide.
+	// A human-ratified table entry (see calibratedIdentityText2Large) may
+	// therefore knowingly supersede an ApplyReady=false verdict: this
+	// function's fail-closed default protects an AUTOMATED caller that
+	// never asked chris; it does not, and cannot, encode the recall-channel
+	// doctrine's own precision story, which lives downstream of tau
+	// entirely.
 	ApplyReady bool
 	// NegativeGateNote explains the ApplyReady verdict in one sentence, set
 	// on BOTH outcomes, so a caller logging or printing this result never has

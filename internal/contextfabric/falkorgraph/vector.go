@@ -726,7 +726,7 @@ func EmbedderFromEnv(lookup func(string) (string, bool)) (EmbedderOptions, error
 	if err != nil {
 		return EmbedderOptions{}, err
 	}
-	if policy, ok := LookupRetrievalPolicy(lookup, identity, cfg.Dimension); ok {
+	if policy, ok := LookupRetrievalPolicy(identity, cfg.Dimension); ok {
 		// A calibrated entry's zero fields still mean "unchanged from
 		// today's default" (RetrievalPolicy's doc comment) -- e.g. the
 		// shipped openai/text-embedding-3-large entry deliberately leaves

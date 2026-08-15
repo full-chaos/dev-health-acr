@@ -20,45 +20,23 @@ func TestRetrievalPolicyVersionBumpedByCHAOS3834(t *testing.T) {
 	}
 }
 
-// envWith builds a lookup func(string) (string, bool) from a plain map, for
-// tests that need to control specific env vars (e.g. EnvCalibrated) without
-// pulling in fakeEmbedderEnv's embedprovider defaults.
-func envWith(pairs map[string]string) func(string) (string, bool) {
-	return func(key string) (string, bool) { value, ok := pairs[key]; return value, ok }
-}
-
 // TestLookupRetrievalPolicy_KnownIdentityReturnsCalibratedEntry proves the
 // shipped openai/text-embedding-3-large entry is reachable by exactly the
 // identity string form the write path stamps (identity.String()+"#"+tag) AT
-// its measured dimension (3072), WHEN EnvCalibrated is explicitly set (codex
-// round-8 P1).
+// its measured dimension (3072). No opt-in flag gates this (codex round-8
+// P1, REVISED -- chris overruled an initial env-flag ruling): the exact-
+// identity pinning IS the safety mechanism, see LookupRetrievalPolicy's doc
+// comment.
 func TestLookupRetrievalPolicy_KnownIdentityReturnsCalibratedEntry(t *testing.T) {
-	policy, ok := LookupRetrievalPolicy(envWith(map[string]string{EnvCalibrated: "1"}), "openai/text-embedding-3-large#t2:r2000:b0:pnone", 3072)
+	policy, ok := LookupRetrievalPolicy("openai/text-embedding-3-large#t2:r2000:b0:pnone", 3072)
 	if !ok {
-		t.Fatal("LookupRetrievalPolicy() ok = false, want true for the calibrated CHAOS-3834 entry with EnvCalibrated set")
+		t.Fatal("LookupRetrievalPolicy() ok = false, want true for the calibrated CHAOS-3834 entry")
 	}
 	if policy.SimilarityFloor <= 0 || policy.SimilarityFloor >= embedprovider.DefaultSimilarityFloor {
 		t.Fatalf("SimilarityFloor = %v, want a recall-gate value strictly below the uncalibrated default %v", policy.SimilarityFloor, embedprovider.DefaultSimilarityFloor)
 	}
 	if policy.EfRuntime != 200 {
 		t.Fatalf("EfRuntime = %d, want the CHAOS-3832 knee value 200", policy.EfRuntime)
-	}
-}
-
-// TestLookupRetrievalPolicy_FlagUnsetKeepsConservativeDefaultEvenForKnownIdentity
-// is the codex round-8 P1 pinning test: the calibrated table must NOT apply
-// -- even for the EXACT measured identity/dimension -- when EnvCalibrated is
-// unset. Before this fix, LookupRetrievalPolicy had no such gate at all: any
-// deployment matching the identity string got tau=0.30/efRuntime=200
-// unconditionally, regardless of whether the sequencing decision the entry's
-// own doc comment describes had actually been made for it.
-func TestLookupRetrievalPolicy_FlagUnsetKeepsConservativeDefaultEvenForKnownIdentity(t *testing.T) {
-	policy, ok := LookupRetrievalPolicy(envWith(nil), "openai/text-embedding-3-large#t2:r2000:b0:pnone", 3072)
-	if ok {
-		t.Fatalf("LookupRetrievalPolicy() ok = true, want false -- EnvCalibrated is unset, the exact measured identity must still fall back to conservative defaults; got %+v", policy)
-	}
-	if policy != (RetrievalPolicy{}) {
-		t.Fatalf("LookupRetrievalPolicy() = %+v, want the zero value when EnvCalibrated is unset", policy)
 	}
 }
 
@@ -85,11 +63,7 @@ func TestLookupRetrievalPolicy_UnknownIdentityKeepsConservativeDefault(t *testin
 		{"openai/text-embedding-3-large#t2:r2000:b0:pnone", 1536},
 		{"none", 0},
 	} {
-		// EnvCalibrated is set here (codex round-8 P1): this test proves
-		// UNKNOWN identities miss regardless of the flag, which is a
-		// different property from the flag-unset test above (a KNOWN
-		// identity missing because the flag is off).
-		policy, ok := LookupRetrievalPolicy(envWith(map[string]string{EnvCalibrated: "1"}), tc.identity, tc.dimension)
+		policy, ok := LookupRetrievalPolicy(tc.identity, tc.dimension)
 		if ok {
 			t.Errorf("LookupRetrievalPolicy(%q, %d) ok = true, want false (no calibrated entry)", tc.identity, tc.dimension)
 		}
@@ -130,13 +104,12 @@ func TestLookupRetrievalPolicy_UnknownIdentityKeepsConservativeDefault(t *testin
 func TestCalibratedEntryDriftsLoudlyWithCompositionTag(t *testing.T) {
 	liveTag := EmbedCompositionTag(embedprovider.DefaultMaxTextRunes, false, "")
 	liveIdentity := "openai/text-embedding-3-large#" + liveTag
-	calibratedEnv := envWith(map[string]string{EnvCalibrated: "1"})
-	if _, ok := LookupRetrievalPolicy(calibratedEnv, liveIdentity, 3072); !ok {
+	if _, ok := LookupRetrievalPolicy(liveIdentity, 3072); !ok {
 		t.Fatalf("LookupRetrievalPolicy(%q, 3072) ok = false: the live composition tag no longer matches the CHAOS-3834 measurement-pinned entry (%q). "+
 			"Composition changed -- recalibrate this identity against the new composition, or record an explicit inheritance decision as a new pinned entry. "+
 			"Do not silently repoint the pinned key at the new tag.", liveIdentity, calibratedIdentityText2Large)
 	}
-	if _, ok := LookupRetrievalPolicy(calibratedEnv, liveIdentity, 1536); ok {
+	if _, ok := LookupRetrievalPolicy(liveIdentity, 1536); ok {
 		t.Fatalf("LookupRetrievalPolicy(%q, 1536) ok = true, want false -- the calibrated entry is pinned to dimension 3072 and must not match a different width", liveIdentity)
 	}
 }
@@ -156,15 +129,14 @@ func fakeEmbedderEnv(overrides map[string]string) func(string) (string, bool) {
 
 // TestEmbedderFromEnv_CalibratedIdentityOverridesDefaults wires
 // LookupRetrievalPolicy end to end through EmbedderFromEnv: a deployment
-// whose provider/model/composition resolve to the calibrated identity AND
-// has explicitly opted in via EnvCalibrated (codex round-8 P1) gets the
-// policy's tau and efRuntime instead of embedprovider's single global
+// whose provider/model/composition resolve to the calibrated identity gets
+// the policy's tau and efRuntime instead of embedprovider's single global
 // defaults, with K left at "unchanged" (0) exactly as the shipped entry
-// specifies.
+// specifies. No opt-in flag gates this (codex round-8 P1, REVISED -- chris
+// overruled an initial env-flag ruling): the exact-identity pinning IS the
+// safety mechanism.
 func TestEmbedderFromEnv_CalibratedIdentityOverridesDefaults(t *testing.T) {
-	options, err := EmbedderFromEnv(fakeEmbedderEnv(map[string]string{
-		EnvCalibrated: "1",
-	}))
+	options, err := EmbedderFromEnv(fakeEmbedderEnv(nil))
 	if err != nil {
 		t.Fatalf("EmbedderFromEnv: %v", err)
 	}
@@ -176,27 +148,6 @@ func TestEmbedderFromEnv_CalibratedIdentityOverridesDefaults(t *testing.T) {
 	}
 	if options.OverFetchMultiplier != 0 {
 		t.Fatalf("OverFetchMultiplier = %d, want 0 (K unchanged per the shipped entry)", options.OverFetchMultiplier)
-	}
-}
-
-// TestEmbedderFromEnv_FlagUnsetKeepsConservativeDefaultsEvenForCalibratedIdentity
-// is the codex round-8 P1 pinning test, end to end through EmbedderFromEnv:
-// the EXACT same deployment as the test above (calibrated identity,
-// calibrated dimension) but WITHOUT EnvCalibrated set must keep today's
-// conservative, env-configured defaults -- the auto-apply this round closes.
-func TestEmbedderFromEnv_FlagUnsetKeepsConservativeDefaultsEvenForCalibratedIdentity(t *testing.T) {
-	options, err := EmbedderFromEnv(fakeEmbedderEnv(nil))
-	if err != nil {
-		t.Fatalf("EmbedderFromEnv: %v", err)
-	}
-	if options.SimilarityFloor != embedprovider.DefaultSimilarityFloor {
-		t.Fatalf("SimilarityFloor = %v, want the uncalibrated default %v -- EnvCalibrated is unset, the exact calibrated identity must not auto-apply", options.SimilarityFloor, embedprovider.DefaultSimilarityFloor)
-	}
-	if options.EfRuntime != 0 {
-		t.Fatalf("EfRuntime = %d, want 0 -- EnvCalibrated is unset", options.EfRuntime)
-	}
-	if options.OverFetchMultiplier != 0 {
-		t.Fatalf("OverFetchMultiplier = %d, want 0", options.OverFetchMultiplier)
 	}
 }
 
@@ -238,7 +189,6 @@ func TestEmbedderFromEnv_MismatchedDimensionKeepsConservativeDefaults(t *testing
 func TestEmbedderFromEnv_ExplicitSimilarityFloorSurvivesCalibratedTableMatch(t *testing.T) {
 	options, err := EmbedderFromEnv(fakeEmbedderEnv(map[string]string{
 		embedprovider.EnvSimilarityFloor: "0.81",
-		EnvCalibrated:                    "1",
 	}))
 	if err != nil {
 		t.Fatalf("EmbedderFromEnv: %v", err)
@@ -266,7 +216,6 @@ func TestEmbedderFromEnv_ExplicitSimilarityFloorSurvivesCalibratedTableMatch(t *
 func TestEmbedderFromEnv_BlankSimilarityFloorEnvIsNotExplicit(t *testing.T) {
 	options, err := EmbedderFromEnv(fakeEmbedderEnv(map[string]string{
 		embedprovider.EnvSimilarityFloor: "   ",
-		EnvCalibrated:                    "1",
 	}))
 	if err != nil {
 		t.Fatalf("EmbedderFromEnv: %v", err)
