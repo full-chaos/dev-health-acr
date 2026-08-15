@@ -18,9 +18,9 @@ import (
 //	ACR_TEST_HNSW_SWEEP_ADDR=host:port \
 //	ACR_TEST_HNSW_SWEEP_GRAPH_KEY=<graph key> \
 //	ACR_TEST_HNSW_SWEEP_EXPECTED_COPY_KEY=<same graph key, typed independently> \
-//	ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX=<the org's production graph prefix, e.g. acr-cf> \
 //	ACR_TEST_HNSW_SWEEP_ORG_ID=<the org id this run is sweeping> \
 //	ACR_TEST_HNSW_SWEEP_CONFIRM_COPY=1 \
+//	ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX=<the REAL production graph prefix, e.g. acr-cf> \
 //	  go test ./internal/contextfabric/falkorgraph -run TestLiveHNSWSweep -v
 //
 // SAFETY (hard requirement, not a convention): this test refuses to run
@@ -33,14 +33,47 @@ import (
 //     known key still fails open for a different prefix or a different
 //     org -- a derivation-based comparison cannot).
 //
+// CLASS CLOSURE (Luna round-3, addendum: three rounds broke this same gate --
+// round 1 a substring heuristic, round 2 a hardcoded denylist, round 3 a
+// hardcoded/parallel PREFIX SOURCE feeding an otherwise-correct derivation).
+// The defect class is "the gate's notion of the protected key is derived
+// from anything other than what production itself reads." Closing it needs
+// EVERY input the derivation touches to be traced to its production source:
+//
+//   - orgID: no static production source exists to diverge from -- a
+//     production Principal's org id is per-REQUEST, never configured
+//     ambient state (there is no "ACR_CONTEXT_FABRIC_ORG_ID" to read). It is
+//     inherently sweep-declared; nothing to single-source it against.
+//   - graphPrefix: DOES have exactly one static production source --
+//     `ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX` (EnvGraphPrefix), which is
+//     what `cmd/acr-projector/runtime.go` and `internal/runtime/hosted/
+//     open.go` both hand to `falkorgraph.ConfigFromEnv(os.LookupEnv)` --
+//     `os.LookupEnv` is a DIRECT passthrough, no test-side translation layer
+//     in production. So hnswSweepLookup's EnvGraphPrefix case ALSO reads
+//     that literal name directly (below) -- not a dedicated ACR_TEST_*
+//     variable at all. This is a deliberate, narrow exception to "every
+//     input is a dedicated ACR_TEST_* name": that discipline exists to stop
+//     ADDR/PASSWORD/credentials from ever reaching a real endpoint by
+//     accident; GraphPrefix carries no connection or credential risk (it is
+//     a string folded into a hash for a REFUSAL check), and reading anything
+//     OTHER than the real value here is what created round 3's gap. There is
+//     now no second variable this value could be typed into and diverge
+//     from.
+//   - expectedCopyKey: a confirmation mechanism (state the target twice),
+//     not a shadow of any production value -- nothing to diverge from.
+//
+// With graphPrefix single-sourced from production's own variable and orgID/
+// expectedCopyKey having no production analog to diverge from, no
+// misconfiguration of a SWEEP-SPECIFIC input can redirect isSweepTargetSafe's
+// derivation: graphPrefix is the value production itself would use, or the
+// run is skipped (empty is refused, never defaulted).
+//
 // recreateVectorIndexWithOptions drops and rebuilds the target's vector
 // index repeatedly -- correctness-preserving (§7 D3) with a restore-on-
 // failure fallback covering both a create error and a poll failure -- but
 // never something to run against a graph an operator did not deliberately
 // stand up as a scratch copy (e.g. via `GRAPH.COPY <live-org-key> <dst>` in
-// redis-cli, per this lane's operating instructions). None of these env var
-// names is a production ACR_CONTEXT_FABRIC_* name, so no ambient production
-// configuration can ever satisfy this test by accident.
+// redis-cli, per this lane's operating instructions).
 //
 // The dimension and seed canonical IDs are also supplied at run time --
 // ACR_TEST_HNSW_SWEEP_DIMENSION and a comma-separated
@@ -62,28 +95,25 @@ func TestLiveHNSWSweep(t *testing.T) {
 	}
 	// isSweepTargetSafe (hnsw_sweep.go) derives the org's production graph
 	// key at runtime and refuses if the target equals it -- FAIL-CLOSED, no
-	// list to maintain (Luna round-2 finding 1). ACR_TEST_HNSW_SWEEP_ORG_ID
-	// and ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX are both REQUIRED (skip, not a
-	// silently-passed check, if either is missing) because an underivable
-	// comparison must never be treated as a passed one.
+	// list to maintain (Luna round-2 finding 1).
 	expectedCopyKey := os.Getenv("ACR_TEST_HNSW_SWEEP_EXPECTED_COPY_KEY")
 	if expectedCopyKey == "" {
 		t.Skip("ACR_TEST_HNSW_SWEEP_EXPECTED_COPY_KEY is not set (must independently restate ACR_TEST_HNSW_SWEEP_GRAPH_KEY)")
 	}
-	// SINGLE SOURCE FOR THE PREFIX (Luna round-3 finding 1): presence is
-	// checked here, but the VALUE that reaches isSweepTargetSafe below is
-	// read from graphConfig.GraphPrefix AFTER construction, never from this
-	// (or any other) direct os.Getenv call. Round 2's fix read this env var
-	// TWICE, independently -- once (wrongly hardcoded, ignoring this var
-	// entirely) via hnswSweepLookup for graphConfig.GraphPrefix, and once
-	// directly here for the safety derivation. Two reads of what is meant to
-	// be the same fact can diverge; a config field read once cannot.
-	if os.Getenv("ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX") == "" {
-		t.Skip("ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX is not set (needed to derive and refuse the org's production graph key)")
-	}
 	orgID := os.Getenv("ACR_TEST_HNSW_SWEEP_ORG_ID")
 	if orgID == "" {
 		t.Skip("ACR_TEST_HNSW_SWEEP_ORG_ID is not set (needed to derive and refuse the org's production graph key)")
+	}
+	// CLASS CLOSURE (Luna round-3 addendum, see the file doc comment): the
+	// prefix is read from EnvGraphPrefix -- ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX,
+	// production's OWN variable, the exact one os.LookupEnv hands to
+	// falkorgraph.ConfigFromEnv in cmd/acr-projector and internal/runtime/
+	// hosted -- never a dedicated ACR_TEST_* name. There is no second
+	// variable for this value to be typed into and diverge from. Required
+	// (skip, not a silently-passed check) because an underivable comparison
+	// must never be treated as a passed one.
+	if os.Getenv(EnvGraphPrefix) == "" {
+		t.Skip("ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX is not set (production's own prefix variable -- needed to derive and refuse the org's production graph key)")
 	}
 	dimensionRaw := os.Getenv("ACR_TEST_HNSW_SWEEP_DIMENSION")
 	if dimensionRaw == "" {
@@ -111,14 +141,11 @@ func TestLiveHNSWSweep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("graph configuration: %v", err)
 	}
-	// isSweepTargetSafe derives from graphConfig.GraphPrefix -- the field
-	// hnswSweepLookup populated from ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX, and
-	// the SAME field production reads to derive a graph key (projection.go,
-	// reader.go, via identity.go's graphKey()). Reading the already-
-	// constructed config here rather than the environment a second time is
-	// the fix itself (Luna round-3 finding 1): there is exactly one place
-	// the prefix is decided, so there is nothing left for a second read to
-	// diverge from.
+	// isSweepTargetSafe derives from graphConfig.GraphPrefix -- populated by
+	// hnswSweepLookup from EnvGraphPrefix, production's OWN variable (see the
+	// file doc comment's class-closure argument). Reading the CONSTRUCTED
+	// config here, rather than the environment a second time, means there is
+	// exactly one place this value is decided.
 	if safe, reason := isSweepTargetSafe(key, expectedCopyKey, graphConfig.GraphPrefix, orgID); !safe {
 		t.Fatalf("refusing to run RunHNSWSweep's destructive drop/recreate cycle: %s", reason)
 	}
@@ -180,10 +207,19 @@ func TestLiveHNSWSweep(t *testing.T) {
 }
 
 // hnswSweepLookup mirrors benchmarkLookup's discipline (ambiguity_benchmark_
-// live_test.go): every value comes from a dedicated ACR_TEST_HNSW_SWEEP_*
-// name or a fixed test-only default, never a production ACR_CONTEXT_FABRIC_*
-// name, so this test can never reach a production graph through ambient
-// environment.
+// live_test.go) for every CONNECTION/CREDENTIAL input: ADDR and PASSWORD
+// come from a dedicated ACR_TEST_HNSW_SWEEP_* name, never a production
+// ACR_CONTEXT_FABRIC_* one, so this test can never reach a REAL production
+// endpoint through ambient environment.
+//
+// EnvGraphPrefix is the deliberate, narrow exception (Luna round-3 addendum
+// class-closure argument, see the file doc comment): it is not a connection
+// or credential input, it is a value the safety GATE needs to equal
+// production's own, so it is read from production's OWN variable name
+// directly -- the identical one os.LookupEnv hands to
+// falkorgraph.ConfigFromEnv in cmd/acr-projector/runtime.go and
+// internal/runtime/hosted/open.go. There is no ACR_TEST_HNSW_SWEEP_* prefix
+// variable at all; nothing exists for that single fact to diverge from.
 func hnswSweepLookup(key string) (string, bool) {
 	value := func(name string) (string, bool) {
 		v := os.Getenv(name)
@@ -199,18 +235,7 @@ func hnswSweepLookup(key string) (string, bool) {
 	case EnvAllowInsecure:
 		return "true", true
 	case EnvGraphPrefix:
-		// SINGLE SOURCE (Luna round-3 finding 1): this MUST be the same
-		// ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX value the safety derivation in
-		// TestLiveHNSWSweep reads (via the CONSTRUCTED graphConfig.GraphPrefix,
-		// not a second direct env read). The pre-fix value here was a
-		// hardcoded, unused placeholder -- completely disconnected from
-		// whatever the operator set for the safety check, which is exactly
-		// what let a typo'd or mismatched prefix source derive the WRONG
-		// "production key" and pass a real one through. There is deliberately
-		// no fallback default: an unset prefix must surface as a missing
-		// value (TestLiveHNSWSweep skips before this is ever reached), never
-		// silently resolve to a value nobody chose.
-		return value("ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX")
+		return value(EnvGraphPrefix) // production's own variable, read directly -- see doc comment above.
 	case EnvRequestTimeout:
 		// The default 30s (config.go) is tuned for a request-path query, not
 		// an HNSW index build -- live-measured (CHAOS-3832 §7 D3 probe):
@@ -236,33 +261,36 @@ func hnswSweepLookup(key string) (string, bool) {
 	}
 }
 
-// Luna round-3 finding 1's closure test: hnswSweepLookup's EnvGraphPrefix
-// case is the ONLY place ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX may reach the
-// adapter's config -- graphConfig.GraphPrefix (what TestLiveHNSWSweep now
-// feeds to isSweepTargetSafe) must equal EXACTLY what the operator declared,
-// never a hardcoded stub that ignores it. This is the wiring-level proof;
-// TestIsSweepTargetSafeAcceptsTheRealProductionKeyWhenDerivedFromAWrongPrefixSource
-// below proves the CONSEQUENCE of getting this wrong.
-func TestHNSWSweepLookupGraphPrefixIsTheSingleSourceOfTruth(t *testing.T) {
-	t.Setenv("ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX", "acr-cf")
+// Luna round-3 addendum's class-closure test: hnswSweepLookup's
+// EnvGraphPrefix case must read PRODUCTION'S OWN variable
+// (ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX) directly -- not a dedicated
+// ACR_TEST_HNSW_SWEEP_* name that could itself be typo'd or left stale
+// relative to what production actually reads. graphConfig.GraphPrefix (what
+// TestLiveHNSWSweep feeds to isSweepTargetSafe) must equal EXACTLY the
+// value production's own os.LookupEnv(EnvGraphPrefix) would return -- proven
+// here by setting THAT literal variable and checking it round-trips. This is
+// the wiring-level proof; TestIsSweepTargetSafeAcceptsTheRealProductionKeyWhenDerivedFromAWrongPrefixSource
+// below proves the CONSEQUENCE of a divergent source.
+func TestHNSWSweepLookupGraphPrefixReadsProductionsOwnVariableDirectly(t *testing.T) {
+	t.Setenv(EnvGraphPrefix, "acr-cf")
 	cfg, err := ConfigFromEnv(hnswSweepLookup)
 	if err != nil {
 		t.Fatalf("ConfigFromEnv: %v", err)
 	}
 	if cfg.GraphPrefix != "acr-cf" {
-		t.Fatalf("graphConfig.GraphPrefix = %q, want the operator-declared ACR_TEST_HNSW_SWEEP_GRAPH_PREFIX value %q -- "+
-			"a divergent source here is exactly what let the round-2 safety derivation compare against the WRONG "+
-			"production key (Luna round-3 finding 1)", cfg.GraphPrefix, "acr-cf")
+		t.Fatalf("graphConfig.GraphPrefix = %q, want production's own %s value %q -- "+
+			"any indirection here (a dedicated test variable, a hardcoded stub) is exactly what let the "+
+			"round-2/round-3 safety derivation compare against the WRONG production key", cfg.GraphPrefix, EnvGraphPrefix, "acr-cf")
 	}
 }
 
 // The consequence, demonstrated directly against isSweepTargetSafe's own
-// semantics with no revert needed: deriving from a prefix source that has
-// diverged from what production actually uses -- exactly what
-// hnswSweepLookup's pre-fix hardcoded stub did, and equally what an
-// UNVALIDATED, independently-typed prefix env var would do on a typo --
-// lets the REAL production key through; deriving from the correct,
-// single-sourced prefix rejects it.
+// semantics with no revert needed: WHY the class-closure argument above
+// requires production's own variable rather than any indirection at all --
+// deriving from a prefix source that has diverged from what production
+// actually uses (round 2's hardcoded stub, verbatim, stands in for "any
+// value that isn't production's own") lets the REAL production key through;
+// deriving from the correct, single-sourced prefix rejects it.
 func TestIsSweepTargetSafeAcceptsTheRealProductionKeyWhenDerivedFromAWrongPrefixSource(t *testing.T) {
 	orgID := "70d529e0-3c06-4597-8480-794fd02328b6"
 	realPrefix := "acr-cf"
