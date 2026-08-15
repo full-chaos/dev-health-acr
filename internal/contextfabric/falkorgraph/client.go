@@ -357,6 +357,8 @@ func classifyFalkorError(operation string, err error) error {
 		return fmt.Errorf("%s: %w", operation, ErrConstraintViolation)
 	case strings.Contains(message, "already indexed") || strings.Contains(message, "already exists"):
 		return fmt.Errorf("%s: %w", operation, errAlreadyExists)
+	case strings.Contains(message, "no such index"):
+		return fmt.Errorf("%s: %w", operation, errIndexNotFound)
 	// "Invalid graph operation on empty key" is FalkorDB's error for a
 	// GRAPH.DELETE or GRAPH.RO_QUERY against a graph key that never
 	// existed or was just deleted. Verified live: unlike GRAPH.QUERY
@@ -389,7 +391,7 @@ func classifyFalkorError(operation string, err error) error {
 // fully generic, content-free message.
 var knownSentinels = []error{
 	ErrNotFound, ErrUnauthorized, ErrRateLimited, ErrConstraintViolation,
-	errAlreadyExists, errConstraintBootstrapFailed, errConstraintBootstrapTimedOut,
+	errAlreadyExists, errIndexNotFound, errConstraintBootstrapFailed, errConstraintBootstrapTimedOut,
 	context.Canceled, context.DeadlineExceeded,
 }
 

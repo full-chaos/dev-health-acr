@@ -69,11 +69,33 @@ type indexStatus struct {
 // as UNKNOWN rather than as a match -- guessing a match is precisely the
 // failure AC-3778-7 exists to prevent.
 func (i indexStatus) Dimension() (int, bool) {
+	return i.embeddingOption("dimension")
+}
+
+// HNSWOptions reports the M/efConstruction/efRuntime the server echoes back
+// for this vector index (CHAOS-3832 T2: recreateVectorIndexWithOptions reads
+// this BEFORE dropping, so a failed recreation can restore the prior
+// configuration rather than leave the index absent). A field the server
+// omitted decodes as 0, matching hnswIndexOptions' own "0 means let the
+// server default" convention -- restoring a value the server never reported
+// simply re-omits it from the recreated OPTIONS clause, the same as it was
+// omitted the first time.
+func (i indexStatus) HNSWOptions() hnswIndexOptions {
+	m, _ := i.embeddingOption("M")
+	efConstruction, _ := i.embeddingOption("efConstruction")
+	efRuntime, _ := i.embeddingOption("efRuntime")
+	return hnswIndexOptions{M: m, EfConstruction: efConstruction, EfRuntime: efRuntime}
+}
+
+// embeddingOption reads one numeric key out of this index's Subject.embedding
+// options map, decoded from whichever concrete numeric type the falkordb-go
+// decoder produced (verified live to vary: int64/int/float64 all observed).
+func (i indexStatus) embeddingOption(name string) (int, bool) {
 	property, ok := i.Options[propEmbedding].(map[string]interface{})
 	if !ok {
 		return 0, false
 	}
-	switch value := property["dimension"].(type) {
+	switch value := property[name].(type) {
 	case int64:
 		return int(value), true
 	case int:
