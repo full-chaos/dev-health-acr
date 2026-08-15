@@ -349,6 +349,35 @@ func TestCalibrateFromReport_DeterministicRecallGate(t *testing.T) {
 	}
 }
 
+// TestCalibrateFromReport_TargetRecallJustAboveExactBoundaryStillPreservesTheInvariant
+// is the codex round-6 P3 pinning test: the SAME 10-sample fixture as
+// TestCalibrateFromReport_DeterministicRecallGate above (unchanged, proving
+// the fix does not disturb the exact-0.90 case), but TargetRecall is
+// 0.90000000001 -- a hair above the clean boundary, by construction, not by
+// float64 rounding noise. The predecessor's fixed quantileEpsilon (1e-9,
+// far coarser than genuine ~1e-16 float64 noise at this magnitude) treated
+// that hair as noise and rounded it away, excluding one MORE sample than
+// requested and returning AchievedRecall=0.90 < TargetRecall=0.90000000001
+// -- a real violation of the function's own documented invariant
+// (AchievedRecall >= TargetRecall, always). This pins that the invariant
+// now holds.
+func TestCalibrateFromReport_TargetRecallJustAboveExactBoundaryStillPreservesTheInvariant(t *testing.T) {
+	cases := []CalibrationCase{}
+	for _, s := range []float64{0.50, 0.10, 0.90, 0.30, 0.70, 0.20, 1.00, 0.40, 0.80, 0.60} {
+		cases = append(cases, CalibrationCase{Cause: "hit", CorrectSimilarity: floatPtr(s)})
+	}
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: cases}
+	const targetRecall = 0.90000000001
+
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: targetRecall, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
+	if err != nil {
+		t.Fatalf("CalibrateFromReport: %v", err)
+	}
+	if result.AchievedRecall < targetRecall {
+		t.Fatalf("AchievedRecall = %v, want >= TargetRecall %v -- the documented invariant must hold even when the target sits a hair above a clean decimal boundary", result.AchievedRecall, targetRecall)
+	}
+}
+
 // A single S+ sample is its own tau, with achieved recall trivially 1.0.
 func TestCalibrateFromReport_SingleSample(t *testing.T) {
 	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: []CalibrationCase{{Cause: "hit", CorrectSimilarity: floatPtr(0.42)}}}
@@ -454,6 +483,35 @@ func TestCalibrateFromReport_InvalidTargetRecallIsAnError(t *testing.T) {
 		if _, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: target, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}); err != ErrInvalidTargetRecall {
 			t.Fatalf("TargetRecall=%v: err = %v, want ErrInvalidTargetRecall", target, err)
 		}
+	}
+}
+
+// TestCalibrateFromReport_EmptyNegativePoolIsUnmeasuredNotApplyReady is the
+// codex round-6 P2 pinning test: a report with valid S+ samples but ZERO
+// negative measurements anywhere (no case sets BestWrongSimilarity, no case
+// carries HardNegatives) must NOT vacuously pass the negative gate.
+// rejectRate's own vacuous-truth default (1.0, "nothing to reject")
+// unguarded would clear NegativeGateRejectThreshold trivially -- this pins
+// that ApplyReady is false and the note explicitly says UNMEASURED, distinct
+// from a gate that ran and failed.
+func TestCalibrateFromReport_EmptyNegativePoolIsUnmeasuredNotApplyReady(t *testing.T) {
+	var cases []CalibrationCase
+	for _, s := range []float64{0.50, 0.10, 0.90, 0.30, 0.70, 0.20, 1.00, 0.40, 0.80, 0.60} {
+		cases = append(cases, CalibrationCase{Cause: "hit", CorrectSimilarity: floatPtr(s)})
+	}
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, Cases: cases}
+	result, err := CalibrateFromReport(report, CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension})
+	if err != nil {
+		t.Fatalf("CalibrateFromReport: %v", err)
+	}
+	if result.ApplyReady {
+		t.Fatal("ApplyReady = true, want false -- an empty negative pool means the gate was never measured, not that it passed")
+	}
+	if !almostEqual(result.HardNegativeRejectRate, 1.0) {
+		t.Fatalf("HardNegativeRejectRate = %v, want the vacuous 1.0 (unchanged numeric default; ApplyReady, not this field, is what must reflect UNMEASURED)", result.HardNegativeRejectRate)
+	}
+	if !strings.Contains(result.NegativeGateNote, "UNMEASURED") {
+		t.Fatalf("NegativeGateNote = %q, want it to explicitly say UNMEASURED (distinct from a measured-and-failed gate)", result.NegativeGateNote)
 	}
 }
 
@@ -748,12 +806,59 @@ func TestCalibrationRunner_GatePassingReportWritesArtifact(t *testing.T) {
 	opts := CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}
 	outputPath := filepath.Join(t.TempDir(), "policy.json")
 
+	// Pre-place a stale marker (codex round-6 P2): a PASSING run must
+	// overwrite it with fresh content, not merely leave SOME file present.
+	const staleMarker = `{"stale": true}`
+	if err := os.WriteFile(outputPath, []byte(staleMarker), 0o600); err != nil {
+		t.Fatalf("pre-place stale artifact: %v", err)
+	}
+
 	fake := runFakeCalibrationRunner(t, report, opts, outputPath)
 	if fake.failed {
 		t.Fatalf("runCalibrationRunner called Fatalf, want it to complete -- this fixture clears both readiness gates; logs: %v", fake.logs)
 	}
-	if _, err := os.Stat(outputPath); err != nil {
+	written, err := os.ReadFile(outputPath)
+	if err != nil {
 		t.Fatalf("output file missing at %s, want it written when both gates pass: %v", outputPath, err)
+	}
+	if string(written) == staleMarker {
+		t.Fatalf("output file at %s still holds the pre-placed stale marker, want it overwritten with a fresh result", outputPath)
+	}
+}
+
+// TestCalibrationRunner_StaleArtifactIsRemovedOnAFailingRun is the codex
+// round-6 P2 pinning test: a PRE-EXISTING artifact at outputPath (left
+// behind by an earlier, unrelated successful run) must be removed before a
+// later gate-failing run's Fatalf -- otherwise a downstream consumer
+// reading outputPath would see that STALE file and mistake it for the
+// current (failed) run's output, defeating the round-4 FIX C file-presence
+// contract ("never a blessed-looking artifact for a run this tool itself
+// would not bless") entirely.
+func TestCalibrationRunner_StaleArtifactIsRemovedOnAFailingRun(t *testing.T) {
+	var cases []CalibrationCase
+	for i := 0; i < 30; i++ {
+		sPlus := 0.20 + float64(i)*(0.45/29.0)
+		sMinus := 0.23 + float64(i)*(0.45/29.0)
+		cases = append(cases, CalibrationCase{
+			Cause: "floor_loss", CorrectSimilarity: floatPtr(sPlus), BestWrongSimilarity: floatPtr(sMinus),
+		})
+	}
+	report := CalibrationReport{EmbedIdentity: testEmbedIdentity, EmbedDimension: testDimension, TopK: 20, Cases: cases}
+	opts := CalibrationOptions{TargetRecall: 0.90, TargetEmbedIdentity: testEmbedIdentity, TargetDimension: testDimension}
+	outputPath := filepath.Join(t.TempDir(), "policy.json")
+
+	// Pre-place an artifact, as if left behind by an earlier, successful
+	// run at this same path.
+	if err := os.WriteFile(outputPath, []byte(`{"policy": "from an earlier successful run"}`), 0o600); err != nil {
+		t.Fatalf("pre-place stale artifact: %v", err)
+	}
+
+	fake := runFakeCalibrationRunner(t, report, opts, outputPath)
+	if !fake.failed {
+		t.Fatalf("runCalibrationRunner did not call Fatalf, want it to -- this fixture's negative gate is known to fail; logs: %v", fake.logs)
+	}
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Fatalf("stale artifact still exists at %s (err=%v) after a failing run, want it removed -- a downstream reader must never see a prior run's file as if it were this run's output", outputPath, err)
 	}
 }
 

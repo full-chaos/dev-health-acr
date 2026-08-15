@@ -135,8 +135,15 @@ type CalibrationResult struct {
 	Policy RetrievalPolicy
 
 	// ApplyReady is FAIL-CLOSED (codex round-2 P1): false whenever
-	// HardNegativeRejectRate falls below NegativeGateRejectThreshold. tau/K
-	// above remain valid RECALL-CHANNEL diagnostics either way -- this does
+	// HardNegativeRejectRate falls below NegativeGateRejectThreshold, OR
+	// (codex round-6 P2) whenever the negative gate was never MEASURED at
+	// all -- a report with no BestWrongSimilarity on any case and no
+	// HardNegatives anywhere leaves an empty wrong-pool, whose vacuous
+	// reject-rate default (1.0, "nothing to reject") would otherwise
+	// trivially clear the threshold without a single impostor ever having
+	// been checked. NegativeGateNote distinguishes the two false-causing
+	// states explicitly ("UNMEASURED" vs "FAILED"). tau/K above remain
+	// valid RECALL-CHANNEL diagnostics either way -- this does
 	// NOT reopen tau as a precision knob, and CHAOS-3834's ratified design is
 	// unchanged: tau is still picked from S+ recall alone (recallGateThreshold),
 	// never re-derived from the negative pool. What changes is that a caller
@@ -415,12 +422,27 @@ func CalibrateFromReport(report CalibrationReport, opts CalibrationOptions) (Cal
 		}
 	}
 
-	applyReady := rejectRate >= NegativeGateRejectThreshold
-	note := fmt.Sprintf(
-		"negative gate PASSED: hard-negative reject rate %.4f clears the %.4f threshold; recall-gate tau is apply-ready",
-		rejectRate, NegativeGateRejectThreshold,
-	)
-	if !applyReady {
+	// codex round-6 P2: an EMPTY wrongPool (no BestWrongSimilarity on any
+	// scored case, no hard negatives anywhere in the report) leaves
+	// rejectRate at its vacuous 1.0 default, which -- unguarded --
+	// satisfies the >= threshold check below and reports ApplyReady=true
+	// for a gate that was never actually measured against a single
+	// impostor. Same fail-toward-fine class as every other gate this lane
+	// has closed: "nothing was checked" must never read as "checked and
+	// passed". measured is false ONLY when there is nothing to check;
+	// applyReady requires BOTH measured AND the threshold clearing.
+	measured := len(wrongPool) > 0
+	applyReady := measured && rejectRate >= NegativeGateRejectThreshold
+	var note string
+	switch {
+	case !measured:
+		note = "negative gate UNMEASURED: this report carries no negative measurements at all -- no case has a BestWrongSimilarity and no case has any HardNegatives -- so the recall-gate tau above has never been checked against a single impostor. ApplyReady is false because NOTHING WAS MEASURED, not because measurement failed; this is distinct from a negative gate that ran and came back below threshold. Re-run the harness so scored cases populate BestWrongSimilarity and/or HardNegatives before trusting this tau."
+	case applyReady:
+		note = fmt.Sprintf(
+			"negative gate PASSED: hard-negative reject rate %.4f clears the %.4f threshold; recall-gate tau is apply-ready",
+			rejectRate, NegativeGateRejectThreshold,
+		)
+	default:
 		note = fmt.Sprintf(
 			"negative gate FAILED: hard-negative reject rate %.4f is below the %.4f threshold -- recall-only tau; "+
 				"precision must come from hybrid/corroboration adjudication, not this floor; human ratification required "+
@@ -554,16 +576,39 @@ func overFetchMultiplierOrUnchanged(multiplier int) int {
 	return multiplier
 }
 
-// quantileEpsilon nudges a floor()/ceil() boundary computed from a floating-
-// point product back onto the intended integer when the "exact" fraction
-// (e.g. 0.90 of 10 samples = 9.0 exactly, in real-number terms) lands just
-// off an integer due to float64 rounding (0.9*10 can evaluate to
-// 9.000000000000002 or 8.999999999999998 depending on the inputs). Both
-// recallGateThreshold and percentileInt need this correction, in the
-// direction that favors their own rounding function (floor adds it,
-// ceil subtracts it), so an intended-exact boundary always resolves to the
-// same integer regardless of which side of it float64 happened to land on.
-const quantileEpsilon = 1e-9
+// snapNearIntegerBoundary nudges a floating-point PRODUCT back onto the
+// nearest integer ONLY when it is within a few float64 ULPs of that
+// integer -- i.e. only when the deviation is genuine float64 REPRESENTATION
+// noise (e.g. 0.9*10 evaluating to 9.000000000000002 or 8.999999999999998
+// instead of the real-number-exact 9.0), never when the value is a
+// genuinely different number that merely happens to sit close to an
+// integer BY CONSTRUCTION.
+//
+// codex round-6 P3: the PREDECESSOR of this function was a single fixed
+// constant (quantileEpsilon = 1e-9) added/subtracted unconditionally before
+// floor()/ceil(). That constant is roughly 1e6 times LARGER than genuine
+// float64 noise at these magnitudes (~1 ULP near 1.0 is ~2.22e-16), so it
+// silently swallowed real inputs too: TargetRecall=0.90000000001 with
+// n=10 samples computes (1-TargetRecall)*n = 0.9999999999 -- a REAL value
+// 1e-10 away from 1.0, not noise -- but the fixed epsilon (1e-9 > 1e-10)
+// pushed it up to 1.0000000009 before flooring, excluding one MORE sample
+// than the caller actually asked for and violating recallGateThreshold's
+// own documented invariant (AchievedRecall >= TargetRecall always).
+//
+// The tolerance here is magnitude-relative (computed from math.Nextafter at
+// the SAME value being tested, not a fixed constant), so it scales
+// correctly regardless of how large the product is, and a caller-supplied
+// value that is genuinely a few ULPs away from its own intent is preserved
+// exactly rather than silently re-pointed at a neighboring integer.
+func snapNearIntegerBoundary(raw float64) float64 {
+	nearest := math.Round(raw)
+	ulp := math.Nextafter(nearest, math.Inf(1)) - nearest
+	const ulpTolerance = 8 // a handful of ULPs of slack for compounded rounding across the multiply/subtract chain, still ~1e6x tighter than the old fixed constant
+	if math.Abs(raw-nearest) <= ulpTolerance*ulp {
+		return nearest
+	}
+	return raw
+}
 
 // recallGateThreshold returns (tau, achievedRecall) for samples under the
 // nearest-rank recall-gate method described in CalibrateFromReport's doc
@@ -586,7 +631,7 @@ func recallGateThreshold(samples []float64, targetRecall float64) (float64, floa
 	sorted := append([]float64(nil), samples...)
 	sort.Float64s(sorted)
 	n := len(sorted)
-	excludeCount := int(math.Floor((1-targetRecall)*float64(n) + quantileEpsilon))
+	excludeCount := int(math.Floor(snapNearIntegerBoundary((1 - targetRecall) * float64(n))))
 	if excludeCount >= n {
 		excludeCount = n - 1
 	}
@@ -622,7 +667,7 @@ func percentileInt(counts []int, fraction float64) int {
 	sorted := append([]int(nil), counts...)
 	sort.Ints(sorted)
 	n := len(sorted)
-	rank := int(math.Ceil(fraction*float64(n) - quantileEpsilon))
+	rank := int(math.Ceil(snapNearIntegerBoundary(fraction * float64(n))))
 	if rank < 1 {
 		rank = 1
 	}

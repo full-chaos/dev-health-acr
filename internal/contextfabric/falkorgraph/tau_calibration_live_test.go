@@ -32,6 +32,23 @@ type runnerT interface {
 // ACR_TEST_CALIBRATION_REPORT file on disk.
 func runCalibrationRunner(t runnerT, report CalibrationReport, opts CalibrationOptions, outputPath string) {
 	t.Helper()
+	// codex round-6 P2: remove any EXISTING artifact at outputPath FIRST,
+	// before any measurement runs, so every exit path (pass, gate-fail,
+	// crash mid-run below) leaves either a fresh artifact or NO artifact --
+	// never a STALE one. Without this, a prior successful run's file at
+	// this same path survives untouched through a LATER gate-failing run,
+	// and a downstream consumer reading outputPath sees that stale
+	// artifact as if it were the current (failed) run's output -- exactly
+	// defeating the round-4 FIX C file-presence contract this file exists
+	// to uphold. A missing file is not an error (the common case, nothing
+	// to clean up); any OTHER removal failure IS one -- proceeding without
+	// being sure the stale file is gone would silently reopen the hazard.
+	if outputPath != "" {
+		if err := os.Remove(outputPath); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove stale artifact at %s before running: %v", outputPath, err)
+		}
+	}
+
 	result, err := CalibrateFromReport(report, opts)
 	if err != nil {
 		t.Fatalf("CalibrateFromReport: %v", err)
