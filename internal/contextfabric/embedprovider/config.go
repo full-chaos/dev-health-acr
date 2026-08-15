@@ -91,6 +91,12 @@ const (
 	EnvTimeout         = "ACR_CONTEXT_FABRIC_EMBED_TIMEOUT"
 	EnvMaxBatch        = "ACR_CONTEXT_FABRIC_EMBED_MAX_BATCH"
 	EnvMaxTextRunes    = "ACR_CONTEXT_FABRIC_EMBED_MAX_TEXT_RUNES"
+	// EnvPrefixFamily selects the asymmetric task-prefix pair this
+	// deployment's model requires (CHAOS-3836; spec §6 T6). Unset means
+	// PrefixFamilyNone. See the embedprovider package doc comment in
+	// prefix.go for why this is a closed-vocabulary setting rather than
+	// inferred from EnvModel.
+	EnvPrefixFamily = "ACR_CONTEXT_FABRIC_EMBED_PREFIX_FAMILY"
 	// EnvExpectResponseModel names the model id the SERVER reports, when it
 	// legitimately differs from the id we send. It RETARGETS the
 	// response-model check; it cannot disable it. Leave it unset unless a
@@ -143,6 +149,13 @@ type Config struct {
 	MaxTransportRetries int
 	// AllowInsecureBaseURL permits a plaintext http:// base URL.
 	AllowInsecureBaseURL bool
+	// PrefixFamily selects the asymmetric task-prefix pair applied to text
+	// before it is embedded (CHAOS-3836). The zero value is treated as
+	// PrefixFamilyNone everywhere this is read (validate, New), so a
+	// hand-built Config that never mentions prefixes stays valid and
+	// prefix-free -- only an explicitly set, UNRECOGNIZED family is a
+	// configuration error.
+	PrefixFamily PrefixFamily
 }
 
 var (
@@ -235,6 +248,9 @@ func (c Config) validate() error {
 	if c.MaxTransportRetries < 0 || c.MaxTransportRetries > 5 {
 		return errors.New("embedder max transport retries must be between zero and five")
 	}
+	if !validPrefixFamily(c.resolvedPrefixFamily()) {
+		return prefixFamilyError(c.PrefixFamily)
+	}
 	return nil
 }
 
@@ -291,6 +307,7 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		MaxTextRunes:         maxTextRunes,
 		MaxTransportRetries:  retries,
 		AllowInsecureBaseURL: envBool(lookup, EnvAllowInsecureBaseURL, false),
+		PrefixFamily:         PrefixFamily(envString(lookup, EnvPrefixFamily, string(PrefixFamilyNone))),
 	}
 	if err := cfg.validate(); err != nil {
 		return Config{}, err
